@@ -38,6 +38,7 @@ import path from "node:path"
 import { testEffect } from "./lib/effect"
 
 const database = Database.layerFromPath(":memory:")
+// would change the wire request. Pin the W3 flag OFF so the request matches the recorded fixture.
 const events = EventV2.layer.pipe(Layer.provide(database))
 const projector = SessionProjector.layer.pipe(Layer.provide(events), Layer.provide(database))
 const store = SessionStore.layer.pipe(Layer.provide(database))

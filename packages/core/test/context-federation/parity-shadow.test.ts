@@ -6,7 +6,7 @@ import { SelectionWriter } from "../../src/context-federation/selection-writer"
 import { ParityShadow, setShadowModeForTest } from "../../src/context-federation/parity-shadow"
 import { budgetSelection } from "../../src/context-federation/selection-budget"
 import { Hash } from "../../src/util/hash"
-import { type QueryEnvelope, type QueryResultV2 } from "../../src/context-federation/resolver-v2"
+import { type QueryEnvelope, type QueryResultV2, type GraphStatusRecord } from "../../src/context-federation/resolver-v2"
 import { SessionActivityTable, SessionContextSelectionTable } from "../../src/context-federation/session-sql"
 import { ContextCandidate, ContextFederation } from "../../src/context-federation/federation"
 import { LocationKey, ProjectScopeKey, SecurityNamespaceID, type ContextRef } from "../../src/context-federation/reference"
@@ -76,7 +76,7 @@ function envelope(overrides?: Partial<QueryEnvelope>): QueryEnvelope {
   }
 }
 
-function status(graph: GraphKind, state: GraphStatus["status"], revision: string, candidateCount: number): GraphStatus {
+function status(graph: GraphKind, state: GraphStatus["status"], revision: string, candidateCount: number): GraphStatusRecord {
   return {
     graph,
     status: state,
@@ -86,6 +86,7 @@ function status(graph: GraphKind, state: GraphStatus["status"], revision: string
     latencyMs: 1,
     candidateCount,
     reasonCode: state === "ready" ? "none" : state === "denied" ? "scope_denied" : "none",
+    rejectedCount: 0,
   }
 }
 
@@ -107,7 +108,7 @@ function result(candidates: readonly ContextCandidate[], statusesByGraph?: Recor
     ),
     candidates: byGraph.get(graph) ?? [],
   }))
-  const graphStatuses = Object.fromEntries(results.map((entry) => [entry.graph, entry.status])) as Record<GraphKind, GraphStatus>
+  const graphStatuses = Object.fromEntries(results.map((entry) => [entry.graph, entry.status])) as Record<GraphKind, GraphStatusRecord>
   return {
     queryFingerprint: "qf-parity",
     authorizationFingerprint: "af-parity",
@@ -158,7 +159,7 @@ function snapshot(
   }))
   const graphStatuses = Object.fromEntries(
     states.map((entry) => [entry.graph, status(entry.graph, entry.status, `${entry.graph}:1`, 0)]),
-  ) as Record<GraphKind, GraphStatus>
+  ) as Record<GraphKind, GraphStatusRecord>
   return { selectedRefs, graphStatuses }
 }
 

@@ -26,10 +26,15 @@ import { InstanceRef, WorkspaceRef } from "@/effect/instance-ref"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { MultiAgentRuntime } from "./multi-agent-runtime"
-import { makeV2AdmissionBridge } from "./v2-admission-bridge"
+import { makeV2AdmissionBridge, makeSessionV2Adapter } from "./v2-admission-bridge"
 import { EventDispatcher, DISPATCH_GROUP } from "./event-dispatcher"
 import { AgentHandoffConsumer, HANDOFF_GROUP } from "./agent-handoff-consumer"
 import { HandoffAdmission } from "@deepagent-code/core/deepagent/handoff-admission"
+import { EventSpool } from "@deepagent-code/core/deepagent/event-spool"
+import { EventAdmission } from "@deepagent-code/core/deepagent/event-admission"
+import { ConsumerReceipts } from "@deepagent-code/core/deepagent/consumer-receipts"
+import { Location } from "@deepagent-code/core/location"
+import { AbsolutePath } from "@deepagent-code/core/schema"
 import type { SubagentTurnRunner, SubagentTurnResult } from "./goal-loop-wiring"
 import { MessageID, SessionID } from "./schema"
 import { SessionCompletedPublisher } from "./session-completed-publisher"
@@ -997,13 +1002,139 @@ const goalTickConsumerLayer = Layer.unwrap(
   }),
 )
 
+// ── W5 ③ — DLQ 可见化: the C5 SPOOL DRAIN daemon + `event_consumer_failure` receipt ────────────────
+// design.md §8.6 (durable high/critical + throttled spool: never lost, bounded concurrency, priority
+// order, crash-safe claim/lease) was implemented but had NO production consumer — the spool ledger
+// (`deepagent_event_spool`) only ever ran in tests (audit a4-events §2.6, worklist C5-07). This daemon
+// claims due spool rows and admits each bounded envelope as durable V2 session work
+// (`EventAdmission.admit` with the PRODUCTION SessionV2 adapter — the spool is the high/critical lane
+// of the V2 admission path). A consumption failure NACKS (bounded retry → `dead` = the DLQ) and
+// records an `event_consumer_failure` receipt in `deepagent_consumer_receipt` (`ConsumerReceipts.runOnce`,
+// consumerKind "event_consumer_failure", source_event_id = the spool eventRef) + log.error — the durable,
+// admin-queriable DLQ visibility. (Admin HTTP surface: none exists for the spool today — receipt + log
+// only, per W5 scope.)
+//
+// FLAG COUPLING: the daemon runs only when v4MultiAgentRuntime is ON (the C5 event daemons are live)
+// AND the V2 admission switch is ON (without admission the drain would refuse every row and dead-letter
+// live high/critical work — the drain MUST be inert when the admission path is off; a spool row also
+// never reaches `dead` without the drain, so nothing is lost while it is off).
+export const SPOOL_DRAIN_INTERVAL_MS = 60_000
+export const SPOOL_DRAIN_BATCH = 20
+export const SPOOL_DRAIN_LEASE_MS = 120_000
+
+/** Deterministic admission anchor per spool row (SessionV2 dedupe — a re-drain never double-admits). */
+export const spoolAdmissionAnchor = (eventRef: string, sessionID: string): string =>
+  `spool:${eventRef}:${sessionID}`
+
+/** §C derivation for the spool adapter's get-or-create (a non-"wrk" workspaceID doubles as the directory). */
+export const spoolLocationFor = (workspaceId: string | undefined): Location.Ref | undefined =>
+  workspaceId && !workspaceId.startsWith("wrk")
+    ? Location.Ref.make({ directory: AbsolutePath.make(workspaceId) })
+    : undefined
+
+/**
+ * The admin-queriable consumer-kind for spool consumption failures (W5 ③). Read via
+ * `ConsumerReceipts.receiptFor(db, "event_consumer_failure", eventRef)` / the `deepagent_consumer_receipt`
+ * ledger for a DLQ view; no HTTP surface exists for it yet (W5 scope: receipt + log).
+ */
+export const CONSUMER_FAILURE_KIND = "event_consumer_failure"
+
+/**
+ * ONE spool drain pass: claim a due batch (priority order, bounded per-session concurrency), admit each
+ * bounded envelope as durable V2 session work, commit on success and nack on failure (bounded retry →
+ * `dead` = the DLQ). Every failure writes an `event_consumer_failure` receipt + log. Exported for direct
+ * testing; the daemon repeats it on a cadence.
+ *
+ * INERT when the V2 admission switch is OFF or no SessionV2 stack is present — the drain must not
+ * dead-letter live high/critical work by refusing it because the admission lane is not live.
+ */
+export const spoolDrainPass = (input: {
+  readonly db: Database.Interface["db"]
+  readonly v2Session?: SessionV2.Interface
+  readonly now?: () => number
+}): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    const at = input.now?.() ?? Date.now()
+    const v2Session = input.v2Session
+    if (!v2Session || !EventAdmission.isEventV2AdmissionEnabled()) return
+    const claimed = yield* EventSpool.claimDue(input.db, {
+      claimantId: "v4-spool-drain",
+      now: at,
+      leaseMs: SPOOL_DRAIN_LEASE_MS,
+      limit: SPOOL_DRAIN_BATCH,
+    })
+    for (const row of claimed.rows) {
+      const workspaceId = row.envelope.actorAndScope.workspaceId
+      const outcome = yield* EventAdmission.admit(input.db, {
+        envelope: row.envelope,
+        sessionID: row.sessionID,
+        messageID: spoolAdmissionAnchor(row.eventRef, row.sessionID),
+        adapter: makeSessionV2Adapter(v2Session, spoolLocationFor, workspaceId),
+        now: at,
+      }).pipe(Effect.exit)
+      if (outcome._tag === "Success") {
+        // Admitted (or exact-retry re-admitted — the receipt row idempotency key made it a no-op).
+        yield* EventSpool.commitResult(input.db, {
+          eventRef: row.eventRef,
+          claimToken: claimed.claimToken,
+          now: at,
+        }).pipe(Effect.orDie)
+      } else {
+        const reason =
+          (Cause.squash(outcome.cause) as { readonly message?: string } | undefined)?.message ??
+          "spool consumption failed"
+        yield* EventSpool.nack(input.db, {
+          eventRef: row.eventRef,
+          claimToken: claimed.claimToken,
+          now: at,
+          reason,
+        }).pipe(Effect.orDie)
+        // DLQ visibility: durable `event_consumer_failure` receipt (the pending row carries the failure
+        // reason + attempt count; per-eventRef idempotent) + log. Best-effort — never perturbs the nack.
+        yield* ConsumerReceipts.runOnce(input.db, {
+          consumerKind: CONSUMER_FAILURE_KIND,
+          sourceEventId: row.eventRef,
+          // The failing side effect carries the consumption error so the durable receipt's `last_error`
+          // is the real reason (the receipt stays `pending` = "a failed consumption is recorded").
+          sideEffect: Effect.fail(new Error(reason)),
+          now: at,
+        }).pipe(
+          Effect.catchCause(() => Effect.void),
+        )
+        yield* Effect.logError("spool consumption failed (bounded retry → DLQ after cap)", {
+          eventRef: row.eventRef,
+          sessionID: row.sessionID,
+          reason,
+          attempts: row.attempts,
+        })
+      }
+    }
+  }).pipe(Effect.catchCause((cause) =>
+    Effect.sync(() => log.error("spool drain pass failed", { cause: Cause.pretty(cause) })),
+  ))
+
+const spoolDrainLayer = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const flags = yield* RuntimeFlags.Service
+    if (!flags.v4MultiAgentRuntime) return
+    const { db } = yield* Database.Service
+    const v2Session = Option.getOrUndefined(yield* Effect.serviceOption(SessionV2.Service))
+    yield* spoolDrainPass({ db, ...(v2Session ? { v2Session } : {}) })
+      .pipe(
+        Effect.repeat(Schedule.spaced(Duration.millis(SPOOL_DRAIN_INTERVAL_MS))),
+        Effect.forkScoped,
+      )
+      .pipe(Effect.asVoid)
+  }),
+)
+
 /**
  * The full V4 event-runtime, ready to merge into the instance app graph. Starts (as scoped daemons):
  * the EventDispatcher (router + scheduler tick + retry pump), the MultiAgentRuntime (DispatchPort),
- * the RetentionSweeper, the §E2 publish-limiter sweep, the §A4/§N schedule bootstrap, and the §L
- * SessionCompletedPublisher (republishes a completed root session's end-of-turn idle as
- * `session.completed` so the archiver has a trigger). All behavior is flag-gated, so providing this
- * layer is inert until the V4 flags are enabled.
+ * the RetentionSweeper, the §E2 publish-limiter sweep, the §A4/§N schedule bootstrap, the spool drain
+ * (W5 ③ — the C5 spool consumer + DLQ receipt), and the §L SessionCompletedPublisher (republishes a
+ * completed root session's end-of-turn idle as `session.completed` so the archiver has a trigger).
+ * All behavior is flag-gated, so providing this layer is inert until the V4 flags are enabled.
  *
  * Requires from the surrounding graph: Session, SessionPrompt, Agent, Provider, RuntimeFlags,
  * EventV2Bridge, and a Database (for the core V4 services this self-provides over it). The core services
@@ -1015,6 +1146,9 @@ export const layer = Layer.mergeAll(
   retentionLayer,
   limiterSweepLayer,
   scheduleBootstrapLayer,
+  // W5 ③ — the C5 spool drain (high/critical lane of the V2 admission path). Flag-gated ON
+  // v4MultiAgentRuntime + admission switch (see spoolDrainLayer); inert under the defaults.
+  spoolDrainLayer,
   // §L — the session.completed producer. Its subscription/publish is gated on v4EventDrivenArchive
   // (inert when off). It draws DeepAgentEventBus (provided alongside the runtime), plus RuntimeFlags /
   // EventV2Bridge / Session from the shared app graph — so it shares the ONE bus the archiver consumes.

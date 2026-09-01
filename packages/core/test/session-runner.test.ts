@@ -72,6 +72,16 @@ import { asc, eq, sql } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 
 const database = Database.layerFromPath(":memory:")
+// W3.6: the runner appends the selection graph evidence to the volatile system tail. The harness has
+// no production graph sources wired, so the four graphs resolve under the W3 production default as:
+const selectionEvidence = [
+  "Context selection (this turn):",
+  "- code: degraded_unavailable [rev code:unavailable] (0 refs)",
+  "- documents: degraded_unavailable [rev documents:unavailable] (0 refs)",
+  "- knowledge: empty [rev released:no-store] (0 refs)",
+  "- memory: empty [rev memory:no-store] (0 refs)",
+].join("\n")
+const withSelection = (parts: string[]) => [...parts, selectionEvidence]
 const providerTurns = V2ProviderTurn.layer.pipe(
   Layer.provide(SessionProviderOwner.layer.pipe(Layer.provide(database))),
   Layer.provide(database),
@@ -1278,8 +1288,8 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
-        ["Initial context"],
-        ["Initial context"],
+        withSelection(["Initial context"]),
+        withSelection(["Initial context"]),
       ])
       expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "user", "system"])
       expect(requests[1]?.messages.at(-1)?.content).toEqual([{ type: "text", text: "Changed context" }])
@@ -1315,7 +1325,7 @@ describe("SessionRunnerLLM", () => {
       response = fragmentFixture("text", "text-build", ["Done"]).completeEvents
       yield* session.resume(sessionID)
 
-      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual(["Build agent instructions", "Initial context"])
+      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual(withSelection(["Build agent instructions", "Initial context"]))
     }),
   )
 
@@ -1370,7 +1380,7 @@ describe("SessionRunnerLLM", () => {
       response = fragmentFixture("text", "text-reviewer", ["Done"]).completeEvents
       yield* session.resume(sessionID)
 
-      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual(["Reviewer instructions", "Initial context"])
+      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual(withSelection(["Reviewer instructions", "Initial context"]))
       expect((yield* session.messages({ sessionID }))[0]).toMatchObject({ type: "assistant", agent: "reviewer" })
     }),
   )
@@ -1399,7 +1409,7 @@ describe("SessionRunnerLLM", () => {
       response = fragmentFixture("text", "text-selected", ["Done"]).completeEvents
       yield* session.resume(sessionID)
 
-      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual(["Reviewer instructions", "Initial context"])
+      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual(withSelection(["Reviewer instructions", "Initial context"]))
       expect((yield* session.messages({ sessionID }))[0]).toMatchObject({ type: "assistant", agent: "reviewer" })
     }),
   )
@@ -1429,8 +1439,8 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
-        ["Initial context\n\nBuild skills"],
-        ["Initial context\n\nReviewer skills"],
+        withSelection(["Initial context\n\nBuild skills"]),
+        withSelection(["Initial context\n\nReviewer skills"]),
       ])
     }),
   )
@@ -1462,7 +1472,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
-        ["Initial context\n\nReviewer skills"],
+        withSelection(["Initial context\n\nReviewer skills"]),
       ])
     }),
   )
@@ -1530,7 +1540,7 @@ describe("SessionRunnerLLM", () => {
       response = []
       yield* session.resume(sessionID)
       expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
-        ["Initial context\n\nReviewer skills"],
+        withSelection(["Initial context\n\nReviewer skills"]),
       ])
       expect(
         yield* db
@@ -1567,7 +1577,7 @@ describe("SessionRunnerLLM", () => {
       response = []
       yield* session.resume(sessionID)
       expect(requests.map((request) => request.model)).toEqual([replacementModel])
-      expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([["Initial context"]])
+      expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([withSelection(["Initial context"])])
     }),
   )
 
@@ -1700,7 +1710,7 @@ describe("SessionRunnerLLM", () => {
       systemUnavailable = false
       yield* session.resume(sessionID)
       expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
-        ["Initial context\n\nReviewer skills"],
+        withSelection(["Initial context\n\nReviewer skills"]),
       ])
     }),
   )
@@ -1750,9 +1760,9 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
-        ["Initial context"],
-        ["Initial context"],
-        ["Replacement context"],
+        withSelection(["Initial context"]),
+        withSelection(["Initial context"]),
+        withSelection(["Replacement context"]),
       ])
       expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "user", "system"])
       expect(requests[2]?.messages.map((message) => message.role)).toEqual(["user", "user", "user"])
@@ -1794,9 +1804,9 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
-        ["Initial context"],
-        ["Initial context"],
-        ["Replacement context"],
+        withSelection(["Initial context"]),
+        withSelection(["Initial context"]),
+        withSelection(["Replacement context"]),
       ])
     }),
   )
@@ -1866,7 +1876,7 @@ describe("SessionRunnerLLM", () => {
 
       expect(invalidations).toBe(4)
       expect(requests).toHaveLength(1)
-      expect(requests[0]?.system.map((part) => part.text)).toEqual(["Changed context"])
+      expect(requests[0]?.system.map((part) => part.text)).toEqual(withSelection(["Changed context"]))
     }),
   )
 
@@ -1894,7 +1904,7 @@ describe("SessionRunnerLLM", () => {
       systemBaseline = "Replacement context"
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Third" }), resume: false })
       yield* session.resume(sessionID)
-      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual(["Replacement context"])
+      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual(withSelection(["Replacement context"]))
     }),
   )
 
@@ -1928,8 +1938,8 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
-        ["Initial context"],
-        ["Replacement context"],
+        withSelection(["Initial context"]),
+        withSelection(["Replacement context"]),
       ])
       yield* replaySessionProjection(sessionID)
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Third" }), resume: false })
@@ -2254,7 +2264,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Third" }), resume: false })
       yield* session.resume(sessionID)
 
-      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual(["Initial context"])
+      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual(withSelection(["Initial context"]))
       expect(
         requests
           .at(-1)
@@ -2466,8 +2476,8 @@ describe("SessionRunnerLLM", () => {
 
       expect(requests.map((request) => request.model)).toEqual([model, replacementModel])
       expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
-        ["Initial context"],
-        ["Replacement context"],
+        withSelection(["Initial context"]),
+        withSelection(["Replacement context"]),
       ])
     }),
   )

@@ -1,7 +1,7 @@
 export * as SessionRunnerCanonical from "./canonical-turn"
 
 import { and, asc, desc, eq } from "drizzle-orm"
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Layer, Option, Schema } from "effect"
 import { Database } from "../../database/database"
 import { ContextArtifactStore } from "../../context-federation/artifact-store"
 import { SessionProviderAttempt } from "../../context-federation/provider-attempt"
@@ -14,8 +14,16 @@ import {
   isLegacyIncompleteRow,
   writeSelectionRow,
   assertAttemptBoundSelection,
+  type ReleasedKnowledgeIdentity,
 } from "../../context-federation/selection-writer"
 import { stagedV2Adapters } from "../../context-federation/staged-adapters-v2"
+import {
+  productionV2Adapters,
+  productionAdaptersEnabled,
+  ProductionV2Sources,
+  type ProductionV2AdapterInput,
+} from "../../context-federation/production-adapters"
+import { DeepAgentReleasedSnapshot } from "../../deepagent/released-snapshot"
 import type { GraphKind, SelectionEnvelope } from "../../contract/selection"
 import {
   SessionActivityInputTable,
@@ -35,14 +43,17 @@ import { V2ProviderTurn } from "./v2-provider-turn"
 // V2 runner turns bind Context Federation authority through the same admission chain as the legacy
 // durable runtime (activity -> selection -> validation -> attempt). Since C3-08 the selection is a
 // REAL four-graph V2 selection produced by the F1 resolver + F2 writer (never the legacy v2-none
-// fallback), so a V2 attempt is always bound to real graph statuses/revisions. The runner
-// composition uses the staged adapter set until production graph sources are wired (C7).
+// fallback), so a V2 attempt is always bound to real graph statuses/revisions. W3: the runner
+// composition uses the PRODUCTION adapter set (real code/documents/knowledge/memory sources) while
+// `DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION` is ON (default), and falls back to the staged
+// adapter set (`source_disabled`) only under an explicit `=false`.
 export const SelectionLifetimeMs = 14 * 60_000
 export const ValidationMs = 60_000
 
 const V2Namespace = ContextReference.SecurityNamespaceID.make("v2:local")
 const V2Scope = ContextReference.ProjectScopeKey.make("v2:local")
 const StagedPerGraphTimeoutMs = 5_000
+const emptyProductionSources: ProductionV2AdapterInput = {}
 
 // §16.3 order 4 package D — the legacy federation selection evidence seam is DELETED by C3-08.
 // A V2 turn no longer copies legacy evidence (or the v2-none fallback) into the selection; the
@@ -235,9 +246,14 @@ function admissionFromRow(
 
 /**
  * C3-08 — build a REAL V2 selection (never v2-none) through the F1 resolver-v2 + F2 selection-budget
- * + selection-writer flow, write the selection row, and derive the admission. A staged adapter set
- * yields explicit `degraded_unavailable` statuses until production graph sources are wired; every
- * graph still produces an explicit status + revision, so a V2 attempt is NEVER a v2-none fallback.
+ * + selection-writer flow, write the selection row, and derive the admission. W3.1: the resolver is
+ * fed the PRODUCTION adapter set (`productionV2Adapters`) while the W0.1 flag
+ * `DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION` is ON (single flip-flag table, default ON); `=false`
+ * falls back to the staged adapter set (existing explicit degraded_unavailable behavior). W3.3: a
+ * `successorRebuild` signal is consumed — a `released_snapshot_drift` re-binds the released snapshot
+ * and re-resolves once (a release happened between the bind and the resolve); any remaining signal
+ * fails with `selection_rebuild_required:<trigger>` under the existing AdmissionError semantics
+ * (the caller's rebuild path owns the turn rebuild).
  */
 function buildV2Selection(
   input: AdmitSelectionInput,
@@ -249,14 +265,46 @@ function buildV2Selection(
   const inputs = activityInputIds(input, activity.activityId)
   return Effect.gen(function* () {
     const ids = yield* inputs
-    const envelope = buildV2Envelope(input, activity, ids, locationKey, now)
-    const resolved = yield* resolveGraphs(envelope, stagedV2Adapters(), StagedPerGraphTimeoutMs)
+    const sources = yield* Effect.serviceOption(ProductionV2Sources).pipe(
+      Effect.map((option) => Option.getOrElse(option, () => emptyProductionSources)),
+    )
+    const resolveOnce = Effect.fn("SessionRunnerCanonical.resolveOnce")(function* () {
+      const current = yield* currentReleasedSelection(sources)
+      const releasedBinding = {
+        snapshotId: current?.snapshotId ?? "",
+        binding: current ? ("bound" as const) : ("unavailable" as const),
+        current: releasedPicker(sources),
+      }
+      const adapters = productionAdaptersEnabled()
+        ? productionV2Adapters({
+            ...sources,
+            ...(sources.knowledge ? { knowledge: { stores: sources.knowledge.stores, released: releasedBinding } } : {}),
+          })
+        : stagedV2Adapters()
+      const envelope = buildV2Envelope(input, activity, ids, locationKey, now, current)
+      const resolved = yield* resolveGraphs(envelope, adapters, StagedPerGraphTimeoutMs)
+      return { resolved, envelope, current }
+    })
+    const first = yield* resolveOnce()
+    // W3.3: a released-snapshot drift re-binds the CURRENT snapshot and re-resolves ONCE; the
+    // rebinding is a fresh envelope (+ fresh adapter binding), so the second resolution observes the
+    // post-release authority. All other signals (authorization/location epoch drift) are consumed by
+    // failing the admission — the turn-rebuild path of the caller owns the successor.
+    const second =
+      first.resolved.successorRebuild?.trigger === "released_snapshot_drift"
+        ? yield* resolveOnce()
+        : first
+    const { resolved, envelope, current } = second
+    if (resolved.successorRebuild !== undefined) {
+      return yield* new AdmissionError({ reason: `selection_rebuild_required:${resolved.successorRebuild.trigger}` })
+    }
     const batch = budgetSelection(resolved, envelope)
     const selectionEnvelope = buildSelectionEnvelope(batch, resolved, envelope, {
       revision,
       triggerInputId: activity.triggerInputId,
       providerTurnSeq: 0,
       now,
+      ...(current === undefined ? {} : { releasedKnowledgeIdentity: releasedKnowledgeIdentityOf(current) }),
     })
     const written = yield* writeSelectionRow(input.db, selectionEnvelope, now).pipe(
       Effect.mapError((error) => new AdmissionError({ reason: `selection_commit_failed:${selectionErrorDetail(error)}` })),
@@ -269,6 +317,7 @@ function buildV2Selection(
         triggerInputId: activity.triggerInputId,
         providerTurnSeq: 0,
         now,
+        ...(current === undefined ? {} : { releasedKnowledgeIdentity: releasedKnowledgeIdentityOf(current) }),
       })
       const successorWritten = yield* writeSelectionRow(input.db, successor, now).pipe(
         Effect.mapError((error) => new AdmissionError({ reason: `selection_commit_failed:${selectionErrorDetail(error)}` })),
@@ -277,6 +326,88 @@ function buildV2Selection(
     }
     return admissionOf(written.selectionId, selectionEnvelope, input, activity, now)
   })
+}
+
+/** The production released-snapshot picker (bounded: a missing picker is simply not bound). */
+function releasedPicker(
+  sources: ProductionV2AdapterInput,
+): (scope: DeepAgentReleasedSnapshot.Scope) => Effect.Effect<DeepAgentReleasedSnapshot.Selection | undefined, unknown> {
+  return sources.knowledge?.released?.current ?? (() => Effect.succeed(undefined))
+}
+
+/** Resolve-time current released snapshot for the V2 envelope scope (best-effort). */
+function currentReleasedSelection(
+  sources: ProductionV2AdapterInput,
+): Effect.Effect<DeepAgentReleasedSnapshot.Selection | undefined> {
+  const scope = {
+    securityNamespaceId: V2Namespace,
+    projectScopeKey: V2Scope,
+    legacyProjectId: V2Scope,
+  }
+  return releasedPicker(sources)(scope).pipe(
+    Effect.catch(() => Effect.succeed(undefined)),
+    Effect.map((value) => value ?? undefined),
+  )
+}
+
+/** W3.4 — runtime released-knowledge identity for the bound selection row (contract unchanged). */
+function releasedKnowledgeIdentityOf(selection: DeepAgentReleasedSnapshot.Selection): ReleasedKnowledgeIdentity {
+  return {
+    generation: selection.generation,
+    membershipHash: selection.membershipHash,
+    manifestHash: selection.manifestHash,
+    exactRefs: selection.documents,
+    exactRefsFingerprint: DeepAgentReleasedSnapshot.exactRefsFingerprint(selection.documents),
+  }
+}
+
+/**
+ * W3.6 — compact, bounded selection graph evidence for the model-visible system tail: per-graph
+ * status + revision summary and the selected refs (tokens) e.g. used by `llm.ts` after admission.
+ * Never fails the turn: a missing row or unreadable JSON yields `undefined` (no evidence), matching
+ * the pre-W3 behavior rather than blocking dispatch.
+ */
+export const selectionGraphEvidence = Effect.fn("SessionRunnerCanonical.selectionGraphEvidence")(function* (
+  db: Database.Interface["db"],
+  selectionId: string,
+) {
+  const row = yield* db
+    .select()
+    .from(SessionContextSelectionTable)
+    .where(eq(SessionContextSelectionTable.selection_id, selectionId))
+    .get()
+    .pipe(Effect.orDie)
+  if (row === undefined) return yield* Effect.succeed(undefined)
+  return renderGraphEvidence(row)
+})
+
+function renderGraphEvidence(row: typeof SessionContextSelectionTable.$inferSelect): string | undefined {
+  let statuses: Readonly<Record<string, { readonly status: string; readonly revision: string; readonly candidateCount: number; readonly reasonCode: string }>>
+  try {
+    statuses = JSON.parse(row.graph_statuses) as Readonly<Record<string, { readonly status: string; readonly revision: string; readonly candidateCount: number; readonly reasonCode: string }>>
+  } catch {
+    return undefined
+  }
+  let refs: readonly { readonly token: string }[]
+  try {
+    refs = JSON.parse(row.selected_refs) as readonly { readonly token: string }[]
+  } catch {
+    refs = []
+  }
+  const graphLines = GraphOrder.map((graph) => {
+    const status = statuses[graph]
+    if (status === undefined) return `- ${graph}: n/a`
+    const revision = status.revision.length === 0 ? "" : ` [rev ${status.revision.slice(0, 48)}]`
+    const rejected = "rejectedCount" in status && typeof (status as { readonly rejectedCount?: unknown }).rejectedCount === "number" && (status as { readonly rejectedCount: number }).rejectedCount > 0
+      ? ` (${(status as { readonly rejectedCount: number }).rejectedCount} rejected)`
+      : ""
+    return `- ${graph}: ${status.status}${revision}${rejected} (${status.candidateCount} refs)`
+  })
+  const refTokens = refs.slice(0, 8).map((ref) => ref.token).filter((token) => token.length > 0).join(" ")
+  const lines = [`Context selection (this turn):`, ...graphLines]
+  if (refTokens.length > 0) lines.push(`Selected refs: ${refTokens}`)
+  if (refs.length > 8) lines.push(`(and ${refs.length - 8} more refs)`)
+  return lines.join("\n")
 }
 
 function admissionOf(
@@ -305,6 +436,7 @@ function buildV2Envelope(
   inputIds: readonly string[],
   locationKey: string,
   now: number,
+  released?: DeepAgentReleasedSnapshot.Selection,
 ): QueryEnvelope {
   const location = ContextReference.LocationKey.make(locationKey)
   const principal = {
@@ -328,7 +460,9 @@ function buildV2Envelope(
     egress: { policyId: "v2:history-context", epoch: input.system.baselineSeq, graphs, sensitivities: [] },
     agentPolicy: { agentId: input.agent, autonomyCeiling: "medium", permitDegraded: true },
     modelCapability: { modelId: "", providerId: "", protocol: "openai.responses", contextWindow: 0, structuredOutput: false },
-    releasedKnowledge: { snapshotId: "", binding: "unavailable" },
+    releasedKnowledge: released
+      ? { snapshotId: released.snapshotId, binding: "bound" }
+      : { snapshotId: "", binding: "unavailable" },
     queryIntent: "search",
     query: "session context",
     observedLocationMutationEpoch: 0,

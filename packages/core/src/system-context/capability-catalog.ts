@@ -86,7 +86,12 @@ export const capabilityCatalog: ReadonlyArray<CapabilityManifest> = sortManifest
       version: "1.0.0-beta.0",
       summary: "Query authorized cross-graph project context",
       use_when: ["recalling project context", "tracing evidence", "finding conflicts"],
-      availability: "stable",
+      // W3.5 (spec §W3 step 5): the `context_query` tool is not registered in the built-in tool
+      // registry yet (W4 wires the inventory↔registry assertion), so the capability is maintenance —
+      // it is never advertised as executable until the tool lands. `deepagent.code-intel` has no L0
+      // catalog manifest (its manifest lives in the capability-bodies successor set), so the same
+      // maintenance ruling applies there via the bodies module.
+      availability: "maintenance_only",
       required_permissions: ["context.read"],
       required_runtime_features: ["context_federation_v2"],
       entry_tools: ["context_query"],

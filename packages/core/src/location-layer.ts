@@ -48,6 +48,7 @@ import { ProjectDocs } from "./system-context/project-docs"
 import { SystemContextRegistry } from "./system-context/registry"
 import { SessionProviderOwner } from "./context-federation/provider-owner"
 import { SessionContext } from "./context-federation/session-context"
+import { productionV2SourcesLayer } from "./context-federation/production-adapters"
 import { SessionRunnerCanonical } from "./session/runner/canonical-turn"
 import { V2ProviderTurn } from "./session/runner/v2-provider-turn"
 import { V2ToolEffect } from "./session/runner/v2-tool-effect"
@@ -119,6 +120,12 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()(
         Layer.provide(model),
         Layer.provide(skillGuidance),
         Layer.provide(sessionContext),
+        // W3.1 production-sources seam: the V2 runner reads `ProductionV2Sources` when it admits a
+        // selection. The default is EMPTY (no live sources wired) — the four production adapters then
+        // degrade honestly. A deepagent-code composition replaces this layer with the live inputs
+        // (LiveCodeQuery / LocationIndexCoordinator / DurableKnowledgeStore + released-snapshot
+        // picker) so the default path resolves real graph data.
+        Layer.provide(productionV2SourcesLayer),
         Layer.provide(V2ProviderTurn.layer.pipe(Layer.provide(SessionProviderOwner.layer), Layer.provide(services))),
         Layer.provide(V2ToolEffect.layer.pipe(Layer.provide(services))),
       )

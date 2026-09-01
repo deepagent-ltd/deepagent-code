@@ -222,7 +222,7 @@ it.effect("commits a real four-graph V2 selection (never v2-none) with explicit 
   }),
 )
 
-it.effect("keeps explicit degraded statuses rather than a v2-none fallback when no graph source is wired", () =>
+it.effect("keeps explicit graph statuses (never v2-none) when no graph source is wired under the W3 production default", () =>
   Effect.gen(function* () {
     yield* seed
     const { db } = yield* Database.Service
@@ -242,11 +242,14 @@ it.effect("keeps explicit degraded statuses rather than a v2-none fallback when 
       .where(eq(SessionContextSelectionTable.selection_id, admission.selectionId))
       .get()
       .pipe(Effect.orDie)
+    // W3.1: the default flag is ON, so the PRODUCTION adapter set runs with the (empty) composition
+    // sources: code/documents degrade honestly (source_disabled), knowledge/memory are legitimate
+    // empty domains — explicit statuses, never v2-none.
     expect(JSON.parse(row?.graph_revisions ?? "{}")).toEqual({
-      code: "code:staged:0",
-      documents: "documents:staged:0",
-      knowledge: "knowledge:staged:0",
-      memory: "memory:staged:0",
+      code: "code:unavailable",
+      documents: "documents:unavailable",
+      knowledge: "released:no-store",
+      memory: "memory:no-store",
     })
     expect(row?.observed_location_mutation_epoch).toBe(0)
   }),
