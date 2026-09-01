@@ -1,10 +1,11 @@
 export * as SessionInput from "./input"
 
-import { and, asc, eq, isNull, lte } from "drizzle-orm"
+import { and, asc, eq, inArray, isNull, lte } from "drizzle-orm"
 import { DateTime, Effect, Schema } from "effect"
 import type { Database } from "../database/database"
 import type { EventV2 } from "../event"
 import { EventSequenceTable } from "../event/sql"
+import { Hash } from "../util/hash"
 import { NonNegativeInt } from "../schema"
 import { V2Schema } from "../v2-schema"
 import { SessionEvent } from "./event"
@@ -387,6 +388,96 @@ export const promoteNextQueued = Effect.fn("SessionInput.promoteNextQueued")(fun
   const ids = yield* publish(db, events, sessionID, [row])
   return ids[0]
 })
+
+// ---------------------------------------------------------------------------------------------------
+// W1.1 — goal_steer drain affordances (design W1 §1). `goal_steer` (§S1.3) is guidance directed at a
+// RUNNING goal: the parent runLoop's `steer` drain and the goal driver's `goal_steer` drain read
+// DISJOINT rows, and a goal steer is NEVER promoted into the session transcript (the goal threads it
+// into its next step prompt instead). Consumption therefore cannot reuse the `steer`/`queue`
+// promotion event: the goal channel stamps rows consumed directly, mirroring the SessionSteer
+// `consumed_seq` convention (any non-null == consumed, one-way, idempotent).
+// ---------------------------------------------------------------------------------------------------
+
+/** Goal-directed steer text waiting on the goal driver, in send-order (non-consuming read). */
+export const pendingGoalSteers = Effect.fn("SessionInput.pendingGoalSteers")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+) {
+  const rows = yield* db
+    .select()
+    .from(SessionInputTable)
+    .where(
+      and(
+        eq(SessionInputTable.session_id, sessionID),
+        isNull(SessionInputTable.promoted_seq),
+        eq(SessionInputTable.delivery, "goal_steer"),
+      ),
+    )
+    .orderBy(asc(SessionInputTable.admitted_seq))
+    .all()
+    .pipe(Effect.orDie)
+  return rows.map(fromRow)
+})
+
+/**
+ * Stamp the given goal-steer rows consumed (idempotent: already-consumed ids are skipped). The
+ * consumed marker is `promoted_seq` — the session_input row's one-way consumption watermark; the
+ * goal channel never triggers a PromptLifecycle.Promoted projection for these rows, so a stamped
+ * goal_steer row is a plain "delivered to the goal" state, not a transcript message.
+ */
+export const consumeGoalSteers = Effect.fn("SessionInput.consumeGoalSteers")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  ids: ReadonlyArray<SessionMessage.ID>,
+) {
+  if (ids.length === 0) return
+  const stampedAt = yield* DateTime.now
+  yield* db
+    .update(SessionInputTable)
+    .set({ promoted_seq: DateTime.toEpochMillis(stampedAt) })
+    .where(
+      and(
+        eq(SessionInputTable.session_id, sessionID),
+        inArray(SessionInputTable.id, ids.map((id) => id)),
+        isNull(SessionInputTable.promoted_seq),
+      ),
+    )
+    .run()
+    .pipe(Effect.orDie)
+})
+
+// One deterministic notice per pending goal steer (a goal_steer that found no active goal): the
+// notice's message id derives from the steer's own row id, so re-drains across crash/restart never
+// fan out duplicate notices for the same steer.
+const goalSteerNoticeID = (steerID: SessionMessage.ID): SessionMessage.ID =>
+  SessionMessage.ID.make(`msg_${Hash.sha256(`goal-steer-pending:${steerID}`).slice(0, 40)}`)
+
+export const GOAL_STEER_PENDING_NOTICE =
+  "Goal-directed instruction recorded: it will be delivered to the goal once a goal is running (no active goal in this session yet)."
+
+/**
+ * W1.1 — publish the one-time "waiting for a goal" notice for a pending goal_steer that no active
+ * goal could receive. Idempotent by the derived deterministic message id: a crash between the notice
+ * and the consume (or repeated no-goal drains) never repeats the notice for the same steer.
+ */
+export const publishGoalSteerPendingNotice = Effect.fn("SessionInput.publishGoalSteerPendingNotice")(
+  function* (db: DatabaseService, events: EventV2.Interface, sessionID: SessionSchema.ID, steerID: SessionMessage.ID) {
+    const messageID = goalSteerNoticeID(steerID)
+    const existing = yield* db
+      .select({ id: SessionMessageTable.id })
+      .from(SessionMessageTable)
+      .where(eq(SessionMessageTable.id, messageID))
+      .get()
+      .pipe(Effect.orDie)
+    if (existing) return
+    yield* events.publish(SessionEvent.Synthetic, {
+      sessionID,
+      messageID,
+      timestamp: yield* DateTime.now,
+      text: GOAL_STEER_PENDING_NOTICE,
+    })
+  },
+)
 
 const toMessage = (input: Admitted) =>
   new SessionMessage.User({

@@ -1,4 +1,7 @@
 import { describe, expect } from "bun:test"
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import path from "node:path"
 import {
   LLMClient,
   LLMError,
@@ -45,6 +48,21 @@ import { SessionProviderOwner } from "@deepagent-code/core/context-federation/pr
 import { SessionContext } from "@deepagent-code/core/context-federation/session-context"
 import { SessionRunnerCanonical } from "@deepagent-code/core/session/runner/canonical-turn"
 import { SessionCompaction } from "@deepagent-code/core/session/compaction"
+import { DocumentStore } from "@deepagent-code/core/deepagent/document-store"
+import { createPlanDoc, planScope, type PlanStep } from "@deepagent-code/core/deepagent/plan-controller"
+import { planStoreRoot } from "@deepagent-code/core/deepagent/plan-store"
+import {
+  configure as configureSessionState,
+  getOrCreate as getOrCreateSessionState,
+  setActiveGoal as setActiveGoalPointer,
+} from "@deepagent-code/core/deepagent/session-state"
+import {
+  makeGoalLoop,
+  type ControllerDeps,
+  type GraderPorts,
+  type RollbackPort,
+  type StepExecutor,
+} from "@deepagent-code/core/deepagent/goal-loop"
 import { ToolRegistry } from "@deepagent-code/core/tool/registry"
 import { ToolOutputStore } from "@deepagent-code/core/tool-output-store"
 import { ApplicationTools } from "@deepagent-code/core/tool/application-tools"
@@ -317,13 +335,16 @@ const historyEpochLookupLayer = Layer.succeedContext(
 )
 // §16.3 order 5 F3 — remote compaction seam. remoteCompactionMode: undefined = unwired (local
 // dispatch), "summary" = remote authority produces the summary, "fault" = remote faults (design §5.3:
-// enters compact recovery — the remote result is unknown and is NEVER disguised as a local success).
-let remoteCompactionMode: "summary" | "fault" | undefined
+// enters compact recovery — the remote result is unknown and is NEVER disguised as a local success),
+// "refused" = the producer raises a TYPED refusal (W1.3: keeps its specific reason code).
+let remoteCompactionMode: "summary" | "fault" | "refused" | undefined
 const remoteCompactionLayer = Layer.succeedContext(
   Context.make(SessionCompaction.CurrentRemoteCompaction, (_input) =>
     remoteCompactionMode === "summary"
       ? Effect.succeed({ kind: "compacted", summary: "## Remote\n- remote summary" })
-      : Effect.fail(new Error("remote compaction unavailable")),
+      : remoteCompactionMode === "refused"
+        ? Effect.fail(new SessionCompaction.RemoteCompactRefusedError({ reason: "network_unknown" }))
+        : Effect.fail(new Error("remote compaction unavailable")),
   ),
 )
 const runner = SessionRunnerLLM.layer.pipe(
@@ -4589,6 +4610,237 @@ describe("SessionRunnerLLM", () => {
       expect(yield* session.resume(sessionID).pipe(Effect.catchDefect(Effect.succeed))).toBe(
         "Tool input delta before start: call-1",
       )
+    }),
+  )
+
+  // -------------------------------------------------------------------------------------------------
+  // W1.1 — goal_steer drain (design W1 §1): rows admitted with delivery "goal_steer" are delivered to
+  // the ACTIVE goal's durable runtime state (never promoted into the transcript), consumed once
+  // delivered, and — with no active goal — stay pending with ONE deterministic waiting notice.
+  // -------------------------------------------------------------------------------------------------
+
+  const passingPorts = (): GraderPorts => ({
+    runTests: () => Effect.succeed({ pass: true }),
+    diagnostics: () => Effect.succeed({ maxSeverity: null }),
+    reviewerClean: () => Effect.succeed({ pass: true }),
+    panelApproves: () => Effect.succeed({ decision: "approve" }),
+  })
+  const noopExecutor: StepExecutor = () => Effect.succeed({ tokensUsed: 10 })
+  const noopRollback: RollbackPort = () => Effect.void
+  const goalDeps = (store: DocumentStore, over: Partial<ControllerDeps> = {}): ControllerDeps => ({
+    store,
+    ports: passingPorts(),
+    executor: noopExecutor,
+    rollback: noopRollback,
+    now: () => Date.now(),
+    ...over,
+  })
+  const pendingStep = (id: string): PlanStep => ({
+    step_id: id,
+    title: id,
+    status: "pending",
+    acceptance: null,
+    assigned_agent: null,
+    evidence: [],
+    note: null,
+  })
+  const readGoalState = (store: DocumentStore, sessionId: string, goalId: string) =>
+    store
+      .list({ type: "run_context", scope: planScope(sessionId) })
+      .map((ref) => store.get(ref.id))
+      .find((doc) => doc?.extensions?.goal_id === goalId)
+
+  it.effect("delivers a goal_steer to the active goal and consumes the row without a provider turn", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const root = mkdtempSync(path.join(tmpdir(), "deepagent-w1-"))
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          // session-state is PROCESS-GLOBAL: drop the active-goal pointer so the next test starts
+          // from a no-goal posture (its in-memory session map would otherwise leak it).
+          setActiveGoalPointer(sessionID, null)
+          rmSync(root, { recursive: true, force: true })
+        }),
+      )
+      configureSessionState(root)
+      getOrCreateSessionState(sessionID, "high")
+      const store = DocumentStore.shared(planStoreRoot(sessionID))
+      const plan = createPlanDoc(sessionID, "Reach the goal", [pendingStep("a")])
+      const planDoc = store.upsert({
+        type: "plan",
+        scope: planScope(sessionID),
+        description: `plan ${sessionID}`,
+        idSlug: `plan-${sessionID}`,
+        body: JSON.stringify(plan),
+        provenance: { source: "model", run_ref: planScope(sessionID) },
+      })
+      const handle = yield* makeGoalLoop(goalDeps(store)).start({
+        planDocId: planDoc.id,
+        criteria: [{ kind: "plan_complete" }],
+        limits: { maxTicks: 100, maxTokens: 100_000, maxWallclockMs: 100_000 },
+        stallThreshold: 3,
+      })
+      setActiveGoalPointer(sessionID, {
+        goalId: handle.goalId,
+        planDocId: handle.planDocId,
+        phase: "running",
+        startedAt: new Date().toISOString(),
+      })
+
+      requests.length = 0
+      const session = yield* SessionV2.Service
+      yield* session.prompt({
+        sessionID,
+        prompt: new Prompt({ text: "Weigh the edge case before finishing" }),
+        delivery: "goal_steer",
+      })
+      yield* (yield* SessionExecution.Service).awaitIdle(sessionID)
+
+      // Drain-only: the steer reaches the goal WITHOUT dispatching a provider turn (the goal's own
+      // next tick drives the model).
+      expect(requests).toHaveLength(0)
+      const state = readGoalState(store, sessionID, handle.goalId)
+      expect(state).toBeDefined()
+      const runtime = JSON.parse(state!.body) as { pendingSteers: readonly { id: string; text: string }[] }
+      expect(runtime.pendingSteers).toEqual([
+        expect.objectContaining({ text: "Weigh the edge case before finishing" }),
+      ])
+      // The session_input row is stamped consumed (idempotent by row id).
+      const { db } = yield* Database.Service
+      const row = yield* db
+        .select()
+        .from(SessionInputTable)
+        .where(eq(SessionInputTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
+      expect(row).toHaveLength(1)
+      expect(row[0]!.delivery).toBe("goal_steer")
+      expect(row[0]!.promoted_seq).not.toBeNull()
+      // No waiting notice: the steer was delivered.
+      expect((yield* session.context(sessionID)).some((message) => message.type === "synthetic")).toBe(false)
+    }),
+  )
+
+  it.effect("keeps a goal_steer pending and publishes one waiting notice when no goal is active", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      requests.length = 0
+      yield* session.prompt({
+        sessionID,
+        prompt: new Prompt({ text: "Re-prioritise once a goal starts" }),
+        delivery: "goal_steer",
+      })
+      yield* (yield* SessionExecution.Service).awaitIdle(sessionID)
+
+      expect(requests).toHaveLength(0)
+      const notices = (yield* session.context(sessionID)).filter((message) => message.type === "synthetic")
+      expect(notices).toHaveLength(1)
+      expect(notices[0]).toMatchObject({ text: SessionInput.GOAL_STEER_PENDING_NOTICE })
+      // No loss: the row stays pending so a goal started later can still absorb the guidance.
+      const { db } = yield* Database.Service
+      const row = yield* db
+        .select()
+        .from(SessionInputTable)
+        .where(eq(SessionInputTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
+      expect(row).toHaveLength(1)
+      expect(row[0]!.promoted_seq).toBeNull()
+      // Idempotent notice: a repeated drain does not fan out a second waiting notice.
+      yield* session.resume(sessionID)
+      expect((yield* session.context(sessionID)).filter((message) => message.type === "synthetic")).toHaveLength(1)
+    }),
+  )
+
+  // -------------------------------------------------------------------------------------------------
+  // W1.2 — SessionV2 manual command typing: wait/switchAgent are REAL (SessionExecution.awaitIdle /
+  // the AgentSwitched event service); shell/skill/compact stay typed-unavailable but now carry the
+  // concrete reason instead of a bare operation code.
+  // -------------------------------------------------------------------------------------------------
+
+  it.effect("wait resolves only after the active drain settles (awaitIdle)", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Start working" }), resume: false })
+
+      requests.length = 0
+      responses = [fragmentFixture("text", "text-wait", ["Settled"]).completeEvents]
+      streamGate = yield* Deferred.make<void>()
+      streamStarted = yield* Deferred.make<void>()
+      const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      yield* Deferred.await(streamStarted)
+
+      const waited = yield* Deferred.make<void>()
+      const waiter = yield* session
+        .wait(sessionID)
+        .pipe(Effect.ensuring(Deferred.succeed(waited, undefined)), Effect.forkChild)
+      yield* Effect.yieldNow
+      expect(yield* Deferred.isDone(waited)).toBe(false)
+      yield* Deferred.succeed(streamGate, undefined)
+      yield* Fiber.join(run)
+      expect(yield* Deferred.isDone(waited)).toBe(true) // wait resolves now that the drain settled
+      yield* Fiber.join(waiter)
+    }),
+  )
+
+  it.effect("switchAgent records the agent switch durably through the session event", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      yield* session.switchAgent({ sessionID, agent: "research" })
+      expect((yield* session.get(sessionID)).agent).toBe(AgentV2.ID.make("research"))
+      expect(yield* session.context(sessionID)).toMatchObject([{ type: "agent-switched", agent: "research" }])
+    }),
+  )
+
+  it.effect("refuses compact/shell/skill with a typed reason instead of a silent no-op", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const compactErr = yield* session.compact({ sessionID }).pipe(Effect.flip)
+      expect(compactErr).toMatchObject({ operation: "compact" })
+      expect((compactErr as SessionV2.OperationUnavailableError).reason).toContain("manual compaction is not wired")
+      expect(compactErr).not.toBe(undefined)
+      const shellErr = yield* session.shell({ sessionID, command: "ls" }).pipe(Effect.flip)
+      expect(shellErr).toMatchObject({ operation: "shell" })
+      expect((shellErr as SessionV2.OperationUnavailableError).reason).toContain("manual shell execution is not wired")
+      const skillErr = yield* session.skill({ sessionID, skill: "test" }).pipe(Effect.flip)
+      expect(skillErr).toMatchObject({ operation: "skill" })
+      expect(skillErr).not.toBe(undefined)
+    }),
+  )
+
+  // -------------------------------------------------------------------------------------------------
+  // W1.3 — remote compact differentiation: a producer's TYPED refusal enters compact recovery
+  // (no fabricated Compaction.Ended, no local summary success) just like an untyped fault.
+  // -------------------------------------------------------------------------------------------------
+
+  it.effect("does not disguise a typed remote compact refusal as a local success (W1.3)", () =>
+    Effect.gen(function* () {
+      const session = yield* setupOverflowRecovery
+      remoteCompactionMode = "refused"
+      currentModel = responsesRecoveryModel
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          remoteCompactionMode = undefined
+        }),
+      )
+      responses = [
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.providerError({ message: "prompt too long", classification: "context-overflow" }),
+        ],
+        fragmentFixture("text", "text-final", ["Recovered after refusal"]).completeEvents,
+      ]
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Continue" }), resume: false })
+      yield* session.resume(sessionID)
+
+      // Exactly one physical request: the refused remote compact never dispatched a fake summary.
+      expect(requests).toHaveLength(1)
+      const context = yield* (yield* SessionStore.Service).context(sessionID)
+      expect(context.some((message) => message.type === "compaction")).toBe(false)
     }),
   )
 })

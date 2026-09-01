@@ -92,10 +92,17 @@ type LegacyMessageWithParts = {
 export const NotFoundError = SessionNotFound.Error
 export type NotFoundError = SessionNotFound.Error
 
+/**
+ * A manual (user-initiated) Session control that the wired core services cannot serve yet. Typed,
+ * never a silent no-op: callers and the UI surface the `reason` directly. `operation` stays the
+ * coarse command name; `reason` states the concrete gap (e.g. the manual compaction state machine is
+ * not ported to the V2 runner) so a refusal is distinguishable from an unknown command.
+ */
 export class OperationUnavailableError extends Schema.TaggedErrorClass<OperationUnavailableError>()(
   "Session.OperationUnavailableError",
   {
     operation: Schema.Literals(["move", "shell", "skill", "switchAgent", "compact", "wait"]),
+    reason: Schema.String,
   },
 ) {}
 
@@ -445,7 +452,7 @@ export interface Interface {
   readonly switchAgent: (input: {
     sessionID: SessionSchema.ID
     agent: string
-  }) => Effect.Effect<void, OperationUnavailableError>
+  }) => Effect.Effect<void, NotFoundError>
   readonly switchModel: (input: {
     sessionID: SessionSchema.ID
     model: ModelV2.Ref
@@ -462,15 +469,15 @@ export interface Interface {
     sessionID: SessionSchema.ID
     command: string
     resume?: boolean
-  }) => Effect.Effect<void, OperationUnavailableError>
+  }) => Effect.Effect<void, NotFoundError | OperationUnavailableError>
   readonly skill: (input: {
     id?: EventV2.ID
     sessionID: SessionSchema.ID
     skill: string
     resume?: boolean
-  }) => Effect.Effect<void, OperationUnavailableError>
+  }) => Effect.Effect<void, NotFoundError | OperationUnavailableError>
   readonly compact: (input: CompactInput) => Effect.Effect<void, NotFoundError | OperationUnavailableError>
-  readonly wait: (id: SessionSchema.ID) => Effect.Effect<void, NotFoundError | OperationUnavailableError>
+  readonly wait: (id: SessionSchema.ID) => Effect.Effect<void, NotFoundError | SessionRunner.RunError>
   readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | SessionRunner.RunError>
   readonly interrupt: (sessionID: SessionSchema.ID) => Effect.Effect<void>
 }
@@ -779,14 +786,39 @@ export const layer = Layer.effect(
           }),
         ),
       ),
-      shell: Effect.fn("V2Session.shell")(function* () {
-        return yield* new OperationUnavailableError({ operation: "shell" })
+      // W1.2 — manual shell execution is NOT wired as a core service: a user-initiated shell command
+      // runs only through the provider-turn tool path (the model executes it as a tool), and the V2
+      // runner has no standalone "run this command now" seam. Typed refusal with the concrete reason
+      // rather than a silent no-op.
+      shell: Effect.fn("V2Session.shell")(function* (input) {
+        yield* result.get(input.sessionID)
+        return yield* new OperationUnavailableError({
+          operation: "shell",
+          reason: "manual shell execution is not wired: the V2 runner executes shell commands only as model tool calls",
+        })
       }),
-      skill: Effect.fn("V2Session.skill")(function* () {
-        return yield* new OperationUnavailableError({ operation: "skill" })
+      // W1.2 — manual skill invocation is NOT wired as a core service: SkillGuidance is per-turn
+      // advisory composition (loaded into the system context at turn boundaries), with no standalone
+      // "inject this skill now" service. Typed refusal with the concrete reason.
+      skill: Effect.fn("V2Session.skill")(function* (input) {
+        yield* result.get(input.sessionID)
+        return yield* new OperationUnavailableError({
+          operation: "skill",
+          reason: "manual skill invocation is not wired: skill guidance composes into the next turn's system context only",
+        })
       }),
-      switchAgent: Effect.fn("V2Session.switchAgent")(function* () {
-        return yield* new OperationUnavailableError({ operation: "switchAgent" })
+      // W1.2 — switchAgent is REAL: the AgentSwitched event is the established switch service (the
+      // projector updates the Session's agent and requests a ContextEpoch replacement at the next
+      // provider-turn boundary, exactly like the sibling switchModel path). No AgentV2 dependency is
+      // needed — the event owns the transition; the agent roster is resolved per-turn by the runner.
+      switchAgent: Effect.fn("V2Session.switchAgent")(function* (input) {
+        yield* result.get(input.sessionID)
+        yield* events.publish(SessionEvent.AgentSwitched, {
+          sessionID: input.sessionID,
+          messageID: SessionMessage.ID.create(),
+          timestamp: yield* DateTime.now,
+          agent: input.agent,
+        })
       }),
       switchModel: Effect.fn("V2Session.switchModel")(function* (input) {
         yield* result.get(input.sessionID)
@@ -798,17 +830,24 @@ export const layer = Layer.effect(
         })
       }),
       // §16.3 order 4 package E: overflow-triggered compaction and its continuation loop run
-      // natively in the V2 runner, but MANUAL compaction needs the legacy compaction state
-      // machine (continuation state, soft-landing, remote artifacts), which is not ported yet.
-      // Keep the typed refusal — fail-closed for callers, honest API surface — rather than a
-      // partial reimplementation.
+      // natively in the V2 runner, but MANUAL compaction still needs the legacy compaction state
+      // machine (continuation state, soft-landing, remote artifacts), which is not ported to the
+      // core runner yet. W1.2 keeps the typed refusal — fail-closed for callers, honest API
+      // surface — but now REPORTING the concrete reason instead of a bare operation code.
       compact: Effect.fn("V2Session.compact")(function* (input) {
         yield* result.get(input.sessionID)
-        return yield* new OperationUnavailableError({ operation: "compact" })
+        return yield* new OperationUnavailableError({
+          operation: "compact",
+          reason:
+            "manual compaction is not wired: the legacy compaction state machine (continuation state, soft-landing, remote artifacts) is not ported to the V2 runner; overflow compaction runs automatically",
+        })
       }),
+      // W1.2 — wait is REAL: it maps to SessionExecution.awaitIdle — the process-local ownership
+      // chain resolves once the Session is idle (a no-op when nothing is running). With the no-op
+      // execution layer (tests) it resolves immediately.
       wait: Effect.fn("V2Session.wait")(function* (sessionID) {
         yield* result.get(sessionID)
-        return yield* new OperationUnavailableError({ operation: "wait" })
+        yield* execution.awaitIdle(sessionID)
       }),
       resume: Effect.fn("V2Session.resume")(function* (sessionID) {
         yield* result.get(sessionID)

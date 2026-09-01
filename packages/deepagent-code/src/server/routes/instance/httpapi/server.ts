@@ -147,6 +147,7 @@ import { layer as maintenanceRegistryLayer } from "./maintenance-registry"
 import { capabilityHandlers } from "./handlers/capability"
 import { systemContextHandlers } from "./handlers/system-context"
 import { contextHandlers } from "./handlers/context"
+import { productionSourcesLayer } from "@/context-federation/production-sources"
 import { V2OwnerSeed } from "@deepagent-code/core/session/runner/v2-owner-seed"
 
 export const context = Context.makeUnsafe<unknown>(new Map())
@@ -423,6 +424,11 @@ export function createRoutes(corsOptions?: CorsOptions) {
   // consumes the module-level Database.defaultLayer constant — memoized per runtime object
   // identity, so it is the SAME connection the route graph builds (no split-brain).
   return baseRoutes.pipe(
+    // W3.7 — the ProductionV2Sources VALUE seam (same context-flow mechanism as the PromptEpoch
+    // seam below): the route graph's location-layer runner subtree forwards it into the four-graph
+    // adapters (real code/documents/knowledge/memory sources), and the C6 context-readiness handler
+    // requires it so readiness probes the SAME adapter set the runner serves (W3.7 L5).
+    Layer.provide(productionSourcesLayer({ workspaceDirectory: process.cwd() })),
     Layer.provide(PromptEpoch.v2RunnerSeamLayer.pipe(Layer.provide(Database.defaultLayer))),
     Layer.provideMerge(devCampaignMint),
     // W0.5 (blocker-2): the release pipeline ships owner-authorization.json with the install

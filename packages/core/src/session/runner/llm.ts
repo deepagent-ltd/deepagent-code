@@ -31,8 +31,13 @@ import { SessionContext } from "../../context-federation/session-context"
 import { SessionEvent } from "../event"
 import { SessionHistory } from "../history"
 import { SessionInput } from "../input"
+import { SessionMessage } from "../message"
 import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
+import { GoalLoop } from "../../deepagent/goal-loop"
+import { getActiveGoal } from "../../deepagent/session-state"
+import { DocumentStore } from "../../deepagent/document-store"
+import { planStoreRoot } from "../../deepagent/plan-store"
 import { type RunError, Service, StepLimitExceededError } from "./index"
 import { SessionRunnerModel } from "./model"
 import { PreparedProviderTurn } from "./prepared-provider-turn"
@@ -231,6 +236,36 @@ export const layer = Layer.effect(
         Effect.map(SystemContext.combine),
       )
 
+    // W1.1 — goal_steer delivery (design W1 §1). Each pending goal-directed steer is handed to the
+    // ACTIVE goal's durable runtime state via GoalLoop.enqueueGoalSteer; without an active goal (or a
+    // stale pointer whose runtime state is gone/terminal) the row stays pending (no loss) and one
+    // deterministic "waiting for a goal" notice is published. Delivered rows are stamped consumed
+    // (idempotent by row id) — crash-safe at-least-once, mirroring the goal driver's steer semantics.
+    const drainGoalSteers = Effect.fn("SessionRunner.drainGoalSteers")(function* (
+      sessionID: SessionSchema.ID,
+      steers: ReadonlyArray<SessionInput.Admitted>,
+    ) {
+      const pointer = getActiveGoal(sessionID)
+      const delivered: SessionMessage.ID[] = []
+      for (const steer of steers) {
+        if (pointer !== null && (pointer.phase === "running" || pointer.phase === "paused")) {
+          const outcome = yield* Effect.sync(() =>
+            GoalLoop.enqueueGoalSteer(
+              DocumentStore.shared(planStoreRoot(sessionID)),
+              { goalId: pointer.goalId, planDocId: pointer.planDocId, sessionId: sessionID },
+              { id: steer.id, text: steer.prompt.text },
+            ),
+          ).pipe(Effect.catchCause(() => Effect.succeed("no_goal" as const)))
+          if (outcome === "enqueued") {
+            delivered.push(steer.id)
+            continue
+          }
+        }
+        yield* SessionInput.publishGoalSteerPendingNotice(db, events, sessionID, steer.id)
+      }
+      if (delivered.length > 0) yield* SessionInput.consumeGoalSteers(db, sessionID, delivered)
+    })
+
     const runTurnAttempt = Effect.fn("SessionRunner.runTurn")(function* (
       sessionID: SessionSchema.ID,
       promotion: SessionInput.Delivery | undefined,
@@ -261,7 +296,10 @@ export const layer = Layer.effect(
       const toolFibers = yield* FiberSet.make<void, ToolOutputStore.Error>()
       let needsContinuation = false
       const promoted = yield* Effect.gen(function* () {
-        if (!promotion) return [] as readonly string[]
+        // W1.1 — only `steer`/`queue` are transcript promotions. A `goal_steer` promotion is the
+        // goal channel's drain-only turn: it must NOT promote chat steers/queued input (the goal
+        // driver reads a DISJOINT buffer), and it dispatches no provider turn of its own.
+        if (promotion !== "steer" && promotion !== "queue") return [] as readonly string[]
         const cutoff = yield* SessionInput.latestSeq(db, session.id)
         if (promotion === "steer") return yield* SessionInput.promoteSteers(db, events, session.id, cutoff)
         const queued = yield* SessionInput.promoteNextQueued(db, events, session.id)
@@ -269,6 +307,17 @@ export const layer = Layer.effect(
         return queued === undefined ? steers : [queued, ...steers]
       })
       const currentStep = promoted.length > 0 ? 1 : step
+      // W1.1 — goal_steer drain (after the promoted-inputs read; the goal channel is DISJOINT from
+      // the steer/queue promotions above). Pending goal-directed steers are delivered to the ACTIVE
+      // goal's durable runtime state (the next goal tick threads them into its step prompt); without
+      // an active goal they stay pending (no loss) and one deterministic notice reaches the user.
+      // A `goal_steer` drain-only turn returns here WITHOUT a provider dispatch — the goal's own
+      // tick drives the model, so the drain itself never spends a turn.
+      const goalSteers = yield* SessionInput.pendingGoalSteers(db, session.id)
+      if (goalSteers.length > 0) {
+        yield* drainGoalSteers(session.id, goalSteers)
+        if (promotion === "goal_steer") return { needsContinuation: false, step: currentStep }
+      }
       const system =
         initialized ??
         (yield* SessionContextEpoch.prepare(
@@ -784,7 +833,10 @@ export const layer = Layer.effect(
     }) {
       const hasSteer = yield* SessionInput.hasPending(db, input.sessionID, "steer")
       const hasQueue = hasSteer ? false : yield* SessionInput.hasPending(db, input.sessionID, "queue")
-      if (input.force !== true && !hasSteer && !hasQueue) return
+      // W1.1 — a goal_steer admission wakes the drain but is NOT a chat activity: it opens a
+      // DRAIN-ONLY turn (no provider dispatch) that delivers the guidance to the active goal.
+      const hasGoalSteer = !hasSteer && !hasQueue && (yield* SessionInput.hasPending(db, input.sessionID, "goal_steer"))
+      if (input.force !== true && !hasSteer && !hasQueue && !hasGoalSteer) return
       const parityCampaign = (yield* V2ProviderTurn.CurrentCampaign) ?? V2ProviderTurn.campaignFromEnv()
       const ownerCampaign = (yield* V2ProviderTurn.CurrentOwnerCampaign) ?? V2ProviderTurn.ownerCampaignFromEnv()
       if (!(yield* ownerAuthorization.authorize(db, ownerCampaign)))
@@ -796,8 +848,8 @@ export const layer = Layer.effect(
       if (parityCampaign && V2ProviderTurn.ownerCampaignFromEnv())
         return yield* new V2ProviderTurn.ConflictError({ reason: "v2_owner_cannot_record_shadow_parity" })
       yield* failInterruptedTools(input.sessionID)
-      let promotion: SessionInput.Delivery | undefined = hasSteer ? "steer" : hasQueue ? "queue" : undefined
-      let openActivity = input.force === true || hasSteer || hasQueue
+      let promotion: SessionInput.Delivery | undefined = hasSteer ? "steer" : hasQueue ? "queue" : hasGoalSteer ? "goal_steer" : undefined
+      let openActivity = input.force === true || hasSteer || hasQueue || hasGoalSteer
       while (openActivity) {
         let needsContinuation = true
         let step = 1

@@ -149,11 +149,14 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 }),
               ),
             ),
-            Effect.catchTag("Session.OperationUnavailableError", (error) =>
+            // W1.2 — wait is now REAL (SessionExecution.awaitIdle): its failures are the underlying
+            // drain's RunError. Surface them as unavailable with the concrete message instead of a
+            // stale typed-unavailable mapping.
+            Effect.catch((error): Effect.Effect<void, ServiceUnavailableError> =>
               Effect.fail(
                 new ServiceUnavailableError({
-                  message: `Session ${error.operation} is not available yet`,
-                  service: `session.${error.operation}`,
+                  message: `Session wait failed: ${error instanceof Error ? error.message : String(error)}`,
+                  service: "session.wait",
                 }),
               ),
             ),
