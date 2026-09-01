@@ -48,6 +48,7 @@ export type StartupCategory =
   | "task_run"
   | "compaction"
   | "session_activity"
+  | "recovery_descriptor"
 
 export const StartupCategories: readonly StartupCategory[] = [
   "provider_attempt",
@@ -55,6 +56,7 @@ export const StartupCategories: readonly StartupCategory[] = [
   "task_run",
   "compaction",
   "session_activity",
+  "recovery_descriptor",
 ]
 
 /** The deterministic classification bucket for one durable item. */
@@ -322,6 +324,37 @@ function classifySessionActivityItem(row: CategoryRow): StartupInventoryItem {
   }
 }
 
+// W2 — the durable C1B recovery descriptor surface (design §W2). Every row of the
+// descriptor table is a classified five-class object; kind `resolved` is terminal
+// (resolved), the other four classes are past-dispatch recoveries (never an automatic
+// requeue — §2.2), and an out-of-vocabulary kind is `unclassified` (blocks ready).
+function classifyRecoveryDescriptorItem(row: CategoryRow): StartupInventoryItem {
+  const classification =
+    row.state === "resolved"
+      ? "resolved"
+      : ["resolvable_exact", "repairable_exact", "fork_only", "coordination_required"].includes(row.state)
+        ? "recovery"
+        : undefined
+  if (classification === undefined)
+    return {
+      category: "recovery_descriptor",
+      id: row.id,
+      classification: "unclassified",
+      state: row.state,
+      reason: `unknown recovery descriptor kind '${row.state}'`,
+    }
+  return {
+    category: "recovery_descriptor",
+    id: row.id,
+    classification,
+    state: row.state,
+    reason:
+      classification === "resolved"
+        ? "recovery descriptor resolved; terminal evidence exists"
+        : "recovery descriptor past dispatch; explicit recovery (never auto-requeued)",
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Inventory assembly
 // ---------------------------------------------------------------------------
@@ -353,6 +386,7 @@ export const classifyStartup = Effect.fn("StartupInventory.classifyStartup")(fun
     task_run: emptyCounts(),
     compaction: emptyCounts(),
     session_activity: emptyCounts(),
+    recovery_descriptor: emptyCounts(),
   }
   const unclassifiedItems: StartupInventoryItem[] = []
   const observedAt = Date.now()
@@ -392,6 +426,13 @@ export const classifyStartup = Effect.fn("StartupInventory.classifyStartup")(fun
   )
   activities.forEach((row) => accept(classifySessionActivityItem(row)))
 
+  // W2 recovery descriptors: one item per durable descriptor row (append-only
+  // classification log; the five C1B classes map onto the inventory buckets).
+  const descriptors = yield* db.all<CategoryRow>(
+    sql`SELECT descriptor_id AS id, kind AS state FROM session_provider_recovery_descriptor`,
+  )
+  descriptors.forEach((row) => accept(classifyRecoveryDescriptorItem(row)))
+
   const total =
     byCategory.provider_attempt.safe_before_dispatch +
     byCategory.provider_attempt.recovery +
@@ -412,7 +453,11 @@ export const classifyStartup = Effect.fn("StartupInventory.classifyStartup")(fun
     byCategory.session_activity.safe_before_dispatch +
     byCategory.session_activity.recovery +
     byCategory.session_activity.resolved +
-    byCategory.session_activity.unclassified
+    byCategory.session_activity.unclassified +
+    byCategory.recovery_descriptor.safe_before_dispatch +
+    byCategory.recovery_descriptor.recovery +
+    byCategory.recovery_descriptor.resolved +
+    byCategory.recovery_descriptor.unclassified
 
   return { total, byCategory, unclassifiedItems, ready: gateReady({ unclassifiedItems }) } satisfies StartupInventory
 })

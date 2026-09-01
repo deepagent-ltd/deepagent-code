@@ -1,6 +1,7 @@
 export * as SessionRunner from "./index"
 export * as SessionProviderRecovery from "./recovery"
 export * as SessionProviderRecoveryStore from "./recovery-store"
+export * as SessionProviderRecoveryDurable from "./recovery-durable-store"
 
 import type { LLMError } from "@deepagent-code/llm"
 import { Context, Effect, Schema } from "effect"

@@ -39,6 +39,11 @@ const createTables = (db: Db) =>
     yield* db.run(sql`
       CREATE TABLE session_facade_activity (activity_id TEXT PRIMARY KEY, state TEXT NOT NULL)
     `)
+    yield* db.run(sql`
+      CREATE TABLE session_provider_recovery_descriptor
+        (descriptor_id TEXT PRIMARY KEY, session_id TEXT, activity_id TEXT, turn_id TEXT,
+         kind TEXT NOT NULL, payload TEXT, content_hash TEXT, created_at INTEGER)
+    `)
   })
 
 describe("StartupInventory.classifyStartup (C1B-10)", () => {
@@ -238,6 +243,68 @@ describe("StartupInventory.classifyStartup (C1B-10)", () => {
         expect(inventory.byCategory.compaction.safe_before_dispatch).toBe(1)
         expect(inventory.byCategory.compaction.recovery).toBe(1)
         expect(inventory.ready).toBe(true)
+      }),
+    )
+  })
+
+  test("W2 descriptor rows classify by kind: resolved → resolved, the four C1B classes → recovery", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* createTables(db)
+        yield* db.run(sql`INSERT INTO session_provider_recovery_descriptor
+          (descriptor_id, session_id, kind) VALUES
+          ('desc-a', 'sess-1', 'resolvable_exact'),
+          ('desc-b', 'sess-1', 'repairable_exact'),
+          ('desc-c', 'sess-1', 'fork_only'),
+          ('desc-d', 'sess-1', 'coordination_required'),
+          ('desc-e', 'sess-1', 'resolved')`)
+
+        const inventory = yield* StartupInventory.classifyStartup(db)
+        expect(inventory.byCategory.recovery_descriptor.resolved).toBe(1)
+        expect(inventory.byCategory.recovery_descriptor.recovery).toBe(4)
+        expect(inventory.byCategory.recovery_descriptor.safe_before_dispatch).toBe(0)
+        expect(inventory.byCategory.recovery_descriptor.unclassified).toBe(0)
+        expect(inventory.ready).toBe(true)
+      }),
+    )
+  })
+
+  test("an unknown descriptor kind makes the inventory not ready (never silently skipped)", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* createTables(db)
+        yield* db.run(sql`INSERT INTO session_provider_recovery_descriptor
+          (descriptor_id, session_id, kind) VALUES ('desc-weird', 'sess-1', 'teleported')`)
+
+        const inventory = yield* StartupInventory.classifyStartup(db)
+        expect(inventory.ready).toBe(false)
+        expect(inventory.unclassifiedItems).toHaveLength(1)
+        expect(inventory.unclassifiedItems[0]).toMatchObject({
+          category: "recovery_descriptor",
+          classification: "unclassified",
+          state: "teleported",
+        })
+      }),
+    )
+  })
+
+  test("restart determinism includes descriptor rows (kill-9 re-derives the same inventory from the same rows)", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* createTables(db)
+        yield* db.run(sql`INSERT INTO session_provider_attempt VALUES ('att-a', 'indeterminate_after_crash')`)
+        yield* db.run(sql`INSERT INTO session_provider_recovery_descriptor
+          (descriptor_id, session_id, kind) VALUES ('desc-a', 'sess-1', 'coordination_required')`)
+
+        const first = yield* StartupInventory.classifyStartup(db)
+        const second = yield* StartupInventory.classifyStartup(db)
+        expect(second).toEqual(first)
+        expect(first.byCategory.provider_attempt.recovery).toBe(1)
+        expect(first.byCategory.recovery_descriptor.recovery).toBe(1)
+        expect(first.ready).toBe(true)
       }),
     )
   })

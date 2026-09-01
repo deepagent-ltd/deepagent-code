@@ -15,7 +15,10 @@ import { migrations } from "../src/database/migration.gen"
 // Successor pin (2026-08-28): the event-ledger wiring migration body
 // (20260829030000_wire_event_ledgers) joined the registry, so the ordered
 // registry digest moved. The pin tracks the current release candidate.
-const PINNED_DIGEST = "c1762b0df77600e7fb84e238aaa4f8e10629629b50792169eb05fd06dbb537c7"
+// Successor pin (W2, 2026-09-01): the session-provider recovery persistence
+// migration (20260830000000_session_provider_recovery) joined the registry, so
+// the ordered registry digest moved again.
+const PINNED_DIGEST = "3e5e425b76758008b9bc19d6ec19d48c5fe35309731f2873785b0f30f503da14"
 
 const digest = (entries: readonly { readonly id: string; readonly hash: string }[]) =>
   createHash("sha256").update(JSON.stringify(entries)).digest("hex")

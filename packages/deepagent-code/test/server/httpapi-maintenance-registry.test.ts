@@ -1,20 +1,41 @@
 import { describe, expect, test } from "bun:test"
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
+import { Database } from "@deepagent-code/core/database/database"
+import { SessionProviderRecovery } from "@deepagent-code/core/session/runner"
 import { Service as MaintenanceRegistryService, DefaultEvidenceExportTtlMs, layer } from "../../src/server/routes/instance/httpapi/maintenance-registry"
 import type { RecoveryDescriptorRecord } from "../../src/server/routes/instance/httpapi/maintenance-registry"
 
-// C6-01 in-memory maintenance surface state (design §11.1). The registry gives the
-// maintenance/recovery HTTP contract a coherent request/response surface with a
-// deterministic, process-local store. These tests exercise the exact behaviors the
-// handlers rely on (restore-in-progress 409, per-session listing, request-hash
-// lookup, evidence export TTL/redaction).
+// C6-01 maintenance surface state (design §11.1) — W2: the recovery command/descriptor/
+// evidence-export records are DURABLE (core's DB-backed store) so these tests exercise
+// the exact behaviors the handlers rely on (restore-in-progress 409, per-session
+// listing, request-hash lookup, evidence export TTL/redaction) against an in-memory
+// database shared with the layer.
+
+const database = Database.layerFromPath(":memory:")
+const testLayer = Layer.provideMerge(layer, database)
 
 const run = <A>(self: Effect.Effect<A, never, MaintenanceRegistryService>) =>
-  Effect.runPromise(self.pipe(Effect.provide(layer)))
+  Effect.runPromise(self.pipe(Effect.provide(testLayer)))
+
+// Commands are content-addressed (the handler computes the same id), so a fixture
+// record derives its commandId from the request hash + attempt identity.
+const fixtureAttempt = (record: Partial<RecoveryDescriptorRecord>): SessionProviderRecovery.AttemptIdentity => ({
+  sessionId: record.sessionId ?? "sess_1",
+  activityId: "",
+  attemptId: record.attemptId ?? "attempt_1",
+  providerTurnSeq: 0,
+  selectionId: "",
+  projectionHash: record.requestHash ?? "req_hash_1",
+  requestHash: record.requestHash ?? "req_hash_1",
+  providerId: "",
+})
 
 /** A minimal frozen-shaped recovery descriptor record for listing/lookup. */
 const record = (overrides: Partial<RecoveryDescriptorRecord> = {}): RecoveryDescriptorRecord => ({
-  commandId: "cmd_1",
+  commandId: SessionProviderRecovery.recoveryCommandContentAddress({
+    requestHash: "req_hash_1",
+    attemptIdentity: fixtureAttempt({}),
+  }),
   sessionId: "sess_1",
   attemptId: "attempt_1",
   requestHash: "req_hash_1",
@@ -60,17 +81,19 @@ describe("maintenance registry", () => {
     run(
       Effect.gen(function* () {
         const r = yield* MaintenanceRegistryService
-        yield* r.record(record())
+        const fixture = record()
+        yield* r.record(fixture)
 
-        const fetched = yield* r.getRecord("cmd_1")
-        expect(fetched?.commandId).toBe("cmd_1")
+        const fetched = yield* r.getRecord(fixture.commandId)
+        expect(fetched?.commandId).toBe(fixture.commandId)
         expect(fetched?.requestHash).toBe("req_hash_1")
+        expect(fetched?.attemptId).toBe("attempt_1")
 
         const list = yield* r.listBySession("sess_1")
-        expect(list.map((item) => item.commandId)).toEqual(["cmd_1"])
+        expect(list.map((item) => item.commandId)).toEqual([fixture.commandId])
 
         const byHash = yield* r.getByRequestHash("req_hash_1")
-        expect(byHash?.commandId).toBe("cmd_1")
+        expect(byHash?.commandId).toBe(fixture.commandId)
         const other = yield* r.listBySession("sess_other")
         expect(other).toEqual([])
       }),
