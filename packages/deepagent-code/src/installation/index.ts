@@ -213,8 +213,10 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
         const detectedMethod = installMethod || (yield* result.method())
 
         if (detectedMethod === "brew") {
-          // Brew resolves the `deepagent-code` formula directly; the migration-era
-          // homebrew tap is gone and no longer probed.
+          // No published formula exists yet: formulae.brew.sh returns 404 for
+          // `deepagent-code`. This branch is reserved for a future Homebrew tap
+          // release; until then brew installs are governed by downstream
+          // releases.
           const response = yield* httpOk.execute(
             HttpClientRequest.get("https://formulae.brew.sh/api/formula/deepagent-code.json").pipe(
               HttpClientRequest.acceptJson,

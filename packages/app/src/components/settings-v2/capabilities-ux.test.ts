@@ -53,4 +53,16 @@ describe("C6-09 capabilities panel wiring", () => {
       expect(panel).not.toContain(`settings.capabilities.${key}"`)
     }
   })
+
+  test("the snapshot row templates resolve their params (no literal {{digest}}/{{count}})", async () => {
+    const panel = await readFile(path.join(here, "capabilities.tsx"), "utf8")
+
+    // W9.5 — the local `t` wrapper passes params through to `language.t` (resolveTemplate);
+    // otherwise the snapshot row renders the raw `{{digest}}`/`{{count}}` placeholders.
+    const t = panel.match(/const t = \([^)]*\) =>[^\n]*/)
+    expect(t).not.toBeNull()
+    expect(t![0]).toContain("params")
+    expect(panel).toContain('settings.capabilities.digest", { digest: row().catalogDigest }')
+    expect(panel).toContain('settings.capabilities.l0lineCount", { count: row().l0LineCount }')
+  })
 })

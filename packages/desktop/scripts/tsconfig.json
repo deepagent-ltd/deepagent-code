@@ -1,23 +1,22 @@
 {
+  "$schema": "https://json.schemastore.org/tsconfig",
   "compilerOptions": {
+    "composite": true,
     "target": "ESNext",
     "module": "ESNext",
     "skipLibCheck": true,
     "moduleResolution": "bundler",
     "allowSyntheticDefaultImports": true,
     "esModuleInterop": true,
-    "jsx": "preserve",
-    "jsxImportSource": "solid-js",
     "allowJs": true,
     "resolveJsonModule": true,
     "strict": true,
     "isolatedModules": true,
-    "noEmit": true,
-    "emitDeclarationOnly": false,
+    "noEmit": false,
+    "emitDeclarationOnly": true,
     "outDir": "node_modules/.ts-dist",
-    "types": ["vite/client", "node", "electron"]
+    "types": ["bun", "node"]
   },
-  "references": [{ "path": "../app" }, { "path": "./scripts" }],
-  "include": ["src", "package.json"],
-  "exclude": ["src/**/*.test.ts"]
+  "include": ["*.ts"],
+  "exclude": ["live-llm/**", "subagents-live.ts"]
 }

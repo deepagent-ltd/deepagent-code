@@ -34,6 +34,29 @@ describe("C6-11 session lifecycle wiring", () => {
     expect(pump).toContain("subscribeExecutionEvents")
   })
 
+  test("the pump drains the durable journal (versioned types + seq-resumed cursor poll)", async () => {
+    const pump = await readFile(path.join(here, "lifecycle-execution-pump.ts"), "utf8")
+
+    // W9.5 — the durable journal is the PRIMARY source (the GlobalBus SSE mirror is skipped
+    // under V2 admission ON), and journal row types are versioned (`session.execution.started.1`).
+    expect(pump).toContain("createExecutionJournalSubscription")
+    expect(pump).toContain("eventsCursor")
+    expect(pump).toContain("context.events")
+    expect(pump).toContain("eventBaseType")
+    expect(pump).toContain("cursor_gap_exceeded")
+    // The SSE subscription is retained as the admission-OFF fallback/compat path.
+    expect(pump).toContain("subscribeExecutionEvents")
+  })
+
+  test("the session lifecycle mounts the journal as the primary source", async () => {
+    const lifecycle = await readFile(path.join(here, "session-lifecycle.tsx"), "utf8")
+
+    expect(lifecycle).toContain("createExecutionJournalSubscription({")
+    expect(lifecycle).toContain("subscribeExecutionEvents")
+    expect(lifecycle).toContain("onConnectionChange")
+    expect(lifecycle).toContain('lifecycle().onEvent(connected ? { type: "reconnect" } : { type: "disconnect" })')
+  })
+
   test("the lifecycle reducer accepts the execution event vocabulary", async () => {
     const reducer = await readFile(path.join(here, "recovery-lifecycle-state.ts"), "utf8")
 

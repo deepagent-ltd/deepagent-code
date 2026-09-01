@@ -12,7 +12,7 @@ import { resolveDataPath } from "@deepagent-code/core/global-path"
 import { Deferred, Effect, Fiber } from "effect"
 import contextMenu from "electron-context-menu"
 
-import type { ServerReadyData, WslServersState } from "../preload/types"
+import type { ServerReadyData } from "../preload/types"
 import { checkAppExists, resolveAppPath } from "./apps"
 import { CHANNEL } from "./constants"
 import { registerIpcHandlers, sendDeepLinks, sendMenuCommand } from "./ipc"
@@ -28,11 +28,10 @@ import {
   type SidecarListener,
 } from "./server"
 import {
-  firstReadyWslServer,
-  isSidecarSpawnFailure,
   resolveWslSidecarMode,
-  sidecarSpawnFailure,
-  type WslServerReady,
+  startPrimarySidecar,
+  waitForWslServerReady,
+  type SidecarReady,
   type WslSidecarMode,
 } from "./sidecar-routing"
 import { setupAutoUpdater, showUpdaterDialog } from "./updater"
@@ -386,7 +385,8 @@ const main = Effect.gen(function* () {
         hostname,
         port,
         password,
-        wslServers,
+        spawnLocalServer,
+        startWslPrimary: (wslMode) => startWslPrimary(wslServers, wslMode),
         onStdout: (message) => writeLog("server", "stdout", { message }),
         onStderr: (message) => writeLog("server", "stderr", { message }, "warn"),
         onExit: (code) => writeLog("utility", "sidecar exited", { code }, "warn"),
@@ -394,6 +394,8 @@ const main = Effect.gen(function* () {
           logger.log("sidecar_platform_fallback", { mode: "auto", reason })
         },
       }),
+    ).pipe(
+      Effect.tapError((error) => Effect.sync(() => logger.error("primary sidecar startup failed", error))),
     )
     server = connection.listener
 
@@ -404,21 +406,9 @@ const main = Effect.gen(function* () {
       void wslServers.initialize().catch((error) => logger.error("wsl server initialization failed", error))
     }
 
-    // Wait for the sidecar to be ready for API requests before delivering credentials
-    // to the renderer. Listener-ready ≠ API-ready; delivering credentials too early
-    // causes the renderer to race against an uninitialized sidecar, which can result
-    // in failed bootstrap requests and a "local server disconnected" splash.
-    // Timeout is 15 s (down from the old 30 s). On failure we log and continue.
-    yield* Effect.promise(() => connection.health).pipe(
-      Effect.timeout("15 seconds"),
-      Effect.tapError((e) =>
-        Effect.sync(() => {
-          logger.error("sidecar health check failed", e.toString())
-        }),
-      ),
-      Effect.ignore,
-    )
-
+    // startPrimarySidecar only resolves after the sidecar's API health check
+    // passed (or a ready WSL primary was selected), so the credentials handed
+    // to the renderer are verified — never a listener-only URL.
     yield* Deferred.succeed(serverReady, connection.ready)
 
     logger.log("loading task finished")
@@ -427,117 +417,16 @@ const main = Effect.gen(function* () {
   yield* Fiber.await(loadingTask)
 })
 
-type SidecarConnection = {
-  listener: SidecarListener | null
-  ready: ServerReadyData
-  health: Promise<void>
-  wslFallback: boolean
-}
-
-// Budget for a WSL fallback: WSL2 distro boot plus a fresh `deepagent-code serve`
-// start. Each spawnWslSidecar already polls its own health (30s default) inside
-// that budget, so a ready WSL server typically resolves far sooner.
-const WSL_FALLBACK_TIMEOUT_MS = 120_000
-
-async function startPrimarySidecar(options: {
-  platform: NodeJS.Platform
-  mode: WslSidecarMode
-  hostname: string
-  port: number
-  password: string
-  wslServers: WslServersController
-  onStdout: (message: string) => void
-  onStderr: (message: string) => void
-  onExit: (code: number) => void
-  onPlatformFallback: (reason: string) => void
-}): Promise<SidecarConnection> {
-  const spawnLocal = () =>
-    spawnLocalServer(options.hostname, options.port, options.password, {
-      onStdout: options.onStdout,
-      onStderr: options.onStderr,
-      onExit: options.onExit,
-    }).then(({ listener, health }) => ({
-      listener,
-      ready: {
-        url: `http://${options.hostname}:${options.port}`,
-        username: "deepagent-code",
-        password: options.password,
-      },
-      health: health.wait,
-      wslFallback: false,
-    }))
-
-  if (options.platform === "win32" && options.mode === "force") {
-    return startWslPrimary(options.wslServers)
-  }
-
-  try {
-    return await spawnLocal()
-  } catch (error) {
-    if (options.platform !== "win32" || options.mode !== "auto" || !isSidecarSpawnFailure(error)) throw error
-    options.onPlatformFallback(error instanceof Error ? error.message : String(error))
-    return startWslPrimary(options.wslServers).catch((fallbackError) => {
-      const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : String(fallbackError)
-      const reason = error instanceof Error ? error.message : String(error)
-      throw sidecarSpawnFailure(`local sidecar spawn failed (${reason}); WSL fallback failed (${fallbackMessage})`, error)
-    })
-  }
-}
-
-function startWslPrimary(wslServers: WslServersController): Promise<SidecarConnection> {
-  return waitForWslServerReady(wslServers).then((ready) => ({
+function startWslPrimary(wslServers: WslServersController, mode: WslSidecarMode): Promise<SidecarReady> {
+  return waitForWslServerReady(wslServers, { mode }).then((ready) => ({
     listener: null,
     ready: {
       url: ready.url,
       username: ready.username,
       password: ready.password,
     },
-    health: Promise.resolve(),
     wslFallback: true,
   }))
-}
-
-async function waitForWslServerReady(
-  wslServers: WslServersController,
-  options: { timeoutMs?: number } = {},
-): Promise<WslServerReady> {
-  const timeoutMs = options.timeoutMs ?? WSL_FALLBACK_TIMEOUT_MS
-  return new Promise<WslServerReady>((resolve, reject) => {
-    let settled = false
-    let unsubscribe: (() => void) | undefined
-    let timer: ReturnType<typeof setTimeout> | undefined
-
-    const settle = (action: () => void) => {
-      if (settled) return
-      settled = true
-      if (timer) clearTimeout(timer)
-      unsubscribe?.()
-      action()
-    }
-
-    const inspect = (state: WslServersState) => {
-      const ready = firstReadyWslServer(state.servers)
-      if (ready) {
-        settle(() => resolve(ready))
-        return
-      }
-      if (state.servers.length === 0) {
-        settle(() => reject(new Error("no WSL sidecar server is configured for fallback")))
-        return
-      }
-      if (state.servers.every((item) => item.runtime.kind === "failed")) {
-        settle(() => reject(new Error("every configured WSL sidecar failed to start")))
-      }
-    }
-
-    unsubscribe = wslServers.subscribe((event) => inspect(event.state))
-    timer = setTimeout(() => settle(() => reject(new Error(`WSL fallback timed out after ${timeoutMs}ms`))), timeoutMs)
-    // initialize() runs refreshFromStore plus the per-server startServer loop
-    // synchronously up to its first await, so the state read below already sees
-    // the persisted servers marked starting and no transition can slip through.
-    void wslServers.initialize().catch(() => undefined)
-    inspect(wslServers.getState())
-  })
 }
 
 Effect.runFork(main)

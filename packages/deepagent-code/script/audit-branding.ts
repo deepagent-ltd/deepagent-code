@@ -5,22 +5,30 @@
 //   opencode / anomalyco / lessweb / deepagent-code.ai   (case-insensitive)
 //
 // Detection windows
-//   - text files (full-content regex): extensions md/sh/ps1/yml/yaml/json/txt/jsonc,
+//   - text files (full-content regex): extensions md/mdx/sh/ps1/yml/yaml/json/txt/jsonc,
 //     plus any tracked file whose name contains "config" (parsed as UTF-8 text;
 //     binaries with a NUL byte are skipped).
 //   - source strings (packages/**/*.ts and .tsx): only brand tokens inside string
-//     and template literals are reported. Comments are never reported, and
-//     identifiers such as `OpencodeClient` are not string literals, so they are
-//     intentionally out of scope (public SDK compatibility surface, not branding).
+//     literals and template-literal content are reported. Comments are never
+//     reported, and identifiers such as `OpencodeClient` are not string
+//     literals, so they are intentionally out of scope (public SDK
+//     compatibility surface, not branding).
 //   Known limitations of the naive scanner (documented on purpose):
-//     - tokens inside `${...}` expression spans of template literals are skipped
+//     - the `${...}` expression span of a template literal is not scanned
 //       (prevents identifier false positives; a string there is missed)
-//     - a token split across concatenated fragments ("open" + "code") is missed
+//     - regex literals and JSX text nodes are not covered at all: they are
+//       neither string nor template literals, so a brand token in `/lessweb/i`
+//       or in `<p>lessweb</p>` is not reported
 //     - fully \u-escaped spellings are missed
-//     - JSX text nodes in .tsx are reported (treated as literal content)
+//     - a token distributed across multiple string-literal fragments on one
+//       line IS reported (a line's fragments are scanned as one joined
+//       window, so "less" + "web" is caught); the same split across lines is
+//       missed
 //
-// Exemption model: a hit is skipped only when it lands on an exempt line of an
-// exempt path (or an exempt whole-file); other hits in the same file still fail.
+// Exemption model: a hit word on a line is skipped only when that word has a
+// line-level marker for this path and the line carries it; other words (or the
+// same word in another file) still fail. The whole-file exemption list below
+// skips entire files.
 
 const repoRoot = Bun.spawnSync(["git", "rev-parse", "--show-toplevel"], { cwd: import.meta.dir }).stdout.toString().trim()
 if (!repoRoot) {
@@ -44,36 +52,50 @@ const WHOLE_FILE_EXEMPT = new Set([
   // table are string literals by construction, so it self-references the brand
   // words. It is audit infrastructure, not residue.
   "packages/deepagent-code/script/audit-branding.ts",
+  // The gate's negative fixtures: brand words appear there by design as
+  // injected test data. Same class as the script itself (audit infrastructure).
+  "packages/deepagent-code/test/audit-branding.test.ts",
 ])
 
-// Line-level exemptions keyed by exact tracked path; a hit line is skipped when
-// it also contains one of the markers.
-const LINE_EXEMPTIONS: Record<string, string[]> = {
+// Line-level exemptions keyed by exact tracked path; a hit of `word` on a line
+// is skipped only when the line also carries one of `word`'s markers. The word
+// binding keeps one marker from silently exempting unrelated brand tokens on
+// the same line.
+const LINE_EXEMPTIONS: Record<string, Record<string, string[]>> = {
   // "derived from [opencode](...)" upstream-attribution paragraph (README)
-  "README.md": ["derived from"],
+  "README.md": { opencode: ["derived from"] },
   // 基于 [opencode](...) upstream-attribution paragraph (README.zh.md)
-  "README.zh.md": ["基于"],
+  "README.zh.md": { opencode: ["基于"] },
   // opencode foundation notes in the design overview (diagram + attribution)
-  "design/README.md": ["opencode"],
+  "design/README.md": { opencode: ["opencode"] },
   // MIT attribution lines in the in-app About panel
-  "packages/app/src/components/settings-v2/about.tsx": ["opencode"],
+  "packages/app/src/components/settings-v2/about.tsx": { opencode: ["opencode"] },
   // "keeps the opencode runtime foundation" architecture note (same class as
   // design/README.md foundation note)
-  "packages/deepagent-code/README.md": ["opencode"],
+  "packages/deepagent-code/README.md": { opencode: ["opencode"] },
   // Upstream opencode-ecosystem fork URLs (tree-sitter wasm/queries hosted by
   // the upstream org; no deepagent-ltd mirror exists, rewriting would break the
   // runtime download)
-  "packages/tui/src/parsers-config.ts": ["anomalyco"],
+  "packages/tui/src/parsers-config.ts": { anomalyco: ["anomalyco"] },
   // Upstream fork dependency (github:anomalyco/ghostty-web#main); same origin
   // rationale as parsers-config.ts
-  "packages/app/package.json": ["anomalyco"],
+  "packages/app/package.json": { anomalyco: ["anomalyco"] },
   // describe() label quoting the public SDK compatibility export name
   // `OpencodePlugin` (identifier is out of scope; only its stringified label
   // shows up here)
-  "packages/core/test/plugin/provider-deepagent-code.test.ts": ["OpencodePlugin"],
+  "packages/core/test/plugin/provider-deepagent-code.test.ts": { opencode: ["OpencodePlugin"] },
+  // Public SDK compatibility exports documented on the SDK pages:
+  // `createOpencode` / `createOpencodeClient` are real exports of the JS SDK
+  // (compatibility aliases, not branding).
+  "packages/web/src/content/docs/sdk.mdx": { opencode: ["createOpencode"] },
+  ...Object.fromEntries(
+    ["ar", "bs", "da", "de", "es", "fr", "it", "ja", "ko", "nb", "pl", "pt-br", "ru", "th", "tr", "zh-cn", "zh-tw"].map(
+      (locale) => [`packages/web/src/content/docs/${locale}/sdk.mdx`, { opencode: ["createOpencode"] }],
+    ),
+  ),
 }
 
-const TEXT_EXTS = new Set(["md", "sh", "ps1", "yml", "yaml", "json", "txt", "jsonc"])
+const TEXT_EXTS = new Set(["md", "mdx", "sh", "ps1", "yml", "yaml", "json", "txt", "jsonc"])
 const ext = (path: string) => path.split(".").pop() ?? ""
 const isTextScan = (path: string) => TEXT_EXTS.has(ext(path)) || path.split("/").pop()?.includes("config") === true
 const isSourceScan = (path: string) => path.startsWith("packages/") && /\.(ts|tsx)$/.test(path)
@@ -118,12 +140,32 @@ function stringFragments(line: string, state: { inBlock: boolean; inTemplate: bo
     }
     if (state.inTemplate) {
       if (state.brace > 0) {
+        // Inside a `${...}` expression span: braces are counted, but string
+        // literals are skipped so a `}` inside quotes cannot close the
+        // expression early and re-open the content window inside it.
+        if (ch === "'" || ch === '"') {
+          const quote = ch
+          let j = i + 1
+          while (j < line.length && line[j] !== quote) {
+            if (line[j] === "\\") j += 2
+            else j += 1
+          }
+          i = j < line.length ? j + 1 : j
+          continue
+        }
         if (ch === "{") state.brace += 1
         if (ch === "}") state.brace -= 1
         i += 1
         continue
       }
       if (ch === "$" && next === "{") {
+        // Expression span of the template: close the current content window
+        // (if any) and skip the whole `${...}` span, so identifiers in the
+        // expression are never reported as content.
+        if (fragmentStart !== -1) {
+          collect(fragmentStart, i)
+          fragmentStart = -1
+        }
         state.brace = 1
         i += 2
         continue
@@ -181,13 +223,13 @@ function stringFragments(line: string, state: { inBlock: boolean; inTemplate: bo
 
 function recordHits(path: string, category: "text" | "source-string", rows: Row[]) {
   if (WHOLE_FILE_EXEMPT.has(path)) return
-  const markers = LINE_EXEMPTIONS[path]
+  const wordMarkers = LINE_EXEMPTIONS[path]
   for (const row of rows) {
     const window = row.window.toLowerCase()
     for (const word of BRAND_WORDS) {
       let at = window.indexOf(word)
       while (at !== -1) {
-        if (markers?.some((marker) => row.raw.includes(marker))) {
+        if (wordMarkers?.[word]?.some((marker) => row.raw.includes(marker))) {
           stats.exemptLines += 1
         } else {
           const slice = row.window.slice(Math.max(0, at - 30), at + word.length + 30).replace(/[\r\n\t]/g, " ")

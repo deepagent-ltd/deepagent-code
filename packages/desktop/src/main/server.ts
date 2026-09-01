@@ -175,7 +175,12 @@ export async function spawnLocalServer(
     const healthWaitT0 = Date.now()
     const gone = exit.promise.then((code) => {
       if (healthy) return
-      throw new Error(`Sidecar exited before health check passed with code ${code}`)
+      // Same error code family as the pre-ready failures so routing layers
+      // (startPrimarySidecar) treat an API-health failure like any other
+      // spawn failure — the ready message only proved the listener socket.
+      throw Object.assign(new Error(`Sidecar exited before health check passed with code ${code}`), {
+        code: SIDECAR_SPAWN_FAILED,
+      })
     })
 
     const ready = async () => {
