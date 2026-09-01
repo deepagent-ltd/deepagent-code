@@ -6,6 +6,7 @@ import {
   searchOutput,
   type SearchAuthorization,
 } from "./capability-search"
+import { capabilityCatalogSnapshotId } from "./capability-catalog"
 import { RuntimeFeatures } from "../flag/runtime-features"
 import { Effect, Layer } from "effect"
 import { Tool } from "../tool/tool"
@@ -89,7 +90,11 @@ export function runtimeAuthorizedSearch(
 /**
  * A ready-to-register runtime-authorized `capability_search` tool. Successor to the
  * frozen `makeCapabilitySearchTool`: it feeds the E2-derived authorization so the
- * runtime-feature filter is the registry's, not a frozen literal.
+ * runtime-feature filter is the registry's, not a frozen literal. The DEFAULT catalog
+ * snapshot id is the REAL deterministic snapshot id derived from the catalog digest
+ * (W4: the placeholder `capability_catalog:local` is no longer the default — the search
+ * output binds the runtime's own snapshot identity, so a load request against the
+ * returned snapshot id always matches the runtime catalog).
  */
 export function makeRuntimeAuthorizedSearchTool(input?: {
   readonly catalog?: ReadonlyArray<CapabilityManifest>
@@ -97,7 +102,7 @@ export function makeRuntimeAuthorizedSearchTool(input?: {
 }): Tool.AnyTool {
   return makeCapabilitySearchTool({
     ...(input?.catalog ? { catalog: input.catalog } : {}),
-    ...(input?.catalogSnapshotId ? { catalogSnapshotId: input.catalogSnapshotId } : {}),
+    catalogSnapshotId: input?.catalogSnapshotId ?? capabilityCatalogSnapshotId,
     authorization: runtimeFeatureAuthorization(),
   })
 }

@@ -13,6 +13,31 @@ import { WebFetchTool } from "./webfetch"
 import { WebSearchTool } from "./websearch"
 import { WriteTool } from "./write"
 import { CapabilityRuntimeSearch } from "../system-context/capability-runtime-search"
+import { CapabilityLoadTool } from "../system-context/capability-load-tool"
+
+/**
+ * The shipped built-in tool names (the exact registry names `locationLayer`
+ * registers). This is the W4 inventory↔registry gate's registered set: a catalog
+ * that advertises a tool name absent from this set is a build-gate failure
+ * (`assertInventoryMatchesRegistry`). Kept in the same module as the layer so the
+ * set and the registration cannot drift silently.
+ */
+export const builtinToolNames: ReadonlySet<string> = new Set([
+  "apply-patch",
+  "bash",
+  "edit",
+  "glob",
+  "grep",
+  "question",
+  "read",
+  "skill",
+  "webfetch",
+  "websearch",
+  "write",
+  "capability_search",
+  "capability_load",
+  "domain_pack_load",
+])
 
 /**
  * Composes only the shipped Location-scoped built-in tool transforms.
@@ -47,4 +72,5 @@ export const locationLayer = Layer.mergeAll(
   WebSearchTool.layer.pipe(Layer.provide(WebSearchTool.defaultConfigLayer)),
   WriteTool.layer,
   CapabilityRuntimeSearch.layer,
+  CapabilityLoadTool.layer,
 )

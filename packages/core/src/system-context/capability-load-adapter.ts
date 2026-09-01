@@ -1,5 +1,7 @@
 export * as CapabilityLoadAdapter from "./capability-load-adapter"
 
+import { eq } from "drizzle-orm"
+import { Effect } from "effect"
 import { contentDigest } from "../contract/digest"
 import {
   CapabilityLoadReceipt as ContractLoadReceipt,
@@ -10,6 +12,8 @@ import {
   type ContentLoadState,
   type CapabilityLevel,
 } from "../contract/capability-load"
+import { Database } from "../database/database"
+import { SessionCapabilityLoadTable } from "./capability-load.sql"
 import { CapabilityBudget } from "./capability-manifest"
 import {
   CapabilityL2BudgetExceededError,
@@ -255,24 +259,53 @@ export function withTurnIdentity(
 }
 
 /** Resolve the kernel identity for a bound request (the `capability_load:<sha256>` tag). */
-export const loadIdentityFor = (request: CapabilityLoadRequest): string =>
+export const loadIdentityFor = (bound: CapabilityLoadRequest & CapabilityLoadTurnIdentity): string =>
   capabilityLoaderIdentity(
-    request.capabilityId,
-    request.version,
-    request.bodyHash,
-    request.runtimeHash,
-    request.permissionHash,
+    bound.sessionId,
+    bound.capabilityId,
+    bound.version,
+    bound.bodyHash,
+    bound.runtimeHash,
+    bound.permissionHash,
   )
 
 /**
  * Run one capability load through the K2 kernel with the frozen receipt binding,
  * bound to a real session/activity/turn identity. This is the production `capability_load`
  * path the runner reuses: it charges the per-turn budget, maps the kernel result to
- * the frozen ContentLoadState and returns the frozen CapabilityLoadReceipt alongside
- * the loaded body (when present). Never loads as part of the call: the caller passes
- * a body + declared digest already verified against a signed bundle / trusted pack.
+ * the frozen ContentLoadState, returns the frozen CapabilityLoadReceipt alongside
+ * the loaded body (when present) and persists the receipt to the durable
+ * `session_capability_load` table (design §7.5) — an exact retry converges on the
+ * same row (unique (session_id, capability_id, body_hash)); a retry of a body the
+ * kernel already holds returns `already_loaded` WITH the body (the W4 kernel
+ * `existing` carries it). Never loads as part of the call: the caller passes a body +
+ * declared digest already verified against a signed bundle / trusted pack.
+ *
+ * The persistence is a transaction over the receipt insert (insert-or-ignore by the
+ * exact-retry key) and only records states that represent an actually-loaded body
+ * (`loaded` / `already_loaded`): a denied/not_found/budget_exceeded attempt loaded
+ * nothing, so it leaves no durable fact. Mapped/lookup failures are typed defects.
+ *
+ * The database handle is passed in (not required as a service): the tool layer resolves
+ * `Database.Service` once at build time and closes over the `db`, so the execute effects
+ * stay dependency-free like the other built-in tools.
  */
-export function sessionCapabilityLoad(args: {
+export function sessionCapabilityLoad(
+  db: Database.Interface["db"],
+  args: {
+    readonly request: CapabilityLoadRequest
+    readonly identity: CapabilityLoadTurnIdentity
+    readonly contextEpoch: string
+    readonly level?: CapabilityLevel
+    readonly loadedAt?: number
+  },
+): Effect.Effect<{ readonly state: ContentLoadState; readonly receipt: ContractLoadReceipt; readonly body: string | undefined }, never> {
+  const out = computeCapabilityLoad(args)
+  return persistLoadReceipt(db, out, args.request.capabilityId).pipe(Effect.as(out))
+}
+
+/** The pure kernel + receipt computation (kept separable so the write path stays a thin shell). */
+function computeCapabilityLoad(args: {
   readonly request: CapabilityLoadRequest
   readonly identity: CapabilityLoadTurnIdentity
   readonly contextEpoch: string
@@ -312,7 +345,138 @@ export function sessionCapabilityLoad(args: {
     level: args.level,
     loadedAt: args.loadedAt,
   })
-  return { state: receipt.state, receipt, body: result.state === "available" ? result.body : undefined }
+  const body =
+    result.state === "available" || result.state === "existing" ? result.body : undefined
+  return { state: receipt.state, receipt, body }
+}
+
+/** The durable load receipt row (JSON columns decoded by Drizzle; exact-retry key in the schema). */
+type LoadReceiptRow = typeof SessionCapabilityLoadTable.$inferSelect
+
+/** Insert the receipt row in one transaction; the unique key makes an exact retry a no-op. */
+function persistLoadReceipt(
+  db: Database.Interface["db"],
+  out: { readonly state: ContentLoadState; readonly receipt: ContractLoadReceipt },
+  capabilityId: string,
+) {
+  if (out.state.state !== "loaded" && out.state.state !== "already_loaded") return Effect.void
+  return db
+    .transaction((tx) =>
+      tx
+        .insert(SessionCapabilityLoadTable)
+        .values(toLoadReceiptRow(out.receipt, capabilityId))
+        .onConflictDoNothing()
+        .run()
+        .pipe(Effect.orDie),
+    )
+    .pipe(Effect.orDie)
+}
+
+function toLoadReceiptRow(receipt: ContractLoadReceipt, capabilityId: string): typeof SessionCapabilityLoadTable.$inferInsert {
+  return {
+    load_id: receipt.loadId,
+    schema_version: receipt.schemaVersion,
+    content_kind: receipt.contentKind,
+    session_id: receipt.sessionId,
+    activity_id: receipt.activityId,
+    turn_id: receipt.turnId,
+    catalog_snapshot_id: receipt.catalogSnapshotId,
+    ...(receipt.packId === undefined ? {} : { pack_id: receipt.packId }),
+    capability_id: capabilityId,
+    version: receipt.version,
+    body_hash: receipt.bodyHash,
+    runtime_hash: receipt.runtimeHash,
+    permission_hash: receipt.permissionHash,
+    permission_binding: receipt.permissionBinding,
+    runtime_compatibility_hash: receipt.runtimeCompatibilityHash,
+    request_hash: receipt.requestHash,
+    result_hash: receipt.resultHash,
+    level: receipt.level,
+    body_ref: receipt.bodyRef,
+    ...(receipt.supersedes === undefined ? {} : { supersedes: receipt.supersedes }),
+    token_count: receipt.tokenCount,
+    byte_count: receipt.byteCount,
+    budget_state: receipt.budgetState,
+    new_loads_this_turn: receipt.newLoadsThisTurn,
+    new_tokens_this_turn: receipt.newTokensThisTurn,
+    context_epoch: receipt.contextEpoch,
+    loaded_at: receipt.loadedAt,
+    state: receipt.state,
+  }
+}
+
+/**
+ * Rebuild a receipt from a durable row. The row stores the frozen receipt fields
+ * (the tagged `state` and `permissionBinding` as JSON), so the decode re-validates
+ * the frozen shape — an incoherent/unknown field fails loudly rather than
+ * truncating. This wave writes capability-kind rows only; a domain-pack row would
+ * need the pack binding columns and fails the decode loudly (never a silent read).
+ */
+function receiptFromRow(row: LoadReceiptRow): ContractLoadReceipt {
+  return decodeCapabilityLoadReceipt({
+    schemaVersion: row.schema_version,
+    contentKind: "capability",
+    loadId: row.load_id,
+    sessionId: row.session_id,
+    activityId: row.activity_id,
+    turnId: row.turn_id,
+    catalogSnapshotId: row.catalog_snapshot_id,
+    ...(row.pack_id === null ? {} : { packId: row.pack_id }),
+    version: row.version,
+    bodyHash: row.body_hash,
+    runtimeHash: row.runtime_hash,
+    permissionHash: row.permission_hash,
+    permissionBinding: row.permission_binding,
+    runtimeCompatibilityHash: row.runtime_compatibility_hash,
+    requestHash: row.request_hash,
+    resultHash: row.result_hash,
+    level: row.level,
+    bodyRef: row.body_ref,
+    ...(row.supersedes === null ? {} : { supersedes: row.supersedes }),
+    tokenCount: row.token_count,
+    byteCount: row.byte_count,
+    budgetState: row.budget_state,
+    newLoadsThisTurn: row.new_loads_this_turn,
+    newTokensThisTurn: row.new_tokens_this_turn,
+    contextEpoch: row.context_epoch,
+    loadedAt: row.loaded_at,
+    state: row.state,
+  })
+}
+
+/**
+ * The durable snapshot fact for one receipt (design §7.5 restoration): the frozen
+ * receipt does not carry `capabilityId` top-level (it is bound through `body_ref`),
+ * so the snapshot fact derives it from the body ref — `capability://<id>@<version>`.
+ */
+export const capabilityLoadFactOf = (receipt: ContractLoadReceipt): { readonly capabilityId: string; readonly bodyHash: string } => ({
+  capabilityId: receipt.bodyRef.split("@")[0]!.slice("capability://".length),
+  bodyHash: receipt.bodyHash,
+})
+
+/**
+ * The durable read-back seam (W4, design §7.5 snapshot restoration): the load
+ * receipts recorded for one session, read from `session_capability_load` (a new
+ * store / DB connection sees the same rows — the compaction-restart closure). The
+ * kernel's in-module `recordedCapabilityLoads()` stays the process-local exact-retry
+ * cache; this is the durable fact store the runner uses to rebuild the snapshot
+ * after a restart. Ordered by first-load time (loaded_at, then load_id) so the
+ * rebuild is deterministic.
+ */
+export function recordedCapabilityLoadsForSession(
+  db: Database.Interface["db"],
+  sessionId: string,
+): Effect.Effect<ReadonlyArray<ContractLoadReceipt>, never> {
+  return Effect.gen(function* () {
+    const rows = yield* db
+      .select()
+      .from(SessionCapabilityLoadTable)
+      .where(eq(SessionCapabilityLoadTable.session_id, sessionId))
+      .orderBy(SessionCapabilityLoadTable.loaded_at, SessionCapabilityLoadTable.load_id)
+      .all()
+      .pipe(Effect.orDie)
+    return rows.map(receiptFromRow)
+  })
 }
 
 function budgetExceededState(error: unknown): CapabilityLoadResult {

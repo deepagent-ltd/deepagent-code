@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { Effect } from "effect"
 import { Hash } from "@deepagent-code/core/util/hash"
 import {
   assertCapabilityBodiesCoherent,
@@ -10,11 +11,21 @@ import {
   bodyContent,
 } from "@deepagent-code/core/system-context/capability-bodies"
 import { sessionCapabilityLoad, type CapabilityLoadTurnIdentity } from "@deepagent-code/core/system-context/capability-load-adapter"
+import { Database } from "@deepagent-code/core/database/database"
 import { resetCapabilityLoader } from "@deepagent-code/core/system-context/capability-loader"
 import { capabilityCatalog, capabilityCatalogSnapshotId } from "@deepagent-code/core/system-context/capability-catalog"
 
 // C4-09 — author the first batch of capability bodies, hash-bound, within the L2
-// budget, with no permission expansion.
+// budget, with no permission expansion. W4: `sessionCapabilityLoad` persists receipts.
+
+/** Run one adapter load against a fresh in-memory DB. */
+const load = (args: Parameters<typeof sessionCapabilityLoad>[1]) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      return yield* sessionCapabilityLoad(db, args)
+    }).pipe(Effect.provide(Database.layerFromPath(":memory:"))),
+  )
 
 describe("first batch = 10 capability bodies", () => {
   test("authors exactly 10 concrete bodies", () => {
@@ -37,11 +48,12 @@ describe("first batch = 10 capability bodies", () => {
 })
 
 describe("each body loads through the kernel (hash matches)", () => {
-  test("every body's body + declared digest load as 'loaded'", () => {
+  test("every body's body + declared digest load as 'loaded'", async () => {
     const IDENTITY: CapabilityLoadTurnIdentity = { sessionId: "session-bodies", activityId: "activity-bodies", turnId: "turn-bodies" }
+    resetCapabilityLoader()
     for (const entry of capabilityBodies) {
       const { body, declaredDigest } = bodyContent(entry)
-      const out = sessionCapabilityLoad({
+      const out = await load({
         request: {
           capabilityId: entry.id,
           version: entry.version,

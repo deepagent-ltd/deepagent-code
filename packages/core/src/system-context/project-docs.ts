@@ -1,6 +1,6 @@
 export * as ProjectDocs from "./project-docs"
 
-import { basename, extname, join } from "path"
+import { basename, dirname, extname, join, parse } from "path"
 import { Effect, Layer, Option, Schema } from "effect"
 import { makeLocationNode } from "../effect/app-node"
 import { FSUtil } from "../fs-util"
@@ -46,6 +46,9 @@ export class Observed extends Schema.Class<Observed>("ProjectDocs.Observed")({
   root: Schema.String,
   branch: Schema.optional(Schema.String),
   contents: Contents,
+  // High-2: `true` when no project root was determined (Project.resolve fell back to the
+  // filesystem root) and discovery was clamped to the session directory.
+  undetectedRoot: Schema.optional(Schema.Boolean),
 }) {}
 
 export const registryKey = SystemContext.Key.make("deepagent/project-docs")
@@ -56,7 +59,10 @@ export const registryKey = SystemContext.Key.make("deepagent/project-docs")
  * spelling mismatch ("灵活处理") still resolves, while the literal spelling wins.
  */
 export function discoverFile(dir: string, name: DocName, entries: FSUtil.DirEntry[]): string | undefined {
-  if (entries.some((entry) => entry.name === `${name}.md`)) return join(dir, `${name}.md`)
+  // Med-1: the literal spelling must also be a FILE — a directory named `NAME.md` (EISDIR on
+  // read) previously hijacked the fallback branches and failed the whole observation.
+  if (entries.some((entry) => entry.type === "file" && entry.name === `${name}.md`))
+    return join(dir, `${name}.md`)
   const withExt = entries.find((entry) => {
     if (entry.type !== "file") return false
     const ext = extname(entry.name).toLowerCase()
@@ -68,10 +74,50 @@ export function discoverFile(dir: string, name: DocName, entries: FSUtil.DirEntr
   return undefined
 }
 
+// Med-2: per-observation document reads are cached so repeated reconciles of unchanged files skip
+// disk I/O. Key: resolved file path. Invalidation: file mtime + size (mtime alone can miss a
+// rewrite landing in the same millisecond on coarse-resolution clocks; a deleted file evicts the
+// entry). Bounded FIFO — at most this many documents are retained process-locally. The cache holds
+// the BOUNDED snapshot value, so a snapshot restore re-observes truncated data, never a stale full
+// read.
+const MAX_READ_CACHE = 64
+const readCache = new Map<string, { mtime: number; size: number; content: string | undefined }>()
+
+const cachedRead = Effect.fn("ProjectDocs.cachedRead")(function* (file: string, fs: FSUtil.Interface) {
+  const info = yield* fs.stat(file).pipe(Effect.catch(() => Effect.succeed(undefined)))
+  const mtime = Option.match(info?.mtime ?? Option.none<Date>(), {
+    onNone: () => undefined,
+    onSome: (date) => date.getTime(),
+  })
+  // mtime unavailable: read fresh every time (never cache a stamp-less value).
+  if (mtime === undefined) return yield* fs.readFileStringSafe(file)
+  const size = Number(info?.size ?? -1)
+  const cached = readCache.get(file)
+  if (cached !== undefined && cached.mtime === mtime && cached.size === size) return cached.content
+  const content = yield* fs.readFileStringSafe(file)
+  readCache.set(file, { mtime, size, content })
+  if (readCache.size > MAX_READ_CACHE) {
+    const oldest = readCache.keys().next().value
+    if (oldest !== undefined) readCache.delete(oldest)
+  }
+  return content
+})
+
+/** The project root of a docs directory: always `<root>/docs/deepagent` — two parent dirs up.
+ *  Low-4: a fixed-length tail slice would strip the drive prefix on Windows; `dirname`/`parse`
+ *  stay platform-correct. */
+const docRoot = (docsDir: string) => dirname(dirname(docsDir))
+
 /**
  * Observation state for one docs directory: full contents of the documents that exist + env facts.
  * A missing directory or missing documents are not an observation failure — the absent fields
  * render as the not-set-up empty state (W10.1).
+ *
+ * Error policy ruling (Med-1): like a failing `readDirectoryEntries` (treated as an empty listing),
+ * a per-document READ failure is treated as THAT DOCUMENT BEING ABSENT and observation still
+ * succeeds — one broken doc (e.g. a `HANDOFF.md` directory) must not make the whole source
+ * `unavailable` and block context initialization. Only genuine defects surface through the layer
+ * guard, whose `unavailable` remains the transient-failure escape hatch.
  */
 export const observeDir = Effect.fn("ProjectDocs.observeDir")(function* (
   docsDir: string,
@@ -82,12 +128,14 @@ export const observeDir = Effect.fn("ProjectDocs.observeDir")(function* (
   for (const name of DOC_NAMES) {
     const file = discoverFile(docsDir, name, entries)
     if (file === undefined) continue
-    const text = yield* fs.readFileStringSafe(file)
-    if (text === undefined) continue // listed but gone by read time; treat as absent
-    texts[name] = text
+    const text = yield* cachedRead(file, fs).pipe(Effect.catch(() => Effect.succeed(undefined)))
+    if (text === undefined) continue // listed but gone/read-failed by read time; treat as absent
+    // Med-2: the durable observed value is bounded (same 40-line/6000-char budget the render uses)
+    // so a giant LOG cannot balloon the persisted snapshot. The file on disk stays full.
+    texts[name] = excerpt(text)
   }
   return yield* observed({
-    root: docsDir.slice(0, -(DOCS_DIRECTORY.length + 1)),
+    root: docRoot(docsDir),
     contents: new Contents({ ...texts }),
   })
 })
@@ -101,6 +149,7 @@ export const observeFor = (root: string, fs: FSUtil.Interface) => observeDir(joi
 const observed = Effect.fn("ProjectDocs.observed")(function* (input: {
   root: string
   contents: Contents
+  undetectedRoot?: boolean
 }) {
   const git = Option.getOrUndefined(yield* Effect.serviceOption(Git.Service))
   const branch =
@@ -111,6 +160,7 @@ const observed = Effect.fn("ProjectDocs.observed")(function* (input: {
     root: input.root,
     ...(branch === undefined ? {} : { branch }),
     contents: input.contents,
+    ...(input.undetectedRoot === true ? { undetectedRoot: true } : {}),
   })
 })
 
@@ -145,11 +195,16 @@ const docTitle = (content: string | undefined) =>
         .map((line) => line.trim())
         .find((line) => line.length > 0 && !line.startsWith(">")) ?? "(empty)"
 
-/** The first LOG entry (heading + following bullet lines), used as the "recent changes" fact. */
+/**
+ * The first LOG entry (heading + following bullet lines), used as the "recent changes" fact.
+ * Med-3: the document title (`# Log 工程日志`) is an H1 and must be skipped — the fact cites the
+ * first H2/H3 entry heading, which is the newest session entry our writer emits (`## <updated> ·`).
+ * A log whose entries are only H1 headings has no fact (undefined) rather than a bogus title fact.
+ */
 const recentLogEntry = (content: string | undefined) => {
   if (content === undefined) return undefined
   const lines = content.split(/\r?\n/)
-  const start = lines.findIndex((line) => /^#{1,3}\s/.test(line))
+  const start = lines.findIndex((line) => /^#{2,3}\s/.test(line))
   if (start === -1) return undefined
   const body = lines.slice(start, start + 8).join("\n").trim()
   return body.length > 0 ? body : undefined
@@ -182,7 +237,11 @@ function renderExcerpts(observed: Observed) {
 
 export const renderBaseline = (observed: Observed) => {
   if (allMissing(observed)) {
-    return ["Project documents (docs/deepagent):", "", "未建立项目文档（运行 `deepagent docs sync` 可生成）"].join("\n")
+    const hint =
+      observed.undetectedRoot === true
+        ? "未建立项目文档（运行 `deepagent docs sync` 可生成）；未检测到项目根——已限制在会话目录内查找 docs/deepagent"
+        : "未建立项目文档（运行 `deepagent docs sync` 可生成）"
+    return ["Project documents (docs/deepagent):", "", hint].join("\n")
   }
   return [
     "Project documents (docs/deepagent):",
@@ -203,19 +262,40 @@ function changedDocs(previous: Observed, current: Observed): DocName[] {
   return DOC_NAMES.filter((name) => previous.contents[name] !== current.contents[name])
 }
 
+/** Env facts (root/branch) that differ between two observations — Med-4: equivalence is the whole
+ *  Observed (branch/root included, core/system-context), so a branch checkout alone is an update. */
+function changedEnvFacts(previous: Observed, current: Observed): string[] {
+  const facts: string[] = []
+  if (previous.root !== current.root) facts.push(`root: ${previous.root} → ${current.root}`)
+  if (previous.branch !== current.branch)
+    facts.push(`branch: ${previous.branch ?? "unknown"} → ${current.branch ?? "unknown"}`)
+  return facts
+}
+
 export const renderUpdate = (previous: Observed, current: Observed) => {
   if (allMissing(current)) return "Project documents not set up yet — run `deepagent docs sync`"
   const changed = changedDocs(previous, current)
-  if (changed.length === 0) return `Project documents updated.\n\n${renderExcerpts(current)}`
-  const rendered = changed
-    .map((name) => {
-      const content = current.contents[name]
-      const divider = "─".repeat(24)
-      const body = content === undefined ? `(missing)` : excerpt(content)
-      return [`${divider} ${name}.md ${divider}`, body].join("\n")
-    })
-    .join("\n\n")
-  return `Project documents updated (${changed.map((name) => `${name}.md`).join(", ")}):\n\n${rendered}`
+  const env = changedEnvFacts(previous, current)
+  if (changed.length === 0 && env.length === 0) return `Project documents updated.\n\n${renderExcerpts(current)}`
+  const sections: string[] = []
+  if (changed.length > 0) {
+    const rendered = changed
+      .map((name) => {
+        const content = current.contents[name]
+        const divider = "─".repeat(24)
+        const body = content === undefined ? `(missing)` : excerpt(content)
+        return [`${divider} ${name}.md ${divider}`, body].join("\n")
+      })
+      .join("\n\n")
+    sections.push(`Project documents updated (${changed.map((name) => `${name}.md`).join(", ")}):\n\n${rendered}`)
+  }
+  if (env.length > 0) {
+    // Med-4: env-only change re-sends the new facts, NOT the full excerpts (documents are unchanged).
+    sections.push(
+      `Project environment changed (${env.join(", ")}):\n\n${env.map((fact) => `- ${fact}`).join("\n")}`,
+    )
+  }
+  return sections.join("\n\n")
 }
 
 /** Closes an observation effect into the `deepagent/project-docs` System Context source. */
@@ -246,11 +326,23 @@ export const layer = Layer.effectDiscard(
     const fs = yield* FSUtil.Service
     const registry = yield* SystemContextRegistry.Service
     const observe = Effect.fn("ProjectDocs.observe")(function* () {
-      const docsDir = yield* discoverDocsDir(location.directory, location.project.directory, fs)
+      // High-2: `Project.resolve` falls back to the FILESYSTEM ROOT when no git repo is found
+      // (core/src/project.ts). Such a root is undetermined — discovery must never scan above the
+      // session directory for it: stop = session dir (only `sessionDir/docs/deepagent` is checked)
+      // and the observation records `undetectedRoot` so the empty state can say why. A real project
+      // root keeps nearest-first discovery up to the root inclusive.
+      const sessionDir = location.directory
+      const projectDir = location.project.directory
+      const undetected = parse(sessionDir).root === projectDir
+      const docsDir = yield* discoverDocsDir(sessionDir, undetected ? sessionDir : projectDir, fs)
       if (!docsDir) {
         // No `docs/deepagent` under the project: still ready — the source renders the not-set-up
         // state instead of blocking context initialization (W10.1).
-        return yield* observed({ root: location.project.directory, contents: new Contents({}) })
+        return yield* observed({
+          root: undetected ? sessionDir : projectDir,
+          contents: new Contents({}),
+          ...(undetected ? { undetectedRoot: true } : {}),
+        })
       }
       return yield* observeDir(docsDir, fs)
     })

@@ -8,12 +8,13 @@ import type { CapabilityLevel, CapabilityLoadDeniedReason } from "../contract/ca
 
 // C4-04 — durable capability loader kernel (design §7.4-7.5). This module is the
 // single load path for a procedure body: it computes a byte-stable identity over
-// the capability id + version + body/runtime/permission hashes, verifies the body
+// the session + capability id + version + body/runtime/permission hashes, verifies the body
 // content against the declared digest (fail-closed), and returns a typed tagged
 // union. It carries an in-module deterministic receipt store keyed by identity so
-// an exact retry of the identical identity is a no-op `existing` (never a
-// duplicate), and it is the kernel that the DISABLED L1 search and the DISABLED
-// L2 `capability_load` / `domain_pack_load` callers reuse.
+// an exact retry of the identical identity within the SAME session is a no-op
+// `existing` (never a duplicate) — a different session derives a different
+// identity, so it loads the body afresh with its body returned (W4 session-scoped
+// identity, design §7.5 per-session restoration).
 //
 // No clock, no absolute path, no randomness enters the identity or the receipt
 // key — two identical inputs always produce the identical identity, which is the
@@ -22,8 +23,10 @@ import type { CapabilityLevel, CapabilityLoadDeniedReason } from "../contract/ca
 // body lane authors bodies), so a capability whose body is absent or whose hash
 // drifts is never loaded.
 
-/** The five identity grounds of a capability load (design §7.5 exact-retry binding). */
+/** The six identity grounds of a capability load (design §7.5 exact-retry binding). */
 export interface CapabilityLoaderIdentityInput {
+  /** The session the load is scoped to: a second session loads the same body afresh (never `existing`). */
+  readonly sessionId: string
   readonly capabilityId: string
   readonly version: string
   readonly bodyHash: string
@@ -38,18 +41,36 @@ export interface CapabilityLoaderIdentityInput {
  * identity (= exact retry). A different body/runtime/permission hash changes the
  * identity, which is required for a superseded or drifted load to be rejected
  * rather than silently reused.
+ *
+ * The identity is SESSION-SCOPED (W4, design §7.5 per-session restoration): the
+ * first ground is the session, so two different sessions loading the identical
+ * body derive DIFFERENT identities — a second session is a fresh `loaded` with
+ * its body, never the first session's `existing` no-op (the audit finding: the
+ * pre-W4 identity had no session ground, so the 2nd session observed
+ * `already_loaded` without a body). Within ONE session the identity is
+ * byte-stable, so the exact retry is still the no-op `existing` (which now
+ * carries the body).
  */
 export const capabilityLoaderIdentity = (
+  sessionId: string,
   capabilityId: string,
   version: string,
   bodyHash: string,
   runtimeHash: string,
   permissionHash: string,
-): string => `capability_load:${contentDigest({ capabilityId, version, bodyHash, runtimeHash, permissionHash })}`
+): string =>
+  `capability_load:${contentDigest({ sessionId, capabilityId, version, bodyHash, runtimeHash, permissionHash })}`
 
 /** The identity grounds re-derived from a manifest-side resolved load, for convenience. */
 export const capabilityLoaderIdentityFrom = (input: CapabilityLoaderIdentityInput): string =>
-  capabilityLoaderIdentity(input.capabilityId, input.version, input.bodyHash, input.runtimeHash, input.permissionHash)
+  capabilityLoaderIdentity(
+    input.sessionId,
+    input.capabilityId,
+    input.version,
+    input.bodyHash,
+    input.runtimeHash,
+    input.permissionHash,
+  )
 
 /** Typed violation: the body content hash does not equal the declared digest (fail-closed). */
 export class CapabilityBodyHashMismatchError extends Error {
@@ -137,7 +158,7 @@ export interface CapabilityLoadReceipt {
 
 /** Tagged result of a capability load (design §7.4-7.5): `existing` is the exact-retry no-op. */
 export type CapabilityLoadResult =
-  | { readonly state: "existing"; readonly receipt: CapabilityLoadReceipt }
+  | { readonly state: "existing"; readonly receipt: CapabilityLoadReceipt; readonly body: string }
   | {
       readonly state: "available"
       readonly body: string
@@ -171,7 +192,11 @@ export interface CapabilityLoadGrounds {
 }
 
 // --- deterministic in-module receipt store (C1A boundary: DB persistence is later) ---
-const receiptStore = new Map<string, CapabilityLoadReceipt>()
+// A stored entry is only ever a LOADED body — the store is the exact-retry body cache
+// (design §7.5). Denied/superseded/missing_body/budget_exceeded never record. The body is
+// retained alongside the receipt so an exact retry (`existing`) returns the body too: the
+// per-session idempotence is a no-op for the kernel, not a no-body result for the caller.
+const receiptStore = new Map<string, { readonly receipt: CapabilityLoadReceipt; readonly body: string }>()
 
 /** Clear the in-module receipt store + per-turn budget (test isolation / fresh environment). */
 export function resetCapabilityLoader(): void {
@@ -181,7 +206,7 @@ export function resetCapabilityLoader(): void {
 
 /** Snapshot of the currently-recorded receipts (test/observability only). */
 export function recordedCapabilityLoads(): ReadonlyArray<CapabilityLoadReceipt> {
-  return [...receiptStore.values()]
+  return [...receiptStore.values()].map((entry) => entry.receipt)
 }
 
 /**
@@ -199,7 +224,7 @@ export function loadCapabilityBody(
   grounds: CapabilityLoadGrounds,
 ): CapabilityLoadResult {
   const existing = receiptStore.get(identity)
-  if (existing) return { state: "existing", receipt: existing }
+  if (existing) return { state: "existing", receipt: existing.receipt, body: existing.body }
 
   if (grounds.deniedReason !== undefined) return { state: "denied", reasonCode: grounds.deniedReason }
 
@@ -248,7 +273,7 @@ export function loadCapabilityBody(
     ...(grounds.sessionId ? { sessionId: grounds.sessionId } : {}),
     ...(grounds.turnId ? { turnId: grounds.turnId } : {}),
   }
-  receiptStore.set(identity, receipt)
+  receiptStore.set(identity, { receipt, body })
   return { state: "available", body, tokenCount, byteCount, receipt }
 }
 
@@ -324,6 +349,7 @@ export function capabilityLoad(args: {
   readonly deniedReason?: CapabilityLoadDeniedReason
 }): CapabilityLoadResult {
   const identity = capabilityLoaderIdentity(
+    args.sessionIdentity,
     args.capabilityId,
     args.version,
     args.bodyHash,

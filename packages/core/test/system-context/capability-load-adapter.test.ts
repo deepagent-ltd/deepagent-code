@@ -1,13 +1,16 @@
 import { describe, expect, test, beforeEach } from "bun:test"
+import { Effect } from "effect"
 import { Hash } from "@deepagent-code/core/util/hash"
 import {
   mapCapabilityLoadResult,
   sessionCapabilityLoad,
+  recordedCapabilityLoadsForSession,
   withTurnIdentity,
   capabilityLoadRequestHash,
   type CapabilityLoadRequest,
   type CapabilityLoadTurnIdentity,
 } from "@deepagent-code/core/system-context/capability-load-adapter"
+import { Database } from "@deepagent-code/core/database/database"
 import { capabilityCatalog } from "@deepagent-code/core/system-context/capability-catalog"
 import { capabilitySearch, fullAuthorization } from "@deepagent-code/core/system-context/capability-search"
 import { findCapabilityBody } from "@deepagent-code/core/system-context/capability-bodies"
@@ -15,8 +18,18 @@ import { resetCapabilityLoader, type CapabilityLoadResult } from "@deepagent-cod
 
 // C4-07 — wire the K2 kernel onto the frozen C0-02 contract: the 6-state -> ContentLoadState
 // mapping, the frozen durable receipt, the withTurnIdentity seam, and the search -> load path.
+// W4: `sessionCapabilityLoad` persists the receipt to `session_capability_load` (in-memory DB).
 
 const digestOf = (body: string): string => `sha256:${Hash.sha256(body)}`
+
+/** Run an adapter call against a fresh in-memory DB (migrations applied by the layer). */
+const load = (args: Parameters<typeof sessionCapabilityLoad>[1]) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      return yield* sessionCapabilityLoad(db, args)
+    }).pipe(Effect.provide(Database.layerFromPath(":memory:"))),
+  )
 
 const REQUEST: CapabilityLoadRequest = {
   capabilityId: "deepagent.code-read",
@@ -56,7 +69,7 @@ function kernelReceipt(bodyHash = digestOf("Read source body")) {
 describe("mapCapabilityLoadResult (6-state kernel -> ContentLoadState)", () => {
   const cases: ReadonlyArray<[string, CapabilityLoadResult, { state: string; extra: Record<string, unknown> }]> = [
     ["available", { state: "available", body: "b", tokenCount: 5, byteCount: 20, receipt: kernelReceipt() }, { state: "loaded", extra: { bodyRef: "capability://deepagent.code-read@1.0.0-beta.0", tokenCount: 5, byteCount: 20 } }],
-    ["existing", { state: "existing", receipt: kernelReceipt() }, { state: "already_loaded", extra: { bodyRef: "capability://deepagent.code-read@1.0.0-beta.0" } }],
+    ["existing", { state: "existing", body: "b", receipt: kernelReceipt() }, { state: "already_loaded", extra: { bodyRef: "capability://deepagent.code-read@1.0.0-beta.0" } }],
     ["denied", { state: "denied", reasonCode: "permission_scope_denied" }, { state: "denied", extra: { reasonCode: "permission_scope_denied" } }],
     ["budget_exceeded", { state: "budget_exceeded", level: "L2", limitTokens: 1200, requestedTokens: 1500 }, { state: "budget_exceeded", extra: { level: "L2", limitTokens: 1200, requestedTokens: 1500, limitNewPerTurn: 2, newThisTurn: 0 } }],
     ["missing_body", { state: "missing_body", bodyRef: "capability://deepagent.code-edit@1.0.0-beta.0" }, { state: "not_found", extra: { reasonCode: "capability_unregistered" } }],
@@ -74,8 +87,8 @@ describe("mapCapabilityLoadResult (6-state kernel -> ContentLoadState)", () => {
 
 // --- frozen receipt field completeness -------------------------------------------
 describe("sessionCapabilityLoad builds the durable frozen receipt", () => {
-  test("a successful load yields a ContentLoadState 'loaded' + a fully-populated receipt", () => {
-    const out = sessionCapabilityLoad({ request: REQUEST, identity: IDENTITY, contextEpoch: "epoch-1" })
+  test("a successful load yields a ContentLoadState 'loaded' + a fully-populated receipt", async () => {
+    const out = await load({ request: REQUEST, identity: IDENTITY, contextEpoch: "epoch-1" })
     expect(out.state.state).toBe("loaded")
     const receipt = out.receipt
     // Every frozen field is present and coherent.
@@ -119,26 +132,44 @@ describe("sessionCapabilityLoad builds the durable frozen receipt", () => {
     expect(bound.capabilityId).toBe("deepagent.code-read")
   })
 
-  test("an exact retry returns the already_loaded state with a stable request/body binding", () => {
-    const first = sessionCapabilityLoad({ request: REQUEST, identity: IDENTITY, contextEpoch: "epoch-1" })
-    const second = sessionCapabilityLoad({ request: REQUEST, identity: IDENTITY, contextEpoch: "epoch-1" })
+  test("an exact retry returns the already_loaded state with a stable request/body binding", async () => {
+    const first = await load({ request: REQUEST, identity: IDENTITY, contextEpoch: "epoch-1" })
+    const second = await load({ request: REQUEST, identity: IDENTITY, contextEpoch: "epoch-1" })
     expect(second.state.state).toBe("already_loaded")
     expect(second.receipt.requestHash).toBe(first.receipt.requestHash)
     expect(second.receipt.bodyHash).toBe(first.receipt.bodyHash)
     expect(second.receipt.catalogSnapshotId).toBe(first.receipt.catalogSnapshotId)
+    // W4: a same-session exact retry still returns the body (never a bodyless already_loaded).
+    expect(second.body).toBe("Read source body")
+  })
+
+  test("sessionCapabilityLoad persists the receipt to session_capability_load (W4 write table)", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        const out = yield* sessionCapabilityLoad(db, { request: REQUEST, identity: IDENTITY, contextEpoch: "epoch-1" })
+        expect(out.state.state).toBe("loaded")
+        // Durable read-back from the SAME connection.
+        const receipts = yield* recordedCapabilityLoadsForSession(db, "session-1")
+        expect(receipts).toHaveLength(1)
+        expect(receipts[0]!.loadId).toBe(out.receipt.loadId)
+        expect(receipts[0]!.bodyHash).toBe(REQUEST.bodyHash)
+        expect(receipts[0]!.sessionId).toBe("session-1")
+      }).pipe(Effect.provide(Database.layerFromPath(":memory:"))),
+    )
   })
 })
 
 // --- search -> load path: available index is reachable ---------------------------
 describe("L0 catalog -> L1 search -> L2 load is reachable (available index non-empty)", () => {
-  test("a known capability card is searchable, then its body loads through the kernel", () => {
+  test("a known capability card is searchable, then its body loads through the kernel", async () => {
     const cards = capabilitySearch(capabilityCatalog, { query: "read source", intended_action: "read" }, fullAuthorization)
     expect(cards.some((card) => card.id === "deepagent.code-read")).toBe(true)
 
     const entry = findCapabilityBody("capability://deepagent.code-read@1.0.0-beta.0")
     expect(entry).toBeTruthy()
 
-    const out = sessionCapabilityLoad({
+    const out = await load({
       request: {
         capabilityId: entry!.id,
         version: entry!.version,
@@ -163,10 +194,46 @@ describe("L0 catalog -> L1 search -> L2 load is reachable (available index non-e
 
 // --- observable store reset -------------------------------------------------------
 describe("adapter re-exports the kernel reset for isolation", () => {
-  test("a fresh adapter boundary clears the loader budget", () => {
-    sessionCapabilityLoad({ request: REQUEST, identity: IDENTITY, contextEpoch: "epoch-1" })
+  test("a fresh adapter boundary clears the loader budget", async () => {
+    await load({ request: REQUEST, identity: IDENTITY, contextEpoch: "epoch-1" })
     resetCapabilityLoader()
-    const again = sessionCapabilityLoad({ request: REQUEST, identity: IDENTITY, contextEpoch: "epoch-1" })
+    const again = await load({ request: REQUEST, identity: IDENTITY, contextEpoch: "epoch-1" })
     expect(again.state.state).toBe("loaded")
+  })
+})
+
+// --- W4 session scope: cross-session loads + durable per-session read-back ---
+describe("session-scoped loads (W4)", () => {
+  test("two different sessions loading the same body are BOTH loaded with the body", async () => {
+    resetCapabilityLoader()
+    const first = await load({ request: REQUEST, identity: IDENTITY, contextEpoch: "epoch-1" })
+    const second = await load({ request: REQUEST, identity: { ...IDENTITY, sessionId: "session-2" }, contextEpoch: "epoch-1" })
+    expect(first.state.state).toBe("loaded")
+    expect(second.state.state).toBe("loaded")
+    expect(second.body).toBe("Read source body")
+  })
+
+  test("each session's durable receipts are filtered per session (snapshot restoration shape)", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* sessionCapabilityLoad(db, { request: REQUEST, identity: IDENTITY, contextEpoch: "epoch-1" })
+        yield* sessionCapabilityLoad(db, {
+          request: { ...REQUEST, capabilityId: "deepagent.code-edit" },
+          identity: { sessionId: "session-1", activityId: "activity-1", turnId: "turn-1" },
+          contextEpoch: "epoch-1",
+        })
+        yield* sessionCapabilityLoad(db, {
+          request: REQUEST,
+          identity: { sessionId: "session-2", activityId: "activity-2", turnId: "turn-2" },
+          contextEpoch: "epoch-1",
+        })
+        const receiptsOne = yield* recordedCapabilityLoadsForSession(db, "session-1")
+        expect(receiptsOne).toHaveLength(2)
+        expect(receiptsOne.every((receipt) => receipt.sessionId === "session-1")).toBe(true)
+        const receiptsTwo = yield* recordedCapabilityLoadsForSession(db, "session-2")
+        expect(receiptsTwo).toHaveLength(1)
+      }).pipe(Effect.provide(Database.layerFromPath(":memory:"))),
+    )
   })
 })

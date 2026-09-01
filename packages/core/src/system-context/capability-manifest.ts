@@ -302,6 +302,39 @@ export function assertCapabilityCatalogConsistent(
   for (const manifest of manifests) assertCapabilityManifestConsistent(manifest, inventory)
 }
 
+/** Typed violation: a stable catalog manifest advertises an entry tool the runtime does not register. */
+export class CatalogRegistryMismatchError extends Schema.TaggedErrorClass<CatalogRegistryMismatchError>()(
+  "CapabilityManifest.CatalogRegistryMismatchError",
+  { missing: Schema.Array(Schema.String) },
+) {}
+
+/**
+ * W4 inventory ↔ registry consistency gate (design §7.2: a manifest is only advertisable
+ * when its entry tools exist in the runtime). The constraint is the subset direction: the
+ * stable catalog's entry-tool set must be REGISTERED in the shipped tool registry —
+ * advertising a capability whose entry tool is absent is a build gate failure (the model
+ * would discover a feature it cannot operate). Extra registered tools (question,
+ * capability_search, the load tools) are fine; missing tools are not.
+ *
+ * Current HEAD: `deepagent.context-query` is `stable` but `context_query` is not in the
+ * builtin registry → throws (expected). W3.5 marks the not-yet-wired capabilities
+ * `maintenance_only` (they are excluded here — a maintenance-only capability is never
+ * advertised as operable), and the gate passes for the merged wave.
+ */
+export function assertInventoryMatchesRegistry(
+  registeredTools: ReadonlyArray<string> | ReadonlySet<string>,
+  manifests: ReadonlyArray<CapabilityManifest>,
+): void {
+  const registered = registeredTools instanceof Set ? registeredTools : new Set(registeredTools)
+  const advertised = new Set<string>()
+  for (const manifest of manifests) {
+    if (manifest.availability !== "stable") continue
+    for (const tool of manifest.entry_tools) advertised.add(tool)
+  }
+  const missing = [...advertised].filter((tool) => !registered.has(tool)).sort()
+  if (missing.length > 0) throw new CatalogRegistryMismatchError({ missing })
+}
+
 /** Deterministically sort manifests by id, then version. */
 export function sortManifests(manifests: ReadonlyArray<CapabilityManifest>): ReadonlyArray<CapabilityManifest> {
   return [...manifests].toSorted(

@@ -22,7 +22,10 @@ import { migrations } from "../src/database/migration.gen"
 // gained the recovery_command state CHECK and the descriptor immutability
 // triggers (anti-review W2-1 issue 7), so the ordered registry digest moved
 // again. Explicit re-pin: the previous pin covered the pre-hardening body.
-const PINNED_DIGEST = "ec9035e1c24ccd5cdd33289978a49a9e2827740940d7b7a749673a19be01daa3"
+// Successor pin (W4, 2026-09-01): the session_capability_load persistence
+// migration joined the registry (generated from the Drizzle schema via
+// `bun script/migration.ts`), so the ordered registry digest moved again.
+const PINNED_DIGEST = "92033b45935ca9d21fa6b0c34dc6ce8ab1e83ffeb17fae4d18ab2acea11e2ebe"
 
 const digest = (entries: readonly { readonly id: string; readonly hash: string }[]) =>
   createHash("sha256").update(JSON.stringify(entries)).digest("hex")

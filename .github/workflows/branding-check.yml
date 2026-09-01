@@ -33,3 +33,8 @@ jobs:
         # Fails the job on any non-exempt hit; no continue-on-error.
         working-directory: packages/deepagent-code
         run: bun script/audit-branding.ts
+
+      - name: Run capability inventory consistency gate
+        # W4 step 7: stable catalog entry_tools must all be in the builtin registry.
+        working-directory: packages/deepagent-code
+        run: bun script/assert-capability-inventory.ts
