@@ -1,10 +1,10 @@
 export * as ProductionV2Adapters from "./production-adapters"
 
-import { Context, Effect, Layer, Option } from "effect"
+import { Cause, Context, Effect, Layer, Option } from "effect"
 import { type CodeQuery } from "../code-intelligence/query"
 import { ContextAuthorization } from "./authorization"
 import { ContextFederation } from "./federation"
-import { LocationKey, canonicalProjectionRevision, type ContextRef } from "./reference"
+import { LocationKey, ProjectScopeKey, SecurityNamespaceID, canonicalProjectionRevision, type ContextRef } from "./reference"
 import { type ProjectionSnapshotRevision } from "./reference"
 import { AdapterVersion, code as codeFactory, knowledge as knowledgeFactory, memory as memoryFactory } from "./adapters-v2"
 import { type V2Adapter, type V2AdapterInput, type V2AdapterResult } from "./adapters-v2"
@@ -14,7 +14,7 @@ import { DurableKnowledgeStore } from "../deepagent/durable-knowledge-store"
 import { DeepAgentReleasedSnapshot } from "../deepagent/released-snapshot"
 import { RepoDocument } from "../document-intelligence/repo-document"
 import type { GraphKind } from "../contract/selection"
-import { flipFlagValueOn } from "../deepagent/flip-flag"
+import { RuntimeFeatures } from "../flag/runtime-features"
 
 // W3.1 — production V2 adapter assembly. Wraps the four `adapters-v2` factories with REAL source
 // inputs (live code query, repo-document index, durable knowledge stores, released snapshot) so the
@@ -27,10 +27,33 @@ import { flipFlagValueOn } from "../deepagent/flip-flag"
  * runtime-defaults); both sides use the single `flipFlagValueOn` table — absent key default ON. */
 export const CONTEXT_FEDERATION_PRODUCTION_ENV = "DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION"
 
+// W3.8 M1 — flag single-point closure: the W3 assembly gate delegates to the W4
+// `RuntimeFeatures` gate instead of parsing the env key itself. There is exactly ONE reader of
+// `DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION` in core now (`flag/runtime-features.ts`), so the
+// former two-consumer default split (assembly ON, runtime-features OFF in a bare core process) is
+// gone: the feature defaults ON (production semantics per W4.6 / the W0.1 default table — the
+// W3.7 real-source wiring is in), and an explicit `=false`/`=0`/`""` kill-switch still flips both
+// consumers together because they are the same consumer now.
 /** W3.1 flag gate: production adapters are ON by default; `=false`/`=0`/`""` (trim+lower) falls
  * back to the staged adapter set (existing behavior). Read at call time so tests can flip it. */
-export const productionAdaptersEnabled = (): boolean =>
-  flipFlagValueOn(process.env[CONTEXT_FEDERATION_PRODUCTION_ENV], true)
+export const productionAdaptersEnabled = (): boolean => RuntimeFeatures.enabled("context_federation_v2")
+
+/**
+ * W3.8 — real location identity (location-derived, `LocationIdentity.resolve` output shape) carried
+ * by the production sources seam. The V2 envelope is built with THIS identity when present, so the
+ * refs produced by the live sources (all bound to the same real namespace/scope/location) pass
+ * resolver authorization and the four graphs resolve {ready, empty} instead of degrading against
+ * the legacy `v2:local` pin. Absent (bare core / unwired composition), the envelope falls back to
+ * the `v2:local` degradation identity — "no location context" — exactly as before W3.8.
+ */
+export type ProductionV2LocationIdentity = {
+  readonly securityNamespaceId: SecurityNamespaceID
+  readonly locationKey: LocationKey
+  readonly projectScopeKey: ProjectScopeKey
+  /** Durable-knowledge legacy project id (git project id or `projectIdForWorkspace(canonicalRoot)`);
+   * the released-snapshot scope guard matches on it, so it must use the publisher's derivation. */
+  readonly legacyProjectId: string
+}
 
 /**
  * Repo-document search surface (mirrors the `LocationIndexCoordinator.searchDocuments` core type
@@ -62,6 +85,9 @@ export type ProductionReleasedBinding = {
  * its graph honestly instead of failing the turn (staged behavior is only the `=false` fallback).
  */
 export type ProductionV2AdapterInput = {
+  /** W3.8 — the real location identity for the V2 frame (location-derived). When present the V2
+   * envelope is built with THIS identity; absent keeps the `v2:local` degradation frame. */
+  readonly identity?: ProductionV2LocationIdentity
   /** Live code query (deepagent-code `LiveCodeQuery` provides `CodeQuery.Service`). */
   readonly code?: CodeQuery.Interface
   /** Repo-document index search (deepagent-code `LocationIndexCoordinator`). */
@@ -296,7 +322,7 @@ function resolveKnowledgeBinding(
     if (binding === undefined) {
       return { state: "current" as const, selection: undefined }
     }
-    const current = yield* binding.current(releasedScope(query))
+    const current = yield* binding.current(releasedScope(query)).pipe(releasedPickerDefectGuard)
     if (binding.binding !== "bound") return { state: "current" as const, selection: current }
     if (current === undefined) return { state: "unavailable" as const }
     if (current.snapshotId !== binding.snapshotId) return { state: "superseded" as const, selection: current }
@@ -318,7 +344,7 @@ function memoryAdapter(knowledge: ProductionV2AdapterInput["knowledge"]): V2Adap
     resolve: (query) =>
       Effect.gen(function* () {
         const selection = knowledge.released
-          ? yield* knowledge.released.current(releasedScope(query)).pipe(Effect.catch(() => Effect.succeed(undefined)))
+          ? yield* knowledge.released.current(releasedScope(query)).pipe(releasedPickerDefectGuard).pipe(Effect.catch(() => Effect.succeed(undefined)))
           : undefined
         return yield* memoryFactory({
           stores: storesOf(knowledge.stores),
@@ -388,6 +414,28 @@ function releasedScope(query: V2AdapterInput): DeepAgentReleasedSnapshot.Scope {
     projectScopeKey: query.projectScopeKey,
     legacyProjectId: query.legacyProjectId,
   }
+}
+
+// W3.8 A — released-picker integrity guard. The picker (`DeepAgentReleasedSnapshot.current`) reads
+// the snapshot head under the envelope scope; a scope LEGACY-PROJECT mismatch between the envelope
+// identity and the published head dies inside `requireSnapshotAuthority` (an integrity defect, not
+// a typed failure). A V2 TURN must never crash on that: the knowledge/memory graphs degrade
+// honestly (the same downstream state as "snapshot unavailable" / "none") and the cause is logged.
+// Scope match is the normal path — with the real identity the envelope reuses the publisher's
+// derivation, so a mismatch here means the host frame was stale, not that data is corrupted.
+function releasedPickerDefectGuard(effect: Effect.Effect<DeepAgentReleasedSnapshot.Selection | undefined, unknown>) {
+  return effect.pipe(
+    // catchCause deliberately distinguishes: a TYPED failure (picker unavailable) keeps its error
+    // for the caller's catch ("failed" → degraded), while a DEFECT (integrity die on a scope
+    // mismatch) is converted into the honest "no snapshot" outcome with the cause logged.
+    Effect.catchCause((cause) =>
+      Option.isSome(Cause.findErrorOption(cause))
+        ? Effect.fail(Option.getOrThrow(Cause.findErrorOption(cause)))
+        : Effect.logWarning("released knowledge picker defect (scope mismatch?) — degrading knowledge/memory", {
+            cause,
+          }).pipe(Effect.as(undefined as DeepAgentReleasedSnapshot.Selection | undefined)),
+    ),
+  )
 }
 
 /** Bounded copy of the sensitive-path guard (mirror of the deepagent-code location-index guard). */

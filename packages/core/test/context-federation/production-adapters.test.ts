@@ -288,6 +288,62 @@ describe("W3 production adapters: real sources, never staged", () => {
     expect(result.successorRebuild?.expected).toBe(selection.snapshotId)
     expect(result.successorRebuild?.observed).toBe(newer.snapshotId)
   })
+
+  test("M2: unbound + degraded knowledge reports degraded with NO successor signal (negative regression)", async () => {
+    // The envelope has no released-snapshot expectation (binding "unavailable") while the knowledge
+    // source is degraded (picker unavailable): the graph is honestly degraded and the resolver must
+    // NOT emit a released_snapshot_drift successor — drift is only meaningful when a snapshot was
+    // bound (W3.3 rule), otherwise a stale frame would rebuild every turn forever.
+    const input: ProductionV2AdapterInput = {
+      knowledge: {
+        stores: [new DurableKnowledgeStore(tmpdirPath)],
+        released: {
+          snapshotId: "snap-unbound",
+          binding: "unavailable",
+          current: () => Effect.fail(new Error("released picker unavailable")),
+        },
+      },
+    }
+    const adapters = productionV2Adapters(input)
+    const result = await Effect.runPromise(
+      SessionContextResolverV2.resolveGraphs(
+        envelope({ releasedKnowledge: { snapshotId: "", binding: "unavailable" } }),
+        adapters,
+        100,
+      ),
+    )
+    expect(result.graphStatuses.knowledge.status).toBe("degraded_unavailable")
+    expect(result.graphStatuses.knowledge.reasonCode).toBe("released_snapshot_unavailable")
+    expect(result.successorRebuild).toBeUndefined()
+  })
+
+  test("M2: a released-picker integrity defect degrades knowledge, never crashes the resolution (scope mismatch honesty)", async () => {
+    // W3.8 A — the deep read (`DeepAgentReleasedSnapshot.current`) dies on a legacy-project scope
+    // mismatch inside `requireSnapshotAuthority`. The production adapters convert that defect into
+    // the honest degraded outcome (logged), and a bound envelope surfaces the drift signal so the
+    // caller re-binds instead of the turn dying.
+    const input: ProductionV2AdapterInput = {
+      knowledge: {
+        stores: [new DurableKnowledgeStore(tmpdirPath)],
+        released: {
+          snapshotId: "snap-bound",
+          binding: "bound",
+          current: () => Effect.die("released snapshot legacy project binding mismatch"),
+        },
+      },
+    }
+    const adapters = productionV2Adapters(input)
+    const result = await Effect.runPromise(
+      SessionContextResolverV2.resolveGraphs(
+        envelope({ releasedKnowledge: { snapshotId: "snap-bound", binding: "bound" } }),
+        adapters,
+        100,
+      ),
+    )
+    expect(result.graphStatuses.knowledge.status).toBe("degraded_unavailable")
+    expect(result.graphStatuses.knowledge.reasonCode).toBe("released_snapshot_unavailable")
+    expect(result.successorRebuild?.trigger).toBe("released_snapshot_drift")
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -411,39 +467,37 @@ const seed = Effect.gen(function* () {
 })
 
 describe("W3 canonical drift consumption (released_snapshot_drift)", () => {
-  const rebound = releasedPair({ securityNamespaceId: "v2:local", projectScopeKey: "v2:local", legacyProjectId: "v2:local" })
-  const reboundSequence = [rebound.selection, rebound.newer, rebound.newer, rebound.newer]
-  let reboundCalls = 0
-  const rebindSources: ProductionV2AdapterInput = {
-    knowledge: {
-      stores: [new DurableKnowledgeStore(tmpdirPath)],
-      released: {
-        snapshotId: rebound.selection.snapshotId,
-        binding: "bound",
-        current: () => Effect.succeed(reboundSequence[Math.min(reboundCalls++, reboundSequence.length - 1)]),
+  // L7 — deterministic scripted picker: the CURRENT host picker has no state, so a drift script is
+  // an explicit snapshot sequence + a recorded call trace. No module-level counters are used (the
+  // old implementation shared mutable `reboundCalls`/`persistentCalls` across tests and depended on
+  // the exact internal call order), so the admission flow may reorder or repeat picker calls and
+  // the tests still assert exactly what happened.
+  function scriptedPicker(script: readonly DeepAgentReleasedSnapshot.Selection[]) {
+    const calls: string[] = []
+    return {
+      calls,
+      binding: {
+        snapshotId: script[0]!.snapshotId,
+        binding: "bound" as const,
+        current: (): Effect.Effect<DeepAgentReleasedSnapshot.Selection | undefined, unknown> => {
+          const value = script[Math.min(calls.length, script.length - 1)]
+          calls.push(value.snapshotId)
+          return Effect.succeed(value)
+        },
       },
-    },
+    }
   }
-  const persistent = releasedPair({ securityNamespaceId: "v2:local", projectScopeKey: "v2:local", legacyProjectId: "v2:local" })
-  // bind#1 = snap-0; knowledge/memory#1 = snap-1 (drift); rebind#2 = snap-1; knowledge/memory#2 = snap-2 (drift again) -> fail.
-  const persistentSequence = [persistent.selection, persistent.newer, persistent.newer, persistent.newer, { ...persistent.newer, snapshotId: "snap-2", generation: 2 }, { ...persistent.newer, snapshotId: "snap-2", generation: 2 }]
-  let persistentCalls = 0
-  const persistentSources: ProductionV2AdapterInput = {
-    knowledge: {
-      stores: [new DurableKnowledgeStore(tmpdirPath)],
-      released: {
-        snapshotId: persistent.selection.snapshotId,
-        binding: "bound",
-        current: () => Effect.succeed(persistentSequence[Math.min(persistentCalls++, persistentSequence.length - 1)]),
-      },
-    },
-  }
-  const rebindIt = testEffect(
-    Layer.mergeAll(database, contexts, Layer.succeed(ProductionV2Sources, rebindSources)),
-  )
 
-  rebindIt.effect("a release between bind and resolve re-binds and admits (signal is consumed, not dropped)", () =>
-      Effect.gen(function* () {
+  const rebindIt = testEffect(Layer.mergeAll(database, contexts))
+  const rebindScope = { securityNamespaceId: "v2:local", projectScopeKey: "v2:local", legacyProjectId: "v2:local" }
+  const rebind = releasedPair(rebindScope)
+  // Resolution per resolveOnce: bind (envelope) + knowledge + memory (GraphOrder); the drift path
+  // re-resolves once, so exactly 6 picker calls: bind#1=stale, then 5× the released authority.
+  const rebindScript = [rebind.selection, rebind.newer, rebind.newer, rebind.newer, rebind.newer, rebind.newer]
+
+  rebindIt.effect("a release between bind and resolve re-binds and admits (signal is consumed, not dropped)", () => {
+      const scripted = scriptedPicker(rebindScript)
+      return Effect.gen(function* () {
         yield* seed
         const db = (yield* Database.Service).db
         const admission = yield* SessionRunnerCanonical.admitSelection({
@@ -466,16 +520,38 @@ describe("W3 canonical drift consumption (released_snapshot_drift)", () => {
         // The rebind observed the post-release authority: knowledge is an empty released domain.
         expect(statuses.knowledge?.status).toBe("empty")
         expect(row?.released_knowledge_binding_state).toBe("bound")
-        expect(row?.released_knowledge_snapshot_id).toBe(rebound.newer.snapshotId)
-      }),
+        expect(row?.released_knowledge_snapshot_id).toBe(rebind.newer.snapshotId)
+        // Deterministic call-trace assertion (L7): one bind + one knowledge + one memory per
+        // resolve, twice — and the drift is consumed exactly once.
+        expect(scripted.calls).toEqual([rebind.selection.snapshotId, ...rebindScript.slice(1).map((selection) => selection.snapshotId)])
+        expect(scripted.calls).toHaveLength(rebindScript.length)
+      }).pipe(
+        Effect.provideService(ProductionV2Sources, {
+          knowledge: {
+            stores: [new DurableKnowledgeStore(tmpdirPath)],
+            released: scripted.binding,
+          },
+        } as ProductionV2AdapterInput),
+      )
+    },
   )
 
-  const persistentIt = testEffect(
-    Layer.mergeAll(database, contexts, Layer.succeed(ProductionV2Sources, persistentSources)),
-  )
+  const persistentIt = testEffect(Layer.mergeAll(database, contexts))
+  const persistent = releasedPair(rebindScope)
+  // bind#1 = stale; knowledge#1 = current (drift); rebind#2 = current; knowledge#2 = snap-2 (drift
+  // again) — the second resolution still signals, so the admission must fail with rebuild required.
+  const persistentScript = [
+    persistent.selection,
+    persistent.newer,
+    persistent.newer,
+    persistent.newer,
+    { ...persistent.newer, snapshotId: "snap-2", generation: 2 },
+    { ...persistent.newer, snapshotId: "snap-2", generation: 2 },
+  ]
 
-  persistentIt.effect("a persistent drift fails the admission with selection_rebuild_required (turn rebuild signal, never silent)", () =>
-      Effect.gen(function* () {
+  persistentIt.effect("a persistent drift fails the admission with selection_rebuild_required (turn rebuild signal, never silent)", () => {
+      const scripted = scriptedPicker(persistentScript)
+      return Effect.gen(function* () {
         yield* seed
         const db = (yield* Database.Service).db
         const outcome = yield* SessionRunnerCanonical.admitSelection({
@@ -489,7 +565,19 @@ describe("W3 canonical drift consumption (released_snapshot_drift)", () => {
           historyEndMessageId: "msg_prod_drift",
         }).pipe(Effect.catch((error) => Effect.succeed({ error })))
         expect(outcome).toMatchObject({ error: { _tag: "SessionRunnerCanonical.AdmissionError", reason: "selection_rebuild_required:released_snapshot_drift" } })
-      }),
+        expect(scripted.calls).toHaveLength(persistentScript.length)
+        expect(scripted.calls[0]).toBe(persistent.selection.snapshotId)
+        expect(scripted.calls[1]).toBe(persistent.newer.snapshotId)
+        expect(scripted.calls[4]).toBe("snap-2")
+      }).pipe(
+        Effect.provideService(ProductionV2Sources, {
+          knowledge: {
+            stores: [new DurableKnowledgeStore(tmpdirPath)],
+            released: scripted.binding,
+          },
+        } as ProductionV2AdapterInput),
+      )
+    },
   )
 })
 

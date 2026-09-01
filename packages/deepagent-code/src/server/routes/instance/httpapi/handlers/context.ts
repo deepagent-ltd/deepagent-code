@@ -13,6 +13,7 @@ import {
   productionAdaptersEnabled,
   productionV2Adapters,
   type ProductionV2AdapterInput,
+  type ProductionV2LocationIdentity,
 } from "@deepagent-code/core/context-federation/production-adapters"
 import { ContextStagedAdaptersV2 } from "@deepagent-code/core/context-federation/staged-adapters-v2"
 import { Session } from "@/session/session"
@@ -59,30 +60,49 @@ export function dedupeEvents<T extends { seq: number }>(events: readonly T[]): T
 const V2Namespace = ContextReference.SecurityNamespaceID.make("v2:local")
 const V2Scope = ContextReference.ProjectScopeKey.make("v2:local")
 
-/** Build a v2-scoped resolver QueryEnvelope for a session readiness probe. */
-export function buildReadinessEnvelope(session: Session.Info): QueryEnvelope {
-  const locationKey = ContextReference.LocationKey.make(session.directory)
+/**
+ * Build a v2-scoped resolver QueryEnvelope for a session readiness probe. W3.8.1: when the
+ * production sources seam carries the real location identity, the probe answers with THAT frame
+ * (identity namespace/location/scope + the released-knowledge legacy project id — the same frame
+ * the V2 runner's `buildV2Envelope` uses, so the probe cannot diverge from real turns); absent an
+ * identity the envelope keeps the v2:local degradation pin exactly as before.
+ */
+export function buildReadinessEnvelope(
+  session: Session.Info,
+  identity?: ProductionV2LocationIdentity,
+): QueryEnvelope {
+  const frameLocationKey = identity?.locationKey ?? ContextReference.LocationKey.make(session.directory)
+  const frameNamespace = identity?.securityNamespaceId ?? V2Namespace
+  const frameScope = identity?.projectScopeKey ?? V2Scope
+  // The contract `projectId` is the released-knowledge legacy project id: the real frame carries
+  // the host derivation (the adapter `legacyProjectId`), the v2:local fallback carries "v2:local".
+  const frameLegacyProjectId = identity?.legacyProjectId ?? V2Scope
   const graphs = [...SessionContextResolverV2.GraphOrder]
   return {
     membership: { sessionId: session.id, activityId: "", inputIds: [] },
     location: {
-      locationKey,
+      locationKey: frameLocationKey,
       ...(session.workspaceID ? { workspaceId: session.workspaceID } : {}),
     },
     principal: {
-      securityNamespaceId: V2Namespace,
+      securityNamespaceId: frameNamespace,
       principalId: session.id,
       authorizationEpoch: 0,
-      locationKeys: [locationKey],
-      projectScopeKeys: [V2Scope],
+      locationKeys: [frameLocationKey],
+      projectScopeKeys: [frameScope],
       sessionIds: [session.id],
       subjectIds: [],
       allowBuiltin: false,
     },
     workspace: { workspaceId: session.workspaceID ?? "" },
-    securityNamespace: { securityNamespaceId: V2Namespace },
-    projectScope: { projectScopeKey: V2Scope },
-    egress: { policyId: "v2:history-context", epoch: 0, graphs, sensitivities: [] },
+    securityNamespace: { securityNamespaceId: frameNamespace },
+    projectScope: { projectScopeKey: frameScope, projectId: frameLegacyProjectId },
+    // W3.8.1 — the probe must let the LIVE sources actually answer: the LiveCodeQuery gate and the
+    // document/durable-knowledge candidate authorization check the egress sensitivity list, and an
+    // empty list would make every real-frame probe answer `source_error` (the exact defect being
+    // closed). The grant mirrors the deepagent-code live-query facade default (`envelopeFor`): the
+    // sensitivity set a real context query may read.
+    egress: { policyId: "v2:history-context", epoch: 0, graphs, sensitivities: ["public", "source_code", "secret_adjacent"] },
     agentPolicy: { agentId: session.agent ?? "default", autonomyCeiling: "medium", permitDegraded: true },
     modelCapability: { modelId: "", providerId: "", protocol: "openai.responses", contextWindow: 0, structuredOutput: false },
     releasedKnowledge: { snapshotId: "", binding: "unavailable" },
@@ -125,10 +145,12 @@ export const contextHandlers = HttpApiBuilder.group(InstanceHttpApi, "context", 
       const info = yield* session.get(sessionId).pipe(
         Effect.mapError(() => makeApiError("resource_not_found", { resource: ctx.query.session_id })),
       )
-      const envelope = buildReadinessEnvelope(info)
+      // W3.8.1: the probe frame mirrors the runner — the seam's real location identity when the
+      // instance index is attached, the v2:local degradation otherwise.
+      const sources = yield* ProductionV2Sources
+      const envelope = buildReadinessEnvelope(info, sources.identity)
       // W3.7 L5: readiness reflects what the V2 runner actually does — same flag-gated adapter
       // selection (production sources default, staged `source_disabled` only under `=false`).
-      const sources = yield* ProductionV2Sources
       const adapters = readinessAdapters(sources)
       const resolved = yield* SessionContextResolverV2.resolveGraphs(envelope, adapters, 5_000)
       const graphs = resolved.results.map((entry) => entry.status)

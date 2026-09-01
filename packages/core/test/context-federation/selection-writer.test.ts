@@ -330,6 +330,16 @@ describe("SelectionWriter (C3-05 production write + FK + no v2-none + successor)
       }),
     )
   })
+
+  test("L2: a candidate title token is truncated at 120 chars in the selection ref (bounded evidence)", () => {
+    const longCandidate = { ...candidate({ graph: "code", entityId: "long-token" }), title: "y".repeat(400) }
+    const sel = build(result([longCandidate]), envelope(), 0, 1)
+    const token = sel.selectedRefs[0]?.token
+    expect(token).toBeDefined()
+    expect(token?.length).toBe(121)
+    expect(token?.endsWith("…")).toBe(true)
+    expect(token?.slice(0, 120)).toBe("y".repeat(120))
+  })
 })
 
 // ---------------------------------------------------------------------------

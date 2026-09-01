@@ -37,6 +37,7 @@ import { SessionRunCoordinator } from "@deepagent-code/core/session/run-coordina
 import { SessionRunner } from "@deepagent-code/core/session/runner"
 import * as SessionRunnerLLM from "@deepagent-code/core/session/runner/llm"
 import { SessionRunnerModel } from "@deepagent-code/core/session/runner/model"
+import { CONTEXT_FEDERATION_PRODUCTION_ENV } from "@deepagent-code/core/context-federation/production-adapters"
 import { V2ProviderTurn } from "@deepagent-code/core/session/runner/v2-provider-turn"
 import { V2ToolEffect } from "@deepagent-code/core/session/runner/v2-tool-effect"
 import { V2ToolEffectTable } from "@deepagent-code/core/session/runner/v2-tool-effect.sql"
@@ -77,6 +78,7 @@ import {
   SessionMessageTable,
   SessionTable,
 } from "@deepagent-code/core/session/sql"
+import { SessionContextSelectionTable } from "@deepagent-code/core/context-federation/session-sql"
 import { SessionStore } from "@deepagent-code/core/session/store"
 import { SystemContext } from "@deepagent-code/core/system-context"
 import { SystemContextRegistry } from "@deepagent-code/core/system-context/registry"
@@ -86,7 +88,7 @@ import { Location } from "@deepagent-code/core/location"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { Cause, Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect"
 import { systemError } from "effect/PlatformError"
-import { asc, eq, sql } from "drizzle-orm"
+import { asc, desc, eq, sql } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
 
 const database = Database.layerFromPath(":memory:")
@@ -1347,6 +1349,47 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests.at(-1)?.system.map((part) => part.text)).toEqual(withSelection(["Build agent instructions", "Initial context"]))
+    }),
+  )
+
+  it.effect("W3.8 M3: an explicit =false keeps the request byte-identical (no selection evidence part)", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const previous = process.env[CONTEXT_FEDERATION_PRODUCTION_ENV]
+      process.env[CONTEXT_FEDERATION_PRODUCTION_ENV] = "false"
+      try {
+        const session = yield* SessionV2.Service
+        yield* session.prompt({ sessionID, prompt: new Prompt({ text: "First" }), resume: false })
+
+        requests.length = 0
+        response = fragmentFixture("text", "text-false-flag", ["Done"]).completeEvents
+        yield* session.resume(sessionID)
+
+        // The pre-W3 wire shape: no "Context selection (this turn):" tail. The default-ON twin is
+        // asserted by every other runner test (`withSelection`), so this negative proves the
+        // byte-invariance of the explicit kill-switch — the staged adapters + no evidence tail.
+        const system = requests.at(-1)?.system.map((part) => part.text) ?? []
+        expect(system.join("\n")).not.toContain("Context selection (this turn):")
+        expect(system).toEqual(["Initial context"])
+        // Selection row still carries explicit four-graph statuses (staged source_disabled), never
+        // v2-none — the =false fallback stays a REAL selection.
+        const { db } = yield* Database.Service
+        const row = yield* db
+          .select()
+          .from(SessionContextSelectionTable)
+          .where(eq(SessionContextSelectionTable.session_id, sessionID))
+          .orderBy(desc(SessionContextSelectionTable.revision))
+          .get()
+        const statuses = JSON.parse(row?.graph_statuses ?? "{}") as Record<string, { status: string; reasonCode: string }>
+        expect(Object.keys(statuses).sort()).toEqual(["code", "documents", "knowledge", "memory"])
+        for (const status of Object.values(statuses)) {
+          expect(status.status).toBe("degraded_unavailable")
+          expect(status.reasonCode).toBe("source_disabled")
+        }
+      } finally {
+        if (previous === undefined) delete process.env[CONTEXT_FEDERATION_PRODUCTION_ENV]
+        else process.env[CONTEXT_FEDERATION_PRODUCTION_ENV] = previous
+      }
     }),
   )
 

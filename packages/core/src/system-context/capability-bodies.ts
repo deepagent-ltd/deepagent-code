@@ -187,7 +187,11 @@ export const capabilityBodies: ReadonlyArray<CapabilityBodyEntry> = [
     version: "1.0.0-beta.0",
     summary: "Index and query code intelligence for a module or symbol",
     use_when: ["symbol definition", "call site", "module structure"],
-    availability: "stable",
+    // W3.5 (spec §W3 step 5) ruling, applied here (the code-intel manifest lives in the bodies
+    // successor set, not the frozen catalog): the `code_intel` tool has no production registry
+    // entry yet (its V2 code-graph wiring lands with W10+), so the capability is maintenance —
+    // never advertised as executable until the tool lands.
+    availability: "maintenance_only",
     required_permissions: ["read", "glob", "grep"],
     required_runtime_features: [],
     entry_tools: ["code_intel"],

@@ -38,7 +38,7 @@ import { LSP } from "../../src/lsp/lsp"
 import { LocationIndexCoordinator } from "../../src/location-index/coordinator"
 import { LocationIndexRuntime } from "../../src/location-index/runtime"
 import { isRepoDocument, scan } from "../../src/location-index/manifest"
-import { productionInput } from "../../src/context-federation/production-sources"
+import { productionInput, identityFromHandle } from "../../src/context-federation/production-sources"
 import {
   buildReadinessEnvelope,
   readinessAdapters,
@@ -246,7 +246,16 @@ describe("W3.7 production sources (deepagent-code composition)", () => {
           code,
           db,
           workspaceDirectory: root,
+          // W3.8.1 — exactly what `productionSourcesLayer` computes: the frame identity from the
+          // CURRENT instance handle (the layer reads `runtime.current()` and maps it).
+          identity: identityFromHandle({ identity: resolvedIdentity }),
         })
+        const seamIdentity = input.identity!
+        expect(seamIdentity.securityNamespaceId).toBe(resolvedIdentity.securityNamespaceId)
+        expect(seamIdentity.locationKey).toBe(resolvedIdentity.locationKey)
+        expect(seamIdentity.projectScopeKey).toBe(resolvedIdentity.projectScopeKey)
+        // registered_root project without an observed project id: the released-knowledge derivation.
+        expect(seamIdentity.legacyProjectId).toBe(projectIdForWorkspace(root))
         // 组合层装配：sources 非空，code 源有查询面，documents 有搜索面，knowledge 有真 store + 释放 picker
         expect(input.code).toBeDefined()
         expect(input.documents).toBeDefined()
@@ -312,21 +321,28 @@ describe("W3.7 production sources (deepagent-code composition)", () => {
         expect(resolvedMemory.graphStatuses.knowledge.status).toBe("empty")
 
         // W3.7 L5 — C6 readiness uses the SAME flag-gated adapter selection as the runner, so the
-        // probe cannot split from real turns. The readiness envelope is the REAL API frame
-        // (v2:local pin + session.directory location key): with the production adapter set the
-        // probe answers from the LIVE sources — never the staged `source_disabled` marker. In the
-        // current core W3 frame the code source answers `source_error` (the real LiveCodeQuery ran
-        // and the v2:local-pinned envelope denies the real-identity grant — a core envelope
-        // follow-up, reported; no fake).
-        const readinessEnvelope = buildReadinessEnvelope({
-          id: SessionID.make("ses_w37"),
-          slug: "w37-readiness",
-          projectID: ProjectV2.ID.global,
-          directory: root,
-          title: "w37 readiness",
-          version: "test",
-          time: { created: 1, updated: 1 },
-        })
+        // probe cannot split from real turns. W3.8.1 — the seam now carries the real frame
+        // identity, and the readiness envelope is built with it (the same frame the V2 runner
+        // builds), so the probe answers from the LIVE sources with the REAL scope — code is no
+        // longer denied to `source_error` by the v2:local pin. Expected: code ∈ {ready, empty}
+        // (the probe query "session context" has no fixture hit — honest empty), never
+        // `degraded_unavailable(source_error)`.
+        const readinessEnvelope = buildReadinessEnvelope(
+          {
+            id: SessionID.make("ses_w37"),
+            slug: "w37-readiness",
+            projectID: ProjectV2.ID.global,
+            directory: root,
+            title: "w37 readiness",
+            version: "test",
+            time: { created: 1, updated: 1 },
+          },
+          input.identity,
+        )
+        expect(readinessEnvelope.principal.securityNamespaceId).toBe(input.identity!.securityNamespaceId)
+        expect(readinessEnvelope.location.locationKey).toBe(input.identity!.locationKey)
+        expect(readinessEnvelope.projectScope.projectScopeKey).toBe(input.identity!.projectScopeKey)
+        expect(readinessEnvelope.projectScope.projectId).toBe(input.identity!.legacyProjectId)
         const readinessResolved = yield* SessionContextResolverV2.resolveGraphs(
           readinessEnvelope,
           readinessAdapters(input),
@@ -334,13 +350,14 @@ describe("W3.7 production sources (deepagent-code composition)", () => {
         )
         const readinessGraphs = readinessResolved.graphStatuses
         console.log(
-          `W3.7 L5 readiness four-graph statuses: ${Object.entries(readinessGraphs)
+          `W3.8.1 real-frame readiness four-graph statuses: ${Object.entries(readinessGraphs)
             .map(([graph, record]) => `${graph}=${record.status}(${record.reasonCode}${record.rejectedCount > 0 ? `,rejected:${record.rejectedCount}` : ""})`)
             .join(" ")}`,
         )
         for (const [graph, record] of Object.entries(readinessGraphs)) {
           expect(record.reasonCode).not.toBe("source_disabled")
-          expect(["ready", "empty", "degraded_unavailable"]).toContain(record.status)
+          expect(record.reasonCode).not.toBe("source_error")
+          expect(["ready", "empty"]).toContain(record.status)
         }
       }).pipe(Effect.scoped),
     )
@@ -414,5 +431,67 @@ describe("W3.7 production sources (deepagent-code composition)", () => {
     const withoutSeam = ManagedRuntime.make(mapLayer)
     expect(await withoutSeam.runPromise(probe.pipe(Effect.provide(location)))).toBe("empty")
     await withoutSeam.dispose()
+  })
+})
+
+describe("W3.8.1 production frame identity (deepagent-code side)", () => {
+  test("identityFromHandle maps the handle identity and derives the legacy project id", () => {
+    // registered_root (no observed project id): the canonical durable-knowledge derivation.
+    expect(identityFromHandle({ identity: envelopeIdentity() })).toEqual({
+      securityNamespaceId: ns,
+      locationKey: LocationKey.make("loc_w37"),
+      projectScopeKey: proj,
+      legacyProjectId: projectIdForWorkspace(process.cwd()),
+    })
+    // git: the observed project id is the publisher's derivation — carried verbatim.
+    const gitIdentity: Identity = {
+      securityNamespaceId: ns,
+      locationKey: LocationKey.make("loc_w37"),
+      projectScopeKey: proj,
+      indexSpaceId: IndexSpaceID.make("idx_w37"),
+      canonicalRoot: AbsolutePath.make(process.cwd()),
+      observedProjectId: "git-observed-42",
+    }
+    expect(identityFromHandle({ identity: gitIdentity })?.legacyProjectId).toBe("git-observed-42")
+    // No handle => undefined => the v2:local degradation frame (never a fake).
+    expect(identityFromHandle(undefined)).toBeUndefined()
+  })
+
+  test("no handle keeps the seam identity undefined and the readiness envelope pinned to v2:local", async () => {
+    await using fixture = await tmpdir()
+    const stateRoot = fixture.path
+    const root = path.join(stateRoot, "repo")
+    const database = Database.layerFromPath(path.join(stateRoot, "metadata.sqlite"))
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const dbCtx = yield* Layer.build(database)
+        const db = Context.get(dbCtx, Database.Service).db
+        const runtime: LocationIndexRuntime.Interface = {
+          init: () => Effect.void,
+          current: () => Effect.succeed(undefined),
+        }
+        const code = { query: () => Effect.succeed({} as never) } as unknown as CodeQuery.Interface
+        // Exactly the layer expression: identityFromHandle(yield* runtime.current()).
+        const layerIdentity = yield* Effect.map(runtime.current(), identityFromHandle)
+        expect(layerIdentity).toBeUndefined()
+        const input = productionInput({ runtime, code, db, workspaceDirectory: root, identity: layerIdentity })
+        expect(input.identity).toBeUndefined()
+        const session = {
+          id: SessionID.make("ses_w381"),
+          slug: "w381-readiness",
+          projectID: ProjectV2.ID.global,
+          directory: root,
+          title: "w381 readiness",
+          version: "test",
+          time: { created: 1, updated: 1 },
+        }
+        const envelope = buildReadinessEnvelope(session)
+        expect(envelope.principal.securityNamespaceId).toBe(SecurityNamespaceID.make("v2:local"))
+        expect(envelope.securityNamespace.securityNamespaceId).toBe(SecurityNamespaceID.make("v2:local"))
+        expect(envelope.projectScope.projectScopeKey).toBe(ProjectScopeKey.make("v2:local"))
+        expect(envelope.projectScope.projectId).toBe("v2:local")
+        expect(envelope.location.locationKey).toBe(LocationKey.make(root))
+      }).pipe(Effect.scoped),
+    )
   })
 })

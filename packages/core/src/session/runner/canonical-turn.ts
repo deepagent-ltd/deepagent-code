@@ -5,7 +5,7 @@ import { Effect, Layer, Option, Schema } from "effect"
 import { Database } from "../../database/database"
 import { ContextArtifactStore } from "../../context-federation/artifact-store"
 import { SessionProviderAttempt } from "../../context-federation/provider-attempt"
-import { ContextReference } from "../../context-federation/reference"
+import { ContextReference, LocationKey, ProjectScopeKey, SecurityNamespaceID } from "../../context-federation/reference"
 import { SessionContext } from "../../context-federation/session-context"
 import { resolveGraphs, GraphOrder, type QueryEnvelope } from "../../context-federation/resolver-v2"
 import { budgetSelection } from "../../context-federation/selection-budget"
@@ -22,9 +22,10 @@ import {
   productionAdaptersEnabled,
   ProductionV2Sources,
   type ProductionV2AdapterInput,
+  type ProductionV2LocationIdentity,
 } from "../../context-federation/production-adapters"
 import { DeepAgentReleasedSnapshot } from "../../deepagent/released-snapshot"
-import type { GraphKind, SelectionEnvelope } from "../../contract/selection"
+import type { GraphKind, SelectionEnvelope, SelectionQueryIntent } from "../../contract/selection"
 import {
   SessionActivityInputTable,
   SessionActivityTable,
@@ -52,8 +53,37 @@ export const ValidationMs = 60_000
 
 const V2Namespace = ContextReference.SecurityNamespaceID.make("v2:local")
 const V2Scope = ContextReference.ProjectScopeKey.make("v2:local")
-const StagedPerGraphTimeoutMs = 5_000
+// L4: the constant is the per-graph QUERY timeout (applies to the production adapters too, not the
+// staged set), named for what it is — the previous `StagedPerGraphTimeoutMs` name was misleading.
+const PerGraphQueryTimeoutMs = 5_000
 const emptyProductionSources: ProductionV2AdapterInput = {}
+
+/** The effective V2 frame identity: the real location-derived identity when the production sources
+ * seam carries one, otherwise the `v2:local` degradation identity (no location context). The
+ * envelope/principal/scope/released picker all use this single value, so a real frame authorizes
+ * the real refs and the fallback reproduces the pre-W3.8 semantics (the envelope's scope values
+ * are the v2:local constants; the contract now also carries `projectId: "v2:local"`, which the
+ * adapters already fell back to via `projectScopeKey`). */
+type EffectiveFrameIdentity = {
+  readonly securityNamespaceId: SecurityNamespaceID
+  readonly locationKey: LocationKey
+  readonly projectScopeKey: ProjectScopeKey
+  readonly legacyProjectId: string
+}
+
+function effectiveFrameIdentity(
+  identity: ProductionV2LocationIdentity | undefined,
+  locationKey: LocationKey,
+): EffectiveFrameIdentity {
+  return identity === undefined
+    ? { securityNamespaceId: V2Namespace, locationKey, projectScopeKey: V2Scope, legacyProjectId: V2Scope }
+    : {
+        securityNamespaceId: identity.securityNamespaceId,
+        locationKey: identity.locationKey,
+        projectScopeKey: identity.projectScopeKey,
+        legacyProjectId: identity.legacyProjectId,
+      }
+}
 
 // §16.3 order 4 package D — the legacy federation selection evidence seam is DELETED by C3-08.
 // A V2 turn no longer copies legacy evidence (or the v2-none fallback) into the selection; the
@@ -92,6 +122,13 @@ export type AdmitSelectionInput = {
   readonly fallbackUserInputId?: string
   readonly system: SystemSnapshot
   readonly historyEndMessageId?: string
+  /**
+   * L1 — selection query intent seam. The V2 core prompt admission carries no per-input intent
+   * signal yet (the session input/Prompt shapes have none), so the runner leaves this unset and the
+   * envelope uses the `"search"` default; a caller with a real intent (classifier or host prompt
+   * metadata) passes it here and it reaches the resolver/adapter `intentFor` mapping.
+   */
+  readonly queryIntent?: SelectionQueryIntent
   readonly now?: number
 }
 
@@ -101,9 +138,16 @@ export const admitSelection = Effect.fn("SessionRunnerCanonical.admitSelection")
   return yield* Effect.gen(function* () {
     const now = input.now ?? Date.now()
     const locationKey = `${input.location.directory}#${input.location.workspaceID ?? ""}`
-    yield* ensureLocationIdentity(input.db, locationKey, now)
+    const sources = yield* Effect.serviceOption(ProductionV2Sources).pipe(
+      Effect.map((option) => Option.getOrElse(option, () => emptyProductionSources)),
+    )
+    // W3.8 A — the frame identity: real (location-derived, host seam) or the v2:local degradation.
+    // The same identity seeds the guard chain and builds the envelope, so the selection row and the
+    // envelope never disagree about the frame.
+    const frame = effectiveFrameIdentity(sources.identity, LocationKey.make(locationKey))
+    yield* ensureLocationIdentity(input.db, frame, now)
     const activity = yield* admitActivity(input, now)
-    const selection = yield* selectContext(input, activity, now, locationKey)
+    const selection = yield* selectContext(input, activity, now, frame)
     return {
       activityId: activity.activityId,
       selectionId: selection.selectionId,
@@ -157,23 +201,31 @@ function admitActivity(input: AdmitSelectionInput, now: number) {
   })
 }
 
-// V2 selections live in a dedicated local namespace. The selection insert guard requires the
-// namespace/scope/location identity chain to exist and stay unretired, so ensure it idempotently.
-function ensureLocationIdentity(db: Database.Interface["db"], locationKey: string, now: number) {
+// V2 selections live in a dedicated namespace frame. The selection insert guard requires the
+// namespace/scope/location identity chain to exist and stay unretired, so ensure it idempotently
+// (per-id onConflictDoNothing: when the host already resolved the identity through
+// `LocationIdentity.resolve`, those rows win; this seed only covers a bare-core / test frame).
+function ensureLocationIdentity(db: Database.Interface["db"], frame: EffectiveFrameIdentity, now: number) {
   return Effect.gen(function* () {
     yield* db
       .insert(SecurityNamespaceTable)
-      .values({ id: V2Namespace, kind: "implicit_local", binding_hash: Hash.sha256(V2Namespace), created_at: now })
+      .values({
+        id: frame.securityNamespaceId,
+        kind: "implicit_local",
+        binding_hash: Hash.sha256(frame.securityNamespaceId),
+        created_at: now,
+      })
       .onConflictDoNothing()
       .run()
       .pipe(Effect.orDie)
     yield* db
       .insert(ProjectScopeIdentityTable)
       .values({
-        security_namespace_id: V2Namespace,
-        project_scope_key: V2Scope,
+        security_namespace_id: frame.securityNamespaceId,
+        project_scope_key: frame.projectScopeKey,
         project_kind: "registered_root",
-        project_identity_hash: Hash.sha256(`${V2Namespace}:${V2Scope}`),
+        project_identity_hash: Hash.sha256(`${frame.securityNamespaceId}:${frame.projectScopeKey}`),
+        observed_project_id: frame.legacyProjectId,
         created_at: now,
       })
       .onConflictDoNothing()
@@ -182,10 +234,11 @@ function ensureLocationIdentity(db: Database.Interface["db"], locationKey: strin
     yield* db
       .insert(LocationIdentityTable)
       .values({
-        security_namespace_id: V2Namespace,
-        location_key: locationKey,
-        project_scope_key: V2Scope,
-        canonical_root: locationKey,
+        security_namespace_id: frame.securityNamespaceId,
+        location_key: frame.locationKey,
+        project_scope_key: frame.projectScopeKey,
+        canonical_root: String(frame.locationKey),
+        observed_project_id: frame.legacyProjectId,
         created_at: now,
       })
       .onConflictDoNothing()
@@ -198,7 +251,7 @@ function selectContext(
   input: AdmitSelectionInput,
   activity: { readonly activityId: string; readonly triggerInputId: string },
   now: number,
-  locationKey: string,
+  frame: EffectiveFrameIdentity,
 ) {
   return Effect.gen(function* () {
     const latest = yield* input.db
@@ -219,7 +272,7 @@ function selectContext(
     // for history but is NOT reusable for a new dispatch — build a V2 successor instead.
     if (latest && !isLegacyIncompleteRow(latest)) return yield* admissionFromRow(latest, activity, input, now)
     const revision = latest ? latest.revision + 1 : 0
-    return yield* buildV2Selection(input, activity, now, locationKey, revision)
+    return yield* buildV2Selection(input, activity, now, frame, revision)
   })
 }
 
@@ -259,7 +312,7 @@ function buildV2Selection(
   input: AdmitSelectionInput,
   activity: { readonly activityId: string; readonly triggerInputId: string },
   now: number,
-  locationKey: string,
+  frame: EffectiveFrameIdentity,
   revision: number,
 ): Effect.Effect<SelectionAdmission, AdmissionError> {
   const inputs = activityInputIds(input, activity.activityId)
@@ -269,7 +322,7 @@ function buildV2Selection(
       Effect.map((option) => Option.getOrElse(option, () => emptyProductionSources)),
     )
     const resolveOnce = Effect.fn("SessionRunnerCanonical.resolveOnce")(function* () {
-      const current = yield* currentReleasedSelection(sources)
+      const current = yield* currentReleasedSelection(sources, frame)
       const releasedBinding = {
         snapshotId: current?.snapshotId ?? "",
         binding: current ? ("bound" as const) : ("unavailable" as const),
@@ -281,8 +334,8 @@ function buildV2Selection(
             ...(sources.knowledge ? { knowledge: { stores: sources.knowledge.stores, released: releasedBinding } } : {}),
           })
         : stagedV2Adapters()
-      const envelope = buildV2Envelope(input, activity, ids, locationKey, now, current)
-      const resolved = yield* resolveGraphs(envelope, adapters, StagedPerGraphTimeoutMs)
+      const envelope = buildV2Envelope(input, activity, ids, frame, now, current)
+      const resolved = yield* resolveGraphs(envelope, adapters, PerGraphQueryTimeoutMs)
       return { resolved, envelope, current }
     })
     const first = yield* resolveOnce()
@@ -335,14 +388,15 @@ function releasedPicker(
   return sources.knowledge?.released?.current ?? (() => Effect.succeed(undefined))
 }
 
-/** Resolve-time current released snapshot for the V2 envelope scope (best-effort). */
+/** Resolve-time current released snapshot for the V2 envelope frame (best-effort). */
 function currentReleasedSelection(
   sources: ProductionV2AdapterInput,
+  frame: EffectiveFrameIdentity,
 ): Effect.Effect<DeepAgentReleasedSnapshot.Selection | undefined> {
   const scope = {
-    securityNamespaceId: V2Namespace,
-    projectScopeKey: V2Scope,
-    legacyProjectId: V2Scope,
+    securityNamespaceId: frame.securityNamespaceId,
+    projectScopeKey: frame.projectScopeKey,
+    legacyProjectId: frame.legacyProjectId,
   }
   return releasedPicker(sources)(scope).pipe(
     Effect.catch(() => Effect.succeed(undefined)),
@@ -364,9 +418,13 @@ function releasedKnowledgeIdentityOf(selection: DeepAgentReleasedSnapshot.Select
 /**
  * W3.6 — compact, bounded selection graph evidence for the model-visible system tail: per-graph
  * status + revision summary and the selected refs (tokens) e.g. used by `llm.ts` after admission.
- * Never fails the turn: a missing row or unreadable JSON yields `undefined` (no evidence), matching
- * the pre-W3 behavior rather than blocking dispatch.
+ * A missing row or unreadable JSON yields `undefined` (no evidence), and the rendered evidence is
+ * bounded by `EvidenceByteBudget` (L2) so the tail can never blow the request context. The one DB
+ * read is `Effect.orDie` like every other runner read: a storage fault is a defect, NOT a typed
+ * "undefined" — this function never lets a DB error masquerade as missing evidence.
  */
+export const EvidenceByteBudget = 4 * 1024
+
 export const selectionGraphEvidence = Effect.fn("SessionRunnerCanonical.selectionGraphEvidence")(function* (
   db: Database.Interface["db"],
   selectionId: string,
@@ -403,11 +461,33 @@ function renderGraphEvidence(row: typeof SessionContextSelectionTable.$inferSele
       : ""
     return `- ${graph}: ${status.status}${revision}${rejected} (${status.candidateCount} refs)`
   })
-  const refTokens = refs.slice(0, 8).map((ref) => ref.token).filter((token) => token.length > 0).join(" ")
-  const lines = [`Context selection (this turn):`, ...graphLines]
-  if (refTokens.length > 0) lines.push(`Selected refs: ${refTokens}`)
-  if (refs.length > 8) lines.push(`(and ${refs.length - 8} more refs)`)
+  // L2 — total evidence byte budget (4 KB): ref tokens are added greedily under the budget so a
+  // high-token selection cannot make the system tail arbitrarily large. Each token is also
+  // single-token-bounded (120 chars, mirrored from the writer's truncation).
+  const lines: string[] = ["Context selection (this turn):", ...graphLines]
+  let budgetUsed = bytesOf(lines.join("\n"))
+  // Reserve the two one-time tail parts (prefix + the "(and N more refs)" marker with a generous
+  // N bound) so the final join never exceeds the budget after a token was accepted.
+  const tailReserve = bytesOf("Selected refs: ") + bytesOf(" (and 999999 more refs)")
+  const tokens: string[] = []
+  for (const ref of refs) {
+    const token = ref.token.slice(0, 120).trim()
+    if (token.length === 0) continue
+    if (tokens.length >= 8) break
+    if (budgetUsed + bytesOf(token) + 1 + tailReserve > EvidenceByteBudget) break
+    tokens.push(token)
+    budgetUsed += bytesOf(token) + 1
+  }
+  if (tokens.length > 0) lines.push(`Selected refs: ${tokens.join(" ")}`)
+  const remaining = refs
+    .map((ref) => ref.token.slice(0, 120).trim())
+    .filter((token) => token.length > 0).length - tokens.length
+  if (remaining > 0) lines.push(`(and ${remaining} more refs)`)
   return lines.join("\n")
+}
+
+function bytesOf(value: string): number {
+  return new TextEncoder().encode(value).length
 }
 
 function admissionOf(
@@ -429,22 +509,21 @@ function admissionOf(
   }
 }
 
-/** Build the F1 resolver QueryEnvelope for a V2 runner turn (v2:local authority scope). */
+/** Build the F1 resolver QueryEnvelope for a V2 runner turn under the effective frame identity. */
 function buildV2Envelope(
   input: AdmitSelectionInput,
   activity: { readonly activityId: string; readonly triggerInputId: string },
   inputIds: readonly string[],
-  locationKey: string,
+  frame: EffectiveFrameIdentity,
   now: number,
   released?: DeepAgentReleasedSnapshot.Selection,
 ): QueryEnvelope {
-  const location = ContextReference.LocationKey.make(locationKey)
   const principal = {
-    securityNamespaceId: V2Namespace,
+    securityNamespaceId: frame.securityNamespaceId,
     principalId: input.sessionID,
     authorizationEpoch: input.system.revision,
-    locationKeys: [location],
-    projectScopeKeys: [V2Scope],
+    locationKeys: [frame.locationKey],
+    projectScopeKeys: [frame.projectScopeKey],
     sessionIds: [input.sessionID],
     subjectIds: [],
     allowBuiltin: false,
@@ -452,18 +531,29 @@ function buildV2Envelope(
   const graphs: GraphKind[] = [...GraphOrder]
   return {
     membership: { sessionId: input.sessionID, activityId: activity.activityId, inputIds },
-    location: { locationKey, ...(input.location.workspaceID === undefined ? {} : { workspaceId: input.location.workspaceID }) },
+    location: { locationKey: frame.locationKey, ...(input.location.workspaceID === undefined ? {} : { workspaceId: input.location.workspaceID }) },
     principal,
     workspace: { workspaceId: input.location.workspaceID ?? "" },
-    securityNamespace: { securityNamespaceId: V2Namespace },
-    projectScope: { projectScopeKey: V2Scope },
-    egress: { policyId: "v2:history-context", epoch: input.system.baselineSeq, graphs, sensitivities: [] },
+    securityNamespace: { securityNamespaceId: frame.securityNamespaceId },
+    // The contract `projectId` is the released-knowledge legacy project id: the real frame carries
+    // the host derivation (resolver feeds it to the adapters as `legacyProjectId`); the v2:local
+    // fallback carries "v2:local" — the pre-W3.8 value (projectScopeKey fallback) unchanged.
+    projectScope: { projectScopeKey: frame.projectScopeKey, projectId: frame.legacyProjectId },
+    // W3.8.1: the selection frame's egress carries the live-query sensitivity set (same default as
+    // the deepagent-code readiness probe) — otherwise the LiveCodeQuery authorization gate rejects
+    // the code graph with provider_egress_denied even when the real identity frame is bound.
+    egress: {
+      policyId: "v2:history-context",
+      epoch: input.system.baselineSeq,
+      graphs,
+      sensitivities: ["public", "source_code", "secret_adjacent"],
+    },
     agentPolicy: { agentId: input.agent, autonomyCeiling: "medium", permitDegraded: true },
     modelCapability: { modelId: "", providerId: "", protocol: "openai.responses", contextWindow: 0, structuredOutput: false },
     releasedKnowledge: released
       ? { snapshotId: released.snapshotId, binding: "bound" }
       : { snapshotId: "", binding: "unavailable" },
-    queryIntent: "search",
+    queryIntent: input.queryIntent ?? "search",
     query: "session context",
     observedLocationMutationEpoch: 0,
     now,

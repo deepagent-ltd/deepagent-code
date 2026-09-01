@@ -35,10 +35,17 @@ import { describe, expect } from "bun:test"
 import { eq } from "drizzle-orm"
 import { Effect, Layer } from "effect"
 import path from "node:path"
+import { CONTEXT_FEDERATION_PRODUCTION_ENV } from "../src/context-federation/production-adapters"
 import { testEffect } from "./lib/effect"
 
 const database = Database.layerFromPath(":memory:")
-// would change the wire request. Pin the W3 flag OFF so the request matches the recorded fixture.
+// W3.6/W3.8 — the cassette was recorded under the W3 production default (missing sources degrade
+// honestly and the selection evidence tail IS appended — the recorded request literally carries the
+// "Context selection (this turn):" system part). The W3.8 M1 single-point gate is ON by default;
+// this test pins it explicitly so the replayed request deterministically equals the recording even
+// when a caller/process already set the key, and restores the previous value afterwards. The
+// `=false` byte-invariance proof (no evidence part) lives in session-runner.test.ts with a captured
+// request — a replay test cannot exercise it because the recorded fixture differs.
 const events = EventV2.layer.pipe(Layer.provide(database))
 const projector = SessionProjector.layer.pipe(Layer.provide(events), Layer.provide(database))
 const store = SessionStore.layer.pipe(Layer.provide(database))
@@ -159,7 +166,17 @@ describe("SessionRunnerLLM recorded", () => {
       // prior test may have left enabled — which would prepend the DeepAgent system message and break the
       // fixture match. Force it disabled so the replayed request matches the recording deterministically.
       AgentGateway.configure({ enabled: false, agentMode: "high" })
+      // W3.6/W3.8 pin: the recorded request carries the W3 production selection-evidence tail, so the
+      // W3 flag must be ON for the replayed bytes to equal the fixture (see the module comment above).
+      const previousFlag = process.env[CONTEXT_FEDERATION_PRODUCTION_ENV]
+      process.env[CONTEXT_FEDERATION_PRODUCTION_ENV] = "true"
       const { db } = yield* Database.Service
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          if (previousFlag === undefined) delete process.env[CONTEXT_FEDERATION_PRODUCTION_ENV]
+          else process.env[CONTEXT_FEDERATION_PRODUCTION_ENV] = previousFlag
+        }),
+      )
       yield* db
         .insert(ProjectTable)
         .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
