@@ -9,16 +9,37 @@ export * as V2OwnerSeed from "./v2-owner-seed"
 //   - fail-open   on "no file"        (local dev has no file -> no-op, mint --dev covers it);
 //   - fail-closed on "file exists"    (any validation/verification failure is refused and logged;
 //                                     a row that cannot be verified is never written);
-//   - never overwrite: an existing row (even expired/revoked) is left untouched — the table is
-//     append-only and the existing row keeps its authority until the operator rotates it.
+//   - existing-row semantics (W0.8 review major-1): an existing row is never REPLACED, but a LEGAL
+//     renewal of the same authorization is APPLIED. "Same identity" = campaign_id AND the 5
+//     identity fields (subject_commit/subject_tree/schema_digest/build_id/package_digest) equal:
+//       - same identity, stored row ACTIVE, and the file re-issues the SAME authorization — same
+//         authorization_id and valid_from (exactly the script/mint-owner-campaign.ts --renew
+//         shape), signature re-issued — with a strictly later expiry → signed RENEWAL in place:
+//         expires_at + signature_digest + authorization_digest updated, status stays active,
+//         revoked_at stays NULL, everything else unchanged (the relaxed update guard
+//         20260902100000 permits this active→active extension, so the 90-day window self-heals
+//         when a release ships a renewed file; the rebuilt row still verifies because the
+//         re-issue keeps the signed authorization_id/valid_from);
+//       - same identity, stored row still valid AND the file does not extend the window →
+//         already_present no-op (idempotent re-delivery);
+//       - same identity but the file is not such a re-issue, extends nothing, shrinks the window,
+//         or the stored row is expired → exists_conflict with both windows reported;
+//       - stored row revoked → exists_conflict (a revoked authorization is never revived);
+//       - different identity (same campaign) → exists_conflict (never overwrite another build's
+//         authorization).
+//
+// Release delivery note (W0.8 review minor-2): the release flow carries `owner-authorization.json`
+// as a RELEASE ASSET; fetching that asset on the install side (repo-root install script / desktop
+// packaging resources) is a release deliverable (see v2.0-design W0.5 note and the RELEASE-GO
+// checklist), not runtime code — this module only seeds the file a release places at appRoot.
 //
 // Verification mirrors V2ProviderTurn.ownerQualified exactly: pin the production issuance public
 // key (or the explicit test/dev override), verify the Ed25519 signature over the canonical
 // payload, check the tamper digest, check the validity window, and compare the 5 identity fields
 // recomputed from the installation version.
 
-import { eq } from "drizzle-orm"
-import { Context, Effect, Layer } from "effect"
+import { and, eq } from "drizzle-orm"
+import { Context, Effect, Exit, Layer } from "effect"
 import { existsSync, readFileSync } from "node:fs"
 import { basename, dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -30,7 +51,7 @@ import { V2OwnerAuthorizationTable } from "./v2-owner-authorization.sql"
 import { buildIdentityFromVersion } from "./v2-provider-turn"
 
 export type OwnerSeedOutcome =
-  | { readonly seeded: true; readonly campaignID: string }
+  | { readonly seeded: true; readonly campaignID: string; readonly renewed: boolean }
   | {
       readonly seeded: false
       readonly reason:
@@ -136,22 +157,89 @@ export function seedOwnerAuthorization(
       .get()
       .pipe(Effect.orDie)
     if (existing) {
-      // Never overwrite: an existing row — active, expired, or revoked — is left untouched. The
-      // table is append-only, so a live certificate must be rotated by the operator instead.
+      // W0.8 (review major-1): the previous blanket "never overwrite, even expired" left a release
+      // whose authorization window lapsed 90 days out with NO self-healing — the shipped renewal
+      // file was ignored. A LEGAL renewal is now applied in place (the ONLY in-place mutation; the
+      // table stays append-only and no other existing row is ever replaced), and it matches the
+      // relaxed update guard (20260902100000) shape: same authorization_id/valid_from/identity,
+      // active→active, strictly extended window, signature + digest re-issued.
       const sameIdentity =
         existing.subject_commit === row.fields.subjectCommit &&
         existing.subject_tree === row.fields.subjectTree &&
         existing.schema_digest === row.fields.schemaDigest &&
         existing.build_id === row.fields.buildID &&
         existing.package_digest === row.fields.packageDigest
-      if (existing.status === "active" && existing.expires_at > now && sameIdentity) {
-        return { seeded: false, reason: "already_present", campaignID: row.fields.campaignID } as const
+      if (existing.status === "active") {
+        // Signed renewal: the file must re-issue the SAME authorization (same authorization_id and
+        // valid_from — exactly what script/mint-owner-campaign.ts --renew produces) with a
+        // strictly later expiry. Coherence is required, not just identity: the stored
+        // signature_digest/authorization_digest are replaced by the file's values while
+        // authorization_id/valid_from stay byte-identical (guard-forced), so any other file would
+        // leave a row that no longer verifies — the seed's fail-closed posture never writes that.
+        if (
+          sameIdentity &&
+          row.fields.authorizationID === existing.authorization_id &&
+          row.fields.validFrom === existing.valid_from &&
+          row.fields.expiresAt > existing.expires_at
+        ) {
+          const updated = yield* db
+            .update(V2OwnerAuthorizationTable)
+            .set({
+              expires_at: row.fields.expiresAt,
+              signature_digest: row.fields.signatureDigest,
+              authorization_digest: row.authorizationDigest,
+            })
+            .where(
+              and(
+                eq(V2OwnerAuthorizationTable.campaign_id, row.fields.campaignID),
+                eq(V2OwnerAuthorizationTable.status, "active"),
+              ),
+            )
+            .returning({ authorization_id: V2OwnerAuthorizationTable.authorization_id })
+            .get()
+            .pipe(Effect.exit)
+          if (Exit.isFailure(updated)) {
+            // Fail-open on outcome: a storage-guard refusal (e.g. a database still carrying a
+            // stricter guard) reports the conflict instead of failing startup.
+            return {
+              seeded: false,
+              reason: "exists_conflict",
+              campaignID: row.fields.campaignID,
+              detail: `renewal was refused by the storage guard: ${String(updated.cause)}`,
+            } as const
+          }
+          if (!updated.value) {
+            return {
+              seeded: false,
+              reason: "exists_conflict",
+              campaignID: row.fields.campaignID,
+              detail: "renewal did not apply (row is no longer active)",
+            } as const
+          }
+          return { seeded: true, campaignID: row.fields.campaignID, renewed: true } as const
+        }
+        // Idempotent re-delivery: the stored row is still valid and the file does not extend it
+        // (same window) — the row stays authoritative, nothing is written.
+        if (
+          sameIdentity &&
+          existing.expires_at > now &&
+          row.fields.expiresAt >= existing.expires_at
+        ) {
+          return { seeded: false, reason: "already_present", campaignID: row.fields.campaignID } as const
+        }
       }
       return {
         seeded: false,
         reason: "exists_conflict",
         campaignID: row.fields.campaignID,
-        detail: `existing row status=${existing.status} expires_at=${existing.expires_at} — not overwritten`,
+        detail:
+          existing.status === "revoked"
+            ? `existing row status=revoked (revoked_at=${existing.revoked_at}) — a revoked authorization cannot be revived; rotate with a new --campaign or re-issue --renew BEFORE expiry`
+            : `existing row status=${existing.status} expires_at=${existing.expires_at} vs file expires_at=${row.fields.expiresAt} — not overwritten${
+                sameIdentity && existing.status === "active"
+                  ? " (the file is not a legal renewal: same authorization_id+valid_from and a strictly later expiry are required)"
+                  : ""
+              }`,
       } as const
     }
     yield* db
@@ -173,7 +261,7 @@ export function seedOwnerAuthorization(
       })
       .run()
       .pipe(Effect.orDie)
-    return { seeded: true, campaignID: row.fields.campaignID } as const
+    return { seeded: true, campaignID: row.fields.campaignID, renewed: false } as const
   })
 }
 
@@ -199,7 +287,7 @@ export const layer = (options: OwnerSeedOptions) =>
 
 function reportOutcome(outcome: OwnerSeedOutcome) {
   if (outcome.seeded) {
-    console.error(`[owner-authorization-seed] seeded ${outcome.campaignID}`)
+    console.error(`[owner-authorization-seed] ${outcome.renewed ? "renewed" : "seeded"} ${outcome.campaignID}`)
     return
   }
   if (outcome.reason === "not_found") return

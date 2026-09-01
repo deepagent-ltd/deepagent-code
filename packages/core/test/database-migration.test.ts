@@ -46,6 +46,7 @@ import taskStructuredOutputReceiptMigration from "@deepagent-code/core/database/
 import taskExecutionSpecAuthorityMigration from "@deepagent-code/core/database/migration/20260812210000_task_execution_spec_authority"
 import taskStructuredOutputEvidenceAuthorityMigration from "@deepagent-code/core/database/migration/20260812220000_task_structured_output_evidence_authority"
 import providerCrossStateRecoveryMigration from "@deepagent-code/core/database/migration/20260812061000_provider_cross_state_recovery"
+import recoveryProviderMigration from "@deepagent-code/core/database/migration/20260830000000_session_provider_recovery"
 import type { SqlClient as SqlClientService } from "effect/unstable/sql/SqlClient"
 import { Database } from "@deepagent-code/core/database/database"
 import { tmpdir } from "./fixture/tmpdir"
@@ -4892,6 +4893,45 @@ describe("DatabaseMigration", () => {
           { session_id: "session-a", authority_state: "recovery_required" },
           { session_id: "session-b", authority_state: "recovery_required" },
         ])
+      }),
+    )
+  })
+
+  test("20260830000000_session_provider_recovery enforces the state CHECK and descriptor immutability triggers", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* DatabaseMigration.applyOnly(db, [recoveryProviderMigration])
+        // state CHECK: only the closed state vocabulary is storable.
+        yield* db.run(sql`
+          INSERT INTO recovery_command (command_id, attempt, state, created_at, updated_at)
+          VALUES ('cmd-pending', '{"sessionId":"s","attemptId":"a"}', 'pending', 1, 1)
+        `)
+        const rejected = yield* Effect.exit(
+          db.run(sql`
+            INSERT INTO recovery_command (command_id, attempt, state, created_at, updated_at)
+            VALUES ('cmd-weird', '{"sessionId":"s","attemptId":"a"}', 'teleported', 1, 1)
+          `),
+        )
+        expect(Exit.isFailure(rejected)).toBe(true)
+        // descriptor immutability: a stored recovery fact may be neither updated nor deleted.
+        yield* db.run(sql`
+          INSERT INTO session_provider_recovery_descriptor
+            (descriptor_id, session_id, activity_id, turn_id, kind, payload, content_hash, created_at)
+          VALUES ('desc-immutable', 's', 'a', '1', 'resolved', '{}', 'hash', 1)
+        `)
+        const updated = yield* Effect.exit(
+          db.run(sql`UPDATE session_provider_recovery_descriptor SET created_at = 2 WHERE descriptor_id = 'desc-immutable'`),
+        )
+        expect(Exit.isFailure(updated)).toBe(true)
+        const deleted = yield* Effect.exit(
+          db.run(sql`DELETE FROM session_provider_recovery_descriptor WHERE descriptor_id = 'desc-immutable'`),
+        )
+        expect(Exit.isFailure(deleted)).toBe(true)
+        // The row is still there, untouched.
+        expect(
+          yield* db.get(sql`SELECT created_at FROM session_provider_recovery_descriptor WHERE descriptor_id = 'desc-immutable'`),
+        ).toEqual({ created_at: 1 })
       }),
     )
   })

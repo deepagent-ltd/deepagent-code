@@ -38,6 +38,8 @@ export * as StartupInventory from "./startup-inventory"
 import { sql } from "drizzle-orm"
 import { Effect } from "effect"
 import type { EffectDrizzleSqlite } from "@deepagent-code/effect-drizzle-sqlite"
+import { decodeDescriptorRow } from "./recovery-durable-store"
+import type { DescriptorDbRow, DescriptorRow } from "./recovery-durable-store"
 
 type Database = EffectDrizzleSqlite.EffectSQLiteDatabase
 
@@ -327,27 +329,31 @@ function classifySessionActivityItem(row: CategoryRow): StartupInventoryItem {
 // W2 — the durable C1B recovery descriptor surface (design §W2). Every row of the
 // descriptor table is a classified five-class object; kind `resolved` is terminal
 // (resolved), the other four classes are past-dispatch recoveries (never an automatic
-// requeue — §2.2), and an out-of-vocabulary kind is `unclassified` (blocks ready).
-function classifyRecoveryDescriptorItem(row: CategoryRow): StartupInventoryItem {
+// requeue — §2.2), and an unverifiable row is `unclassified` (blocks ready). The
+// classification is driven by the DECODED payload (kind binding AND content_hash
+// verified against the recomputed descriptor digest — see decodeDescriptorRow), never
+// by the raw `kind` column alone: a tampered/partial row can never be classified as a
+// trusted recovery fact.
+function classifyRecoveryDescriptorItem(row: DescriptorRow): StartupInventoryItem {
   const classification =
-    row.state === "resolved"
+    row.kind === "resolved"
       ? "resolved"
-      : ["resolvable_exact", "repairable_exact", "fork_only", "coordination_required"].includes(row.state)
+      : ["resolvable_exact", "repairable_exact", "fork_only", "coordination_required"].includes(row.kind)
         ? "recovery"
         : undefined
   if (classification === undefined)
     return {
       category: "recovery_descriptor",
-      id: row.id,
+      id: row.descriptorId,
       classification: "unclassified",
-      state: row.state,
-      reason: `unknown recovery descriptor kind '${row.state}'`,
+      state: row.kind,
+      reason: `unknown recovery descriptor kind '${row.kind}'`,
     }
   return {
     category: "recovery_descriptor",
-    id: row.id,
+    id: row.descriptorId,
     classification,
-    state: row.state,
+    state: row.kind,
     reason:
       classification === "resolved"
         ? "recovery descriptor resolved; terminal evidence exists"
@@ -427,11 +433,27 @@ export const classifyStartup = Effect.fn("StartupInventory.classifyStartup")(fun
   activities.forEach((row) => accept(classifySessionActivityItem(row)))
 
   // W2 recovery descriptors: one item per durable descriptor row (append-only
-  // classification log; the five C1B classes map onto the inventory buckets).
-  const descriptors = yield* db.all<CategoryRow>(
-    sql`SELECT descriptor_id AS id, kind AS state FROM session_provider_recovery_descriptor`,
+  // classification log; the five C1B classes map onto the inventory buckets). The
+  // row is DECODED (kind binding + content_hash verified) — a row that fails decode
+  // is unclassified (blocks ready), never classified from the raw kind column.
+  const descriptorRows = yield* db.all<DescriptorDbRow>(
+    sql`SELECT descriptor_id, session_id, activity_id, turn_id, kind, payload, content_hash, created_at
+        FROM session_provider_recovery_descriptor`,
   )
-  descriptors.forEach((row) => accept(classifyRecoveryDescriptorItem(row)))
+  for (const row of descriptorRows) {
+    const decoded = decodeDescriptorRow(row)
+    if (!decoded) {
+      accept({
+        category: "recovery_descriptor",
+        id: row.descriptor_id,
+        classification: "unclassified",
+        state: row.kind,
+        reason: "recovery descriptor payload unverifiable (decode failure or content_hash mismatch)",
+      })
+      continue
+    }
+    accept(classifyRecoveryDescriptorItem(decoded))
+  }
 
   const total =
     byCategory.provider_attempt.safe_before_dispatch +

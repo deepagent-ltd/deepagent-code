@@ -46,6 +46,9 @@ import { CanonicalJson } from "../../util/canonical-json"
 import { Hash } from "../../util/hash"
 import { CapabilitySnapshot } from "../../system-context/capability-snapshot"
 import { recordedCapabilityLoads } from "../../system-context/capability-loader"
+import { ProjectDocsSync } from "../../deepagent/project-docs-sync"
+import { FSUtil } from "../../fs-util"
+import { Git } from "../../git"
 import {
   configDrift,
   configEvidenceForTurn,
@@ -129,6 +132,14 @@ export const layer = Layer.effect(
     const systemContext = yield* SystemContextRegistry.Service
     const skillGuidance = yield* SkillGuidance.Service
     const config = yield* Config.Service
+    // FSUtil/Git are not required by every runner composition (tests may omit them): the W10
+    // project docs tail is skipped when either is absent.
+    const fs = Option.getOrUndefined(yield* Effect.serviceOption(FSUtil.Service))
+    const gitService = Option.getOrUndefined(yield* Effect.serviceOption(Git.Service))
+    // W10: after a drain chain settles, best-effort project docs maintenance. Writes are opt-in
+    // (DEEPAGENT_CODE_PROJECT_DOCS_SYNC or `docs_sync` config, default false).
+    const docsSyncEnabled =
+      fs !== undefined && ProjectDocsSync.writingEnabled(Config.latest(yield* config.entries(), "docs_sync"))
     const providerTurns = yield* V2ProviderTurn.Service
     const toolEffects = yield* V2ToolEffect.Service
     const permissionGrantLookup = yield* V2ToolEffect.CurrentPermissionGrantLookup
@@ -799,6 +810,15 @@ export const layer = Layer.effect(
         openActivity = yield* SessionInput.hasPending(db, input.sessionID, "queue")
         promotion = openActivity ? "queue" : undefined
       }
+      if (docsSyncEnabled && fs !== undefined)
+        yield* ProjectDocsSync.afterSessionNow({
+          sessionID: input.sessionID,
+          root: location.project.directory,
+          enabled: true,
+          store,
+          fs,
+          ...(gitService === undefined ? {} : { git: gitService }),
+        })
     })
 
     return Service.of({

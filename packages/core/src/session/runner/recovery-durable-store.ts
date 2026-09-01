@@ -64,6 +64,19 @@ export const CommandState = {
 } as const
 export type CommandState = (typeof CommandState)[keyof typeof CommandState]
 
+/**
+ * The terminal command states (a slot that already holds a terminal resolution:
+ * the attempt is settled/abandoned/forked — no further exit may be offered).
+ * Post-kill-9 this is the DURABLE terminal signal: the process-local evidence
+ * ref is empty at boot.
+ */
+export const TerminalCommandStates: readonly CommandState[] = [
+  CommandState.settled,
+  CommandState.abandoned,
+  CommandState.forked,
+]
+export const isTerminalCommandState = (state: CommandState): boolean => TerminalCommandStates.includes(state)
+
 /** One durable recovery-command row (attempt identity decoded). */
 export type CommandRow = {
   readonly commandId: string
@@ -89,8 +102,8 @@ export type ExportRow = {
   readonly payload: unknown
 }
 
-/** Raw row as stored (JSON columns as text). */
-type DescriptorDbRow = {
+/** Raw row as stored (JSON columns as text) — the decode surface for DB reads. */
+export type DescriptorDbRow = {
   descriptor_id: string
   session_id: string
   activity_id: string
@@ -132,7 +145,12 @@ export function recoveryDescriptorId(descriptor: RecoveryCommandContract.Recover
   return `descriptor_${RecoveryCommandContract.recoveryDescriptorDigest(descriptor)}`
 }
 
-/** Decode a stored descriptor row into the typed shape. Unknown kind is a typed refusal. */
+/**
+ * Decode a stored descriptor row into the typed shape. Unknown kind or a content-hash
+ * mismatch (the stored `content_hash` does not equal the recomputed descriptor digest)
+ * is a typed refusal (`undefined`) — the caller skips the row and never uses a partial
+ * or tampered descriptor (C1B-01: every recovery fact is verifiable).
+ */
 export function decodeDescriptorRow(row: DescriptorDbRow): DescriptorRow | undefined {
   let payload: RecoveryCommandContract.RecoveryDescriptor
   try {
@@ -141,6 +159,7 @@ export function decodeDescriptorRow(row: DescriptorDbRow): DescriptorRow | undef
     return undefined
   }
   if (payload.descriptorKind !== row.kind) return undefined
+  if (RecoveryCommandContract.recoveryDescriptorDigest(payload) !== row.content_hash) return undefined
   return {
     descriptorId: row.descriptor_id,
     sessionId: row.session_id,
@@ -293,22 +312,40 @@ export interface DurableRecoveryStore {
     readonly createdAt?: number
   }) => Effect.Effect<CommandWriteOutcome, never>
   /**
-   * Conditional state transition (CAS by `state` match). `result_hash` is written back
-   * with the transition; only the winner of the race reports `transitioned`, and an
-   * idempotent retry of an already-transitioned command reports `already`.
+   * Conditional state transition (CAS by `state` match, and by `expected_owner_token`
+   * when the caller passes one — design §9.2 C1B-11 fenced writes). `result_hash` is
+   * written back with the transition; only the winner of the race reports
+   * `transitioned`, an idempotent retry of an already-transitioned command reports
+   * `already`, a stale from-state reports `state_mismatch`, and a provided
+   * expected-owner token that does not match the row reports `owner_token_mismatch`.
+   * When no token is passed the transition is unfenced (callers without a token, e.g.
+   * the maintenance surface, cannot prove ownership — the fence applies when a token
+   * is known and recorded, e.g. the resolve path).
    */
   readonly transitionCommand: (input: {
     readonly commandId: string
     readonly from: CommandState
     readonly to: CommandState
     readonly resultHash?: string
+    readonly expectedOwnerToken?: string
     readonly now?: number
-  }) => Effect.Effect<"transitioned" | "already" | "state_mismatch", never>
+  }) => Effect.Effect<
+    "transitioned" | "already" | "state_mismatch" | "owner_token_mismatch",
+    never
+  >
   readonly getCommand: (commandId: string) => Effect.Effect<CommandRow | undefined, never>
+  /**
+   * The command slot for an attempt (the single-writer slot keyed by session id +
+   * attempt id). Post-kill-9 this is the DURABLE terminal read: a slot row in a
+   * terminal state is the terminal signal for the attempt.
+   */
+  readonly getCommandForAttempt: (sessionId: string, attemptId: string) => Effect.Effect<CommandRow | undefined, never>
   /** Commands for a session (joined through their descriptor rows), newest first. */
   readonly listCommandsBySession: (sessionId: string) => Effect.Effect<readonly CommandRow[], never>
   /** Commands whose attempt identity carries the exact request hash. */
   readonly listCommandsByRequestHash: (requestHash: string) => Effect.Effect<readonly CommandRow[], never>
+  /** Descriptors whose payload carries the exact request hash (turn-terminal orphans included). */
+  readonly listDescriptorsByRequestHash: (requestHash: string) => Effect.Effect<readonly DescriptorRow[], never>
   /** Insert-or-ignore an evidence export (sealed body kept for post-restart unlock). */
   readonly putExport: (input: {
     readonly exportId: string
@@ -420,7 +457,7 @@ export const makeDurableRecoveryStore = (db: Database): DurableRecoveryStore => 
             } satisfies CommandWriteOutcome
           }
           const now = input.createdAt ?? Date.now()
-          yield* tx
+          const inserted = yield* tx
             .insert(RecoveryCommandTable)
             .values({
               command_id: address,
@@ -435,7 +472,33 @@ export const makeDurableRecoveryStore = (db: Database): DurableRecoveryStore => 
               updated_at: now,
             })
             .onConflictDoNothing()
-            .run()
+            .returning({ command_id: RecoveryCommandTable.command_id })
+            .get()
+          // `.onConflictDoNothing()` alone cannot prove the write: only the `returning`
+          // row is the winner. A no-winner conflict means another writer claimed the
+          // slot between the read above and the insert — re-read it and report the
+          // authoritative `existing` / `mismatch` outcome, never a fabricated `recorded`.
+          if (!inserted) {
+            const conflicted = yield* tx.get<CommandDbRow | undefined>(sql`
+              SELECT command_id, descriptor_id, attempt, state, expected_owner_token, result_hash,
+                     actor_type, actor_id, created_at, updated_at
+              FROM recovery_command
+              WHERE json_extract(attempt, '$.sessionId') = ${input.attemptIdentity.sessionId}
+                AND json_extract(attempt, '$.attemptId') = ${input.attemptIdentity.attemptId}
+            `)
+            if (conflicted) {
+              const decoded = decodeCommandRow(conflicted)
+              if (!decoded) return yield* Effect.die(new Error("recovery_command attempt decode failed"))
+              if (decoded.requestHash !== input.requestHash) {
+                return { status: "mismatch" as const, commandId: address, reason: "request_hash_mismatch" as const }
+              }
+              return {
+                status: "existing" as const,
+                commandId: conflicted.command_id,
+                record: toCommandRecord(decoded),
+              } satisfies CommandWriteOutcome
+            }
+          }
           return {
             status: "recorded" as const,
             commandId: address,
@@ -451,6 +514,7 @@ export const makeDurableRecoveryStore = (db: Database): DurableRecoveryStore => 
     readonly from: CommandState
     readonly to: CommandState
     readonly resultHash?: string
+    readonly expectedOwnerToken?: string
     readonly now?: number
   }) {
     const now = input.now ?? Date.now()
@@ -465,16 +529,31 @@ export const makeDurableRecoveryStore = (db: Database): DurableRecoveryStore => 
         and(
           eq(RecoveryCommandTable.command_id, input.commandId),
           eq(RecoveryCommandTable.state, input.from),
+          // The token fence applies only when the caller passes one (it is the
+          // C1B-11 write fence — not a "write the token back" column).
+          ...(input.expectedOwnerToken === undefined
+            ? []
+            : [eq(RecoveryCommandTable.expected_owner_token, input.expectedOwnerToken)]),
         ),
       )
       .returning({ command_id: RecoveryCommandTable.command_id })
       .get()
       .pipe(Effect.orDie)
     if (winner) return "transitioned" as const
-    const current = yield* db.get<{ state: string } | undefined>(sql`
-      SELECT state FROM recovery_command WHERE command_id = ${input.commandId}
+    const current = yield* db.get<{ state: string; expected_owner_token: string | null } | undefined>(sql`
+      SELECT state, expected_owner_token FROM recovery_command WHERE command_id = ${input.commandId}
     `).pipe(Effect.orDie)
-    if (current?.state === input.to) return "already" as const
+    if (!current) return "state_mismatch" as const
+    // A row without a recorded fence (legacy/NULL write) cannot prove ownership —
+    // the fence is skipped; a recorded but differing token IS a typed mismatch.
+    if (
+      input.expectedOwnerToken !== undefined &&
+      current.expected_owner_token != null &&
+      current.expected_owner_token !== input.expectedOwnerToken
+    ) {
+      return "owner_token_mismatch" as const
+    }
+    if (current.state === input.to) return "already" as const
     return "state_mismatch" as const
   })
 
@@ -487,13 +566,32 @@ export const makeDurableRecoveryStore = (db: Database): DurableRecoveryStore => 
     return row ? decodeCommandRow(row) : undefined
   })
 
+  const getCommandForAttempt = Effect.fn("RecoveryDurableStore.getCommandForAttempt")(function* (
+    sessionId: string,
+    attemptId: string,
+  ) {
+    const row = yield* db.get<CommandDbRow | undefined>(sql`
+      SELECT command_id, descriptor_id, attempt, state, expected_owner_token, result_hash,
+             actor_type, actor_id, created_at, updated_at
+      FROM recovery_command
+      WHERE json_extract(attempt, '$.sessionId') = ${sessionId}
+        AND json_extract(attempt, '$.attemptId') = ${attemptId}
+    `).pipe(Effect.orDie)
+    return row ? decodeCommandRow(row) : undefined
+  })
+
   const listCommandsBySession = Effect.fn("RecoveryDurableStore.listCommandsBySession")(function* (sessionId: string) {
+    // LEFT JOIN: a command row with a NULL descriptor_id (recordCommand before any
+    // descriptor link) must stay visible — the slot semantics and the pure
+    // `commandCas` treat it as the same command surface, so the session listing
+    // must not hide it. Its session comes from the attempt JSON instead.
     const rows = yield* db.all<CommandDbRow>(sql`
       SELECT c.command_id, c.descriptor_id, c.attempt, c.state, c.expected_owner_token,
              c.result_hash, c.actor_type, c.actor_id, c.created_at, c.updated_at
       FROM recovery_command c
-      JOIN session_provider_recovery_descriptor d ON d.descriptor_id = c.descriptor_id
+      LEFT JOIN session_provider_recovery_descriptor d ON d.descriptor_id = c.descriptor_id
       WHERE d.session_id = ${sessionId}
+         OR (c.descriptor_id IS NULL AND json_extract(c.attempt, '$.sessionId') = ${sessionId})
       ORDER BY c.created_at DESC, c.command_id DESC
     `).pipe(Effect.orDie)
     return rows.flatMap((row) => {
@@ -514,6 +612,21 @@ export const makeDurableRecoveryStore = (db: Database): DurableRecoveryStore => 
     `).pipe(Effect.orDie)
     return rows.flatMap((row) => {
       const decoded = decodeCommandRow(row)
+      return decoded ? [decoded] : []
+    })
+  })
+
+  const listDescriptorsByRequestHash = Effect.fn("RecoveryDurableStore.listDescriptorsByRequestHash")(function* (
+    requestHash: string,
+  ) {
+    const rows = yield* db.all<DescriptorDbRow>(sql`
+      SELECT descriptor_id, session_id, activity_id, turn_id, kind, payload, content_hash, created_at
+      FROM session_provider_recovery_descriptor
+      WHERE json_extract(payload, '$.requestHash') = ${requestHash}
+      ORDER BY created_at DESC, descriptor_id DESC
+    `).pipe(Effect.orDie)
+    return rows.flatMap((row) => {
+      const decoded = decodeDescriptorRow(row)
       return decoded ? [decoded] : []
     })
   })
@@ -562,8 +675,10 @@ export const makeDurableRecoveryStore = (db: Database): DurableRecoveryStore => 
     putCommand,
     transitionCommand,
     getCommand,
+    getCommandForAttempt,
     listCommandsBySession,
     listCommandsByRequestHash,
+    listDescriptorsByRequestHash,
     putExport,
     getExport,
   }

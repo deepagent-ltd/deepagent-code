@@ -985,9 +985,11 @@ export function turnTerminalDescriptor(row: {
 
 /**
  * Insert-or-ignore the terminal descriptor in the caller's transaction (idempotent by
- * content address — an exact retry converges on the same row). A DB failure is a defect
- * (the receipt terminal is already committed; the descriptor is re-derivable and a
- * later resolve/classify re-writes it).
+ * content address — an exact retry converges on the same row). Factual transaction
+ * semantics: the descriptor write and the receipt terminal update run in the SAME
+ * immediate transaction — a write failure rolls back the terminal update too, so the
+ * attempt stays non-terminal and the recovery authority treats it as indeterminate
+ * (the descriptor is re-derivable by a later resolve/classify).
  */
 export function writeTurnTerminalDescriptor(
   tx: Transaction,
@@ -1230,10 +1232,14 @@ export function ownerCampaignFromEnv(): string | undefined {
 // build). Without this fallback every default install failed owner qualification even with the
 // correct authorization row delivered. An explicit (valid) env value still wins so a shadow or
 // staging campaign can override.
-export function defaultOwnerCampaign(): string {
+export function defaultOwnerCampaign(): string | undefined {
   const id = ownerCampaignFromEnv()
   if (id) return id
-  return `v2-owner-${InstallationVersion}`
+  const derived = `v2-owner-${InstallationVersion}`
+  // W0.8 (review minor-4): an installation version that cannot form a legal campaign id (e.g. a
+  // `+` build-metadata suffix, which validCampaignID rejects) must fail CLOSED, not throw: return
+  // undefined so the authorization gate reports unverified instead of dying inside ownerQualified.
+  return validCampaignID(derived) ? derived : undefined
 }
 
 export function releaseQualified() {
@@ -1251,6 +1257,9 @@ export function ownerQualified(db: Database.Interface["db"], campaignId?: string
     // W0.5: an omitted campaign resolves to the installation default (`v2-owner-${InstallationVersion}`)
     // so a default install with the delivered authorization row qualifies without any env wiring.
     const resolved = campaignId ?? defaultOwnerCampaign()
+    // W0.8 (review minor-4): fail closed when no legal campaign id can be resolved (invalid
+    // installation version) — never throw from the authorization gate.
+    if (resolved === undefined) return false
     const identity = yield* Effect.serviceOption(CurrentBuildIdentity)
     if (identity._tag === "None" || identity.value === undefined) return false
     const buildIdentity = identity.value

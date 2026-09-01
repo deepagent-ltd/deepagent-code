@@ -13,6 +13,17 @@ import type { DatabaseMigration } from "../migration"
 //
 // The Drizzle schema (`recovery-store.sql.ts`) is aligned through the generated
 // `schema-checkpoint` migration so drizzle-kit stays in sync without re-emitting DDL.
+// The state CHECK and the descriptor immutability triggers below are DB-level
+// invariants ONLY (hand-written migration; they are NOT part of the Drizzle schema,
+// so drizzle-kit regeneration is untouched).
+//
+// SQLite notes:
+//   - `state` CHECK closes the state vocabulary (pending/abandoned/forked/settled) —
+//     an out-of-vocabulary state can never be stored (the startup inventory treats it
+//     as unclassified otherwise, but the DB enforces it earlier);
+//   - descriptor rows are content-addressed + append-only: once inserted they are
+//     immutable, so a recovery fact can never be silently rewritten (UPDATE/DELETE
+//     raise ABORT — the pure-command/state idempotency is the only allowed change).
 
 const migrationID = "20260830000000_session_provider_recovery"
 
@@ -46,7 +57,7 @@ export default {
           descriptor_id text
             REFERENCES session_provider_recovery_descriptor (descriptor_id) ON DELETE CASCADE,
           attempt text NOT NULL,
-          state text NOT NULL,
+          state text NOT NULL CHECK (state IN ('pending', 'abandoned', 'forked', 'settled')),
           expected_owner_token text,
           result_hash text,
           actor_type text,
@@ -65,6 +76,24 @@ export default {
           created_at integer NOT NULL,
           payload text NOT NULL
         )
+      `)
+      // Immutable descriptor rows: a stored recovery fact is append-only — any UPDATE
+      // or DELETE is a defect (the append-only insert-or-ignore is the only legal write).
+      yield* tx.run("DROP TRIGGER IF EXISTS session_provider_recovery_descriptor_immutable_update")
+      yield* tx.run("DROP TRIGGER IF EXISTS session_provider_recovery_descriptor_immutable_delete")
+      yield* tx.run(`
+        CREATE TRIGGER session_provider_recovery_descriptor_immutable_update
+        BEFORE UPDATE ON session_provider_recovery_descriptor
+        BEGIN
+          SELECT RAISE(ABORT, 'recovery descriptor is append-only; UPDATE forbidden');
+        END
+      `)
+      yield* tx.run(`
+        CREATE TRIGGER session_provider_recovery_descriptor_immutable_delete
+        BEFORE DELETE ON session_provider_recovery_descriptor
+        BEGIN
+          SELECT RAISE(ABORT, 'recovery descriptor is append-only; DELETE forbidden');
+        END
       `)
     })
   },

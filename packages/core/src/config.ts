@@ -104,6 +104,10 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   plugins: ConfigPlugin.Plugins.pipe(Schema.optional).annotate({
     description: "Ordered external plugin packages to load",
   }),
+  docs_sync: Schema.Boolean.pipe(Schema.optional).annotate({
+    description:
+      "Maintain docs/deepagent project documents after each session settles (W10; default false — reading the documents needs no flag)",
+  }),
   experimental: ConfigExperimental.Experimental.pipe(Schema.optional),
   providers: Schema.Record(Schema.String, ConfigProvider.Info).pipe(Schema.optional),
 }) {}

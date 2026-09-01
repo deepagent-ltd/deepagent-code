@@ -3,6 +3,7 @@ import { Context, Effect, Layer, Ref } from "effect"
 import type { RecoveryDescriptor } from "@deepagent-code/core/contract/recovery-command"
 import { Database } from "@deepagent-code/core/database/database"
 import { SessionProviderRecoveryDurable } from "@deepagent-code/core/session/runner"
+import { makeApiError, type ApiTypedError } from "./typed-error"
 type CommandRow = SessionProviderRecoveryDurable.CommandRow
 type DescriptorRow = SessionProviderRecoveryDurable.DescriptorRow
 type DurableRecoveryStore = SessionProviderRecoveryDurable.DurableRecoveryStore
@@ -49,7 +50,7 @@ export interface MaintenanceRegistry {
   readonly listBySession: (sessionId: string) => Effect.Effect<ReadonlyArray<RecoveryDescriptorRecord>>
   readonly getRecord: (commandId: string) => Effect.Effect<RecoveryDescriptorRecord | undefined>
   readonly getByRequestHash: (requestHash: string) => Effect.Effect<RecoveryDescriptorRecord | undefined>
-  readonly record: (record: RecoveryDescriptorRecord) => Effect.Effect<RecoveryDescriptorRecord>
+  readonly record: (record: RecoveryDescriptorRecord) => Effect.Effect<RecoveryDescriptorRecord, ApiTypedError>
   readonly createExport: (input: {
     sessionId: string
     contentHash: string
@@ -140,10 +141,39 @@ export const layer = Layer.effect(
         const descriptor = yield* store.getDescriptor(command.descriptorId)
         if (descriptor) return toRecord(command, descriptor)
       }
+      // W2-1 durable terminal signal: turn-terminal descriptors (written by
+      // v2-provider-turn.ts with NO command row) survive a kill-9 restart, so a
+      // request that was already settled/failed BEFORE the restart must still gate
+      // the network-unknown 410 — the descriptor table is the second authority.
+      const descriptors = yield* store.listDescriptorsByRequestHash(requestHash)
+      for (const descriptor of descriptors) {
+        if (descriptor.payload.descriptorKind !== "resolved") continue
+        return toOrphanRecord(descriptor)
+      }
       return undefined
     })
 
     const record = Effect.fn("MaintenanceRegistry.record")(function* (record: RecoveryDescriptorRecord) {
+      // W2-1 CAS verification: the attempt slot is inspected up front, so the verdict is
+      // never a silent 200 with a 404-able command id:
+      //   - same attempt + SAME request hash  → idempotent exact retry → the existing row
+      //     (its command id is authoritative, not the caller's);
+      //   - same attempt + DIFFERENT request hash → typed 409 (never clobbered, and
+      //     nothing is written — no orphan descriptor row is left behind).
+      const slot = yield* store.getCommandForAttempt(record.sessionId, record.attemptId)
+      if (slot) {
+        if (slot.requestHash !== record.requestHash) {
+          return yield* Effect.fail(
+            makeApiError("recovery_command_hash_mismatch", {
+              resource: record.requestHash,
+              expected: slot.requestHash,
+              actual: record.requestHash,
+            }),
+          )
+        }
+        const descriptor = slot.descriptorId ? yield* store.getDescriptor(slot.descriptorId) : undefined
+        return descriptor ? toRecord(slot, descriptor) : { ...record, commandId: slot.commandId }
+      }
       const descriptorWrite = yield* store.putDescriptor({
         descriptor: record.descriptor,
         sessionId: record.sessionId,
@@ -151,7 +181,7 @@ export const layer = Layer.effect(
         turnId: "0",
         createdAt: record.createdAt,
       })
-      yield* store.putCommand({
+      const cas = yield* store.putCommand({
         // The handler pre-computed this exact content address for the response; store
         // the row under it so recoveryCommandGet round-trips the same command id.
         commandId: record.commandId,
@@ -171,6 +201,25 @@ export const layer = Layer.effect(
         actorId: record.actorId,
         createdAt: record.createdAt,
       })
+      if (cas.status === "mismatch") {
+        // A concurrent writer claimed the slot with a DIFFERENT request hash between
+        // the pre-check and the CAS — typed 409; the slot is never clobbered.
+        return yield* Effect.fail(
+          makeApiError("recovery_command_hash_mismatch", {
+            resource: record.requestHash,
+            expected: "the slot's request hash",
+            actual: record.requestHash,
+          }),
+        )
+      }
+      if (cas.status === "existing") {
+        // A concurrent exact retry won the slot — return the already-recorded row.
+        const winner = yield* store.getCommand(cas.commandId)
+        const winnerDescriptor = winner?.descriptorId
+          ? yield* store.getDescriptor(winner.descriptorId)
+          : undefined
+        return winnerDescriptor && winner ? toRecord(winner, winnerDescriptor) : record
+      }
       return record
     })
 
