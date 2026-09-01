@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Effect, Layer } from "effect"
 import { Database } from "@deepagent-code/core/database/database"
-import { SessionProviderRecovery } from "@deepagent-code/core/session/runner"
+import { SessionProviderRecovery, SessionProviderRecoveryDurable } from "@deepagent-code/core/session/runner"
 import { Service as MaintenanceRegistryService, DefaultEvidenceExportTtlMs, layer } from "../../src/server/routes/instance/httpapi/maintenance-registry"
 import type { RecoveryDescriptorRecord } from "../../src/server/routes/instance/httpapi/maintenance-registry"
 
@@ -14,8 +14,9 @@ import type { RecoveryDescriptorRecord } from "../../src/server/routes/instance/
 const database = Database.layerFromPath(":memory:")
 const testLayer = Layer.provideMerge(layer, database)
 
-const run = <A>(self: Effect.Effect<A, never, MaintenanceRegistryService>) =>
-  Effect.runPromise(self.pipe(Effect.provide(testLayer)))
+const run = <A, E = never>(
+  self: Effect.Effect<A, E, MaintenanceRegistryService | Database.Service>,
+) => Effect.runPromise(self.pipe(Effect.provide(testLayer)))
 
 // Commands are content-addressed (the handler computes the same id), so a fixture
 // record derives its commandId from the request hash + attempt identity.
@@ -82,7 +83,8 @@ describe("maintenance registry", () => {
       Effect.gen(function* () {
         const r = yield* MaintenanceRegistryService
         const fixture = record()
-        yield* r.record(fixture)
+        const recorded = yield* r.record(fixture)
+        expect(recorded.commandId).toBe(fixture.commandId)
 
         const fetched = yield* r.getRecord(fixture.commandId)
         expect(fetched?.commandId).toBe(fixture.commandId)
@@ -96,6 +98,70 @@ describe("maintenance registry", () => {
         expect(byHash?.commandId).toBe(fixture.commandId)
         const other = yield* r.listBySession("sess_other")
         expect(other).toEqual([])
+      }),
+    ))
+
+  test("W2-1 CAS: a second record for the same attempt with the SAME request hash returns the existing command id (200)", () =>
+    run(
+      Effect.gen(function* () {
+        const r = yield* MaintenanceRegistryService
+        const first = yield* r.record(record())
+        const retry = yield* r.record(record())
+        expect(retry.commandId).toBe(first.commandId)
+        // No second row: the listing still shows exactly one command.
+        const list = yield* r.listBySession("sess_1")
+        expect(list).toHaveLength(1)
+      }),
+    ))
+
+  test("W2-1 CAS: a second record for the same attempt with a DIFFERENT request hash is a typed 409, never a 200", () =>
+    run(
+      Effect.gen(function* () {
+        const r = yield* MaintenanceRegistryService
+        yield* r.record(record())
+        const conflict = yield* r
+          .record(record({ requestHash: "req_hash_2", commandId: `cmd_${"x".repeat(63)}` }))
+          .pipe(Effect.flip)
+        expect(conflict).toMatchObject({
+          name: "ApiConflict",
+          data: { code: "recovery_command_hash_mismatch", httpStatus: 409, resource: "req_hash_2" },
+        })
+        // The original record is untouched and still fetchable.
+        const original = yield* r.getByRequestHash("req_hash_1")
+        expect(original?.requestHash).toBe("req_hash_1")
+      }),
+    ))
+
+  test("W2-1: a descriptor-only (no command) settled terminal gates getByRequestHash", () =>
+    run(
+      Effect.gen(function* () {
+        const r = yield* MaintenanceRegistryService
+        const databaseService = yield* Database.Service
+        const store = SessionProviderRecoveryDurable.makeDurableRecoveryStore(databaseService.db)
+        // The turn-terminal descriptor v2-provider-turn.ts writes: settled → resolved(settled),
+        // written with NO command row.
+        yield* store.putDescriptor({
+          descriptor: {
+            schemaVersion: "recovery-descriptor.v1",
+            requestHash: "req_hash_terminal",
+            provenance: { origin: "recorded", sourceRefs: ["receipt_9"] },
+            baseline: { verified: false },
+            terminalBridge: { bridgeId: "none", bridgeType: "none" },
+            casTokens: { expectedState: "settled", expectedVersion: 0, ownerToken: "owner_9" },
+            descriptorKind: "resolved",
+            resolved: { resolutionRef: "receipt_9", bridgeRef: "none", terminal: "settled" },
+          },
+          sessionId: "sess_terminal",
+          activityId: "act_9",
+          turnId: "3",
+          createdAt: 1,
+        })
+
+        const byHash = yield* r.getByRequestHash("req_hash_terminal")
+        // The 410 gate (`evidenceStatus === "settled"`) fires even though no command row exists.
+        expect(byHash?.evidenceStatus).toBe("settled")
+        expect(byHash?.commandId).toBe("")
+        expect(byHash?.descriptor.descriptorKind).toBe("resolved")
       }),
     ))
 

@@ -38,6 +38,7 @@ import { PanelCommand } from "./cli/cmd/panel"
 import { ReviewCommand } from "./cli/cmd/review"
 import { WikiCommand } from "./cli/cmd/wiki"
 import { PacksCommand } from "./cli/cmd/packs"
+import { DocsCommand } from "./cli/cmd/docs"
 import { errorMessage } from "./util/error"
 import { PluginCommand } from "./cli/cmd/plug"
 import { Heap } from "./cli/heap"
@@ -188,6 +189,7 @@ const cli = yargs(args)
   .command(ReviewCommand)
   .command(WikiCommand)
   .command(PacksCommand)
+  .command(DocsCommand)
   .fail((msg, err) => {
     if (
       msg?.startsWith("Unknown argument") ||

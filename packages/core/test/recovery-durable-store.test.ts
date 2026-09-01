@@ -157,25 +157,47 @@ describe("SessionProviderRecoveryDurable store (W2)", () => {
     )
   })
 
-  test("command CAS: concurrent submissions of the same command → exactly one winner", async () => {
+  test("command CAS: two INDEPENDENT connections over the same file serialize to exactly one winner", async () => {
+    // W2-1 (issue 10): the previous CAS test shared ONE connection/two store instances —
+    // Bun's single-connection pool serialized everything, so the race was never exercised.
+    // Two independent connections over the SAME file (separate Db + client instances) go
+    // through two separate SQLite handles: the immediate-transaction writer lock is the
+    // CAS authority — exactly one `recorded`, the other converges on `existing`.
+    const dir = await tmpdir()
+    const file = path.join(dir.path, "cas.db")
     await runDb(
-      ":memory:",
+      file,
       Effect.gen(function* () {
         const db = yield* makeDb
         yield* createTables(db)
-        const storeA = SessionProviderRecoveryDurable.makeDurableRecoveryStore(db)
-        const storeB = SessionProviderRecoveryDurable.makeDurableRecoveryStore(db)
-        const input = { requestHash: H64("r"), attemptIdentity: identity() }
-        const [a, b] = yield* Effect.all([storeA.putCommand(input), storeB.putCommand(input)], {
-          concurrency: 2,
-        })
-        const recorded = [a, b].filter((outcome) => outcome.status === "recorded")
-        const existing = [a, b].filter((outcome) => outcome.status === "existing")
-        expect(recorded).toHaveLength(1)
-        expect(existing).toHaveLength(1)
-        const row = yield* storeA.getCommand(recorded[0]!.commandId)
-        expect(row?.state).toBe("pending")
-        expect(row?.requestHash).toBe(H64("r"))
+      }),
+    )
+    const input = { requestHash: H64("r"), attemptIdentity: identity() }
+    // Two independent connections run the same CAS write concurrently.
+    await Promise.all(
+      [0, 1].map(() =>
+        runDb(
+          file,
+          Effect.gen(function* () {
+            const db = yield* makeDb
+            const store = SessionProviderRecoveryDurable.makeDurableRecoveryStore(db)
+            const outcome = yield* store.putCommand(input)
+            expect(["recorded", "existing"]).toContain(outcome.status)
+          }),
+        ),
+      ),
+    )
+    // Exactly ONE row exists for the attempt slot, in `pending` (single winner).
+    await runDb(
+      file,
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        const store = SessionProviderRecoveryDurable.makeDurableRecoveryStore(db)
+        const rows = yield* store.listCommandsByRequestHash(H64("r"))
+        expect(rows).toHaveLength(1)
+        expect(rows[0]!.state).toBe("pending")
+        const slot = yield* store.getCommandForAttempt(identity().sessionId, identity().attemptId)
+        expect(slot?.commandId).toBe(rows[0]!.commandId)
       }),
     )
   })
@@ -226,6 +248,236 @@ describe("SessionProviderRecoveryDurable store (W2)", () => {
         const row = yield* store.getCommand(cas.commandId)
         expect(row?.state).toBe("abandoned")
         expect(row?.resultHash).toBe(H64("result"))
+      }),
+    )
+  })
+
+  test("W2-1 owner-token fence: a transition with a mismatched recorded token is a typed verdict, never a transition", async () => {
+    await runDb(
+      ":memory:",
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* createTables(db)
+        const store = SessionProviderRecoveryDurable.makeDurableRecoveryStore(db)
+        const cas = yield* store.putCommand({
+          requestHash: H64("r"),
+          attemptIdentity: identity(),
+          expectedOwnerToken: "owner_real",
+        })
+        expect(cas.status).toBe("recorded")
+        const mismatched = yield* store.transitionCommand({
+          commandId: cas.commandId,
+          from: "pending",
+          to: "abandoned",
+          expectedOwnerToken: "owner_forged",
+        })
+        expect(mismatched).toBe("owner_token_mismatch")
+        // The row is untouched.
+        const row = yield* store.getCommand(cas.commandId)
+        expect(row?.state).toBe("pending")
+        const matched = yield* store.transitionCommand({
+          commandId: cas.commandId,
+          from: "pending",
+          to: "abandoned",
+          expectedOwnerToken: "owner_real",
+        })
+        expect(matched).toBe("transitioned")
+        // An unfenced call (no token, e.g. the maintenance surface) still transitions.
+        const other = yield* store.putCommand({
+          requestHash: H64("y"),
+          attemptIdentity: identity({ attemptId: "att_other" }),
+        })
+        const unfenced = yield* store.transitionCommand({
+          commandId: other.commandId,
+          from: "pending",
+          to: "forked",
+        })
+        expect(unfenced).toBe("transitioned")
+      }),
+    )
+  })
+
+  test("W2-1 visibility: a commanded row WITHOUT a descriptor (recordCommand) is visible to listCommandsBySession", async () => {
+    await runDb(
+      ":memory:",
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* createTables(db)
+        const store = SessionProviderRecoveryDurable.makeDurableRecoveryStore(db)
+        const cas = yield* store.putCommand({ requestHash: H64("r"), attemptIdentity: identity() })
+        expect(cas.status).toBe("recorded")
+        // The descriptor-less command belongs to the attempt's session (LEFT JOIN path).
+        const rows = yield* store.listCommandsBySession(identity().sessionId)
+        expect(rows.map((row) => row.commandId)).toEqual([cas.commandId])
+        expect(rows[0]!.descriptorId).toBeUndefined()
+      }),
+    )
+  })
+
+  test("W2-1 content-hash validation: a tampered descriptor row decodes to undefined", async () => {
+    await runDb(
+      ":memory:",
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* createTables(db)
+        const store = SessionProviderRecoveryDurable.makeDurableRecoveryStore(db)
+        const descriptor = fiveClassDescriptors()[0]!
+        const written = yield* store.putDescriptor({
+          descriptor,
+          sessionId: "ses_durable",
+          activityId: "act_durable",
+          turnId: "1",
+          createdAt: 1,
+        })
+        expect(written.status).toBe("recorded")
+        // Tamper with the payload (keep the row honest-clean except the content).
+        yield* db.run(sql`
+          UPDATE session_provider_recovery_descriptor
+          SET payload = '{"tampered": true}'
+          WHERE descriptor_id = ${written.descriptorId}
+        `)
+        const read = yield* store.getDescriptor(written.descriptorId)
+        expect(read).toBeUndefined()
+      }),
+    )
+  })
+
+  test("kill-9 terminal guard: a settled command row refuses abandon on a NEW service instance over the same DB", async () => {
+    const dir = await tmpdir()
+    const file = path.join(dir.path, "terminal.db")
+    const attempt = identity({ idempotencyKey: "idem-1" })
+    await runDb(
+      file,
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* createTables(db)
+        const service = yield* SessionProviderRecovery.Service.pipe(
+          Effect.provide(SessionProviderRecovery.durableLayerWith(db)),
+        )
+        // In-process terminal evidence is a precondition of confirm-settled (design §9.2).
+        yield* service.evidence.recordStatus({
+          evidenceRef: "ev_terminal",
+          status: "settled",
+          providerId: attempt.providerId,
+          requestHash: attempt.requestHash,
+          payloadHash: H64("term"),
+        })
+        const outcome = yield* service.confirmSettled({
+          actor: { type: "user", id: "actor_1" },
+          requestHash: attempt.requestHash,
+          attemptIdentity: attempt,
+          evidence: {
+            schemaVersion: "recovery-evidence.v1",
+            providerId: attempt.providerId,
+            externalRequestId: "ext-1",
+            idempotencyKey: "idem-1",
+            terminalState: "settled",
+            payloadHash: H64("term"),
+            responseFingerprint: attempt.requestHash,
+            retrievalRef: "retrieval:1",
+            metadata: {},
+            verifiedAt: 100,
+          },
+        })
+        expect(outcome.status).toBe("settled")
+      }),
+    )
+    // "kill-9 restart": a NEW process view — new client, new store, new service instance.
+    await runDb(
+      file,
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        const service = yield* SessionProviderRecovery.Service.pipe(
+          Effect.provide(SessionProviderRecovery.durableLayerWith(db)),
+        )
+        const refused = yield* service
+          .abandonExact({
+            actor: { type: "user", id: "actor_1" },
+            requestHash: attempt.requestHash,
+            attemptIdentity: attempt,
+            reasonCode: "network_unknown",
+          })
+          .pipe(Effect.flip)
+        // The durable terminal guard refuses (the in-process evidence ref is empty at
+        // boot — the DB command slot is the terminal authority).
+        expect(refused).toMatchObject({
+          _tag: "SessionProviderRecovery.RefuseAbandonWithTerminalEvidenceError",
+          requestHash: attempt.requestHash,
+        })
+        // The row is still settled — no abandon was layered on top of it.
+        const store = SessionProviderRecoveryDurable.makeDurableRecoveryStore(db)
+        const rows = yield* store.listCommandsByRequestHash(attempt.requestHash)
+        expect(rows).toHaveLength(1)
+        expect(rows[0]!.state).toBe("settled")
+      }),
+    )
+  })
+
+  test("kill-9 idempotent confirm: a settled slot answers existing when the evidence matches", async () => {
+    const dir = await tmpdir()
+    const file = path.join(dir.path, "confirm.db")
+    const attempt = identity({ idempotencyKey: "idem-1" })
+    await runDb(
+      file,
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* createTables(db)
+        const service = yield* SessionProviderRecovery.Service.pipe(
+          Effect.provide(SessionProviderRecovery.durableLayerWith(db)),
+        )
+        yield* service.evidence.recordStatus({
+          evidenceRef: "ev_terminal",
+          status: "settled",
+          providerId: attempt.providerId,
+          requestHash: attempt.requestHash,
+          payloadHash: H64("term"),
+        })
+        yield* service.confirmSettled({
+          actor: { type: "user", id: "actor_1" },
+          requestHash: attempt.requestHash,
+          attemptIdentity: attempt,
+          evidence: {
+            schemaVersion: "recovery-evidence.v1",
+            providerId: attempt.providerId,
+            externalRequestId: "ext-1",
+            idempotencyKey: "idem-1",
+            terminalState: "settled",
+            payloadHash: H64("term"),
+            responseFingerprint: attempt.requestHash,
+            retrievalRef: "retrieval:1",
+            metadata: {},
+            verifiedAt: 100,
+          },
+        })
+      }),
+    )
+    // Restart: the settled slot is the terminal authority → an exact confirm retry is
+    // idempotent `existing` (validated against the recorded result hash).
+    await runDb(
+      file,
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        const service = yield* SessionProviderRecovery.Service.pipe(
+          Effect.provide(SessionProviderRecovery.durableLayerWith(db)),
+        )
+        const retry = yield* service.confirmSettled({
+          actor: { type: "user", id: "actor_1" },
+          requestHash: attempt.requestHash,
+          attemptIdentity: attempt,
+          evidence: {
+            schemaVersion: "recovery-evidence.v1",
+            providerId: attempt.providerId,
+            externalRequestId: "ext-1",
+            idempotencyKey: "idem-1",
+            terminalState: "settled",
+            payloadHash: H64("term"),
+            responseFingerprint: attempt.requestHash,
+            retrievalRef: "retrieval:1",
+            metadata: {},
+            verifiedAt: 100,
+          },
+        })
+        expect(retry.status).toBe("existing")
       }),
     )
   })

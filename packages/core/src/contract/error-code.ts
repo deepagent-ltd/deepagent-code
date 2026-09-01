@@ -108,6 +108,7 @@ export const ERROR_CODE_REGISTRY: readonly ErrorCodeEntry[] = [
   { code: "provider_recovery_no_baseline", category: "recovery", retryability: "not_retryable", httpStatus: 409, meaning: "Recovery has no committed baseline hash; must fork or coordinate." },
   { code: "recovery_baseline_hash_mismatch", category: "recovery", retryability: "not_retryable", httpStatus: 409, meaning: "Reconstructed baseline does not match the committed hash." },
   { code: "recovery_terminal_bridge_missing", category: "recovery", retryability: "not_retryable", httpStatus: 410, meaning: "Terminal bridge was not written; attempt is not settled." },
+  { code: "recovery_command_hash_mismatch", category: "recovery", retryability: "not_retryable", httpStatus: 409, meaning: "A recovery command for the same attempt carried a different request hash." },
   { code: "recovery_active_descriptor_incomplete", category: "recovery", retryability: "indeterminate", httpStatus: 503, meaning: "A recovery descriptor is active but incomplete; coordination required." },
   { code: "model_protocol_compatible_fixed_by_default", category: "model_route", retryability: "not_retryable", httpStatus: 400, meaning: "Compatible models were fixed to Chat; explicit protocol selection required." },
   { code: "model_protocol_selection_required", category: "model_route", retryability: "not_retryable", httpStatus: 400, meaning: "Provider config lacks an explicit protocol/capability selection." },

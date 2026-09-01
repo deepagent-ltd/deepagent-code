@@ -22,6 +22,13 @@ export * as SessionProviderRecovery from "./recovery"
 //
 // Command / evidence store semantics live in ./recovery-store (C1B-03); this service owns
 // the single-writer serialize + classify + authorize + command-record path.
+//
+// W2/W2-1 honest scope note: this file holds BOTH the process-local store-backed service
+// (`layer`) and the durable DB-backed service (`durableLayerWith`). The durable service is
+// the kill-9-survivor surface and is exercised by recovery-durable-store.test.ts, but the
+// production executor wiring (which commands run after a restart) is a later wave — the
+// current production path is terminal-descriptor write + maintenance registry +
+// startup inventory (see `durableLayerWith`).
 
 import { randomUUID } from "node:crypto"
 import { Context, Effect, Layer, Ref, Schema, Semaphore } from "effect"
@@ -31,10 +38,12 @@ import { contentDigest } from "../../contract/digest"
 import { Hash } from "../../util/hash"
 import {
   CommandState,
+  isTerminalCommandState,
   makeDurableRecoveryStore,
   recoveryDescriptorId,
   toCommandRecord,
 } from "./recovery-durable-store"
+import type { CommandRow } from "./recovery-durable-store"
 import type {
   AbandonRecord,
   AbandonTransactionOutcome,
@@ -182,8 +191,9 @@ export class RecoveryDecodeError extends Schema.TaggedErrorClass<RecoveryDecodeE
   { message: Schema.String },
 ) {}
 /**
- * Typed refusal for the network-unknown abandon path: a settled/terminal
- * provider evidence already exists for the request, so the attempt may have
+ * Typed refusal for the network-unknown abandon path: the attempt already carries a
+ * terminal resolution (a settled/terminal provider evidence, or a durable command
+ * slot in a terminal state after a kill-9 restart), so the attempt may have
  * dispatched and produced a result — the user is NOT offered abandon and is
  * pointed to confirm-settled instead (design §9.1 / §11.3 query-command-first).
  */
@@ -1636,7 +1646,35 @@ const durableServiceWith = (db: Database) =>
       return yield* Semaphore.withPermits(lock, 1)(
         Effect.gen(function* () {
           yield* assertPermission(input.actor, requiredPermissionFor("resolvable_exact"))
+          // W2 terminal guard: the DURABLE command slot is the terminal authority, not the
+          // process-local evidence ref (empty after a kill-9 restart). A slot row in a
+          // terminal state (settled / abandoned / forked) means the attempt already has a
+          // terminal resolution — abandon is refused and the user is pointed at the
+          // terminal ref (design §11.3 query-command-first). The ref is the resolved
+          // descriptor's resolution ref (evidence ref / command id / fork ref), or the
+          // command id when no descriptor is linked.
+          const slot = yield* store.getCommandForAttempt(
+            input.attemptIdentity.sessionId,
+            input.attemptIdentity.attemptId,
+          )
+          if (slot && isTerminalCommandState(slot.state)) {
+            const terminalDescriptor = slot.descriptorId
+              ? yield* store.getDescriptor(slot.descriptorId)
+              : undefined
+            const evidenceRef =
+              terminalDescriptor?.payload.descriptorKind === "resolved"
+                ? terminalDescriptor.payload.resolved.resolutionRef
+                : slot.commandId
+            return yield* Effect.fail(
+              new RefuseAbandonWithTerminalEvidenceError({
+                evidenceRef,
+                requestHash: input.requestHash,
+              }),
+            )
+          }
           const state = yield* snapshot(input.attemptIdentity.sessionId)
+          // In-process settled evidence still refuses abandon (the same scan the memory
+          // layer runs); the DB slot guard above covers the post-restart evidence gap.
           const scan = scanTerminalEvidence(evidenceOf(state), input.requestHash)
           if (scan.status === "duplicate") {
             return yield* Effect.fail(
@@ -1683,17 +1721,30 @@ const durableServiceWith = (db: Database) =>
             requestHash: input.requestHash,
             attemptIdentity: input.attemptIdentity,
             descriptorId: descriptorWrite.descriptorId,
-            expectedOwnerToken: "",
           })
           if (cas.status === "mismatch") {
             return yield* Effect.fail(new MismatchError({ reason: "request_hash_mismatch" }))
           }
-          yield* store.transitionCommand({
+          const transition = yield* store.transitionCommand({
             commandId: cas.commandId,
             from: CommandState.pending,
             to: CommandState.abandoned,
             resultHash: contentDigest(tx.outcome.abandon),
           })
+          // The verdict is authoritative: never report an abandon the row does not record.
+          if (transition === "state_mismatch") {
+            return yield* Effect.fail(new MismatchError({ reason: "command_state_mismatch" }))
+          }
+          if (transition === "already") {
+            // An earlier execution already moved the slot to `abandoned` (exact retry
+            // converging on the same command id) — the contract outcome is `existing`,
+            // never a second terminal row or double effect.
+            return {
+              status: "existing",
+              commandId: cas.commandId,
+              abandon: tx.outcome.abandon,
+            } satisfies AbandonTransactionOutcome
+          }
           yield* commitMemory(tx.state)
           return tx.outcome
         }),
@@ -1717,6 +1768,28 @@ const durableServiceWith = (db: Database) =>
           })
           if (verified.status !== "verified") {
             return yield* Effect.fail(new BaselineVerifyRefusedError({ reason: verified.reason }))
+          }
+          // W2 terminal guard (same as abandonExact): a terminal slot is the durable
+          // terminal authority after a restart — repair+abandon is refused, never
+          // layered onto an already-resolved attempt.
+          const slot = yield* store.getCommandForAttempt(
+            input.attemptIdentity.sessionId,
+            input.attemptIdentity.attemptId,
+          )
+          if (slot && isTerminalCommandState(slot.state)) {
+            const terminalDescriptor = slot.descriptorId
+              ? yield* store.getDescriptor(slot.descriptorId)
+              : undefined
+            const evidenceRef =
+              terminalDescriptor?.payload.descriptorKind === "resolved"
+                ? terminalDescriptor.payload.resolved.resolutionRef
+                : slot.commandId
+            return yield* Effect.fail(
+              new RefuseAbandonWithTerminalEvidenceError({
+                evidenceRef,
+                requestHash: input.requestHash,
+              }),
+            )
           }
           const state = yield* snapshot(input.attemptIdentity.sessionId)
           const tx = repairAndAbandonTransaction(
@@ -1750,17 +1823,29 @@ const durableServiceWith = (db: Database) =>
             requestHash: input.requestHash,
             attemptIdentity: input.attemptIdentity,
             descriptorId: descriptorWrite.descriptorId,
-            expectedOwnerToken: "",
           })
           if (cas.status === "mismatch") {
             return yield* Effect.fail(new MismatchError({ reason: "request_hash_mismatch" }))
           }
-          yield* store.transitionCommand({
+          const transition = yield* store.transitionCommand({
             commandId: cas.commandId,
             from: CommandState.pending,
             to: CommandState.abandoned,
             resultHash: contentDigest(tx.outcome.abandon),
           })
+          // The verdict is authoritative: never report a repair+abandon the row does not record.
+          if (transition === "state_mismatch") {
+            return yield* Effect.fail(new MismatchError({ reason: "command_state_mismatch" }))
+          }
+          if (transition === "already") {
+            // The slot already holds `abandoned` — an exact retry converging on the same
+            // command id; the contract outcome is `existing`.
+            return {
+              status: "existing",
+              repair: tx.outcome.repair,
+              abandon: tx.outcome.abandon,
+            } satisfies RepairAndAbandonOutcome
+          }
           yield* commitMemory(tx.state)
           return tx.outcome
         }),
@@ -1825,17 +1910,23 @@ const durableServiceWith = (db: Database) =>
             requestHash: input.requestHash,
             attemptIdentity: input.attemptIdentity,
             descriptorId: descriptorWrite.descriptorId,
-            expectedOwnerToken: "",
           })
           if (cas.status === "mismatch") {
             return yield* Effect.fail(new MismatchError({ reason: "request_hash_mismatch" }))
           }
-          yield* store.transitionCommand({
+          const transition = yield* store.transitionCommand({
             commandId: cas.commandId,
             from: CommandState.pending,
             to: CommandState.forked,
             resultHash: contentDigest(tx.outcome.manifest),
           })
+          // The verdict is authoritative: never report a fork the row does not record.
+          if (transition === "state_mismatch") {
+            // The slot moved to a different terminal state concurrently.
+            return yield* Effect.fail(new MismatchError({ reason: "command_state_mismatch" }))
+          }
+          // `already` (the slot already holds `forked`): an exact retry converges on the
+          // in-memory `existing` outcome below; it never double-commits a second fork.
           yield* commitMemory(tx.state)
           const commandId = recoveryCommandContentAddress({
             requestHash: input.requestHash,
@@ -1898,6 +1989,45 @@ const durableServiceWith = (db: Database) =>
             return yield* Effect.fail(new TextIsNotEvidenceError({ reason: "text_is_not_evidence" }))
           }
           const state = yield* snapshot(input.attemptIdentity.sessionId)
+          // W2 terminal guard: the DURABLE command slot is the terminal authority after a
+          // restart (the process-local evidence ref is empty at boot). A slot already
+          // terminal is handled BEFORE the in-process evidence scan:
+          //   - settled: the attempt is already settled — an exact retry validates the
+          //     evidence against the recorded result hash and answers `existing`;
+          //   - abandoned/forked: the attempt was resolved by a different exit — there is
+          //     no settled evidence to confirm against (typed refusal, same as the
+          //     in-process scan miss).
+          const slot = yield* store.getCommandForAttempt(
+            input.attemptIdentity.sessionId,
+            input.attemptIdentity.attemptId,
+          )
+          if (slot && slot.requestHash !== input.requestHash) {
+            return yield* Effect.fail(new MismatchError({ reason: "request_hash_mismatch" }))
+          }
+          if (slot && isTerminalCommandState(slot.state)) {
+            if (slot.state === CommandState.settled) {
+              const terminalPayloadHash = slot.resultHash ?? undefined
+              if (terminalPayloadHash === undefined) {
+                return yield* Effect.fail(new MissingTerminalEvidenceError({ requestHash: input.requestHash }))
+              }
+              const verification = validateConfirmSettledEvidence(evidence, {
+                requestHash: input.requestHash,
+                providerId: input.attemptIdentity.providerId,
+                idempotencyKey: input.attemptIdentity.idempotencyKey,
+                terminalPayloadHash,
+              })
+              if (!verification.ok) {
+                return yield* Effect.fail(new EvidenceBindingError({ reason: verification.reason }))
+              }
+              const existingRef = confirmSettledEvidenceRef({
+                requestHash: input.requestHash,
+                attempt: input.attemptIdentity,
+                evidence,
+              })
+              return { status: "existing", evidenceRef: existingRef } satisfies ConfirmSettledOutcome
+            }
+            return yield* Effect.fail(new MissingTerminalEvidenceError({ requestHash: input.requestHash }))
+          }
           const scan = scanTerminalEvidence(evidenceOf(state), input.requestHash)
           if (scan.status === "duplicate") {
             return yield* Effect.fail(
@@ -1962,18 +2092,24 @@ const durableServiceWith = (db: Database) =>
             requestHash: input.requestHash,
             attemptIdentity: input.attemptIdentity,
             descriptorId: descriptorWrite.descriptorId,
-            expectedOwnerToken: "",
             createdAt: input.now,
           })
-          if (casCommand.status !== "mismatch") {
-            yield* store.transitionCommand({
-              commandId: casCommand.commandId,
-              from: CommandState.pending,
-              to: CommandState.settled,
-              resultHash: evidence.payloadHash,
-              now: input.now,
-            })
+          if (casCommand.status === "mismatch") {
+            return yield* Effect.fail(new MismatchError({ reason: "request_hash_mismatch" }))
           }
+          const transition = yield* store.transitionCommand({
+            commandId: casCommand.commandId,
+            from: CommandState.pending,
+            to: CommandState.settled,
+            resultHash: evidence.payloadHash,
+            now: input.now,
+          })
+          // The verdict is authoritative: never report a settle the row does not record.
+          if (transition === "state_mismatch") {
+            return yield* Effect.fail(new MismatchError({ reason: "command_state_mismatch" }))
+          }
+          // `already` (the slot already holds `settled`): an exact retry converges on the
+          // settled outcome below; never a second terminal row.
           yield* Ref.set(memory, { ...state, evidence: new Map(state.evidence).set(evidenceRef, record) })
           const settled: ConfirmSettledOutcome = { status: "settled", evidenceRef: cas.evidenceRef }
           return settled
@@ -2177,5 +2313,16 @@ const durableServiceWith = (db: Database) =>
  * W2 — the production recovery layer bound to the business DB. The command/descriptor/
  * export surfaces survive a kill-9 restart; the frozen contract and typed outcomes are
  * identical to the in-memory `layer` (see `durableServiceWith`).
+ *
+ * W2-1 honesty declaration — executor wiring status: the durable STORE layer is
+ * fully implemented and exercised by the durable-store tests, but the durable
+ * SERVICE (this `durableLayerWith` / `durableServiceWith`) is NOT yet wired into
+ * the production model-execution path. The current production recovery path is:
+ *   - provider-turn terminal descriptors (v2-provider-turn.ts `writeTurnTerminalDescriptor`);
+ *   - the maintenance command/evidence-export registry (deepagent-code maintenance-registry);
+ *   - the startup inventory classification (startup-inventory.ts).
+ * Wiring the actual recovery-command EXECUTORS (resolve/abandon/fork/confirm-settled)
+ * behind a kill-9 restart is a later wave; until then `durableLayerWith` is the test +
+ * integration surface for that wiring.
  */
 export const durableLayerWith = (db: Database) => Layer.effect(Service, durableServiceWith(db))

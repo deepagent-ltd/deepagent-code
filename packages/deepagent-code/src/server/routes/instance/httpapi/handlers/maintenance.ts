@@ -308,7 +308,10 @@ export const maintenanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "mainte
         requestHash: payload.request_hash,
         attemptIdentity,
       })
-      yield* registry.record({
+      // The registry verifies the attempt-slot CAS: an idempotent exact retry returns the
+      // already-recorded row (its command id is authoritative), and a different request
+      // hash on the same attempt is a typed 409 `recovery_command_hash_mismatch`.
+      const recorded = yield* registry.record({
         commandId,
         sessionId: payload.session_id,
         attemptId: payload.attempt_id,
@@ -319,7 +322,7 @@ export const maintenanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "mainte
         createdAt: Date.now(),
       })
 
-      return { command_id: commandId, descriptor }
+      return { command_id: recorded.commandId, descriptor: recorded.descriptor }
     })
 
     const recoveryCommandGet = Effect.fn("MaintenanceHttpApi.recoveryCommandGet")(function* (ctx: {

@@ -25,6 +25,11 @@
 //     built with and exports `owner-authorization.json` (--export) into the release; the runtime
 //     seed (packages/core/src/session/runner/v2-owner-seed.ts) delivers the row to user DBs.
 //
+// Release delivery note (W0.8 review minor-2): the release flow publishes the exported
+// owner-authorization.json as a RELEASE ASSET; fetching that asset on the install side (repo-root
+// install script / desktop packaging resources) is a release deliverable (see v2.0-design W0.5
+// note and the RELEASE-GO checklist), not code in this repo.
+//
 // The signing key comes from the DEEPAGENT_CODE_OWNER_SIGNING_KEY env: either the Ed25519 private
 // key PEM inline, or a path to a PEM file (same file convention as script/v2-campaign-sign.ts).
 // Without a key and without --dev the script fails closed (exit 1): an unsigned row could never
@@ -167,13 +172,13 @@ function ensureOwnerAuthorizationSchema(db: Database) {
 function loadSigningKey(): string | undefined {
   const raw = process.env.DEEPAGENT_CODE_OWNER_SIGNING_KEY?.trim()
   if (!raw) return undefined
-  // Robust inline/path discrimination (audit 8a): an inline PEM ALWAYS carries the BEGIN marker;
-  // anything else is a path — but a path that happens to contain the marker, or a missing path,
-  // must produce a clear error instead of being misread as an inline key.
-  const pem = raw.includes("-----BEGIN")
-    ? raw
-    : existsSync(raw)
-      ? readFileSync(raw, "utf8")
+  // Robust inline/path discrimination (audit 8a, W0.8 review new-5): a REAL file wins even when its
+  // PATH happens to contain the PEM BEGIN marker; only a non-existent value that carries the
+  // marker is treated as an inline PEM, and anything else is a missing path (clear ENOENT error).
+  const pem = existsSync(raw)
+    ? readFileSync(raw, "utf8")
+    : raw.includes("-----BEGIN")
+      ? raw
       : (() => {
           throw new Error(
             `DEEPAGENT_CODE_OWNER_SIGNING_KEY points to a missing PEM file: ${raw} (ENOENT)`,
@@ -489,6 +494,29 @@ if (existing) {
       }),
     )
     process.exit(0)
+  }
+  // W0.8 review new-3: the idempotent no-op must never re-export an EXPIRED row as if it were a
+  // valid authorization — that would ship a dead owner-authorization.json to every install. An
+  // expired row with a matching identity is a hard signal to re-issue: fail loudly (exit 1) and
+  // suggest --renew so the release pipeline can expose the staleness instead of masking it.
+  if (existing.expires_at <= now) {
+    db.close()
+    console.error(
+      `[mint-owner-campaign] campaign ${campaignId} exists but its authorization EXPIRED at ${existing.expires_at} — re-issue with --renew before exporting again`,
+    )
+    console.log(
+      JSON.stringify({
+        action: "already_present",
+        campaign_id: campaignId,
+        build_identity: buildIdentity,
+        status: "active",
+        expired: true,
+        expires_at: existing.expires_at,
+        suggest: "--renew",
+        db: dbPath,
+      }),
+    )
+    process.exit(1)
   }
   // Idempotent no-op: the stored row already matches the requested identity. Also re-export it so
   // a repeated release pipeline still produces the owner-authorization.json artifact.

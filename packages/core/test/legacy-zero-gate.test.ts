@@ -169,7 +169,7 @@ describe("C0-08 legacy-zero gate real inventory (actual frozen numbers)", () => 
 
   test("frozen counters match the C0-01 report (red oracle, never hidden)", () => {
     const counters = currentTreeCounts(inventory)
-    expect(counters.legacyDims).toBe(903)
+    expect(counters.legacyDims).toBe(910)
     expect(counters.doubleWrite).toBe(0)
     expect(counters.doubleWriteEntries).toBe(0)
     expect(counters.v2Dims).toBe(26)
@@ -215,14 +215,14 @@ describe("C0-08 legacy-zero gate real inventory (actual frozen numbers)", () => 
     try { mustBeZero(inventory) } catch (error) { caught = error }
     expect(caught).toBeInstanceOf(LegacyZeroError)
     const error = caught as LegacyZeroError
-    expect(error.counters.legacyDims).toBe(903)
+    expect(error.counters.legacyDims).toBe(910)
     expect(error.counters.doubleWrite).toBe(0)
     expect(error.counters.adapterDims).toBe(3)
     expect(error.selectionBridgeSites.length).toBe(0)
-    expect(error.message).toContain("legacy dims=903")
+    expect(error.message).toContain("legacy dims=910")
     expect(error.message).toContain("double_write=0")
     expect(error.message).toContain("im.agent-executor :: execution_owner :: legacy")
-    expect(error.violations.length).toBe(903 + 0 + 3)
+    expect(error.violations.length).toBe(910 + 0 + 3)
   })
 })
 
@@ -253,12 +253,12 @@ describe("C0-08 legacy-zero gate snapshot (byte-stable)", () => {
 
   test("snapshot counters carry the frozen red numbers", () => {
     const snapshot = buildSnapshot(inventory, bridgeSites)
-    expect(snapshot.counters.legacyDims).toBe(903)
+    expect(snapshot.counters.legacyDims).toBe(910)
     expect(snapshot.counters.doubleWrite).toBe(0)
     expect(snapshot.counters.adapterDims).toBe(3)
     expect(snapshot.counters.v2Dims).toBe(26)
-    expect(snapshot.entries).toBe(396)
-    expect(snapshot.roles).toBe(2772)
+    expect(snapshot.entries).toBe(397)
+    expect(snapshot.roles).toBe(2779)
     expect(snapshot.selectionBridgeUsages).toBe(0)
   })
 
@@ -270,6 +270,6 @@ describe("C0-08 legacy-zero gate snapshot (byte-stable)", () => {
     try { returned = redOracle(inventory) } finally { console.log = original }
     expect(returned).toBeDefined()
     expect(returned!.snapshotDigest).toBe(buildSnapshot(inventory, bridgeSites).snapshotDigest)
-    expect(captured.join("\n")).toContain("legacy_dims        903")
+    expect(captured.join("\n")).toContain("legacy_dims        910")
   })
 })

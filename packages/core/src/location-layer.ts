@@ -44,6 +44,7 @@ import * as SessionRunnerLLM from "./session/runner/llm"
 import { SessionRunnerModel } from "./session/runner/model"
 import { SystemContextBuiltIns } from "./system-context/builtins"
 import { CapabilityCatalog } from "./system-context/capability-catalog"
+import { ProjectDocs } from "./system-context/project-docs"
 import { SystemContextRegistry } from "./system-context/registry"
 import { SessionProviderOwner } from "./context-federation/provider-owner"
 import { SessionContext } from "./context-federation/session-context"
@@ -60,11 +61,14 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()(
     lookup: (ref: Location.Ref) => {
       const location = Location.layer(ref)
       // Production System Context stack (design §7.3 L0): the host-local builtins +
-      // ambient instructions, plus the stably-loaded `deepagent/capability-catalog`
-      // source so the boot catalog is part of every V2 session context.
+      // ambient instructions, the stably-loaded `deepagent/capability-catalog`
+      // source (so the boot catalog is part of every V2 session context), and the
+      // W10 project docs source (`deepagent/project-docs`) over the worksetted
+      // four-document suite.
       const systemContext = Layer.mergeAll(
         SystemContextBuiltIns.locationLayer,
         CapabilityCatalog.layer,
+        ProjectDocs.layer,
       ).pipe(Layer.provideMerge(SystemContextRegistry.layer))
       const base = Layer.mergeAll(
         location,

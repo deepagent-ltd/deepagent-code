@@ -18,7 +18,11 @@ import { migrations } from "../src/database/migration.gen"
 // Successor pin (W2, 2026-09-01): the session-provider recovery persistence
 // migration (20260830000000_session_provider_recovery) joined the registry, so
 // the ordered registry digest moved again.
-const PINNED_DIGEST = "3e5e425b76758008b9bc19d6ec19d48c5fe35309731f2873785b0f30f503da14"
+// Successor pin (W2-1, 2026-09-02): the session-provider recovery migration body
+// gained the recovery_command state CHECK and the descriptor immutability
+// triggers (anti-review W2-1 issue 7), so the ordered registry digest moved
+// again. Explicit re-pin: the previous pin covered the pre-hardening body.
+const PINNED_DIGEST = "ec9035e1c24ccd5cdd33289978a49a9e2827740940d7b7a749673a19be01daa3"
 
 const digest = (entries: readonly { readonly id: string; readonly hash: string }[]) =>
   createHash("sha256").update(JSON.stringify(entries)).digest("hex")

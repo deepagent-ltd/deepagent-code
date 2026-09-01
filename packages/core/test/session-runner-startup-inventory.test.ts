@@ -5,6 +5,8 @@ import { sql } from "drizzle-orm"
 import type { EffectDrizzleSqlite } from "@deepagent-code/effect-drizzle-sqlite"
 import { EffectDrizzleSqlite as EffectDrizzleSqliteValue } from "@deepagent-code/effect-drizzle-sqlite"
 import type { SqlClient as SqlClientService } from "effect/unstable/sql/SqlClient"
+import { RecoveryCommandContract } from "../src/contract/recovery-command"
+import { SessionProviderRecovery } from "../src/session/runner/recovery"
 import { StartupInventory } from "../src/session/runner/startup-inventory"
 
 const makeDb = EffectDrizzleSqliteValue.makeWithDefaults()
@@ -15,6 +17,71 @@ const run = <A, E>(effect: Effect.Effect<A, E, SqlClientService>) =>
   Effect.runPromise(
     effect.pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:", disableWAL: true })), Effect.scoped),
   )
+
+const H64 = (c: string) => c.repeat(64)
+
+const identity = () => ({
+  sessionId: "sess_inv",
+  attemptId: "att_inv",
+  activityId: "act_inv",
+  providerTurnSeq: 1,
+  selectionId: "sel_1",
+  projectionHash: H64("p"),
+  requestHash: H64("r"),
+  providerId: "provider-test",
+})
+
+const baseClassify = (attempt: ReturnType<typeof identity>) => ({
+  attempt,
+  attemptState: "indeterminate_after_crash",
+  expectedAttemptState: "indeterminate_after_crash",
+  ownerToken: "owner_inv",
+  expectedVersion: 2,
+  baseline: { baselineHash: H64("b"), verified: true, state: "present" as const },
+  historyVerified: true,
+  providerLookupComplete: true,
+  placementUnresolved: false,
+  permissionIncomplete: false,
+  workspaceConflict: false,
+})
+
+/** The five descriptor classes, classified through the real classifier (valid payload + hash). */
+const fiveDescriptorRows = (): readonly {
+  readonly descriptor_id: string
+  readonly session_id: string
+  readonly kind: string
+  readonly payload: string
+  readonly content_hash: string
+}[] => {
+  const attempt = identity()
+  const descriptors = [
+    SessionProviderRecovery.classify(baseClassify(attempt)),
+    SessionProviderRecovery.classify({
+      ...baseClassify(attempt),
+      baseline: { verified: false, state: "missing", sourceSnapshotRef: "snap:1" },
+    }),
+    SessionProviderRecovery.classify({
+      ...baseClassify(attempt),
+      baseline: { verified: false, state: "present" },
+      safeBoundary: { safeBoundaryRef: "boundary:1", safeBoundaryHash: H64("sb") },
+    }),
+    SessionProviderRecovery.classify({
+      ...baseClassify(attempt),
+      baseline: { verified: false, state: "present" },
+    }),
+    SessionProviderRecovery.classify({
+      ...baseClassify(attempt),
+      resolution: { resolutionRef: "resolution:1", bridgeRef: "bridge:1", terminal: "settled" },
+    }),
+  ]
+  return descriptors.map((descriptor) => ({
+    descriptor_id: `descriptor_${RecoveryCommandContract.recoveryDescriptorDigest(descriptor)}`,
+    session_id: "sess-1",
+    kind: descriptor.descriptorKind,
+    payload: JSON.stringify(descriptor),
+    content_hash: RecoveryCommandContract.recoveryDescriptorDigest(descriptor),
+  }))
+}
 
 // Minimal, deterministic schema mirroring the columns classifyStartup reads. The real DB is built
 // by the tracked migrations; these fixtures create exactly the read surface so the test is focused
@@ -252,13 +319,17 @@ describe("StartupInventory.classifyStartup (C1B-10)", () => {
       Effect.gen(function* () {
         const db = yield* makeDb
         yield* createTables(db)
-        yield* db.run(sql`INSERT INTO session_provider_recovery_descriptor
-          (descriptor_id, session_id, kind) VALUES
-          ('desc-a', 'sess-1', 'resolvable_exact'),
-          ('desc-b', 'sess-1', 'repairable_exact'),
-          ('desc-c', 'sess-1', 'fork_only'),
-          ('desc-d', 'sess-1', 'coordination_required'),
-          ('desc-e', 'sess-1', 'resolved')`)
+        yield* db.run(sql`
+          INSERT INTO session_provider_recovery_descriptor
+            (descriptor_id, session_id, activity_id, turn_id, kind, payload, content_hash, created_at)
+          VALUES ${sql.join(
+            fiveDescriptorRows().map(
+              (row) =>
+                sql`(${row.descriptor_id}, ${row.session_id}, 'act', '1', ${row.kind}, ${row.payload}, ${row.content_hash}, 1)`,
+            ),
+            sql`, `,
+          )}
+        `)
 
         const inventory = yield* StartupInventory.classifyStartup(db)
         expect(inventory.byCategory.recovery_descriptor.resolved).toBe(1)
@@ -275,8 +346,11 @@ describe("StartupInventory.classifyStartup (C1B-10)", () => {
       Effect.gen(function* () {
         const db = yield* makeDb
         yield* createTables(db)
+        // A valid payload whose kind column does NOT match it → decode refusal.
+        const valid = fiveDescriptorRows()[0]!
         yield* db.run(sql`INSERT INTO session_provider_recovery_descriptor
-          (descriptor_id, session_id, kind) VALUES ('desc-weird', 'sess-1', 'teleported')`)
+          (descriptor_id, session_id, activity_id, turn_id, kind, payload, content_hash, created_at)
+          VALUES ('desc-weird', 'sess-1', 'act', '1', 'teleported', ${valid.payload}, ${valid.content_hash}, 1)`)
 
         const inventory = yield* StartupInventory.classifyStartup(db)
         expect(inventory.ready).toBe(false)
@@ -290,14 +364,43 @@ describe("StartupInventory.classifyStartup (C1B-10)", () => {
     )
   })
 
+  test("W2-1 content-hash validation: a tampered descriptor payload is unclassified (blocks ready)", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* createTables(db)
+        const valid = fiveDescriptorRows()[0]!
+        yield* db.run(sql`INSERT INTO session_provider_recovery_descriptor
+          (descriptor_id, session_id, activity_id, turn_id, kind, payload, content_hash, created_at)
+          VALUES (${valid.descriptor_id}, 'sess-1', 'act', '1', ${valid.kind}, '{"tampered":true}', ${valid.content_hash}, 1)`)
+
+        const inventory = yield* StartupInventory.classifyStartup(db)
+        expect(inventory.ready).toBe(false)
+        expect(inventory.unclassifiedItems).toHaveLength(1)
+        expect(inventory.unclassifiedItems[0]).toMatchObject({
+          category: "recovery_descriptor",
+          classification: "unclassified",
+          reason: "recovery descriptor payload unverifiable (decode failure or content_hash mismatch)",
+        })
+      }),
+    )
+  })
+
   test("restart determinism includes descriptor rows (kill-9 re-derives the same inventory from the same rows)", async () => {
     await run(
       Effect.gen(function* () {
         const db = yield* makeDb
         yield* createTables(db)
         yield* db.run(sql`INSERT INTO session_provider_attempt VALUES ('att-a', 'indeterminate_after_crash')`)
+        const coordination = SessionProviderRecovery.classify({
+          ...baseClassify(identity()),
+          baseline: { verified: false, state: "present" },
+        })
         yield* db.run(sql`INSERT INTO session_provider_recovery_descriptor
-          (descriptor_id, session_id, kind) VALUES ('desc-a', 'sess-1', 'coordination_required')`)
+          (descriptor_id, session_id, activity_id, turn_id, kind, payload, content_hash, created_at)
+          VALUES ('desc-a', 'sess-1', 'act', '1',
+                  ${coordination.descriptorKind}, ${JSON.stringify(coordination)},
+                  ${RecoveryCommandContract.recoveryDescriptorDigest(coordination)}, 1)`)
 
         const first = yield* StartupInventory.classifyStartup(db)
         const second = yield* StartupInventory.classifyStartup(db)

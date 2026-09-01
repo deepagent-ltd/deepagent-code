@@ -10,6 +10,7 @@
 // closes exactly like a default install of the released product.
 import "./fixture/install-version"
 import { describe, expect, test } from "bun:test"
+import { Database } from "bun:sqlite"
 import { EffectDrizzleSqlite } from "@deepagent-code/effect-drizzle-sqlite"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
 import { existsSync } from "node:fs"
@@ -317,5 +318,135 @@ describe("V2 owner campaign production mint (W0.3)", () => {
     const revoked = await runMint(["--revoke", "--db", dbFile, "--campaign", "v2-owner-2.0.0-beta.0"])
     expect(revoked.exitCode).not.toBe(0)
     expect(revoked.stderr).toContain("fail-closed")
+  })
+
+  test("W0.8 review new-3: the idempotent no-op of an EXPIRED row fails closed (exit 1) and suggests --renew", async () => {
+    await using tmp = await tmpdir()
+    const dbFile = join(tmp.path, "owner.sqlite")
+    // First run creates the schema (and an unexpired row for a scratch campaign) in the db file.
+    await runMint(["--dev", "--db", dbFile, "--build-identity", "1.2.3"])
+    // Reuse the minted schema to insert an EXPIRED row for a second campaign, same identity.
+    const identity = V2ProviderTurn.buildIdentityFromVersion("1.2.3")
+    const sqlite = new Database(dbFile)
+    sqlite
+      .query(
+        `INSERT INTO session_v2_owner_authorization (
+           authorization_id, campaign_id, subject_commit, subject_tree, schema_digest, build_id,
+           package_digest, valid_from, expires_at, status, signature_digest, authorization_digest,
+           created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)`,
+      )
+      .run(
+        "auth_expired_noop",
+        "v2-owner-expired-case",
+        identity.subjectCommit,
+        identity.subjectTree,
+        identity.schemaDigest,
+        identity.buildID,
+        identity.packageDigest,
+        1_000,
+        2_000,
+        "a".repeat(128),
+        "b".repeat(64),
+        1_000,
+      )
+    sqlite.close()
+    const rerun = await runMint([
+      "--dev",
+      "--db",
+      dbFile,
+      "--build-identity",
+      "1.2.3",
+      "--campaign",
+      "v2-owner-expired-case",
+      "--export",
+      join(tmp.path, "must-not-be-written.json"),
+    ])
+    expect(rerun.exitCode).toBe(1)
+    const parsed = JSON.parse(rerun.stdout) as {
+      action: string
+      expired: boolean
+      suggest: string
+    }
+    expect(parsed.action).toBe("already_present")
+    expect(parsed.expired).toBe(true)
+    expect(parsed.suggest).toBe("--renew")
+    expect(rerun.stderr).toContain("--renew")
+    // An expired authorization must never be re-exported as if it were valid.
+    expect(existsSync(join(tmp.path, "must-not-be-written.json"))).toBe(false)
+  })
+
+  test("W0.8 review new-3: the idempotent no-op of an UNEXPIRED row stays exit 0 and re-exports a VALID row", async () => {
+    await using tmp = await tmpdir()
+    const dbFile = join(tmp.path, "owner.sqlite")
+    const exportFile = join(tmp.path, "owner-authorization.json")
+    const first = await runMint(["--dev", "--db", dbFile, "--build-identity", "3.4.5"])
+    expect(first.exitCode, first.stderr).toBe(0)
+    const again = await runMint(["--dev", "--db", dbFile, "--build-identity", "3.4.5", "--export", exportFile])
+    expect(again.exitCode, again.stderr).toBe(0)
+    const parsed = JSON.parse(again.stdout) as { action: string; expired?: boolean }
+    expect(parsed.action).toBe("already_present")
+    expect(parsed.expired).toBeUndefined()
+    const exported = JSON.parse(await Bun.file(exportFile).text()) as {
+      status: string
+      expires_at: number
+      signature_digest: string
+    }
+    expect(exported.status).toBe("active")
+    expect(exported.expires_at).toBeGreaterThan(Date.now())
+    expect(exported.signature_digest).toMatch(/^[0-9a-f]{128}$/)
+  })
+
+  test("W0.8 review new-5: a REAL PEM file whose PATH contains the BEGIN marker is read as a file, not as inline PEM", async () => {
+    await using tmp = await tmpdir()
+    const issuance = V2OwnerAuthorization.generateAuthorizationKeyPair()
+    const keyFile = join(tmp.path, "key-----BEGIN-private.pem")
+    await Bun.write(keyFile, issuance.privateKeyPem)
+    const dbFile = join(tmp.path, "owner.sqlite")
+    const minted = await runMint(["--db", dbFile, "--build-identity", "1.2.3"], {
+      DEEPAGENT_CODE_OWNER_SIGNING_KEY: keyFile,
+    })
+    // Old discrimination would treat the path as inline PEM (because it contains the marker) and
+    // fail createPrivateKey; the fix reads the file because it exists.
+    expect(minted.exitCode, minted.stderr).toBe(0)
+    expect((JSON.parse(minted.stdout) as { action: string }).action).toBe("minted")
+  })
+
+  test("W0.8 review minor-4: an installation version that cannot form a legal campaign id fails closed (false), never throws", async () => {
+    // The compile-time InstallationVersion cannot be changed in-process, so run the same module
+    // in a fresh bun child with a hostile DEEPAGENT_CODE_VERSION global (same pattern as the mint
+    // subprocess): `+` build metadata makes `v2-owner-2.0.0-beta.0+...` an illegal campaign id.
+    const probe = `
+      globalThis.DEEPAGENT_CODE_VERSION = "2.0.0-beta.0+exp.sha.17b0d"
+      const { V2ProviderTurn } = await import(${JSON.stringify(new URL("../src/session/runner/v2-provider-turn.ts", import.meta.url).pathname)})
+      const { Database } = await import(${JSON.stringify(new URL("../src/database/database.ts", import.meta.url).pathname)})
+      const { Effect } = await import("effect")
+      try {
+        const db = (await Effect.runPromise(
+          Effect.service(Database.Service).pipe(Effect.provide(Database.layerFromPath(":memory:"))),
+        )).db
+        const qualified = await Effect.runPromise(V2ProviderTurn.ownerQualified(db, undefined))
+        console.log(JSON.stringify({ campaign: V2ProviderTurn.defaultOwnerCampaign(), qualified }))
+      } catch (error) {
+        console.log(JSON.stringify({ threw: String(error) }))
+        process.exit(2)
+      }
+    `
+    const child = Bun.spawn([process.execPath, "-e", probe], {
+      cwd: join(import.meta.dir, ".."),
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env, DEEPAGENT_CODE_OWNER_SIGNING_KEY: "" },
+    })
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+      child.exited,
+    ])
+    expect(exitCode, stderr).toBe(0)
+    const parsed = JSON.parse(stdout.trim()) as { campaign?: string; qualified?: boolean; threw?: string }
+    expect(parsed.threw).toBeUndefined()
+    expect(parsed.campaign).toBeUndefined()
+    expect(parsed.qualified).toBe(false)
   })
 })
