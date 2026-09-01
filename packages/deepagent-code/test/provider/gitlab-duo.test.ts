@@ -19,7 +19,7 @@ export {}
 //       await Bun.write(
 //         path.join(dir, "deepagent-code.json"),
 //         JSON.stringify({
-//           $schema: "https://deepagent-code.ai/config.json",
+//           $schema: "https://ai.deepagent.ltd/config.schema.json",
 //         }),
 //       )
 //     },
@@ -43,7 +43,7 @@ export {}
 //       await Bun.write(
 //         path.join(dir, "deepagent-code.json"),
 //         JSON.stringify({
-//           $schema: "https://deepagent-code.ai/config.json",
+//           $schema: "https://ai.deepagent.ltd/config.schema.json",
 //           provider: {
 //             gitlab: {
 //               options: {
@@ -75,7 +75,7 @@ export {}
 //       await Bun.write(
 //         path.join(dir, "deepagent-code.json"),
 //         JSON.stringify({
-//           $schema: "https://deepagent-code.ai/config.json",
+//           $schema: "https://ai.deepagent.ltd/config.schema.json",
 //         }),
 //       )
 //     },
@@ -112,7 +112,7 @@ export {}
 //       await Bun.write(
 //         path.join(dir, "deepagent-code.json"),
 //         JSON.stringify({
-//           $schema: "https://deepagent-code.ai/config.json",
+//           $schema: "https://ai.deepagent.ltd/config.schema.json",
 //         }),
 //       )
 //     },
@@ -148,7 +148,7 @@ export {}
 //       await Bun.write(
 //         path.join(dir, "deepagent-code.json"),
 //         JSON.stringify({
-//           $schema: "https://deepagent-code.ai/config.json",
+//           $schema: "https://ai.deepagent.ltd/config.schema.json",
 //           provider: {
 //             gitlab: {
 //               options: {
@@ -180,7 +180,7 @@ export {}
 //       await Bun.write(
 //         path.join(dir, "deepagent-code.json"),
 //         JSON.stringify({
-//           $schema: "https://deepagent-code.ai/config.json",
+//           $schema: "https://ai.deepagent.ltd/config.schema.json",
 //           provider: {
 //             gitlab: {
 //               options: {
@@ -210,7 +210,7 @@ export {}
 //       await Bun.write(
 //         path.join(dir, "deepagent-code.json"),
 //         JSON.stringify({
-//           $schema: "https://deepagent-code.ai/config.json",
+//           $schema: "https://ai.deepagent.ltd/config.schema.json",
 //         }),
 //       )
 //     },
@@ -236,7 +236,7 @@ export {}
 //       await Bun.write(
 //         path.join(dir, "deepagent-code.json"),
 //         JSON.stringify({
-//           $schema: "https://deepagent-code.ai/config.json",
+//           $schema: "https://ai.deepagent.ltd/config.schema.json",
 //           provider: {
 //             gitlab: {
 //               options: {
@@ -271,7 +271,7 @@ export {}
 //       await Bun.write(
 //         path.join(dir, "deepagent-code.json"),
 //         JSON.stringify({
-//           $schema: "https://deepagent-code.ai/config.json",
+//           $schema: "https://ai.deepagent.ltd/config.schema.json",
 //         }),
 //       )
 //     },
@@ -297,7 +297,7 @@ export {}
 //   test("duo-workflow-* model routes through workflowChat", async () => {
 //     await using tmp = await tmpdir({
 //       init: async (dir) => {
-//         await Bun.write(path.join(dir, "deepagent-code.json"), JSON.stringify({ $schema: "https://deepagent-code.ai/config.json" }))
+//         await Bun.write(path.join(dir, "deepagent-code.json"), JSON.stringify({ $schema: "https://ai.deepagent.ltd/config.schema.json" }))
 //       },
 //     })
 //     await withTestInstance({
@@ -345,7 +345,7 @@ export {}
 //   test("duo-chat-* model routes through agenticChat (not workflow)", async () => {
 //     await using tmp = await tmpdir({
 //       init: async (dir) => {
-//         await Bun.write(path.join(dir, "deepagent-code.json"), JSON.stringify({ $schema: "https://deepagent-code.ai/config.json" }))
+//         await Bun.write(path.join(dir, "deepagent-code.json"), JSON.stringify({ $schema: "https://ai.deepagent.ltd/config.schema.json" }))
 //       },
 //     })
 //     await withTestInstance({
@@ -368,7 +368,7 @@ export {}
 //   test("model.options merged with provider.options in getLanguage", async () => {
 //     await using tmp = await tmpdir({
 //       init: async (dir) => {
-//         await Bun.write(path.join(dir, "deepagent-code.json"), JSON.stringify({ $schema: "https://deepagent-code.ai/config.json" }))
+//         await Bun.write(path.join(dir, "deepagent-code.json"), JSON.stringify({ $schema: "https://ai.deepagent.ltd/config.schema.json" }))
 //       },
 //     })
 //     await withTestInstance({
@@ -392,7 +392,7 @@ export {}
 //   test("static duo-chat models always present regardless of discovery", async () => {
 //     await using tmp = await tmpdir({
 //       init: async (dir) => {
-//         await Bun.write(path.join(dir, "deepagent-code.json"), JSON.stringify({ $schema: "https://deepagent-code.ai/config.json" }))
+//         await Bun.write(path.join(dir, "deepagent-code.json"), JSON.stringify({ $schema: "https://ai.deepagent.ltd/config.schema.json" }))
 //       },
 //     })
 //     await withTestInstance({

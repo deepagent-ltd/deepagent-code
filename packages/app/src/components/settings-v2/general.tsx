@@ -602,7 +602,7 @@ export const SettingsGeneralV2: Component = () => {
           description={
             <>
               {language.t("settings.general.row.theme.description")}{" "}
-              <Link class="settings-v2-link" href="https://deepagent-code.ai/docs/themes/">
+              <Link class="settings-v2-link" href="https://ai.deepagent.ltd/">
                 {language.t("common.learnMore")}
               </Link>
             </>

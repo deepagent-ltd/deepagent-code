@@ -461,7 +461,7 @@ export const ProvidersLoginCommand = effectCmd({
     }
 
     if (provider === "deepagent-code") {
-      yield* Prompt.log.info("Create an api key at https://deepagent-code.ai/auth")
+      yield* Prompt.log.info("Create an api key at https://api.deepagent.ltd/")
     }
 
     if (provider === "vercel") {
@@ -470,7 +470,7 @@ export const ProvidersLoginCommand = effectCmd({
 
     if (["cloudflare", "cloudflare-ai-gateway"].includes(provider)) {
       yield* Prompt.log.info(
-        "Cloudflare AI Gateway can be configured with CLOUDFLARE_GATEWAY_ID, CLOUDFLARE_ACCOUNT_ID, and CLOUDFLARE_API_TOKEN environment variables. Read more: https://deepagent-code.ai/docs/providers/#cloudflare-ai-gateway",
+        "Cloudflare AI Gateway can be configured with CLOUDFLARE_GATEWAY_ID, CLOUDFLARE_ACCOUNT_ID, and CLOUDFLARE_API_TOKEN environment variables. Read more: https://ai.deepagent.ltd/",
       )
     }
 

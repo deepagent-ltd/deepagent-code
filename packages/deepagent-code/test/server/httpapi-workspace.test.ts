@@ -469,7 +469,7 @@ describe("workspace HttpApi", () => {
             "content-type": "application/json",
             "x-deepagent-code-workspace": "internal",
           },
-          body: JSON.stringify({ $schema: "https://deepagent-code.ai/config.json" }),
+          body: JSON.stringify({ $schema: "https://ai.deepagent.ltd/config.schema.json" }),
         })
 
         const responseBody = yield* response.text
@@ -486,7 +486,7 @@ describe("workspace HttpApi", () => {
               "content-type": "application/json",
               "x-target-auth": "secret",
             }),
-            body: JSON.stringify({ $schema: "https://deepagent-code.ai/config.json" }),
+            body: JSON.stringify({ $schema: "https://ai.deepagent.ltd/config.schema.json" }),
           },
         ])
         expect(forwarded[0]?.headers).not.toHaveProperty("x-deepagent-code-directory")

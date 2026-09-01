@@ -6,7 +6,7 @@ import { ProxyUtil } from "../proxy-util"
 
 let embeddedUIPromise: Promise<Record<string, string> | null> | undefined
 
-export const UI_UPSTREAM = new URL("https://app.deepagent-code.ai")
+export const UI_UPSTREAM = new URL("https://ai.deepagent.ltd")
 
 export const csp = (hash = "") =>
   `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'${hash ? ` 'sha256-${hash}'` : ""}; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; media-src 'self' data:; connect-src * data:`
@@ -87,7 +87,7 @@ export function serveUIEffect(
 
     // Embedded UI disabled (Server Edition: the UI is served by the gateway, the
     // kernel runs headless): an unmatched path is a genuine 404, not a cue to
-    // reach out to the public UI upstream. Proxying to app.deepagent-code.ai here
+    // reach out to the public UI upstream. Proxying to ai.deepagent.ltd here
     // would (a) 500 in an offline/egress-restricted container, and (b) turn any
     // unknown path into an unexpected outbound fetch. Fail closed with 404.
     if (services.disableEmbeddedWebUi) return notFound()

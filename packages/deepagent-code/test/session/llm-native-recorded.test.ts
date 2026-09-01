@@ -30,7 +30,7 @@ import { ModelV2 } from "@deepagent-code/core/model"
 
 const FIXTURES_DIR = path.join(import.meta.dir, "../fixtures/recordings")
 
-const zenURL = (connection: string) => `https://console.deepagent-code.ai/proxy/connections/${connection}/v1`
+const zenURL = (connection: string) => `https://api.deepagent.ltd/proxy/connections/${connection}/v1`
 
 const replayOpenAIOAuth = {
   type: "oauth",
@@ -323,7 +323,7 @@ const writeConfig = (directory: string, scenario: RecordedScenario, model: Model
   Effect.promise(() =>
     Bun.write(
       path.join(directory, "deepagent-code.json"),
-      JSON.stringify({ $schema: "https://deepagent-code.ai/config.json", ...scenario.config(model) }),
+      JSON.stringify({ $schema: "https://ai.deepagent.ltd/config.schema.json", ...scenario.config(model) }),
     ),
   )
 

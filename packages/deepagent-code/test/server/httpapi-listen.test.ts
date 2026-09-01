@@ -298,7 +298,7 @@ describe("HttpApi Server.listen", () => {
     }) as typeof process.stderr.write
     try {
       // Hit a real defined route (/global/health) rather than /status, which falls
-      // through to the UI /* fallback and proxies to app.deepagent-code.ai — that
+      // through to the UI /* fallback and proxies to ai.deepagent.ltd — that
       // 500s in an offline/egress-restricted checkout. This test is about NOT
       // emitting Effect HTTP response logs, so any 200 route through the same
       // handler exercises the intent deterministically without the web UI/network.

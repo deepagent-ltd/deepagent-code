@@ -172,7 +172,7 @@ refreshed from the endpoint at runtime, or list them explicitly under `models`:
 
 ```jsonc
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "myprovider": {
       "name": "My Provider",

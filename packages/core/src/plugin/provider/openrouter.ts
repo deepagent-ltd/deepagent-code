@@ -11,7 +11,7 @@ export const OpenRouterPlugin = PluginV2.define({
           if (item.provider.api.type !== "aisdk") continue
           if (item.provider.api.package !== "@openrouter/ai-sdk-provider") continue
           evt.provider.update(item.provider.id, (provider) => {
-            provider.request.headers["HTTP-Referer"] = "https://deepagent-code.ai/"
+            provider.request.headers["HTTP-Referer"] = "https://ai.deepagent.ltd/"
             provider.request.headers["X-Title"] = "deepagent-code"
           })
           for (const modelID of [ModelV2.ID.make("gpt-5-chat-latest"), ModelV2.ID.make("openai/gpt-5-chat")]) {

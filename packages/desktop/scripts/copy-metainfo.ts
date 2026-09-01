@@ -33,7 +33,7 @@ const xml = `<?xml version="1.0" encoding="UTF-8"?>
   <content_rating type="oars-1.1" />
 
   <url type="bugtracker">https://github.com/lessweb/deepagent-code/issues</url>
-  <url type="homepage">https://deepagent-code.ai</url>
+  <url type="homepage">https://ai.deepagent.ltd</url>
   <url type="vcs-browser">https://github.com/lessweb/deepagent-code</url>
 
   <screenshots>

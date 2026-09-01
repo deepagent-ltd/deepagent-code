@@ -434,7 +434,7 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
         autoload: false,
         options: {
           headers: {
-            "HTTP-Referer": "https://deepagent-code.ai/",
+            "HTTP-Referer": "https://ai.deepagent.ltd/",
             "X-Title": "deepagent-code",
             "X-Source": "deepagent-code",
           },
@@ -445,7 +445,7 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
         autoload: false,
         options: {
           headers: {
-            "HTTP-Referer": "https://deepagent-code.ai/",
+            "HTTP-Referer": "https://ai.deepagent.ltd/",
             "X-Title": "deepagent-code",
           },
         },
@@ -455,7 +455,7 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
         autoload: provider.source === "config",
         options: {
           headers: {
-            "HTTP-Referer": "https://deepagent-code.ai/",
+            "HTTP-Referer": "https://ai.deepagent.ltd/",
             "X-Title": "deepagent-code",
             "X-BILLING-INVOKE-ORIGIN": "DeepAgent Code",
           },
@@ -466,7 +466,7 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
         autoload: false,
         options: {
           headers: {
-            "http-referer": "https://deepagent-code.ai/",
+            "http-referer": "https://ai.deepagent.ltd/",
             "x-title": "deepagent-code",
           },
         },
@@ -569,7 +569,7 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
         autoload: false,
         options: {
           headers: {
-            "HTTP-Referer": "https://deepagent-code.ai/",
+            "HTTP-Referer": "https://ai.deepagent.ltd/",
             "X-Title": "deepagent-code",
           },
         },
@@ -842,7 +842,7 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
         autoload: false,
         options: {
           headers: {
-            "HTTP-Referer": "https://deepagent-code.ai/",
+            "HTTP-Referer": "https://ai.deepagent.ltd/",
             "X-Title": "deepagent-code",
           },
         },

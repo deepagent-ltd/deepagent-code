@@ -2478,7 +2478,7 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
       archivedLabel={() => language.t("session.archived.title")}
       onOpenArchived={openArchivedSessions}
       helpLabel={() => language.t("sidebar.help")}
-      onOpenHelp={() => platform.openLink("https://deepagent-code.ai/desktop-feedback")}
+      onOpenHelp={() => platform.openLink("https://ai.deepagent.ltd/")}
       renderPanel={() =>
         mobile ? <SidebarPanel project={currentProject} mobile /> : <SidebarPanel project={currentProject} merged />
       }

@@ -25,7 +25,7 @@ describe("VercelPlugin", () => {
       })
       expect((yield* catalog.provider.get(ProviderV2.ID.make("vercel"))).request.headers).toEqual({
         Existing: "1",
-        "http-referer": "https://deepagent-code.ai/",
+        "http-referer": "https://ai.deepagent.ltd/",
         "x-title": "deepagent-code",
       })
     }),

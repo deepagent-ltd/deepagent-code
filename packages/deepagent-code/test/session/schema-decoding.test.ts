@@ -242,7 +242,7 @@ describe("SessionStatus.Info", () => {
         title: "Free limit reached",
         message: "Usage is temporarily limited.",
         label: "retry",
-        link: "https://deepagent-code.ai/docs",
+        link: "https://ai.deepagent.ltd/docs",
       },
       next: 500,
     }
