@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url"
 import { app, utilityProcess } from "electron"
 import type { Details } from "electron"
 import { getLogger } from "./logging"
+import { SIDECAR_SPAWN_FAILED, sidecarSpawnFailure } from "./sidecar-routing"
 import { getUserShell, loadShellEnv, shouldLoadShellEnv } from "./shell-env"
 import { getStore } from "./store"
 import { DEFAULT_SERVER_URL_KEY } from "./store-keys"
@@ -76,12 +77,17 @@ export async function spawnLocalServer(
   const sidecar = join(dirname(fileURLToPath(import.meta.url)), "sidecar.js")
   // desktop.sidecar_spawn — start: utility process fork
   const sidecarSpawnT0 = Date.now()
-  const child = utilityProcess.fork(sidecar, [], {
-    cwd: process.cwd(),
-    env: createSidecarEnv(),
-    serviceName: SIDECAR_SERVICE_NAME,
-    stdio: "pipe",
-  })
+  let child: Electron.UtilityProcess
+  try {
+    child = utilityProcess.fork(sidecar, [], {
+      cwd: process.cwd(),
+      env: createSidecarEnv(),
+      serviceName: SIDECAR_SERVICE_NAME,
+      stdio: "pipe",
+    })
+  } catch (error) {
+    throw sidecarSpawnFailure(`Sidecar fork failed: ${serializeError(error).message}`, error)
+  }
   let exited = false
   const exit = defer<number>()
 
@@ -110,7 +116,7 @@ export async function spawnLocalServer(
       if (done) return
       done = true
       cleanup()
-      reject(error)
+      reject(Object.assign(error, { code: SIDECAR_SPAWN_FAILED }))
     }
 
     const refreshTimeout = () => {
