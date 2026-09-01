@@ -20,8 +20,8 @@ const doc = Schema.toJsonSchemaDocument(ConfigV1.Info)
 const output = {
   $schema: "https://json-schema.org/draft/2020-12/schema",
   $id: "https://ai.deepagent.ltd/config.schema.json",
-  $ref: "#/$defs/Config",
-  $defs: doc.definitions,
+  ...doc.schema,
+  ...(Object.keys(doc.definitions).length > 0 ? { $defs: doc.definitions } : {}),
 }
 
 console.log(JSON.stringify(output, null, 2))
