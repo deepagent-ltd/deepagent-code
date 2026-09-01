@@ -70,7 +70,9 @@ describe("runtimeFeatureCompatible consults RuntimeFeatures.enabled per feature 
 describe("runtime-authorized search + tool (the wired successor)", () => {
   test("search returns a registry-authorized capability card", () => {
     const output = runtimeAuthorizedSearch(capabilityCatalog, { query: "project context", intended_action: "context_query" }, "capability_catalog:test")
-    expect(output.cards.map((card) => String(card.id))).toContain("deepagent.context-query")
+    // W3.5 tool-consistency ruling: `deepagent.context-query` is maintenance_only (the
+    // context_query tool is not registered yet), so it is NEVER advertised as executable.
+    expect(output.cards.map((card) => String(card.id))).not.toContain("deepagent.context-query")
     expect(output.catalog_snapshot_id).toBe("capability_catalog:test")
   })
 
@@ -122,7 +124,8 @@ describe("K3 production registry assembly registers capability_search", () => {
         call: { type: "tool-call", id: "call-caps", name: "capability_search", input: { query: "project context", intended_action: "context_query" } },
       })
       expect(output.result.type).toBe("text")
-      expect(String(output.result.value)).toContain("deepagent.context-query")
+      // W3.5: a maintenance-only capability is never in a runtime search result.
+      expect(String(output.result.value)).not.toContain("deepagent.context-query")
     }),
   )
 })

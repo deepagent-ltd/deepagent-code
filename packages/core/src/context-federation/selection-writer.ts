@@ -116,6 +116,22 @@ export type BuildEnvelopeOptions = {
   readonly outcome?: SelectionValidation["outcome"]
   readonly validUntil?: number
   readonly now?: number
+  /**
+   * W3.4 — RUNTIME-only released-knowledge identity (generation/membership/manifest/exact refs).
+   * The frozen contract selection `releasedKnowledge` carries only snapshotId/binding; the durable
+   * row's released-knowledge authority trigger requires the full identity for a `bound` binding, so
+   * the writer attaches it as a runtime-record extra (contract schema stays unchanged).
+   */
+  readonly releasedKnowledgeIdentity?: ReleasedKnowledgeIdentity
+}
+
+/** W3.4 — runtime record side of a bound released-knowledge binding (never part of the contract). */
+export type ReleasedKnowledgeIdentity = {
+  readonly generation: number
+  readonly membershipHash: string
+  readonly manifestHash: string
+  readonly exactRefs: readonly DeepAgentReleasedSnapshot.DocumentRef[]
+  readonly exactRefsFingerprint: string
 }
 
 /**
@@ -124,6 +140,10 @@ export type BuildEnvelopeOptions = {
  * absolute path, no random). Never produces v2-none — graph statuses always come from the four
  * explicit resolver statuses, and an all-denied/degraded result still yields an explicit selection
  * with an identity and an empty `selectedRefs`.
+ *
+ * The returned value may carry the W3 runtime-only `releasedKnowledgeIdentity` extra (see
+ * `BuildEnvelopeOptions`); the contract fields stay unchanged and the extra never enters the
+ * content-addressed identity seed.
  */
 export function buildSelectionEnvelope(
   batch: SelectionCandidateBatch,
@@ -171,7 +191,7 @@ export function buildSelectionEnvelope(
   const artifactBinding: SelectionArtifactBinding = batch.selected.length > 0
     ? { status: "available", ref: `context-selection:${selectionId}` }
     : { status: "degraded_unavailable", inlineAudit: "deterministic_budget_no_selected_refs" }
-  return {
+  const envelopeValue: RuntimeSelectionEnvelope = {
     schemaVersion: seed.schemaVersion,
     selectionMode: seed.selectionMode,
     selectionId,
@@ -204,7 +224,13 @@ export function buildSelectionEnvelope(
     tokenCount: seed.tokenCount,
     artifactBinding,
   }
+  return opts.releasedKnowledgeIdentity === undefined
+    ? envelopeValue
+    : Object.assign(envelopeValue, { releasedKnowledgeIdentity: opts.releasedKnowledgeIdentity })
 }
+
+/** W3.4 — the runtime envelope is the contract envelope plus the writer-only released identity. */
+export type RuntimeSelectionEnvelope = SelectionEnvelope & { readonly releasedKnowledgeIdentity?: ReleasedKnowledgeIdentity }
 
 /**
  * Build the SELECTION successor (design §6.3) after a validation drift. The successor carries a NEW
@@ -638,6 +664,10 @@ function graphRevisions(statuses: Readonly<Record<GraphKind, GraphStatus>>): str
 
 /** Build the `session_context_selection` insert row from a frozen envelope. */
 function rowValues(envelope: SelectionEnvelope, now: number): typeof SessionContextSelectionTable.$inferInsert {
+  // W3.4: a `bound` selection row requires the full released-knowledge identity (the durable
+  // authority trigger); the runtime extra carries it (contract unchanged). Without the identity the
+  // bound columns stay NULL (the pre-W3 writer behavior — only `unavailable` rows were writable).
+  const identity = (envelope as RuntimeSelectionEnvelope).releasedKnowledgeIdentity
   const projectionText = CanonicalJson.stringify({
     mode: "v2",
     refs: envelope.selectedRefs.map((ref) => ({ graph: ref.graph, ref: ref.ref })),
@@ -661,11 +691,12 @@ function rowValues(envelope: SelectionEnvelope, now: number): typeof SessionCont
     next_revalidation_at: envelope.validation.validUntil,
     released_knowledge_binding_state: envelope.releasedKnowledge.binding,
     released_knowledge_snapshot_id: bound ? envelope.releasedKnowledge.snapshotId : null,
-    released_knowledge_generation: null,
-    released_knowledge_membership_hash: null,
-    released_knowledge_manifest_hash: null,
-    released_knowledge_exact_refs: [],
-    released_knowledge_exact_refs_fingerprint: DeepAgentReleasedSnapshot.exactRefsFingerprint([]),
+    released_knowledge_generation: bound && identity ? identity.generation : null,
+    released_knowledge_membership_hash: bound && identity ? identity.membershipHash : null,
+    released_knowledge_manifest_hash: bound && identity ? identity.manifestHash : null,
+    released_knowledge_exact_refs: identity?.exactRefs ?? [],
+    released_knowledge_exact_refs_fingerprint:
+      identity?.exactRefsFingerprint ?? DeepAgentReleasedSnapshot.exactRefsFingerprint([]),
     graph_revisions: graphRevisions(envelope.graphStatuses),
     graph_statuses: JSON.stringify(envelope.graphStatuses),
     selected_refs: JSON.stringify(envelope.selectedRefs),

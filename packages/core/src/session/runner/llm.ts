@@ -40,6 +40,7 @@ import { V2ToolEffect } from "./v2-tool-effect"
 import { createLLMEventPublisher } from "./publish-llm-event"
 import { toLLMMessages } from "./to-llm-message"
 import { SessionRunnerCanonical } from "./canonical-turn"
+import { productionAdaptersEnabled } from "../../context-federation/production-adapters"
 import { V2ProviderTurn } from "./v2-provider-turn"
 import { V2ProviderTurnReceiptTable } from "./v2-provider-turn.sql"
 import { CanonicalJson } from "../../util/canonical-json"
@@ -340,7 +341,7 @@ export const layer = Layer.effect(
         ...toLLMMessages(context, model),
         ...(stepLimitReached ? [Message.assistant(MAX_STEPS_PROMPT)] : []),
       ]
-      const request = LLM.request({
+      let request = LLM.request({
         model,
         providerOptions: { openai: { promptCacheKey } },
         system: requestSystem.map(SystemPart.make),
@@ -370,6 +371,19 @@ export const layer = Layer.effect(
         system: { baseline: system.baseline, revision: system.revision, baselineSeq: system.baselineSeq },
         historyEndMessageId: context.at(-1)?.id,
       })
+      // W3.6 — after the selection is admitted, the selection graph evidence (refs + brief
+      // revision/summary) is appended to the VOLATILE system tail (`deepagentSystem` + the request
+      // system). `system.baseline` is never touched, so the cache prefix stays stable; the evidence
+      // sits after the cache breakpoint and is also recorded in the prepared turn's volatile parts.
+      // Gated by the W3 production flag: an explicit `=false` keeps the pre-W3 request byte-identical
+      // (staged adapters + no evidence tail).
+      const selectionEvidence = productionAdaptersEnabled()
+        ? yield* SessionRunnerCanonical.selectionGraphEvidence(db, selectionAdmission.selectionId)
+        : undefined
+      if (selectionEvidence !== undefined) {
+        deepagentSystem.push(selectionEvidence)
+        request = LLM.updateRequest(request, { system: [...request.system, SystemPart.make(selectionEvidence)] })
+      }
       // An interrupted turn must terminalize the activity it admitted; otherwise the leftover
       // `active` activity blocks every future queued admission on this Session. The per-turn scope
       // closes on interruption too, and settleActivity is idempotent.

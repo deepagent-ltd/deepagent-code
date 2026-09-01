@@ -1,7 +1,7 @@
 export * as EventAdmission from "./event-admission"
 
 import { eq } from "drizzle-orm"
-import { Effect } from "effect"
+import { Cause, Effect } from "effect"
 import type { Database } from "../database/database"
 import {
   decodeEventWorkEnvelope,
@@ -184,6 +184,68 @@ export type AdmitResult =
   | { readonly kind: "disabled" }
 
 /**
+ * W5 receipts honesty — write the receipt row from the EFFECT outcome (design §8.3: "at-least-once
+ * delivery 不等于重复执行副作用"; audit A4-§2.4: receipt-before-effect). `status` on the row is the
+ * honest state of the durable V2 effect:
+ *   - `resolved` — the SessionV2 admission effect COMPLETED (the row is written after the adapter
+ *     returns; it is appended, not pre-claimed).
+ *   - `refused`  — the last attempt was REFUSED (the adapter failed; the effect never completed).
+ *   - `admitted` — legacy pre-W5 rows / the historical "claimed, effect unknown" marker; treated as a
+ *     crash window and re-driven below.
+ *
+ * No row is ever written BEFORE the effect (receipt-before-effect is gone). The idempotency gate for
+ * duplicates is the deterministic message id (SessionV2 dedupes) plus the UNIQUE `event_ref` receipt —
+ * the same envelope re-driven with the same anchor cannot produce a second durable session_input.
+ */
+const rowFor = (row: AdmissionRow): AdmitResult | undefined => {
+  // digest was checked by the caller; resolved is the ONLY exact-retry state (idempotency key fully
+  // matches: same identity + same digest + effect completed).
+  if (row.status === "resolved") return { kind: "exact_retry", row }
+  return undefined
+}
+
+/**
+ * Write the terminal receipt row. The insert is an UPSERT-keyed append on `event_ref`: a fresh admit
+ * inserts `status`; a re-drive of the same identity refreshes a legacy `admitted`/`refused` row to the
+ * new outcome. The caller only upserts when the row was NOT `resolved`, so in the normal flow a
+ * resolved receipt is never overwritten. `admitted_at` stays the FIRST admission time (identity history,
+ * not attempt time).
+ */
+const writeReceipt = (
+  db: DatabaseClient,
+  input: {
+    readonly envelope: EventWorkEnvelope
+    readonly sessionID: string
+    readonly digest: string
+    readonly status: EventAdmissionStatus
+    readonly messageID?: string
+    readonly now: number
+  },
+): Effect.Effect<AdmissionRow> =>
+  Effect.gen(function* () {
+    const row = yield* db
+      .insert(DeepAgentEventAdmissionTable)
+      .values({
+        event_ref: input.envelope.eventRef,
+        session_id: input.sessionID,
+        envelope_digest: input.digest,
+        status: input.status,
+        message_id: input.messageID ?? null,
+        envelope_json: JSON.stringify(encodeEventWorkEnvelope(input.envelope)),
+        admitted_at: input.now,
+        updated_at: input.now,
+      })
+      .onConflictDoUpdate({
+        target: DeepAgentEventAdmissionTable.event_ref,
+        set: { status: input.status, message_id: input.messageID ?? null, updated_at: input.now },
+      })
+      .returning()
+      .get()
+      .pipe(Effect.orDie)
+    return decodeRow(row)
+  })
+
+/**
  * C5-04 — admit a bounded work envelope as durable V2 session work.
  *
  * FAIL-CLOSED (typed refusal):
@@ -192,10 +254,16 @@ export type AdmitResult =
  *   - `envelope_noise`           coordination/operational noise (never admitted, §8.8).
  *   - `envelope_digest_mismatch` re-admitting the SAME identity with a DIFFERENT digest.
  *
- * EXACT RETRY (design §2.3): re-admitting the SAME envelope identity with the SAME digest returns the
- * existing receipt (`exact_retry`) WITHOUT re-calling the session adapter — the durable SessionV2 row
- * (idempotent by message id) is unchanged. A crash after the durable receipt but before the session
- * adapter commits is recovered by re-driving the admission with the SAME message id; SessionV2 dedupes.
+ * EXACT RETRY (design §2.3): re-admitting the SAME envelope identity with the SAME digest whose EFFECT
+ * already completed (`resolved`) returns the existing receipt (`exact_retry`) WITHOUT re-calling the
+ * session adapter — the durable SessionV2 row (idempotent by message id) is unchanged. Any receipt that
+ * is NOT resolved (legacy `admitted` crash window, or a `refused` last attempt) is re-driven: the
+ * adapter is called again with the SAME message id and SessionV2 dedupes, so the effect never runs twice.
+ *
+ * RECEIPT HONESTY (W5): the receipt row is written AFTER the effect completes (design §8.3 /
+ * audit A4-§2.4 — receipt-before-effect could permanently drop work when the adapter failed). On adapter
+ * success the row is `resolved`; on adapter refusal the row is `refused` and the admission fails typed —
+ * the caller nacks; the retry pump re-drives and the same message id dedupes at SessionV2.
  *
  * The model-facing work is the BOUNDED envelope: `envelopePromptText` serializes the envelope (never the
  * raw payload). The actual SessionV2.prompt call is the injected `adapter`; this module never touches
@@ -226,72 +294,56 @@ export function admit(db: DatabaseClient, input: AdmitInput): Effect.Effect<Admi
           `admission for "${envelope.eventRef}" carries envelope digest "${existing.envelopeDigest}" but this admission presents "${digest}"; refusing to bind changed work to the same identity`,
         )
       }
-      // Exact retry: the same envelope was already admitted — no-op, never a second session_input.
-      return { kind: "exact_retry", row: existing }
+      const retry = rowFor(existing)
+      if (retry) return retry
+      // `admitted` (legacy crash window) / `refused` (last attempt was refused): re-drive below with the
+      // SAME message id — the durable effect is idempotent at SessionV2, never duplicated.
     }
 
     const messageID = input.messageID
     const delivery = input.delivery ?? "steer"
     const resume = input.resume ?? true
-    const envelopeJson = JSON.stringify(encodeEventWorkEnvelope(envelope))
 
-    const inserted = yield* db
-      .insert(DeepAgentEventAdmissionTable)
-      .values({
-        event_ref: envelope.eventRef,
-        session_id: input.sessionID,
-        envelope_digest: digest,
-        status: "admitted" as const,
-        message_id: messageID ?? null,
-        envelope_json: envelopeJson,
-        admitted_at: input.now,
-        updated_at: input.now,
+    // EFFECT FIRST (design §8.3 receipt honesty): the SessionV2 admission is the effect; the receipt row
+    // is written from its outcome — never before it. The deterministic message id makes a re-drive a
+    // SessionV2 dedupe (no second session_input), and the UNIQUE event_ref receipt gates duplicates.
+    const outcome = yield* input.adapter
+      .admit({
+        envelope,
+        sessionID: input.sessionID,
+        ...(messageID != null ? { messageID } : {}),
+        delivery,
+        resume,
+        promptText: envelopePromptText(envelope),
       })
-      .onConflictDoNothing({ target: DeepAgentEventAdmissionTable.event_ref })
-      .returning()
-      .get()
-      .pipe(Effect.orDie)
+      .pipe(Effect.exit)
 
-    if (!inserted) {
-      // A racing duplicate landed between the read-check and the insert; return the winner.
-      const winner = yield* admissionFor(db, envelope.eventRef)
-      if (!winner) throw new Error("event admission lost the idempotency race with no surviving row")
-      if (winner.envelopeDigest !== digest) {
-        return yield* refuse(
-          "envelope_digest_mismatch",
-          envelope.eventRef,
-          `admission for "${envelope.eventRef}" was concurrently bound to digest "${winner.envelopeDigest}" but this admission presents "${digest}"`,
-        )
-      }
-      return { kind: "exact_retry", row: winner }
+    if (outcome._tag === "Failure") {
+      const message = (Cause.squash(outcome.cause) as { readonly message?: string } | undefined)?.message ??
+        "session V2 admission refused"
+      // Honest terminal record: the effect never completed → `refused` (never `resolved`).
+      yield* writeReceipt(db, {
+        envelope,
+        sessionID: input.sessionID,
+        digest,
+        status: "refused",
+        ...(messageID != null ? { messageID } : {}),
+        now: input.now,
+      })
+      return yield* Effect.fail(new EventAdmissionError("admit_refused", envelope.eventRef, message))
     }
 
-    const row = decodeRow(inserted)
-
-    // ADMIT as durable V2 work: the model-facing work is the bounded envelope (never the raw payload).
-    // The adapter performs SessionV2.prompt semantics (durable session_input row, then advisory wake).
-    const admitted = yield* input.adapter.admit({
+    // RECEIPT AFTER EFFECT: the durable V2 admission completed → `resolved` (terminal).
+    const resolvedMessageID = outcome.value.messageID ?? messageID
+    const row = yield* writeReceipt(db, {
       envelope,
       sessionID: input.sessionID,
-      ...(messageID != null ? { messageID } : {}),
-      delivery,
-      resume,
-      promptText: envelopePromptText(envelope),
-    }).pipe(
-      Effect.mapError((cause) => new EventAdmissionError("admit_refused", envelope.eventRef, String(cause))),
-    )
-
-    if (admitted.messageID != null && messageID == null) {
-      yield* db
-        .update(DeepAgentEventAdmissionTable)
-        .set({ message_id: admitted.messageID, updated_at: input.now })
-        .where(eq(DeepAgentEventAdmissionTable.event_ref, envelope.eventRef))
-        .run()
-        .pipe(Effect.orDie)
-    }
-
-    const finalRow = yield* admissionFor(db, envelope.eventRef)
-    return { kind: "admitted", row: finalRow ?? row }
+      digest,
+      status: "resolved",
+      ...(resolvedMessageID != null ? { messageID: resolvedMessageID } : {}),
+      now: input.now,
+    })
+    return { kind: "admitted", row }
   })
 }
 

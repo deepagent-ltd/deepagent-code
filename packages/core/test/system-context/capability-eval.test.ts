@@ -29,7 +29,11 @@ const FIXTURE_TASKS: ReadonlyArray<FixtureTask> = [
   { query: "read and trace references in this file", intendedAction: "read", expectedCapability: "deepagent.code-read", expectedTool: "read" },
   { query: "apply an exact change to a file", intendedAction: "edit", expectedCapability: "deepagent.code-edit", expectedTool: "edit" },
   { query: "run the test suite", intendedAction: "bash", expectedCapability: "deepagent.shell-execute", expectedTool: "bash" },
-  { query: "recall project context across graphs", intendedAction: "context_query", expectedCapability: "deepagent.context-query", expectedTool: "context_query" },
+  // W3.5: `deepagent.context-query` is maintenance_only (its entry tool is not registered yet), so
+  // it is NOT part of the discoverable fixture set — a maintenance capability must never be
+  // advertised as executable (the runtime-search suite asserts its exclusion); the generic read
+  // fallback covers a cross-graph recall honestly, and this eval measures discoverable capability
+  // coverage only.
   { query: "follow a documented skill procedure", intendedAction: "skill", expectedCapability: "deepagent.skill-guidance", expectedTool: "skill" },
   { query: "research current info on the web", intendedAction: "websearch", expectedCapability: "deepagent.web-research", expectedTool: "websearch" },
 ]
@@ -154,7 +158,7 @@ describe("C4-11 fixture/synthetic model eval (three configurations, deterministi
     const byConfig = new Map(results.map((r) => [r.config, r]))
     expect(byConfig.get("l0-on-demand")!.successRate).toBe(1)
     expect(byConfig.get("no-catalog")!.successRate).toBeLessThan(1)
-    // Discovery matters: the capability-specific tasks (context_query / skill) are undiscoverable without a catalog.
+    // Discovery matters: the capability-specific task (skill) is undiscoverable without a catalog.
     expect(byConfig.get("no-catalog")!.toolChoiceErrors).toBeGreaterThan(byConfig.get("l0-on-demand")!.toolChoiceErrors)
   })
 
