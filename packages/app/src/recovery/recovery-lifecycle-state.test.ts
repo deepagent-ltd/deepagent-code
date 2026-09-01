@@ -137,14 +137,31 @@ describe("recovery lifecycle (session.execution.* track)", () => {
     expect(state.lastExecution?.ref.commandId).toBe("execution:1")
   })
 
-  test("terminal events without a start are tolerated (stream gap: no state is fabricated)", () => {
+  test("terminal events without a start synthesize the missed slot (outcome is never dropped)", () => {
+    // W9.5 — the page mounted after `started` (or the started was lost to a gap): the terminal
+    // event still records the outcome, with a synthetic slot closed in the same step. No fake
+    // "running" state is left behind.
     const lc = createRecoveryLifecycle()
     lc.onEvent({ type: "execution-succeeded", sessionID: "ses-gap", timestamp: 5 })
-    lc.onEvent({ type: "execution-failed", sessionID: "ses-gap", timestamp: 6, error: new Error("x") })
-    lc.onEvent({ type: "execution-interrupted", sessionID: "ses-gap", timestamp: 7, reason: "shutdown" })
-    const state = lc.snapshot().sessions.get("ses-gap")!
+    let state = lc.snapshot().sessions.get("ses-gap")!
     expect(state.execution).toBeUndefined()
-    expect(state.lastExecution).toBeUndefined()
+    expect(state.lastExecution).toEqual({
+      ref: { commandId: "execution:1", attemptId: "ses-gap:execution:1" },
+      state: "succeeded",
+      at: 5,
+      number: 1,
+    })
+
+    lc.onEvent({ type: "execution-failed", sessionID: "ses-gap", timestamp: 6, error: new Error("x") })
+    state = lc.snapshot().sessions.get("ses-gap")!
+    expect(state.lastExecution?.state).toBe("failed")
+    expect(state.lastExecution?.number).toBe(2)
+
+    lc.onEvent({ type: "execution-interrupted", sessionID: "ses-gap", timestamp: 7, reason: "shutdown" })
+    state = lc.snapshot().sessions.get("ses-gap")!
+    expect(state.execution).toBeUndefined()
+    expect(state.lastExecution?.state).toBe("interrupted")
+    expect(state.lastExecution?.number).toBe(3)
   })
 
   test("quit discards a running execution slot (no zombie), command notices unchanged", () => {

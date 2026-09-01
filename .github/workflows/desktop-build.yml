@@ -160,7 +160,10 @@ jobs:
         working-directory: packages/desktop
         shell: pwsh
         run: |
-          $exe = Get-ChildItem -Path "dist/win-unpacked" -Filter "DeepAgent Code.exe" -Recurse -File | Select-Object -First 1
+          # Wildcard matches both prod ("DeepAgent Code.exe") and beta
+          # ("DeepAgent Code Beta.exe") artifact names so the beta build
+          # cannot silently fail this smoke because of an exact name filter.
+          $exe = Get-ChildItem -Path "dist/win-unpacked" -Filter "*DeepAgent Code*.exe" -Recurse -File | Select-Object -First 1
           if (-not $exe) {
             Write-Error "Packaged executable not found under dist/win-unpacked"
             exit 1

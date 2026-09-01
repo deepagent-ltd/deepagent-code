@@ -145,7 +145,9 @@ export function CapabilitiesView(props: CapabilityPanelViewProps) {
 export const SettingsCapabilitiesV2: Component = () => {
   const language = useLanguage()
   const serverSdk = useServerSDK()
-  const t = (key: string) => language.t(key as never)
+  // W9.5: pass params through so `{{digest}}`/`{{count}}` templates resolve to real values
+  // instead of rendering the literal placeholders.
+  const t = (key: string, params?: Record<string, string | number | boolean>) => language.t(key as never, params)
 
   const [catalog, { refetch: refetchCatalog }] = createResource(
     () => serverSdk.client as unknown as CapabilityCatalogClient,

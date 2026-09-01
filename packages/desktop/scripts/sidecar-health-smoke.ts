@@ -4,11 +4,11 @@
 // main process to deliver sidecar credentials, then hits GET /global/health with
 // Basic auth and asserts 200 + `healthy: true`. Wired into the desktop-build
 // Windows job after packaging.
-import { strict as assert } from "node:assert"
-import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises"
+import assert from "node:assert/strict"
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import { _electron as electron, type ElectronApplication, type Page } from "@playwright/test"
+import { _electron, type ElectronApplication, type Page } from "@playwright/test"
 
 const root = await realpath(await mkdtemp(join(tmpdir(), "deepagent-code-sidecar-health-")))
 // Fixed port so CI logs/asserts are deterministic (defaults to the port the
@@ -36,16 +36,74 @@ await Promise.all(
   ),
 )
 
+// The renderer's awaitInitialization hangs forever when the main process never
+// delivers sidecar credentials (e.g. a dead sidecar URL), and page.evaluate has
+// no default timeout — so a global watchdog covers it. On expiry the watchdog
+// prints the app's main.log tail (where sidecar spawn/health diagnostics land)
+// and exits 1 instead of leaving CI hanging until the job limit. The budget must
+// exceed the worst-case legal startup: local health (15s) + WSL fallback (120s).
+const WATCHDOG_TIMEOUT_MS = 180_000
+
 type Server = { url: string; username: string | null; password: string | null }
 const readServer = (page: Page) =>
-  page.evaluate(
-    () => (window as unknown as { api: { awaitInitialization(): Promise<Server> } }).api.awaitInitialization(),
+  withWatchdog(
+    page.evaluate(
+      () => (window as unknown as { api: { awaitInitialization(): Promise<Server> } }).api.awaitInitialization(),
+    ),
   )
+
+function withWatchdog<T>(probe: Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const watchdog = setTimeout(() => {
+      // No reject here: the finally block would delete the log root before the
+      // tail is read. The watchdog itself prints and exits with 1.
+      void mainLogTail()
+        .catch(() => null)
+        .then((tail) => {
+          if (tail) console.error(`\nmain.log tail:\n${tail}\n`)
+          console.error(`renderer awaitInitialization timed out after ${WATCHDOG_TIMEOUT_MS}ms`)
+          process.exit(1)
+        })
+    }, WATCHDOG_TIMEOUT_MS)
+    probe.then(
+      (value) => {
+        clearTimeout(watchdog)
+        resolve(value)
+      },
+      (error) => {
+        clearTimeout(watchdog)
+        reject(error)
+      },
+    )
+  })
+}
+
+async function mainLogTail(): Promise<string | null> {
+  const candidates: { path: string; mtime: number }[] = []
+  const collect = async (directory: string) => {
+    const entries = await readdir(directory, { withFileTypes: true }).catch(() => [])
+    for (const entry of entries) {
+      const full = join(directory, entry.name)
+      if (entry.isDirectory()) {
+        await collect(full)
+        continue
+      }
+      if (entry.name !== "main.log") continue
+      const info = await stat(full)
+      candidates.push({ path: full, mtime: info.mtimeMs })
+    }
+  }
+  await collect(root)
+  const newest = candidates.sort((a, b) => b.mtime - a.mtime)[0]
+  if (!newest) return null
+  const contents = await readFile(newest.path, "utf8")
+  return contents.split("\n").slice(-100).join("\n")
+}
 
 let activeApp: ElectronApplication | undefined
 try {
   const started = performance.now()
-  const app = await electron.launch({
+  const app = await _electron.launch({
     args: packagedExecutable ? [] : [main],
     ...(packagedExecutable ? { executablePath: packagedExecutable } : {}),
     env,

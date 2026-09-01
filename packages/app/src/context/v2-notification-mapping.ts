@@ -6,6 +6,12 @@
 //
 // V2 has no session.idle: a settled execution (succeeded / interrupted) is the durable idle
 // signal; session.execution.failed carries the structured error payload.
+//
+// Journal row types are VERSIONED (`EventTable.type` = `session.execution.succeeded.1`): the
+// suffix is stripped here (`eventBaseType`) so the same vocabulary matches both the SSE mirror
+// (unversioned definition type) and the durable drain surface.
+
+import { eventBaseType } from "@/utils/event-type"
 
 export type NotificationEvent = {
   readonly type: "session.idle" | "session.error"
@@ -15,9 +21,10 @@ export type NotificationEvent = {
 
 export const toNotificationEvent = (type: string, data: Record<string, unknown>): NotificationEvent | undefined => {
   const sessionID = typeof data.sessionID === "string" ? data.sessionID : undefined
-  if (type === "session.execution.succeeded" || type === "session.execution.interrupted")
+  const baseType = eventBaseType(type)
+  if (baseType === "session.execution.succeeded" || baseType === "session.execution.interrupted")
     return { type: "session.idle", sessionID }
-  if (type === "session.execution.failed") {
+  if (baseType === "session.execution.failed") {
     const error = data.error as { readonly message?: unknown } | undefined
     const message =
       typeof error?.message === "string" && error.message.length > 0 ? error.message : "Session execution failed"

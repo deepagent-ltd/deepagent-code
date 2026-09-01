@@ -15,16 +15,24 @@ import {
   type DockState,
   type Exit,
 } from "./recovery-dock-state"
+import { executionStatusOf, type ExecutionStatusView } from "./recovery-lifecycle-state"
+import { useSessionLifecycle } from "./session-lifecycle"
 
 // C6-06 recovery dock (design §11.3 §9.1-9.2). It drives the pure `reduceDock`
 // state machine: lists ALL pending descriptors, runs commands SERIAL per session
 // (one in-flight, queue shown), passes network-unknown descriptors through a
 // "核对中" (verifying) query-first path, and never shows a permanent disabled
 // dead-end (a blocked descriptor renders a typed reason + coordination path).
+//
+// W9.5 — the dock also observes the per-session execution track wired through
+// `useSessionLifecycle()` (the durable journal pump): the current session's open
+// turn or last terminal outcome surfaces as one compact status line. It renders
+// ONLY when real execution data exists, so a quiet session has zero pixel surface.
 
 export function RecoveryDock(props: { sessionId: string; client: MaintenanceClient; onPendingChange?: (pending: boolean) => void }) {
   const [state, setState] = createSignal<DockState>(initialDockState)
   const dispatch = (action: DockAction) => setState((prev) => reduceDock(prev, action))
+  const lifecycle = useSessionLifecycle()
 
   const load = async () => {
     dispatch({ type: "descriptorsLoaded", descriptors: [] })
@@ -81,12 +89,21 @@ export function RecoveryDock(props: { sessionId: string; client: MaintenanceClie
   }
 
   const pending = () => pendingItems(state())
+  const executionStatus = () => {
+    const sessionState = lifecycle?.snapshot().sessions.get(props.sessionId)
+    return sessionState ? executionStatusOf(sessionState) : undefined
+  }
   const show = () =>
-    pending().length > 0 || state().loadStatus === "error" || queueActive(state()) || state().export.status === "error" || state().export.status === "done"
+    pending().length > 0 || executionStatus() !== undefined || state().loadStatus === "error" || queueActive(state()) || state().export.status === "error" || state().export.status === "done"
 
   return (
     <Show when={show()}>
       <div class="mb-2 flex flex-col gap-2">
+      <Show when={executionStatus() !== undefined}>
+        <div class="rounded-md border border-border-weak-base bg-surface-raised-base px-3 py-2 text-12-regular text-text-weak">
+          {executionLabel(executionStatus()!)}
+        </div>
+      </Show>
       <Show when={state().loadStatus === "error"}>
         <div class="rounded-md border border-border-critical-base bg-surface-raised-base px-3 py-2.5 text-12-regular text-text-critical">
           Recovery list failed ({state().loadError})
@@ -222,4 +239,10 @@ function hasEvidencePermission(state: DockState): boolean {
 function requiresCoordination(item: DockItem): boolean {
   const reason = blockedReason(item)
   return reason !== undefined && reason.coordination.evidenceExportRef !== undefined
+}
+
+/** One compact line for the per-session execution track (matches the dock's existing literal style). */
+function executionLabel(status: ExecutionStatusView): string {
+  if (status.kind === "running") return `Agent execution running… (turn ${status.number})`
+  return `Last agent execution: ${status.state} (turn ${status.number})`
 }
