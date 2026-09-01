@@ -30,7 +30,12 @@ import { migrations } from "../src/database/migration.gen"
 // provider transition guard and the parity receipt authority guard for the
 // identity-folded canonical prepared_turn_hash, so the ordered registry digest
 // moved again.
-const PINNED_DIGEST = "c758ec9353461ba370cc740640f33b786e9db6c99d1363f6a29869be1bb5227f"
+// Successor pin (W5.1, 2026-09-10): the event-admission refusal-reason
+// migration (20260910000000_event_admission_refusal_reason) joined the
+// registry (event admission no longer refuses with a coarse static reason but
+// persists the per-admission refusal reason), so the ordered registry digest
+// moved again. Explicit re-pin of the W5.1 trigger.
+const PINNED_DIGEST = "d48c150fb5e30ae8a9e7b9e1f3bd6996571abb96186dee382552146d0fcb4965"
 
 const digest = (entries: readonly { readonly id: string; readonly hash: string }[]) =>
   createHash("sha256").update(JSON.stringify(entries)).digest("hex")
