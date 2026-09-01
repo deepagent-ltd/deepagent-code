@@ -1,6 +1,6 @@
 export * as CapabilityLoadTool from "./capability-load-tool"
 
-import { eq } from "drizzle-orm"
+import { desc, eq } from "drizzle-orm"
 import { Effect, Layer, Schema } from "effect"
 import { ToolFailure } from "@deepagent-code/llm"
 import { Tool } from "../tool/tool"
@@ -50,6 +50,23 @@ export const CapabilityLoadToolOutput = Schema.Struct({
 })
 export type CapabilityLoadToolOutput = typeof CapabilityLoadToolOutput.Type
 
+/**
+ * The model-facing input surface: the frozen contract `CapabilityLoadRequest`
+ * extended with an OPTIONAL `catalogSnapshotId`. W4.1 P0-2: the runtime snapshot id
+ * never reaches the model-visible text (L0 render, L1 search cards and the load
+ * text all omit it), so requiring the id made every production `capability_load`
+ * settle as the typed `catalog_snapshot_mismatch`. The runtime is authoritative:
+ * an omitted id binds the runtime snapshot (the receipt snapshot field and the
+ * context epoch = the runtime id); an explicitly provided id is still strictly
+ * checked against the runtime snapshot — a stale pin settles as the typed
+ * mismatch (fail-closed, never silently re-targeted).
+ */
+export const CapabilityLoadToolInput = Schema.Struct({
+  ...CapabilityLoadRequest.fields,
+  catalogSnapshotId: Schema.String.pipe(Schema.optional),
+})
+export type CapabilityLoadToolInput = typeof CapabilityLoadToolInput.Type
+
 /** Tool construction options (defaults are the production wiring). */
 export interface CapabilityLoadToolOptions {
   readonly db: Database.Interface["db"]
@@ -59,11 +76,19 @@ export interface CapabilityLoadToolOptions {
 }
 
 /**
- * The default turn-identity seam: the session's latest `session_v2_provider_turn_receipt`
- * row IS the turn the model is executing in (the receipt is committed BEFORE the provider
- * dispatch, so an in-turn tool settle sees it). The fallback (no provider turn: the tool
- * invoked outside a runner turn) keeps the identity deterministic but non-prestigious —
- * the durable rows are session-scoped regardless, and a real turn re-derives the true one.
+ * The default turn-identity seam. CONTRACT (W4.1 P0-1): it resolves the session's
+ * LATEST `session_v2_provider_turn_receipt` row (created_at desc, request_ordinal
+ * desc as the deterministic tiebreak — a session accrues one row per dispatched
+ * turn) — the receipt is committed BEFORE the provider dispatch, so an in-turn
+ * tool settle sees the row of the turn the model is executing in. Taking the
+ * EARLIEST row (the pre-fix ASC order) mis-bound the audit identity to turn 1 and
+ * leaked the per-turn L2 budget across turns (turn1 loaded 2 bodies → turn2+
+ * settled every load as budget_exceeded). The fallback (no provider turn: the tool
+ * invoked outside a runner turn) keeps the identity deterministic but
+ * non-prestigious — the durable rows are session-scoped regardless, and a real
+ * turn re-derives the true one. This seam is the production default (used when
+ * `turnIdentity` is not injected) and is exercised through
+ * `packages/core/test/system-context/capability-l2-production.test.ts`.
  */
 export const makeDefaultCapabilityLoadTurnIdentity = (
   db: Database.Interface["db"],
@@ -73,7 +98,7 @@ export const makeDefaultCapabilityLoadTurnIdentity = (
       .select()
       .from(V2ProviderTurnReceiptTable)
       .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID))
-      .orderBy(V2ProviderTurnReceiptTable.created_at, V2ProviderTurnReceiptTable.request_ordinal)
+      .orderBy(desc(V2ProviderTurnReceiptTable.created_at), desc(V2ProviderTurnReceiptTable.request_ordinal))
       .limit(1)
       .get()
       .pipe(Effect.orDie)
@@ -96,13 +121,19 @@ export function makeCapabilityLoadTool(options: CapabilityLoadToolOptions): Tool
     Tool.make({
       description:
         "Load the L2 procedure body of a DeepAgentCode capability (by capability id, from the current catalog snapshot) and receive its summary + a bounded body preview. Use after capability_search found a card for the intended action. Never used to load a path, URL or arbitrary content.",
-      input: CapabilityLoadRequest,
+      input: CapabilityLoadToolInput,
       output: CapabilityLoadToolOutput,
       execute: (input, context) => {
         return Effect.gen(function* () {
           const manifest = catalog.find((entry) => entry.id === input.capabilityId)
           if (!manifest) return notFound("capability_unregistered")
-          if (input.catalogSnapshotId !== snapshotId) return notFound("catalog_snapshot_mismatch")
+          // W4.1 P0-2: server-authoritative snapshot id — the model cannot know the
+          // runtime snapshot id (it is never rendered into a model-visible surface),
+          // so an omitted input binds the RUNTIME snapshot for execution, the receipt
+          // snapshot field and the context epoch. An explicit id is still validated
+          // strictly: a stale pin settles as the typed mismatch, never re-targeted.
+          const resolvedSnapshotId = input.catalogSnapshotId ?? snapshotId
+          if (resolvedSnapshotId !== snapshotId) return notFound("catalog_snapshot_mismatch")
           if (manifest.availability !== "stable") return disabledReason(disabledReasonOf(manifest.availability))
           if (!runtimeFeaturesEnabled(manifest)) return disabledReason("incompatible_runtime")
           const identity = yield* turnIdentity(context.sessionID)
@@ -116,12 +147,12 @@ export function makeCapabilityLoadTool(options: CapabilityLoadToolOptions): Tool
             bodyRef: manifest.body_ref,
             body: entry?.body,
             declaredDigest: entry?.body_hash,
-            catalogSnapshotId: input.catalogSnapshotId,
+            catalogSnapshotId: resolvedSnapshotId,
             requiredPermissions: manifest.required_permissions,
             grantedPermissions: manifest.required_permissions,
             requiredRuntimeFeatures: manifest.required_runtime_features,
           }
-          const out = yield* sessionCapabilityLoad(db, { request, identity, contextEpoch: input.catalogSnapshotId })
+          const out = yield* sessionCapabilityLoad(db, { request, identity, contextEpoch: resolvedSnapshotId })
           return renderLoadOutput(out.state, out.body, out.receipt)
         }).pipe(Effect.mapError((error) => new ToolFailure({ message: messageOf(error) })))
       },
@@ -144,7 +175,7 @@ export function makeDomainPackLoadTool(options: CapabilityLoadToolOptions): Tool
     Tool.make({
       description:
         "Load an active domain pack's L2 procedure body. Domain packs are not active in this build; the tool reports the typed not_found(domain_pack_not_active) state.",
-      input: CapabilityLoadRequest,
+      input: CapabilityLoadToolInput,
       output: CapabilityLoadToolOutput,
       execute: (input, context) => {
         return Effect.gen(function* () {

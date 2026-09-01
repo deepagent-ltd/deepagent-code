@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeAll, afterAll } from "bun:test"
-import { Effect, Exit } from "effect"
+import { Deferred, Effect, Exit, Fiber, Scope } from "effect"
 import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -51,7 +51,7 @@ const build = (event = verifiedCommand(registry), reg = commandReg): WorkEnvelop
 
 const SESSION = "ses_admission_test"
 
-function run<A, E>(effect: Effect.Effect<A, E, Database.Service>): Promise<A> {
+function run<A, E>(effect: Effect.Effect<A, E, Database.Service | Scope.Scope>): Promise<A> {
   return Effect.runPromise(
     Effect.gen(function* () {
       const db = (yield* Database.Service).db
@@ -431,6 +431,197 @@ describe("W5 receipt honesty — effect-first receipt with terminal states", () 
         )
         expect(err?.reason).toBe("envelope_digest_mismatch")
         expect(calls).toEqual(["anchor-4"])
+      }),
+    )
+  })
+
+  // ── W5 F2 — a re-drive anchors at the row's STORED message id ──────────────────────────────────────
+  test("W5 F2: re-driving a legacy `admitted` row (with a stored message id) uses the STORED anchor, not the caller's", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = (yield* Database.Service).db
+        const calls: Array<string | undefined> = []
+        const envelope = build()
+        yield* db
+          .insert(DeepAgentEventAdmissionTable)
+          .values({
+            event_ref: envelope.eventRef,
+            session_id: SESSION,
+            envelope_digest: eventWorkEnvelopeDigest(envelope),
+            status: "admitted" as const,
+            message_id: "anchor-legacy",
+            envelope_json: JSON.stringify(encodeEventWorkEnvelope(envelope)),
+            admitted_at: 5,
+            updated_at: 5,
+          })
+          .run()
+        // The caller passes a DIFFERENT lane's anchor (e.g. the spool's `spool:<ref>:<session>`): the
+        // re-drive must keep the row's stored message id so SessionV2 reconcile-dedupes the FIRST input.
+        const recovered = yield* EventAdmission.admit(db, {
+          envelope,
+          sessionID: SESSION,
+          messageID: "spool:event://x:ses_y",
+          adapter: anchoredRecorder(calls, "msg_recovered"),
+          now: 20,
+        })
+        expect(recovered.kind).toBe("admitted")
+        // The adapter was re-driven with the ROW's stored anchor — not the caller's spool anchor.
+        expect(calls).toEqual(["anchor-legacy"])
+        const row = yield* EventAdmission.admissionFor(db, envelope.eventRef)
+        expect(row?.status).toBe("resolved")
+      }),
+    )
+  })
+
+  // ── W5 F3 — strategic (pre-adapter) refusals are ALSO `refused` receipt rows ───────────────────────
+  test("W5 F3: a NOISE refusal writes a `refused` row with the reason before the adapter is consulted", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = (yield* Database.Service).db
+        const noise = { ...build(), eventType: "agent.task.started" }
+        const err = yield* refusalOf(
+          EventAdmission.admit(db, { envelope: noise, sessionID: SESSION, adapter: recorder([]), now: 10 }),
+        )
+        expect(err?.reason).toBe("envelope_noise")
+        const row = yield* EventAdmission.admissionFor(db, noise.eventRef)
+        expect(row).toBeDefined()
+        if (!row) return
+        expect(row.status).toBe("refused")
+        expect(row.reason).toBe("envelope_noise")
+      }),
+    )
+  })
+
+  test("W5 F3: a DISABLED refusal writes a `refused` row with the reason", async () => {
+    process.env[EventAdmission.EVENT_V2_ADMISSION_ENV] = "false"
+    try {
+      await run(
+        Effect.gen(function* () {
+          const db = (yield* Database.Service).db
+          const envelope = build()
+          const err = yield* refusalOf(
+            EventAdmission.admit(db, { envelope, sessionID: SESSION, adapter: recorder([]), now: 10 }),
+          )
+          expect(err?.reason).toBe("admission_disabled")
+          const row = yield* EventAdmission.admissionFor(db, envelope.eventRef)
+          expect(row?.status).toBe("refused")
+          expect(row?.reason).toBe("admission_disabled")
+        }),
+      )
+    } finally {
+      process.env[EventAdmission.EVENT_V2_ADMISSION_ENV] = "true"
+    }
+  })
+
+  test("W5 F3: a DIGEST-MISMATCH refusal (over a NOT-resolved receipt) writes a `refused` row keeping the original digest + anchor", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = (yield* Database.Service).db
+        const first = build()
+        // First attempt: the effect refused → the receipt is `refused` (NOT resolved).
+        const firstOutcome = yield* refusalOf(
+          EventAdmission.admit(db, {
+            envelope: first,
+            sessionID: SESSION,
+            messageID: "anchor-first",
+            adapter: brokeAdapter("first attempt refused"),
+            now: 10,
+          }),
+        )
+        expect(firstOutcome?.reason).toBe("admit_refused")
+        const changed = build(
+          verifiedCommand(registry, { payload: { contentType: "application/json", ref: "ctx://p/1", payloadHash: "1".repeat(64) } }),
+        )
+        const err = yield* refusalOf(
+          EventAdmission.admit(db, { envelope: changed, sessionID: SESSION, adapter: recorder([]), now: 20 }),
+        )
+        expect(err?.reason).toBe("envelope_digest_mismatch")
+        const row = yield* EventAdmission.admissionFor(db, changed.eventRef)
+        expect(row?.status).toBe("refused")
+        expect(row?.reason).toBe("envelope_digest_mismatch")
+        // The receipt keeps the ORIGINAL identity digest + stored anchor: a retry must present the
+        // original work to be re-admitted; the record never binds the changed work to the identity.
+        expect(row?.envelopeDigest).toBe(eventWorkEnvelopeDigest(first))
+        expect(row?.messageID).toBe("anchor-first")
+      }),
+    )
+  })
+
+  test("W5 F3: an INVALID-envelope refusal is typed — the row only exists when the envelope is durably recordable", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = (yield* Database.Service).db
+        // Excess property → the frozen-contract decode rejects it (invalid_envelope); the refusal is
+        // typed. The row is NOT written for an unrepresentable envelope (its json could not round-trip
+        // without poisoning every later read of the identity) — recordable refusals do persist (noise /
+        // mismatch / disabled cover the others).
+        const invalid = { ...build(), extra: "not-schema" } as EventAdmission.AdmitInput["envelope"]
+        const err = yield* refusalOf(
+          EventAdmission.admit(db, { envelope: invalid, sessionID: SESSION, adapter: recorder([]), now: 10 }),
+        )
+        expect(err?.reason).toBe("invalid_envelope")
+        const row = yield* EventAdmission.admissionFor(db, invalid.eventRef)
+        expect(row).toBeUndefined()
+      }),
+    )
+  })
+
+  // ── W5 F6 — the receipt upsert is CAS-fenced: no write can overwrite a `resolved` row ──────────────
+  test("W5 F6: a concurrent refusal racing a resolve cannot overwrite the `resolved` receipt", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = (yield* Database.Service).db
+        const envelope = build()
+        const aStarted = yield* Deferred.make<void>()
+        const bStarted = yield* Deferred.make<void>()
+        const releaseA = yield* Deferred.make<void>()
+        const aFinished = yield* Deferred.make<void>()
+        // A: the resolving writer — passes the read gate, waits for the release, then resolves.
+        const adapterA: EventAdmission.SessionWorkAdapter = {
+          admit: () =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(aStarted, void 0)
+              yield* Deferred.await(releaseA)
+              yield* Deferred.succeed(aFinished, void 0)
+              return { messageID: "msg_a" }
+            }),
+        }
+        // B: the refusing writer — passes the read gate while A is still in-flight (both see NO row),
+        // then fails AFTER A resolved: its refused write is CAS-blocked and the honest `resolved` wins.
+        const adapterB: EventAdmission.SessionWorkAdapter = {
+          admit: () =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(bStarted, void 0)
+              yield* Deferred.await(aFinished)
+              return yield* Effect.fail(new Error("late refusal"))
+            }),
+        }
+        const aFiber = yield* EventAdmission.admit(db, {
+          envelope,
+          sessionID: SESSION,
+          messageID: "anchor-a",
+          adapter: adapterA,
+          now: 10,
+        }).pipe(Effect.forkScoped)
+        const bFiber = yield* EventAdmission.admit(db, {
+          envelope,
+          sessionID: SESSION,
+          messageID: "anchor-b",
+          adapter: adapterB,
+          now: 10,
+        }).pipe(Effect.forkScoped)
+        yield* Deferred.await(aStarted)
+        yield* Deferred.await(bStarted)
+        yield* Deferred.succeed(releaseA, void 0)
+        const exitA = yield* Fiber.await(aFiber)
+        const exitB = yield* Fiber.await(bFiber)
+        expect(Exit.isSuccess(exitA)).toBe(true)
+        expect(Exit.isFailure(exitB)).toBe(true)
+        // The honest effect-completed record wins: B's refusal did not overwrite it.
+        const row = yield* EventAdmission.admissionFor(db, envelope.eventRef)
+        expect(row?.status).toBe("resolved")
+        expect(row?.messageID).toBe("msg_a")
+        expect((yield* EventAdmission.forSession(db, SESSION)).length).toBe(1)
       }),
     )
   })

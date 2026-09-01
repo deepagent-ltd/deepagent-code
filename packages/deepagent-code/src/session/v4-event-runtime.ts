@@ -1026,6 +1026,14 @@ export const SPOOL_DRAIN_LEASE_MS = 120_000
 export const spoolAdmissionAnchor = (eventRef: string, sessionID: string): string =>
   `spool:${eventRef}:${sessionID}`
 
+// W5 F4 ③ — nack retry backoff. Exponential with a floor of 5s and a cap of 5min, keyed by the ATTEMPT
+// count (1st nack → 5s, 2nd → 10s, 3rd → 20s … past the 5-min cap). Kept small (fixed helper, one
+// min/max): bounded retries must not hammer the spool while still recovering quickly for transient faults.
+export const SPOOL_NACK_BACKOFF_BASE_MS = 5_000
+export const SPOOL_NACK_BACKOFF_CAP_MS = 5 * 60_000
+export const spoolNackBackoffMs = (attempt: number): number =>
+  Math.min(SPOOL_NACK_BACKOFF_CAP_MS, SPOOL_NACK_BACKOFF_BASE_MS * 2 ** Math.max(0, attempt - 1))
+
 /** §C derivation for the spool adapter's get-or-create (a non-"wrk" workspaceID doubles as the directory). */
 export const spoolLocationFor = (workspaceId: string | undefined): Location.Ref | undefined =>
   workspaceId && !workspaceId.startsWith("wrk")
@@ -1042,11 +1050,20 @@ export const CONSUMER_FAILURE_KIND = "event_consumer_failure"
 /**
  * ONE spool drain pass: claim a due batch (priority order, bounded per-session concurrency), admit each
  * bounded envelope as durable V2 session work, commit on success and nack on failure (bounded retry →
- * `dead` = the DLQ). Every failure writes an `event_consumer_failure` receipt + log. Exported for direct
- * testing; the daemon repeats it on a cadence.
+ * `dead` = the DLQ). Exported for direct testing; the daemon repeats it on a cadence.
  *
  * INERT when the V2 admission switch is OFF or no SessionV2 stack is present — the drain must not
  * dead-letter live high/critical work by refusing it because the admission lane is not live.
+ *
+ * W5 honesty (receipts + interruption):
+ *   - a strategic refusal (noise / invalid envelope / digest mismatch / disabled) is recorded as a
+ *     `refused` admission receipt by `EventAdmission.admit` itself — the drain sees the typed refusal
+ *     and NACKs (bounded retry); the receipt row IS the durable record of the refusal.
+ *   - the `event_consumer_failure` receipt is written ONLY when the nack dead-letters the spool row
+ *     (the DLQ terminal state) — intermediate retries stay visible via the spool row's own
+ *     `attempts`/`last_error`; on eventual success a pending failure receipt is CLEARED (F4 ②).
+ *   - an INTERRUPTION (daemon dispose) is not a consumption failure: the row stays claimed and the
+ *     lease expiry revives it — no spurious nack, no attempt inflation, no receipt.
  */
 export const spoolDrainPass = (input: {
   readonly db: Database.Interface["db"]
@@ -1065,13 +1082,22 @@ export const spoolDrainPass = (input: {
     })
     for (const row of claimed.rows) {
       const workspaceId = row.envelope.actorAndScope.workspaceId
+      // W5 F2 — a re-drive anchors the admission at the row's STORED message id (when the receipt was
+      // previously written by any lane) so SessionV2 reconcile-dedupes against the FIRST admission;
+      // the deterministic spool anchor is only the first-attempt fallback.
+      const priorAdmission = yield* EventAdmission.admissionFor(input.db, row.eventRef)
+      const anchor = priorAdmission?.messageID ?? spoolAdmissionAnchor(row.eventRef, row.sessionID)
       const outcome = yield* EventAdmission.admit(input.db, {
         envelope: row.envelope,
         sessionID: row.sessionID,
-        messageID: spoolAdmissionAnchor(row.eventRef, row.sessionID),
+        messageID: anchor,
         adapter: makeSessionV2Adapter(v2Session, spoolLocationFor, workspaceId),
         now: at,
       }).pipe(Effect.exit)
+      // An INTERRUPTION is not a failure: re-raise it and leave the claimed row for lease revival.
+      if (outcome._tag === "Failure" && Cause.hasInterrupts(outcome.cause)) {
+        return yield* Effect.interrupt
+      }
       if (outcome._tag === "Success") {
         // Admitted (or exact-retry re-admitted — the receipt row idempotency key made it a no-op).
         yield* EventSpool.commitResult(input.db, {
@@ -1079,39 +1105,57 @@ export const spoolDrainPass = (input: {
           claimToken: claimed.claimToken,
           now: at,
         }).pipe(Effect.orDie)
+        // W5 F4 ② — the consumption succeeded: a stale PENDING failure receipt is no longer true.
+        yield* ConsumerReceipts.clearPending(input.db, CONSUMER_FAILURE_KIND, row.eventRef).pipe(
+          Effect.catchCause(() => Effect.void),
+        )
       } else {
         const reason =
           (Cause.squash(outcome.cause) as { readonly message?: string } | undefined)?.message ??
           "spool consumption failed"
+        // W5 F4 ③ — exponential nack backoff (bounded retries do not hammer the spool).
+        const backoffMs = spoolNackBackoffMs(row.attempts + 1)
         yield* EventSpool.nack(input.db, {
           eventRef: row.eventRef,
           claimToken: claimed.claimToken,
           now: at,
           reason,
+          backoffMs,
         }).pipe(Effect.orDie)
-        // DLQ visibility: durable `event_consumer_failure` receipt (the pending row carries the failure
-        // reason + attempt count; per-eventRef idempotent) + log. Best-effort — never perturbs the nack.
-        yield* ConsumerReceipts.runOnce(input.db, {
-          consumerKind: CONSUMER_FAILURE_KIND,
-          sourceEventId: row.eventRef,
-          // The failing side effect carries the consumption error so the durable receipt's `last_error`
-          // is the real reason (the receipt stays `pending` = "a failed consumption is recorded").
-          sideEffect: Effect.fail(new Error(reason)),
-          now: at,
-        }).pipe(
-          Effect.catchCause(() => Effect.void),
-        )
+        const settled = yield* EventSpool.getByRef(input.db, row.eventRef)
+        // W5 F4 ① — the DLQ receipt is written ONLY when this nack dead-lettered the row (terminal):
+        // the durable `event_consumer_failure` receipt (last_error = the reason, attempts = the real
+        // count) is the admin view of the DLQ. Intermediate retries keep the spool row as the record.
+        if (settled?.status === "dead") {
+          yield* ConsumerReceipts.runOnce(input.db, {
+            consumerKind: CONSUMER_FAILURE_KIND,
+            sourceEventId: row.eventRef,
+            // The failing side effect carries the consumption error so the durable receipt's `last_error`
+            // is the real reason (the receipt stays `pending` = "a failed consumption is recorded"; the
+            // DLQ terminal state lives on the dead spool row).
+            sideEffect: Effect.fail(new Error(reason)),
+            now: at,
+          }).pipe(
+            Effect.catchCause(() => Effect.void),
+          )
+        }
         yield* Effect.logError("spool consumption failed (bounded retry → DLQ after cap)", {
           eventRef: row.eventRef,
           sessionID: row.sessionID,
           reason,
-          attempts: row.attempts,
+          attempts: settled?.attempts ?? row.attempts + 1,
         })
       }
     }
-  }).pipe(Effect.catchCause((cause) =>
-    Effect.sync(() => log.error("spool drain pass failed", { cause: Cause.pretty(cause) })),
-  ))
+  }).pipe(
+    // W5 F5 — interruption must NOT be swallowed: the daemon's dispose interrupts this pass and the
+    // interruption has to stop the `repeat` loop (a swallowed interrupt would keep the daemon alive).
+    // A real failure is logged and the pass completes (the repeat loop retries on its cadence).
+    Effect.catchCauseIf(
+      (cause) => !Cause.hasInterrupts(cause),
+      (cause) => Effect.sync(() => log.error("spool drain pass failed", { cause: Cause.pretty(cause) })),
+    ),
+  )
 
 const spoolDrainLayer = Layer.effectDiscard(
   Effect.gen(function* () {

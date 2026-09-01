@@ -1,6 +1,6 @@
 export * as EventAdmission from "./event-admission"
 
-import { eq } from "drizzle-orm"
+import { eq, sql } from "drizzle-orm"
 import { Cause, Effect } from "effect"
 import type { Database } from "../database/database"
 import {
@@ -79,6 +79,8 @@ export type AdmissionRow = {
   readonly envelopeDigest: string
   readonly status: EventAdmissionStatus
   readonly messageID?: string
+  /** WHY the last attempt was `refused` (strategic reason or the adapter's refusal); absent otherwise. */
+  readonly reason?: string
   readonly envelope: EventWorkEnvelope
   readonly admittedAt: number
   readonly updatedAt: number
@@ -90,6 +92,7 @@ const decodeRow = (row: typeof DeepAgentEventAdmissionTable.$inferSelect): Admis
   envelopeDigest: row.envelope_digest,
   status: row.status as EventAdmissionStatus,
   ...(row.message_id != null ? { messageID: row.message_id } : {}),
+  ...(row.reason != null ? { reason: row.reason } : {}),
   envelope: decodeEventWorkEnvelope(JSON.parse(row.envelope_json) as unknown),
   admittedAt: row.admitted_at,
   updatedAt: row.updated_at,
@@ -189,7 +192,11 @@ export type AdmitResult =
  * honest state of the durable V2 effect:
  *   - `resolved` — the SessionV2 admission effect COMPLETED (the row is written after the adapter
  *     returns; it is appended, not pre-claimed).
- *   - `refused`  — the last attempt was REFUSED (the adapter failed; the effect never completed).
+ *   - `refused`  — the LAST attempt was refused, whether strategically (pre-adapter: disabled / digest
+ *     mismatch / invalid envelope / noise — W5 F3) or by the adapter. A refused row is RE-DRIVABLE: a
+ *     later exact retry of the same identity re-runs the adapter under the SAME anchor and flips the row
+ *     to `resolved` (the refusal is honest history of the last attempt, never a permanent tombstone).
+ *     The `reason` column records WHY the last attempt was refused.
  *   - `admitted` — legacy pre-W5 rows / the historical "claimed, effect unknown" marker; treated as a
  *     crash window and re-driven below.
  *
@@ -207,9 +214,11 @@ const rowFor = (row: AdmissionRow): AdmitResult | undefined => {
 /**
  * Write the terminal receipt row. The insert is an UPSERT-keyed append on `event_ref`: a fresh admit
  * inserts `status`; a re-drive of the same identity refreshes a legacy `admitted`/`refused` row to the
- * new outcome. The caller only upserts when the row was NOT `resolved`, so in the normal flow a
- * resolved receipt is never overwritten. `admitted_at` stays the FIRST admission time (identity history,
- * not attempt time).
+ * new outcome. The upsert is CAS-fenced (W5 F6): the update clause carries `WHERE status != 'resolved'`,
+ * so a concurrent loser (or a late refused write racing a resolved one) can NEVER overwrite a terminal
+ * `resolved` receipt — the honest effect-completed record wins. The winner row is returned either way
+ * (the caller keeps its own typed failure/success). `admitted_at` stays the FIRST admission time
+ * (identity history, not attempt time).
  */
 const writeReceipt = (
   db: DatabaseClient,
@@ -219,6 +228,7 @@ const writeReceipt = (
     readonly digest: string
     readonly status: EventAdmissionStatus
     readonly messageID?: string
+    readonly reason?: string
     readonly now: number
   },
 ): Effect.Effect<AdmissionRow> =>
@@ -231,19 +241,72 @@ const writeReceipt = (
         envelope_digest: input.digest,
         status: input.status,
         message_id: input.messageID ?? null,
+        reason: input.reason ?? null,
         envelope_json: JSON.stringify(encodeEventWorkEnvelope(input.envelope)),
         admitted_at: input.now,
         updated_at: input.now,
       })
       .onConflictDoUpdate({
         target: DeepAgentEventAdmissionTable.event_ref,
-        set: { status: input.status, message_id: input.messageID ?? null, updated_at: input.now },
+        set: {
+          status: input.status,
+          message_id: input.messageID ?? null,
+          reason: input.reason ?? null,
+          updated_at: input.now,
+        },
+        where: sql`${DeepAgentEventAdmissionTable.status} != 'resolved'`,
       })
       .returning()
       .get()
       .pipe(Effect.orDie)
-    return decodeRow(row)
+    if (row) return decodeRow(row)
+    // CAS lost — the competing writer holds `resolved`; hand back the winner (never overwritten).
+    const winner = yield* admissionFor(db, input.envelope.eventRef)
+    if (!winner) throw new Error("admission receipt CAS lost with no surviving row")
+    return winner
   })
+
+/**
+ * Best-effort durable record of a strategic (pre-adapter) refusal (W5 F3): the row carries
+ * `status: 'refused'` + the refusal `reason`, so the ledger shows WHY the last attempt was refused even
+ * when the adapter never ran. The envelope must round-trip the frozen DECODE (encodeSync is stricter on
+ * non-instance shapes, so the decode round-trip is the honest recordability boundary): an
+ * unrepresentable envelope (e.g. an excess-property "invalid_envelope") is still refused typed, just
+ * without a row — a non-round-trippable `envelope_json` would poison every later read of the receipt
+ * identity. Any row write failure is swallowed: the refusal itself is the authority, the record is
+ * best-effort diagnostics.
+ */
+const recordStrategicRefusal = (
+  db: DatabaseClient,
+  input: {
+    readonly envelope: EventWorkEnvelope
+    readonly sessionID: string
+    readonly reason: AdmissionErrorReason
+    readonly messageID?: string
+    readonly now: number
+  },
+): Effect.Effect<void> =>
+  Effect.try({
+    try: () => {
+      const canonical = decodeEventWorkEnvelope(JSON.parse(JSON.stringify(input.envelope)) as unknown)
+      return { envelope: canonical, digest: eventWorkEnvelopeDigest(canonical) }
+    },
+    catch: (error) => error,
+  }).pipe(
+    Effect.flatMap(({ envelope, digest }) =>
+      writeReceipt(db, {
+        envelope,
+        sessionID: input.sessionID,
+        digest,
+        status: "refused",
+        reason: input.reason,
+        ...(input.messageID != null ? { messageID: input.messageID } : {}),
+        now: input.now,
+      }),
+    ),
+    Effect.asVoid,
+    Effect.catchCause(() => Effect.void),
+  )
 
 /**
  * C5-04 — admit a bounded work envelope as durable V2 session work.
@@ -272,6 +335,14 @@ const writeReceipt = (
 export function admit(db: DatabaseClient, input: AdmitInput): Effect.Effect<AdmitResult, EventAdmissionError> {
   return Effect.gen(function* () {
     if (!isEventV2AdmissionEnabled()) {
+      // W5 F3 — a strategic refusal is ALSO a refused receipt (the last attempt was refused: disabled).
+      yield* recordStrategicRefusal(db, {
+        envelope: input.envelope,
+        sessionID: input.sessionID,
+        reason: "admission_disabled",
+        ...(input.messageID != null ? { messageID: input.messageID } : {}),
+        now: input.now,
+      })
       return yield* refuse(
         "admission_disabled",
         input.envelope.eventRef,
@@ -279,7 +350,20 @@ export function admit(db: DatabaseClient, input: AdmitInput): Effect.Effect<Admi
       )
     }
 
-    const envelope = yield* validateEnvelope(input.envelope)
+    // W5 F3 — an envelope that does not round-trip the frozen contract (or is §8.8 noise) is a strategic
+    // refusal: the refusal is recorded as a `refused` receipt (best-effort) BEFORE the adapter is ever
+    // consulted, then fails typed.
+    const envelope = yield* validateEnvelope(input.envelope).pipe(
+      Effect.catch((error) =>
+        recordStrategicRefusal(db, {
+          envelope: input.envelope,
+          sessionID: input.sessionID,
+          reason: error.reason,
+          ...(input.messageID != null ? { messageID: input.messageID } : {}),
+          now: input.now,
+        }).pipe(Effect.andThen(Effect.fail(error))),
+      ),
+    )
 
     // BIND the admission to the envelope hash (design §8.4). The digest is byte-stable over the
     // bounded envelope; it never sees the raw payload.
@@ -288,6 +372,16 @@ export function admit(db: DatabaseClient, input: AdmitInput): Effect.Effect<Admi
     const existing = yield* admissionFor(db, envelope.eventRef)
     if (existing) {
       if (existing.envelopeDigest !== digest) {
+        // W5 F3 — the refusal is recorded (the row keeps the ORIGINAL identity digest: a retry must
+        // present the original work to be re-admitted; changed work under the same identity is never
+        // silently re-admitted) and the admission fails typed.
+        yield* recordStrategicRefusal(db, {
+          envelope,
+          sessionID: input.sessionID,
+          reason: "envelope_digest_mismatch",
+          ...(existing.messageID != null ? { messageID: existing.messageID } : {}),
+          now: input.now,
+        })
         return yield* refuse(
           "envelope_digest_mismatch",
           envelope.eventRef,
@@ -300,7 +394,11 @@ export function admit(db: DatabaseClient, input: AdmitInput): Effect.Effect<Admi
       // SAME message id — the durable effect is idempotent at SessionV2, never duplicated.
     }
 
-    const messageID = input.messageID
+    // W5 F2 — the exact-retry anchor is the row's STORED message id when one exists (the first attempt's
+    // SessionV2 anchor), so a re-drive from ANY lane (spool, dispatcher, etc.) re-anchors the SAME
+    // SessionV2 input and reconcile-dedupes there — never a second session_input. The caller-supplied
+    // anchor is only the fallback for a first attempt.
+    const messageID = existing?.messageID ?? input.messageID
     const delivery = input.delivery ?? "steer"
     const resume = input.resume ?? true
 
@@ -321,12 +419,14 @@ export function admit(db: DatabaseClient, input: AdmitInput): Effect.Effect<Admi
     if (outcome._tag === "Failure") {
       const message = (Cause.squash(outcome.cause) as { readonly message?: string } | undefined)?.message ??
         "session V2 admission refused"
-      // Honest terminal record: the effect never completed → `refused` (never `resolved`).
+      // Honest terminal record: the effect never completed → `refused` (never `resolved`); the reason
+      // records it as an ADAPTER refusal (distinct from the strategic pre-adapter refusals).
       yield* writeReceipt(db, {
         envelope,
         sessionID: input.sessionID,
         digest,
         status: "refused",
+        reason: "admit_refused",
         ...(messageID != null ? { messageID } : {}),
         now: input.now,
       })

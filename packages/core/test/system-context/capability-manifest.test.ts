@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { builtinToolNames } from "@deepagent-code/core/tool/builtins"
 import {
   CapabilityBudget,
   DeepAgentCodeToolInventory,
@@ -7,6 +8,7 @@ import {
   capabilityCatalogDigest,
   capabilityManifestSignature,
   decodeCapabilityManifest,
+  findUpgradableMaintenance,
   manifestCoherence,
   type CapabilityManifest,
 } from "@deepagent-code/core/system-context/capability-manifest"
@@ -162,6 +164,35 @@ describe("CapabilityManifest consistency gate", () => {
   test("flags duplicate capability ids at the catalog level", () => {
     const a = decodeCapabilityManifest(validManifest)
     expect(() => assertCapabilityCatalogConsistent([a, a], DeepAgentCodeToolInventory)).toThrow(/duplicate capability ids/)
+  })
+})
+
+describe("W4.1 reverse warning: findUpgradableMaintenance + the single permission directory", () => {
+  test("a maintenance_only capability whose entry tools are ALL registered is an upgrade candidate", () => {
+    const candidates = findUpgradableMaintenance(["context_query"], capabilityCatalog)
+    expect(candidates.map((manifest) => String(manifest.id))).toEqual(["deepagent.context-query"])
+  })
+
+  test("no candidate while the entry tool is not registered (current HEAD)", () => {
+    expect(findUpgradableMaintenance(builtinToolNames, capabilityCatalog)).toEqual([])
+  })
+
+  test("stable/disabled/unavailable capabilities are never candidates (maintenance_only only), order deterministic", () => {
+    const shifted = capabilityCatalog.map((manifest) => {
+      if (manifest.id === "deepagent.context-query") return { ...manifest, availability: "disabled" as const }
+      if (manifest.id === "deepagent.code-read") return { ...manifest, availability: "maintenance_only" as const }
+      return manifest
+    })
+    // `deepagent.code-read` is maintenance with fully-registered tools → the only candidate.
+    expect(findUpgradableMaintenance(builtinToolNames, shifted).map((manifest) => String(manifest.id))).toEqual([
+      "deepagent.code-read",
+    ])
+    // Same input twice → identical listing (deterministic).
+    expect(findUpgradableMaintenance(builtinToolNames, shifted)).toEqual(findUpgradableMaintenance(builtinToolNames, shifted))
+  })
+
+  test("the single permission directory (§7.2) includes the capability_load authorization action", () => {
+    expect(DeepAgentCodeToolInventory.permissionActions.has("capability.read")).toBe(true)
   })
 })
 

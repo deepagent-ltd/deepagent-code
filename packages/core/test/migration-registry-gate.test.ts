@@ -25,7 +25,12 @@ import { migrations } from "../src/database/migration.gen"
 // Successor pin (W4, 2026-09-01): the session_capability_load persistence
 // migration joined the registry (generated from the Drizzle schema via
 // `bun script/migration.ts`), so the ordered registry digest moved again.
-const PINNED_DIGEST = "92033b45935ca9d21fa6b0c34dc6ce8ab1e83ffeb17fae4d18ab2acea11e2ebe"
+// Successor pin (W8, 2026-09-04): the W8 protocol-close migration
+// (20260904120000_v2_provider_prepared_turn_canonical_hash) re-created the V2
+// provider transition guard and the parity receipt authority guard for the
+// identity-folded canonical prepared_turn_hash, so the ordered registry digest
+// moved again.
+const PINNED_DIGEST = "c758ec9353461ba370cc740640f33b786e9db6c99d1363f6a29869be1bb5227f"
 
 const digest = (entries: readonly { readonly id: string; readonly hash: string }[]) =>
   createHash("sha256").update(JSON.stringify(entries)).digest("hex")

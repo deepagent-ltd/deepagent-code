@@ -145,9 +145,10 @@ Open **Settings → Providers**:
 - **Official providers** (DeepAgent, OpenAI, Anthropic, DeepSeek, Google, xAI, ZhipuAI/GLM):
   click **Connect**, paste your API key.
 - **Any other provider or gateway**: click **Connect** on *Custom provider*, paste
-  the **Base URL** and **API key**. DeepAgent Code auto-detects the protocol
-  (OpenAI-compatible or Anthropic) and discovers the available models from the
-  endpoint's `/models` list — you don't have to fill anything else.
+  the **Base URL** and **API key**. DeepAgent Code classifies the API family from
+  the vendor SDK package (OpenAI-compatible or Anthropic) and discovers the
+  available models from the endpoint's `/models` list — you don't have to fill
+  anything else.
 
 Model specs (context window, reasoning) are auto-filled by matching each model
 against the models.dev catalog. You can reopen a custom provider to override a

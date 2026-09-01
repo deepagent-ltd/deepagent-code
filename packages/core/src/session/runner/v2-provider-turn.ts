@@ -391,7 +391,10 @@ export const layerWith = (options: LayerOptions = {}) =>
                     state: input.state,
                     ...(input.preparedTurn
                       ? {
-                          prepared_turn_hash: input.preparedTurn.request_hash,
+                          // W8: the durable canonical hash is the identity-folded
+                          // `sha256(request_hash + protocolAttemptIdentityHash)` (design §4.1 step 8),
+                          // NOT the raw request hash — the audit's DEFECT 3 fixed here.
+                          prepared_turn_hash: input.preparedTurn.prepared_turn_hash,
                           wire_request_hash: input.preparedTurn.wire_request_hash,
                           prepared_turn: input.preparedTurn,
                           dispatching_at: observedAt,
@@ -433,7 +436,7 @@ export const layerWith = (options: LayerOptions = {}) =>
                       from: ["prepared"],
                       to: "prepared",
                       now: observedAt,
-                      preparedTurnHash: input.preparedTurn.request_hash,
+                      preparedTurnHash: input.preparedTurn.prepared_turn_hash,
                       wireRequestHash: input.preparedTurn.wire_request_hash,
                     })
                     yield* sync({ attemptId, expectedOwnerToken: ownerToken, from: ["prepared"], to: "dispatching", now: observedAt })
@@ -489,6 +492,12 @@ export const layerWith = (options: LayerOptions = {}) =>
           )
         }).pipe(preserveErrors)
 
+      // W8 — the seal is where the prepared turn is generated and bound (the stream's
+      // `CurrentRequestSeal` closure prepares from the exact sealed wire hash and hands it to this
+      // transition): the receipt MUTATES from `preparing` to `dispatching` carrying the full
+      // prepared turn (protocol attempt identity + the identity-folded canonical `prepared_turn_hash`),
+      // so from dispatch onward the drift/retry identity is the W8 canonical, never the raw request
+      // hash (audit DEFECT 3).
       const seal = (receipt: Receipt, prepared: PreparedProviderTurn.PreparedProviderTurn, input: RequestSealInput) => {
         if (prepared.receipt_id !== receipt.receiptId || prepared.wire_request_hash !== input.wireHash)
           return Effect.fail(new ConflictError({ reason: "v2_wire_seal_binding_mismatch" }))
@@ -731,8 +740,11 @@ export const layerWith = (options: LayerOptions = {}) =>
           case: input.campaign.case,
           legacyReceiptId: baseline.legacy_receipt_id,
           coreV2ReceiptId: receipt.receiptId,
+          // Parity compares the REQUEST identity (payload content) across legacy and V2, so the raw
+          // `request_hash` is the comparable; the W8 canonical `prepared_turn_hash` (identity-folded)
+          // is the exact-retry/drift identity, not a parity cross-comparison value.
           legacyRequestHash: baseline.prepared_turn.request_hash,
-          coreV2RequestHash: receipt.preparedTurnHash,
+          coreV2RequestHash: receipt.preparedTurn.request_hash,
           legacyOutcomeHash: baseline.outcome_hash,
           coreV2OutcomeHash: receipt.outcomeHash,
           legacyPreparedTurn: baseline.prepared_turn,

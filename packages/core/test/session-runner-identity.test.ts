@@ -18,6 +18,7 @@ import * as SessionRunnerLLM from "@deepagent-code/core/session/runner/llm"
 import { SessionRunnerModel } from "@deepagent-code/core/session/runner/model"
 import { V2ProviderTurn } from "@deepagent-code/core/session/runner/v2-provider-turn"
 import { V2ProviderTurnReceiptTable } from "@deepagent-code/core/session/runner/v2-provider-turn.sql"
+import { PreparedProviderTurn } from "@deepagent-code/core/session/runner/prepared-provider-turn"
 import { V2ToolEffect } from "@deepagent-code/core/session/runner/v2-tool-effect"
 import { SessionProviderOwner } from "@deepagent-code/core/context-federation/provider-owner"
 import { SessionContext } from "@deepagent-code/core/context-federation/session-context"
@@ -292,6 +293,16 @@ describe("SessionRunner identity binding (C2-04/B2 residual)", () => {
       const boundIdentityHash = (receipt.prepared_turn as { protocol_attempt_identity_hash?: string })
         .protocol_attempt_identity_hash
       expect(boundIdentityHash).toMatch(/^[0-9a-f]{64}$/)
+      // W8 — the seal persisted the identity-folded canonical hash: the durable column equals the
+      // record's canonical value and differs from the raw request hash once an identity is bound.
+      // (The transition trigger pins json_extract(prepared_turn, '$.prepared_turn_hash') to the
+      // column, so these two MUST agree or the seal would have been aborted.)
+      const preparedTurn = receipt.prepared_turn
+      expect(preparedTurn).not.toBeNull()
+      if (!preparedTurn) return
+      expect(receipt.prepared_turn_hash).toBe(preparedTurn.prepared_turn_hash)
+      expect(receipt.prepared_turn_hash).toBe(PreparedProviderTurn.preparedTurnHash(preparedTurn))
+      expect(receipt.prepared_turn_hash).not.toBe(preparedTurn.request_hash)
     }),
   )
 
@@ -305,6 +316,21 @@ describe("SessionRunner identity binding (C2-04/B2 residual)", () => {
       })
       const drifted = ModelProtocol.protocolAttemptIdentityFor(driftedInfo, openAIProvider)
       expect(ModelProtocol.configDrift(drifted, ModelProtocol.protocolAttemptIdentityHash(identityA))).toBe(true)
+
+      // W8 audit oracle: an identical payload on a drifted route produces a DIFFERENT canonical
+      // prepared_turn_hash (the durable exact-retry/drift identity now carries route/origin).
+      const payload = "same-payload-on-drifted-route"
+      expect(
+        PreparedProviderTurn.preparedTurnHash({
+          request_hash: payload,
+          protocol_attempt_identity_hash: ModelProtocol.protocolAttemptIdentityHash(drifted),
+        }),
+      ).not.toBe(
+        PreparedProviderTurn.preparedTurnHash({
+          request_hash: payload,
+          protocol_attempt_identity_hash: ModelProtocol.protocolAttemptIdentityHash(identityA),
+        }),
+      )
 
       // Dispatch seam gate: the stale (drifted) attempt never reaches the wire while the rebuilt
       // attempt does; this is the exact seam the runner wires (design §2.3).

@@ -12,7 +12,7 @@ import { Catalog } from "../../catalog"
 import { ModelProtocolDisabledReason } from "../../contract/model-protocol"
 import { ModelV2 } from "../../model"
 import { ModelRequest } from "../../model-request"
-import { resolveModelProtocol } from "../../model-protocol"
+import { configEvidenceForTurn, refreshConfigEvidence, resolveModelProtocol } from "../../model-protocol"
 import { PluginBoot } from "../../plugin/boot"
 import { ProviderV2 } from "../../provider"
 import { SessionSchema } from "../schema"
@@ -206,6 +206,14 @@ export const locationLayer = Layer.effect(
             (yield* catalog.model.available()).find(supported))
         if (!selected) return yield* new ModelNotSelectedError({ sessionID: session.id })
         const provider = yield* catalog.provider.get(selected.providerID)
+        // W8 — production seam for the C2-03 explicit configuration action (design §5.2): the FIRST
+        // successful resolve of a config refreshes (derives + caches) the capability evidence so the
+        // business turn can consume the cached evidence instead of the always-missing `no_evidence`
+        // (audit A8 R6: `refreshConfigEvidence` had zero production callers). The probe hook is pure
+        // and side-effect-free in this wave, the cache is keyed by config identity, and subsequent
+        // resolves reuse the cached entry — never a per-request re-probe; a config drift changes the
+        // identity hash, which misses the cache and refreshes once for the new config.
+        if (configEvidenceForTurn(selected, provider) === "no_evidence") refreshConfigEvidence(selected, provider)
         return { model: yield* resolve(session, selected, provider), info: selected, provider }
       }),
     })

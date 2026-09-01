@@ -43,6 +43,15 @@ describe("V2 provider turn authority", () => {
         wireRequestHash: Hash.sha256("wire-natural"),
         outcomeHash: Hash.sha256(JSON.stringify(["first", "second"])),
       })
+      // W8 — seal generated the prepared turn immediately and persisted the canonical
+      // identity-folded hash: the receipt carries a non-null prepared turn and the column equals
+      // the record's canonical value (this identity-less prepared turn folds request_hash alone).
+      const recorded = yield* service.get(receipt.receiptId)
+      expect(recorded?.preparedTurn).toBeDefined()
+      expect(recorded?.preparedTurnHash).toBe(recorded?.preparedTurn?.prepared_turn_hash)
+      expect(recorded?.preparedTurnHash).toBe(
+        PreparedProviderTurn.preparedTurnHash(recorded?.preparedTurn as PreparedProviderTurn.PreparedProviderTurn),
+      )
     }),
   )
 
