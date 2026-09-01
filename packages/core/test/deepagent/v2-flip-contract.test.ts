@@ -38,16 +38,28 @@ describe("C7-05 flip contract (production-entry ON + explicit kill-switch)", () 
     withEnv(IM_SINGLE_WRITE_ENV, "0", () => expect(isEventV2ImSingleWriteEnabled()).toBe(false))
   })
 
-  test("the production entrypoint enables both authorities", () => {
+  test("the production entrypoints enable both authorities via runtime-defaults", () => {
     const entry = readFileSync(
       fileURLToPath(new URL("../../../deepagent-code/src/index.ts", import.meta.url)),
       "utf8",
     )
-    expect(entry).toContain('process.env.DEEPAGENT_CODE_EVENT_V2_ADMISSION ??= "true"')
-    expect(entry).toContain('process.env.DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE ??= "true"')
-    // The IM single-write suppression must ship together with the V2 event-driven IM path
+    const node = readFileSync(
+      fileURLToPath(new URL("../../../deepagent-code/src/node.ts", import.meta.url)),
+      "utf8",
+    )
+    const defaults = readFileSync(
+      fileURLToPath(new URL("../../../deepagent-code/src/runtime-defaults.ts", import.meta.url)),
+      "utf8",
+    )
+    // W0.1: both production entrypoints apply the single runtime-defaults source; the CI entry
+    // must still ship the IM single-write suppression together with the V2 event-driven IM path
     // (otherwise @mention work is silently dropped — the G7i authority review P1).
+    expect(entry).toContain("applyRuntimeDefaults(")
+    expect(node).toContain("applyRuntimeDefaults(")
     expect(entry).toContain('process.env.DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM ??= "true"')
+    // both authorities' env constants are covered by the default-ON runtime defaults
+    expect(defaults).toContain('= "DEEPAGENT_CODE_EVENT_V2_ADMISSION"')
+    expect(defaults).toContain('= "DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE"')
   })
 
   test("the two switches are independent", () => {
