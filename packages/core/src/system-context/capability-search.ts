@@ -159,10 +159,18 @@ function toCard(manifest: CapabilityManifest, authorization: SearchAuthorization
  * the procedure body is never present in a search result (design §7.3). The
  * parameter is the plain renderable shape, so both the decoded (branded) card
  * and the wire-encoded card are accepted.
+ *
+ * W4.1 P0-2: when the caller supplies the catalog snapshot id of the result
+ * envelope, it is rendered as a header line. The load tool's snapshot id is
+ * otherwise invisible to the model (which made the frozen require-it input
+ * settle as `catalog_snapshot_mismatch` every time); the search output is the one
+ * model-visible place the id can surface, so the model may echo it back — the
+ * load tool still treats the runtime snapshot as authoritative.
  */
-export function renderSearchCards(cards: ReadonlyArray<CardView>): string {
+export function renderSearchCards(cards: ReadonlyArray<CardView>, catalogSnapshotId?: string): string {
   if (cards.length === 0) return "No matching DeepAgentCode capabilities for this request."
   return [
+    ...(catalogSnapshotId === undefined ? [] : [`Catalog snapshot: ${catalogSnapshotId}`]),
     "Matching DeepAgentCode capabilities:",
     ...cards.map(
       (card) =>
@@ -202,6 +210,6 @@ export function makeCapabilitySearchTool(input: {
     input: CapabilitySearchInput,
     output: CapabilitySearchOutput,
     execute: (call) => Effect.succeed(searchOutput(catalog, call, authorization, snapshotId)),
-    toModelOutput: ({ output }) => [{ type: "text", text: renderSearchCards(output.cards) }],
+    toModelOutput: ({ output }) => [{ type: "text", text: renderSearchCards(output.cards, output.catalog_snapshot_id) }],
   })
 }

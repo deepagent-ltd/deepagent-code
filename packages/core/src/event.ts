@@ -377,11 +377,15 @@ export interface PublishOptions {
   readonly metadata?: Record<string, unknown>
   readonly location?: Location.Ref
   /**
-   * Local operational projection committed atomically with a synchronized event. Exact idempotent
-   * publish retries run this hook again so a caller can repair a missing local receipt; the hook must
-   * therefore use an idempotent write or CAS. It is not replayed from the serialized event log.
+   * Local operational projection committed atomically with a synchronized event — the hook runs INSIDE
+   * the same transaction as the durable event row. Exact idempotent publish retries run this hook again
+   * so a caller can repair a missing local receipt; the hook must therefore use an idempotent write or
+   * CAS. It is not replayed from the serialized event log. The second argument is the canonical event
+   * being committed (as projected/re-encoded in this commit), so a hook that mirrors the event can
+   * derive from the same bytes that hit the event row. A hook failure rolls back the whole transaction
+   * (fail-closed: no durable event without its local projection).
    */
-  readonly commit?: (seq: number) => Effect.Effect<void>
+  readonly commit?: (seq: number, event: Payload) => Effect.Effect<void, unknown>
 }
 
 export interface Interface {
@@ -403,11 +407,26 @@ export interface Interface {
   readonly registerSnapshotCodec?: (codec: SnapshotCodec) => Effect.Effect<void>
   readonly replay: (
     event: SerializedEvent,
-    options?: { readonly publish?: boolean; readonly ownerID?: string; readonly strictOwner?: boolean },
+    options?: {
+      readonly publish?: boolean
+      readonly ownerID?: string
+      readonly strictOwner?: boolean
+      /**
+       * In-transaction mirror hook: runs inside the same transaction as the replayed event row (same
+       * contract as `PublishOptions.commit`). Idempotent-write/CAS discipline applies; a failure rolls
+       * back the replayed commit. Used by the EventV2Bridge to land replayed commits into the C5 outbox.
+       */
+      readonly onCommit?: (seq: number, event: Payload) => Effect.Effect<void, unknown>
+    },
   ) => Effect.Effect<void>
   readonly replayAll: (
     events: SerializedEvent[],
-    options?: { readonly publish?: boolean; readonly ownerID?: string; readonly strictOwner?: boolean },
+    options?: {
+      readonly publish?: boolean
+      readonly ownerID?: string
+      readonly strictOwner?: boolean
+      readonly onCommit?: (seq: number, event: Payload) => Effect.Effect<void, unknown>
+    },
   ) => Effect.Effect<string | undefined>
   readonly snapshot: (aggregateID: string) => Effect.Effect<SerializedSnapshot | undefined>
   readonly aggregateState?: (aggregateID: string) => Effect.Effect<{
@@ -543,7 +562,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
           readonly ownerID?: string
           readonly strictOwner?: boolean
         },
-        commit?: (seq: number) => Effect.Effect<void>,
+        commit?: (seq: number, event: Payload) => Effect.Effect<void, unknown>,
         idempotent = false,
         deferDurableWake = false,
       ) {
@@ -789,7 +808,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                                 )
                               : isDeepStrictEqual(stored.data, encoded))
                           ) {
-                            if (commit) yield* commit(stored.seq)
+                            if (commit) yield* commit(stored.seq, canonicalEvent)
                             return { aggregateID, seq: stored.seq, inserted: false }
                           }
                           if (stored)
@@ -812,7 +831,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                           for (const projector of list) {
                             yield* projector({ ...canonicalEvent, seq } as Payload)
                           }
-                          if (commit) yield* commit(seq)
+                          if (commit) yield* commit(seq, canonicalEvent)
                           yield* db
                             .insert(EventSequenceTable)
                             .values([{ aggregate_id: aggregateID, seq, owner_id: input?.ownerID }])
@@ -973,6 +992,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
           readonly ownerID?: string
           readonly strictOwner?: boolean
           readonly onCommitted?: (event: Payload) => void
+          readonly onCommit?: (seq: number, event: Payload) => Effect.Effect<void, unknown>
           readonly deferDurableWake?: boolean
         },
       ) {
@@ -1000,7 +1020,10 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                 ownerID: options?.ownerID,
                 strictOwner: options?.strictOwner,
               },
-              undefined,
+              // The in-transaction mirror hook (outbox landing for replayed commits): it runs inside the
+              // same transaction as the replayed event row, so a replayed commit can never survive
+              // without its local projection (same contract as PublishOptions.commit).
+              options?.onCommit,
               false,
               options?.deferDurableWake,
             )
@@ -1014,7 +1037,12 @@ export const layerWith = (layerOptions?: LayerOptions) =>
 
       function replayAll(
         events: SerializedEvent[],
-        options?: { readonly publish?: boolean; readonly ownerID?: string; readonly strictOwner?: boolean },
+        options?: {
+          readonly publish?: boolean
+          readonly ownerID?: string
+          readonly strictOwner?: boolean
+          readonly onCommit?: (seq: number, event: Payload) => Effect.Effect<void, unknown>
+        },
       ) {
         return Effect.gen(function* () {
           const source = events[0]?.aggregateID

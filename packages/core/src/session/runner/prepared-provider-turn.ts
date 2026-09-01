@@ -95,6 +95,15 @@ export interface PreparedProviderTurn {
   readonly budget: Budget
   readonly wire_request_hash: string
   readonly request_hash: string
+  /**
+   * W8 canonical attempt hash (design §4.1 step 8, audit DEFECT 3): the durable
+   * canonical `prepared_turn_hash` folds the C2-04 protocol attempt identity hash
+   * (route/protocol/endpoint-origin/capability/lowering) into the request content
+   * hash — `sha256(request_hash + protocolAttemptIdentityHash)` — so the persisted
+   * exact-retry identity changes on a route/protocol/origin drift even when the
+   * request payload is byte-identical. See `preparedTurnHash`.
+   */
+  readonly prepared_turn_hash: string
   readonly cache_prefix_hash: string
   readonly volatile_tail_hash: string
   readonly receipt_id: string
@@ -128,6 +137,34 @@ export function attemptIdentityHash(turn: PreparedProviderTurn): string {
       ...(turn.capability_snapshot_hash === undefined
         ? {}
         : { capability_snapshot_hash: turn.capability_snapshot_hash }),
+    }),
+  )
+}
+
+/**
+ * W8 canonical attempt hash (design §4.1 step 8 + C2-04): `prepared_turn_hash =
+ * sha256(request_hash + protocolAttemptIdentityHash)`. The canonical hash that is
+ * persisted in the durable `prepared_turn_hash` column (and mirrored onto the
+ * provider attempt) must carry the route/protocol/endpoint-origin binding — the
+ * audit found the production path persisted only `request_hash`, which omits
+ * route/protocol/origin. `request_hash` keeps its content-only semantics (it is
+ * the payload identity, compared across legacy/V2 parity), while this folded
+ * value is the exact-retry identity: an identical payload on a drifted route no
+ * longer hashes to the same canonical value. An identity-less turn (embedded
+ * resolvers that leave `protocolAttemptIdentity` unbound) folds the request hash
+ * alone — still deterministic, and byte-stable with the pre-W8 receipts whose
+ * canonical hash equalled `request_hash`.
+ */
+export function preparedTurnHash(turn: {
+  readonly request_hash: string
+  readonly protocol_attempt_identity_hash?: string
+}): string {
+  return Hash.sha256(
+    CanonicalJson.stringify({
+      request_hash: turn.request_hash,
+      ...(turn.protocol_attempt_identity_hash === undefined
+        ? {}
+        : { protocol_attempt_identity_hash: turn.protocol_attempt_identity_hash }),
     }),
   )
 }
@@ -174,13 +211,18 @@ export function prepare(input: Input): PreparedProviderTurn {
     budget: input.budget,
     wire_request_hash: wireRequestHash,
   }
+  const requestHash = fingerprint(fields)
   return {
     ...fields,
     owner: input.owner,
     system_stable_parts: systemStableParts,
     system_volatile_parts: systemVolatileParts,
     history_message_count: input.historyMessages.length,
-    request_hash: fingerprint(fields),
+    request_hash: requestHash,
+    prepared_turn_hash: preparedTurnHash({
+      request_hash: requestHash,
+      protocol_attempt_identity_hash: input.protocolAttemptIdentityHash,
+    }),
     cache_prefix_hash: Hash.sha256(`${systemStableHash}:${input.historyPromptEpoch}`),
     volatile_tail_hash: systemVolatileHash,
     receipt_id: input.receiptID,

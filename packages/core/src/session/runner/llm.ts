@@ -51,7 +51,9 @@ import { V2ProviderTurnReceiptTable } from "./v2-provider-turn.sql"
 import { CanonicalJson } from "../../util/canonical-json"
 import { Hash } from "../../util/hash"
 import { CapabilitySnapshot } from "../../system-context/capability-snapshot"
-import { recordedCapabilityLoads } from "../../system-context/capability-loader"
+// W4.1/P1-1: the snapshot restore reads the DURABLE `session_capability_load` table
+// (the in-process kernel cache is process-local only — a restart would lose it).
+import { capabilityLoadFactOf, recordedCapabilityLoadsForSession } from "../../system-context/capability-load-adapter"
 import { ProjectDocsSync } from "../../deepagent/project-docs-sync"
 import { FSUtil } from "../../fs-util"
 import { Git } from "../../git"
@@ -622,6 +624,14 @@ export const layer = Layer.effect(
         yield* terminalizePreDispatch("config_drift_rebuild_required")
         return yield* Effect.die(rebuildPreparedTurn(undefined, currentStep))
       }
+      // C4-08 session-side assembly (design §4.1 step 5): the prepared attempt carries the
+      // capability catalog/load snapshot restored from the DURABLE load receipts of THIS
+      // session, so the attempt identity (attemptIdentityHash) covers the loaded-body facts
+      // even though bodies are not kept in the system prefix (design §7.5). W4.1/P1-1: the
+      // durable table is the restoration authority (the in-process kernel cache is
+      // process-local, so it would lose the loaded facts on a restart); `capabilityLoadFactOf`
+      // derives the snapshot fact from the frozen receipt, matching the kernel record shape.
+      const sessionLoadFacts = (yield* recordedCapabilityLoadsForSession(db, session.id)).map(capabilityLoadFactOf)
       const providerStream = V2ProviderTurn.stream({
         service: providerTurns,
         receipt: providerReceipt,
@@ -653,15 +663,10 @@ export const layer = Layer.effect(
               contextProjectionHash: selectionAdmission.projectionHash,
               ...(protocolIdentity === undefined ? {} : { protocolAttemptIdentity: protocolIdentity }),
               ...(protocolIdentityHash === undefined ? {} : { protocolAttemptIdentityHash: protocolIdentityHash }),
-              // C4-08 session-side assembly (design §4.1 step 5): the prepared attempt carries the
-              // capability catalog/load snapshot restored from the durable load receipts of THIS
-              // session, so the attempt identity (attemptIdentityHash) covers the loaded-body facts
-              // even though bodies are not kept in the system prefix (design §7.5).
-              capabilitySnapshot: CapabilitySnapshot.capabilitySnapshotRefFor(
-                recordedCapabilityLoads()
-                  .filter((receipt) => receipt.sessionId === session.id)
-                  .map((receipt) => ({ capabilityId: receipt.capabilityId, bodyHash: receipt.bodyHash })),
-              ),
+              // W4.1/P1-1: the snapshot facts are read from the DURABLE table once per
+              // dispatch (before the prepare callback runs) — same-process loads converge on
+              // the same rows they wrote, and a restarted process restores them from the table.
+              capabilitySnapshot: CapabilitySnapshot.capabilitySnapshotRefFor(sessionLoadFacts),
             },
             wireRequestHash,
           ),

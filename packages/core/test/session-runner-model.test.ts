@@ -1,11 +1,14 @@
 import { describe, expect } from "bun:test"
 import { LLM } from "@deepagent-code/llm"
 import { LLMClient } from "@deepagent-code/llm/route"
-import { ConfigProvider, DateTime, Effect } from "effect"
+import { ConfigProvider, DateTime, Effect, Layer, Option } from "effect"
 import { Headers } from "effect/unstable/http"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ProjectV2 } from "@deepagent-code/core/project"
+import { Catalog } from "@deepagent-code/core/catalog"
+import { PluginBoot } from "@deepagent-code/core/plugin/boot"
+import { ModelProtocol } from "@deepagent-code/core/model-protocol"
 import { SessionRunnerModel } from "@deepagent-code/core/session/runner/model"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { AbsolutePath } from "@deepagent-code/core/schema"
@@ -295,6 +298,79 @@ describe("SessionRunnerModel", () => {
         ),
       ).toBe(false)
       expect(SessionRunnerModel.supported(model({ type: "native", settings: {} }))).toBe(false)
+    }),
+  )
+})
+
+describe("W8 production seam: location resolve refreshes config evidence once", () => {
+  it.effect("calls refreshConfigEvidence on the first resolve, reusing the cache afterwards (no per-request probe)", () =>
+    Effect.gen(function* () {
+      const modelInfo = model({
+        type: "aisdk",
+        package: "@ai-sdk/openai-compatible",
+        url: "https://compat.example/v1",
+      })
+      const providerInfo = provider({
+        type: "aisdk",
+        package: "@ai-sdk/openai-compatible",
+        url: "https://compat.example/v1",
+      })
+      const catalog = Layer.succeed(
+        Catalog.Service,
+        Catalog.Service.of({
+          transform: () => Effect.die("unused"),
+          provider: {
+            get: () => Effect.succeed(providerInfo),
+            all: () => Effect.succeed([providerInfo]),
+            available: () => Effect.succeed([providerInfo]),
+          },
+          model: {
+            get: () => Effect.succeed(modelInfo),
+            all: () => Effect.succeed([modelInfo]),
+            available: () => Effect.succeed([modelInfo]),
+            default: () => Effect.succeed(Option.some(modelInfo)),
+            small: () => Effect.succeed(Option.some(modelInfo)),
+          },
+        }),
+      )
+      const boot = Layer.succeed(PluginBoot.Service, PluginBoot.Service.of({ wait: () => Effect.void }))
+      const models = SessionRunnerModel.locationLayer.pipe(Layer.provide(boot), Layer.provide(catalog))
+      const session = SessionV2.Info.make({
+        id: SessionV2.ID.make("ses_model_evidence"),
+        projectID: ProjectV2.ID.global,
+        title: "test",
+        model: { id: modelInfo.id, providerID: modelInfo.providerID },
+        cost: 0,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        time: { created: DateTime.makeUnsafe(0), updated: DateTime.makeUnsafe(0) },
+        location: { directory: AbsolutePath.make("/project") },
+      })
+      const resolve = () =>
+        Effect.provide(
+          SessionRunnerModel.Service.pipe(Effect.flatMap((service) => service.resolve(session))),
+          models,
+        )
+      // Spy: the injection seam counts probe-hook invocations through refreshConfigEvidence.
+      const probed: string[] = []
+      ModelProtocol.setProbeHook((resolving, provider) => {
+        probed.push(resolving.id)
+        return ModelProtocol.probeCapabilities(resolving, provider)
+      })
+      try {
+        const resolved = yield* resolve()
+        expect(resolved.info?.id).toBe(modelInfo.id)
+        // Exactly ONE explicit configuration action for the config — and the business-turn
+        // evidence lookup now finds the cached entry instead of the always-missing no_evidence.
+        expect(probed).toEqual([modelInfo.id])
+        expect(ModelProtocol.configEvidenceForTurn(modelInfo, providerInfo)).not.toBe("no_evidence")
+
+        // A second resolve of the same config must NOT re-probe (design: probe is a configuration
+        // action, never a per-request crawl).
+        yield* resolve()
+        expect(probed).toEqual([modelInfo.id])
+      } finally {
+        ModelProtocol.resetProbeHook()
+      }
     }),
   )
 })

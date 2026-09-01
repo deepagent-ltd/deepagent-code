@@ -244,6 +244,11 @@ export const DeepAgentCodeToolInventory: CapabilityInventory = {
     "question",
     "skill",
     "context.read",
+    // W4.1 (§7.2 single permission directory): the capability load tools are authorized by
+    // `capability.read` (Tool.withPermission), so the action belongs in the one permission
+    // catalog the coherence gate validates manifests against — a manifest (or the
+    // runtime-authorized search grant set derived from this inventory) can now name it.
+    "capability.read",
   ]),
 }
 
@@ -333,6 +338,28 @@ export function assertInventoryMatchesRegistry(
   }
   const missing = [...advertised].filter((tool) => !registered.has(tool)).sort()
   if (missing.length > 0) throw new CatalogRegistryMismatchError({ missing })
+}
+
+/**
+ * W4.1 reverse warning (design §7.6 诚实化): a `maintenance_only` capability whose
+ * entry tools are ALL registered is an upgrade candidate — the runtime now ships
+ * the tool the manifest declared, so the capability can be promoted to `stable`
+ * (and re-gated) instead of staying hidden from the model. This is a WARNING
+ * surface, never a gate error: the returned list is a prompt to act, not a
+ * violation. Deterministic order (id asc); a maintenance manifest with no entry
+ * tools is not a candidate (nothing to register).
+ */
+export function findUpgradableMaintenance(
+  registeredTools: ReadonlyArray<string> | ReadonlySet<string>,
+  manifests: ReadonlyArray<CapabilityManifest>,
+): ReadonlyArray<CapabilityManifest> {
+  const registered = registeredTools instanceof Set ? registeredTools : new Set(registeredTools)
+  return sortManifests(manifests).filter(
+    (manifest) =>
+      manifest.availability === "maintenance_only" &&
+      manifest.entry_tools.length > 0 &&
+      manifest.entry_tools.every((tool) => registered.has(tool)),
+  )
 }
 
 /** Deterministically sort manifests by id, then version. */

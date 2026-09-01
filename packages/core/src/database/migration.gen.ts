@@ -173,5 +173,7 @@ export const migrations = (
     import("./migration/20260830000000_session_provider_recovery"),
     import("./migration/20260902100000_v2_owner_authorization_renew_guard"),
     import("./migration/20260901181952_session_capability_load"),
+    import("./migration/20260910000000_event_admission_refusal_reason"),
+    import("./migration/20260904120000_v2_provider_prepared_turn_canonical_hash"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

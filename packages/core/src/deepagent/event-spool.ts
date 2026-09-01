@@ -278,9 +278,19 @@ export function commitResult(db: DatabaseClient, input: SettleInput): Effect.Eff
 export interface NackInput extends SettleInput {
   readonly reason: string
   readonly maxAttempts?: number
+  /**
+   * Retry backoff (ms) applied as `next_attempt_at = now + backoffMs` on a NON-dead nack — the row is
+   * not re-claimed before it is due (`claimDue` filters `next_attempt_at <= now`). Default 0
+   * (immediate retry, pre-W5 behavior). The caller (spool drain) computes an exponential backoff.
+   */
+  readonly backoffMs?: number
 }
 
-/** §8.6 — fenced nack: increments `attempts`; past the cap the row is `dead` (DLQ, terminal). */
+/**
+ * §8.6 — fenced nack: increments `attempts`; past the cap the row is `dead` (DLQ, terminal). A non-dead
+ * nack backs off by `backoffMs` (W5 F4 — `next_attempt_at = now + backoffMs`) so bounded retries do not
+ * hammer the spool; a `dead` row never re-claims (no backoff — it is terminal).
+ */
 export function nack(db: DatabaseClient, input: NackInput): Effect.Effect<boolean> {
   return Effect.gen(function* () {
     const row = yield* db
@@ -302,7 +312,7 @@ export function nack(db: DatabaseClient, input: NackInput): Effect.Effect<boolea
         claimant_id: null,
         claimed_at: null,
         lease_expires_at: null,
-        next_attempt_at: dead ? null : input.now,
+        next_attempt_at: dead ? null : input.now + (input.backoffMs ?? 0),
         updated_at: input.now,
       })
       .where(eq(DeepAgentEventSpoolTable.event_ref, input.eventRef))

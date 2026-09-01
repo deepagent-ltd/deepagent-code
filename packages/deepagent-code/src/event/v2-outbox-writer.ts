@@ -31,12 +31,21 @@ import {
 // durably published — the C5 outbox publisher (claim/lease) then dispatches them under the SAME
 // idempotency key, which is the "no duplicate effect" guarantee:
 //
-//   - PUBLISH → ROW: the row is written AFTER the EventV2 publish committed (the EventV2 sync event row
-//     and the outbox row are the durable record; the row is keyed idempotency_key = `eventv2:<eventId>`).
-//   - CRASH-WINDOW REPLAY: a process crash after publish but before the downstream effect (the C5
-//     consumer's side effect) leaves the outbox row; a replay re-publishes the same event id — EventV2
-//     exact-retry returns the already-committed event (no second projection) and `land` returns
-//     `already_landed` (the UNIQUE idempotency key is the fence) — the effect is never duplicated.
+//   - PUBLISH → ROW, SAME TRANSACTION (design §8.3): the landing runs inside `PublishOptions.commit`,
+//     which `commitSyncEvent` executes IN the same transaction as the EventV2 event row. The event and
+//     its outbox mirror commit or roll back together — there is NO window in which the event is durable
+//     and the outbox row is missing. A landing failure fails the publish transaction (fail-closed: the
+//     caller sees the failure and no event row survives — never a silent missing outbox row).
+//   - EXACT-RETRY FENCE: an exact idempotent re-publish re-runs the commit hook for the already-stored
+//     event, but `land` is keyed by the UNIQUE `eventv2:<eventId>` (idempotency key) and returns
+//     `already_landed` — one row, one dispatch, no duplicate effect. The same fence covers a replayed
+//     commit: the EventV2Bridge also threads an in-transaction `onCommit` into `EventV2.replay` /
+//     `replayAll`, so a replayed event id lands at most once under the same key.
+//   - REPLAY SCOPE: EventV2 replay (sync/import/control-plane re-commit of the serialized event log) IS
+//     a production driver, and the bridge lands its commits in-transaction (same key, same fence). An
+//     event that never reached this DB in the first place (fresh import) gets its outbox row at replay
+//     commit time — the C5 consumers observe imported session lifecycle facts exactly like locally
+//     published ones.
 //
 // AUTHORITY / FAIL-CLOSED: the outbox only accepts envelopes the C5 registry validated
 // (`EventOutbox.enqueue` rejects unregistered / kind / schema / causation mismatches — design §8.8
@@ -95,6 +104,15 @@ let defaultRegistry: Registry = EVENT_V2_OUTBOX_REGISTRY
  */
 export function register(registration: EventTypeRegistration): void {
   defaultRegistry = defaultRegistry.register(registration)
+}
+
+/**
+ * Restore the default registry to the documented seed (`EVENT_V2_OUTBOX_REGISTRY`). Test-teardown hook:
+ * `register()` mutates the module-level registry for the process lifetime, so a test suite that
+ * registers its own types MUST restore in `afterAll` (F8) or a later suite sees the stale registration.
+ */
+export function resetRegistry(): void {
+  defaultRegistry = EVENT_V2_OUTBOX_REGISTRY
 }
 
 /** The deterministic C5 registration lookup used by the publish surface. */
@@ -171,10 +189,12 @@ export interface LandInput {
 }
 
 /**
- * Land an EventV2 publish into `deepagent_event_outbox`. Idempotent on `eventv2:<eventId>`: a replay
- * (crash window: publish committed, downstream effect not run) returns `already_landed` with the
+ * Land an EventV2 publish into `deepagent_event_outbox`. Idempotent on `eventv2:<eventId>`: an exact
+ * retry (the commit hook re-runs for an already-stored event) returns `already_landed` with the
  * surviving row — never a second row, never a second dispatch. Fail-closed: the envelope is re-validated
- * against the registration (kind/schema/policy) and a mismatch is a typed `EventPublishError`.
+ * against the registration (kind/schema/policy) and a mismatch is a typed `EventPublishError` — which,
+ * because the EventV2Bridge calls `land` inside `PublishOptions.commit`, rolls back the whole publish
+ * transaction (no durable event without its outbox row, design §8.3).
  */
 export function land(db: DatabaseClient, input: LandInput): Effect.Effect<LandResult, EventRegistry.EventPublishError> {
   return Effect.gen(function* () {

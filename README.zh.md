@@ -143,7 +143,7 @@ DeepAgent Code 不绑定供应商。它通过
 - **官方供应商**（DeepAgent、OpenAI、Anthropic、DeepSeek、Google、xAI、智谱/GLM）：点击
   **连接**，粘贴你的 API Key。
 - **其他供应商或网关**：在「自定义供应商」上点击 **连接**，填入 **Base URL** 和
-  **API Key**。DeepAgent Code 会自动探测协议（OpenAI 兼容或 Anthropic），并从接口的
+  **API Key**。DeepAgent Code 按供应商 SDK 包判定 API 协议族（OpenAI 兼容或 Anthropic），并从接口的
   `/models` 列表自动发现可用模型——其余字段无需填写。
 
 模型规格（上下文窗口、推理能力）会通过与 models.dev 目录按模型 id 匹配来自动补全。
