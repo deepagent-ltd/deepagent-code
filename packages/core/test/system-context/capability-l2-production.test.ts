@@ -573,8 +573,10 @@ describe("RuntimeFeatures.enabled mirrors the flip-flag table (W4 step 6)", () =
     expect(RuntimeFeatures.enabled("event.v2.im_single_write")).toBe(false)
   })
 
-  test("context_federation_v2 defaults OFF in core and follows the W3.1 federation gate env", () => {
+  test("context_federation_v2 defaults ON (W3.8 M1: production semantic) and follows the gate env", () => {
     delete process.env["DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION"]
+    expect(RuntimeFeatures.enabled("context_federation_v2")).toBe(true)
+    process.env["DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION"] = "false"
     expect(RuntimeFeatures.enabled("context_federation_v2")).toBe(false)
     process.env["DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION"] = "true"
     expect(RuntimeFeatures.enabled("context_federation_v2")).toBe(true)

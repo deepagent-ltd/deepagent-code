@@ -618,12 +618,19 @@ function toSelectionRef(ranked: RankedCandidate): SelectionRef {
   return {
     graph: candidate.ref.graph,
     ref: canonicalContextRef(candidate.ref),
-    token: candidate.title,
+    // L2 — single-token bound (120 chars): a candidate title (symbol/heading/path text) is
+    // model-visible evidence, never unlimited. Ref/summary facts are untouched; only the title
+    // token is truncated so the evidence tail and token accounting stay bounded.
+    token: truncateTitle(candidate.title),
     score: ranked.score,
     freshness: "current",
     sensitivity: sensitivityOf(candidate),
     reason: `deterministic_rank:value_tier_${ranked.valueTier}`,
   }
+}
+
+function truncateTitle(title: string): string {
+  return title.length > 120 ? `${title.slice(0, 120)}…` : title
 }
 
 function sensitivityOf(candidate: ContextCandidate): SelectionRef["sensitivity"] {
