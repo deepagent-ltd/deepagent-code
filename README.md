@@ -16,32 +16,20 @@
 
 ---
 
-## Alpha Release Line
+DeepAgent Code is an AI coding workspace for work that lasts longer than one prompt. You can ask for a small edit, guide a running task without interrupting it, hand over a migration with objective completion criteria, or bring several specialist agents into a decision — and the work stays coherent across turns, restarts, tools, people, and projects.
 
-The repository is preparing the coordinated Core V2 and Desktop 2.0 alpha line. Core and Desktop are validated and released as separate products, so their public labels remain explicit.
+## What makes it different
 
-| Component | Version | Git tag | Scope |
-|---|---|---|---|
-| **Core runtime** | `2.0.0-alpha.0` | `core-v2.0alpha` | Durable V2 sessions, storage, provider ownership, context, tools, and recovery |
-| **Desktop app** | `2.0.0-alpha.0` | `desktop-v2.0alpha` | Electron shell, renderer, bundled CLI, updater, and packaged user experience |
-
-These alpha tags identify the validated source line. They do not promise stable API compatibility or authorize a production database migration. The GitHub Action remains on its independent `github-v1.4.7` line until that component is released separately.
-
-## Repository Map
-
-| Path | Responsibility |
+| A typical coding agent | DeepAgent Code |
 |---|---|
-| `packages/core` | Shared durable runtime and database authority |
-| `packages/deepagent-code` | CLI, server, session orchestration, and bundled runtime |
-| `packages/app` | Desktop renderer and user-facing application state |
-| `packages/desktop` | Electron process, packaging, updater, and native integration |
-| `packages/sdk/js` | Public JavaScript SDK surface |
+| Understands only what's in the current prompt | **Remembers your project** — sessions survive restarts, and what you taught it is still there tomorrow |
+| Searches for files when it needs context | **Understands the project** — code, knowledge, project memory and documents are connected, so it works from what your project actually is |
+| Does one task at a time | **Plans and finishes real work** — define a goal once, and it advances through plan → execute → verify → iterate |
+| Works alone | **Collaborates with specialists** — bounded subagents, worktree isolation, and an Expert Panel for high-risk decisions |
+| Runs only in one place, one model | **Fits your setup** — desktop or terminal, and 75+ model providers with your own API keys |
+| Keeps its memory a black box | **Memory you can see and govern** — inspect what it learned, reject what it shouldn't repeat |
 
-The root README covers the product and quick-start workflow. Component READMEs cover local package development; `CHANGELOG.md` records public release changes.
-
-DeepAgent Code is an AI coding workspace for work that lasts longer than one prompt. It combines a production coding-agent runtime with durable sessions, connected project memory, live planning, code intelligence, multi-agent collaboration, and human oversight.
-
-You can ask for a small edit, guide a running task without interrupting it, hand over a migration with objective completion criteria, or bring several specialist agents into a decision. DeepAgent keeps the work coherent across turns, restarts, tools, people, and projects.
+Everything below is what this means day to day.
 
 ## One Workspace, Three Ways to Work
 
@@ -143,7 +131,7 @@ endpoint. Pick whichever path fits how you work.
 
 Open **Settings → Providers**:
 
-- **Official providers** (OpenAI, Anthropic, DeepSeek, Google, xAI, ZhipuAI/GLM):
+- **Official providers** (DeepAgent, OpenAI, Anthropic, DeepSeek, Google, xAI, ZhipuAI/GLM):
   click **Connect**, paste your API key.
 - **Any other provider or gateway**: click **Connect** on *Custom provider*, paste
   the **Base URL** and **API key**. DeepAgent Code auto-detects the protocol
@@ -213,7 +201,7 @@ The agent will:
 
 On your next session, when you ask to add rate limiting elsewhere, the agent already knows the pattern.
 
-## Core Concepts
+## How It Works (under the hood)
 
 **Document graph** — All persistent state lives in typed documents: `knowledge`, `strategy`, `methodology`, `skill`, `memory`, `design`, `worklog`, `diagnosis`, `eval`. Documents link to each other (supports/blocks/conflicts/validates), forming a graph you can traverse.
 
@@ -221,40 +209,9 @@ On your next session, when you ask to add rate limiting elsewhere, the agent alr
 
 **Context admission** — Retrieval hits pass through admission gates. Full tool output (raw LSP dumps, diagnostics, capability indexes) is written to evidence artifacts, ref-linked and tool-only; only summaries and `file:line` snippets enter the model context. Sensitive values (SSH hosts, tokens, internal paths) are suggested, never auto-expanded.
 
-**AI IDE microservice** — Query code by symbol name and intent (e.g. `code_intel({ symbol: "AgentGateway.open", intent: "overview" })`), not file:line coordinates. Get definitions, references, call chains, type hierarchies, and diagnostics in one call. Built on LSP with 38 language servers; degrades gracefully to grep/read when no server is configured.
+**AI IDE microservice** — Query code by symbol name and intent (e.g. `code_intel({ symbol: "AgentGateway.open", intent: "overview" })`), not file:line coordinates. Get definitions, references, call chains, type hierarchies, and diagnostics in one call. Built on LSP with 38+ language servers; degrades gracefully to grep/read when no server is configured.
 
 **Preset MCP catalog** — Curated MCP servers for Git platforms, file search, read-only databases, and browser automation. Risk tiers are derived at load time from the catalog template (not user config, so they can't be injected), and servers default to not-connected with write and external-fetch operations behind approval gates.
-
-## Architecture
-
-```text
-┌─────────────────────────────────────────────────────────────┐
-│  Control Plane (DeepAgent additions)                        │
-│  • Four-graph unified store (code + knowledge + memory + doc)│
-│  • Continuously maintained working state (memory + compaction)│
-│  • Domain pack system (composable, auto-activating knowledge)│
-│  • Context assembly & admission gates                       │
-│  • Multi-agent orchestration & adversarial review           │
-│  • Supervised goal loop & expert panel (event-driven)       │
-│  • Evidence-gated learning & work-strength ladder           │
-└─────────────────────────────────────────────────────────────┘
-                             │
-┌─────────────────────────────────────────────────────────────┐
-│  Runtime Foundations (from opencode)                        │
-│  • Agent loop & tool execution                              │
-│  • Session, fork & provider management                      │
-│  • MCP client runtime                                       │
-│  • Permission system                                        │
-└─────────────────────────────────────────────────────────────┘
-                             │
-┌─────────────────────────────────────────────────────────────┐
-│  Intelligence Layers                                        │
-│  • LSP microservice (38 language servers)                   │
-│  • Preset MCP servers (git/files/db/browser)                │
-│  • Domain adapters (validation & diagnostics)               │
-│  • Diagnostic & validation loops                            │
-└─────────────────────────────────────────────────────────────┘
-```
 
 The full architecture and its invariants are documented in [Architecture & Design](design/README.md).
 
