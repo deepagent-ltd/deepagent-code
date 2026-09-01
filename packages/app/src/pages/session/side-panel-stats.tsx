@@ -43,7 +43,7 @@ export const SidePanelStats: Component<{ onClose: () => void }> = (props) => {
   return (
     <section class="size-full min-w-0 flex flex-col overflow-hidden bg-background-base" data-testid="side-panel-stats">
       <header class="h-10 shrink-0 px-2 flex items-center gap-2 border-b border-border-weaker-base">
-        <Icon name="dash" size="small" class="text-icon-base" />
+        <Icon name="dollar" size="small" class="text-icon-base" />
         <div class="min-w-0 flex-1 text-13-medium text-text-strong truncate">
           {language.t("session.stats.title")}
         </div>

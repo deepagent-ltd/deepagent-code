@@ -99,6 +99,7 @@ const names = [
   "help",
   "settings-gear",
   "dash",
+  "dollar",
   "cloud-upload",
   "trash",
   "sliders",
