@@ -1,17 +1,18 @@
 import { randomUUID } from "node:crypto"
 import { Context, Effect, Layer, Ref } from "effect"
 import type { RecoveryDescriptor } from "@deepagent-code/core/contract/recovery-command"
+import { Database } from "@deepagent-code/core/database/database"
+import { SessionProviderRecoveryDurable } from "@deepagent-code/core/session/runner"
+type CommandRow = SessionProviderRecoveryDurable.CommandRow
+type DescriptorRow = SessionProviderRecoveryDurable.DescriptorRow
+type DurableRecoveryStore = SessionProviderRecoveryDurable.DurableRecoveryStore
 
-// In-memory HTTP-surface state for the maintenance surface (C6-01). This is a
-// process-local, non-durable registry that exists ONLY to give the maintenance
-// HTTP contract a coherent request/response + typed-error surface while the
-// durable authority (core's SessionProviderRecovery store) is consumed where the
-// core service exposes a read. Restore is fixture-gated / dry-run in this lane:
-// the registry tracks the restore-in-progress flag that drives the 409 conflict.
-//
-// Not exported from a package surface; it is provided by the maintenance handler
-// layer (deepagent-code) so the route graph stays independent of any core
-// persistence wiring.
+// C6-01 maintenance HTTP-surface state (design §11.1) — W2: the recovery command /
+// descriptor / evidence-export records are now DURABLE (core's DB-backed
+// SessionProviderRecoveryDurable store) instead of a synthetic in-memory Ref, so a
+// kill-9 restart re-lists the same descriptors/commands/exports. The restore-in-progress
+// flag stays process-local by nature (it drives the 409 conflict surface for the
+// backup/restore lane).
 
 export interface RecoveryDescriptorRecord {
   readonly commandId: string
@@ -64,85 +65,165 @@ export class Service extends Context.Service<Service, MaintenanceRegistry>()(
 /** The default export TTL for evidence (7 days, mirroring the core default). */
 export const DefaultEvidenceExportTtlMs = 7 * 24 * 60 * 60_000
 
-interface MaintenanceRegistryState {
-  readonly restore: RestoreStatusRecord
-  readonly records: ReadonlyMap<string, RecoveryDescriptorRecord>
-  readonly sessionIndex: ReadonlyMap<string, ReadonlyArray<string>>
-  readonly exports: ReadonlyMap<string, EvidenceExportRecord>
+// ---------------------------------------------------------------------------
+// Pure reconstruction (descriptor row + command row → wire record)
+// ---------------------------------------------------------------------------
+
+/** Derive the durable evidence status a descriptor row records (settled terminal → settled). */
+const evidenceStatusOf = (descriptor: RecoveryDescriptor): "settled" | undefined =>
+  descriptor.descriptorKind === "resolved" && descriptor.resolved.terminal === "settled"
+    ? "settled"
+    : undefined
+
+/** Rebuild the wire record from a commanded descriptor row (command authorizes it). */
+function toRecord(command: CommandRow, descriptor: DescriptorRow): RecoveryDescriptorRecord {
+  return {
+    commandId: command.commandId,
+    sessionId: descriptor.sessionId,
+    attemptId: command.attempt.attemptId,
+    requestHash: command.requestHash,
+    descriptor: descriptor.payload,
+    actorType: command.actorType ?? "system",
+    actorId: command.actorId ?? `turn_terminal:${descriptor.activityId}`,
+    createdAt: descriptor.createdAt,
+    ...(evidenceStatusOf(descriptor.payload) ? { evidenceStatus: evidenceStatusOf(descriptor.payload) } : {}),
+  }
 }
 
-const emptyState = (): MaintenanceRegistryState => ({
-  restore: { inProgress: false },
-  records: new Map(),
-  sessionIndex: new Map(),
-  exports: new Map(),
-})
-
-const appendSessionCommand = (
-  current: ReadonlyMap<string, ReadonlyArray<string>>,
-  sessionId: string,
-  commandId: string,
-): ReadonlyMap<string, ReadonlyArray<string>> => {
-  const existing = current.get(sessionId) ?? []
-  return new Map(current).set(sessionId, [...existing, commandId])
+/** Rebuild a system-authored record for a descriptor row without a command (turn terminal). */
+function toOrphanRecord(descriptor: DescriptorRow): RecoveryDescriptorRecord {
+  return {
+    commandId: "",
+    sessionId: descriptor.sessionId,
+    attemptId: descriptor.payload.provenance.sourceRefs[0] ?? descriptor.descriptorId,
+    requestHash: descriptor.payload.requestHash,
+    descriptor: descriptor.payload,
+    actorType: "system",
+    actorId: `turn_terminal:${descriptor.activityId}`,
+    createdAt: descriptor.createdAt,
+    ...(evidenceStatusOf(descriptor.payload) ? { evidenceStatus: evidenceStatusOf(descriptor.payload) } : {}),
+  }
 }
+
+// ---------------------------------------------------------------------------
+// DB-backed layer
+// ---------------------------------------------------------------------------
 
 export const layer = Layer.effect(
   Service,
-  Ref.make(emptyState()).pipe(
-    Effect.map(
-      (ref): MaintenanceRegistry => ({
-        restore: Effect.map(Ref.get(ref), (value) => value.restore),
-        setRestoreInProgress: (input) =>
-          Ref.modify(ref, (value) => {
-            const restore: RestoreStatusRecord = {
-              inProgress: true,
-              restoreId: `restore_${randomUUID()}`,
-              startedAt: Date.now(),
-              sourceFile: input.sourceFile,
-            }
-            return [restore, { ...value, restore }]
-          }),
-        clearRestore: () => Ref.update(ref, (value) => ({ ...value, restore: emptyState().restore })),
-        listBySession: (sessionId) =>
-          Effect.map(Ref.get(ref), (value) => {
-            const ids = value.sessionIndex.get(sessionId) ?? []
-            return ids.flatMap((id) => {
-              const record = value.records.get(id)
-              return record ? [record] : []
-            })
-          }),
-        getRecord: (commandId) => Effect.map(Ref.get(ref), (value) => value.records.get(commandId)),
-        getByRequestHash: (requestHash) =>
-          Effect.map(Ref.get(ref), (value) =>
-            [...value.records.values()].find((record) => record.requestHash === requestHash),
-          ),
-        record: (record) =>
-          Effect.gen(function* () {
-            yield* Ref.update(ref, (value) => ({
-              ...value,
-              records: new Map(value.records).set(record.commandId, record),
-              sessionIndex: appendSessionCommand(value.sessionIndex, record.sessionId, record.commandId),
-            }))
-            return record
-          }),
-        createExport: ({ sessionId, contentHash, ttlMs }) => {
-          const now = Date.now()
-          const exportRecord: EvidenceExportRecord = {
-            exportId: `exp_${randomUUID()}`,
-            sessionId,
-            ownerSessionId: sessionId,
-            exportedAt: now,
-            expiresAt: now + (ttlMs ?? DefaultEvidenceExportTtlMs),
-            contentHash,
-          }
-          return Effect.map(
-            Ref.update(ref, (value) => ({ ...value, exports: new Map(value.exports).set(exportRecord.exportId, exportRecord) })),
-            () => exportRecord,
-          )
+  Effect.gen(function* () {
+    const db = (yield* Database.Service).db
+    const store: DurableRecoveryStore = SessionProviderRecoveryDurable.makeDurableRecoveryStore(db)
+    const restoreRef = yield* Ref.make<RestoreStatusRecord>({ inProgress: false })
+
+    const listBySession = Effect.fn("MaintenanceRegistry.listBySession")(function* (sessionId: string) {
+      const commands = yield* store.listCommandsBySession(sessionId)
+      const byDescriptor = new Map(commands.flatMap((row) => (row.descriptorId ? [[row.descriptorId, row] as const] : [])))
+      const descriptors = yield* store.listDescriptorsBySession(sessionId)
+      return descriptors.map((descriptor) => {
+        const command = byDescriptor.get(descriptor.descriptorId)
+        return command ? toRecord(command, descriptor) : toOrphanRecord(descriptor)
+      })
+    })
+
+    const getRecord = Effect.fn("MaintenanceRegistry.getRecord")(function* (commandId: string) {
+      const command = yield* store.getCommand(commandId)
+      if (!command?.descriptorId) return undefined
+      const descriptor = yield* store.getDescriptor(command.descriptorId)
+      return descriptor ? toRecord(command, descriptor) : undefined
+    })
+
+    const getByRequestHash = Effect.fn("MaintenanceRegistry.getByRequestHash")(function* (requestHash: string) {
+      const commands = yield* store.listCommandsByRequestHash(requestHash)
+      for (const command of commands) {
+        if (!command.descriptorId) continue
+        const descriptor = yield* store.getDescriptor(command.descriptorId)
+        if (descriptor) return toRecord(command, descriptor)
+      }
+      return undefined
+    })
+
+    const record = Effect.fn("MaintenanceRegistry.record")(function* (record: RecoveryDescriptorRecord) {
+      const descriptorWrite = yield* store.putDescriptor({
+        descriptor: record.descriptor,
+        sessionId: record.sessionId,
+        activityId: "",
+        turnId: "0",
+        createdAt: record.createdAt,
+      })
+      yield* store.putCommand({
+        // The handler pre-computed this exact content address for the response; store
+        // the row under it so recoveryCommandGet round-trips the same command id.
+        commandId: record.commandId,
+        requestHash: record.requestHash,
+        attemptIdentity: {
+          sessionId: record.sessionId,
+          activityId: "",
+          attemptId: record.attemptId,
+          providerTurnSeq: 0,
+          selectionId: "",
+          projectionHash: record.requestHash,
+          requestHash: record.requestHash,
+          providerId: "",
         },
-        getExport: (exportId) => Effect.map(Ref.get(ref), (value) => value.exports.get(exportId)),
-      }),
-    ),
-  ),
+        descriptorId: descriptorWrite.descriptorId,
+        actorType: record.actorType,
+        actorId: record.actorId,
+        createdAt: record.createdAt,
+      })
+      return record
+    })
+
+    const createExport = Effect.fn("MaintenanceRegistry.createExport")(function* (input: {
+      sessionId: string
+      contentHash: string
+      ttlMs?: number
+    }) {
+      const now = Date.now()
+      const exportRecord: EvidenceExportRecord = {
+        exportId: `exp_${randomUUID()}`,
+        sessionId: input.sessionId,
+        ownerSessionId: input.sessionId,
+        exportedAt: now,
+        expiresAt: now + (input.ttlMs ?? DefaultEvidenceExportTtlMs),
+        contentHash: input.contentHash,
+      }
+      yield* store.putExport({
+        exportId: exportRecord.exportId,
+        manifestHash: input.contentHash,
+        state: "issued",
+        payload: { record: exportRecord },
+        createdAt: now,
+      })
+      return exportRecord
+    })
+
+    const getExport = Effect.fn("MaintenanceRegistry.getExport")(function* (exportId: string) {
+      const row = yield* store.getExport(exportId)
+      if (!row) return undefined
+      const body = row.payload as { readonly record?: EvidenceExportRecord } | undefined
+      return body?.record
+    })
+
+    return Service.of({
+      restore: Effect.map(Ref.get(restoreRef), (value) => value),
+      setRestoreInProgress: (input) =>
+        Ref.modify(restoreRef, () => {
+          const restore: RestoreStatusRecord = {
+            inProgress: true,
+            restoreId: `restore_${randomUUID()}`,
+            startedAt: Date.now(),
+            sourceFile: input.sourceFile,
+          }
+          return [restore, restore]
+        }),
+      clearRestore: () => Ref.set(restoreRef, { inProgress: false }),
+      listBySession,
+      getRecord,
+      getByRequestHash,
+      record,
+      createExport,
+      getExport,
+    })
+  }),
 )

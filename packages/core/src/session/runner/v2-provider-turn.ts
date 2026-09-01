@@ -6,6 +6,7 @@ import { Cause, Context, Duration, Effect, Exit, Layer, Option, Ref, Schedule, S
 import { Database } from "../../database/database"
 import { CanonicalJson } from "../../util/canonical-json"
 import { Hash } from "../../util/hash"
+import { RecoveryCommandContract } from "../../contract/recovery-command"
 import type { ProtocolAttemptIdentity } from "../../contract/model-protocol"
 import type { PreparedCapabilitySnapshotRef } from "../../contract/prepared-turn"
 import { ContextFederationExecutionParity } from "../../context-federation/execution-parity"
@@ -477,6 +478,11 @@ export const layerWith = (options: LayerOptions = {}) =>
                     })
                   }
                 }
+                // W2 — a terminal receipt carries its durable recovery descriptor in the SAME
+                // transaction (settled / failed / indeterminate_after_crash).
+                if (["settled", "failed", "indeterminate_after_crash"].includes(input.state)) {
+                  yield* writeTurnTerminalDescriptor(tx, row, observedAt)
+                }
                 return fromRow(row)
               }),
             { behavior: "immediate" },
@@ -562,10 +568,11 @@ export const layerWith = (options: LayerOptions = {}) =>
                   rows,
                   (joined) => {
                     const row = joined.session_v2_provider_turn_receipt
+                    const terminalState = row.state === "preparing" ? "failed" : "indeterminate_after_crash"
                     return tx
                       .update(V2ProviderTurnReceiptTable)
                       .set({
-                        state: row.state === "preparing" ? "failed" : "indeterminate_after_crash",
+                        state: terminalState,
                         error_code:
                           row.state === "preparing" ? "owner_lost_before_dispatch" : "owner_lost_after_dispatch",
                         terminal_at: observedAt,
@@ -579,6 +586,12 @@ export const layerWith = (options: LayerOptions = {}) =>
                       )
                       .returning({ receiptId: V2ProviderTurnReceiptTable.receipt_id })
                       .get()
+                      .pipe(
+                        // W2 — the crash-recovered terminal carries its durable descriptor too.
+                        Effect.tap((winner) =>
+                          winner ? writeTurnTerminalDescriptor(tx, { ...row, state: terminalState }, observedAt) : Effect.void,
+                        ),
+                      )
                   },
                   { concurrency: 1 },
                 )
@@ -903,6 +916,97 @@ export const receiptByIdentity = (
     )
     .orderBy(sql`${V2ProviderTurnReceiptTable.request_ordinal} DESC`)
     .get()
+
+// ---------------------------------------------------------------------------
+// W2 — durable recovery descriptor at the turn terminal (design §W2).
+// A settled / failed / indeterminate terminal writes ONE content-addressed
+// descriptor row (kind + payload + digest) in the SAME receipt transaction, so a
+// kill-9 restart re-derives the same recovery classification from the table.
+// ---------------------------------------------------------------------------
+
+const terminalDescriptorCommon = (row: {
+  readonly receipt_id: string
+  readonly session_id: string
+  readonly activity_id: string
+  readonly provider_turn_seq: number
+  readonly provider_attempt_id: string | null
+  readonly request_input_hash: string
+  readonly owner_token: string
+  readonly state: string
+}) => ({
+  schemaVersion: "recovery-descriptor.v1" as const,
+  requestHash: row.request_input_hash,
+  provenance: { origin: "recorded" as const, sourceRefs: [row.provider_attempt_id ?? row.receipt_id] },
+  baseline: { verified: false },
+  terminalBridge: { bridgeId: "none", bridgeType: "none" },
+  casTokens: { expectedState: row.state, expectedVersion: 0, ownerToken: row.owner_token },
+})
+
+/**
+ * The five-class descriptor for a turn terminal state. settled → resolved(settled);
+ * failed → resolved(unknown) — the local outcome is terminal but no provider verdict
+ * exists; indeterminate_after_crash → coordination_required(network_unknown) — the
+ * unknown provider result requires explicit resolution (never an automatic replay).
+ */
+export function turnTerminalDescriptor(row: {
+  readonly receipt_id: string
+  readonly session_id: string
+  readonly activity_id: string
+  readonly provider_turn_seq: number
+  readonly provider_attempt_id: string | null
+  readonly request_input_hash: string
+  readonly owner_token: string
+  readonly state: string
+}): RecoveryCommandContract.RecoveryDescriptor | undefined {
+  const common = terminalDescriptorCommon(row)
+  if (row.state === "settled") {
+    return {
+      ...common,
+      descriptorKind: "resolved",
+      resolved: { resolutionRef: row.receipt_id, bridgeRef: "none", terminal: "settled" },
+    }
+  }
+  if (row.state === "failed") {
+    return {
+      ...common,
+      descriptorKind: "resolved",
+      resolved: { resolutionRef: row.receipt_id, bridgeRef: "none", terminal: "unknown" },
+    }
+  }
+  if (row.state === "indeterminate_after_crash") {
+    return {
+      ...common,
+      descriptorKind: "coordination_required",
+      coordination: { reason: "network_unknown", requiredActor: "admin" },
+    }
+  }
+  return undefined
+}
+
+/**
+ * Insert-or-ignore the terminal descriptor in the caller's transaction (idempotent by
+ * content address — an exact retry converges on the same row). A DB failure is a defect
+ * (the receipt terminal is already committed; the descriptor is re-derivable and a
+ * later resolve/classify re-writes it).
+ */
+export function writeTurnTerminalDescriptor(
+  tx: Transaction,
+  row: typeof V2ProviderTurnReceiptTable.$inferSelect,
+  observedAt: number,
+): Effect.Effect<void, never> {
+  const descriptor = turnTerminalDescriptor(row)
+  if (!descriptor) return Effect.void
+  const contentHash = RecoveryCommandContract.recoveryDescriptorDigest(descriptor)
+  return tx
+    .run(sql`
+      INSERT OR IGNORE INTO session_provider_recovery_descriptor
+        (descriptor_id, session_id, activity_id, turn_id, kind, payload, content_hash, created_at)
+      VALUES (${`descriptor_${contentHash}`}, ${row.session_id}, ${row.activity_id},
+              ${String(row.provider_turn_seq)}, ${descriptor.descriptorKind},
+              ${JSON.stringify(descriptor)}, ${contentHash}, ${observedAt})
+    `)
+    .pipe(Effect.orDie)
+}
 
 export function admitInTransaction(
   tx: Transaction,

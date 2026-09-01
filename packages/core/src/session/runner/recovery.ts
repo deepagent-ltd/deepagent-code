@@ -25,9 +25,16 @@ export * as SessionProviderRecovery from "./recovery"
 
 import { randomUUID } from "node:crypto"
 import { Context, Effect, Layer, Ref, Schema, Semaphore } from "effect"
+import type { EffectDrizzleSqlite } from "@deepagent-code/effect-drizzle-sqlite"
 import { RecoveryCommandContract } from "../../contract/recovery-command"
 import { contentDigest } from "../../contract/digest"
 import { Hash } from "../../util/hash"
+import {
+  CommandState,
+  makeDurableRecoveryStore,
+  recoveryDescriptorId,
+  toCommandRecord,
+} from "./recovery-durable-store"
 import type {
   AbandonRecord,
   AbandonTransactionOutcome,
@@ -1380,3 +1387,795 @@ export const layer = Layer.effect(
     })
   }),
 )
+
+// ---------------------------------------------------------------------------
+// W2 — durable service (DB-backed descriptors / commands / evidence exports)
+// ---------------------------------------------------------------------------
+//
+// The C1B service above keeps the pure, process-local store (its tests + crash seams).
+// This section is the PRODUCTION service: the same frozen contract, the same five
+// executors, but the three W2 surfaces persist in the DB (design §W2 "恢复持久化"):
+//   - a classified descriptor row per resolve / terminal exit (content-addressed,
+//     insert-or-ignore, so an exact retry converges on the same row);
+//   - a command row per CAS winner (state text + expected owner token + result hash);
+//   - a sealed evidence-export row per export (unlock works after restart).
+//
+// W2 boundary: C1B evidence status records, baseline repairs, fork fences and abandon
+// receipts are NOT YET table-backed (later waves), so they stay in a process-local Ref
+// here. Commands / descriptors / exports are read from and written to the DB.
+
+type Database = EffectDrizzleSqlite.EffectSQLiteDatabase
+
+/** The resolver's exit descriptor for a terminal command effect (idempotent, content-addressed). */
+function resolvedExitDescriptor(input: {
+  readonly requestHash: string
+  readonly attempt: AttemptIdentity
+  readonly terminal: RecoveryCommandContract.RecoveryTerminal
+  readonly resolutionRef: string
+  readonly ownerToken?: string
+}): RecoveryCommandContract.RecoveryDescriptor {
+  return {
+    schemaVersion: "recovery-descriptor.v1",
+    requestHash: input.requestHash,
+    provenance: { origin: "recorded", sourceRefs: [input.attempt.attemptId] },
+    baseline: { verified: false },
+    terminalBridge: { bridgeId: "none", bridgeType: "none" },
+    casTokens: {
+      expectedState: "indeterminate_after_crash",
+      expectedVersion: 0,
+      ownerToken: input.ownerToken ?? "",
+    },
+    descriptorKind: "resolved",
+    resolved: {
+      resolutionRef: input.resolutionRef,
+      bridgeRef: "none",
+      terminal: input.terminal,
+    },
+  }
+}
+
+/** W2 — the DB-backed service implementation. `durableLayerWith(db)` binds it to a store. */
+const durableServiceWith = (db: Database) =>
+  Effect.gen(function* () {
+    const store = makeDurableRecoveryStore(db)
+    // Non-durable domains (evidence records, baselines, forks, abandon receipts,
+    // artifacts) stay process-local; commands/descriptors/exports live in the DB above.
+    const memory = yield* Ref.make(emptyRecoveryStoreState())
+    const lock = yield* Semaphore.make(1)
+    const resolveCache = yield* Ref.make(new Map<string, ResolveOutcome>())
+
+    const commandRecordsFor = (sessionId: string): Effect.Effect<ReadonlyMap<string, CommandRecord>> =>
+      Effect.map(store.listCommandsBySession(sessionId), (rows) =>
+        new Map(rows.map((row) => [row.commandId, toCommandRecord(row)])),
+      )
+
+    const snapshot = (sessionId: string): Effect.Effect<RecoveryStoreState> =>
+      Effect.gen(function* () {
+        const base = yield* Ref.get(memory)
+        const commands = yield* commandRecordsFor(sessionId)
+        return { ...base, commands }
+      })
+
+    const commitMemory = (state: RecoveryStoreState): Effect.Effect<void> => Ref.set(memory, state)
+
+    const putDescriptorFor = (input: {
+      readonly descriptor: RecoveryCommandContract.RecoveryDescriptor
+      readonly attempt: AttemptIdentity
+      readonly createdAt?: number
+    }) =>
+      store.putDescriptor({
+        descriptor: input.descriptor,
+        sessionId: input.attempt.sessionId,
+        activityId: input.attempt.activityId,
+        turnId: String(input.attempt.providerTurnSeq),
+        createdAt: input.createdAt,
+      })
+
+    const resolve = Effect.fn("SessionProviderRecovery.resolve")(function* (input: ResolveInput) {
+      const key = `${input.sessionId}:${input.attemptId}`
+      return yield* Semaphore.withPermits(lock, 1)(
+        Effect.gen(function* () {
+          const cached = yield* Ref.get(resolveCache)
+          if (cached.has(key)) return cached.get(key)!
+          const outcome = yield* resolveOnce(input)
+          yield* Ref.update(resolveCache, (map) => new Map(map).set(key, outcome))
+          return outcome
+        }),
+      )
+    })
+
+    const resolveOnce = (input: ResolveInput): Effect.Effect<ResolveOutcome, Error> =>
+      Effect.gen(function* () {
+        const descriptor = classify({
+          attempt: input.attemptIdentity,
+          attemptState: "indeterminate_after_crash",
+          expectedAttemptState: input.expectedAttemptState,
+          ownerToken: input.ownerToken,
+          expectedVersion: input.expectedVersion,
+          ...(input.baseline ? { baseline: input.baseline } : {}),
+          ...(input.safeBoundary ? { safeBoundary: input.safeBoundary } : {}),
+          historyVerified: input.historyVerified ?? true,
+          providerLookupComplete: input.providerLookupComplete ?? true,
+          placementUnresolved: input.placementUnresolved ?? false,
+          permissionIncomplete: input.permissionIncomplete ?? false,
+          workspaceConflict: input.workspaceConflict ?? false,
+        })
+        const descriptorWrite = yield* putDescriptorFor({ descriptor, attempt: input.attemptIdentity })
+        const write = yield* store.putCommand({
+          requestHash: input.requestHash,
+          attemptIdentity: input.attemptIdentity,
+          descriptorId: descriptorWrite.descriptorId,
+          expectedOwnerToken: input.ownerToken,
+        })
+        return {
+          descriptor,
+          commandId: write.commandId,
+          author: { actorType: input.actor.type, actorId: input.actor.id },
+        }
+      })
+
+    const recordCommand = Effect.fn("SessionProviderRecovery.recordCommand")(function* (input: {
+      readonly requestHash: string
+      readonly attemptIdentity: AttemptIdentity
+      readonly fault?: { readonly at: "after_command_stage" }
+    }) {
+      return yield* Semaphore.withPermits(lock, 1)(
+        Effect.gen(function* () {
+          // C1B-12 crash seam: a crash injected when the command WOULD be newly recorded
+          // aborts the commit (nothing is written); an idempotent existing/mismatch write
+          // changes no state so it needs no crash seam.
+          if (input.fault?.at === "after_command_stage") {
+            const address = recoveryCommandContentAddress({
+              requestHash: input.requestHash,
+              attemptIdentity: input.attemptIdentity,
+            })
+            const existing = yield* store.getCommand(address)
+            if (!existing) {
+              return yield* Effect.fail(new RecoveryTransactionAbortedError({ operation: "record_command" }))
+            }
+          }
+          return yield* store.putCommand({
+            requestHash: input.requestHash,
+            attemptIdentity: input.attemptIdentity,
+          })
+        }),
+      )
+    })
+
+    const getCommand = Effect.fn("SessionProviderRecovery.getCommand")(function* (commandId: string) {
+      const row = yield* store.getCommand(commandId)
+      return row ? toCommandRecord(row) : undefined
+    })
+
+    const evidence = {
+      recordStatus: Effect.fn("SessionProviderRecovery.evidence.recordStatus")(function* (input: {
+        readonly evidenceRef: string
+        readonly status: EvidenceStatus
+        readonly providerId?: string
+        readonly requestHash?: string
+        readonly payloadHash?: string
+      }) {
+        const record: EvidenceRecord = {
+          evidenceRef: input.evidenceRef,
+          status: input.status,
+          ...(input.providerId ? { providerId: input.providerId } : {}),
+          ...(input.requestHash ? { requestHash: input.requestHash } : {}),
+          ...(input.payloadHash ? { payloadHash: input.payloadHash } : {}),
+          recordedAt: Date.now(),
+        }
+        const state = yield* Ref.get(memory)
+        const prior = state.evidence.get(input.evidenceRef)
+        if (prior) {
+          const same =
+            prior.status === record.status &&
+            prior.providerId === record.providerId &&
+            prior.requestHash === record.requestHash &&
+            prior.payloadHash === record.payloadHash
+          if (same) return undefined
+          return yield* Effect.fail(new MismatchError({ reason: "evidence_status_divergence" }))
+        }
+        yield* Ref.set(memory, { ...state, evidence: new Map(state.evidence).set(input.evidenceRef, record) })
+      }),
+      getStatus: (evidenceRef: string) => Effect.map(Ref.get(memory), (state) => evidenceOf(state).get(evidenceRef)),
+    }
+
+    const adapter: { readonly classifyLegacy: (input: { readonly receiptId: string }) => {
+      readonly descriptor: RecoveryCommandContract.RecoveryDescriptor
+      readonly outOfAuthority: true
+    } } = {
+      classifyLegacy: (input: { readonly receiptId: string }) => {
+        return {
+          descriptor: classify({
+            attempt: {
+              sessionId: "",
+              attemptId: input.receiptId,
+              activityId: "",
+              providerTurnSeq: 0,
+              selectionId: "",
+              projectionHash: "",
+              requestHash: "",
+              providerId: "",
+            },
+            attemptState: "indeterminate_after_crash",
+            expectedAttemptState: "indeterminate_after_crash",
+            ownerToken: "",
+            expectedVersion: 0,
+            historyVerified: false,
+            providerLookupComplete: false,
+            placementUnresolved: false,
+            permissionIncomplete: false,
+            workspaceConflict: false,
+          }),
+          outOfAuthority: true,
+        }
+      },
+    }
+
+    const queryCommand = Effect.fn("SessionProviderRecovery.queryCommand")(function* (input: {
+      readonly requestHash: string
+      readonly attemptIdentity: AttemptIdentity
+    }) {
+      const address = recoveryCommandContentAddress({
+        requestHash: input.requestHash,
+        attemptIdentity: input.attemptIdentity,
+      })
+      const command = yield* store.getCommand(address)
+      const state = yield* Ref.get(memory)
+      return {
+        command: command ? toCommandRecord(command) : undefined,
+        evidence: [...evidenceOf(state).values()].filter((e) => e.requestHash === input.requestHash),
+      }
+    })
+
+    const queryAbandon = Effect.fn("SessionProviderRecovery.queryAbandon")(function* (attemptIdentity: AttemptIdentity) {
+      const state = yield* Ref.get(memory)
+      return state.abandons.get(abandonAttemptKey(attemptIdentity))
+    })
+
+    const abandonExact = Effect.fn("SessionProviderRecovery.abandonExact")(function* (input: AbandonExactInput) {
+      return yield* Semaphore.withPermits(lock, 1)(
+        Effect.gen(function* () {
+          yield* assertPermission(input.actor, requiredPermissionFor("resolvable_exact"))
+          const state = yield* snapshot(input.attemptIdentity.sessionId)
+          const scan = scanTerminalEvidence(evidenceOf(state), input.requestHash)
+          if (scan.status === "duplicate") {
+            return yield* Effect.fail(
+              new DuplicateTerminalConflictError({
+                evidenceRef: scan.canonical.evidenceRef,
+                requestHash: input.requestHash,
+                duplicateRef: scan.duplicate.evidenceRef,
+              }),
+            )
+          }
+          if (scan.status === "single") {
+            return yield* Effect.fail(
+              new RefuseAbandonWithTerminalEvidenceError({
+                evidenceRef: scan.canonical.evidenceRef,
+                requestHash: input.requestHash,
+              }),
+            )
+          }
+          const tx = abandonTransaction(
+            state,
+            {
+              requestHash: input.requestHash,
+              attemptIdentity: input.attemptIdentity,
+              actorType: input.actor.type,
+              actorId: input.actor.id,
+              reasonCode: input.reasonCode,
+            },
+            input.fault,
+          )
+          if (tx.status === "aborted") {
+            return yield* Effect.fail(new RecoveryTransactionAbortedError({ operation: "abandon_exact" }))
+          }
+          if (tx.outcome.status === "conflict") return tx.outcome
+          const descriptorWrite = yield* putDescriptorFor({
+            descriptor: resolvedExitDescriptor({
+              requestHash: input.requestHash,
+              attempt: input.attemptIdentity,
+              terminal: "abandoned",
+              resolutionRef: tx.outcome.commandId,
+            }),
+            attempt: input.attemptIdentity,
+          })
+          const cas = yield* store.putCommand({
+            requestHash: input.requestHash,
+            attemptIdentity: input.attemptIdentity,
+            descriptorId: descriptorWrite.descriptorId,
+            expectedOwnerToken: "",
+          })
+          if (cas.status === "mismatch") {
+            return yield* Effect.fail(new MismatchError({ reason: "request_hash_mismatch" }))
+          }
+          yield* store.transitionCommand({
+            commandId: cas.commandId,
+            from: CommandState.pending,
+            to: CommandState.abandoned,
+            resultHash: contentDigest(tx.outcome.abandon),
+          })
+          yield* commitMemory(tx.state)
+          return tx.outcome
+        }),
+      )
+    })
+
+    const queryBaseline = Effect.fn("SessionProviderRecovery.queryBaseline")(function* (baselineRef: string) {
+      const state = yield* Ref.get(memory)
+      return baselinesOf(state).get(baselineRef)
+    })
+
+    const repairBaselineAndAbandon = Effect.fn("SessionProviderRecovery.repairBaselineAndAbandon")(function* (
+      input: RepairBaselineAndAbandonInput,
+    ) {
+      return yield* Semaphore.withPermits(lock, 1)(
+        Effect.gen(function* () {
+          yield* assertPermission(input.actor, requiredPermissionFor("repairable_exact"))
+          const verified = verifyBaselineReconstruction({
+            reconstruction: { fragments: input.fragments },
+            evidence: input.evidence,
+          })
+          if (verified.status !== "verified") {
+            return yield* Effect.fail(new BaselineVerifyRefusedError({ reason: verified.reason }))
+          }
+          const state = yield* snapshot(input.attemptIdentity.sessionId)
+          const tx = repairAndAbandonTransaction(
+            state,
+            {
+              requestHash: input.requestHash,
+              attemptIdentity: input.attemptIdentity,
+              baselineRef: input.baselineRef,
+              evidence: input.evidence,
+              fragments: input.fragments,
+              actorType: input.actor.type,
+              actorId: input.actor.id,
+              reasonCode: input.reasonCode,
+            },
+            input.fault,
+          )
+          if (tx.status === "aborted") {
+            return yield* Effect.fail(new RecoveryTransactionAbortedError({ operation: "repair_baseline_and_abandon" }))
+          }
+          if (tx.outcome.status === "conflict") return tx.outcome
+          const descriptorWrite = yield* putDescriptorFor({
+            descriptor: resolvedExitDescriptor({
+              requestHash: input.requestHash,
+              attempt: input.attemptIdentity,
+              terminal: "abandoned",
+              resolutionRef: tx.outcome.abandon.commandId,
+            }),
+            attempt: input.attemptIdentity,
+          })
+          const cas = yield* store.putCommand({
+            requestHash: input.requestHash,
+            attemptIdentity: input.attemptIdentity,
+            descriptorId: descriptorWrite.descriptorId,
+            expectedOwnerToken: "",
+          })
+          if (cas.status === "mismatch") {
+            return yield* Effect.fail(new MismatchError({ reason: "request_hash_mismatch" }))
+          }
+          yield* store.transitionCommand({
+            commandId: cas.commandId,
+            from: CommandState.pending,
+            to: CommandState.abandoned,
+            resultHash: contentDigest(tx.outcome.abandon),
+          })
+          yield* commitMemory(tx.state)
+          return tx.outcome
+        }),
+      )
+    })
+
+    const findSafeBoundary = (history: readonly SessionRecoverySafeBoundary.SafeBoundaryMessage[]) =>
+      SessionRecoverySafeBoundary.findSafeBoundary(history)
+
+    const forkFromSafeBoundary = Effect.fn("SessionProviderRecovery.forkFromSafeBoundary")(function* (
+      input: ForkFromSafeBoundaryInput,
+    ) {
+      return yield* Semaphore.withPermits(lock, 1)(
+        Effect.gen(function* () {
+          yield* assertPermission(input.actor, requiredPermissionFor("fork_only"))
+          const safe = SessionRecoverySafeBoundary.findSafeBoundary(input.history)
+          if (safe.status === "none") {
+            return yield* Effect.fail(new SafeBoundaryNoneError({ reason: "safe_boundary_none" }))
+          }
+          if (input.boundaryMessageId !== undefined && input.boundaryMessageId !== safe.boundaryMessageId) {
+            return yield* Effect.fail(new MismatchError({ reason: "boundary_mismatch" }))
+          }
+          const boundary = safe.confirmedThrough
+          const boundaryHash = contentDigest({ id: boundary.id, seq: boundary.seq, kind: boundary.kind })
+          const forkSessionId = input.forkSessionId ?? `fork_${randomUUID()}`
+          const state = yield* snapshot(input.sourceSessionId)
+          // NOTE: the source-session snapshot loads commands from the source session's DB rows.
+          const tx = forkTransaction(
+            state,
+            {
+              sourceSessionId: input.sourceSessionId,
+              requestHash: input.requestHash,
+              attemptIdentity: input.attemptIdentity,
+              boundaryMessageId: safe.boundaryMessageId,
+              boundaryIndex: safe.boundaryIndex,
+              boundaryHash,
+              copiedMessageIds: safe.copiedMessages.map((message) => message.id),
+              excludedIndeterminateTurns: safe.excludedTurns,
+              copiedWindowHash: safe.hashedWindow,
+              actorType: input.actor.type,
+              actorId: input.actor.id,
+              permission: requiredPermissionFor("fork_only"),
+              forkSessionId,
+              now: input.now,
+            },
+            input.fault,
+          )
+          if (tx.status === "aborted") {
+            return yield* Effect.fail(new RecoveryTransactionAbortedError({ operation: "fork_from_safe_boundary" }))
+          }
+          if (tx.outcome.status === "conflict") return tx.outcome
+          const descriptorWrite = yield* putDescriptorFor({
+            descriptor: resolvedExitDescriptor({
+              requestHash: input.requestHash,
+              attempt: input.attemptIdentity,
+              terminal: "forked",
+              resolutionRef: tx.outcome.forkRef,
+            }),
+            attempt: input.attemptIdentity,
+          })
+          const cas = yield* store.putCommand({
+            requestHash: input.requestHash,
+            attemptIdentity: input.attemptIdentity,
+            descriptorId: descriptorWrite.descriptorId,
+            expectedOwnerToken: "",
+          })
+          if (cas.status === "mismatch") {
+            return yield* Effect.fail(new MismatchError({ reason: "request_hash_mismatch" }))
+          }
+          yield* store.transitionCommand({
+            commandId: cas.commandId,
+            from: CommandState.pending,
+            to: CommandState.forked,
+            resultHash: contentDigest(tx.outcome.manifest),
+          })
+          yield* commitMemory(tx.state)
+          const commandId = recoveryCommandContentAddress({
+            requestHash: input.requestHash,
+            attemptIdentity: input.attemptIdentity,
+          })
+          if (tx.outcome.status === "existing") {
+            const existing: ForkFromSafeBoundaryOutcome = {
+              status: "existing",
+              forkRef: tx.outcome.forkRef,
+              manifest: tx.outcome.manifest,
+              forkSessionId: tx.outcome.manifest.forkSessionId,
+            }
+            return existing
+          }
+          const forked: ForkFromSafeBoundaryOutcome = {
+            status: "forked",
+            forkRef: tx.outcome.forkRef,
+            manifest: tx.outcome.manifest,
+            forkSessionId: tx.outcome.manifest.forkSessionId,
+            commandId,
+          }
+          return forked
+        }),
+      )
+    })
+
+    const queryFork = Effect.fn("SessionProviderRecovery.queryFork")(function* (sourceSessionId: string) {
+      const state = yield* Ref.get(memory)
+      const fence = readOnlySessionsOf(state).get(sourceSessionId)
+      if (!fence) return undefined
+      return forksOf(state).get(fence.forkRef)
+    })
+
+    const isSessionReadOnly = Effect.fn("SessionProviderRecovery.isSessionReadOnly")(function* (sessionId: string) {
+      const state = yield* Ref.get(memory)
+      return readOnlySessionsOf(state).has(sessionId)
+    })
+
+    const assertSessionWritable = Effect.fn("SessionProviderRecovery.assertSessionWritable")(function* (sessionId: string) {
+      const state = yield* Ref.get(memory)
+      if (readOnlySessionsOf(state).has(sessionId)) {
+        return yield* Effect.fail(new SessionReadOnlyError({ sessionId, reason: "fork_fence" }))
+      }
+      return undefined
+    })
+
+    const confirmSettled = Effect.fn("SessionProviderRecovery.confirmSettled")(function* (input: ConfirmSettledInput) {
+      return yield* Semaphore.withPermits(lock, 1)(
+        Effect.gen(function* () {
+          yield* assertPermission(input.actor, requiredPermissionFor("resolvable_exact"))
+          let evidence: RecoveryCommandContract.RecoveryEvidence
+          try {
+            evidence = RecoveryCommandContract.decodeRecoveryEvidence(input.evidence)
+          } catch {
+            return yield* Effect.fail(new TextIsNotEvidenceError({ reason: "text_is_not_evidence" }))
+          }
+          try {
+            RecoveryCommandContract.assertEvidenceTyped(evidence)
+          } catch {
+            return yield* Effect.fail(new TextIsNotEvidenceError({ reason: "text_is_not_evidence" }))
+          }
+          const state = yield* snapshot(input.attemptIdentity.sessionId)
+          const scan = scanTerminalEvidence(evidenceOf(state), input.requestHash)
+          if (scan.status === "duplicate") {
+            return yield* Effect.fail(
+              new DuplicateTerminalConflictError({
+                evidenceRef: scan.canonical.evidenceRef,
+                requestHash: input.requestHash,
+                duplicateRef: scan.duplicate.evidenceRef,
+              }),
+            )
+          }
+          const terminalPayloadHash = scan.status === "single" ? scan.canonical.payloadHash : undefined
+          if (terminalPayloadHash === undefined) {
+            return yield* Effect.fail(new MissingTerminalEvidenceError({ requestHash: input.requestHash }))
+          }
+          const verification = validateConfirmSettledEvidence(evidence, {
+            requestHash: input.requestHash,
+            providerId: input.attemptIdentity.providerId,
+            idempotencyKey: input.attemptIdentity.idempotencyKey,
+            terminalPayloadHash,
+          })
+          if (!verification.ok) {
+            return yield* Effect.fail(new EvidenceBindingError({ reason: verification.reason }))
+          }
+          const evidenceRef = confirmSettledEvidenceRef({
+            requestHash: input.requestHash,
+            attempt: input.attemptIdentity,
+            evidence,
+          })
+          const cas = evidenceSettleCas(evidenceOf(state), {
+            evidenceRef,
+            requestHash: input.requestHash,
+            payloadHash: evidence.payloadHash,
+            providerId: evidence.providerId,
+          })
+          if (cas.status === "conflict") return yield* Effect.fail(new MismatchError({ reason: cas.reason }))
+          if (cas.status === "existing") {
+            const existing: ConfirmSettledOutcome = { status: "existing", evidenceRef: cas.evidenceRef }
+            return existing
+          }
+          if (input.fault?.at === "after_evidence_stage") {
+            return yield* Effect.fail(new RecoveryTransactionAbortedError({ operation: "confirm_settled" }))
+          }
+          const record: EvidenceRecord = {
+            evidenceRef,
+            status: "settled",
+            providerId: evidence.providerId,
+            requestHash: input.requestHash,
+            payloadHash: evidence.payloadHash,
+            recordedAt: input.now ?? Date.now(),
+          }
+          const descriptorWrite = yield* putDescriptorFor({
+            descriptor: resolvedExitDescriptor({
+              requestHash: input.requestHash,
+              attempt: input.attemptIdentity,
+              terminal: "settled",
+              resolutionRef: evidenceRef,
+            }),
+            attempt: input.attemptIdentity,
+            createdAt: input.now,
+          })
+          const casCommand = yield* store.putCommand({
+            requestHash: input.requestHash,
+            attemptIdentity: input.attemptIdentity,
+            descriptorId: descriptorWrite.descriptorId,
+            expectedOwnerToken: "",
+            createdAt: input.now,
+          })
+          if (casCommand.status !== "mismatch") {
+            yield* store.transitionCommand({
+              commandId: casCommand.commandId,
+              from: CommandState.pending,
+              to: CommandState.settled,
+              resultHash: evidence.payloadHash,
+              now: input.now,
+            })
+          }
+          yield* Ref.set(memory, { ...state, evidence: new Map(state.evidence).set(evidenceRef, record) })
+          const settled: ConfirmSettledOutcome = { status: "settled", evidenceRef: cas.evidenceRef }
+          return settled
+        }),
+      )
+    })
+
+    const exportRecoveryEvidence = Effect.fn("SessionProviderRecovery.exportRecoveryEvidence")(function* (
+      input: ExportRecoveryEvidenceInput,
+    ) {
+      return yield* Semaphore.withPermits(lock, 1)(
+        Effect.gen(function* () {
+          yield* assertPermission(input.actor, "user")
+          if (input.encryptionKey.byteLength !== 32) {
+            return yield* Effect.fail(new MismatchError({ reason: "invalid_export_key" }))
+          }
+          const descriptor = classify(input.classifyInput)
+          const state = yield* snapshot(input.attemptIdentity.sessionId)
+          const commands = [...commandsOf(state).values()].filter(
+            (command) =>
+              command.requestHash === input.requestHash &&
+              command.attemptIdentity.attemptId === input.attemptIdentity.attemptId,
+          )
+          const evidenceRecords = [...evidenceOf(state).values()].filter(
+            (record) => record.requestHash === input.requestHash,
+          )
+          const payload = canonicalEvidenceExportPayload({
+            requestHash: input.requestHash,
+            attempt: input.attemptIdentity,
+            descriptor,
+            commands,
+            evidence: evidenceRecords,
+          })
+          const contentHash = Hash.sha256(Buffer.from(payload))
+          const exportId = input.exportId ?? `exp_${randomUUID()}`
+          const now = input.now ?? Date.now()
+          const ttlMs = input.ttlMs ?? DefaultEvidenceExportTtlMs
+          const artifactRef = `artifact_${contentDigest({ exportId, sessionId: input.sessionId, contentHash })}`
+          const summary = redactedSummary({
+            requestHash: input.requestHash,
+            commands,
+            evidence: evidenceRecords,
+            descriptor,
+          })
+          const manifest = buildExportManifest({
+            exportId,
+            sessionId: input.sessionId,
+            attemptIds: [input.attemptIdentity.attemptId],
+            artifactRef,
+            contentHash,
+            actorType: input.actor.type,
+            actorId: input.actor.id,
+            summary,
+            now,
+            ttlMs,
+          })
+          const sealed = encryptEvidenceArtifact({
+            key: input.encryptionKey,
+            plaintext: Buffer.from(payload),
+            aad: evidenceArtifactAAD({ exportId, sessionId: input.sessionId, artifactRef, contentHash }),
+          })
+          const artifact: EncryptedEvidenceArtifact = {
+            artifactRef,
+            exportId,
+            contentHash,
+            keyId: input.keyId,
+            iv: sealed.iv,
+            ciphertext: sealed.ciphertext,
+            authTag: sealed.authTag,
+            expiresAt: now + ttlMs,
+          }
+          yield* store.putExport({
+            exportId,
+            descriptorId: recoveryDescriptorId(descriptor),
+            manifestHash: manifest.contentHash,
+            state: "issued",
+            payload: {
+              manifest,
+              artifact: {
+                ...artifact,
+                iv: Buffer.from(artifact.iv).toString("base64"),
+                ciphertext: Buffer.from(artifact.ciphertext).toString("base64"),
+                authTag: Buffer.from(artifact.authTag).toString("base64"),
+              },
+            },
+            createdAt: now,
+          })
+          return { exportId, artifactRef, contentHash, manifest }
+        }),
+      )
+    })
+
+    const queryExport = Effect.fn("SessionProviderRecovery.queryExport")(function* (exportId: string) {
+      const row = yield* store.getExport(exportId)
+      if (!row) return undefined
+      const body = row.payload as { readonly manifest?: EvidenceExportManifest } | undefined
+      return body?.manifest
+    })
+
+    const unlockRecoveryEvidence = Effect.fn("SessionProviderRecovery.unlockRecoveryEvidence")(function* (
+      input: UnlockRecoveryEvidenceInput,
+    ) {
+      const row = yield* store.getExport(input.exportId)
+      if (!row) return yield* Effect.fail(new ExportNotFoundError({ exportId: input.exportId }))
+      const body = row.payload as
+        | {
+            readonly manifest: EvidenceExportManifest
+            readonly artifact: {
+              readonly artifactRef: string
+              readonly exportId: string
+              readonly contentHash: string
+              readonly keyId: string
+              readonly iv: string
+              readonly ciphertext: string
+              readonly authTag: string
+              readonly expiresAt: number
+            }
+          }
+        | undefined
+      if (!body?.manifest || !body.artifact) {
+        return yield* Effect.fail(new ExportNotFoundError({ exportId: input.exportId }))
+      }
+      const manifest = body.manifest
+      if (
+        input.sessionId !== manifest.permission.unlockSessionId ||
+        input.actor.type !== manifest.permission.unlockActorType ||
+        input.actor.id !== manifest.permission.unlockActorId
+      ) {
+        return yield* Effect.fail(
+          new ExportCrossSessionDeniedError({
+            exportId: input.exportId,
+            requestedSessionId: input.sessionId,
+            ownerSessionId: manifest.target.sessionId,
+          }),
+        )
+      }
+      const artifact: EncryptedEvidenceArtifact = {
+        artifactRef: body.artifact.artifactRef,
+        exportId: body.artifact.exportId,
+        contentHash: body.artifact.contentHash,
+        keyId: body.artifact.keyId,
+        iv: Buffer.from(body.artifact.iv, "base64"),
+        ciphertext: Buffer.from(body.artifact.ciphertext, "base64"),
+        authTag: Buffer.from(body.artifact.authTag, "base64"),
+        expiresAt: body.artifact.expiresAt,
+      }
+      const now = input.now ?? Date.now()
+      if (now > manifest.expiresAt || now > artifact.expiresAt) {
+        return yield* Effect.fail(
+          new ExportExpiredError({
+            exportId: input.exportId,
+            expiredAt: Math.min(manifest.expiresAt, artifact.expiresAt),
+          }),
+        )
+      }
+      const verification = verifyExportedArtifact({ manifest, artifact, key: input.encryptionKey, now })
+      if (!verification.ok) {
+        return yield* Effect.fail(new ExportTamperError({ exportId: input.exportId, reason: verification.reason }))
+      }
+      const plaintext = decryptEvidenceArtifact({
+        key: input.encryptionKey,
+        iv: artifact.iv,
+        ciphertext: artifact.ciphertext,
+        authTag: artifact.authTag,
+        aad: evidenceArtifactAAD({
+          exportId: manifest.exportId,
+          sessionId: manifest.target.sessionId,
+          artifactRef: manifest.artifactRef,
+          contentHash: manifest.contentHash,
+        }),
+      })
+      return { exportId: input.exportId, contentHash: manifest.contentHash, payload: plaintext, manifest }
+    })
+
+    return Service.of({
+      classify,
+      resolve,
+      recordCommand,
+      getCommand,
+      queryCommand,
+      queryAbandon,
+      abandonExact,
+      verifyBaselineReconstruction,
+      queryBaseline,
+      repairBaselineAndAbandon,
+      evidence,
+      findSafeBoundary,
+      forkFromSafeBoundary,
+      queryFork,
+      isSessionReadOnly,
+      assertSessionWritable,
+      confirmSettled,
+      exportRecoveryEvidence,
+      queryExport,
+      unlockRecoveryEvidence,
+      adapter,
+    })
+  })
+
+/**
+ * W2 — the production recovery layer bound to the business DB. The command/descriptor/
+ * export surfaces survive a kill-9 restart; the frozen contract and typed outcomes are
+ * identical to the in-memory `layer` (see `durableServiceWith`).
+ */
+export const durableLayerWith = (db: Database) => Layer.effect(Service, durableServiceWith(db))
