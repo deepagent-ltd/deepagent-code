@@ -120,12 +120,23 @@ deepagent-code
 deepagent
 ```
 
-## Adding a Provider
+## Adding a Model Provider
 
-Before you can run a task, DeepAgent Code needs at least one model provider. It
-supports 75+ providers through the [AI SDK](https://ai-sdk.dev/) and
-[models.dev](https://models.dev), plus any OpenAI- or Anthropic-compatible
-endpoint. Pick whichever path fits how you work.
+### DeepAgent API — our own platform (recommended)
+
+If you want the experience DeepAgent Code is tuned around, use the official
+**DeepAgent API Platform** ([api.deepagent.ltd](https://api.deepagent.ltd)) — a
+secure model API service for DeepAgent applications with GPT and DeepSeek
+families over Chat Completions and Responses, plus Anthropic-compatible
+endpoints. Get a key from the platform console, check plan prices on
+[Model Square pricing](https://api.deepagent.ltd/pricing), then open
+**Settings → Providers → DeepAgent → Connect**, paste the key, and you're done.
+
+### Any other provider
+
+DeepAgent Code is provider-agnostic. It supports 75+ providers through the
+[AI SDK](https://ai-sdk.dev/) and [models.dev](https://models.dev), plus any
+OpenAI- or Anthropic-compatible endpoint.
 
 ### Desktop app (recommended)
 
@@ -177,9 +188,10 @@ refreshed from the endpoint at runtime, or list them explicitly under `models`:
 ```
 
 Official-provider keys added via the app/CLI are stored separately in
-`~/.deepagent/code/auth.json`, not in the config file. See the
-[providers guide](https://deepagent-code.ai/docs/providers/) for the full
-reference (base URL overrides, headers, per-model config, gateways).
+`~/.deepagent/code/auth.json`, not in the config file. Full reference
+(base URL overrides, headers, per-model config, gateways) lives in the
+[DeepAgent API Platform docs](https://api.deepagent.ltd/) — or explore
+supported models and plans on [Model Square pricing](https://api.deepagent.ltd/pricing).
 
 All DeepAgent Code private filesystem data lives under `~/.deepagent/code/`, including configuration, credential references, databases, Desktop state, logs, caches, and temporary files. Native secret values remain in the operating system's credential store. Tests use explicit isolated roots and cannot redirect production storage through ordinary environment variables.
 
@@ -251,7 +263,7 @@ bun run --cwd packages/deepagent-code dev import-history --from codex --dry-run
 
 ## Documentation
 
-- [Providers & Models](https://deepagent-code.ai/docs/providers/)
+- [DeepAgent API Platform](https://api.deepagent.ltd/) · [Model Square pricing](https://api.deepagent.ltd/pricing)
 - [Architecture & Design](design/README.md)
 - [Real-LLM Testing Guide](design/real-llm-testing.md)
 - [Security Policy](SECURITY.md)

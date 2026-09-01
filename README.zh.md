@@ -122,9 +122,19 @@ deepagent
 
 ## 添加供应商
 
-在运行任务之前，DeepAgent Code 至少需要一个模型供应商。它通过
+### DeepAgent API —— 我们自己的平台（推荐）
+
+如果你想要 DeepAgent Code 最顺畅的体验，请使用官方 **DeepAgent API 平台**
+（[api.deepagent.ltd](https://api.deepagent.ltd)）——为 DeepAgent 应用提供安全模型 API 的官方服务，
+覆盖 GPT 与 DeepSeek 家族的 Chat Completions 与 Responses 协议，并提供 Anthropic 兼容端点。
+在平台控制台获取 API Key，在 [Model Square 定价页](https://api.deepagent.ltd/pricing)查看套餐价格，
+然后打开 **设置 → 供应商 → DeepAgent → 连接**，粘贴 Key 即可开始。
+
+### 其他任何供应商
+
+DeepAgent Code 不绑定供应商。它通过
 [AI SDK](https://ai-sdk.dev/) 和 [models.dev](https://models.dev) 支持 75+ 家供应商，
-以及任意 OpenAI 或 Anthropic 兼容的接口。按你习惯的方式选一种即可。
+以及任意 OpenAI 或 Anthropic 兼容的接口。
 
 ### 桌面应用（推荐）
 
@@ -174,7 +184,8 @@ deepagent auth list
 
 通过应用/CLI 添加的官方供应商密钥单独存放在 `~/.deepagent/code/auth.json`，不在配置文件里。
 完整参考（Base URL 覆盖、请求头、逐模型配置、网关）见
-[供应商文档](https://deepagent-code.ai/docs/providers/)。
+[DeepAgent API 平台文档](https://api.deepagent.ltd/)；支持的模型与套餐见
+[Model Square 定价](https://api.deepagent.ltd/pricing)。
 
 DeepAgent Code 的所有私有文件数据都位于 `~/.deepagent/code/`，包括配置、凭据引用、数据库、桌面状态、日志、缓存和临时文件；原生 secret 值仍由操作系统凭据存储保管。测试使用显式隔离的数据根，普通环境变量不能重定向生产存储。
 
@@ -246,7 +257,7 @@ bun run --cwd packages/deepagent-code dev import-history --from codex --dry-run
 
 ## 文档
 
-- [供应商与模型](https://deepagent-code.ai/docs/providers/)
+- [DeepAgent API 平台](https://api.deepagent.ltd/) · [Model Square 定价](https://api.deepagent.ltd/pricing)
 - [架构与设计](design/README.md)
 - [真实 LLM 测试指南](design/real-llm-testing.md)
 - [安全策略](SECURITY.md)
