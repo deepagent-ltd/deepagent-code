@@ -8,6 +8,7 @@ import {
   enID,
   errorID,
   pixelDirectory,
+  pixelExecutionJournal,
   pixelMockConfig,
   pixelRecoveryDescriptors,
   recoveryID,
@@ -117,6 +118,9 @@ for (const viewport of viewports) {
       const { errors, composer } = await openSession(page, cnID, "中文长标题：跨代码库检索重构方案与依赖分析")
       await expect(page.getByText("方案：将公共依赖抽取到")).toBeVisible()
       await expect(composer).toBeVisible()
+      // W9.6 — a session with no execution-journal rows keeps ZERO pixel surface for the
+      // execution line (the journal pump mirrored `{}` context responses, no rows to deliver).
+      await expect(page.getByText(/Last agent execution:/)).toHaveCount(0)
       expect(errors).toEqual([])
       await page.screenshot({ path: `e2e/pixel-matrix/cn-${viewport.name}.png` })
     })
@@ -155,6 +159,32 @@ test.describe("pixel matrix @ recovery dock", () => {
       await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ descriptors: pixelRecoveryDescriptors }) })
     })
 
+    // W9.6 — durable execution journal (SOLE lifecycle source): mirror the real
+    // `/context/eventsCursor` + `/context/events` contract so the dock's execution-summary
+    // line renders from one actually-settled turn (started 11 + succeeded 12, anchor at 10).
+    // No test switch, no hidden fixture flag: these routes are the same payload shape the
+    // production server serves. Sessions without a journal entry resolve to empty (zero rows).
+    await page.route("**/context/eventsCursor**", async (route) => {
+      const id = new URL(route.request().url()).searchParams.get("session_id") ?? ""
+      const entry = pixelExecutionJournal[id]
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(entry ? { watermark: entry.watermark, cursor: entry.watermark, floor: entry.floor } : {}),
+      })
+    })
+    await page.route("**/context/events**", async (route) => {
+      const url = new URL(route.request().url())
+      const entry = pixelExecutionJournal[url.searchParams.get("session_id") ?? ""]
+      const after = Number(url.searchParams.get("after") ?? "0")
+      const events = entry && after <= entry.watermark ? entry.rows : []
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ events, nextCursor: undefined, floor: entry?.floor ?? 0 }),
+      })
+    })
+
     await page.goto("/")
     const row = page.locator('[data-home-project-row]').filter({ hasText: /PixelProject/i }).first()
     await expectAppVisible(row)
@@ -164,6 +194,10 @@ test.describe("pixel matrix @ recovery dock", () => {
     await expectSessionTitle(page, "Recovery dock pixel state")
     const composer = page.getByRole("textbox", { name: /Ask anything/i })
     await expectAppVisible(composer)
+
+    // W9.6 — the journal pump (1s poll) delivers the settled turn: the execution summary line
+    // renders and is the kept product intent for an idle session with a finished turn.
+    await expect(page.getByText("Last agent execution: succeeded (turn 1)")).toBeVisible()
 
     // All five pending items render (three exact + two coordination).
     for (const id of ["req-exact-0", "req-exact-1", "req-exact-2", "req-coord-3", "req-coord-4"]) {

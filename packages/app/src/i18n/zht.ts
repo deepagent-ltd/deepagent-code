@@ -1255,4 +1255,6 @@ export const dict = {
   "session.context.state.denied": "無權存取",
   "session.context.state.disabled": "未啟用",
   "session.context.state.broken": "引用損壞",
+  "recovery.execution.running": "智能體執行中…（第 {{number}} 輪）",
+  "recovery.execution.last": "最近一次智能體執行：{{state}}（第 {{number}} 輪）",
 } satisfies Partial<Record<Keys, string>>

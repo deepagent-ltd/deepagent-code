@@ -147,6 +147,7 @@ import { layer as maintenanceRegistryLayer } from "./maintenance-registry"
 import { capabilityHandlers } from "./handlers/capability"
 import { systemContextHandlers } from "./handlers/system-context"
 import { contextHandlers } from "./handlers/context"
+import { V2OwnerSeed } from "@deepagent-code/core/session/runner/v2-owner-seed"
 
 export const context = Context.makeUnsafe<unknown>(new Map())
 
@@ -424,6 +425,14 @@ export function createRoutes(corsOptions?: CorsOptions) {
   return baseRoutes.pipe(
     Layer.provide(PromptEpoch.v2RunnerSeamLayer.pipe(Layer.provide(Database.defaultLayer))),
     Layer.provideMerge(devCampaignMint),
+    // W0.5 (blocker-2): the release pipeline ships owner-authorization.json with the install
+    // product; this layer seeds ONE signed row into the local DB when the routes graph is built —
+    // after the database layer initialized, before the HTTP server accepts requests. File absent
+    // => no-op (local dev / mint --dev covers it); file present but unverifiable => REFUSED
+    // (fail-closed, nothing written) and only logged — a seed failure never blocks startup.
+    Layer.provideMerge(
+      V2OwnerSeed.layer({ env: process.env, appRoot: V2OwnerSeed.defaultOwnerAuthorizationAppRoot() }),
+    ),
     // 1.4.8.rN: LAST-WINS — the shared @deepagent-code/server handlers graph binds
     // SessionV2.defaultLayer (no-op execution) inside its own subtree; re-provide the live layer at
     // the very end so the route graph as a whole runs V2 sessions on the local execution coordinator.

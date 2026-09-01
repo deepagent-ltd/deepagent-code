@@ -74,6 +74,7 @@ import { SessionStatus } from "../../src/session/status"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { V2ProviderTurnReceiptTable } from "@deepagent-code/core/session/runner/v2-provider-turn.sql"
 import { CurrentBuildIdentity, CurrentOwnerAuthorizationPublicKey, CurrentOwnerCampaign, ownerQualified as v2OwnerQualified } from "@deepagent-code/core/session/runner/v2-provider-turn"
+import { InstallationVersion } from "@deepagent-code/core/installation/version"
 import { V2OwnerAuthorization } from "@deepagent-code/core/session/runner/v2-owner-authorization"
 import { V2OwnerAuthorizationTable } from "@deepagent-code/core/session/runner/v2-owner-authorization.sql"
 import { SessionInput } from "@deepagent-code/core/session/input"
@@ -6100,7 +6101,10 @@ v2Owner.instance(
           coreV2ExecutionOwnerFlag: true,
           coreV2ExecutionOwnerEnabled: false,
           parityCampaign: "none",
-          ownerCampaign: "none",
+          // W0.5 (blocker-1): the runtime now resolves the DEFAULT owner campaign
+          // (v2-owner-<InstallationVersion>) instead of "none"; qualification still fails closed
+          // without a signed row, so the fork decision is unchanged.
+          ownerCampaign: `v2-owner-${InstallationVersion}`,
           blockedReasons: ["core_v2_parity_required"],
         })
       }

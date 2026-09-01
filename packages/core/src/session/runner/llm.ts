@@ -229,7 +229,11 @@ export const layer = Layer.effect(
       const ownerCampaign = (yield* V2ProviderTurn.CurrentOwnerCampaign) ?? V2ProviderTurn.ownerCampaignFromEnv()
       if (!(yield* ownerAuthorization.authorize(db, ownerCampaign)))
         return yield* new V2ProviderTurn.ConflictError({ reason: "v2_owner_campaign_not_verified" })
-      if (parityCampaign && ownerCampaign)
+      // W0.5 (blocker-1): the parity exclusion compares the operator's EXPLICIT owner campaign
+      // only — the runtime's auto-default (v2-owner-<InstallationVersion>) is the NORMAL production
+      // posture and must not disable the shadow-parity verification run that intentionally sets
+      // parity envs without an owner env.
+      if (parityCampaign && V2ProviderTurn.ownerCampaignFromEnv())
         return yield* new V2ProviderTurn.ConflictError({ reason: "v2_owner_cannot_record_shadow_parity" })
       const session = yield* getSession(sessionID)
       if (session.location.directory !== location.directory || session.location.workspaceID !== location.workspaceID)
@@ -760,7 +764,11 @@ export const layer = Layer.effect(
       const ownerCampaign = (yield* V2ProviderTurn.CurrentOwnerCampaign) ?? V2ProviderTurn.ownerCampaignFromEnv()
       if (!(yield* ownerAuthorization.authorize(db, ownerCampaign)))
         return yield* new V2ProviderTurn.ConflictError({ reason: "v2_owner_campaign_not_verified" })
-      if (parityCampaign && ownerCampaign)
+      // W0.5 (blocker-1): the parity exclusion compares the operator's EXPLICIT owner campaign
+      // only — the runtime's auto-default (v2-owner-<InstallationVersion>) is the NORMAL production
+      // posture and must not disable the shadow-parity verification run that intentionally sets
+      // parity envs without an owner env.
+      if (parityCampaign && V2ProviderTurn.ownerCampaignFromEnv())
         return yield* new V2ProviderTurn.ConflictError({ reason: "v2_owner_cannot_record_shadow_parity" })
       yield* failInterruptedTools(input.sessionID)
       let promotion: SessionInput.Delivery | undefined = hasSteer ? "steer" : hasQueue ? "queue" : undefined

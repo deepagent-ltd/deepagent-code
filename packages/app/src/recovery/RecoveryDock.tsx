@@ -1,5 +1,6 @@
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js"
 import type { MaintenanceClient } from "@/maintenance/maintenance-client"
+import { useLanguage } from "@/context/language"
 import {
   blockedReason,
   descriptorDeadEnd,
@@ -27,12 +28,20 @@ import { useSessionLifecycle } from "./session-lifecycle"
 // W9.5 — the dock also observes the per-session execution track wired through
 // `useSessionLifecycle()` (the durable journal pump): the current session's open
 // turn or last terminal outcome surfaces as one compact status line. It renders
-// ONLY when real execution data exists, so a quiet session has zero pixel surface.
+// ONLY when real execution data exists, so a session that never ran a turn has
+// zero pixel surface.
+//
+// W9.6 — product ruling (kept): an idle session whose FIRST turn already settled
+// keeps showing its last terminal outcome. That is the desired "execution
+// summary" semantics of the dock (recovery/status context — the user can see at
+// a glance what the session last did), not a stale-zero-pixel bug. Only a session
+// that NEVER executed anything stays hidden.
 
 export function RecoveryDock(props: { sessionId: string; client: MaintenanceClient; onPendingChange?: (pending: boolean) => void }) {
   const [state, setState] = createSignal<DockState>(initialDockState)
   const dispatch = (action: DockAction) => setState((prev) => reduceDock(prev, action))
   const lifecycle = useSessionLifecycle()
+  const language = useLanguage()
 
   const load = async () => {
     dispatch({ type: "descriptorsLoaded", descriptors: [] })
@@ -101,7 +110,7 @@ export function RecoveryDock(props: { sessionId: string; client: MaintenanceClie
       <div class="mb-2 flex flex-col gap-2">
       <Show when={executionStatus() !== undefined}>
         <div class="rounded-md border border-border-weak-base bg-surface-raised-base px-3 py-2 text-12-regular text-text-weak">
-          {executionLabel(executionStatus()!)}
+          {executionLabel(language, executionStatus()!)}
         </div>
       </Show>
       <Show when={state().loadStatus === "error"}>
@@ -241,8 +250,9 @@ function requiresCoordination(item: DockItem): boolean {
   return reason !== undefined && reason.coordination.evidenceExportRef !== undefined
 }
 
-/** One compact line for the per-session execution track (matches the dock's existing literal style). */
-function executionLabel(status: ExecutionStatusView): string {
-  if (status.kind === "running") return `Agent execution running… (turn ${status.number})`
-  return `Last agent execution: ${status.state} (turn ${status.number})`
+/** One compact line for the per-session execution track (W9.6: i18n keys; the `state` token is
+ * the machine state vocabulary — kept raw, like the dock's other state literals). */
+function executionLabel(language: ReturnType<typeof useLanguage>, status: ExecutionStatusView): string {
+  if (status.kind === "running") return language.t("recovery.execution.running", { number: status.number })
+  return language.t("recovery.execution.last", { state: status.state, number: status.number })
 }

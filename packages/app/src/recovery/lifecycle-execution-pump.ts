@@ -1,21 +1,25 @@
 import { eventBaseType } from "@/utils/event-type"
 import type { LifecycleEvent, RecoveryLifecycle, ExecutionInterruptReason } from "./recovery-lifecycle-state"
 
-// C6-11 + W9.5 — the real-event pump: `SessionEvent.Execution.*` (core src/session/event.ts:
+// C6-11 + W9.5 + W9.6 — the real-event pump: `SessionEvent.Execution.*` (core src/session/event.ts:
 // session.execution.started/succeeded/failed/interrupted) flow into the per-session lifecycle
 // reducer. This module is the single mapping source from the wire event shapes to
-// `LifecycleEvent`, plus the two live subscription helpers:
+// `LifecycleEvent`, plus the ONE live subscription helper:
 //
-//   - `createExecutionJournalSubscription` — PRIMARY source: the durable journal drain
-//     (context.eventsCursor/events, snapshot-at-watermark, seq-resumed poll). The journal is the
-//     only execution surface when `DEEPAGENT_CODE_EVENT_V2_ADMISSION` is ON: the GlobalBus SSE
-//     mirror is skipped by event-v2-bridge.ts in that mode, so `sdk.event` never carries
-//     `session.execution.*` and the durable rows are the sole authority.
-//   - `subscribeExecutionEvents` — SSE fallback/compat for the admission-OFF mirror (which emits
-//     the unversioned definition type in `properties`).
+//   - `createExecutionJournalSubscription` — the durable journal drain (context.eventsCursor/
+//     events, snapshot-at-watermark, seq-resumed poll). W9.6 — the journal is the sole execution
+//     surface in BOTH admission modes: `SessionExecution` (core/src/session/execution/local.ts)
+//     publishes Started/Succeeded/Failed/Interrupted through `EventV2.Service.publish`, which
+//     writes EventTable rows unconditionally — the same rows `/context/events` drains. The only
+//     admission gate lives in event-v2-bridge.ts, and it gates the GlobalBus SSE MIRROR only
+//     (skipped under admission ON; under OFF it mirrors the SAME published events the journal
+//     already persists). A second SSE subscription therefore always double-delivers (W9.5 review:
+//     phantom superseded + synthetic records + turn number +2 per round), so it was removed —
+//     the journal is the single authority, no cross-source dedup needed.
 //
-// Wire shapes accepted (both carry sessionID in a payload record):
-//   - SSE:           { type, properties: { timestamp, sessionID, error?, reason? } }
+// Wire shapes accepted (both carry sessionID in a payload record; the mapper stays shape-tolerant
+// for older servers while the live pump only feeds `data` rows):
+//   - SSE-compat:    { type, properties: { timestamp, sessionID, error?, reason? } }
 //   - durable drain: { type: "…started.1", data: { timestamp, sessionID, error?, reason? } }
 // The drain row type is VERSIONED (`EventTable.type` = `versionedType(type, sync.version)`);
 // `eventBaseType` strips the trailing `.N` before vocabulary matching. The pump filters
@@ -40,11 +44,6 @@ export type ExecutionEventInput = {
   readonly type: string
   readonly properties?: unknown
   readonly data?: unknown
-}
-
-/** Structural event source (dir-SDK emitter `.listen` / global emitter `.listen`). */
-export type ExecutionEventSource = {
-  listen: (handler: (event: { name: string; details: unknown }) => void) => () => void
 }
 
 /** One durable journal row (the generated `ContextSessionEvent` shape). */
@@ -79,6 +78,13 @@ export type ExecutionJournalHandlers = {
   readonly onConnectionChange?: (connected: boolean) => void
   /** Typed/network errors that are not consumed as a resync (never a crash). */
   readonly onErrorEvent?: (error: unknown) => void
+  /** Bounded resync notice (W9.6): the journal pruned rows while the drain held its anchor, so
+   * a typed 410 re-anchored the drain at the retained `floor`. The window `(fromSeq, floor]` was
+   * DROPPED by the journal itself — a terminal event inside it is archivally lost, and the
+   * execution summary for this session resumes from `floor`. This is the authoritative compact
+   * contract (never a re-read storm); the notice exists so UI/log consumers can surface it
+   * ("session history compressed, execution summary resumes from X"). */
+  readonly onResync?: (info: { readonly sessionID: string; readonly fromSeq: number | undefined; readonly floor: number }) => void
 }
 
 const payloadOf = (event: ExecutionEventInput): Record<string, unknown> | undefined => {
@@ -121,23 +127,6 @@ export const toLifecycleEvent = (event: ExecutionEventInput): LifecycleEvent | u
   }
 }
 
-/**
- * Subscribe a live event source to a lifecycle reducer (SSE fallback/compat path). Returns the
- * unsubscribe function. `onEvent` is invoked after every mapped event so callers can trigger
- * reactivity.
- */
-export const subscribeExecutionEvents = (
-  source: ExecutionEventSource,
-  lifecycle: RecoveryLifecycle,
-  onEvent?: () => void,
-): (() => void) =>
-  source.listen((event) => {
-    const mapped = toLifecycleEvent(event.details as ExecutionEventInput)
-    if (!mapped) return
-    lifecycle.onEvent(mapped)
-    onEvent?.()
-  })
-
 const POLL_MS = 1000
 
 /** A typed error's C0-03 `code` (stable envelope — never a message). The throwOnError client
@@ -159,12 +148,14 @@ const isTypedApiError = (error: unknown): boolean => {
 }
 
 /**
- * Durable journal drive for the lifecycle pump (PRIMARY source). Per session: the first subscribe
- * anchors the drain at the journal watermark (snapshot-at-watermark — never a history replay at
- * mount); every following drain resumes from the last seen seq (`after=lastSeq`), so a network
- * blip or a re-mount resumes exactly where the reducer left off. Duplicate absorption is
- * seq-based; a typed 410 `cursor_gap_exceeded` re-anchors at the retained floor (bounded resync);
- * any other typed error is surfaced via `onErrorEvent`; a network-layer failure flips the
+ * Durable journal drive for the lifecycle pump (the ONLY source — W9.6 removed the SSE fallback
+ * because it always double-delivered). Per session: the first subscribe anchors the drain at the
+ * journal watermark (snapshot-at-watermark — never a history replay at mount); every following
+ * drain resumes from the last seen seq (`after=lastSeq`), so a network blip or a re-mount resumes
+ * exactly where the reducer left off. Duplicate absorption is seq-based; a typed 410
+ * `cursor_gap_exceeded` re-anchors at the retained floor (bounded resync, `onResync` notice);
+ * any other typed error is surfaced via `onErrorEvent` AND counts as a server response for
+ * connectivity (never leaves the aggregate signal stale-false); a network-layer failure flips the
  * aggregate connection signal (false) and recovery flips it back (true) — the loop itself already
  * resumes from the last cursor, which is the reconnect semantics. Returns `{ refresh, dispose }`;
  * `refresh()` re-reads the session set and rebuilds only when it actually changed.
@@ -180,6 +171,11 @@ export const createExecutionJournalSubscription = (
 ): { readonly refresh: (force?: boolean) => void; readonly dispose: () => void } => {
   const cancelled = new Set<string>()
   const timers = new Map<string, ReturnType<typeof setTimeout>>()
+  // W9.6 — WRITE-THROUGH anchor map: every consumed seq (initial watermark anchor, 410 floor
+  // re-anchor, and each drained row) is stored here. `rebuild()` seeds a surviving session's loop
+  // FROM this map, so a session-set change or session switch resumes from the last seen seq
+  // instead of re-anchoring at the mount watermark — the `(lastSeq, head]` window is never
+  // re-delivered (phantom turn + fake superseded) and never lost (stale watermark re-read).
   const lastSeqs = new Map<string, number>()
   const failedSessions = new Set<string>()
   let sessionIDs: readonly string[] = []
@@ -215,19 +211,34 @@ export const createExecutionJournalSubscription = (
     let lastSeq = seedSeq
     let gapResync = false
 
+    // Write through to the shared anchor map: every consumed position (initial watermark, 410
+    // floor re-anchor, each drained row) becomes the rebuild seed for this session.
+    const advance = (seq: number) => {
+      lastSeq = seq
+      lastSeqs.set(sessionID, seq)
+    }
+
     const handleError = (error: unknown) => {
       if (typedCodeOf(error) === "cursor_gap_exceeded") {
         // Cursor behind the retained floor (the journal dropped rows while we held the anchor):
         // bounded resync — re-anchor at the floor on the next tick and re-drain the window.
-        // The drain after `floor` can only return rows newer than our last seq, so the reducer
-        // never re-processes an already-delivered outcome.
+        // The drain after `floor` can only return rows newer than the floor, so the reducer
+        // never re-processes an already-delivered outcome. W9.6 semantics: the window
+        // `(lastSeq, floor]` was compacted away by the journal itself — a terminal inside it is
+        // archivally lost, and re-anchoring at the floor is the authoritative contract. The
+        // shared map keeps the pre-410 anchor so a mid-resync rebuild retries the same poll.
         lastSeq = undefined
         gapResync = true
+        // A 410 is a server RESPONSE — connectivity is fine; clear any stale network-fail flag.
+        markRecovered(sessionID)
         return
       }
       if (isTypedApiError(error)) {
-        // The server answered with a typed refusal (400/404/…): connectivity is fine, surface it.
+        // The server answered with a typed refusal (400/404/…): connectivity is fine — surface it
+        // AND clear a stale network-fail flag, otherwise a preceding network blip would leave the
+        // aggregate signal false forever (W9.6). Any non-network response counts as recovered.
         input.handlers?.onErrorEvent?.(error)
+        markRecovered(sessionID)
         return
       }
       // Network-layer failure: flag the disconnect once; the poll keeps running and resumes
@@ -241,21 +252,34 @@ export const createExecutionJournalSubscription = (
       try {
         let anchor: number
         if (gapResync) {
+          const fromSeq = lastSeqs.get(sessionID)
           anchor = await readAnchor(sessionID, "floor")
           gapResync = false
+          advance(anchor)
+          // The re-anchor took effect at this point: the window (fromSeq, floor] is dropped by
+          // the JOURNAL's own compaction and the summary continues from the retained floor.
+          input.handlers?.onResync?.({ sessionID, fromSeq, floor: anchor })
         } else if (lastSeq === undefined) {
           anchor = await readAnchor(sessionID, "watermark")
+          advance(anchor)
         } else {
           anchor = lastSeq
+          advance(anchor)
         }
-        lastSeq = anchor
         const drain = await input.client.context.events({ session_id: sessionID, after: String(anchor) })
+        // A rebuild may have replaced this loop while the poll was in flight: an old-generation
+        // tick must never deliver (double delivery = phantom turn), never clear the new loop's
+        // anchor, and never flip connectivity it no longer owns. The new loop was seeded from
+        // the shared map, so it owns the window now.
+        if (cancelled.has(sessionID) || myGeneration !== generation) return
         if (drain.error) {
           handleError(drain.error)
         } else {
+          let seen = anchor // flush position at drain start; advances with every delivered row
           for (const row of drain.data?.events ?? []) {
-            if (row.seq <= lastSeq) continue // duplicate absorption (seq-dedupe)
-            lastSeq = row.seq
+            if (row.seq <= seen) continue // duplicate absorption (seq-dedupe)
+            seen = row.seq
+            advance(row.seq)
             const mapped = toLifecycleEvent({ type: row.type, data: row.data })
             if (!mapped) continue
             input.lifecycle.onEvent(mapped)

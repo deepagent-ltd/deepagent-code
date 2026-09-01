@@ -24,37 +24,44 @@ describe("C6-11 session lifecycle wiring", () => {
     expect(close).toBeGreaterThan(composer)
   })
 
-  test("the pump module maps SessionEvent.Execution.* and exposes the live subscription", async () => {
+  test("the pump module maps SessionEvent.Execution.* and exposes the journal subscription", async () => {
     const pump = await readFile(path.join(here, "lifecycle-execution-pump.ts"), "utf8")
 
     for (const type of ["session.execution.started", "session.execution.succeeded", "session.execution.failed", "session.execution.interrupted"]) {
       expect(pump).toContain(`"${type}"`)
     }
     expect(pump).toContain("toLifecycleEvent")
-    expect(pump).toContain("subscribeExecutionEvents")
+    expect(pump).toContain("createExecutionJournalSubscription")
+    // W9.6 — the SSE fallback subscription was removed: the journal is the SOLE execution source
+    // in both admission modes (SessionExecution publishes through EventV2 unconditionally;
+    // event-v2-bridge only gates the SSE mirror, so the mirror never adds rows the journal lacks).
+    expect(pump).not.toContain("subscribeExecutionEvents")
   })
 
-  test("the pump drains the durable journal (versioned types + seq-resumed cursor poll)", async () => {
+  test("the pump drains the durable journal (versioned types + seq-resumed cursor poll + resync notice)", async () => {
     const pump = await readFile(path.join(here, "lifecycle-execution-pump.ts"), "utf8")
 
-    // W9.5 — the durable journal is the PRIMARY source (the GlobalBus SSE mirror is skipped
-    // under V2 admission ON), and journal row types are versioned (`session.execution.started.1`).
+    // W9.5 + W9.6 — the durable journal is the only source (the GlobalBus SSE mirror is gated by
+    // event-v2-bridge and always duplicates journal rows), and journal row types are versioned
+    // (`session.execution.started.1`).
     expect(pump).toContain("createExecutionJournalSubscription")
     expect(pump).toContain("eventsCursor")
     expect(pump).toContain("context.events")
     expect(pump).toContain("eventBaseType")
     expect(pump).toContain("cursor_gap_exceeded")
-    // The SSE subscription is retained as the admission-OFF fallback/compat path.
-    expect(pump).toContain("subscribeExecutionEvents")
+    // W9.6 — the bounded resync surfaces a typed notice (history-compacted semantics).
+    expect(pump).toContain("onResync")
   })
 
-  test("the session lifecycle mounts the journal as the primary source", async () => {
+  test("the session lifecycle mounts the journal as the sole source", async () => {
     const lifecycle = await readFile(path.join(here, "session-lifecycle.tsx"), "utf8")
 
     expect(lifecycle).toContain("createExecutionJournalSubscription({")
-    expect(lifecycle).toContain("subscribeExecutionEvents")
     expect(lifecycle).toContain("onConnectionChange")
     expect(lifecycle).toContain('lifecycle().onEvent(connected ? { type: "reconnect" } : { type: "disconnect" })')
+    // W9.6 — single-source contract: no SSE fallback subscription survives in the wiring.
+    expect(lifecycle).not.toContain("subscribeExecutionEvents")
+    expect(lifecycle).toContain("onResync")
   })
 
   test("the lifecycle reducer accepts the execution event vocabulary", async () => {

@@ -21,7 +21,7 @@ import {
 import { MentionParser } from "@deepagent-code/core/im/mention-parser"
 import { AgentListProviderService } from "@deepagent-code/core/im/agent-list-provider"
 import { executeAgentMentions } from "@deepagent-code/core/im/agent-orchestrator"
-import { isEventV2ImSingleWriteEnabled } from "@deepagent-code/core/deepagent/im-single-write"
+import { isEventV2AdmissionEnabled } from "@deepagent-code/core/deepagent/event-admission"
 import type { IMMessage, IMAttachment } from "@deepagent-code/core/im/repository"
 import * as IMID from "@deepagent-code/core/im/id"
 import { getWorkspaceContext } from "../utils/workspace-context"
@@ -31,17 +31,20 @@ import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
 
 const IMAttachmentID = IMID.AttachmentID
 
-/** C5-12 — the IM single-write gate for the legacy @mention execution path. AUTH-P2-2 close
- * (decoupled switches): the legacy synchronous @mention path is SKIPPED only when BOTH the
- * single-write switch (`DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE`) AND the V4 event-driven IM path
- * (`DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM`, which publishes im.message.created onto the bus that drives the
- * durable V2 admission) are ON — the single-write regime replaces the legacy executor, so it must be
- * paired with the event-driven path that actually carries the mention work. With EITHER switch off the
- * legacy path stays authoritative (fail-open: an @mention is never silently dropped; the legacy
- * double-write tradeoff applies only when v4 is ON and single-write is OFF — none of the switches is
- * stronger than a user's explicit choice). Exported for deterministic testing of the flag-gated branch. */
+/** P1/P2 (design v2.0-design.md W0.4 note 4) — the legacy synchronous @mention executor gate. The V4
+ * event-driven path is authoritative exactly when the Event Dispatcher's dispatch/receipt port is
+ * authoritative: `v4EventDrivenIm` (the IM event is on the bus AND the dispatcher's im.* flag gate is
+ * open — flagForEventType) AND `isEventV2AdmissionEnabled()` (the dispatch port routes through the
+ * durable V2 admission path, multi-agent-runtime.ts dispatch). In that regime the dispatcher either
+ * dispatches the mention or writes a durable receipt, so the legacy executor must NOT also run (the
+ * P1 double-execution regression fix). With EITHER switch off the bus path is not authoritative: the
+ * dispatcher's mention branch is gated off (admission OFF — note 4's explicit fall-back-to-legacy
+ * matrix) or never sees the event (v4 OFF), so the legacy executor is the single authority and an
+ * @mention is never silently dropped (it executes — no receipt is written, which is the documented
+ * "explicitly disabled admission = fall back to legacy" semantic, not a silent loss). Exported for
+ * deterministic testing of the flag-gated branch. */
 export const shouldExecuteLegacyAgentMentions = (mentionCount: number, v4EventDrivenIm: boolean): boolean =>
-  mentionCount > 0 && !(isEventV2ImSingleWriteEnabled() && v4EventDrivenIm)
+  mentionCount > 0 && !(v4EventDrivenIm && isEventV2AdmissionEnabled())
 
 const IM_MAX_MESSAGE_LENGTH = 100000 // 增加到 100k，更灵活
 
@@ -462,12 +465,15 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
             // to locate the worktree/directory. A detached Effect.runFork would drop
             // those references and the agent would never actually run.
             //
-            // C5-12 — IM SINGLE-WRITE: when `isEventV2ImSingleWriteEnabled()` is ON, the legacy
-            // synchronous @mention execution path is SKIPPED (the durable IM single-write receipt is the
-            // single authority). The live WebSocket broadcast of message_created (above) and the agent's
-            // progress/status are the non-authoritative LOW-LATENCY hint surface; the durable receipt is
-            // the authority. When the flag is OFF the legacy double-write path stays authoritative
-            // (unchanged).
+            // P1 — @mention single execution (design W0.4 note 4): when V4 event-driven IM is ON AND the
+            // V2 event admission is ON, the Event Dispatcher owns the mention (dispatch with the durable
+            // V2 admission, or a `agent_no_trigger_mention` receipt) — the legacy synchronous @mention
+            // executor must be SKIPPED here or the mention runs twice (P1 regression). With admission OFF
+            // the dispatcher's mention branch is also gated off (IMMEDIATE P2 fix, same predicate), so
+            // this legacy path is the sole authority and runs. With v4 OFF the event never reaches the
+            // dispatcher, so the legacy path is the sole authority (unchanged V3.8 behavior). The live
+            // WebSocket broadcast of message_created (above) and the agent's progress/status are the
+            // NON-authoritative low-latency hint surface.
             if (shouldExecuteLegacyAgentMentions(mentionedAgentNames.length, flags.v4EventDrivenIm)) {
               yield* executeAgentMentions({
                 workspaceID,
