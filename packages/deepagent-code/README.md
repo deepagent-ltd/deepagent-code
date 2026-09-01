@@ -2,7 +2,7 @@
 
 DeepAgent Code is a document-centered AI coding agent. This package contains the CLI/server runtime used by the terminal and desktop applications.
 
-The CLI runtime is part of the coordinated Core V2 and Desktop 2.0 alpha line: package version `2.0.0-alpha.0`, with the Core release label `core-v2.0alpha` and the Desktop release label `desktop-v2.0alpha`.
+The CLI runtime is part of the coordinated Core V2 and Desktop 2.0 beta line: package version `2.0.0-beta.0`, with the Core release label `core-v2.0beta` and the Desktop release label `desktop-v2.0beta`.
 
 DeepAgent Code keeps the opencode runtime foundation and adds the DeepAgent control plane:
 

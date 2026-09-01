@@ -2,7 +2,7 @@
 
 SolidJS front-end shell for the DeepAgent Code desktop app (Electron/Tauri).
 
-The renderer ships with the coordinated Desktop 2.0 alpha as package version `2.0.0-alpha.0`, released under `desktop-v2.0alpha`. The CI artifact tag may retain its platform build suffix (`app-v{version}-main.{run_number}`); the public alpha label is the component tag above.
+The renderer ships with the coordinated Desktop 2.0 beta as package version `2.0.0-beta.0`, released under `desktop-v2.0beta`. The CI artifact tag may retain its platform build suffix (`app-v{version}-main.{run_number}`); the public release label is the component tag above.
 
 ## Stack
 
