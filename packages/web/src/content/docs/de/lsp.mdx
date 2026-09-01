@@ -79,7 +79,7 @@ Um alle integrierten LSP-Server zu aktivieren, setzen Sie `lsp` auf `true`.
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "lsp": true
 }
 ```
@@ -88,7 +88,7 @@ Verwenden Sie ein Objekt, um integrierte Server aktiviert zu lassen und gleichze
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "lsp": {}
 }
 ```
@@ -113,7 +113,7 @@ Verwenden Sie die Eigenschaft `env`, um Umgebungsvariablen festzulegen, wenn Sie
 
 ```json title="deepagent-code.json" {5-7}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "lsp": {
     "rust": {
       "env": {
@@ -132,7 +132,7 @@ Verwenden Sie die Eigenschaft `initialization`, um Initialisierungsoptionen an d
 
 ```json title="deepagent-code.json" {5-9}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "lsp": {
     "typescript": {
       "initialization": {
@@ -157,7 +157,7 @@ Wenn `lsp` ausgelassen wird, sind alle LSP-Server deaktiviert. Um alle LSP-Serve
 
 ```json title="deepagent-code.json" {3}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "lsp": false
 }
 ```
@@ -166,7 +166,7 @@ Um einen **bestimmten** LSP-Server zu deaktivieren, setzen Sie `disabled` auf `t
 
 ```json title="deepagent-code.json" {5}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "lsp": {
     "typescript": {
       "disabled": true
@@ -183,7 +183,7 @@ Sie können einen benutzerdefinierten LSP-Server hinzufügen, indem Sie den Befe
 
 ```json title="deepagent-code.json" {4-7}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "lsp": {
     "custom-lsp": {
       "command": ["custom-lsp-server", "--stdio"],

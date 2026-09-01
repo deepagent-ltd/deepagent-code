@@ -2,44 +2,44 @@ import { test, expect } from "bun:test"
 import { parseGitHubRemote } from "../../src/cli/cmd/github"
 
 test("parses https URL with .git suffix", () => {
-  expect(parseGitHubRemote("https://github.com/lessweb/deepagentCode.git")).toEqual({
-    owner: "lessweb",
-    repo: "deepagentCode",
+  expect(parseGitHubRemote("https://github.com/deepagent-ltd/deepagent-code.git")).toEqual({
+    owner: "deepagent-ltd",
+    repo: "deepagent-code",
   })
 })
 
 test("parses https URL without .git suffix", () => {
-  expect(parseGitHubRemote("https://github.com/lessweb/deepagentCode")).toEqual({
-    owner: "lessweb",
-    repo: "deepagentCode",
+  expect(parseGitHubRemote("https://github.com/deepagent-ltd/deepagent-code")).toEqual({
+    owner: "deepagent-ltd",
+    repo: "deepagent-code",
   })
 })
 
 test("parses git@ URL with .git suffix", () => {
-  expect(parseGitHubRemote("git@github.com:lessweb/deepagentCode.git")).toEqual({
-    owner: "lessweb",
-    repo: "deepagentCode",
+  expect(parseGitHubRemote("git@github.com:deepagent-ltd/deepagent-code.git")).toEqual({
+    owner: "deepagent-ltd",
+    repo: "deepagent-code",
   })
 })
 
 test("parses git@ URL without .git suffix", () => {
-  expect(parseGitHubRemote("git@github.com:lessweb/deepagentCode")).toEqual({
-    owner: "lessweb",
-    repo: "deepagentCode",
+  expect(parseGitHubRemote("git@github.com:deepagent-ltd/deepagent-code")).toEqual({
+    owner: "deepagent-ltd",
+    repo: "deepagent-code",
   })
 })
 
 test("parses ssh:// URL with .git suffix", () => {
-  expect(parseGitHubRemote("ssh://git@github.com/lessweb/deepagentCode.git")).toEqual({
-    owner: "lessweb",
-    repo: "deepagentCode",
+  expect(parseGitHubRemote("ssh://git@github.com/deepagent-ltd/deepagent-code.git")).toEqual({
+    owner: "deepagent-ltd",
+    repo: "deepagent-code",
   })
 })
 
 test("parses ssh:// URL without .git suffix", () => {
-  expect(parseGitHubRemote("ssh://git@github.com/lessweb/deepagentCode")).toEqual({
-    owner: "lessweb",
-    repo: "deepagentCode",
+  expect(parseGitHubRemote("ssh://git@github.com/deepagent-ltd/deepagent-code")).toEqual({
+    owner: "deepagent-ltd",
+    repo: "deepagent-code",
   })
 })
 

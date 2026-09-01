@@ -48,7 +48,7 @@ DeepAgent Code config.
 
 ```json title="deepagent-code.json" {3}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "model": "lmstudio/google/gemma-3n-e4b"
 }
 ```
@@ -64,7 +64,7 @@ Možete globalno konfigurirati opcije modela kroz config.
 
 ```jsonc title="deepagent-code.jsonc" {7-12,19-24}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "openai": {
       "models": {
@@ -101,7 +101,7 @@ Također možete definirati prilagođene varijante koje proširuju ugrađene. Va
 
 ```jsonc title="deepagent-code.jsonc" {6-21}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "deepagent-code": {
       "models": {
@@ -159,7 +159,7 @@ Možete nadjačati postojeće varijante ili dodati svoje:
 
 ```jsonc title="deepagent-code.jsonc" {7-18}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "openai": {
       "models": {
@@ -193,7 +193,7 @@ Kada se DeepAgent Code pokrene, on provjerava modele u sljedećem prioritetnom r
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "model": "anthropic/claude-sonnet-4-20250514"
 }
 ```

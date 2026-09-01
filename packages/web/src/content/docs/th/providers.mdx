@@ -35,7 +35,7 @@ DeepAgent Code ใช้ [AI SDK](https://ai-sdk.dev/) และ [Models.dev](ht
 
 ```json title="deepagent-code.json" {6}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "anthropic": {
       "options": {
@@ -57,7 +57,7 @@ DeepAgent Code Zen คือรายชื่อโมเดลที่จั�
 หากคุณยังใหม่ เราขอแนะนำให้เริ่มต้นด้วย DeepAgent Code Zen
 :::
 
-1. เรียกใช้คำสั่ง `/connect` ใน TUI เลือก deepagent-code และไปที่ [deepagent-code.ai/auth](https://deepagent-code.ai/auth)
+1. เรียกใช้คำสั่ง `/connect` ใน TUI เลือก deepagent-code และไปที่ [ai.deepagent.ltd/auth](https://ai.deepagent.ltd/auth)
 
    ```txt
    /connect
@@ -88,7 +88,7 @@ DeepAgent Code Zen คือรายชื่อโมเดลที่จั�
 
 DeepAgent Code Go คือแผนการสมัครสมาชิกราคาประหยัดที่ให้การเข้าถึงโมเดลการเขียนโค้ดแบบเปิดยอดนิยมที่เชื่อถือได้ ซึ่งจัดเตรียมโดยทีมงาน DeepAgent Code ที่ได้รับการทดสอบและตรวจสอบแล้วว่าทำงานได้ดีกับ DeepAgent Code
 
-1. เรียกใช้คำสั่ง `/connect` ใน TUI เลือก `DeepAgent Code Go` และไปที่ [deepagent-code.ai/auth](https://deepagent-code.ai/zen)
+1. เรียกใช้คำสั่ง `/connect` ใน TUI เลือก `DeepAgent Code Go` และไปที่ [ai.deepagent.ltd/auth](https://ai.deepagent.ltd/zen)
 
    ```txt
    /connect
@@ -194,7 +194,7 @@ DeepAgent Code Go คือแผนการสมัครสมาชิก�
 
    ```json title="deepagent-code.json"
    {
-     "$schema": "https://deepagent-code.ai/config.json",
+     "$schema": "https://ai.deepagent.ltd/config.schema.json",
      "provider": {
        "amazon-bedrock": {
          "options": {
@@ -221,7 +221,7 @@ DeepAgent Code Go คือแผนการสมัครสมาชิก�
 
    ```json title="deepagent-code.json"
    {
-     "$schema": "https://deepagent-code.ai/config.json",
+     "$schema": "https://ai.deepagent.ltd/config.schema.json",
      "provider": {
        "amazon-bedrock": {
          "options": {
@@ -265,7 +265,7 @@ DeepAgent Code Go คือแผนการสมัครสมาชิก�
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "amazon-bedrock": {
       // ...
@@ -327,7 +327,7 @@ DeepAgent Code Go คือแผนการสมัครสมาชิก�
 
 ```json title="deepagent-code.json" "atomic-chat" {5, 6, 8, 10-14}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "atomic-chat": {
       "npm": "@ai-sdk/openai-compatible",
@@ -555,7 +555,7 @@ Cloudflare AI Gateway ช่วยให้คุณเข้าถึงโม�
 
    ```json title="deepagent-code.json"
    {
-     "$schema": "https://deepagent-code.ai/config.json",
+     "$schema": "https://ai.deepagent.ltd/config.schema.json",
      "provider": {
        "cloudflare-ai-gateway": {
          "models": {
@@ -762,7 +762,7 @@ DeepAgent Code ใช้โมเดลขนาดเล็กสำหรั�
 
 ```json
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "small_model": "gitlab/duo-chat-haiku-4-5",
   "share": "disabled"
 }
@@ -824,7 +824,7 @@ export GITLAB_OAUTH_CLIENT_ID=your_application_id_here
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "gitlab": {
       "options": {
@@ -841,7 +841,7 @@ export GITLAB_OAUTH_CLIENT_ID=your_application_id_here
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "plugin": ["deepagent-code-gitlab-plugin"]
 }
 ```
@@ -1024,7 +1024,7 @@ subscription](https://github.com/features/copilot/plans) เพื่อใช�
 
 ```jsonc title="~/.config/deepagent-code/deepagent-code.jsonc"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "helicone": {
       "npm": "@ai-sdk/openai-compatible",
@@ -1052,7 +1052,7 @@ Helicone รองรับส่วนหัวแบบกำหนดเอ�
 
 ```jsonc title="~/.config/deepagent-code/deepagent-code.jsonc"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "helicone": {
       "npm": "@ai-sdk/openai-compatible",
@@ -1106,7 +1106,7 @@ npm install -g deepagent-code-helicone-session
 
 ```json title="deepagent-code.json" "llama.cpp" {5, 6, 8, 10-15}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "llama.cpp": {
       "npm": "@ai-sdk/openai-compatible",
@@ -1173,7 +1173,7 @@ IO.NET มี 17 โมเดลที่ได้รับการปรับ
 
 ```json title="deepagent-code.json" "lmstudio" {5, 6, 8, 10-14}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "lmstudio": {
       "npm": "@ai-sdk/openai-compatible",
@@ -1294,7 +1294,7 @@ Ollama สามารถกำหนดค่าตัวเองสำหร�
 
 ```json title="deepagent-code.json" "ollama" {5, 6, 8, 10-14}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "ollama": {
       "npm": "@ai-sdk/openai-compatible",
@@ -1456,7 +1456,7 @@ DeepAgent Code Zen คือรายการโมเดลที่ได้�
 
    ```json title="deepagent-code.json" {6}
    {
-     "$schema": "https://deepagent-code.ai/config.json",
+     "$schema": "https://ai.deepagent.ltd/config.schema.json",
      "provider": {
        "openrouter": {
          "models": {
@@ -1471,7 +1471,7 @@ DeepAgent Code Zen คือรายการโมเดลที่ได้�
 
    ```json title="deepagent-code.json"
    {
-     "$schema": "https://deepagent-code.ai/config.json",
+     "$schema": "https://ai.deepagent.ltd/config.schema.json",
      "provider": {
        "openrouter": {
          "models": {
@@ -1720,7 +1720,7 @@ Vercel AI Gateway ช่วยให้คุณเข้าถึงโมเ�
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "vercel": {
       "models": {
@@ -1830,7 +1830,7 @@ Vercel AI Gateway ช่วยให้คุณเข้าถึงโมเ�
 
    ```json title="deepagent-code.json" {6}
    {
-     "$schema": "https://deepagent-code.ai/config.json",
+     "$schema": "https://ai.deepagent.ltd/config.schema.json",
      "provider": {
        "zenmux": {
          "models": {
@@ -1898,7 +1898,7 @@ Vercel AI Gateway ช่วยให้คุณเข้าถึงโมเ�
 
    ```json title="deepagent-code.json" ""myprovider"" {5-15}
    {
-     "$schema": "https://deepagent-code.ai/config.json",
+     "$schema": "https://ai.deepagent.ltd/config.schema.json",
      "provider": {
        "myprovider": {
          "npm": "@ai-sdk/openai-compatible",
@@ -1936,7 +1936,7 @@ Vercel AI Gateway ช่วยให้คุณเข้าถึงโมเ�
 
 ```json title="deepagent-code.json" {9,11,17-20}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "myprovider": {
       "npm": "@ai-sdk/openai-compatible",
@@ -2033,7 +2033,7 @@ Vercel AI Gateway ช่วยให้คุณเข้าถึงโมเ�
 
    ```json title="deepagent-code.json" {6}
    {
-     "$schema": "https://deepagent-code.ai/config.json",
+     "$schema": "https://ai.deepagent.ltd/config.schema.json",
      "provider": {
        "openrouter": {
          "models": {
@@ -2048,7 +2048,7 @@ Vercel AI Gateway ช่วยให้คุณเข้าถึงโมเ�
 
    ```json title="deepagent-code.json"
    {
-     "$schema": "https://deepagent-code.ai/config.json",
+     "$schema": "https://ai.deepagent.ltd/config.schema.json",
      "provider": {
        "openrouter": {
          "models": {
@@ -2264,7 +2264,7 @@ Vercel AI Gateway ช่วยให้คุณเข้าถึงโมเ�
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "vercel": {
       "models": {
@@ -2374,7 +2374,7 @@ Vercel AI Gateway ช่วยให้คุณเข้าถึงโมเ�
 
    ```json title="deepagent-code.json" {6}
    {
-     "$schema": "https://deepagent-code.ai/config.json",
+     "$schema": "https://ai.deepagent.ltd/config.schema.json",
      "provider": {
        "zenmux": {
          "models": {
@@ -2442,7 +2442,7 @@ Vercel AI Gateway ช่วยให้คุณเข้าถึงโมเ�
 
    ```json title="deepagent-code.json" ""myprovider"" {5-15}
    {
-     "$schema": "https://deepagent-code.ai/config.json",
+     "$schema": "https://ai.deepagent.ltd/config.schema.json",
      "provider": {
        "myprovider": {
          "npm": "@ai-sdk/openai-compatible",
@@ -2480,7 +2480,7 @@ Vercel AI Gateway ช่วยให้คุณเข้าถึงโมเ�
 
 ```json title="deepagent-code.json" {9,11,17-20}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "myprovider": {
       "npm": "@ai-sdk/openai-compatible",

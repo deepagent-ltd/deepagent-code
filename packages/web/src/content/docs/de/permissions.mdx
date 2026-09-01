@@ -25,7 +25,7 @@ Sie können Berechtigungen global festlegen (mit `*`) und bestimmte Tools übers
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": {
     "*": "ask",
     "bash": "allow",
@@ -38,7 +38,7 @@ Sie können auch alle Berechtigungen auf einmal festlegen:
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": "allow"
 }
 ```
@@ -51,7 +51,7 @@ Bei den meisten Berechtigungen können Sie ein Objekt verwenden, um basierend au
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": {
     "bash": {
       "*": "ask",
@@ -96,7 +96,7 @@ Dies ermöglicht beispielsweise den Zugriff auf alles unter `~/projects/personal
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": {
     "external_directory": {
       "~/projects/personal/**": "allow"
@@ -109,7 +109,7 @@ Jedes hier zulässige Verzeichnis erbt dieselben Standardeinstellungen wie der a
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": {
     "external_directory": {
       "~/projects/personal/**": "allow"
@@ -189,7 +189,7 @@ Ausführlichere Mustervergleichsbeispiele finden Sie oben im Abschnitt [Granular
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": {
     "bash": {
       "*": "ask",

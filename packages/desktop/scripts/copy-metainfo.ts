@@ -32,13 +32,13 @@ const xml = `<?xml version="1.0" encoding="UTF-8"?>
 
   <content_rating type="oars-1.1" />
 
-  <url type="bugtracker">https://github.com/lessweb/deepagent-code/issues</url>
+  <url type="bugtracker">https://github.com/deepagent-ltd/deepagent-code/issues</url>
   <url type="homepage">https://ai.deepagent.ltd</url>
-  <url type="vcs-browser">https://github.com/lessweb/deepagent-code</url>
+  <url type="vcs-browser">https://github.com/deepagent-ltd/deepagent-code</url>
 
   <screenshots>
     <screenshot type="default">
-      <image>https://raw.githubusercontent.com/lessweb/deepagent-code/b75d4d1c5ec449585d515c756fc81f080a157a9a/packages/web/src/assets/lander/screenshot.png</image>
+      <image>https://raw.githubusercontent.com/deepagent-ltd/deepagent-code/b75d4d1c5ec449585d515c756fc81f080a157a9a/packages/web/src/assets/lander/screenshot.png</image>
     </screenshot>
   </screenshots>
 </component>

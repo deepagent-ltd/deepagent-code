@@ -4,7 +4,7 @@
 
 ## Local Dev
 
-- `deepagent-code dev web` proxies `https://app.deepagent-code.ai`, so local UI/CSS changes will not show there.
+- `deepagent-code dev web` proxies `https://ai.deepagent.ltd`, so local UI/CSS changes will not show there.
 - For local UI changes, run the backend and app dev servers separately.
 - Backend (from `packages/deepagent-code`): `bun run --conditions=browser ./src/index.ts serve --port 4096`
 - App (from `packages/app`): `bun dev -- --port 4444`

@@ -146,7 +146,7 @@ Configura gli agenti nel file `deepagent-code.json`:
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "agent": {
     "build": {
       "mode": "primary",
@@ -375,7 +375,7 @@ Controlla quali strumenti sono disponibili per questo agente tramite la config `
 
 ```json title="deepagent-code.json" {3-6,9-12}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "tools": {
     "write": true,
     "bash": true
@@ -399,7 +399,7 @@ Puoi anche usare wildcard per controllare più strumenti in una volta. Per esemp
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "agent": {
     "readonly": {
       "tools": {
@@ -426,7 +426,7 @@ Puoi configurare i permessi per gestire quali azioni un agente può eseguire. At
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": {
     "edit": "deny"
   }
@@ -437,7 +437,7 @@ Puoi sovrascrivere questi permessi per agente.
 
 ```json title="deepagent-code.json" {3-5,8-10}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": {
     "edit": "deny"
   },
@@ -474,7 +474,7 @@ Puoi impostare permessi per comandi bash specifici.
 
 ```json title="deepagent-code.json" {7}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "agent": {
     "build": {
       "permission": {
@@ -492,7 +492,7 @@ Questo può usare un glob pattern.
 
 ```json title="deepagent-code.json" {7}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "agent": {
     "build": {
       "permission": {
@@ -510,7 +510,7 @@ Dato che l'ultima regola che corrisponde ha la precedenza, metti prima la wildca
 
 ```json title="deepagent-code.json" {8}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "agent": {
     "build": {
       "permission": {
@@ -703,7 +703,7 @@ Ecco alcuni casi d'uso comuni per agenti diversi.
 Ecco alcuni agenti di esempio che potresti trovare utili.
 
 :::tip
-Hai un agente che vorresti condividere? [Invia una PR](https://github.com/lessweb/deepagent-code).
+Hai un agente che vorresti condividere? [Invia una PR](https://github.com/deepagent-ltd/deepagent-code).
 :::
 
 ---

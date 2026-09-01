@@ -35,7 +35,7 @@ config.
 
 ```json title="deepagent-code.json" {6}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "anthropic": {
       "options": {
@@ -57,7 +57,7 @@ deepagent-code ile iyi çalıştığı test edilip doğrulandı. [Daha fazla bil
 Yeniyseniz DeepAgent Code Zen ile başlamanızı öneririz.
 :::
 
-1. TUI'de `/connect` komutunu çalıştırın, deepagent-code'u seçin ve [deepagent-code.ai/auth](https://deepagent-code.ai/auth)'ye gidin.
+1. TUI'de `/connect` komutunu çalıştırın, deepagent-code'u seçin ve [ai.deepagent.ltd/auth](https://ai.deepagent.ltd/auth)'ye gidin.
 
    ```txt
    /connect
@@ -88,7 +88,7 @@ deepagent-code'daki diğer sağlayıcılar gibi çalışır ve kullanımı tamam
 
 DeepAgent Code Go, deepagent-code ile iyi çalıştığı test edilmiş ve doğrulanmış, deepagent-code ekibi tarafından sağlanan popüler açık kodlama modellerine güvenilir erişim sağlayan düşük maliyetli bir abonelik planıdır.
 
-1. TUI'de `/connect` komutunu çalıştırın, `DeepAgent Code Go`'yu seçin ve [deepagent-code.ai/auth](https://deepagent-code.ai/zen) adresine gidin.
+1. TUI'de `/connect` komutunu çalıştırın, `DeepAgent Code Go`'yu seçin ve [ai.deepagent.ltd/auth](https://ai.deepagent.ltd/zen) adresine gidin.
 
    ```txt
    /connect
@@ -194,7 +194,7 @@ Amazon Bedrock'u deepagent-code ile kullanmak için:
 
    ```json title="deepagent-code.json"
    {
-     "$schema": "https://deepagent-code.ai/config.json",
+     "$schema": "https://ai.deepagent.ltd/config.schema.json",
      "provider": {
        "amazon-bedrock": {
          "options": {
@@ -221,7 +221,7 @@ Bedrock için VPC uç noktaları kullanıyorsanız:
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "amazon-bedrock": {
       "options": {
@@ -267,7 +267,7 @@ Bir taşıyıcı belirteç ayarlandığında (`/connect` veya `AWS_BEARER_TOKEN_
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "amazon-bedrock": {
       // ...
@@ -329,7 +329,7 @@ deepagent-code'u, yerel LLM'leri OpenAI uyumlu bir API sunucusunun arkasında ç
 
 ```json title="deepagent-code.json" "atomic-chat" {5, 6, 8, 10-14}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "atomic-chat": {
       "npm": "@ai-sdk/openai-compatible",
@@ -557,7 +557,7 @@ Cloudflare AI Gateway, OpenAI, Anthropic, Workers AI ve daha fazlasındaki model
 
    ```json title="deepagent-code.json"
    {
-     "$schema": "https://deepagent-code.ai/config.json",
+     "$schema": "https://ai.deepagent.ltd/config.schema.json",
      "provider": {
        "cloudflare-ai-gateway": {
          "models": {
@@ -763,7 +763,7 @@ yalnızca kendi GitLab tarafından barındırılan örneğinizi kullanmak için 
 
 ```json
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "small_model": "gitlab/duo-chat-haiku-4-5",
   "share": "disabled"
 }
@@ -825,7 +825,7 @@ Daha fazla belge [deepagent-code-gitlab-auth](https://www.npmjs.com/package/deep
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "gitlab": {
       "options": {
@@ -842,7 +842,7 @@ GitLab araçlarına (birleştirme istekleri, sorunlar, işlem hatları, CI/CD vb
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "plugin": ["deepagent-code-gitlab-plugin"]
 }
 ```
@@ -1024,7 +1024,7 @@ Helicone'un deepagent-code aracılığıyla otomatik olarak yapılandırılmayan
 
 ```jsonc title="~/.config/deepagent-code/deepagent-code.jsonc"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "helicone": {
       "npm": "@ai-sdk/openai-compatible",
@@ -1052,7 +1052,7 @@ Helicone, önbelleğe alma, kullanıcı izleme ve oturum yönetimi gibi özellik
 
 ```jsonc title="~/.config/deepagent-code/deepagent-code.jsonc"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "helicone": {
       "npm": "@ai-sdk/openai-compatible",
@@ -1106,7 +1106,7 @@ deepagent-code'u yerel modelleri kullanacak şekilde [llama.cpp's](https://githu
 
 ```json title="deepagent-code.json" "llama.cpp" {5, 6, 8, 10-15}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "llama.cpp": {
       "npm": "@ai-sdk/openai-compatible",
@@ -1173,7 +1173,7 @@ LM Studio aracılığıyla deepagent-code'u yerel modelleri kullanacak şekilde 
 
 ```json title="deepagent-code.json" "lmstudio" {5, 6, 8, 10-14}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "lmstudio": {
       "npm": "@ai-sdk/openai-compatible",
@@ -1294,7 +1294,7 @@ Ollama kendisini deepagent-code için otomatik olarak yapılandırabilir. Ayrın
 
 ```json title="deepagent-code.json" "ollama" {5, 6, 8, 10-14}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "ollama": {
       "npm": "@ai-sdk/openai-compatible",
@@ -1456,7 +1456,7 @@ DeepAgent Code Zen, deepagent-code ekibinin test edip doğruladığı modellerin
 
    ```json title="deepagent-code.json" {6}
    {
-     "$schema": "https://deepagent-code.ai/config.json",
+     "$schema": "https://ai.deepagent.ltd/config.schema.json",
      "provider": {
        "openrouter": {
          "models": {
@@ -1471,7 +1471,7 @@ DeepAgent Code Zen, deepagent-code ekibinin test edip doğruladığı modellerin
 
    ```json title="deepagent-code.json"
    {
-     "$schema": "https://deepagent-code.ai/config.json",
+     "$schema": "https://ai.deepagent.ltd/config.schema.json",
      "provider": {
        "openrouter": {
          "models": {
@@ -1720,7 +1720,7 @@ Modelleri deepagent-code yapılandırmanız aracılığıyla da özelleştirebil
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "vercel": {
       "models": {
@@ -1830,7 +1830,7 @@ Bazı yararlı yönlendirme seçenekleri:
 
    ```json title="deepagent-code.json" {6}
    {
-     "$schema": "https://deepagent-code.ai/config.json",
+     "$schema": "https://ai.deepagent.ltd/config.schema.json",
      "provider": {
        "zenmux": {
          "models": {
@@ -1898,7 +1898,7 @@ OpenAI uyumlu herhangi bir sağlayıcıyı deepagent-code ile kullanabilirsiniz.
 
    ```json title="deepagent-code.json" ""myprovider"" {5-15}
    {
-     "$schema": "https://deepagent-code.ai/config.json",
+     "$schema": "https://ai.deepagent.ltd/config.schema.json",
      "provider": {
        "myprovider": {
          "npm": "@ai-sdk/openai-compatible",
@@ -1936,7 +1936,7 @@ Burada `apiKey`, `headers` ve model `limit` seçeneklerini ayarlayan bir örnek 
 
 ```json title="deepagent-code.json" {9,11,17-20}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "myprovider": {
       "npm": "@ai-sdk/openai-compatible",

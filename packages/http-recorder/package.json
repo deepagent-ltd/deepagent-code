@@ -7,11 +7,11 @@
   "license": "AGPL-3.0-or-later",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/lessweb/deepagent-code.git",
+    "url": "git+https://github.com/deepagent-ltd/deepagent-code.git",
     "directory": "packages/http-recorder"
   },
-  "homepage": "https://github.com/lessweb/deepagent-code/tree/dev/packages/http-recorder",
-  "bugs": "https://github.com/lessweb/deepagent-code/issues",
+  "homepage": "https://github.com/deepagent-ltd/deepagent-code/tree/dev/packages/http-recorder",
+  "bugs": "https://github.com/deepagent-ltd/deepagent-code/issues",
   "keywords": [
     "effect",
     "http",

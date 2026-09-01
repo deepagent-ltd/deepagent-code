@@ -77,9 +77,6 @@ export class UpgradeFailedError extends Schema.TaggedErrorClass<UpgradeFailedErr
 const GitHubRelease = Schema.Struct({ tag_name: Schema.String })
 const NpmPackage = Schema.Struct({ version: Schema.String })
 const BrewFormula = Schema.Struct({ versions: Schema.Struct({ stable: Schema.String }) })
-const BrewInfoV2 = Schema.Struct({
-  formulae: Schema.Array(Schema.Struct({ versions: Schema.Struct({ stable: Schema.String }) })),
-})
 const ChocoPackage = Schema.Struct({
   d: Schema.Struct({ results: Schema.Array(Schema.Struct({ Version: Schema.String })) }),
 })
@@ -134,14 +131,6 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
       },
       Effect.catch((err) => Effect.succeed({ code: 1, stdout: "", stderr: errorMessage(err) })),
     )
-
-    const getBrewFormula = Effect.fnUntraced(function* () {
-      const tapFormula = yield* text(["brew", "list", "--formula", "anomalyco/tap/deepagent-code"])
-      if (tapFormula.includes("deepagent-code")) return "anomalyco/tap/deepagent-code"
-      const coreFormula = yield* text(["brew", "list", "--formula", "deepagent-code"])
-      if (coreFormula.includes("deepagent-code")) return "deepagent-code"
-      return "deepagent-code"
-    })
 
     const upgradeFailure = (method: Method, result?: { code: number; stdout: string; stderr: string }) => {
       if (method === "choco") return "not running from an elevated command shell"
@@ -224,12 +213,8 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
         const detectedMethod = installMethod || (yield* result.method())
 
         if (detectedMethod === "brew") {
-          const formula = yield* getBrewFormula()
-          if (formula.includes("/")) {
-            const infoJson = yield* text(["brew", "info", "--json=v2", formula])
-            const info = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(BrewInfoV2))(infoJson)
-            return info.formulae[0].versions.stable
-          }
+          // Brew resolves the `deepagent-code` formula directly; the migration-era
+          // homebrew tap is gone and no longer probed.
           const response = yield* httpOk.execute(
             HttpClientRequest.get("https://formulae.brew.sh/api/formula/deepagent-code.json").pipe(
               HttpClientRequest.acceptJson,
@@ -270,7 +255,7 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
         }
 
         const response = yield* httpOk.execute(
-          HttpClientRequest.get("https://api.github.com/repos/lessweb/deepagent-code/releases/latest").pipe(
+          HttpClientRequest.get("https://api.github.com/repos/deepagent-ltd/deepagent-code/releases/latest").pipe(
             HttpClientRequest.acceptJson,
           ),
         )
@@ -293,25 +278,8 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
             upgradeResult = yield* run(["bun", "install", "-g", `deepagent-code@${target}`])
             break
           case "brew": {
-            const formula = yield* getBrewFormula()
             const env = { HOMEBREW_NO_AUTO_UPDATE: "1" }
-            if (formula.includes("/")) {
-              const tap = yield* run(["brew", "tap", "anomalyco/tap"], { env })
-              if (tap.code !== 0) {
-                upgradeResult = tap
-                break
-              }
-              const repo = yield* text(["brew", "--repo", "anomalyco/tap"])
-              const dir = repo.trim()
-              if (dir) {
-                const pull = yield* run(["git", "pull", "--ff-only"], { cwd: dir, env })
-                if (pull.code !== 0) {
-                  upgradeResult = pull
-                  break
-                }
-              }
-            }
-            upgradeResult = yield* run(["brew", "upgrade", formula], { env })
+            upgradeResult = yield* run(["brew", "upgrade", "deepagent-code"], { env })
             break
           }
           case "choco":

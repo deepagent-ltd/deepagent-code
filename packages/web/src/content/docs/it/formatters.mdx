@@ -62,7 +62,7 @@ Puoi personalizzare i formattatori nella sezione `formatter` della config di Dee
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "formatter": {}
 }
 ```
@@ -86,7 +86,7 @@ Per disabilitare **tutti** i formattatori globalmente, imposta `formatter` a `fa
 
 ```json title="deepagent-code.json" {3}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "formatter": false
 }
 ```
@@ -95,7 +95,7 @@ Per disabilitare un formattatore **specifico**, imposta `disabled` a `true`:
 
 ```json title="deepagent-code.json" {5}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "formatter": {
     "prettier": {
       "disabled": true
@@ -112,7 +112,7 @@ Puoi sovrascrivere i formattatori integrati o aggiungerne di nuovi specificando 
 
 ```json title="deepagent-code.json" {4-14}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "formatter": {
     "prettier": {
       "command": ["npx", "prettier", "--write", "$FILE"],

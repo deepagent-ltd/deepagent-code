@@ -25,7 +25,7 @@ DeepAgent Code 使用 `permission` 設定來決定某個操作是否應自動執
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": {
     "*": "ask",
     "bash": "allow",
@@ -38,7 +38,7 @@ DeepAgent Code 使用 `permission` 設定來決定某個操作是否應自動執
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": "allow"
 }
 ```
@@ -51,7 +51,7 @@ DeepAgent Code 使用 `permission` 設定來決定某個操作是否應自動執
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": {
     "bash": {
       "*": "ask",
@@ -96,7 +96,7 @@ DeepAgent Code 使用 `permission` 設定來決定某個操作是否應自動執
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": {
     "external_directory": {
       "~/projects/personal/**": "allow"
@@ -109,7 +109,7 @@ DeepAgent Code 使用 `permission` 設定來決定某個操作是否應自動執
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": {
     "external_directory": {
       "~/projects/personal/**": "allow"
@@ -189,7 +189,7 @@ DeepAgent Code 的權限以工具名稱為鍵，外加幾個安全防護項：
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": {
     "bash": {
       "*": "ask",

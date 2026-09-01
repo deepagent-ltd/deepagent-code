@@ -61,7 +61,7 @@ Du kan tilpasse formatere gennem afsnittet `formatter` i din DeepAgent Code-konf
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "formatter": {}
 }
 ```
@@ -85,7 +85,7 @@ For at deaktivere **alle** formatere globalt, skal du indstille `formatter` til 
 
 ```json title="deepagent-code.json" {3}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "formatter": false
 }
 ```
@@ -94,7 +94,7 @@ For at deaktivere en **specifik** formatter, skal du indstille `disabled` til `t
 
 ```json title="deepagent-code.json" {5}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "formatter": {
     "prettier": {
       "disabled": true
@@ -111,7 +111,7 @@ Du kan tilsidesætte de indbyggede formattere eller tilføje nye ved at angive k
 
 ```json title="deepagent-code.json" {4-14}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "formatter": {
     "prettier": {
       "command": ["npx", "prettier", "--write", "$FILE"],
