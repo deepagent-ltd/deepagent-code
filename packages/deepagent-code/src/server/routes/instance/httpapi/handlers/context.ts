@@ -8,6 +8,12 @@ import {
   SessionContextResolverV2,
   type QueryEnvelope,
 } from "@deepagent-code/core/context-federation/resolver-v2"
+import {
+  ProductionV2Sources,
+  productionAdaptersEnabled,
+  productionV2Adapters,
+  type ProductionV2AdapterInput,
+} from "@deepagent-code/core/context-federation/production-adapters"
 import { ContextStagedAdaptersV2 } from "@deepagent-code/core/context-federation/staged-adapters-v2"
 import { Session } from "@/session/session"
 import { SessionID } from "@/session/schema"
@@ -54,7 +60,7 @@ const V2Namespace = ContextReference.SecurityNamespaceID.make("v2:local")
 const V2Scope = ContextReference.ProjectScopeKey.make("v2:local")
 
 /** Build a v2-scoped resolver QueryEnvelope for a session readiness probe. */
-function buildReadinessEnvelope(session: Session.Info): QueryEnvelope {
+export function buildReadinessEnvelope(session: Session.Info): QueryEnvelope {
   const locationKey = ContextReference.LocationKey.make(session.directory)
   const graphs = [...SessionContextResolverV2.GraphOrder]
   return {
@@ -94,6 +100,19 @@ const decodeEventRow = (row: { id: string; seq: number; type: string; data: Reco
   data: row.data,
 })
 
+/**
+ * W3.7 L5 — the adapter set the C6 readiness probe uses: IDENTICAL to the V2 runner's selection
+ * (production sources under the W0.1 flag, staged `source_disabled` only under an explicit
+ * `=false`). Before this, readiness probed staged adapters while the runner served the production
+ * sources, so a ready turn could be reported degraded (and vice versa) once the real seams were
+ * mounted.
+ */
+export function readinessAdapters(sources: ProductionV2AdapterInput) {
+  return productionAdaptersEnabled()
+    ? productionV2Adapters(sources)
+    : ContextStagedAdaptersV2.stagedV2Adapters()
+}
+
 export const contextHandlers = HttpApiBuilder.group(InstanceHttpApi, "context", (handlers) =>
   Effect.gen(function* () {
     const session = yield* Session.Service
@@ -107,11 +126,11 @@ export const contextHandlers = HttpApiBuilder.group(InstanceHttpApi, "context", 
         Effect.mapError(() => makeApiError("resource_not_found", { resource: ctx.query.session_id })),
       )
       const envelope = buildReadinessEnvelope(info)
-      const resolved = yield* SessionContextResolverV2.resolveGraphs(
-        envelope,
-        ContextStagedAdaptersV2.stagedV2Adapters(),
-        5_000,
-      )
+      // W3.7 L5: readiness reflects what the V2 runner actually does — same flag-gated adapter
+      // selection (production sources default, staged `source_disabled` only under `=false`).
+      const sources = yield* ProductionV2Sources
+      const adapters = readinessAdapters(sources)
+      const resolved = yield* SessionContextResolverV2.resolveGraphs(envelope, adapters, 5_000)
       const graphs = resolved.results.map((entry) => entry.status)
       const ready = Object.values(resolved.graphStatuses).every((status) => status.status === "ready")
       const statuses = Object.fromEntries(

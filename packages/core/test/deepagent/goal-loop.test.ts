@@ -17,9 +17,11 @@ import {
   readGoalTickCursor,
   evaluateForController,
   budgetNotice,
+  enqueueGoalSteer,
   InvalidGoalError,
   type ControllerDeps,
   type GraderPorts,
+  type GoalHandle,
   type StepExecutor,
   type StepExecutorResult,
   type RollbackPort,
@@ -1342,3 +1344,85 @@ describe("V4.0.1 P2 — net-generation token accounting (§4.4/§4.5, budgetToke
     expect(status.ledger.tokens).toBe(2_100) // 2 × 1050 gross — stays gross despite the flag flip
   })
 })
+
+// W1.1 — §S1.3 core-side goal-steer: enqueueGoalSteer writes guidance into the goal's durable runtime
+// state; the next EXECUTING tick threads it into the step executor (steerGuidance) and clears the
+// queue; a short-circuited tick preserves it (no loss).
+describe("V4.1 §S1.3 — goal-steer enqueue + tick delivery (W1.1)", () => {
+  test("enqueueGoalSteer returns no_goal for an unknown handle and enqueues for a running goal", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "pending")])
+    const loop = makeGoalLoop(deps({}, clock))
+    expect(enqueueGoalSteer(store, { goalId: "goal_missing", planDocId, sessionId: SESSION }, { id: "msg_s1", text: "Go" })).toBe(
+      "no_goal",
+    )
+    const handle = await Effect.runPromise(loop.start(spec(planDocId)))
+    expect(enqueueGoalSteer(store, handle, { id: "msg_s1", text: "Weigh the edge case" })).toBe("enqueued")
+    expect(stateBody(handle)?.pendingSteers).toEqual([{ id: "msg_s1", text: "Weigh the edge case" }])
+  })
+
+  test("enqueueGoalSteer is idempotent by steer id and refused for a terminal goal", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "pending")])
+    const loop = makeGoalLoop(deps({}, clock))
+    const handle = await Effect.runPromise(loop.start(spec(planDocId)))
+    expect(enqueueGoalSteer(store, handle, { id: "msg_s1", text: "Once" })).toBe("enqueued")
+    // The same steer id re-enqueued (crash replay) never duplicates the guidance.
+    expect(enqueueGoalSteer(store, handle, { id: "msg_s1", text: "Once" })).toBe("enqueued")
+    expect(stateBody(handle)?.pendingSteers).toEqual([{ id: "msg_s1", text: "Once" }])
+    await Effect.runPromise(loop.stop(handle))
+    // A terminal goal is no longer steerable — the caller keeps the row pending and informs the user.
+    expect(enqueueGoalSteer(store, handle, { id: "msg_s2", text: "Too late" })).toBe("no_goal")
+  })
+
+  test("the next executing tick threads the steer into the executor and clears the queue", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "pending")])
+    const received: string[][] = []
+    const executing = (input: Parameters<StepExecutor>[0]) => {
+      received.push([...(input.steerGuidance ?? [])])
+      updatePlan(planDocId, (plan: PlanDoc) => ({
+        ...plan,
+        steps: plan.steps.map((s) => ({ ...s, status: "done" })),
+      }))
+      return Effect.succeed({ tokensUsed: 100 })
+    }
+    const loop = makeGoalLoop(deps({ executor: executing }, clock))
+    const handle = await Effect.runPromise(loop.start(spec(planDocId)))
+    expect(enqueueGoalSteer(store, handle, { id: "msg_s1", text: "Weigh the edge case first" })).toBe("enqueued")
+
+    const outcome = await Effect.runPromise(loop.tick(handle))
+    expect(outcome).toBe("done")
+    expect(received).toEqual([["Weigh the edge case first"]])
+    // Delivered — the queue is drained; a repeated same-version tick must NOT re-thread the steer.
+    expect(stateBody(handle)?.pendingSteers).toEqual([])
+    await Effect.runPromise(loop.tick(handle))
+    expect(received).toHaveLength(1)
+  })
+
+  test("a short-circuited tick preserves the pending steers (no loss)", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "pending")])
+    const loop = makeGoalLoop(deps({}, clock))
+    const handle = await Effect.runPromise(loop.start(spec(planDocId)))
+    expect(enqueueGoalSteer(store, handle, { id: "msg_s1", text: "Do not drop me" })).toBe("enqueued")
+    await Effect.runPromise(loop.stop(handle))
+    // Terminal replay never runs the executor — the steer stays pending for a resumed run.
+    await Effect.runPromise(loop.tick(handle))
+    expect(stateBody(handle)?.pendingSteers).toEqual([{ id: "msg_s1", text: "Do not drop me" }])
+  })
+})
+
+const readGoalState = (handle: GoalHandle) =>
+  store
+    .list({ type: "run_context", scope: planScope(handle.sessionId) })
+    .map((ref) => store.get(ref.id))
+    .find((doc) => doc?.extensions?.goal_id === handle.goalId)
+
+function stateBody(
+  handle: GoalHandle,
+): { readonly pendingSteers: readonly { readonly id: string; readonly text: string }[] } | null {
+  const doc = readGoalState(handle)
+  if (!doc) return null
+  return JSON.parse(doc.body) as { readonly pendingSteers: readonly { readonly id: string; readonly text: string }[] }
+}

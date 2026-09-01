@@ -65,6 +65,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { DurableLearningRuntime } from "@/deepagent/learning-runtime"
 import { LegacyEventCanonicalizerRuntime } from "@/legacy-event-canonicalizer-runtime"
+import { productionSourcesLayer } from "@/context-federation/production-sources"
 
 const baseAppLayer = Layer.mergeAll(
   Npm.defaultLayer,
@@ -144,6 +145,13 @@ const baseAppLayer = Layer.mergeAll(
 // campaigns through the operator flow instead — this seam exists so the packaged live test can boot
 // the V2-only profile with a verifiable campaign against a real provider.
 export const AppLayer = baseAppLayer.pipe(
+  // W3.7 — the ProductionV2Sources VALUE seam: provided INTO the base graph (same context-flow
+  // mechanism as the PromptEpoch seam below) so the location-layer runner subtree — whose
+  // `productionV2SourcesLayer` forwards an outer-scope value from its build context — resolves the
+  // LIVE four-graph sources (LiveCodeQuery / LocationIndexCoordinator / durable knowledge +
+  // released-snapshot picker). `process.cwd()` is the production workspace (one server per
+  // project); absent this seam the runner degrades the four graphs honestly (pre-W3.7 behavior).
+  Layer.provide(productionSourcesLayer({ workspaceDirectory: process.cwd() })),
   Layer.provide(PromptEpoch.v2RunnerSeamLayer.pipe(Layer.provide(Database.defaultLayer))),
   Layer.provideMerge(devCampaignMint),
   // W0.5: deliver the shipped owner-authorization.json into the local DB once per runtime build

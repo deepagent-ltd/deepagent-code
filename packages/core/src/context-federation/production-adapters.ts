@@ -1,6 +1,6 @@
 export * as ProductionV2Adapters from "./production-adapters"
 
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Option } from "effect"
 import { type CodeQuery } from "../code-intelligence/query"
 import { ContextAuthorization } from "./authorization"
 import { ContextFederation } from "./federation"
@@ -80,7 +80,23 @@ export class ProductionV2Sources extends Context.Service<ProductionV2Sources, Pr
   "@deepagent-code/ProductionV2Sources",
 ) {}
 
-export const productionV2SourcesLayer = Layer.succeed(ProductionV2Sources, {})
+/**
+ * W3.7 host-injectable seam. The location-layer runner graph provides this layer, so a plain
+ * `Layer.succeed` default would shadow any host-provided value for the whole runner subtree. Instead
+ * the layer reads the build context: when a deepagent-code composition placed a real
+ * `ProductionV2Sources` value there (via `Layer.provide(seam)` at the app root — the same
+ * context-flow mechanism as `PromptEpoch.v2RunnerSeamLayer`), it forwards that value into the runner
+ * subtree; otherwise it stays the documented empty default (`{}` = all four graphs degrade honestly,
+ * the pre-W3.7 behavior — the `=false` staged fallback is unaffected).
+ */
+export const productionV2SourcesLayer = Layer.unwrap(
+  Effect.gen(function* () {
+    const provided = yield* Effect.serviceOption(ProductionV2Sources)
+    return Option.isSome(provided)
+      ? Layer.succeed(ProductionV2Sources, provided.value)
+      : Layer.succeed(ProductionV2Sources, {} as ProductionV2AdapterInput)
+  }),
+)
 
 /**
  * Assemble the four production adapters. The adapters capture the inputs and read state at resolve

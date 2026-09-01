@@ -9,7 +9,7 @@ import {
   isContextOverflowFailure,
   type Model,
 } from "@deepagent-code/llm"
-import { Context, DateTime, Effect, Stream } from "effect"
+import { Context, DateTime, Effect, Schema, Stream } from "effect"
 import type { Config } from "../config"
 import type { SessionContext } from "../context-federation/session-context"
 import type { Database } from "../database/database"
@@ -301,9 +301,26 @@ export type RemoteCompactionRequest = {
 export type RemoteCompactionResult =
   | { readonly kind: "compacted"; readonly summary: string }
   | { readonly kind: "recovery_required"; readonly reason: Contract.RemoteCompactRecoveryReason }
+/**
+ * W1.3 — a producer-side TYPED refusal of a remote compact (provider said no / not eligible /
+ * network-unknown / etc.) so the caller differentiates a concrete refusal reason from a blanket
+ * `provider_error`. A producer should fail with this (instead of a generic Error) whenever it knows
+ * the refusal's reason code; a plain fault still degrades to `provider_error`.
+ */
+export class RemoteCompactRefusedError extends Schema.TaggedErrorClass<RemoteCompactRefusedError>()(
+  "SessionCompaction.RemoteCompactRefusedError",
+  { reason: Contract.RemoteCompactRecoveryReason },
+) {}
 export const CurrentRemoteCompaction = Context.Reference<
   ((input: RemoteCompactionRequest) => Effect.Effect<RemoteCompactionResult, unknown>) | undefined
->("@deepagent-code/v2/SessionCompaction/CurrentRemoteCompaction", { defaultValue: () => undefined })
+>(
+  "@deepagent-code/v2/SessionCompaction/CurrentRemoteCompaction",
+  // W1.3 — NO production provider is registered in this package yet (the only wiring today is the
+  // test seam). Honest posture: the reference stays `undefined` ⇒ the V2-native LOCAL summary path
+  // dispatches, and a caller that wants a remote compact must provide a producer explicitly (the
+  // Responses-only gate + recovery differentiation below then apply).
+  { defaultValue: () => undefined },
+)
 
 /**
  * design §5.3 Responses-only gate (C2-05). Remote compact is only applicable to an explicit
@@ -355,13 +372,17 @@ export const make = (dependencies: Dependencies) => {
         // design §5.3: an unknown/faulted remote result never degrades to a fake local success — it
         // enters compact recovery (the original history stays readable). Typed failures first, then
         // adapter defects, both logged; interrupts are caught by NEITHER stage so cancellation always
-        // propagates (the order-4 seams' catchCause swallowed them; this one must not).
+        // propagates (the order-4 seams' catchCause swallowed them; this one must not). W1.3: a
+        // producer's TYPED refusal (RemoteCompactRefusedError) keeps its specific reason code so the
+        // caller can differentiate a refusal (e.g. not-eligible / network-unknown / response_id
+        // missing) from a generic provider_error.
         Effect.catch((error): Effect.Effect<RemoteCompactionResult> => {
+          const reason = error instanceof RemoteCompactRefusedError ? error.reason : "provider_error"
           log.warn("remote compaction faulted, entering compact recovery", {
             sessionID: input.sessionID,
-            reason: String(error),
+            reason,
           })
-          return Effect.succeed({ kind: "recovery_required", reason: "provider_error" })
+          return Effect.succeed({ kind: "recovery_required", reason })
         }),
         Effect.catchDefect((): Effect.Effect<RemoteCompactionResult> => {
           log.warn("remote compaction adapter defect, entering compact recovery", {
