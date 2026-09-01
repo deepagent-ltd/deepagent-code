@@ -4,8 +4,8 @@ import stripAnsi from "strip-ansi"
 import { defaultConsoleUrl, formatAccountLabel, formatOrgLine } from "../../src/cli/cmd/account"
 
 describe("console account display", () => {
-  test("uses console.deepagent-code.ai as the default login URL", () => {
-    expect(defaultConsoleUrl).toBe("https://console.deepagent-code.ai")
+  test("uses api.deepagent.ltd as the default login URL", () => {
+    expect(defaultConsoleUrl).toBe("https://api.deepagent.ltd")
   })
 
   test("includes the account url in account labels", () => {

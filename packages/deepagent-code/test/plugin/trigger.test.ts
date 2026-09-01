@@ -53,7 +53,7 @@ function withProject<A, E, R>(source: string, self: Effect.Effect<A, E, R>) {
             path.join(test.directory, "deepagent-code.json"),
             JSON.stringify(
               {
-                $schema: "https://deepagent-code.ai/config.json",
+                $schema: "https://ai.deepagent.ltd/config.schema.json",
                 plugin: [pathToFileURL(file).href],
               },
               null,

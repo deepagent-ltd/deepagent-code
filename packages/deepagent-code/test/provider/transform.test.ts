@@ -2029,7 +2029,7 @@ describe("ProviderTransform.message - strip openai metadata when store=false", (
       providerID: "deepagent-code",
       api: {
         id: "deepagent-code-test",
-        url: "https://api.deepagent-code.ai",
+        url: "https://api.deepagent.ltd",
         npm: "@ai-sdk/openai-compatible",
       },
     }
@@ -2063,7 +2063,7 @@ describe("ProviderTransform.message - strip openai metadata when store=false", (
       providerID: "deepagent-code",
       api: {
         id: "deepagent-code-test",
-        url: "https://api.deepagent-code.ai",
+        url: "https://api.deepagent.ltd",
         npm: "@ai-sdk/openai-compatible",
       },
     }

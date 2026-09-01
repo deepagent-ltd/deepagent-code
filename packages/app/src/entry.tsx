@@ -81,7 +81,7 @@ const notify: Platform["notify"] = async (title, description, href) => {
 
   const notification = new Notification(title, {
     body: description ?? "",
-    icon: "https://deepagent-code.ai/favicon-96x96-v3.png",
+    icon: "https://ai.deepagent.ltd/favicon-96x96-v3.png",
   })
 
   notification.onclick = () => {
@@ -112,7 +112,7 @@ if (!(root instanceof HTMLElement) && import.meta.env.DEV) {
 }
 
 const getCurrentUrl = () => {
-  if (location.hostname.includes("deepagent-code.ai")) return "http://localhost:4096"
+  if (location.hostname.includes("ai.deepagent.ltd")) return "http://localhost:4096"
   if (import.meta.env.DEV)
     return `http://${import.meta.env.VITE_DEEPAGENT_CODE_SERVER_HOST ?? "localhost"}:${import.meta.env.VITE_DEEPAGENT_CODE_SERVER_PORT ?? "4096"}`
   return location.origin

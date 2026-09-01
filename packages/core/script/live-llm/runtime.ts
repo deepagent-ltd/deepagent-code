@@ -231,7 +231,7 @@ function isolateProcess(testRoot: string, isolatedHome: string, isolatedData: st
 
 function workspaceConfig(config: LiveLLMConfig, agents: Record<string, V2LiveAgent>, shell?: string) {
   return {
-    $schema: "https://deepagent-code.ai/config.json",
+    $schema: "https://ai.deepagent.ltd/config.schema.json",
     model: `${runtimeProviderID}/${config.modelID}`,
     snapshot: false,
     ...(shell ? { shell } : {}),

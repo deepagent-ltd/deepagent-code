@@ -72,14 +72,14 @@ describe("HttpApi CORS", () => {
       const response = yield* Effect.promise(() =>
         handler(
           new Request(new URL("/global/config", "http://localhost"), {
-            headers: { origin: "https://app.deepagent-code.ai" },
+            headers: { origin: "https://ai.deepagent.ltd" },
           }),
           HttpApiApp.context,
         ),
       )
 
       expect(response.status).toBe(401)
-      expect(response.headers.get("access-control-allow-origin")).toBe("https://app.deepagent-code.ai")
+      expect(response.headers.get("access-control-allow-origin")).toBe("https://ai.deepagent.ltd")
     }),
     { timeout: 30_000 },
   )

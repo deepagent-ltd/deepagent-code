@@ -377,7 +377,7 @@ const writeText = Effect.fn("test.writeText")(function* (file: string, text: str
 const writeConfig = Effect.fn("test.writeConfig")(function* (dir: string, config: Partial<ConfigV1.Info>) {
   yield* writeText(
     path.join(dir, "deepagent-code.json"),
-    JSON.stringify({ $schema: "https://deepagent-code.ai/config.json", ...config }),
+    JSON.stringify({ $schema: "https://ai.deepagent.ltd/config.schema.json", ...config }),
   )
 })
 
