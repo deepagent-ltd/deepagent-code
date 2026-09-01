@@ -17,6 +17,15 @@ import { SessionV2 } from "@deepagent-code/core/session"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import { testEffect } from "../lib/effect"
 
+// W4: `RuntimeFeatures.enabled` is env-gated (flip-flag). These cases describe the
+// PRODUCTION-ENABLED state (the W0.1 runtime defaults set the context gates ON in the
+// entrypoints), so the context federation gate is preset to ON here; the env-consistency
+// matrix (incl. the OFF side) is covered by capability-l2-production.test.ts.
+process.env["DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION"] = "true"
+process.env["DEEPAGENT_CODE_CONTEXT_QUERY_TOOLS_V2"] = "true"
+delete process.env["DEEPAGENT_CODE_EVENT_V2_ADMISSION"]
+delete process.env["DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE"]
+
 // C4-07 — capability_search's enabledRuntimeFeatures reconnected to the E2
 // manifest-derived RuntimeFeatures registry (the frozen capability-search.ts is
 // untouched; this module is the replacement seam).

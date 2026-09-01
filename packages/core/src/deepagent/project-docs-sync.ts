@@ -1,6 +1,6 @@
 export * as ProjectDocsSync from "./project-docs-sync"
 
-import { join } from "path"
+import { dirname, join, parse } from "path"
 import { DateTime, Effect, Option } from "effect"
 import { FSUtil } from "../fs-util"
 import { Git } from "../git"
@@ -225,6 +225,12 @@ const renderPlan = (input: { revision: string; goal: GoalDocInfo | undefined }) 
 /**
  * Renders the four documents. LOG is idempotent: an existing entry marked for this session id is
  * left untouched (no duplicate append); all other documents are regenerated deterministically.
+ *
+ * Low-4 ruling — replayed session ids: a resumed session (same id) keeps its original LOG entry
+ * verbatim, so the entry's title/updated stamp can lag the session's current state. That is
+ * deliberate: the id is the identity ("the same session, carried on"), HANDOFF/DESIGN/PLAN are
+ * regenerated fresh every sync, and the LOG records the session's first (creation) entry — a
+ * replay is not a new "change", so no duplicate is appended and the entry is not rewritten.
  */
 export function renderDocs(input: {
   root: string
@@ -260,9 +266,18 @@ export function renderDocs(input: {
   }
 }
 
-/** Prepends one entry below the LOG header (newest first); refresh a stale revision stamp only. */
+/**
+ * Prepends one entry into the LOG (newest first) and keeps the file bounded:
+ * - Low-1: a blank/empty LOG is rebuilt with the canonical header; otherwise the entry is INSERTED
+ *   into the existing text — existing content is never dropped for lacking a heading.
+ * - High-1: the insertion point is positional, not "always the top": the entry lands between the
+ *   first newer and first older `## <updated> · ` stamp, so any traversal order (or a LOG that was
+ *   written by a single-session settle) still yields newest-first. Unparseable content falls back
+ *   to the prepend-below-header position — hand-written logs are never reordered.
+ * - Med-2: after the insert, the log rotates at LOG_MAX_ENTRIES (newest window kept, note at tail).
+ */
 function insertLogEntry(revision: string, existing: string | undefined, entry: string): string {
-  if (existing === undefined || !/^#{1,3}\s/m.test(existing)) {
+  if (existing === undefined || existing.trim() === "") {
     return [
       revisionHeader(revision),
       "",
@@ -273,14 +288,63 @@ function insertLogEntry(revision: string, existing: string | undefined, entry: s
       entry,
     ].join("\n")
   }
-  // Insert the entry below the header block (heading + any blockquote/blank lines) so the newest
-  // entry stays on top, then refresh a stale revision stamp in place.
   const lines = existing.split(/\r?\n/)
   const heading = lines.findIndex((line) => /^#{1,3}\s/.test(line))
   let i = heading + 1
   while (i < lines.length && (lines[i].trim() === "" || lines[i].startsWith(">"))) i++
-  const next = [...lines.slice(0, i), entry, ...lines.slice(i)].join("\n")
-  return next.replace(/^> revision:.*$/m, revisionHeader(revision))
+  const insertAt = logInsertionPoint(lines, i, entry)
+  const next = [...lines.slice(0, insertAt), entry, ...lines.slice(insertAt)].join("\n")
+  return rotateLog(next.replace(/^> revision:.*$/m, revisionHeader(revision)))
+}
+
+/** The `## <ISO timestamp> · <title>` stamp our entries carry. */
+const ENTRY_STAMP = /^## (\S+) · /
+
+/**
+ * Insertion index for `entry` inside `lines` scanning from `start` (below the header block).
+ * Returns the index of the marker line of the first entry whose stamp is not newer than the new
+ * entry's stamp — the slot that keeps entries newest-first (see insertLogEntry). When every parsed
+ * entry is strictly newer, the new entry belongs at the BOTTOM of the entry block (before a
+ * trailing rotation note, if any); with no parseable entries the prepend slot is kept.
+ */
+function logInsertionPoint(lines: string[], start: number, entry: string): number {
+  const entryStamp = ENTRY_STAMP.exec(entry.split(/\r?\n/)[1] ?? "")?.[1]
+  if (entryStamp === undefined) return start
+  let marker = start
+  let lastStamp = -1
+  for (let j = start; j < lines.length; j++) {
+    const line = lines[j]
+    if (line.startsWith("<!-- session: ")) marker = j
+    const stamp = ENTRY_STAMP.exec(line)?.[1]
+    if (stamp === undefined) continue
+    lastStamp = j
+    if (stamp <= entryStamp) return marker
+  }
+  if (lastStamp === -1) return start
+  // All parsed entries are newer: append the entry after the last entry's body, before a
+  // trailing rotation note (the only trailing `> ` line our writer emits).
+  let end = lines.length
+  if (lines[end - 1]?.startsWith("> ")) {
+    end -= 1
+    if (lines[end - 1] === "") end -= 1
+  }
+  return end
+}
+
+/** Med-2: keep at most this many session entries in LOG.md (newest window). */
+export const LOG_MAX_ENTRIES = 500
+
+/**
+ * Bounds LOG.md after an insert. Older entries beyond the newest `LOG_MAX_ENTRIES` are dropped and
+ * the tail notes the rotation. Note: a rotated-out session's marker disappears, so a later sync of
+ * that session re-appends its (now-old) entry at the bottom of the window — the file stays bounded
+ * either way; the log is a rolling window, not an archive.
+ */
+function rotateLog(text: string): string {
+  const markers = [...text.matchAll(/<!-- session: /g)]
+  if (markers.length <= LOG_MAX_ENTRIES) return text
+  const kept = text.slice(0, markers[LOG_MAX_ENTRIES].index).trimEnd()
+  return `${kept}\n\n> log rotated: kept the newest ${LOG_MAX_ENTRIES} session entries (older entries dropped)`
 }
 
 export const writeDocs = Effect.fn("ProjectDocsSync.writeDocs")(function* (
@@ -336,9 +400,39 @@ export function writingEnabled(docsSync: boolean | undefined): boolean {
 }
 
 /**
+ * High-2: where the settle hook writes. `root` comes from `location.project.directory`, which
+ * `Project.resolve` sets to the FILESYSTEM ROOT when no git repo is found (core/src/project.ts).
+ * A real project root is writable as-is (docs are created there when absent). An undetermined root
+ * is used only when a `docs/deepagent` directory already exists as the nearest ancestor of the
+ * session directory — otherwise undefined (skip). The filesystem root itself is NEVER a write
+ * target, so a no-git location can never create `/docs/deepagent`.
+ */
+const resolveWriteRoot = Effect.fn("ProjectDocsSync.resolveWriteRoot")(function* (
+  sessionDirectory: string,
+  root: string,
+  fs: FSUtil.Interface,
+) {
+  const fsRoot = parse(sessionDirectory).root
+  if (root !== fsRoot) return root
+  let current = sessionDirectory
+  while (true) {
+    if (current !== fsRoot && (yield* fs.isDir(join(current, ProjectDocs.DOCS_DIRECTORY)))) return current
+    const parent = dirname(current)
+    if (parent === current || parent === fsRoot) return undefined
+    current = parent
+  }
+})
+
+/**
  * Session settle tail (called from SessionRunner.run once the drain chain settles): best-effort
  * project docs maintenance. Only primary sessions (subagent sessions carry a parent id) and only
  * when `enabled` is true. Never fails the settle: sync failures are logged and ignored.
+ *
+ * Low-2 note (message-source difference): this tail summarizes `store.context` — the
+ * `SessionHistory.load` window, which is filtered to post-compaction messages — while
+ * `deepagent docs sync` regenerates from the CLI's FULL `messages` listing. That is deliberate:
+ * the settle tail maintains the recent working window and never has to resurrect compacted-away
+ * history, whereas the CLI is the authoritative full-history regeneration on demand.
  */
 export const afterSessionNow = Effect.fn("ProjectDocsSync.afterSessionNow")(function* (input: {
   sessionID: SessionSchema.ID
@@ -352,14 +446,24 @@ export const afterSessionNow = Effect.fn("ProjectDocsSync.afterSessionNow")(func
     const session = yield* input.store.get(input.sessionID)
     if (!session || session.parentID !== undefined) return
     if (!input.enabled) return
+    const writeRoot = yield* resolveWriteRoot(session.location.directory, input.root, input.fs)
+    if (writeRoot === undefined) {
+      yield* Effect.logDebug(
+        "project docs sync skipped: no docs/deepagent ancestor and the project root is undetermined",
+        { sessionID: input.sessionID, root: input.root },
+      )
+      return
+    }
     const messages = yield* input.store.context(input.sessionID).pipe(Effect.catch(() => Effect.succeed([])))
     yield* syncSessionDataFor({ fs: input.fs, git: input.git })({
-      root: input.root,
+      root: writeRoot,
       session,
       messages,
     })
   })
-  return sync().pipe(
+  // `return`-ing the inner effect would only succeed with the effect as a VALUE (never running
+  // it); `yield*` executes it — the settle tail must actually run.
+  yield* sync().pipe(
     Effect.catchCause((cause) =>
       Effect.logWarning("project docs sync after session failed", {
         sessionID: input.sessionID,

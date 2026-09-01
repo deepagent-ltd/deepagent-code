@@ -8,6 +8,16 @@ import {
 import { DeepAgentCodeToolInventory } from "@deepagent-code/core/system-context/capability-manifest"
 import { capabilityCatalog, capabilityCatalogDigestValue } from "@deepagent-code/core/system-context/capability-catalog"
 
+// W4: `enabled()` now returns the feature's REAL runtime value (flip-flag gates). These
+// suite-wide assertions describe the PRODUCTION-enabled state (the W0.1 runtime defaults
+// set these envs in the entrypoints), so the two context gates are preset to ON here; the
+// env-consistency matrix (incl. the OFF side) is covered by
+// system-context/capability-l2-production.test.ts.
+process.env["DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION"] = "true"
+process.env["DEEPAGENT_CODE_CONTEXT_QUERY_TOOLS_V2"] = "true"
+delete process.env["DEEPAGENT_CODE_EVENT_V2_ADMISSION"]
+delete process.env["DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE"]
+
 // C5-05 — the runtime feature registry is DERIVED from the frozen capability catalog, never a
 // hand-duplicated literal. These tests prove the derivation, the fail-closed unknown-feature
 // behavior, the drift gate, and deterministic digest.

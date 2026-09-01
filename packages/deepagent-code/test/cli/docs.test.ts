@@ -91,4 +91,41 @@ describe("deepagent docs sync (subprocess)", () => {
       }),
     180_000,
   )
+
+  cliIt.concurrent(
+    "a single sync over two fresh sessions orders the LOG newest-first (High-1)",
+    ({ deepagentCode, home }) =>
+      Effect.gen(function* () {
+        const project = path.join(home, "project")
+        const dbEnv = { DEEPAGENT_CODE_DB: path.join(home, "docs-cli.db") }
+        yield* Effect.promise(() => fsNode.mkdir(project, { recursive: true }))
+
+        const first = yield* deepagentCode.run("first task", {
+          model: testModelID,
+          env: dbEnv,
+          extraArgs: ["--dir", project],
+        })
+        deepagentCode.expectExit(first, 0, "run: first session")
+        const second = yield* deepagentCode.run("second task", {
+          model: testModelID,
+          env: dbEnv,
+          extraArgs: ["--dir", project],
+        })
+        deepagentCode.expectExit(second, 0, "run: second session")
+        // ONE sync processes both fresh sessions together — the LOG must come out newest-first
+        // (the old DESC traversal prepended each entry and inverted the order).
+        const sync = yield* deepagentCode.spawn(["docs", "sync", "--dir", project], { env: dbEnv })
+        deepagentCode.expectExit(sync, 0, "docs sync (one shot, two sessions)")
+
+        const log = yield* Effect.promise(() =>
+          fsNode.readFile(path.join(project, "docs", "deepagent", "LOG.md"), "utf8"),
+        )
+        expect(log.match(/<!-- session: /g)).toHaveLength(2)
+        const stamps = [...log.matchAll(/^## (\S+) · /gm)].map((m) => m[1])
+        expect(stamps).toHaveLength(2)
+        // newest first: the top entry carries the strictly newer timestamp
+        expect(Date.parse(stamps[0])).toBeGreaterThan(Date.parse(stamps[1]))
+      }),
+    180_000,
+  )
 })

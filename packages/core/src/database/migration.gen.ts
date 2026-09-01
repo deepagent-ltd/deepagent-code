@@ -172,5 +172,6 @@ export const migrations = (
     import("./migration/20260829030000_wire_event_ledgers"),
     import("./migration/20260830000000_session_provider_recovery"),
     import("./migration/20260902100000_v2_owner_authorization_renew_guard"),
+    import("./migration/20260901181952_session_capability_load"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

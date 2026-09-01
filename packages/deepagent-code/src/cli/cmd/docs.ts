@@ -29,11 +29,13 @@ export const DocsCommand = effectCmd({
             yargs
               .option("dir", {
                 type: "string",
-                describe: "project directory to scan for sessions (default: current directory)",
+                describe:
+                  "project directory whose sessions to sync — exact directory match, NOT recursive (default: current directory)",
               })
               .option("root", {
                 type: "string",
-                describe: "project root to write docs/deepagent under (default: --dir)",
+                describe:
+                  "project root to write docs/deepagent under; an explicit root is always written (default: --dir)",
               })
               .option("session", {
                 type: "string",
@@ -56,10 +58,19 @@ export const DocsCommand = effectCmd({
               // directory), so the session store lookup matches the recorded location.
               const directory = Filesystem.resolve(path.resolve(args.dir ?? process.cwd()))
               const root = Filesystem.resolve(path.resolve(args.root ?? directory))
+              // High-2: the write root is an explicit user target, but the filesystem root is
+              // never acceptable — refuse instead of creating /docs/deepagent.
+              if (path.parse(root).root === root)
+                return yield* fail(
+                  `refusing to write project docs to the filesystem root ${root} (pass --root/--dir naming a real project directory)`,
+                )
               const sessions = yield* SessionV2.Service
               const scoped = yield* sessions.list({ directory: AbsolutePath.make(directory) })
+              // High-1: ASCENDING by updated time — the LOG writer inserts each session's entry at
+              // its newest-first position (and typically prepends), so old→new traversal finishes
+              // with the newest session on top instead of inverted.
               const parents = scoped.filter((session) => session.parentID === undefined).toSorted(
-                (a, b) => DateTime.toEpochMillis(b.time.updated) - DateTime.toEpochMillis(a.time.updated),
+                (a, b) => DateTime.toEpochMillis(a.time.updated) - DateTime.toEpochMillis(b.time.updated),
               )
               const targets = args.session
                 ? parents.filter((session) => session.id === args.session)

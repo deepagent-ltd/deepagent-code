@@ -16,6 +16,29 @@
 
 import { DeepAgentCodeToolInventory, capabilityCatalogDigest } from "../system-context/capability-manifest"
 import { capabilityCatalog } from "../system-context/capability-catalog"
+import { flipFlagValueOn } from "../deepagent/flip-flag"
+
+/** The runtime gate behind each canonical feature (W4: `enabled()` returns the FEATURE'S
+ * REAL value, not a constant true). All of them use the single explicit-env flag table
+ * (`flipFlagValueOn` — a defined `""`/`false`/`0` is OFF, any other defined value is ON):
+ *
+ * | feature                    | env key                                      | unsetDefault | rationale                                      |
+ * |----------------------------|----------------------------------------------|--------------|------------------------------------------------|
+ * | event.v2.admission         | DEEPAGENT_CODE_EVENT_V2_ADMISSION            | true         | W0.1 default table (production default ON)     |
+ * | event.v2.im_single_write   | DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE      | true         | W0.1 default table (production default ON)     |
+ * | context_federation_v2      | DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION | false        | W3.1 gate key (reserved by W0.1); fail-closed in core until the production federation wiring is in; `runtimeDefaultsFromEnv` sets it ON in production entries |
+ * | context_query_tools_v2     | DEEPAGENT_CODE_CONTEXT_QUERY_TOOLS_V2        | false        | no production consumer / no catalog manifest requires it this wave; opt-in key, OFF by default (W4 目录未启用 → false) |
+ *
+ * A canonical feature without an env binding is a build defect: it is reported OFF
+ * (fail-closed) rather than silently passing. Unknown features keep throwing the typed
+ * `UnknownRuntimeFeatureError`.
+ */
+const featureEnv = new Map<string, { readonly env: string; readonly unsetDefault: boolean }>([
+  ["event.v2.admission", { env: "DEEPAGENT_CODE_EVENT_V2_ADMISSION", unsetDefault: true }],
+  ["event.v2.im_single_write", { env: "DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE", unsetDefault: true }],
+  ["context_federation_v2", { env: "DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION", unsetDefault: false }],
+  ["context_query_tools_v2", { env: "DEEPAGENT_CODE_CONTEXT_QUERY_TOOLS_V2", unsetDefault: false }],
+])
 
 /** The canonical feature set the runtime ships: inventory features ∪ catalog-required features. */
 const canonicalFeatures = (): ReadonlySet<string> => {
@@ -61,7 +84,9 @@ export interface RuntimeFeatureRegistry {
   /**
    * Is a runtime feature enabled? FAIL-CLOSED on an unknown feature: a feature the frozen catalog
    * / inventory does not declare throws a typed `UnknownRuntimeFeatureError` rather than silently
-   * reporting `false`. A canonical feature is a shipped runtime feature, so it is enabled.
+   * reporting `false`. A canonical feature is gated by its real runtime flag (see `featureEnv`:
+   * W4 — event admission / IM single-write default ON per the W0.1 table, the two context features
+   * default OFF until their production wiring is in). Unset/unknown-state features are `false`.
    */
   readonly enabled: (feature: string) => boolean
   /**
@@ -88,7 +113,11 @@ export const createRuntimeFeatureRegistry = (
     all: () => [...features].sort(),
     enabled: (feature) => {
       if (!features.has(feature)) throw new UnknownRuntimeFeatureError(feature)
-      return true
+      const gate = featureEnv.get(feature)
+      // A feature without a runtime gate is a build defect: report OFF (fail-closed),
+      // never a silent pass.
+      if (gate === undefined) return false
+      return flipFlagValueOn(process.env[gate.env], gate.unsetDefault)
     },
     assertCanonical: () => {
       const expected = canonicalFeatures()
