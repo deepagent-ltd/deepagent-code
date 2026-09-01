@@ -35,7 +35,7 @@ Puede personalizar la URL base para cualquier proveedor configurando la opción 
 
 ```json title="deepagent-code.json" {6}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "anthropic": {
       "options": {
@@ -57,7 +57,7 @@ probado y verificado para funcionar bien con DeepAgent Code. [Más información]
 Si eres nuevo, te recomendamos comenzar con DeepAgent Code Zen.
 :::
 
-1. Ejecute el comando `/connect` en TUI, seleccione deepagent-code y diríjase a [deepagent-code.ai/auth](https://deepagent-code.ai/auth).
+1. Ejecute el comando `/connect` en TUI, seleccione deepagent-code y diríjase a [ai.deepagent.ltd/auth](https://ai.deepagent.ltd/auth).
 
    ```txt
    /connect
@@ -89,7 +89,7 @@ Funciona como cualquier otro proveedor en DeepAgent Code y su uso es completamen
 DeepAgent Code Go es un plan de suscripción de bajo costo que brinda acceso confiable a modelos de codificación abiertos populares proporcionados por el equipo de DeepAgent Code que han sido
 probado y verificado para funcionar bien con DeepAgent Code.
 
-1. Ejecute el comando `/connect` en TUI, seleccione `DeepAgent Code Go` y diríjase a [deepagent-code.ai/auth](https://deepagent-code.ai/zen).
+1. Ejecute el comando `/connect` en TUI, seleccione `DeepAgent Code Go` y diríjase a [ai.deepagent.ltd/auth](https://ai.deepagent.ltd/zen).
 
    ```txt
    /connect
@@ -195,7 +195,7 @@ Para usar Amazon Bedrock con DeepAgent Code:
 
    ```json title="deepagent-code.json"
    {
-     "$schema": "https://deepagent-code.ai/config.json",
+     "$schema": "https://ai.deepagent.ltd/config.schema.json",
      "provider": {
        "amazon-bedrock": {
          "options": {
@@ -222,7 +222,7 @@ Para usar Amazon Bedrock con DeepAgent Code:
 
    ```json title="deepagent-code.json"
    {
-     "$schema": "https://deepagent-code.ai/config.json",
+     "$schema": "https://ai.deepagent.ltd/config.schema.json",
      "provider": {
        "amazon-bedrock": {
          "options": {
@@ -266,7 +266,7 @@ Para perfiles de inferencia personalizados, utilice el modelo y el nombre del pr
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "amazon-bedrock": {
       // ...
@@ -328,7 +328,7 @@ Puedes configurar deepagent-code para usar modelos locales mediante [Atomic Chat
 
 ```json title="deepagent-code.json" "atomic-chat" {5, 6, 8, 10-14}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "atomic-chat": {
       "npm": "@ai-sdk/openai-compatible",
@@ -556,7 +556,7 @@ Cloudflare AI Gateway le permite acceder a modelos de OpenAI, Anthropic, Workers
 
    ```json title="deepagent-code.json"
    {
-     "$schema": "https://deepagent-code.ai/config.json",
+     "$schema": "https://ai.deepagent.ltd/config.schema.json",
      "provider": {
        "cloudflare-ai-gateway": {
          "models": {
@@ -763,7 +763,7 @@ Archivo `deepagent-code.json`. También se recomienda desactivar el uso comparti
 
 ```json
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "small_model": "gitlab/duo-chat-haiku-4-5",
   "share": "disabled"
 }
@@ -825,7 +825,7 @@ Personalizar a través de `deepagent-code.json`:
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "gitlab": {
       "options": {
@@ -842,7 +842,7 @@ Para acceder a herramientas GitLab (solicitudes de fusión, problemas, canalizac
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "plugin": ["deepagent-code-gitlab-plugin"]
 }
 ```
@@ -1024,7 +1024,7 @@ Aquí está el [Directorio de modelos de Helicone](https://helicone.ai/models), 
 
 ```jsonc title="~/.config/deepagent-code/deepagent-code.jsonc"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "helicone": {
       "npm": "@ai-sdk/openai-compatible",
@@ -1052,7 +1052,7 @@ Helicone admite encabezados personalizados para funciones como almacenamiento en
 
 ```jsonc title="~/.config/deepagent-code/deepagent-code.jsonc"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "helicone": {
       "npm": "@ai-sdk/openai-compatible",
@@ -1106,7 +1106,7 @@ Puede configurar deepagent-code para usar modelos locales a través de la utilid
 
 ```json title="deepagent-code.json" "llama.cpp" {5, 6, 8, 10-15}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "llama.cpp": {
       "npm": "@ai-sdk/openai-compatible",
@@ -1173,7 +1173,7 @@ Puede configurar deepagent-code para usar modelos locales a través de LM Studio
 
 ```json title="deepagent-code.json" "lmstudio" {5, 6, 8, 10-14}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "lmstudio": {
       "npm": "@ai-sdk/openai-compatible",
@@ -1294,7 +1294,7 @@ Ollama puede configurarse automáticamente para DeepAgent Code. Consulte los [do
 
 ```json title="deepagent-code.json" "ollama" {5, 6, 8, 10-14}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "ollama": {
       "npm": "@ai-sdk/openai-compatible",
@@ -1457,7 +1457,7 @@ DeepAgent Code Zen es una lista de modelos probados y verificados proporcionada 
 
    ```json title="deepagent-code.json" {6}
    {
-     "$schema": "https://deepagent-code.ai/config.json",
+     "$schema": "https://ai.deepagent.ltd/config.schema.json",
      "provider": {
        "openrouter": {
          "models": {
@@ -1472,7 +1472,7 @@ DeepAgent Code Zen es una lista de modelos probados y verificados proporcionada 
 
    ```json title="deepagent-code.json"
    {
-     "$schema": "https://deepagent-code.ai/config.json",
+     "$schema": "https://ai.deepagent.ltd/config.schema.json",
      "provider": {
        "openrouter": {
          "models": {
@@ -1721,7 +1721,7 @@ También puede personalizar modelos a través de su configuración deepagent-cod
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "vercel": {
       "models": {
@@ -1831,7 +1831,7 @@ Algunas opciones de enrutamiento útiles:
 
    ```json title="deepagent-code.json" {6}
    {
-     "$schema": "https://deepagent-code.ai/config.json",
+     "$schema": "https://ai.deepagent.ltd/config.schema.json",
      "provider": {
        "zenmux": {
          "models": {
@@ -1899,7 +1899,7 @@ Puede utilizar cualquier proveedor compatible con OpenAI con deepagent-code. La 
 
    ```json title="deepagent-code.json" ""myprovider"" {5-15}
    {
-     "$schema": "https://deepagent-code.ai/config.json",
+     "$schema": "https://ai.deepagent.ltd/config.schema.json",
      "provider": {
        "myprovider": {
          "npm": "@ai-sdk/openai-compatible",
@@ -1937,7 +1937,7 @@ A continuación se muestra un ejemplo de configuración de las opciones `apiKey`
 
 ```json title="deepagent-code.json" {9,11,17-20}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "myprovider": {
       "npm": "@ai-sdk/openai-compatible",

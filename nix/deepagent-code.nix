@@ -96,7 +96,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
 
   meta = {
     description = "The open source coding agent";
-    homepage = "https://deepagent-code.ai";
+    homepage = "https://ai.deepagent.ltd";
     license = lib.licenses.mit;
     mainProgram = "deepagent-code";
     inherit (node_modules.meta) platforms;

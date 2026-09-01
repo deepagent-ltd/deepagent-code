@@ -50,7 +50,7 @@ jobs:
 
       - name: Install DeepAgent Code
         if: steps.changes.outputs.has_changes == 'true'
-        run: curl -fsSL https://deepagent-code.ai/install | bash
+        run: curl -fsSL https://deepagent.ltd/install | bash
 
       - name: Sync locale docs with DeepAgent Code
         if: steps.changes.outputs.has_changes == 'true'

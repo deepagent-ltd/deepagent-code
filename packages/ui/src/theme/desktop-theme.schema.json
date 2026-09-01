@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://deepagent-code.ai/desktop-theme.json",
+  "$id": "https://ai.deepagent.ltd/desktop-theme.json",
   "title": "DeepAgent Code Desktop Theme",
   "description": "A theme definition for the DeepAgent Code desktop application",
   "type": "object",

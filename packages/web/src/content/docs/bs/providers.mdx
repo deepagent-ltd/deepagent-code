@@ -35,7 +35,7 @@ Možete prilagoditi osnovni URL za bilo kojeg provajdera postavljanjem opcije `b
 
 ```json title="deepagent-code.json" {6}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "anthropic": {
       "options": {
@@ -57,7 +57,7 @@ testirano i potvrđeno da dobro radi sa DeepAgent Code. [Saznajte više](/docs/z
 Ako ste novi, preporučujemo da počnete sa DeepAgent Code Zen.
 :::
 
-1. Pokrenite naredbu `/connect` u TUI-u, odaberite deepagent-code i idite na [deepagent-code.ai/auth](https://deepagent-code.ai/auth).
+1. Pokrenite naredbu `/connect` u TUI-u, odaberite deepagent-code i idite na [ai.deepagent.ltd/auth](https://ai.deepagent.ltd/auth).
 
 ```txt
    /connect
@@ -88,7 +88,7 @@ Radi kao i svaki drugi provajder u DeepAgent Code i potpuno je opcionalan za kor
 
 DeepAgent Code Go je jeftin plan pretplate koji pruža pouzdan pristup popularnim modelima otvorenog kodiranja koje pruža DeepAgent Code tim i koji su testirani i verificirani da dobro rade s DeepAgent Code-om.
 
-1. Pokrenite naredbu `/connect` u TUI-u, odaberite `DeepAgent Code Go` i idite na [deepagent-code.ai/auth](https://deepagent-code.ai/zen).
+1. Pokrenite naredbu `/connect` u TUI-u, odaberite `DeepAgent Code Go` i idite na [ai.deepagent.ltd/auth](https://ai.deepagent.ltd/zen).
 
    ```txt
    /connect
@@ -194,7 +194,7 @@ Za konfiguraciju specifičnu za projekat ili trajnu konfiguraciju, koristite `de
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "amazon-bedrock": {
       "options": {
@@ -222,7 +222,7 @@ Ako koristite VPC krajnje tačke za Bedrock:
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "amazon-bedrock": {
       "options": {
@@ -268,7 +268,7 @@ Za prilagođene profile zaključivanja, koristite ime modela i dobavljača u klj
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "amazon-bedrock": {
       // ...
@@ -330,7 +330,7 @@ Možete konfigurirati deepagent-code za korištenje lokalnih modela preko [Atomi
 
 ```json title="deepagent-code.json" "atomic-chat" {5, 6, 8, 10-14}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "atomic-chat": {
       "npm": "@ai-sdk/openai-compatible",
@@ -558,7 +558,7 @@ Također možete dodati modele kroz svoju deepagent-code konfiguraciju.
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "cloudflare-ai-gateway": {
       "models": {
@@ -766,7 +766,7 @@ da biste koristili samo svoju vlastitu instancu koju hostuje GitLab, dodajte slj
 
 ```json
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "small_model": "gitlab/duo-chat-haiku-4-5",
   "share": "disabled"
 }
@@ -828,7 +828,7 @@ Prilagodite putem `deepagent-code.json`:
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "gitlab": {
       "options": {
@@ -845,7 +845,7 @@ Za pristup GitLab alatima (zahtjevi za spajanje, problemi, cjevovodi, CI/CD, itd
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "plugin": ["deepagent-code-gitlab-plugin"]
 }
 ```
@@ -1028,7 +1028,7 @@ Evo [Heliconeov katalog modela](https://helicone.ai/models), ovo će vam trebati
 
 ```jsonc title="~/.config/deepagent-code/deepagent-code.jsonc"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "helicone": {
       "npm": "@ai-sdk/openai-compatible",
@@ -1056,7 +1056,7 @@ Helicone podržava prilagođena zaglavlja za funkcije kao što su keširanje, pr
 
 ```jsonc title="~/.config/deepagent-code/deepagent-code.jsonc"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "helicone": {
       "npm": "@ai-sdk/openai-compatible",
@@ -1110,7 +1110,7 @@ Možete konfigurirati deepagent-code za korištenje lokalnih modela putem [llama
 
 ```json title="deepagent-code.json" "llama.cpp" {5, 6, 8, 10-15}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "llama.cpp": {
       "npm": "@ai-sdk/openai-compatible",
@@ -1177,7 +1177,7 @@ Možete konfigurirati deepagent-code za korištenje lokalnih modela preko LM Stu
 
 ```json title="deepagent-code.json" "lmstudio" {5, 6, 8, 10-14}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "lmstudio": {
       "npm": "@ai-sdk/openai-compatible",
@@ -1298,7 +1298,7 @@ Ollama se može automatski konfigurirati za DeepAgent Code. Pogledajte [Ollama i
 
 ```json title="deepagent-code.json" "ollama" {5, 6, 8, 10-14}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "ollama": {
       "npm": "@ai-sdk/openai-compatible",
@@ -1460,7 +1460,7 @@ Također možete dodati dodatne modele putem vaše deepagent-code konfiguracije.
 
 ```json title="deepagent-code.json" {6}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "openrouter": {
       "models": {
@@ -1475,7 +1475,7 @@ Također možete dodati dodatne modele putem vaše deepagent-code konfiguracije.
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "openrouter": {
       "models": {
@@ -1724,7 +1724,7 @@ Također možete prilagoditi modele kroz svoju deepagent-code konfiguraciju. Evo
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "vercel": {
       "models": {
@@ -1834,7 +1834,7 @@ Također možete dodati dodatne modele putem vaše deepagent-code konfiguracije.
 
 ```json title="deepagent-code.json" {6}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "zenmux": {
       "models": {
@@ -1902,7 +1902,7 @@ Odaberite ID koji se pamti, to ćete koristiti u svom konfiguracijskom fajlu.
 
 ```json title="deepagent-code.json" ""myprovider"" {5-15}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "myprovider": {
       "npm": "@ai-sdk/openai-compatible",
@@ -1941,7 +1941,7 @@ Evo primjera postavljanja opcija `apiKey`, `headers` i modela `limit`.
 
 ```json title="deepagent-code.json" {9,11,17-20}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "myprovider": {
       "npm": "@ai-sdk/openai-compatible",

@@ -17,7 +17,7 @@ console.log("🚀 Starting deepagent-code server...")
 const deepagentCode = await createOpencode({
   port: 0,
 })
-console.log("✅ Opencode server ready")
+console.log("✅ DeepAgent server ready")
 
 const sessions = new Map<string, { client: any; server: any; sessionId: string; channel: string; thread: string }>()
 void (async () => {
@@ -105,7 +105,7 @@ app.message(async ({ message, say }) => {
     body: { parts: [{ type: "text", text: message.text }] },
   })
 
-  console.log("📤 Opencode response:", JSON.stringify(result, null, 2))
+  console.log("📤 DeepAgent response:", JSON.stringify(result, null, 2))
 
   if (result.error) {
     console.error("❌ Failed to send message:", result.error)

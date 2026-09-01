@@ -51,7 +51,7 @@ DeepAgent Code は [AI SDK](https://ai-sdk.dev/) および [Models.dev](https://
 
 ```json title="deepagent-code.json" {3}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "model": "lmstudio/google/gemma-3n-e4b"
 }
 ```
@@ -68,7 +68,7 @@ config を通じてモデルのオプションをグローバルに設定でき�
 
 ```jsonc title="deepagent-code.jsonc" {7-12,19-24}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "openai": {
       "models": {
@@ -107,7 +107,7 @@ config を通じてモデルのオプションをグローバルに設定でき�
 
 ```jsonc title="deepagent-code.jsonc" {6-21}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "deepagent-code": {
       "models": {
@@ -172,7 +172,7 @@ DeepAgent Code には、多くのプロバイダーのデフォルトのバリ�
 
 ```jsonc title="deepagent-code.jsonc" {7-18}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "openai": {
       "models": {
@@ -209,7 +209,7 @@ DeepAgent Code が起動すると、次の優先順位でモデルがチェッ�
 
    ```json title="deepagent-code.json"
    {
-     "$schema": "https://deepagent-code.ai/config.json",
+     "$schema": "https://ai.deepagent.ltd/config.schema.json",
      "model": "anthropic/claude-sonnet-4-20250514"
    }
    ```

@@ -13,7 +13,7 @@ description: استخدام ملف إعدادات DeepAgent Code بصيغة JSON
 
 ```jsonc title="deepagent-code.jsonc"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   // إعدادات السمة
   "theme": "deepagent-code",
   "model": "anthropic/claude-sonnet-4-5",
@@ -145,7 +145,7 @@ deepagent-code run "Hello world"
 
 ## المخطط
 
-يحتوي ملف الإعدادات على مخطط مُعرَّف في [**`deepagent-code.ai/config.json`**](https://deepagent-code.ai/config.json).
+يحتوي ملف الإعدادات على مخطط مُعرَّف في [**`ai.deepagent.ltd/config.schema.json`**](https://ai.deepagent.ltd/config.schema.json).
 
 يفترض أن يتمكن محررك من التحقق والإكمال التلقائي اعتمادًا على هذا المخطط.
 
@@ -157,7 +157,7 @@ deepagent-code run "Hello world"
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "tui": {
     "scroll_speed": 3,
     "scroll_acceleration": {
@@ -184,7 +184,7 @@ deepagent-code run "Hello world"
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "server": {
     "port": 4096,
     "hostname": "0.0.0.0",
@@ -213,7 +213,7 @@ deepagent-code run "Hello world"
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "tools": {
     "write": false,
     "bash": false
@@ -231,7 +231,7 @@ deepagent-code run "Hello world"
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {},
   "model": "anthropic/claude-sonnet-4-5",
   "small_model": "anthropic/claude-haiku-4-5"
@@ -244,7 +244,7 @@ deepagent-code run "Hello world"
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "anthropic": {
       "options": {
@@ -273,7 +273,7 @@ deepagent-code run "Hello world"
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "amazon-bedrock": {
       "options": {
@@ -304,7 +304,7 @@ deepagent-code run "Hello world"
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "theme": ""
 }
 ```
@@ -319,7 +319,7 @@ deepagent-code run "Hello world"
 
 ```jsonc title="deepagent-code.jsonc"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "agent": {
     "code-reviewer": {
       "description": "Reviews code for best practices and potential issues",
@@ -345,7 +345,7 @@ deepagent-code run "Hello world"
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "default_agent": "plan"
 }
 ```
@@ -362,7 +362,7 @@ deepagent-code run "Hello world"
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "share": "manual"
 }
 ```
@@ -383,7 +383,7 @@ deepagent-code run "Hello world"
 
 ```jsonc title="deepagent-code.jsonc"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "command": {
     "test": {
       "template": "Run the full test suite with coverage report and show any failures.\nFocus on the failing tests and suggest fixes.",
@@ -409,7 +409,7 @@ deepagent-code run "Hello world"
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "keybinds": {}
 }
 ```
@@ -424,7 +424,7 @@ deepagent-code run "Hello world"
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "autoupdate": false
 }
 ```
@@ -440,7 +440,7 @@ deepagent-code run "Hello world"
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "formatter": {
     "prettier": {
       "disabled": true
@@ -468,7 +468,7 @@ deepagent-code run "Hello world"
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": {
     "edit": "ask",
     "bash": "ask"
@@ -486,7 +486,7 @@ deepagent-code run "Hello world"
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "compaction": {
     "auto": true,
     "prune": false
@@ -506,7 +506,7 @@ deepagent-code run "Hello world"
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "watcher": {
     "ignore": ["node_modules/**", "dist/**", ".git/**"]
   }
@@ -523,7 +523,7 @@ deepagent-code run "Hello world"
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "mcp": {}
 }
 ```
@@ -540,7 +540,7 @@ deepagent-code run "Hello world"
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "plugin": ["deepagent-code-helicone-session", "@my-org/custom-plugin"]
 }
 ```
@@ -555,7 +555,7 @@ deepagent-code run "Hello world"
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "instructions": ["CONTRIBUTING.md", "docs/guidelines.md", ".cursor/rules/*.md"]
 }
 ```
@@ -571,7 +571,7 @@ deepagent-code run "Hello world"
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "disabled_providers": ["openai", "gemini"]
 }
 ```
@@ -594,7 +594,7 @@ deepagent-code run "Hello world"
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "enabled_providers": ["anthropic", "openai"]
 }
 ```
@@ -615,7 +615,7 @@ deepagent-code run "Hello world"
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "experimental": {}
 }
 ```
@@ -638,7 +638,7 @@ deepagent-code run "Hello world"
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "model": "{env:DEEPAGENT_CODE_MODEL}",
   "provider": {
     "anthropic": {
@@ -661,7 +661,7 @@ deepagent-code run "Hello world"
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "instructions": ["./custom-instructions.md"],
   "provider": {
     "openai": {

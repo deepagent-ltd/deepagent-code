@@ -1,7 +1,7 @@
 export const domain = (() => {
-  if ($app.stage === "production") return "deepagent-code.ai"
-  if ($app.stage === "dev") return "dev.deepagent-code.ai"
-  return `${$app.stage}.dev.deepagent-code.ai`
+  if ($app.stage === "production") return "ai.deepagent.ltd"
+  if ($app.stage === "dev") return "dev.ai.deepagent.ltd"
+  return `${$app.stage}.dev.ai.deepagent.ltd`
 })()
 
 export const zoneID = "430ba34c138cfb5360826c4909f99be8"

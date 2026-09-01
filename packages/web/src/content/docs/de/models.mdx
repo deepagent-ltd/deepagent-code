@@ -53,7 +53,7 @@ DeepAgent Code config.
 
 ```json title="deepagent-code.json" {3}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "model": "lmstudio/google/gemma-3n-e4b"
 }
 ```
@@ -70,7 +70,7 @@ Sie können die Optionen eines Modells global über die Konfiguration konfigurie
 
 ```jsonc title="deepagent-code.jsonc" {7-12,19-24}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "openai": {
       "models": {
@@ -109,7 +109,7 @@ Sie können auch benutzerdefinierte Varianten definieren, die integrierte Varian
 
 ```jsonc title="deepagent-code.jsonc" {6-21}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "deepagent-code": {
       "models": {
@@ -174,7 +174,7 @@ Sie können vorhandene Varianten überschreiben oder eigene hinzufügen:
 
 ```jsonc title="deepagent-code.jsonc" {7-18}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "openai": {
       "models": {
@@ -211,7 +211,7 @@ Wenn DeepAgent Code startet, sucht es nach Modellen in der folgenden Prioritäts
 
    ```json title="deepagent-code.json"
    {
-     "$schema": "https://deepagent-code.ai/config.json",
+     "$schema": "https://ai.deepagent.ltd/config.schema.json",
      "model": "anthropic/claude-sonnet-4-20250514"
    }
    ```

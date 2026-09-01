@@ -4,10 +4,10 @@
   "version": "2.0.0-beta.0",
   "type": "module",
   "license": "AGPL-3.0-or-later",
-  "homepage": "https://deepagent-code.ai",
+  "homepage": "https://ai.deepagent.ltd",
   "author": {
     "name": "DeepAgent Code",
-    "email": "hello@deepagent-code.ai"
+    "email": "hello@ai.deepagent.ltd"
   },
   "scripts": {
     "typecheck": "tsgo -b",

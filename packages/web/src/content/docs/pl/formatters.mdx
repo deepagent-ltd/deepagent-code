@@ -61,7 +61,7 @@ Możesz dostosować formatery za pomocą sekcji `formatter` w konfiguracji DeepA
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "formatter": {}
 }
 ```
@@ -85,7 +85,7 @@ Aby globalnie wyłączyć **wszystkie** formatery, ustaw `formatter` na `false`:
 
 ```json title="deepagent-code.json" {3}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "formatter": false
 }
 ```
@@ -94,7 +94,7 @@ Aby wyłączyć **określony** formater, ustaw `disabled` na `true`:
 
 ```json title="deepagent-code.json" {5}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "formatter": {
     "prettier": {
       "disabled": true
@@ -111,7 +111,7 @@ Możesz dodać niestandardowe formatery, podając polecenie, zmienne środowisko
 
 ```json title="deepagent-code.json" {4-14}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "formatter": {
     "prettier": {
       "command": ["npx", "prettier", "--write", "$FILE"],

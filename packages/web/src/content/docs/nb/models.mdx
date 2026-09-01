@@ -53,7 +53,7 @@ DeepAgent Code-konfigurasjon.
 
 ```json title="deepagent-code.json" {3}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "model": "lmstudio/google/gemma-3n-e4b"
 }
 ```
@@ -70,7 +70,7 @@ Du kan konfigurere en modells alternativer globalt gjennom konfigurasjonen.
 
 ```jsonc title="deepagent-code.jsonc" {7-12,19-24}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "openai": {
       "models": {
@@ -109,7 +109,7 @@ Du kan også definere tilpassede varianter som utvider de innebygde. Varianter l
 
 ```jsonc title="deepagent-code.jsonc" {6-21}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "deepagent-code": {
       "models": {
@@ -174,7 +174,7 @@ Du kan overstyre eksisterende varianter eller legge til dine egne:
 
 ```jsonc title="deepagent-code.jsonc" {7-18}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "openai": {
       "models": {
@@ -211,7 +211,7 @@ Når DeepAgent Code starter opp, ser den etter modeller i følgende prioriterte 
 
    ```json title="deepagent-code.json"
    {
-     "$schema": "https://deepagent-code.ai/config.json",
+     "$schema": "https://ai.deepagent.ltd/config.schema.json",
      "model": "anthropic/claude-sonnet-4-20250514"
    }
    ```

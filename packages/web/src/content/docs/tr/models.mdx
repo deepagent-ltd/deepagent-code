@@ -53,7 +53,7 @@ deepagent-code yapılandırması
 
 ```json title="deepagent-code.json" {3}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "model": "lmstudio/google/gemma-3n-e4b"
 }
 ```
@@ -70,7 +70,7 @@ Bir modelin seçeneklerini genel olarak yapılandırma aracılığıyla yapılan
 
 ```jsonc title="deepagent-code.jsonc" {7-12,19-24}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "openai": {
       "models": {
@@ -109,7 +109,7 @@ Ayrıca yerleşik çeşitleri genişleten özel varyantlar da tanımlayabilirsin
 
 ```jsonc title="deepagent-code.jsonc" {6-21}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "deepagent-code": {
       "models": {
@@ -174,7 +174,7 @@ Mevcut varyantları geçersiz kılabilir veya kendinizinkini ekleyebilirsiniz:
 
 ```jsonc title="deepagent-code.jsonc" {7-18}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "openai": {
       "models": {
@@ -211,7 +211,7 @@ deepagent-code başlatıldığında modelleri aşağıdaki öncelik sırasına g
 
    ```json title="deepagent-code.json"
    {
-     "$schema": "https://deepagent-code.ai/config.json",
+     "$schema": "https://ai.deepagent.ltd/config.schema.json",
      "model": "anthropic/claude-sonnet-4-20250514"
    }
    ```
