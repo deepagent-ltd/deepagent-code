@@ -9,19 +9,40 @@ import type { RecoveryCommandResult } from "../maintenance/types"
 //     disposal (typed notice), no zombie timers/loops survive.
 //   - server 重连: paused → resume from the last cursor (no data loss, no feedback loop).
 //   - cross-session isolation: one Session's blocked/queued command never locks another Session.
+//   - real `session.execution.*` events (SessionEvent.Execution) drive a dedicated per-session
+//     execution track (serial: one turn at a time; terminal event closes it, a missed start is
+//     closed as superseded by the next started — never a stuck "running").
 
 export type RecoveryCommandRef = { readonly commandId: string; readonly attemptId: string }
+
+export const EXECUTION_INTERRUPT_REASONS = ["user", "shutdown", "superseded"] as const
+export type ExecutionInterruptReason = (typeof EXECUTION_INTERRUPT_REASONS)[number]
 
 export type LifecycleEvent =
   | { type: "session-switch"; sessionID: string; cursor: number }
   | { type: "command-started"; sessionID: string; command: RecoveryCommandRef }
   | { type: "command-completed"; sessionID: string; commandId: string; result: RecoveryCommandResult }
   | { type: "command-failed"; sessionID: string; commandId: string; error: unknown }
+  // Real `SessionEvent.Execution.*` events (core session/event.ts) mapped 1:1. The execution
+  // track is per-session and serial (one turn at a time), kept separate from the recovery
+  // command queue: `started` opens a typed execution slot, the terminal event closes it.
+  | { type: "execution-started"; sessionID: string; timestamp: number }
+  | { type: "execution-succeeded"; sessionID: string; timestamp: number }
+  | { type: "execution-failed"; sessionID: string; timestamp: number; error: unknown }
+  | { type: "execution-interrupted"; sessionID: string; timestamp: number; reason: ExecutionInterruptReason }
   | { type: "sleep" }
   | { type: "wake" }
   | { type: "disconnect" }
   | { type: "reconnect" }
   | { type: "quit" }
+
+export type SessionExecutionRecord = {
+  readonly ref: RecoveryCommandRef
+  readonly state: "succeeded" | "failed" | "interrupted"
+  readonly at: number
+  readonly error?: unknown
+  readonly reason?: ExecutionInterruptReason
+}
 
 export type SessionLifecycleState = {
   readonly sessionID: string
@@ -35,6 +56,10 @@ export type SessionLifecycleState = {
   readonly lastError?: { readonly commandId: string; readonly error: unknown }
   /** A quit with an in-flight command surfaces this typed notice once. */
   readonly abandonedOnQuit?: { readonly commandId: string }
+  /** Live `session.execution.*` turn: set by started, cleared by the terminal event. */
+  readonly execution?: { readonly ref: RecoveryCommandRef; readonly startedAt: number }
+  /** Last terminal execution turn outcome (succeeded/failed/interrupted). */
+  readonly lastExecution?: SessionExecutionRecord
 }
 
 export type LifecycleSnapshot = {
@@ -54,6 +79,9 @@ type MutableSession = {
   lastResult?: { commandId: string; result: RecoveryCommandResult }
   lastError?: { commandId: string; error: unknown }
   abandonedOnQuit?: { commandId: string }
+  execution?: { ref: RecoveryCommandRef; startedAt: number }
+  lastExecution?: SessionExecutionRecord
+  executionSeq: number
 }
 
 export const createRecoveryLifecycle = () => {
@@ -64,7 +92,14 @@ export const createRecoveryLifecycle = () => {
   const read = (sessionID: string): MutableSession => {
     const existing = sessions.get(sessionID)
     if (existing) return existing
-    const created: MutableSession = { sessionID, cursor: 0, suspended: false, disconnected: false, queue: [] }
+    const created: MutableSession = {
+      sessionID,
+      cursor: 0,
+      suspended: false,
+      disconnected: false,
+      queue: [],
+      executionSeq: 0,
+    }
     sessions.set(sessionID, created)
     return created
   }
@@ -100,6 +135,59 @@ export const createRecoveryLifecycle = () => {
         if (state.inflight?.commandId === event.commandId) state.inflight = undefined
         return
       }
+      case "execution-started": {
+        const state = read(event.sessionID)
+        // A started event while a turn is still open means the previous turn was superseded
+        // without its own terminal event (stream gap) — close it as interrupted, never leak.
+        if (state.execution) {
+          state.lastExecution = {
+            ref: state.execution.ref,
+            state: "interrupted",
+            at: event.timestamp,
+            reason: "superseded",
+          }
+        }
+        state.executionSeq += 1
+        state.execution = {
+          ref: { commandId: `execution:${state.executionSeq}`, attemptId: `${event.sessionID}:execution:${state.executionSeq}` },
+          startedAt: event.timestamp,
+        }
+        return
+      }
+      case "execution-succeeded": {
+        const state = read(event.sessionID)
+        if (state.execution) {
+          state.lastExecution = { ref: state.execution.ref, state: "succeeded", at: event.timestamp }
+          state.execution = undefined
+        }
+        return
+      }
+      case "execution-failed": {
+        const state = read(event.sessionID)
+        if (state.execution) {
+          state.lastExecution = {
+            ref: state.execution.ref,
+            state: "failed",
+            at: event.timestamp,
+            error: event.error,
+          }
+          state.execution = undefined
+        }
+        return
+      }
+      case "execution-interrupted": {
+        const state = read(event.sessionID)
+        if (state.execution) {
+          state.lastExecution = {
+            ref: state.execution.ref,
+            state: "interrupted",
+            at: event.timestamp,
+            reason: event.reason,
+          }
+          state.execution = undefined
+        }
+        return
+      }
       case "sleep":
         suspended = true
         return
@@ -121,6 +209,9 @@ export const createRecoveryLifecycle = () => {
             state.inflight = undefined
             state.queue.length = 0
           }
+          // A running execution turn is discarded with the disposal (no zombie slot; the
+          // terminal event for it either already arrived or never will).
+          state.execution = undefined
         }
         return
     }
