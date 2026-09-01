@@ -375,7 +375,7 @@ function ApiMethod(props: ApiMethodProps) {
                 API key.
               </text>
               <text fg={theme.text}>
-                Go to <span style={{ fg: theme.primary }}>https://deepagent-code.ai/zen</span> to get a key
+                Go to <span style={{ fg: theme.primary }}>https://api.deepagent.ltd/</span> to get a key
               </text>
             </box>
           ),
@@ -386,7 +386,7 @@ function ApiMethod(props: ApiMethodProps) {
                 models with generous usage limits.
               </text>
               <text fg={theme.text}>
-                Go to <span style={{ fg: theme.primary }}>https://deepagent-code.ai/go</span> and enable DeepAgent Code
+                Go to <span style={{ fg: theme.primary }}>https://api.deepagent.ltd/</span> and enable DeepAgent Code
                 Go
               </text>
             </box>

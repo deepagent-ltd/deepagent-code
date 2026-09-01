@@ -218,7 +218,7 @@ const createPlatform = (): Platform => {
 
       const notification = new Notification(title, {
         body: description ?? "",
-        icon: "https://deepagent-code.ai/favicon-96x96-v3.png",
+        icon: "https://ai.deepagent.ltd/favicon-96x96-v3.png",
       })
       notification.onclick = () => {
         void window.api.showWindow()

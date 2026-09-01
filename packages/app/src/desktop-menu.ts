@@ -200,7 +200,7 @@ export const DESKTOP_MENU: DesktopMenu[] = [
     id: "help",
     label: "Help",
     items: [
-      { type: "item", label: "DeepAgent Code Documentation", href: "https://deepagent-code.ai/docs" },
+      { type: "item", label: "DeepAgent Code Documentation", href: "https://ai.deepagent.ltd/" },
       { type: "item", label: "Support Forum", href: "https://discord.com/invite/deepagent-code" },
       { type: "item", label: "Export Logs...", command: "logs.export" },
       { type: "separator" },

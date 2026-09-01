@@ -92,7 +92,7 @@ export async function tmpdir<T>(options?: TmpDirOptions<T>) {
     await Bun.write(
       path.join(dirpath, "deepagent-code.json"),
       JSON.stringify({
-        $schema: "https://deepagent-code.ai/config.json",
+        $schema: "https://ai.deepagent.ltd/config.schema.json",
         ...options.config,
       }),
     )
@@ -150,7 +150,7 @@ export function tmpdirScoped<E = never, R = never>(options?: {
       yield* Effect.promise(() =>
         fs.writeFile(
           path.join(dir, "deepagent-code.json"),
-          JSON.stringify({ $schema: "https://deepagent-code.ai/config.json", ...resolved }),
+          JSON.stringify({ $schema: "https://ai.deepagent.ltd/config.schema.json", ...resolved }),
         ),
       )
     }

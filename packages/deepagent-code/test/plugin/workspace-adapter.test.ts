@@ -100,7 +100,7 @@ describe("plugin.workspace", () => {
           path.join(dir, "deepagent-code.json"),
           JSON.stringify(
             {
-              $schema: "https://deepagent-code.ai/config.json",
+              $schema: "https://ai.deepagent.ltd/config.schema.json",
               plugin: [pathToFileURL(file).href],
             },
             null,

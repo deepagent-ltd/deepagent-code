@@ -847,7 +847,7 @@ const writeIncidentConfig = Effect.fn("IncidentRegression.writeConfig")(function
   const fs = yield* FSUtil.Service
   yield* fs.writeWithDirs(
     path.join(dir, "deepagent-code.json"),
-    JSON.stringify({ $schema: "https://deepagent-code.ai/config.json", ...config }),
+    JSON.stringify({ $schema: "https://ai.deepagent.ltd/config.schema.json", ...config }),
   )
 })
 

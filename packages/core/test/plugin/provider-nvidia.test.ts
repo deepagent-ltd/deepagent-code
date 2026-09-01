@@ -36,7 +36,7 @@ describe("NvidiaPlugin", () => {
       })
       expect((yield* catalog.provider.get(ProviderV2.ID.make("nvidia"))).request.headers).toEqual({
         Existing: "value",
-        "HTTP-Referer": "https://deepagent-code.ai/",
+        "HTTP-Referer": "https://ai.deepagent.ltd/",
         "X-Title": "deepagent-code",
         "X-BILLING-INVOKE-ORIGIN": "DeepAgent Code",
       })
@@ -62,7 +62,7 @@ describe("NvidiaPlugin", () => {
       })
 
       expect((yield* catalog.provider.get(ProviderV2.ID.make("nvidia"))).request.headers).toEqual({
-        "HTTP-Referer": "https://deepagent-code.ai/",
+        "HTTP-Referer": "https://ai.deepagent.ltd/",
         "X-Title": "deepagent-code",
         "X-BILLING-INVOKE-ORIGIN": "DeepAgent Code",
       })
@@ -90,7 +90,7 @@ describe("NvidiaPlugin", () => {
       })
 
       expect((yield* catalog.provider.get(ProviderV2.ID.make("nvidia"))).request.headers).toEqual({
-        "HTTP-Referer": "https://deepagent-code.ai/",
+        "HTTP-Referer": "https://ai.deepagent.ltd/",
         "X-Title": "deepagent-code",
         "X-BILLING-INVOKE-ORIGIN": "CustomOrigin",
       })

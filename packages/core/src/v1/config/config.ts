@@ -39,7 +39,7 @@ export const Info = Schema.Struct({
     description: "Server configuration for deepagent-code serve and web commands",
   }),
   command: Schema.optional(Schema.Record(Schema.String, ConfigCommandV1.Info)).annotate({
-    description: "Command configuration, see https://deepagent-code.ai/docs/commands",
+    description: "Command configuration, see the DeepAgent API Platform docs",
   }),
   skills: Schema.optional(ConfigSkillsV1.Info).annotate({ description: "Additional skill folder paths" }),
   reference: Schema.optional(ConfigReferenceV1.Info).annotate({
@@ -104,7 +104,7 @@ export const Info = Schema.Struct({
       }),
       [Schema.Record(Schema.String, ConfigAgentV1.Info)],
     ),
-  ).annotate({ description: "Agent configuration, see https://deepagent-code.ai/docs/agents" }),
+  ).annotate({ description: "Agent configuration, see the DeepAgent API Platform docs" }),
   provider: Schema.optional(Schema.Record(Schema.String, ConfigProviderV1.Info)).annotate({
     description: "Custom provider configurations and model overrides",
   }),

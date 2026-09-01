@@ -36,7 +36,7 @@ process.env.DEEPAGENT_ENABLED = "false"
 await Bun.write(
   path.join(workspace, "deepagent-code.json"),
   JSON.stringify({
-    $schema: "https://deepagent-code.ai/config.json",
+    $schema: "https://ai.deepagent.ltd/config.schema.json",
     model: `${runtimeProviderID}/${config.modelID}`,
     snapshot: false,
     permission: { "*": "deny", issue_marker: "allow" },

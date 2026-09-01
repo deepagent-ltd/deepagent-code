@@ -1,6 +1,10 @@
 import { Context } from "effect"
 
-const deepagentCodeOrigin = /^https:\/\/([a-z0-9-]+\.)*deepagent-code\.ai$/
+// The product's own browser origins: the DeepAgent platform (API console +
+// static hosting). The full product surface now lives on `ai.deepagent.ltd`
+// (static hosting / docs / assets) and `api.deepagent.ltd` (API platform
+// console); any subdomain of either is treated as first-party.
+const deepagentCodeOrigin = /^https:\/\/([a-z0-9-]+\.)*(ai|api)\.deepagent\.ltd$/
 
 export type CorsOptions = { readonly cors?: ReadonlyArray<string> }
 

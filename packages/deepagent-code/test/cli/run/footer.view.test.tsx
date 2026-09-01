@@ -59,7 +59,7 @@ function model(input: {
     providerID: "deepagentCode",
     api: {
       id: "deepagentCode",
-      url: "https://deepagent-code.ai",
+      url: "https://ai.deepagent.ltd",
       npm: "@ai-sdk/openai-compatible",
     },
     name: input.name,

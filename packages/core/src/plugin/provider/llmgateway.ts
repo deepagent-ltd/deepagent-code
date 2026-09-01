@@ -12,7 +12,7 @@ export const LLMGatewayPlugin = PluginV2.define({
           if (item.provider.api.package !== "@ai-sdk/openai-compatible") continue
           if (item.provider.api.url !== "https://api.llmgateway.io/v1") continue
           evt.provider.update(item.provider.id, (provider) => {
-            provider.request.headers["HTTP-Referer"] = "https://deepagent-code.ai/"
+            provider.request.headers["HTTP-Referer"] = "https://ai.deepagent.ltd/"
             provider.request.headers["X-Title"] = "deepagent-code"
             provider.request.headers["X-Source"] = "deepagent-code"
           })
