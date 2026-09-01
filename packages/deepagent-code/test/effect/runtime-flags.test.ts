@@ -14,16 +14,18 @@ const fromConfig = (input: Record<string, unknown>) =>
 const readFlags = RuntimeFlags.Service.useSync((flags) => flags)
 
 describe("RuntimeFlags", () => {
-  it.effect("forces the Core V2 alpha release series into V2-only mode", () =>
+  it.effect("forces the Core V2 alpha/beta release series into V2-only mode", () =>
     Effect.sync(() => {
       expect(isCoreV2OnlyVersion("1.4.7")).toBe(false)
       expect(isCoreV2OnlyVersion("1.4.8")).toBe(true)
       expect(isCoreV2OnlyVersion("1.4.8-r0")).toBe(true)
       expect(isCoreV2OnlyVersion("1.4.8.r3")).toBe(true)
+      expect(isCoreV2OnlyVersion("1.4.8.5")).toBe(true)
       expect(isCoreV2OnlyVersion("2.0alpha")).toBe(true)
       expect(isCoreV2OnlyVersion("2.0.0-alpha.0")).toBe(true)
       expect(isCoreV2OnlyVersion("2.0.0-alpha.1")).toBe(true)
-      expect(isCoreV2OnlyVersion("2.0.0-beta.1")).toBe(false)
+      expect(isCoreV2OnlyVersion("2.0.0-beta.0")).toBe(true)
+      expect(isCoreV2OnlyVersion("2.0.0-beta.1")).toBe(true)
       expect(isCoreV2OnlyVersion("2.0.0")).toBe(false)
       expect(isCoreV2OnlyVersion("1.4.80")).toBe(false)
     }),
@@ -48,7 +50,7 @@ describe("RuntimeFlags", () => {
     }),
   )
 
-  it.effect("defaults four-graph reads on but contains the Core V2 execution owner", () =>
+  it.effect("defaults four-graph reads on and ships the Core V2 execution owner ON (W0.2)", () =>
     Effect.gen(function* () {
       const defaults = yield* readFlags.pipe(Effect.provide(fromConfig({})))
       expect({
@@ -63,7 +65,7 @@ describe("RuntimeFlags", () => {
         locationIndexesV2Shadow: true,
         contextProjectionV2: true,
         contextQueryToolsV2: true,
-        coreV2ExecutionOwner: false,
+        coreV2ExecutionOwner: true,
         coreV2Only: false,
       })
 
@@ -73,7 +75,7 @@ describe("RuntimeFlags", () => {
       expect(disabled.contextFederationShadow).toBe(false)
       expect(disabled.contextProjectionV2).toBe(true)
       expect(disabled.contextQueryToolsV2).toBe(true)
-      expect(disabled.coreV2ExecutionOwner).toBe(false)
+      expect(disabled.coreV2ExecutionOwner).toBe(true)
 
       const explicit = yield* readFlags.pipe(
         Effect.provide(fromConfig({ DEEPAGENT_CODE_CORE_V2_EXECUTION_OWNER: "true" })),
@@ -81,6 +83,27 @@ describe("RuntimeFlags", () => {
       expect(explicit.coreV2ExecutionOwner).toBe(true)
       const v2Only = yield* readFlags.pipe(Effect.provide(fromConfig({ DEEPAGENT_CODE_CORE_V2_ONLY: "true" })))
       expect(v2Only.coreV2Only).toBe(true)
+    }),
+  )
+
+  it.effect("W0.2: coreV2ExecutionOwner turns off only on explicit =false/=0 (case/whitespace tolerant)", () =>
+    Effect.gen(function* () {
+      const on = yield* readFlags.pipe(
+        Effect.provide(fromConfig({ DEEPAGENT_CODE_CORE_V2_EXECUTION_OWNER: "" })),
+      )
+      expect(on.coreV2ExecutionOwner).toBe(true)
+      for (const value of ["false", "0", "False", " FALSE ", "\t0\n", " false "]) {
+        const off = yield* readFlags.pipe(
+          Effect.provide(fromConfig({ DEEPAGENT_CODE_CORE_V2_EXECUTION_OWNER: value })),
+        )
+        expect(off.coreV2ExecutionOwner).toBe(false)
+      }
+      for (const value of ["true", "1", "yes", "TRUE", " anything "]) {
+        const stillOn = yield* readFlags.pipe(
+          Effect.provide(fromConfig({ DEEPAGENT_CODE_CORE_V2_EXECUTION_OWNER: value })),
+        )
+        expect(stillOn.coreV2ExecutionOwner).toBe(true)
+      }
     }),
   )
 

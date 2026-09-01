@@ -43,6 +43,21 @@ import { PluginCommand } from "./cli/cmd/plug"
 import { Heap } from "./cli/heap"
 import { ensureProcessMetadata } from "@deepagent-code/core/util/deepagent-code-process"
 import { isRecord } from "@/util/record"
+import { applyRuntimeDefaults, RUNTIME_DEFAULTS_SNAPSHOT_ENV, runtimeDefaultsEnvSnapshot } from "./runtime-defaults"
+
+// W0.1 — the production runtime defaults (V2 event admission / IM single-write / Core V2 execution
+// owner / four-graph federation) are applied at the very first process statement, before any
+// RuntimeFlags or event reader below can run, and before yargs.parse() reaches the middleware.
+// The desktop sidecar (src/node.ts) applies the same single call, so the two entries cannot
+// diverge; default values live in one module only (src/runtime-defaults.ts).
+applyRuntimeDefaults()
+
+if (process.env[RUNTIME_DEFAULTS_SNAPSHOT_ENV] === "1") {
+  // Test-only affordance (W0.1 verification case 4): print the canonical defaults vector and exit
+  // without starting the CLI — test/runtime-defaults.test.ts compares both entries' vectors.
+  console.log(JSON.stringify(runtimeDefaultsEnvSnapshot(process.env)))
+  process.exit(0)
+}
 
 const processMetadata = ensureProcessMetadata("main")
 
@@ -118,13 +133,14 @@ const cli = yargs(args)
     }
     process.env.DEEPAGENT_CODE = "1"
     process.env.DEEPAGENT_CODE_PID = String(process.pid)
-    // C7-05: the production runtime ships with the V2 event-admission + IM single-write
-    // authorities ON (the switches stay explicit-env so isolated test/daemon contexts keep
-    // their own behavior; `=false`/`=0` in this process restores the legacy authorities).
-    // The IM single-write suppression is only safe together with the V2 event-driven IM path
-    // (im.message.created → admission → dispatchV2); without it @mention work would be dropped.
-    process.env.DEEPAGENT_CODE_EVENT_V2_ADMISSION ??= "true"
-    process.env.DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE ??= "true"
+    // C7-05/W0.1: the V2 event-admission + IM single-write authority defaults live in
+    // src/runtime-defaults.ts (applied at the top of this module — the switches stay explicit-env
+    // so isolated test/daemon contexts keep their own behavior; `=false`/`=0` restores the legacy
+    // authorities). The IM single-write suppression is only safe together with the V2 event-driven
+    // IM path (im.message.created → admission → dispatchV2); without it @mention work would be
+    // dropped. DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM is NOT part of RuntimeDefaults (runtime-flags
+    // gates it per the V4 §H3 default-off discipline), so the CLI keeps its explicit pairing
+    // default here.
     process.env.DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM ??= "true"
 
     Log.Default.info(scriptName, {

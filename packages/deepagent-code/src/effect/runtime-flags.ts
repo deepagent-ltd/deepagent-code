@@ -6,6 +6,17 @@ const bool = (name: string) => Config.boolean(name).pipe(Config.withDefault(fals
 // A capability that ships ON by default but can be explicitly disabled with `=false` (U5: background
 // subagents are promoted from experimental to a stable local capability in V3.3).
 const stableOn = (name: string) => Config.boolean(name).pipe(Config.withDefault(true))
+// W0.1/W0.2: default-ON flag with the W0.1 runtimeDefaultsFromEnv semantics — an explicit "false"
+// or "0" (case-insensitive, surrounding whitespace tolerated) turns it OFF; unset or any other
+// value keeps the default ON. W0.1: runtime-defaults.ts 单点化后此处保持语义一致.
+const flagDefaultOn = (name: string) =>
+  Config.string(name).pipe(
+    Config.withDefault("true"),
+    Config.map((value) => {
+      const normalized = value.trim().toLowerCase()
+      return normalized !== "false" && normalized !== "0"
+    }),
+  )
 const positiveInteger = (name: string) =>
   Config.number(name).pipe(
     Config.map((value) => (Number.isInteger(value) && value > 0 ? value : undefined)),
@@ -18,7 +29,8 @@ const positiveIntegerWithDefault = (name: string, fallback: number) =>
   )
 export const DEFAULT_SUBAGENT_TIMEOUT_MS = 30 * 60_000
 export const DEFAULT_SUBAGENT_OUTPUT_MAX_CHARS = 8_000
-export const isCoreV2OnlyVersion = (version: string) => /^(?:1\.4\.8(?:[.-]|$)|2\.0(?:\.0-)?alpha(?:[.-]|$))/.test(version)
+export const isCoreV2OnlyVersion = (version: string) =>
+  /^(?:1\.4\.8(?:[.-]|$)|2\.0(?:\.0-)?alpha(?:[.-]|$)|2\.0\.0-beta(?:[.-]|$))/.test(version)
 const experimental = bool("DEEPAGENT_CODE_EXPERIMENTAL")
 const enabledByExperimental = (name: string) =>
   Config.all({ experimental, enabled: Config.boolean(name).pipe(Config.option) }).pipe(
@@ -129,8 +141,10 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   locationIndexesV2Shadow: stableOn("DEEPAGENT_CODE_LOCATION_INDEXES_V2_SHADOW"),
   contextProjectionV2: stableOn("DEEPAGENT_CODE_CONTEXT_PROJECTION_V2"),
   contextQueryToolsV2: stableOn("DEEPAGENT_CODE_CONTEXT_QUERY_TOOLS_V2"),
-  // M-1 containment: execution remains closed until a durable M10 cohort authorization exists.
-  coreV2ExecutionOwner: bool("DEEPAGENT_CODE_CORE_V2_EXECUTION_OWNER"),
+  // W0.2: the owner flag now ships ON (an explicit =false/=0 restores the contained posture);
+  // unqualified owners still fail closed at the ownerCampaign gate (v2_owner_campaign_not_verified).
+  // W0.1: runtime-defaults.ts 单点化后此处保持语义一致.
+  coreV2ExecutionOwner: flagDefaultOn("DEEPAGENT_CODE_CORE_V2_EXECUTION_OWNER"),
   // Core V2 alpha profile: an unavailable/unqualified V2 owner fails closed
   // instead of entering the legacy SessionPrompt executor. This is a kill switch for admission,
   // never a legacy fallback selector.

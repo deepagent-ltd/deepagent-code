@@ -1,9 +1,10 @@
-// 1.4.8.rN dev campaign mint (live-test seam, env-gated, NEVER active without the env var): when
-// DEEPAGENT_CODE_V2_DEV_CAMPAIGN is a JSON {campaignID, privateKeyPem, identity:{subjectCommit,
-// subjectTree, schemaDigest, buildID, packageDigest}}, the runtime inserts ONE signed owner
-// authorization row (ephemeral issuance pair, onConflictDoNothing) — the SAME signing path the
-// verifier checks. Production r0 mints campaigns through the operator flow; this seam exists so the
-// packaged live test can boot the V2-only profile with a verifiable campaign against a real provider.
+// LOCAL/TEST-ONLY dev campaign mint (live-test seam, env-gated, NEVER active without the env
+// var): when DEEPAGENT_CODE_V2_DEV_CAMPAIGN is a JSON {campaignID, privateKeyPem,
+// identity:{subjectCommit, subjectTree, schemaDigest, buildID, packageDigest}}, the runtime
+// inserts ONE signed owner authorization row (ephemeral issuance pair, onConflictDoNothing) — the
+// SAME signing path the verifier checks. This seam exists only so the packaged live test can boot
+// the V2-only profile with a verifiable campaign against a real provider; production issuance
+// goes through script/mint-owner-campaign.ts — 仅本地/测试；生产铸造以 script/mint-owner-campaign.ts 为准.
 import { Context, Effect, Layer } from "effect"
 import { Hash } from "@deepagent-code/core/util/hash"
 import { Database } from "@deepagent-code/core/database/database"

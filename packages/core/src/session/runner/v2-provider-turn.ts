@@ -12,6 +12,7 @@ import { ContextFederationExecutionParity } from "../../context-federation/execu
 import { SessionProviderOwner } from "../../context-federation/provider-owner"
 import { SessionProviderAttempt } from "../../context-federation/provider-attempt"
 import { SessionProviderAttemptTable, SessionProviderOwnerLeaseTable } from "../../context-federation/session-sql"
+import { InstallationVersion } from "../../installation/version"
 import { SessionSchema } from "../schema"
 import { PreparedProviderTurn } from "./prepared-provider-turn"
 import {
@@ -179,28 +180,46 @@ export type BuildIdentity = {
   readonly packageDigest: string
 }
 
+// W0.3: deterministic build identity derived from an installation version. A DEFAULT installation
+// has no DEEPAGENT_CODE_V2_BUILD_IDENTITY env, so the owner chain derives its identity from
+// InstallationVersion; script/mint-owner-campaign.ts derives the SAME fields from its
+// `--build-identity` input, so a minted authorization row qualifies a default install of the
+// same version. All fields are hex digests sized to satisfy the
+// session_v2_owner_authorization storage guards (40/64 hex).
+export function buildIdentityFromVersion(version: string): BuildIdentity {
+  const field = (label: string) => Hash.sha256(`${label}\u0000${version}`)
+  return {
+    subjectCommit: field("subject-commit").slice(0, 40),
+    subjectTree: field("subject-tree").slice(0, 40),
+    schemaDigest: field("schema-digest"),
+    buildID: field("build-id"),
+    packageDigest: field("package-digest"),
+  }
+}
+
 export const CurrentBuildIdentity = Context.Reference<BuildIdentity | undefined>(
   "@deepagent-code/v2/V2ProviderTurn/CurrentBuildIdentity",
   {
-    // 1.4.8.rN: dev campaign flow — identity comes from env (JSON with the five fields); production
-    // r0 binds the durable build identity at startup instead.
     defaultValue: () => {
       const raw = process.env.DEEPAGENT_CODE_V2_BUILD_IDENTITY?.trim()
-      if (!raw) return undefined
-      try {
-        const parsed = JSON.parse(raw) as Partial<BuildIdentity>
-        if (
-          typeof parsed.subjectCommit === "string" &&
-          typeof parsed.subjectTree === "string" &&
-          typeof parsed.schemaDigest === "string" &&
-          typeof parsed.buildID === "string" &&
-          typeof parsed.packageDigest === "string"
-        )
-          return parsed as BuildIdentity
-      } catch {
-        return undefined
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw) as Partial<BuildIdentity>
+          if (
+            typeof parsed.subjectCommit === "string" &&
+            typeof parsed.subjectTree === "string" &&
+            typeof parsed.schemaDigest === "string" &&
+            typeof parsed.buildID === "string" &&
+            typeof parsed.packageDigest === "string"
+          )
+            return parsed as BuildIdentity
+        } catch {
+          // Invalid/env absent: fall through to the version-derived default below.
+        }
       }
-      return undefined
+      // W0.3: env unset (or unparsable) — fall back to the identity derived from the installation
+      // version so a default install can qualify the minted v2-owner-<version> authorization row.
+      return buildIdentityFromVersion(InstallationVersion)
     },
   },
 )

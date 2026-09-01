@@ -20,6 +20,19 @@ jobs:
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
 
+      - name: Mint V2 owner authorization (v2.0 design W0.3)
+        working-directory: packages/deepagent-code
+        env:
+          # The campaign issuer's Ed25519 private key (PEM inline, or a path to a PEM file — the
+          # same convention as script/v2-campaign-sign.ts). NOTE: no
+          # `DEEPAGENT_CODE_OWNER_SIGNING_KEY` secret is configured in this repository yet. Until
+          # it is added the step fails closed (exit 1) — release minting must never write an
+          # unsigned row. Create the secret before this workflow can mint.
+          DEEPAGENT_CODE_OWNER_SIGNING_KEY: ${{ secrets.DEEPAGENT_CODE_OWNER_SIGNING_KEY }}
+        run: |
+          bun install
+          bun script/mint-owner-campaign.ts --build-identity "$(git describe --tags)"
+
       - name: Setup Git Committer
         id: setup-git-committer
         uses: ./.github/actions/setup-git-committer
