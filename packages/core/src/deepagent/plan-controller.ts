@@ -241,25 +241,36 @@ export type PlanWriteInput = {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
 
+// Some providers (GLM 5.x) serialize JSON numbers and nulls inside tool arguments as strings
+// ("0", "null"). Coerce at the decode boundary so the strict protocol keeps its semantics
+// without burning the plan attempt budget on provider encoding habits.
+const coerceNullableInteger = (value: unknown): number | null | undefined => {
+  if (value === null) return null
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return value
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value)
+    if (Number.isSafeInteger(parsed) && parsed >= 0 && String(parsed) === value.trim()) return parsed
+  }
+  return undefined
+}
+
+const coerceNullableString = (value: unknown): string | null | undefined => {
+  if (value === null || value === undefined) return value ?? null
+  if (typeof value === "string") return value === "null" ? null : value
+  return undefined
+}
+
 /** Decode a persisted or otherwise untrusted strict plan-write envelope. */
 export const decodePlanWriteInput = (value: unknown): PlanWriteInput | null => {
   if (!isRecord(value)) return null
   if (!(value.operation === "create" || value.operation === "advance" || value.operation === "replan")) return null
-  if (!(value.expected_plan_id === null || typeof value.expected_plan_id === "string")) return null
-  if (
-    !(
-      value.expected_version === null ||
-      (typeof value.expected_version === "number" &&
-        Number.isSafeInteger(value.expected_version) &&
-        value.expected_version >= 0)
-    )
-  )
-    return null
+  const expected_plan_id = coerceNullableString(value.expected_plan_id)
+  if (expected_plan_id === undefined) return null
+  const expected_version = coerceNullableInteger(value.expected_version)
+  if (expected_version === undefined) return null
   if (typeof value.goal !== "string" || !Array.isArray(value.steps)) return null
-  if (
-    !(value.active_step_id === undefined || value.active_step_id === null || typeof value.active_step_id === "string")
-  )
-    return null
+  const active_step_id = coerceNullableString(value.active_step_id)
+  if (active_step_id === undefined) return null
   if (value.replan_reason !== undefined && typeof value.replan_reason !== "string") return null
   if (
     value.assumptions !== undefined &&
@@ -286,13 +297,15 @@ export const decodePlanWriteInput = (value: unknown): PlanWriteInput | null => {
   if (steps.some((step) => step == null)) return null
   return {
     operation: value.operation,
-    expected_plan_id: value.expected_plan_id,
-    expected_version: value.expected_version,
+    expected_plan_id,
+    expected_version,
     ...(typeof value.replan_reason === "string" ? { replan_reason: value.replan_reason } : {}),
     goal: value.goal,
     ...(Array.isArray(value.assumptions) ? { assumptions: value.assumptions as string[] } : {}),
     steps: steps.filter((step): step is NonNullable<typeof step> => step != null),
-    ...(value.active_step_id !== undefined ? { active_step_id: value.active_step_id } : {}),
+    ...(active_step_id !== null || value.active_step_id !== undefined
+      ? { active_step_id: active_step_id ?? null }
+      : {}),
   }
 }
 
