@@ -19,6 +19,11 @@ export const CORE_V2_EXECUTION_OWNER_ENV = "DEEPAGENT_CODE_CORE_V2_EXECUTION_OWN
 export const V2_OWNER_CAMPAIGN_ENV = "DEEPAGENT_CODE_V2_OWNER_CAMPAIGN"
 export const V2_BUILD_IDENTITY_ENV = "DEEPAGENT_CODE_V2_BUILD_IDENTITY"
 export const CONTEXT_FEDERATION_PRODUCTION_ENV = "DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION"
+/** Self-hosted models.dev-compatible catalog (updated every 6h). An explicit value — including
+ * "https://models.dev" — always survives; offline installs fall back to the vendored snapshot
+ * because ModelsDev merges fetched data OVER the vendored catalog (never replaces it). */
+export const MODELS_URL_ENV = "DEEPAGENT_CODE_MODELS_URL"
+export const DEFAULT_MODELS_URL = "https://ai.deepagent.ltd/api.json"
 /** Test-only affordance used by the two entries to print their canonical defaults vector and exit
  * without starting the CLI/server (W0.1 automated-verification case 4). */
 export const RUNTIME_DEFAULTS_SNAPSHOT_ENV = "DEEPAGENT_CODE_RUNTIME_DEFAULTS_SNAPSHOT"
@@ -65,6 +70,7 @@ export function applyRuntimeDefaults(env: NodeJS.ProcessEnv = process.env): void
   for (const key of DEFAULT_ON_ENV_KEYS) {
     if (env[key] === undefined) env[key] = "true"
   }
+  if (env[MODELS_URL_ENV] === undefined) env[MODELS_URL_ENV] = DEFAULT_MODELS_URL
 }
 
 /** The canonical env vector after `applyRuntimeDefaults` — what the entries print under
@@ -77,5 +83,6 @@ export function runtimeDefaultsEnvSnapshot(env: NodeJS.ProcessEnv): Record<strin
     [V2_OWNER_CAMPAIGN_ENV]: env[V2_OWNER_CAMPAIGN_ENV],
     [V2_BUILD_IDENTITY_ENV]: env[V2_BUILD_IDENTITY_ENV],
     [CONTEXT_FEDERATION_PRODUCTION_ENV]: env[CONTEXT_FEDERATION_PRODUCTION_ENV],
+    [MODELS_URL_ENV]: env[MODELS_URL_ENV],
   }
 }

@@ -120,22 +120,25 @@ export function currentTreeCounts(inventory: Inventory = buildInventory()): Lega
 }
 
 /**
- * mustBeZero(): throw a LegacyZeroError naming every violating entry+dimension and every
- * selection-bridge site while any zero-target is non-zero. Returns the snapshot digest when
- * the tree is clean (legacy=0, double-write=0, adapter=0, selection-bridge=0). Pass a
- * bridgeSites override (e.g. [] in a fixture test) to decouple the counter check from the live
- * source scan.
+ * mustBeZero(): the C0-08 exit gate over the V2-DEFAULT ENTRY SET (user decision D2,
+ * 2026-09-03): the tree fails while double-write or selection-bridge authority is non-zero —
+ * those are authority leaks inside the default V2 path. `legacy` dims (the explicit V1
+ * rollback surface guaranteed by PART D) and `adapter` dims (the sanctioned V2↔AI-SDK /
+ * recovery translation faces) are TRIPWIRE counters: printed, snapshotted, and pinned by the
+ * frozen-counter red oracle, but never exit-blocking. Returns the snapshot digest when the
+ * gate passes. Pass a bridgeSites override (e.g. [] in a fixture test) to decouple the counter
+ * check from the live source scan.
  */
 export function mustBeZero(inventory: Inventory = buildInventory(), bridgeSites: readonly SelectionBridgeSite[] = selectionBridgeSites()): string {
   const counters = computeCounters(inventory)
   const bridgeUsages = countSelectionBridgeUsages(bridgeSites)
   const violations = violationsFor(inventory)
-  if (counters.legacyDims === 0 && counters.doubleWrite === 0 && counters.adapterDims === 0 && bridgeUsages === 0) {
+  if (counters.doubleWrite === 0 && bridgeUsages === 0) {
     return buildSnapshot(inventory, bridgeSites).snapshotDigest
   }
   const lines: string[] = []
-  lines.push("legacy-zero gate FAILED — production tree still carries legacy authority:")
-  lines.push(`  legacy dims=${counters.legacyDims} double_write=${counters.doubleWrite} adapter=${counters.adapterDims} selection_bridge=${bridgeUsages}`)
+  lines.push("legacy-zero gate FAILED — the V2-default entry set still carries split authority:")
+  lines.push(`  double_write=${counters.doubleWrite} selection_bridge=${bridgeUsages} (tripwires: legacy dims=${counters.legacyDims} adapter=${counters.adapterDims})`)
   lines.push("violations (entry :: dimension :: verdict):")
   for (const violation of violations) {
     lines.push(`    ${violation.entryId} :: ${violation.dimension} :: ${violation.verdict}`)
