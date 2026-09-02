@@ -46,6 +46,14 @@ import { LocationIndexRuntime } from "../location-index/runtime"
 // knowledge + released-snapshot scoping must be that workspace. The code/documents sources are
 // per-call over `runtime.current()`, so they always observe the index of the instance the resolve
 // runs under.
+//
+// W3.9 laziness: the W3.7 seam captured the frame identity with `runtime.current()` INSIDE the
+// layer-build effect — an eager `LocationIndexRuntime` attach on every CLI start (≈+5s: the
+// instance build) that ran WITHOUT an `InstanceRef` (always failing with "InstanceRef not
+// provided") and logged a WARN to STDOUT (breaking `--format json` subprocess output). The build
+// effect now has ZERO runtime side effects: `identity` is resolved on first consumption via
+// `currentIdentity` (readiness probe, fanout consumers) — the same `identityFromHandle`
+// derivation, evaluated against the CURRENT instance handle at resolution time.
 
 export function productionSourcesLayer(options: { readonly workspaceDirectory: string }) {
   return Layer.effect(
@@ -54,13 +62,7 @@ export function productionSourcesLayer(options: { readonly workspaceDirectory: s
       const runtime = yield* LocationIndexRuntime.Service
       const code = yield* CodeQuery.Service
       const db = (yield* Database.Service).db
-      // W3.8.1 — the frame identity is captured at seam build: the CURRENT instance handle (index
-      // flag on + instance attached) carries the real location-derived identity; no handle keeps
-      // `identity` undefined so the V2 frame falls back to the v2:local degradation (honest).
-      // The seam value is a plain field (core W3.8 shape), so the one-shot read at build is the
-      // frame contract — per-call document/knowledge sources still re-read the handle themselves.
-      const identity = identityFromHandle(yield* runtime.current())
-      return productionInput({ runtime, code, db, workspaceDirectory: options.workspaceDirectory, identity })
+      return productionInput({ runtime, code, db, workspaceDirectory: options.workspaceDirectory })
     }),
   ).pipe(
     Layer.provide(
@@ -96,6 +98,16 @@ export function identityFromHandle(
     projectScopeKey: handle.identity.projectScopeKey,
     legacyProjectId: handle.identity.observedProjectId ?? projectIdForWorkspace(handle.identity.canonicalRoot),
   }
+}
+
+/**
+ * W3.9 — the ON-DEMAND seam identity: `identityFromHandle` of the CURRENT instance handle at the
+ * moment a consumer actually needs the frame (readiness probe, first-consume fanout), instead of
+ * eagerly attaching the `LocationIndexRuntime` at layer build. Same derivation as W3.8.1, same
+ * honesty contract (no handle => undefined => v2:local).
+ */
+export function currentIdentity(runtime: LocationIndexRuntime.Interface) {
+  return Effect.map(runtime.current(), (handle) => identityFromHandle(handle))
 }
 
 /** Pure assembly: the same value the layer provides, constructible in tests. */

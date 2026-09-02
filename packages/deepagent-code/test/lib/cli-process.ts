@@ -167,6 +167,9 @@ export type OpencodeCli = {
   // Convenience assertion. Dumps captured stderr/stdout on mismatch so CI
   // failures are debuggable without re-running locally.
   readonly expectExit: (result: RunResult, expected: number, label?: string) => void
+  // W3.9 stdout hygiene: JSON.parse the whole stdout and assert no Effect log
+  // line ([HH:MM:SS.mmm] WARN/ERROR (#fiber): ...) polluted it. Returns the payload.
+  readonly expectJsonStdout: (result: RunResult, label?: string) => unknown
   // Parse `--format json` stdout into one event object per non-empty line.
   // The CLI writes `JSON.stringify({ type, sessionID, ... }) + EOL` for each
   // event (see src/cli/cmd/run.ts `emit`). Throws on a malformed line so
@@ -408,7 +411,7 @@ export function withCliFixture<A, E>(
       } satisfies AcpHandle
     })
 
-    const deepagentCode: OpencodeCli = { run, serve, acp, spawn, expectExit, parseJsonEvents }
+    const deepagentCode: OpencodeCli = { run, serve, acp, spawn, expectExit, expectJsonStdout, parseJsonEvents }
 
     return yield* fn({ llm, home, deepagentCode })
     // FetchHttpClient is provided so test bodies can `yield* HttpClient.HttpClient`
@@ -440,6 +443,20 @@ function expectExit(result: RunResult, expected: number, label = "deepagentCode"
   // eslint-disable-next-line no-console
   console.error(`[${label}] stdout (last 500):\n${tail(result.stdout, 500)}`)
   throw new Error(`${label}: expected exit ${expected}, got ${result.exitCode}`)
+}
+
+// W3.9 — stdout hygiene for machine-readable output. The whole stdout must parse as JSON (any
+// `Effect.log*` emitted during layer builds is written to STDOUT by the Effect default logger as
+// `[HH:MM:SS.mmm] LEVEL (#fiber): ...` — W3.7 regression — so a successful parse also proves no
+// line precedes the payload), and no line may carry a WARN/ERROR log prefix. Returns the parsed
+// payload so callers keep asserting on it.
+function expectJsonStdout(result: RunResult, label = "json stdout") {
+  const logLine = /^\[\d{2}:\d{2}:\d{2}\.\d{3}\]\s+(WARN|ERROR)/
+  const offenders = result.stdout.split("\n").filter((line) => logLine.test(line))
+  if (offenders.length > 0) {
+    throw new Error(`${label}: stdout contains Effect log line(s): ${offenders.join(" | ")}`)
+  }
+  return JSON.parse(result.stdout) as unknown
 }
 
 // `cliIt.live(name, fixture => effect)` is the same as

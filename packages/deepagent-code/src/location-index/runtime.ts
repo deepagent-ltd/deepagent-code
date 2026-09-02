@@ -75,14 +75,21 @@ export const layer = Layer.effect(
         }))
       }),
     )
+    // W3.9 — "runtime unavailable" is the expected outcome whenever the consumer runs outside an
+    // instance context (no `InstanceRef`) or the index flag is off; every consumer already degrades
+    // honestly (undefined handle → unavailable/uninitialized), so a WARN here is noise that the
+    // Effect default logger would write to STDOUT (breaking machine-readable CLI output). Debug
+    // keeps the cause available in logs without polluting stdout. There is no explicit
+    // server-start `init()` caller today (verified W3.9), so contexts cannot be distinguished —
+    // unified debug per the W3.9 decision.
     return Service.of({
       init: () => InstanceState.get(state).pipe(
-        Effect.catchCause((cause) => Effect.logWarning("Location index runtime unavailable", { cause })),
+        Effect.catchCause((cause) => Effect.logDebug("Location index runtime unavailable", { cause })),
         Effect.asVoid,
       ),
       current: () => InstanceState.get(state).pipe(
         Effect.catchCause((cause) =>
-          Effect.logWarning("Location index runtime unavailable", { cause }).pipe(Effect.as(undefined)),
+          Effect.logDebug("Location index runtime unavailable", { cause }).pipe(Effect.as(undefined)),
         ),
       ),
     })

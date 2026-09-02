@@ -59,4 +59,25 @@ describe("DeepAgent Code config", () => {
       rmSync(home, { recursive: true, force: true })
     }
   })
+
+  test("W7: durable learning defaults ON; =false falls back to the legacy-only posture", () => {
+    const previous = process.env.DEEPAGENT_DURABLE_LEARNING
+    try {
+      delete process.env.DEEPAGENT_DURABLE_LEARNING
+      expect(gatewayConfig().durableLearning).toBe(true)
+      process.env.DEEPAGENT_DURABLE_LEARNING = "false"
+      expect(gatewayConfig().durableLearning).toBe(false)
+      process.env.DEEPAGENT_DURABLE_LEARNING = "0"
+      expect(gatewayConfig().durableLearning).toBe(false)
+      process.env.DEEPAGENT_DURABLE_LEARNING = "true"
+      expect(gatewayConfig().durableLearning).toBe(true)
+      // explicit option wins over the env fallback
+      expect(
+        gatewayConfig({ provider: { deepagent: { options: { durableLearning: false } } } }).durableLearning,
+      ).toBe(false)
+    } finally {
+      if (previous === undefined) delete process.env.DEEPAGENT_DURABLE_LEARNING
+      else process.env.DEEPAGENT_DURABLE_LEARNING = previous
+    }
+  })
 })

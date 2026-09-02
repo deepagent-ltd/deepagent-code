@@ -14,6 +14,12 @@ import { GOAL_PLAN_FILE, parseGoalPlanFile } from "./goal-plan-file"
 // W10 write side: the session settle tail and the `deepagent docs sync` CLI both run the SAME
 // generation logic here. Writing project files is opt-in (env DEEPAGENT_CODE_PROJECT_DOCS_SYNC or
 // the `docs_sync` config, default false); reading via `deepagent/project-docs` needs no switch.
+//
+// W7 step 4: `deepagent.learning.project_copy` (core config, default false) is the OPTIONAL mirror
+// of released knowledge/memory selections into `docs/deepagent/`. The DurableKnowledgeStore root
+// (`~/.deepagent/code/project/<pid>/knowledge`) remains the single authority; the project-copy
+// selection sync is DEFERRED to a later wave (config + contract only here) — this module stays the
+// single write-generation home when that lands.
 
 /** Environment switch for automatic writes after a session settles (default off). */
 export const SYNC_ENV_FLAG = "DEEPAGENT_CODE_PROJECT_DOCS_SYNC"

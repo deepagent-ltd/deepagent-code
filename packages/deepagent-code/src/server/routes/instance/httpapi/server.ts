@@ -45,6 +45,7 @@ import { LLM } from "@/session/llm"
 import { SessionPrompt } from "@/session/prompt"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { PromptEpoch } from "@/session/prompt-epoch"
+import { DurableLearningRuntime } from "@/deepagent/learning-runtime"
 import { devCampaignMint } from "@/effect/dev-campaign-mint"
 import { GoalManager } from "@/session/goal-manager"
 import { SessionRevert } from "@/session/revert"
@@ -430,6 +431,8 @@ export function createRoutes(corsOptions?: CorsOptions) {
     // requires it so readiness probes the SAME adapter set the runner serves (W3.7 L5).
     Layer.provide(productionSourcesLayer({ workspaceDirectory: process.cwd() })),
     Layer.provide(PromptEpoch.v2RunnerSeamLayer.pipe(Layer.provide(Database.defaultLayer))),
+    // W7 — settle-triggered durable learning (same INTO-the-base seam direction as above).
+    Layer.provide(DurableLearningRuntime.onSessionSettledSeamLayer.pipe(Layer.provide(Database.defaultLayer))),
     Layer.provideMerge(devCampaignMint),
     // W0.5 (blocker-2): the release pipeline ships owner-authorization.json with the install
     // product; this layer seeds ONE signed row into the local DB when the routes graph is built —
