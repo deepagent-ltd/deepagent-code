@@ -1,14 +1,14 @@
 /**
  * C0-08 legacy-zero inventory gate tests.
  *
- * The gate is a red oracle on the current tree: the C0-01 frozen caller inventory still
- * classifies production entry points as legacy owner/writer (910 dimension roles), no
- * double-write path (event.v2-bridge is the C7-05 V2 authority), three legacy-only adapters
- * carrying authority, and the V2 selection bridge commits zero v2-none graph-revision
- * fallbacks. The counter tests
- * verify the COUNTER implementation against both a small fixture inventory and the real
- * buildInventory() output, and mustBeZero() is asserted to FAIL honestly on the current tree —
- * green arrives only when C1B/C2-C5 migration completes.
+ * User decision D2 (2026-09-03): the EXIT gate covers the V2-default entry set — it fails only
+ * on double-write or selection-bridge authority. `legacy` dims (910: the explicit V1 rollback
+ * surface PART D guarantees) and `adapter` dims (3: the sanctioned V2↔AI-SDK/recovery
+ * translation faces) are TRIPWIRES — still counted, printed, snapshotted, and pinned by the
+ * frozen-counter red oracle below, but never exit-blocking. The counter tests verify the
+ * COUNTER implementation against a small fixture inventory and the real buildInventory()
+ * output; mustBeZero() is asserted GREEN on the current tree and to throw on double-write
+ * authority.
  */
 import { describe, expect, test } from "bun:test"
 import { buildInventory } from "../script/caller-inventory/build"
@@ -147,6 +147,19 @@ describe("C0-08 legacy-zero counter (fixture inventory)", () => {
     expect(counters.adapterDims).toBe(0)
   })
 
+  test("mustBeZero ignores tripwire-only violations (D2: legacy/adapter never block the exit gate)", () => {
+    const tripwireOnly = fixtureInventory([
+      makeEntry("fixture.legacy-owner", "im", allRoles("legacy")),
+      makeEntry("fixture.legacy-adapter", "recovery", allRoles("adapter")),
+    ])
+    const digest = mustBeZero(tripwireOnly, [])
+    expect(digest).toMatch(SHA256)
+    const counters = computeCounters(tripwireOnly)
+    expect(counters.legacyDims).toBeGreaterThan(0)
+    expect(counters.adapterDims).toBeGreaterThan(0)
+    expect(counters.doubleWrite).toBe(0)
+  })
+
   test("empty inventory yields all-zero counters and no violations", () => {
     const empty = fixtureInventory([])
     const counters = computeCounters(empty)
@@ -211,19 +224,15 @@ describe("C0-08 legacy-zero gate real inventory (actual frozen numbers)", () => 
     }
   })
 
-  test("mustBeZero is RED on the current tree (green only after C1B/C2-C5 migration)", () => {
-    let caught: unknown
-    try { mustBeZero(inventory) } catch (error) { caught = error }
-    expect(caught).toBeInstanceOf(LegacyZeroError)
-    const error = caught as LegacyZeroError
-    expect(error.counters.legacyDims).toBe(910)
-    expect(error.counters.doubleWrite).toBe(0)
-    expect(error.counters.adapterDims).toBe(3)
-    expect(error.selectionBridgeSites.length).toBe(0)
-    expect(error.message).toContain("legacy dims=910")
-    expect(error.message).toContain("double_write=0")
-    expect(error.message).toContain("im.agent-executor :: execution_owner :: legacy")
-    expect(error.violations.length).toBe(910 + 0 + 3)
+  test("mustBeZero is GREEN on the current tree (D2: exit = V2-default entry set; tripwirs pinned by the frozen counters)", () => {
+    const digest = mustBeZero(inventory)
+    expect(digest).toMatch(SHA256)
+    // Tripwire counters stay pinned here — a drift in the legacy/adapter surfaces must show
+    // up in this red oracle even though it no longer blocks the exit gate.
+    const counters = currentTreeCounts(inventory)
+    expect(counters.legacyDims).toBe(910)
+    expect(counters.doubleWrite).toBe(0)
+    expect(counters.adapterDims).toBe(3)
   })
 })
 

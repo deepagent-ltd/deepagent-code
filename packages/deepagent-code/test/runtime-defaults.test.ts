@@ -5,8 +5,10 @@ import {
   applyRuntimeDefaults,
   CORE_V2_EXECUTION_OWNER_ENV,
   CONTEXT_FEDERATION_PRODUCTION_ENV,
+  DEFAULT_MODELS_URL,
   EVENT_V2_ADMISSION_ENV,
   IM_SINGLE_WRITE_ENV,
+  MODELS_URL_ENV,
   RUNTIME_DEFAULTS_SNAPSHOT_ENV,
   runtimeDefaultsFromEnv,
   V2_BUILD_IDENTITY_ENV,
@@ -86,6 +88,15 @@ describe("runtimeDefaultsFromEnv", () => {
       buildIdentity: undefined,
     })
   })
+
+  test("case 3b: the models catalog URL defaults to the self-hosted catalog; an explicit value survives", () => {
+    const env: NodeJS.ProcessEnv = {}
+    applyRuntimeDefaults(env)
+    expect(env[MODELS_URL_ENV]).toBe(DEFAULT_MODELS_URL)
+    const pinned: NodeJS.ProcessEnv = { [MODELS_URL_ENV]: "https://models.dev" }
+    applyRuntimeDefaults(pinned)
+    expect(pinned[MODELS_URL_ENV]).toBe("https://models.dev")
+  })
 })
 
 const packageRoot = path.resolve(import.meta.dir, "..")
@@ -121,6 +132,7 @@ describe("W0.1 entry parity: CLI and desktop sidecar apply identical runtime def
       [IM_SINGLE_WRITE_ENV]: "true",
       [CORE_V2_EXECUTION_OWNER_ENV]: "true",
       [CONTEXT_FEDERATION_PRODUCTION_ENV]: "true",
+      [MODELS_URL_ENV]: DEFAULT_MODELS_URL,
     })
     // The optional strings have no canonical default — absent from the printed vector.
     expect(V2_OWNER_CAMPAIGN_ENV in cli).toBe(false)
@@ -128,7 +140,11 @@ describe("W0.1 entry parity: CLI and desktop sidecar apply identical runtime def
   })
 
   test("case 4b: an explicit =false kill-switch survives in both entries", () => {
-    const killEnv = { [EVENT_V2_ADMISSION_ENV]: "false", [CORE_V2_EXECUTION_OWNER_ENV]: "0" }
+    const killEnv = {
+      [EVENT_V2_ADMISSION_ENV]: "false",
+      [CORE_V2_EXECUTION_OWNER_ENV]: "0",
+      [MODELS_URL_ENV]: "https://models.dev",
+    }
     const cli = entrySnapshot("index", killEnv)
     const sidecar = entrySnapshot("node", killEnv)
     expect(sidecar).toEqual(cli)
@@ -136,5 +152,6 @@ describe("W0.1 entry parity: CLI and desktop sidecar apply identical runtime def
     expect(cli[CORE_V2_EXECUTION_OWNER_ENV]).toBe("0")
     expect(cli[IM_SINGLE_WRITE_ENV]).toBe("true")
     expect(cli[CONTEXT_FEDERATION_PRODUCTION_ENV]).toBe("true")
+    expect(cli[MODELS_URL_ENV]).toBe("https://models.dev")
   })
 })
