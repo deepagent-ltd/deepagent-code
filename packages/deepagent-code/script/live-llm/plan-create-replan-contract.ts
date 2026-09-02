@@ -5,9 +5,6 @@ import { assertPlanCreateObservation, assertPlanReplanObservation } from "./plan
 import { runLegacyLiveCases } from "./runtime"
 
 const config = await loadLiveLLMConfig()
-if (config.providerID !== "deepseek" || config.modelID !== "deepseek-v4-flash") {
-  throw new Error("Plan create/replan release test requires DeepSeek deepseek-v4-flash")
-}
 
 const goal = "Prove create and replan preserve server-owned Plan authority"
 const assumptions = ["server_assigns_every_new_step_id", "retained_identity_is_authoritative"]
@@ -46,7 +43,7 @@ const artifact = await runLegacyLiveCases({
     "Omit assumptions on replan so the server retains the authoritative list.",
     "If a plan conflict occurs, retry the requested replan exactly once using the authoritative correction.",
   ].join(" "),
-  modelMaxTokens: 1024,
+  modelMaxTokens: config.providerID === "deepseek" ? 1024 : 2048,
   maxProviderTurns: 5,
   cases: [
     {

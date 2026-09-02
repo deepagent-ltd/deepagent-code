@@ -4,9 +4,6 @@ import { finishLiveScript } from "./lifecycle"
 import { runLegacyLiveCases } from "./runtime"
 
 const config = await loadLiveLLMConfig()
-if (config.providerID !== "deepseek" || config.modelID !== "deepseek-v4-flash") {
-  throw new Error("Activity progress release test requires DeepSeek deepseek-v4-flash")
-}
 
 const marker = `activity-progress-${crypto.randomUUID()}`
 const facts = Array.from({ length: 3 }, (_, index) => ({
@@ -42,7 +39,7 @@ const artifact = await runLegacyLiveCases({
   ].join(" "),
   inspectDurability: true,
   observeAssembledRequestFingerprints: true,
-  modelMaxTokens: 768,
+  modelMaxTokens: config.providerID === "deepseek" ? 768 : 1536,
   maxProviderTurns: 8,
 })
 
@@ -89,8 +86,8 @@ const result = {
     model: config.modelID,
     markerHash: Bun.hash(marker).toString(16),
     factHashes: facts.map((fact) => Bun.hash(fact.value).toString(16)),
-    activityIDHash: Bun.hash(evidence.activity.activity_id).toString(16),
-    activityState: evidence.activity.state,
+    activityIDHash: Bun.hash(evidence.activities.map((activity) => activity.activity_id).join(",")).toString(16),
+    activityStates: evidence.activities.map((activity) => activity.state),
     progressStates: evidence.progress.map((progress) => `${progress.revision}:${progress.state}`),
     assistantTurns: observation.assistantTurns,
     toolSequence: observation.newTools.map((tool) => `${tool.name}:${tool.status}`),
