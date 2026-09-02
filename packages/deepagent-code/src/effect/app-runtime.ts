@@ -66,6 +66,7 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { DurableLearningRuntime } from "@/deepagent/learning-runtime"
 import { LegacyEventCanonicalizerRuntime } from "@/legacy-event-canonicalizer-runtime"
 import { productionSourcesLayer } from "@/context-federation/production-sources"
+import { RecoveryExecutor } from "@/server/recovery-executor"
 
 const baseAppLayer = Layer.mergeAll(
   Npm.defaultLayer,
@@ -156,6 +157,19 @@ export const AppLayer = baseAppLayer.pipe(
   // W7 — settle-triggered durable learning: the runner's `onSessionSettled` hook (same INTO-the-base
   // graph direction as the v2RunnerSeam above; `DEEPAGENT_DURABLE_LEARNING=false` keeps legacy-only).
   Layer.provide(DurableLearningRuntime.onSessionSettledSeamLayer.pipe(Layer.provide(Database.defaultLayer))),
+  // W2.2 — C1B recovery executor production wiring (in-app composition): provide the DB-backed
+  // durable SessionProviderRecovery service over the shared Database singleton (single-instance
+  // local process, no clustering) and the executor whose layer build runs the startup drain —
+  // process boot = post-crash resume (applies committed pending recovery commands, never fails).
+  // Both self-provide the module-level Database.defaultLayer constant (memoized by object
+  // identity, so it is the SAME connection the base graph builds — no split-brain).
+  Layer.provide(RecoveryExecutor.recoveryDurableLayer.pipe(Layer.provide(Database.defaultLayer))),
+  Layer.provide(
+    RecoveryExecutor.layer.pipe(
+      Layer.provide(RecoveryExecutor.recoveryDurableLayer.pipe(Layer.provide(Database.defaultLayer))),
+      Layer.provide(Database.defaultLayer),
+    ),
+  ),
   Layer.provideMerge(devCampaignMint),
   // W0.5: deliver the shipped owner-authorization.json into the local DB once per runtime build
   // (after the database layer initialized; fail-open on file absence, fail-closed on verification

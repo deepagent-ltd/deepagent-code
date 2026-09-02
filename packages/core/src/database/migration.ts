@@ -5,6 +5,7 @@ import { Cause, Data, Effect, Exit, Option, Schedule, Semaphore } from "effect"
 import type { EffectDrizzleSqlite } from "@deepagent-code/effect-drizzle-sqlite"
 import { migrations } from "./migration.gen"
 import { MigrationIdentity } from "./migration-identity"
+import { Diagnostics } from "./diagnostics"
 import { DatabaseUpgradeRun } from "./upgrade-run"
 import { DatabaseMigrationLease as MigrationLease, type MigrationLease as MigrationLeaseHandle } from "./migration-lease"
 import { PostVerify } from "./post-verify"
@@ -454,7 +455,18 @@ function applyMigrations(
                   `database migration ${migration.id} was blocked by another connection for 60s; close other DeepAgent Code windows and restart`,
                 ),
               )
-            return Effect.failCause(exit.cause)
+            // C1A-14 — every migration-defect failure carries the structured diagnostic (stable code,
+            // SQLite extended code + constraint/trigger name, run/migration id, correlation id) so an
+            // operator log line is actionable AND payload-free (diagnostics never echo SQL/params).
+            return Effect.gen(function* () {
+              const diagnostics = Diagnostics.buildMigrationDiagnostics(Cause.squash(exit.cause), {
+                stableCode: "migration_apply_failed",
+                runId: upgrade?.run.runId,
+                migrationId: migration.id,
+              })
+              yield* Effect.logError("database migration failed", diagnostics)
+              return yield* Effect.failCause(exit.cause)
+            })
           }),
         )
     }
