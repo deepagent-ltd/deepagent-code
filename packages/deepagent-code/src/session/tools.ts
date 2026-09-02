@@ -319,9 +319,15 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   // (deriveSubagentSessionPermission + PLAN_WRITE_OWN_GOAL, see agent/subagent-permissions.ts); a
   // subagent without it (explore/researcher/reviewer/panel/generic task children) cannot repair the
   // plan, so blocking its writes would deny its only mutating path with no exit — those stay warn-only.
+  // W15 (P3): the escape is judged on the EFFECTIVE ruleset — `Permission.merge(agent, session)`, the
+  // same merge the permission ask path uses (line 278/298) — not on the session ruleset alone: a
+  // custom agent with `plan: allow` + a session with no plan rule is still a subagent that CAN repair
+  // its plan, so the strict block must stay active (fail-closed).
   const subagentHasPlanEscape =
     input.session.parentID == null ||
-    (input.session.permission ?? []).some((rule) => rule.permission === "plan" && rule.action === "allow")
+    Permission.merge(input.agent.permission, input.session.permission ?? []).some(
+      (rule) => rule.permission === "plan" && rule.action === "allow",
+    )
   const evaluatePlanGate = (sessionID: string, isMutating: boolean): GateDirective => {
     const latch = AgentGateway.DeepAgentSessionState.planLatch(sessionID)
     const planStale = latch?.latch === "stale" && !AgentGateway.DeepAgentPlanController.shouldEscapeToHuman(latch)

@@ -1,4 +1,6 @@
 import { NodeFileSystem } from "@effect/platform-node"
+import { mkdtempSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { ConfigV1 } from "@deepagent-code/core/v1/config/config"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { Database } from "@deepagent-code/core/database/database"
@@ -136,6 +138,11 @@ import {
 } from "@/session/activity-sql"
 
 void Log.init({ print: false })
+
+// W16 (O-W0-4): the goal-active predicate in promptOrSteer reads the DeepAgent in-memory session-state
+// pointer (session-state map). Point it at a throwaway dir so getOrCreate/setActiveGoal work in-process
+// (no real $HOME writes); unseeded sessions read as no-goal (getActiveGoal → null).
+AgentGateway.DeepAgentSessionState.configure(mkdtempSync(path.join(tmpdir(), "prompt-state-")))
 
 const summary = Layer.succeed(
   SessionSummary.Service,
@@ -6192,6 +6199,7 @@ const r0Signed = {
   signatureDigest: V2OwnerAuthorization.signAuthorization(r0Issuance.privateKeyPem, r0Fields),
 }
 const r0V2PromptCalls: string[] = []
+const r0V2PromptDeliveries: Array<SessionInput.Delivery | undefined> = []
 const r0V2ResumeCalls: string[] = []
 const r0V2AdoptCalls: string[] = []
 const r0V2Stub = SessionV2.Service.of({
@@ -6242,6 +6250,9 @@ const r0V2Stub = SessionV2.Service.of({
   prompt: (input) =>
     Effect.sync(() => {
       r0V2PromptCalls.push(input.sessionID)
+      // W16: record the admission delivery so the goal_steer routing (vs the undefined default the
+      // chat path passes — core SessionV2.prompt defaults it to "steer") is pinned at the call shape.
+      r0V2PromptDeliveries.push(input.delivery)
     }).pipe(
       Effect.as({ id: SessionMessage.ID.make("msg_r0_admitted"), delivery: "steer" } as unknown as SessionInput.Admitted),
     ),
@@ -6473,6 +6484,142 @@ v2Qualified.instance(
       // and then drives the drain explicitly (admission-before-wake, wake-after-admit), so the
       // durable input IS executed — a pure no-drain admission would leave the prompt unserved.
       expect(r0V2ResumeCalls).toContain(chat.id)
+    }),
+  30_000,
+)
+
+// ── W16 (O-W0-4): goalActive 判定提前 under the V2-only profile ─────────────────────────────────────
+//
+// The seam (prompt.ts promptOrSteer coreV2Only branch): a NON-terminal active-goal pointer must be
+// checked BEFORE the promptV2 short-circuit. A running goal's steer must land on the V2 goal channel —
+// SessionV2.prompt delivery="goal_steer" (the SessionInput.Delivery literal) — not as the default
+// "steer" chat input the parent runner promotes into the transcript (in which case the goal never
+// receives the guidance). The W1.1 runner drain opens a drain-only turn (no provider dispatch) that
+// hands the steer to the active goal's durable runtime state. Under the profile the legacy
+// SessionSteer table is NOT written (W1 channel takeover; the legacy buffer stays for the non-profile
+// ingress and the goal-manager cold-path relay).
+
+const seedV2Goal = (sessionID: string, phase: AgentGateway.DeepAgentSessionState.GoalPointerPhase) => {
+  AgentGateway.DeepAgentSessionState.getOrCreate(sessionID, "high")
+  AgentGateway.DeepAgentSessionState.setActiveGoal(sessionID, {
+    goalId: "g_" + sessionID,
+    planDocId: "plan_" + sessionID,
+    phase: "running",
+    startedAt: new Date(0).toISOString(),
+  })
+  // setActiveGoalPhase patches ONLY the phase of the just-set pointer (drives running↔paused↔terminal).
+  AgentGateway.DeepAgentSessionState.setActiveGoalPhase(sessionID, phase)
+}
+
+v2Qualified.instance(
+  "W16: coreV2Only + active goal routes the steer to SessionV2.prompt with delivery goal_steer (no legacy steer row)",
+  () =>
+    Effect.gen(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+      yield* mintR0Authorization(db)
+      const chat = yield* sessions.create({ title: "W16 goal steer" })
+      r0V2PromptCalls.length = 0
+      r0V2PromptDeliveries.length = 0
+      r0V2ResumeCalls.length = 0
+
+      seedV2Goal(chat.id, "running")
+
+      const result = yield* provideR0OwnerRefs(
+        prompt.promptOrSteer({
+          sessionID: chat.id,
+          agent: "build",
+          parts: [{ type: "text", text: "GOAL-GUIDANCE" }],
+        }),
+      )
+
+      // The REAL call shape: the V2 admission carried the goal channel's delivery literal — NOT the
+      // chat path's omitted delivery (undefined ⇒ core SessionV2.prompt defaults to "steer").
+      expect(r0V2PromptDeliveries).toEqual(["goal_steer"])
+      expect(r0V2PromptCalls).toContain(chat.id)
+      // Goal admission is admit + default-resume (the wake drives the W1.1 drain-only turn); the
+      // ingress must NOT also run the chat drain/loop (no explicit resume from this seam).
+      expect(r0V2ResumeCalls).not.toContain(chat.id)
+      // Ack: the goal channel absorbed it (kind "steer_v2" — no chat turn ran, no legacy steer row).
+      expect(result.kind).toBe("steer_v2")
+      if (result.kind !== "steer_v2") throw new Error("expected steer_v2 ack")
+      expect(result.delivery).toBe("goal_steer")
+      expect(result.admitted.id).toBe(SessionMessage.ID.make("msg_r0_admitted"))
+      // W1 channel takeover: ZERO legacy SessionSteer rows under the profile.
+      const steers = (yield* db.select().from(SessionSteerTable).all()).length
+      expect(steers).toBe(0)
+      // session-state is PROCESS-GLOBAL: drop the pointer so later tests start goal-free.
+      AgentGateway.DeepAgentSessionState.setActiveGoal(chat.id, null)
+    }),
+  30_000,
+)
+
+v2Qualified.instance(
+  "W16: coreV2Only + NO active goal keeps the promptV2 chat admission unchanged (delivery defaults to steer)",
+  () =>
+    Effect.gen(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+      yield* mintR0Authorization(db)
+      const chat = yield* sessions.create({ title: "W16 no goal" })
+      r0V2PromptCalls.length = 0
+      r0V2PromptDeliveries.length = 0
+      r0V2ResumeCalls.length = 0
+
+      const result = yield* provideR0OwnerRefs(
+        prompt.promptOrSteer({
+          sessionID: chat.id,
+          agent: "build",
+          parts: [{ type: "text", text: "hello via v2" }],
+        }),
+      )
+
+      // Admission shape unchanged from pre-W16: no delivery key passed (core defaults "steer") — the
+      // chat drain + V1 mirror + turn ack path runs exactly as before the wiring.
+      expect(r0V2PromptDeliveries).toEqual([undefined])
+      expect(r0V2ResumeCalls).toContain(chat.id)
+      expect(result.kind).toBe("turn")
+      if (result.kind !== "turn") throw new Error("expected turn")
+      expect(result.message.parts.some((part) => part.type === "text" && part.text === "v2 owner reply")).toBe(
+        true,
+      )
+      // No legacy steer rows (chat admission is also V2-only under the profile).
+      const steers = (yield* db.select().from(SessionSteerTable).all()).length
+      expect(steers).toBe(0)
+    }),
+  30_000,
+)
+
+v2Qualified.instance(
+  "W16: coreV2Only + TERMINAL goal phase does NOT route to goal_steer (falls through to the chat path)",
+  () =>
+    Effect.gen(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+      yield* mintR0Authorization(db)
+      const chat = yield* sessions.create({ title: "W16 terminal goal" })
+      r0V2PromptCalls.length = 0
+      r0V2PromptDeliveries.length = 0
+      r0V2ResumeCalls.length = 0
+
+      seedV2Goal(chat.id, "done")
+
+      const result = yield* provideR0OwnerRefs(
+        prompt.promptOrSteer({
+          sessionID: chat.id,
+          agent: "build",
+          parts: [{ type: "text", text: "after done" }],
+        }),
+      )
+
+      // The goal-active predicate excludes terminal phases: the steer is NOT admitted with
+      // goal_steer; it takes the regular V2 chat admission (same call shape as the no-goal test).
+      expect(r0V2PromptDeliveries).toEqual([undefined])
+      expect(result.kind).toBe("turn")
+      AgentGateway.DeepAgentSessionState.setActiveGoal(chat.id, null)
     }),
   30_000,
 )

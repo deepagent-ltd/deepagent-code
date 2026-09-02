@@ -142,7 +142,9 @@ class ServerAgentExecutor implements AgentExecutor {
 
       // Steer branch: the message was absorbed into the already-running turn (its reply streams through
       // that turn's own IM/progress path). Ack success without a synthesized reply of our own.
-      if (outcome.kind === "steer") {
+      // `steer_v2` is the goal_steer ack under the V2-only profile (admitted on the V2 goal channel,
+      // no legacy SessionSteer row — the reply still comes from the running goal's own turns).
+      if (outcome.kind === "steer" || outcome.kind === "steer_v2") {
         return {
           success: true,
           timeout: false,

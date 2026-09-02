@@ -25,6 +25,9 @@ import * as SessionRunnerLLM from "@deepagent-code/core/session/runner/llm"
 import { SessionRunnerModel } from "@deepagent-code/core/session/runner/model"
 import { SessionProviderOwner } from "@deepagent-code/core/context-federation/provider-owner"
 import { V2ProviderTurn } from "@deepagent-code/core/session/runner/v2-provider-turn"
+import { V2ProviderTurnReceiptTable } from "@deepagent-code/core/session/runner/v2-provider-turn.sql"
+import { PreparedProviderTurn } from "@deepagent-code/core/session/runner/prepared-provider-turn"
+import { SessionProviderOwnerLeaseTable } from "@deepagent-code/core/context-federation/session-sql"
 import { V2ToolEffect } from "@deepagent-code/core/session/runner/v2-tool-effect"
 import { SessionProjector } from "@deepagent-code/core/session/projector"
 import { SessionStore } from "@deepagent-code/core/session/store"
@@ -40,8 +43,9 @@ import { SessionRunnerCanonical } from "@deepagent-code/core/session/runner/cano
 import { LearningAdmissionOutboxTable } from "@deepagent-code/core/deepagent/learning-admission-outbox.sql"
 import { LearningJobTable } from "@deepagent-code/core/deepagent/learning-job.sql"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
+import { Hash } from "@deepagent-code/core/util/hash"
 import { Effect, Layer, Schema, Stream } from "effect"
-import { eq } from "drizzle-orm"
+import { eq, sql } from "drizzle-orm"
 import { testEffect } from "../lib/effect"
 import { onSessionSettled, onSessionSettledSeamLayer } from "@/deepagent/learning-runtime"
 
@@ -70,7 +74,27 @@ const client = Layer.succeed(
     prepare: () => Effect.die("unused"),
     stream: ((request: LLMRequest) => {
       requests.push(request)
-      return Stream.fromIterable(response)
+      // W15 (P2): the fake provider seals the request like the real transport — the wire seal is
+      // the receipt state-machine authority. Without it the wire never leaves `preparing`, the
+      // receipt terminalizes as `failed`/wire_seal_failed_before_dispatch, and the settle hook
+      // (correctly) refuses to admit a failed activity — which is exactly the W15 posture, so the
+      // success fixture must produce a genuinely SETTLED receipt.
+      return Stream.unwrap(
+        Effect.gen(function* () {
+          const seal = yield* V2ProviderTurn.CurrentRequestSeal
+          if (seal !== undefined) {
+            yield* seal
+              .seal({
+                wireHash: Hash.sha256("w15-settle-wire"),
+                bodyHash: Hash.sha256("w15-settle-body"),
+                bodyLength: 40,
+                contentType: "application/json",
+              })
+              .pipe(Effect.orDie)
+          }
+          return Stream.fromIterable(response)
+        }),
+      )
     }) as unknown as LLMClientShape["stream"],
     generate: () => Effect.die("unused"),
   }),
@@ -273,6 +297,11 @@ describe("W7 V2 session settle → durable learning admission", () => {
           .pipe(Effect.orDie)
         expect(outbox).toHaveLength(1)
         expect(outbox[0]).toMatchObject({ trigger: "session_finalization", state: "admitted" })
+        // W15 (P2): the real settled activity admits with finalStatus completed + its dispatched
+        // round count (the receipt state gate reads the actual terminal, not a hardcoded value).
+        const intent = JSON.parse(outbox[0]!.payload_json) as { final_status: string; total_rounds: number }
+        expect(intent.final_status).toBe("completed")
+        expect(intent.total_rounds).toBe(1)
         const job = yield* db
           .select()
           .from(LearningJobTable)
@@ -342,6 +371,195 @@ describe("W7 onSessionSettled hook unit semantics", () => {
       })
       const outbox = yield* db.select().from(LearningAdmissionOutboxTable).all().pipe(Effect.orDie)
       expect(outbox).toHaveLength(0)
+    }),
+  )
+})
+
+describe("W15 onSessionSettled reads the V2 receipt terminal state (P2)", () => {
+  // Direct-unit postures: seed the owner lease + activity receipt rows the hook reads, then
+  // invoke the REAL settle hook. Receipt rows are the durable facts the production runner writes
+  // (state semantics per v2-provider-turn.ts: settled / failed / indeterminate_after_crash). The
+  // DB trigger authority only admits `preparing` inserts and the legal state walk
+  // (preparing → dispatching → streaming → settled/failed/indeterminate), so the seed replays
+  // that walk with the minimal fields the guard inspects.
+  const seedReceipt = Effect.fn("seedReceipt")(function* (input: {
+    readonly activityId: string
+    readonly state: "settled" | "failed" | "indeterminate_after_crash"
+    readonly providerTurnSeq?: number
+    readonly requestOrdinal?: number
+    readonly errorCode?: string
+    readonly ownerMode?: "v2" | "shadow_v2"
+  }) {
+    const { db } = yield* Database.Service
+    yield* seedSession
+    // The lease clock guard requires observed time (registered_at = heartbeat_at = DB now).
+    const dbNowMs = sql`CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)`
+    const receiptId = `receipt_w15_${input.activityId}_${input.providerTurnSeq ?? 1}`
+    yield* db
+      .insert(SessionProviderOwnerLeaseTable)
+      .values({
+        owner_token: `owner_w15_${input.activityId}`,
+        registered_at: dbNowMs,
+        heartbeat_at: dbNowMs,
+        lease_expires_at: sql`${dbNowMs} + 3600000`,
+      })
+      .onConflictDoNothing()
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
+      .insert(V2ProviderTurnReceiptTable)
+      .values({
+        receipt_id: receiptId,
+        session_id: sessionID,
+        request_ordinal: input.requestOrdinal ?? 1,
+        activity_id: input.activityId,
+        provider_turn_seq: input.providerTurnSeq ?? 1,
+        user_message_id: `msg_w15_${input.activityId}`,
+        history_prompt_epoch: 1,
+        request_input_hash: `req_${input.activityId}`,
+        provider_id: "fake",
+        model_id: "fake-model",
+        protocol: "openai-chat",
+        owner_mode: input.ownerMode ?? "v2",
+        owner_token: `owner_w15_${input.activityId}`,
+        state: "preparing",
+        created_at: dbNowMs,
+      })
+      .run()
+      .pipe(Effect.orDie)
+    if (input.state === "failed") {
+      // preparing → failed (the abandon/pre-dispatch terminal, also the terminal-provider-failure path).
+      yield* db
+        .update(V2ProviderTurnReceiptTable)
+        .set({ state: "failed", error_code: input.errorCode ?? "provider_stream_failed:test", terminal_at: dbNowMs })
+        .where(eq(V2ProviderTurnReceiptTable.receipt_id, receiptId))
+        .run()
+        .pipe(Effect.orDie)
+      return
+    }
+    // preparing → dispatching → streaming, then the terminal. The transition trigger inspects the
+    // canonical prepared-turn hash off the prepared-turn JSON (W8 pin), so compute it properly —
+    // the full PreparedProviderTurn shape is irrelevant to the hook, only the pinned fields matter.
+    const preparedTurnHash = PreparedProviderTurn.preparedTurnHash({ request_hash: "req_hash" })
+    const preparedTurn = {
+      request_hash: "req_hash",
+      prepared_turn_hash: preparedTurnHash,
+      wire_request_hash: "wh",
+    } as PreparedProviderTurn.PreparedProviderTurn
+    yield* db
+      .update(V2ProviderTurnReceiptTable)
+      .set({
+        state: "dispatching",
+        prepared_turn_hash: preparedTurnHash,
+        wire_request_hash: preparedTurn.wire_request_hash,
+        prepared_turn: preparedTurn,
+        dispatching_at: dbNowMs,
+      })
+      .where(eq(V2ProviderTurnReceiptTable.receipt_id, receiptId))
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
+      .update(V2ProviderTurnReceiptTable)
+      .set({ state: "streaming", first_event_at: dbNowMs })
+      .where(eq(V2ProviderTurnReceiptTable.receipt_id, receiptId))
+      .run()
+      .pipe(Effect.orDie)
+    if (input.state === "settled") {
+      yield* db
+        .update(V2ProviderTurnReceiptTable)
+        .set({ state: "settled", outcome_hash: "a".repeat(64), outcome_artifact: [], terminal_at: dbNowMs })
+        .where(eq(V2ProviderTurnReceiptTable.receipt_id, receiptId))
+        .run()
+        .pipe(Effect.orDie)
+      return
+    }
+    yield* db
+      .update(V2ProviderTurnReceiptTable)
+      .set({
+        state: "indeterminate_after_crash",
+        error_code: input.errorCode ?? "consumer_cancelled_after_dispatch",
+        terminal_at: dbNowMs,
+      })
+      .where(eq(V2ProviderTurnReceiptTable.receipt_id, receiptId))
+      .run()
+      .pipe(Effect.orDie)
+  })
+
+  it.effect("a failed terminal activity is NOT admitted (no learning admission)", () =>
+    Effect.gen(function* () {
+      yield* clearLearningTables
+      yield* configureGateway(true)
+      yield* seedReceipt({
+        activityId: "activity_w15_failed",
+        state: "failed",
+        requestOrdinal: 101,
+        errorCode: "provider_stream_failed:abc",
+      })
+      yield* onSessionSettled(yield* Database.Service)({
+        sessionID,
+        workspacePath: root,
+        activityId: "activity_w15_failed",
+      })
+      const { db } = yield* Database.Service
+      const outbox = yield* db.select().from(LearningAdmissionOutboxTable).all().pipe(Effect.orDie)
+      expect(outbox).toHaveLength(0)
+    }),
+  )
+
+  it.effect("an indeterminate terminal activity is NOT admitted either", () =>
+    Effect.gen(function* () {
+      yield* clearLearningTables
+      yield* configureGateway(true)
+      yield* seedReceipt({ activityId: "activity_w15_indeterminate", state: "indeterminate_after_crash", requestOrdinal: 102 })
+      yield* onSessionSettled(yield* Database.Service)({
+        sessionID,
+        workspacePath: root,
+        activityId: "activity_w15_indeterminate",
+      })
+      const { db } = yield* Database.Service
+      const outbox = yield* db.select().from(LearningAdmissionOutboxTable).all().pipe(Effect.orDie)
+      expect(outbox).toHaveLength(0)
+    }),
+  )
+
+  it.effect("a settled activity admits with finalStatus completed and non-rebuild/non-isolation rounds", () =>
+    Effect.gen(function* () {
+      yield* clearLearningTables
+      yield* configureGateway(true)
+      // One real settled round + one pre-dispatch rebuild artifact (same chain, later ordinal)
+      // + one shadow-parity probe row: totalRounds must count exactly 1.
+      yield* seedReceipt({ activityId: "activity_w15_settled", state: "settled", requestOrdinal: 201 })
+      yield* seedReceipt({
+        activityId: "activity_w15_settled",
+        state: "failed",
+        providerTurnSeq: 2,
+        requestOrdinal: 202,
+        errorCode: "epoch_mismatch_rebuild",
+      })
+      yield* seedReceipt({
+        activityId: "activity_w15_settled",
+        state: "settled",
+        providerTurnSeq: 3,
+        requestOrdinal: 203,
+        ownerMode: "shadow_v2",
+      })
+      yield* onSessionSettled(yield* Database.Service)({
+        sessionID,
+        workspacePath: root,
+        activityId: "activity_w15_settled",
+      })
+      const { db } = yield* Database.Service
+      const outbox = yield* db
+        .select()
+        .from(LearningAdmissionOutboxTable)
+        .where(eq(LearningAdmissionOutboxTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
+      expect(outbox).toHaveLength(1)
+      expect(outbox[0]!.trigger).toBe("session_finalization")
+      const intent = JSON.parse(outbox[0]!.payload_json) as { final_status: string; total_rounds: number }
+      expect(intent.final_status).toBe("completed")
+      expect(intent.total_rounds).toBe(1)
     }),
   )
 })

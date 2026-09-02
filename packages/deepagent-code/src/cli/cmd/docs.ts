@@ -13,6 +13,13 @@ import { Filesystem } from "@/util/filesystem"
 // directory, runs the SAME generation logic as the session settle hook, and atomically writes
 // docs/deepagent/{HANDOFF,DESIGN,PLAN,LOG}.md. Explicit invocation always writes; the automatic
 // settle hook additionally needs DEEPAGENT_CODE_PROJECT_DOCS_SYNC=true or `docs_sync: true`.
+//
+// Multi-session semantics (each parent session processed in ASCENDING updated-time order — see the
+// `parents` sort below): HANDOFF/DESIGN/PLAN are session-SNAPSHOT docs — every processed session
+// rewrites all three, so with several sessions the LAST processed (newest) session's snapshot wins
+// on disk (last-session-wins). LOG is the rolling AGGREGATE: each session's entry is inserted at
+// its newest-first position (window bounded to the newest 500 entries), so all sessions of the
+// project accumulate in the single LOG file. `--session` narrows both to that one session.
 
 export const DocsCommand = effectCmd({
   command: "docs",
@@ -23,7 +30,8 @@ export const DocsCommand = effectCmd({
       .command(
         effectCmd({
           command: "sync",
-          describe: "generate or update docs/deepagent {HANDOFF,DESIGN,PLAN,LOG}.md from session history",
+          describe:
+            "generate or update docs/deepagent {HANDOFF,DESIGN,PLAN,LOG}.md from session history (HANDOFF/DESIGN/PLAN = newest session's snapshot, last-session-wins; LOG = aggregate of all sessions, newest-first)",
           instance: false,
           builder: (yargs: Argv) =>
             yargs

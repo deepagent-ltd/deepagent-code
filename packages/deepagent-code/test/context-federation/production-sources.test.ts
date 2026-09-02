@@ -246,8 +246,10 @@ describe("W3.7 production sources (deepagent-code composition)", () => {
           code,
           db,
           workspaceDirectory: root,
-          // W3.8.1 — exactly what `productionSourcesLayer` computes: the frame identity from the
-          // CURRENT instance handle (the layer reads `runtime.current()` and maps it).
+          // W3.10 — the frame identity is NO LONGER computed by `productionSourcesLayer` (app-level
+          // build has no InstanceRef; W3.9 made the seam identity-lazy). It is what the W3.10 host
+          // hook (`session/v2-runner-frame.ts` runnerFrameSeamFor) resolves at the per-location
+          // runner tree: identityFromHandle of the CURRENT instance handle of the ref directory.
           identity: identityFromHandle({ identity: resolvedIdentity }),
         })
         const seamIdentity = input.identity!
@@ -321,12 +323,14 @@ describe("W3.7 production sources (deepagent-code composition)", () => {
         expect(resolvedMemory.graphStatuses.knowledge.status).toBe("empty")
 
         // W3.7 L5 — C6 readiness uses the SAME flag-gated adapter selection as the runner, so the
-        // probe cannot split from real turns. W3.8.1 — the seam now carries the real frame
-        // identity, and the readiness envelope is built with it (the same frame the V2 runner
-        // builds), so the probe answers from the LIVE sources with the REAL scope — code is no
-        // longer denied to `source_error` by the v2:local pin. Expected: code ∈ {ready, empty}
-        // (the probe query "session context" has no fixture hit — honest empty), never
-        // `degraded_unavailable(source_error)`.
+        // probe cannot split from real turns. W3.8.1 — the readiness envelope is built with the
+        // real frame identity, so the probe answers from the LIVE sources with the REAL scope —
+        // code is no longer denied to `source_error` by the v2:local pin. W3.10 — the RUNNER gets
+        // the same frame via the host hook (`session/v2-runner-frame.ts`: the augmented
+        // `LocationServiceMap` resolves `currentIdentity` at the per-location tree build with the
+        // ref's instance context), so probe and runner no longer disagree. Expected: code ∈
+        // {ready, empty} (the probe query "session context" has no fixture hit — honest empty),
+        // never `degraded_unavailable(source_error)`.
         const readinessEnvelope = buildReadinessEnvelope(
           {
             id: SessionID.make("ses_w37"),
@@ -434,7 +438,7 @@ describe("W3.7 production sources (deepagent-code composition)", () => {
   })
 })
 
-describe("W3.8.1 production frame identity (deepagent-code side)", () => {
+describe("W3.8.1/W3.10 production frame identity (deepagent-code side)", () => {
   test("identityFromHandle maps the handle identity and derives the legacy project id", () => {
     // registered_root (no observed project id): the canonical durable-knowledge derivation.
     expect(identityFromHandle({ identity: envelopeIdentity() })).toEqual({
@@ -457,7 +461,7 @@ describe("W3.8.1 production frame identity (deepagent-code side)", () => {
     expect(identityFromHandle(undefined)).toBeUndefined()
   })
 
-  test("no handle keeps the seam identity undefined and the readiness envelope pinned to v2:local", async () => {
+  test("no handle keeps the host-hook identity undefined and the readiness envelope pinned to v2:local", async () => {
     await using fixture = await tmpdir()
     const stateRoot = fixture.path
     const root = path.join(stateRoot, "repo")
@@ -471,10 +475,12 @@ describe("W3.8.1 production frame identity (deepagent-code side)", () => {
           current: () => Effect.succeed(undefined),
         }
         const code = { query: () => Effect.succeed({} as never) } as unknown as CodeQuery.Interface
-        // Exactly the layer expression: identityFromHandle(yield* runtime.current()).
-        const layerIdentity = yield* Effect.map(runtime.current(), identityFromHandle)
-        expect(layerIdentity).toBeUndefined()
-        const input = productionInput({ runtime, code, db, workspaceDirectory: root, identity: layerIdentity })
+        // W3.9/W3.10 — the app-level seam value carries NO identity (it is built without an
+        // InstanceRef); the W3.10 host hook resolves it per location ref from the ref's instance
+        // context. With no handle the hook keeps identity undefined (honest v2:local degradation).
+        const hookIdentity = yield* Effect.map(runtime.current(), identityFromHandle)
+        expect(hookIdentity).toBeUndefined()
+        const input = productionInput({ runtime, code, db, workspaceDirectory: root, identity: hookIdentity })
         expect(input.identity).toBeUndefined()
         const session = {
           id: SessionID.make("ses_w381"),

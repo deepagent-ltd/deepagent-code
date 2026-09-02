@@ -142,6 +142,7 @@ import { SessionFederatedContext } from "@/context-federation/session-context-ru
 import { ContextFederationReadiness } from "@/context-federation/readiness"
 import { ContextActivationReceipt } from "@/context-federation/activation-receipt"
 import { ContextFederationProviderOwnerRuntime } from "@/context-federation/provider-owner-runtime"
+import { V2RunnerFrame } from "@/session/v2-runner-frame"
 import { PreparedProviderTurn } from "@deepagent-code/core/session/runner/prepared-provider-turn"
 import { V2ProviderTurn } from "@deepagent-code/core/session/runner/v2-provider-turn"
 import { V2ProviderTurnReceiptTable } from "@deepagent-code/core/session/runner/v2-provider-turn.sql"
@@ -2993,6 +2994,52 @@ export const layer = Layer.effect(
         return Option.getOrThrow(userRow)
       }
       return yield* loop({ sessionID: input.sessionID, drainFirst: true }).pipe(Effect.ensuring(evidence))
+    })
+
+    // W16 (O-W0-4): the V2-goal admission under the V2-only profile. Shares promptV2's pre-admission
+    // guards (owner qualification + get-or-create adoption) but admits with delivery="goal_steer"
+    // (SessionInput.Delivery literal, the W1.1 goal channel) and the DEFAULT resume (wake), so the
+    // runner's drain-only turn delivers the guidance to the active goal's durable runtime state
+    // WITHOUT a provider dispatch (the goal's own tick drives the model). This deliberately differs
+    // from promptV2's chat-admission contract (resume:false + explicit loop): a goal steer is NOT a
+    // chat activity — no transcript promotion, no V1 mirror, no loop. The wake also cannot race a
+    // second provider dispatch here because the goal channel opens a drain-ONLY turn (llm.ts W1.1).
+    // Under the profile NO legacy SessionSteer row is written — the W1 channel takes over admission;
+    // the legacy buffer remains for the non-profile ingress and the goal-manager cold-path relay
+    // (dual-channel convergence: both channels settle in the goal runtime state's pendingSteers).
+    const promptV2GoalSteer = Effect.fn("SessionPrompt.promptV2GoalSteer")(function* (
+      input: PromptInput,
+      lifecycle?: PromptLifecycle,
+    ) {
+      const ownerCampaignNow = yield* V2ProviderTurn.CurrentOwnerCampaign
+      if (!(yield* V2ProviderTurn.ownerQualified(database.db, ownerCampaignNow)))
+        return yield* refuseLegacyExecution({
+          sessionID: input.sessionID,
+          reason: "v2_owner_unavailable",
+          detail: "V2 owner qualification is not verified for the V2-only profile",
+        })
+      yield* ensureV2Session(input.sessionID)
+      const admitted = yield* coreV2Session
+        .prompt({
+          sessionID: SessionV2.ID.make(input.sessionID),
+          ...(input.messageID ? { id: SessionMessage.ID.make(input.messageID) } : {}),
+          prompt: yield* requireV2PromptText(input.sessionID, interactiveV2Prompt(input)),
+          delivery: "goal_steer",
+        })
+        .pipe(
+          Effect.catch((error) =>
+            Effect.fail(
+              new SessionPromptIntent.Conflict({
+                intentID: String(input.sessionID),
+                reason: String((error as { message?: unknown }).message ?? (error as { _tag?: unknown })._tag ?? error),
+              }),
+            ),
+          ),
+        )
+      // P2-10: same lifecycle contract as promptV2 — signal the V2 admission receipt with the goal
+      // channel's delivery so lifecycle callers never hang.
+      if (lifecycle) yield* lifecycle.ready({ messageID: MessageID.make(admitted.id), delivery: "goal_steer" })
+      return admitted
     })
 
     const prompt: ExecutePrompt = Effect.fn("SessionPrompt.prompt")(function* (
@@ -6003,6 +6050,16 @@ export const layer = Layer.effect(
       // 1.4.8.r0: under the V2-only profile the ingress routes to the V2 owner (busy/steer
       // coalescing is the V2 admission contract).
       if (flags.coreV2Only) {
+        // W16 (O-W0-4): the goalActive predicate moves BEFORE the promptV2 short-circuit. A running
+        // goal's steer must land on the V2 goal channel (SessionInput delivery "goal_steer"), not as
+        // the default "steer" chat input that the parent runner promotes into the transcript — under
+        // the profile the goal would never receive it. The predicate is the SAME sync session-state
+        // pointer read as the legacy branch below (getActiveGoal + TERMINAL_GOAL_PHASES exclusion).
+        const goal = AgentGateway.DeepAgentSessionState.getActiveGoal(input.sessionID)
+        if (goal != null && !TERMINAL_GOAL_PHASES.has(goal.phase)) {
+          const admitted = yield* promptV2GoalSteer(input, lifecycle)
+          return { kind: "steer_v2" as const, delivery: "goal_steer" as const, admitted }
+        }
         const message = yield* promptV2(input, lifecycle)
         return { kind: "turn" as const, message }
       }
@@ -7052,6 +7109,12 @@ export const defaultLayer = Layer.suspend(() =>
         Git.defaultLayer,
         PRQueue.layer.pipe(Layer.orDie),
         SessionV2.liveLayer,
+        // W3.10 — V2 runner real frame (O-W3-10): LAST-WINS within this merge over the live layer's
+        // internal LocationServiceMap.layer. Per-location runner trees (this subtree drives V2 runs
+        // through SessionV2.resume) build with the ref's instance context + a ProductionV2Sources
+        // override carrying the REAL location identity (currentIdentity of the current instance
+        // handle) — the same derivation the C6 readiness probe uses.
+        V2RunnerFrame.runnerFrameLocationMapLayer,
       ),
     ),
   ),
@@ -7109,9 +7172,13 @@ export type SteerInput = Schema.Schema.Type<typeof SteerInput>
 // §S1.2 the discriminated ack returned by promptOrSteer: either a completed turn (the session was idle)
 // or an accepted steer (the session was mid-turn; the running/next turn absorbs it). The `delivery` tells
 // the caller which channel absorbed it ("steer" = this session's turn, "goal_steer" = the active goal).
+// `steer_v2` is the goal_steer ack under the V2-only profile: the steer was admitted on the V2 goal
+// channel (SessionInput delivery "goal_steer") and NO legacy SessionSteer row exists — hence the
+// distinct kind (wire consumers read only `admitted.id`, which both admitted shapes carry).
 export type PromptOrSteerResult =
   | { readonly kind: "turn"; readonly message: SessionV1.WithParts }
   | { readonly kind: "steer"; readonly delivery: "steer" | "goal_steer"; readonly admitted: SessionSteer.Admitted }
+  | { readonly kind: "steer_v2"; readonly delivery: "goal_steer"; readonly admitted: SessionInput.Admitted }
 
 export class LoopInput extends Schema.Class<LoopInput>("SessionPrompt.LoopInput")({
   sessionID: SessionID,

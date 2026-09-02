@@ -147,11 +147,15 @@ export const contextHandlers = HttpApiBuilder.group(InstanceHttpApi, "context", 
       const info = yield* session.get(sessionId).pipe(
         Effect.mapError(() => makeApiError("resource_not_found", { resource: ctx.query.session_id })),
       )
-      // W3.8.1: the probe frame mirrors the runner — the real location identity when the current
-      // instance index is attached, the v2:local degradation otherwise. W3.9: the identity is
-      // resolved ON DEMAND here (`runtime.current()` at probe time) because the production-sources
-      // seam built at layer start no longer attaches the index eagerly (zero layer-build side
-      // effects); the probe's per-request `InstanceRef` makes this the first real frame consumer.
+      // W3.8.1 + W3.9 + W3.10: the probe frame mirrors the runner. W3.9 made the seam identity
+      // lazy — resolved HERE on demand (`runtime.current()` at probe time, per-request `InstanceRef`
+      // from the instance-context middleware) because the production-sources layer built at app
+      // start has neither `InstanceRef` nor an eager index attach (zero layer-build side effects).
+      // W3.10 closes the runner side with a host hook at the per-location runner tree (the augmented
+      // `LocationServiceMap` in `session/v2-runner-frame.ts`): the runner resolves the same
+      // `currentIdentity` derivation at tree build with the instance context of the ref directory,
+      // so probe and runner frames are the SAME derivation — a real frame when an instance index is
+      // attached, the v2:local degradation otherwise (never a fake).
       const sources = yield* ProductionV2Sources
       const identity = yield* currentIdentity(yield* LocationIndexRuntime.Service)
       const envelope = buildReadinessEnvelope(info, identity)

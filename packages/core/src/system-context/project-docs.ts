@@ -76,8 +76,10 @@ export function discoverFile(dir: string, name: DocName, entries: FSUtil.DirEntr
 
 // Med-2: per-observation document reads are cached so repeated reconciles of unchanged files skip
 // disk I/O. Key: resolved file path. Invalidation: file mtime + size (mtime alone can miss a
-// rewrite landing in the same millisecond on coarse-resolution clocks; a deleted file evicts the
-// entry). Bounded FIFO — at most this many documents are retained process-locally. The cache holds
+// rewrite landing in the same millisecond on coarse-resolution clocks). A stat failure (e.g. the
+// file was deleted) does NOT evict the entry — the read falls through to a FRESH read every time
+// (never cache a stamp-less value); the stale entry is dropped only by the FIFO bound below.
+// Bounded FIFO — at most this many documents are retained process-locally. The cache holds
 // the BOUNDED snapshot value, so a snapshot restore re-observes truncated data, never a stale full
 // read.
 const MAX_READ_CACHE = 64

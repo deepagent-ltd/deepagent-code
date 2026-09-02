@@ -66,7 +66,9 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { DurableLearningRuntime } from "@/deepagent/learning-runtime"
 import { LegacyEventCanonicalizerRuntime } from "@/legacy-event-canonicalizer-runtime"
 import { productionSourcesLayer } from "@/context-federation/production-sources"
+import { LocationIndexRuntime } from "@/location-index/runtime"
 import { RecoveryExecutor } from "@/server/recovery-executor"
+import { V2RunnerFrame } from "@/session/v2-runner-frame"
 
 const baseAppLayer = Layer.mergeAll(
   Npm.defaultLayer,
@@ -110,6 +112,14 @@ const baseAppLayer = Layer.mergeAll(
   // SessionPrompt subtree, so providing it here only exports the shared singleton — no split-brain,
   // no extra construction.
   SessionV2.liveLayer,
+  // W3.10 — V2 runner real frame (O-W3-10): LAST-WINS within the merge over the live layer's
+  // internal LocationServiceMap.layer — per-location runner trees build with the ref's instance
+  // context + a ProductionV2Sources override carrying the REAL location identity (same derivation
+  // as the C6 readiness probe), so runner selection rows bind the real frame instead of v2:local.
+  V2RunnerFrame.runnerFrameLocationMapLayer,
+  // The augmented map resolves the identity per location ref through `LocationIndexRuntime` (needs
+  // the service in the graph env at drain time — the index handle + identity are per instance).
+  LocationIndexRuntime.defaultLayer,
   GoalManager.defaultLayer,
   Instruction.defaultLayer,
   LLM.defaultLayer,

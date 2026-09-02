@@ -1,7 +1,7 @@
 export * as DurableLearningRuntime from "./learning-runtime"
 
 import path from "node:path"
-import { and, count, eq } from "drizzle-orm"
+import { and, count, desc, eq, isNull, ne, notInArray, or } from "drizzle-orm"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { Database } from "@deepagent-code/core/database/database"
 import { DeepAgentDurableLearning } from "@deepagent-code/core/deepagent/durable-learning"
@@ -96,9 +96,14 @@ export const defaultLayer = layer.pipe(Layer.provide(Database.defaultLayer))
 // outbox → reconcile → job pipeline the legacy gateway close path drives, with:
 //   - trigger   = session_finalization
 //   - runID     = `v2_<activityId>` (one run per durable V2 activity)
-//   - totalRounds = provider-turn receipts observed for the activity
+//   - totalRounds = non-rebuild / non-isolation provider-turn receipts observed for the
+//     activity (W15: `owner_mode='v2'` rows only, minus pre-dispatch rebuild abandons)
 //   - roundState = initial round state (V2 has no V1 diagnoses; extraction sees the
 //     first-pass/multi-round candidates only)
+// W15 (P2): the admission is gated on the activity's LATEST receipt terminal state — only a
+// `settled` receipt admits (finalStatus "completed"); a `failed` / `indeterminate_after_crash`
+// / non-terminal activity is NOT admitted (the legacy `learningFinalStatus` contract: failed
+// and unresolved runs do not enter learning extraction).
 // The terminal `DEEPAGENT_RUN_STATE.json` is written under the configured runsDir
 // (<baseDir>/runs/<runID>/), the SAME directory convention the legacy run-close path uses — a later
 // lifecycle-trigger wave can pick up V2-settled sources without layout changes (the V2 path itself
@@ -126,6 +131,19 @@ export function onSessionSettled(database: Database.Interface): (input: SessionR
       const runID = `v2_${input.activityId}`
       const mode = AgentGateway.snapshot().agentMode
       const roundState = createInitialRoundState(mode)
+      // W15 (P2) — non-rebuilt / non-isolation rounds only. The row set distinguishes both:
+      //   - isolation: shadow-parity probe rows carry `owner_mode = 'shadow_v2'` (never a learning
+      //     round); only the real `v2` rows count.
+      //   - rebuild: a pre-dispatch rebuild terminalizes the admitted receipt in place as
+      //     `failed` with one of the abandon codes below — the provider NEVER received the
+      //     request, so it is not a dispatched round. Post-dispatch `failed` receipts (e.g.
+      //     provider_stream_failed) are real rounds and stay counted.
+      const preDispatchRebuildErrorCodes = [
+        "turn_aborted_before_dispatch",
+        "epoch_mismatch_rebuild",
+        "config_drift_rebuild_required",
+        "wire_seal_failed_before_dispatch",
+      ]
       const turns = yield* database.db
         .select({ count: count() })
         .from(V2ProviderTurnReceiptTable)
@@ -133,6 +151,15 @@ export function onSessionSettled(database: Database.Interface): (input: SessionR
           and(
             eq(V2ProviderTurnReceiptTable.session_id, input.sessionID),
             eq(V2ProviderTurnReceiptTable.activity_id, input.activityId),
+            eq(V2ProviderTurnReceiptTable.owner_mode, "v2"),
+            or(
+              ne(V2ProviderTurnReceiptTable.state, "failed"),
+              // A `failed` row always carries an error_code (settle(failed)/abandon require one),
+              // so a NULL error_code cannot occur on a failed row; the isNull arm keeps the
+              // predicate total regardless.
+              isNull(V2ProviderTurnReceiptTable.error_code),
+              notInArray(V2ProviderTurnReceiptTable.error_code, preDispatchRebuildErrorCodes),
+            ),
           ),
         )
         .get()
@@ -140,6 +167,25 @@ export function onSessionSettled(database: Database.Interface): (input: SessionR
       // Drain-only activities (e.g. goal_steer) never dispatch a provider turn: nothing to learn.
       if ((turns?.count ?? 0) === 0) return
       roundState.round = Math.max(turns?.count ?? 1, 1)
+      // W15 (P2) — the admission status mirrors the activity's LATEST receipt terminal state
+      // instead of the hardcoded "completed": only a terminal `settled` receipt admits. A `failed`
+      // terminal is exactly the legacy `learningFinalStatus` failed case — a failed activity does
+      // not enter learning extraction (V2 has no failure-dossier diagnoses to extract), same for
+      // `indeterminate_after_crash` and any non-terminal receipt (no proven success).
+      const latestTurn = yield* database.db
+        .select({ state: V2ProviderTurnReceiptTable.state })
+        .from(V2ProviderTurnReceiptTable)
+        .where(
+          and(
+            eq(V2ProviderTurnReceiptTable.session_id, input.sessionID),
+            eq(V2ProviderTurnReceiptTable.activity_id, input.activityId),
+          ),
+        )
+        .orderBy(desc(V2ProviderTurnReceiptTable.provider_turn_seq), desc(V2ProviderTurnReceiptTable.request_ordinal))
+        .limit(1)
+        .get()
+        .pipe(Effect.orDie)
+      if (latestTurn?.state !== "settled") return
       const terminalPath = path.join(runsDir, runID, "DEEPAGENT_RUN_STATE.json")
       const admission: DeepAgentDurableLearning.Admission = {
         baseDir,

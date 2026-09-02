@@ -254,6 +254,13 @@ export const createExecutionJournalSubscription = (
         if (gapResync) {
           const fromSeq = lastSeqs.get(sessionID)
           anchor = await readAnchor(sessionID, "floor")
+          // W15 (P1): a rebuild may land while this floor read was in flight. An old-generation
+          // tick must never `advance` into the SHARED anchor map — that would overwrite the new
+          // loop's seeded position (e.g. 50) with the stale floor (45) and replay the already
+          // delivered window (45, 50] at the NEXT rebuild — and must never fire a fake onResync.
+          // Re-check the guard after EVERY await, before any shared-map mutation or
+          // consumer-facing notice (the same guard the drain already had post-poll).
+          if (cancelled.has(sessionID) || myGeneration !== generation) return
           gapResync = false
           advance(anchor)
           // The re-anchor took effect at this point: the window (fromSeq, floor] is dropped by
@@ -261,6 +268,7 @@ export const createExecutionJournalSubscription = (
           input.handlers?.onResync?.({ sessionID, fromSeq, floor: anchor })
         } else if (lastSeq === undefined) {
           anchor = await readAnchor(sessionID, "watermark")
+          if (cancelled.has(sessionID) || myGeneration !== generation) return
           advance(anchor)
         } else {
           anchor = lastSeq
@@ -288,6 +296,9 @@ export const createExecutionJournalSubscription = (
           markRecovered(sessionID)
         }
       } catch (error) {
+        // W15 (P1): a stale tick's failed read must not flip connectivity the new loop owns
+        // (same post-await guard as the advance/onResync path above).
+        if (cancelled.has(sessionID) || myGeneration !== generation) return
         handleError(error)
       } finally {
         if (!cancelled.has(sessionID) && myGeneration === generation) {
