@@ -1,6 +1,8 @@
 export * as PanelConveneConsumer from "./panel-convene-consumer"
 
 import { Context, Deferred, Effect, Layer, Stream, Schedule, Duration, Cause } from "effect"
+import { ConsumerReceipts } from "@deepagent-code/core/deepagent/consumer-receipts"
+import { Database } from "@deepagent-code/core/database/database"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
 import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
@@ -128,6 +130,7 @@ export const layerWith = (options: LayerOptions) =>
       const bus = yield* DeepAgentEventBus.Service
       const queue = yield* ApprovalQueue.Service
       const flags = yield* RuntimeFlags.Service
+      const { db } = yield* Database.Service
       const convene = options.convene
       const rules = options.rules
       const runLoop = options.runLoop ?? true
@@ -172,22 +175,74 @@ export const layerWith = (options: LayerOptions) =>
             return null
           }
 
-          // idempotency: a prior handle already convened + published for this event ⇒ don't re-run.
-          if (yield* alreadyConvened(event)) {
-            log.info("panel already convened for event; skipping re-convene", { eventID: event.id })
-            yield* ack(event)
-            return null
-          }
-
+          // idempotency: a prior handle already convened + published for this event ⇒ don't re-run. The
+          // guard lives INSIDE the C5-10 side-effect receipt unit below, so a crash-after-publish
+          // redelivery (receipt still `pending`) completes as a no-op and flips the receipt `done`
+          // instead of re-running the panel.
           const question = buildQuestion(event, decision.riskClass)
 
-          // run the panel via the INJECTED port. A failure is transient (session/turn error) ⇒ nack so
-          // the pump retries; we do NOT publish a verdict on failure (never fabricate an outcome).
-          const outcome = yield* convene({ question, riskClass: decision.riskClass, event }).pipe(
-            Effect.map((verdict) => ({ ok: true as const, verdict })),
-            Effect.catchCause((cause) => Effect.succeed({ ok: false as const, cause })),
-          )
-          if (!outcome.ok) {
+          // C5-10 durable side-effect receipt: convene → verdict publish → approval offer are ONE
+          // idempotency unit for this (panel, event) pair:
+          //   - first delivery → receipt `pending` → convene → publish → offer → receipt `done`;
+          //   - redelivery     → a `done` receipt returns "existing" → ack, nothing runs again
+          //                       (cold-recovery safe — the durable receipt proves the panel ran);
+          //   - sink failure   → the receipt STAYS `pending` and the bus nack re-drives it (the verdict
+          //                       publish rides idempotencyKey `panel:<event.id>` and the queue offer
+          //                       UNIQUE(event_id), so the completion is never duplicated).
+          let verdictDecision: PanelVerdict["decision"] | null = null
+          const outcome = yield* ConsumerReceipts.runOnce(db, {
+            consumerKind: "panel",
+            sourceEventId: event.id,
+            sideEffect: Effect.gen(function* () {
+              if (yield* alreadyConvened(event)) {
+                log.info("panel already convened for event; skipping re-convene", { eventID: event.id })
+                return
+              }
+              // run the panel via the INJECTED port. A failure is transient (session/turn error) ⇒ the
+              // receipt stays pending so the pump retries; we do NOT publish a verdict on failure
+              // (never fabricate an outcome).
+              const verdict = yield* convene({ question, riskClass: decision.riskClass, event })
+              verdictDecision = verdict.decision
+              // publish panel.verdict — chained to the trigger (correlation/causation) + deterministic
+              // idempotencyKey so a re-delivery is a bus-level no-op. The payload carries the
+              // needs_human discriminator ApprovalQueue.shouldQueueForApproval folds, plus a summary.
+              const verdictEvent = yield* bus.publish({
+                type: LMNEvents.PANEL_VERDICT,
+                source: CONVENE_SOURCE,
+                workspaceID: event.workspaceID,
+                ...(event.projectID != null ? { projectID: event.projectID } : {}),
+                correlationID: event.correlationID ?? event.id,
+                causationID: event.id,
+                idempotencyKey: `panel:${event.id}`,
+                priority: decision.urgency,
+                payload: {
+                  decision: verdict.decision,
+                  question,
+                  riskClass: decision.riskClass,
+                  confidence: verdict.confidence,
+                  rounds: verdict.rounds,
+                  dissentCount: verdict.dissent.length,
+                  evidence: [...verdict.evidence],
+                },
+              })
+              // §D2: offer the verdict to the Approval Queue. `offer` folds shouldQueueForApproval, so a
+              // needs_human verdict lands as a pending item and an autonomously-resolved verdict is a
+              // no-op.
+              yield* queue.offer(verdictEvent).pipe(
+                Effect.catchCause((cause) =>
+                  Effect.sync(() => log.error("approval-queue offer failed", { cause: Cause.pretty(cause) })),
+                ),
+              )
+              log.info("auto-convened panel verdict published", {
+                eventID: event.id,
+                decision: verdict.decision,
+                riskClass: decision.riskClass,
+              })
+            }),
+            now: Date.now(),
+          }).pipe(Effect.exit)
+
+          if (outcome._tag === "Failure") {
             log.error("panel convene failed; nacking for retry", {
               eventID: event.id,
               cause: Cause.pretty(outcome.cause),
@@ -195,46 +250,15 @@ export const layerWith = (options: LayerOptions) =>
             yield* bus.nack({ subscriptionGroup: CONVENE_GROUP, eventID: event.id, reason: "panel convene failed" })
             return null
           }
-
-          const verdict = outcome.verdict
-          // publish panel.verdict — chained to the trigger (correlation/causation) + deterministic
-          // idempotencyKey so a re-delivery is a bus-level no-op. The payload carries the needs_human
-          // discriminator ApprovalQueue.shouldQueueForApproval folds, plus a verdict summary.
-          const verdictEvent = yield* bus.publish({
-            type: LMNEvents.PANEL_VERDICT,
-            source: CONVENE_SOURCE,
-            workspaceID: event.workspaceID,
-            ...(event.projectID != null ? { projectID: event.projectID } : {}),
-            correlationID: event.correlationID ?? event.id,
-            causationID: event.id,
-            idempotencyKey: `panel:${event.id}`,
-            priority: decision.urgency,
-            payload: {
-              decision: verdict.decision,
-              question,
-              riskClass: decision.riskClass,
-              confidence: verdict.confidence,
-              rounds: verdict.rounds,
-              dissentCount: verdict.dissent.length,
-              evidence: [...verdict.evidence],
-            },
-          })
-
-          // §D2: offer the verdict to the Approval Queue. `offer` folds shouldQueueForApproval, so a
-          // needs_human verdict lands as a pending item and an autonomously-resolved verdict is a no-op.
-          yield* queue.offer(verdictEvent).pipe(
-            Effect.catchCause((cause) =>
-              Effect.sync(() => log.error("approval-queue offer failed", { cause: Cause.pretty(cause) })),
-            ),
-          )
+          if (outcome.value.kind === "existing") {
+            // Redelivery of an already-completed convene: the receipt is the once-run authority.
+            log.info("panel receipt done; skipping redelivered convene", { eventID: event.id })
+            yield* ack(event)
+            return null
+          }
 
           yield* ack(event) // success — the trigger is fully handled.
-          log.info("auto-convened panel verdict published", {
-            eventID: event.id,
-            decision: verdict.decision,
-            riskClass: decision.riskClass,
-          })
-          return verdict.decision
+          return verdictDecision
         })
 
       const pumpRetries: Interface["pumpRetries"] = (now) =>

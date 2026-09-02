@@ -4,7 +4,7 @@ import { fileURLToPath } from "url"
 import path from "path"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
 import { EffectDrizzleSqlite } from "@deepagent-code/effect-drizzle-sqlite"
-import { Effect, Exit, Layer } from "effect"
+import { Effect, Exit, Layer, Logger } from "effect"
 import { eq, inArray, sql } from "drizzle-orm"
 import { DatabaseMigration } from "@deepagent-code/core/database/migration"
 import { MigrationIdentity } from "@deepagent-code/core/database/migration-identity"
@@ -114,6 +114,32 @@ describe("DatabaseMigration", () => {
         expect(
           yield* db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'migration'`),
         ).toBeUndefined()
+      }),
+    )
+  })
+
+  test("C1A-14: a migration-defect failure emits the structured diagnostics log (stable code + migration id)", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        const failing = {
+          id: "w14-diagnostics-failure",
+          up: () => Effect.die("w14 boom"),
+        }
+        const captured: Array<unknown> = []
+        const loggerLayer = Logger.layer([
+          Logger.make((options) => {
+            captured.push(options)
+          }),
+        ])
+        const result = yield* DatabaseMigration.applyOnly(db, [failing])
+          .pipe(Effect.provide(loggerLayer), Effect.exit)
+        expect(result).toMatchObject({ _tag: "Failure" })
+        // the diagnostics carry the stable code, the migration id and the failure fact — payload-free.
+        const logged = captured.map((options) => JSON.stringify(options)).join("\n")
+        expect(logged).toContain("database migration failed")
+        expect(logged).toContain("migration_apply_failed")
+        expect(logged).toContain("w14-diagnostics-failure")
       }),
     )
   })

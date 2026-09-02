@@ -1979,7 +1979,12 @@ describe("workspace sync state", () => {
           const req = yield* HttpServerRequest.HttpServerRequest
           const url = new URL(req.url, "http://localhost")
           if (url.pathname === "/history-artifact-fail/global/event")
-            return HttpServerResponse.fromWeb(eventStreamResponse())
+            // Keep the SSE stream finite. A never-ending stream is abandoned the moment
+            // the history import fails, and the lingering connection then blocks the
+            // server's graceful close at scope teardown, stretching the test into its
+            // timeout/interrupt window on loaded hosts (the sibling history test above
+            // already uses `eventStreamResponse([], false)` for the same reason).
+            return HttpServerResponse.fromWeb(eventStreamResponse([], false))
           if (url.pathname === "/history-artifact-fail/sync/history")
             return (
               historyRequests++,
@@ -2080,10 +2085,12 @@ describe("workspace sync state", () => {
             }
 
             yield* workspace.startWorkspaceSyncing(instance.project.id)
-            // Under load the chunk download retry backoff stretches; give the failed import a wide
-            // window, then let any in-flight retry wave settle before asserting the negative
-            // guarantees (no cursor advance, no event applied).
-            yield* eventuallyEffect(Effect.sync(() => expect(chunkRequests).toBeGreaterThanOrEqual(1)), 15_000)
+            // The corrupt chunk makes every import attempt fail before the cursor is
+            // committed, so the negatives below hold at any settling point. Under load
+            // the first attempt can arrive late and the retry backoff (1s → 2s → 4s …)
+            // stretches between waves, so poll with a wide window before asserting the
+            // positive requests and the negative guarantees.
+            yield* eventuallyEffect(Effect.sync(() => expect(chunkRequests).toBeGreaterThanOrEqual(1)), 30_000)
             expect(historyRequests).toBeGreaterThanOrEqual(1)
             expect(metadataRequests).toBeGreaterThanOrEqual(1)
             yield* Effect.sleep("500 millis")
@@ -2096,7 +2103,7 @@ describe("workspace sync state", () => {
         { git: true },
       )
     })
-  }, 30_000)
+  }, 60_000)
 
   it.live("resumes from its durable cursor after reconnecting", () => {
     const historyBodies = new Array<{ version: 1; cursor?: string }>()

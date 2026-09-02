@@ -1,6 +1,8 @@
 export * as EventDrivenArchiver from "./event-driven-archiver"
 
 import { Context, Deferred, Effect, Layer, Stream, Schedule, Duration, Cause } from "effect"
+import { ConsumerReceipts } from "@deepagent-code/core/deepagent/consumer-receipts"
+import { Database } from "@deepagent-code/core/database/database"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
 import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
@@ -69,6 +71,7 @@ export const layerWith = (options?: LayerOptions) =>
     Service,
     Effect.gen(function* () {
       const bus = yield* DeepAgentEventBus.Service
+      const { db } = yield* Database.Service
       const runLoop = options?.runLoop ?? true
       const retryPumpIntervalMs = options?.retryPumpIntervalMs ?? DEFAULT_RETRY_PUMP_INTERVAL_MS
 
@@ -94,19 +97,40 @@ export const layerWith = (options?: LayerOptions) =>
             yield* ack(event) // unarchivable, terminal — acking avoids an un-fixable retry loop.
             return false
           }
-          const outcome = yield* archiveSessionOnCompletion({ workspacePath, sessionID, bus }).pipe(
-            Effect.map((archive) => ({ ok: true as const, archive })),
-            Effect.catchCause((cause) => Effect.succeed({ ok: false as const, cause })),
-          )
-          if (!outcome.ok) {
+          // C5-10 durable side-effect receipt: the archive projection is ONE idempotency unit for this
+          // (archive, event) pair. A `done` receipt makes a redelivery a durable no-op (cold-recovery
+          // safe); a failed projection stays `pending` so the bus nack re-drives it.
+          //   - first delivery → receipt `pending` → archive → receipt `done` (incl. a null archive =
+          //                       nothing to archive — a terminal successful no-op, acked);
+          //   - redelivery     → `done` receipt returns "existing" → ack, nothing re-projects;
+          //   - projection error → receipt stays `pending`, bus nack re-drives (the projection itself
+          //                       is idempotent: re-archiving the same session writes the same page).
+          let produced = false
+          const outcome = yield* ConsumerReceipts.runOnce(db, {
+            consumerKind: "archive",
+            sourceEventId: event.id,
+            sideEffect: archiveSessionOnCompletion({ workspacePath, sessionID, bus }).pipe(
+              Effect.map((archive) => {
+                produced = archive != null
+                if (archive)
+                  log.info("archived session execution trajectory", { sessionID, entries: archive.entries.length })
+              }),
+            ),
+            now: Date.now(),
+          }).pipe(Effect.exit)
+          if (outcome._tag === "Failure") {
             log.error("archive failed; nacking for retry", { sessionID, cause: Cause.pretty(outcome.cause) })
             yield* bus.nack({ subscriptionGroup: ARCHIVE_GROUP, eventID: event.id, reason: "archive failed" })
             return false
           }
-          if (outcome.archive)
-            log.info("archived session execution trajectory", { sessionID, entries: outcome.archive.entries.length })
+          if (outcome.value.kind === "existing") {
+            // Redelivery of an already-completed archive: the receipt is the once-run authority.
+            log.info("archive receipt done; skipping redelivered archive", { sessionID, eventID: event.id })
+            yield* ack(event)
+            return false
+          }
           yield* ack(event) // success (incl. idempotent null = nothing to archive).
-          return outcome.archive != null
+          return produced
         })
 
       const pumpRetries: Interface["pumpRetries"] = (now) =>

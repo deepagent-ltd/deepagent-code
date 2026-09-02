@@ -145,6 +145,7 @@ import { schemaErrorLayer } from "./middleware/schema-error"
 import { syncReplayBodyLimitLayer } from "./middleware/sync-replay-body-limit"
 import { maintenanceHandlers } from "./handlers/maintenance"
 import { layer as maintenanceRegistryLayer } from "./maintenance-registry"
+import { RecoveryExecutor } from "@/server/recovery-executor"
 import { capabilityHandlers } from "./handlers/capability"
 import { systemContextHandlers } from "./handlers/system-context"
 import { contextHandlers } from "./handlers/context"
@@ -331,6 +332,10 @@ type RouteRequirements =
   | HttpRouter.Request<"Requires", unknown>
   | HttpRouter.Request<"GlobalRequires", never>
 
+// W2.2 — the durable recovery service bound to the Database singleton, built once per
+// process boot and shared with the route graph provide below (no split-brain).
+const recoveryDurable = RecoveryExecutor.recoveryDurableLayer.pipe(Layer.provide(Database.defaultLayer))
+
 export function createRoutes(corsOptions?: CorsOptions) {
   const baseRoutes = Layer.mergeAll(
     rootApiRoutes,
@@ -433,6 +438,15 @@ export function createRoutes(corsOptions?: CorsOptions) {
     Layer.provide(PromptEpoch.v2RunnerSeamLayer.pipe(Layer.provide(Database.defaultLayer))),
     // W7 — settle-triggered durable learning (same INTO-the-base seam direction as above).
     Layer.provide(DurableLearningRuntime.onSessionSettledSeamLayer.pipe(Layer.provide(Database.defaultLayer))),
+    // W2.2 — C1B recovery executor production wiring: provide the DB-backed durable
+    // SessionProviderRecovery service and the executor whose layer build runs the
+    // startup drain (process boot = post-crash resume: applies committed pending
+    // recovery commands, never fails the boot). Both self-provide the module-level
+    // Database.defaultLayer constant — memoized by object identity under the shared
+    // memoMap, the SAME connection the route graph builds (single-instance local
+    // process, one database; no clustering; no split-brain).
+    Layer.provide(recoveryDurable),
+    Layer.provide(RecoveryExecutor.layer.pipe(Layer.provide(recoveryDurable), Layer.provide(Database.defaultLayer))),
     Layer.provideMerge(devCampaignMint),
     // W0.5 (blocker-2): the release pipeline ships owner-authorization.json with the install
     // product; this layer seeds ONE signed row into the local DB when the routes graph is built —

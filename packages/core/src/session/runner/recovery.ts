@@ -25,10 +25,15 @@ export * as SessionProviderRecovery from "./recovery"
 //
 // W2/W2-1 honest scope note: this file holds BOTH the process-local store-backed service
 // (`layer`) and the durable DB-backed service (`durableLayerWith`). The durable service is
-// the kill-9-survivor surface and is exercised by recovery-durable-store.test.ts, but the
-// production executor wiring (which commands run after a restart) is a later wave — the
-// current production path is terminal-descriptor write + maintenance registry +
-// startup inventory (see `durableLayerWith`).
+// the kill-9-survivor surface and is exercised by recovery-durable-store.test.ts.
+// W2.2 wiring note: `durableLayerWith` is NOW the production service — the deepagent-code
+// server route graph and the app runtime provide it over the composition's Database
+// (single-instance local process; no clustering) and the RecoveryExecutor drains the
+// pending recovery commands at process boot. The terminal-descriptor write
+// (v2-provider-turn.ts `writeTurnTerminalDescriptor`) and the startup inventory
+// classification (startup-inventory.ts) are the audit/read side; the W2 boundary stays:
+// C1B evidence status records, baseline repairs, fork fences and abandon receipts are
+// NOT YET table-backed (process-local in `durableServiceWith`).
 
 import { randomUUID } from "node:crypto"
 import { Context, Effect, Layer, Ref, Schema, Semaphore } from "effect"
@@ -2314,15 +2319,19 @@ const durableServiceWith = (db: Database) =>
  * export surfaces survive a kill-9 restart; the frozen contract and typed outcomes are
  * identical to the in-memory `layer` (see `durableServiceWith`).
  *
- * W2-1 honesty declaration — executor wiring status: the durable STORE layer is
- * fully implemented and exercised by the durable-store tests, but the durable
- * SERVICE (this `durableLayerWith` / `durableServiceWith`) is NOT yet wired into
- * the production model-execution path. The current production recovery path is:
+ * W2.2 wiring status (2026-09-02): this `durableLayerWith` / `durableServiceWith` IS the
+ * production recovery service. The deepagent-code compositions (server route graph +
+ * app runtime) provide it over the composition's Database and the RecoveryExecutor
+ * drains pending recovery commands at process boot:
  *   - provider-turn terminal descriptors (v2-provider-turn.ts `writeTurnTerminalDescriptor`);
  *   - the maintenance command/evidence-export registry (deepagent-code maintenance-registry);
- *   - the startup inventory classification (startup-inventory.ts).
- * Wiring the actual recovery-command EXECUTORS (resolve/abandon/fork/confirm-settled)
- * behind a kill-9 restart is a later wave; until then `durableLayerWith` is the test +
- * integration surface for that wiring.
+ *   - the startup inventory classification (startup-inventory.ts);
+ *   - recovery-command execution after a kill-9 restart (deepagent-code RecoveryExecutor;
+ *     see recovery-executor.ts for the per-class exit policy — resolvable_exact → abandon
+ *     replay, the other classes kept pending).
+ * W2 boundary (unchanged, honest): C1B evidence status records, baseline repairs, fork
+ * fences and abandon receipts remain process-local (the `memory` Ref above), and the
+ * turn-terminal descriptors written WITHOUT a command row are audit-only — they never
+ * enter execution.
  */
 export const durableLayerWith = (db: Database) => Layer.effect(Service, durableServiceWith(db))
