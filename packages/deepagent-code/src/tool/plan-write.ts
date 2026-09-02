@@ -71,11 +71,16 @@ export const Parameters = Schema.Struct({
   operation: Schema.Literals(["create", "advance", "replan"]).annotate({
     description: "create a plan, advance an existing plan, or replan with a reason",
   }),
+  // Provider-tolerant decoding (GLM 5.x serializes tool-argument numbers as strings and null
+  // as "null"): the schema accepts the coerced shapes and execute normalizes them, so the
+  // strict protocol semantics downstream are unchanged.
   expected_plan_id: Schema.NullOr(Schema.String).annotate({
     description:
       "Use null for create; for advance/replan copy expected_plan_id exactly from the latest <plan-status> or plan result",
   }),
-  expected_version: Schema.NullOr(NonNegativeInt).annotate({
+  expected_version: Schema.NullOr(
+    Schema.Union([NonNegativeInt, Schema.NumberFromString]),
+  ).annotate({
     description:
       "Use null for create; for advance/replan copy expected_version exactly from the latest <plan-status> or plan result",
   }),
@@ -347,12 +352,25 @@ export const normalizeModelPlanWrite = (
   previous: ReturnType<typeof AgentGateway.DeepAgentPlanStore.getPlanDoc>,
   expected: AgentGateway.DeepAgentPlanController.PlanExpected | null,
 ) => {
+  // Provider-tolerant normalization (GLM 5.x): the literal "null" string and stringified
+  // numbers decode through the tolerant schema but must land as real nulls/numbers before
+  // the strict core precondition runs.
+  const normalized = {
+    ...params,
+    expected_plan_id: params.expected_plan_id === "null" ? null : params.expected_plan_id,
+    active_step_id:
+      params.active_step_id === undefined
+        ? undefined
+        : params.active_step_id === "null"
+          ? null
+          : params.active_step_id,
+  }
   // Stale writers are concurrency conflicts even when a concurrent replan also changed step IDs.
   // Check the shared core precondition before interpreting the patch against current authority.
-  AgentGateway.DeepAgentPlanController.requirePlanWriteExpected(params, previous, expected)
+  AgentGateway.DeepAgentPlanController.requirePlanWriteExpected(normalized, previous, expected)
   const base = {
     operation: params.operation,
-    expected_plan_id: params.expected_plan_id,
+    expected_plan_id: normalized.expected_plan_id,
     expected_version: params.expected_version,
     ...(params.replan_reason !== undefined ? { replan_reason: params.replan_reason } : {}),
     goal: params.goal ?? "",

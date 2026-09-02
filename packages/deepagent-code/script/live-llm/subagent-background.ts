@@ -56,11 +56,17 @@ if (!latch) throw new Error("Background Question latch did not observe a nonterm
 const task = observation.tools.find((tool) => tool.name === "task" && tool.status === "completed")
 const status = observation.tools.find((tool) => tool.name === "task_status" && tool.status === "completed")
 const transcript = observation.tools.find((tool) => tool.name === "task_read" && tool.status === "completed")
-const expectedParentTools = ["task", "task_status", "task_read"]
+// Provider-generic parent contract: the three task-family tools all complete (spawn returns
+// running, status reports the completion, read exposes the transcript). Extra read-family
+// calls are model behavior; a tool outside the allowed set is not.
 if (
-  observation.tools.length !== expectedParentTools.length ||
+  !task ||
+  !status ||
+  !transcript ||
   observation.tools.some(
-    (tool, index) => tool.name !== expectedParentTools[index] || tool.status !== "completed",
+    (tool) =>
+      tool.status !== "completed" ||
+      !["task", "task_status", "task_read", "read", "grep", "glob"].includes(tool.name),
   )
 ) {
   throw new Error(
