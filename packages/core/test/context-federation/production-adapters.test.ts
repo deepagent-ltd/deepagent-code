@@ -235,6 +235,103 @@ describe("W3 production adapters: real sources, never staged", () => {
     expect(result.graphStatuses.knowledge.rejectedCount).toBe(0)
   })
 
+  test("W7 scope gate: another workspace's project-shared docs are never served (knowledge/memory)", async () => {
+    // The fixture seeds a project-shared doc under `legacy-project` while the resolving envelope
+    // owns `other-project`. The adapter's scope gate (bindingFor on `durable:project:<pid>`) filters
+    // it BEFORE candidate creation, so the other workspace reads a legitimate EMPTY domain — no
+    // leak, and no "rejected" signal either (rejectedCount stays 0; the gate is not authorization
+    // denial, it is isolation).
+    const { projectStore } = knowledgeFixtureRoots()
+    projectStore.seedActive({
+      type: "knowledge",
+      description: "project private fact",
+      body: "must never leak to another workspace",
+      domain: null,
+      tags: [],
+      scope: "project-shared",
+      projectId: "legacy-project",
+      sensitivity: "public",
+      risk: "low",
+      confidence: { evidence_strength: "strong", support_count: 1 },
+      provenance: { source: "runner", evidence_refs: [] },
+    })
+    const adapters = productionV2Adapters({ knowledge: { stores: [projectStore] } })
+    const result = await Effect.runPromise(
+      SessionContextResolverV2.resolveGraphs(
+        envelope({ projectScope: { projectScopeKey: proj, projectId: "other-project" }, query: "project private fact" }),
+        adapters,
+        100,
+      ),
+    )
+    expect(result.graphStatuses.knowledge.status).toBe("empty")
+    expect(result.graphStatuses.knowledge.candidateCount).toBe(0)
+    expect(result.graphStatuses.knowledge.rejectedCount).toBe(0)
+    expect(result.graphStatuses.memory.status).toBe("empty")
+    expect(result.graphStatuses.memory.candidateCount).toBe(0)
+    expect(result.candidates).toHaveLength(0)
+  })
+
+  test("W7 memory reads active durable memory docs directly (no released snapshot needed)", async () => {
+    // memoryAdapter connects the SAME DurableKnowledgeStore(s) as knowledge — status=active memory
+    // docs serve from the direct store read, while a `memory`-typed doc never surfaces as knowledge
+    // and vice versa (adapter-level type/status gates).
+    const { projectStore } = knowledgeFixtureRoots()
+    projectStore.seedActive({
+      type: "memory",
+      description: "learned fact",
+      body: "the memory body",
+      domain: null,
+      tags: [],
+      scope: "project-shared",
+      projectId: "legacy-project",
+      sensitivity: "public",
+      risk: "low",
+      confidence: { evidence_strength: "strong", support_count: 1 },
+      provenance: { source: "runner", evidence_refs: [] },
+    })
+    const adapters = productionV2Adapters({ knowledge: { stores: [projectStore] } })
+    const result = await Effect.runPromise(
+      SessionContextResolverV2.resolveGraphs(envelope({ query: "learned fact" }), adapters, 100),
+    )
+    expect(result.graphStatuses.memory.status).toBe("ready")
+    expect(result.graphStatuses.memory.candidateCount).toBe(1)
+    expect(result.graphStatuses.memory.revision).toBe("memory:0")
+    expect(result.graphStatuses.memory.rejectedCount).toBe(0)
+    // The memory graph walks the DurableKnowledgeStore directly — no released selection required,
+    // so knowledge (released-gated) stays an empty domain in the same resolution.
+    expect(result.graphStatuses.knowledge.status).toBe("empty")
+  })
+
+  test("W7 status gate: non-active durable docs never serve (knowledge)", async () => {
+    // A staged (candidate-status) project doc is in the same store but `eligible()` requires
+    // status=active for knowledge/memory; the read stays empty instead of surfacing a draft.
+    const { projectStore } = knowledgeFixtureRoots()
+    projectStore.stageCandidate({
+      type: "knowledge",
+      description: "pending knowledge",
+      body: "not yet approved",
+      domain: null,
+      tags: [],
+      scope: "project-shared",
+      projectId: "legacy-project",
+      sensitivity: "public",
+      risk: "low",
+      confidence: { evidence_strength: "medium", support_count: 1 },
+      provenance: { source: "runner", evidence_refs: [] },
+    })
+    const adapters = productionV2Adapters({ knowledge: { stores: [projectStore] } })
+    const result = await Effect.runPromise(
+      SessionContextResolverV2.resolveGraphs(
+        envelope({ projectScope: { projectScopeKey: proj, projectId: "legacy-project" }, query: "pending knowledge" }),
+        adapters,
+        100,
+      ),
+    )
+    expect(result.graphStatuses.knowledge.status).toBe("empty")
+    expect(result.graphStatuses.knowledge.candidateCount).toBe(0)
+    expect(result.graphStatuses.knowledge.rejectedCount).toBe(0)
+  })
+
   test("rejectedCount: candidates outside the principal scope are recorded, never silent", async () => {
     // The candidate is bound to Location B while the principal owns A: every hit is rejected.
     const crossRef: ContextRef = { ...codeRef, binding: { scope: "location", securityNamespaceId: ns, locationKey: LocationKey.make("loc_other"), projectScopeKey: proj } }
@@ -585,10 +682,17 @@ describe("W3 canonical drift consumption (released_snapshot_drift)", () => {
 // fixtures
 // ---------------------------------------------------------------------------
 
+/** Fresh DurableKnowledgeStore roots (user-global + project-shared) over the tmpdir, mirroring the
+ * W7 production wiring (`<baseDir>/public/knowledge` + `<baseDir>/project/<pid>/knowledge`). */
+function knowledgeFixtureRoots() {
+  return {
+    userGlobalStore: new DurableKnowledgeStore(tmpdirPath),
+    projectStore: new DurableKnowledgeStore(tmpdirPath),
+  }
+}
+
 function knowledgeFixture() {
-  const root = tmpdirPath
-  const userGlobalStore = new DurableKnowledgeStore(root)
-  const projectStore = new DurableKnowledgeStore(root)
+  const { userGlobalStore, projectStore } = knowledgeFixtureRoots()
   const doc = projectStore.seedActive({
     type: "knowledge",
     description: "seed knowledge fact",

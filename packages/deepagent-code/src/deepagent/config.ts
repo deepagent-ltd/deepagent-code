@@ -1,5 +1,6 @@
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { Global } from "@deepagent-code/core/global"
+import { flipFlagValueOn } from "@deepagent-code/core/deepagent/flip-flag"
 
 type AgentGatewayConfig = NonNullable<Parameters<typeof AgentGateway.configure>[0]>
 type AgentMode = NonNullable<NonNullable<AgentGatewayConfig>["agentMode"]>
@@ -42,7 +43,9 @@ export function gatewayConfig(config?: ConfigInfo): AgentGatewayConfig {
     enabled: true,
     agentMode: agentMode(options.agentMode) ?? envAgentMode() ?? "high",
     selfLearning: selfLearning(options.selfLearning) ?? envSelfLearning() ?? "manual",
-    durableLearning: bool(options.durableLearning) ?? envBool("DEEPAGENT_DURABLE_LEARNING"),
+    // W7: durable learning ships ON by default (the shared core flip-flag table: absent/other value
+    // = ON; `""`/`false`/`0` = OFF). `=false` falls back to the legacy-only learning path.
+    durableLearning: bool(options.durableLearning) ?? flipFlagValueOn(process.env.DEEPAGENT_DURABLE_LEARNING, true),
     // Private runtime state is not configurable outside the canonical/test storage root.
     baseDir: Global.Path.agent.data,
     runsDir: Global.Path.agent.runs,

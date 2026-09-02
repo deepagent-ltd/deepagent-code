@@ -18,6 +18,8 @@ import {
 import { ContextStagedAdaptersV2 } from "@deepagent-code/core/context-federation/staged-adapters-v2"
 import { Session } from "@/session/session"
 import { SessionID } from "@/session/schema"
+import { LocationIndexRuntime } from "@/location-index/runtime"
+import { currentIdentity } from "@/context-federation/production-sources"
 import { InstanceHttpApi } from "../api"
 import { ContextApi } from "../groups/context"
 import { makeApiError } from "../typed-error"
@@ -145,10 +147,14 @@ export const contextHandlers = HttpApiBuilder.group(InstanceHttpApi, "context", 
       const info = yield* session.get(sessionId).pipe(
         Effect.mapError(() => makeApiError("resource_not_found", { resource: ctx.query.session_id })),
       )
-      // W3.8.1: the probe frame mirrors the runner — the seam's real location identity when the
-      // instance index is attached, the v2:local degradation otherwise.
+      // W3.8.1: the probe frame mirrors the runner — the real location identity when the current
+      // instance index is attached, the v2:local degradation otherwise. W3.9: the identity is
+      // resolved ON DEMAND here (`runtime.current()` at probe time) because the production-sources
+      // seam built at layer start no longer attaches the index eagerly (zero layer-build side
+      // effects); the probe's per-request `InstanceRef` makes this the first real frame consumer.
       const sources = yield* ProductionV2Sources
-      const envelope = buildReadinessEnvelope(info, sources.identity)
+      const identity = yield* currentIdentity(yield* LocationIndexRuntime.Service)
+      const envelope = buildReadinessEnvelope(info, identity)
       // W3.7 L5: readiness reflects what the V2 runner actually does — same flag-gated adapter
       // selection (production sources default, staged `source_disabled` only under `=false`).
       const adapters = readinessAdapters(sources)

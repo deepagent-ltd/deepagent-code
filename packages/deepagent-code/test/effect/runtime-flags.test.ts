@@ -67,6 +67,17 @@ describe("RuntimeFlags", () => {
     }),
   )
 
+  it.effect("context ledger (Project Bridge write) defaults ON and disables explicitly (W7)", () =>
+    Effect.gen(function* () {
+      const defaults = yield* readFlags.pipe(Effect.provide(fromConfig({})))
+      expect(defaults.experimentalContextLedger).toBe(true)
+      const off = yield* readFlags.pipe(
+        Effect.provide(fromConfig({ DEEPAGENT_CODE_EXPERIMENTAL_CONTEXT_LEDGER: "false" })),
+      )
+      expect(off.experimentalContextLedger).toBe(false)
+    }),
+  )
+
   it.effect("defaults four-graph reads on and ships the Core V2 execution owner ON (W0.2)", () =>
     Effect.gen(function* () {
       const defaults = yield* readFlags.pipe(Effect.provide(fromConfig({})))

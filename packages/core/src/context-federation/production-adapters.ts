@@ -255,6 +255,16 @@ function toDocumentsCandidate(
 // ---------------------------------------------------------------------------
 // knowledge / memory
 // ---------------------------------------------------------------------------
+// W7 read-side posture (the Bridge-write side ships ON via `experimentalContextLedger`):
+//   - both graphs read the SAME DurableKnowledgeStore body the learning worker writes (stores walk
+//     `documentStore` directly; no store → honest `empty` with rejectedCount 0 — the `=false`/
+//     staged fallback is unaffected);
+//   - `status=active` is the eligibility gate (adapters.ts `eligible`) and the scope gate
+//     (`bindingFor` on `durable:project:<pid>`) keeps other workspaces from reading project-shared
+//     docs — both were landed with W3.8; the W7 additions are the DEFAULT-ON flags (settle hook +
+//     Bridge write) and their coverage in production-adapters.test.ts;
+//   - released knowledge requires a bound snapshot (drift semantics unchanged, W3.3); memory is the
+//     direct-store read and needs no released snapshot.
 
 function knowledgeAdapter(knowledge: ProductionV2AdapterInput["knowledge"]): V2Adapter {
   if (knowledge === undefined || knowledge.stores.length === 0) {

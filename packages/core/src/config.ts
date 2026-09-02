@@ -19,6 +19,7 @@ import { ConfigExperimental } from "./config/experimental"
 import { ConfigFormatter } from "./config/formatter"
 import { ConfigLSP } from "./config/lsp"
 import { ConfigMCP } from "./config/mcp"
+import { ConfigLearning } from "./config/learning"
 import { ConfigPlugin } from "./config/plugin"
 import { ConfigProvider } from "./config/provider"
 import { ConfigReference } from "./config/reference"
@@ -107,6 +108,9 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   docs_sync: Schema.Boolean.pipe(Schema.optional).annotate({
     description:
       "Maintain docs/deepagent project documents after each session settles (W10; default false — reading the documents needs no flag)",
+  }),
+  learning: ConfigLearning.Info.pipe(Schema.optional).annotate({
+    description: "Durable learning / memory output positioning (W7)",
   }),
   experimental: ConfigExperimental.Experimental.pipe(Schema.optional),
   providers: Schema.Record(Schema.String, ConfigProvider.Info).pipe(Schema.optional),

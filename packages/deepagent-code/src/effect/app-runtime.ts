@@ -153,6 +153,9 @@ export const AppLayer = baseAppLayer.pipe(
   // project); absent this seam the runner degrades the four graphs honestly (pre-W3.7 behavior).
   Layer.provide(productionSourcesLayer({ workspaceDirectory: process.cwd() })),
   Layer.provide(PromptEpoch.v2RunnerSeamLayer.pipe(Layer.provide(Database.defaultLayer))),
+  // W7 — settle-triggered durable learning: the runner's `onSessionSettled` hook (same INTO-the-base
+  // graph direction as the v2RunnerSeam above; `DEEPAGENT_DURABLE_LEARNING=false` keeps legacy-only).
+  Layer.provide(DurableLearningRuntime.onSessionSettledSeamLayer.pipe(Layer.provide(Database.defaultLayer))),
   Layer.provideMerge(devCampaignMint),
   // W0.5: deliver the shipped owner-authorization.json into the local DB once per runtime build
   // (after the database layer initialized; fail-open on file absence, fail-closed on verification

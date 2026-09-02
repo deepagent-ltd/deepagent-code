@@ -16,6 +16,7 @@ import { buildRunGraph } from "./deepagent/run-graph"
 import { knowledgeEnabled, strategyMethodologyEnabled, domainKnowledgeEnabled, modeRank } from "./deepagent/mode"
 import type { AgentMode } from "./deepagent/mode"
 import { resolveDeepAgentCodeHome } from "./deepagent/workspace"
+import { flipFlagValueOn } from "./deepagent/flip-flag"
 import * as KnowledgeRetriever from "./deepagent/knowledge-retriever"
 import { buildProfile as buildRunProfile } from "./deepagent/profile-builder"
 import type { ProblemProfile } from "./deepagent/domain-pack"
@@ -251,7 +252,10 @@ let current: CurrentConfig = {
   allowProviderExecutedToolNames: parseAllowlist(env().allowProviderExecutedToolNames),
   killSwitch: env().killSwitch === "true" || env().killSwitch === "1",
   selfLearning: env().selfLearning === "auto" ? "auto" : "manual",
-  durableLearning: env().durableLearning === "true" || env().durableLearning === "1",
+  // W7: durable learning ships ON. `=false`/`=0`/`""` (trim+lower, the shared flip-flag table)
+  // falls back to the legacy-only learning path. THIS reader is the production default; the
+  // deepagent-code `gatewayConfig` uses the same table.
+  durableLearning: flipFlagValueOn(env().durableLearning, true),
   modelRouter: {
     upstreamProviderID: env().routerProvider ?? "deepagent-upstream",
     upstreamModelID: env().routerModel ?? "deepagent/default-upstream",
@@ -264,6 +268,19 @@ let current: CurrentConfig = {
 }
 
 export const selfLearningPolicy = (): SelfLearningPolicy => current.selfLearning
+
+/** W7 — single runtime authority for the durable-learning flag (mirrors `configure()`). */
+export const durableLearningEnabled = (): boolean => current.durableLearning
+
+/** W7 — the configured learning storage root pair, resolved from the CURRENT configure() state so
+ * the settle hook follows the same authority (baseDir/runsDir) as the legacy run-close path. */
+export const learningAuthorityConfig = (): { readonly baseDir: string; readonly runsDir: string } => {
+  const baseDir = current.baseDir ?? resolveDeepAgentCodeHome()
+  return {
+    baseDir,
+    runsDir: current.runsDir ?? path.join(baseDir, "runs"),
+  }
+}
 
 export type LearningAuthority = {
   readonly record?: (admission: Admission) => Promise<void>
@@ -1251,13 +1268,15 @@ const writeArtifacts = async (run: RunRecord, state: RunCloseState, artifacts = 
 const terminalArtifactFor = (run: RunRecord, artifacts: Record<string, unknown>): Admission["terminalArtifact"] => {
   const content = artifactText("DEEPAGENT_RUN_STATE.json", artifacts["DEEPAGENT_RUN_STATE.json"])
   const runState = artifacts["DEEPAGENT_RUN_STATE.json"]
+  // W7: the fingerprint is set by V2 settle admissions; legacy/pre-W7 run states (and tool-loop
+  // harness runs) legitimately lack it — bind them to the established zero-fingerprint (no learning
+  // admission) semantics instead of throwing, so terminal processing never breaks on existing data.
   const fingerprint = isRecord(runState) ? stringValue(runState.learning_admission_fingerprint) : undefined
-  if (!fingerprint) throw new Error("DeepAgent terminal run state is missing the learning admission fingerprint")
   return {
     schema_version: "deepagent-code.learning_terminal_artifact.v1",
     path: path.join(run.dir, "DEEPAGENT_RUN_STATE.json"),
     sha256: createHash("sha256").update(content).digest("hex"),
-    learning_admission_fingerprint: fingerprint,
+    learning_admission_fingerprint: fingerprint ?? "0".repeat(64),
   }
 }
 

@@ -112,9 +112,11 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   experimentalQueryLogTool: stableOn("DEEPAGENT_CODE_EXPERIMENTAL_QUERY_LOG"),
   // V3.8 App-A Stage 1: maintain the Session Ledger alongside compaction (parse each compaction
   // summary into structured ledger entries + persist as the `ledger` DocType). Coexists with V1
-  // compaction — does NOT replace the assembly path. Default OFF (gated grey rollout, C6 §1). Enable
-  // with DEEPAGENT_CODE_EXPERIMENTAL_CONTEXT_LEDGER.
-  experimentalContextLedger: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_CONTEXT_LEDGER"),
+  // compaction — does NOT replace the assembly path. W7: the Project Bridge write side is now the
+  // durable-knowledge writeback, so this ships ON by default (kill-switch semantics: the ledger
+  // writer is default-safe); set DEEPAGENT_CODE_EXPERIMENTAL_CONTEXT_LEDGER=false to restore the
+  // pre-W7 OFF posture.
+  experimentalContextLedger: stableOn("DEEPAGENT_CODE_EXPERIMENTAL_CONTEXT_LEDGER"),
   // L6 (V3.4): code_intel (symbol-driven AI IDE entry) ships ON by default and is promoted out of
   // the experimental gate — `=false` disables. grep is never disabled; no-server files fall back.
   codeIntelTool: stableOn("DEEPAGENT_CODE_CODE_INTEL_TOOL"),

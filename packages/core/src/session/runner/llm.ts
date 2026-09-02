@@ -38,7 +38,7 @@ import { GoalLoop } from "../../deepagent/goal-loop"
 import { getActiveGoal } from "../../deepagent/session-state"
 import { DocumentStore } from "../../deepagent/document-store"
 import { planStoreRoot } from "../../deepagent/plan-store"
-import { type RunError, Service, StepLimitExceededError } from "./index"
+import { type RunError, Service, StepLimitExceededError, CurrentOnSessionSettled } from "./index"
 import { SessionRunnerModel } from "./model"
 import { PreparedProviderTurn } from "./prepared-provider-turn"
 import { V2ToolEffect } from "./v2-tool-effect"
@@ -148,6 +148,9 @@ export const layer = Layer.effect(
     // (DEEPAGENT_CODE_PROJECT_DOCS_SYNC or `docs_sync` config, default false).
     const docsSyncEnabled =
       fs !== undefined && ProjectDocsSync.writingEnabled(Config.latest(yield* config.entries(), "docs_sync"))
+    // W7: host-injectable settle hook (durable-learning admission in the deepagent-code
+    // composition); unwired = no-op.
+    const onSessionSettled = yield* CurrentOnSessionSettled
     const providerTurns = yield* V2ProviderTurn.Service
     const toolEffects = yield* V2ToolEffect.Service
     const permissionGrantLookup = yield* V2ToolEffect.CurrentPermissionGrantLookup
@@ -855,6 +858,9 @@ export const layer = Layer.effect(
       yield* failInterruptedTools(input.sessionID)
       let promotion: SessionInput.Delivery | undefined = hasSteer ? "steer" : hasQueue ? "queue" : hasGoalSteer ? "goal_steer" : undefined
       let openActivity = input.force === true || hasSteer || hasQueue || hasGoalSteer
+      // W7: the settle hook references the PRIMARY activity of this drain chain (the trigger input),
+      // so a multi-activity drain admits one learning run anchored on the prompt that opened it.
+      let settledActivityId: string | undefined
       while (openActivity) {
         let needsContinuation = true
         let step = 1
@@ -874,10 +880,12 @@ export const layer = Layer.effect(
         // activity. Settle is idempotent and best-effort; recovery owns activities a drain never
         // settles. Interrupted turns settle their own activity through the per-turn scope
         // finalizer in runTurnAttempt.
-        if (activityId !== undefined)
+        if (activityId !== undefined) {
+          settledActivityId = settledActivityId ?? activityId
           yield* Effect.uninterruptible(contexts.settleActivity({ activityId, state: "settled" })).pipe(
             Effect.ignore,
           )
+        }
         openActivity = yield* SessionInput.hasPending(db, input.sessionID, "queue")
         promotion = openActivity ? "queue" : undefined
       }
@@ -890,6 +898,14 @@ export const layer = Layer.effect(
           fs,
           ...(gitService === undefined ? {} : { git: gitService }),
         })
+      // W7: settle-triggered learning. Best-effort and non-blocking for the turn: a hook failure
+      // must never fail a settled drain (same posture as the docs sync tail).
+      if (onSessionSettled !== undefined)
+        yield* onSessionSettled({
+          sessionID: input.sessionID,
+          workspacePath: location.project.directory,
+          ...(settledActivityId === undefined ? {} : { activityId: settledActivityId }),
+        }).pipe(Effect.ignore)
     })
 
     return Service.of({

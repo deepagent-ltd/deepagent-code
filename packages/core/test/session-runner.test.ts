@@ -349,6 +349,16 @@ const remoteCompactionLayer = Layer.succeedContext(
         : Effect.fail(new Error("remote compaction unavailable")),
   ),
 )
+// W7 — settle-hook recorder: verifies the runner invokes the injected hook once per settled drain
+// (the deepagent-code composition injects the durable-learning admission there).
+let settleHookInputs: SessionRunner.OnSessionSettledInput[] = []
+const settleHookLayer = Layer.succeedContext(
+  Context.make(SessionRunner.CurrentOnSessionSettled, (input) =>
+    Effect.sync(() => {
+      settleHookInputs.push(input)
+    }),
+  ),
+)
 const runner = SessionRunnerLLM.layer.pipe(
   Layer.provide(providerTurns),
   Layer.provide(V2ToolEffect.layer.pipe(Layer.provide(database))),
@@ -368,6 +378,7 @@ const runner = SessionRunnerLLM.layer.pipe(
   Layer.provide(skillGuidance),
   Layer.provide(config),
   Layer.provide(testOwnerAuthorization),
+  Layer.provide(settleHookLayer),
 )
 const coordinator = SessionRunCoordinator.layer.pipe(Layer.provide(runner))
 const execution = Layer.effect(
@@ -529,6 +540,7 @@ const setup = Effect.gen(function* () {
   toolExecutionsReady = 5
   activeToolExecutions = 0
   maxActiveToolExecutions = 0
+  settleHookInputs = []
   yield* db
     .insert(ProjectTable)
     .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
@@ -777,6 +789,24 @@ const verifyPartialFlushOnInterruption = (kind: FragmentKind) =>
   })
 
 describe("SessionRunnerLLM", () => {
+  it.effect("W7: invokes the injected onSessionSettled hook once after a settled drain", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      response = fragmentFixture("text", "w7-text", ["W7 answer"]).completeEvents
+      requests.length = 0
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "W7 settle" }), resume: false })
+      yield* session.resume(sessionID)
+
+      expect(settleHookInputs).toHaveLength(1)
+      expect(settleHookInputs[0]?.sessionID).toBe(sessionID)
+      // The workspace path is the runner's Location project root (informational; the deepagent-code
+      // admission derives its authoritative workspacePath from the canonical Session row).
+      expect(settleHookInputs[0]?.workspacePath).toBe("/")
+      expect(settleHookInputs[0]?.activityId).toMatch(/^activity_/)
+    }),
+  )
+
   it.effect("does not dispatch a forced empty Session without a durable provider receipt", () =>
     Effect.gen(function* () {
       yield* setup

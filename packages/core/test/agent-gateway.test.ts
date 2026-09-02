@@ -44,6 +44,20 @@ const readOnlyRunDir = async (dir: string) => {
 const readJson = async (dir: string, name: string) => JSON.parse(await readFile(path.join(dir, name), "utf8"))
 
 describe("AgentGateway", () => {
+  test("W7: durable learning flag and storage root follow configure() (default ON)", async () => {
+    const root = await tempRunsDir()
+    try {
+      AgentGateway.configure({ enabled: false, agentMode: "high", baseDir: root, runsDir: path.join(root, "runs") })
+      expect(AgentGateway.durableLearningEnabled()).toBe(true)
+      expect(AgentGateway.learningAuthorityConfig()).toEqual({ baseDir: root, runsDir: path.join(root, "runs") })
+      AgentGateway.configure({ durableLearning: false })
+      expect(AgentGateway.durableLearningEnabled()).toBe(false)
+    } finally {
+      AgentGateway.configure({ enabled: false, agentMode: "high", runsDir: undefined, durableLearning: false })
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   test("configuration defers built-in knowledge seeding until after startup", async () => {
     const root = await tempRunsDir()
     try {
