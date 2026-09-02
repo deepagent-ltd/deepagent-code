@@ -150,6 +150,7 @@ import { capabilityHandlers } from "./handlers/capability"
 import { systemContextHandlers } from "./handlers/system-context"
 import { contextHandlers } from "./handlers/context"
 import { productionSourcesLayer } from "@/context-federation/production-sources"
+import { V2RunnerFrame } from "@/session/v2-runner-frame"
 import { V2OwnerSeed } from "@deepagent-code/core/session/runner/v2-owner-seed"
 
 export const context = Context.makeUnsafe<unknown>(new Map())
@@ -460,6 +461,13 @@ export function createRoutes(corsOptions?: CorsOptions) {
     // SessionV2.defaultLayer (no-op execution) inside its own subtree; re-provide the live layer at
     // the very end so the route graph as a whole runs V2 sessions on the local execution coordinator.
     Layer.provide(SessionV2.liveLayer),
+    // W3.10 — V2 runner real frame (O-W3-10): LAST-WINS over the live layer's internal
+    // LocationServiceMap.layer. The augmented map builds every per-location runner tree with the
+    // instance context for the ref directory + a ProductionV2Sources override carrying the REAL
+    // location identity (currentIdentity of the current instance handle), so runner selection rows
+    // bind the real frame — never the v2:local pin — and stay consistent with the C6 readiness
+    // probe (same derivation). Instance store / index runtime memoize under the shared memoMap.
+    Layer.provide(V2RunnerFrame.runnerFrameLocationMapLayer),
   ).pipe(Layer.orDie)
 }
 

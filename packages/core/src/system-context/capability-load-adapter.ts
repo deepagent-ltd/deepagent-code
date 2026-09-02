@@ -1,6 +1,6 @@
 export * as CapabilityLoadAdapter from "./capability-load-adapter"
 
-import { eq } from "drizzle-orm"
+import { and, eq } from "drizzle-orm"
 import { Effect } from "effect"
 import { contentDigest } from "../contract/digest"
 import {
@@ -456,23 +456,38 @@ export const capabilityLoadFactOf = (receipt: ContractLoadReceipt): { readonly c
 
 /**
  * The durable read-back seam (W4, design §7.5 snapshot restoration): the load
- * receipts recorded for one session, read from `session_capability_load` (a new
- * store / DB connection sees the same rows — the compaction-restart closure). The
- * kernel's in-module `recordedCapabilityLoads()` stays the process-local exact-retry
- * cache; this is the durable fact store the runner uses to rebuild the snapshot
- * after a restart. Ordered by first-load time (loaded_at, then load_id) so the
- * rebuild is deterministic.
+ * receipts recorded for one session in ONE catalog snapshot, read from
+ * `session_capability_load` (a new store / DB connection sees the same rows — the
+ * compaction-restart closure). The kernel's in-module `recordedCapabilityLoads()`
+ * stays the process-local exact-retry cache; this is the durable fact store the
+ * runner uses to rebuild the snapshot after a restart.
+ *
+ * W15 (P4) — the restore is FILTERED to the request/current catalog snapshot id
+ * (`catalog_snapshot_id`, the frozen contract field the receipt always carries):
+ * rows recorded under a DIFFERENT catalog snapshot belong to a different Context
+ * Epoch, and folding them in would rebuild a snapshot digest that never existed
+ * (mixed-epoch facts). Rows are ordered by `load_id` alone — `loaded_at` is
+ * audit-only and written as 0 by the production path (the adapter never passes a
+ * `loadedAt`), and the table has no real record-time column, so a "first-load
+ * time" order is not representable; `load_id` is the deterministic, stable tie
+ * that makes the rebuild byte-stable.
  */
 export function recordedCapabilityLoadsForSession(
   db: Database.Interface["db"],
   sessionId: string,
+  catalogSnapshotId: string,
 ): Effect.Effect<ReadonlyArray<ContractLoadReceipt>, never> {
   return Effect.gen(function* () {
     const rows = yield* db
       .select()
       .from(SessionCapabilityLoadTable)
-      .where(eq(SessionCapabilityLoadTable.session_id, sessionId))
-      .orderBy(SessionCapabilityLoadTable.loaded_at, SessionCapabilityLoadTable.load_id)
+      .where(
+        and(
+          eq(SessionCapabilityLoadTable.session_id, sessionId),
+          eq(SessionCapabilityLoadTable.catalog_snapshot_id, catalogSnapshotId),
+        ),
+      )
+      .orderBy(SessionCapabilityLoadTable.load_id)
       .all()
       .pipe(Effect.orDie)
     return rows.map(receiptFromRow)

@@ -56,6 +56,7 @@ const makeHarness = (
   flags: Partial<RuntimeFlags.Info>,
   onExecute: () => void,
   sessionInfo?: Session.Info,
+  agentInfo?: Agent.Info,
 ) => {
   const registry = Layer.succeed(
     ToolRegistry.Service,
@@ -130,7 +131,7 @@ const makeHarness = (
   )
   return Effect.gen(function* () {
     const tools = yield* SessionTools.resolve({
-      agent,
+      agent: agentInfo ?? agent,
       model,
       session: sessionInfo ?? session(),
       processor,
@@ -258,6 +259,29 @@ describe("W6 strictPlanGate escalation (session/tools.ts)", () => {
         {},
         () => executed++,
         session({ parentID: sessionID, permission: [{ permission: "plan", pattern: "*", action: "allow" }] }),
+      ),
+    )
+    AgentGateway.DeepAgentSessionState.getOrCreate(String(sessionID), "high")
+    AgentGateway.DeepAgentSessionState.markPlanStale(String(sessionID), "user_appended")
+
+    const result = await tools.edit!.execute!({}, { toolCallId: "call-1", messages: [] })
+    expect(result).toMatchObject({ title: "Plan update required" })
+    expect(executed).toBe(0)
+  })
+
+  test("W15 P3: custom agent ruleset plan:allow + session without plan → stale still blocks (merge is the effective ruleset)", async () => {
+    // The subagent has NO session-level plan rule, but its AGENT ruleset carries `plan: allow`
+    // (e.g. a custom agent with PLAN_WRITE_OWN_GOAL). The escape check must judge the MERGED
+    // effective ruleset (`Permission.merge(agent, session)` — the same merge the permission ask
+    // path uses), so this subagent CAN repair its plan and the strict block stays active.
+    let executed = 0
+    const tools = await Effect.runPromise(
+      makeHarness(
+        "edit",
+        {},
+        () => executed++,
+        session({ parentID: sessionID, permission: [] }),
+        { name: "custom", mode: "primary", permission: [{ permission: "plan", pattern: "*", action: "allow" }], options: {} } as unknown as Agent.Info,
       ),
     )
     AgentGateway.DeepAgentSessionState.getOrCreate(String(sessionID), "high")

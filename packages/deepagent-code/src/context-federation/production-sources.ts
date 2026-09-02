@@ -52,8 +52,10 @@ import { LocationIndexRuntime } from "../location-index/runtime"
 // instance build) that ran WITHOUT an `InstanceRef` (always failing with "InstanceRef not
 // provided") and logged a WARN to STDOUT (breaking `--format json` subprocess output). The build
 // effect now has ZERO runtime side effects: `identity` is resolved on first consumption via
-// `currentIdentity` (readiness probe, fanout consumers) — the same `identityFromHandle`
-// derivation, evaluated against the CURRENT instance handle at resolution time.
+// `currentIdentity` — the readiness probe (per request, `InstanceRef` from the instance-context
+// middleware) and, since W3.10, the V2 runner via the host hook in `session/v2-runner-frame.ts`
+// (the augmented `LocationServiceMap` resolves the same derivation at the per-location runner
+// tree with the ref directory's instance context, so runner and probe frames never diverge).
 
 export function productionSourcesLayer(options: { readonly workspaceDirectory: string }) {
   return Layer.effect(

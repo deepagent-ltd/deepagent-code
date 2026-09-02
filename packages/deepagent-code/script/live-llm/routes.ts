@@ -1082,6 +1082,7 @@ export const routeManifest = [
       "packages/deepagent-code/src/agent/prompt/panel/**",
       "packages/deepagent-code/src/session/goal-loop-wiring.ts",
       "packages/deepagent-code/src/session/v2-turn-evidence.ts",
+      "packages/deepagent-code/src/session/v2-runner-frame.ts",
       "packages/deepagent-code/script/live-llm/expert-panel.ts",
       "packages/deepagent-code/script/live-llm/expert-panel-oracle.ts",
       "packages/deepagent-code/test/script/live-llm-expert-panel-oracle.test.ts",

@@ -150,7 +150,7 @@ describe("sessionCapabilityLoad builds the durable frozen receipt", () => {
         const out = yield* sessionCapabilityLoad(db, { request: REQUEST, identity: IDENTITY, contextEpoch: "epoch-1" })
         expect(out.state.state).toBe("loaded")
         // Durable read-back from the SAME connection.
-        const receipts = yield* recordedCapabilityLoadsForSession(db, "session-1")
+        const receipts = yield* recordedCapabilityLoadsForSession(db, "session-1", REQUEST.catalogSnapshotId)
         expect(receipts).toHaveLength(1)
         expect(receipts[0]!.loadId).toBe(out.receipt.loadId)
         expect(receipts[0]!.bodyHash).toBe(REQUEST.bodyHash)
@@ -228,11 +228,30 @@ describe("session-scoped loads (W4)", () => {
           identity: { sessionId: "session-2", activityId: "activity-2", turnId: "turn-2" },
           contextEpoch: "epoch-1",
         })
-        const receiptsOne = yield* recordedCapabilityLoadsForSession(db, "session-1")
+        const receiptsOne = yield* recordedCapabilityLoadsForSession(db, "session-1", REQUEST.catalogSnapshotId)
         expect(receiptsOne).toHaveLength(2)
         expect(receiptsOne.every((receipt) => receipt.sessionId === "session-1")).toBe(true)
-        const receiptsTwo = yield* recordedCapabilityLoadsForSession(db, "session-2")
+        const receiptsTwo = yield* recordedCapabilityLoadsForSession(db, "session-2", REQUEST.catalogSnapshotId)
         expect(receiptsTwo).toHaveLength(1)
+      }).pipe(Effect.provide(Database.layerFromPath(":memory:"))),
+    )
+  })
+
+  test("W15 P4: durable receipts are ALSO filtered per catalog snapshot (mixed-epoch rows never leak into the restore)", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* sessionCapabilityLoad(db, { request: REQUEST, identity: IDENTITY, contextEpoch: "epoch-a" })
+        // Same session, DIFFERENT catalog snapshot (a different Context Epoch): the row is a
+        // mixed-epoch fact and must not fold into the CURRENT snapshot restore.
+        yield* sessionCapabilityLoad(db, {
+          request: { ...REQUEST, catalogSnapshotId: "capability_catalog:other" },
+          identity: { sessionId: "session-1", activityId: "activity-1", turnId: "turn-1" },
+          contextEpoch: "epoch-b",
+        })
+        const receipts = yield* recordedCapabilityLoadsForSession(db, "session-1", REQUEST.catalogSnapshotId)
+        expect(receipts).toHaveLength(1)
+        expect(receipts[0]!.catalogSnapshotId).toBe(REQUEST.catalogSnapshotId)
       }).pipe(Effect.provide(Database.layerFromPath(":memory:"))),
     )
   })

@@ -634,7 +634,10 @@ export const layer = Layer.effect(
       // durable table is the restoration authority (the in-process kernel cache is
       // process-local, so it would lose the loaded facts on a restart); `capabilityLoadFactOf`
       // derives the snapshot fact from the frozen receipt, matching the kernel record shape.
-      const sessionLoadFacts = (yield* recordedCapabilityLoadsForSession(db, session.id)).map(capabilityLoadFactOf)
+      // W15 (P4): the durable restore is snapshot-scoped — only receipts recorded under the
+      // CURRENT catalog snapshot belong to this epoch's loaded facts (mixed-epoch rows would
+      // rebuild a snapshot digest that never existed).
+      const sessionLoadFacts = (yield* recordedCapabilityLoadsForSession(db, session.id, CapabilitySnapshot.defaultCatalogSnapshotId())).map(capabilityLoadFactOf)
       const providerStream = V2ProviderTurn.stream({
         service: providerTurns,
         receipt: providerReceipt,

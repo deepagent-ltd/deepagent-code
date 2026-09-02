@@ -511,6 +511,96 @@ describe("createExecutionJournalSubscription (durable drain)", () => {
     }
   })
 
+  test("W15 P1 regression: a stale gapResync tick after a rebuild never overwrites the new anchor or fakes onResync", async () => {
+    // Old-generation tick: first drain hits the typed 410 (gapResync) and the next tick is
+    // awaiting its FLOOR re-read when a forced rebuild lands. The new loop seeds from the shared
+    // pre-410 anchor (45) and drains the retained window up to 50 (lastSeqs → 50). The stale
+    // tick must then return WITHOUT `advance(45)` (which would overwrite the shared anchor and
+    // replay the already-delivered (45, 50] window at the NEXT rebuild) and WITHOUT firing a fake
+    // onResync. Script: cursor#1 = watermark 45/floor 40; events(after=45) first call = 410;
+    // cursor#2 (the stale floor read) hangs on a gate released only after the rebuild; the
+    // rebuilt loop's events(after=45) serves rows 46..50; every later drain (after=50) is empty.
+    const lifecycle = createRecoveryLifecycle()
+    const afterCalls: string[] = []
+    const resyncs: { sessionID: string; fromSeq: number | undefined; floor: number }[] = []
+    let eventCalls = 0
+    let cursorReads = 0
+    let drainCalls = 0
+    let release: () => void = () => {}
+    const cursorGate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const client: ExecutionJournalClient = {
+      context: {
+        eventsCursor: async () => {
+          cursorReads += 1
+          if (cursorReads === 1) return { data: { watermark: 45, cursor: 45, floor: 40 } }
+          // The STALE tick's floor re-read: hangs until the test releases it after the rebuild
+          // (the server meanwhile pruned up to floor=45).
+          if (cursorReads === 2) {
+            await cursorGate
+            return { data: { watermark: 50, cursor: 50, floor: 45 } }
+          }
+          return { data: { watermark: 50, cursor: 50, floor: 45 } }
+        },
+        events: async ({ after }) => {
+          afterCalls.push(after)
+          drainCalls += 1
+          if (after !== "45") return { data: { events: [] } }
+          if (drainCalls === 1) throw typedGap() // stale anchor behind the newly-raised floor
+          return {
+            data: {
+              events: [
+                row(46, "session.execution.started.1", { sessionID: "ses-a" }),
+                row(47, "session.execution.succeeded.1", { sessionID: "ses-a" }),
+                row(48, "session.execution.started.1", { sessionID: "ses-a" }),
+                row(49, "session.execution.succeeded.1", { sessionID: "ses-a" }),
+                row(50, "session.execution.started.1", { sessionID: "ses-a" }),
+              ],
+            },
+          }
+        },
+      },
+    }
+    const journals = createExecutionJournalSubscription(
+      {
+        client,
+        sessionIDs: () => ["ses-a"],
+        lifecycle,
+        handlers: {
+          onEvent: () => (eventCalls += 1),
+          onResync: (info) => resyncs.push(info),
+        },
+      },
+      10,
+    )
+    try {
+      // Generation 1: anchor 45, drain 410 → gapResync; the stale tick is then parked in its
+      // floor re-read (cursor gate). Only after that does the rebuild land (generation 2).
+      await waitFor(() => drainCalls >= 1, "the 410 drain never ran")
+      await waitFor(() => cursorReads >= 2, "the stale floor read never started")
+      journals.refresh(true) // rebuild while the old tick is in flight at the cursor gate
+      await waitFor(() => eventCalls >= 5, "rebuilt loop never drained the retained window")
+      // The rebuilt loop delivered rows 46..50: the shared anchor is 50 now.
+      release() // the stale tick's floor read (floor=45) resolves post-rebuild
+      await new Promise((resolve) => setTimeout(resolve, 60)) // let the stale tick settle
+      // Second rebuild: seeds from the shared anchor. It must be 50 (the preserved position —
+      // not the stale floor 45, which would re-drain and REPLAY the already-delivered window).
+      journals.refresh(true)
+      await waitFor(() => afterCalls.length >= 6, "second rebuild never drained")
+      expect(resyncs).toEqual([]) // no fake onResync from the stale tick
+      expect(afterCalls.filter((after) => after === "45")).toHaveLength(2) // 410 drain + rebuilt drain only
+      expect(eventCalls).toBe(5) // every row delivered exactly once — no (45, 50] replay
+      const state = lifecycle.snapshot().sessions.get("ses-a")!
+      expect(state.execution?.number).toBe(3) // row 50 opened turn 3 exactly once
+      expect(state.lastExecution?.number).toBe(2) // turns 1+2 closed by rows 47/49 exactly once
+      expect(state.lastExecution?.reason).toBeUndefined() // no forged superseded from a replay
+    } finally {
+      release()
+      journals.dispose()
+    }
+  })
+
   test("session-set rebuild preserves per-session anchors and stops removed sessions", async () => {
     const lifecycle = createRecoveryLifecycle()
     const afterBySession = new Map<string, string[]>()

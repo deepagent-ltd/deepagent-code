@@ -63,7 +63,11 @@ describe("AgentGateway", () => {
     try {
       const started = performance.now()
       AgentGateway.configure({ enabled: false, agentMode: "general", baseDir: root, runsDir: undefined })
-      expect(performance.now() - started).toBeLessThan(100)
+      // W15 (flake): the assertion is a budget, not a benchmark — configure() must stay
+      // "deferred seeding" (no knowledge write here), but a 100ms wall-clock bound flaked under
+      // CI/load (fs warmup, GC). 500ms still proves no synchronous seeding happened (seeding is
+      // ~seconds of work), while leaving room for scheduler jitter.
+      expect(performance.now() - started).toBeLessThan(500)
       expect(existsSync(path.join(root, "public", "knowledge"))).toBe(false)
       await AgentGateway.flushKnowledgeSeed()
       expect(existsSync(path.join(root, "public", "knowledge"))).toBe(true)

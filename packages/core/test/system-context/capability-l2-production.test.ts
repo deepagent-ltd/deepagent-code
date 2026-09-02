@@ -313,7 +313,7 @@ describe("durable receipt: write table → NEW store instance (new DB connection
         // snapshot is rebuilt to the SAME loaded facts (the §7.5 restoration closure).
         const after = yield* Effect.gen(function* () {
           const { db } = yield* Database.Service
-          const receipts = yield* recordedCapabilityLoadsForSession(db, SESSION)
+          const receipts = yield* recordedCapabilityLoadsForSession(db, SESSION, capabilityCatalogSnapshotId)
           expect(receipts).toHaveLength(1)
           expect(receipts[0]!.sessionId).toBe(SESSION)
           expect(receipts[0]!.bodyHash).toBe(requestFor("deepagent.code-read").bodyHash)
@@ -342,7 +342,7 @@ describe("durable receipt: write table → NEW store instance (new DB connection
         // process — no in-memory state is consulted.
         const snapshot = yield* Effect.gen(function* () {
           const { db } = yield* Database.Service
-          const receipts = yield* recordedCapabilityLoadsForSession(db, SESSION)
+          const receipts = yield* recordedCapabilityLoadsForSession(db, SESSION, capabilityCatalogSnapshotId)
           const facts = receipts.map(capabilityLoadFactOf)
           return { snapshot: capabilitySnapshotRefFor(facts), fact: capabilityLoadFactOf(receipts[0]!) }
         }).pipe(Effect.provide(Database.layerFromPath(file)))
@@ -370,7 +370,7 @@ describe("capability_load tool settle: budget gate + audit receipt + snapshot ch
         expect(text).toContain("deepagent.code-read")
 
         // Durable audit receipt in session_capability_load.
-        const receipts = yield* recordedCapabilityLoadsForSession(db, SESSION)
+        const receipts = yield* recordedCapabilityLoadsForSession(db, SESSION, capabilityCatalogSnapshotId)
         expect(receipts).toHaveLength(1)
         expect(receipts[0]!.state.state).toBe("loaded")
         expect(receipts[0]!.bodyHash).toBe(requestFor("deepagent.code-read").bodyHash)
@@ -399,7 +399,7 @@ describe("capability_load tool settle: budget gate + audit receipt + snapshot ch
         expect(third.result.type).toBe("text")
         expect(String(third.result.value)).toContain("budget")
         // Only the two actually-loaded bodies have durable rows.
-        const receipts = yield* recordedCapabilityLoadsForSession(db, SESSION)
+        const receipts = yield* recordedCapabilityLoadsForSession(db, SESSION, capabilityCatalogSnapshotId)
         expect(receipts).toHaveLength(2)
       }).pipe(Effect.provide(toolLayer), Effect.scoped),
     )
@@ -458,7 +458,7 @@ describe("capability_load snapshot id: runtime-authoritative (W4.1 P0-2)", () =>
         expect(settlement.result.type).toBe("text")
         expect(String(settlement.result.value)).toContain("deepagent.code-read")
         expect(String(settlement.result.value)).toContain("Body preview:")
-        const receipts = yield* recordedCapabilityLoadsForSession(db, SESSION)
+        const receipts = yield* recordedCapabilityLoadsForSession(db, SESSION, capabilityCatalogSnapshotId)
         expect(receipts).toHaveLength(1)
         expect(receipts[0]!.catalogSnapshotId).toBe(capabilityCatalogSnapshotId)
       }).pipe(Effect.provide(toolLayer), Effect.scoped),
@@ -472,7 +472,7 @@ describe("capability_load snapshot id: runtime-authoritative (W4.1 P0-2)", () =>
         const settlement = yield* settleLoadCall("call-wrong-snap", "deepagent.code-read", "capability_catalog:stale")
         expect(String(settlement.result.value)).toContain("catalog_snapshot_mismatch")
         // A mismatched snapshot loads nothing — no durable fact.
-        const receipts = yield* recordedCapabilityLoadsForSession(db, SESSION)
+        const receipts = yield* recordedCapabilityLoadsForSession(db, SESSION, capabilityCatalogSnapshotId)
         expect(receipts).toHaveLength(0)
       }).pipe(Effect.provide(toolLayer), Effect.scoped),
     ))
@@ -484,7 +484,7 @@ describe("capability_load snapshot id: runtime-authoritative (W4.1 P0-2)", () =>
         yield* registerLoadTools(db)
         const settlement = yield* settleLoadCall("call-right-snap", "deepagent.code-read", capabilityCatalogSnapshotId)
         expect(String(settlement.result.value)).toContain("deepagent.code-read")
-        const receipts = yield* recordedCapabilityLoadsForSession(db, SESSION)
+        const receipts = yield* recordedCapabilityLoadsForSession(db, SESSION, capabilityCatalogSnapshotId)
         expect(receipts).toHaveLength(1)
         expect(receipts[0]!.catalogSnapshotId).toBe(capabilityCatalogSnapshotId)
       }).pipe(Effect.provide(toolLayer), Effect.scoped),

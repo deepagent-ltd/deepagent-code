@@ -99,7 +99,9 @@ export interface PreparedProviderTurn {
    * W8 canonical attempt hash (design §4.1 step 8, audit DEFECT 3): the durable
    * canonical `prepared_turn_hash` folds the C2-04 protocol attempt identity hash
    * (route/protocol/endpoint-origin/capability/lowering) into the request content
-   * hash — `sha256(request_hash + protocolAttemptIdentityHash)` — so the persisted
+   * hash — `sha256(canonicalJson({request_hash, protocol_attempt_identity_hash}))`,
+   * a canonical-JSON concatenation (NOT a spec-literal string join; the exact
+   * composition is pinned by the oracle tests) — so the persisted
    * exact-retry identity changes on a route/protocol/origin drift even when the
    * request payload is byte-identical. See `preparedTurnHash`.
    */
@@ -143,7 +145,9 @@ export function attemptIdentityHash(turn: PreparedProviderTurn): string {
 
 /**
  * W8 canonical attempt hash (design §4.1 step 8 + C2-04): `prepared_turn_hash =
- * sha256(request_hash + protocolAttemptIdentityHash)`. The canonical hash that is
+ * sha256(canonicalJson({request_hash, protocol_attempt_identity_hash}))` — canonical-JSON
+ * concatenation (NOT a spec-literal string join; the exact composition is pinned by the
+ * oracle tests). The canonical hash that is
  * persisted in the durable `prepared_turn_hash` column (and mirrored onto the
  * provider attempt) must carry the route/protocol/endpoint-origin binding — the
  * audit found the production path persisted only `request_hash`, which omits
@@ -152,8 +156,10 @@ export function attemptIdentityHash(turn: PreparedProviderTurn): string {
  * value is the exact-retry identity: an identical payload on a drifted route no
  * longer hashes to the same canonical value. An identity-less turn (embedded
  * resolvers that leave `protocolAttemptIdentity` unbound) folds the request hash
- * alone — still deterministic, and byte-stable with the pre-W8 receipts whose
- * canonical hash equalled `request_hash`.
+ * alone — `sha256(canonicalJson({request_hash}))`, still deterministic, but NOT
+ * byte-stable with the pre-W8 receipts whose column held the raw `request_hash`
+ * digest: the JSON wrapper changes the pre-image, so the fold re-hashes rather
+ * than reproducing the pre-W8 value.
  */
 export function preparedTurnHash(turn: {
   readonly request_hash: string
