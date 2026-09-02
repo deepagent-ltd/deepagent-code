@@ -188,7 +188,7 @@ export const OFFICIAL_VENDORED_CATALOG: Record<string, Provider> = Schema.decode
       "qwen3.8-flash": vendoredModel("qwen3.8-flash", "Qwen 3.8 Flash", { context: 128_000, family: "qwen" }),
       "qwen3.8-max": vendoredModel("qwen3.8-max", "Qwen 3.8 Max", { context: 128_000, reasoning: true, family: "qwen" }),
       "glm-5.3": vendoredModel("glm-5.3", "GLM 5.3", { context: 200_000, reasoning: true, family: "glm" }),
-      "glm-5.3-flash": vendoredModel("glm-5.3-flash", "GLM 5.3 Flash", { context: 128_000, family: "glm" }),
+      "glm-5.3-flash": vendoredModel("glm-5.3-flash", "GLM 5.3 Flash", { context: 128_000, reasoning: true, family: "glm" }),
       "kimi-k3": vendoredModel("kimi-k3", "Kimi K3", { context: 256_000, reasoning: true, family: "kimi" }),
       "k3-256k": vendoredModel("k3-256k", "Kimi K3 256K", { context: 256_000, reasoning: true, family: "kimi" }),
       "kimi-for-coding": vendoredModel("kimi-for-coding", "Kimi Coding", { context: 128_000, family: "kimi" }),

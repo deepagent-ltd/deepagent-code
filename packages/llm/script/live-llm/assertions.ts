@@ -10,21 +10,30 @@ export function assertTextResponse(response: LLMResponse.Output) {
   return { textLength: text.length, finishReason: finish.reason, usage: usageSummary(usage) }
 }
 
-export function assertToolResponse(response: LLMResponse.Output, name: string, expectedInput: unknown) {
+export function assertToolResponse(
+  response: LLMResponse.Output,
+  name: string,
+  expectedInput: unknown,
+  options: { rawInput?: boolean } = {},
+) {
   const calls = LLMResponse.toolCalls(response).filter((event) => event.name === name)
   if (calls.length !== 1) throw new Error(`Expected one ${name} tool call, received ${calls.length}`)
-  const actual = JSON.stringify(calls[0].input)
-  const expected = JSON.stringify(expectedInput)
-  if (actual !== expected) {
-    const mismatch = Array.from({ length: Math.max(actual.length, expected.length) }).findIndex(
-      (_, index) => actual[index] !== expected[index],
-    )
-    throw new Error(
-      `${name} tool input did not survive the provider round trip: ` +
-        `expected length/hash ${expected.length}/${Bun.hash(expected).toString(16)}, ` +
-        `actual ${actual.length}/${Bun.hash(actual).toString(16)}, first mismatch ${mismatch} ` +
-        `(expected ${expected.codePointAt(mismatch) ?? "EOF"}, actual ${actual.codePointAt(mismatch) ?? "EOF"})`,
-    )
+  // Providers like GLM 5.x serialize tool-call numbers as strings; callers that verify
+  // values through schema decoding can opt out of the byte-level round-trip check.
+  if (options.rawInput !== false) {
+    const actual = JSON.stringify(calls[0].input)
+    const expected = JSON.stringify(expectedInput)
+    if (actual !== expected) {
+      const mismatch = Array.from({ length: Math.max(actual.length, expected.length) }).findIndex(
+        (_, index) => actual[index] !== expected[index],
+      )
+      throw new Error(
+        `${name} tool input did not survive the provider round trip: ` +
+          `expected length/hash ${expected.length}/${Bun.hash(expected).toString(16)}, ` +
+          `actual ${actual.length}/${Bun.hash(actual).toString(16)}, first mismatch ${mismatch} ` +
+          `(expected ${expected.codePointAt(mismatch) ?? "EOF"}, actual ${actual.codePointAt(mismatch) ?? "EOF"})`,
+      )
+    }
   }
   const lifecycle = ["tool-input-start", "tool-input-end", "tool-call"]
   for (const type of lifecycle) {

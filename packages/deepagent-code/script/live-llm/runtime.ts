@@ -20,7 +20,11 @@ import { prepareToolSandbox, type ToolSandbox } from "../../../core/script/live-
 export const runtimeProviderID = "live-deepseek"
 
 export function runtimeProviderIDFor(config: Pick<LiveLLMConfig, "providerID">) {
-  return config.providerID === "deepseek" ? runtimeProviderID : "live-kimi"
+  return `live-${config.providerID}`
+}
+
+function liveProviderLabel(config: Pick<LiveLLMConfig, "providerID">) {
+  return config.providerID === "deepseek" ? "DeepSeek" : config.providerID === "kimi" ? "Kimi" : "GLM"
 }
 
 export async function directoryExists(directory: string): Promise<boolean> {
@@ -1722,7 +1726,7 @@ export function liveWorkspaceConfig(
           }
         : {}),
       [liveProviderID]: {
-        name: `${config.providerID === "deepseek" ? "DeepSeek" : "Kimi"} legacy live test`,
+        name: `${liveProviderLabel(config)} live test`,
         env: [],
         npm: "@ai-sdk/openai-compatible",
         api: config.baseURL,
@@ -1736,7 +1740,7 @@ export function liveWorkspaceConfig(
           [config.modelID]: {
             id: config.modelID,
             name: `${config.modelID} live test`,
-            reasoning: config.providerID === "kimi",
+            reasoning: config.providerID !== "deepseek",
             temperature: config.providerID === "deepseek",
             tool_call: true,
             release_date: "2026-07-27",

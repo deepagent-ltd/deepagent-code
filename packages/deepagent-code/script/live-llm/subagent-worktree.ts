@@ -68,11 +68,11 @@ if (
 }
 
 if (
-  child.model?.providerID !== "live-deepseek" ||
+  child.model?.providerID !== artifact.fingerprint.runtimeProviderID ||
   child.model.id !== artifact.fingerprint.modelID ||
   child.assistants.some(
     (assistant) =>
-      assistant.providerID !== "live-deepseek" || assistant.modelID !== artifact.fingerprint.modelID,
+      assistant.providerID !== artifact.fingerprint.runtimeProviderID || assistant.modelID !== artifact.fingerprint.modelID,
   )
 ) {
   throw new Error("Worktree routing child persisted the wrong provider/model identity")

@@ -175,7 +175,7 @@ try {
     if (
       observation.models.length === 0 ||
       observation.models.some(
-        (model) => model.providerID !== "live-deepseek" || model.modelID !== artifact.fingerprint.modelID,
+        (model) => model.providerID !== artifact.fingerprint.runtimeProviderID || model.modelID !== artifact.fingerprint.modelID,
       )
     ) {
       throw new Error(`${expectation.name} used the wrong provider/model identity`)

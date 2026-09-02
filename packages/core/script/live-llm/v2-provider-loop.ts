@@ -8,10 +8,11 @@ import {
   preflightLiveLLM,
   writeLiveArtifact,
 } from "../../../llm/script/live-llm/config"
+import { liveProviderLabel, runtimeProviderIDFor } from "./runtime"
 
 const suite = "v2-provider-loop"
-const runtimeProviderID = "live-deepseek"
 const config = await loadLiveLLMConfig()
+const runtimeProviderID = runtimeProviderIDFor(config)
 const preflight = await preflightLiveLLM(config)
 const testRoot = await mkdtemp(path.join(os.tmpdir(), "deepagent-code-v2-live-llm-"))
 const workspace = path.join(testRoot, "workspace")
@@ -50,7 +51,7 @@ await Bun.write(
     },
     provider: {
       [runtimeProviderID]: {
-        name: "DeepSeek V2 live test",
+        name: `${liveProviderLabel(config)} V2 live test`,
         env: [],
         npm: "@ai-sdk/openai-compatible",
         api: config.baseURL,
@@ -58,19 +59,22 @@ await Bun.write(
         models: {
           [config.modelID]: {
             id: config.modelID,
-            name: "DeepSeek V4 Flash live test",
-            reasoning: false,
-            temperature: true,
+            name: `${config.modelID} live test`,
+            reasoning: config.providerID !== "deepseek",
+            temperature: config.providerID === "deepseek",
             tool_call: true,
             release_date: "2026-07-27",
             limit: { context: 1_000_000, output: 1024 },
             cost: { input: 0, output: 0 },
             modalities: { input: ["text"], output: ["text"] },
-            options: {
-              thinking: { type: "disabled" },
-              maxTokens: 256,
-              temperature: 0,
-            },
+            options:
+              config.providerID === "deepseek"
+                ? {
+                    thinking: { type: "disabled" },
+                    maxTokens: 256,
+                    temperature: 0,
+                  }
+                : { reasoningEffort: "low", maxTokens: 1024 },
           },
         },
       },
