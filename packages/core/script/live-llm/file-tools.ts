@@ -84,7 +84,7 @@ async function readSuite() {
     requireToolSequence(grep, ["grep", "read"])
     requireMarker(grep.finalText, marker, "grep/read final answer")
   }
-  artifact.cases.forEach((testCase) => requireRuntimeMetadata(testCase, artifact.fingerprint.modelID))
+  artifact.cases.forEach((testCase) => requireRuntimeMetadata(testCase, artifact.fingerprint.modelID, artifact.fingerprint.runtimeProviderID))
   return {
     ...artifact,
     evidence: { markerHash: Bun.hash(marker).toString(16), extended },
@@ -200,7 +200,7 @@ async function mutationSuite() {
   if (changedPaths.length !== expectedPaths.size || changedPaths.some((file) => !expectedPaths.has(file))) {
     throw new Error(`Mutation allowlist mismatch: ${changedPaths.join(", ") || "no changes"}`)
   }
-  artifact.cases.forEach((testCase) => requireRuntimeMetadata(testCase, artifact.fingerprint.modelID))
+  artifact.cases.forEach((testCase) => requireRuntimeMetadata(testCase, artifact.fingerprint.modelID, artifact.fingerprint.runtimeProviderID))
   return {
     ...artifact,
     evidence: {
@@ -262,10 +262,11 @@ function requireRuntimeMetadata(
     sessionUsage: { input: number; output: number }
   },
   modelID: string,
+  runtimeProviderID: string,
 ) {
   if (
     testCase.models.length === 0 ||
-    testCase.models.some((model) => model.providerID !== artifact.fingerprint.runtimeProviderID || model.modelID !== modelID)
+    testCase.models.some((model) => model.providerID !== runtimeProviderID || model.modelID !== modelID)
   ) {
     throw new Error(`${testCase.name} persisted the wrong provider/model identity`)
   }

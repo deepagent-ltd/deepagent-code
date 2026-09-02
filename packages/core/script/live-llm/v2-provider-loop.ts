@@ -8,7 +8,7 @@ import {
   preflightLiveLLM,
   writeLiveArtifact,
 } from "../../../llm/script/live-llm/config"
-import { liveProviderLabel, runtimeProviderIDFor } from "./runtime"
+import { liveProviderLabel, prepareHarnessOwner, runtimeProviderIDFor } from "./runtime"
 
 const suite = "v2-provider-loop"
 const config = await loadLiveLLMConfig()
@@ -21,6 +21,7 @@ const isolatedData = path.join(testRoot, "deepagent-home")
 
 await mkdir(workspace, { recursive: true })
 await mkdir(isolatedHome, { recursive: true })
+await mkdir(isolatedData, { recursive: true })
 process.env.HOME = isolatedHome
 process.env.XDG_DATA_HOME = path.join(testRoot, "data")
 process.env.XDG_CONFIG_HOME = path.join(testRoot, "config")
@@ -33,6 +34,8 @@ process.env.DEEPAGENT_CODE_DISABLE_MODELS_FETCH = "1"
 process.env.DEEPAGENT_CODE_DISABLE_DEFAULT_PLUGINS = "1"
 process.env.DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE = config.apiKeyFile
 process.env.DEEPAGENT_ENABLED = "false"
+// Qualify the V2 owner gate AFTER env isolation but BEFORE any layer boots.
+const ownerSetup = await prepareHarnessOwner()
 
 await Bun.write(
   path.join(workspace, "deepagent-code.json"),
@@ -166,7 +169,8 @@ const liveLayer = Layer.mergeAll(
   locations,
   execution,
   sessions,
-)
+).pipe(Layer.provide(ownerSetup.ownerLayer))
+await ownerSetup.seedRow()
 
 const program = Effect.gen(function* () {
   const service = yield* SessionV2.Service
