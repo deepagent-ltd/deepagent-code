@@ -265,7 +265,7 @@ function requireRuntimeMetadata(
 ) {
   if (
     testCase.models.length === 0 ||
-    testCase.models.some((model) => model.providerID !== "live-deepseek" || model.modelID !== modelID)
+    testCase.models.some((model) => model.providerID !== artifact.fingerprint.runtimeProviderID || model.modelID !== modelID)
   ) {
     throw new Error(`${testCase.name} persisted the wrong provider/model identity`)
   }

@@ -15,7 +15,7 @@ import {
   type GoalCliToolEvidence,
   requirePostFeedbackMutations,
 } from "./goal-cli-oracle"
-import { liveSubprocessEnvironment, liveWorkspaceConfig, runtimeProviderID } from "./runtime"
+import { liveSubprocessEnvironment, liveWorkspaceConfig, runtimeProviderIDFor } from "./runtime"
 
 const config = await loadLiveLLMConfig()
 const preflight = await preflightLiveLLM(config)
@@ -148,7 +148,7 @@ try {
       "--agent",
       "loop",
       "--model",
-      `${runtimeProviderID}/${config.modelID}`,
+      `${runtimeProviderIDFor(config)}/${config.modelID}`,
       "--format",
       "json",
     ],
@@ -194,7 +194,7 @@ try {
     mode: "ext",
     stack: "cli-subprocess",
     status: "observed",
-    fingerprint: { ...modelFingerprint(config), runtimeProviderID },
+    fingerprint: { ...modelFingerprint(config), runtimeProviderID: runtimeProviderIDFor(config) },
     preflight: { durationMs: preflight.durationMs },
     sandbox: sandbox.evidence,
     process: {
@@ -306,7 +306,7 @@ try {
     mode: "ext" as const,
     stack: "cli-subprocess" as const,
     status: "passed" as const,
-    fingerprint: { ...modelFingerprint(config), runtimeProviderID },
+    fingerprint: { ...modelFingerprint(config), runtimeProviderID: runtimeProviderIDFor(config) },
     preflight: { durationMs: preflight.durationMs },
     sandbox: sandbox.evidence,
     process: {

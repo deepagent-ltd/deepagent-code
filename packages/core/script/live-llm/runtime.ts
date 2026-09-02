@@ -12,6 +12,14 @@ import { prepareToolSandbox } from "./sandbox"
 
 export const runtimeProviderID = "live-deepseek"
 
+export function runtimeProviderIDFor(config: Pick<LiveLLMConfig, "providerID">) {
+  return `live-${config.providerID}`
+}
+
+export function liveProviderLabel(config: Pick<LiveLLMConfig, "providerID">) {
+  return config.providerID === "deepseek" ? "DeepSeek" : config.providerID === "kimi" ? "Kimi" : "GLM"
+}
+
 export type V2LiveAgent = {
   prompt: string
   permission: Record<string, "allow" | "deny" | Record<string, "allow" | "deny">>
@@ -103,7 +111,7 @@ export async function runV2LiveCases(input: {
       sessions,
     )
     const location = Location.Ref.make({ directory: AbsolutePath.make(workspace) })
-    const providerID = ProviderV2.ID.make(runtimeProviderID)
+    const providerID = ProviderV2.ID.make(runtimeProviderIDFor(config))
     const modelID = ModelV2.ID.make(config.modelID)
     const startedAt = Date.now()
 
@@ -189,7 +197,7 @@ export async function runV2LiveCases(input: {
       mode: "live" as const,
       stack: "session-v2" as const,
       status: "passed" as const,
-      fingerprint: { ...modelFingerprint(config), runtimeProviderID },
+      fingerprint: { ...modelFingerprint(config), runtimeProviderID: runtimeProviderIDFor(config) },
       preflight: { durationMs: preflight.durationMs },
       sandbox: sandbox?.evidence,
       cases: observations,
@@ -232,14 +240,14 @@ function isolateProcess(testRoot: string, isolatedHome: string, isolatedData: st
 function workspaceConfig(config: LiveLLMConfig, agents: Record<string, V2LiveAgent>, shell?: string) {
   return {
     $schema: "https://ai.deepagent.ltd/config.schema.json",
-    model: `${runtimeProviderID}/${config.modelID}`,
+    model: `${runtimeProviderIDFor(config)}/${config.modelID}`,
     snapshot: false,
     ...(shell ? { shell } : {}),
     permission: { "*": "deny" },
     agent: Object.fromEntries(Object.entries(agents).map(([id, agent]) => [id, { mode: "primary", ...agent }])),
     provider: {
-      [runtimeProviderID]: {
-        name: "DeepSeek V2 live test",
+      [runtimeProviderIDFor(config)]: {
+        name: `${liveProviderLabel(config)} V2 live test`,
         env: [],
         npm: "@ai-sdk/openai-compatible",
         api: config.baseURL,
@@ -252,15 +260,18 @@ function workspaceConfig(config: LiveLLMConfig, agents: Record<string, V2LiveAge
         models: {
           [config.modelID]: {
             id: config.modelID,
-            name: "DeepSeek V4 Flash live test",
-            reasoning: false,
-            temperature: true,
+            name: `${config.modelID} live test`,
+            reasoning: config.providerID !== "deepseek",
+            temperature: config.providerID === "deepseek",
             tool_call: true,
             release_date: "2026-07-27",
             limit: { context: 1_000_000, output: 2048 },
             cost: { input: 0, output: 0 },
             modalities: { input: ["text"], output: ["text"] },
-            options: { thinking: { type: "disabled" }, maxTokens: 512, temperature: 0 },
+            options:
+              config.providerID === "deepseek"
+                ? { thinking: { type: "disabled" }, maxTokens: 512, temperature: 0 }
+                : { reasoningEffort: "low", maxTokens: 1024 },
           },
         },
       },

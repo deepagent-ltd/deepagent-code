@@ -68,7 +68,7 @@ if (
     (testCase) =>
       testCase.permissionRequests.length > 0 ||
       testCase.models.some(
-        (model) => model.providerID !== "live-deepseek" || model.modelID !== artifact.fingerprint.modelID,
+        (model) => model.providerID !== artifact.fingerprint.runtimeProviderID || model.modelID !== artifact.fingerprint.modelID,
       ),
   )
 ) {

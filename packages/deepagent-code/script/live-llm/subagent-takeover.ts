@@ -66,12 +66,12 @@ const child = observation.children[0]!
 if (
   child.parentID !== observation.sessionID ||
   child.agent !== "researcher" ||
-  child.model?.providerID !== "live-deepseek" ||
+  child.model?.providerID !== artifact.fingerprint.runtimeProviderID ||
   child.model.id !== artifact.fingerprint.modelID ||
   child.assistants.length === 0 ||
   child.assistants.some(
     (assistant) =>
-      assistant.providerID !== "live-deepseek" ||
+      assistant.providerID !== artifact.fingerprint.runtimeProviderID ||
       assistant.modelID !== artifact.fingerprint.modelID ||
       record(assistant.error, "expected timeout assistant error").name !== "MessageAbortedError",
   )

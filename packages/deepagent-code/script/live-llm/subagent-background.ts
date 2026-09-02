@@ -91,11 +91,11 @@ if (!childTools.some((tool) => tool.name === "question" && tool.status === "comp
   throw new Error("Background child did not resume from the Question latch answer")
 }
 if (
-  child.model?.providerID !== "live-deepseek" ||
+  child.model?.providerID !== artifact.fingerprint.runtimeProviderID ||
   child.model.id !== artifact.fingerprint.modelID ||
   child.assistants.some(
     (assistant) =>
-      assistant.providerID !== "live-deepseek" || assistant.modelID !== artifact.fingerprint.modelID,
+      assistant.providerID !== artifact.fingerprint.runtimeProviderID || assistant.modelID !== artifact.fingerprint.modelID,
   )
 ) {
   throw new Error("Background child persisted the wrong provider/model identity")
