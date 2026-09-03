@@ -143,8 +143,8 @@ try {
     stack: "packaged-renderer-ui",
     status: "passed",
     fingerprint: {
-      providerID: "deepseek",
-      runtimeProviderID: "live-deepseek",
+      providerID: config.providerID,
+      runtimeProviderID: process.env.DEEPAGENT_CODE_LIVE_LLM_PROVIDER?.trim() || "live-deepseek",
       modelID: config.modelID,
       modelRevision: config.modelRevision,
       baseURL: config.baseURL,

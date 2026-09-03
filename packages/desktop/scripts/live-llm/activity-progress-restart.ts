@@ -368,8 +368,8 @@ try {
     stack: "desktop-sidecar-process-restart",
     status: "passed",
     fingerprint: {
-      providerID: "deepseek",
-      runtimeProviderID: "live-deepseek",
+      providerID: config.providerID,
+      runtimeProviderID: process.env.DEEPAGENT_CODE_LIVE_LLM_PROVIDER?.trim() || "live-deepseek",
       modelID: config.modelID,
       modelRevision: config.modelRevision,
       baseURL: config.baseURL,
@@ -438,7 +438,7 @@ function promptBody(messageID: string, intentID: string, text: string) {
   return {
     messageID,
     intentID,
-    model: { providerID: "live-deepseek", modelID: config.modelID },
+    model: { providerID: process.env.DEEPAGENT_CODE_LIVE_LLM_PROVIDER?.trim() || "live-deepseek", modelID: config.modelID },
     agent: "live-ui",
     parts: [{ type: "text", text }],
   }

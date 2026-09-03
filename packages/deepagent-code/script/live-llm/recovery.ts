@@ -63,15 +63,19 @@ await writeLiveArtifact(
 )
 
 const stale = requireCase("stale-edit")
+// Provider-generic stale-edit contract: the model observes the file (read family), a stale
+// edit attempt fails with the not-found error, and a later edit completes. Exact counts and
+// ordering around the failure are model behavior.
+const staleRead = stale.tools.some((tool) => ["read", "grep", "glob"].includes(tool.name) && tool.status === "completed")
+const staleErrors = stale.tools.filter((tool) => tool.status === "error")
+const staleEditCompletedAfterError = stale.tools.some(
+  (tool, index) => tool.name === "edit" && tool.status === "completed" && stale.tools.slice(0, index).some((prior) => prior.status === "error"),
+)
 if (
-  stale.tools.length !== 3 ||
-  stale.tools[0]?.name !== "read" ||
-  stale.tools[0].status !== "completed" ||
-  stale.tools[1]?.name !== "edit" ||
-  stale.tools[1].status !== "error" ||
-  !stale.tools[1].error?.includes("Could not find oldString") ||
-  stale.tools[2]?.name !== "edit" ||
-  stale.tools[2].status !== "completed"
+  !staleRead ||
+  staleErrors.length < 1 ||
+  !staleErrors.some((tool) => tool.name === "edit" && tool.error?.includes("Could not find oldString")) ||
+  !staleEditCompletedAfterError
 ) {
   throw new Error(
     `Stale edit recovery mismatch: ${stale.tools.map((tool) => `${tool.name}:${tool.status}`).join(", ")}`,
@@ -79,15 +83,22 @@ if (
 }
 
 const patch = requireCase("patch-rebuild")
+// Provider-generic patch-recovery contract: every call is apply_patch_chunk, at least one
+// attempt fails with the verification error, at least one later attempt completes, and the
+// final workspace applies only the valid transaction (asserted below). The exact call count
+// and interleaving are model behavior.
+const patchErrors = patch.tools.filter((tool) => tool.status === "error")
+const patchCompletedAfterError = patch.tools.some(
+  (tool, index) => tool.status === "completed" && patch.tools.slice(0, index).some((prior) => prior.status === "error"),
+)
 if (
-  patch.tools.length !== 4 ||
+  patch.tools.length === 0 ||
   patch.tools.some((tool) => tool.name !== "apply_patch_chunk") ||
-  patch.tools.map((tool) => tool.status).join(",") !== "completed,error,completed,completed"
+  patchErrors.length < 1 ||
+  !patchCompletedAfterError ||
+  !patchErrors.some((tool) => tool.error?.includes("apply_patch verification failed"))
 ) {
   throw new Error(`Patch recovery mismatch: ${patch.tools.map((tool) => `${tool.name}:${tool.status}`).join(", ")}`)
-}
-if (!patch.tools[1]?.error?.includes("apply_patch verification failed")) {
-  throw new Error("Invalid patch did not produce the expected validation error")
 }
 if (artifact.workspace.files["stale.txt"] !== `header\nstate=${editMarker}\nneighbor=unchanged\n`) {
   throw new Error("Stale edit recovery did not preserve exact file content")
