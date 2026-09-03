@@ -28,7 +28,7 @@ const positiveIntegerWithDefault = (name: string, fallback: number) =>
 export const DEFAULT_SUBAGENT_TIMEOUT_MS = 30 * 60_000
 export const DEFAULT_SUBAGENT_OUTPUT_MAX_CHARS = 8_000
 export const isCoreV2OnlyVersion = (version: string) =>
-  /^(?:1\.4\.8(?=[.-]|$)|2\.0(?:\.0-)?(?:alpha|beta)(?=[.-]|\d|$))/.test(version)
+  /^(?:1\.4\.8(?=[.-]|$)|2\.0(?:\.0-)?(?:alpha|beta)(?=[.-]|\d|$)|0\.0\.0-core-v2)/.test(version)
 const experimental = bool("DEEPAGENT_CODE_EXPERIMENTAL")
 const enabledByExperimental = (name: string) =>
   Config.all({ experimental, enabled: Config.boolean(name).pipe(Config.option) }).pipe(

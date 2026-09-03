@@ -152,6 +152,7 @@ import { contextHandlers } from "./handlers/context"
 import { productionSourcesLayer } from "@/context-federation/production-sources"
 import { V2RunnerFrame } from "@/session/v2-runner-frame"
 import { V2OwnerSeed } from "@deepagent-code/core/session/runner/v2-owner-seed"
+import { V2OwnerDevMint } from "@deepagent-code/core/session/runner/v2-owner-dev-mint"
 
 export const context = Context.makeUnsafe<unknown>(new Map())
 
@@ -462,7 +463,15 @@ export function createRoutes(corsOptions?: CorsOptions) {
     // => no-op (local dev / mint --dev covers it); file present but unverifiable => REFUSED
     // (fail-closed, nothing written) and only logged — a seed failure never blocks startup.
     Layer.provideMerge(
-      V2OwnerSeed.layer({ env: process.env, appRoot: V2OwnerSeed.defaultOwnerAuthorizationAppRoot() }),
+      Layer.mergeAll(
+        V2OwnerSeed.layer({ env: process.env, appRoot: V2OwnerSeed.defaultOwnerAuthorizationAppRoot() }),
+        // run 模式适配（2026-09-03）：dev 构建自举 owner 授权 — V2-only profile 拒绝 legacy 后，
+        // dev 构建（无发布授权文件）必须能自举，否则每个 dev run 都 fail-closed 在
+        // v2_owner_campaign_not_verified。生产版本不走此路径（fail-closed 合同不变）。
+        // same memoized Database.defaultLayer constant the other INTO-the-base seams use, so the
+        // mint shares the route graph's connection (no split-brain) and adds no requirements.
+        V2OwnerDevMint.layer.pipe(Layer.provide(Database.defaultLayer)),
+      ),
     ),
     // 1.4.8.rN: LAST-WINS — the shared @deepagent-code/server handlers graph binds
     // SessionV2.defaultLayer (no-op execution) inside its own subtree; re-provide the live layer at
