@@ -712,6 +712,38 @@ export const RunCommand = effectCmd({
         async function loop(client: OpencodeClient, events: Awaited<ReturnType<typeof sdk.event.subscribe>>) {
           const toggles = new Map<string, boolean>()
           const goalMode = args.goal === true
+          // W3 gap repair (design-code-gap-audit B5): per-turn mechanism activation evidence in the
+          // CLI json stream. The benchmark trajectories previously could not self-attest which
+          // mechanisms fired (the wazero C2 analysis had to reverse-engineer "compact" keyword hits
+          // that turned out to be task content). Plan state and gate blocks are folded from the very
+          // parts flowing through this loop; four-graph statuses come from the C6 readiness probe.
+          const mechanismTrace = args.format === "json" && !!process.env.DEEPAGENT_CODE_MECHANISM_TRACE?.trim()
+          const trace = {
+            turn: 0,
+            blocks: 0,
+            plan: null as null | { done: number; total: number; version: number; protocol: string },
+            graphs: false,
+          }
+          const emitTrace = (extra: Record<string, unknown> = {}) =>
+            emit("mechanism_trace", {
+              turn: trace.turn,
+              plan: trace.plan,
+              gate: { blocks: trace.blocks },
+              ...extra,
+            })
+          const probeGraphs = (client: OpencodeClient) => {
+            // retry until the first success — the earliest turns may race session projection
+            if (trace.graphs) return
+            void client.context
+              .readiness({ session_id: sessionID })
+              .then((result) => {
+                const statuses = result.data?.statuses
+                if (!statuses) return
+                trace.graphs = true
+                emitTrace({ graphs: statuses })
+              })
+              .catch(() => {})
+          }
           const sessions = createSessionTree(sessionID, async (candidate) => {
             const result = await client.session.get({ sessionID: candidate }).catch(() => undefined)
             return result?.data
@@ -760,7 +792,24 @@ export const RunCommand = effectCmd({
               }
 
               if (part.type === "tool" && (part.state.status === "completed" || part.state.status === "error")) {
-                if (emit("tool_use", { part })) continue
+                if (emit("tool_use", { part })) {
+                  if (mechanismTrace) {
+                    const meta = (part.state as { metadata?: Record<string, unknown> }).metadata ?? {}
+                    if (part.tool === "plan" && meta.plan_protocol) {
+                      trace.plan = {
+                        done: Number(meta.done ?? 0),
+                        total: Number(meta.total ?? 0),
+                        version: Number(meta.plan_version ?? 0),
+                        protocol: String(meta.plan_protocol),
+                      }
+                    }
+                    const output = String((part.state as { output?: unknown }).output ?? "")
+                    if (output.includes("No plan exists yet") || output.includes("blocked until the plan is re-synced")) {
+                      trace.blocks++
+                    }
+                  }
+                  continue
+                }
                 if (part.state.status === "completed") {
                   await tool(part)
                   continue
@@ -785,7 +834,15 @@ export const RunCommand = effectCmd({
               }
 
               if (part.type === "step-finish") {
-                if (emit("step_finish", { part })) continue
+                if (emit("step_finish", { part })) {
+                  if (mechanismTrace) {
+                    trace.turn++
+                    const tokens = (part as { tokens?: Record<string, unknown> }).tokens
+                    emitTrace({ context: { tokens: tokens ?? null } })
+                    probeGraphs(client)
+                  }
+                  continue
+                }
               }
 
               if (part.type === "text" && part.time?.end) {

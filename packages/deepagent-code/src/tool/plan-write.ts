@@ -68,21 +68,25 @@ const PlanStep = Schema.Struct({
 })
 
 export const Parameters = Schema.Struct({
-  operation: Schema.Literals(["create", "advance", "replan"]).annotate({
-    description: "create a plan, advance an existing plan, or replan with a reason",
+  operation: Schema.optional(Schema.Literals(["create", "advance", "replan"])).annotate({
+    description:
+      "create a plan, advance an existing plan, or replan with a reason; omit for the default create",
   }),
   // Provider-tolerant decoding (GLM 5.x serializes tool-argument numbers as strings and null
-  // as "null"): the schema accepts the coerced shapes and execute normalizes them, so the
-  // strict protocol semantics downstream are unchanged.
-  expected_plan_id: Schema.NullOr(Schema.String).annotate({
+  // as "null"): the schema accepts the coerced shapes and execute normalizes them, so the strict
+  // protocol semantics downstream are unchanged. F-10: expected_* are OPTIONAL — GLM omits
+  // meaningless fields, and for create they are meaningless (absent = null). An advance/replan
+  // that omits them lands on the coached PlanConflict path (correction payload with the exact
+  // authoritative values) instead of a dead schema rejection.
+  expected_plan_id: Schema.optional(Schema.NullOr(Schema.String)).annotate({
     description:
-      "Use null for create; for advance/replan copy expected_plan_id exactly from the latest <plan-status> or plan result",
+      "Use null (or omit) for create; for advance/replan copy expected_plan_id exactly from the latest <plan-status> or plan result",
   }),
-  expected_version: Schema.NullOr(
-    Schema.Union([NonNegativeInt, Schema.NumberFromString]),
+  expected_version: Schema.optional(
+    Schema.NullOr(Schema.Union([NonNegativeInt, Schema.NumberFromString])),
   ).annotate({
     description:
-      "Use null for create; for advance/replan copy expected_version exactly from the latest <plan-status> or plan result",
+      "Use null (or omit) for create; for advance/replan copy expected_version exactly from the latest <plan-status> or plan result",
   }),
   replan_reason: Schema.optional(Schema.String).annotate({
     description: "Required for replan; omit for create/advance",
@@ -133,8 +137,8 @@ export const PlanTool = Tool.define<typeof Parameters, Metadata, EventV2Bridge.S
         // server-owned and intentionally excluded from its semantic proposal.
         advance_patch: input.operation === "advance",
         operation: input.operation,
-        expected_plan_id: input.expected_plan_id,
-        expected_version: input.expected_version,
+        expected_plan_id: input.expected_plan_id ?? null,
+        expected_version: input.expected_version ?? null,
         replan_reason: input.operation === "advance" ? null : (input.replan_reason ?? null),
         goal: input.operation === "advance" ? null : (input.goal?.trim() ?? null),
         assumptions: input.operation === "advance" ? [] : (input.assumptions ?? []).map((value) => value.trim()),
@@ -239,9 +243,16 @@ export const PlanTool = Tool.define<typeof Parameters, Metadata, EventV2Bridge.S
               const validation = error
               const offending = validation.offending_step_ids
               const offendingText = offending.length ? " Offending step IDs: " + offending.join(", ") + "." : ""
+              // F-9: the all-steps-done advance has a legal terminal form (active_step_id null) —
+              // teach it in the rejection itself instead of letting the budget die on it.
+              const terminalHint =
+                validation.code === "invalid_active_step" && params.operation === "advance"
+                  ? " If every step is done after this update, resend the same advance with active_step_id set to null — a completed plan with no active step is the terminal state."
+                  : ""
               const validationOutput = [
                 "The plan was not committed (" + validation.code + ").",
                 offendingText,
+                terminalHint,
                 " Correct the plan payload and retry once.",
                 validation.challenge_id ? " Confirmation: " + validation.challenge_id : "",
                 renderModelPlanCorrection(params, validation.code, previous, ref),
@@ -359,11 +370,24 @@ export const normalizeModelPlanWrite = (
   // only finite non-negative integers survive as versions; everything else reads as absent.
   const expectedVersionNumber =
     typeof params.expected_version === "number" ? params.expected_version : Number(params.expected_version)
+  const expectedPlanID =
+    params.expected_plan_id == null || params.expected_plan_id === "null" ? null : params.expected_plan_id
+  // F-11: providers omit `operation` on obvious payload shapes. Infer instead of defaulting to
+  // create: no prior plan (or no expected precondition) → create; a supplied precondition with an
+  // existing plan → advance (replan iff it carries a reason). Wrong inferences land on the coached
+  // validation/conflict paths, never a dead schema rejection.
+  const inferredOperation =
+    previous == null || (expectedPlanID == null && params.expected_version == null)
+      ? "create"
+      : params.replan_reason !== undefined
+        ? "replan"
+        : "advance"
   const normalized = {
     ...params,
-    expected_plan_id: params.expected_plan_id === "null" ? null : params.expected_plan_id,
+    operation: params.operation ?? inferredOperation,
+    expected_plan_id: expectedPlanID,
     expected_version:
-      params.expected_version === null || !Number.isInteger(expectedVersionNumber) || expectedVersionNumber < 0
+      params.expected_version == null || !Number.isInteger(expectedVersionNumber) || expectedVersionNumber < 0
         ? null
         : expectedVersionNumber,
     active_step_id:
@@ -377,16 +401,18 @@ export const normalizeModelPlanWrite = (
   // Check the shared core precondition before interpreting the patch against current authority.
   AgentGateway.DeepAgentPlanController.requirePlanWriteExpected(normalized, previous, expected)
   const base = {
-    operation: params.operation,
+    operation: normalized.operation,
     expected_plan_id: normalized.expected_plan_id,
     expected_version: normalized.expected_version,
     ...(params.replan_reason !== undefined ? { replan_reason: params.replan_reason } : {}),
     goal: params.goal ?? "",
   }
 
-  if (params.operation === "create") {
+  if (normalized.operation === "create") {
     const suppliedIDs = params.steps.map((step) => step.step_id?.trim()).filter((stepID) => stepID !== undefined)
-    if (suppliedIDs.length > 0 || params.active_step_id !== undefined) {
+    // F-13: a null pointer ("null" string or real null) is absent intent, not an invented ID —
+    // GLM sends it while echoing the schema; only a real string pointer is unsafe on create.
+    if (suppliedIDs.length > 0 || normalized.active_step_id != null) {
       throw new AgentGateway.DeepAgentPlanController.PlanValidationError("unsafe_step_identity", [
         ...new Set([...suppliedIDs, ...(typeof params.active_step_id === "string" ? [params.active_step_id] : [])]),
       ])
@@ -402,7 +428,7 @@ export const normalizeModelPlanWrite = (
     throw new AgentGateway.DeepAgentPlanController.PlanValidationError("plan_missing")
   }
 
-  if (params.operation === "advance") {
+  if (normalized.operation === "advance") {
     const suppliedIDs = params.steps.map((step) => step.step_id?.trim() ?? "")
     if (suppliedIDs.some((stepID) => stepID === "")) {
       throw new AgentGateway.DeepAgentPlanController.PlanValidationError("unsafe_step_identity", [], previous.plan_id)
@@ -425,22 +451,34 @@ export const normalizeModelPlanWrite = (
       )
     }
     const updates = new Map(params.steps.map((step, index) => [suppliedIDs[index], step] as const))
+    const built = previous.steps.map((step) => {
+      const update = updates.get(step.step_id)
+      return {
+        step_id: step.step_id,
+        title: step.title,
+        status: update?.status ?? step.status,
+        acceptance: step.acceptance ?? null,
+        assigned_agent: step.assigned_agent ?? null,
+        note: update?.note ?? step.note ?? null,
+      }
+    })
+    // F-9/F-11/F-12: the supplied active_step_id is ADVISORY on advance — the built statuses are
+    // the truth (exactly one active step, or none on the legal terminal close). Every hard-failure
+    // variant so far was a pointer/statuses contradiction: retain-resurrected dead pointers, and
+    // explicit stale pointers copied verbatim from a correction payload while that step was being
+    // marked done. A pointer that matches a built ACTIVE step passes through; anything else is
+    // dropped and the controller derives from statuses.
+    const advisoryActive =
+      normalized.active_step_id != null &&
+      built.some((step) => step.step_id === normalized.active_step_id && step.status === "active")
+        ? normalized.active_step_id
+        : undefined
     return {
       ...base,
       goal: previous.goal,
       assumptions: [...previous.assumptions],
-      active_step_id: normalized.active_step_id === undefined ? previous.active_step_id : normalized.active_step_id,
-      steps: previous.steps.map((step) => {
-        const update = updates.get(step.step_id)
-        return {
-          step_id: step.step_id,
-          title: step.title,
-          status: update?.status ?? step.status,
-          acceptance: step.acceptance ?? null,
-          assigned_agent: step.assigned_agent ?? null,
-          note: update?.note ?? step.note ?? null,
-        }
-      }),
+      ...(advisoryActive !== undefined ? { active_step_id: advisoryActive } : {}),
+      steps: built,
     }
   }
 
@@ -501,7 +539,7 @@ export const renderModelPlanCorrection = (
       renderPlanRetryBase(previous, ref)
     )
   }
-  if (params.operation === "create") {
+  if ((params.operation ?? "create") === "create") {
     return (
       "\n\nCorrection protocol for create: copy the schema-valid payload below. It deliberately omits every step_id and active_step_id; the server allocates IDs and derives the active pointer. Do not invent a future server ID.\n" +
       JSON.stringify({
