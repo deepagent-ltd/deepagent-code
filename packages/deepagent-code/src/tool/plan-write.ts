@@ -354,10 +354,18 @@ export const normalizeModelPlanWrite = (
 ) => {
   // Provider-tolerant normalization (GLM 5.x): the literal "null" string and stringified
   // numbers decode through the tolerant schema but must land as real nulls/numbers before
-  // the strict core precondition runs.
+  // the strict core precondition runs. NumberFromString can also surface the "null" string
+  // as NaN — a number-typed value that still fails every downstream `!== null` check — so
+  // only finite non-negative integers survive as versions; everything else reads as absent.
+  const expectedVersionNumber =
+    typeof params.expected_version === "number" ? params.expected_version : Number(params.expected_version)
   const normalized = {
     ...params,
     expected_plan_id: params.expected_plan_id === "null" ? null : params.expected_plan_id,
+    expected_version:
+      params.expected_version === null || !Number.isInteger(expectedVersionNumber) || expectedVersionNumber < 0
+        ? null
+        : expectedVersionNumber,
     active_step_id:
       params.active_step_id === undefined
         ? undefined
@@ -371,7 +379,7 @@ export const normalizeModelPlanWrite = (
   const base = {
     operation: params.operation,
     expected_plan_id: normalized.expected_plan_id,
-    expected_version: params.expected_version,
+    expected_version: normalized.expected_version,
     ...(params.replan_reason !== undefined ? { replan_reason: params.replan_reason } : {}),
     goal: params.goal ?? "",
   }
@@ -421,7 +429,7 @@ export const normalizeModelPlanWrite = (
       ...base,
       goal: previous.goal,
       assumptions: [...previous.assumptions],
-      active_step_id: params.active_step_id === undefined ? previous.active_step_id : params.active_step_id,
+      active_step_id: normalized.active_step_id === undefined ? previous.active_step_id : normalized.active_step_id,
       steps: previous.steps.map((step) => {
         const update = updates.get(step.step_id)
         return {

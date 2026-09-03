@@ -95,6 +95,40 @@ describe("model plan advance normalization", () => {
     expect(next.active_step_id).toBe(next.steps[1]!.step_id)
   })
 
+  // F-7 regression (GLM 5.x): the tolerant schema decodes "null"/stringified numbers, and the
+  // normalization layer converts them — but the built payload must carry the CONVERTED values,
+  // not the raw ones. The raw leak made the model's protocol-correct self-correction
+  // (expected_version "0" → "null") still fail create's requirePlanWriteExpected(null-only)
+  // precondition, burning the whole two-attempt budget (wazero c2-fullon-seed1).
+  test("threads GLM-stringified nulls through the built payload, not just the schema", () => {
+    const params = decode({
+      operation: "create",
+      expected_plan_id: "null",
+      expected_version: "null",
+      goal: "ship the provider migration",
+      steps: [{ title: "Inspect the provider boundary", status: "active" }],
+    })
+
+    const normalized = normalizeModelPlanWrite(params, null, null)
+    expect(normalized.expected_version).toBeNull()
+    const next = buildPlanFromWriteInput(previous.session_id, normalized, null, null)
+    expect(next.steps[0]!.status).toBe("active")
+  })
+
+  test("a stringified advance version is coerced before the authority CAS precondition", () => {
+    const params = decode({
+      operation: "advance",
+      expected_plan_id: previous.plan_id,
+      expected_version: "2",
+      active_step_id: "null",
+      steps: previous.steps.map((step) => ({ step_id: step.step_id, status: step.status })),
+    })
+
+    const normalized = normalizeModelPlanWrite(params, previous, ref)
+    expect(normalized.expected_version).toBe(ref.version)
+    expect("active_step_id" in normalized && normalized.active_step_id === null).toBeTrue()
+  })
+
   test("rejects an incident-shaped replan that invents an active ID", () => {
     const params = decode({
       operation: "replan",

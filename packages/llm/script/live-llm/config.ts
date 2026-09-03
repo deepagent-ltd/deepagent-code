@@ -2,7 +2,7 @@ import path from "node:path"
 import os from "node:os"
 import { mkdir, realpath, stat } from "node:fs/promises"
 
-export type LiveLLMProviderID = "deepseek" | "kimi" | "zai"
+export type LiveLLMProviderID = "deepseek" | "kimi" | "zai" | "zai-coding-plan"
 
 export type LiveLLMConfig = {
   providerID: LiveLLMProviderID
@@ -41,6 +41,12 @@ const providerProfiles: Record<LiveLLMProviderID, LiveLLMProviderProfile> = {
     modelID: "glm-5.3-flash",
     label: "GLM",
   },
+  "zai-coding-plan": {
+    baseURL: "https://open.bigmodel.cn/api/coding/paas/v4",
+    aliases: ["https://api.z.ai/api/coding/paas/v4"],
+    modelID: "glm-5.3-flash",
+    label: "GLM Coding Plan",
+  },
 }
 
 /** Environment names accepted for DEEPAGENT_CODE_LIVE_LLM_PROVIDER; moonshotai is the
@@ -50,10 +56,11 @@ const providerEnvironmentAliases: Record<string, LiveLLMProviderID> = {
   kimi: "kimi",
   moonshotai: "kimi",
   zai: "zai",
+  "zai-coding-plan": "zai-coding-plan",
 }
 
 /** Registry provider ids (script/live-llm/providers.ts) the live suites can actually drive. */
-export const runnableLiveLLMRegistryProviderIDs = ["deepseek", "moonshotai", "zai"] as const
+export const runnableLiveLLMRegistryProviderIDs = ["deepseek", "moonshotai", "zai", "zai-coding-plan"] as const
 
 export function liveLLMProviderFromEnvironment(
   environment: Readonly<Record<string, string | undefined>> = process.env,
@@ -61,7 +68,7 @@ export function liveLLMProviderFromEnvironment(
   const requested = environment.DEEPAGENT_CODE_LIVE_LLM_PROVIDER?.trim() || "deepseek"
   const providerID = providerEnvironmentAliases[requested]
   if (!providerID) {
-    throw new Error("DEEPAGENT_CODE_LIVE_LLM_PROVIDER must be deepseek, kimi, or zai")
+    throw new Error("DEEPAGENT_CODE_LIVE_LLM_PROVIDER must be deepseek, kimi, zai, or zai-coding-plan")
   }
   return providerID
 }
@@ -89,8 +96,8 @@ export async function loadPlanLiveLLMConfig(
   environment: Readonly<Record<string, string | undefined>> = process.env,
 ): Promise<LiveLLMConfig> {
   const providerID = environment.DEEPAGENT_CODE_PLAN_LIVE_LLM_PROVIDER?.trim() || "deepseek"
-  if (providerID !== "deepseek" && providerID !== "kimi" && providerID !== "zai") {
-    throw new Error("DEEPAGENT_CODE_PLAN_LIVE_LLM_PROVIDER must be deepseek, kimi, or zai")
+  if (providerID !== "deepseek" && providerID !== "kimi" && providerID !== "zai" && providerID !== "zai-coding-plan") {
+    throw new Error("DEEPAGENT_CODE_PLAN_LIVE_LLM_PROVIDER must be deepseek, kimi, zai, or zai-coding-plan")
   }
   return loadLiveLLMProviderConfig(providerID, environment)
 }
