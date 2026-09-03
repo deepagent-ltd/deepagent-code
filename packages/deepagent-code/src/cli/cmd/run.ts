@@ -357,6 +357,14 @@ export const RunCommand = effectCmd({
 
       const replay = args.replay || args["replay-limit"] !== undefined
 
+      // run 模式适配（F-15 收口）：dev 构建在进入任何 prompt 路径之前自举 V2 owner 授权 —
+      // 守卫可能在 httpapi 图构建（图内 mint）之前被直连路径触发，入口处武装是唯一稳态。
+      if (process.env.DEEPAGENT_CODE_V2_OWNER_DEV_MINT !== "0") {
+        const { bootstrapDevOwnerAuthorization } = await import(
+          "@deepagent-code/core/session/runner/v2-owner-dev-mint"
+        )
+        await bootstrapDevOwnerAuthorization()
+      }
       const root = Filesystem.resolve(process.cwd())
       const directory = (() => {
         if (!args.dir) return args.attach ? undefined : root

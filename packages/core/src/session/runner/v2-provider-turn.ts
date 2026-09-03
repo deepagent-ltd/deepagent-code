@@ -13,7 +13,10 @@ import { ContextFederationExecutionParity } from "../../context-federation/execu
 import { SessionProviderOwner } from "../../context-federation/provider-owner"
 import { SessionProviderAttempt } from "../../context-federation/provider-attempt"
 import { SessionProviderAttemptTable, SessionProviderOwnerLeaseTable } from "../../context-federation/session-sql"
+import { existsSync, readFileSync } from "node:fs"
+import { join } from "node:path"
 import { InstallationVersion } from "../../installation/version"
+import { Global } from "../../global"
 import { SessionSchema } from "../schema"
 import { PreparedProviderTurn } from "./prepared-provider-turn"
 import {
@@ -233,6 +236,7 @@ export const CurrentOwnerAuthorizationPublicKey = Context.Reference<string>(
   {
     defaultValue: () =>
       process.env.DEEPAGENT_CODE_V2_OWNER_AUTHORIZATION_PUBLIC_KEY?.trim() ||
+      devVerifierPublicKey() ||
       V2OwnerAuthorization.PRODUCTION_OWNER_AUTHORIZATION_PUBLIC_KEY,
   },
 )
@@ -1237,6 +1241,28 @@ export function ownerCampaignFromEnv(): string | undefined {
   return id && validCampaignID(id) ? id : undefined
 }
 
+// F-15 closeout: dev-build owner resolution is DETERMINISTIC — no env arming, so multi-process
+// timing can never split the campaign between the minter and the verifier (the armed-env approach
+// failed exactly there: a spawned child inherited pre-arm env and resolved the default campaign).
+// The campaign derives from the build identity (same derivation in every process of the same
+// binary), and the verifier key comes from the persisted local dev keypair the mint wrote.
+export const DEV_VERSION_PREFIX = "0.0.0-"
+export const isDevBuildVersion = (version: string = InstallationVersion) => version.startsWith(DEV_VERSION_PREFIX)
+export const devOwnerCampaignFor = (subjectCommit: string) => `v2-owner-dev-${subjectCommit.slice(0, 12)}`
+
+let cachedDevVerifierKey: string | undefined
+const devVerifierPublicKey = (): string | undefined => {
+  if (!isDevBuildVersion()) return undefined
+  if (cachedDevVerifierKey) return cachedDevVerifierKey
+  try {
+    const key = readFileSync(join(Global.Path.state, "v2-owner-dev", "public.pem"), "utf8")
+    if (key.includes("BEGIN PUBLIC KEY")) cachedDevVerifierKey = key
+  } catch {
+    // absent until the mint writes it — re-read on the next access, never cache the miss
+  }
+  return cachedDevVerifierKey
+}
+
 // W0.5 (blocker-1): a DEFAULT install never sets DEEPAGENT_CODE_V2_OWNER_CAMPAIGN, so the runtime
 // must resolve the same default campaign the production mint derives: `v2-owner-<buildIdentity>`
 // with the build identity from the installation version (script/mint-owner-campaign.ts derives the
@@ -1247,6 +1273,12 @@ export function ownerCampaignFromEnv(): string | undefined {
 export function defaultOwnerCampaign(): string | undefined {
   const id = ownerCampaignFromEnv()
   if (id) return id
+  // F-15: a dev build resolves its per-build dev campaign deterministically (matches
+  // V2OwnerDevMint's derivation) — the mint's row qualifies without any env wiring.
+  if (isDevBuildVersion()) {
+    const devCampaign = devOwnerCampaignFor(buildIdentityFromVersion(InstallationVersion).subjectCommit)
+    return validCampaignID(devCampaign) ? devCampaign : undefined
+  }
   const derived = `v2-owner-${InstallationVersion}`
   // W0.8 (review minor-4): an installation version that cannot form a legal campaign id (e.g. a
   // `+` build-metadata suffix, which validCampaignID rejects) must fail CLOSED, not throw: return
@@ -1272,9 +1304,13 @@ export function ownerQualified(db: Database.Interface["db"], campaignId?: string
     // W0.8 (review minor-4): fail closed when no legal campaign id can be resolved (invalid
     // installation version) — never throw from the authorization gate.
     if (resolved === undefined) return false
-    const identity = yield* Effect.serviceOption(CurrentBuildIdentity)
-    if (identity._tag === "None" || identity.value === undefined) return false
-    const buildIdentity = identity.value
+    // F-15: serviceOption on a defaulted Reference resolves None unless a layer explicitly
+    // provided it — and NOTHING in production ever did, so EVERY install failed
+    // v2_owner_unavailable (only the live-llm harness provided the layers). Resolve the Reference
+    // directly: the env override or the version-derived default applies, and fail-closed stays
+    // enforced by the row/signature/campaign/window checks below.
+    const buildIdentity = yield* CurrentBuildIdentity
+    if (buildIdentity === undefined) return false
     const row = yield* db
       .select()
       .from(V2OwnerAuthorizationTable)
