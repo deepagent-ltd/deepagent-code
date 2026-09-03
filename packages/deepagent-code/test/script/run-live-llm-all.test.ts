@@ -254,7 +254,7 @@ describe("all real LLM test runner", () => {
         DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE: file,
         DEEPAGENT_CODE_LIVE_LLM_PROVIDER: "openai",
       }),
-    ).rejects.toThrow("DEEPAGENT_CODE_LIVE_LLM_PROVIDER must be deepseek, kimi, or zai")
+    ).rejects.toThrow("DEEPAGENT_CODE_LIVE_LLM_PROVIDER must be deepseek, kimi, zai, or zai-coding-plan")
 
     const moonshotai = await loadLiveLLMConfig({
       DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE: file,
