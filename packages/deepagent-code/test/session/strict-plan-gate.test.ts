@@ -211,6 +211,62 @@ describe("W6 strictPlanGate escalation (session/tools.ts)", () => {
     expect(executed).toBe(1)
   })
 
+  test("W2: no plan + mutating tool → blocked once with the copyable minimal plan template", async () => {
+    let executed = 0
+    const tools = await Effect.runPromise(makeHarness("edit", {}, () => executed++))
+    AgentGateway.DeepAgentSessionState.getOrCreate(String(sessionID), "high")
+
+    const result = await tools.edit!.execute!({}, { toolCallId: "call-w2a", messages: [] })
+    expect(result).toMatchObject({ title: "Plan update required" })
+    expect(String(result.output)).toContain("No plan exists yet")
+    // the trivial escape is stated AND machine-copyable (schema-valid create payload)
+    expect(String(result.output)).toContain("one-step plan")
+    expect(String(result.output)).toContain('"operation":"create"')
+    expect(String(result.output)).toContain('"expected_version":null')
+    expect(executed).toBe(0)
+    expect(AgentGateway.DeepAgentSessionState.planLatch(String(sessionID))!.consecutive_blocks).toBe(1)
+  })
+
+  test("W2: no plan + reads are never held — understanding stays ungated", async () => {
+    let executed = 0
+    const tools = await Effect.runPromise(makeHarness("read", {}, () => executed++))
+    AgentGateway.DeepAgentSessionState.getOrCreate(String(sessionID), "high")
+
+    const result = await tools.read!.execute!({}, { toolCallId: "call-w2b", messages: [] })
+    expect(result).toMatchObject({ output: "read executed" })
+    expect(executed).toBe(1)
+  })
+
+  test("W2: no-plan blocks hit the SAME grace release — limit consecutive blocks, then ONE release with reminder", async () => {
+    let executed = 0
+    const tools = await Effect.runPromise(makeHarness("edit", {}, () => executed++))
+    AgentGateway.DeepAgentSessionState.getOrCreate(String(sessionID), "high")
+    const limit = AgentGateway.DeepAgentPlanController.DEFAULT_GRACE_BLOCK_LIMIT
+
+    const results = []
+    for (let i = 0; i <= limit; i++) {
+      results.push(await tools.edit!.execute!({}, { toolCallId: `call-w2c-${i}`, messages: [] }))
+    }
+    expect(results.slice(0, limit).map((r) => r.title)).toEqual(Array(limit).fill("Plan update required"))
+    expect(executed).toBe(1)
+    const released = results[limit]!
+    expect(String(released.output)).toContain("released ONCE")
+    expect(String(released.output)).toContain("No plan was ever created")
+    // released call reset the counter → next mutating call is held again
+    const next = await tools.edit!.execute!({}, { toolCallId: "call-w2c-after", messages: [] })
+    expect(next.title).toBe("Plan update required")
+  })
+
+  test("W2: lightweight mode (general) never no-plan-blocks", async () => {
+    let executed = 0
+    const tools = await Effect.runPromise(makeHarness("edit", {}, () => executed++))
+    AgentGateway.DeepAgentSessionState.getOrCreate(String(sessionID), "general")
+
+    const result = await tools.edit!.execute!({}, { toolCallId: "call-w2d", messages: [] })
+    expect(String(result.output)).toContain("edit executed")
+    expect(executed).toBe(1)
+  })
+
   test("grace release: DEFAULT_GRACE_BLOCK_LIMIT consecutive blocks then ONE release with a reminder (P1-1a)", async () => {
     let executed = 0
     const tools = await Effect.runPromise(makeHarness("edit", {}, () => executed++))

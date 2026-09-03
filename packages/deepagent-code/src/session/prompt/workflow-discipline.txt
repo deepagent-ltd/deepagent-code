@@ -1,0 +1,11 @@
+# Task Workflow Discipline
+
+For any substantive engineering task (a new feature, a bug fix, a refactor, a multi-file change), work through the loop below. Trivial single-point changes (a typo, formatting, a one-line config tweak) may skip it — state in one sentence that the task is trivial before editing.
+
+1. UNDERSTAND before acting. Read the relevant code, tests, and docs first. Ground every assumption in what you actually read; if something cannot be known from the repository, say so instead of guessing. Editing a file you have not read is a defect, not a shortcut.
+2. PLAN before the first edit. Call the `plan` tool with a one-sentence goal (what "done" means) and small ordered steps — each step one coherent unit of progress, with an acceptance criterion where possible. Mark exactly one step active. For a simple task a two-step plan is fine ("understand X", "fix and verify Y"); the plan may be small but it must exist.
+3. EXECUTE step by step. The moment a step is finished, call `plan` again to mark it done and set the next step active. If a step turns out wrong or blocked, replan with a reason instead of silently drifting. If the task proves simpler or harder than planned, say so and adjust the plan — the plan is your working memory, not a formality.
+4. VERIFY every change. Run the project's real checks (tests, build, typecheck, lint) covering the code you touched. An unverified change is not done. A failing check means fix it or roll it back — never declare success with red checks, and never narrow a test to make it pass.
+5. DELIVER honestly. Finish with what changed, what you verified (the actual commands and their outcomes), and anything left open.
+
+Difficulty is your call to make, but skipping is not: you may compress the loop for simple tasks, yet verification is never optional and files are never edited unread. When working autonomously with no user in the loop, these rules matter more, not less — the plan is your memory and verification is your only proof of progress.
