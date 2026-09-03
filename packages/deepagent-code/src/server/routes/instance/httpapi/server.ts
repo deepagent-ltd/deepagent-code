@@ -436,6 +436,13 @@ export function createRoutes(corsOptions?: CorsOptions) {
     // adapters (real code/documents/knowledge/memory sources), and the C6 context-readiness handler
     // requires it so readiness probes the SAME adapter set the runner serves (W3.7 L5).
     Layer.provide(productionSourcesLayer({ workspaceDirectory: process.cwd() })),
+    // F-14: the C6 readiness handler resolves LocationIndexRuntime for the probe-time identity —
+    // the runner subtree builds its own per-location runtime, but the bare HTTP composition never
+    // provided the service, so /context/readiness 500'd with "Service not found" in every embedded
+    // (run/serve) process: implemented but production-unreachable, exactly the I381-1 class. The
+    // default runtime degrades honestly (no attached index -> v2:local identity), which is the
+    // documented probe contract.
+    Layer.provide(LocationIndexRuntime.defaultLayer),
     Layer.provide(PromptEpoch.v2RunnerSeamLayer.pipe(Layer.provide(Database.defaultLayer))),
     // W7 — settle-triggered durable learning (same INTO-the-base seam direction as above).
     Layer.provide(DurableLearningRuntime.onSessionSettledSeamLayer.pipe(Layer.provide(Database.defaultLayer))),
