@@ -306,3 +306,47 @@ describe("I33-1 plan-store single authority", () => {
     })
   })
 })
+
+describe("W4 run document set (requirements/design/worklog)", () => {
+  test("writeSpecDoc stores typed run docs beside the plan; re-write bumps version; list sees them", () => {
+    const stateDir = mkdtempSync(path.join(tmpdir(), "spec-store-"))
+    PlanStore.configureRoot(stateDir)
+    DocumentStore.__resetSharedRegistryForTests()
+
+    const first = PlanStore.writeSpecDoc("s_spec", {
+      kind: "requirements",
+      title: "Reset Contract",
+      body: "Reset() zeroes the counter; test covers reset-after-increment",
+    })
+    expect(first.version).toBe(1)
+
+    const refined = PlanStore.writeSpecDoc("s_spec", {
+      kind: "requirements",
+      title: "Reset Contract",
+      body: "Reset() zeroes the counter; also Reset on a fresh counter is a no-op",
+    })
+    // same idSlug -> same document, version+1 (iterative refinement, not a second doc)
+    expect(refined.id).toBe(first.id)
+    expect(refined.version).toBe(2)
+
+    PlanStore.writeSpecDoc("s_spec", {
+      kind: "design",
+      title: "Approach",
+      body: "direct field assignment",
+      origin: "model",
+    })
+    PlanStore.writeSpecDoc("s_spec", {
+      kind: "worklog",
+      title: "completion",
+      body: JSON.stringify({ completed: true, steps_done: 2, steps_total: 2 }),
+      origin: "runner",
+    })
+
+    const docs = PlanStore.listSpecDocs("s_spec")
+    expect(docs.filter((doc) => doc.kind === "requirements")).toHaveLength(1)
+    expect(docs.filter((doc) => doc.kind === "design")).toHaveLength(1)
+    expect(docs.filter((doc) => doc.kind === "worklog")).toHaveLength(1)
+    // scoped to THIS session's run scope — another session sees nothing
+    expect(PlanStore.listSpecDocs("s_other")).toHaveLength(0)
+  })
+})

@@ -683,6 +683,7 @@ export const routeManifest = [
       "packages/deepagent-code/src/session/llm/request.ts",
       "packages/deepagent-code/src/session/reminders.ts",
       "packages/deepagent-code/src/tool/plan*.{ts,txt}",
+      "packages/deepagent-code/src/tool/spec.{ts,txt}",
     ],
     checks: ["live-llm-routes", "llm-adapter", "permission"],
     runs: [planAdvanceContract, planCreateReplanContract],
