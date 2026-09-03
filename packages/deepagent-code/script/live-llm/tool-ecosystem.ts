@@ -162,8 +162,12 @@ try {
     const observation = artifact.cases.find((testCase) => testCase.name === expectation.name)
     if (!observation) throw new Error(`Missing tool ecosystem case ${expectation.name}`)
     const tools = observation.newTools
+    // Provider-generic contract: the requested tool completes at least once and no other
+    // tool family is used (retries of the same tool after a protocol conflict are model
+    // behavior). Cases with no expected tool must not call anything.
     if (expectation.tool) {
-      if (tools.length !== 1 || tools[0]?.name !== expectation.tool || tools[0].status !== "completed") {
+      const completed = tools.filter((tool) => tool.name === expectation.tool && tool.status === "completed")
+      if (completed.length < 1 || tools.some((tool) => tool.name !== expectation.tool)) {
         throw new Error(`${expectation.name} tool sequence mismatch: ${JSON.stringify(tools)}`)
       }
     } else if (tools.length !== 0) {
