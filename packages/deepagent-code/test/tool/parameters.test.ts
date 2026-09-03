@@ -105,7 +105,12 @@ describe("tool parameters", () => {
   })
 
   describe("plan-write protocol admission", () => {
-    test("rejects the original historical payload before execute", () => {
+    // F-10/F-11 contract update: omission-tolerant providers (GLM) legally send goal+steps with no
+    // operation/expected_* — those ADMIT at the schema boundary and get inferred/normalized in
+    // execute. The historical garbage-title defense is now carried by semantic validation plus the
+    // two-attempt protocol budget, not by required fields (a required-field rejection had no
+    // correction payload and burned the whole budget in the field).
+    test("admits omission-shaped payloads (F-10) and still rejects malformed shapes", () => {
       const historical = [
         ["ayContext", "active"],
         ["Context", "pending"],
@@ -119,14 +124,11 @@ describe("tool parameters", () => {
         ["Context", "active"],
         ["Context", "active"],
       ] as const
-      for (const [title, status] of historical) {
-        expect(
-          accepts(PlanWriteParameters, {
-            goal: "现场计划目标",
-            steps: [{ title, status }],
-          }),
-        ).toBe(false)
-      }
+      expect(
+        accepts(PlanWriteParameters, { goal: "现场计划目标", steps: [{ title: "Context", status: "active" }] }),
+      ).toBe(true)
+      expect(accepts(PlanWriteParameters, { goal: "x", steps: "not-an-array" })).toBe(false)
+      expect(accepts(PlanWriteParameters, { operation: "bogus", goal: "x", steps: [] })).toBe(false)
     })
 
     test("accepts the forward-compatible envelope so semantic validation remains the failing boundary", () => {

@@ -3058,17 +3058,21 @@ it.instance("loop continues when finish is tool-calls", () =>
   }),
 )
 
-it.instance("BUG-010 original schema-invalid plan payload stops before a third Provider dispatch", () =>
+it.instance("BUG-010 original malformed plan payload stops before a third Provider dispatch", () =>
   assertPlanProtocolProviderBudget({
     payload: {
       goal: "complete the benchmark and compress collectives to 3.3ms",
       steps: [{ step_id: "s1", title: "ayContext", status: "active" }],
       active_step_id: "s1",
     },
-    firstState: "error",
-    protocol: "schema",
-    errorCode: "schema",
-    validationOutcome: "schema_invalid",
+    // F-10/F-11: the omission-shaped envelope now ADMITS (GLM sends goal+steps legally) and the
+    // historical garbage defense fires at the SEMANTIC boundary instead — the supplied step_id on
+    // an inferred create is unsafe_step_identity, rejected WITH a correction payload rather than
+    // the dead schema path. The budget protection is unchanged.
+    firstState: "completed",
+    protocol: "invalid",
+    errorCode: "unsafe_step_identity",
+    validationOutcome: "semantic_invalid",
   }),
 )
 

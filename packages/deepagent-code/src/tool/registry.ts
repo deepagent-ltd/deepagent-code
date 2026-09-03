@@ -1,5 +1,6 @@
 import { PlanExitTool } from "./plan"
 import { PlanTool } from "./plan-write"
+import { SpecTool } from "./spec"
 import { Session } from "@/session/session"
 import { QuestionTool } from "./question"
 import { ShellTool } from "./shell"
@@ -178,6 +179,7 @@ const layerWithFacades: Layer.Layer<
     const lsptool = yield* LspTool
     const plan = yield* PlanExitTool
     const planwrite = yield* PlanTool
+    const spectool = yield* SpecTool
     const webfetch = yield* WebFetchTool
     const websearch = yield* WebSearchTool
     const shell = yield* ShellTool
@@ -377,6 +379,7 @@ const layerWithFacades: Layer.Layer<
           debug: Tool.init(debugtool),
           plan: Tool.init(plan),
           planwrite: Tool.init(planwrite),
+          spectool: Tool.init(spectool),
           query_log: Tool.init(querylog),
           git_read: Tool.init(gitreadtool),
         })
@@ -406,6 +409,7 @@ const layerWithFacades: Layer.Layer<
             tool.patch_chunk,
             tool.git_read,
             tool.planwrite,
+            tool.spectool,
             ...(flags.experimentalLspTool ? [tool.lsp] : []),
             ...(flags.codeIntelTool ? [tool.code_intel] : []),
             ...(rollout.enabled.contextQueryToolsV2 ? [contextQuery] : []),

@@ -118,8 +118,38 @@ export const defaultLayer = layer.pipe(Layer.provide(Database.defaultLayer))
 export function onSessionSettled(database: Database.Interface): (input: SessionRunner.OnSessionSettledInput) => Effect.Effect<void> {
   return (input) =>
     Effect.gen(function* () {
-      if (!AgentGateway.durableLearningEnabled()) return
       if (input.activityId === undefined) return
+      // W4 (gap audit B3): the completion worklog — RUNNER facts only (plan terminal state),
+      // written at settle into the run document set next to the plan. Model self-reports never
+      // enter it (V3.3 completion-report contract). Independent of the learning flag: this is
+      // the run's own record, not learning extraction.
+      yield* Effect.sync(() => {
+        const plan = AgentGateway.DeepAgentPlanStore.getPlanDoc(input.sessionID)
+        if (!plan) return
+        const progress = AgentGateway.DeepAgentPlanController.planProgress(plan)
+        AgentGateway.DeepAgentPlanStore.writeSpecDoc(input.sessionID, {
+          kind: "worklog",
+          title: "completion",
+          origin: "runner",
+          body: JSON.stringify(
+            {
+              plan_id: plan.plan_id,
+              goal: plan.goal,
+              steps_done: progress.done,
+              steps_total: progress.total,
+              completed: progress.done === progress.total,
+              activity: input.activityId,
+            },
+            null,
+            2,
+          ),
+        })
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("completion worklog write failed", { cause }).pipe(Effect.asVoid),
+        ),
+      )
+      if (!AgentGateway.durableLearningEnabled()) return
       const session = yield* database.db
         .select({ projectId: SessionTable.project_id, directory: SessionTable.directory })
         .from(SessionTable)

@@ -173,6 +173,42 @@ const provenanceFor = (origin: PlanWriteOrigin, sessionId: string): Provenance =
   run_ref: planScope(sessionId),
 })
 
+// W4 (gap audit B3): the run document set. requirements/design (model-authored during the
+// understand/design phases) and the settle-time completion worklog live in the SAME session store
+// as the plan, under the same run scope, with model/runner provenance. The full-document-set
+// design declared these DocTypes without any production writer — this is that writer. Federation
+// graph reachability is W4.2 (needs the run-mode index attach) and is deliberately NOT faked here.
+export type SpecDocKind = "requirements" | "design" | "worklog"
+
+const specSlug = (value: string): string =>
+  value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "untitled"
+
+export const writeSpecDoc = (
+  sessionId: string,
+  input: { kind: SpecDocKind; title: string; body: string; origin?: "model" | "runner" },
+): { id: string; version: number } => {
+  const doc = store(sessionId).upsert({
+    type: input.kind,
+    scope: planScope(sessionId),
+    description: `${input.kind}: ${input.title}`,
+    idSlug: `${input.kind}-${specSlug(input.title)}`,
+    body: input.body,
+    provenance: { source: input.origin ?? "model", run_ref: planScope(sessionId) },
+  })
+  return { id: doc.id, version: doc.version }
+}
+
+export const listSpecDocs = (
+  sessionId: string,
+): ReadonlyArray<{ kind: SpecDocKind; id: string; version: number; description: string }> => {
+  const documentStore = store(sessionId)
+  return (["requirements", "design", "worklog"] as const).flatMap((kind) =>
+    documentStore
+      .list({ type: kind, scope: planScope(sessionId) })
+      .map((ref) => ({ kind, id: ref.id, version: ref.version, description: ref.description })),
+  )
+}
+
 const currentPlanFromStore = (
   documentStore: DocumentStore,
   sessionId: string,
