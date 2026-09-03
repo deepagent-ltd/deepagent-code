@@ -375,6 +375,41 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
       planStale &&
       subagentHasPlanEscape
     let graceReminder: string | undefined
+    // W2 gap repair (design-code-gap-audit B2): a run that never created a plan could previously
+    // mutate freely — `planStale` requires a plan to exist, so the whole strict gate was vacuous for
+    // planless runs and the designed understand→plan→execute discipline was optional in practice (the
+    // wazero C2 runs edited with zero plan calls). The first mutating call without a plan is now held
+    // with a copyable MINIMAL plan template; a one-step plan IS the trivial self-assessed escape (the
+    // workflow-discipline prompt section states this contract), and the U1 anti-deadlock grace release
+    // still applies: once consecutive_blocks reaches DEFAULT_GRACE_BLOCK_LIMIT the next mutating call
+    // is released once with a reminder, so a model that never plans cannot be permanently denied.
+    // `!planStale` keeps the stale-latch machinery authoritative for its own planless-stale states;
+    // this branch covers exactly the previously-ungated fresh-planless run.
+    if (flags.strictPlanGate && !lightweight && plan == null && !planStale && isMutating && subagentHasPlanEscape) {
+      if (latch != null && AgentGateway.DeepAgentPlanController.shouldGraceRelease(latch)) {
+        log.warn("plan gate no-plan grace release", {
+          sessionID,
+          consecutiveBlocks: latch.consecutive_blocks,
+        })
+        graceReminder =
+          `No plan was ever created and the plan gate already blocked ${latch.consecutive_blocks} consecutive mutating calls without one. ` +
+          "This call was released ONCE: call the `plan` tool now with a minimal plan (a one-step plan is fine for a simple task) — otherwise the next mutating call will be blocked again."
+      } else {
+        AgentGateway.DeepAgentSessionState.recordPlanGateBlock(sessionID)
+        return {
+          kind: "block",
+          output:
+            "No plan exists yet, so this mutating action is held: call the `plan` tool first with a one-sentence goal and ordered steps. A one-step plan is a valid escape for a genuinely simple task.\n\nCopyable starting point:\n" +
+            JSON.stringify({
+              operation: "create",
+              expected_plan_id: null,
+              expected_version: null,
+              goal: "<one sentence: what done means>",
+              steps: [{ title: "<first coherent step>", status: "active" }],
+            }),
+        }
+      }
+    }
     if (gateDecision.decision === "block" || strictBlock) {
       // W6-1 / P1-1a: U1 anti-deadlock grace release. shouldGraceRelease fires once
       // consecutive_blocks reaches DEFAULT_GRACE_BLOCK_LIMIT (3), and its whole point is to let a

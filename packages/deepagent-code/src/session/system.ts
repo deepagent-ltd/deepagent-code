@@ -11,25 +11,31 @@ import PROMPT_KIMI from "./prompt/kimi.txt"
 
 import PROMPT_CODEX from "./prompt/codex.txt"
 import PROMPT_TRINITY from "./prompt/trinity.txt"
+import PROMPT_WORKFLOW_DISCIPLINE from "./prompt/workflow-discipline.txt"
 import type { Provider } from "@/provider/provider"
 import type { Agent } from "@/agent/agent"
 import { Permission } from "@/permission"
 import { Skill } from "@/skill"
 
+// The workflow discipline (understand → plan → execute → verify → deliver) is mode-invariant: every
+// collaboration mode differs only in how much a human participates, never in whether the discipline
+// applies. anthropic.txt already carries a strong plan-tool section with few-shot examples, so it is
+// excluded to avoid double-billing the same discipline; every other provider baseline gets the shared
+// section appended.
 export function provider(model: Provider.Model) {
   if (model.api.id.includes("gpt-4") || model.api.id.includes("o1") || model.api.id.includes("o3"))
-    return [PROMPT_BEAST]
+    return [PROMPT_BEAST, PROMPT_WORKFLOW_DISCIPLINE]
   if (model.api.id.includes("gpt")) {
     if (model.api.id.includes("codex")) {
-      return [PROMPT_CODEX]
+      return [PROMPT_CODEX, PROMPT_WORKFLOW_DISCIPLINE]
     }
-    return [PROMPT_GPT]
+    return [PROMPT_GPT, PROMPT_WORKFLOW_DISCIPLINE]
   }
-  if (model.api.id.includes("gemini-")) return [PROMPT_GEMINI]
+  if (model.api.id.includes("gemini-")) return [PROMPT_GEMINI, PROMPT_WORKFLOW_DISCIPLINE]
   if (model.api.id.includes("claude")) return [PROMPT_ANTHROPIC]
-  if (model.api.id.toLowerCase().includes("trinity")) return [PROMPT_TRINITY]
-  if (model.api.id.toLowerCase().includes("kimi")) return [PROMPT_KIMI]
-  return [PROMPT_DEFAULT]
+  if (model.api.id.toLowerCase().includes("trinity")) return [PROMPT_TRINITY, PROMPT_WORKFLOW_DISCIPLINE]
+  if (model.api.id.toLowerCase().includes("kimi")) return [PROMPT_KIMI, PROMPT_WORKFLOW_DISCIPLINE]
+  return [PROMPT_DEFAULT, PROMPT_WORKFLOW_DISCIPLINE]
 }
 
 export interface Interface {
