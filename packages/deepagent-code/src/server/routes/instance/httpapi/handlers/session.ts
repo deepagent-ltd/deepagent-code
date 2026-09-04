@@ -418,7 +418,15 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
         },
         auto: ctx.payload.auto ?? false,
       })
-      yield* promptSvc.loop({ sessionID: ctx.params.sessionID }).pipe(Effect.mapError(mapLegacyZero))
+      // F-18 follow-up: the V2 drain loop may fail with a typed admission Conflict (reason in
+      // `error.reason`) — render it as 503 with the reason instead of leaking a defect.
+      yield* promptSvc.loop({ sessionID: ctx.params.sessionID }).pipe(
+        Effect.mapError((error) =>
+          error instanceof SessionPromptIntent.Conflict
+            ? new ServiceUnavailableError({ service: "session.v2.admission", message: error.reason })
+            : mapLegacyZero(error),
+        ),
+      )
       return true
     })
 

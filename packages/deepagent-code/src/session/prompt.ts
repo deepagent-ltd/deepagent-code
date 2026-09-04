@@ -145,6 +145,7 @@ import { ContextFederationProviderOwnerRuntime } from "@/context-federation/prov
 import { V2RunnerFrame } from "@/session/v2-runner-frame"
 import { PreparedProviderTurn } from "@deepagent-code/core/session/runner/prepared-provider-turn"
 import { V2ProviderTurn } from "@deepagent-code/core/session/runner/v2-provider-turn"
+import { SessionRunnerCanonical } from "@deepagent-code/core/session/runner/canonical-turn"
 import { V2ProviderTurnReceiptTable } from "@deepagent-code/core/session/runner/v2-provider-turn.sql"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { ModelV2 } from "@deepagent-code/core/model"
@@ -159,7 +160,7 @@ import {
 } from "@deepagent-code/core/session/prompt"
 import { Reference } from "@/reference/reference"
 import * as DateTime from "effect/DateTime"
-import { and, desc, eq, exists, gt, inArray, isNull, max, notExists, notInArray, or } from "drizzle-orm"
+import { and, desc, eq, exists, gt, inArray, isNull, max, notExists, notInArray, or, sql } from "drizzle-orm"
 import {
   SessionHistoryStateTable,
   SessionTable,
@@ -961,7 +962,10 @@ export interface Interface {
   readonly promptOrSteer: (
     input: PromptInput,
   ) => Effect.Effect<PromptOrSteerResult, Image.Error | SessionPromptIntent.Error | Session.BusyError | LegacyExecutionUnavailable>
-  readonly loop: (input: LoopInput, onRunning?: Effect.Effect<void>) => Effect.Effect<SessionV1.WithParts, LegacyExecutionUnavailable>
+  readonly loop: (
+      input: LoopInput,
+      onRunning?: Effect.Effect<void>,
+    ) => Effect.Effect<SessionV1.WithParts, LegacyExecutionUnavailable | SessionPromptIntent.Conflict>
   readonly shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError | LegacyExecutionUnavailable>
   readonly command: (
     input: CommandInput,
@@ -6269,7 +6273,10 @@ export const layer = Layer.effect(
       return yield* Deferred.await(admission)
     })
 
-    const loop: (input: LoopInput, onRunning?: Effect.Effect<void>) => Effect.Effect<SessionV1.WithParts, LegacyExecutionUnavailable> = Effect.fn(
+    const loop: (
+      input: LoopInput,
+      onRunning?: Effect.Effect<void>,
+    ) => Effect.Effect<SessionV1.WithParts, LegacyExecutionUnavailable | SessionPromptIntent.Conflict> = Effect.fn(
       "SessionPrompt.loop",
     )(function* (input: LoopInput, onRunning?: Effect.Effect<void>) {
       yield* ensureProviderOwnerHealthy
@@ -6333,18 +6340,34 @@ export const layer = Layer.effect(
                 detail: "V2 owner qualification is not verified: " + (ownerCampaignNow ?? "none"),
               })
             : Effect.die(new Error("V2 owner qualification is not verified: " + (ownerCampaignNow ?? "none"))))
-        const latestLegacyProvider = yield* database.db
+        // R6 — the guard's purpose is preventing a CONCURRENT legacy dispatch while V2 owns the
+        // session. Non-terminal legacy receipts whose owner lease is dead are harmless residue of
+        // a crashed legacy run (V1-mode crash before flipping to the V2-only profile); refusing on
+        // them forever bricks the session because the profile never runs the legacy sweep. Refuse
+        // only while a live legacy owner lease backs a non-terminal receipt.
+        const liveLegacyOwner = yield* database.db
           .select({ state: SessionToolRequestReceiptTable.provider_state })
           .from(SessionToolRequestReceiptTable)
-          .where(eq(SessionToolRequestReceiptTable.session_id, input.sessionID))
-          .orderBy(SessionToolRequestReceiptTable.request_ordinal)
-          .all()
-          .pipe(Effect.orDie)
-        if (
-          latestLegacyProvider.some((receipt) =>
-            ["preparing", "prepared", "dispatching", "streaming"].includes(receipt.state),
+          .innerJoin(
+            SessionProviderOwnerLeaseTable,
+            eq(SessionToolRequestReceiptTable.owner_token, SessionProviderOwnerLeaseTable.owner_token),
           )
-        )
+          .where(
+            and(
+              eq(SessionToolRequestReceiptTable.session_id, input.sessionID),
+              inArray(SessionToolRequestReceiptTable.provider_state, [
+                "preparing",
+                "prepared",
+                "dispatching",
+                "streaming",
+              ]),
+              isNull(SessionProviderOwnerLeaseTable.released_at),
+              gt(SessionProviderOwnerLeaseTable.lease_expires_at, sql`CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)`),
+            ),
+          )
+          .get()
+          .pipe(Effect.orDie)
+        if (liveLegacyOwner)
           return yield* (flags.coreV2Only
             ? refuseLegacyExecution({
                 sessionID: input.sessionID,
@@ -6392,32 +6415,45 @@ export const layer = Layer.effect(
           // F-17: dedupe by CONTENT HASH, not part id — a tool part first lands as pending/running
           // and the CLI consumers key on the completed/error transition; an id-only set would
           // swallow exactly that state update.
+          // F-19: the fingerprint map is shared by the live mirror AND the settle-time final
+          // projection below — the final flush publishes only DELTAS the mirror missed, never a
+          // byte-identical repeat of an already-published part/message (duplicate SSE events).
+          // Set-then-publish ordering keeps concurrent mirror fibers race-free.
           const mirrorPublished = new Map<string, string>()
+          const projectAssistant = (message: SessionMessage.Assistant) =>
+            Effect.gen(function* () {
+              const mirrorParent = yield* sessions
+                .findMessage(input.sessionID, (message) => message.info.role === "user")
+                .pipe(Effect.orDie)
+              const projectedNow = SessionV2.legacyAssistant({
+                sessionID: SessionV2.ID.make(input.sessionID),
+                parentMessageID: Option.isSome(mirrorParent)
+                  ? Option.getOrThrow(mirrorParent).info.id
+                  : MessageID.make(message.id),
+                directory: session.directory,
+                root: current.worktree,
+                message,
+              })
+              const messageFingerprint = JSON.stringify(projectedNow.info)
+              if (mirrorPublished.get(`msg:${projectedNow.info.id}`) !== messageFingerprint) {
+                mirrorPublished.set(`msg:${projectedNow.info.id}`, messageFingerprint)
+                yield* sessions.updateMessage(projectedNow.info)
+              }
+              for (const part of projectedNow.parts) {
+                const fingerprint = JSON.stringify(part)
+                if (mirrorPublished.get(part.id) === fingerprint) continue
+                mirrorPublished.set(part.id, fingerprint)
+                yield* sessions.updatePart(part)
+              }
+              return projectedNow
+            })
           const mirrorAssistant = Effect.gen(function* () {
             const messages = yield* coreV2Session.context(SessionV2.ID.make(input.sessionID)).pipe(Effect.orDie)
             const mirrorSource = messages.findLast(
               (message): message is SessionMessage.Assistant => message.type === "assistant",
             )
             if (!mirrorSource) return
-            const mirrorParent = yield* sessions
-              .findMessage(input.sessionID, (message) => message.info.role === "user")
-              .pipe(Effect.orDie)
-            const projectedNow = SessionV2.legacyAssistant({
-              sessionID: SessionV2.ID.make(input.sessionID),
-              parentMessageID: Option.isSome(mirrorParent)
-                ? Option.getOrThrow(mirrorParent).info.id
-                : MessageID.make(mirrorSource.id),
-              directory: session.directory,
-              root: current.worktree,
-              message: mirrorSource,
-            })
-            yield* sessions.updateMessage(projectedNow.info)
-            for (const part of projectedNow.parts) {
-              const fingerprint = JSON.stringify(part)
-              if (mirrorPublished.get(part.id) === fingerprint) continue
-              mirrorPublished.set(part.id, fingerprint)
-              yield* sessions.updatePart(part)
-            }
+            yield* projectAssistant(mirrorSource)
           })
           const stopMirror = yield* events.listen((event) =>
             Effect.suspend(() => {
@@ -6430,7 +6466,34 @@ export const layer = Layer.effect(
           yield* coreV2Session
             .resume(SessionV2.ID.make(input.sessionID))
             .pipe(Effect.provideService(V2ProviderTurn.CurrentOwnerCampaign, ownerCampaignNow))
-            .pipe(Effect.orDie)
+            .pipe(
+              // F-18 follow-up: a typed admission refusal (live in-flight attempt, expired
+              // selection, unsafe retry) is a user-actionable "cannot run now", not a defect.
+              // Surface the reason (already carried in the error message) on the session error
+              // channel for the streaming surfaces, then fail with the typed Conflict the HTTP
+              // layer maps to 409 + reason — instead of orDie-ing into a generic 500.
+              Effect.catch((error) =>
+                Effect.gen(function* () {
+                  if (
+                    !(
+                      error instanceof SessionRunnerCanonical.AdmissionError ||
+                      error instanceof V2ProviderTurn.UnsafeRetryError ||
+                      error instanceof V2ProviderTurn.ConflictError
+                    )
+                  )
+                    return yield* Effect.orDie(Effect.fail(error))
+                  yield* events
+                    .publish(Session.Event.Error, {
+                      sessionID: input.sessionID,
+                      error: new NamedError.Unknown({ message: error.message }).toObject(),
+                    })
+                    .pipe(Effect.ignore)
+                  return yield* Effect.fail(
+                    new SessionPromptIntent.Conflict({ intentID: input.sessionID, reason: error.message }),
+                  )
+                }),
+              ),
+            )
             .pipe(Effect.ensuring(stopMirror))
           // FEAT-010: durable evidence correlation. The receipt row itself is written by the core
           // runner (V2ProviderTurn.admit inside SessionRunner.runTurn during resume); read back the
@@ -6483,21 +6546,10 @@ export const layer = Layer.effect(
                   detail: `V2 owner produced no assistant message: ${input.sessionID}`,
                 })
               : Effect.die(new Error(`V2 owner produced no assistant message: ${input.sessionID}`)))
-          // Real-store semantics: the serialized runner promotes admitted inputs into visible user
-          // messages during the drain, so the V1 mirror may not have a user row yet at projection time.
-          // Fall back to the assistant message id as its own root anchor (idempotent, self-parented).
-          const parent = yield* sessions
-            .findMessage(input.sessionID, (message) => message.info.role === "user")
-            .pipe(Effect.orDie)
-          const projected = SessionV2.legacyAssistant({
-            sessionID: SessionV2.ID.make(input.sessionID),
-            parentMessageID: Option.isSome(parent) ? Option.getOrThrow(parent).info.id : MessageID.make(assistant.id),
-            directory: session.directory,
-            root: current.worktree,
-            message: assistant,
-          })
-          yield* sessions.updateMessage(projected.info)
-          yield* Effect.forEach(projected.parts, sessions.updatePart, { discard: true })
+          // F-19: authoritative final flush through the SAME fingerprint set the live mirror used —
+          // publishes only deltas (state transitions the mirror's last pass didn't see), never a
+          // repeat of already-published content.
+          const projected = yield* projectAssistant(assistant)
           return projected
         }).pipe(Effect.ensuring(status.set(input.sessionID, { type: "idle" })))
       }

@@ -1,6 +1,6 @@
 export * as SessionRunnerCanonical from "./canonical-turn"
 
-import { and, asc, desc, eq, gt, inArray, isNull } from "drizzle-orm"
+import { and, asc, desc, eq, gt, inArray, isNull, lte } from "drizzle-orm"
 import { Effect, Layer, Option, Schema } from "effect"
 import { Database } from "../../database/database"
 import { ContextArtifactStore } from "../../context-federation/artifact-store"
@@ -53,6 +53,14 @@ import { V2ProviderTurnReceiptTable } from "./v2-provider-turn.sql"
 // adapter set (`source_disabled`) only under an explicit `=false`.
 export const SelectionLifetimeMs = 14 * 60_000
 export const ValidationMs = 60_000
+
+/**
+ * opencode upstream port #1 — the durable resume budget (upstream default 10). Counted from the
+ * durable attempt rows as the leading run of crash-quarantined attempts (indeterminate_after_crash
+ * or the pre-dispatch owner-loss failure) before any other terminal state; a settled attempt
+ * resets the run. Bounds quarantine/retry loops without a new migration.
+ */
+export const MaxConsecutiveCrashResumes = 10
 
 const V2Namespace = ContextReference.SecurityNamespaceID.make("v2:local")
 const V2Scope = ContextReference.ProjectScopeKey.make("v2:local")
@@ -645,6 +653,42 @@ function staleAfterLeaseLoss(
   })
 }
 
+/** The leading run of crash-quarantined attempts ending at `fromSeq` (inclusive). */
+function consecutiveCrashQuarantines(
+  tx: Parameters<Parameters<Database.Interface["db"]["transaction"]>[0]>[0],
+  sessionId: SessionSchema.ID,
+  fromSeq: number,
+) {
+  return tx
+    .select({ state: SessionProviderAttemptTable.state, errorCode: SessionProviderAttemptTable.error_code })
+    .from(SessionProviderAttemptTable)
+    .where(
+      and(
+        eq(SessionProviderAttemptTable.session_id, sessionId),
+        lte(SessionProviderAttemptTable.provider_turn_seq, fromSeq),
+      ),
+    )
+    .orderBy(desc(SessionProviderAttemptTable.provider_turn_seq))
+    .all()
+    .pipe(
+      Effect.orDie,
+      Effect.map((rows) => {
+        let run = 0
+        for (const row of rows) {
+          if (
+            row.state === "indeterminate_after_crash" ||
+            (row.state === "failed" && row.errorCode === "owner_lease_lost_before_dispatch")
+          ) {
+            run++
+            continue
+          }
+          break
+        }
+        return run
+      }),
+    )
+}
+
 export type CommitTurnInput = {
   readonly db: Database.Interface["db"]
   readonly contexts: SessionContext.Interface
@@ -677,52 +721,100 @@ export const commitTurn = Effect.fn("SessionRunnerCanonical.commitTurn")(functio
           // forced continuation may open a fresh attempt (new seq, no replay of the quarantined
           // identity); the quarantined attempt still requires explicit resolution before recovery
           // may treat its turn as terminal.
-          if (latest && ["dispatching", "streaming"].includes(latest.state)) {
-            const stale = yield* staleAfterLeaseLoss(tx, latest.owner_token)
-            if (!stale) return yield* new AdmissionError({ reason: `provider_attempt_blocked:${latest.state}` })
-            // F-18 — the owner's lease is provably dead (crashed process, lease expired after the
-            // one-shot layer-build recovery already ran): quarantine the in-flight attempt + its
-            // receipt as indeterminate in THIS transaction, then let the user's explicit input
-            // open a fresh attempt. The quarantined turn is never replayed (§2.2) and still
-            // requires explicit resolution; mirrors V2ProviderTurn.recover / recoverIndeterminate.
-            yield* tx
-              .update(SessionProviderAttemptTable)
-              .set({ state: "indeterminate_after_crash", error_code: "process_recovery" })
-              .where(
-                and(
-                  eq(SessionProviderAttemptTable.attempt_id, latest.attempt_id),
-                  inArray(SessionProviderAttemptTable.state, ["dispatching", "streaming"]),
-                ),
-              )
-              .run()
-              .pipe(Effect.orDie)
-            const staleReceipt =
-              latest.owner_token === null
-                ? undefined
-                : yield* tx
-                    .update(V2ProviderTurnReceiptTable)
-                    .set({
-                      state: "indeterminate_after_crash",
-                      error_code: "owner_lost_after_dispatch",
-                      terminal_at: stale,
-                    })
-                    .where(
-                      and(
-                        eq(V2ProviderTurnReceiptTable.session_id, input.sessionID),
-                        eq(V2ProviderTurnReceiptTable.owner_token, latest.owner_token),
-                        inArray(V2ProviderTurnReceiptTable.state, ["dispatching", "streaming"]),
-                      ),
-                    )
-                    .returning()
-                    .get()
-                    .pipe(Effect.orDie)
-            yield* staleReceipt
-              ? V2ProviderTurn.writeTurnTerminalDescriptor(tx, staleReceipt, stale)
-              : Effect.void
+          // R1 — a `prepared` attempt (crash in the commitTurn→wire-seal window) of a foreign
+          // owner is quarantined too when that owner's lease is provably dead: otherwise the seq
+          // reuse below hands the new turn to prepareInTransaction, which fails forever with
+          // `prepared_attempt_binding_mismatch` (the attempt-side sweep recoverIndeterminate has
+          // no production caller). Same-owner prepared attempts keep the exact-retry convergence.
+          let quarantinedLatest = false
+          if (latest) {
+            const inFlight = ["dispatching", "streaming"].includes(latest.state)
+            const foreignPrepared = latest.state === "prepared" && latest.owner_token !== input.ownerToken
+            if (inFlight || foreignPrepared) {
+              const stale = yield* staleAfterLeaseLoss(tx, latest.owner_token)
+              if (!stale) {
+                if (inFlight) return yield* new AdmissionError({ reason: `provider_attempt_blocked:${latest.state}` })
+                // prepared + live foreign owner falls through: the same-owner exact-retry reuse does
+                // not apply and prepareInTransaction answers with the typed binding mismatch.
+              } else {
+              // F-18 — the owner's lease is provably dead (crashed process, lease expired after
+              // the one-shot layer-build recovery already ran): quarantine the attempt + its
+              // receipt in THIS transaction, then let the user's explicit input open a fresh
+              // attempt. In-flight turns go to indeterminate_after_crash (unknown outcome, never
+              // replayed, §2.2, explicit resolution still required); a prepared turn never
+              // dispatched, so it terminalizes as failed/owner_lease_lost_before_dispatch.
+              // Mirrors V2ProviderTurn.recover / recoverIndeterminate.
+              yield* tx
+                .update(SessionProviderAttemptTable)
+                .set(
+                  inFlight
+                    ? { state: "indeterminate_after_crash", error_code: "process_recovery" }
+                    : {
+                        state: "failed",
+                        error_code: "owner_lease_lost_before_dispatch",
+                        settled_at: stale,
+                      },
+                )
+                .where(
+                  and(
+                    eq(SessionProviderAttemptTable.attempt_id, latest.attempt_id),
+                    eq(SessionProviderAttemptTable.state, latest.state),
+                  ),
+                )
+                .run()
+                .pipe(Effect.orDie)
+              const staleReceipt =
+                latest.owner_token === null
+                  ? undefined
+                  : yield* tx
+                      .update(V2ProviderTurnReceiptTable)
+                      .set(
+                        inFlight
+                          ? {
+                              state: "indeterminate_after_crash",
+                              error_code: "owner_lost_after_dispatch",
+                              terminal_at: stale,
+                            }
+                          : {
+                              state: "failed",
+                              error_code: "owner_lost_before_dispatch",
+                              terminal_at: stale,
+                            },
+                      )
+                      .where(
+                        and(
+                          eq(V2ProviderTurnReceiptTable.session_id, input.sessionID),
+                          eq(V2ProviderTurnReceiptTable.owner_token, latest.owner_token),
+                          inArray(
+                            V2ProviderTurnReceiptTable.state,
+                            inFlight ? ["dispatching", "streaming"] : ["preparing"],
+                          ),
+                        ),
+                      )
+                      .returning()
+                      .get()
+                      .pipe(Effect.orDie)
+              yield* staleReceipt
+                ? V2ProviderTurn.writeTurnTerminalDescriptor(tx, staleReceipt, stale)
+                : Effect.void
+              quarantinedLatest = true
+              // opencode upstream port #1 — durable resume budget: consecutive crash
+              // quarantines without a single settled attempt in between converge to a typed
+              // refusal instead of an unbounded quarantine/retry loop (the budget is derived
+              // from the durable attempt rows; a settled attempt anywhere in the leading run
+              // resets it).
+              const budget = yield* consecutiveCrashQuarantines(tx, input.sessionID, latest.provider_turn_seq)
+              if (budget >= MaxConsecutiveCrashResumes)
+                return yield* new AdmissionError({ reason: `resume_budget_exhausted:${budget}` })
+              }
+            }
           }
-          // Receipt identity requires provider_turn_seq >= 1; canonical sequences are 1-based.
+          // Receipt identity requires provider_turn_seq >= 1; canonical sequences are 1-based. A
+          // just-quarantined latest must NOT be reused (exact-retry reuse is same-owner only).
           const providerTurnSeq =
-            latest?.state === "prepared" ? latest.provider_turn_seq : (latest?.provider_turn_seq ?? 0) + 1
+            latest && latest.state === "prepared" && !quarantinedLatest
+              ? latest.provider_turn_seq
+              : (latest?.provider_turn_seq ?? 0) + 1
           const validUntil = Math.min(now + ValidationMs, input.admission.nextRevalidationAt)
           if (validUntil <= now) return yield* new AdmissionError({ reason: "selection_revalidation_required" })
           yield* input.contexts.appendValidation({

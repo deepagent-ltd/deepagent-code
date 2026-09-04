@@ -19,6 +19,7 @@ import { EventV2 } from "../../event"
 import { Location } from "../../location"
 import { ModelV2 } from "../../model"
 import { ProviderV2 } from "../../provider"
+import { Catalog } from "../../catalog"
 import { QuestionV2 } from "../../question"
 import { SystemContext } from "../../system-context/index"
 import { SystemContextRegistry } from "../../system-context/registry"
@@ -523,6 +524,20 @@ export const layer = Layer.effect(
           ownerToken: providerTurns.ownerToken,
         })
       ).receipt
+      // R4 — resolve the turn's pricing (per-million cost tier) when the composition provides the
+      // catalog; without it Step.Ended keeps cost 0 rather than guessing.
+      const pricing = yield* Effect.serviceOption(Catalog.Service).pipe(
+        Effect.flatMap((option) =>
+          Option.isSome(option)
+            ? option.value.model
+                .get(ProviderV2.ID.make(model.provider), ModelV2.ID.make(model.id))
+                .pipe(
+                  Effect.map((info) => info.cost[0]),
+                  Effect.catch(() => Effect.succeed(undefined)),
+                )
+            : Effect.succeed(undefined),
+        ),
+      )
       const publisher = createLLMEventPublisher(events, {
         sessionID: session.id,
         agent: agent.id,
@@ -531,6 +546,19 @@ export const layer = Layer.effect(
           providerID: ProviderV2.ID.make(model.provider),
           ...(session.model?.variant === undefined ? {} : { variant: session.model.variant }),
         },
+        ...(pricing
+          ? {
+              costOf: (stepTokens: { input: number; output: number; cache: { read: number; write: number } }) => {
+                const per = (count: number, rate: number) => (Math.max(0, count) / 1e6) * rate
+                return (
+                  per(stepTokens.input, pricing.input) +
+                  per(stepTokens.output, pricing.output) +
+                  per(stepTokens.cache.read, pricing.cache.read) +
+                  per(stepTokens.cache.write, pricing.cache.write)
+                )
+              },
+            }
+          : {}),
       })
       const withPublication = Semaphore.makeUnsafe(1).withPermit
       const publish = (event: LLMEvent, outputPaths: ReadonlyArray<string> = []) =>

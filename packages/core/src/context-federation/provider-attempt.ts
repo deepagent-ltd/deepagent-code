@@ -41,13 +41,25 @@ export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()(
   "SessionProviderAttempt.NotFoundError",
   {},
 ) {}
+// R3 — each class carries its diagnosis in Error.message (TaggedErrorClass would otherwise
+// render an empty message on every log/SSE surface that prints `error.message`).
 export class ConflictError extends Schema.TaggedErrorClass<ConflictError>()("SessionProviderAttempt.ConflictError", {
   reason: Schema.String.pipe(Schema.optional),
-}) {}
+}) {
+  constructor(props: { readonly reason?: string } = {}) {
+    super(props)
+    this.message = props.reason ?? "provider attempt conflict"
+  }
+}
 export class InvalidStateError extends Schema.TaggedErrorClass<InvalidStateError>()(
   "SessionProviderAttempt.InvalidStateError",
   { state: Schema.String },
-) {}
+) {
+  constructor(props: { readonly state: string }) {
+    super(props)
+    this.message = `invalid provider attempt state: ${props.state}`
+  }
+}
 export class ValidationRequiredError extends Schema.TaggedErrorClass<ValidationRequiredError>()(
   "SessionProviderAttempt.ValidationRequiredError",
   {},
@@ -55,7 +67,12 @@ export class ValidationRequiredError extends Schema.TaggedErrorClass<ValidationR
 export class UnsafeRetryError extends Schema.TaggedErrorClass<UnsafeRetryError>()(
   "SessionProviderAttempt.UnsafeRetryError",
   { state: Schema.String },
-) {}
+) {
+  constructor(props: { readonly state: string }) {
+    super(props)
+    this.message = `unsafe retry: provider attempt is ${props.state}`
+  }
+}
 export class ResolutionDeniedError extends Schema.TaggedErrorClass<ResolutionDeniedError>()(
   "SessionProviderAttempt.ResolutionDeniedError",
   {},

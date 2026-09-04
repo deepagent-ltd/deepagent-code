@@ -22,7 +22,12 @@ export class ModelNotSelectedError extends Schema.TaggedErrorClass<ModelNotSelec
   {
     sessionID: SessionSchema.ID,
   },
-) {}
+) {
+  constructor(props: { readonly sessionID: SessionSchema.ID }) {
+    super(props)
+    this.message = `no model selected for session ${props.sessionID}`
+  }
+}
 
 export class UnsupportedApiError extends Schema.TaggedErrorClass<UnsupportedApiError>()(
   "SessionRunnerModel.UnsupportedApiError",
@@ -31,7 +36,12 @@ export class UnsupportedApiError extends Schema.TaggedErrorClass<UnsupportedApiE
     modelID: ModelV2.ID,
     api: Schema.String,
   },
-) {}
+) {
+  constructor(props: { readonly providerID: ProviderV2.ID; readonly modelID: ModelV2.ID; readonly api: string }) {
+    super(props)
+    this.message = `api ${props.api} is not supported by ${props.providerID}/${props.modelID}`
+  }
+}
 
 /** A model whose protocol selection is explicitly disabled (unknown/conflict). */
 export class ModelProtocolDisabledError extends Schema.TaggedErrorClass<ModelProtocolDisabledError>()(
@@ -43,7 +53,18 @@ export class ModelProtocolDisabledError extends Schema.TaggedErrorClass<ModelPro
     reason: ModelProtocolDisabledReason,
     selectionState: Schema.String,
   },
-) {}
+) {
+  constructor(props: {
+    readonly providerID: ProviderV2.ID
+    readonly modelID: ModelV2.ID
+    readonly protocol?: string
+    readonly reason: ModelProtocolDisabledReason
+    readonly selectionState: string
+  }) {
+    super(props)
+    this.message = `model protocol disabled for ${props.providerID}/${props.modelID}: ${props.reason} (${props.selectionState})`
+  }
+}
 
 export type Error =
   | Catalog.ProviderNotFoundError

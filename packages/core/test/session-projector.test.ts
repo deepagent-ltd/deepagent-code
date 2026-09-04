@@ -74,6 +74,84 @@ describe("SessionProjector", () => {
     }),
   )
 
+  // R4 — usage accounting has exactly ONE application point: the Step.Ended projection. A
+  // mirrored step-finish part carrying the same usage must NOT add a second count (the pre-R4
+  // double-count), and removing the part must not subtract usage that was only counted once.
+  it.effect("counts step usage once even when the step-finish part is mirrored too", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      yield* db
+        .insert(ProjectTable)
+        .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+        .onConflictDoNothing()
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: sessionID,
+          project_id: Project.ID.global,
+          slug: "test",
+          directory: "/project",
+          title: "test",
+          version: "test",
+        })
+        .onConflictDoNothing()
+        .run()
+        .pipe(Effect.orDie)
+      const events = yield* EventV2.Service
+      yield* db
+        .insert(MessageTable)
+        .values({
+          id: SessionV1.MessageID.make("msg_step_usage"),
+          session_id: sessionID,
+          type: "assistant",
+          seq: 1,
+          time_created: 1,
+          data: { role: "assistant" },
+        })
+        .onConflictDoNothing()
+        .run()
+        .pipe(Effect.orDie)
+      const stepUsage = { input: 100, output: 50, reasoning: 0, cache: { read: 0, write: 0 } }
+      yield* events.publish(SessionEvent.Step.Ended, {
+        sessionID,
+        timestamp: created,
+        assistantMessageID: SessionMessage.ID.make("msg_step_usage"),
+        finish: "stop",
+        cost: 0.5,
+        tokens: stepUsage,
+      })
+      yield* events.publish(SessionV1.Event.PartUpdated, {
+        sessionID,
+        time: 1,
+        part: {
+          id: SessionV1.PartID.make("prt_step_usage_finish"),
+          sessionID,
+          messageID: SessionV1.MessageID.make("msg_step_usage"),
+          type: "step-finish" as const,
+          reason: "stop",
+          cost: 0.5,
+          tokens: stepUsage,
+        },
+      })
+      yield* events.publish(SessionV1.Event.PartRemoved, {
+        sessionID,
+        messageID: SessionV1.MessageID.make("msg_step_usage"),
+        partID: SessionV1.PartID.make("prt_step_usage_finish"),
+      })
+      const totals = yield* db
+        .select({ cost: SessionTable.cost, tokensInput: SessionTable.tokens_input, tokensOutput: SessionTable.tokens_output })
+        .from(SessionTable)
+        .where(eq(SessionTable.id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
+      expect(totals?.cost).toBe(0.5)
+      expect(totals?.tokensInput).toBe(100)
+      expect(totals?.tokensOutput).toBe(50)
+    }),
+  )
+
   it.effect("never persists computed V1 activity progress from a full message update", () =>
     Effect.gen(function* () {
       const { db } = yield* Database.Service
