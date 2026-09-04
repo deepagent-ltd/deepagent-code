@@ -12,6 +12,7 @@ import { SessionMessage } from "../src/session/message"
 import { Prompt } from "../src/session/prompt"
 import { SessionInputTable, SessionTable } from "../src/session/sql"
 import { SessionContextSelectionTable, SessionProviderAttemptTable } from "../src/context-federation/session-sql"
+import { V2ProviderTurnReceiptTable } from "../src/session/runner/v2-provider-turn.sql"
 import { Project } from "../src/project"
 import { ProjectTable } from "../src/project/sql"
 import { AbsolutePath } from "../src/schema"
@@ -438,5 +439,176 @@ it.effect("quarantines a dead-owner streaming attempt and opens a fresh one on t
     // Receipt-side quarantine (dispatching/streaming -> indeterminate_after_crash, terminal
     // descriptor) mirrors V2ProviderTurn.recover's predicate and is exercised by the live kill-9
     // repro; driving a receipt to `dispatching` here would require faking the full W8 seal.
+  }),
+)
+
+// R1 — a crash in the commitTurn→wire-seal window leaves a PREPARED attempt (and its preparing
+// receipt) owned by the dead process. A foreign commitTurn must quarantine it (failed /
+// owner_lease_lost_before_dispatch, receipt failed / owner_lost_before_dispatch) and open a fresh
+// attempt instead of failing forever on the seq-reuse binding mismatch.
+it.effect("quarantines a dead-owner prepared attempt (pre-dispatch crash) and opens a fresh one", () =>
+  Effect.gen(function* () {
+    yield* seed
+    yield* staleSeed
+    const { db } = yield* Database.Service
+    const owners = yield* SessionProviderOwner.Service
+    const providerTurns = yield* V2ProviderTurn.Service
+    const dyingToken = "v2:r1-dying-owner"
+    yield* owners.register({ ownerToken: dyingToken, leaseMs: 60_000 })
+    const admission = yield* SessionRunnerCanonical.admitSelection({
+      db,
+      contexts: yield* SessionContext.Service,
+      sessionID: staleSessionID,
+      agent: "build",
+      location: { directory: "/project" },
+      promotedInputIds: ["msg_trigger_stale"],
+      system: { baseline: "baseline", revision: 0, baselineSeq: 1 },
+      historyEndMessageId: "msg_trigger_stale",
+    })
+    const crashed = yield* SessionRunnerCanonical.commitTurn({
+      db,
+      contexts: yield* SessionContext.Service,
+      sessionID: staleSessionID,
+      admission,
+      receipt: {
+        sessionId: staleSessionID,
+        userMessageId: "msg_trigger_stale",
+        historyPromptEpoch: 0,
+        historySourceEndMessageId: "msg_trigger_stale",
+        requestInputHash: Hash.sha256("r1-pre-dispatch-crash"),
+        providerId: "provider-test",
+        modelId: "model-test",
+        protocol: "openai-chat",
+        ownerMode: "v2" as const,
+      },
+      ownerToken: dyingToken,
+    })
+    expect(crashed.attempt.state).toBe("prepared")
+    yield* owners.release({ ownerToken: dyingToken })
+    const fresh = yield* SessionRunnerCanonical.commitTurn({
+      db,
+      contexts: yield* SessionContext.Service,
+      sessionID: staleSessionID,
+      admission,
+      receipt: {
+        sessionId: staleSessionID,
+        userMessageId: "msg_trigger_stale",
+        historyPromptEpoch: 0,
+        historySourceEndMessageId: "msg_trigger_stale",
+        requestInputHash: Hash.sha256("r1-after-pre-dispatch-crash"),
+        providerId: "provider-test",
+        modelId: "model-test",
+        protocol: "openai-chat",
+        ownerMode: "v2" as const,
+      },
+      ownerToken: providerTurns.ownerToken,
+    })
+    expect(fresh.attempt.attemptId).not.toBe(crashed.attempt.attemptId)
+    expect(fresh.attempt.providerTurnSeq).toBe(crashed.attempt.providerTurnSeq + 1)
+    const quarantinedAttempt = yield* db
+      .select({
+        state: SessionProviderAttemptTable.state,
+        error_code: SessionProviderAttemptTable.error_code,
+        settled_at: SessionProviderAttemptTable.settled_at,
+      })
+      .from(SessionProviderAttemptTable)
+      .where(eq(SessionProviderAttemptTable.attempt_id, crashed.attempt.attemptId))
+      .get()
+      .pipe(Effect.orDie)
+    expect(quarantinedAttempt?.state).toBe("failed")
+    expect(quarantinedAttempt?.error_code).toBe("owner_lease_lost_before_dispatch")
+    expect(quarantinedAttempt?.settled_at).not.toBeNull()
+    const quarantinedReceipt = yield* db
+      .select({ state: V2ProviderTurnReceiptTable.state })
+      .from(V2ProviderTurnReceiptTable)
+      .where(eq(V2ProviderTurnReceiptTable.receipt_id, crashed.receipt.receiptId))
+      .get()
+      .pipe(Effect.orDie)
+    expect(quarantinedReceipt?.state).toBe("failed")
+  }),
+)
+
+// opencode port #1 — the durable resume budget: a leading run of MaxConsecutiveCrashResumes
+// quarantined attempts without a settle in between must converge to a typed refusal.
+it.effect("refuses new turns once the consecutive crash-resume budget is exhausted", () =>
+  Effect.gen(function* () {
+    yield* seed
+    const { db } = yield* Database.Service
+    const owners = yield* SessionProviderOwner.Service
+    const budgetSessionID = SessionSchema.ID.make("ses_canonical_budget")
+    yield* db
+      .insert(SessionTable)
+      .values({
+        id: budgetSessionID,
+        project_id: Project.ID.global,
+        slug: "canonical-budget",
+        directory: "/project",
+        title: "canonical budget",
+        version: "test",
+      })
+      .onConflictDoNothing()
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
+      .insert(SessionInputTable)
+      .values({
+        id: SessionMessage.ID.make("msg_trigger_budget"),
+        session_id: budgetSessionID,
+        admitted_seq: 1,
+        prompt: new Prompt({ text: "trigger" }),
+        delivery: "steer",
+        promoted_seq: 1,
+        time_created: 1,
+      })
+      .onConflictDoNothing()
+      .run()
+      .pipe(Effect.orDie)
+    const admission = yield* SessionRunnerCanonical.admitSelection({
+      db,
+      contexts: yield* SessionContext.Service,
+      sessionID: budgetSessionID,
+      agent: "build",
+      location: { directory: "/project" },
+      promotedInputIds: ["msg_trigger_budget"],
+      system: { baseline: "baseline", revision: 0, baselineSeq: 1 },
+      historyEndMessageId: "msg_trigger_budget",
+    })
+    const commitWith = (ownerToken: string, salt: string) =>
+      Effect.gen(function* () {
+        return yield* SessionRunnerCanonical.commitTurn({
+          db,
+          contexts: yield* SessionContext.Service,
+          sessionID: budgetSessionID,
+          admission,
+          receipt: {
+            sessionId: budgetSessionID,
+            userMessageId: "msg_trigger_budget",
+            historyPromptEpoch: 0,
+            historySourceEndMessageId: "msg_trigger_budget",
+            requestInputHash: Hash.sha256(`budget-${salt}`),
+            providerId: "provider-test",
+            modelId: "model-test",
+            protocol: "openai-chat",
+            ownerMode: "v2" as const,
+          },
+          ownerToken,
+        })
+      })
+    // Crash-loop emulation: round i commits under owner i, dies (release), and the next round's
+    // commit quarantines it and itself runs under owner i+1.
+    for (let round = 0; round <= SessionRunnerCanonical.MaxConsecutiveCrashResumes; round++) {
+      const owner = `v2:budget-owner-${round}`
+      yield* owners.register({ ownerToken: owner, leaseMs: 60_000 })
+      if (round > 0) yield* owners.release({ ownerToken: `v2:budget-owner-${round - 1}` })
+      // The v4 Exit failure variant carries the error value directly in `.failure`.
+      const outcome = yield* commitWith(owner, String(round)).pipe(Effect.result)
+      const failure = (outcome as { failure?: unknown }).failure
+      if (round < SessionRunnerCanonical.MaxConsecutiveCrashResumes) {
+        expect(failure).toBeUndefined()
+      } else {
+        expect(failure).toBeInstanceOf(SessionRunnerCanonical.AdmissionError)
+        expect((failure as SessionRunnerCanonical.AdmissionError).reason).toStartWith("resume_budget_exhausted:")
+      }
+    }
   }),
 )

@@ -59,13 +59,20 @@ export const registerToolSettleGate = (fn: ToolSettleGateFn) => {
 export const currentToolSettleGate = (): ToolSettleGateFn | undefined =>
   [...gateRegistry.values()].toReversed()[0]
 
+// R3 — the message carries the diagnosis (TaggedErrorClass otherwise renders an empty message
+// on every log/SSE surface that prints `error.message`).
 export class StepLimitExceededError extends Schema.TaggedErrorClass<StepLimitExceededError>()(
   "SessionRunner.StepLimitExceededError",
   {
     sessionID: SessionSchema.ID,
     limit: Schema.Int,
   },
-) {}
+) {
+  constructor(props: { readonly sessionID: SessionSchema.ID; readonly limit: number }) {
+    super(props)
+    this.message = `step limit ${props.limit} exceeded for session ${props.sessionID}`
+  }
+}
 
 export type RunError =
   | LLMError

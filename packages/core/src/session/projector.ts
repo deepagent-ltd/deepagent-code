@@ -46,14 +46,6 @@ type Usage = {
   }
 }
 
-function usage(part: (typeof SessionV1.Event.PartUpdated.Type)["data"]["part"] | unknown): Usage | undefined {
-  if (typeof part !== "object" || part === null) return undefined
-  const value = part as Record<string, unknown>
-  if (value.type !== "step-finish") return undefined
-  if (!("cost" in value) || !("tokens" in value)) return undefined
-  return { cost: value.cost as Usage["cost"], tokens: value.tokens as Usage["tokens"] }
-}
-
 function sessionRow(info: SessionV1.SessionInfo): typeof SessionTable.$inferInsert {
   return {
     id: info.id,
@@ -756,10 +748,6 @@ export const layer = Layer.effectDiscard(
           .where(and(eq(PartTable.message_id, event.data.messageID), eq(PartTable.session_id, event.data.sessionID)))
           .all()
           .pipe(Effect.orDie)
-        for (const row of rows) {
-          const previous = usage(row.data)
-          if (previous) yield* applyUsage(db, event.data.sessionID, previous, -1)
-        }
         yield* db
           .delete(MessageTable)
           .where(and(eq(MessageTable.id, event.data.messageID), eq(MessageTable.session_id, event.data.sessionID)))
@@ -781,8 +769,6 @@ export const layer = Layer.effectDiscard(
           )
           .get()
           .pipe(Effect.orDie)
-        const previous = row && usage(row.data)
-        if (previous) yield* applyUsage(db, event.data.sessionID, previous, -1)
         yield* db
           .delete(PartTable)
           .where(
@@ -819,10 +805,9 @@ export const layer = Layer.effectDiscard(
           .onConflictDoUpdate({ target: PartTable.id, set: { data } })
           .run()
           .pipe(Effect.orDie)
-        const previous = row && usage(row.data)
-        const next = usage(event.data.part)
-        if (previous) yield* applyUsage(db, row.session_id, previous, -1)
-        if (next) yield* applyUsage(db, sessionID, next)
+        // R4 — a projected step-finish part does NOT apply usage: every such part is the mirror of
+        // a turn whose Step.Ended event already applied the same usage below. Applying here too
+        // double-counted every V2 turn (and each mirror re-projection re-counted it again).
       }),
     )
     yield* events.project(SessionEvent.AgentSwitched, (event) => {

@@ -17,21 +17,25 @@ type Input = {
   readonly sessionID: SessionSchema.ID
   readonly agent: string
   readonly model: ModelV2.Ref
+  /** R4 — optional per-turn pricing closure; absent pricing keeps cost 0 (the pre-R4 state). */
+  readonly costOf?: (tokens: StepTokens) => number
 }
 
 const safe = (value: number | undefined) => Math.max(0, Number.isFinite(value) ? (value ?? 0) : 0)
 
-const tokens = (usage: Usage | undefined) => {
-  const reasoning = safe(usage?.reasoningTokens)
-  const read = safe(usage?.cacheReadInputTokens)
-  const write = safe(usage?.cacheWriteInputTokens)
-  return {
-    input: safe(usage?.nonCachedInputTokens),
-    output: safe(usage?.visibleOutputTokens),
-    reasoning,
-    cache: { read, write },
-  }
+type StepTokens = {
+  readonly input: number
+  readonly output: number
+  readonly reasoning: number
+  readonly cache: { readonly read: number; readonly write: number }
 }
+
+const tokens = (usage: Usage | undefined): StepTokens => ({
+  input: safe(usage?.nonCachedInputTokens),
+  output: safe(usage?.visibleOutputTokens),
+  reasoning: safe(usage?.reasoningTokens),
+  cache: { read: safe(usage?.cacheReadInputTokens), write: safe(usage?.cacheWriteInputTokens) },
+})
 
 const record = (value: unknown): Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : { value }
@@ -380,17 +384,19 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
         })
         return
       }
-      case "step-finish":
+      case "step-finish": {
+        const stepTokens = tokens(event.usage)
         yield* flush()
         yield* events.publish(SessionEvent.Step.Ended, {
           sessionID: input.sessionID,
           timestamp: yield* timestamp,
           assistantMessageID: yield* startAssistant(),
           finish: event.reason,
-          cost: 0,
-          tokens: tokens(event.usage),
+          cost: input.costOf ? input.costOf(stepTokens) : 0,
+          tokens: stepTokens,
         })
         return
+      }
       case "finish":
         return
       case "provider-error":
