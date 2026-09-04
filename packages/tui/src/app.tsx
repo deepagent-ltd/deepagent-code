@@ -43,7 +43,17 @@ import { DialogThemeList } from "./component/dialog-theme-list"
 import { DialogHelp } from "./ui/dialog-help"
 import { DialogReviewList } from "./component/dialog-review-list"
 import { DialogKnowledgeReview } from "./component/dialog-knowledge-review"
+import { DialogOversight } from "./component/dialog-oversight"
 import { DialogIM } from "./component/dialog-im"
+import { DialogStats } from "./component/dialog-stats"
+import { DialogGitTimeline } from "./component/dialog-git-timeline"
+import { DialogTerminal } from "./component/dialog-terminal"
+import { DialogPacks } from "./component/dialog-packs"
+import { DialogAgentSystem } from "./component/dialog-agent-system"
+import { DialogProfile } from "./component/dialog-profile"
+import { DialogWorktree } from "./component/dialog-worktree"
+import { DialogBackup } from "./component/dialog-backup"
+import { DialogDebug } from "./component/dialog-debug"
 import { DialogWikiPages } from "./component/dialog-wiki-pages"
 import { DialogAgent } from "./component/dialog-agent"
 import { DialogSessionList } from "./component/dialog-session-list"
@@ -816,6 +826,16 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         category: "System",
       },
       {
+        // W2-6 — oversight face: approval queue + metrics + trace + takeover/rollback.
+        name: "oversight.show",
+        title: "Oversight dashboard",
+        slashName: "oversight",
+        run: () => {
+          dialog.replace(() => <DialogOversight />)
+        },
+        category: "System",
+      },
+      {
         // W4-1 companion — durable knowledge pending review (approve/reject with CAS identity).
         name: "review.pending",
         title: "Review pending knowledge",
@@ -832,6 +852,95 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         slashName: "wiki",
         run: () => {
           dialog.replace(() => <DialogWikiPages />)
+        },
+        category: "System",
+      },
+      {
+        // W4-4a — usage stats (client-side aggregation over the synced session list).
+        name: "stats.show",
+        title: "Usage stats",
+        slashName: "stats",
+        run: () => {
+          dialog.replace(() => <DialogStats />)
+        },
+        category: "System",
+      },
+      {
+        // W4-4a — git timeline: local `git log --follow` for a picked file.
+        name: "git.timeline",
+        title: "Git timeline for a file",
+        slashName: "git",
+        run: () => {
+          dialog.replace(() => <DialogGitTimeline />)
+        },
+        category: "System",
+      },
+      {
+        // W4-4b — domain packs catalog with pin/unpin.
+        name: "packs.list",
+        title: "Domain packs",
+        slashName: "packs",
+        run: () => {
+          dialog.replace(() => <DialogPacks />)
+        },
+        category: "System",
+      },
+      {
+        // W4-4b — agent-system overview from the synced store (agents + providers).
+        name: "agentSystem.show",
+        title: "Agent system",
+        run: () => {
+          dialog.replace(() => <DialogAgentSystem />)
+        },
+        category: "System",
+      },
+      {
+        // W4-4b — profiler runs + hotspots.
+        name: "profile.show",
+        title: "Profiler",
+        slashName: "profile",
+        run: () => {
+          dialog.replace(() => <DialogProfile />)
+        },
+        category: "System",
+      },
+      {
+        // W4-4b — worktree changes, merge-back, fail-closed removal.
+        name: "worktree.show",
+        title: "Worktree",
+        slashName: "worktree",
+        run: () => {
+          dialog.replace(() => <DialogWorktree />)
+        },
+        category: "System",
+      },
+      {
+        // W4-4b — backup list + verify (restore stays GUI-side).
+        name: "backup.list",
+        title: "Backups",
+        slashName: "backup",
+        run: () => {
+          dialog.replace(() => <DialogBackup />)
+        },
+        category: "System",
+      },
+      {
+        // W4-4b — DAP session registry + stack inspection.
+        name: "debug.sessions",
+        title: "Debug sessions (DAP)",
+        slashName: "debug",
+        run: () => {
+          dialog.replace(() => <DialogDebug />)
+        },
+        category: "System",
+      },
+      {
+        // W4-4a — terminal registry over the pty API (create/list/remove).
+        name: "terminal.list",
+        title: "Terminals (pty)",
+        slashName: "terminal",
+        run: () => {
+          dialog.replace(() => <DialogTerminal />)
         },
         category: "System",
       },
