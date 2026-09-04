@@ -144,4 +144,10 @@ export const dict = {
   "tui.oversight.rollbackConfirm": "回滚此会话？这将撤销 Agent 产生的真实变更。",
   "tui.oversight.rollbackNoop": "无可撤销 — 回滚记录为空操作",
   "tui.oversight.rollbackApplied": "回滚已执行 — 会话已撤销",
+  "tui.deepagent.title": "DeepAgent 设置",
+  "tui.deepagent.agentMode": "Agent 模式（general/high/xhigh/max/ultra）",
+  "tui.deepagent.selfLearning": "自学习（manual/auto）",
+  "tui.deepagent.subagentIntensity": "子代理强度（inherit/downgrade）",
+  "tui.deepagent.promptMode": "提示模式（direct/intelligence）",
+  "tui.deepagent.updated": "DeepAgent 设置已更新",
 } satisfies Record<Keys, string>

@@ -142,6 +142,12 @@ export const dict = {
   "tui.oversight.rollbackConfirm": "Roll back this session? This reverts real agent-produced changes.",
   "tui.oversight.rollbackNoop": "Nothing to revert — rollback recorded as a no-op",
   "tui.oversight.rollbackApplied": "Rollback applied — session reverted",
+  "tui.deepagent.title": "DeepAgent settings",
+  "tui.deepagent.agentMode": "Agent mode (general/high/xhigh/max/ultra)",
+  "tui.deepagent.selfLearning": "Self-learning (manual/auto)",
+  "tui.deepagent.subagentIntensity": "Subagent intensity (inherit/downgrade)",
+  "tui.deepagent.promptMode": "Prompt mode (direct/intelligence)",
+  "tui.deepagent.updated": "DeepAgent settings updated",
 }
 
 export type TuiI18nKey = keyof typeof dict

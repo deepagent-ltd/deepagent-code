@@ -144,4 +144,10 @@ export const dict = {
   "tui.oversight.rollbackConfirm": "回滾此會話？這將撤銷 Agent 產生的真實變更。",
   "tui.oversight.rollbackNoop": "無可撤銷 — 回滾記錄為空操作",
   "tui.oversight.rollbackApplied": "回滾已執行 — 會話已撤銷",
+  "tui.deepagent.title": "DeepAgent 設定",
+  "tui.deepagent.agentMode": "Agent 模式（general/high/xhigh/max/ultra）",
+  "tui.deepagent.selfLearning": "自學習（manual/auto）",
+  "tui.deepagent.subagentIntensity": "子代理強度（inherit/downgrade）",
+  "tui.deepagent.promptMode": "提示模式（direct/intelligence）",
+  "tui.deepagent.updated": "DeepAgent 設定已更新",
 } satisfies Record<Keys, string>

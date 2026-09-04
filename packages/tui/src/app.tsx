@@ -44,6 +44,7 @@ import { DialogHelp } from "./ui/dialog-help"
 import { DialogReviewList } from "./component/dialog-review-list"
 import { DialogKnowledgeReview } from "./component/dialog-knowledge-review"
 import { DialogOversight } from "./component/dialog-oversight"
+import { DialogDeepAgentSettings } from "./component/dialog-deepagent-settings"
 import { DialogIM } from "./component/dialog-im"
 import { DialogStats } from "./component/dialog-stats"
 import { DialogGitTimeline } from "./component/dialog-git-timeline"
@@ -832,6 +833,16 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         slashName: "oversight",
         run: () => {
           dialog.replace(() => <DialogOversight />)
+        },
+        category: "System",
+      },
+      {
+        // GUI settings-v2 parity — DeepAgent mode/self-learning/subagent-intensity/prompt-mode.
+        name: "deepagent.settings",
+        title: "DeepAgent settings",
+        slashName: "deepagent",
+        run: () => {
+          dialog.replace(() => <DialogDeepAgentSettings />)
         },
         category: "System",
       },
