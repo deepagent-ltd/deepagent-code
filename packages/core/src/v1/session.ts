@@ -1,11 +1,13 @@
 export * as SessionV1 from "./session"
 
 import { Effect, Schema, Types } from "effect"
-import { EventV2 } from "../event"
+// Deep import: ../event owns the drizzle/database service layer; the schema factory
+// lives in event/define (browser bundles reach this module via legacy-wire).
+import { EventV2 } from "../event/define"
 import { PermissionV1 } from "./permission"
-import { ProjectV2 } from "../project"
-import { ProviderV2 } from "../provider"
-import { ModelV2 } from "../model"
+import { ProjectID } from "../project/id"
+import { ProviderID } from "../provider-id"
+import { ModelRef } from "../model/ref"
 import { optionalOmitUndefined, withStatics } from "../schema"
 import { Identifier } from "../util/identifier"
 import { NonNegativeInt } from "../schema"
@@ -238,8 +240,8 @@ export const SubtaskPart = Schema.Struct({
   agent: Schema.String,
   model: Schema.optional(
     Schema.Struct({
-      providerID: ProviderV2.ID,
-      modelID: ModelV2.ID,
+      providerID: ProviderID.ID,
+      modelID: ModelRef.ID,
     }),
   ),
   command: Schema.optional(Schema.String),
@@ -425,8 +427,8 @@ export const User = Schema.Struct({
   ),
   agent: Schema.String,
   model: Schema.Struct({
-    providerID: ProviderV2.ID,
-    modelID: ModelV2.ID,
+    providerID: ProviderID.ID,
+    modelID: ModelRef.ID,
     variant: Schema.optional(Schema.String),
   }),
   system: Schema.optional(Schema.String),
@@ -526,8 +528,8 @@ export const SubtaskPartInput = Schema.Struct({
   agent: Schema.String,
   model: Schema.optional(
     Schema.Struct({
-      providerID: ProviderV2.ID,
-      modelID: ModelV2.ID,
+      providerID: ProviderID.ID,
+      modelID: ModelRef.ID,
     }),
   ),
   command: Schema.optional(Schema.String),
@@ -558,8 +560,8 @@ export const Assistant = Schema.Struct({
   }),
   error: Schema.optional(AssistantErrorSchema),
   parentID: MessageID,
-  modelID: ModelV2.ID,
-  providerID: ProviderV2.ID,
+  modelID: ModelRef.ID,
+  providerID: ProviderID.ID,
   providerAttemptID: Schema.optional(Schema.String),
   mode: Schema.String,
   agent: Schema.String,
@@ -637,15 +639,15 @@ const SessionRevert = Schema.Struct({
 })
 
 const SessionModel = Schema.Struct({
-  id: ModelV2.ID,
-  providerID: ProviderV2.ID,
+  id: ModelRef.ID,
+  providerID: ProviderID.ID,
   variant: optionalOmitUndefined(Schema.String),
 })
 
 export const SessionInfo = Schema.Struct({
   id: SessionSchema.ID,
   slug: Schema.String,
-  projectID: ProjectV2.ID,
+  projectID: ProjectID.ID,
   workspaceID: optionalOmitUndefined(WorkspaceV2.ID),
   directory: Schema.String,
   path: optionalOmitUndefined(Schema.String),

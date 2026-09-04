@@ -1,13 +1,17 @@
 import { Schema } from "effect"
-import { ProviderMetadata } from "@deepagent-code/llm"
-import { EventV2 } from "../event"
-import { ModelV2 } from "../model"
+// Deep import: the llm barrel exports route/client (node transport) — browser bundles
+// reachable via app → legacy-wire → event cannot parse it.
+import { ProviderMetadata } from "@deepagent-code/llm/schema"
+// Deep import: the ../event barrel owns the drizzle/database service layer; the schema
+// factory alone lives in event/define (browser bundles reach this module via legacy-wire).
+import { EventV2 } from "../event/define"
+import { ModelRef } from "../model/ref"
 import { NonNegativeInt } from "../schema"
 import { ToolOutput } from "../tool-output"
 import { V2Schema } from "../v2-schema"
 import { FileAttachment, Prompt } from "./prompt"
 import { SessionSchema } from "./schema"
-import { Location } from "../location"
+import { LocationRef } from "../location/ref"
 import { RelativePath } from "../schema"
 import { SessionMessageID } from "./message-id"
 
@@ -65,7 +69,7 @@ export const ModelSwitched = EventV2.define({
   schema: {
     ...Base,
     messageID: SessionMessageID.ID,
-    model: ModelV2.Ref,
+    model: ModelRef.Ref,
   },
 })
 export type ModelSwitched = typeof ModelSwitched.Type
@@ -75,7 +79,7 @@ export const Moved = EventV2.define({
   ...options,
   schema: {
     ...Base,
-    location: Location.Ref,
+    location: LocationRef.Ref,
     subdirectory: RelativePath.pipe(Schema.optional),
   },
 })
@@ -221,7 +225,7 @@ export namespace Step {
       ...Base,
       assistantMessageID: SessionMessageID.ID,
       agent: Schema.String,
-      model: ModelV2.Ref,
+      model: ModelRef.Ref,
       snapshot: Schema.String.pipe(Schema.optional),
     },
   })

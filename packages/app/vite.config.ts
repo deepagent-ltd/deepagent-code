@@ -21,6 +21,15 @@ const sentry =
 
 export default defineConfig({
   plugins: [desktopPlugin, sentry] as any,
+  resolve: {
+    alias: {
+      // node builtins that reach the bundle via core/session/legacy-wire (see polyfills/)
+      "node:crypto": new URL("./polyfills/crypto.ts", import.meta.url).pathname,
+      "node:buffer": new URL("./polyfills/buffer.ts", import.meta.url).pathname,
+      crypto: new URL("./polyfills/crypto.ts", import.meta.url).pathname,
+      buffer: new URL("./polyfills/buffer.ts", import.meta.url).pathname,
+    },
+  },
   server: {
     host: "0.0.0.0",
     allowedHosts: true,
