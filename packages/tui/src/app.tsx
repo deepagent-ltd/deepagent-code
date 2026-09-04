@@ -41,6 +41,8 @@ import { DialogMcp } from "./component/dialog-mcp"
 import { DialogStatus } from "./component/dialog-status"
 import { DialogThemeList } from "./component/dialog-theme-list"
 import { DialogHelp } from "./ui/dialog-help"
+import { DialogReviewList } from "./component/dialog-review-list"
+import { DialogWikiPages } from "./component/dialog-wiki-pages"
 import { DialogAgent } from "./component/dialog-agent"
 import { DialogSessionList } from "./component/dialog-session-list"
 import { DialogWorkspaceList } from "./component/dialog-workspace-list"
@@ -56,6 +58,7 @@ import { DialogConfirm } from "./ui/dialog-confirm"
 import { ToastProvider, useToast } from "./ui/toast"
 import { isDefaultTitle, requestSessionFork } from "./util/session"
 import { KVProvider, useKV } from "./context/kv"
+import { TuiI18nProvider, useTuiI18n, type TuiI18nLocale } from "./context/i18n"
 import * as Model from "./util/model"
 import { ArgsProvider, useArgs, type Args } from "./context/args"
 import open from "open"
@@ -258,7 +261,8 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                         <OpencodeKeymapProvider keymap={keymap}>
                           <ArgsProvider {...input.args}>
                             <KVProvider>
-                              <ToastProvider>
+                              <TuiI18nProvider>
+                                <ToastProvider>
                                 <RouteProvider
                                   initialRoute={
                                     input.args.continue
@@ -309,6 +313,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                   </TuiConfigProvider>
                                 </RouteProvider>
                               </ToastProvider>
+                              </TuiI18nProvider>
                             </KVProvider>
                           </ArgsProvider>
                         </OpencodeKeymapProvider>
@@ -344,6 +349,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   const event = useEvent()
   const sdk = useSDK()
   const toast = useToast()
+  const i18n = useTuiI18n()
   const themeState = useTheme()
   const { theme, mode, setMode, locked, lock, unlock } = themeState
   const sync = useSync()
@@ -793,6 +799,41 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         title: "Open docs",
         run: () => {
           open("https://ai.deepagent.ltd/").catch(() => {})
+          dialog.clear()
+        },
+        category: "System",
+      },
+      {
+        // W4-1 minimal face — read-only review list; the full review flow stays GUI-only.
+        name: "review.list",
+        title: "Browse run reviews (read-only)",
+        slashName: "reviews",
+        run: () => {
+          dialog.replace(() => <DialogReviewList />)
+        },
+        category: "System",
+      },
+      {
+        // W4-2 minimal face — read-only wiki pages; editing stays GUI-only.
+        name: "wiki.pages",
+        title: "Browse wiki pages (read-only)",
+        slashName: "wiki",
+        run: () => {
+          dialog.replace(() => <DialogWikiPages />)
+        },
+        category: "System",
+      },
+      {
+        // W2-7 — locale switcher for the TUI's own surfaces (persists via kv "tui_locale").
+        name: "tui.language",
+        title: "Switch TUI language",
+        slashName: "language",
+        run: () => {
+          const order: TuiI18nLocale[] = ["en", "zh", "zht"]
+          const labels: Record<TuiI18nLocale, string> = { en: "English", zh: "简体中文", zht: "繁體中文" }
+          const next = order[(order.indexOf(i18n.locale()) + 1) % order.length]!
+          i18n.setLocale(next)
+          toast.show({ message: labels[next], variant: "info", duration: 3000 })
           dialog.clear()
         },
         category: "System",
