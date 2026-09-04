@@ -730,6 +730,7 @@ export const routeManifest = [
       "packages/deepagent-code/src/session/processor.ts",
       "packages/deepagent-code/src/session/tool-argument-receipt.sql.ts",
       "packages/deepagent-code/src/session/tools.ts",
+      "packages/deepagent-code/src/session/v2-plan-gate.ts",
     ],
     checks: ["llm-adapter", "session-continuation", "tool-files", "tool-bash-sandbox", "worktree-routing"],
     runs: [

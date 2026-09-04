@@ -589,6 +589,15 @@ describe("makeTaskSubagentRunner capability boundary", () => {
         state: expect.objectContaining({ status: "error", error: "denied" }),
       }),
       expect.objectContaining({ type: "text", text: "final answer", id: "prt_assist_full_3" }),
+      // F-17 hardening: the canonical converter synthesizes a step-finish part (V1 turn
+      // accounting/token capture keys on it) — deterministic `<msgid>_finish` id.
+      expect.objectContaining({
+        type: "step-finish",
+        reason: "length",
+        id: "prt_assist_full_finish",
+        tokens: { input: 1, output: 2, reasoning: 3, cache: { read: 0, write: 0 } },
+        cost: 0.25,
+      }),
     ])
   })
 

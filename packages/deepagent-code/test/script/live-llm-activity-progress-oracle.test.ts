@@ -45,7 +45,7 @@ describe("activity progress live oracle", () => {
         expectedTools: ["read", "read"],
         observation: value,
       }),
-    ).toThrow("lacked one matching run and terminal receipt")
+    ).toThrow("lacked matching runs and terminal receipts")
   })
 })
 

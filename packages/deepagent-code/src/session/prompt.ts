@@ -2878,13 +2878,16 @@ export const layer = Layer.effect(
     const requireV2PromptText = (
       sessionID: SessionID,
       message: Prompt,
+      input?: PromptInput,
     ): Effect.Effect<Prompt, LegacyExecutionUnavailable, never> =>
       message.text.trim().length > 0 || (message.files?.length ?? 0) > 0 || (message.agents?.length ?? 0) > 0
         ? Effect.succeed(message)
         : refuseLegacyExecution({
             sessionID,
             reason: "v2_owner_unavailable",
-            detail: "V2 prompt admission has no mappable content (text/file/agent parts)",
+            detail: input?.parts.some((part) => part.type === "subtask")
+              ? "subtask commands are not supported under the V2-only profile yet (the subagent drive is not wired); use the task tool inside a normal turn instead"
+              : "V2 prompt admission has no mappable content (text/file/agent parts)",
           })
 
     // P2-10 (rN): lifecycle is accepted for call-site compatibility but not wired to V2 admission
@@ -2952,7 +2955,7 @@ export const layer = Layer.effect(
         .prompt({
           sessionID: v2SessionID,
           ...(input.messageID ? { id: SessionMessage.ID.make(input.messageID) } : {}),
-          prompt: yield* requireV2PromptText(input.sessionID, interactiveV2Prompt(input)),
+          prompt: yield* requireV2PromptText(input.sessionID, interactiveV2Prompt(input), input),
           resume: false,
         })
         .pipe(
@@ -3027,7 +3030,7 @@ export const layer = Layer.effect(
         .prompt({
           sessionID: SessionV2.ID.make(input.sessionID),
           ...(input.messageID ? { id: SessionMessage.ID.make(input.messageID) } : {}),
-          prompt: yield* requireV2PromptText(input.sessionID, interactiveV2Prompt(input)),
+          prompt: yield* requireV2PromptText(input.sessionID, interactiveV2Prompt(input), input),
           delivery: "goal_steer",
         })
         .pipe(

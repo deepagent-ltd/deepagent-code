@@ -1133,15 +1133,25 @@ export function Prompt(props: PromptProps) {
 
     if (store.mode === "shell") {
       move.startSubmit()
-      void sdk.client.session.shell({
-        sessionID,
-        agent: agent.name,
-        model: {
-          providerID: selectedModel.providerID,
-          modelID: selectedModel.modelID,
-        },
-        command: inputText,
-      })
+      void sdk.client.session
+        .shell({
+          sessionID,
+          agent: agent.name,
+          model: {
+            providerID: selectedModel.providerID,
+            modelID: selectedModel.modelID,
+          },
+          command: inputText,
+        })
+        .catch((error) => {
+          // V2-only profile refuses the legacy shell route with a typed 503 whose message
+          // carries the reason — surface it instead of dropping the `!` command silently.
+          toast.show({
+            message: error instanceof Error ? error.message : "Shell command failed",
+            variant: "error",
+            duration: 5000,
+          })
+        })
       setStore("mode", "normal")
     } else if (
       inputText.startsWith("/") &&
@@ -1155,15 +1165,25 @@ export function Prompt(props: PromptProps) {
       const restOfInput = firstLineEnd === -1 ? "" : inputText.slice(firstLineEnd + 1)
       const args = firstLineArgs.join(" ") + (restOfInput ? "\n" + restOfInput : "")
 
-      void sdk.client.session.command({
-        sessionID,
-        command: command.slice(1),
-        arguments: args,
-        agent: agent.name,
-        model: `${selectedModel.providerID}/${selectedModel.modelID}`,
-        variant,
-        parts: nonTextParts.filter((x) => x.type === "file"),
-      })
+      void sdk.client.session
+        .command({
+          sessionID,
+          command: command.slice(1),
+          arguments: args,
+          agent: agent.name,
+          model: `${selectedModel.providerID}/${selectedModel.modelID}`,
+          variant,
+          parts: nonTextParts.filter((x) => x.type === "file"),
+        })
+        .catch((error) => {
+          // Commands may refuse with typed errors (e.g. subtask commands under the V2-only
+          // profile) whose message carries the reason — show it instead of failing silently.
+          toast.show({
+            message: error instanceof Error ? error.message : `Command /${command.slice(1)} failed`,
+            variant: "error",
+            duration: 5000,
+          })
+        })
     } else {
       move.startSubmit()
       sdk.client.session
@@ -1182,7 +1202,26 @@ export function Prompt(props: PromptProps) {
             ...nonTextParts,
           ],
         })
-        .catch(() => {})
+        .then((result) => {
+          // V4.1 §S1.2 steer ack: a message sent mid-turn is absorbed as a steer and delivered
+          // at the next step boundary — keep that visible instead of appearing dropped.
+          const ack = result as unknown as { steered?: boolean }
+          if (ack.steered)
+            toast.show({
+              message: "Steered into the running task (applies at the next step boundary)",
+              variant: "info",
+              duration: 4000,
+            })
+        })
+        .catch((error) => {
+          // Typed refusals (v2 owner unavailable, intent conflicts) carry the reason in the
+          // message — surface them; silence hid real send failures.
+          toast.show({
+            message: error instanceof Error ? error.message : "Failed to send message",
+            variant: "error",
+            duration: 5000,
+          })
+        })
       if (editorParts.length > 0) editor.markSelectionSent()
     }
     history.append({
