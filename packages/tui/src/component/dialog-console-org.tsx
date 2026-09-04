@@ -2,6 +2,7 @@ import { createResource, createMemo } from "solid-js"
 import { DialogSelect } from "../ui/dialog-select"
 import { useSDK } from "../context/sdk"
 import { useDialog } from "../ui/dialog"
+import { useTuiI18n } from "../context/i18n"
 import { useToast } from "../ui/toast"
 import { useTheme } from "../context/theme"
 import type { ExperimentalConsoleListOrgsResponse } from "@deepagent-code/sdk"
@@ -23,6 +24,7 @@ export function DialogConsoleOrg() {
   const sdk = useSDK()
   const dialog = useDialog()
   const toast = useToast()
+  const i18n = useTuiI18n()
   const { theme } = useTheme()
 
   const [orgs] = createResource(async () => {
@@ -37,7 +39,7 @@ export function DialogConsoleOrg() {
     if (listed === undefined) {
       return [
         {
-          title: "Loading orgs...",
+          title: i18n.t("tui.consoleOrg.loading"),
           value: "loading",
           onSelect: () => {},
         },
@@ -47,7 +49,7 @@ export function DialogConsoleOrg() {
     if (listed.length === 0) {
       return [
         {
-          title: "No orgs found",
+          title: i18n.t("tui.consoleOrg.empty"),
           value: "empty",
           onSelect: () => {},
         },

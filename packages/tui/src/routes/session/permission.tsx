@@ -16,6 +16,7 @@ import { getScrollAcceleration } from "../../util/scroll"
 import { useTuiConfig } from "../../config"
 import { DEEPAGENT_CODE_BASE_MODE, useBindings, useCommandShortcut } from "../../keymap"
 import { usePathFormatter } from "../../context/path-format"
+import { useTuiI18n } from "../../context/i18n"
 
 type PermissionStage = "permission" | "always" | "reject"
 
@@ -112,6 +113,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
   const sdk = useSDK()
   const project = useProject()
   const sync = useSync()
+  const i18n = useTuiI18n()
   const [store, setStore] = createStore({
     stage: "permission" as PermissionStage,
   })
@@ -366,7 +368,7 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
             if (permission === "doom_loop") {
               return {
                 icon: "⟳",
-                title: "Continue after repeated failures",
+                title: i18n.t("tui.permission.continueAfterRepeatedFailures"),
                 body: (
                   <box paddingLeft={1}>
                     <text fg={theme.textMuted}>This keeps the session running despite repeated failures.</text>
@@ -408,7 +410,11 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
               title="Permission required"
               header={header()}
               body={current.body}
-              options={{ once: "Allow once", always: "Allow always", reject: "Reject" }}
+              options={{
+                once: i18n.t("tui.permission.allowOnce"),
+                always: i18n.t("tui.permission.allowAlways"),
+                reject: i18n.t("tui.permission.rejectOption"),
+              }}
               escapeKey="reject"
               fullscreen
               onSelect={(option) => {
@@ -450,6 +456,7 @@ function RejectPrompt(props: { onConfirm: (message: string) => void; onCancel: (
   let input: TextareaRenderable
   const { theme } = useTheme()
   const tuiConfig = useTuiConfig()
+  const i18n = useTuiI18n()
   const dimensions = useTerminalDimensions()
   const narrow = createMemo(() => dimensions().width < 80)
   useBindings(() => ({
@@ -457,20 +464,25 @@ function RejectPrompt(props: { onConfirm: (message: string) => void; onCancel: (
     commands: [
       {
         name: "app.exit",
-        title: "Cancel permission rejection",
-        category: "Permission",
+        title: i18n.t("tui.permission.cancelRejection"),
+        category: i18n.t("tui.category.permission"),
         run() {
           props.onCancel()
         },
       },
     ],
     bindings: [
-      { key: "escape", desc: "Cancel permission rejection", group: "Permission", cmd: () => props.onCancel() },
+      {
+        key: "escape",
+        desc: i18n.t("tui.permission.cancelRejection"),
+        group: i18n.t("tui.category.permission"),
+        cmd: () => props.onCancel(),
+      },
       ...tuiConfig.keybinds.get("app.exit"),
       {
         key: "return",
-        desc: "Confirm permission rejection",
-        group: "Permission",
+        desc: i18n.t("tui.permission.confirmRejection"),
+        group: i18n.t("tui.category.permission"),
         cmd: () => props.onConfirm(input.plainText),
       },
     ],
@@ -486,7 +498,7 @@ function RejectPrompt(props: { onConfirm: (message: string) => void; onCancel: (
       <box gap={1} paddingLeft={1} paddingRight={3} paddingTop={1} paddingBottom={1}>
         <box flexDirection="row" gap={1} paddingLeft={1}>
           <text fg={theme.error}>{"△"}</text>
-          <text fg={theme.text}>Reject permission</text>
+          <text fg={theme.text}>{i18n.t("tui.permission.reject")}</text>
         </box>
         <box paddingLeft={1}>
           <text fg={theme.textMuted}>Tell DeepAgent Code what to do differently</text>
@@ -538,6 +550,7 @@ function Prompt<const T extends Record<string, string>>(props: {
 }) {
   const { theme } = useTheme()
   const tuiConfig = useTuiConfig()
+  const i18n = useTuiI18n()
   const dimensions = useTerminalDimensions()
   const keys = Object.keys(props.options) as (keyof T)[]
   const [store, setStore] = createStore({
@@ -552,8 +565,8 @@ function Prompt<const T extends Record<string, string>>(props: {
     commands: [
       {
         name: "app.exit",
-        title: "Reject permission",
-        category: "Permission",
+        title: i18n.t("tui.permission.reject"),
+        category: i18n.t("tui.category.permission"),
         run() {
           if (!props.escapeKey) return
           props.onSelect(props.escapeKey)
@@ -561,8 +574,8 @@ function Prompt<const T extends Record<string, string>>(props: {
       },
       {
         name: "permission.prompt.fullscreen",
-        title: "Toggle permission fullscreen",
-        category: "Permission",
+        title: i18n.t("tui.permission.toggleFullscreen"),
+        category: i18n.t("tui.category.permission"),
         run() {
           if (!props.fullscreen) return
           setStore("expanded", (v) => !v)
@@ -572,8 +585,8 @@ function Prompt<const T extends Record<string, string>>(props: {
     bindings: [
       {
         key: "left",
-        desc: "Previous permission option",
-        group: "Permission",
+        desc: i18n.t("tui.permission.previousOption"),
+        group: i18n.t("tui.category.permission"),
         cmd: () => {
           const idx = keys.indexOf(store.selected)
           const next = keys[(idx - 1 + keys.length) % keys.length]
@@ -582,8 +595,8 @@ function Prompt<const T extends Record<string, string>>(props: {
       },
       {
         key: "h",
-        desc: "Previous permission option",
-        group: "Permission",
+        desc: i18n.t("tui.permission.previousOption"),
+        group: i18n.t("tui.category.permission"),
         cmd: () => {
           const idx = keys.indexOf(store.selected)
           const next = keys[(idx - 1 + keys.length) % keys.length]
@@ -592,8 +605,8 @@ function Prompt<const T extends Record<string, string>>(props: {
       },
       {
         key: "right",
-        desc: "Next permission option",
-        group: "Permission",
+        desc: i18n.t("tui.permission.nextOption"),
+        group: i18n.t("tui.category.permission"),
         cmd: () => {
           const idx = keys.indexOf(store.selected)
           const next = keys[(idx + 1) % keys.length]
@@ -602,8 +615,8 @@ function Prompt<const T extends Record<string, string>>(props: {
       },
       {
         key: "l",
-        desc: "Next permission option",
-        group: "Permission",
+        desc: i18n.t("tui.permission.nextOption"),
+        group: i18n.t("tui.category.permission"),
         cmd: () => {
           const idx = keys.indexOf(store.selected)
           const next = keys[(idx + 1) % keys.length]
@@ -612,16 +625,16 @@ function Prompt<const T extends Record<string, string>>(props: {
       },
       {
         key: "return",
-        desc: "Select permission option",
-        group: "Permission",
+        desc: i18n.t("tui.permission.selectOption"),
+        group: i18n.t("tui.category.permission"),
         cmd: () => props.onSelect(store.selected),
       },
       ...(props.escapeKey
         ? [
             {
               key: "escape",
-              desc: "Reject permission",
-              group: "Permission",
+              desc: i18n.t("tui.permission.reject"),
+              group: i18n.t("tui.category.permission"),
               cmd: () => props.onSelect(props.escapeKey!),
             },
           ]

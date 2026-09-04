@@ -1,8 +1,10 @@
 /** @jsxImportSource @opentui/solid */
+import { pluginTranslator } from "../../i18n/standalone"
 import { RGBA, TextAttributes, type KeyEvent, type Renderable } from "@opentui/core"
 import { useTerminalDimensions } from "@opentui/solid"
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js"
 import { useBindings, useKeymapSelector } from "../../keymap"
+import { useTuiI18n } from "../../context/i18n"
 import type { ActiveKey } from "@opentui/keymap"
 import type { TuiPlugin, TuiPluginApi } from "@deepagent-code/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
@@ -189,6 +191,7 @@ function WhichKeyPanel(props: {
   pinned: () => boolean
 }) {
   const dimensions = useTerminalDimensions()
+  const i18n = useTuiI18n()
   const [offset, setOffset] = createSignal(0)
   const [activeGroup, setActiveGroup] = createSignal<string | undefined>()
   const pending = useKeymapSelector((keymap) => keymap.getPendingSequence())
@@ -289,72 +292,72 @@ function WhichKeyPanel(props: {
     commands: [
       {
         name: command.groupPrevious,
-        title: "Previous key binding group",
-        desc: "Show the previous which-key group",
-        category: "System",
+        title: i18n.t("tui.whichKey.previousGroup"),
+        desc: i18n.t("tui.whichKey.showPreviousGroup"),
+        category: i18n.t("tui.category.system"),
         run() {
           moveGroup(-1)
         },
       },
       {
         name: command.groupNext,
-        title: "Next key binding group",
-        desc: "Show the next which-key group",
-        category: "System",
+        title: i18n.t("tui.whichKey.nextGroup"),
+        desc: i18n.t("tui.whichKey.showNextGroup"),
+        category: i18n.t("tui.category.system"),
         run() {
           moveGroup(1)
         },
       },
       {
         name: command.scrollUp,
-        title: "Scroll key bindings up",
-        desc: "Scroll the which-key panel up",
-        category: "System",
+        title: i18n.t("tui.whichKey.scrollUp"),
+        desc: i18n.t("tui.whichKey.scrollPanelUp"),
+        category: i18n.t("tui.category.system"),
         run() {
           scroll(-columns())
         },
       },
       {
         name: command.scrollDown,
-        title: "Scroll key bindings down",
-        desc: "Scroll the which-key panel down",
-        category: "System",
+        title: i18n.t("tui.whichKey.scrollDown"),
+        desc: i18n.t("tui.whichKey.scrollPanelDown"),
+        category: i18n.t("tui.category.system"),
         run() {
           scroll(columns())
         },
       },
       {
         name: command.pageUp,
-        title: "Page key bindings up",
-        desc: "Page the which-key panel up",
-        category: "System",
+        title: i18n.t("tui.whichKey.pageUp"),
+        desc: i18n.t("tui.whichKey.pagePanelUp"),
+        category: i18n.t("tui.category.system"),
         run() {
           scroll(-pageSize())
         },
       },
       {
         name: command.pageDown,
-        title: "Page key bindings down",
-        desc: "Page the which-key panel down",
-        category: "System",
+        title: i18n.t("tui.whichKey.pageDown"),
+        desc: i18n.t("tui.whichKey.pagePanelDown"),
+        category: i18n.t("tui.category.system"),
         run() {
           scroll(pageSize())
         },
       },
       {
         name: command.home,
-        title: "First key binding",
-        desc: "Jump to the first which-key binding",
-        category: "System",
+        title: i18n.t("tui.whichKey.firstBinding"),
+        desc: i18n.t("tui.whichKey.jumpFirst"),
+        category: i18n.t("tui.category.system"),
         run() {
           setOffset(0)
         },
       },
       {
         name: command.end,
-        title: "Last key binding",
-        desc: "Jump to the last which-key binding",
-        category: "System",
+        title: i18n.t("tui.whichKey.lastBinding"),
+        desc: i18n.t("tui.whichKey.jumpLast"),
+        category: i18n.t("tui.category.system"),
         run() {
           setOffset(maxOffset())
         },
@@ -530,6 +533,7 @@ function WhichKeyPanel(props: {
 }
 
 const tui: TuiPlugin = async (api) => {
+  const t = pluginTranslator(api.kv)
   const [pinned, setPinned] = createSignal(false)
   const [mode, setMode] = createSignal(layout(api.kv.get(KV_LAYOUT, "dock")))
   const [pendingPreview, setPendingPreview] = createSignal(api.kv.get(KV_PENDING_PREVIEW, false))
@@ -539,8 +543,8 @@ const tui: TuiPlugin = async (api) => {
     commands: [
       {
         name: command.toggle,
-        title: "Show key bindings",
-        desc: "Toggle which-key overlay",
+        title: t("tui.whichKey.show"),
+        desc: t("tui.whichKey.toggleOverlay"),
         category: "System",
         run() {
           setPinned((value) => !value)
@@ -548,8 +552,8 @@ const tui: TuiPlugin = async (api) => {
       },
       {
         name: command.toggleLayout,
-        title: "Toggle key bindings layout",
-        desc: "Switch which-key between dock and overlay mode",
+        title: t("tui.whichKey.toggleLayout"),
+        desc: t("tui.whichKey.switchMode"),
         category: "System",
         run() {
           setMode((value) => {
@@ -561,8 +565,8 @@ const tui: TuiPlugin = async (api) => {
       },
       {
         name: command.togglePending,
-        title: "Toggle pending key preview",
-        desc: "Automatically show which-key for pending key sequences in overlay mode",
+        title: t("tui.whichKey.togglePending"),
+        desc: t("tui.whichKey.toggleAutoShow"),
         category: "System",
         run() {
           setPendingPreview((value) => {

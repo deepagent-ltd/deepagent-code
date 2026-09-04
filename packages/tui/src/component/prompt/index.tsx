@@ -49,6 +49,7 @@ import { DialogAlert } from "../../ui/dialog-alert"
 import { DialogSelect } from "../../ui/dialog-select"
 import { DialogPrompt } from "../../ui/dialog-prompt"
 import { useToast } from "../../ui/toast"
+import { useTuiI18n } from "../../context/i18n"
 import { useKV } from "../../context/kv"
 import { createFadeIn } from "../../util/signal"
 import { DialogSkill } from "../dialog-skill"
@@ -173,6 +174,7 @@ export function Prompt(props: PromptProps) {
   const tuiConfig = useTuiConfig()
   const dialog = useDialog()
   const toast = useToast()
+  const i18n = useTuiI18n()
 
   // GUI parity (D1): the intelligence prepare pipeline. POSTs the raw text to
   // /session/:id/prompt_prepare_stream (SSE), then shows the prepared draft in an editable review.
@@ -238,7 +240,7 @@ export function Prompt(props: PromptProps) {
       if (result.intent_id && result.intent_id !== intentID) throw new Error("prepare returned a different intent")
       const editable = (result.preview ?? result.goal ?? "").trim()
       if (!editable) return direct
-      const edited = await DialogPrompt.show(dialog, "Intelligence draft — edit then confirm", {
+      const edited = await DialogPrompt.show(dialog, i18n.t("tui.intelligence.reviewTitle"), {
         value: editable,
       })
       if (edited === null) return false
@@ -253,7 +255,7 @@ export function Prompt(props: PromptProps) {
       }
     } catch {
       // W1-3 — refinement is an enhancement, not a gate: degrade to direct override.
-      toast.show({ message: "Prompt refinement unavailable — sending directly", variant: "info", duration: 3000 })
+      toast.show({ message: i18n.t("tui.intelligence.degraded"), variant: "info", duration: 3000 })
       return direct
     }
   }
@@ -341,7 +343,7 @@ export function Prompt(props: PromptProps) {
   function promptModelWarning() {
     toast.show({
       variant: "warning",
-      message: "Connect a provider to send prompts",
+      message: i18n.t("tui.prompt.connectProvider"),
       duration: 3000,
     })
     if (sync.data.provider.length === 0) {
@@ -455,7 +457,7 @@ export function Prompt(props: PromptProps) {
   const promptCommands = createMemo(() =>
     [
       {
-        title: "Clear prompt",
+        title: i18n.t("tui.prompt.clearPrompt"),
         name: "prompt.clear",
         category: "Prompt",
         hidden: true,
@@ -465,7 +467,7 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "Submit prompt",
+        title: i18n.t("tui.prompt.submitPrompt"),
         name: "prompt.submit",
         category: "Prompt",
         hidden: true,
@@ -478,7 +480,7 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "Remove editor context",
+        title: i18n.t("tui.prompt.removeEditorContext"),
         name: "prompt.editor_context.clear",
         category: "Prompt",
         enabled: Boolean(editorContext()),
@@ -488,7 +490,7 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "Paste",
+        title: i18n.t("tui.prompt.paste"),
         name: "prompt.paste",
         category: "Prompt",
         hidden: true,
@@ -510,7 +512,7 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "Interrupt session",
+        title: i18n.t("tui.prompt.interruptSession"),
         name: "session.interrupt",
         category: "Session",
         hidden: true,
@@ -541,7 +543,7 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "Open editor",
+        title: i18n.t("tui.prompt.openEditor"),
         category: "Session",
         name: "prompt.editor",
         slashName: "editor",
@@ -633,7 +635,7 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "Skills",
+        title: i18n.t("tui.prompt.skills"),
         name: "prompt.skills",
         category: "Prompt",
         slashName: "skills",
@@ -653,8 +655,8 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "Warp",
-        desc: "Change the workspace for the session",
+        title: i18n.t("tui.prompt.warp"),
+        desc: i18n.t("tui.prompt.workspace.change"),
         name: "workspace.set",
         category: "Session",
         enabled: Flag.DEEPAGENT_CODE_EXPERIMENTAL_WORKSPACES,
@@ -664,8 +666,8 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "Expert panel",
-        desc: "Convene the expert panel (会诊) on the current conversation",
+        title: i18n.t("tui.prompt.expertPanel"),
+        desc: i18n.t("tui.prompt.expertPanelDesc"),
         name: "deepagent.panel",
         category: "Session",
         slashName: "panel",
@@ -673,7 +675,7 @@ export function Prompt(props: PromptProps) {
         run: async () => {
           const sessionID = props.sessionID
           if (!sessionID) return
-          toast.show({ variant: "info", message: "Convening expert panel…", duration: 3000 })
+          toast.show({ variant: "info", message: i18n.t("tui.prompt.conveningExpertPanel"), duration: 3000 })
           try {
             const res = await rawRequest<{ decision: string; confidence: number; rounds: number }>({
               method: "POST",
@@ -690,13 +692,13 @@ export function Prompt(props: PromptProps) {
               duration: 6000,
             })
           } catch {
-            toast.show({ variant: "warning", message: "Expert panel failed", duration: 3000 })
+            toast.show({ variant: "warning", message: i18n.t("tui.prompt.expertPanelFailed"), duration: 3000 })
           }
         },
       },
       {
-        title: "Start goal",
-        desc: "Drive the current plan to completion as an autonomous goal",
+        title: i18n.t("tui.prompt.startGoal"),
+        desc: i18n.t("tui.prompt.startGoalDesc"),
         name: "deepagent.goal",
         category: "Session",
         slashName: "goal",
@@ -750,15 +752,15 @@ export function Prompt(props: PromptProps) {
           } catch {
             toast.show({
               variant: "warning",
-              message: "Could not start goal — describe an objective (/goal ...) or make a plan first",
+              message: i18n.t("tui.prompt.startGoalFailed"),
               duration: 4000,
             })
           }
         },
       },
       {
-        title: "Move session",
-        desc: "Move the session to another project directory",
+        title: i18n.t("tui.prompt.moveSession"),
+        desc: i18n.t("tui.prompt.moveSessionDesc"),
         name: "session.move",
         category: "Session",
         slashName: "move",
@@ -769,8 +771,8 @@ export function Prompt(props: PromptProps) {
       {
         // GUI D1 parity — the per-session intelligence toggle (scenario-toggle). While on, sends
         // run through the prepare pipeline with an editable draft review before submission.
-        title: intelligenceMode() ? "Disable intelligence prompts" : "Enable intelligence prompts",
-        desc: "Route sends through the DeepAgent prepare pipeline",
+        title: intelligenceMode() ? i18n.t("tui.intelligence.toggleOn") : i18n.t("tui.intelligence.toggleOff"),
+        desc: i18n.t("tui.intelligence.desc"),
         name: "prompt.intelligence",
         category: "Session",
         slashName: "intelligence",
@@ -780,9 +782,7 @@ export function Prompt(props: PromptProps) {
           const next = !intelligenceMode()
           kv.set("intelligence_mode", { ...(kv.get("intelligence_mode", {}) as Record<string, boolean>), [sessionID]: next })
           toast.show({
-            message: next
-              ? "Intelligence prompts on — sends are refined and reviewed before submission"
-              : "Intelligence prompts off — direct sends",
+            message: next ? i18n.t("tui.intelligence.on") : i18n.t("tui.intelligence.off"),
             variant: "info",
             duration: 4000,
           })
@@ -790,8 +790,8 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "Queue followup while busy",
-        desc: "Park text to send when the running turn settles",
+        title: i18n.t("tui.followup.title"),
+        desc: i18n.t("tui.followup.desc"),
         name: "prompt.followup",
         category: "Session",
         slashName: "followup",
@@ -801,18 +801,22 @@ export function Prompt(props: PromptProps) {
           if (!sessionID) return
           const text = store.prompt.input.replace(/^\/followup\b\s*/, "").trim()
           if (!text) {
-            toast.show({ message: "Usage: /followup <text> — queues it for when the turn settles", variant: "info", duration: 4000 })
+            toast.show({ message: i18n.t("tui.followup.usage"), variant: "info", duration: 4000 })
             return
           }
           setFollowups(sessionID, [...(followups()[sessionID] ?? []), text])
           input.setText("")
           setStore("prompt", { input: "", parts: [] })
-          toast.show({ message: `Followup queued (${(followups()[sessionID] ?? []).length} waiting)`, variant: "info", duration: 3000 })
+          toast.show({
+            message: i18n.t("tui.followup.queued", { count: (followups()[sessionID] ?? []).length }),
+            variant: "info",
+            duration: 3000,
+          })
           dialog.clear()
         },
       },
       {
-        title: "Browse queued followups",
+        title: i18n.t("tui.followup.list"),
         name: "prompt.followup.list",
         category: "Session",
         slashName: "followups",
@@ -821,12 +825,12 @@ export function Prompt(props: PromptProps) {
           if (!sessionID) return
           const queue = followups()[sessionID] ?? []
           if (queue.length === 0) {
-            toast.show({ message: "No queued followups", variant: "info", duration: 3000 })
+            toast.show({ message: i18n.t("tui.followup.none"), variant: "info", duration: 3000 })
             return
           }
           dialog.replace(() => (
             <DialogSelect
-              title={`Queued followups (${queue.length})`}
+              title={i18n.t("tui.followup.queueTitle", { count: queue.length })}
               options={queue.map((text, index) => ({
                 title: text.length > 90 ? `${text.slice(0, 90)}…` : text,
                 value: index,
@@ -1030,7 +1034,7 @@ export function Prompt(props: PromptProps) {
   const stashCommands = createMemo(() =>
     [
       {
-        title: "Stash prompt",
+        title: i18n.t("tui.prompt.stash"),
         name: "prompt.stash",
         category: "Prompt",
         enabled: !!store.prompt.input,
@@ -1048,7 +1052,7 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "Stash pop",
+        title: i18n.t("tui.prompt.stashPop"),
         name: "prompt.stash.pop",
         category: "Prompt",
         enabled: stash.list().length > 0,
@@ -1064,7 +1068,7 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "Stash list",
+        title: i18n.t("tui.prompt.stashList"),
         name: "prompt.stash.list",
         category: "Prompt",
         enabled: stash.list().length > 0,
@@ -1123,7 +1127,7 @@ export function Prompt(props: PromptProps) {
       bindings: [
         {
           key: "!",
-          desc: "Shell mode",
+          desc: i18n.t("tui.prompt.shellMode"),
           group: "Prompt",
           cmd: () => {
             setStore("placeholder", randomIndex(shell().length))
@@ -1138,7 +1142,9 @@ export function Prompt(props: PromptProps) {
     return {
       target: inputTarget,
       enabled: inputTarget() !== undefined && store.mode === "shell",
-      bindings: [{ key: "escape", desc: "Exit shell mode", group: "Prompt", cmd: () => setStore("mode", "normal") }],
+      bindings: [
+        { key: "escape", desc: i18n.t("tui.prompt.exitShellMode"), group: "Prompt", cmd: () => setStore("mode", "normal") },
+      ],
     }
   })
 
@@ -1149,7 +1155,9 @@ export function Prompt(props: PromptProps) {
         cursorVersion()
         return inputTarget() !== undefined && store.mode === "shell" && input?.visualCursor.offset === 0
       })(),
-      bindings: [{ key: "backspace", desc: "Exit shell mode", group: "Prompt", cmd: () => setStore("mode", "normal") }],
+      bindings: [
+        { key: "backspace", desc: i18n.t("tui.prompt.exitShellMode"), group: "Prompt", cmd: () => setStore("mode", "normal") },
+      ],
     }
   })
 
@@ -1163,7 +1171,7 @@ export function Prompt(props: PromptProps) {
       commands: [
         {
           name: "prompt.history.previous",
-          title: "Previous prompt history",
+          title: i18n.t("tui.prompt.historyPrevious"),
           category: "Prompt",
           run() {
             if (input.cursorOffset !== 0) {
@@ -1195,7 +1203,7 @@ export function Prompt(props: PromptProps) {
       commands: [
         {
           name: "prompt.history.next",
-          title: "Next prompt history",
+          title: i18n.t("tui.prompt.historyNext"),
           category: "Prompt",
           run() {
             if (input.cursorOffset !== input.plainText.length) {
@@ -1307,7 +1315,7 @@ export function Prompt(props: PromptProps) {
         console.log("Creating a session failed:", res.error)
 
         toast.show({
-          message: "Creating a session failed. Open console for more details.",
+          message: i18n.t("tui.prompt.createSessionFailed"),
           variant: "error",
         })
 
@@ -1445,7 +1453,7 @@ export function Prompt(props: PromptProps) {
           const ack = result as unknown as { steered?: boolean }
           if (ack.steered)
             toast.show({
-              message: "Steered into the running task (applies at the next step boundary)",
+              message: i18n.t("tui.prompt.steered"),
               variant: "info",
               duration: 4000,
             })

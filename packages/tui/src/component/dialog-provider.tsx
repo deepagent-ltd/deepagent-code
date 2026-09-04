@@ -1,5 +1,6 @@
 import { createMemo, createSignal, onMount, Show } from "solid-js"
 import { useSync } from "../context/sync"
+import { useTuiI18n } from "../context/i18n"
 import { map, pipe, sortBy } from "remeda"
 import { DialogSelect } from "../ui/dialog-select"
 import { useDialog } from "../ui/dialog"
@@ -88,12 +89,13 @@ export function createDialogProviderOptions() {
   const dialog = useDialog()
   const sdk = useSDK()
   const toast = useToast()
+  const i18n = useTuiI18n()
   const { theme } = useTheme()
   const onboarded = useConnected()
 
   async function promptCustomProviderID(): Promise<string | undefined> {
-    const value = await DialogPrompt.show(dialog, "Other", {
-      placeholder: "Provider id",
+    const value = await DialogPrompt.show(dialog, i18n.t("tui.provider.other"), {
+      placeholder: i18n.t("tui.provider.idPlaceholder"),
       description: () => (
         <text fg={theme.textMuted}>
           This only stores a credential. Configure the provider in deepagent-code.json to use it.
@@ -107,8 +109,7 @@ export function createDialogProviderOptions() {
 
     toast.show({
       variant: "error",
-      message:
-        "Provider ids must start with a lowercase letter or number and only use lowercase letters, numbers, hyphens, and underscores",
+      message: i18n.t("tui.provider.idInvalid"),
     })
     return promptCustomProviderID()
   }
@@ -119,14 +120,16 @@ export function createDialogProviderOptions() {
       map((provider) => {
         if (provider.type === "custom") {
           return {
-            title: provider.title,
+            title: i18n.t("tui.provider.other"),
             value: provider.value,
             description: provider.description,
             category: provider.category,
             async onSelect() {
               const providerID = await promptCustomProviderID()
               if (!providerID) return
-              return dialog.replace(() => <ApiMethod providerID={providerID} title="API key" custom />)
+              return dialog.replace(() => (
+                <ApiMethod providerID={providerID} title={i18n.t("tui.provider.apiKey")} custom />
+              ))
             },
           }
         }
@@ -242,20 +245,21 @@ function AutoMethod(props: AutoMethodProps) {
   const dialog = useDialog()
   const sync = useSync()
   const toast = useToast()
+  const i18n = useTuiI18n()
   const clipboard = useClipboard()
 
   useBindings(() => ({
     bindings: [
       {
         key: "c",
-        desc: "Copy provider code",
-        group: "Dialog",
+        desc: i18n.t("tui.provider.copyCode"),
+        group: i18n.t("tui.category.dialog"),
         cmd: () => {
           const code =
             props.authorization.instructions.match(/[A-Z0-9]{4}-[A-Z0-9]{4,5}/)?.[0] ?? props.authorization.url
           clipboard
             .write?.(code)
-            .then(() => toast.show({ message: "Copied to clipboard", variant: "info" }))
+            .then(() => toast.show({ message: i18n.t("tui.common.copiedToClipboard"), variant: "info" }))
             .catch(toast.error)
         },
       },
