@@ -42,6 +42,7 @@ import { Locale } from "../../util/locale"
 import { webSearchProviderLabel } from "../../util/tool-display"
 import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import { useSDK } from "../../context/sdk"
+import { useTuiI18n } from "../../context/i18n"
 import { useEditorContext } from "../../context/editor"
 import { openEditor } from "../../editor"
 import { useDialog } from "../../ui/dialog"
@@ -352,6 +353,7 @@ export function Session() {
   }
   const keymap = useOpencodeKeymap()
   const dialog = useDialog()
+  const i18n = useTuiI18n()
   const renderer = useRenderer()
 
   event.on("session.status", (evt) => {
@@ -574,7 +576,7 @@ export function Session() {
           .then((x) => x.data)
           .catch(() => undefined)
         if (!suggestion || !suggestion.body) {
-          toast.show({ variant: "warning", message: "No next-step suggestion available yet", duration: 4000 })
+          toast.show({ variant: "warning", message: i18n.t("tui.suggest.none"), duration: 4000 })
           dialog.clear()
           return
         }
@@ -599,12 +601,12 @@ export function Session() {
             time: { archived: Date.now() },
           })
           await sync.session.refresh()
-          toast.show({ variant: "success", message: "Session archived", duration: 3000 })
+          toast.show({ variant: "success", message: i18n.t("tui.archive.archived"), duration: 3000 })
           navigate({ type: "home" })
         } catch (error) {
           toast.show({
             variant: "error",
-            message: error instanceof Error ? error.message : "Failed to archive session",
+            message: error instanceof Error ? error.message : i18n.t("tui.archive.archiveFailed"),
             duration: 5000,
           })
         }
@@ -642,7 +644,7 @@ export function Session() {
         if (items.length === 0) {
           toast.show({
             variant: "info",
-            message: "No queued inputs — explicit queue-mode inputs open the next activity when this one settles",
+            message: i18n.t("tui.queue.empty"),
             duration: 5000,
           })
           dialog.clear()
@@ -650,12 +652,12 @@ export function Session() {
         }
         dialog.replace(() => (
           <DialogSelect
-            title={`Queued inputs (${items.length})`}
+            title={`${i18n.t("tui.queue.title")} (${items.length})`}
             options={items.map((x) => ({
               title: x.text.length > 90 ? `${x.text.slice(0, 90)}…` : x.text,
               value: x.id,
               category: "Queue",
-              footer: `#${x.admittedSeq} · ${Locale.time(x.timeCreated)} · promotes in admit order`,
+              footer: `#${x.admittedSeq} · ${Locale.time(x.timeCreated)} · ${i18n.t("tui.queue.promotesInOrder")}`,
             }))}
             onSelect={() => {}}
           />

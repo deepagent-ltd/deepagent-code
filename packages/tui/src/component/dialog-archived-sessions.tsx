@@ -2,6 +2,7 @@ import { useDialog } from "../ui/dialog"
 import { DialogSelect } from "../ui/dialog-select"
 import { useRoute } from "../context/route"
 import { useSDK } from "../context/sdk"
+import { useTuiI18n } from "../context/i18n"
 import { useSync } from "../context/sync"
 import { useTheme } from "../context/theme"
 import { useToast } from "../ui/toast"
@@ -19,6 +20,7 @@ export function DialogArchivedSessions() {
   const sync = useSync()
   const { theme } = useTheme()
   const toast = useToast()
+  const i18n = useTuiI18n()
   const [toDelete, setToDelete] = createSignal<string>()
 
   const [items, { refetch }] = createResource(async () => {
@@ -29,7 +31,7 @@ export function DialogArchivedSessions() {
 
   const options = () =>
     (items.latest ?? []).map((x) => ({
-      title: toDelete() === x.id ? "Press delete again to confirm" : x.title,
+      title: toDelete() === x.id ? i18n.t("tui.archive.confirmDelete") : x.title,
       bg: toDelete() === x.id ? theme.error : undefined,
       value: x.id,
       category: "Archived",
@@ -46,7 +48,7 @@ export function DialogArchivedSessions() {
 
   return (
     <DialogSelect
-      title="Archived sessions"
+      title={i18n.t("tui.archive.title")}
       options={options()}
       current={undefined}
       onMove={() => {
@@ -59,7 +61,7 @@ export function DialogArchivedSessions() {
       actions={[
         {
           command: "session.archive.list",
-          title: "restore",
+          title: i18n.t("tui.archive.restore"),
           onTrigger: async (option: { value: string }) => {
             const session = (items.latest ?? []).find((item) => item.id === option.value)
             try {
@@ -70,13 +72,13 @@ export function DialogArchivedSessions() {
               })
               if (result.error) throw result.error
               await sync.session.refresh()
-              toast.show({ variant: "success", message: "Session restored", duration: 3000 })
+              toast.show({ variant: "success", message: i18n.t("tui.archive.restored"), duration: 3000 })
               setToDelete(undefined)
               removeLocal()
             } catch (error) {
               toast.show({
                 variant: "error",
-                title: "Failed to restore session",
+                title: i18n.t("tui.archive.restoreFailed"),
                 message: errorMessage(error),
               })
             }
@@ -84,7 +86,7 @@ export function DialogArchivedSessions() {
         },
         {
           command: "session.delete",
-          title: "delete",
+          title: i18n.t("tui.archive.delete"),
           onTrigger: async (option: { value: string }) => {
             if (toDelete() !== option.value) {
               setToDelete(option.value)
@@ -100,13 +102,13 @@ export function DialogArchivedSessions() {
               if (route.data.type === "session" && route.data.sessionID === option.value) {
                 route.navigate({ type: "home" })
               }
-              toast.show({ variant: "success", message: "Session deleted", duration: 3000 })
+              toast.show({ variant: "success", message: i18n.t("tui.archive.deleted"), duration: 3000 })
               setToDelete(undefined)
               removeLocal()
             } catch (error) {
               toast.show({
                 variant: "error",
-                title: "Failed to delete session",
+                title: i18n.t("tui.archive.deleteFailed"),
                 message: errorMessage(error),
               })
               setToDelete(undefined)
