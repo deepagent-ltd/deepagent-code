@@ -1413,10 +1413,10 @@ export function Prompt(props: PromptProps) {
         })
     } else {
       move.startSubmit()
-      // GUI parity (D1/W0-3a): when intelligence mode is on for this session, run the prompt
+      // GUI parity (D1): when intelligence mode is on for this session, run the prompt
       // through the prepare pipeline first — SSE progress + an editable draft review — then send
-      // with the confirmed-draft metadata. Any prepare failure or route "general" degrades to
-      // direct_override (the server already degrades under the V2-only profile).
+      // with the confirmed-draft metadata. Prepare failures degrade to direct_override (W1-3
+      // semantics; W0-3b made refinement itself run under the V2-only profile).
       const intelligenceOn = props.sessionID
         ? kv.get("intelligence_mode", {})[props.sessionID] === true
         : false

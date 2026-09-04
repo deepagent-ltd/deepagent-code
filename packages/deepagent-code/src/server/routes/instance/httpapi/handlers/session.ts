@@ -512,43 +512,32 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       const rawInput = promptText(input.ctx.payload.parts)
       if (!rawInput.trim()) return yield* new HttpApiError.BadRequest({})
       if (input.ctx.payload.intent_id) {
-        // W0-3a — the intelligence prepare pipeline is legacy-only (intent admission writes V1
-        // rows; refineIntelligenceDraft guards the same). Under the V2-only profile degrade to
-        // the direct route instead of a 503: the client treats route "general" as
-        // direct_override, so the message still goes through the V2 owner.
-        if (flags.coreV2Only) {
-          return yield* Effect.logWarning("intelligence prompt prepare degraded to direct (v2-only profile)").pipe(
-            Effect.annotateLogs({ sessionID: input.ctx.params.sessionID }),
-            Effect.as({
-              route: "general" as const,
-              prompt_draft_id: "",
-              context_plan_id: "",
-              state: "general_ready",
-              mode: "intelligence" as const,
-              goal: rawInput,
-              preview: rawInput,
-              intent_id: input.ctx.payload.intent_id,
-            }),
+        // W0-3b — the V1 intent admission (SessionPromptIntent.prepare) is the intelligence
+        // pipeline's ONLY legacy durable write, and it exists to make the V1 claim/renew chain
+        // idempotent. Under the V2-only profile that chain is retired: V2 prompt idempotency is
+        // carried by the SessionV2 messageID, so prepare is skipped and refinement runs for real
+        // (auxiliary model call + fs draft — no legacy rows). intent_id still round-trips so the
+        // client's identity checks are unaffected.
+        if (!flags.coreV2Only) {
+          yield* guardLegacyExecution(flags, { sessionID: input.ctx.params.sessionID }).pipe(
+            Effect.mapError(mapLegacyZero),
+          )
+          yield* SessionPromptIntent.prepare({
+            intentID: input.ctx.payload.intent_id,
+            sessionID: input.ctx.params.sessionID,
+            source: input.ctx.payload.intent_source ?? "intelligence",
+          }).pipe(
+            Effect.provideService(Database.Service, database),
+            Effect.mapError((error) =>
+              error instanceof SessionMutationEpoch.Stale
+                ? new ConflictError({
+                    message: "prompt intent was superseded by a session revert",
+                    resource: `session:${error.sessionID}`,
+                  })
+                : new ConflictError({ message: error.reason, resource: `session_intent:${error.intentID}` }),
+            ),
           )
         }
-        yield* guardLegacyExecution(flags, { sessionID: input.ctx.params.sessionID }).pipe(
-          Effect.mapError(mapLegacyZero),
-        )
-        yield* SessionPromptIntent.prepare({
-          intentID: input.ctx.payload.intent_id,
-          sessionID: input.ctx.params.sessionID,
-          source: input.ctx.payload.intent_source ?? "intelligence",
-        }).pipe(
-          Effect.provideService(Database.Service, database),
-          Effect.mapError((error) =>
-            error instanceof SessionMutationEpoch.Stale
-              ? new ConflictError({
-                  message: "prompt intent was superseded by a session revert",
-                  resource: `session:${error.sessionID}`,
-                })
-              : new ConflictError({ message: error.reason, resource: `session_intent:${error.intentID}` }),
-          ),
-        )
       }
       const result = yield* promptSvc
         .refineIntelligenceDraft({
