@@ -1,3 +1,4 @@
+import { pluginTranslator } from "../../i18n/standalone"
 import type { TuiPlugin, TuiPluginApi, TuiPluginStatus } from "@deepagent-code/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
 import { useTerminalDimensions } from "@opentui/solid"
@@ -5,6 +6,7 @@ import { fileURLToPath } from "url"
 import { DialogSelect, type DialogSelectOption } from "../../ui/dialog-select"
 import { Show, createEffect, createMemo, createSignal } from "solid-js"
 import { useBindings } from "../../keymap"
+import { useTuiI18n } from "../../context/i18n"
 
 const id = "internal:plugin-manager"
 
@@ -36,17 +38,25 @@ function meta(item: TuiPluginStatus, width: number) {
 }
 
 function Install(props: { api: TuiPluginApi }) {
+  const i18n = useTuiI18n()
   const [global, setGlobal] = createSignal(false)
   const [busy, setBusy] = createSignal(false)
 
   useBindings(() => ({
     enabled: !busy(),
-    bindings: [{ key: "tab", desc: "Toggle install scope", group: "Plugins", cmd: () => setGlobal((value) => !value) }],
+    bindings: [
+      {
+        key: "tab",
+        desc: i18n.t("tui.plugins.toggleInstallScope"),
+        group: "Plugins",
+        cmd: () => setGlobal((value) => !value),
+      },
+    ],
   }))
 
   return (
     <props.api.ui.DialogPrompt
-      title="Install plugin"
+      title={i18n.t("tui.plugins.installTitle")}
       placeholder="npm package name"
       busy={busy()}
       busyText="Installing plugin..."
@@ -67,7 +77,7 @@ function Install(props: { api: TuiPluginApi }) {
         if (!mod) {
           props.api.ui.toast({
             variant: "error",
-            message: "Plugin package name is required",
+            message: i18n.t("tui.plugins.packageNameRequired"),
           })
           return
         }
@@ -84,7 +94,7 @@ function Install(props: { api: TuiPluginApi }) {
               if (out.missing) {
                 props.api.ui.toast({
                   variant: "info",
-                  message: "Check npm registry/auth settings and try again.",
+                  message: i18n.t("tui.plugins.checkNpmSettings"),
                 })
               }
               show(props.api)
@@ -98,7 +108,7 @@ function Install(props: { api: TuiPluginApi }) {
             if (!out.tui) {
               props.api.ui.toast({
                 variant: "info",
-                message: "Package has no TUI target to load in this app.",
+                message: i18n.t("tui.plugins.noTuiTarget"),
               })
               show(props.api)
               return
@@ -108,7 +118,7 @@ function Install(props: { api: TuiPluginApi }) {
               if (!ok) {
                 props.api.ui.toast({
                   variant: "warning",
-                  message: "Installed plugin, but runtime load failed. See console/logs; restart TUI to retry.",
+                  message: i18n.t("tui.plugins.runtimeLoadFailed"),
                 })
                 show(props.api)
                 return
@@ -148,6 +158,7 @@ function showInstall(api: TuiPluginApi) {
 }
 
 function View(props: { api: TuiPluginApi }) {
+  const i18n = useTuiI18n()
   const size = useTerminalDimensions()
   const [list, setList] = createSignal(props.api.plugins.list())
   const [cur, setCur] = createSignal<string | undefined>()
@@ -200,7 +211,7 @@ function View(props: { api: TuiPluginApi }) {
 
   return (
     <DialogSelect
-      title="Plugins"
+      title={i18n.t("tui.plugins.title")}
       options={rows()}
       current={cur()}
       onMove={(item) => setCur(item.value)}
@@ -236,11 +247,12 @@ function show(api: TuiPluginApi) {
 }
 
 const tui: TuiPlugin = async (api) => {
+  const t = pluginTranslator(api.kv)
   api.keymap.registerLayer({
     commands: [
       {
         name: "plugins.list",
-        title: "Plugins",
+        title: t("tui.plugins.list"),
         category: "System",
         namespace: "palette",
         run() {
@@ -249,7 +261,7 @@ const tui: TuiPlugin = async (api) => {
       },
       {
         name: "plugins.install",
-        title: "Install plugin",
+        title: t("tui.plugins.installCommand"),
         category: "System",
         namespace: "palette",
         run() {
