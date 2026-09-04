@@ -306,6 +306,10 @@ describe("SessionV2.create", () => {
           [0, EventV2.versionedType(SessionV1.Event.Created.type, 1)],
           [1, EventV2.versionedType(SessionEvent.PromptLifecycle.Admitted.type, 1)],
           [2, EventV2.versionedType(SessionEvent.PromptLifecycle.Promoted.type, 1)],
+          // W4-6 wire egress: the promoted user message derives a V1 wire row on replay too —
+          // the egress is journal-driven, so a fresh target replays the same wire derivation.
+          [3, EventV2.versionedType(SessionV1.Event.MessageUpdated.type, 1)],
+          [4, EventV2.versionedType(SessionV1.Event.PartUpdated.type, 1)],
         ])
       }).pipe(Effect.provide(Layer.fresh(Layer.mergeAll(targetDatabase, targetEvents, targetProjector, targetStore))))
     }),

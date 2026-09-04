@@ -36,7 +36,8 @@ describe("C0-01 caller inventory gate", () => {
   test("NEW-P3-G regression: exact universe count and frozen lildax leaf-command set", () => {
     // Universe is frozen at 379 (NEW-P2-A removed the 8 spurious bare-nested lildax entries);
     // W10 added the `docs` leaf command (cli.dacode.docs) -> 397.
-    expect(inventory.entries.length).toBe(397)
+    // W2-3 added the deepagent queue read endpoint (http.instance.deepagent.queuedInputs) -> 398.
+    expect(inventory.entries.length).toBe(398)
     const lildax = inventory.entries
       .filter((entry) => entry.entry.surface === "cli-lildax")
       .map((entry) => entry.entry.id)

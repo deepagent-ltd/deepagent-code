@@ -11,6 +11,8 @@ import { FilePartArtifact } from "../file-part-artifact"
 import { FilePartArtifactBindingTable } from "../file-part-artifact.sql"
 import { SessionEvent } from "./event"
 import { SessionV1 } from "../v1/session"
+import { ProviderV2 } from "../provider"
+import { ModelV2 } from "../model"
 import { WorkspaceTable } from "../control-plane/workspace.sql"
 import { SessionMessage } from "./message"
 import { SessionMessageUpdater } from "./message-updater"
@@ -24,7 +26,10 @@ import {
   SessionInputTable,
   SessionMessageTable,
   SessionTable,
+  SessionWireProjectionTable,
 } from "./sql"
+import { V2ProviderTurnReceiptTable } from "./runner/v2-provider-turn.sql"
+import { legacyAssistant as legacyAssistantExport } from "./legacy-wire"
 import type { DeepMutable } from "../schema"
 import { SessionSchema } from "./schema"
 
@@ -268,6 +273,253 @@ function insertMessage(db: DatabaseService, event: SessionEvent.Event, message: 
     })
     .run()
     .pipe(Effect.orDie)
+}
+
+// ── W4-6: journal → V1-wire projection egress ────────────────────────────────────────────────
+// The single production line: durable session.next.* events fold into SessionMessageTable (run
+// above), and THIS egress derives the V1 wire rows from that folded state — publishing
+// SessionV1.Event.MessageUpdated/PartUpdated so the existing V1 projection handlers write the
+// wire tables and the SSE surface fans out to both clients. Exactly-once: the
+// session_wire_projection fingerprint cursor (durable, unlike the F-17 drain-local map it
+// replaces) skips byte-identical re-derivations across replay/overlap windows.
+
+const loadMessageRow = (db: DatabaseService, sessionID: SessionSchema.ID, messageID: SessionMessage.ID) =>
+  db
+    .select()
+    .from(SessionMessageTable)
+    .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.id, messageID)))
+    .get()
+    .pipe(Effect.orDie)
+
+const decodeRow = (row: typeof SessionMessageTable.$inferSelect) =>
+  decodeMessage({ ...row.data, id: row.id, type: row.type })
+
+function wireFingerprintCursor(
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  entity: "message" | "part",
+  entityID: string,
+) {
+  return db
+    .select({ fingerprint: SessionWireProjectionTable.fingerprint })
+    .from(SessionWireProjectionTable)
+    .where(
+      and(
+        eq(SessionWireProjectionTable.session_id, sessionID),
+        eq(SessionWireProjectionTable.entity, entity),
+        eq(SessionWireProjectionTable.entity_id, entityID),
+      ),
+    )
+    .get()
+    .pipe(Effect.orDie)
+}
+
+const recordWireFingerprint = (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  entity: "message" | "part",
+  entityID: string,
+  fingerprint: string,
+) =>
+  db
+    .insert(SessionWireProjectionTable)
+    .values({ session_id: sessionID, entity, entity_id: entityID, fingerprint, time_updated: Date.now() })
+    .onConflictDoUpdate({
+      target: [SessionWireProjectionTable.session_id, SessionWireProjectionTable.entity, SessionWireProjectionTable.entity_id],
+      set: { fingerprint, time_updated: Date.now() },
+    })
+    .run()
+    .pipe(Effect.orDie)
+
+// Publish a wire entity when its content fingerprint advanced. Set-then-publish ordering (the
+// cursor row lands before the event) keeps concurrent folds race-free, mirroring F-19.
+function publishWireOnce(
+  db: DatabaseService,
+  events: EventV2.Interface,
+  sessionID: SessionSchema.ID,
+  entity: "message" | "part",
+  entityID: string,
+  fingerprint: string,
+  publish: () => Effect.Effect<void, unknown>,
+) {
+  return Effect.gen(function* () {
+    const cursor = yield* wireFingerprintCursor(db, sessionID, entity, entityID)
+    if (cursor?.fingerprint === fingerprint) return
+    yield* recordWireFingerprint(db, sessionID, entity, entityID, fingerprint)
+    yield* publish().pipe(Effect.orDie)
+  })
+}
+
+// The V1 wire parent linkage needs the first user message of the session; the F-17 mirror used
+// the same resolution (sessions.findMessage(role === "user")).
+const firstWireParent = (db: DatabaseService, sessionID: SessionSchema.ID) =>
+  db
+    .select({ id: SessionMessageTable.id })
+    .from(SessionMessageTable)
+    .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.type, "user")))
+    .orderBy(asc(SessionMessageTable.seq))
+    .get()
+    .pipe(Effect.orDie)
+
+function legacyUserRow(input: {
+  readonly sessionID: SessionSchema.ID
+  readonly message: SessionMessage.User
+  readonly agent: string | null
+  readonly model: { id: string; providerID: string; variant?: string } | null
+}): SessionV1.WithParts {
+  const created = DateTime.toEpochMillis(input.message.time.created)
+  const messageID = SessionV1.MessageID.ascending(input.message.id)
+  const parts: SessionV1.Part[] = []
+  if (input.message.text) {
+    parts.push({
+      id: SessionV1.PartID.ascending(`prt_${input.message.id.slice("msg_".length)}_0`),
+      sessionID: input.sessionID,
+      messageID,
+      type: "text",
+      text: input.message.text,
+      time: { start: created, end: created },
+    })
+  }
+  for (const [index, file] of (input.message.files ?? []).entries()) {
+    parts.push({
+      id: SessionV1.PartID.ascending(`prt_${input.message.id.slice("msg_".length)}_f${index}`),
+      sessionID: input.sessionID,
+      messageID,
+      type: "file",
+      url: file.uri,
+      mime: file.mime,
+      ...(file.name === undefined ? {} : { filename: file.name }),
+      time: { start: created, end: created },
+    } as SessionV1.Part)
+  }
+  return {
+    info: {
+      id: messageID,
+      sessionID: input.sessionID,
+      role: "user",
+      time: { created },
+      agent: input.agent ?? "",
+      // The wire user row feeds next-turn model resolution (currentModel falls back to the last
+      // user message's model); carry the session's model so the fallback never resolves empty.
+      model: {
+        providerID: (input.model?.providerID ?? "") as ProviderV2.ID,
+        modelID: (input.model?.id ?? "") as ModelV2.ID,
+        ...(input.model?.variant === undefined ? {} : { variant: input.model.variant }),
+      },
+    },
+    parts,
+  }
+}
+
+// Derive + publish the V1 wire rows for one folded SessionMessage. Assistant rows carry the full
+// legacyAssistant conversion (model/cost/tokens/path + synthesized step-finish); user rows carry
+// the text part, file attachments, and the session's agent/model identity. Idempotent via the
+// durable fingerprint cursor.
+function publishWireForMessage(
+  db: DatabaseService,
+  events: EventV2.Interface,
+  sessionID: SessionSchema.ID,
+  messageID: SessionMessage.ID,
+) {
+  return Effect.gen(function* () {
+    const row = yield* loadMessageRow(db, sessionID, messageID)
+    if (!row) return
+    const message = decodeRow(row)
+    const projected =
+      message.type === "assistant"
+        ? yield* Effect.gen(function* () {
+            const parent = yield* firstWireParent(db, sessionID)
+            const directory = yield* db
+              .select({ directory: SessionTable.directory, path: SessionTable.path })
+              .from(SessionTable)
+              .where(eq(SessionTable.id, sessionID))
+              .get()
+              .pipe(Effect.orDie)
+            return legacyAssistantExport({
+              sessionID,
+              parentMessageID: SessionV1.MessageID.ascending(parent ? parent.id : message.id),
+              directory: directory?.directory ?? "",
+              root: directory?.path ?? "",
+              message,
+            })
+          })
+        : message.type === "user"
+          ? yield* Effect.gen(function* () {
+              const identity = yield* db
+                .select({ agent: SessionTable.agent, model: SessionTable.model })
+                .from(SessionTable)
+                .where(eq(SessionTable.id, sessionID))
+                .get()
+                .pipe(Effect.orDie)
+              return legacyUserRow({ sessionID, message, agent: identity?.agent ?? null, model: identity?.model ?? null })
+            })
+          : undefined
+    if (!projected) return
+    const existing = yield* db
+      .select({ data: MessageTable.data })
+      .from(MessageTable)
+      .where(eq(MessageTable.id, projected.info.id))
+      .get()
+      .pipe(Effect.orDie)
+    // Ownership scoping (staged 6b-1): the host authors wire rows for legacy-loop sessions with
+    // host-side extras (`structured`, host part ids, reference-mention parts...) the V2
+    // projection does not model. The egress therefore only CREATES rows it cannot see (crash
+    // recovery: the row was never written) plus assistant rows for V2-owned sessions (the
+    // mirror's exact audience); existing host-authored rows stay untouched until 6b-2 retires
+    // the mirror and the egress becomes the single writer.
+    if (projected.info.role === "user") {
+      if (existing) return
+      const messageFingerprint = JSON.stringify(projected.info)
+      yield* publishWireOnce(db, events, sessionID, "message", projected.info.id, messageFingerprint, () =>
+        events.publish(SessionV1.Event.MessageUpdated, {
+          sessionID,
+          info: structuredClone(projected.info),
+        }),
+      )
+      for (const part of projected.parts) {
+        const fingerprint = JSON.stringify(part)
+        yield* publishWireOnce(db, events, sessionID, "part", part.id, fingerprint, () =>
+          events.publish(SessionV1.Event.PartUpdated, {
+            sessionID,
+            part: structuredClone(part),
+            time: Date.now(),
+          }),
+        )
+      }
+      return
+    }
+    const v2Owned = yield* db
+      .select({ id: V2ProviderTurnReceiptTable.receipt_id })
+      .from(V2ProviderTurnReceiptTable)
+      .where(and(eq(V2ProviderTurnReceiptTable.session_id, sessionID), eq(V2ProviderTurnReceiptTable.owner_mode, "v2")))
+      .get()
+      .pipe(Effect.orDie)
+    if (v2Owned) {
+      // Merge-preserve: keep wire-row fields the V2 projection does not model (assistant
+      // `structured`, providerAttemptID...) on top of the derived row.
+      const mergedInfo =
+        existing?.data && typeof existing.data === "object"
+          ? ({ ...structuredClone(projected.info), ...structuredClone(existing.data) } as typeof projected.info)
+          : projected.info
+      const messageFingerprint = JSON.stringify(mergedInfo)
+      yield* publishWireOnce(db, events, sessionID, "message", mergedInfo.id, messageFingerprint, () =>
+        events.publish(SessionV1.Event.MessageUpdated, {
+          sessionID,
+          info: structuredClone(mergedInfo),
+        }),
+      )
+    }
+    for (const part of projected.parts) {
+      const fingerprint = JSON.stringify(part)
+      yield* publishWireOnce(db, events, sessionID, "part", part.id, fingerprint, () =>
+        events.publish(SessionV1.Event.PartUpdated, {
+          sessionID,
+          part: structuredClone(part),
+          time: Date.now(),
+        }),
+      )
+    }
+  })
 }
 
 export const layer = Layer.effectDiscard(
@@ -936,6 +1188,31 @@ export const layer = Layer.effectDiscard(
         yield* SessionContextEpoch.requestReplacement(db, event.data.sessionID, seq)
       })
     })
+
+    // W4-6 — the journal→V1-wire egress runs OUTSIDE the projection transaction: publishing
+    // V1 wire events from inside events.project would insert into the same event table the
+    // fold is committing to (unique-aggregate collision). A post-commit listener sees the
+    // journal after the fold settled, re-reads the folded SessionMessage, derives the wire
+    // rows, and the durable fingerprint cursor keeps it exactly-once across replays. This
+    // replaces the F-17 in-process mirror with the same listen structure but journal-derived,
+    // crash-safe state.
+    yield* events.listen((event) =>
+      Effect.suspend(() => {
+        if (!event.type.startsWith("session.next.")) return Effect.void
+        const data = event.data as { sessionID?: string; assistantMessageID?: string; messageID?: string }
+        if (typeof data.sessionID !== "string") return Effect.void
+        const messageIDs = [data.assistantMessageID, data.messageID].filter(
+          (id): id is string => typeof id === "string",
+        )
+        if (messageIDs.length === 0) return Effect.void
+        return Effect.forEach(
+          messageIDs,
+          (messageID) =>
+            publishWireForMessage(db, events, SessionSchema.ID.make(data.sessionID!), SessionMessage.ID.make(messageID)),
+          { concurrency: "unbounded" },
+        ).pipe(Effect.ignore)
+      }),
+    )
   }),
 )
 

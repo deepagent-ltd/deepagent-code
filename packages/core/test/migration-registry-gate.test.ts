@@ -11,6 +11,8 @@ import { migrations } from "../src/database/migration.gen"
 // the ordered (id, source-content-hash) pairs, so it captures BOTH the id list and each
 // migration's executable body.
 // Re-pinned after five incident-labelled migration identities were canonicalized while retaining
+// W4-6: re-pinned again for the session_wire_projection migration (20260904171154) — the
+// journal→V1-wire egress fingerprint cursor table.
 // their released database IDs as compatibility aliases.
 // Successor pin (2026-08-28): the event-ledger wiring migration body
 // (20260829030000_wire_event_ledgers) joined the registry, so the ordered
@@ -35,7 +37,7 @@ import { migrations } from "../src/database/migration.gen"
 // registry (event admission no longer refuses with a coarse static reason but
 // persists the per-admission refusal reason), so the ordered registry digest
 // moved again. Explicit re-pin of the W5.1 trigger.
-const PINNED_DIGEST = "d48c150fb5e30ae8a9e7b9e1f3bd6996571abb96186dee382552146d0fcb4965"
+const PINNED_DIGEST = "9f7eca030d024292631e310f3376cd1a5c4335cfcdddf4e145227ef4aeeae440"
 
 const digest = (entries: readonly { readonly id: string; readonly hash: string }[]) =>
   createHash("sha256").update(JSON.stringify(entries)).digest("hex")

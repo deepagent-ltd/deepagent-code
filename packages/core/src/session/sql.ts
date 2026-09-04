@@ -342,6 +342,26 @@ export const SessionHistoryStateTable = sqliteTable("session_history_state", {
   time_updated: integer().notNull(),
 })
 
+// W4-6 — durable content-fingerprint cursor for the journal→V1-wire projection egress. One row
+// per projected V1 entity (message or part); the fingerprint is the JSON of the last published
+// wire payload. Replay/overlap windows re-derive identical payloads and skip (exactly-once
+// publish), while a genuine state transition always differs and re-publishes. Replaces the
+// F-17 in-process mirrorPublished map, which was drain-local and lost on crash.
+export const SessionWireProjectionTable = sqliteTable(
+  "session_wire_projection",
+  {
+    session_id: text()
+      .$type<SessionSchema.ID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    entity: text().notNull(),
+    entity_id: text().notNull(),
+    fingerprint: text().notNull(),
+    time_updated: integer().notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.session_id, table.entity, table.entity_id] })],
+)
+
 // Immutable ordered replacement membership for the legacy Session prompt authority.
 // The row is the durable model-visible base; physical messages added after the
 // epoch boundary are appended by the production projector.

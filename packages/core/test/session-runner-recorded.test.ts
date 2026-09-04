@@ -222,10 +222,20 @@ describe("SessionRunnerLLM recorded", () => {
       ).toEqual([
         "session.next.prompt.admitted.1",
         "session.next.prompt.promoted.1",
+        // W4-6 wire egress: fold boundaries derive V1 wire rows (merge-preserved with any
+        // host-authored fields); the interleaved wire events are the egress output.
+        "message.updated.1",
+        "message.part.updated.1",
         "session.next.step.started.1",
+        "message.updated.1",
         "session.next.text.started.1",
+        "message.part.updated.1",
         "session.next.text.ended.1",
+        "message.part.updated.1",
         "session.next.step.ended.2",
+        "message.updated.1",
+        "message.part.updated.1",
+        "message.part.updated.1",
       ])
     }),
   )
