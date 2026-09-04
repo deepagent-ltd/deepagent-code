@@ -354,11 +354,20 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       return
     }
 
-    await sdk.client.session.summarize({
-      sessionID,
-      modelID: model.id,
-      providerID: model.provider.id,
-    })
+    await sdk.client.session
+      .summarize({
+        sessionID,
+        modelID: model.id,
+        providerID: model.provider.id,
+      })
+      .catch((err) => {
+        // The V2-only profile refuses manual compaction with a typed 503 whose message carries
+        // the reason — surface it instead of failing silently (fork uses the same pattern).
+        showToast({
+          title: language.t("common.requestFailed"),
+          description: errorMessage(err, language.t("common.requestFailed")),
+        })
+      })
   }
 
   const fork = async () => {

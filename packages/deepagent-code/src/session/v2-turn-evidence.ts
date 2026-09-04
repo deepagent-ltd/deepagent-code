@@ -44,9 +44,15 @@ export const recordTurnEvidence = Effect.fn("recordTurnEvidence")(function* (inp
   let lastAssistant: V2AssistantMessage | undefined
   let lastAssistantMirrorParts: Map<string, string> | undefined
   for (const message of messages) {
-    const mirrored = yield* input.sessions
-      .getMessage({ sessionID: input.sessionID, messageID: MessageID.make(message.id) })
-      .pipe(Effect.option)
+    // R2 follow-up — the fingerprint gate is an optimization, never an authority: when the
+    // existing mirror row cannot be read (Session.Interface stubs without getMessage, transient
+    // read failures), fall back to publishing unconditionally rather than dropping evidence.
+    const mirrored =
+      typeof input.sessions.getMessage === "function"
+        ? yield* input.sessions
+            .getMessage({ sessionID: input.sessionID, messageID: MessageID.make(message.id) })
+            .pipe(Effect.option, Effect.catchCause(() => Effect.succeed(Option.none())))
+        : Option.none()
     const mirroredInfo = Option.isSome(mirrored) ? mirrorFingerprint(mirrored.value.info) : undefined
     const mirroredParts = Option.isSome(mirrored)
       ? new Map(mirrored.value.parts.map((part) => [part.id, mirrorFingerprint(part)]))

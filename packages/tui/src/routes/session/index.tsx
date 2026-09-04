@@ -569,11 +569,22 @@ export function Session() {
           })
           return
         }
-        void sdk.client.session.summarize({
-          sessionID: route.sessionID,
-          modelID: selectedModel.modelID,
-          providerID: selectedModel.providerID,
-        })
+        void sdk.client.session
+          .summarize({
+            sessionID: route.sessionID,
+            modelID: selectedModel.modelID,
+            providerID: selectedModel.providerID,
+          })
+          .then(() => toast.show({ message: "Session compacted", variant: "success" }))
+          .catch((error) => {
+            // V2-only profile refuses manual compaction with a typed 503 whose message carries
+            // the reason — surface it instead of failing silently.
+            toast.show({
+              message: error instanceof Error ? error.message : "Failed to compact session",
+              variant: "error",
+              duration: 5000,
+            })
+          })
         dialog.clear()
       },
     },

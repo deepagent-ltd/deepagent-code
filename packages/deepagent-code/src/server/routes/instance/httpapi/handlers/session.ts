@@ -489,6 +489,25 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       const rawInput = promptText(input.ctx.payload.parts)
       if (!rawInput.trim()) return yield* new HttpApiError.BadRequest({})
       if (input.ctx.payload.intent_id) {
+        // W0-3a — the intelligence prepare pipeline is legacy-only (intent admission writes V1
+        // rows; refineIntelligenceDraft guards the same). Under the V2-only profile degrade to
+        // the direct route instead of a 503: the client treats route "general" as
+        // direct_override, so the message still goes through the V2 owner.
+        if (flags.coreV2Only) {
+          return yield* Effect.logWarning("intelligence prompt prepare degraded to direct (v2-only profile)").pipe(
+            Effect.annotateLogs({ sessionID: input.ctx.params.sessionID }),
+            Effect.as({
+              route: "general" as const,
+              prompt_draft_id: "",
+              context_plan_id: "",
+              state: "general_ready",
+              mode: "intelligence" as const,
+              goal: rawInput,
+              preview: rawInput,
+              intent_id: input.ctx.payload.intent_id,
+            }),
+          )
+        }
         yield* guardLegacyExecution(flags, { sessionID: input.ctx.params.sessionID }).pipe(
           Effect.mapError(mapLegacyZero),
         )

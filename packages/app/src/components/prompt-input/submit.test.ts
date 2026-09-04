@@ -655,7 +655,7 @@ describe("prompt submit worktree selection", () => {
     promptValue[0] = { type: "text", content: "ls", start: 0, end: 2 }
   })
 
-  test("does not submit when intelligence prompt preparation fails", async () => {
+  test("degrades to direct submit when intelligence prompt preparation fails", async () => {
     params = { id: "session-1" }
     promptMode = "intelligence"
     promptValue[0] = { type: "text", content: "prepare fails", start: 0, end: 13 }
@@ -691,7 +691,17 @@ describe("prompt submit worktree selection", () => {
         text: "prepare fails",
       },
     ])
-    expect(sentPromptAsync).toEqual([])
+    // W1-3 — a failed prepare no longer blocks the send: the raw input goes out on the direct
+    // path (same metadata as a route:"general" degrade) instead of stranding the draft.
+    expect(sentPromptAsync[0]?.text).toBe("prepare fails")
+    expect(sentPromptAsync[0]?.metadata).toEqual({
+      deepagent: {
+        agent_mode_override: "general",
+        prompt_pipeline: {
+          mode: "direct_override",
+        },
+      },
+    })
     promptValue[0] = { type: "text", content: "ls", start: 0, end: 2 }
   })
 
