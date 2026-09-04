@@ -2,6 +2,7 @@ import { createSignal, onMount } from "solid-js"
 import { useDialog } from "../ui/dialog"
 import { DialogSelect } from "../ui/dialog-select"
 import { DialogAlert } from "../ui/dialog-alert"
+import { DialogPrompt } from "../ui/dialog-prompt"
 import { useSDK } from "../context/sdk"
 import { useTuiI18n } from "../context/i18n"
 import { useToast } from "../ui/toast"
@@ -16,26 +17,25 @@ type WikiPage = {
   version: number
 }
 
-// W4-2 minimal face — the TUI's read-only wiki browser. Lists projectable pages
-// (GET /deepagent/wiki/pages, sealed excluded); selection fetches the page body and shows it in
-// the alert viewer. Editing stays GUI-only by plan ruling. Both routes are path-served and not
-// in the generated SDK, hence the low-level request helper.
+// W4-2 full face — the TUI wiki browser with editing. Listing + page view ride the read-only
+// paths; editable pages (knowledge/strategy/methodology/memory) open the multi-line editor and
+// POST /deepagent/wiki/edit with the editor identity the evidence-gate requires. The edit is
+// append-only (server versions it); expected failures surface as DeepAgentPromotionError with
+// the reason — no outbound links, or a previously-rejected (type, summary) fingerprint.
 export function DialogWikiPages() {
   const dialog = useDialog()
   const sdk = useSDK()
-  const toast = useToast()
   const i18n = useTuiI18n()
+  const toast = useToast()
 
-  const rawRequest = <T,>(options: { method: string; url: string }) =>
-    (sdk.client as unknown as { client: { request<D>(o: typeof options): Promise<{ data?: D }> } }).client.request<T>(
-      options,
-    )
+  const rawRequest = <T,>(options: { method: string; url: string; body?: unknown }) =>
+    (sdk.client as unknown as { client: { request<D>(o: typeof options): Promise<{ data?: T; error?: unknown }> } }).client.request<T>(options)
 
   const [pages, setPages] = createSignal<WikiPage[] | undefined>(undefined)
+  const [busy, setBusy] = createSignal(false)
 
-  onMount(() => {
-    dialog.setSize("large")
-    void rawRequest<{ pages: WikiPage[] }>({ method: "GET", url: "/deepagent/wiki/pages" })
+  const reload = () =>
+    rawRequest<{ pages: WikiPage[] }>({ method: "GET", url: "/deepagent/wiki/pages" })
       .then((result) => {
         setPages(result.data?.pages ?? [])
       })
@@ -43,9 +43,50 @@ export function DialogWikiPages() {
         toast.show({ variant: "error", message: errorMessage(error), duration: 5000 })
         dialog.clear()
       })
+
+  onMount(() => {
+    dialog.setSize("large")
+    void reload()
   })
 
-  const openPage = (page: WikiPage) => {
+  const editPage = async (page: WikiPage) => {
+    if (busy() || !page.editable) return
+    setBusy(true)
+    try {
+      const current = await rawRequest<{ markdown: string }>({
+        method: "GET",
+        url: `/deepagent/wiki/page?docId=${encodeURIComponent(page.docId)}&scope=${encodeURIComponent(page.scope)}`,
+      })
+      if (current.error) throw current.error
+      const edited = await DialogPrompt.show(dialog, `${i18n.t("tui.wiki.editTitle")} — ${page.title}`, {
+        value: current.data?.markdown ?? "",
+      })
+      if (edited === null) return
+      if (edited.trim() === (current.data?.markdown ?? "").trim()) {
+        toast.show({ variant: "info", message: i18n.t("tui.wiki.unchanged"), duration: 3000 })
+        return
+      }
+      const result = await rawRequest<{ version: number }>({
+        method: "POST",
+        url: "/deepagent/wiki/edit",
+        body: {
+          docId: page.docId,
+          scope: page.scope,
+          body: edited,
+          editor: { id: "tui-user" },
+        },
+      })
+      if (result.error) throw result.error
+      toast.show({ variant: "success", message: i18n.t("tui.wiki.saved"), duration: 4000 })
+      await reload()
+    } catch (error) {
+      toast.show({ variant: "error", message: errorMessage(error), duration: 6000 })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const viewPage = (page: WikiPage) => {
     void rawRequest<{ markdown: string }>({
       method: "GET",
       url: `/deepagent/wiki/page?docId=${encodeURIComponent(page.docId)}&scope=${encodeURIComponent(page.scope)}`,
@@ -64,7 +105,7 @@ export function DialogWikiPages() {
       title: x.title,
       value: x.docId,
       category: x.type,
-      footer: `${x.scope} · v${x.version}${x.editable ? ` · ${i18n.t("tui.wiki.editableGuiOnly")}` : ""}`,
+      footer: `${x.scope} · v${x.version}${x.editable ? ` · ${i18n.t("tui.wiki.editable")}` : ""}`,
     }))
 
   const byDocId = () => new Map((pages() ?? []).map((x) => [x.docId, x]))
@@ -76,8 +117,19 @@ export function DialogWikiPages() {
       current={undefined}
       onSelect={(option) => {
         const page = byDocId().get(String(option.value))
-        if (page) openPage(page)
+        if (page) viewPage(page)
       }}
+      actions={[
+        {
+          command: "wiki.page.edit",
+          title: i18n.t("tui.wiki.edit"),
+          disabled: (option) => !option || !byDocId().get(String(option.value))?.editable,
+          onTrigger: (option: { value: string }) => {
+            const page = byDocId().get(String(option.value))
+            if (page) void editPage(page)
+          },
+        },
+      ]}
     />
   )
 }

@@ -42,6 +42,8 @@ import { DialogStatus } from "./component/dialog-status"
 import { DialogThemeList } from "./component/dialog-theme-list"
 import { DialogHelp } from "./ui/dialog-help"
 import { DialogReviewList } from "./component/dialog-review-list"
+import { DialogKnowledgeReview } from "./component/dialog-knowledge-review"
+import { DialogIM } from "./component/dialog-im"
 import { DialogWikiPages } from "./component/dialog-wiki-pages"
 import { DialogAgent } from "./component/dialog-agent"
 import { DialogSessionList } from "./component/dialog-session-list"
@@ -804,7 +806,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         category: "System",
       },
       {
-        // W4-1 minimal face — read-only review list; the full review flow stays GUI-only.
+        // W4-1 full face — read-only review list; the full review flow stays GUI-only.
         name: "review.list",
         title: "Browse run reviews (read-only)",
         slashName: "reviews",
@@ -814,12 +816,32 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         category: "System",
       },
       {
-        // W4-2 minimal face — read-only wiki pages; editing stays GUI-only.
+        // W4-1 companion — durable knowledge pending review (approve/reject with CAS identity).
+        name: "review.pending",
+        title: "Review pending knowledge",
+        slashName: "knowledge",
+        run: () => {
+          dialog.replace(() => <DialogKnowledgeReview />)
+        },
+        category: "System",
+      },
+      {
+        // W4-2 — wiki browser with editing for editable page types.
         name: "wiki.pages",
-        title: "Browse wiki pages (read-only)",
+        title: "Browse and edit wiki pages",
         slashName: "wiki",
         run: () => {
           dialog.replace(() => <DialogWikiPages />)
+        },
+        category: "System",
+      },
+      {
+        // W4-3 — IM panel: group list, chat view with live WS messages, send.
+        name: "im.list",
+        title: "Messages (IM)",
+        slashName: "im",
+        run: () => {
+          dialog.replace(() => <DialogIM />)
         },
         category: "System",
       },
