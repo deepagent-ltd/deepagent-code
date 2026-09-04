@@ -30,6 +30,10 @@ import { Script } from "@deepagent-code/script"
 import pkg from "../package.json"
 
 const singleFlag = process.argv.includes("--single")
+// --arch <a> narrows any build mode to one architecture (cross-compile; bun compile targets
+// are cross-platform). Used for the ablation x64 artifact on an arm64 host.
+const archFlagIndex = process.argv.indexOf("--arch")
+const archFlag = archFlagIndex > 0 ? process.argv[archFlagIndex + 1] : undefined
 const baselineFlag = process.argv.includes("--baseline")
 const skipInstall = process.argv.includes("--skip-install")
 const sourcemapsFlag = process.argv.includes("--sourcemaps")
@@ -127,7 +131,7 @@ const allTargets: {
 
 const targets = singleFlag
   ? allTargets.filter((item) => {
-      if (item.os !== process.platform || item.arch !== process.arch) {
+      if (archFlag ? item.arch !== archFlag || item.abi !== undefined || item.avx2 === false : item.os !== process.platform || item.arch !== process.arch) {
         return false
       }
 

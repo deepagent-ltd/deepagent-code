@@ -28,49 +28,24 @@ import { createHash } from "node:crypto"
 import { FilePartArtifact } from "./file-part-artifact"
 import { FilePartArtifactBindingTable } from "./file-part-artifact.sql"
 
-export const ID = Schema.String.check(Schema.isStartsWith("evt_")).pipe(
-  Schema.brand("Event.ID"),
-  withStatics((schema) => ({
-    create: () => schema.make("evt_" + Identifier.ascending()),
-    fromExternal: (input: ExternalID) => schema.make(externalID("evt", input)),
-  })),
-)
-export type ID = typeof ID.Type
+import {
+  Cursor,
+  ID,
+  define,
+  registry,
+  syncRegistry,
+  versionedType,
+  type Definition,
+  type Payload,
+  type SyncDefinition,
+} from "./event/define"
 
-/**
- * Durable aggregate continuation position for embedded replay streams.
- * TODO: Decide whether a future HTTP / SDK surface should expose an opaque cursor instead.
- */
-export const Cursor = NonNegativeInt.pipe(Schema.brand("EventV2.Cursor"))
-export type Cursor = typeof Cursor.Type
+export { Cursor, ID, define, registry, syncRegistry, versionedType }
+export type { Definition, Payload, SyncDefinition } from "./event/define"
 
-export type Definition<Type extends string = string, DataSchema extends Schema.Top = Schema.Top> = {
-  readonly type: Type
-  readonly sync?: {
-    readonly version: number
-    readonly aggregate: string
-  }
-  readonly data: DataSchema
-}
 
 export type Data<D extends Definition> = Schema.Schema.Type<D["data"]>
 
-export type Payload<D extends Definition = Definition> = {
-  readonly id: ID
-  readonly type: D["type"]
-  readonly data: Data<D>
-  /** Durable aggregate order, populated while synchronized events are projected. */
-  readonly seq?: number
-  readonly version?: number
-  readonly location?: Location.Ref
-  readonly metadata?: Record<string, unknown>
-  /** Internal replay marker for projectors that own non-replicated operational state. */
-  readonly replay?: boolean
-  /** Internal exact-replay marker set only after the durable event identity and payload are verified. */
-  readonly replayExact?: boolean
-  /** Internal owner authority supplied by a replay ingress. It is never serialized into the event payload. */
-  readonly replayOwnerID?: string
-}
 
 export type Projector<D extends Definition = Definition> = (event: Payload<D>) => Effect.Effect<void>
 type AnyProjector = (event: Payload) => Effect.Effect<void>
@@ -264,18 +239,6 @@ export class MaintenanceRequiredError extends Schema.TaggedErrorClass<Maintenanc
   },
 ) {}
 
-export function versionedType(type: string, version: number) {
-  return `${type}.${version}`
-}
-
-export const registry = new Map<string, Definition>()
-type SyncDefinition = Definition & {
-  readonly sync: NonNullable<Definition["sync"]>
-  readonly encode: (data: unknown) => unknown
-  readonly decode: (data: unknown) => unknown
-}
-const syncRegistry = new Map<string, SyncDefinition>()
-
 function admitEncodedPayload(definition: SyncDefinition, data: unknown) {
   const encoded = definition.encode(data) as Record<string, unknown>
   const encodedBytes = Buffer.byteLength(JSON.stringify(encoded))
@@ -322,48 +285,6 @@ function isCompactedLegacyFileArtifactRetry(
   if (prepared.artifacts.length !== 1 || !isDeepStrictEqual(prepared.data, encoded)) return false
   return isDeepStrictEqual(binding.canonicalData, encoded) ||
     FilePartArtifact.isLegacySyntheticCanonical(binding.canonicalData, encoded)
-}
-
-// Synchronized events cross a JSON boundary, so their data schemas must encode and decode without services.
-const syncCodec = (definition: Definition) => definition.data as Schema.Codec<unknown, unknown, never, never>
-
-export function define<const Type extends string, Fields extends Schema.Struct.Fields>(input: {
-  readonly type: Type
-  readonly sync?: {
-    readonly version: number
-    readonly aggregate: string
-  }
-  readonly schema: Fields
-}): Schema.Schema<Payload<Definition<Type, Schema.Struct<Fields>>>> & Definition<Type, Schema.Struct<Fields>> {
-  const Data = Schema.Struct(input.schema)
-  const Payload = Schema.Struct({
-    id: ID,
-    metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
-    type: Schema.Literal(input.type),
-    version: Schema.optional(Schema.Number),
-    location: Schema.optional(Location.Ref),
-    data: Data,
-  }).annotate({ identifier: input.type })
-
-  const definition = Object.assign(Payload, {
-    type: input.type,
-    ...(input.sync === undefined ? {} : { sync: input.sync }),
-    data: Data,
-  })
-  const existing = registry.get(input.type)
-  if (input.sync === undefined || existing?.sync === undefined || input.sync.version >= existing.sync.version) {
-    registry.set(input.type, definition)
-  }
-  if (input.sync)
-    syncRegistry.set(
-      versionedType(input.type, input.sync.version),
-      Object.assign(definition, {
-        encode: Schema.encodeUnknownSync(syncCodec(definition)),
-        decode: Schema.decodeUnknownSync(syncCodec(definition)),
-      }) as SyncDefinition,
-    )
-  return definition as Schema.Schema<Payload<Definition<Type, Schema.Struct<Fields>>>> &
-    Definition<Type, Schema.Struct<Fields>>
 }
 
 export function definitions() {

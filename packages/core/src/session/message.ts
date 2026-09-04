@@ -1,8 +1,13 @@
 export * as SessionMessage from "./message"
 
 import { Schema } from "effect"
-import { ProviderMetadata } from "@deepagent-code/llm"
-import { ModelV2 } from "../model"
+// Deep import: the llm barrel exports route/client (node:http/Buffer transport) which is
+// unparseable in the browser bundle reached via app → legacy-wire → message. The schema
+// submodule carries only the JSON schemas.
+import { ProviderMetadata } from "@deepagent-code/llm/schema"
+// Deep import: model.ts carries the contract/model-protocol edge (node:crypto digest);
+// the Ref schema alone lives in the dependency-free model/ref module.
+import { ModelRef } from "../model/ref"
 import { ToolOutput } from "../tool-output"
 import { V2Schema } from "../v2-schema"
 import { SessionEvent } from "./event"
@@ -29,7 +34,7 @@ export class AgentSwitched extends Schema.Class<AgentSwitched>("Session.Message.
 export class ModelSwitched extends Schema.Class<ModelSwitched>("Session.Message.ModelSwitched")({
   ...Base,
   type: Schema.Literal("model-switched"),
-  model: ModelV2.Ref,
+  model: ModelRef.Ref,
 }) {}
 
 export class User extends Schema.Class<User>("Session.Message.User")({

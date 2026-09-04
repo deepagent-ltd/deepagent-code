@@ -9,8 +9,8 @@ import { ProviderV2 } from "./provider"
 import { PositiveInt } from "./schema"
 import { State } from "./state"
 
-export const ID = Schema.String.pipe(Schema.brand("AgentV2.ID"))
-export type ID = typeof ID.Type
+import { ID } from "./agent/id"
+export { ID }
 // The default primary agent. Renamed build→auto in the mode redesign (auto/loop/design collaboration
 // modes). "build" is kept as a back-compat alias in the default-resolution fallback below so older
 // sessions/configs that reference "build" still resolve.
