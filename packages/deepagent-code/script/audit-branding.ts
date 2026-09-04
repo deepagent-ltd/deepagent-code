@@ -80,6 +80,11 @@ const LINE_EXEMPTIONS: Record<string, Record<string, string[]>> = {
   // Upstream fork dependency (github:anomalyco/ghostty-web#main); same origin
   // rationale as parsers-config.ts
   "packages/app/package.json": { anomalyco: ["anomalyco"] },
+  // Lockfiles record dependency coordinates verbatim (github:anomalyco/ghostty-web
+  // and its resolved hash entry) — same upstream-fork rationale as package.json;
+  // workspace NAMES are still audited (the stale "opencode" root-name class).
+  "bun.lock": { anomalyco: ["anomalyco"] },
+  "sdks/vscode/bun.lock": { anomalyco: ["anomalyco"] },
   // describe() label quoting the public SDK compatibility export name
   // `OpencodePlugin` (identifier is out of scope; only its stringified label
   // shows up here)
@@ -95,7 +100,7 @@ const LINE_EXEMPTIONS: Record<string, Record<string, string[]>> = {
   ),
 }
 
-const TEXT_EXTS = new Set(["md", "mdx", "sh", "ps1", "yml", "yaml", "json", "txt", "jsonc"])
+const TEXT_EXTS = new Set(["md", "mdx", "sh", "ps1", "yml", "yaml", "json", "txt", "jsonc", "lock"])
 const ext = (path: string) => path.split(".").pop() ?? ""
 const isTextScan = (path: string) => TEXT_EXTS.has(ext(path)) || path.split("/").pop()?.includes("config") === true
 const isSourceScan = (path: string) => path.startsWith("packages/") && /\.(ts|tsx)$/.test(path)

@@ -28,9 +28,9 @@ npm install @deepagent-code/sdk
 Создайте экземпляр deepagent-code:
 
 ```javascript
-import { createOpencode } from "@deepagent-code/sdk"
+import { createDeepAgentCode } from "@deepagent-code/sdk"
 
-const { client } = await createOpencode()
+const { client } = await createDeepAgentCode()
 ```
 
 Это запускает и сервер, и клиент.
@@ -52,9 +52,9 @@ const { client } = await createOpencode()
 Вы можете передать объект конфигурации для настройки поведения. Экземпляр по-прежнему получает ваш `deepagent-code.json`, но вы можете переопределить или добавить встроенную конфигурацию:
 
 ```javascript
-import { createOpencode } from "@deepagent-code/sdk"
+import { createDeepAgentCode } from "@deepagent-code/sdk"
 
-const deepagent-code = await createOpencode({
+const deepagentCode = await createDeepAgentCode({
   hostname: "127.0.0.1",
   port: 4096,
   config: {
@@ -62,9 +62,9 @@ const deepagent-code = await createOpencode({
   },
 })
 
-console.log(`Server running at ${deepagent-code.server.url}`)
+console.log(`Server running at ${deepagentCode.server.url}`)
 
-deepagent-code.server.close()
+deepagentCode.server.close()
 ```
 
 ## Только клиент
@@ -72,9 +72,9 @@ deepagent-code.server.close()
 Если у вас уже есть работающий экземпляр deepagent-code, вы можете создать экземпляр клиента для подключения к нему:
 
 ```javascript
-import { createOpencodeClient } from "@deepagent-code/sdk"
+import { createDeepAgentCodeClient } from "@deepagent-code/sdk"
 
-const client = createOpencodeClient({
+const client = createDeepAgentCodeClient({
   baseUrl: "http://localhost:4096",
 })
 ```
