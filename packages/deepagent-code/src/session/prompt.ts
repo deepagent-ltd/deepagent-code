@@ -2145,7 +2145,12 @@ export const layer = Layer.effect(
       outputLanguage?: AgentGateway.DeepAgentPromptPipeline.IntelligenceRefinementOutputLanguage
       onProgress?: (preview: string) => void
     }) {
-      yield* guardLegacyExecution(flags, { sessionID: input.sessionID })
+      // W0-3b — refinement is an AUXILIARY-AI surface, not legacy execution: it runs one
+      // AgentGateway.runAuxiliary model call (streaming SDK, no V1 durable rows) and persists the
+      // draft as PromptDraftStore FILES (draftsDir JSON/MD, not database tables). The V1 intent
+      // admission the old guard protected lives in the HTTP prepare handler, which skips it under
+      // the profile; V2 prompt idempotency is carried by the SessionV2 messageID instead. The
+      // LEGACY-EXECUTION-ZERO firewall does not apply (D2 classification: auxiliary_ai_call).
       const ctx = yield* InstanceState.context
       const home = new AgentGateway.DeepAgentWorkspace.DeepAgentCodeHome(Global.Path.agent.data)
       const sessionPath = home.ensureSession(projectIDForDirectory(ctx.directory), input.sessionID)
@@ -6147,11 +6152,20 @@ export const layer = Layer.effect(
             detail: "V2 owner qualification is not verified for the V2-only profile",
           })
         yield* ensureV2Session(input.sessionID)
+        // W0-3b — consume the confirmed intelligence draft before V2 admission. The submission
+        // builder is the same pure path the V1 loop uses (fs draft store: confirm + read the
+        // task_prompt); under the profile it writes no legacy rows, so the refined text replaces
+        // the first user text part exactly as the legacy loop's createUserMessage would.
+        const pipelineV2 = yield* buildPromptPipelineSubmission(input)
         const admitted = yield* coreV2Session
           .prompt({
             sessionID: SessionV2.ID.make(input.sessionID),
             ...(input.messageID ? { id: SessionMessage.ID.make(input.messageID) } : {}),
-            prompt: interactiveV2Prompt(input),
+            prompt: yield* requireV2PromptText(
+              input.sessionID,
+              interactiveV2Prompt({ ...input, parts: pipelineV2.parts }),
+              input,
+            ),
             // P1-1: admission-before-wake — prompt-async is admit-only until its own resume/wake path.
             resume: false,
           })

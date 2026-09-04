@@ -6036,7 +6036,13 @@ v2Only.instance(
       const refineExit = yield* prompt
         .refineIntelligenceDraft({ sessionID: chat.id, rawInput: "a code task" })
         .pipe(Effect.exit)
-      expect(failureIsLegacyUnavailable(refineExit).reason).toBe("v2_only_profile")
+      // W0-3b — refinement is an auxiliary-AI surface (one runAuxiliary model call + fs draft),
+      // no longer refused under the profile. Without a live model it still fails (refiner model
+      // error), so assert only that it is NOT the legacy firewall refusing it.
+      if (Exit.isFailure(refineExit)) {
+        const error = Option.getOrUndefined(Cause.findErrorOption(refineExit.cause))
+        expect(error).not.toBeInstanceOf(LegacyExecutionUnavailable)
+      }
 
       // Final sweep re-snapshots (the shell projection added wire rows) and asserts only the
       // legacy EXECUTION surfaces stay untouched.
@@ -6223,6 +6229,7 @@ const r0Signed = {
   signatureDigest: V2OwnerAuthorization.signAuthorization(r0Issuance.privateKeyPem, r0Fields),
 }
 const r0V2PromptCalls: string[] = []
+const r0V2PromptTexts: string[] = []
 const r0V2PromptDeliveries: Array<SessionInput.Delivery | undefined> = []
 const r0V2ResumeCalls: string[] = []
 const r0V2AdoptCalls: string[] = []
@@ -6274,6 +6281,7 @@ const r0V2Stub = SessionV2.Service.of({
   prompt: (input) =>
     Effect.sync(() => {
       r0V2PromptCalls.push(input.sessionID)
+      r0V2PromptTexts.push(input.prompt.text)
       // W16: record the admission delivery so the goal_steer routing (vs the undefined default the
       // chat path passes — core SessionV2.prompt defaults it to "steer") is pinned at the call shape.
       r0V2PromptDeliveries.push(input.delivery)
@@ -6508,6 +6516,44 @@ v2Qualified.instance(
       // and then drives the drain explicitly (admission-before-wake, wake-after-admit), so the
       // durable input IS executed — a pure no-drain admission would leave the prompt unserved.
       expect(r0V2ResumeCalls).toContain(chat.id)
+    }),
+  30_000,
+)
+
+v2Qualified.instance(
+  "W0-3b: confirmed intelligence draft replaces the V2 prompt text under the profile",
+  () =>
+    Effect.gen(function* () {
+      const { directory: dir } = yield* TestInstance
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+      yield* mintR0Authorization(db)
+      const chat = yield* sessions.create({ title: "r0 intelligence confirm" })
+      const draftID = prepareDraft(dir, chat.id, "intelligence", "Design the V2 confirmation flow")
+      r0V2PromptCalls.length = 0
+      r0V2PromptTexts.length = 0
+
+      yield* provideR0OwnerRefs(
+        prompt.promptAsync({
+          sessionID: chat.id,
+          agent: "build",
+          noReply: true,
+          metadata: {
+            deepagent: { prompt_pipeline: { confirmedDraftID: draftID, editedGoal: "Refined V2 goal from draft" } },
+          },
+          parts: [{ type: "text", text: "raw unrefined input" }],
+        }),
+      )
+
+      // The confirmed draft's task_prompt (the edited goal) replaces the raw text in the V2
+      // admission — exactly what the legacy loop's createUserMessage did for the V1 path.
+      expect(r0V2PromptCalls).toContain(chat.id)
+      expect(r0V2PromptTexts).toContain("Refined V2 goal from draft")
+      expect(r0V2PromptTexts).not.toContain("raw unrefined input")
+      // The pipeline submission is pure fs work — no legacy execution rows appear.
+      const intents = (yield* db.select().from(SessionIntentTable).all()).length
+      expect(intents).toBe(0)
     }),
   30_000,
 )
