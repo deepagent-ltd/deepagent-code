@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "opencode",
+      "name": "deepagent-code",
       "dependencies": {
         "@aws-sdk/client-s3": "3.933.0",
         "@deepagent-code/plugin": "workspace:*",
