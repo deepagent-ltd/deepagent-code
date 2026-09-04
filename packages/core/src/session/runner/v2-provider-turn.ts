@@ -94,13 +94,25 @@ export type Receipt = {
   readonly terminalAt?: number
 }
 
+// Same F-18 diagnostic-fidelity rule as AdmissionError: these cross the prompt boundary to
+// logs/CLI, and TaggedErrorClass would otherwise render an empty message.
 export class ConflictError extends Schema.TaggedErrorClass<ConflictError>()("V2ProviderTurn.ConflictError", {
   reason: Schema.String,
-}) {}
+}) {
+  constructor(props: { readonly reason: string }) {
+    super(props)
+    this.message = props.reason
+  }
+}
 
 export class UnsafeRetryError extends Schema.TaggedErrorClass<UnsafeRetryError>()("V2ProviderTurn.UnsafeRetryError", {
   state: Schema.String,
-}) {}
+}) {
+  constructor(props: { readonly state: string }) {
+    super(props)
+    this.message = `unsafe retry: latest receipt is ${props.state}`
+  }
+}
 
 export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("V2ProviderTurn.NotFoundError", {}) {}
 

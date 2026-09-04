@@ -29,6 +29,36 @@ export const CurrentOnSessionSettled = Context.Reference<
   ((input: OnSessionSettledInput) => Effect.Effect<void>) | undefined
 >("@deepagent-code/v2/SessionRunner/OnSessionSettled", { defaultValue: () => undefined })
 
+// W2-V2 seam: the plan gate (understand→plan→execute discipline) lives in the deepagent-code
+// layer — it wraps the V1 SessionTools execution path but the V2 runner settles tools through the
+// core registry, so the gate never fired on the V2 path (run-mode evidence: edits executed with
+// zero plan calls and zero blocks). The composition wires this reference with the same
+// evaluatePlanGate decision; absent (core-only compositions) tools settle ungated exactly as before.
+export type ToolSettleGateInput = {
+  readonly sessionID: string
+  readonly toolName: string
+  readonly args: unknown
+}
+export type ToolSettleGateDecision = { kind: "pass"; reminder?: string } | { kind: "block"; output: string }
+export const CurrentToolSettleGate = Context.Reference<
+  ((input: ToolSettleGateInput) => Effect.Effect<ToolSettleGateDecision>) | undefined
+>("@deepagent-code/v2/SessionRunner/ToolSettleGate", { defaultValue: () => undefined })
+
+// Module-level registrar (the learning-runtime reviewer-factory pattern): the runner tree builds
+// inside per-location layer scopes where outer graph provides do not reliably flow (run-mode
+// evidence: the httpapi-root Reference provide never reached the runner's layer build). A host
+// registers the gate implementation at composition build; the runner reads it at SETTLE time —
+// immune to layer scoping.
+type ToolSettleGateFn = (input: ToolSettleGateInput) => Effect.Effect<ToolSettleGateDecision>
+const gateRegistry = new Map<symbol, ToolSettleGateFn>()
+export const registerToolSettleGate = (fn: ToolSettleGateFn) => {
+  const token = Symbol("v2-tool-settle-gate")
+  gateRegistry.set(token, fn)
+  return () => gateRegistry.delete(token)
+}
+export const currentToolSettleGate = (): ToolSettleGateFn | undefined =>
+  [...gateRegistry.values()].toReversed()[0]
+
 export class StepLimitExceededError extends Schema.TaggedErrorClass<StepLimitExceededError>()(
   "SessionRunner.StepLimitExceededError",
   {

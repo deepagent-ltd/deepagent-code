@@ -51,6 +51,7 @@ import { SessionContext } from "./context-federation/session-context"
 import { productionV2SourcesLayer } from "./context-federation/production-adapters"
 import { SessionRunnerCanonical } from "./session/runner/canonical-turn"
 import { V2ProviderTurn } from "./session/runner/v2-provider-turn"
+import { SessionRunnerLLMToolGateSeam } from "./session/runner/llm"
 import { V2ToolEffect } from "./session/runner/v2-tool-effect"
 import { FetchHttpClient } from "effect/unstable/http"
 
@@ -116,6 +117,7 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()(
         Layer.provide(services),
       )
       const runner = SessionRunnerLLM.defaultLayer.pipe(
+        Layer.provide(SessionRunnerLLMToolGateSeam),
         Layer.provide(services),
         Layer.provide(model),
         Layer.provide(skillGuidance),

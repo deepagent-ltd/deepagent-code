@@ -1,10 +1,11 @@
 export * as SessionRunnerCanonical from "./canonical-turn"
 
-import { and, asc, desc, eq } from "drizzle-orm"
+import { and, asc, desc, eq, gt, inArray, isNull } from "drizzle-orm"
 import { Effect, Layer, Option, Schema } from "effect"
 import { Database } from "../../database/database"
 import { ContextArtifactStore } from "../../context-federation/artifact-store"
 import { SessionProviderAttempt } from "../../context-federation/provider-attempt"
+import { SessionProviderOwner } from "../../context-federation/provider-owner"
 import { ContextReference, LocationKey, ProjectScopeKey, SecurityNamespaceID } from "../../context-federation/reference"
 import { SessionContext } from "../../context-federation/session-context"
 import { resolveGraphs, GraphOrder, type QueryEnvelope } from "../../context-federation/resolver-v2"
@@ -31,6 +32,7 @@ import {
   SessionActivityTable,
   SessionContextSelectionTable,
   SessionProviderAttemptTable,
+  SessionProviderOwnerLeaseTable,
 } from "../../context-federation/session-sql"
 import {
   LocationIdentityTable,
@@ -40,6 +42,7 @@ import {
 import { SessionSchema } from "../schema"
 import { Hash } from "../../util/hash"
 import { V2ProviderTurn } from "./v2-provider-turn"
+import { V2ProviderTurnReceiptTable } from "./v2-provider-turn.sql"
 
 // V2 runner turns bind Context Federation authority through the same admission chain as the legacy
 // durable runtime (activity -> selection -> validation -> attempt). Since C3-08 the selection is a
@@ -88,9 +91,20 @@ function effectiveFrameIdentity(
 // §16.3 order 4 package D — the legacy federation selection evidence seam is DELETED by C3-08.
 // A V2 turn no longer copies legacy evidence (or the v2-none fallback) into the selection; the
 // selection is produced by the F1 resolver + F2 writer and always carries real graph statuses.
-export class AdmissionError extends Schema.TaggedErrorClass<AdmissionError>()("SessionRunnerCanonical.AdmissionError", {
-  reason: Schema.String,
-}) {}
+// TaggedErrorClass leaves Error.message empty, so every log/print surface that renders
+// `error.message` (server error log, SSE error parts, CLI) showed a bare class name with no
+// reason — F-18's "empty reason" symptom. Carry the reason in the message itself.
+export class AdmissionError extends Schema.TaggedErrorClass<AdmissionError>()(
+  "SessionRunnerCanonical.AdmissionError",
+  {
+    reason: Schema.String,
+  },
+) {
+  constructor(props: { readonly reason: string }) {
+    super(props)
+    this.message = props.reason
+  }
+}
 
 export type SystemSnapshot = {
   readonly baseline: string
@@ -603,6 +617,34 @@ function contextErrorDetail(error: SessionContext.Error) {
   return "reason" in error && typeof error.reason === "string" ? `${error._tag}:${error.reason}` : error._tag
 }
 
+/**
+ * The database-clock timestamp observed when `ownerToken` provably lost its lease (no lease row,
+ * released, or expired) — `undefined` while the lease is live. Same liveness predicate as
+ * V2ProviderTurn.recover / requireStaleOwner; an ownerless attempt has no lease to lose.
+ */
+function staleAfterLeaseLoss(
+  tx: Parameters<Parameters<Database.Interface["db"]["transaction"]>[0]>[0],
+  ownerToken: string | null,
+) {
+  return Effect.gen(function* () {
+    const observedAt = yield* SessionProviderOwner.observedAtInTransaction(tx)
+    if (ownerToken === null) return observedAt
+    const live = yield* tx
+      .select({ ownerToken: SessionProviderOwnerLeaseTable.owner_token })
+      .from(SessionProviderOwnerLeaseTable)
+      .where(
+        and(
+          eq(SessionProviderOwnerLeaseTable.owner_token, ownerToken),
+          isNull(SessionProviderOwnerLeaseTable.released_at),
+          gt(SessionProviderOwnerLeaseTable.lease_expires_at, observedAt),
+        ),
+      )
+      .get()
+      .pipe(Effect.orDie)
+    return live ? undefined : observedAt
+  })
+}
+
 export type CommitTurnInput = {
   readonly db: Database.Interface["db"]
   readonly contexts: SessionContext.Interface
@@ -635,8 +677,49 @@ export const commitTurn = Effect.fn("SessionRunnerCanonical.commitTurn")(functio
           // forced continuation may open a fresh attempt (new seq, no replay of the quarantined
           // identity); the quarantined attempt still requires explicit resolution before recovery
           // may treat its turn as terminal.
-          if (latest && ["dispatching", "streaming"].includes(latest.state))
-            return yield* new AdmissionError({ reason: `provider_attempt_blocked:${latest.state}` })
+          if (latest && ["dispatching", "streaming"].includes(latest.state)) {
+            const stale = yield* staleAfterLeaseLoss(tx, latest.owner_token)
+            if (!stale) return yield* new AdmissionError({ reason: `provider_attempt_blocked:${latest.state}` })
+            // F-18 — the owner's lease is provably dead (crashed process, lease expired after the
+            // one-shot layer-build recovery already ran): quarantine the in-flight attempt + its
+            // receipt as indeterminate in THIS transaction, then let the user's explicit input
+            // open a fresh attempt. The quarantined turn is never replayed (§2.2) and still
+            // requires explicit resolution; mirrors V2ProviderTurn.recover / recoverIndeterminate.
+            yield* tx
+              .update(SessionProviderAttemptTable)
+              .set({ state: "indeterminate_after_crash", error_code: "process_recovery" })
+              .where(
+                and(
+                  eq(SessionProviderAttemptTable.attempt_id, latest.attempt_id),
+                  inArray(SessionProviderAttemptTable.state, ["dispatching", "streaming"]),
+                ),
+              )
+              .run()
+              .pipe(Effect.orDie)
+            const staleReceipt =
+              latest.owner_token === null
+                ? undefined
+                : yield* tx
+                    .update(V2ProviderTurnReceiptTable)
+                    .set({
+                      state: "indeterminate_after_crash",
+                      error_code: "owner_lost_after_dispatch",
+                      terminal_at: stale,
+                    })
+                    .where(
+                      and(
+                        eq(V2ProviderTurnReceiptTable.session_id, input.sessionID),
+                        eq(V2ProviderTurnReceiptTable.owner_token, latest.owner_token),
+                        inArray(V2ProviderTurnReceiptTable.state, ["dispatching", "streaming"]),
+                      ),
+                    )
+                    .returning()
+                    .get()
+                    .pipe(Effect.orDie)
+            yield* staleReceipt
+              ? V2ProviderTurn.writeTurnTerminalDescriptor(tx, staleReceipt, stale)
+              : Effect.void
+          }
           // Receipt identity requires provider_turn_seq >= 1; canonical sequences are 1-based.
           const providerTurnSeq =
             latest?.state === "prepared" ? latest.provider_turn_seq : (latest?.provider_turn_seq ?? 0) + 1

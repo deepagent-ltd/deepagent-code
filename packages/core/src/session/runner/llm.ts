@@ -11,7 +11,7 @@ import {
 } from "@deepagent-code/llm"
 import { AgentGateway } from "../../agent-gateway"
 import { desc, eq } from "drizzle-orm"
-import { Cause, DateTime, Effect, Exit, FiberSet, Layer, Option, Schema, Semaphore, Stream } from "effect"
+import { Cause, Context, DateTime, Effect, Exit, FiberSet, Layer, Option, Schema, Semaphore, Stream } from "effect"
 import { AgentV2 } from "../../agent"
 import { Config } from "../../config"
 import { Database } from "../../database/database"
@@ -38,7 +38,14 @@ import { GoalLoop } from "../../deepagent/goal-loop"
 import { getActiveGoal } from "../../deepagent/session-state"
 import { DocumentStore } from "../../deepagent/document-store"
 import { planStoreRoot } from "../../deepagent/plan-store"
-import { type RunError, Service, StepLimitExceededError, CurrentOnSessionSettled } from "./index"
+import {
+  type RunError,
+  Service,
+  StepLimitExceededError,
+  CurrentOnSessionSettled,
+  CurrentToolSettleGate,
+  currentToolSettleGate,
+} from "./index"
 import { SessionRunnerModel } from "./model"
 import { PreparedProviderTurn } from "./prepared-provider-turn"
 import { V2ToolEffect } from "./v2-tool-effect"
@@ -127,6 +134,20 @@ The maximum number of steps allowed for this task has been reached. Tools are di
 
 Summarize the work completed so far, list any remaining tasks, and recommend what should happen next. Do not make any tool calls.`
 
+// W2-V2: the host-injectable plan gate seam at the runner root — an outer host providing
+// CurrentToolSettleGate flows through serviceOption at build; pure core compositions stay
+// ungated. (Defined here so location-layer imports it along the existing llm.ts edge — a
+// separate module-level const in location-layer created an import cycle / TDZ crash.)
+export const SessionRunnerLLMToolGateSeam = Layer.unwrap(
+  Effect.map(
+    Effect.serviceOption(CurrentToolSettleGate),
+    (provided) =>
+      Option.isSome(provided)
+        ? Layer.succeedContext(Context.make(CurrentToolSettleGate, provided.value))
+        : Layer.effectDiscard(Effect.void),
+  ),
+)
+
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -151,6 +172,7 @@ export const layer = Layer.effect(
     // W7: host-injectable settle hook (durable-learning admission in the deepagent-code
     // composition); unwired = no-op.
     const onSessionSettled = yield* CurrentOnSessionSettled
+    const toolSettleGate = yield* CurrentToolSettleGate
     const providerTurns = yield* V2ProviderTurn.Service
     const toolEffects = yield* V2ToolEffect.Service
     const permissionGrantLookup = yield* V2ToolEffect.CurrentPermissionGrantLookup
@@ -582,12 +604,46 @@ export const layer = Layer.effect(
       // authority for unknown outcomes (`tapError` observes typed errors only and never
       // captures defects or interrupts).
       const settleTool: ToolRegistry.Materialization["settle"] = (input) =>
-        baseSettleTool(input).pipe(
-          Effect.tap((settlement) => recordToolEffect(input, "settled", settlement.result, undefined)),
-          Effect.tapError(() =>
-            recordToolEffect(input, "failed", { type: "error", value: "settlement_failed" }, "tool_settlement_failed"),
-          ),
-        )
+        Effect.gen(function* () {
+          // W2-V2: the plan gate runs BEFORE the tool executes — a block returns a synthetic
+          // settled result carrying the correction template (mirroring the V1 wrapper's soft
+          // tool-result block), a grace-release pass prepends the reminder to the real output.
+          const gateFn = toolSettleGate ?? currentToolSettleGate()
+          if (gateFn) {
+            const gate = yield* gateFn({
+              sessionID: input.sessionID,
+              toolName: input.call.name,
+              args: input.call.input,
+            })
+            if (gate.kind === "block") {
+              // A gated call settles as a typed error RESULT carrying the correction template —
+              // the model sees the block text as the tool's outcome, exactly like the V1 wrapper's
+              // soft block (never a typed settlement failure, which would poison effect evidence).
+              const blocked = { result: { type: "error" as const, value: gate.output } }
+              yield* recordToolEffect(input, "settled", blocked.result, undefined)
+              return blocked
+            }
+            if (gate.reminder) {
+              const settlement = yield* baseSettleTool(input)
+              yield* recordToolEffect(input, "settled", settlement.result, undefined)
+              return "output" in settlement && settlement.output && "output" in settlement.output
+                ? {
+                    ...settlement,
+                    output: {
+                      ...settlement.output,
+                      output: [gate.reminder, settlement.output.output].filter(Boolean).join("\n\n"),
+                    },
+                  }
+                : settlement
+            }
+          }
+          return yield* baseSettleTool(input).pipe(
+            Effect.tap((settlement) => recordToolEffect(input, "settled", settlement.result, undefined)),
+            Effect.tapError(() =>
+              recordToolEffect(input, "failed", { type: "error", value: "settlement_failed" }, "tool_settlement_failed"),
+            ),
+          )
+        })
       let overflowFailure: ProviderErrorEvent | undefined
       const providerEvents: LLMEvent[] = []
       // Any rebuild after admit must terminalize the admitted receipt first: an epoch that is no
