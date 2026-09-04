@@ -6409,63 +6409,12 @@ export const layer = Layer.effect(
                   detail: "V2 owner readiness gate is closed for the V2-only profile",
                 })
               : Effect.die(new Error(`V2 owner readiness gate is closed: ${input.sessionID}`)))
-          // F-17: live part mirror. resume() blocks until the whole drain settles; without a
-          // concurrent projector the V1 mirror (and the SSE surface the run CLI and app listen on)
-          // sees nothing until the final projection — every intermediate tool/text/step part was
-          // invisible. Mirror each session event for THIS session into the V1 mirror as it lands
-          // (diffed by part id, idempotent upserts), then keep the existing settle-time projection
-          // as the authoritative final flush.
-          // F-17: dedupe by CONTENT HASH, not part id — a tool part first lands as pending/running
-          // and the CLI consumers key on the completed/error transition; an id-only set would
-          // swallow exactly that state update.
-          // F-19: the fingerprint map is shared by the live mirror AND the settle-time final
-          // projection below — the final flush publishes only DELTAS the mirror missed, never a
-          // byte-identical repeat of an already-published part/message (duplicate SSE events).
-          // Set-then-publish ordering keeps concurrent mirror fibers race-free.
-          const mirrorPublished = new Map<string, string>()
-          const projectAssistant = (message: SessionMessage.Assistant) =>
-            Effect.gen(function* () {
-              const mirrorParent = yield* sessions
-                .findMessage(input.sessionID, (message) => message.info.role === "user")
-                .pipe(Effect.orDie)
-              const projectedNow = SessionV2.legacyAssistant({
-                sessionID: SessionV2.ID.make(input.sessionID),
-                parentMessageID: Option.isSome(mirrorParent)
-                  ? Option.getOrThrow(mirrorParent).info.id
-                  : MessageID.make(message.id),
-                directory: session.directory,
-                root: current.worktree,
-                message,
-              })
-              const messageFingerprint = JSON.stringify(projectedNow.info)
-              if (mirrorPublished.get(`msg:${projectedNow.info.id}`) !== messageFingerprint) {
-                mirrorPublished.set(`msg:${projectedNow.info.id}`, messageFingerprint)
-                yield* sessions.updateMessage(projectedNow.info)
-              }
-              for (const part of projectedNow.parts) {
-                const fingerprint = JSON.stringify(part)
-                if (mirrorPublished.get(part.id) === fingerprint) continue
-                mirrorPublished.set(part.id, fingerprint)
-                yield* sessions.updatePart(part)
-              }
-              return projectedNow
-            })
-          const mirrorAssistant = Effect.gen(function* () {
-            const messages = yield* coreV2Session.context(SessionV2.ID.make(input.sessionID)).pipe(Effect.orDie)
-            const mirrorSource = messages.findLast(
-              (message): message is SessionMessage.Assistant => message.type === "assistant",
-            )
-            if (!mirrorSource) return
-            yield* projectAssistant(mirrorSource)
-          })
-          const stopMirror = yield* events.listen((event) =>
-            Effect.suspend(() => {
-              const data = event.data as { sessionID?: string }
-              if (!event.type.startsWith("session.next.") || data?.sessionID !== input.sessionID)
-                return Effect.void
-              return mirrorAssistant.pipe(Effect.ignore)
-            }),
-          )
+          // W4-6/6b-2: the F-17 in-process mirror is RETIRED. The journal→V1-wire egress in the
+          // core projector (post-commit listener + durable fingerprint cursor) now derives the
+          // wire rows for this drain as session.next.* events commit — crash-safe and
+          // replay-convergent, unlike the drain-local mirrorPublished map this replaces. The
+          // SSE surface (message.updated / message.part.updated) keeps the same shape, so the
+          // run CLI and both clients are unaffected.
           yield* coreV2Session
             .resume(SessionV2.ID.make(input.sessionID))
             .pipe(Effect.provideService(V2ProviderTurn.CurrentOwnerCampaign, ownerCampaignNow))
@@ -6497,7 +6446,6 @@ export const layer = Layer.effect(
                 }),
               ),
             )
-            .pipe(Effect.ensuring(stopMirror))
           // FEAT-010: durable evidence correlation. The receipt row itself is written by the core
           // runner (V2ProviderTurn.admit inside SessionRunner.runTurn during resume); read back the
           // latest owner=v2 receipt so the slog trail ties this selection to its durable row.
@@ -6549,11 +6497,21 @@ export const layer = Layer.effect(
                   detail: `V2 owner produced no assistant message: ${input.sessionID}`,
                 })
               : Effect.die(new Error(`V2 owner produced no assistant message: ${input.sessionID}`)))
-          // F-19: authoritative final flush through the SAME fingerprint set the live mirror used —
-          // publishes only deltas (state transitions the mirror's last pass didn't see), never a
-          // repeat of already-published content.
-          const projected = yield* projectAssistant(assistant)
-          return projected
+          // 6b-2: the settle-time return derives from the folded V2 state through the same
+          // canonical converter the egress uses (legacyAssistant). No wire-table write happens
+          // here — the egress owns the wire rows now; this is only the loop's return value.
+          const mirrorParent = yield* sessions
+            .findMessage(input.sessionID, (message) => message.info.role === "user")
+            .pipe(Effect.orDie)
+          return SessionV2.legacyAssistant({
+            sessionID: SessionV2.ID.make(input.sessionID),
+            parentMessageID: Option.isSome(mirrorParent)
+              ? Option.getOrThrow(mirrorParent).info.id
+              : MessageID.make(assistant.id),
+            directory: session.directory,
+            root: current.worktree,
+            message: assistant,
+          })
         }).pipe(Effect.ensuring(status.set(input.sessionID, { type: "idle" })))
       }
       if (flags.coreV2Only)

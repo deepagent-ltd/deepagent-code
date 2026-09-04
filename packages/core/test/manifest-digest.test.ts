@@ -152,13 +152,14 @@ describe("C0-05 requirement coverage", () => {
 
 // C7-10 (a10 R3 close, W14) — the deterministic manifest MUST reproduce at the current HEAD. The values
 // below are the regenerated digests for HEAD c41aa5d7d (W14 base) on a clean tree: any drift in the
+// W4-6 refresh: session_wire_projection migration + journal→V1-wire egress moved the digest set.
 // manifest input groups (contract / migration registry / package versions / runtime flags) fails here,
 // and the pinned value + the record in `beta-rc-evidence-manifest.md` §1 / compliance-matrix C7-10 must
 // be refreshed TOGETHER (the R3 gap was exactly "recorded digests not reproducible at HEAD").
 describe("C7-10 HEAD reproducibility (a10 R3 close)", () => {
   test("regenerated manifest matches the HEAD-pinned digest", () => {
     const manifest = generateManifest()
-    expect(manifest.setTreeDigest).toBe("c5a8a6d665e740badf39771faef7da4f0562a14fcc09f9fe5d3e7314107f7c0c")
-    expect(manifest.overallDigest).toBe("9da554644c6348bee039a6a218f90c38ad570c72b1ea08001b64af80ef3ddf1e")
+    expect(manifest.setTreeDigest).toBe("dcfa6ead116cfd08b5c0bb6d1be4b653dc0caaec6fe3c5b2d0c02066780a93c9")
+    expect(manifest.overallDigest).toBe("faa36a443c5e7ea114f01a4ed52429b27d509ffee057c8ac80014defa415c861")
   })
 })

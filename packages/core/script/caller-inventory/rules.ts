@@ -287,7 +287,7 @@ export const RULE_PACKS: readonly RulePack[] = [
   {
     match: (id) =>
       id.startsWith("http.instance.deepagent.") &&
-      ["goalStartable", "goalStatus", "envFacts", "envFactsDecide", "envFactsModify", "knowledgeApprove", "knowledgePending", "knowledgeReviewSummary", "promote", "reject", "reviews", "wikiEdit", "wikiExecutionArchive", "wikiPage", "wikiPages", "wikiSearch"].includes(id.slice("http.instance.deepagent.".length)),
+      ["goalStartable", "goalStatus", "envFacts", "envFactsDecide", "envFactsModify", "knowledgeApprove", "knowledgePending", "knowledgeReviewSummary", "promote", "reject", "reviews", "wikiEdit", "wikiExecutionArchive", "wikiPage", "wikiPages", "wikiSearch", "queuedInputs"].includes(id.slice("http.instance.deepagent.".length)),
     rules: readOnlyNoBody(),
   },
 

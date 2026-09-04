@@ -188,7 +188,7 @@ describe("C0-08 legacy-zero gate real inventory (actual frozen numbers)", () => 
     expect(counters.doubleWriteEntries).toBe(0)
     expect(counters.v2Dims).toBe(26)
     expect(counters.adapterDims).toBe(3)
-    expect(counters.readOnlyDims).toBe(1840)
+    expect(counters.readOnlyDims).toBe(1847)
     expect(counters.unclassifiedDims).toBe(0)
   })
 
@@ -267,8 +267,8 @@ describe("C0-08 legacy-zero gate snapshot (byte-stable)", () => {
     expect(snapshot.counters.doubleWrite).toBe(0)
     expect(snapshot.counters.adapterDims).toBe(3)
     expect(snapshot.counters.v2Dims).toBe(26)
-    expect(snapshot.entries).toBe(397)
-    expect(snapshot.roles).toBe(2779)
+    expect(snapshot.entries).toBe(398)
+    expect(snapshot.roles).toBe(2786)
     expect(snapshot.selectionBridgeUsages).toBe(0)
   })
 
