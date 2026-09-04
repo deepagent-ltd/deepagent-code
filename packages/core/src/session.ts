@@ -160,6 +160,25 @@ export function legacyAssistant(input: {
     }
   })
   const tokens = input.message.tokens ?? { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+  // F-17: a completed assistant message carries a synthesized step-finish part — the V1 SSE
+  // surface (run CLI, app) keys turn accounting and per-turn token/cost capture on it; without it
+  // a projected V2 turn is invisible to step counters.
+  if (completed !== undefined) {
+    parts.push({
+      id: SessionV1.PartID.ascending(`prt_${input.message.id.slice("msg_".length)}_finish`),
+      sessionID: input.sessionID,
+      messageID,
+      type: "step-finish",
+      reason: input.message.finish ?? "stop",
+      cost: input.message.cost ?? 0,
+      tokens: {
+        input: tokens.input,
+        output: tokens.output,
+        reasoning: tokens.reasoning,
+        cache: tokens.cache,
+      },
+    })
+  }
   return {
     info: {
       id: messageID,
@@ -196,10 +215,18 @@ function legacyAssistantToolState(
     return { status: "running", input: part.state.input, title: part.name, time: { start } }
   }
   if (part.state.status === "completed") {
+    // JSON.stringify(undefined) is undefined (not a string) — the V1 schema requires a string
+    // output, so an absent result must land as "" rather than dying the whole projection.
+    const result =
+      typeof part.state.result === "string"
+        ? part.state.result
+        : part.state.result === undefined
+          ? ""
+          : JSON.stringify(part.state.result)
     return {
       status: "completed",
       input: part.state.input,
-      output: typeof part.state.result === "string" ? part.state.result : JSON.stringify(part.state.result),
+      output: result,
       title: part.name,
       metadata: part.provider?.resultMetadata ?? {},
       time: { start, end: DateTime.toEpochMillis(part.time.completed ?? part.time.created) },

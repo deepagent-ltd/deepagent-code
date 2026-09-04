@@ -2,6 +2,7 @@ export * as V2RunnerFrame from "./v2-runner-frame"
 
 import { Location } from "@deepagent-code/core/location"
 import { LocationServiceMap } from "@deepagent-code/core/location-layer"
+import { V2PlanGate } from "@/session/v2-plan-gate"
 import {
   ProductionV2Sources,
   type ProductionV2AdapterInput,
@@ -91,7 +92,14 @@ export const runnerFrameLocationMap = Layer.effect(
       Effect.map((built) => Context.get(built, LocationServiceMap)),
     )
     return yield* LayerMap.make(
-      (ref: Location.Ref) => baseMap.get(ref).pipe(Layer.provide(runnerFrameSeamFor(ref))),
+      (ref: Location.Ref) =>
+        baseMap.get(ref).pipe(
+          Layer.provide(runnerFrameSeamFor(ref)),
+          // W2-V2: the plan gate must be provided to the LOCATION TREE itself — the core runner
+          // layer inside it resolves CurrentToolSettleGate through the seam (an outer provide on
+          // the sources layer is silently discarded, a plain tree provide reaches the runner).
+          Layer.provide(V2PlanGate.defaultLayer),
+        ),
       { idleTimeToLive: "60 minutes" },
     ).pipe(Effect.map((map) => LocationServiceMap.of(map)))
   }),

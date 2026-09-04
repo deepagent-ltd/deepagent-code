@@ -11,7 +11,7 @@ import { SessionSchema } from "../src/session/schema"
 import { SessionMessage } from "../src/session/message"
 import { Prompt } from "../src/session/prompt"
 import { SessionInputTable, SessionTable } from "../src/session/sql"
-import { SessionContextSelectionTable } from "../src/context-federation/session-sql"
+import { SessionContextSelectionTable, SessionProviderAttemptTable } from "../src/context-federation/session-sql"
 import { Project } from "../src/project"
 import { ProjectTable } from "../src/project/sql"
 import { AbsolutePath } from "../src/schema"
@@ -252,5 +252,191 @@ it.effect("keeps explicit graph statuses (never v2-none) when no graph source is
       memory: "memory:no-store",
     })
     expect(row?.observed_location_mutation_epoch).toBe(0)
+  }),
+)
+
+// F-18 — a crashed process leaves its in-flight attempt (and receipt) in `dispatching`/`streaming`.
+// The lease-gated quarantine at the commitTurn block site must (a) keep blocking while the owner's
+// lease is live, (b) quarantine attempt+receipt as indeterminate_after_crash once the lease is
+// provably dead, so the user's explicit new input opens a fresh attempt instead of failing forever.
+const staleSessionID = SessionSchema.ID.make("ses_canonical_stale")
+
+const staleSeed = Effect.gen(function* () {
+  const { db } = yield* Database.Service
+  yield* db
+    .insert(SessionTable)
+    .values({
+      id: staleSessionID,
+      project_id: Project.ID.global,
+      slug: "canonical-stale",
+      directory: "/project",
+      title: "canonical stale",
+      version: "test",
+    })
+    .onConflictDoNothing()
+    .run()
+    .pipe(Effect.orDie)
+  yield* db
+    .insert(SessionInputTable)
+    .values({
+      id: SessionMessage.ID.make("msg_trigger_stale"),
+      session_id: staleSessionID,
+      admitted_seq: 1,
+      prompt: new Prompt({ text: "trigger" }),
+      delivery: "steer",
+      promoted_seq: 1,
+      time_created: 1,
+    })
+    .onConflictDoNothing()
+    .run()
+    .pipe(Effect.orDie)
+})
+
+// Crash residue seeding: drive the committed attempt into the in-flight `dispatching` state via
+// the LEGAL service path (the DB trigger rejects raw prepared->streaming writes).
+const forceInFlight = (attemptId: string, ownerToken: string) =>
+  Effect.gen(function* () {
+    const attempts = yield* SessionProviderAttempt.Service
+    yield* attempts.sealPrepared({
+      attemptId,
+      expectedOwnerToken: ownerToken,
+      preparedTurnHash: Hash.sha256("prepared-turn"),
+      wireRequestHash: Hash.sha256("wire-request"),
+    })
+    yield* attempts.markDispatching({ attemptId, expectedOwnerToken: ownerToken })
+  })
+
+it.effect("blocks a streaming attempt while its owner lease is live, with the reason in the message", () =>
+  Effect.gen(function* () {
+    yield* seed
+    yield* staleSeed
+    const { db } = yield* Database.Service
+    const providerTurns = yield* V2ProviderTurn.Service
+    const admission = yield* SessionRunnerCanonical.admitSelection({
+      db,
+      contexts: yield* SessionContext.Service,
+      sessionID: staleSessionID,
+      agent: "build",
+      location: { directory: "/project" },
+      promotedInputIds: ["msg_trigger_stale"],
+      system: { baseline: "baseline", revision: 0, baselineSeq: 1 },
+      historyEndMessageId: "msg_trigger_stale",
+    })
+    const committed = yield* SessionRunnerCanonical.commitTurn({
+      db,
+      contexts: yield* SessionContext.Service,
+      sessionID: staleSessionID,
+      admission,
+      receipt: {
+        sessionId: staleSessionID,
+        userMessageId: "msg_trigger_stale",
+        historyPromptEpoch: 0,
+        historySourceEndMessageId: "msg_trigger_stale",
+        requestInputHash: Hash.sha256("stale-live"),
+        providerId: "provider-test",
+        modelId: "model-test",
+        protocol: "openai-chat",
+        ownerMode: "v2" as const,
+      },
+      ownerToken: providerTurns.ownerToken,
+    })
+    yield* forceInFlight(committed.attempt.attemptId, providerTurns.ownerToken)
+    const blocked = yield* SessionRunnerCanonical.commitTurn({
+      db,
+      contexts: yield* SessionContext.Service,
+      sessionID: staleSessionID,
+      admission,
+      receipt: {
+        sessionId: staleSessionID,
+        userMessageId: "msg_trigger_stale",
+        historyPromptEpoch: 0,
+        historySourceEndMessageId: "msg_trigger_stale",
+        requestInputHash: Hash.sha256("stale-live-next"),
+        providerId: "provider-test",
+        modelId: "model-test",
+        protocol: "openai-chat",
+        ownerMode: "v2" as const,
+      },
+      ownerToken: providerTurns.ownerToken,
+    }).pipe(Effect.flip)
+    // F-18 diagnostic fidelity: the reason reaches the message, not just the schema field.
+    expect(blocked).toBeInstanceOf(SessionRunnerCanonical.AdmissionError)
+    expect((blocked as SessionRunnerCanonical.AdmissionError).reason).toBe("provider_attempt_blocked:dispatching")
+    expect((blocked as SessionRunnerCanonical.AdmissionError).message).toBe("provider_attempt_blocked:dispatching")
+  }),
+)
+
+it.effect("quarantines a dead-owner streaming attempt and opens a fresh one on the explicit input", () =>
+  Effect.gen(function* () {
+    yield* seed
+    yield* staleSeed
+    const { db } = yield* Database.Service
+    const owners = yield* SessionProviderOwner.Service
+    const providerTurns = yield* V2ProviderTurn.Service
+    // The dying owner commits the first turn, crashes mid-stream, and loses its lease (released).
+    const dyingToken = "v2:f18-dying-owner"
+    yield* owners.register({ ownerToken: dyingToken, leaseMs: 60_000 })
+    const admission = yield* SessionRunnerCanonical.admitSelection({
+      db,
+      contexts: yield* SessionContext.Service,
+      sessionID: staleSessionID,
+      agent: "build",
+      location: { directory: "/project" },
+      promotedInputIds: ["msg_trigger_stale"],
+      system: { baseline: "baseline", revision: 0, baselineSeq: 1 },
+      historyEndMessageId: "msg_trigger_stale",
+    })
+    const crashed = yield* SessionRunnerCanonical.commitTurn({
+      db,
+      contexts: yield* SessionContext.Service,
+      sessionID: staleSessionID,
+      admission,
+      receipt: {
+        sessionId: staleSessionID,
+        userMessageId: "msg_trigger_stale",
+        historyPromptEpoch: 0,
+        historySourceEndMessageId: "msg_trigger_stale",
+        requestInputHash: Hash.sha256("f18-crashed"),
+        providerId: "provider-test",
+        modelId: "model-test",
+        protocol: "openai-chat",
+        ownerMode: "v2" as const,
+      },
+      ownerToken: dyingToken,
+    })
+    yield* forceInFlight(crashed.attempt.attemptId, dyingToken)
+    yield* owners.release({ ownerToken: dyingToken })
+
+    const fresh = yield* SessionRunnerCanonical.commitTurn({
+      db,
+      contexts: yield* SessionContext.Service,
+      sessionID: staleSessionID,
+      admission,
+      receipt: {
+        sessionId: staleSessionID,
+        userMessageId: "msg_trigger_stale",
+        historyPromptEpoch: 0,
+        historySourceEndMessageId: "msg_trigger_stale",
+        requestInputHash: Hash.sha256("f18-after-crash"),
+        providerId: "provider-test",
+        modelId: "model-test",
+        protocol: "openai-chat",
+        ownerMode: "v2" as const,
+      },
+      ownerToken: providerTurns.ownerToken,
+    })
+    expect(fresh.attempt.attemptId).not.toBe(crashed.attempt.attemptId)
+    expect(fresh.attempt.providerTurnSeq).toBe(crashed.attempt.providerTurnSeq + 1)
+    const quarantinedAttempt = yield* db
+      .select({ state: SessionProviderAttemptTable.state, error_code: SessionProviderAttemptTable.error_code })
+      .from(SessionProviderAttemptTable)
+      .where(eq(SessionProviderAttemptTable.attempt_id, crashed.attempt.attemptId))
+      .get()
+      .pipe(Effect.orDie)
+    expect(quarantinedAttempt?.state).toBe("indeterminate_after_crash")
+    expect(quarantinedAttempt?.error_code).toBe("process_recovery")
+    // Receipt-side quarantine (dispatching/streaming -> indeterminate_after_crash, terminal
+    // descriptor) mirrors V2ProviderTurn.recover's predicate and is exercised by the live kill-9
+    // repro; driving a receipt to `dispatching` here would require faking the full W8 seal.
   }),
 )

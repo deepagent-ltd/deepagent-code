@@ -6383,10 +6383,55 @@ export const layer = Layer.effect(
                   detail: "V2 owner readiness gate is closed for the V2-only profile",
                 })
               : Effect.die(new Error(`V2 owner readiness gate is closed: ${input.sessionID}`)))
+          // F-17: live part mirror. resume() blocks until the whole drain settles; without a
+          // concurrent projector the V1 mirror (and the SSE surface the run CLI and app listen on)
+          // sees nothing until the final projection — every intermediate tool/text/step part was
+          // invisible. Mirror each session event for THIS session into the V1 mirror as it lands
+          // (diffed by part id, idempotent upserts), then keep the existing settle-time projection
+          // as the authoritative final flush.
+          // F-17: dedupe by CONTENT HASH, not part id — a tool part first lands as pending/running
+          // and the CLI consumers key on the completed/error transition; an id-only set would
+          // swallow exactly that state update.
+          const mirrorPublished = new Map<string, string>()
+          const mirrorAssistant = Effect.gen(function* () {
+            const messages = yield* coreV2Session.context(SessionV2.ID.make(input.sessionID)).pipe(Effect.orDie)
+            const mirrorSource = messages.findLast(
+              (message): message is SessionMessage.Assistant => message.type === "assistant",
+            )
+            if (!mirrorSource) return
+            const mirrorParent = yield* sessions
+              .findMessage(input.sessionID, (message) => message.info.role === "user")
+              .pipe(Effect.orDie)
+            const projectedNow = SessionV2.legacyAssistant({
+              sessionID: SessionV2.ID.make(input.sessionID),
+              parentMessageID: Option.isSome(mirrorParent)
+                ? Option.getOrThrow(mirrorParent).info.id
+                : MessageID.make(mirrorSource.id),
+              directory: session.directory,
+              root: current.worktree,
+              message: mirrorSource,
+            })
+            yield* sessions.updateMessage(projectedNow.info)
+            for (const part of projectedNow.parts) {
+              const fingerprint = JSON.stringify(part)
+              if (mirrorPublished.get(part.id) === fingerprint) continue
+              mirrorPublished.set(part.id, fingerprint)
+              yield* sessions.updatePart(part)
+            }
+          })
+          const stopMirror = yield* events.listen((event) =>
+            Effect.suspend(() => {
+              const data = event.data as { sessionID?: string }
+              if (!event.type.startsWith("session.next.") || data?.sessionID !== input.sessionID)
+                return Effect.void
+              return mirrorAssistant.pipe(Effect.ignore)
+            }),
+          )
           yield* coreV2Session
             .resume(SessionV2.ID.make(input.sessionID))
             .pipe(Effect.provideService(V2ProviderTurn.CurrentOwnerCampaign, ownerCampaignNow))
             .pipe(Effect.orDie)
+            .pipe(Effect.ensuring(stopMirror))
           // FEAT-010: durable evidence correlation. The receipt row itself is written by the core
           // runner (V2ProviderTurn.admit inside SessionRunner.runTurn during resume); read back the
           // latest owner=v2 receipt so the slog trail ties this selection to its durable row.
