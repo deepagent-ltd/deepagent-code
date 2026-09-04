@@ -130,6 +130,7 @@ const sessionBindingCommands = [
   "session.toggle.actions",
   "session.toggle.scrollbar",
   "session.toggle.generic_tool_output",
+  "session.toggle.auto_accept",
   "session.first",
   "session.last",
   "session.messages_last_user",
@@ -231,6 +232,24 @@ export function Session() {
   const permissions = createMemo(() => {
     if (session()?.parentID) return []
     return children().flatMap((x) => sync.data.permission[x.id] ?? [])
+  })
+
+  // GUI parity: session-scoped auto-accept. The persisted map keys accept either a bare sessionID
+  // or `session/child` pairs — while auto-accepting, new permission.asked events are answered
+  // with a single-use "once" reply (never persisted as a rule), mirroring the GUI permission
+  // auto-respond semantics.
+  const autoAccept = () => kv.get("permission_auto_accept", {}) as Record<string, boolean>
+  const isAutoAccepting = () => autoAccept()[route.sessionID] === true
+  createEffect(() => {
+    if (!isAutoAccepting()) return
+    const request = permissions()[0]
+    if (!request) return
+    void sdk.client.permission.reply({
+      reply: "once",
+      requestID: request.id,
+      directory: sync.session.get(request.sessionID)?.directory,
+      workspace: project.workspace.current(),
+    })
   })
   const questions = createMemo(() => {
     if (session()?.parentID) return []
@@ -951,6 +970,24 @@ export function Session() {
       category: "Session",
       run: () => {
         setShowScrollbar((prev) => !prev)
+        dialog.clear()
+      },
+    },
+    {
+      title: isAutoAccepting() ? "Disable auto-accept permissions" : "Enable auto-accept permissions",
+      value: "session.toggle.auto_accept",
+      category: "Session",
+      slash: {
+        name: "permissions",
+      },
+      run: () => {
+        const next = !isAutoAccepting()
+        kv.set("permission_auto_accept", { ...autoAccept(), [route.sessionID]: next })
+        toast.show({
+          message: next ? "Auto-accept enabled — new permissions are approved once" : "Auto-accept disabled",
+          variant: "info",
+          duration: 4000,
+        })
         dialog.clear()
       },
     },

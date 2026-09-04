@@ -46,6 +46,8 @@ import { createColors, createFrames } from "../../ui/spinner"
 import { useDialog } from "../../ui/dialog"
 import { DialogProvider as DialogProviderConnect } from "../dialog-provider"
 import { DialogAlert } from "../../ui/dialog-alert"
+import { DialogSelect } from "../../ui/dialog-select"
+import { DialogPrompt } from "../../ui/dialog-prompt"
 import { useToast } from "../../ui/toast"
 import { useKV } from "../../context/kv"
 import { createFadeIn } from "../../util/signal"
@@ -171,7 +173,120 @@ export function Prompt(props: PromptProps) {
   const tuiConfig = useTuiConfig()
   const dialog = useDialog()
   const toast = useToast()
+
+  // GUI parity (D1): the intelligence prepare pipeline. POSTs the raw text to
+  // /session/:id/prompt_prepare_stream (SSE), then shows the prepared draft in an editable review.
+  // Returns the send metadata (confirmed draft, or direct_override on degrade), or false when the
+  // user dismissed the review. Mirrors submit.ts prepareDeepAgentPromptDraft + W1-3 fallback.
+  const prepareIntelligenceDraft = async (sessionID: string, text: string): Promise<Record<string, unknown> | false> => {
+    const intentID = `int_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+    const direct: Record<string, unknown> = {
+      deepagent: { agent_mode_override: "general", prompt_pipeline: { mode: "direct_override" } },
+    }
+    try {
+      const streamResult = await (
+        sdk.client as unknown as {
+          client: {
+            request<D>(o: {
+              method: string
+              url: string
+              body?: unknown
+              headers?: Record<string, string>
+              parseAs?: "stream"
+            }): Promise<{ data?: D }>
+          }
+        }
+      ).client.request<ReadableStream<Uint8Array>>({
+        method: "POST",
+        url: `/session/${sessionID}/prompt_prepare_stream`,
+        body: {
+          mode: "intelligence",
+          output_language: "english",
+          intent_id: intentID,
+          intent_source: "intelligence",
+          parts: [{ type: "text", text }],
+        },
+        headers: { "Content-Type": "application/json" },
+        parseAs: "stream",
+      })
+      if (!streamResult.data) throw new Error("prepare returned no stream")
+      const reader = streamResult.data.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ""
+      let result: { route?: string; prompt_draft_id?: string; goal?: string; preview?: string; intent_id?: string } | undefined
+      const readEvent = (block: string) => {
+        const data = block
+          .split("\n")
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).trimStart())
+          .join("\n")
+        if (!data) return
+        const event = JSON.parse(data) as { type: string; preview?: string; result?: typeof result; message?: string }
+        if (event.type === "progress") return
+        if (event.type === "error") throw new Error(event.message ?? "prepare failed")
+        result = event.result
+      }
+      while (true) {
+        const part = await reader.read()
+        if (part.done) break
+        buffer += decoder.decode(part.value, { stream: true })
+        const blocks = buffer.split("\n\n")
+        buffer = blocks.pop() ?? ""
+        blocks.forEach(readEvent)
+      }
+      if (!result || result.route === "general" || !result.prompt_draft_id) return direct
+      if (result.intent_id && result.intent_id !== intentID) throw new Error("prepare returned a different intent")
+      const editable = (result.preview ?? result.goal ?? "").trim()
+      if (!editable) return direct
+      const edited = await DialogPrompt.show(dialog, "Intelligence draft — edit then confirm", {
+        value: editable,
+      })
+      if (edited === null) return false
+      return {
+        deepagent: {
+          prompt_pipeline: {
+            mode: "intelligence",
+            confirmed_draft_id: result.prompt_draft_id,
+            edited_goal: edited.trim() || editable,
+          },
+        },
+      }
+    } catch {
+      // W1-3 — refinement is an enhancement, not a gate: degrade to direct override.
+      toast.show({ message: "Prompt refinement unavailable — sending directly", variant: "info", duration: 3000 })
+      return direct
+    }
+  }
+
   const status = createMemo(() => sync.data.session_status?.[props.sessionID ?? ""] ?? { type: "idle" })
+  const intelligenceMode = createMemo(
+    () => props.sessionID && (kv.get("intelligence_mode", {}) as Record<string, boolean>)[props.sessionID] === true,
+  )
+  // GUI followup-dock parity: while the session is busy, `/followup <text>` parks the text in a
+  // kv-persisted per-session FIFO; when the session returns to idle the head is sent as a normal
+  // prompt (server-side delivery is steer-or-queue as usual — this is the local editing buffer
+  // the GUI followup dock owns).
+  const followups = () => kv.get("prompt_followups", {}) as Record<string, string[]>
+  const setFollowups = (sessionID: string, next: string[]) =>
+    kv.set("prompt_followups", { ...followups(), [sessionID]: next })
+  createEffect(() => {
+    const sessionID = props.sessionID
+    if (!sessionID) return
+    if (status().type !== "idle") return
+    const queue = followups()[sessionID]
+    const text = queue?.[0]
+    if (!text) return
+    setFollowups(sessionID, queue.slice(1))
+    void sdk.client.session
+      .prompt({ sessionID, parts: [{ type: "text", text }] })
+      .catch((error) => {
+        toast.show({
+          message: error instanceof Error ? error.message : "Failed to send followup",
+          variant: "error",
+          duration: 5000,
+        })
+      })
+  })
   const history = usePromptHistory()
   const stash = usePromptStash()
   const keymap = useOpencodeKeymap()
@@ -649,6 +764,88 @@ export function Prompt(props: PromptProps) {
         slashName: "move",
         run: () => {
           move.open()
+        },
+      },
+      {
+        // GUI D1 parity — the per-session intelligence toggle (scenario-toggle). While on, sends
+        // run through the prepare pipeline with an editable draft review before submission.
+        title: intelligenceMode() ? "Disable intelligence prompts" : "Enable intelligence prompts",
+        desc: "Route sends through the DeepAgent prepare pipeline",
+        name: "prompt.intelligence",
+        category: "Session",
+        slashName: "intelligence",
+        run: () => {
+          const sessionID = props.sessionID
+          if (!sessionID) return
+          const next = !intelligenceMode()
+          kv.set("intelligence_mode", { ...(kv.get("intelligence_mode", {}) as Record<string, boolean>), [sessionID]: next })
+          toast.show({
+            message: next
+              ? "Intelligence prompts on — sends are refined and reviewed before submission"
+              : "Intelligence prompts off — direct sends",
+            variant: "info",
+            duration: 4000,
+          })
+          dialog.clear()
+        },
+      },
+      {
+        title: "Queue followup while busy",
+        desc: "Park text to send when the running turn settles",
+        name: "prompt.followup",
+        category: "Session",
+        slashName: "followup",
+        enabled: status().type !== "idle",
+        run: () => {
+          const sessionID = props.sessionID
+          if (!sessionID) return
+          const text = store.prompt.input.replace(/^\/followup\b\s*/, "").trim()
+          if (!text) {
+            toast.show({ message: "Usage: /followup <text> — queues it for when the turn settles", variant: "info", duration: 4000 })
+            return
+          }
+          setFollowups(sessionID, [...(followups()[sessionID] ?? []), text])
+          input.setText("")
+          setStore("prompt", { input: "", parts: [] })
+          toast.show({ message: `Followup queued (${(followups()[sessionID] ?? []).length} waiting)`, variant: "info", duration: 3000 })
+          dialog.clear()
+        },
+      },
+      {
+        title: "Browse queued followups",
+        name: "prompt.followup.list",
+        category: "Session",
+        slashName: "followups",
+        run: () => {
+          const sessionID = props.sessionID
+          if (!sessionID) return
+          const queue = followups()[sessionID] ?? []
+          if (queue.length === 0) {
+            toast.show({ message: "No queued followups", variant: "info", duration: 3000 })
+            return
+          }
+          dialog.replace(() => (
+            <DialogSelect
+              title={`Queued followups (${queue.length})`}
+              options={queue.map((text, index) => ({
+                title: text.length > 90 ? `${text.slice(0, 90)}…` : text,
+                value: index,
+                footer: `#${index + 1}`,
+              }))}
+              current={undefined}
+              actions={[
+                {
+                  command: "followup.delete",
+                  title: "delete",
+                  onTrigger: (option: { value: number }) => {
+                    const next = (followups()[sessionID] ?? []).filter((_, index) => index !== option.value)
+                    setFollowups(sessionID, next)
+                    if (next.length === 0) dialog.clear()
+                  },
+                },
+              ]}
+            />
+          ))
         },
       },
     ].map((entry) => ({
@@ -1208,6 +1405,23 @@ export function Prompt(props: PromptProps) {
         })
     } else {
       move.startSubmit()
+      // GUI parity (D1/W0-3a): when intelligence mode is on for this session, run the prompt
+      // through the prepare pipeline first — SSE progress + an editable draft review — then send
+      // with the confirmed-draft metadata. Any prepare failure or route "general" degrades to
+      // direct_override (the server already degrades under the V2-only profile).
+      const intelligenceOn = props.sessionID
+        ? kv.get("intelligence_mode", {})[props.sessionID] === true
+        : false
+      let metadata: Record<string, unknown> | undefined
+      if (intelligenceOn && inputText.trim()) {
+        const prepared = await prepareIntelligenceDraft(sessionID!, inputText)
+        if (prepared === false) {
+          // user dismissed the draft review — abort the send, keep the composer text
+          input.setText(inputText)
+          return true
+        }
+        metadata = prepared
+      }
       sdk.client.session
         .prompt({
           sessionID,
@@ -1215,6 +1429,7 @@ export function Prompt(props: PromptProps) {
           agent: agent.name,
           model: selectedModel,
           variant,
+          metadata,
           parts: [
             ...editorParts,
             {
