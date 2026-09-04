@@ -6005,10 +6005,22 @@ v2Only.instance(
         .pipe(Effect.exit)
       expect(failureIsLegacyUnavailable(commandExit).reason).toBe("v2_owner_unavailable")
 
+      // W0-2 — shell is a projection-layer surface (spawn + V1 wire mirror; no legacy durable
+      // writes, no provider call), so the firewall no longer refuses it. Assert it stays
+      // side-effect-clean against the legacy-row snapshot instead.
       const shellExit = yield* prompt
-        .shell({ sessionID: chat.id, agent: "build", command: "ls" })
+        .shell({ sessionID: chat.id, agent: "build", command: "true" })
         .pipe(Effect.exit)
-      expect(failureIsLegacyUnavailable(shellExit).reason).toBe("v2_only_profile")
+      expect(shellExit._tag).toBe("Success")
+      // Projection-only effects: the V1 wire mirror gains the shell assistant message + tool
+      // part, but every LEGACY EXECUTION surface (intents/steers/receipts/leases/activities/
+      // selections) stays at zero.
+      const afterShell = yield* snapshotLegacyRows(db)
+      expect(afterShell.intents).toBe(before.intents)
+      expect(afterShell.steers).toBe(before.steers)
+      expect(afterShell.receipts).toBe(before.receipts)
+      expect(afterShell.activities).toBe(before.activities)
+      expect(afterShell.selections).toBe(before.selections)
 
       const steerExit = yield* prompt
         .steer({ sessionID: chat.id, prompt: new Prompt({ text: "steer text" }) })
@@ -6026,7 +6038,15 @@ v2Only.instance(
         .pipe(Effect.exit)
       expect(failureIsLegacyUnavailable(refineExit).reason).toBe("v2_only_profile")
 
-      yield* expectLegacyZeroRows(db, before)
+      // Final sweep re-snapshots (the shell projection added wire rows) and asserts only the
+      // legacy EXECUTION surfaces stay untouched.
+      const final = yield* snapshotLegacyRows(db)
+      expect(final.intents).toBe(before.intents)
+      expect(final.steers).toBe(before.steers)
+      expect(final.receipts).toBe(before.receipts)
+      expect(final.activities).toBe(before.activities)
+      expect(final.selections).toBe(before.selections)
+      expect(final.leases).toBe(before.leases)
     }),
   30_000,
 )

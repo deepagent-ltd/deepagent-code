@@ -9,7 +9,7 @@ import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-even
 import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
 import { buildProfile } from "@/deepagent/profile-detector"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
-import { Effect, Option } from "effect"
+import { Effect, Option, DateTime } from "effect"
 import { buildRunReview, listRunIds } from "@/deepagent/run-review"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { InstanceHttpApi } from "../api"
@@ -26,6 +26,7 @@ import {
 import { WorkspaceRouteContext } from "../middleware/workspace-routing"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { SessionV2 } from "@deepagent-code/core/session"
+import { SessionInput } from "@deepagent-code/core/session/input"
 import { Snapshot } from "@/snapshot"
 import { SettingsStore } from "@/settings/store"
 import { Session } from "@/session/session"
@@ -1042,6 +1043,20 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       return yield* goals.startable(ctx.query.sessionID)
     })
 
+    // W2-3 — pending FIFO queue inputs, non-consuming read in admit order.
+    const queuedInputs = Effect.fn("DeepAgentHttpApi.queuedInputs")(function* (ctx) {
+      const pending = yield* SessionInput.pendingQueueInputs(database.db, SessionV2.ID.make(ctx.query.sessionID))
+      return {
+        items: pending.map((x) => ({
+          id: x.id,
+          admittedSeq: x.admittedSeq,
+          text: x.prompt.text,
+          files: x.prompt.files?.map((f) => f.name ?? f.uri),
+          timeCreated: DateTime.toEpochMillis(x.timeCreated),
+        })),
+      }
+    })
+
     // ── V3.9 §B Repo & Wiki ─────────────────────────────────────────────────
     // Read-only projection + governed knowledge edit + full-text search. All fail-closed on the wiki
     // flag. The graph union / search index / edit gate are all built from the active workspace dir.
@@ -1190,6 +1205,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       .handle("goalEditPlan", goalEditPlan)
       .handle("goalStatus", goalStatus)
       .handle("goalStartable", goalStartable)
+      .handle("queuedInputs", queuedInputs)
       .handle("wikiPages", wikiPages)
       .handle("wikiPage", wikiPage)
       .handle("wikiSearch", wikiSearch)

@@ -365,6 +365,29 @@ export const promoteSteers = Effect.fn("SessionInput.promoteSteers")(function* (
 
 export type PromotedInputs = readonly string[]
 
+// W2-3 — non-consuming read of the session's FIFO `queue` inputs still awaiting promotion, in
+// admit order. Mirrors promoteNextQueued's ordering; used by the TUI /queue view (and any future
+// queue surface) to show what is deferred until the activity settles.
+export const pendingQueueInputs = Effect.fn("SessionInput.pendingQueueInputs")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+) {
+  const rows = yield* db
+    .select()
+    .from(SessionInputTable)
+    .where(
+      and(
+        eq(SessionInputTable.session_id, sessionID),
+        isNull(SessionInputTable.promoted_seq),
+        eq(SessionInputTable.delivery, "queue"),
+      ),
+    )
+    .orderBy(asc(SessionInputTable.admitted_seq))
+    .all()
+    .pipe(Effect.orDie)
+  return rows.map(fromRow)
+})
+
 export const promoteNextQueued = Effect.fn("SessionInput.promoteNextQueued")(function* (
   db: DatabaseService,
   events: EventV2.Interface,

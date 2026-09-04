@@ -105,11 +105,9 @@ describe("SessionProjector", () => {
         .values({
           id: SessionV1.MessageID.make("msg_step_usage"),
           session_id: sessionID,
-          type: "assistant",
-          seq: 1,
           time_created: 1,
-          data: { role: "assistant" },
-        })
+          data: { role: "assistant", time: { created: 1 } },
+        } as typeof MessageTable.$inferInsert)
         .onConflictDoNothing()
         .run()
         .pipe(Effect.orDie)

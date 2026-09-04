@@ -6692,10 +6692,15 @@ export const layer = Layer.effect(
     const shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError | LegacyExecutionUnavailable> = Effect.fn(
       "SessionPrompt.shell",
     )(function* (input: ShellInput) {
-      yield* guardLegacyExecution(flags, { sessionID: input.sessionID })
-      const ready = yield* Latch.make()
-      return yield* state.startShell(input.sessionID, lastAssistant(input.sessionID), shellImpl(input, ready), ready)
-    })
+        // W0-2 — the shell route is a PROJECTION-LAYER surface, not legacy execution: it spawns a
+        // child process and mirrors the turn as V1 wire rows via sessions.updateMessage/updatePart
+        // (EventV2 publishes, the same projection class the F-17 mirror uses). It writes no
+        // session_intent / session_steer / session_tool_request_receipt rows and never calls the
+        // provider, so the LEGACY-EXECUTION-ZERO firewall does not apply (D2 classification:
+        // projection adapter). This restores the `!` shell mode under the V2-only profile.
+        const ready = yield* Latch.make()
+        return yield* state.startShell(input.sessionID, lastAssistant(input.sessionID), shellImpl(input, ready), ready)
+      })
 
     const command = Effect.fn("SessionPrompt.command")(function* (input: CommandInput) {
       // 1.4.8.r0: template expansion happens here (may run embedded !-shell blocks / plugin hooks —

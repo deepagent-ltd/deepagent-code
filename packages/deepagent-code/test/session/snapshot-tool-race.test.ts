@@ -23,6 +23,7 @@ import { SessionRevert } from "../../src/session/revert"
 import { SessionSummary } from "../../src/session/summary"
 import { MessageV2 } from "../../src/session/message-v2"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
+import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { SessionV2 } from "@deepagent-code/core/session"
 import * as Log from "@deepagent-code/core/util/log"
 import { disposeAllInstances, provideTmpdirServer, testInstanceStoreLayer } from "../fixture/fixture"
@@ -328,6 +329,20 @@ it.live("tool execution produces non-empty session diff (snapshot race)", () =>
         description: "create test file",
       })
       yield* llm.textMatch((hit) => JSON.stringify(hit.body).includes("bash"), "done")
+
+      // The strict plan gate is ON by default (agentMode "high"): a planless mutating bash call
+      // is correctly blocked with the minimal-plan template (F-20). Seed a live plan so the file
+      // write is a legitimate planned mutation.
+      AgentGateway.DeepAgentSessionState.getOrCreate(session.id, "high")
+      AgentGateway.DeepAgentSessionState.setPlan(session.id, {
+        plan_id: "plan_snapshot_race",
+        session_id: session.id,
+        goal: "create the test file",
+        assumptions: [],
+        steps: [{ step_id: "s1", title: "create race-test.txt", status: "active" }],
+        active_step_id: "s1",
+        created_at: new Date().toISOString(),
+      })
 
       // Seed user message
       yield* prompt.prompt({
