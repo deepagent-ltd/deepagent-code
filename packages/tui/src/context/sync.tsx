@@ -45,6 +45,7 @@ import path from "path"
 import { aggregateFailures } from "./aggregate-failures"
 import { useKV } from "./kv"
 import { destroyRenderer } from "../util/renderer"
+import * as V2WireProjection from "./v2-wire-projection"
 
 const emptyConsoleState: ConsoleState = {
   consoleManagedProviders: [],
@@ -616,12 +617,29 @@ export const {
           const tracker = { messages: new Set<string>(), parts: new Set<string>() }
           hydratingSessions.set(sessionID, tracker)
           const task = (async () => {
-            const [session, messages, todo, diff] = await Promise.all([
+            const [session, wirePage, todo, diff] = await Promise.all([
               sdk.client.session.get({ sessionID }, { throwOnError: true }),
               sdk.client.session.messages({ sessionID, limit: 100 }),
               sdk.client.session.todo({ sessionID }),
               sdk.client.session.diff({ sessionID }),
             ])
+            // 6b-4 — V2-authoritative fallback (mirrors the app's directory-sync path): a first
+            // wire page that comes back EMPTY has its history only in the durable V2 store
+            // (journal-driven session whose wire egress lagged). Project the V2 snapshot into
+            // the WithParts rows this store consumes instead of rendering an empty transcript.
+            let messages = wirePage
+            if ((messages.data ?? []).length === 0) {
+              const v2 = await sdk.client.v2.session.messages({ sessionID, limit: 100 }).catch(() => undefined)
+              const rows = v2?.data?.data?.length
+                ? V2WireProjection.snapshotRows({
+                    sessionID,
+                    directory: session.data?.directory ?? "",
+                    root: session.data?.directory ?? "",
+                    messages: v2.data.data as never[],
+                  })
+                : []
+              if (rows.length > 0) messages = { ...messages, data: rows as never }
+            }
             setStore(
               produce((draft) => {
                 const match = search(draft.session, sessionID, (s) => s.id)
