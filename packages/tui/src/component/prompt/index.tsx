@@ -593,6 +593,28 @@ export function Prompt(props: PromptProps) {
           // seeds a plan server-side (used when the session has no plan yet); otherwise the goal loop
           // drives the session's existing plan.
           const objective = store.prompt.input.replace(/^\/goal\b\s*/, "").trim()
+          // W2-1 — control subcommands mirror the app's goal-status-bar controls (pause/resume/stop
+          // ride POST /deepagent/goal/{action}); they act on the session's RUNNING goal.
+          const control = ["pause", "resume", "stop"].includes(objective) ? objective : undefined
+          if (control) {
+            try {
+              await rawRequest<{ ok: boolean }>({
+                method: "POST",
+                url: `/deepagent/goal/${control}`,
+                body: { sessionID },
+                headers: { "Content-Type": "application/json" },
+              })
+              toast.show({ variant: "success", message: `Goal ${control}d`, duration: 3000 })
+            } catch (error) {
+              toast.show({
+                variant: "warning",
+                message: error instanceof Error ? error.message : `Could not ${control} the goal`,
+                duration: 4000,
+              })
+            }
+            dialog.clear()
+            return
+          }
           try {
             const res = await rawRequest<{ goalId: string; phase: string }>({
               method: "POST",

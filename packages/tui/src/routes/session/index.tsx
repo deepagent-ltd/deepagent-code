@@ -50,9 +50,12 @@ import { TodoItem } from "../../component/todo-item"
 import { DialogMessage } from "./dialog-message"
 import type { PromptInfo } from "../../component/prompt/history"
 import { DialogConfirm } from "../../ui/dialog-confirm"
+import { DialogSelect } from "../../ui/dialog-select"
+import { DialogPrompt } from "../../ui/dialog-prompt"
 import { DialogTimeline } from "./dialog-timeline"
 import { DialogForkFromTimeline } from "./dialog-fork-from-timeline"
 import { DialogSessionRename } from "../../component/dialog-session-rename"
+import { DialogArchivedSessions } from "../../component/dialog-archived-sessions"
 import { Sidebar } from "./sidebar"
 import { SubagentFooter } from "./subagent-footer.tsx"
 import { filetype } from "../../util/filetype"
@@ -274,6 +277,10 @@ export function Session() {
   const scrollAcceleration = createMemo(() => getScrollAcceleration(tuiConfig))
   const toast = useToast()
   const sdk = useSDK()
+  const rawRequest = <T,>(options: { method: string; url: string; body?: unknown; headers?: Record<string, string> }) =>
+    (sdk.client as unknown as { client: { request<D>(o: typeof options): Promise<{ data?: D }> } }).client.request<T>(
+      options,
+    )
   const editor = useEditorContext()
 
   createEffect(() => {
@@ -549,6 +556,207 @@ export function Session() {
             sessionID={route.sessionID}
           />
         ))
+      },
+    },
+    {
+      title: "Show next-step suggestion",
+      desc: "Read the macro-round next-round suggestion the backend persisted for this session",
+      value: "session.suggest",
+      category: "Session",
+      slash: {
+        name: "suggest",
+      },
+      run: async () => {
+        const sessionID = route.sessionID
+        if (!sessionID) return
+        const suggestion = await sdk.client.session
+          .promptSuggestion({ sessionID })
+          .then((x) => x.data)
+          .catch(() => undefined)
+        if (!suggestion || !suggestion.body) {
+          toast.show({ variant: "warning", message: "No next-step suggestion available yet", duration: 4000 })
+          dialog.clear()
+          return
+        }
+        toast.show({ variant: "info", message: suggestion.body, duration: 8000 })
+        dialog.clear()
+      },
+    },
+    {
+      title: "Archive session",
+      desc: "Move the session out of the active list (archive mark)",
+      value: "session.archive",
+      category: "Session",
+      slash: {
+        name: "archive",
+      },
+      run: async () => {
+        const sessionID = route.sessionID
+        if (!sessionID) return
+        try {
+          await sdk.client.session.update({
+            sessionID,
+            time: { archived: Date.now() },
+          })
+          await sync.session.refresh()
+          toast.show({ variant: "success", message: "Session archived", duration: 3000 })
+          navigate({ type: "home" })
+        } catch (error) {
+          toast.show({
+            variant: "error",
+            message: error instanceof Error ? error.message : "Failed to archive session",
+            duration: 5000,
+          })
+        }
+        dialog.clear()
+      },
+    },
+    {
+      title: "Archived sessions",
+      desc: "Browse, restore, or delete archived sessions",
+      value: "session.archive.list",
+      category: "Session",
+      run: () => {
+        dialog.replace(() => <DialogArchivedSessions />)
+      },
+    },
+    {
+      title: "Queued inputs",
+      desc: "Show the session's pending FIFO queue inputs (V2 delivery=queue)",
+      value: "session.queued_prompts",
+      category: "Session",
+      slash: {
+        name: "queue",
+      },
+      run: async () => {
+        const sessionID = route.sessionID
+        if (!sessionID) return
+        // W2-3 — GET /deepagent/queue is served by path and not in the generated SDK; rawRequest
+        // reaches it the same way the /goal commands do. Read is non-consuming: promotion happens
+        // at the next activity boundary, so the dialog is view-only.
+        const result = await rawRequest<{ items: { id: string; admittedSeq: number; text: string; timeCreated: number }[] }>({
+          method: "GET",
+          url: `/deepagent/queue?sessionID=${encodeURIComponent(sessionID)}`,
+        }).catch(() => undefined)
+        const items = result?.data?.items ?? []
+        if (items.length === 0) {
+          toast.show({
+            variant: "info",
+            message: "No queued inputs — explicit queue-mode inputs open the next activity when this one settles",
+            duration: 5000,
+          })
+          dialog.clear()
+          return
+        }
+        dialog.replace(() => (
+          <DialogSelect
+            title={`Queued inputs (${items.length})`}
+            options={items.map((x) => ({
+              title: x.text.length > 90 ? `${x.text.slice(0, 90)}…` : x.text,
+              value: x.id,
+              category: "Queue",
+              footer: `#${x.admittedSeq} · ${Locale.time(x.timeCreated)} · promotes in admit order`,
+            }))}
+            onSelect={() => {}}
+          />
+        ))
+      },
+    },
+    {
+      title: "Show plan",
+      desc: "View the session's durable plan (goal, steps, version) and edit it",
+      value: "session.plan",
+      category: "Session",
+      slash: {
+        name: "plan",
+      },
+      run: async () => {
+        const sessionID = route.sessionID
+        if (!sessionID) return
+        // W2-2 — plan view + edit. The read path has no legacy guard (DeepAgentPlanStore); edits ride
+        // the same /deepagent/goal/edit-plan admission the app's plan editor uses.
+        const planResponse = await sdk.client.session
+          .plan({ sessionID })
+          .then((x) => x.data)
+          .catch(() => undefined)
+        const result = planResponse?.plan
+        if (!result) {
+          toast.show({
+            variant: "warning",
+            message: "No plan yet — create one with /goal <objective> or the plan tool",
+            duration: 4000,
+          })
+          dialog.clear()
+          return
+        }
+        const choice = await new Promise<string | null>((resolve) => {
+          dialog.replace(
+            () => (
+              <DialogSelect
+                title={`Plan — ${result.goal}`}
+                skipFilter={true}
+                options={[
+                  { title: "Edit plan (goal + steps)", value: "plan.edit", description: "rewrite goal and steps" },
+                  ...result.steps.map((step, index) => ({
+                    title: `${index + 1}. ${step.title}`,
+                    description: step.status,
+                    value: `step:${index}`,
+                  })),
+                ]}
+                onSelect={(option) => resolve(option.value)}
+              />
+            ),
+            () => resolve(null),
+          )
+        })
+        if (choice !== "plan.edit") {
+          dialog.clear()
+          return
+        }
+        // Edit flow: multiline input "goal\nstep 1\nstep 2…" → edit-plan admission (replan).
+        const edited = await DialogPrompt.show(dialog, "Edit plan — one goal line, then one step per line", {
+          value: [result.goal, ...result.steps.map((s) => s.title)].join("\n"),
+        })
+        if (edited === null) {
+          dialog.clear()
+          return
+        }
+        const [goalLine, ...stepLinesIn] = edited.split("\n").map((l) => l.trim()).filter(Boolean)
+        if (!goalLine || stepLinesIn.length === 0) {
+          toast.show({ variant: "warning", message: "Edit needs a goal line and at least one step line", duration: 4000 })
+          dialog.clear()
+          return
+        }
+        try {
+          await rawRequest({
+            method: "POST",
+            url: "/deepagent/goal/edit-plan",
+            body: {
+              sessionID,
+              request_id: `tui-plan-edit-${Date.now()}`,
+              plan_write: {
+                operation: "replan",
+                expected_plan_id: result.plan_id,
+                expected_version: Number(planResponse?.plan_version ?? 0),
+                replan_reason: "tui plan editor",
+                goal: goalLine,
+                steps: stepLinesIn.map((title, index) => ({
+                  title,
+                  status: index === 0 ? "active" : "pending",
+                })),
+              },
+            },
+            headers: { "Content-Type": "application/json" },
+          })
+          toast.show({ variant: "success", message: "Plan updated", duration: 3000 })
+        } catch (error) {
+          toast.show({
+            variant: "error",
+            message: error instanceof Error ? error.message : "Plan edit was rejected",
+            duration: 5000,
+          })
+        }
+        dialog.clear()
       },
     },
     {

@@ -20,6 +20,18 @@ import type {
   SnapshotFileDiff,
   ConsoleState,
 } from "@deepagent-code/sdk"
+
+// W2-1 — the projected goal.updated payload shape (kept structural; the SDK schema lives server-side).
+export type GoalStatus = {
+  goalId: string
+  planDocId: string
+  phase: string
+  ticks: number
+  tokens: number
+  cost: number
+  gaps: string[]
+  stallCount: number
+}
 import { createStore, produce, reconcile } from "solid-js/store"
 import { useProject } from "./project"
 import { useEvent } from "./event"
@@ -94,6 +106,11 @@ export const {
         [messageID: string]: Part[]
       }
       lsp: LspStatus[]
+      // W2-1 — live Goal Loop status per session, fed by the goal.updated SSE event (same stream
+      // the app's goal-status-bar consumes). Undefined = no goal running.
+      session_goal: {
+        [sessionID: string]: GoalStatus
+      }
       mcp: {
         [key: string]: McpStatus
       }
@@ -125,6 +142,7 @@ export const {
       message: {},
       part: {},
       lsp: [],
+      session_goal: {},
       mcp: {},
       mcp_resource: {},
       formatter: [],
@@ -294,6 +312,27 @@ export const {
 
         case "session.status": {
           setStore("session_status", event.properties.sessionID, event.properties.status)
+          break
+        }
+
+        case "goal.updated": {
+          const goal = event.properties
+          const terminal = ["done", "stopped", "rolled_back"].includes(goal.phase)
+          setStore(
+            "session_goal",
+            goal.sessionID,
+            reconcile({
+              goalId: goal.goalId,
+              planDocId: goal.planDocId,
+              phase: goal.phase,
+              ticks: Number(goal.ledger?.ticks ?? 0),
+              tokens: Number(goal.ledger?.tokens ?? 0),
+              cost: Number(goal.ledger?.cost ?? 0),
+              gaps: goal.gaps ?? [],
+              stallCount: Number(goal.stallCount ?? 0),
+            }),
+          )
+          if (terminal) setTimeout(() => setStore("session_goal", goal.sessionID, undefined as unknown as GoalStatus), 8000)
           break
         }
 

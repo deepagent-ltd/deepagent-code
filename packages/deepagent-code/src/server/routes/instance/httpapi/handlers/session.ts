@@ -14,6 +14,7 @@ import { MessageV2 } from "@/session/message-v2"
 import { SessionPrompt } from "@/session/prompt"
 import { SessionPromptIntent } from "@/session/prompt-intent"
 import { LegacyExecutionUnavailable, guardLegacyExecution } from "@/session/legacy-execution-zero"
+import { SessionV2 } from "@deepagent-code/core/session"
 import { SessionMutationEpoch } from "@/session/mutation-epoch"
 import { SessionRevert } from "@/session/revert"
 import { SessionRunState } from "@/session/run-state"
@@ -92,6 +93,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const database = yield* Database.Service
     const revertSvc = yield* SessionRevert.Service
     const compactSvc = yield* SessionCompaction.Service
+    const coreV2Session = yield* SessionV2.Service
     const runState = yield* SessionRunState.Service
     const agentSvc = yield* Agent.Service
     const permissionSvc = yield* Permission.Service
@@ -402,8 +404,29 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof SummarizePayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
-      // LEGACY-EXECUTION-ZERO: refuse BEFORE compaction/marker writes under the profile.
-      yield* guardLegacyExecution(flags, { sessionID: ctx.params.sessionID }).pipe(Effect.mapError(mapLegacyZero))
+      // W0-1 — under the V2-only profile manual compaction routes through SessionV2.compact, which
+      // delegates to the host CurrentManualCompaction seam (the same SessionCompaction.create state
+      // machine below) after awaiting an idle session. Legacy profiles keep the direct path.
+      if (flags.coreV2Only) {
+        const currentSession = yield* requireSession(ctx.params.sessionID)
+        yield* coreV2Session
+          .compact({ sessionID: SessionV2.ID.make(ctx.params.sessionID) })
+          .pipe(
+            Effect.mapError(
+              (error) =>
+                new ServiceUnavailableError({
+                  service: "session.compact",
+                  message:
+                    "reason" in error && typeof error.reason === "string"
+                      ? error.reason
+                      : error instanceof Error
+                        ? error.message
+                        : String(error),
+                }),
+            ),
+          )
+        return true
+      }
       yield* revertSvc.cleanup(yield* requireSession(ctx.params.sessionID))
       const messages = yield* SessionError.mapStorageNotFound(session.messages({ sessionID: ctx.params.sessionID }))
       const defaultAgent = yield* agentSvc.defaultAgent()
@@ -769,7 +792,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof ContextAttemptResolvePayload.Type
     }) {
       const current = yield* requireSession(ctx.params.sessionID)
-      yield* guardLegacyExecution(flags, { sessionID: ctx.params.sessionID }).pipe(Effect.mapError(mapLegacyZero))
+      // W0-4 — resolveAttempt reads/writes V2 attempt/selection/recovery tables only (the V2
+      // recovery surface), never legacy rows; the firewall does not apply.
       const resolved = yield* contextDiagnosticsSvc
         .resolveAttempt({
           session: current,
@@ -819,7 +843,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof ProviderResolutionPayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
-      yield* guardLegacyExecution(flags, { sessionID: ctx.params.sessionID }).pipe(Effect.mapError(mapLegacyZero))
+      // W0-4 — provider recovery resolution is a V2 recovery-surface operation (no legacy rows).
       const actor = yield* getWorkspaceContext()
       return yield* providerResolutionSvc
         .resolve({ ...ctx.payload, sessionID: ctx.params.sessionID, actorID: actor.userID })
@@ -844,7 +868,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof ContinuationResolutionPayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
-      yield* guardLegacyExecution(flags, { sessionID: ctx.params.sessionID }).pipe(Effect.mapError(mapLegacyZero))
+      // W0-4 — continuation resolution (compact state machine) is a V2 recovery-surface op.
       const actor = yield* getWorkspaceContext()
       const result = yield* compactSvc
         .resolveContinuation({ ...ctx.payload, sessionID: ctx.params.sessionID, actorID: actor.userID })

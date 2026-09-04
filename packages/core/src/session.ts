@@ -1,7 +1,7 @@
 export * as SessionV2 from "./session"
 export * from "./session/schema"
 
-import { Cause, DateTime, Effect, Layer, Schema, Context, Stream } from "effect"
+import { Cause, DateTime, Effect, Exit, Layer, Schema, Context, Stream } from "effect"
 import { and, asc, desc, eq, gt, inArray, like, lt, or, type SQL } from "drizzle-orm"
 import { ProjectV2 } from "./project"
 import { WorkspaceV2 } from "./workspace"
@@ -90,6 +90,26 @@ type LegacyMessageWithParts = {
 }
 
 export const NotFoundError = SessionNotFound.Error
+
+// W0-1 — host seam for MANUAL compaction under the V2 surface. The deepagent-code composition
+// provides the implementation (summary model resolution + the legacy continuation/soft-landing
+// semantics); core keeps only the admission contract (session exists, idle, then delegate).
+// W0-2 — host seam for the projection-layer manual shell (spawn + V1 wire mirror; see the
+// shell entry above for the classification rationale).
+export type ShellExchange = {
+  readonly sessionID: SessionSchema.ID
+  readonly command: string
+  readonly agent?: AgentV2.ID
+  readonly model?: ModelV2.Ref
+}
+export const CurrentManualShell = Context.Reference<
+  ((input: ShellExchange) => Effect.Effect<void, unknown>) | undefined
+>("@deepagent-code/v2/SessionV2/CurrentManualShell", { defaultValue: () => undefined })
+
+export const CurrentManualCompaction = Context.Reference<
+  ((sessionID: SessionSchema.ID) => Effect.Effect<void, unknown>) | undefined
+>("@deepagent-code/v2/SessionV2/CurrentManualCompaction", { defaultValue: () => undefined })
+
 export type NotFoundError = SessionNotFound.Error
 
 /**
@@ -818,11 +838,26 @@ export const layer = Layer.effect(
       // runner has no standalone "run this command now" seam. Typed refusal with the concrete reason
       // rather than a silent no-op.
       shell: Effect.fn("V2Session.shell")(function* (input) {
+        // W0-2 — manual shell is a projection-layer surface: the host implementation spawns the
+        // process and mirrors the exchange as V1 wire rows (no legacy durable writes, no provider
+        // call). Wired hosts inject CurrentManualShell; an unwired composition keeps the typed
+        // refusal with the concrete reason.
         yield* result.get(input.sessionID)
-        return yield* new OperationUnavailableError({
-          operation: "shell",
-          reason: "manual shell execution is not wired: the V2 runner executes shell commands only as model tool calls",
-        })
+        const manual = yield* CurrentManualShell
+        if (!manual)
+          return yield* new OperationUnavailableError({
+            operation: "shell",
+            reason:
+              "manual shell execution is not wired in this composition (provide CurrentManualShell); the V2 runner executes shell only as model tool calls",
+          })
+        const exit = yield* manual(input).pipe(Effect.exit)
+        if (Exit.isFailure(exit)) {
+          const failure = Cause.squash(exit.cause)
+          return yield* new OperationUnavailableError({
+            operation: "shell",
+            reason: failure instanceof Error ? failure.message : String(failure),
+          })
+        }
       }),
       // W1.2 — manual skill invocation is NOT wired as a core service: SkillGuidance is per-turn
       // advisory composition (loaded into the system context at turn boundaries), with no standalone
@@ -856,18 +891,44 @@ export const layer = Layer.effect(
           model: input.model,
         })
       }),
-      // §16.3 order 4 package E: overflow-triggered compaction and its continuation loop run
-      // natively in the V2 runner, but MANUAL compaction still needs the legacy compaction state
-      // machine (continuation state, soft-landing, remote artifacts), which is not ported to the
-      // core runner yet. W1.2 keeps the typed refusal — fail-closed for callers, honest API
-      // surface — but now REPORTING the concrete reason instead of a bare operation code.
+      // §16.3 order 4 package E + W0-1: overflow-triggered compaction and its continuation loop
+      // run natively in the V2 runner. MANUAL compaction is host-injected through the
+      // CurrentManualCompaction seam (the deepagent-code composition owns the summary model
+      // resolution and the legacy continuation/soft-landing semantics); an unwired composition
+      // keeps the typed refusal — fail-closed for callers, honest API surface, concrete reason.
       compact: Effect.fn("V2Session.compact")(function* (input) {
         yield* result.get(input.sessionID)
-        return yield* new OperationUnavailableError({
-          operation: "compact",
-          reason:
-            "manual compaction is not wired: the legacy compaction state machine (continuation state, soft-landing, remote artifacts) is not ported to the V2 runner; overflow compaction runs automatically",
-        })
+        const manual = yield* CurrentManualCompaction
+        if (!manual)
+          return yield* new OperationUnavailableError({
+            operation: "compact",
+            reason:
+              "manual compaction is not wired in this composition (provide CurrentManualCompaction); overflow compaction runs automatically",
+          })
+        const idle: Effect.Effect<void, OperationUnavailableError> = execution
+          .awaitIdle(input.sessionID)
+          .pipe(
+            Effect.mapError(
+              (error) =>
+                new OperationUnavailableError({
+                  operation: "compact",
+                  reason: `session is not idle: ${String(error)}`,
+                }),
+            ),
+          ) as Effect.Effect<void, OperationUnavailableError>
+        yield* idle
+        // The host seam's error channel is `unknown` by design (compositions vary); this boundary
+        // is the single place it joins the typed Interface channel — mirror the shape the typed
+        // refusal used (a plain Error carrying the host's reason).
+        const exit = yield* manual(input.sessionID).pipe(Effect.exit)
+        if (Exit.isFailure(exit)) {
+          const cause = exit.cause
+          const failure = Cause.squash(cause)
+          return yield* new OperationUnavailableError({
+            operation: "compact",
+            reason: failure instanceof Error ? failure.message : String(failure),
+          })
+        }
       }),
       // W1.2 — wait is REAL: it maps to SessionExecution.awaitIdle — the process-local ownership
       // chain resolves once the Session is idle (a no-op when nothing is running). With the no-op

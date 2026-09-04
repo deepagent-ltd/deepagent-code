@@ -748,13 +748,11 @@ describe("session HttpApi", () => {
         const headers = { "x-deepagent-code-directory": test.directory }
         const session = yield* createSession({ title: "v2 unavailable" })
 
+        // W0-1 — the host graph injects the V2ManualCompaction seam, so the /compact endpoint now
+        // genuinely runs the compaction state machine and returns NoContent rather than the old
+        // typed-unavailable 503. Keep this endpoint's response contract pinned.
         const compact = yield* request(`/api/session/${session.id}/compact`, { method: "POST", headers })
-        expect(compact.status).toBe(503)
-        expect(yield* responseJson(compact)).toEqual({
-          _tag: "ServiceUnavailableError",
-          message: "Session compact is not available yet",
-          service: "session.compact",
-        })
+        expect(compact.status).toBe(204)
 
         // W1: session.wait is now REAL (SessionExecution.awaitIdle) — an idle session resolves
         // immediately with NoContent instead of the pre-W1 typed-unavailable 503.

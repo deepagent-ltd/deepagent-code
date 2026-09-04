@@ -16,6 +16,7 @@ import { Plugin } from "@/plugin"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import type { TaskPromptOps } from "@/tool/task"
 import { type Tool as AITool, tool, jsonSchema, type ToolExecutionOptions, asSchema } from "ai"
+import { ToolFailure } from "@deepagent-code/llm"
 import type { JSONSchema7 } from "@ai-sdk/provider"
 import { Cause, Effect, Exit, Result, Schema } from "effect"
 import { MessageV2 } from "./message-v2"
@@ -524,7 +525,14 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
                   }
                   const gate = evaluatePlanGate(ctx.sessionID, isMutating)
                   if (gate.kind === "block") {
-                    return { title: "Plan update required", output: gate.output, metadata: {} }
+                    // F-20 — a gate block is a typed tool FAILURE (mirrors the V2 settle gate's
+                    // error-result semantics), not a fake success whose output happens to carry the
+                    // correction template: the UI part must render status "error" with the template
+                    // as the error text, and effect-evidence must classify it as tool_error.
+                    return yield* new ToolFailure({
+                      message: gate.output,
+                      metadata: { planGateBlocked: true, title: "Plan update required" },
+                    })
                   }
                   const result = yield* item.execute(args, ctx).pipe(
                     // I33-2: any tool execution failure marks the plan stale (tool_failed reason).

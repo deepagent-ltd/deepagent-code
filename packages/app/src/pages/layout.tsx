@@ -1002,6 +1002,33 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
     }
   }
 
+  // W3-3 — parity with the TUI /move command: relocate the session to another project directory
+  // through the same experimental.controlPlane.moveSession admission (durable transfer). The
+  // destination is entered directly (the desktop native directory picker is available via the
+  // preload bridge; the web app uses the text prompt).
+  async function moveSessionDialog() {
+    const session = currentSessions().find((s) => s.id === params.id)
+    if (!session) return
+    const destination = window.prompt(language.t("command.session.move.prompt"), session.directory)
+    if (!destination || destination === session.directory) return
+    try {
+      await serverSDK.client.experimental.controlPlane.moveSession(
+        {
+          sessionID: session.id,
+          destination: { directory: destination },
+        },
+        { throwOnError: true },
+      )
+      showToast({ variant: "success", title: language.t("command.session.move.done") })
+    } catch (error) {
+      showToast({
+        variant: "error",
+        title: language.t("common.requestFailed"),
+        description: error instanceof Error ? error.message : undefined,
+      })
+    }
+  }
+
   async function archiveSession(session: Session) {
     const [store, setStore] = serverSync.child(session.directory)
     const sessions = store.session ?? []
@@ -1137,6 +1164,13 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
           const session = currentSessions().find((s) => s.id === params.id)
           if (session) void archiveSession(session)
         },
+      },
+      {
+        id: "session.move",
+        title: language.t("command.session.move"),
+        category: language.t("command.category.session"),
+        disabled: !params.dir || !params.id,
+        onSelect: () => void moveSessionDialog(),
       },
       {
         id: "session.archived",
