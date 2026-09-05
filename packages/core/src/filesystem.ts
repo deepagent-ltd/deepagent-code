@@ -283,6 +283,11 @@ export const layer = Layer.effect(
       const absolute = path.resolve(selected.directory, input ?? ".")
       if (!FSUtil.contains(selected.directory, absolute))
         return yield* Effect.die(new Error("Path escapes the location"))
+      // The entry may vanish between a listing and the read (a bash step deleting scratch
+      // files mid-turn is the common ablation shape). Surface that as the same tool-argument
+      // die the path-validation cases use instead of letting the ENOENT surface kill the run.
+      const exists = yield* fs.exists(absolute).pipe(Effect.orElseSucceed(() => false))
+      if (!exists) return yield* Effect.die(new Error("Path does not exist"))
       const real = yield* fs.realPath(absolute).pipe(Effect.orDie)
       if (!FSUtil.contains(selected.root, real)) return yield* Effect.die(new Error("Path escapes the location"))
       return { absolute, real, ...selected }

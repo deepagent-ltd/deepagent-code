@@ -98,6 +98,16 @@ export function legacyAssistant(input: {
   }
 }
 
+function toolDisplayOutput(state: SessionMessage.ToolStateCompleted): string {
+  if (state.content.length === 1 && state.content[0]?.type === "text") return state.content[0].text
+  if (state.content.length > 0)
+    return state.content
+      .map((item) => (item.type === "text" ? item.text : `[${item.type}: ${item.name}]`))
+      .join("\n")
+  const json = JSON.stringify(state.structured)
+  return json === "{}" || json === undefined ? "" : json
+}
+
 function legacyAssistantToolState(
   part: SessionMessage.AssistantTool,
   identity: { readonly sessionID: SessionSchema.ID; readonly messageID: SessionV1.MessageID },
@@ -112,11 +122,15 @@ function legacyAssistantToolState(
   if (part.state.status === "completed") {
     // JSON.stringify(undefined) is undefined (not a string) — the V1 schema requires a string
     // output, so an absent result must land as "" rather than dying the whole projection.
+    // Locally-executed tools never persist `state.result` (the event only carries it for
+    // provider-executed calls); derive the display output from the persisted content/structured
+    // the model itself consumed, so the V1 wire shows what the tool actually returned instead
+    // of an empty string.
     const result =
       typeof part.state.result === "string"
         ? part.state.result
         : part.state.result === undefined
-          ? ""
+          ? toolDisplayOutput(part.state)
           : JSON.stringify(part.state.result)
     return {
       status: "completed",

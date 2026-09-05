@@ -135,6 +135,11 @@ const MAX_STEPS = 25
 // is safe and bounded. Mirrors the stock executor budget for non-durable streams (2 retries).
 const MAX_TRANSPORT_RETRIES = 2
 const TRANSPORT_RETRY_BASE_DELAY_MS = 500
+// Die-defect messages from the filesystem layer that are path-argument validation, not defects:
+// the model passed a path/reference the location cannot contain. These settle as tool error
+// results (V1 parity) instead of killing the drain.
+const TOOL_PATH_DEFECT =
+  /^(Absolute path escapes the location|Path escapes the location|Path escapes managed tool output|Absolute paths cannot use a project reference|Absolute path is not managed tool output|Path is not a file or directory|Path is not a file|Path is not a directory|Unknown project reference|Path does not exist|Cannot read binary file: |Media exceeds \d+ byte ingestion limit: )/
 
 const MAX_STEPS_PROMPT = `CRITICAL - MAXIMUM STEPS REACHED
 
@@ -678,10 +683,25 @@ export const layer = Layer.effect(
                 : settlement
             }
           }
+          // Tool bodies surface path-argument validation as die defects (path escapes the
+          // location, not-a-file, unknown reference...); V1 always surfaced those to the model as
+          // tool error results. Convert exactly those — by message prefix, so control-flow
+          // defects (question rejection, turn transitions) keep their interrupt semantics — and
+          // record the failure evidence like the typed-error path.
           return yield* baseSettleTool(input).pipe(
             Effect.tap((settlement) => recordToolEffect(input, "settled", settlement.result, undefined)),
             Effect.tapError(() =>
               recordToolEffect(input, "failed", { type: "error", value: "settlement_failed" }, "tool_settlement_failed"),
+            ),
+            Effect.catchDefect((defect) =>
+              defect instanceof Error && TOOL_PATH_DEFECT.test(defect.message)
+                ? recordToolEffect(
+                    input,
+                    "failed",
+                    { type: "error", value: defect.message },
+                    "tool_settlement_failed",
+                  ).pipe(Effect.as({ result: { type: "error" as const, value: defect.message } }))
+                : Effect.die(defect),
             ),
           )
         })

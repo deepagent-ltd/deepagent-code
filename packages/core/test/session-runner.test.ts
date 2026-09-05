@@ -70,6 +70,7 @@ import { ToolOutputStore } from "@deepagent-code/core/tool-output-store"
 import { ApplicationTools } from "@deepagent-code/core/tool/application-tools"
 import { AgentV2 } from "@deepagent-code/core/agent"
 import { Config } from "@deepagent-code/core/config"
+import { ConfigAgent } from "@deepagent-code/core/config/agent"
 import { ConfigCompaction } from "@deepagent-code/core/config/compaction"
 import { Tool } from "@deepagent-code/core/tool/tool"
 import { recoverReadDefect } from "@deepagent-code/core/tool/read-failure"
@@ -285,23 +286,30 @@ const skillGuidance = Layer.mock(SkillGuidance.Service, {
         : SystemContext.empty,
     ),
 })
-const config = Layer.succeed(
-  Config.Service,
-  Config.Service.of({
-    entries: () =>
-      Effect.succeed([
-        new Config.Document({
-          type: "document",
-          info: new Config.Info({
-            compaction: new ConfigCompaction.Info({
-              buffer: 3_000,
-              keep: new ConfigCompaction.Keep({ tokens: 1_000 }),
+const config = Layer.suspend(
+  () =>
+    Layer.succeed(
+      Config.Service,
+      Config.Service.of({
+        entries: () =>
+          Effect.succeed([
+            new Config.Document({
+              type: "document",
+              info: new Config.Info({
+                compaction: new ConfigCompaction.Info({
+                  buffer: 3_000,
+                  keep: new ConfigCompaction.Keep({ tokens: 1_000 }),
+                }),
+                ...(configAgents === undefined ? {} : { agents: configAgents }),
+              }),
             }),
-          }),
-        }),
-      ]),
-  }),
+          ]),
+      }),
+    ),
 )
+// Config-level agent overrides for the drain-ceiling fallback tests (the production path: the
+// AgentV2 registry is empty in the app runtime, so the budget arrives through config discovery).
+let configAgents: Record<string, ConfigAgent.Info> | undefined
 const testOwnerAuthorization = Layer.succeed(
   V2ProviderTurn.OwnerAuthorization,
   V2ProviderTurn.OwnerAuthorization.of({ authorize: () => Effect.succeed(true) }),
@@ -539,6 +547,7 @@ const setup = Effect.gen(function* () {
   modelResolveHook = Effect.void
   currentModel = model
   skillBaselines.clear()
+  configAgents = undefined
   responses = undefined
   streamFailure = undefined
   responseStream = undefined
@@ -4367,6 +4376,49 @@ describe("SessionRunnerLLM", () => {
       expect(context[0]).toMatchObject({ type: "user", text: "Serial tool loop past the default ceiling" })
       expect(context.filter((m) => m.type === "assistant" && m.content?.[0]?.type === "tool")).toHaveLength(29)
       expect(context.at(-1)).toMatchObject({ type: "assistant", finish: "stop" })
+    }),
+  )
+
+  it.effect("runs past the default step ceiling via the config-level agent budget alone", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      // The production shape: NO AgentV2 registry entry exists (the app runtime registers none),
+      // the budget arrives through config discovery (`.deepagent-code/config.json`).
+      configAgents = { auto: new ConfigAgent.Info({ steps: 30 }) }
+      yield* session.prompt({
+        sessionID,
+        prompt: new Prompt({ text: "Serial tool loop on the config budget" }),
+        resume: false,
+      })
+
+      requests.length = 0
+      const toolTurn = (i: number) => [
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.toolCall({ id: `call-config-${i}`, name: "echo", input: { text: `turn${i}` } }),
+        LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+        LLMEvent.finish({ reason: "tool-calls" }),
+      ]
+      responseStreams = Array.from({ length: 29 }, (_, i) =>
+        Stream.unwrap(
+          Effect.gen(function* () {
+            const seal = yield* V2ProviderTurn.CurrentRequestSeal
+            if (!seal) return yield* Effect.die(`Seal missing for config serial turn ${i}`)
+            yield* seal
+              .seal({
+                wireHash: Hash.sha256(`config-serial-turn-${i}-wire`),
+                bodyHash: Hash.sha256(`config-serial-turn-${i}-body`),
+                bodyLength: 12,
+                contentType: "application/json",
+              })
+              .pipe(Effect.orDie)
+            return Stream.fromIterable(toolTurn(i))
+          }),
+        ),
+      )
+      responses = [[LLMEvent.stepStart({ index: 0 }), LLMEvent.stepFinish({ index: 0, reason: "stop" }), LLMEvent.finish({ reason: "stop" })]]
+      yield* session.resume(sessionID)
+      expect(requests).toHaveLength(30)
     }),
   )
 
