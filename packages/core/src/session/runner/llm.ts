@@ -11,7 +11,7 @@ import {
 } from "@deepagent-code/llm"
 import { AgentGateway } from "../../agent-gateway"
 import { desc, eq } from "drizzle-orm"
-import { Cause, Context, DateTime, Effect, Exit, FiberSet, Layer, Option, Schema, Semaphore, Stream } from "effect"
+import { Cause, Context, DateTime, Duration, Effect, Exit, FiberSet, Layer, Option, Schema, Semaphore, Stream } from "effect"
 import { AgentV2 } from "../../agent"
 import { Config } from "../../config"
 import { Database } from "../../database/database"
@@ -129,6 +129,13 @@ import {
  */
 
 const MAX_STEPS = 25
+// A transient transport drop (connection reset while awaiting a long provider turn) quarantines the
+// receipt indeterminate — the honest durable state — but the live process still owns the session and
+// nothing has been published for the turn, so retrying the physical dispatch through a fresh attempt
+// is safe and bounded. Mirrors the stock executor budget for non-durable streams (2 retries).
+const MAX_TRANSPORT_RETRIES = 2
+const TRANSPORT_RETRY_BASE_DELAY_MS = 500
+
 const MAX_STEPS_PROMPT = `CRITICAL - MAXIMUM STEPS REACHED
 
 The maximum number of steps allowed for this task has been reached. Tools are disabled until next user input. Respond with text only.
@@ -236,7 +243,10 @@ export const layer = Layer.effect(
       | { readonly _tag: "RebuildPreparedTurn"; readonly promotion?: SessionInput.Delivery; readonly step?: number }
       // Overflow compaction completed; rebuild once through the path without overflow recovery.
       | { readonly _tag: "ContinueAfterOverflowCompaction"; readonly step: number }
-
+      // Transport dropped mid-turn before any output was published; the receipt quarantined
+      // indeterminate and a fresh attempt (new seq, §2.2 explicit forced continuation) replays the
+      // dispatch within a bounded budget.
+      | { readonly _tag: "RetryTurnAfterTransportFailure"; readonly step: number; readonly retry: number }
     class TurnTransitionError extends Error {
       constructor(readonly transition: TurnTransition) {
         super()
@@ -250,6 +260,8 @@ export const layer = Layer.effect(
         _tag: "ContinueAfterOverflowCompaction",
         step,
       })
+    const retryTurnAfterTransportFailure = (step: number, retry: number) =>
+      new TurnTransitionError({ _tag: "RetryTurnAfterTransportFailure", step, retry })
 
     const retryAgentMismatch = (promotion: SessionInput.Delivery | undefined, step?: number) =>
       Effect.catchDefect((defect) =>
@@ -299,6 +311,7 @@ export const layer = Layer.effect(
       promotion: SessionInput.Delivery | undefined,
       step: number,
       recoverOverflow?: typeof compaction.compactAfterOverflow,
+      transportRetry = 0,
     ) {
       const parityCampaign = (yield* V2ProviderTurn.CurrentCampaign) ?? V2ProviderTurn.campaignFromEnv()
       const ownerCampaign = (yield* V2ProviderTurn.CurrentOwnerCampaign) ?? V2ProviderTurn.ownerCampaignFromEnv()
@@ -833,8 +846,19 @@ export const layer = Layer.effect(
             ))
           )
             return yield* Effect.die(continueAfterOverflowCompaction(currentStep))
-          if (overflowFailure) yield* publish(overflowFailure)
           const llmFailure = failure instanceof LLMError ? failure : undefined
+          // Transient transport drop with nothing user-visible yet: the onExit quarantine has
+          // already settled the receipt indeterminate (the honest unknown-outcome state), so a
+          // bounded same-process retry opens a fresh attempt (new seq) instead of killing the
+          // drain. Once anything was published for the turn a re-dispatch could duplicate visible
+          // output, so those failures keep the terminal path.
+          if (
+            llmFailure?.reason._tag === "Transport" &&
+            !publisher.hasAssistantStarted() &&
+            transportRetry < MAX_TRANSPORT_RETRIES
+          )
+            return yield* Effect.die(retryTurnAfterTransportFailure(currentStep, transportRetry))
+          if (overflowFailure) yield* publish(overflowFailure)
           if (llmFailure && !publisher.hasProviderError()) {
             yield* withPublication(publisher.failUnsettledTools("Provider did not return a tool result", true))
             yield* withPublication(
@@ -885,6 +909,7 @@ export const layer = Layer.effect(
       sessionID: SessionSchema.ID,
       promotion: SessionInput.Delivery | undefined,
       step: number,
+      transportRetry?: number,
     ) => Effect.Effect<
       { readonly needsContinuation: boolean; readonly step: number; readonly activityId?: string },
       RunError
@@ -897,6 +922,17 @@ export const layer = Layer.effect(
             if (!(defect instanceof TurnTransitionError)) return yield* Effect.die(defect)
             if (defect.transition._tag === "ContinueAfterOverflowCompaction")
               return yield* Effect.die("Post-compaction provider attempt cannot recover another overflow")
+            if (defect.transition._tag === "RetryTurnAfterTransportFailure") {
+              yield* Effect.sleep(Duration.millis(TRANSPORT_RETRY_BASE_DELAY_MS * 4 ** defect.transition.retry))
+              // Post-compaction turns recovered an overflow; a transport drop still retries through
+              // the plain runTurn path (fresh attempt, budget-shared) instead of leaking the defect.
+              return yield* runTurn(
+                sessionID,
+                promotion,
+                defect.transition.step,
+                defect.transition.retry + 1,
+              )
+            }
             yield* Effect.yieldNow
             return yield* runAfterOverflowCompaction(
               sessionID,
@@ -908,14 +944,33 @@ export const layer = Layer.effect(
       )
     })
 
-    const runTurn: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, step) {
-      return yield* runTurnAttempt(sessionID, promotion, step, compaction.compactAfterOverflow).pipe(
+    const runTurn: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, step, transportRetry = 0) {
+      return yield* runTurnAttempt(
+        sessionID,
+        promotion,
+        step,
+        compaction.compactAfterOverflow,
+        transportRetry,
+      ).pipe(
         Effect.catchDefect(
           Effect.fnUntraced(function* (defect) {
             if (!(defect instanceof TurnTransitionError)) return yield* Effect.die(defect)
             yield* Effect.yieldNow
             if (defect.transition._tag === "ContinueAfterOverflowCompaction")
               return yield* runAfterOverflowCompaction(sessionID, undefined, defect.transition.step)
+            if (defect.transition._tag === "RetryTurnAfterTransportFailure") {
+              yield* Effect.sleep(
+                Duration.millis(TRANSPORT_RETRY_BASE_DELAY_MS * 4 ** defect.transition.retry),
+              )
+              // Recurse through runTurn itself so the re-dispatch keeps its own transition
+              // handling (a further drop while the budget lasts must not leak the defect).
+              return yield* runTurn(
+                sessionID,
+                promotion,
+                defect.transition.step,
+                defect.transition.retry + 1,
+              )
+            }
             return yield* runTurn(sessionID, defect.transition.promotion, defect.transition.step ?? step)
           }),
         ),
@@ -952,17 +1007,37 @@ export const layer = Layer.effect(
         let needsContinuation = true
         let step = 1
         let activityId: string | undefined
-        for (let attempt = 0; attempt < MAX_STEPS; attempt++) {
+        // The drain ceiling honors the session agent's configured step budget; the constant is
+        // only the fallback. A configured budget that the loop ignored killed long serial-agent
+        // runs (one tool per turn) at the default 25 regardless of `agent.steps`. The AgentV2
+        // registry is populated only by embedded compositions (the app runtime registers no
+        // agents there), so the config layer is the production source of the budget.
+        const runSession = yield* store.get(input.sessionID)
+        const runAgent = runSession === undefined ? undefined : yield* agents.select(runSession.agent)
+        const configAgents = Config.latest(yield* config.entries(), "agents")
+        const configSteps = configAgents?.[runSession?.agent ?? "auto"]?.steps
+        const stepCeiling = runAgent?.info?.steps ?? configSteps ?? MAX_STEPS
+        let attempts = 0
+        while (attempts < stepCeiling) {
           const result = yield* runTurn(input.sessionID, promotion, step)
           needsContinuation = result.needsContinuation
+          // A steer promotion restarts the chain's step numbering; the budget restarts with it
+          // (the pre-configured-era loop's MAX_STEPS headroom made this implicit; an explicit
+          // budget must reset on promotion, not just on new activities).
+          if (result.step < step) attempts = 0
           step = result.step + 1
           promotion = "steer"
           activityId = result.activityId ?? activityId
-          if (!needsContinuation) needsContinuation = yield* SessionInput.hasPending(db, input.sessionID, "steer")
+          attempts += 1
+          if (needsContinuation) continue
+          if (yield* SessionInput.hasPending(db, input.sessionID, "steer")) {
+            needsContinuation = true
+            attempts = 0
+          }
           if (!needsContinuation) break
         }
         if (needsContinuation)
-          return yield* new StepLimitExceededError({ sessionID: input.sessionID, limit: MAX_STEPS })
+          return yield* new StepLimitExceededError({ sessionID: input.sessionID, limit: stepCeiling })
         // One activity's turn chain is complete: settle it so a queued input may open the next
         // activity. Settle is idempotent and best-effort; recovery owns activities a drain never
         // settles. Interrupted turns settle their own activity through the per-turn scope
