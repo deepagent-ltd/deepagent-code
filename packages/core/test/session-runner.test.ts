@@ -9,6 +9,7 @@ import {
   Model,
   TransportReason,
   InvalidRequestReason,
+  NoRouteReason,
   type LLMClientShape,
   type LLMRequest,
 } from "@deepagent-code/llm"
@@ -86,7 +87,8 @@ import { SkillGuidance } from "@deepagent-code/core/skill/guidance"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { Location } from "@deepagent-code/core/location"
 import { ProviderV2 } from "@deepagent-code/core/provider"
-import { Cause, Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect"
+import { Cause, Context, DateTime, Deferred, Duration, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect"
+import * as TestClock from "effect/testing/TestClock"
 import { systemError } from "effect/PlatformError"
 import { asc, desc, eq, sql } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
@@ -114,6 +116,9 @@ const requests: LLMRequest[] = []
 let response: LLMEvent[] = []
 let responses: LLMEvent[][] | undefined
 let responseStream: Stream.Stream<LLMEvent, LLMError> | undefined
+// One-shot sealed streams served in order (call 1, call 2, ...). Elements may be a failure
+// stream (transient transport drop) followed by a sealed success — the retry shape.
+let responseStreams: Array<Stream.Stream<LLMEvent, LLMError>> | undefined
 let streamGate: Deferred.Deferred<void> | undefined
 let streamStarted: Deferred.Deferred<void> | undefined
 let streamFailure: LLMError | undefined
@@ -132,6 +137,10 @@ const client = Layer.succeed(
         const stream = responseStream
         responseStream = undefined
         return stream
+      }
+      if (responseStreams !== undefined) {
+        const stream = responseStreams.shift()
+        if (stream !== undefined) return stream
       }
       const events = streamFailure
         ? Stream.fail(streamFailure)
@@ -533,6 +542,7 @@ const setup = Effect.gen(function* () {
   responses = undefined
   streamFailure = undefined
   responseStream = undefined
+  responseStreams = undefined
   streamGate = undefined
   streamStarted = undefined
   toolExecutionGate = undefined
@@ -576,6 +586,20 @@ const providerUnavailable = () =>
     module: "test",
     method: "stream",
     reason: new TransportReason({ message: "Provider unavailable" }),
+  })
+
+// Non-transport provider failure for the terminal-path tests: the runner retries transient
+// Transport failures (nothing published) up to its budget, so those tests inject a NoRoute
+// refusal instead — same fail-fast shape, never retried.
+const providerRefused = () =>
+  new LLMError({
+    module: "test",
+    method: "stream",
+    reason: new NoRouteReason({
+      route: "openai-chat",
+      provider: "fake" as never,
+      model: "fake-model" as never,
+    }),
   })
 
 const setupOverflowRecovery = Effect.gen(function* () {
@@ -3271,7 +3295,7 @@ describe("SessionRunnerLLM", () => {
       requests.length = 0
       responses = undefined
       response = []
-      streamFailure = providerUnavailable()
+      streamFailure = providerRefused()
       streamGate = yield* Deferred.make<void>()
       streamStarted = yield* Deferred.make<void>()
 
@@ -3298,7 +3322,7 @@ describe("SessionRunnerLLM", () => {
       const runner = yield* SessionRunner.Service
       const { db } = yield* Database.Service
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Stream fails after dispatch" }), resume: false })
-      const failure = providerUnavailable()
+      const failure = providerRefused()
       responseStream = Stream.unwrap(
         Effect.gen(function* () {
           const seal = yield* V2ProviderTurn.CurrentRequestSeal
@@ -3357,6 +3381,62 @@ describe("SessionRunnerLLM", () => {
       })
       expect(after).toHaveLength(2)
       expect(after[1]).toMatchObject({ state: "settled" })
+    }),
+  )
+
+  it.effect("retries a transient transport drop on a fresh attempt within the retry budget", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const { db } = yield* Database.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Survive transport drop" }), resume: false })
+
+      // First physical dispatch seals, then dies as a raw transport failure (nothing published —
+      // mid-stream drop, the production shape); the runner quarantines the receipt indeterminate
+      // and re-dispatches on a fresh attempt, which seals and succeeds.
+      requests.length = 0
+      const recovered = fragmentFixture("text", "text-after-drop", ["Recovered after drop"])
+      const sealThen = (wire: string, then: Stream.Stream<LLMEvent, LLMError>) =>
+        Stream.unwrap(
+          Effect.gen(function* () {
+            const seal = yield* V2ProviderTurn.CurrentRequestSeal
+            if (!seal) return yield* Effect.die("Transport-drop request seal is missing")
+            yield* seal
+              .seal({
+                wireHash: Hash.sha256(wire),
+                bodyHash: Hash.sha256(`${wire}-body`),
+                bodyLength: 4,
+                contentType: "application/json",
+              })
+              .pipe(Effect.orDie)
+            return then
+          }),
+        )
+      responseStreams = [
+        sealThen("transport-drop-fail", Stream.fail(providerUnavailable())),
+        sealThen("transport-drop-retry", Stream.fromIterable(recovered.completeEvents)),
+      ]
+      const resume = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      // The retry sleeps its backoff on the TestClock; advance past it so the second attempt runs.
+      yield* TestClock.adjust(Duration.seconds(1))
+      yield* Fiber.join(resume)
+
+      // The failed attempt quarantined indeterminate; the retry opened a fresh attempt that settled.
+      const receipts = yield* db
+        .select({ state: V2ProviderTurnReceiptTable.state, errorCode: V2ProviderTurnReceiptTable.error_code })
+        .from(V2ProviderTurnReceiptTable)
+        .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID))
+        .orderBy(asc(V2ProviderTurnReceiptTable.request_ordinal))
+        .all()
+        .pipe(Effect.orDie)
+      expect(receipts).toEqual([
+        { state: "indeterminate_after_crash", errorCode: expect.stringMatching(/^provider_stream_failed:/) },
+        { state: "settled", errorCode: null },
+      ])
+      expect(yield* session.context(sessionID)).toMatchObject([
+        { type: "user", text: "Survive transport drop" },
+        recovered.expectedAssistant,
+      ])
     }),
   )
 
@@ -3820,7 +3900,7 @@ describe("SessionRunnerLLM", () => {
       requests.length = 0
       responses = undefined
       response = []
-      streamFailure = providerUnavailable()
+      streamFailure = providerRefused()
       streamGate = yield* Deferred.make<void>()
       streamStarted = yield* Deferred.make<void>()
 
@@ -4237,6 +4317,59 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("runs past the default step ceiling when the agent budget is configured higher", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const agents = yield* AgentV2.Service
+      // 30 > the MAX_STEPS fallback (25): before the drain honored the configured budget this
+      // run died with StepLimitExceeded at turn 25; now the budget is the ceiling.
+      yield* agents.update((editor) =>
+        editor.update(AgentV2.ID.make("auto"), (agent) => {
+          agent.steps = 30
+        }),
+      )
+      yield* session.prompt({
+        sessionID,
+        prompt: new Prompt({ text: "Serial tool loop past the default ceiling" }),
+        resume: false,
+      })
+
+      requests.length = 0
+      const toolTurn = (i: number) => [
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.toolCall({ id: `call-past-${i}`, name: "echo", input: { text: `turn${i}` } }),
+        LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+        LLMEvent.finish({ reason: "tool-calls" }),
+      ]
+      responseStreams = Array.from({ length: 29 }, (_, i) =>
+        Stream.unwrap(
+          Effect.gen(function* () {
+            const seal = yield* V2ProviderTurn.CurrentRequestSeal
+            if (!seal) return yield* Effect.die(`Seal missing for serial turn ${i}`)
+            yield* seal
+              .seal({
+                wireHash: Hash.sha256(`serial-turn-${i}-wire`),
+                bodyHash: Hash.sha256(`serial-turn-${i}-body`),
+                bodyLength: 12,
+                contentType: "application/json",
+              })
+              .pipe(Effect.orDie)
+            return Stream.fromIterable(toolTurn(i))
+          }),
+        ),
+      )
+      responses = [[LLMEvent.stepStart({ index: 0 }), LLMEvent.stepFinish({ index: 0, reason: "stop" }), LLMEvent.finish({ reason: "stop" })]]
+      yield* session.resume(sessionID)
+      expect(requests).toHaveLength(30)
+      // 29 tool turns + 1 final stop turn all ran; the transcript carries every assistant row.
+      const context = yield* session.context(sessionID)
+      expect(context[0]).toMatchObject({ type: "user", text: "Serial tool loop past the default ceiling" })
+      expect(context.filter((m) => m.type === "assistant" && m.content?.[0]?.type === "tool")).toHaveLength(29)
+      expect(context.at(-1)).toMatchObject({ type: "assistant", finish: "stop" })
+    }),
+  )
+
   it.effect("resets the configured step allowance when steering input is promoted", () =>
     Effect.gen(function* () {
       yield* setup
@@ -4447,10 +4580,33 @@ describe("SessionRunnerLLM", () => {
       yield* setup
       const session = yield* SessionV2.Service
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Fail raw stream durably" }), resume: false })
+      // Sealed mid-stream transport failures (the production shape) exhaust the runner retry
+      // budget, then propagate; the terminal projection contract below observes the failure.
       const failure = providerUnavailable()
-      responseStream = Stream.fail(failure)
-
-      expect(yield* session.resume(sessionID).pipe(Effect.flip)).toBe(failure)
+      const sealThenFail = (wire: string) =>
+        Stream.unwrap(
+          Effect.gen(function* () {
+            const seal = yield* V2ProviderTurn.CurrentRequestSeal
+            if (!seal) return yield* Effect.die("Raw-failure request seal is missing")
+            yield* seal
+              .seal({
+                wireHash: Hash.sha256(wire),
+                bodyHash: Hash.sha256(`${wire}-body`),
+                bodyLength: 4,
+                contentType: "application/json",
+              })
+              .pipe(Effect.orDie)
+            return Stream.fail(failure)
+          }),
+        )
+      responseStreams = [
+        sealThenFail("raw-failure-1"),
+        sealThenFail("raw-failure-2"),
+        sealThenFail("raw-failure-3"),
+      ]
+      const resume = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      yield* TestClock.adjust(Duration.seconds(10))
+      expect(yield* Fiber.join(resume).pipe(Effect.flip)).toBe(failure)
       yield* replaySessionProjection(sessionID)
       expect(yield* session.context(sessionID)).toMatchObject([
         { type: "user", text: "Fail raw stream durably" },

@@ -155,6 +155,77 @@ it.effect("creates attempt and receipt in one recoverable boundary and binds the
   }),
 )
 
+// A provider turn that streams past the 60s selection TTL must NOT kill the session: the durable
+// selection row still matching the admitted identity (fingerprints + location epoch) revalidates
+// in place. Only real drift (fingerprint mismatch) keeps failing closed.
+it.effect("commitTurn past the selection TTL revalidates a matching selection in place", () =>
+  Effect.gen(function* () {
+    yield* seed
+    const { db } = yield* Database.Service
+    const providerTurns = yield* V2ProviderTurn.Service
+    const admittedAt = 1_000_000
+    const admission = yield* SessionRunnerCanonical.admitSelection({
+      db,
+      contexts: yield* SessionContext.Service,
+      sessionID,
+      agent: "build",
+      location: { directory: "/project" },
+      promotedInputIds: ["msg_trigger"],
+      system: { baseline: "baseline", revision: 0, baselineSeq: 1 },
+      historyEndMessageId: "msg_trigger",
+      now: admittedAt,
+    })
+    const late = admittedAt + SessionRunnerCanonical.ValidationMs * 4
+    const expired = yield* SessionRunnerCanonical.commitTurn({
+      db,
+      contexts: yield* SessionContext.Service,
+      sessionID,
+      admission,
+      receipt: {
+        sessionId: sessionID,
+        userMessageId: "msg_trigger",
+        historyPromptEpoch: 0,
+        historySourceEndMessageId: "msg_trigger",
+        requestInputHash: Hash.sha256("request-late"),
+        providerId: "provider-test",
+        modelId: "model-test",
+        protocol: "openai-chat",
+        ownerMode: "v2" as const,
+      },
+      ownerToken: providerTurns.ownerToken,
+      now: late,
+    })
+    expect(expired.attempt.state).toBe("prepared")
+    expect(expired.receipt.providerTurnSeq).toBe(expired.attempt.providerTurnSeq)
+
+    // Real drift — the durable selection row is gone / superseded — still refuses (fail closed,
+    // unchanged §4.1 semantics; the row itself is immutable so in-place fingerprint drift can't
+    // occur, but a successor rebuild removes the row's binding for this admission).
+    const refused = yield* SessionRunnerCanonical.commitTurn({
+      db,
+      contexts: yield* SessionContext.Service,
+      sessionID,
+      admission: { ...admission, selectionId: "sel_superseded_by_rebuild" },
+      receipt: {
+        sessionId: sessionID,
+        userMessageId: "msg_trigger",
+        historyPromptEpoch: 0,
+        historySourceEndMessageId: "msg_trigger",
+        requestInputHash: Hash.sha256("request-drift"),
+        providerId: "provider-test",
+        modelId: "model-test",
+        protocol: "openai-chat",
+        ownerMode: "v2" as const,
+      },
+      ownerToken: providerTurns.ownerToken,
+      now: late + 1,
+    }).pipe(Effect.flip)
+    expect(String((refused as { readonly reason?: string }).reason ?? refused)).toContain(
+      "selection_revalidation_required",
+    )
+  }),
+)
+
 // §16.3 order 4 package D — the federation selection evidence seam. Wired compositions record the
 // session's real federation evidence on the V2 selection commit; unwired keeps v2:local defaults.
 const seamSessionID = SessionSchema.ID.make("ses_canonical_seam")

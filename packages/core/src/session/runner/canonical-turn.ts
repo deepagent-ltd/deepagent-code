@@ -815,8 +815,27 @@ export const commitTurn = Effect.fn("SessionRunnerCanonical.commitTurn")(functio
             latest && latest.state === "prepared" && !quarantinedLatest
               ? latest.provider_turn_seq
               : (latest?.provider_turn_seq ?? 0) + 1
-          const validUntil = Math.min(now + ValidationMs, input.admission.nextRevalidationAt)
-          if (validUntil <= now) return yield* new AdmissionError({ reason: "selection_revalidation_required" })
+          // A single provider turn can stream for minutes (long-reasoning models); the 60s
+          // selection TTL is a freshness window for the ADMITTED identity, not a session
+          // deadline. Elapsed TTL alone must not kill the turn: design §4.1 step 7 keeps the
+          // quarantine for real drift (identity mismatch vs the durable row), while a
+          // still-matching row is revalidated in place (validUntil = now + ValidationMs).
+          const durableSelection = yield* tx
+            .select({
+              observed_location_mutation_epoch: SessionContextSelectionTable.observed_location_mutation_epoch,
+              selected_source_fingerprint: SessionContextSelectionTable.selected_source_fingerprint,
+            })
+            .from(SessionContextSelectionTable)
+            .where(eq(SessionContextSelectionTable.selection_id, input.admission.selectionId))
+            .get()
+            .pipe(Effect.orDie)
+          if (
+            durableSelection === undefined ||
+            durableSelection.observed_location_mutation_epoch > input.admission.observedLocationMutationEpoch ||
+            durableSelection.selected_source_fingerprint !== input.admission.selectedSourceFingerprint
+          )
+            return yield* new AdmissionError({ reason: "selection_revalidation_required" })
+          const validUntil = now + ValidationMs
           yield* input.contexts.appendValidation({
             selectionId: input.admission.selectionId,
             providerTurnSeq,

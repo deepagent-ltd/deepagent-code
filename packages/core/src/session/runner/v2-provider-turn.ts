@@ -1058,8 +1058,15 @@ export function admitInTransaction(
       .orderBy(sql`${V2ProviderTurnReceiptTable.request_ordinal} DESC`)
       .get()
     if (existing) {
-      if (existing.state !== "preparing") return yield* new UnsafeRetryError({ state: existing.state })
-      if (
+      if (existing.state !== "preparing") {
+        // A same-owner indeterminate receipt is a live-process transport drop quarantined by this
+        // owner: the bounded runner retry (and an explicit forced continuation) opens a FRESH
+        // receipt at the next ordinal instead of failing the retry — §2.2 keeps the quarantined row
+        // itself untouched (never replayed; explicit resolution still owns its terminal outcome).
+        // Foreign owners and every other terminal state keep the typed refusal.
+        if (existing.state !== "indeterminate_after_crash" || existing.owner_token !== ownerToken)
+          return yield* new UnsafeRetryError({ state: existing.state })
+      } else if (
         existing.provider_id !== input.providerId ||
         existing.model_id !== input.modelId ||
         existing.protocol !== input.protocol ||
@@ -1068,7 +1075,7 @@ export function admitInTransaction(
         (existing.history_source_end_message_id ?? undefined) !== input.historySourceEndMessageId
       )
         return yield* new ConflictError({ reason: "v2_receipt_retry_binding_mismatch" })
-      return fromRow(existing)
+      else return fromRow(existing)
     }
     const latest = yield* tx
       .select({ ordinal: max(V2ProviderTurnReceiptTable.request_ordinal) })

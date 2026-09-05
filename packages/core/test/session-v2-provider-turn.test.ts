@@ -99,10 +99,13 @@ describe("V2 provider turn authority", () => {
         errorCode: "provider_stream_failed:transport",
         outcomeHash: Hash.sha256(JSON.stringify(["first"])),
       })
-      // Indeterminate is not replayable: an exact-readmission of the same identity must fail closed.
-      expect(
-        yield* admit(service, "msg-typed-failure").pipe(Effect.exit),
-      ).toMatchObject({ _tag: "Failure" })
+      // A same-owner indeterminate receipt is the live-process transport-drop retry path: the
+      // owner opens a FRESH receipt at the next ordinal (the quarantined row itself is never
+      // replayed and keeps its terminal state).
+      const retried = yield* admit(service, "msg-typed-failure")
+      expect(retried.receiptId).not.toBe(receipt.receiptId)
+      expect(retried.state).toBe("preparing")
+      expect(yield* service.get(receipt.receiptId)).toMatchObject({ state: "indeterminate_after_crash" })
     }),
   )
 
