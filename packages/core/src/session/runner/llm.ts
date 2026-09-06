@@ -11,7 +11,7 @@ import {
 } from "@deepagent-code/llm"
 import { AgentGateway } from "../../agent-gateway"
 import { desc, eq } from "drizzle-orm"
-import { Cause, Context, DateTime, Duration, Effect, Exit, FiberSet, Layer, Option, Schema, Semaphore, Stream } from "effect"
+import { Cause, Context, DateTime, Effect, Exit, FiberSet, Layer, Option, Schema, Semaphore, Stream } from "effect"
 import { AgentV2 } from "../../agent"
 import { Config } from "../../config"
 import { Database } from "../../database/database"
@@ -20,6 +20,9 @@ import { Location } from "../../location"
 import { ModelV2 } from "../../model"
 import { ProviderV2 } from "../../provider"
 import { Catalog } from "../../catalog"
+import { CapabilityCatalog } from "../../system-context/capability-catalog"
+import { DeepAgentCodeToolInventory } from "../../system-context/capability-manifest"
+import { PermissionV2 } from "../../permission"
 import { QuestionV2 } from "../../question"
 import { SystemContext } from "../../system-context/index"
 import { SystemContextRegistry } from "../../system-context/registry"
@@ -50,11 +53,15 @@ import {
 } from "./index"
 import { SessionRunnerModel } from "./model"
 import { PreparedProviderTurn } from "./prepared-provider-turn"
+import { buildDeepAgentPrompt } from "./deepagent-prompt"
 import { V2ToolEffect } from "./v2-tool-effect"
 import { createLLMEventPublisher } from "./publish-llm-event"
 import { toLLMMessages } from "./to-llm-message"
 import { SessionRunnerCanonical } from "./canonical-turn"
-import { productionAdaptersEnabled } from "../../context-federation/production-adapters"
+import {
+  productionAdaptersEnabled,
+  ProductionV2Sources,
+} from "../../context-federation/production-adapters"
 import { V2ProviderTurn } from "./v2-provider-turn"
 import { V2ProviderTurnReceiptTable } from "./v2-provider-turn.sql"
 import { CanonicalJson } from "../../util/canonical-json"
@@ -71,6 +78,7 @@ import {
   configEvidenceForTurn,
   protocolAttemptIdentityFor,
   protocolAttemptIdentityHash,
+  resolveModelProtocol,
 } from "../../model-protocol"
 
 /**
@@ -130,12 +138,6 @@ import {
  */
 
 const MAX_STEPS = 25
-// A transient transport drop (connection reset while awaiting a long provider turn) quarantines the
-// receipt indeterminate — the honest durable state — but the live process still owns the session and
-// nothing has been published for the turn, so retrying the physical dispatch through a fresh attempt
-// is safe and bounded. Mirrors the stock executor budget for non-durable streams (2 retries).
-const MAX_TRANSPORT_RETRIES = 2
-const TRANSPORT_RETRY_BASE_DELAY_MS = 500
 // Die-defect messages from the filesystem layer that are path-argument validation, not defects:
 // the model passed a path/reference the location cannot contain. These settle as tool error
 // results (V1 parity) instead of killing the drain.
@@ -175,14 +177,16 @@ export const layer = Layer.effect(
     const systemContext = yield* SystemContextRegistry.Service
     const skillGuidance = yield* SkillGuidance.Service
     const config = yield* Config.Service
-    // FSUtil/Git are not required by every runner composition (tests may omit them): the W10
-    // project docs tail is skipped when either is absent.
-    const fs = Option.getOrUndefined(yield* Effect.serviceOption(FSUtil.Service))
-    const gitService = Option.getOrUndefined(yield* Effect.serviceOption(Git.Service))
+    const catalog = yield* Catalog.Service
+    // Capture Location filesystem/project metadata dependencies at layer construction. Optional
+    // lookups here previously made docs_sync appear wired while the production Location runner had
+    // no Git service and silently dropped branch metadata.
+    const fs = yield* FSUtil.Service
+    const gitService = yield* Git.Service
     // W10: after a drain chain settles, best-effort project docs maintenance. Writes are opt-in
     // (DEEPAGENT_CODE_PROJECT_DOCS_SYNC or `docs_sync` config, default false).
     const docsSyncEnabled =
-      fs !== undefined && ProjectDocsSync.writingEnabled(Config.latest(yield* config.entries(), "docs_sync"))
+      ProjectDocsSync.writingEnabled(Config.latest(yield* config.entries(), "docs_sync"))
     // W7: host-injectable settle hook (durable-learning admission in the deepagent-code
     // composition); unwired = no-op.
     const onSessionSettled = yield* CurrentOnSessionSettled
@@ -196,6 +200,9 @@ export const layer = Layer.effect(
     const contexts = yield* SessionContext.Service
     const queryAuthorization = Option.getOrUndefined(
       yield* Effect.serviceOption(ContextQueryAuthorization.Controller),
+    )
+    const selectionSources = yield* Effect.serviceOption(ProductionV2Sources).pipe(
+      Effect.map((option) => Option.getOrElse(option, () => ({}))),
     )
     const ownerAuthorization = yield* V2ProviderTurn.OwnerAuthorization
     const db = (yield* Database.Service).db
@@ -252,10 +259,6 @@ export const layer = Layer.effect(
       | { readonly _tag: "RebuildPreparedTurn"; readonly promotion?: SessionInput.Delivery; readonly step?: number }
       // Overflow compaction completed; rebuild once through the path without overflow recovery.
       | { readonly _tag: "ContinueAfterOverflowCompaction"; readonly step: number }
-      // Transport dropped mid-turn before any output was published; the receipt quarantined
-      // indeterminate and a fresh attempt (new seq, §2.2 explicit forced continuation) replays the
-      // dispatch within a bounded budget.
-      | { readonly _tag: "RetryTurnAfterTransportFailure"; readonly step: number; readonly retry: number }
     class TurnTransitionError extends Error {
       constructor(readonly transition: TurnTransition) {
         super()
@@ -269,9 +272,6 @@ export const layer = Layer.effect(
         _tag: "ContinueAfterOverflowCompaction",
         step,
       })
-    const retryTurnAfterTransportFailure = (step: number, retry: number) =>
-      new TurnTransitionError({ _tag: "RetryTurnAfterTransportFailure", step, retry })
-
     const retryAgentMismatch = (promotion: SessionInput.Delivery | undefined, step?: number) =>
       Effect.catchDefect((defect) =>
         defect instanceof SessionContextEpoch.AgentMismatch
@@ -280,9 +280,28 @@ export const layer = Layer.effect(
       )
 
     const sameModel = Schema.toEquivalence(Schema.UndefinedOr(ModelV2.Ref))
-    const loadSystemContext = (agent: AgentV2.Selection) =>
+    const loadSystemContext = (
+      agent: AgentV2.Selection,
+      session: SessionSchema.Info,
+      modelSupportsTools: boolean | undefined,
+    ) =>
       Effect.all([systemContext.load(), skillGuidance.load(agent)], { concurrency: "unbounded" }).pipe(
         Effect.map(SystemContext.combine),
+        Effect.provideService(
+          CapabilityCatalog.CurrentGrantedPermissions,
+          new Set(
+            modelSupportsTools === false
+              ? []
+              : [...DeepAgentCodeToolInventory.permissionActions].filter(
+                  (permission) =>
+                    !PermissionV2.isActionWhollyDenied(
+                      permission,
+                      agent.info?.permissions ?? [],
+                      session.permissions,
+                    ),
+                ),
+          ),
+        ),
       )
 
     // W1.1 — goal_steer delivery (design W1 §1). Each pending goal-directed steer is handed to the
@@ -320,7 +339,6 @@ export const layer = Layer.effect(
       promotion: SessionInput.Delivery | undefined,
       step: number,
       recoverOverflow?: typeof compaction.compactAfterOverflow,
-      transportRetry = 0,
     ) {
       const parityCampaign = (yield* V2ProviderTurn.CurrentCampaign) ?? V2ProviderTurn.campaignFromEnv()
       const ownerCampaign = (yield* V2ProviderTurn.CurrentOwnerCampaign) ?? V2ProviderTurn.ownerCampaignFromEnv()
@@ -335,10 +353,20 @@ export const layer = Layer.effect(
       const session = yield* getSession(sessionID)
       if (session.location.directory !== location.directory || session.location.workspaceID !== location.workspaceID)
         return yield* Effect.interrupt
+      const pendingToolEffects = yield* toolEffects.listPendingForSession(session.id)
+      if (pendingToolEffects.length > 0)
+        return yield* new V2ToolEffect.RecoveryRequiredError({
+          sessionId: session.id,
+          pending: pendingToolEffects.length,
+        })
       const agent = yield* agents.select(session.agent)
+      if (session.agent !== undefined && agent.info === undefined)
+        return yield* new AgentV2.NotFoundError({ id: session.agent })
+      const { model, info: modelInfo, provider: modelProvider } = yield* models.resolve(session)
+      const modelProtocol = modelInfo ? resolveModelProtocol(modelInfo, modelProvider).protocol : undefined
       const initialized = yield* SessionContextEpoch.initialize(
         db,
-        loadSystemContext(agent),
+        loadSystemContext(agent, session, modelInfo?.capabilities.tools),
         session.id,
         session.location,
         agent.id,
@@ -373,7 +401,7 @@ export const layer = Layer.effect(
         (yield* SessionContextEpoch.prepare(
           db,
           events,
-          loadSystemContext(agent),
+          loadSystemContext(agent, session, modelInfo?.capabilities.tools),
           session.id,
           session.location,
           agent.id,
@@ -381,7 +409,6 @@ export const layer = Layer.effect(
       const current = yield* getSession(sessionID)
       if ((yield* agents.select(current.agent)).id !== agent.id || !sameModel(current.model, session.model))
         return yield* Effect.die(rebuildPreparedTurn(undefined, currentStep))
-      const { model, info: modelInfo, provider: modelProvider } = yield* models.resolve(session)
       // C2-04/B2 residual — bind the protocol attempt identity (route/protocol/origin/capability/
       // lowering) onto the prepared attempt from the already-resolved catalog config, so an exact
       // retry never changes the model protocol/context/capability body mid-attempt (design §2.3,
@@ -426,26 +453,42 @@ export const layer = Layer.effect(
       // A truly empty imported Session still has no identity and must not dispatch.
       const receiptUserMessageID = currentUserMessageID ?? latestReceipt?.userMessageID
       if (!receiptUserMessageID) return { needsContinuation: false, step: currentStep }
-      const toolMaterialization = yield* tools.materialize(agent.info?.permissions)
+      const toolMaterialization = yield* tools.materialize({
+        rulesets: [agent.info?.permissions ?? [], session.permissions],
+      })
+      const toolDefinitions = modelInfo?.capabilities.tools === false ? [] : toolMaterialization.definitions
       const stepLimitReached = agent.info?.steps !== undefined && currentStep >= agent.info.steps
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
-      const deepagentSystem = AgentGateway.systemPrompt(model.provider)
-      const requestSystem =
-        deepagentSystem.length > 0
-          ? deepagentSystem
-          : [agent.info?.system, system.baseline].filter(
-              (part): part is string => part !== undefined && part.length > 0,
-            )
+      const deepagentPrompt = AgentGateway.isActiveDeepAgentRuntime()
+        ? yield* buildDeepAgentPrompt({
+            sessionID: session.id,
+            userMessageID: receiptUserMessageID,
+            providerID: model.provider,
+            directory: location.directory,
+            messages: context,
+            tools: toolDefinitions,
+            ...(gitService === undefined ? {} : { git: gitService }),
+          })
+        : undefined
+      const stableSystemParts = PreparedProviderTurn.mergeSystemParts(
+        [agent.info?.system],
+        deepagentPrompt?.stableSystemParts ?? [],
+        [system.baseline],
+      )
+      const volatileSystemParts: string[] = []
       const requestMessages = [
         ...toLLMMessages(context, model),
+        ...(deepagentPrompt?.volatileRoundContext
+          ? [Message.user(deepagentPrompt.volatileRoundContext)]
+          : []),
         ...(stepLimitReached ? [Message.assistant(MAX_STEPS_PROMPT)] : []),
       ]
       let request = LLM.request({
         model,
         providerOptions: { openai: { promptCacheKey } },
-        system: requestSystem.map(SystemPart.make),
+        system: stableSystemParts.map(SystemPart.make),
         messages: requestMessages,
-        tools: toolMaterialization.definitions,
+        tools: toolDefinitions,
         toolChoice: stepLimitReached ? "none" : undefined,
         metadata: {
           "deepagent-code": {
@@ -469,6 +512,19 @@ export const layer = Layer.effect(
         fallbackUserInputId: receiptUserMessageID,
         system: { baseline: system.baseline, revision: system.revision, baselineSeq: system.baselineSeq },
         historyEndMessageId: context.at(-1)?.id,
+        ...(modelProtocol
+          ? {
+              model: {
+                id: model.id,
+                providerID: model.provider,
+                protocol: modelProtocol,
+                contextWindow: modelInfo?.limit.context ?? 0,
+                structuredOutput: modelInfo?.api.protocolCapabilities?.structuredOutput ?? false,
+              },
+            }
+          : {}),
+        sources: selectionSources,
+        ...(queryAuthorization === undefined ? {} : { queryAuthorization }),
       })
       // An interrupted turn must terminalize the activity it admitted; otherwise the leftover
       // `active` activity blocks every future queued admission on this Session. The per-turn scope
@@ -492,7 +548,7 @@ export const layer = Layer.effect(
         ? yield* SessionRunnerCanonical.selectionGraphEvidence(db, selectionAdmission.selectionId)
         : undefined
       if (selectionEvidence !== undefined) {
-        deepagentSystem.push(selectionEvidence)
+        volatileSystemParts.push(selectionEvidence)
         request = LLM.updateRequest(request, { system: [...request.system, SystemPart.make(selectionEvidence)] })
       }
       // §16.3 order 4: the receipt's history-window identity comes from the optional epoch bridge;
@@ -548,20 +604,15 @@ export const layer = Layer.effect(
           ownerToken: providerTurns.ownerToken,
         })
       ).receipt
-      // R4 — resolve the turn's pricing (per-million cost tier) when the composition provides the
-      // catalog; without it Step.Ended keeps cost 0 rather than guessing.
-      const pricing = yield* Effect.serviceOption(Catalog.Service).pipe(
-        Effect.flatMap((option) =>
-          Option.isSome(option)
-            ? option.value.model
-                .get(ProviderV2.ID.make(model.provider), ModelV2.ID.make(model.id))
-                .pipe(
-                  Effect.map((info) => info.cost[0]),
-                  Effect.catch(() => Effect.succeed(undefined)),
-                )
-            : Effect.succeed(undefined),
-        ),
-      )
+      // R4 — pricing belongs to the Location catalog and is an explicit runner dependency. A
+      // missing catalog model keeps cost 0 rather than guessing, but a composition can no longer
+      // silently omit the catalog service and disable accounting for every turn.
+      const pricing = yield* catalog.model
+        .get(ProviderV2.ID.make(model.provider), ModelV2.ID.make(model.id))
+        .pipe(
+          Effect.map((info) => info.cost[0]),
+          Effect.catch(() => Effect.succeed(undefined)),
+        )
       const publisher = createLLMEventPublisher(events, {
         sessionID: session.id,
         agent: agent.id,
@@ -593,12 +644,27 @@ export const layer = Layer.effect(
               result: { type: "error", value: "Tools are disabled after the maximum agent steps" },
             })
         : toolMaterialization.settle
-      // Durable tool-effect authority (§16.3 order 1): every settled call records exactly one
-      // terminal row bound to the attempt/receipt that offered it. Capability classification is
-      // not yet wired into the V2 registry, so effects are recorded conservatively as mutating —
-      // watermark proofs must never undercount side effects. A settlement that dies leaves no row:
-      // the enclosing turn receipt quarantines indeterminate, the recovery authority for unknown
-      // outcomes.
+      // Durable tool-effect authority: admission is committed before the tool body can run. A
+      // matching terminal row is appended only after settlement. Therefore a crash between the
+      // two leaves durable unknown-outcome evidence that startup recovery can quarantine without
+      // replaying the call. The registry classifies a closed read-only allowlist; unknown/custom
+      // actions remain mutating so recovery never undercounts a newly registered side effect.
+      const admitToolEffect = (input: Parameters<ToolRegistry.Materialization["settle"]>[0]) => {
+        const attemptId = providerReceipt.providerAttemptId
+        if (attemptId === undefined) return Effect.die("tool effect admission requires a bound provider attempt")
+        return toolEffects
+          .admit({
+            sessionId: input.sessionID,
+            providerAttemptId: attemptId,
+            receiptId: providerReceipt.receiptId,
+            toolCallId: input.call.id,
+            toolName: input.call.name,
+            effectKind: toolMaterialization.effectKind(input.call.name),
+            ownerToken: providerTurns.ownerToken,
+            now: Date.now(),
+          })
+          .pipe(Effect.orDie)
+      }
       const recordToolEffect = (
         input: Parameters<ToolRegistry.Materialization["settle"]>[0],
         state: "settled" | "failed",
@@ -639,7 +705,7 @@ export const layer = Layer.effect(
               receiptId: providerReceipt.receiptId,
               toolCallId: input.call.id,
               toolName: input.call.name,
-              effectKind: "mutating",
+              effectKind: toolMaterialization.effectKind(input.call.name),
               state,
               outcomeHash: Hash.sha256(CanonicalJson.stringify(result)),
               ...(errorCode === undefined ? {} : { errorCode }),
@@ -657,6 +723,7 @@ export const layer = Layer.effect(
       // captures defects or interrupts).
       const settleTool: ToolRegistry.Materialization["settle"] = (input) =>
         Effect.gen(function* () {
+          yield* admitToolEffect(input)
           // W2-V2: the plan gate runs BEFORE the tool executes — a block returns a synthetic
           // settled result carrying the correction template (mirroring the V1 wrapper's soft
           // tool-result block), a grace-release pass prepends the reminder to the real output.
@@ -780,11 +847,17 @@ export const layer = Layer.effect(
           V2ProviderTurn.prepare(
             {
               receipt: providerReceipt,
-              stableSystemParts: [system.baseline],
-              volatileSystemParts: PreparedProviderTurn.mergeSystemParts([agent.info?.system], deepagentSystem),
+              stableSystemParts,
+              volatileSystemParts: PreparedProviderTurn.mergeSystemParts(
+                [deepagentPrompt?.volatileRoundContext],
+                volatileSystemParts,
+              ),
               historyMessages: requestMessages,
-              toolDefinitions: toolMaterialization.definitions,
-              toolIDs: toolMaterialization.definitions.map((tool) => tool.name),
+              toolDefinitions,
+              toolIDs: toolDefinitions.map((tool) => tool.name),
+              toolRegistryIDs: toolMaterialization.registeredIDs,
+              toolPermissionFilteredIDs: toolMaterialization.permissionFilteredIDs,
+              toolFinalOfferedIDs: toolDefinitions.map((tool) => tool.name),
               toolChoice: stepLimitReached ? "none" : null,
               toolResultReferences: context.flatMap((message) =>
                 message.type === "assistant"
@@ -802,6 +875,11 @@ export const layer = Layer.effect(
               providerTurnSeq: providerReceipt.providerTurnSeq,
               contextSelectionID: selectionAdmission.selectionId,
               contextProjectionHash: selectionAdmission.projectionHash,
+              contextReadiness: selectionAdmission.readiness ?? "unavailable",
+              contextSelectedRefs: selectionAdmission.selectedRefs ?? [],
+              toolCapability:
+                modelInfo === undefined ? "unknown" : modelInfo.capabilities.tools ? "supported" : "unsupported",
+              toolLoweringOutcome: modelInfo?.capabilities.tools === false ? "omitted_no_support" : "ok",
               ...(protocolIdentity === undefined ? {} : { protocolAttemptIdentity: protocolIdentity }),
               ...(protocolIdentityHash === undefined ? {} : { protocolAttemptIdentityHash: protocolIdentityHash }),
               // W4.1/P1-1: the snapshot facts are read from the DURABLE table once per
@@ -885,17 +963,9 @@ export const layer = Layer.effect(
           )
             return yield* Effect.die(continueAfterOverflowCompaction(currentStep))
           const llmFailure = failure instanceof LLMError ? failure : undefined
-          // Transient transport drop with nothing user-visible yet: the onExit quarantine has
-          // already settled the receipt indeterminate (the honest unknown-outcome state), so a
-          // bounded same-process retry opens a fresh attempt (new seq) instead of killing the
-          // drain. Once anything was published for the turn a re-dispatch could duplicate visible
-          // output, so those failures keep the terminal path.
-          if (
-            llmFailure?.reason._tag === "Transport" &&
-            !publisher.hasAssistantStarted() &&
-            transportRetry < MAX_TRANSPORT_RETRIES
-          )
-            return yield* Effect.die(retryTurnAfterTransportFailure(currentStep, transportRetry))
+          // A transport failure after dispatch has an unknown provider outcome even when no local
+          // assistant event was observed. The receipt is already quarantined indeterminate by the
+          // provider-turn boundary; never hide that uncertainty by opening a fresh physical attempt.
           if (overflowFailure) yield* publish(overflowFailure)
           if (llmFailure && !publisher.hasProviderError()) {
             yield* withPublication(publisher.failUnsettledTools("Provider did not return a tool result", true))
@@ -947,7 +1017,6 @@ export const layer = Layer.effect(
       sessionID: SessionSchema.ID,
       promotion: SessionInput.Delivery | undefined,
       step: number,
-      transportRetry?: number,
     ) => Effect.Effect<
       { readonly needsContinuation: boolean; readonly step: number; readonly activityId?: string },
       RunError
@@ -960,17 +1029,6 @@ export const layer = Layer.effect(
             if (!(defect instanceof TurnTransitionError)) return yield* Effect.die(defect)
             if (defect.transition._tag === "ContinueAfterOverflowCompaction")
               return yield* Effect.die("Post-compaction provider attempt cannot recover another overflow")
-            if (defect.transition._tag === "RetryTurnAfterTransportFailure") {
-              yield* Effect.sleep(Duration.millis(TRANSPORT_RETRY_BASE_DELAY_MS * 4 ** defect.transition.retry))
-              // Post-compaction turns recovered an overflow; a transport drop still retries through
-              // the plain runTurn path (fresh attempt, budget-shared) instead of leaking the defect.
-              return yield* runTurn(
-                sessionID,
-                promotion,
-                defect.transition.step,
-                defect.transition.retry + 1,
-              )
-            }
             yield* Effect.yieldNow
             return yield* runAfterOverflowCompaction(
               sessionID,
@@ -982,13 +1040,12 @@ export const layer = Layer.effect(
       )
     })
 
-    const runTurn: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, step, transportRetry = 0) {
+    const runTurn: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, step) {
       return yield* runTurnAttempt(
         sessionID,
         promotion,
         step,
         compaction.compactAfterOverflow,
-        transportRetry,
       ).pipe(
         Effect.catchDefect(
           Effect.fnUntraced(function* (defect) {
@@ -996,19 +1053,6 @@ export const layer = Layer.effect(
             yield* Effect.yieldNow
             if (defect.transition._tag === "ContinueAfterOverflowCompaction")
               return yield* runAfterOverflowCompaction(sessionID, undefined, defect.transition.step)
-            if (defect.transition._tag === "RetryTurnAfterTransportFailure") {
-              yield* Effect.sleep(
-                Duration.millis(TRANSPORT_RETRY_BASE_DELAY_MS * 4 ** defect.transition.retry),
-              )
-              // Recurse through runTurn itself so the re-dispatch keeps its own transition
-              // handling (a further drop while the budget lasts must not leak the defect).
-              return yield* runTurn(
-                sessionID,
-                promotion,
-                defect.transition.step,
-                defect.transition.retry + 1,
-              )
-            }
             return yield* runTurn(sessionID, defect.transition.promotion, defect.transition.step ?? step)
           }),
         ),
@@ -1089,14 +1133,14 @@ export const layer = Layer.effect(
         openActivity = yield* SessionInput.hasPending(db, input.sessionID, "queue")
         promotion = openActivity ? "queue" : undefined
       }
-      if (docsSyncEnabled && fs !== undefined)
+      if (docsSyncEnabled)
         yield* ProjectDocsSync.afterSessionNow({
           sessionID: input.sessionID,
           root: location.project.directory,
           enabled: true,
           store,
           fs,
-          ...(gitService === undefined ? {} : { git: gitService }),
+          git: gitService,
         })
       // W7: settle-triggered learning. Best-effort and non-blocking for the turn: a hook failure
       // must never fail a settled drain (same posture as the docs sync tail).

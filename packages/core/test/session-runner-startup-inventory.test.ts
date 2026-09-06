@@ -92,7 +92,13 @@ const createTables = (db: Db) =>
       CREATE TABLE session_provider_attempt (attempt_id TEXT PRIMARY KEY, state TEXT NOT NULL)
     `)
     yield* db.run(sql`
-      CREATE TABLE session_v2_tool_effect (effect_id TEXT PRIMARY KEY, state TEXT NOT NULL, grant_state TEXT)
+      CREATE TABLE session_v2_tool_effect_admission
+        (admission_id TEXT PRIMARY KEY, receipt_id TEXT NOT NULL, tool_call_id TEXT NOT NULL)
+    `)
+    yield* db.run(sql`
+      CREATE TABLE session_v2_tool_effect
+        (effect_id TEXT PRIMARY KEY, receipt_id TEXT NOT NULL, tool_call_id TEXT NOT NULL,
+         state TEXT NOT NULL, grant_state TEXT)
     `)
     yield* db.run(sql`
       CREATE TABLE task_run (run_id TEXT PRIMARY KEY, state TEXT NOT NULL, execution_owner TEXT, lease_expires_at INTEGER)
@@ -121,8 +127,12 @@ describe("StartupInventory.classifyStartup (C1B-10)", () => {
         yield* createTables(db)
         yield* db.run(sql`INSERT INTO session_provider_attempt
           VALUES ('att-prepared', 'prepared'), ('att-stream', 'streaming'), ('att-settled', 'settled')`)
+        yield* db.run(sql`INSERT INTO session_v2_tool_effect_admission
+          VALUES ('adm-a', 'receipt-a', 'call-a'), ('adm-b', 'receipt-b', 'call-b')`)
         yield* db.run(sql`INSERT INTO session_v2_tool_effect
-          VALUES ('eff-a', 'settled', 'settled'), ('eff-b', 'failed', 'unknown')`)
+          VALUES
+            ('eff-a', 'receipt-a', 'call-a', 'settled', 'settled'),
+            ('eff-b', 'receipt-b', 'call-b', 'failed', 'unknown')`)
         yield* db.run(sql`INSERT INTO task_run
           VALUES ('task-a', 'completed', NULL, NULL), ('task-b', 'running', NULL, NULL)`)
         yield* db.run(sql`INSERT INTO event_snapshot_attempt VALUES ('snap-a', 'complete'), ('snap-b', 'staged')`)
@@ -266,15 +276,21 @@ describe("StartupInventory.classifyStartup (C1B-10)", () => {
       Effect.gen(function* () {
         const db = yield* makeDb
         yield* createTables(db)
+        yield* db.run(sql`INSERT INTO session_v2_tool_effect_admission VALUES
+          ('adm-settled', 'receipt-settled', 'call-settled'),
+          ('adm-started', 'receipt-started', 'call-started'),
+          ('adm-unknown', 'receipt-unknown', 'call-unknown'),
+          ('adm-nogrant', 'receipt-nogrant', 'call-nogrant'),
+          ('adm-orphan', 'receipt-orphan', 'call-orphan')`)
         yield* db.run(sql`INSERT INTO session_v2_tool_effect VALUES
-          ('eff-settled', 'settled', 'settled'),
-          ('eff-started', 'failed', 'started'),
-          ('eff-unknown', 'settled', 'unknown'),
-          ('eff-nogrant', 'failed', NULL)`)
+          ('eff-settled', 'receipt-settled', 'call-settled', 'settled', 'settled'),
+          ('eff-started', 'receipt-started', 'call-started', 'failed', 'started'),
+          ('eff-unknown', 'receipt-unknown', 'call-unknown', 'settled', 'unknown'),
+          ('eff-nogrant', 'receipt-nogrant', 'call-nogrant', 'failed', NULL)`)
 
         const inventory = yield* StartupInventory.classifyStartup(db)
         expect(inventory.byCategory.tool_effect.resolved).toBe(1)
-        expect(inventory.byCategory.tool_effect.recovery).toBe(3)
+        expect(inventory.byCategory.tool_effect.recovery).toBe(4)
         expect(inventory.ready).toBe(true)
       }),
     )

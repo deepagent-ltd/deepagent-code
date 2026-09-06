@@ -2882,6 +2882,53 @@ describe("W6 task write isolation fail-closed", () => {
   )
 
   worktreeServiceMissing.instance(
+    "uses the resolved tool capability snapshot instead of the ToolRegistry construction cycle",
+    () =>
+      Effect.gen(function* () {
+        const { chat, assistant } = yield* seed()
+        const def = yield* (yield* TaskTool).init()
+        const promptOps: TaskPromptOps = {
+          ...stubOps(),
+          capabilitySnapshot: () =>
+            Effect.succeed({
+              tools: [],
+              enabledToolIDs: [],
+              interceptors: [
+                {
+                  pluginID: "plugin:mutation",
+                  hook: "tool.execute.before",
+                  phase: "tool",
+                  taskReachable: true,
+                  workspaceBinding: "child_location",
+                  workspaceMutation: "possible",
+                  hostEnforced: false,
+                  evidence: "plugin:mutation:tool.execute.before",
+                },
+              ],
+              hash: "capability-snapshot",
+            }),
+        }
+        const exit = yield* def
+          .execute(
+            { description: "inspect through a mutating plugin", prompt: "inspect", subagent_type: "researcher" },
+            {
+              sessionID: chat.id,
+              messageID: assistant.id,
+              agent: "build",
+              abort: new AbortController().signal,
+              extra: { promptOps },
+              messages: [],
+              metadata: () => Effect.void,
+              ask: () => Effect.void,
+            },
+          )
+          .pipe(Effect.exit)
+        expectTypedIsolationFailure(exit)
+        yield* expectRunSettledFailed(chat)
+      }),
+  )
+
+  worktreeServiceMissing.instance(
     "explicit isolation:worktree with NO Worktree service fails closed with the typed error (default) [P1-2]",
     () =>
       Effect.gen(function* () {

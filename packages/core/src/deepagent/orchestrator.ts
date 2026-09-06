@@ -130,7 +130,7 @@ export const buildPromptContext = (input: OrchestratorInput): PromptContext => {
   // §5b: compute the concrete per-turn fan-out verdict from this turn's request text so the
   // DeepAgent-active prompt (the primary user path) surfaces task-specific numbers, not just the
   // generic guidance. Deterministic pure function; ADVISORY only (the §5a semaphore is the hard cap).
-  const fanoutDecision = state.userRequest
+  const fanoutDecision = state.userRequest && input.tools.availableTools.some((tool) => tool.name === "task")
     ? decideFanout({
         mode: state.mode,
         signals: estimateSignalsFromText({ userRequest: state.userRequest }),

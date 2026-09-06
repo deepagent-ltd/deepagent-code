@@ -89,6 +89,34 @@ function sessionRow(info: SessionV1.SessionInfo): typeof SessionTable.$inferInse
   }
 }
 
+function createdSessionRow(event: SessionEvent.Created): typeof SessionTable.$inferInsert {
+  return {
+    id: event.data.info.id,
+    project_id: event.data.info.projectID,
+    workspace_id: event.data.info.location.workspaceID ?? null,
+    parent_id: event.data.info.parentID,
+    slug: event.data.slug,
+    directory: event.data.info.location.directory,
+    path: event.data.info.subpath,
+    title: event.data.info.title,
+    agent: event.data.info.agent,
+    model: event.data.info.model,
+    version: event.data.version,
+    cost: event.data.info.cost,
+    tokens_input: event.data.info.tokens.input,
+    tokens_output: event.data.info.tokens.output,
+    tokens_reasoning: event.data.info.tokens.reasoning,
+    tokens_cache_read: event.data.info.tokens.cache.read,
+    tokens_cache_write: event.data.info.tokens.cache.write,
+    permission: event.data.info.permissions,
+    time_created: DateTime.toEpochMillis(event.data.info.time.created),
+    time_updated: DateTime.toEpochMillis(event.data.info.time.updated),
+    time_archived: event.data.info.time.archived
+      ? DateTime.toEpochMillis(event.data.info.time.archived)
+      : undefined,
+  }
+}
+
 function sessionUpdateRow(info: SessionV1.SessionInfo) {
   const row = sessionRow(info)
   if (info.summary?.diffs !== undefined) return row
@@ -530,6 +558,7 @@ export const layer = Layer.effectDiscard(
       codec: "session-projection",
       schemaVersion: 1,
       rebuildEventTypes: new Set([
+        SessionEvent.Created,
         SessionV1.Event.Created,
         SessionV1.Event.Updated,
         SessionV1.Event.MessageUpdated,
@@ -538,6 +567,7 @@ export const layer = Layer.effectDiscard(
         SessionV1.Event.PartRemoved,
         SessionEvent.AgentSwitched,
         SessionEvent.ModelSwitched,
+        SessionEvent.PermissionsChanged,
         SessionEvent.ContextUpdated,
         SessionEvent.Synthetic,
         SessionEvent.Shell.Started,
@@ -846,7 +876,9 @@ export const layer = Layer.effectDiscard(
       Effect.gen(function* () {
         if (!event.replay) return
         if (
-          (Schema.is(SessionV1.Event.Created)(event) || Schema.is(SessionV1.Event.Updated)(event)) &&
+          (Schema.is(SessionEvent.Created)(event) ||
+            Schema.is(SessionV1.Event.Created)(event) ||
+            Schema.is(SessionV1.Event.Updated)(event)) &&
           event.data.info.id !== event.data.sessionID
         )
           return yield* Effect.die(
@@ -872,10 +904,12 @@ export const layer = Layer.effectDiscard(
             .pipe(Effect.orDie)
           const freshCreated =
             !authority &&
-            Schema.is(SessionV1.Event.Created)(event) &&
+            (Schema.is(SessionEvent.Created)(event) || Schema.is(SessionV1.Event.Created)(event)) &&
             event.seq === 0 &&
             event.data.info.id === replaySessionID &&
-            event.data.info.workspaceID === event.replayOwnerID
+            (Schema.is(SessionEvent.Created)(event)
+              ? event.data.info.location.workspaceID
+              : event.data.info.workspaceID) === event.replayOwnerID
           if ((!authority && !freshCreated) || (authority && authority.workspaceID !== event.replayOwnerID))
             return yield* Effect.die(
               new EventV2.InvalidSyncEventError({
@@ -938,6 +972,26 @@ export const layer = Layer.effectDiscard(
             .update(WorkspaceTable)
             .set({ time_used: Date.now() })
             .where(eq(WorkspaceTable.id, event.data.info.workspaceID))
+            .run()
+            .pipe(Effect.orDie)
+        }
+      }),
+    )
+    yield* events.project(SessionEvent.Created, (event) =>
+      Effect.gen(function* () {
+        const stored = yield* db
+          .insert(SessionTable)
+          .values(createdSessionRow(event))
+          .onConflictDoNothing()
+          .returning({ sessionID: SessionTable.id })
+          .get()
+          .pipe(Effect.orDie)
+        if (!stored) return yield* Effect.die(new SessionAlreadyProjected())
+        if (event.data.info.location.workspaceID) {
+          yield* db
+            .update(WorkspaceTable)
+            .set({ time_used: Date.now() })
+            .where(eq(WorkspaceTable.id, event.data.info.location.workspaceID))
             .run()
             .pipe(Effect.orDie)
         }
@@ -1089,6 +1143,19 @@ export const layer = Layer.effectDiscard(
         yield* SessionContextEpoch.requestReplacement(db, event.data.sessionID, event.seq)
       }),
     )
+    yield* events.project(SessionEvent.PermissionsChanged, (event) => {
+      if (event.seq === undefined) return Effect.die("Synchronized Session event is missing aggregate sequence")
+      return db
+        .update(SessionTable)
+        .set({ permission: event.data.permissions, time_updated: DateTime.toEpochMillis(event.data.timestamp) })
+        .where(eq(SessionTable.id, event.data.sessionID))
+        .run()
+        .pipe(
+          Effect.orDie,
+          Effect.andThen(run(db, event)),
+          Effect.andThen(SessionContextEpoch.requestReplacement(db, event.data.sessionID, event.seq)),
+        )
+    })
     yield* events.project(SessionEvent.Prompted, (event) =>
       Effect.gen(function* () {
         const messageID = event.data.messageID

@@ -1,5 +1,8 @@
 export * as CapabilityLoadTool from "./capability-load-tool"
 
+export const capabilityLoadName = "capability_load"
+export const domainPackLoadName = "domain_pack_load"
+
 import { desc, eq } from "drizzle-orm"
 import { Effect, Layer, Schema } from "effect"
 import { ToolFailure } from "@deepagent-code/llm"
@@ -292,8 +295,8 @@ export const layer = Layer.effectDiscard(
     const { db } = yield* Database.Service
     yield* tools
       .register({
-        capability_load: makeCapabilityLoadTool({ db }),
-        domain_pack_load: makeDomainPackLoadTool({ db }),
+        [capabilityLoadName]: makeCapabilityLoadTool({ db }),
+        [domainPackLoadName]: makeDomainPackLoadTool({ db }),
       })
       .pipe(Effect.orDie)
   }),

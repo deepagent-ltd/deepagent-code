@@ -9,8 +9,9 @@ const database = Database.layerFromPath(":memory:")
 const effects = V2ToolEffect.layer.pipe(Layer.provide(database))
 const it = testEffect(Layer.mergeAll(database, effects))
 
-const record = (service: V2ToolEffect.Interface, overrides: Record<string, unknown> = {}) =>
-  service.record({
+type EffectInput = Parameters<V2ToolEffect.Interface["record"]>[0]
+
+const effectInput = (overrides: Partial<EffectInput> = {}): EffectInput => ({
     sessionId: "ses_tool_effect",
     providerAttemptId: "attempt_tool_effect",
     receiptId: "receipt_tool_effect",
@@ -22,6 +23,22 @@ const record = (service: V2ToolEffect.Interface, overrides: Record<string, unkno
     ownerToken: "owner_tool_effect",
     now: 1_000,
     ...overrides,
+  })
+
+const record = (service: V2ToolEffect.Interface, overrides: Record<string, unknown> = {}) =>
+  Effect.gen(function* () {
+    const input = effectInput(overrides)
+    yield* service.admit({
+      sessionId: input.sessionId,
+      providerAttemptId: input.providerAttemptId,
+      receiptId: input.receiptId,
+      toolCallId: input.toolCallId,
+      toolName: input.toolName,
+      effectKind: input.effectKind,
+      ownerToken: input.ownerToken,
+      now: input.now,
+    })
+    return yield* service.record(input)
   })
 
 describe("V2 tool effect authority", () => {
@@ -38,7 +55,39 @@ describe("V2 tool effect authority", () => {
         effectKind: "mutating",
       })
       expect(effect.errorCode).toBeUndefined()
+      expect(yield* service.listAdmissionsForSession("ses_tool_effect")).toHaveLength(1)
+      expect(yield* service.listPendingForSession("ses_tool_effect")).toHaveLength(0)
       expect(yield* service.listForSession("ses_tool_effect")).toHaveLength(1)
+    }),
+  )
+
+  it.effect("requires durable admission before a terminal effect and converges exact admission retries", () =>
+    Effect.gen(function* () {
+      const service = yield* V2ToolEffect.Service
+      const input = effectInput({ toolCallId: "call_admitted" })
+      const admission = yield* service.admit(input)
+      expect((yield* service.admit(input)).admissionId).toBe(admission.admissionId)
+      expect(yield* service.listPendingForSession(input.sessionId)).toEqual([admission])
+      expect(yield* service.listForSession(input.sessionId)).toHaveLength(0)
+      expect(
+        yield* service.admit({ ...input, toolName: "write" }).pipe(Effect.exit),
+      ).toMatchObject({ _tag: "Failure" })
+      expect(
+        yield* service.record(effectInput({ receiptId: "receipt_missing", toolCallId: "call_missing" })).pipe(Effect.exit),
+      ).toMatchObject({ _tag: "Failure" })
+    }),
+  )
+
+  it.effect("serializes concurrent exact admission and terminal retries", () =>
+    Effect.gen(function* () {
+      const service = yield* V2ToolEffect.Service
+      const input = effectInput({ toolCallId: "call_concurrent" })
+      const admissions = yield* Effect.all([service.admit(input), service.admit(input)], { concurrency: "unbounded" })
+      expect(new Set(admissions.map((admission) => admission.admissionId)).size).toBe(1)
+      const effects = yield* Effect.all([service.record(input), service.record(input)], { concurrency: "unbounded" })
+      expect(new Set(effects.map((effect) => effect.effectId)).size).toBe(1)
+      expect(yield* service.listAdmissionsForSession(input.sessionId)).toHaveLength(1)
+      expect(yield* service.listForSession(input.sessionId)).toHaveLength(1)
     }),
   )
 
@@ -79,6 +128,14 @@ describe("V2 tool effect authority", () => {
         ) VALUES ${sql.raw(`(${values})`)}
       `).pipe(Effect.exit)
       const base = "'ses_tool_effect', 'attempt_tool_effect', 'receipt_tool_effect'"
+      const admit = (callID: string, effectKind = "mutating", ownerToken = "o") =>
+        databaseService.db.run(sql.raw(`
+          INSERT INTO session_v2_tool_effect_admission (
+            admission_id, session_id, provider_attempt_id, receipt_id, tool_call_id,
+            tool_name, effect_kind, owner_token, time_created
+          ) VALUES ('admission_${callID}', ${base}, '${callID}', 'echo', '${effectKind}', '${ownerToken}', 1)
+        `))
+      yield* Effect.forEach(["c1", "c2", "c3", "c4", "c6", "c7", "c8"], (callID) => admit(callID), { discard: true })
       // settled carrying an error code
       expect(
         (yield* reject(`'t1', ${base}, 'c1', 'echo', 'mutating', 'settled', '${"c".repeat(64)}', 'wrong', 'o', 1`))._tag,
@@ -151,6 +208,16 @@ describe("V2 tool effect authority", () => {
       `).pipe(Effect.exit)
       const base = "'ses_tool_effect', 'attempt_tool_effect', 'receipt_tool_effect'"
       const hash = `'${"a".repeat(64)}'`
+      yield* Effect.forEach(
+        ["call_g1", "call_g2", "call_g3", "call_g4"],
+        (callID) => databaseService.db.run(sql.raw(`
+          INSERT INTO session_v2_tool_effect_admission (
+            admission_id, session_id, provider_attempt_id, receipt_id, tool_call_id,
+            tool_name, effect_kind, owner_token, time_created
+          ) VALUES ('admission_${callID}', ${base}, '${callID}', 'echo', 'mutating', 'o', 1)
+        `)),
+        { discard: true },
+      )
       // complete grant evidence is admitted
       expect(
         (
@@ -199,6 +266,16 @@ describe("V2 tool effect authority", () => {
         .run(sql`DELETE FROM session_v2_tool_effect WHERE receipt_id = 'receipt_tool_effect'`)
         .pipe(Effect.exit)
       expect(deleted._tag).toBe("Failure")
+      expect(
+        (yield* databaseService.db
+          .run(sql`UPDATE session_v2_tool_effect_admission SET tool_name = 'write' WHERE receipt_id = 'receipt_tool_effect'`)
+          .pipe(Effect.exit))._tag,
+      ).toBe("Failure")
+      expect(
+        (yield* databaseService.db
+          .run(sql`DELETE FROM session_v2_tool_effect_admission WHERE receipt_id = 'receipt_tool_effect'`)
+          .pipe(Effect.exit))._tag,
+      ).toBe("Failure")
       expect(yield* service.listForSession("ses_tool_effect")).toHaveLength(1)
     }),
   )

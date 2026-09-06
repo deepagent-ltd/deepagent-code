@@ -94,12 +94,12 @@ export const capabilityBodies: ReadonlyArray<CapabilityBodyEntry> = [
     availability: "stable",
     required_permissions: ["edit"],
     required_runtime_features: [],
-    entry_tools: ["edit", "write", "apply-patch"],
+    entry_tools: ["edit", "write", "apply_patch"],
     body: [
       "Apply exact, minimal changes to files in the active workspace. Prefer a focused edit over a full rewrite; verify the diff after the change.",
       "When to use: a user asked to change code, a test needs a fixture, or a value must be corrected. Read the file first so the edit targets the real current content.",
-      "Entry points: edit (targeted textual change), write (create/replace a file), apply-patch (a patch from an authoritative diff).",
-      "Risks: editing mutates the workspace — never expand beyond the permission granted (edit covers edit/write/apply-patch, nothing more). An edit that does not match the current file fails; re-read and retry rather than guessing.",
+      "Entry points: edit (targeted textual change), write (create/replace a file), apply_patch (a patch from an authoritative diff).",
+      "Risks: editing mutates the workspace — never expand beyond the permission granted (edit covers edit/write/apply_patch, nothing more). An edit that does not match the current file fails; re-read and retry rather than guessing.",
     ].join("\n"),
   }),
   bodyEntry({

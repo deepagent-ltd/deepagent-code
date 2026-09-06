@@ -256,7 +256,7 @@ afterEach(async () => {
 
 describe("session HttpApi", () => {
   it.instance(
-    "keeps the V2 HTTP surface admit-only without execution side effects",
+    "executes normal V2 prompts while resume false remains admit-only",
     () =>
       Effect.gen(function* () {
         const test = yield* TestInstance
@@ -267,30 +267,25 @@ describe("session HttpApi", () => {
         const receiptsBefore = (yield* db.select().from(V2ProviderTurnReceiptTable).all().pipe(Effect.orDie)).length
         const toolsBefore = (yield* db.select().from(SessionToolRequestReceiptTable).all().pipe(Effect.orDie)).length
 
-        const unavailable = yield* request(`/api/session/${session.id}/prompt`, {
-          method: "POST",
-          headers: { ...headers, "content-type": "application/json" },
-          body: JSON.stringify({ id: "msg_v2_unavailable", prompt: { text: "must not execute" } }),
-        })
-        expect(unavailable.status).toBe(503)
-        expect(yield* responseJson(unavailable)).toMatchObject({
-          _tag: "ServiceUnavailableError",
-          service: "session.prompt",
-        })
-
         const admitted = yield* request(`/api/session/${session.id}/prompt`, {
           method: "POST",
           headers: { ...headers, "content-type": "application/json" },
           body: JSON.stringify({ id: "msg_v2_admit_only", prompt: { text: "admit only" }, resume: false }),
         })
         expect(admitted.status).toBe(200)
+        expect((yield* db.select().from(SessionInputTable).all().pipe(Effect.orDie)).length - inputsBefore).toBe(1)
+        expect((yield* db.select().from(V2ProviderTurnReceiptTable).all().pipe(Effect.orDie)).length).toBe(receiptsBefore)
+        expect((yield* db.select().from(SessionToolRequestReceiptTable).all().pipe(Effect.orDie)).length).toBe(toolsBefore)
+
+        const resumed = yield* request(`/api/session/${session.id}/prompt`, {
+          method: "POST",
+          headers: { ...headers, "content-type": "application/json" },
+          body: JSON.stringify({ id: "msg_v2_resume", prompt: { text: "execute normally" } }),
+        })
+        expect(resumed.status).toBe(200)
 
         const inputsAfter = (yield* db.select().from(SessionInputTable).all().pipe(Effect.orDie)).length
-        const receiptsAfter = (yield* db.select().from(V2ProviderTurnReceiptTable).all().pipe(Effect.orDie)).length
-        const toolsAfter = (yield* db.select().from(SessionToolRequestReceiptTable).all().pipe(Effect.orDie)).length
-        expect(inputsAfter - inputsBefore).toBe(1)
-        expect(receiptsAfter - receiptsBefore).toBe(0)
-        expect(toolsAfter - toolsBefore).toBe(0)
+        expect(inputsAfter - inputsBefore).toBe(2)
       }),
     { git: true, config: { formatter: false, lsp: false } },
   )
@@ -400,6 +395,23 @@ describe("session HttpApi", () => {
         expect(Object.hasOwn(listed[0]!, "parentID")).toBe(false)
 
         expect(yield* requestJson<Record<string, unknown>>(SessionPaths.status, { headers })).toEqual({})
+
+        const { db } = yield* Database.Service
+        yield* db
+          .update(SessionTable)
+          .set({ time_suspended: 1 })
+          .where(eq(SessionTable.id, parent.id))
+          .run()
+          .pipe(Effect.orDie)
+        expect(yield* requestJson<Record<string, unknown>>(SessionPaths.status, { headers })).toMatchObject({
+          [parent.id]: { type: "recovery_required", message: expect.any(String) },
+        })
+        yield* db
+          .update(SessionTable)
+          .set({ time_suspended: null })
+          .where(eq(SessionTable.id, parent.id))
+          .run()
+          .pipe(Effect.orDie)
 
         expect(
           yield* requestJson<Session.Info>(pathFor(SessionPaths.get, { sessionID: parent.id }), { headers }),
@@ -741,18 +753,22 @@ describe("session HttpApi", () => {
   )
 
   it.instance(
-    "returns v2 public unavailable errors for unfinished session mutations",
+    "routes v2 public session operations to the Core services",
     () =>
       Effect.gen(function* () {
         const test = yield* TestInstance
         const headers = { "x-deepagent-code-directory": test.directory }
         const session = yield* createSession({ title: "v2 unavailable" })
 
-        // W0-1 — the host graph injects the V2ManualCompaction seam, so the /compact endpoint now
-        // genuinely runs the compaction state machine and returns NoContent rather than the old
-        // typed-unavailable 503. Keep this endpoint's response contract pinned.
+        // Manual compaction must not claim success until Core owns the complete operation. The old
+        // host seam only wrote a legacy marker and returned 204 without processing a summary.
         const compact = yield* request(`/api/session/${session.id}/compact`, { method: "POST", headers })
-        expect(compact.status).toBe(204)
+        expect(compact.status).toBe(503)
+        expect(yield* responseJson(compact)).toEqual({
+          _tag: "ServiceUnavailableError",
+          message: "Session compact is not available yet",
+          service: "session.compact",
+        })
 
         // W1: session.wait is now REAL (SessionExecution.awaitIdle) — an idle session resolves
         // immediately with NoContent instead of the pre-W1 typed-unavailable 503.
@@ -764,11 +780,14 @@ describe("session HttpApi", () => {
           headers: { ...headers, "content-type": "application/json" },
           body: JSON.stringify({ id: "msg_execution_unavailable", prompt: { text: "hello" } }),
         })
-        expect(prompt.status).toBe(503)
-        expect(yield* responseJson(prompt)).toEqual({
-          _tag: "ServiceUnavailableError",
-          message: "Session execution is not available on this endpoint",
-          service: "session.prompt",
+        expect(prompt.status).toBe(200)
+        expect(yield* responseJson(prompt)).toMatchObject({
+          data: {
+            id: "msg_execution_unavailable",
+            sessionID: session.id,
+            prompt: { text: "hello" },
+            delivery: "steer",
+          },
         })
         const admitted = yield* Database.Service.use(({ db }) =>
           db
@@ -778,7 +797,11 @@ describe("session HttpApi", () => {
             .get()
             .pipe(Effect.orDie),
         )
-        expect(admitted).toBeUndefined()
+        expect(admitted).toMatchObject({
+          id: "msg_execution_unavailable",
+          session_id: session.id,
+          delivery: "steer",
+        })
       }),
     { git: true, config: { formatter: false, lsp: false } },
   )

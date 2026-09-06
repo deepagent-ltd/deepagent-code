@@ -142,7 +142,9 @@ export const buildSystemPrompt = (ctx: PromptContext): string => {
   // Tier-gated by mode; buildOrchestrationSection returns null when there is nothing to add. The
   // per-turn fan-out DECISION (concrete counts) is intentionally NOT passed here — it is volatile and
   // rendered by buildVolatileRoundContext; this block keeps only the stable generic guidance.
-  const orchestration = buildOrchestrationSection(ctx.mode)
+  const orchestration = ctx.tools.availableTools.some((tool) => tool.name === "task")
+    ? buildOrchestrationSection(ctx.mode)
+    : null
   if (orchestration) sections.push(orchestration)
 
   // V3.8 App-A C3: cross-session handoff. The orchestrator has already gated (shouldLoadBridge) and
@@ -365,6 +367,16 @@ const toolSection = (tools: ToolContext): string => {
   if (builtins.length > 0) {
     lines.push("")
     lines.push("Core tools: " + builtins.map((t) => t.name).join(", "))
+  }
+  const custom = tools.availableTools.filter((tool) => tool.source === "custom")
+  if (custom.length > 0) {
+    lines.push("")
+    lines.push("Application tools: " + custom.map((tool) => tool.name).join(", "))
+  }
+  const mcp = tools.availableTools.filter((tool) => tool.source === "mcp")
+  if (mcp.length > 0) {
+    lines.push("")
+    lines.push("MCP tools: " + mcp.map((tool) => tool.name).join(", "))
   }
   return lines.join("\n")
 }

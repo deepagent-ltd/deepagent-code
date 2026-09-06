@@ -7,9 +7,13 @@ import * as OpenAIChat from "@deepagent-code/llm/protocols/openai-chat"
 import { ApplicationTools } from "@deepagent-code/core/tool/application-tools"
 import { AgentV2 } from "@deepagent-code/core/agent"
 import { Config } from "@deepagent-code/core/config"
+import { Catalog } from "@deepagent-code/core/catalog"
+import { ModelV2 } from "@deepagent-code/core/model"
 import { ConfigCompaction } from "@deepagent-code/core/config/compaction"
 import { Database } from "@deepagent-code/core/database/database"
 import { EventV2 } from "@deepagent-code/core/event"
+import { FSUtil } from "@deepagent-code/core/fs-util"
+import { Git } from "@deepagent-code/core/git"
 import { Location } from "@deepagent-code/core/location"
 import { PermissionV2 } from "@deepagent-code/core/permission"
 import { Project } from "@deepagent-code/core/project"
@@ -44,7 +48,7 @@ import { LearningAdmissionOutboxTable } from "@deepagent-code/core/deepagent/lea
 import { LearningJobTable } from "@deepagent-code/core/deepagent/learning-job.sql"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { Hash } from "@deepagent-code/core/util/hash"
-import { Effect, Layer, Schema, Stream } from "effect"
+import { Effect, Layer, Option, Schema, Stream } from "effect"
 import { eq, sql } from "drizzle-orm"
 import { testEffect } from "../lib/effect"
 import { onSessionSettled, onSessionSettledSeamLayer } from "@/deepagent/learning-runtime"
@@ -158,6 +162,24 @@ const config = Layer.succeed(
       ]),
   }),
 )
+const catalog = Layer.succeed(
+  Catalog.Service,
+  Catalog.Service.of({
+    transform: () => Effect.die("unexpected catalog.transform"),
+    provider: {
+      get: () => Effect.die("unexpected catalog.provider.get"),
+      all: () => Effect.succeed([]),
+      available: () => Effect.succeed([]),
+    },
+    model: {
+      get: (providerID, modelID) => Effect.fail(new Catalog.ModelNotFoundError({ providerID, modelID })),
+      all: () => Effect.succeed([]),
+      available: () => Effect.succeed([]),
+      default: () => Effect.succeed(Option.none<ModelV2.Info>()),
+      small: () => Effect.succeed(Option.none<ModelV2.Info>()),
+    },
+  }),
+)
 const testOwnerAuthorization = Layer.succeed(
   V2ProviderTurn.OwnerAuthorization,
   V2ProviderTurn.OwnerAuthorization.of({ authorize: () => Effect.succeed(true) }),
@@ -167,6 +189,8 @@ const sessionContext = SessionContext.layer.pipe(
   Layer.provide(database),
 )
 const runner = SessionRunnerLLM.layer.pipe(
+  Layer.provide(FSUtil.defaultLayer),
+  Layer.provide(Git.defaultLayer),
   Layer.provide(providerTurns),
   Layer.provide(V2ToolEffect.layer.pipe(Layer.provide(database))),
   Layer.provide(sessionContext),
@@ -181,6 +205,7 @@ const runner = SessionRunnerLLM.layer.pipe(
   Layer.provide(agents),
   Layer.provide(skillGuidance),
   Layer.provide(config),
+  Layer.provide(catalog),
   Layer.provide(testOwnerAuthorization),
   // W7: the runner's settle-hook seam — the SAME layer the production compositions provide. The
   // production wiring satisfies the seam's Database at the provide site (Database.defaultLayer); the

@@ -44,6 +44,25 @@ const stepSettlementOptions = {
   },
 } as const
 
+/**
+ * Native V2 creation authority. Version 1 of `session.created` remains decodable as the
+ * compatibility/import wire event, while all new V2 Sessions start with this version 2 fact.
+ */
+export const Created = EventV2.define({
+  type: "session.created",
+  sync: {
+    aggregate: "sessionID",
+    version: 2,
+  },
+  schema: {
+    sessionID: SessionSchema.ID,
+    info: SessionSchema.Info,
+    slug: Schema.String,
+    version: Schema.String,
+  },
+})
+export type Created = typeof Created.Type
+
 export const UnknownError = Schema.Struct({
   type: Schema.Literal("unknown"),
   message: Schema.String,
@@ -73,6 +92,16 @@ export const ModelSwitched = EventV2.define({
   },
 })
 export type ModelSwitched = typeof ModelSwitched.Type
+
+export const PermissionsChanged = EventV2.define({
+  type: "session.next.permissions.changed",
+  ...options,
+  schema: {
+    ...Base,
+    permissions: SessionSchema.Info.fields.permissions,
+  },
+})
+export type PermissionsChanged = typeof PermissionsChanged.Type
 
 export const Moved = EventV2.define({
   type: "session.next.moved",
@@ -514,8 +543,10 @@ export namespace Compaction {
 }
 
 const DurableDefinitions = [
+  Created,
   AgentSwitched,
   ModelSwitched,
+  PermissionsChanged,
   Moved,
   Prompted,
   PromptLifecycle.Admitted,

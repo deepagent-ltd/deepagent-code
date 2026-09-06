@@ -16,6 +16,7 @@ import type { Prompt } from "./prompt"
 import type { SessionInput } from "./input"
 import type { Snapshot } from "../snapshot"
 import { PermissionV1 } from "../v1/permission"
+import { PermissionV2 } from "../permission"
 import { ProjectV2 } from "../project"
 import type { SessionSchema } from "./schema"
 import type { MessageID, PartID, SessionV1 } from "../v1/session"
@@ -58,7 +59,7 @@ export const SessionTable = sqliteTable(
     tokens_cache_write: integer().notNull().default(0),
     mutation_epoch: integer().notNull().default(0),
     revert: text({ mode: "json" }).$type<{ messageID: MessageID; partID?: PartID; snapshot?: string; diff?: string }>(),
-    permission: text({ mode: "json" }).$type<PermissionV1.Ruleset>(),
+    permission: text({ mode: "json" }).$type<PermissionV1.Ruleset | PermissionV2.Ruleset>(),
     agent: text(),
     model: text({ mode: "json" }).$type<{
       id: string

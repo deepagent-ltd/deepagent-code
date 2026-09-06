@@ -18,6 +18,7 @@ import { SessionSchema } from "./session/schema"
 import { AbsolutePath, PositiveInt, RelativePath } from "./schema"
 import { AgentV2 } from "./agent"
 import { SessionV1 } from "./v1/session"
+import { PermissionV1 } from "./v1/permission"
 import { InstallationVersion } from "./installation/version"
 import { Slug } from "./util/slug"
 import { ProjectTable } from "./project/sql"
@@ -31,6 +32,7 @@ import { logFailure } from "./session/logging"
 import { MessageDecodeError, SessionNotFound } from "./session/error"
 import { SessionEvent } from "./session/event"
 import { SessionInput } from "./session/input"
+import { PermissionV2 } from "./permission"
 
 // get project -> project.locations
 //
@@ -76,7 +78,16 @@ type CreateInput = {
   id?: SessionSchema.ID
   agent?: AgentV2.ID
   model?: ModelV2.Ref
+  permissions?: PermissionV2.Ruleset
   location: Location.Ref
+}
+
+export function permissionsFromLegacy(ruleset?: PermissionV1.Ruleset): PermissionV2.Ruleset {
+  return (ruleset ?? []).map((rule) => ({
+    action: rule.permission,
+    resource: rule.pattern,
+    effect: rule.action,
+  }))
 }
 
 type CompactInput = {
@@ -367,6 +378,10 @@ export interface Interface {
     sessionID: SessionSchema.ID
     model: ModelV2.Ref
   }) => Effect.Effect<void, NotFoundError>
+  readonly setPermissions: (input: {
+    sessionID: SessionSchema.ID
+    permissions: PermissionV2.Ruleset
+  }) => Effect.Effect<void, NotFoundError>
   readonly prompt: (input: {
     id?: SessionMessage.ID
     sessionID: SessionSchema.ID
@@ -528,29 +543,26 @@ export const layer = Layer.effect(
           .run()
           .pipe(Effect.orDie)
         const now = Date.now()
-        const info = SessionV1.SessionInfo.make({
+        const subpath = path.relative(project.directory, input.location.directory).replaceAll("\\", "/")
+        const info = SessionSchema.Info.make({
           id: sessionID,
-          slug: Slug.create(),
-          version: InstallationVersion,
           projectID: project.id,
-          directory: input.location.directory,
-          path: path.relative(project.directory, input.location.directory).replaceAll("\\", "/"),
-          workspaceID: input.location.workspaceID ? WorkspaceV2.ID.make(input.location.workspaceID) : undefined,
           title: `New session - ${new Date(now).toISOString()}`,
           agent: input.agent,
-          model: input.model
-            ? {
-                id: ModelV2.ID.make(input.model.id),
-                providerID: input.model.providerID,
-                variant: input.model.variant,
-              }
-            : undefined,
+          permissions: input.permissions ?? [],
+          model: input.model,
           cost: 0,
           tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-          time: { created: now, updated: now },
+          time: { created: DateTime.makeUnsafe(now), updated: DateTime.makeUnsafe(now) },
+          location: input.location,
+          subpath: subpath ? RelativePath.make(subpath) : undefined,
         })
         const projected = yield* events
-          .publish(SessionV1.Event.Created, { sessionID, info }, { location: input.location })
+          .publish(
+            SessionEvent.Created,
+            { sessionID, info, slug: Slug.create(), version: InstallationVersion },
+            { location: input.location },
+          )
           .pipe(
             Effect.as({ type: "created" } as const),
             Effect.catchDefect((defect) => {
@@ -752,6 +764,14 @@ export const layer = Layer.effect(
           messageID: SessionMessage.ID.create(),
           timestamp: yield* DateTime.now,
           model: input.model,
+        })
+      }),
+      setPermissions: Effect.fn("V2Session.setPermissions")(function* (input) {
+        yield* result.get(input.sessionID)
+        yield* events.publish(SessionEvent.PermissionsChanged, {
+          sessionID: input.sessionID,
+          timestamp: yield* DateTime.now,
+          permissions: input.permissions,
         })
       }),
       // §16.3 order 4 package E + W0-1: overflow-triggered compaction and its continuation loop

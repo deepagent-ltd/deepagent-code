@@ -176,5 +176,6 @@ export const migrations = (
     import("./migration/20260910000000_event_admission_refusal_reason"),
     import("./migration/20260904120000_v2_provider_prepared_turn_canonical_hash"),
     import("./migration/20260904171154_mighty_fallen_one"),
+    import("./migration/20260906125300_v2_tool_effect_admission"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

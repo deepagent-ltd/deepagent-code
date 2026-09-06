@@ -44,6 +44,9 @@ import { SessionCompaction } from "@/session/compaction"
 import { LLM } from "@/session/llm"
 import { SessionPrompt } from "@/session/prompt"
 import { SessionV2 } from "@deepagent-code/core/session"
+import { SessionExecutionLocal } from "@deepagent-code/core/session/execution/local"
+import { SessionRuntimeStatus } from "@deepagent-code/core/session/runtime-status"
+import { SessionStore } from "@deepagent-code/core/session/store"
 import { PromptEpoch } from "@/session/prompt-epoch"
 import { DurableLearningRuntime } from "@/deepagent/learning-runtime"
 import { devCampaignMint } from "@/effect/dev-campaign-mint"
@@ -152,7 +155,6 @@ import { contextHandlers } from "./handlers/context"
 import { productionSourcesLayer } from "@/context-federation/production-sources"
 import { V2RunnerFrame } from "@/session/v2-runner-frame"
 import { V2PlanGate } from "@/session/v2-plan-gate"
-import { V2ManualCompaction } from "@/session/v2-manual-compaction"
 import { V2OwnerSeed } from "@deepagent-code/core/session/runner/v2-owner-seed"
 import { V2OwnerDevMint } from "@deepagent-code/core/session/runner/v2-owner-dev-mint"
 
@@ -397,6 +399,10 @@ export function createRoutes(corsOptions?: CorsOptions) {
       // serviceOption from THIS root scope. Same memoized liveLayer the SessionPrompt subtree
       // already builds — providing it here only exports the shared singleton (no split-brain).
       SessionV2.liveLayer,
+      SessionRuntimeStatus.layer.pipe(
+        Layer.provide(SessionExecutionLocal.liveLayer),
+        Layer.provide(SessionStore.defaultLayer),
+      ),
       GoalManager.defaultLayer,
       SessionRevert.defaultLayer,
       // V4.1 §N — the durable goal-steer buffer, exposed at the graph root so the v4-event-runtime's
@@ -489,9 +495,6 @@ export function createRoutes(corsOptions?: CorsOptions) {
     // W2-V2: the plan gate on the V2 runner's tool settle path (the V1 SessionTools wrapper never
     // sees V2 settles). LAST-WINS so every per-location runner tree resolves the same gate.
     Layer.provide(V2PlanGate.defaultLayer),
-    // W0-1: manual compaction under the V2-only profile. SessionV2.compact delegates to this host
-    // seam (the same SessionCompaction.create state machine as the legacy summarize route).
-    Layer.provide(V2ManualCompaction.defaultLayer),
   ).pipe(Layer.orDie)
 }
 

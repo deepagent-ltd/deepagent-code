@@ -51,6 +51,20 @@ const location = Location.Ref.make({ directory: AbsolutePath.make("/project") })
 const id = SessionV2.ID.create()
 
 describe("SessionV2.create", () => {
+  it.effect("converts legacy permissions without changing rule precedence", () =>
+    Effect.sync(() => {
+      expect(
+        SessionV2.permissionsFromLegacy([
+          { permission: "bash", pattern: "*", action: "deny" },
+          { permission: "bash", pattern: "git status", action: "allow" },
+        ]),
+      ).toEqual([
+        { action: "bash", resource: "*", effect: "deny" },
+        { action: "bash", resource: "git status", effect: "allow" },
+      ])
+    }),
+  )
+
   it.effect("derives stable namespaced external IDs", () =>
     Effect.sync(() => {
       const input = { namespace: "opencord.agent-thread", key: "thread-1" }
@@ -106,8 +120,14 @@ describe("SessionV2.create", () => {
           location: Location.Ref.make({ directory: location.directory, workspaceID }),
           agent: AgentV2.ID.make("build"),
           model,
+          permissions: [{ action: "bash", resource: "*", effect: "deny" }],
         }),
-      ).toMatchObject({ location: { directory: location.directory, workspaceID }, agent: "build", model })
+      ).toMatchObject({
+        location: { directory: location.directory, workspaceID },
+        agent: "build",
+        model,
+        permissions: [{ action: "bash", resource: "*", effect: "deny" }],
+      })
     }),
   )
 
@@ -182,7 +202,7 @@ describe("SessionV2.create", () => {
     }),
   )
 
-  it.effect("persists creation through the existing legacy created event", () =>
+  it.effect("persists creation through the native V2 created event", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service
       const { db } = yield* Database.Service
@@ -190,7 +210,7 @@ describe("SessionV2.create", () => {
 
       expect(
         yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id)).all().pipe(Effect.orDie),
-      ).toMatchObject([{ type: EventV2.versionedType(SessionV1.Event.Created.type, 1) }])
+      ).toMatchObject([{ type: EventV2.versionedType(SessionEvent.Created.type, 2) }])
     }),
   )
 
@@ -208,7 +228,7 @@ describe("SessionV2.create", () => {
     }),
   )
 
-  it.effect("omits legacy creation rows from the V2 Session event stream", () =>
+  it.effect("includes native creation authority in the V2 Session event stream", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service
       const events = yield* EventV2.Service
@@ -218,8 +238,9 @@ describe("SessionV2.create", () => {
       yield* SessionInput.promoteSteers(db, events, created.id, Number.MAX_SAFE_INTEGER)
 
       expect(
-        Array.from(yield* session.events({ sessionID: created.id }).pipe(Stream.take(2), Stream.runCollect)),
+        Array.from(yield* session.events({ sessionID: created.id }).pipe(Stream.take(3), Stream.runCollect)),
       ).toMatchObject([
+        { cursor: 0, event: { type: "session.created", version: 2 } },
         { cursor: 1, event: { type: "session.next.prompt.admitted", data: { prompt: { text: "Hello" } } } },
         { cursor: 2, event: { type: "session.next.prompt.promoted" } },
       ])
@@ -303,7 +324,7 @@ describe("SessionV2.create", () => {
             .all()
             .pipe(Effect.orDie)).map((event) => [event.seq, event.type]),
         ).toEqual([
-          [0, EventV2.versionedType(SessionV1.Event.Created.type, 1)],
+          [0, EventV2.versionedType(SessionEvent.Created.type, 2)],
           [1, EventV2.versionedType(SessionEvent.PromptLifecycle.Admitted.type, 1)],
           [2, EventV2.versionedType(SessionEvent.PromptLifecycle.Promoted.type, 1)],
           // W4-6 wire egress: the promoted user message derives a V1 wire row on replay too —
@@ -336,6 +357,21 @@ describe("SessionV2.create", () => {
       expect(event).toBeDefined()
       expect(sequence).toBeDefined()
       const data = event!.data as { sessionID: string; info: Record<string, unknown> }
+      const legacyData = {
+        sessionID: created.id,
+        info: SessionV1.SessionInfo.make({
+          id: created.id,
+          slug: "replay-existing",
+          version: "test",
+          projectID: created.projectID,
+          directory: created.location.directory,
+          title: created.title,
+          ...(created.location.workspaceID ? { workspaceID: created.location.workspaceID } : {}),
+          ...(created.agent ? { agent: created.agent } : {}),
+          ...(created.model ? { model: created.model } : {}),
+          time: { created: 0, updated: 0 },
+        }),
+      }
       const beforeSession = yield* db
         .select()
         .from(SessionTable)
@@ -425,7 +461,7 @@ describe("SessionV2.create", () => {
             id: EventV2.ID.make("evt_replay_atomic_created"),
             aggregateID: batchAggregateID,
             seq: 0,
-            type: EventV2.versionedType(SessionV1.Event.Created.type, 1),
+            type: EventV2.versionedType(SessionEvent.Created.type, 2),
             data: {
               ...data,
               sessionID: batchAggregateID,
@@ -438,13 +474,16 @@ describe("SessionV2.create", () => {
             seq: 1,
             type: EventV2.versionedType(SessionV1.Event.Updated.type, 1),
             data: {
-              ...data,
               sessionID: batchAggregateID,
-              info: {
-                ...data.info,
+              info: SessionV1.SessionInfo.make({
                 id: batchAggregateID,
+                slug: "replay-atomic",
+                version: "test",
                 projectID: ProjectV2.ID.make("prj_replay_other"),
-              },
+                directory: location.directory,
+                title: "Replay atomic",
+                time: { created: 0, updated: 1 },
+              }),
             },
           },
         ])
@@ -461,13 +500,16 @@ describe("SessionV2.create", () => {
         {
           id: EventV2.ID.make("evt_replay_session_identity"),
           type: EventV2.versionedType(SessionV1.Event.Updated.type, 1),
-          data: { ...data, info: { ...data.info, id: SessionV2.ID.make("ses_replay_other") } },
+          data: { ...legacyData, info: { ...legacyData.info, id: SessionV2.ID.make("ses_replay_other") } },
           message: "identity does not match",
         },
         {
           id: EventV2.ID.make("evt_replay_session_project"),
           type: EventV2.versionedType(SessionV1.Event.Updated.type, 1),
-          data: { ...data, info: { ...data.info, projectID: ProjectV2.ID.make("prj_replay_other") } },
+          data: {
+            ...legacyData,
+            info: { ...legacyData.info, projectID: ProjectV2.ID.make("prj_replay_other") },
+          },
           message: "cannot change project",
         },
         {
@@ -522,7 +564,7 @@ describe("SessionV2.create", () => {
           id: EventV2.ID.make("evt_replay_created_identity"),
           aggregateID,
           seq: 0,
-          type: EventV2.versionedType(SessionV1.Event.Created.type, 1),
+          type: EventV2.versionedType(SessionEvent.Created.type, 2),
           data: { ...data, sessionID: aggregateID, info: { ...data.info, id: projectedID } },
         })
         .pipe(Effect.catchDefect(Effect.succeed))
@@ -541,11 +583,15 @@ describe("SessionV2.create", () => {
             id: EventV2.ID.make("evt_replay_owned_created"),
             aggregateID: ownedAggregateID,
             seq: 0,
-            type: EventV2.versionedType(SessionV1.Event.Created.type, 1),
+            type: EventV2.versionedType(SessionEvent.Created.type, 2),
             data: {
               ...data,
               sessionID: ownedAggregateID,
-              info: { ...data.info, id: ownedAggregateID, workspaceID: "wrk_other" },
+              info: {
+                ...data.info,
+                id: ownedAggregateID,
+                location: { directory: location.directory, workspaceID: "wrk_other" },
+              },
             },
           },
           { ownerID: "wrk_owner", strictOwner: true },
@@ -594,7 +640,7 @@ describe("SessionV2.create", () => {
       const session = yield* SessionV2.Service
       const event = yield* EventV2.Service
       const defect = new Error("unrelated projector defect")
-      yield* event.project(SessionV1.Event.Created, () => Effect.die(defect))
+      yield* event.project(SessionEvent.Created, () => Effect.die(defect))
 
       expect(yield* session.create({ id, location }).pipe(Effect.catchDefect(Effect.succeed))).toBe(defect)
     }),
@@ -664,7 +710,12 @@ describe("SessionV2.create", () => {
 
       expect(yield* session.get(created.id)).toMatchObject({ model })
       expect(
-        Array.from(yield* session.events({ sessionID: created.id }).pipe(Stream.take(1), Stream.runCollect)),
+        Array.from(
+          yield* session.events({ sessionID: created.id, after: EventV2.Cursor.make(0) }).pipe(
+            Stream.take(1),
+            Stream.runCollect,
+          ),
+        ),
       ).toMatchObject([{ event: { type: "session.next.model.switched", data: { model } } }])
     }),
   )
@@ -683,6 +734,26 @@ describe("SessionV2.create", () => {
         yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id)).all().pipe(Effect.orDie),
       ).toHaveLength(3)
       expect(yield* session.get(created.id)).toMatchObject({ model })
+    }),
+  )
+
+  it.effect("changes permissions through a durable Session event", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const created = yield* session.create({ location })
+      const permissions = [{ action: "bash", resource: "*", effect: "deny" as const }]
+
+      yield* session.setPermissions({ sessionID: created.id, permissions })
+
+      expect(yield* session.get(created.id)).toMatchObject({ permissions })
+      expect(
+        Array.from(
+          yield* session.events({ sessionID: created.id, after: EventV2.Cursor.make(0) }).pipe(
+            Stream.take(1),
+            Stream.runCollect,
+          ),
+        ),
+      ).toMatchObject([{ event: { type: "session.next.permissions.changed", data: { permissions } } }])
     }),
   )
 

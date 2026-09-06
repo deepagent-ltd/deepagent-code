@@ -32,7 +32,7 @@ Complete the user's search request efficiently and report your findings clearly.
 
 const PROMPT_RESEARCHER = `You are a read-only research agent. Follow the user's research request exactly by inspecting the workspace with read-only tools.
 
-Use Read, Glob, Grep, Git Read, and other explicitly permitted analysis tools to gather concrete evidence. Do not edit files, run shell commands, delegate tasks, or claim evidence that you did not observe. Return the requested structured result when the user supplies an output contract.`
+Use Read, Glob, Grep, Code Intel, Context Query, and other explicitly available read-only tools to gather concrete evidence. Do not edit files, run shell commands, delegate tasks, or claim evidence that you did not observe. Return the requested structured result when the user supplies an output contract.`
 
 const PROMPT_COMPACTION = `You are an anchored context summarization assistant for coding sessions.
 
@@ -118,8 +118,6 @@ export const Plugin = PluginV2.define({
       { action: "*", resource: "*", effect: "allow" },
       ...readonlyExternalDirectory,
       { action: "question", resource: "*", effect: "deny" },
-      { action: "plan_enter", resource: "*", effect: "deny" },
-      { action: "plan_exit", resource: "*", effect: "deny" },
       { action: "read", resource: "*", effect: "allow" },
       { action: "read", resource: "*.env", effect: "ask" },
       { action: "read", resource: "*.env.*", effect: "ask" },
@@ -134,7 +132,6 @@ export const Plugin = PluginV2.define({
         item.permissions.push(
           ...PermissionV2.merge(defaults, [
             { action: "question", resource: "*", effect: "allow" },
-            { action: "plan_enter", resource: "*", effect: "allow" },
           ]),
         )
       })
@@ -145,7 +142,6 @@ export const Plugin = PluginV2.define({
         item.permissions.push(
           ...PermissionV2.merge(defaults, [
             { action: "question", resource: "*", effect: "allow" },
-            { action: "plan_exit", resource: "*", effect: "allow" },
             { action: "external_directory", resource: path.join(Global.Path.data, "plans", "*"), effect: "allow" },
             { action: "edit", resource: "*", effect: "deny" },
             { action: "edit", resource: path.join(".deepagent-code", "plans", "*.md"), effect: "allow" },
@@ -159,8 +155,7 @@ export const Plugin = PluginV2.define({
       })
 
       editor.update(AgentV2.ID.make("general"), (item) => {
-        item.description =
-          "General-purpose agent for researching complex questions and executing multi-step tasks. Use this agent to execute multiple units of work in parallel."
+        item.description = "General-purpose agent for researching complex questions and executing multi-step tasks."
         item.mode = "subagent"
         item.permissions.push(...PermissionV2.merge(defaults, [{ action: "todowrite", resource: "*", effect: "deny" }]))
       })
@@ -197,8 +192,6 @@ export const Plugin = PluginV2.define({
               { action: "*", resource: "*", effect: "deny" },
               { action: "grep", resource: "*", effect: "allow" },
               { action: "glob", resource: "*", effect: "allow" },
-              { action: "list", resource: "*", effect: "allow" },
-              { action: "git_read", resource: "*", effect: "allow" },
               { action: "webfetch", resource: "*", effect: "allow" },
               { action: "websearch", resource: "*", effect: "allow" },
               { action: "read", resource: "*", effect: "allow" },

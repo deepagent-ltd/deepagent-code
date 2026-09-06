@@ -94,6 +94,18 @@ const VersionedMessage = EventV2.define({
   },
 })
 
+const LegacyVersionedMessage = EventV2.define({
+  type: "test.versioned",
+  sync: {
+    version: 1,
+    aggregate: "id",
+  },
+  schema: {
+    id: Schema.String,
+    legacy: Schema.Boolean,
+  },
+})
+
 const SyncTimestamp = EventV2.define({
   type: "test.timestamp",
   sync: {
@@ -127,6 +139,26 @@ function payloadAtEncodedBytes(sessionID: string, kind: "session" | "message", b
 }
 
 describe("EventV2", () => {
+  it.effect("routes same-name synchronized definitions by exact version", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const projected: string[] = []
+      yield* events.project(LegacyVersionedMessage, () => Effect.sync(() => projected.push("v1")))
+      yield* events.project(VersionedMessage, () => Effect.sync(() => projected.push("v2")))
+
+      yield* events.publish(LegacyVersionedMessage, { id: "shared", legacy: true })
+      yield* events.publish(VersionedMessage, { id: "shared", text: "current" })
+
+      expect(projected).toEqual(["v1", "v2"])
+      expect(
+        (yield* db.select({ type: EventTable.type }).from(EventTable).orderBy(asc(EventTable.seq)).all()).map(
+          (row) => row.type,
+        ),
+      ).toEqual(["test.versioned.1", "test.versioned.2"])
+    }),
+  )
+
   it.effect("derives stable namespaced external IDs", () =>
     Effect.sync(() => {
       const input = { namespace: "opencord.agent-input", key: "input-1" }

@@ -566,7 +566,15 @@ export function MessageTimeline(props: {
     if (!id) return idle
     return sync.data.session_status[id] ?? idle
   })
-  const working = createMemo(() => sessionStatus().type !== "idle")
+  const recoveryStatus = createMemo(() => {
+    const status = sessionStatus()
+    if (status.type !== "recovery_required") return
+    return status
+  })
+  const working = createMemo(() => {
+    const status = sessionStatus().type
+    return status === "busy" || status === "retry"
+  })
   const tint = createMemo(() => messageAgentColor(sessionMessages(), sync.data.agent))
 
   // Live wall-clock tick (1s) that only runs while the session is working, so the top-left turn timer
@@ -603,8 +611,7 @@ export function MessageTimeline(props: {
       if (message && message.role === "user") return message.id
     }
 
-    const status = sessionStatus()
-    if (status.type !== "idle") {
+    if (working()) {
       const messages = sessionMessages()
       for (let i = messages.length - 1; i >= 0; i--) {
         if (messages[i].role === "user") return messages[i].id
@@ -1267,7 +1274,7 @@ export function MessageTimeline(props: {
     )
   }
 
-  const workingTurn = (userMessageID: string) => sessionStatus().type !== "idle" && activeMessageID() === userMessageID
+  const workingTurn = (userMessageID: string) => working() && activeMessageID() === userMessageID
 
   const turnDurationMs = (userMessageID: string) => {
     const message = messageByID().get(userMessageID)
@@ -1690,6 +1697,15 @@ export function MessageTimeline(props: {
 
   return (
     <div class="relative w-full h-full min-w-0">
+      <Show when={recoveryStatus()}>
+        {(recovery) => (
+          <div class="absolute left-4 right-4 top-4 z-[70] md:left-12 md:right-12">
+            <Card variant="error" class="px-4 py-3">
+              {recovery().message}
+            </Card>
+          </div>
+        )}
+      </Show>
       <TurnRail
         userMessages={() => props.userMessages}
         parts={getMsgParts}

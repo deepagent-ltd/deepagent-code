@@ -13,6 +13,8 @@ import type { SessionContextEpoch } from "../context-epoch"
 import type { ToolOutputStore } from "../../tool-output-store"
 import type { AdmissionError } from "./canonical-turn"
 import type { Error as V2ProviderTurnError } from "./v2-provider-turn"
+import type { RecoveryRequiredError } from "./v2-tool-effect"
+import type { NotFoundError } from "../../agent"
 
 /** W7 — settle hook input. `activityId` is the durable activity that just settled; it is absent
  * when the drain ran without dispatching any provider turn (e.g. an early no-op wake). */
@@ -74,16 +76,31 @@ export class StepLimitExceededError extends Schema.TaggedErrorClass<StepLimitExc
   }
 }
 
+/** A durable execution claim already exists. The caller must classify/recover that Session instead
+ * of starting another provider drain whose preceding physical outcome may be unknown. */
+export class ExecutionRecoveryRequiredError extends Schema.TaggedErrorClass<ExecutionRecoveryRequiredError>()(
+  "SessionRunner.ExecutionRecoveryRequiredError",
+  { sessionID: SessionSchema.ID },
+) {
+  constructor(props: { readonly sessionID: SessionSchema.ID }) {
+    super(props)
+    this.message = `session ${props.sessionID} has an unresolved execution claim; explicit recovery is required`
+  }
+}
+
 export type RunError =
   | LLMError
   | SessionRunnerModel.Error
   | MessageDecodeError
   | ContextSnapshotDecodeError
   | StepLimitExceededError
+  | ExecutionRecoveryRequiredError
   | SystemContext.InitializationBlocked
   | SessionContextEpoch.AgentReplacementBlocked
   | ToolOutputStore.Error
   | V2ProviderTurnError
+  | RecoveryRequiredError
+  | NotFoundError
   | AdmissionError
 
 /** Runs one local continuation from already-recorded Session history. */

@@ -123,7 +123,7 @@ export const SessionGroup = HttpApiGroup.make("server.session")
           identifier: "v2.session.prompt",
           summary: "Send message",
           description:
-            "Durably admit one session input when resume is false. This endpoint does not execute the production SessionPrompt engine.",
+            "Durably admit one session input and schedule the Core V2 session runner. Set resume to false for admit-only delivery.",
         }),
       ),
   )

@@ -415,6 +415,7 @@ export const makeEventPanelPort =
     /** §16.3 order 3: optional V2 drive seam, resolved by the wiring layer (flag + composition gated). */
     readonly v2Session?: SessionV2.Interface
     readonly snapshot?: Snapshot.Interface
+    readonly v2Only?: boolean
   }): PanelConveneConsumer.PanelConvenePort =>
   (input) =>
     Effect.gen(function* () {
@@ -467,7 +468,7 @@ export const makeEventPanelPort =
         model: { providerID: model.providerID, modelID: model.modelID },
         allowPlanWriteCapability: false,
         purpose: "panel",
-        ...v2DriveDeps(deps.v2Session, deps.snapshot),
+        ...v2DriveDeps(deps.v2Session, deps.snapshot, deps.v2Only),
       })
       const runTurn: PanelTurnRunner = (turnInput) =>
         withContext(
@@ -522,8 +523,8 @@ const runtimeLayer = Layer.unwrap(
     // closed at dispatch time, matching the default-off discipline). The security namespace is resolved by
     // the bridge (deterministic workspace-scoped default; ContextLocationIdentity upgrade is a follow-on).
     const db = (yield* Database.Service).db
-    const v2Session = Option.getOrUndefined(yield* Effect.serviceOption(SessionV2.Service))
-    const eventV2Admission = makeV2AdmissionBridge({ db, ...(v2Session ? { v2Session } : {}) })
+    const v2Session = yield* SessionV2.Service
+    const eventV2Admission = makeV2AdmissionBridge({ db, v2Session })
     const runner = makeEventTurnRunner({
       sessions,
       agents,
@@ -938,7 +939,10 @@ const panelConsumerLayer = Layer.unwrap(
     const provider = yield* Provider.Service
     const instanceStore = yield* InstanceStore.Service
     // LEGACY-EXECUTION-ZERO: V2 subagent drive resolution (forced under the V2-only profile).
-    const { v2Session, snapshot: v2Snapshot } = yield* GoalLoopWiring.resolveV2SubagentDrive()
+    const { v2Session, snapshot: v2Snapshot } = yield* GoalLoopWiring.resolveV2SubagentDrive({
+      v2Session: yield* SessionV2.Service,
+      snapshot: yield* Snapshot.Service,
+    })
     const convene = makeEventPanelPort({
       sessions,
       agents,
@@ -946,6 +950,7 @@ const panelConsumerLayer = Layer.unwrap(
       instanceStore,
       defaultModel: () => provider.defaultModel().pipe(Effect.orDie),
       ...v2DriveDeps(v2Session, v2Snapshot, flags.coreV2Only),
+      v2Only: flags.coreV2Only,
     })
     return PanelConveneConsumer.layerWith({ convene, runLoop: flags.v4PanelAutoConvene })
   }),
@@ -978,7 +983,10 @@ const goalTickConsumerLayer = Layer.unwrap(
     const eventBus = yield* DeepAgentEventBus.Service
     const approvalQueue = yield* ApprovalQueue.Service
     // LEGACY-EXECUTION-ZERO: V2 subagent drive resolution for cold tick reconstruction.
-    const { v2Session, snapshot: v2Snapshot } = yield* GoalLoopWiring.resolveV2SubagentDrive()
+    const { v2Session, snapshot: v2Snapshot } = yield* GoalLoopWiring.resolveV2SubagentDrive({
+      v2Session: yield* SessionV2.Service,
+      snapshot: yield* Snapshot.Service,
+    })
     const runTick = GoalTickPort.makeGoalTickPort({
       sessions,
       agents,
@@ -1162,8 +1170,8 @@ const spoolDrainLayer = Layer.effectDiscard(
     const flags = yield* RuntimeFlags.Service
     if (!flags.v4MultiAgentRuntime) return
     const { db } = yield* Database.Service
-    const v2Session = Option.getOrUndefined(yield* Effect.serviceOption(SessionV2.Service))
-    yield* spoolDrainPass({ db, ...(v2Session ? { v2Session } : {}) })
+    const v2Session = yield* SessionV2.Service
+    yield* spoolDrainPass({ db, v2Session })
       .pipe(
         Effect.repeat(Schedule.spaced(Duration.millis(SPOOL_DRAIN_INTERVAL_MS))),
         Effect.forkScoped,

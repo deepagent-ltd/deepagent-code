@@ -1,7 +1,7 @@
 import path from "path"
 import fs from "fs/promises"
 import { describe, expect } from "bun:test"
-import { Effect, Layer, Schema } from "effect"
+import { Cause, Effect, Exit, Layer, Schema } from "effect"
 import { FastCheck } from "effect/testing"
 import { Config } from "@deepagent-code/core/config"
 import { ConfigProvider } from "@deepagent-code/core/config/provider"
@@ -653,7 +653,7 @@ describe("Config", () => {
     ),
   )
 
-  it.live("ignores invalid files while loading valid config values", () =>
+  it.live("rejects invalid files instead of silently running with partial config", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
@@ -670,12 +670,37 @@ describe("Config", () => {
               ),
             ]),
           )
-          return yield* Effect.gen(function* () {
+          const exit = yield* Effect.gen(function* () {
             const config = yield* Config.Service
-            const documents = (yield* config.entries()).filter((entry) => entry.type === "document")
+            return yield* config.entries()
+          }).pipe(Effect.provide(testLayer(tmp.path)), Effect.exit)
+          expect(Exit.isFailure(exit)).toBe(true)
+          if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain("Invalid config JSON")
+        }),
+      ),
+    ),
+  )
 
-            expect(documents.map((document) => document.info.$schema)).toEqual(["base"])
-          }).pipe(Effect.provide(testLayer(tmp.path)))
+  it.live("rejects unknown fields instead of silently ignoring misspelled config", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            fs.writeFile(path.join(tmp.path, "deepagent-code.json"), JSON.stringify({ defualt_agent: "build" })),
+          )
+          const exit = yield* Effect.gen(function* () {
+            const config = yield* Config.Service
+            return yield* config.entries()
+          }).pipe(Effect.provide(testLayer(tmp.path)), Effect.exit)
+
+          expect(Exit.isFailure(exit)).toBe(true)
+          if (Exit.isFailure(exit)) {
+            expect(Cause.pretty(exit.cause)).toContain("Invalid config in")
+            expect(Cause.pretty(exit.cause)).toContain("defualt_agent")
+          }
         }),
       ),
     ),

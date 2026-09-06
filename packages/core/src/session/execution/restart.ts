@@ -14,6 +14,7 @@ import { SessionExecution } from "../execution"
 import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
 import { V2ProviderTurnReceiptTable } from "../runner/v2-provider-turn.sql"
+import { V2ToolEffectAdmissionTable, V2ToolEffectTable } from "../runner/v2-tool-effect.sql"
 
 export type RecoveryReceipt = {
   readonly receiptId: string
@@ -88,8 +89,9 @@ export type RecoveryToolEffect = {
   readonly toolCallId: string
   readonly toolName: string
   readonly effectKind: "mutating" | "read_only"
-  readonly state: "settled" | "failed"
+  readonly state: "admitted" | "settled" | "failed"
   readonly grantBound: boolean
+  readonly classification: "recovery_required" | "terminal_consistent"
 }
 
 export type PendingRecovery = {
@@ -97,9 +99,9 @@ export type PendingRecovery = {
   readonly turns: readonly RecoveryTurn[]
   readonly tools: readonly RecoveryToolReceipt[]
   readonly tasks: readonly RecoveryTaskRun[]
-  // Terminal side-effect evidence: capability-layer recovery decisions must know the recorded
-  // watermark of what already executed. Effects are evidence, not classification inputs — every
-  // row is terminal by construction, so they never move the disposition vocabulary.
+  // Tool-effect admissions are classification inputs. An admission without a matching terminal
+  // row proves only that execution was allowed to start, so its outcome is unknown and must move
+  // the Session into explicit recovery. Terminal rows remain execution-watermark evidence.
   readonly effects: readonly RecoveryToolEffect[]
   readonly disposition:
     | "claim_only"
@@ -300,22 +302,29 @@ export const layer = Layer.effect(
                 WHERE session_id IN (${inSessions})
                   AND provider_state NOT IN ('settled', 'failed')
               `)
-              const effectRows = yield* tx.all<{
-                session_id: string
-                effect_id: string
-                receipt_id: string
-                provider_attempt_id: string
-                tool_call_id: string
-                tool_name: string
-                effect_kind: string
-                state: string
-                grant_receipt_id: string | null
-              }>(sql`
-                SELECT session_id, effect_id, receipt_id, provider_attempt_id, tool_call_id, tool_name,
-                       effect_kind, state, grant_receipt_id
-                FROM session_v2_tool_effect
-                WHERE session_id IN (${inSessions})
-              `)
+              const effectRows = yield* tx
+                .select({
+                  sessionID: V2ToolEffectAdmissionTable.session_id,
+                  admissionId: V2ToolEffectAdmissionTable.admission_id,
+                  effectId: V2ToolEffectTable.effect_id,
+                  receiptId: V2ToolEffectAdmissionTable.receipt_id,
+                  providerAttemptId: V2ToolEffectAdmissionTable.provider_attempt_id,
+                  toolCallId: V2ToolEffectAdmissionTable.tool_call_id,
+                  toolName: V2ToolEffectAdmissionTable.tool_name,
+                  effectKind: V2ToolEffectAdmissionTable.effect_kind,
+                  state: V2ToolEffectTable.state,
+                  grantReceiptId: V2ToolEffectTable.grant_receipt_id,
+                })
+                .from(V2ToolEffectAdmissionTable)
+                .leftJoin(
+                  V2ToolEffectTable,
+                  and(
+                    eq(V2ToolEffectAdmissionTable.receipt_id, V2ToolEffectTable.receipt_id),
+                    eq(V2ToolEffectAdmissionTable.tool_call_id, V2ToolEffectTable.tool_call_id),
+                  ),
+                )
+                .where(inArray(V2ToolEffectAdmissionTable.session_id, sessionIDs))
+                .all()
               const taskRows = yield* tx.all<{
                 run_id: string
                 parent_session_id: string
@@ -405,16 +414,17 @@ export const layer = Layer.effect(
               ),
             }))
           const effects = inventory.effectRows
-            .filter((row) => row.session_id === sessionID)
+            .filter((row) => row.sessionID === sessionID)
             .map((row): RecoveryToolEffect => ({
-              effectId: row.effect_id,
-              receiptId: row.receipt_id,
-              providerAttemptId: row.provider_attempt_id,
-              toolCallId: row.tool_call_id,
-              toolName: row.tool_name,
-              effectKind: row.effect_kind as RecoveryToolEffect["effectKind"],
-              state: row.state as RecoveryToolEffect["state"],
-              grantBound: row.grant_receipt_id !== null,
+              effectId: row.effectId ?? row.admissionId,
+              receiptId: row.receiptId,
+              providerAttemptId: row.providerAttemptId,
+              toolCallId: row.toolCallId,
+              toolName: row.toolName,
+              effectKind: row.effectKind,
+              state: row.state ?? "admitted",
+              grantBound: row.grantReceiptId !== null,
+              classification: row.state === null || row.grantReceiptId === null ? "recovery_required" : "terminal_consistent",
             }))
           return {
             sessionID,
@@ -426,6 +436,7 @@ export const layer = Layer.effect(
               ...turns.map((turn) => turn.classification),
               ...tools.map((tool) => tool.classification),
               ...tasks.map((task) => task.classification),
+              ...effects.map((effect) => effect.classification),
             ]),
           }
         })

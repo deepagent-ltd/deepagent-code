@@ -24,6 +24,7 @@ import { LocationSearch } from "../src/location-search"
 import { ToolRegistry } from "../src/tool/registry"
 import { ApplicationTools } from "../src/tool/application-tools"
 import { Flag } from "../src/flag/flag"
+import { BuiltInTools } from "../src/tool/builtins"
 
 const applicationTools = ApplicationTools.layer
 const it = testEffect(
@@ -104,26 +105,8 @@ describe("LocationServiceMap", () => {
 
           const blockedState = yield* update(blocked.path)
           expect(blockedState.providers.some((provider) => provider.id === ProviderV2.ID.make("test"))).toBe(false)
-          expect(blockedState.tools.map((tool) => tool.name).sort()).toEqual([
-            "application_context",
-            "apply_patch",
-            "bash",
-            "capability_load",
-            "capability_search",
-            "code_intel",
-            "context_query",
-            "domain_pack_load",
-            "edit",
-            "glob",
-            "grep",
-            "plan",
-            "question",
-            "read",
-            "skill",
-            "webfetch",
-            "websearch",
-            "write",
-          ])
+          const expectedTools = ["application_context", ...BuiltInTools.builtinToolNames].sort()
+          expect(blockedState.tools.map((tool) => tool.name).sort()).toEqual(expectedTools)
           expect(blockedState.researcherTools).toEqual([
             "code_intel",
             "context_query",
@@ -135,26 +118,7 @@ describe("LocationServiceMap", () => {
           ])
           const allowedState = yield* update(allowed.path)
           expect(allowedState.providers.some((provider) => provider.id === ProviderV2.ID.make("test"))).toBe(true)
-          expect(allowedState.tools.map((tool) => tool.name).sort()).toEqual([
-            "application_context",
-            "apply_patch",
-            "bash",
-            "capability_load",
-            "capability_search",
-            "code_intel",
-            "context_query",
-            "domain_pack_load",
-            "edit",
-            "glob",
-            "grep",
-            "plan",
-            "question",
-            "read",
-            "skill",
-            "webfetch",
-            "websearch",
-            "write",
-          ])
+          expect(allowedState.tools.map((tool) => tool.name).sort()).toEqual(expectedTools)
           expect(allowedState.researcherTools).toEqual([
             "code_intel",
             "context_query",

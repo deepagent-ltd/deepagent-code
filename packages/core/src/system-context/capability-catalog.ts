@@ -1,6 +1,6 @@
 export * as CapabilityCatalog from "./capability-catalog"
 
-import { Schema } from "effect"
+import { Context, Schema } from "effect"
 import { assertContentLoadBudget } from "../contract/capability-load"
 import { SystemContext } from "./index"
 import { SystemContextRegistry } from "./registry"
@@ -53,7 +53,7 @@ export const capabilityCatalog: ReadonlyArray<CapabilityManifest> = sortManifest
       availability: "stable",
       required_permissions: ["edit"],
       required_runtime_features: [],
-      entry_tools: ["edit", "write", "apply-patch"],
+      entry_tools: ["edit", "write", "apply_patch"],
       body_ref: "capability://deepagent.code-edit@1.0.0-beta.0",
       max_body_tokens: CapabilityBudget.l2SingleMaxTokens,
     },
@@ -156,10 +156,23 @@ export const capabilityCatalogMetrics = (text: string): CatalogMetrics => ({
  * capability the runtime won't serve.
  */
 export function renderCapabilityCatalog(catalog: ReadonlyArray<CapabilityManifest> = capabilityCatalog): string {
+  if (catalog.length === 0) return "No DeepAgentCode capabilities are available under the current permissions."
   return [
     "DeepAgentCode capabilities (discovery; load a body for a full procedure):",
     ...catalog.map((manifest) => l0Line(manifest)),
   ].join("\n")
+}
+
+export const CurrentGrantedPermissions = Context.Reference<ReadonlySet<string> | undefined>(
+  "@deepagent-code/v2/CapabilityCatalog/CurrentGrantedPermissions",
+  { defaultValue: () => undefined },
+)
+
+export function authorizedCatalog(grantedPermissions?: ReadonlySet<string>): ReadonlyArray<CapabilityManifest> {
+  if (grantedPermissions === undefined) return capabilityCatalog
+  return capabilityCatalog.filter((manifest) =>
+    manifest.required_permissions.every((permission) => grantedPermissions.has(permission)),
+  )
 }
 
 /** A capability's rendered L0 line (stable, deterministic). */
@@ -206,8 +219,8 @@ export function assertCapabilityCatalogWithinBudget(text: string): void {
 export const capabilityCatalogSource = SystemContext.make({
   key: SystemContext.Key.make("deepagent/capability-catalog"),
   codec: Schema.toCodecJson(Schema.String),
-  load: Effect.sync(() => {
-    const text = renderCapabilityCatalog()
+  load: Effect.gen(function* () {
+    const text = renderCapabilityCatalog(authorizedCatalog(yield* CurrentGrantedPermissions))
     assertCapabilityCatalogWithinBudget(text)
     return text
   }),

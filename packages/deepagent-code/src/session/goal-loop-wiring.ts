@@ -719,12 +719,19 @@ export const v2DriveDeps = (
 ) =>
   v2Only || v2Session ? { v2Session, ...(snapshot ? { snapshot } : {}), v2Only } : {}
 
-// LEGACY-EXECUTION-ZERO: the single place every subagent-drive call site resolves the V2 seam. Under
-// the V2-only profile the drive is FORCED on (the experimental flag is irrelevant) and a composition
-// without the V2 session stack refuses at layer build instead of falling back to the legacy path.
-// Outside the profile the experimental flag keeps its existing semantics (flag OFF → legacy, ON but
-// stack absent → legacy).
-export const resolveV2SubagentDrive = Effect.fn("GoalLoopWiring.resolveV2SubagentDrive")(function* () {
+export interface V2SubagentDriveServices {
+  readonly v2Session: SessionV2.Interface
+  readonly snapshot: Snapshot.Interface
+}
+
+// LEGACY-EXECUTION-ZERO: every production caller captures these services while its Layer is built and
+// passes them explicitly. Looking them up with serviceOption here hid missing Layer edges from Effect's
+// requirement type: a sibling SessionV2 layer in Layer.mergeAll is not an input to the Goal/Panel layer.
+// Under the V2-only profile the drive is forced on; the experimental flag only preserves isolated legacy
+// tests while migration code remains.
+export const resolveV2SubagentDrive = Effect.fn("GoalLoopWiring.resolveV2SubagentDrive")(function* (
+  services: V2SubagentDriveServices,
+) {
   const flags = yield* RuntimeFlags.Service
   const v2Only = flags.coreV2Only
   if (!flags.experimentalV2SubagentDrive && !v2Only)
@@ -733,15 +740,7 @@ export const resolveV2SubagentDrive = Effect.fn("GoalLoopWiring.resolveV2Subagen
       v2Session: undefined as SessionV2.Interface | undefined,
       snapshot: undefined as Snapshot.Interface | undefined,
     }
-  const v2Session = Option.getOrUndefined(yield* Effect.serviceOption(SessionV2.Service))
-  const snapshot = v2Session
-    ? Option.getOrUndefined(yield* Effect.serviceOption(Snapshot.Service))
-    : undefined
-  // LEGACY-EXECUTION-ZERO / r0: the refusal moves to TURN time (makeTaskSubagentRunner) — some
-  // layered scopes (e.g. HTTP route groups) assemble before the root stack is provided, so a
-  // build-time orDie here is a composition false positive; the execution-time typed refusal keeps
-  // the fail-closed contract at the point that matters.
-  return { v2Only, v2Session, snapshot }
+  return { v2Only, ...services }
 })
 
 export const makeTaskSubagentRunner =

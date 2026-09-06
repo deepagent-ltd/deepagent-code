@@ -10,6 +10,7 @@ import { externalID, type ExternalID } from "../schema/external-id"
 import { Identifier } from "../util/identifier"
 import { V2Schema } from "../v2-schema"
 import { AgentID } from "../agent/id"
+import { PermissionSchema } from "../permission/schema"
 
 export const ID = Schema.String.check(Schema.isStartsWith("ses")).pipe(
   Schema.brand("SessionID"),
@@ -29,6 +30,7 @@ export class Info extends Schema.Class<Info>("SessionV2.Info")({
   parentID: ID.pipe(optionalOmitUndefined),
   projectID: ProjectID.ID,
   agent: AgentID.ID.pipe(Schema.optional),
+  permissions: PermissionSchema.Ruleset,
   model: ModelRef.Ref.pipe(Schema.optional),
   cost: Schema.Finite,
   tokens: Schema.Struct({

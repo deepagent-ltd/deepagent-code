@@ -261,6 +261,12 @@ export function Prompt(props: PromptProps) {
   }
 
   const status = createMemo(() => sync.data.session_status?.[props.sessionID ?? ""] ?? { type: "idle" })
+  const working = createMemo(() => status().type === "busy" || status().type === "retry")
+  const recovery = createMemo(() => {
+    const current = status()
+    if (current.type !== "recovery_required") return
+    return current
+  })
   const intelligenceMode = createMemo(
     () => props.sessionID && (kv.get("intelligence_mode", {}) as Record<string, boolean>)[props.sessionID] === true,
   )
@@ -516,7 +522,7 @@ export function Prompt(props: PromptProps) {
         name: "session.interrupt",
         category: "Session",
         hidden: true,
-        enabled: status().type !== "idle",
+        enabled: working(),
         run: () => {
           if (auto()?.visible) return
           if (!input.focused) return
@@ -795,7 +801,7 @@ export function Prompt(props: PromptProps) {
         name: "prompt.followup",
         category: "Session",
         slashName: "followup",
-        enabled: status().type !== "idle",
+        enabled: working(),
         run: () => {
           const sessionID = props.sessionID
           if (!sessionID) return
@@ -1671,7 +1677,7 @@ export function Prompt(props: PromptProps) {
 
   const spinnerDef = createMemo(() => {
     const agent =
-      status().type !== "idle"
+      working()
         ? (local.agent.list().find((a) => a.name === lastUserMessage()?.agent) ?? local.agent.current())
         : local.agent.current()
     const color = agent ? local.agent.color(agent.name) : theme.border
@@ -1857,7 +1863,15 @@ export function Prompt(props: PromptProps) {
         </box>
         <box width="100%" flexDirection="row" justifyContent="space-between">
           <Switch>
-            <Match when={status().type !== "idle"}>
+            <Match when={recovery()}>
+              {(required) => (
+                <box paddingLeft={1} flexDirection="row" gap={1}>
+                  <text fg={theme.error}>recovery required:</text>
+                  <text fg={theme.textMuted}>{required().message}</text>
+                </box>
+              )}
+            </Match>
+            <Match when={working()}>
               <box
                 flexDirection="row"
                 gap={1}

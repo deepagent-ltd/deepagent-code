@@ -177,7 +177,11 @@ export function fromRow(row: SessionRow): Info {
     share,
     metadata: row.metadata ?? undefined,
     revert,
-    permission: row.permission ? [...row.permission] : undefined,
+    permission: row.permission?.map((rule) =>
+      "permission" in rule
+        ? { permission: rule.permission, pattern: rule.pattern, action: rule.action }
+        : { permission: rule.action, pattern: rule.resource, action: rule.effect },
+    ),
     time: {
       created: row.time_created,
       updated: row.time_updated,

@@ -115,6 +115,27 @@ describe("ToolRegistry", () => {
     }),
   )
 
+  it.effect("classifies only the explicit read-only action allowlist as replay-safe", () =>
+    Effect.gen(function* () {
+      const service = yield* ToolRegistry.Service
+      yield* service.register({
+        read: make(),
+        graph: make("code_intel"),
+        capability: make("capability.read"),
+        custom: make(),
+        unknown_read_alias: make("future.read"),
+      })
+      const materialized = yield* service.materialize()
+
+      expect(materialized.effectKind("read")).toBe("read_only")
+      expect(materialized.effectKind("graph")).toBe("read_only")
+      expect(materialized.effectKind("capability")).toBe("read_only")
+      expect(materialized.effectKind("custom")).toBe("mutating")
+      expect(materialized.effectKind("unknown_read_alias")).toBe("mutating")
+      expect(materialized.effectKind("not_registered")).toBe("mutating")
+    }),
+  )
+
   it.effect("removes a scoped registration", () =>
     Effect.gen(function* () {
       const service = yield* ToolRegistry.Service

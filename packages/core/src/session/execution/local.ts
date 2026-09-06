@@ -30,7 +30,14 @@ export const layer = Layer.effect(
         Effect.ignore,
       )
     const claimOnCommit = (sessionID: SessionSchema.ID) => ({
-      commit: () => store.claim(sessionID),
+      commit: () =>
+        store.claim(sessionID).pipe(
+          Effect.flatMap((claimed) =>
+            claimed
+              ? Effect.void
+              : Effect.fail(new SessionRunner.ExecutionRecoveryRequiredError({ sessionID })),
+          ),
+        ),
     })
     const releaseOnCommit = (sessionID: SessionSchema.ID) => ({
       commit: () => store.release(sessionID),
@@ -42,15 +49,21 @@ export const layer = Layer.effect(
       SessionExecution.InterruptReason
     >({
       started: (sessionID) =>
-        reportLifecycle(
-          sessionID,
-          Effect.gen(function* () {
-            yield* events.publish(
-              SessionEvent.Execution.Started,
-              { sessionID, timestamp: yield* DateTime.now },
-              claimOnCommit(sessionID),
-            )
-          }),
+        Effect.gen(function* () {
+          const session = yield* store.get(sessionID)
+          if (!session) return yield* Effect.die(`Session not found: ${sessionID}`)
+          yield* events.publish(
+            SessionEvent.Execution.Started,
+            { sessionID, timestamp: yield* DateTime.now },
+            { ...claimOnCommit(sessionID), location: session.location },
+          )
+        }).pipe(
+          // EventV2 makes commit-hook failures transactional defects. Recover this expected CAS
+          // refusal into the typed execution channel so resume/wait can report recovery_required.
+          Effect.catchDefect((defect) =>
+            defect instanceof SessionRunner.ExecutionRecoveryRequiredError ? Effect.fail(defect) : Effect.die(defect),
+          ),
+          Effect.asVoid,
         ),
       drain: Effect.fnUntraced(function* (sessionID: SessionSchema.ID, mode) {
         const session = yield* store.get(sessionID)
@@ -64,13 +77,23 @@ export const layer = Layer.effect(
         reportLifecycle(
           sessionID,
           Effect.gen(function* () {
+            if (
+              exit._tag === "Failure" &&
+              exit.cause.reasons.some(
+                (item) =>
+                  Cause.isFailReason(item) && item.error instanceof SessionRunner.ExecutionRecoveryRequiredError,
+              )
+            )
+              return
+            const session = yield* store.get(sessionID)
+            if (!session) return yield* Effect.die(`Session not found: ${sessionID}`)
             const outcome = SessionExecution.terminal(exit, reason)
             const timestamp = yield* DateTime.now
             if (outcome.type === "succeeded") {
               yield* events.publish(
                 SessionEvent.Execution.Succeeded,
                 { sessionID, timestamp },
-                releaseOnCommit(sessionID),
+                { ...releaseOnCommit(sessionID), location: session.location },
               )
               return
             }
@@ -78,14 +101,17 @@ export const layer = Layer.effect(
               yield* events.publish(
                 SessionEvent.Execution.Interrupted,
                 { sessionID, timestamp, reason: outcome.reason },
-                outcome.reason === "shutdown" ? undefined : releaseOnCommit(sessionID),
+                {
+                  ...(outcome.reason === "shutdown" ? {} : releaseOnCommit(sessionID)),
+                  location: session.location,
+                },
               )
               return
             }
             yield* events.publish(
               SessionEvent.Execution.Failed,
               { sessionID, timestamp, error: outcome.error },
-              releaseOnCommit(sessionID),
+              { ...releaseOnCommit(sessionID), location: session.location },
             )
           }),
         ),

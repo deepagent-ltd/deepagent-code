@@ -12,13 +12,53 @@ import { V2OutboxWriter } from "@/event/v2-outbox-writer"
 import "@deepagent-code/core/account"
 import "@deepagent-code/core/catalog"
 import "@deepagent-code/core/session/event"
-import { Context, Effect, Layer } from "effect"
+import { SessionEvent } from "@deepagent-code/core/session/event"
+import { SessionV1 } from "@deepagent-code/core/v1/session"
+import { Context, DateTime, Effect, Layer, Schema } from "effect"
 
 // W5 ① — the EventV2 publish surface mirrors C5-registered publishes into `deepagent_event_outbox`
 // (V2OutboxWriter) IN THE SAME TRANSACTION as the EventV2 event row (design §8.3). See
 // v2-outbox-writer.ts for the idempotency / same-transaction contract.
 
 export class Service extends Context.Service<Service, EventV2.Interface>()("@deepagent-code/EventV2Bridge") {}
+
+/** V1 is an egress shape only: the durable event and projection remain native V2. */
+export function compatibilityEvent(event: EventV2.Payload): EventV2.Payload {
+  if (event.version !== 2 || !Schema.is(SessionEvent.Created)(event)) return event
+  return {
+    ...event,
+    data: {
+      sessionID: event.data.sessionID,
+      info: SessionV1.SessionInfo.make({
+        id: event.data.info.id,
+        parentID: event.data.info.parentID,
+        slug: event.data.slug,
+        projectID: event.data.info.projectID,
+        workspaceID: event.data.info.location.workspaceID,
+        directory: event.data.info.location.directory,
+        path: event.data.info.subpath,
+        title: event.data.info.title,
+        agent: event.data.info.agent,
+        model: event.data.info.model,
+        version: event.data.version,
+        cost: event.data.info.cost,
+        tokens: event.data.info.tokens,
+        time: {
+          created: DateTime.toEpochMillis(event.data.info.time.created),
+          updated: DateTime.toEpochMillis(event.data.info.time.updated),
+          archived: event.data.info.time.archived
+            ? DateTime.toEpochMillis(event.data.info.time.archived)
+            : undefined,
+        },
+        permission: event.data.info.permissions.map((rule) => ({
+          permission: rule.action,
+          pattern: rule.resource,
+          action: rule.effect,
+        })),
+      }),
+    },
+  }
+}
 
 export const layer = Layer.effect(
   Service,
@@ -111,14 +151,16 @@ export const layer = Layer.effect(
         if (isEventV2AdmissionEnabled()) return
         const ctx = yield* InstanceRef
         const workspaceID = (yield* WorkspaceRef) ?? event.location?.workspaceID
+        const compatible = compatibilityEvent(event)
         GlobalBus.emit("event", {
           directory: event.location?.directory ?? ctx?.directory,
           project: ctx?.project.id,
           workspace: workspaceID,
-          payload: { id: event.id, type: event.type, properties: event.data },
+          payload: { id: compatible.id, type: compatible.type, properties: compatible.data },
         })
-        const sync = EventV2.registry.get(event.type)?.sync
-        if (sync === undefined || event.seq === undefined || event.version === undefined) return
+        if (event.seq === undefined || event.version === undefined) return
+        const sync = EventV2.syncRegistry.get(EventV2.versionedType(event.type, event.version))?.sync
+        if (sync === undefined) return
         const aggregateID = (event.data as Record<string, unknown>)[sync.aggregate]
         if (typeof aggregateID !== "string") return
         GlobalBus.emit("event", {
@@ -140,7 +182,13 @@ export const layer = Layer.effect(
     )
     yield* Effect.addFinalizer(() => unsubscribe)
 
-    return Service.of({ ...events, publish, replay, replayAll })
+    return Service.of({
+      ...events,
+      publish,
+      replay,
+      replayAll,
+      listen: (listener) => events.listen((event) => listener(compatibilityEvent(event))),
+    })
   }),
 )
 

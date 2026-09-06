@@ -27,7 +27,7 @@ import {
   type ProductionV2LocationIdentity,
 } from "../../context-federation/production-adapters"
 import { DeepAgentReleasedSnapshot } from "../../deepagent/released-snapshot"
-import type { SelectionEnvelope, SelectionQueryIntent } from "../../contract/selection"
+import { SelectionEnvelope, type SelectionQueryIntent } from "../../contract/selection"
 import {
   SessionActivityInputTable,
   SessionActivityTable,
@@ -130,6 +130,8 @@ export type SelectionAdmission = {
   readonly observedLocationMutationEpoch: number
   readonly selectedSourceFingerprint: string
   readonly nextRevalidationAt: number
+  readonly readiness?: "ready" | "fallback" | "unavailable"
+  readonly selectedRefs?: readonly string[]
 }
 
 export type AdmitSelectionInput = {
@@ -145,6 +147,18 @@ export type AdmitSelectionInput = {
   readonly fallbackUserInputId?: string
   readonly system: SystemSnapshot
   readonly historyEndMessageId?: string
+  readonly model?: {
+    readonly id: string
+    readonly providerID: string
+    readonly protocol: SelectionEnvelope["modelCapability"]["protocol"]
+    readonly contextWindow: number
+    readonly structuredOutput: boolean
+  }
+  /** Location-scoped production sources captured by the runner at layer construction. Direct
+   * callers may omit this and provide the seam in their Effect environment. */
+  readonly sources?: ProductionV2AdapterInput
+  /** Process-local query authority captured by the runner alongside the source frame. */
+  readonly queryAuthorization?: ContextQueryAuthorization.ControllerInterface
   /**
    * L1 — selection query intent seam. The V2 core prompt admission carries no per-input intent
    * signal yet (the session input/Prompt shapes have none), so the runner leaves this unset and the
@@ -161,9 +175,11 @@ export const admitSelection = Effect.fn("SessionRunnerCanonical.admitSelection")
   return yield* Effect.gen(function* () {
     const now = input.now ?? Date.now()
     const locationKey = `${input.location.directory}#${input.location.workspaceID ?? ""}`
-    const sources = yield* Effect.serviceOption(ProductionV2Sources).pipe(
-      Effect.map((option) => Option.getOrElse(option, () => emptyProductionSources)),
-    )
+    const sources =
+      input.sources ??
+      (yield* Effect.serviceOption(ProductionV2Sources).pipe(
+        Effect.map((option) => Option.getOrElse(option, () => emptyProductionSources)),
+      ))
     // W3.8 A — the frame identity: real (location-derived, host seam) or the v2:local degradation.
     // The same identity seeds the guard chain and builds the envelope, so the selection row and the
     // envelope never disagree about the frame.
@@ -171,7 +187,9 @@ export const admitSelection = Effect.fn("SessionRunnerCanonical.admitSelection")
     yield* ensureLocationIdentity(input.db, frame, now)
     const activity = yield* admitActivity(input, now)
     const selection = yield* selectContext(input, activity, now, frame)
-    const authorization = Option.getOrUndefined(yield* Effect.serviceOption(ContextQueryAuthorization.Controller))
+    const authorization =
+      input.queryAuthorization ??
+      Option.getOrUndefined(yield* Effect.serviceOption(ContextQueryAuthorization.Controller))
     if (authorization !== undefined) {
       yield* authorization.bind({
         sessionId: input.sessionID,
@@ -190,6 +208,8 @@ export const admitSelection = Effect.fn("SessionRunnerCanonical.admitSelection")
       observedLocationMutationEpoch: selection.observedLocationMutationEpoch,
       selectedSourceFingerprint: selection.selectedSourceFingerprint,
       nextRevalidationAt: selection.nextRevalidationAt,
+      readiness: selection.readiness,
+      selectedRefs: selection.selectedRefs,
     }
   }).pipe(
     Effect.catch((error) => (isContextError(error) ? Effect.fail(toAdmission(error)) : Effect.fail(error))),
@@ -317,6 +337,14 @@ function admissionFromRow(
   now: number,
 ): Effect.Effect<SelectionAdmission, AdmissionError> {
   return Effect.gen(function* () {
+    const graphStatuses = Schema.decodeUnknownOption(Schema.fromJsonString(SelectionEnvelope.fields.graphStatuses))(
+      row.graph_statuses,
+    )
+    const selectedRefs = Schema.decodeUnknownOption(Schema.fromJsonString(SelectionEnvelope.fields.selectedRefs))(
+      row.selected_refs,
+    )
+    if (Option.isNone(graphStatuses) || Option.isNone(selectedRefs))
+      return yield* new AdmissionError({ reason: "stored_selection_evidence_invalid" })
     return {
       activityId: activity.activityId,
       selectionId: row.selection_id,
@@ -326,6 +354,8 @@ function admissionFromRow(
       observedLocationMutationEpoch: row.observed_location_mutation_epoch,
       selectedSourceFingerprint: row.selected_source_fingerprint,
       nextRevalidationAt: row.next_revalidation_at,
+      readiness: readinessOf(graphStatuses.value),
+      selectedRefs: selectedRefs.value.map((ref) => ref.ref),
     }
   })
 }
@@ -351,9 +381,11 @@ function buildV2Selection(
   const inputs = activityInputIds(input, activity.activityId)
   return Effect.gen(function* () {
     const ids = yield* inputs
-    const sources = yield* Effect.serviceOption(ProductionV2Sources).pipe(
-      Effect.map((option) => Option.getOrElse(option, () => emptyProductionSources)),
-    )
+    const sources =
+      input.sources ??
+      (yield* Effect.serviceOption(ProductionV2Sources).pipe(
+        Effect.map((option) => Option.getOrElse(option, () => emptyProductionSources)),
+      ))
     const resolveOnce = Effect.fn("SessionRunnerCanonical.resolveOnce")(function* () {
       const current = yield* currentReleasedSelection(sources, frame)
       const releasedBinding = {
@@ -384,6 +416,8 @@ function buildV2Selection(
     if (resolved.successorRebuild !== undefined) {
       return yield* new AdmissionError({ reason: `selection_rebuild_required:${resolved.successorRebuild.trigger}` })
     }
+    const denied = Object.values(resolved.graphStatuses).find((status) => status.status === "denied")
+    if (denied) return yield* new AdmissionError({ reason: `selection_denied:${denied.graph}:${denied.reasonCode}` })
     const batch = budgetSelection(resolved, envelope)
     const selectionEnvelope = buildSelectionEnvelope(batch, resolved, envelope, {
       revision,
@@ -539,7 +573,17 @@ function admissionOf(
     observedLocationMutationEpoch: envelope.identity.observedLocationMutationEpoch,
     selectedSourceFingerprint: envelope.identity.selectedSourceFingerprint,
     nextRevalidationAt: envelope.validation.validUntil,
+    readiness: readinessOf(envelope.graphStatuses),
+    selectedRefs: envelope.selectedRefs.map((ref) => ref.ref),
   }
+}
+
+function readinessOf(graphStatuses: SelectionEnvelope["graphStatuses"]): SelectionAdmission["readiness"] {
+  const available = Object.values(graphStatuses).filter(
+    (status) => status.status === "ready" || status.status === "empty",
+  ).length
+  if (available === 0) return "unavailable"
+  return available === Object.keys(graphStatuses).length ? "ready" : "fallback"
 }
 
 /** Build the F1 resolver QueryEnvelope for a V2 runner turn under the effective frame identity. */
@@ -567,7 +611,21 @@ function buildV2Envelope(
     // the code graph with provider_egress_denied even when the real identity frame is bound.
     egress: authorization.egress,
     agentPolicy: { agentId: input.agent, autonomyCeiling: "medium", permitDegraded: true },
-    modelCapability: { modelId: "", providerId: "", protocol: "openai.responses", contextWindow: 0, structuredOutput: false },
+    modelCapability: input.model
+      ? {
+          modelId: input.model.id,
+          providerId: input.model.providerID,
+          protocol: input.model.protocol,
+          contextWindow: input.model.contextWindow,
+          structuredOutput: input.model.structuredOutput,
+        }
+      : {
+          modelId: "",
+          providerId: "",
+          protocol: "openai.responses",
+          contextWindow: 0,
+          structuredOutput: false,
+        },
     releasedKnowledge: released
       ? { snapshotId: released.snapshotId, binding: "bound" }
       : { snapshotId: "", binding: "unavailable" },

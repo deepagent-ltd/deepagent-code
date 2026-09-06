@@ -8,7 +8,6 @@ import { PermissionV2 } from "../permission"
 import { SessionMessage } from "../session/message"
 import { SessionSchema } from "../session/schema"
 import { ToolOutputStore } from "../tool-output-store"
-import { Wildcard } from "../util/wildcard"
 import { ApplicationTools } from "./application-tools"
 import { definition, permission, settle, validateName, type AnyTool, type RegistrationError } from "./tool"
 import { Tools } from "./tools"
@@ -21,13 +20,18 @@ export type ExecuteInput = {
 }
 
 export interface Interface {
-  readonly materialize: (permissions?: PermissionV2.Ruleset) => Effect.Effect<Materialization>
+  readonly materialize: (permissions?: PermissionV2.Ruleset | PermissionPolicy) => Effect.Effect<Materialization>
   /** Internal registration capability exposed publicly only through Tools.Service. */
   readonly register: (tools: Readonly<Record<string, AnyTool>>) => Effect.Effect<void, RegistrationError, Scope.Scope>
 }
 
+export type PermissionPolicy = { readonly rulesets: readonly PermissionV2.Ruleset[] }
+
 export interface Materialization {
+  readonly registeredIDs: ReadonlyArray<string>
+  readonly permissionFilteredIDs: ReadonlyArray<string>
   readonly definitions: ReadonlyArray<ToolDefinition>
+  readonly effectKind: (name: string) => "mutating" | "read_only"
   readonly settle: (input: ExecuteInput) => Effect.Effect<Settlement, ToolOutputStore.Error>
 }
 
@@ -107,10 +111,20 @@ const registryLayer = Layer.effect(
           const registration = entries.at(-1)?.registration
           if (registration) registrations.set(name, registration)
         }
+        const registeredIDs = [...registrations.keys()]
         for (const [name, registration] of registrations)
           if (whollyDisabled(permission(registration.tool, name), permissions)) registrations.delete(name)
         return {
+          registeredIDs,
+          permissionFilteredIDs: [...registrations.keys()],
           definitions: Array.from(registrations, ([name, registration]) => definition(name, registration.tool)),
+          // Read-only classification is an explicit allowlist. Unknown/custom actions remain
+          // mutating so durable side-effect evidence never undercounts a newly registered tool.
+          effectKind: (name) => {
+            const registration = registrations.get(name)
+            if (!registration) return "mutating"
+            return readOnlyActions.has(permission(registration.tool, name)) ? "read_only" : "mutating"
+          },
           settle: (input) => {
             const registration = registrations.get(input.call.name)
             if (registration) return settleWith(input, registration.identity)
@@ -127,9 +141,22 @@ export const layer = Layer.effect(
   Service.use((registry) => Effect.succeed(Tools.Service.of({ register: registry.register }))),
 ).pipe(Layer.provideMerge(registryLayer))
 
-function whollyDisabled(action: string, rules: PermissionV2.Ruleset) {
-  const rule = rules.findLast((rule) => Wildcard.match(action, rule.action))
-  return rule?.resource === "*" && rule.effect === "deny"
+const readOnlyActions = new Set([
+  "read",
+  "glob",
+  "grep",
+  "webfetch",
+  "websearch",
+  "skill",
+  "code_intel",
+  "context_query",
+  "capability_search",
+  "capability.read",
+])
+
+function whollyDisabled(action: string, policy: PermissionV2.Ruleset | PermissionPolicy) {
+  const rulesets = "rulesets" in policy ? policy.rulesets : [policy]
+  return PermissionV2.isActionWhollyDenied(action, ...rulesets)
 }
 
 export const node = makeLocationNode({
