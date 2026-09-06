@@ -387,26 +387,23 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     // `!planStale` keeps the stale-latch machinery authoritative for its own planless-stale states;
     // this branch covers exactly the previously-ungated fresh-planless run.
     if (flags.strictPlanGate && !lightweight && plan == null && !planStale && isMutating && subagentHasPlanEscape) {
-      if (latch != null && AgentGateway.DeepAgentPlanController.shouldGraceRelease(latch)) {
+      if (latch != null && AgentGateway.DeepAgentPlanController.shouldGraceRelease(latch, 2)) {
         log.warn("plan gate no-plan grace release", {
           sessionID,
           consecutiveBlocks: latch.consecutive_blocks,
         })
         graceReminder =
-          `No plan was ever created and the plan gate already blocked ${latch.consecutive_blocks} consecutive mutating calls without one. ` +
-          "This call was released ONCE: call the `plan` tool now with a minimal plan (a one-step plan is fine for a simple task) — otherwise the next mutating call will be blocked again."
+          `Plan gate released this call after ${latch.consecutive_blocks} blocks. Call the \`plan\` tool now (one step is fine) — the next mutating call blocks again.`
       } else {
         AgentGateway.DeepAgentSessionState.recordPlanGateBlock(sessionID)
         return {
           kind: "block",
           output:
-            "No plan exists yet, so this mutating action is held: call the `plan` tool first with a one-sentence goal and ordered steps. A one-step plan is a valid escape for a genuinely simple task.\n\nCopyable starting point:\n" +
+            "Plan gate: create a plan first via the `plan` tool (one step is fine), then retry.\n" +
             JSON.stringify({
               operation: "create",
-              expected_plan_id: null,
-              expected_version: null,
-              goal: "<one sentence: what done means>",
-              steps: [{ title: "<first coherent step>", status: "active" }],
+              goal: "<one sentence>",
+              steps: [{ title: "<first step>", status: "active" }],
             }),
         }
       }
@@ -419,7 +416,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
       // DEFAULT_GRACE_BLOCK_LIMIT consecutive blocks precede the release; the executing call below
       // resets the counter (resetPlanGateBlocks on actual execution), so the release is a
       // one-time pass, not a silent permanent lift of the gate.
-      if (strictBlock && latch != null && AgentGateway.DeepAgentPlanController.shouldGraceRelease(latch)) {
+      if (strictBlock && latch != null && AgentGateway.DeepAgentPlanController.shouldGraceRelease(latch, 2)) {
         log.warn("plan gate grace release", {
           sessionID,
           consecutiveBlocks: latch.consecutive_blocks,

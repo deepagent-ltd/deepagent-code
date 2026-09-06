@@ -672,15 +672,27 @@ export const layer = Layer.effect(
             if (gate.reminder) {
               const settlement = yield* baseSettleTool(input)
               yield* recordToolEffect(input, "settled", settlement.result, undefined)
-              return "output" in settlement && settlement.output && "output" in settlement.output
-                ? {
-                    ...settlement,
-                    output: {
-                      ...settlement.output,
-                      output: [gate.reminder, settlement.output.output].filter(Boolean).join("\n\n"),
-                    },
-                  }
-                : settlement
+              // ToolOutput is {structured, content[]}; prepend the reminder as the leading text
+              // part so the model sees it ahead of the real output in the same tool result.
+              if ("output" in settlement && settlement.output) {
+                const content = settlement.output.content
+                const firstText = content.findIndex((item) => item.type === "text")
+                return {
+                  ...settlement,
+                  output: {
+                    ...settlement.output,
+                    content:
+                      firstText === -1
+                        ? [{ type: "text" as const, text: gate.reminder }, ...content]
+                        : content.flatMap((item, index) =>
+                            index === firstText && item.type === "text"
+                              ? [{ type: "text" as const, text: gate.reminder + "\n\n" + item.text }]
+                              : [item],
+                          ),
+                  },
+                }
+              }
+              return settlement
             }
           }
           // Tool bodies surface path-argument validation as die defects (path escapes the

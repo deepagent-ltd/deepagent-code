@@ -12,6 +12,7 @@ import { SkillTool } from "./skill"
 import { WebFetchTool } from "./webfetch"
 import { WebSearchTool } from "./websearch"
 import { WriteTool } from "./write"
+import { PlanWriteTool } from "./plan"
 import { CapabilityRuntimeSearch } from "../system-context/capability-runtime-search"
 import { CapabilityLoadTool } from "../system-context/capability-load-tool"
 
@@ -28,6 +29,7 @@ export const builtinToolNames: ReadonlySet<string> = new Set([
   "edit",
   "glob",
   "grep",
+  "plan",
   "question",
   "read",
   "skill",
@@ -71,6 +73,7 @@ export const locationLayer = Layer.mergeAll(
   WebFetchTool.layer,
   WebSearchTool.layer.pipe(Layer.provide(WebSearchTool.defaultConfigLayer)),
   WriteTool.layer,
+  PlanWriteTool.layer,
   CapabilityRuntimeSearch.layer,
   CapabilityLoadTool.layer,
 )

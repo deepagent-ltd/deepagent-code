@@ -4,15 +4,13 @@ export * as V2PlanGate from "./v2-plan-gate"
 // （session/tools.ts evaluatePlanGate）；V2 runner 经 core ToolRegistry 结算工具，完全绕过
 // 该包装器 — run 模式实测 V2 路径上 edit 零拦截、plan 零调用。本模块把同一套门禁决策
 // （W2 无计划首变更阻断 / W6 stale 阻断 / U1 grace release / 轻量豁免）接到
-// SessionRunner.CurrentToolSettleGate seam 上。
-//
-// 决策逻辑与 V1 的 evaluatePlanGate 保持同构：任何行为分歧按缺陷处理（两侧必须一致）。
+// SessionRunner.CurrentToolSettleGate seam 上。本模块是 production V2 的门禁决策入口；后续
+// 门禁行为与测试都以 core V2 路径为准，legacy session/tools.ts 仅保留迁移期兼容。
 
 import { Context, Effect, Layer, Option } from "effect"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { SessionRunner } from "@deepagent-code/core/session/runner"
 import { RuntimeFlags } from "@/effect/runtime-flags"
-import { Permission } from "@/permission"
 
 const planHook = new AgentGateway.DeepAgentHooks.HookPolicy().on(
   "before_tool_use",
@@ -37,13 +35,19 @@ const decide = function (
     const agentMode = state?.mode ?? "high"
     const lightweight = AgentGateway.DeepAgentPlanController.isLightweightMode(agentMode)
     const plan = AgentGateway.DeepAgentSessionState.getPlan(sessionID)
-    // Bash 命令的变更分类沿用控制器的命令嗅探；其余工具按工具名分类。失败按变更处理
-    // （fail-safe，与 V1 包装器一致）。
+    // Bash 命令的变更分类沿用 core 控制器的命令嗅探；其余工具按工具名分类。失败按变更
+    // 处理。这个分类器用于放宽门禁，因此不能再按命令头做二次豁免：grep/find 也可通过
+    // 重定向、-delete 或写入型管道改变仓库。
     let isMutating: boolean
     try {
-      const command = input.toolName === "bash" && typeof input.args === "object" && input.args !== null
-        ? String((input.args as { readonly command?: unknown }).command ?? "")
-        : undefined
+      const command =
+        input.toolName === "bash" &&
+        typeof input.args === "object" &&
+        input.args !== null &&
+        "command" in input.args &&
+        typeof input.args.command === "string"
+          ? input.args.command
+          : undefined
       isMutating = AgentGateway.DeepAgentPlanController.isMutatingTool(input.toolName, command)
     } catch {
       isMutating = true
@@ -63,32 +67,35 @@ const decide = function (
     // V2 主会话默认可修复（plan 工具在 registry 中可用）；子会话（学习 reviewer 等）不设防 —
     // 它们没有 plan 权限，阻断即死锁（V1 的 subagentHasPlanEscape 同义，V2 侧 session 表无
     // parentID 可查时保守放行）。
-    const subagentHasPlanEscape = sessionID.includes("ses_learning_review") !== true
+    const subagentHasPlanEscape = !sessionID.includes("ses_learning_review")
+    // V2 sessions never seed DeepAgentSessionState, so the latch reads undefined until the first
+    // block — seed it HERE (same "high" the unseeded gate reads as) or recordPlanGateBlock
+    // no-ops forever and the consecutive-block grace release never arms: the model gets blocked
+    // indefinitely with no tool-side escape (102 blocks, 0 releases in the ablation runs).
+    if (subagentHasPlanEscape && latch == null && state == null)
+      AgentGateway.DeepAgentSessionState.getOrCreate(sessionID, agentMode)
     let graceReminder: string | undefined
     // W2：无计划的 run 的首个变更被拦一次（可复制最小计划模板；单步计划 = trivial 出口）。
     if (flags.strictPlanGate && !lightweight && plan == null && !planStale && isMutating && subagentHasPlanEscape) {
       if (latch != null && AgentGateway.DeepAgentPlanController.shouldGraceRelease(latch)) {
         graceReminder =
-          `No plan was ever created and the plan gate already blocked ${latch.consecutive_blocks} consecutive mutating calls without one. ` +
-          "This call was released ONCE: call the `plan` tool now with a minimal plan (a one-step plan is fine for a simple task) — otherwise the next mutating call will be blocked again."
+          `Plan gate released this call after ${latch.consecutive_blocks} blocks. Call the \`plan\` tool now (one step is fine) — the next mutating call blocks again.`
       } else {
         AgentGateway.DeepAgentSessionState.recordPlanGateBlock(sessionID)
         const block: Directive = {
           kind: "block",
           output:
-            "No plan exists yet, so this mutating action is held: call the `plan` tool first with a one-sentence goal and ordered steps. A one-step plan is a valid escape for a genuinely simple task.\n\nCopyable starting point:\n" +
+            "Plan gate: create a plan first via the `plan` tool (one step is fine), then retry.\n" +
             JSON.stringify({
               operation: "create",
-              expected_plan_id: null,
-              expected_version: null,
-              goal: "<one sentence: what done means>",
-              steps: [{ title: "<first coherent step>", status: "active" }],
+              goal: "<one sentence>",
+              steps: [{ title: "<first step>", status: "active" }],
             }),
         }
         return block
       }
     }
-    // W6：stale 计划的变更阻断（grace release 同 V1）。
+    // W6：stale 计划的变更阻断；与无计划分支共享 core 的 grace limit。
     const strictBlock =
       flags.strictPlanGate &&
       gateDecision.decision === "warn" &&

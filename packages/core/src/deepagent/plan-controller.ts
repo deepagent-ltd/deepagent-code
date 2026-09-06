@@ -125,7 +125,7 @@ export const shouldEscapeToHuman = (state: PlanLatchState, limit: number = DEFAU
 // cooperation, so a model that never repairs the plan (e.g. one that degrades to giving the user
 // manual commands instead of calling the plan tool) can never be permanently denied its tools. This
 // is the direct fix for the production deadlock where 280 consecutive bash calls were blocked.
-export const DEFAULT_GRACE_BLOCK_LIMIT = 3
+export const DEFAULT_GRACE_BLOCK_LIMIT = 2
 export const shouldGraceRelease = (state: PlanLatchState, limit: number = DEFAULT_GRACE_BLOCK_LIMIT): boolean =>
   state.consecutive_blocks >= limit
 
