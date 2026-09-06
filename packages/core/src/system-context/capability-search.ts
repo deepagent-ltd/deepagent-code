@@ -70,7 +70,7 @@ export interface SearchAuthorization {
 
 /** All permission + feature grants (nothing denied, everything compatible). */
 export const fullAuthorization: SearchAuthorization = {
-  grantedPermissions: new Set(["read", "glob", "grep", "edit", "bash", "websearch", "webfetch", "skill", "context.read"]),
+  grantedPermissions: new Set(["read", "glob", "grep", "edit", "bash", "websearch", "webfetch", "skill", "context.read", "code_intel", "context_query"]),
   enabledRuntimeFeatures: new Set(["context_federation_v2", "context_query_tools_v2"]),
 }
 

@@ -72,22 +72,17 @@ describe("C4-02 budget gate", () => {
   })
 })
 
-describe("W4.1 L0 availability annotation (design §7.6 — never advertise an unusable capability)", () => {
-  test("a maintenance_only capability is marked and never advertises an executable entry vector", () => {
+describe("Core V2 context-query capability availability", () => {
+  test("the stable capability advertises its canonical Core entry vector", () => {
     const text = renderCapabilityCatalog()
-    expect(text).toContain("deepagent.context-query [maintenance]")
-    // The directory stays complete (the id is discoverable), but the entry vector
-    // that would promise an operable `context_query` tool is withheld.
-    expect(text).not.toContain("Entry: context_query")
+    expect(text).toContain("deepagent.context-query")
+    expect(text).toContain("Entry: context_query")
   })
 
-  test("capabilityL0Line annotates non-stable capabilities and keeps stable lines unmarked", () => {
-    const maintenance = capabilityCatalog.find((manifest) => manifest.id === "deepagent.context-query")!
-    const stable = capabilityCatalog.find((manifest) => manifest.id === "deepagent.code-read")!
-    expect(capabilityL0Line(maintenance)).toContain("[maintenance]")
-    expect(capabilityL0Line(maintenance)).toContain("Entry: (not yet available)")
-    expect(capabilityL0Line(stable)).not.toContain("[")
-    expect(capabilityL0Line(stable)).toContain("Entry: read, glob, grep")
+  test("capabilityL0Line renders context_query as stable", () => {
+    const contextQuery = capabilityCatalog.find((manifest) => manifest.id === "deepagent.context-query")!
+    expect(capabilityL0Line(contextQuery)).not.toContain("[")
+    expect(capabilityL0Line(contextQuery)).toContain("Entry: context_query")
   })
 
   test("the annotated catalog still fits the frozen L0 budget", () => {

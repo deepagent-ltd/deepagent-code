@@ -110,10 +110,13 @@ describe("LocationServiceMap", () => {
             "bash",
             "capability_load",
             "capability_search",
+            "code_intel",
+            "context_query",
             "domain_pack_load",
             "edit",
             "glob",
             "grep",
+            "plan",
             "question",
             "read",
             "skill",
@@ -121,7 +124,15 @@ describe("LocationServiceMap", () => {
             "websearch",
             "write",
           ])
-          expect(blockedState.researcherTools).toEqual(["glob", "grep", "read", "webfetch", "websearch"])
+          expect(blockedState.researcherTools).toEqual([
+            "code_intel",
+            "context_query",
+            "glob",
+            "grep",
+            "read",
+            "webfetch",
+            "websearch",
+          ])
           const allowedState = yield* update(allowed.path)
           expect(allowedState.providers.some((provider) => provider.id === ProviderV2.ID.make("test"))).toBe(true)
           expect(allowedState.tools.map((tool) => tool.name).sort()).toEqual([
@@ -130,10 +141,13 @@ describe("LocationServiceMap", () => {
             "bash",
             "capability_load",
             "capability_search",
+            "code_intel",
+            "context_query",
             "domain_pack_load",
             "edit",
             "glob",
             "grep",
+            "plan",
             "question",
             "read",
             "skill",
@@ -141,7 +155,15 @@ describe("LocationServiceMap", () => {
             "websearch",
             "write",
           ])
-          expect(allowedState.researcherTools).toEqual(["glob", "grep", "read", "webfetch", "websearch"])
+          expect(allowedState.researcherTools).toEqual([
+            "code_intel",
+            "context_query",
+            "glob",
+            "grep",
+            "read",
+            "webfetch",
+            "websearch",
+          ])
         }),
       ),
     ),

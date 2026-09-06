@@ -8,6 +8,7 @@ import { SessionProviderAttempt } from "../../context-federation/provider-attemp
 import { SessionProviderOwner } from "../../context-federation/provider-owner"
 import { ContextReference, LocationKey, ProjectScopeKey, SecurityNamespaceID } from "../../context-federation/reference"
 import { SessionContext } from "../../context-federation/session-context"
+import { ContextQueryAuthorization } from "../../context-federation/query-authorization"
 import { resolveGraphs, GraphOrder, type QueryEnvelope } from "../../context-federation/resolver-v2"
 import { budgetSelection } from "../../context-federation/selection-budget"
 import {
@@ -26,7 +27,7 @@ import {
   type ProductionV2LocationIdentity,
 } from "../../context-federation/production-adapters"
 import { DeepAgentReleasedSnapshot } from "../../deepagent/released-snapshot"
-import type { GraphKind, SelectionEnvelope, SelectionQueryIntent } from "../../contract/selection"
+import type { SelectionEnvelope, SelectionQueryIntent } from "../../contract/selection"
 import {
   SessionActivityInputTable,
   SessionActivityTable,
@@ -170,12 +171,22 @@ export const admitSelection = Effect.fn("SessionRunnerCanonical.admitSelection")
     yield* ensureLocationIdentity(input.db, frame, now)
     const activity = yield* admitActivity(input, now)
     const selection = yield* selectContext(input, activity, now, frame)
+    const authorization = Option.getOrUndefined(yield* Effect.serviceOption(ContextQueryAuthorization.Controller))
+    if (authorization !== undefined) {
+      yield* authorization.bind({
+        sessionId: input.sessionID,
+        envelope: queryAuthorization(input, frame, {
+          authorizationEpoch: selection.authorizationEpoch,
+          egressEpoch: selection.egressEpoch,
+        }),
+      })
+    }
     return {
       activityId: activity.activityId,
       selectionId: selection.selectionId,
       projectionHash: selection.projectionHash,
-      authorizationEpoch: input.system.revision,
-      egressEpoch: input.system.baselineSeq,
+      authorizationEpoch: selection.authorizationEpoch,
+      egressEpoch: selection.egressEpoch,
       observedLocationMutationEpoch: selection.observedLocationMutationEpoch,
       selectedSourceFingerprint: selection.selectedSourceFingerprint,
       nextRevalidationAt: selection.nextRevalidationAt,
@@ -540,21 +551,11 @@ function buildV2Envelope(
   now: number,
   released?: DeepAgentReleasedSnapshot.Selection,
 ): QueryEnvelope {
-  const principal = {
-    securityNamespaceId: frame.securityNamespaceId,
-    principalId: input.sessionID,
-    authorizationEpoch: input.system.revision,
-    locationKeys: [frame.locationKey],
-    projectScopeKeys: [frame.projectScopeKey],
-    sessionIds: [input.sessionID],
-    subjectIds: [],
-    allowBuiltin: false,
-  }
-  const graphs: GraphKind[] = [...GraphOrder]
+  const authorization = queryAuthorization(input, frame)
   return {
     membership: { sessionId: input.sessionID, activityId: activity.activityId, inputIds },
     location: { locationKey: frame.locationKey, ...(input.location.workspaceID === undefined ? {} : { workspaceId: input.location.workspaceID }) },
-    principal,
+    principal: authorization.principal,
     workspace: { workspaceId: input.location.workspaceID ?? "" },
     securityNamespace: { securityNamespaceId: frame.securityNamespaceId },
     // The contract `projectId` is the released-knowledge legacy project id: the real frame carries
@@ -564,12 +565,7 @@ function buildV2Envelope(
     // W3.8.1: the selection frame's egress carries the live-query sensitivity set (same default as
     // the deepagent-code readiness probe) — otherwise the LiveCodeQuery authorization gate rejects
     // the code graph with provider_egress_denied even when the real identity frame is bound.
-    egress: {
-      policyId: "v2:history-context",
-      epoch: input.system.baselineSeq,
-      graphs,
-      sensitivities: ["public", "source_code", "secret_adjacent"],
-    },
+    egress: authorization.egress,
     agentPolicy: { agentId: input.agent, autonomyCeiling: "medium", permitDegraded: true },
     modelCapability: { modelId: "", providerId: "", protocol: "openai.responses", contextWindow: 0, structuredOutput: false },
     releasedKnowledge: released
@@ -579,6 +575,35 @@ function buildV2Envelope(
     query: "session context",
     observedLocationMutationEpoch: 0,
     now,
+  }
+}
+
+/** The exact authority shared by automatic selection and explicit V2 context tools. */
+function queryAuthorization(
+  input: AdmitSelectionInput,
+  frame: EffectiveFrameIdentity,
+  epochs?: { readonly authorizationEpoch: number; readonly egressEpoch: number },
+): ContextQueryAuthorization.Envelope {
+  return {
+    principal: {
+      securityNamespaceId: frame.securityNamespaceId,
+      principalId: input.sessionID,
+      authorizationEpoch: epochs?.authorizationEpoch ?? input.system.revision,
+      locationKeys: [frame.locationKey],
+      projectScopeKeys: [frame.projectScopeKey],
+      sessionIds: [input.sessionID],
+      subjectIds: [],
+      allowBuiltin: false,
+    },
+    // W3.8.1: the selection frame's egress carries the live-query sensitivity set (same default as
+    // the deepagent-code readiness probe) — otherwise the LiveCodeQuery authorization gate rejects
+    // the code graph with provider_egress_denied even when the real identity frame is bound.
+    egress: {
+      policyId: "v2:history-context",
+      epoch: epochs?.egressEpoch ?? input.system.baselineSeq,
+      graphs: [...GraphOrder],
+      sensitivities: ["public", "source_code", "secret_adjacent"],
+    },
   }
 }
 

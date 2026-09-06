@@ -13,6 +13,9 @@ import { InstanceRef } from "@/effect/instance-ref"
 import { InstanceLayer } from "@/project/instance-layer"
 import { InstanceStore } from "@/project/instance-store"
 import { LocationIndexRuntime } from "@/location-index/runtime"
+import { CodeIntelFacade } from "@/code-intelligence/facade"
+import { ContextQueryFacade } from "@/context-federation/context-query-facade"
+import { V2ContextToolRuntime } from "@/context-federation/v2-tool-runtime"
 
 // W3.10 — the V2 runner frame host hook (closes B-review P0 / O-W3-10).
 //
@@ -73,6 +76,16 @@ export function runnerFrameSeamFor(ref: Location.Ref) {
   )
 }
 
+/** Captures the same ref-owned Instance context around every explicit context-tool query. */
+export function runnerFrameContextToolsFor(ref: Location.Ref) {
+  return Layer.unwrap(
+    Effect.gen(function* () {
+      const ctx = yield* (yield* InstanceStore.Service).load({ directory: ref.directory })
+      return V2ContextToolRuntime.layer(ctx)
+    }),
+  )
+}
+
 /**
  * W3.10 — the augmented `LocationServiceMap`: the core per-location runner tree plus the host-hook
  * override, so every V2 runner subtree observes a REAL frame identity (per instance ref). The base
@@ -95,6 +108,7 @@ export const runnerFrameLocationMap = Layer.effect(
       (ref: Location.Ref) =>
         baseMap.get(ref).pipe(
           Layer.provide(runnerFrameSeamFor(ref)),
+          Layer.provide(runnerFrameContextToolsFor(ref)),
           // W2-V2: the plan gate must be provided to the LOCATION TREE itself — the core runner
           // layer inside it resolves CurrentToolSettleGate through the seam (an outer provide on
           // the sources layer is silently discarded, a plain tree provide reaches the runner).
@@ -113,6 +127,7 @@ export const runnerFrameLocationMap = Layer.effect(
  * same objects the probe and the HTTP handlers use.
  */
 export const runnerFrameLocationMapLayer = runnerFrameLocationMap.pipe(
+  Layer.provide(Layer.mergeAll(CodeIntelFacade.defaultLayer, ContextQueryFacade.defaultLayer)),
   Layer.provide(LocationIndexRuntime.defaultLayer),
   Layer.provide(InstanceLayer.layer),
 )

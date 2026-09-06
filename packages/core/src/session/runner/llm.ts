@@ -29,6 +29,7 @@ import { ToolOutputStore } from "../../tool-output-store"
 import { SessionContextEpoch } from "../context-epoch"
 import { SessionCompaction } from "../compaction"
 import { SessionContext } from "../../context-federation/session-context"
+import { ContextQueryAuthorization } from "../../context-federation/query-authorization"
 import { SessionEvent } from "../event"
 import { SessionHistory } from "../history"
 import { SessionInput } from "../input"
@@ -193,6 +194,9 @@ export const layer = Layer.effect(
     // the captured value reaches every forked drain fiber; undefined keeps the pre-seam identity.
     const historyEpochLookup = yield* V2ProviderTurn.CurrentHistoryEpochLookup
     const contexts = yield* SessionContext.Service
+    const queryAuthorization = Option.getOrUndefined(
+      yield* Effect.serviceOption(ContextQueryAuthorization.Controller),
+    )
     const ownerAuthorization = yield* V2ProviderTurn.OwnerAuthorization
     const db = (yield* Database.Service).db
     const remoteCompaction = yield* SessionCompaction.CurrentRemoteCompaction
@@ -466,6 +470,18 @@ export const layer = Layer.effect(
         system: { baseline: system.baseline, revision: system.revision, baselineSeq: system.baselineSeq },
         historyEndMessageId: context.at(-1)?.id,
       })
+      // An interrupted turn must terminalize the activity it admitted; otherwise the leftover
+      // `active` activity blocks every future queued admission on this Session. The per-turn scope
+      // closes on interruption too, and settleActivity is idempotent. Explicit query authority is
+      // released on every exit; a continuation admits and binds its own selection before tools run.
+      yield* Effect.addFinalizer((exit) =>
+        (Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)
+          ? contexts.settleActivity({ activityId: selectionAdmission.activityId, state: "interrupted" }).pipe(Effect.ignore)
+          : Effect.void
+        ).pipe(
+          Effect.ensuring(queryAuthorization?.remove(session.id).pipe(Effect.ignore) ?? Effect.void),
+        ),
+      )
       // W3.6 — after the selection is admitted, the selection graph evidence (refs + brief
       // revision/summary) is appended to the VOLATILE system tail (`deepagentSystem` + the request
       // system). `system.baseline` is never touched, so the cache prefix stays stable; the evidence
@@ -479,16 +495,6 @@ export const layer = Layer.effect(
         deepagentSystem.push(selectionEvidence)
         request = LLM.updateRequest(request, { system: [...request.system, SystemPart.make(selectionEvidence)] })
       }
-      // An interrupted turn must terminalize the activity it admitted; otherwise the leftover
-      // `active` activity blocks every future queued admission on this Session. The per-turn scope
-      // closes on interruption too, and settleActivity is idempotent.
-      yield* Effect.addFinalizer((exit) =>
-        Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)
-          ? contexts
-              .settleActivity({ activityId: selectionAdmission.activityId, state: "interrupted" })
-              .pipe(Effect.ignore)
-          : Effect.void,
-      )
       // §16.3 order 4: the receipt's history-window identity comes from the optional epoch bridge;
       // unwired compositions (or a lookup fault) keep the ContextEpoch revision exactly as before.
       // Identity stability: the read happens BEFORE compactIfNeeded and is replayed in the same

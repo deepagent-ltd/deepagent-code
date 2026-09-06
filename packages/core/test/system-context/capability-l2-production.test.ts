@@ -582,11 +582,11 @@ describe("RuntimeFeatures.enabled mirrors the flip-flag table (W4 step 6)", () =
     expect(RuntimeFeatures.enabled("context_federation_v2")).toBe(true)
   })
 
-  test("context_query_tools_v2 defaults OFF (no consumer this wave) and follows its opt-in env", () => {
+  test("context_query_tools_v2 defaults ON with canonical Core consumers and follows its kill switch", () => {
     delete process.env["DEEPAGENT_CODE_CONTEXT_QUERY_TOOLS_V2"]
-    expect(RuntimeFeatures.enabled("context_query_tools_v2")).toBe(false)
-    process.env["DEEPAGENT_CODE_CONTEXT_QUERY_TOOLS_V2"] = "TRUE"
     expect(RuntimeFeatures.enabled("context_query_tools_v2")).toBe(true)
+    process.env["DEEPAGENT_CODE_CONTEXT_QUERY_TOOLS_V2"] = "false"
+    expect(RuntimeFeatures.enabled("context_query_tools_v2")).toBe(false)
   })
 
   test("an unknown feature still throws the typed UnknownRuntimeFeatureError", () => {
@@ -595,18 +595,16 @@ describe("RuntimeFeatures.enabled mirrors the flip-flag table (W4 step 6)", () =
 })
 
 describe("inventory ↔ registry consistency gate (W4 step 7)", () => {
-  test("current HEAD (post W3.5 maintenance_only) passes the gate — context_query is no longer advertised", () => {
+  test("current Core V2 registry satisfies the stable context_query manifest", () => {
     expect(() => assertInventoryMatchesRegistry(builtinToolNames, capabilityCatalog)).not.toThrow()
   })
 
-  test("pre-W3.5 catalog advertising context_query without a registry entry still throws", () => {
-    const preW35Catalog = capabilityCatalog.map((manifest) =>
-      manifest.id === "deepagent.context-query" ? { ...manifest, availability: "stable" as const } : manifest,
-    )
+  test("a stable context_query manifest without its Core registry entry still throws", () => {
+    const registered = new Set([...builtinToolNames].filter((name) => name !== "context_query"))
     let missing: ReadonlyArray<string> = []
     try {
-      assertInventoryMatchesRegistry(builtinToolNames, preW35Catalog)
-      throw new Error("expected the gate to throw for a stable context_query before W3.5")
+      assertInventoryMatchesRegistry(registered, capabilityCatalog)
+      throw new Error("expected the gate to throw for a missing stable context_query")
     } catch (error) {
       if (error instanceof CatalogRegistryMismatchError) missing = error.missing
       else throw error

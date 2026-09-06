@@ -169,11 +169,14 @@ describe("CapabilityManifest consistency gate", () => {
 
 describe("W4.1 reverse warning: findUpgradableMaintenance + the single permission directory", () => {
   test("a maintenance_only capability whose entry tools are ALL registered is an upgrade candidate", () => {
-    const candidates = findUpgradableMaintenance(["context_query"], capabilityCatalog)
+    const maintenance = capabilityCatalog.map((manifest) =>
+      manifest.id === "deepagent.context-query" ? { ...manifest, availability: "maintenance_only" as const } : manifest,
+    )
+    const candidates = findUpgradableMaintenance(["context_query"], maintenance)
     expect(candidates.map((manifest) => String(manifest.id))).toEqual(["deepagent.context-query"])
   })
 
-  test("no candidate while the entry tool is not registered (current HEAD)", () => {
+  test("the current stable catalog has no maintenance upgrade candidates", () => {
     expect(findUpgradableMaintenance(builtinToolNames, capabilityCatalog)).toEqual([])
   })
 

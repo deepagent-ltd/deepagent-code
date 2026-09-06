@@ -15,6 +15,7 @@ import { WriteTool } from "./write"
 import { PlanWriteTool } from "./plan"
 import { CapabilityRuntimeSearch } from "../system-context/capability-runtime-search"
 import { CapabilityLoadTool } from "../system-context/capability-load-tool"
+import { ContextQueryTools } from "./context-query-tools"
 
 /**
  * The shipped built-in tool names (the exact registry names `locationLayer`
@@ -39,6 +40,8 @@ export const builtinToolNames: ReadonlySet<string> = new Set([
   "capability_search",
   "capability_load",
   "domain_pack_load",
+  "code_intel",
+  "context_query",
 ])
 
 /**
@@ -76,4 +79,5 @@ export const locationLayer = Layer.mergeAll(
   PlanWriteTool.layer,
   CapabilityRuntimeSearch.layer,
   CapabilityLoadTool.layer,
+  ContextQueryTools.layer,
 )

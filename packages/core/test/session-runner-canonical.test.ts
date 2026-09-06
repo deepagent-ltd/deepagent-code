@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm"
 import { Effect, Layer } from "effect"
 import { Database } from "../src/database/database"
 import { SessionContext } from "../src/context-federation/session-context"
+import { ContextQueryAuthorization } from "../src/context-federation/query-authorization"
 import { SessionProviderAttempt } from "../src/context-federation/provider-attempt"
 import { SessionProviderOwner } from "../src/context-federation/provider-owner"
 import { SessionRunnerCanonical } from "../src/session/runner/canonical-turn"
@@ -98,6 +99,40 @@ it.effect("admits one canonical activity and selection for the promoted trigger 
     })
     expect(second.activityId).toBe(admission.activityId)
     expect(second.selectionId).toBe(admission.selectionId)
+  }),
+)
+
+it.effect("binds explicit context tools to the exact V2 selection authority", () =>
+  Effect.gen(function* () {
+    yield* seed
+    const { db } = yield* Database.Service
+    let envelope: ContextQueryAuthorization.Envelope | undefined
+    yield* SessionRunnerCanonical.admitSelection({
+      db,
+      contexts: yield* SessionContext.Service,
+      sessionID,
+      agent: "build",
+      location: { directory: "/project" },
+      promotedInputIds: ["msg_trigger"],
+      system: { baseline: "baseline", revision: 7, baselineSeq: 11 },
+      historyEndMessageId: "msg_trigger",
+    }).pipe(
+      Effect.provideService(
+        ContextQueryAuthorization.Controller,
+        ContextQueryAuthorization.Controller.of({
+          bind: (input) => Effect.sync(() => {
+            envelope = input.envelope
+          }),
+          remove: () => Effect.void,
+        }),
+      ),
+    )
+    expect(envelope?.principal.principalId).toBe(sessionID)
+    expect(envelope?.principal.sessionIds).toEqual([sessionID])
+    expect(envelope?.principal.authorizationEpoch).toBe(7)
+    expect(envelope?.egress.epoch).toBe(11)
+    expect(envelope?.egress.graphs).toEqual(["code", "documents", "knowledge", "memory"])
+    expect(envelope?.egress.sensitivities).toEqual(["public", "source_code", "secret_adjacent"])
   }),
 )
 
