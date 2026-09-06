@@ -27,7 +27,7 @@ import { flipFlagValueOn } from "../deepagent/flip-flag"
  * | event.v2.admission         | DEEPAGENT_CODE_EVENT_V2_ADMISSION            | true         | W0.1 default table (production default ON)     |
  * | event.v2.im_single_write   | DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE      | true         | W0.1 default table (production default ON)     |
  * | context_federation_v2      | DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION | true         | W3.8 M1 single-point closure: the W3 assembly gate (`productionAdaptersEnabled`) now DELEGATES here (one reader, one default). The W3.7 production wiring is in, so the W4.6 production-default-ON semantics apply; production entries write "true" anyway, and an explicit `=false` kill-switch still turns the staged fallback on. |
- * | context_query_tools_v2     | DEEPAGENT_CODE_CONTEXT_QUERY_TOOLS_V2        | false        | no production consumer / no catalog manifest requires it this wave; opt-in key, OFF by default (W4 目录未启用 → false) |
+ * | context_query_tools_v2     | DEEPAGENT_CODE_CONTEXT_QUERY_TOOLS_V2        | true         | Core V2 ships both canonical context-query tools; explicit false remains the kill switch |
  *
  * A canonical feature without an env binding is a build defect: it is reported OFF
  * (fail-closed) rather than silently passing. Unknown features keep throwing the typed
@@ -37,7 +37,7 @@ const featureEnv = new Map<string, { readonly env: string; readonly unsetDefault
   ["event.v2.admission", { env: "DEEPAGENT_CODE_EVENT_V2_ADMISSION", unsetDefault: true }],
   ["event.v2.im_single_write", { env: "DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE", unsetDefault: true }],
   ["context_federation_v2", { env: "DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION", unsetDefault: true }],
-  ["context_query_tools_v2", { env: "DEEPAGENT_CODE_CONTEXT_QUERY_TOOLS_V2", unsetDefault: false }],
+  ["context_query_tools_v2", { env: "DEEPAGENT_CODE_CONTEXT_QUERY_TOOLS_V2", unsetDefault: true }],
 ])
 
 /** The canonical feature set the runtime ships: inventory features ∪ catalog-required features. */
@@ -87,7 +87,8 @@ export interface RuntimeFeatureRegistry {
    * reporting `false`. A canonical feature is gated by its real runtime flag (see `featureEnv`:
    * W4 — event admission / IM single-write default ON per the W0.1 table; `context_federation_v2`
    * is ON since W3.8 M1 (the W3 assembly gate delegates here — single reader of the W0.1 key, and
-   * the W3.7 production wiring is in); `context_query_tools_v2` stays an opt-in OFF default).
+   * the W3.7 production wiring is in); `context_query_tools_v2` is ON now that the canonical
+   * Core tools and host runtime seam are wired). Explicit false values remain kill switches.
    * Unset/unknown-state features follow the table's `unsetDefault`.
    */
   readonly enabled: (feature: string) => boolean

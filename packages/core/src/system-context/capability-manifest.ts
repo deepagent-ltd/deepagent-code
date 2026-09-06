@@ -244,6 +244,8 @@ export const DeepAgentCodeToolInventory: CapabilityInventory = {
     "question",
     "skill",
     "context.read",
+    "code_intel",
+    "context_query",
     // W4.1 (§7.2 single permission directory): the capability load tools are authorized by
     // `capability.read` (Tool.withPermission), so the action belongs in the one permission
     // catalog the coherence gate validates manifests against — a manifest (or the
@@ -321,10 +323,9 @@ export class CatalogRegistryMismatchError extends Schema.TaggedErrorClass<Catalo
  * would discover a feature it cannot operate). Extra registered tools (question,
  * capability_search, the load tools) are fine; missing tools are not.
  *
- * Current HEAD: `deepagent.context-query` is `stable` but `context_query` is not in the
- * builtin registry → throws (expected). W3.5 marks the not-yet-wired capabilities
- * `maintenance_only` (they are excluded here — a maintenance-only capability is never
- * advertised as operable), and the gate passes for the merged wave.
+ * The Core V2 context tools are part of the shipped built-in set, so their stable
+ * manifests pass this gate. Maintenance-only capabilities remain excluded because
+ * they are never advertised as operable.
  */
 export function assertInventoryMatchesRegistry(
   registeredTools: ReadonlyArray<string> | ReadonlySet<string>,

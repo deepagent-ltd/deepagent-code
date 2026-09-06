@@ -49,6 +49,8 @@ import { SystemContextRegistry } from "./system-context/registry"
 import { SessionProviderOwner } from "./context-federation/provider-owner"
 import { SessionContext } from "./context-federation/session-context"
 import { productionV2SourcesLayer } from "./context-federation/production-adapters"
+import { ContextQueryAuthorization } from "./context-federation/query-authorization"
+import { ContextToolRuntime } from "./context-federation/tool-runtime"
 import { SessionRunnerCanonical } from "./session/runner/canonical-turn"
 import { V2ProviderTurn } from "./session/runner/v2-provider-turn"
 import { SessionRunnerLLMToolGateSeam } from "./session/runner/llm"
@@ -95,7 +97,7 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()(
         Layer.provide(resources),
         Layer.provide(base),
       )
-      const services = Layer.mergeAll(base, resources, permissionsAndTools)
+      const services = Layer.mergeAll(base, resources, permissionsAndTools, ContextQueryAuthorization.defaultLayer)
       const image = Image.layer.pipe(Layer.provide(services))
       const mutation = FileMutation.locationLayer.pipe(Layer.provide(services))
       const searches = LocationSearch.layer.pipe(Layer.provide(Ripgrep.layer), Layer.provide(services))
@@ -103,6 +105,7 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()(
       const todos = SessionTodo.layer.pipe(Layer.provide(services))
       const questions = QuestionV2.locationLayer.pipe(Layer.provide(services))
       const builtInTools = BuiltInTools.locationLayer.pipe(
+        Layer.provide(ContextToolRuntime.seam),
         Layer.provide(services),
         Layer.provide(mutation),
         Layer.provide(searches),

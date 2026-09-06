@@ -29,11 +29,7 @@ const FIXTURE_TASKS: ReadonlyArray<FixtureTask> = [
   { query: "read and trace references in this file", intendedAction: "read", expectedCapability: "deepagent.code-read", expectedTool: "read" },
   { query: "apply an exact change to a file", intendedAction: "edit", expectedCapability: "deepagent.code-edit", expectedTool: "edit" },
   { query: "run the test suite", intendedAction: "bash", expectedCapability: "deepagent.shell-execute", expectedTool: "bash" },
-  // W3.5: `deepagent.context-query` is maintenance_only (its entry tool is not registered yet), so
-  // it is NOT part of the discoverable fixture set — a maintenance capability must never be
-  // advertised as executable (the runtime-search suite asserts its exclusion); the generic read
-  // fallback covers a cross-graph recall honestly, and this eval measures discoverable capability
-  // coverage only.
+  { query: "recall a cross-graph project decision", intendedAction: "context_query", expectedCapability: "deepagent.context-query", expectedTool: "context_query" },
   { query: "follow a documented skill procedure", intendedAction: "skill", expectedCapability: "deepagent.skill-guidance", expectedTool: "skill" },
   { query: "research current info on the web", intendedAction: "websearch", expectedCapability: "deepagent.web-research", expectedTool: "websearch" },
 ]
@@ -87,7 +83,7 @@ function naiveTool(task: FixtureTask): string {
     }
   }
   // Deterministic tie-fallback: without capability knowledge the naive picker cannot know
-  // context_query / skill exist, so a task with no keyword match falls to the generic read.
+  // context_query / skill exist, so these tasks fall to the generic read.
   return best
 }
 

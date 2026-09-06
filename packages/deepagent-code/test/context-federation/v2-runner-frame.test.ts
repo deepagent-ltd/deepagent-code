@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import { eq } from "drizzle-orm"
-import { Context, Effect, Layer, Scope } from "effect"
+import { Context, Effect, Layer } from "effect"
 import { Location } from "@deepagent-code/core/location"
+import { AgentV2 } from "@deepagent-code/core/agent"
 import {
   ProductionV2Sources,
   type ProductionV2AdapterInput,
@@ -21,6 +22,7 @@ import { SessionInputTable, SessionTable } from "@deepagent-code/core/session/sq
 import { Project } from "@deepagent-code/core/project"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { CodeQuery } from "@deepagent-code/core/code-intelligence/query"
+import { ContextToolRuntime } from "@deepagent-code/core/context-federation/tool-runtime"
 import { LSP } from "@/lsp/lsp"
 import { LocationIndexRuntime } from "@/location-index/runtime"
 import { LocationIndexCoordinator } from "@/location-index/coordinator"
@@ -35,6 +37,9 @@ import { ProductionSources } from "@/context-federation/production-sources"
 import { V2RunnerFrame } from "@/session/v2-runner-frame"
 import { InstanceStore } from "@/project/instance-store"
 import { InstanceBootstrap } from "@/project/bootstrap-service"
+import { CodeIntelFacade } from "@/code-intelligence/facade"
+import { ContextQueryFacade } from "@/context-federation/context-query-facade"
+import { InstanceRef } from "@/effect/instance-ref"
 import { tmpdir } from "../fixture/fixture"
 import path from "node:path"
 
@@ -283,4 +288,58 @@ describe("W3.10 V2 runner frame host hook (deepagent-code composition)", () => {
 
     await Effect.runPromise(program)
   })
+
+  test("explicit Core context tools execute inside the ref-owned instance frame", async () => {
+    await using fixture = await tmpdir()
+    const root = path.join(fixture.path, "repo")
+    let observedDirectory: string | undefined
+    const codeIntel = Layer.mock(CodeIntelFacade.Service, {
+      execute: () => Effect.gen(function* () {
+        observedDirectory = (yield* InstanceRef)?.directory
+        return codeIntelResult
+      }),
+    })
+    const contextQuery = Layer.mock(ContextQueryFacade.Service, {
+      execute: () => Effect.die("unused"),
+    })
+    const program = Effect.gen(function* () {
+      const runtime = Context.get(
+        yield* Layer.build(V2RunnerFrame.runnerFrameContextToolsFor(Location.Ref.make({ directory: AbsolutePath.make(root) }))),
+        ContextToolRuntime.Service,
+      )
+      const output = yield* runtime.codeIntel({
+        request: { intent: "search", query: "host result" },
+        sessionID: SessionSchema.ID.make("ses_v2_context_tool_frame"),
+        agent: AgentV2.ID.make("researcher"),
+      })
+      expect(output).toContain("host result")
+      expect(observedDirectory).toBe(root)
+    }).pipe(
+      Effect.provide(InstanceStore.defaultLayer.pipe(Layer.provide(noopBootstrap))),
+      Effect.provide(codeIntel),
+      Effect.provide(contextQuery),
+      Effect.scoped,
+    )
+    await Effect.runPromise(program)
+  })
 })
+
+const codeIntelResult: CodeIntelFacade.Result = {
+  schemaVersion: 2,
+  summary: "host result",
+  index: {
+    state: "ready",
+    generation: 1,
+    dirtyPathCount: 0,
+    semanticCoverage: {},
+    stale: false,
+  },
+  query: {
+    status: { graph: "code", kind: "complete", state: "ready", outcome: "empty", revisions: [] },
+    consistency: "stale_ok",
+    freshnessSatisfied: true,
+  },
+  enrichment: { lsp: "not_applicable", editorOverlay: "not_applicable" },
+  hits: [],
+  truncated: false,
+}
