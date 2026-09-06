@@ -447,6 +447,8 @@ export const layerWith = (layerOptions?: LayerOptions) =>
       const all = yield* PubSub.unbounded<Payload>()
       const synchronized = new Map<string, Set<PubSub.PubSub<void>>>()
       const typed = new Map<string, PubSub.PubSub<Payload>>()
+      // Synchronized definitions are routed by their full wire identity (`type.version`).
+      // A base type alone is insufficient once old decoders and a successor projector coexist.
       const projectors = new Map<string, AnyProjector[]>()
       const snapshotCodecs = new Map<string, SnapshotCodec>()
       const commitGuards = new Array<CommitGuard>()
@@ -454,12 +456,27 @@ export const layerWith = (layerOptions?: LayerOptions) =>
       const syncHandlers = new Array<Sync>()
       const { db } = yield* Database.Service
 
+      const definitionKey = (definition: Definition) =>
+        definition.sync ? versionedType(definition.type, definition.sync.version) : definition.type
+      const eventKey = (event: Payload) =>
+        event.version === undefined ? event.type : versionedType(event.type, event.version)
+      const decodeSyncData = (definition: SyncDefinition, data: unknown) =>
+        Effect.try({
+          try: () => definition.decode(data),
+          catch: (error) =>
+            new InvalidSyncEventError({
+              type: versionedType(definition.type, definition.sync.version),
+              message: `Invalid synchronized event payload: ${String(error)}`,
+            }),
+        }).pipe(Effect.orDie)
+
       const getOrCreate = (definition: Definition) =>
         Effect.gen(function* () {
-          const existing = typed.get(definition.type)
+          const key = definitionKey(definition)
+          const existing = typed.get(key)
           if (existing) return existing
           const pubsub = yield* PubSub.unbounded<Payload>()
-          typed.set(definition.type, pubsub)
+          typed.set(key, pubsub)
           return pubsub
         })
 
@@ -476,6 +493,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
       )
 
       function commitSyncEvent(
+        definition: Definition,
         event: Payload,
         input?: {
           readonly seq: number
@@ -488,17 +506,22 @@ export const layerWith = (layerOptions?: LayerOptions) =>
         deferDurableWake = false,
       ) {
         return Effect.gen(function* () {
-          const definition = registry.get(event.type)
-          const sync = definition?.sync
-          if (sync) {
-            if (event.version !== sync.version) {
+          const sync = definition.sync
+          if (!sync)
+            return yield* Effect.die(
+              new InvalidSyncEventError({
+                type: event.type,
+                message: "Cannot durably commit an unsynchronized event definition",
+              }),
+            )
+          if (event.version !== sync.version) {
               yield* Effect.die(
                 new InvalidSyncEventError({
                   type: event.type,
                   message: `Expected event version ${sync.version}, got ${event.version}`,
                 }),
               )
-            }
+          }
             const aggregateID = (event.data as Record<string, unknown>)[sync.aggregate]
             if (typeof aggregateID !== "string") {
               yield* Effect.die(
@@ -516,7 +539,14 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                   }),
                 )
               }
-              const codec = syncRegistry.get(versionedType(definition.type, sync.version))!
+              const codec = syncRegistry.get(versionedType(definition.type, sync.version))
+              if (!codec)
+                return yield* Effect.die(
+                  new InvalidSyncEventError({
+                    type: event.type,
+                    message: `Missing synchronized codec for ${versionedType(definition.type, sync.version)}`,
+                  }),
+                )
               const original = codec.encode(event.data) as Record<string, unknown>
               const prepared = FilePartArtifact.prepare(
                 definition.type,
@@ -528,7 +558,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
               const admission = admitEncodedPayload(codec, canonicalEvent.data)
               if ("error" in admission) return yield* Effect.die(admission.error)
               const encoded = admission.encoded
-              const list = projectors.get(event.type) ?? []
+              const list = projectors.get(versionedType(event.type, sync.version)) ?? []
               return yield* Effect.uninterruptible(
                 Effect.gen(function* () {
                   const committed = yield* db
@@ -815,17 +845,17 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                 }),
               )
             }
-          }
         })
       }
 
       function publishEvent<D extends Definition>(
+        definition: D,
         event: Payload<D>,
         commit?: PublishOptions["commit"],
         idempotent = false,
       ) {
         return Effect.gen(function* () {
-          const durable = registry.get(event.type)?.sync !== undefined
+          const durable = definition.sync !== undefined
           if (!durable && commit)
             return yield* Effect.die(
               new InvalidSyncEventError({
@@ -834,7 +864,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
               }),
             )
           if (durable) {
-            const committed = yield* commitSyncEvent(event as Payload, undefined, commit, idempotent)
+            const committed = yield* commitSyncEvent(definition, event as Payload, undefined, commit, idempotent)
             if (committed) {
               event = { ...(committed.event ?? event), seq: committed.seq } as Payload<D>
               if (committed.inserted) {
@@ -869,7 +899,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
             (listener) => (isolateListeners ? observe(event, "listener", listener) : listener(event)),
             { discard: true },
           )
-          const pubsub = typed.get(event.type)
+          const pubsub = typed.get(eventKey(event))
           if (pubsub) yield* PubSub.publish(pubsub, event)
           yield* PubSub.publish(all, event)
         })
@@ -892,6 +922,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
               ? { directory: serviceLocation.directory, workspaceID: serviceLocation.workspaceID }
               : undefined)
           return yield* publishEvent(
+            definition,
             {
               id: options?.id ?? ID.create(),
               ...(options?.metadata ? { metadata: options.metadata } : {}),
@@ -929,11 +960,12 @@ export const layerWith = (layerOptions?: LayerOptions) =>
               type: definition.type,
               version: definition.sync.version,
               seq: event.seq,
-              data: definition.decode(event.data),
+              data: yield* decodeSyncData(definition, event.data),
               replay: true,
               ...(options?.ownerID ? { replayOwnerID: options.ownerID } : {}),
             } as Payload
             const committed = yield* commitSyncEvent(
+              definition,
               payload,
               {
                 seq: event.seq,
@@ -996,7 +1028,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
               )
               continue
             }
-            const admission = admitEncodedPayload(definition, definition.decode(event.data))
+            const admission = admitEncodedPayload(definition, yield* decodeSyncData(definition, event.data))
             if ("error" in admission) return yield* Effect.die(admission.error)
           }
           const committed: Payload[] = []
@@ -2403,22 +2435,24 @@ export const layerWith = (layerOptions?: LayerOptions) =>
 
       const streamAll = (): Stream.Stream<Payload> => Stream.fromPubSub(all)
 
-      const decodeSerializedEvent = (event: SerializedEvent): CursorEvent => {
-        const definition = syncRegistry.get(event.type)
-        if (!definition) {
-          throw new InvalidSyncEventError({ type: event.type, message: `Unknown sync event type ${event.type}` })
-        }
-        return {
-          cursor: Cursor.make(event.seq),
-          event: {
-            id: event.id,
-            type: definition.type,
-            version: definition.sync.version,
-            seq: event.seq,
-            data: definition.decode(event.data),
-          },
-        }
-      }
+      const decodeSerializedEvent = (event: SerializedEvent): Effect.Effect<CursorEvent> =>
+        Effect.gen(function* () {
+          const definition = syncRegistry.get(event.type)
+          if (!definition)
+            return yield* Effect.die(
+              new InvalidSyncEventError({ type: event.type, message: `Unknown sync event type ${event.type}` }),
+            )
+          return {
+            cursor: Cursor.make(event.seq),
+            event: {
+              id: event.id,
+              type: definition.type,
+              version: definition.sync.version,
+              seq: event.seq,
+              data: yield* decodeSyncData(definition, event.data),
+            },
+          }
+        })
 
       const decodeStoredEventData = Schema.decodeUnknownSync(Schema.UnknownFromJsonString)
 
@@ -2528,7 +2562,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                 message: `Stored event ${missing.id} disappeared while reading aggregate ${aggregateID}`,
               }),
             )
-          const events = metadata.map((event) =>
+          const events = yield* Effect.forEach(metadata, (event) =>
             decodeSerializedEvent({
               id: event.id,
               aggregateID,
@@ -2627,9 +2661,10 @@ export const layerWith = (layerOptions?: LayerOptions) =>
 
       const project = <D extends Definition>(definition: D, projector: Projector<D>): Effect.Effect<void> =>
         Effect.sync(() => {
-          const list = projectors.get(definition.type) ?? []
+          const key = definitionKey(definition)
+          const list = projectors.get(key) ?? []
           list.push((event) => projector(event as Payload<D>))
-          projectors.set(definition.type, list)
+          projectors.set(key, list)
         })
 
       const registerSnapshotCodec = (codec: SnapshotCodec) =>

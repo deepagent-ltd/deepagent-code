@@ -8,6 +8,8 @@ import { EventTable } from "@deepagent-code/core/event/sql"
 import { PermissionV2 } from "@deepagent-code/core/permission"
 import { AgentV2 } from "@deepagent-code/core/agent"
 import { Config } from "@deepagent-code/core/config"
+import { Catalog } from "@deepagent-code/core/catalog"
+import { ModelV2 } from "@deepagent-code/core/model"
 import { Project } from "@deepagent-code/core/project"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { AbsolutePath } from "@deepagent-code/core/schema"
@@ -31,9 +33,11 @@ import { SystemContextRegistry } from "@deepagent-code/core/system-context/regis
 import { SystemContext } from "@deepagent-code/core/system-context"
 import { SkillGuidance } from "@deepagent-code/core/skill/guidance"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
+import { FSUtil } from "@deepagent-code/core/fs-util"
+import { Git } from "@deepagent-code/core/git"
 import { describe, expect } from "bun:test"
 import { eq } from "drizzle-orm"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Option } from "effect"
 import path from "node:path"
 import { CONTEXT_FEDERATION_PRODUCTION_ENV } from "../src/context-federation/production-adapters"
 import { testEffect } from "./lib/effect"
@@ -85,7 +89,27 @@ const systemContext = SystemContextRegistry.layer
 const location = Location.layer({ directory: AbsolutePath.make("/project") }).pipe(Layer.provide(Project.defaultLayer))
 const skillGuidance = Layer.mock(SkillGuidance.Service, { load: () => Effect.succeed(SystemContext.empty) })
 const config = Layer.succeed(Config.Service, Config.Service.of({ entries: () => Effect.succeed([]) }))
+const catalog = Layer.succeed(
+  Catalog.Service,
+  Catalog.Service.of({
+    transform: () => Effect.die("unexpected catalog.transform"),
+    provider: {
+      get: () => Effect.die("unexpected catalog.provider.get"),
+      all: () => Effect.succeed([]),
+      available: () => Effect.succeed([]),
+    },
+    model: {
+      get: (providerID, modelID) => Effect.fail(new Catalog.ModelNotFoundError({ providerID, modelID })),
+      all: () => Effect.succeed([]),
+      available: () => Effect.succeed([]),
+      default: () => Effect.succeed(Option.none<ModelV2.Info>()),
+      small: () => Effect.succeed(Option.none<ModelV2.Info>()),
+    },
+  }),
+)
 const runner = SessionRunnerLLM.layer.pipe(
+  Layer.provide(FSUtil.defaultLayer),
+  Layer.provide(Git.defaultLayer),
   Layer.provide(
     Layer.succeed(
       V2ProviderTurn.OwnerAuthorization,
@@ -111,6 +135,7 @@ const runner = SessionRunnerLLM.layer.pipe(
   Layer.provide(agents),
   Layer.provide(skillGuidance),
   Layer.provide(config),
+  Layer.provide(catalog),
 )
 const coordinator = SessionRunCoordinator.layer.pipe(Layer.provide(runner))
 const execution = Layer.effect(

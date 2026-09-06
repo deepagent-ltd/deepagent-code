@@ -178,7 +178,7 @@ export const makeGoalTickPort =
         model,
         allowPlanWriteCapability: true,
         purpose: "goal-loop",
-        ...v2DriveDeps(deps.v2Session, deps.snapshot),
+        ...v2DriveDeps(deps.v2Session, deps.snapshot, deps.flags.coreV2Only),
       })
       const runTurn: typeof baseRunner = (input) => withContext(baseRunner(input))
 

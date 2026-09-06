@@ -5,9 +5,6 @@ export type ClientOptions = {
 }
 
 export type Event =
-  | EventModelsDevRefreshed
-  | EventPluginAdded
-  | EventCatalogModelUpdated
   | EventSessionCreated
   | EventSessionUpdated
   | EventSessionDeleted
@@ -17,6 +14,7 @@ export type Event =
   | EventMessagePartRemoved
   | EventSessionNextAgentSwitched
   | EventSessionNextModelSwitched
+  | EventSessionNextPermissionsChanged
   | EventSessionNextMoved
   | EventSessionNextPrompted
   | EventSessionNextPromptAdmitted
@@ -50,6 +48,9 @@ export type Event =
   | EventSessionNextCompactionStarted
   | EventSessionNextCompactionDelta
   | EventSessionNextCompactionEnded
+  | EventModelsDevRefreshed
+  | EventPluginAdded
+  | EventCatalogModelUpdated
   | EventAccountAdded
   | EventAccountRemoved
   | EventAccountSwitched
@@ -842,6 +843,10 @@ export type SessionStatus =
   | {
       type: "busy"
     }
+  | {
+      type: "recovery_required"
+      message: string
+    }
 
 export type GlobalEvent = {
   directory: string
@@ -850,31 +855,12 @@ export type GlobalEvent = {
   payload:
     | {
         id: string
-        type: "models-dev.refreshed"
-        properties: {
-          [key: string]: unknown
-        }
-      }
-    | {
-        id: string
-        type: "plugin.added"
-        properties: {
-          id: string
-        }
-      }
-    | {
-        id: string
-        type: "catalog.model.updated"
-        properties: {
-          model: ModelV2Info
-        }
-      }
-    | {
-        id: string
         type: "session.created"
         properties: {
           sessionID: string
-          info: Session
+          info: SessionV2Info
+          slug: string
+          version: string
         }
       }
     | {
@@ -949,6 +935,15 @@ export type GlobalEvent = {
             providerID: string
             variant?: string
           }
+        }
+      }
+    | {
+        id: string
+        type: "session.next.permissions.changed"
+        properties: {
+          timestamp: number
+          sessionID: string
+          permissions: PermissionV2Ruleset
         }
       }
     | {
@@ -1351,6 +1346,27 @@ export type GlobalEvent = {
           reason: "auto" | "manual"
           text: string
           recent: string
+        }
+      }
+    | {
+        id: string
+        type: "models-dev.refreshed"
+        properties: {
+          [key: string]: unknown
+        }
+      }
+    | {
+        id: string
+        type: "plugin.added"
+        properties: {
+          id: string
+        }
+      }
+    | {
+        id: string
+        type: "catalog.model.updated"
+        properties: {
+          model: ModelV2Info
         }
       }
     | {
@@ -1917,6 +1933,7 @@ export type GlobalEvent = {
     | SyncEventMessagePartRemoved
     | SyncEventSessionNextAgentSwitched
     | SyncEventSessionNextModelSwitched
+    | SyncEventSessionNextPermissionsChanged
     | SyncEventSessionNextMoved
     | SyncEventSessionNextPrompted
     | SyncEventSessionNextPromptAdmitted
@@ -5017,6 +5034,125 @@ export type MoveSessionDestination = {
   directory: string
 }
 
+export type PermissionV2Effect = "allow" | "deny" | "ask"
+
+export type PermissionV2Rule = {
+  action: string
+  resource: string
+  effect: PermissionV2Effect
+}
+
+export type PermissionV2Ruleset = Array<PermissionV2Rule>
+
+export type LocationRef = {
+  directory: string
+  workspaceID?: string
+}
+
+export type SessionV2Info = {
+  id: string
+  parentID?: string
+  projectID: string
+  agent?: string
+  permissions: PermissionV2Ruleset
+  model?: {
+    id: string
+    providerID: string
+    variant?: string
+  }
+  cost: number
+  tokens: {
+    input: number
+    output: number
+    reasoning: number
+    cache: {
+      read: number
+      write: number
+    }
+  }
+  time: {
+    created: number
+    updated: number
+    archived?: number
+  }
+  title: string
+  location: LocationRef
+  subpath?: string
+}
+
+export type PromptSource = {
+  start: number
+  end: number
+  text: string
+}
+
+export type PromptFileAttachment = {
+  uri: string
+  mime: string
+  name?: string
+  description?: string
+  source?: PromptSource
+}
+
+export type PromptAgentAttachment = {
+  name: string
+  source?: PromptSource
+}
+
+export type PromptReferenceAttachment = {
+  name: string
+  kind: "local" | "git" | "invalid"
+  uri?: string
+  repository?: string
+  branch?: string
+  target?: string
+  targetUri?: string
+  problem?: string
+  source?: PromptSource
+}
+
+export type SessionErrorUnknown = {
+  type: "unknown"
+  message: string
+}
+
+export type ToolTextContent = {
+  type: "text"
+  text: string
+}
+
+export type ToolFileContent = {
+  type: "file"
+  source:
+    | {
+        type: "data"
+        data: string
+      }
+    | {
+        type: "url"
+        url: string
+      }
+    | {
+        type: "file"
+        uri: string
+      }
+  mime: string
+  name?: string
+}
+
+export type SessionNextRetryError = {
+  message: string
+  statusCode?: number
+  isRetryable: boolean
+  responseHeaders?: {
+    [key: string]: string
+  }
+  responseBody?: string
+  metadata?: {
+    [key: string]: string
+  }
+}
+
 export type ModelV2Info = {
   id: string
   providerID: string
@@ -5133,84 +5269,6 @@ export type ModelV2Info = {
   }
 }
 
-export type LocationRef = {
-  directory: string
-  workspaceID?: string
-}
-
-export type PromptSource = {
-  start: number
-  end: number
-  text: string
-}
-
-export type PromptFileAttachment = {
-  uri: string
-  mime: string
-  name?: string
-  description?: string
-  source?: PromptSource
-}
-
-export type PromptAgentAttachment = {
-  name: string
-  source?: PromptSource
-}
-
-export type PromptReferenceAttachment = {
-  name: string
-  kind: "local" | "git" | "invalid"
-  uri?: string
-  repository?: string
-  branch?: string
-  target?: string
-  targetUri?: string
-  problem?: string
-  source?: PromptSource
-}
-
-export type SessionErrorUnknown = {
-  type: "unknown"
-  message: string
-}
-
-export type ToolTextContent = {
-  type: "text"
-  text: string
-}
-
-export type ToolFileContent = {
-  type: "file"
-  source:
-    | {
-        type: "data"
-        data: string
-      }
-    | {
-        type: "url"
-        url: string
-      }
-    | {
-        type: "file"
-        uri: string
-      }
-  mime: string
-  name?: string
-}
-
-export type SessionNextRetryError = {
-  message: string
-  statusCode?: number
-  isRetryable: boolean
-  responseHeaders?: {
-    [key: string]: string
-  }
-  responseBody?: string
-  metadata?: {
-    [key: string]: string
-  }
-}
-
 export type AuthOAuthCredential = {
   type: "oauth"
   refresh: string
@@ -5290,13 +5348,15 @@ export type SyncEventSessionCreated = {
   type: "sync"
   id: string
   syncEvent: {
-    type: "session.created.1"
+    type: "session.created.2"
     id: string
     seq: number
     aggregateID: string
     data: {
       sessionID: string
-      info: Session
+      info: SessionV2Info
+      slug: string
+      version: string
     }
   }
 }
@@ -5427,6 +5487,22 @@ export type SyncEventSessionNextModelSwitched = {
         providerID: string
         variant?: string
       }
+    }
+  }
+}
+
+export type SyncEventSessionNextPermissionsChanged = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.permissions.changed.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      permissions: PermissionV2Ruleset
     }
   }
 }
@@ -6312,16 +6388,6 @@ export type LocationInfo = {
   }
 }
 
-export type PermissionV2Effect = "allow" | "deny" | "ask"
-
-export type PermissionV2Rule = {
-  action: string
-  resource: string
-  effect: PermissionV2Effect
-}
-
-export type PermissionV2Ruleset = Array<PermissionV2Rule>
-
 export type AgentV2Info = {
   id: string
   model?: {
@@ -6344,36 +6410,6 @@ export type AgentV2Info = {
   color?: string | "primary" | "secondary" | "accent" | "success" | "warning" | "error" | "info"
   steps?: number
   permissions: PermissionV2Ruleset
-}
-
-export type SessionV2Info = {
-  id: string
-  parentID?: string
-  projectID: string
-  agent?: string
-  model?: {
-    id: string
-    providerID: string
-    variant?: string
-  }
-  cost: number
-  tokens: {
-    input: number
-    output: number
-    reasoning: number
-    cache: {
-      read: number
-      write: number
-    }
-  }
-  time: {
-    created: number
-    updated: number
-    archived?: number
-  }
-  title: string
-  location: LocationRef
-  subpath?: string
 }
 
 export type SessionInputAdmitted = {
@@ -6743,152 +6779,14 @@ export type QuestionV2Reply = {
   answers: Array<QuestionV2Answer>
 }
 
-export type EventModelsDevRefreshed = {
-  id: string
-  type: "models-dev.refreshed"
-  properties: {
-    [key: string]: unknown
-  }
-}
-
-export type EventPluginAdded = {
-  id: string
-  type: "plugin.added"
-  properties: {
-    id: string
-  }
-}
-
-export type ModelV2Info1 = {
-  id: string
-  providerID: string
-  family?: string
-  name: string
-  api:
-    | {
-        id: string
-        type: "aisdk"
-        package: string
-        url?: string
-        settings?: {
-          [key: string]: unknown
-        }
-        protocol?: "openai.responses" | "openai-compatible.responses" | "openai-compatible.chat" | "anthropic.messages"
-        protocolCapabilities?: {
-          structuredOutput: boolean
-          reasoningItems: boolean
-          providerToolExecution: boolean
-          previousResponseId: boolean
-          remoteCompaction: boolean
-          streamTransport: "http_sse" | "http_chunked" | "byte_stream" | "none"
-          protocolRevision: number
-        }
-      }
-    | {
-        id: string
-        type: "native"
-        url?: string
-        settings: {
-          [key: string]: unknown
-        }
-        protocol?: "openai.responses" | "openai-compatible.responses" | "openai-compatible.chat" | "anthropic.messages"
-        protocolCapabilities?: {
-          structuredOutput: boolean
-          reasoningItems: boolean
-          providerToolExecution: boolean
-          previousResponseId: boolean
-          remoteCompaction: boolean
-          streamTransport: "http_sse" | "http_chunked" | "byte_stream" | "none"
-          protocolRevision: number
-        }
-      }
-  capabilities: {
-    tools: boolean
-    input: Array<string>
-    output: Array<string>
-  }
-  request: {
-    headers: {
-      [key: string]: string
-    }
-    body: {
-      [key: string]: unknown
-    }
-    generation?: {
-      maxTokens?: number | "NaN" | "Infinity" | "-Infinity"
-      temperature?: number | "NaN" | "Infinity" | "-Infinity"
-      topP?: number | "NaN" | "Infinity" | "-Infinity"
-      topK?: number | "NaN" | "Infinity" | "-Infinity"
-      frequencyPenalty?: number | "NaN" | "Infinity" | "-Infinity"
-      presencePenalty?: number | "NaN" | "Infinity" | "-Infinity"
-      seed?: number | "NaN" | "Infinity" | "-Infinity"
-      stop?: Array<string>
-    }
-    options?: {
-      [key: string]: unknown
-    }
-    variant?: string
-  }
-  variants: Array<{
-    id: string
-    headers: {
-      [key: string]: string
-    }
-    body: {
-      [key: string]: unknown
-    }
-    generation?: {
-      maxTokens?: number | "NaN" | "Infinity" | "-Infinity"
-      temperature?: number | "NaN" | "Infinity" | "-Infinity"
-      topP?: number | "NaN" | "Infinity" | "-Infinity"
-      topK?: number | "NaN" | "Infinity" | "-Infinity"
-      frequencyPenalty?: number | "NaN" | "Infinity" | "-Infinity"
-      presencePenalty?: number | "NaN" | "Infinity" | "-Infinity"
-      seed?: number | "NaN" | "Infinity" | "-Infinity"
-      stop?: Array<string>
-    }
-    options?: {
-      [key: string]: unknown
-    }
-  }>
-  time: {
-    released: number | "NaN" | "Infinity" | "-Infinity"
-  }
-  cost: Array<{
-    tier?: {
-      type: "context"
-      size: number
-    }
-    input: number
-    output: number
-    cache: {
-      read: number
-      write: number
-    }
-  }>
-  status: "alpha" | "beta" | "deprecated" | "active"
-  enabled: boolean
-  limit: {
-    context: number
-    input?: number
-    output: number
-  }
-}
-
-export type EventCatalogModelUpdated = {
-  id: string
-  type: "catalog.model.updated"
-  properties: {
-    model: ModelV2Info1
-  }
-}
-
 export type EventSessionCreated = {
   id: string
   type: "session.created"
   properties: {
     sessionID: string
-    info: Session
+    info: SessionV2Info
+    slug: string
+    version: string
   }
 }
 
@@ -6971,6 +6869,16 @@ export type EventSessionNextModelSwitched = {
       providerID: string
       variant?: string
     }
+  }
+}
+
+export type EventSessionNextPermissionsChanged = {
+  id: string
+  type: "session.next.permissions.changed"
+  properties: {
+    timestamp: number
+    sessionID: string
+    permissions: PermissionV2Ruleset
   }
 }
 
@@ -7406,6 +7314,146 @@ export type EventSessionNextCompactionEnded = {
     reason: "auto" | "manual"
     text: string
     recent: string
+  }
+}
+
+export type EventModelsDevRefreshed = {
+  id: string
+  type: "models-dev.refreshed"
+  properties: {
+    [key: string]: unknown
+  }
+}
+
+export type EventPluginAdded = {
+  id: string
+  type: "plugin.added"
+  properties: {
+    id: string
+  }
+}
+
+export type ModelV2Info1 = {
+  id: string
+  providerID: string
+  family?: string
+  name: string
+  api:
+    | {
+        id: string
+        type: "aisdk"
+        package: string
+        url?: string
+        settings?: {
+          [key: string]: unknown
+        }
+        protocol?: "openai.responses" | "openai-compatible.responses" | "openai-compatible.chat" | "anthropic.messages"
+        protocolCapabilities?: {
+          structuredOutput: boolean
+          reasoningItems: boolean
+          providerToolExecution: boolean
+          previousResponseId: boolean
+          remoteCompaction: boolean
+          streamTransport: "http_sse" | "http_chunked" | "byte_stream" | "none"
+          protocolRevision: number
+        }
+      }
+    | {
+        id: string
+        type: "native"
+        url?: string
+        settings: {
+          [key: string]: unknown
+        }
+        protocol?: "openai.responses" | "openai-compatible.responses" | "openai-compatible.chat" | "anthropic.messages"
+        protocolCapabilities?: {
+          structuredOutput: boolean
+          reasoningItems: boolean
+          providerToolExecution: boolean
+          previousResponseId: boolean
+          remoteCompaction: boolean
+          streamTransport: "http_sse" | "http_chunked" | "byte_stream" | "none"
+          protocolRevision: number
+        }
+      }
+  capabilities: {
+    tools: boolean
+    input: Array<string>
+    output: Array<string>
+  }
+  request: {
+    headers: {
+      [key: string]: string
+    }
+    body: {
+      [key: string]: unknown
+    }
+    generation?: {
+      maxTokens?: number | "NaN" | "Infinity" | "-Infinity"
+      temperature?: number | "NaN" | "Infinity" | "-Infinity"
+      topP?: number | "NaN" | "Infinity" | "-Infinity"
+      topK?: number | "NaN" | "Infinity" | "-Infinity"
+      frequencyPenalty?: number | "NaN" | "Infinity" | "-Infinity"
+      presencePenalty?: number | "NaN" | "Infinity" | "-Infinity"
+      seed?: number | "NaN" | "Infinity" | "-Infinity"
+      stop?: Array<string>
+    }
+    options?: {
+      [key: string]: unknown
+    }
+    variant?: string
+  }
+  variants: Array<{
+    id: string
+    headers: {
+      [key: string]: string
+    }
+    body: {
+      [key: string]: unknown
+    }
+    generation?: {
+      maxTokens?: number | "NaN" | "Infinity" | "-Infinity"
+      temperature?: number | "NaN" | "Infinity" | "-Infinity"
+      topP?: number | "NaN" | "Infinity" | "-Infinity"
+      topK?: number | "NaN" | "Infinity" | "-Infinity"
+      frequencyPenalty?: number | "NaN" | "Infinity" | "-Infinity"
+      presencePenalty?: number | "NaN" | "Infinity" | "-Infinity"
+      seed?: number | "NaN" | "Infinity" | "-Infinity"
+      stop?: Array<string>
+    }
+    options?: {
+      [key: string]: unknown
+    }
+  }>
+  time: {
+    released: number | "NaN" | "Infinity" | "-Infinity"
+  }
+  cost: Array<{
+    tier?: {
+      type: "context"
+      size: number
+    }
+    input: number
+    output: number
+    cache: {
+      read: number
+      write: number
+    }
+  }>
+  status: "alpha" | "beta" | "deprecated" | "active"
+  enabled: boolean
+  limit: {
+    context: number
+    input?: number
+    output: number
+  }
+}
+
+export type EventCatalogModelUpdated = {
+  id: string
+  type: "catalog.model.updated"
+  properties: {
+    model: ModelV2Info1
   }
 }
 
@@ -10144,6 +10192,43 @@ export type DeepagentGoalStartableResponses = {
 
 export type DeepagentGoalStartableResponse = DeepagentGoalStartableResponses[keyof DeepagentGoalStartableResponses]
 
+export type DeepagentQueueListData = {
+  body?: never
+  path?: never
+  query: {
+    directory?: string
+    workspace?: string
+    sessionID: string
+  }
+  url: "/deepagent/queue"
+}
+
+export type DeepagentQueueListErrors = {
+  /**
+   * DeepAgentPromotionError | InvalidRequestError
+   */
+  400: DeepAgentPromotionError | InvalidRequestError
+}
+
+export type DeepagentQueueListError = DeepagentQueueListErrors[keyof DeepagentQueueListErrors]
+
+export type DeepagentQueueListResponses = {
+  /**
+   * Pending FIFO queue inputs in admit order (V2 session_input delivery=queue)
+   */
+  200: {
+    items: Array<{
+      id: string
+      admittedSeq: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      text: string
+      files?: Array<string>
+      timeCreated: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }>
+  }
+}
+
+export type DeepagentQueueListResponse = DeepagentQueueListResponses[keyof DeepagentQueueListResponses]
+
 export type DeepagentWikiPagesData = {
   body?: never
   path?: never
@@ -12106,6 +12191,13 @@ export type ImMessagesCreateData = {
           code: string
           message: string
           retryable: boolean
+        }
+      | {
+          type: "agent_no_trigger_mention"
+          agentID?: string
+          agentNames?: Array<string>
+          eventID?: string
+          messageID?: string
         }
     replyToID?: string
   }

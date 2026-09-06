@@ -73,6 +73,10 @@ export interface Selection {
   readonly info: Info | undefined
 }
 
+export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("AgentV2.NotFoundError", {
+  id: ID,
+}) {}
+
 type Data = {
   agents: Map<ID, Info>
   default?: ID
@@ -136,6 +140,8 @@ export const layer = Layer.effect(
         if (fallback) return fallback
       }
     }
+    const resolveID = (id: ID) =>
+      id === ID.make("build") && !state.get().agents.has(id) && state.get().agents.has(defaultID) ? defaultID : id
 
     return Service.of({
       transform: state.transform,
@@ -147,12 +153,12 @@ export const layer = Layer.effect(
         return selectedDefault()
       }),
       resolve: Effect.fn("AgentV2.resolve")(function* (id) {
-        if (id !== undefined) return state.get().agents.get(ID.make(id))
+        if (id !== undefined) return state.get().agents.get(resolveID(ID.make(id)))
         return selectedDefault()
       }),
       select: Effect.fn("AgentV2.select")(function* (id) {
         if (id !== undefined) {
-          const selected = ID.make(id)
+          const selected = resolveID(ID.make(id))
           return { id: selected, info: state.get().agents.get(selected) }
         }
         const info = selectedDefault()

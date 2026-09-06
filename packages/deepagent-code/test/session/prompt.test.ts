@@ -380,6 +380,7 @@ function makePrompt(input?: PromptLayerOptions) {
   const question = Question.layer.pipe(Layer.provideMerge(deps))
   const todo = Todo.layer.pipe(Layer.provideMerge(deps))
   const registry = ToolRegistry.layer.pipe(
+    Layer.provide(SessionV2.defaultLayer),
     Layer.provide(TestContextFacades.layer),
     Layer.provide(Skill.defaultLayer),
     Layer.provide(FetchHttpClient.layer),
@@ -5851,6 +5852,7 @@ const v2OwnerStubLayer = Layer.merge(
       events: () => Stream.empty,
       switchAgent: () => Effect.die("v2 owner stub: switchAgent unused"),
       switchModel: () => Effect.die("v2 owner stub: switchModel unused"),
+      setPermissions: () => Effect.die("v2 owner stub: setPermissions unused"),
       prompt: () => Effect.die("v2 owner stub: prompt unused"),
       shell: () => Effect.die("v2 owner stub: shell unused"),
       skill: () => Effect.die("v2 owner stub: skill unused"),
@@ -6233,11 +6235,13 @@ const r0V2PromptTexts: string[] = []
 const r0V2PromptDeliveries: Array<SessionInput.Delivery | undefined> = []
 const r0V2ResumeCalls: string[] = []
 const r0V2AdoptCalls: string[] = []
+const r0V2AdoptPermissions: unknown[] = []
 const r0V2Stub = SessionV2.Service.of({
   list: () => Effect.succeed([]),
   create: (input) =>
     Effect.sync(() => {
       if (input.id) r0V2AdoptCalls.push(input.id)
+      r0V2AdoptPermissions.push(input.permissions)
     }).pipe(
       Effect.as({ id: input.id, directory: "/tmp/ws1", slug: "r0", agent: "build" } as unknown as SessionV2.Info),
     ),
@@ -6278,6 +6282,7 @@ const r0V2Stub = SessionV2.Service.of({
   events: () => Stream.empty,
   switchAgent: () => Effect.die("r0 stub: switchAgent unused"),
   switchModel: () => Effect.die("r0 stub: switchModel unused"),
+  setPermissions: () => Effect.die("r0 stub: setPermissions unused"),
   prompt: (input) =>
     Effect.sync(() => {
       r0V2PromptCalls.push(input.sessionID)
@@ -6416,9 +6421,13 @@ v2Qualified.instance(
       const { db } = yield* Database.Service
       yield* mintR0Authorization(db)
       expect(yield* provideR0OwnerRefs(v2OwnerQualified(db, r0Campaign))).toBe(true)
-      const chat = yield* sessions.create({ title: "r0 interactive" })
+      const chat = yield* sessions.create({
+        title: "r0 interactive",
+        permission: [{ permission: "bash", pattern: "*", action: "deny" }],
+      })
       r0V2PromptCalls.length = 0
       r0V2ResumeCalls.length = 0
+      r0V2AdoptPermissions.length = 0
 
       const result = yield* provideR0OwnerRefs(
         prompt.prompt({
@@ -6431,6 +6440,7 @@ v2Qualified.instance(
       expect(r0V2PromptCalls).toContain(chat.id)
       expect(r0V2ResumeCalls).toContain(chat.id)
       expect(r0V2AdoptCalls).toContain(chat.id)
+      expect(r0V2AdoptPermissions).toContainEqual([{ action: "bash", resource: "*", effect: "deny" }])
       expect(result.info.role).toBe("assistant")
       expect(result.parts.some((part) => part.type === "text" && part.text === "v2 owner reply")).toBe(true)
       // Mirror: V1 reader sees the user + assistant rows (V2 authority projected to the limited reader).

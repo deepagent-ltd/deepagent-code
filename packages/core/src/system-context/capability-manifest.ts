@@ -214,7 +214,7 @@ export const DeepAgentCodeToolInventory: CapabilityInventory = {
     "grep",
     "edit",
     "write",
-    "apply-patch",
+    "apply_patch",
     "bash",
     "websearch",
     "webfetch",

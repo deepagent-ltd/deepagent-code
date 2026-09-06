@@ -1419,6 +1419,7 @@ const stubSessionV2 = SessionV2.Service.of({
   events: () => Stream.empty as never,
   switchAgent: () => Effect.die("stub unused"),
   switchModel: () => Effect.die("stub unused"),
+  setPermissions: () => Effect.die("stub unused"),
   prompt: () => Effect.die("stub unused"),
   shell: () => Effect.die("stub unused"),
   skill: () => Effect.die("stub unused"),
@@ -1428,21 +1429,18 @@ const stubSessionV2 = SessionV2.Service.of({
   interrupt: () => Effect.void,
 })
 
-const resolveDrive = (overrides: Partial<RuntimeFlags.Info>, withV2: boolean) =>
-  GoalLoopWiring.resolveV2SubagentDrive().pipe(
-    Effect.provide(
-      withV2
-        ? RuntimeFlags.layer({ ...overrides }).pipe(Layer.provideMerge(Layer.succeed(SessionV2.Service, stubSessionV2)))
-        : RuntimeFlags.layer({ ...overrides }),
-    ),
-  )
+const resolveDrive = (overrides: Partial<RuntimeFlags.Info>) =>
+  GoalLoopWiring.resolveV2SubagentDrive({
+    v2Session: stubSessionV2,
+    snapshot: {} as Snapshot.Interface,
+  }).pipe(Effect.provide(RuntimeFlags.layer({ ...overrides })))
 
 describe("resolveV2SubagentDrive (LEGACY-EXECUTION-ZERO)", () => {
   test("flag OFF and profile OFF resolves no V2 seam (legacy stays the default)", async () => {
     // W6-1: the flag now DEFAULTS ON, so "flag OFF" has to be stated explicitly (empty overrides
     // would leave the default ON and silently change what this test is exercising).
     const { v2Session } = await Effect.runPromise(
-      resolveDrive({ experimentalV2SubagentDrive: false }, false),
+      resolveDrive({ experimentalV2SubagentDrive: false }),
     )
     expect(v2Session).toBeUndefined()
   })
@@ -1451,30 +1449,23 @@ describe("resolveV2SubagentDrive (LEGACY-EXECUTION-ZERO)", () => {
     // W6-1 / P2-4 acceptance evidence: `experimentalV2SubagentDrive` ships ON, so a production
     // composition with the SessionV2 stack (app-runtime/httpapi) resolves the V2 drive WITHOUT any
     // flag override — the seam is the default subagent-drive path, not an opt-in.
-    const { v2Session } = await Effect.runPromise(resolveDrive({}, true))
+    const { v2Session } = await Effect.runPromise(resolveDrive({}))
     expect(v2Session).toBe(stubSessionV2)
   })
 
   test("flag ON resolves the V2 seam from the composition root", async () => {
-    const { v2Session } = await Effect.runPromise(resolveDrive({ experimentalV2SubagentDrive: true }, true))
+    const { v2Session } = await Effect.runPromise(resolveDrive({ experimentalV2SubagentDrive: true }))
     expect(v2Session).toBe(stubSessionV2)
   })
 
   test("V2-only profile forces the V2 seam even with the experimental flag off", async () => {
-    const { v2Session } = await Effect.runPromise(resolveDrive({ coreV2Only: true }, true))
+    const { v2Session } = await Effect.runPromise(resolveDrive({ coreV2Only: true }))
     expect(v2Session).toBe(stubSessionV2)
   })
 
-  test("V2-only profile without the V2 stack resolves v2Only (refusal is turn-time, no build die)", async () => {
-    const resolved = await Effect.runPromise(resolveDrive({ coreV2Only: true }, false))
+  test("V2-only profile uses the explicitly captured V2 owner", async () => {
+    const resolved = await Effect.runPromise(resolveDrive({ coreV2Only: true }))
     expect(resolved.v2Only).toBe(true)
-    expect(resolved.v2Session).toBeUndefined()
-  })
-
-  test("profile OFF with the flag on and no stack keeps legacy (no v2Only flag)", async () => {
-    const resolved = await Effect.runPromise(resolveDrive({ experimentalV2SubagentDrive: true }, false))
-    expect(resolved.v2Only).toBe(false)
-    expect(resolved.v2Session).toBeUndefined()
+    expect(resolved.v2Session).toBe(stubSessionV2)
   })
 })
-

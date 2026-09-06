@@ -87,6 +87,8 @@ import { ModelV2 } from "@deepagent-code/core/model"
 import { Git } from "@/git"
 import { PRQueue } from "@/agent/pr-queue"
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
+import { SessionV2 } from "@deepagent-code/core/session"
+import { Snapshot } from "@/snapshot"
 
 const log = Log.create({ service: "tool.registry" })
 
@@ -150,6 +152,8 @@ const layerWithFacades: Layer.Layer<
   | CodeIntelFacade.Service
   | ContextQueryFacade.Service
   | EffectFlock.Service
+  | SessionV2.Service
+  | Snapshot.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -597,6 +601,8 @@ export const defaultLayer = Layer.suspend(() =>
         Git.defaultLayer,
         EffectFlock.defaultLayer,
         PRQueue.layer.pipe(Layer.orDie),
+        SessionV2.liveLayer,
+        Snapshot.defaultLayer,
       ),
     ),
   ),

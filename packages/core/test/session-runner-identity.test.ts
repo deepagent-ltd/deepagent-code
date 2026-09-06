@@ -6,6 +6,7 @@ import { EventV2 } from "@deepagent-code/core/event"
 import { PermissionV2 } from "@deepagent-code/core/permission"
 import { AgentV2 } from "@deepagent-code/core/agent"
 import { Config } from "@deepagent-code/core/config"
+import { Catalog } from "@deepagent-code/core/catalog"
 import { Project } from "@deepagent-code/core/project"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { AbsolutePath } from "@deepagent-code/core/schema"
@@ -31,12 +32,14 @@ import { SystemContextRegistry } from "@deepagent-code/core/system-context/regis
 import { SystemContext } from "@deepagent-code/core/system-context"
 import { SkillGuidance } from "@deepagent-code/core/skill/guidance"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
+import { FSUtil } from "@deepagent-code/core/fs-util"
+import { Git } from "@deepagent-code/core/git"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { ModelProtocol } from "@deepagent-code/core/model-protocol"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { Hash } from "@deepagent-code/core/util/hash"
 import { describe, expect, beforeEach } from "bun:test"
-import { DateTime } from "effect"
+import { DateTime, Option } from "effect"
 import { eq } from "drizzle-orm"
 import { Effect, Layer, Stream } from "effect"
 import { testEffect } from "./lib/effect"
@@ -139,6 +142,24 @@ const openAIProvider = new ProviderV2.Info({
   api: { type: "aisdk", package: "@ai-sdk/openai", url: "https://api.openai.com/v1" },
   request: { headers: {}, body: {} },
 })
+const catalog = Layer.succeed(
+  Catalog.Service,
+  Catalog.Service.of({
+    transform: () => Effect.die("unexpected catalog.transform"),
+    provider: {
+      get: () => Effect.succeed(openAIProvider),
+      all: () => Effect.succeed([openAIProvider]),
+      available: () => Effect.succeed([openAIProvider]),
+    },
+    model: {
+      get: () => Effect.succeed(openAIInfo),
+      all: () => Effect.succeed([openAIInfo]),
+      available: () => Effect.succeed([openAIInfo]),
+      default: () => Effect.succeed(Option.some(openAIInfo)),
+      small: () => Effect.succeed(Option.some(openAIInfo)),
+    },
+  }),
+)
 const model = OpenAIResponses.route
   .with({ endpoint: { baseURL: "https://api.openai.com/v1" } })
   .with({ auth: Auth.bearer("test") })
@@ -153,6 +174,8 @@ const location = Location.layer({ directory: AbsolutePath.make("/project") }).pi
 const skillGuidance = Layer.mock(SkillGuidance.Service, { load: () => Effect.succeed(SystemContext.empty) })
 const config = Layer.succeed(Config.Service, Config.Service.of({ entries: () => Effect.succeed([]) }))
 const runner = SessionRunnerLLM.layer.pipe(
+  Layer.provide(FSUtil.defaultLayer),
+  Layer.provide(Git.defaultLayer),
   Layer.provide(
     Layer.succeed(
       V2ProviderTurn.OwnerAuthorization,
@@ -178,6 +201,7 @@ const runner = SessionRunnerLLM.layer.pipe(
   Layer.provide(agents),
   Layer.provide(skillGuidance),
   Layer.provide(config),
+  Layer.provide(catalog),
 )
 const coordinator = SessionRunCoordinator.layer.pipe(Layer.provide(runner))
 const execution = Layer.effect(

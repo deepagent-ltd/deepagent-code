@@ -14,6 +14,7 @@ import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
 import { Database } from "@deepagent-code/core/database/database"
 import { SessionFacadeActivityTable } from "@deepagent-code/core/deepagent/activity-authority.sql"
 import { ProjectV2 } from "@deepagent-code/core/project"
+import { SessionV2 } from "@deepagent-code/core/session"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { SessionTable, TaskRunTable } from "@deepagent-code/core/session/sql"
@@ -24,6 +25,7 @@ import { GoalManager } from "@/session/goal-manager"
 import { Provider } from "@/provider/provider"
 import { Session } from "@/session/session"
 import { SessionID } from "@/session/schema"
+import { Snapshot } from "@/snapshot"
 import {
   applyResultBound,
   clampFacadeBudget,
@@ -38,7 +40,10 @@ import {
 import { testEffect } from "../lib/effect"
 
 const database = Layer.mergeAll(Database.layerFromPath(":memory:"), CrossSpawnSpawner.defaultLayer)
-const facadeLayer = Layer.effect(FacadeActivity.Service, FacadeActivity.build)
+const facadeLayer = Layer.effect(FacadeActivity.Service, FacadeActivity.build).pipe(
+  Layer.provide(SessionV2.defaultLayer),
+  Layer.provide(Snapshot.defaultLayer),
+)
 
 const parentSessionID = SessionID.make("ses_facade_parent")
 const otherSessionID = SessionID.make("ses_facade_other")
@@ -499,7 +504,9 @@ describe("facade-activity recovery", () => {
         .run()
         .pipe(Effect.orDie)
 
-      const facade = yield* FacadeActivity.build
+      const facade = yield* FacadeActivity.build.pipe(
+        Effect.provide(Layer.mergeAll(SessionV2.defaultLayer, Snapshot.defaultLayer)),
+      )
       const row = yield* latestRow(parentSessionID, "goal")
       expect(row?.state).toBe("recovery_required")
       expect(row?.reason_code).toBe("facade_owner_lost_after_restart")

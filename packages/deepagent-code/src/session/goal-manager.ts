@@ -223,9 +223,12 @@ export const layer = Layer.effect(
     const provider = yield* Provider.Service
     const lsp = yield* LSP.Service
     const flags = yield* RuntimeFlags.Service
-    // §16.3 order 3 caller wiring: flag-gated V2 subagent drive. serviceOption keeps compositions
-    // that don't assemble the V2 session stack on the legacy path even with the flag on.
-    const { v2Session, snapshot: v2Snapshot } = yield* GoalLoopWiring.resolveV2SubagentDrive()
+    // Capture the V2 owner explicitly. A sibling layer is not an input dependency, and an optional
+    // lookup here previously let production Goal turns build successfully only to fail on first use.
+    const { v2Session, snapshot: v2Snapshot } = yield* GoalLoopWiring.resolveV2SubagentDrive({
+      v2Session: yield* SessionV2.Service,
+      snapshot: yield* Snapshot.Service,
+    })
     // V4.0 §N — the event bus + Approval Queue the goal loop escalates through. Only used when the
     // event-driven runtime flag is on (default OFF → behavior byte-identical to V3.9).
     const eventBus = yield* DeepAgentEventBus.Service
@@ -880,6 +883,8 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(Provider.defaultLayer),
     Layer.provide(LSP.defaultLayer),
     Layer.provide(RuntimeFlags.defaultLayer),
+    Layer.provide(SessionV2.liveLayer),
+    Layer.provide(Snapshot.defaultLayer),
     Layer.provide(DeepAgentEventBus.defaultLayer),
     Layer.provide(ApprovalQueue.defaultLayer),
   ),

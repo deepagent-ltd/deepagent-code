@@ -16,6 +16,11 @@ export function fromRow(row: typeof SessionTable.$inferSelect): SessionSchema.In
     title: row.title,
     parentID: row.parent_id ? SessionSchema.ID.make(row.parent_id) : undefined,
     agent: row.agent ? AgentV2.ID.make(row.agent) : undefined,
+    permissions: (row.permission ?? []).map((rule) =>
+      "permission" in rule
+        ? { action: rule.permission, resource: rule.pattern, effect: rule.action }
+        : { action: rule.action, resource: rule.resource, effect: rule.effect },
+    ),
     model: row.model
       ? {
           id: ModelV2.ID.make(row.model.id),

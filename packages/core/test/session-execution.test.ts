@@ -121,25 +121,23 @@ describe("SessionExecution lifecycle", () => {
     }),
   )
 
-  it.effect("clears suspension and records one lifecycle when execution succeeds", () =>
+  it.effect("refuses to drain a suspended Session until explicit recovery resolves its claim", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
       const sessionID = SessionSchema.ID.make("ses_suspend_completed")
       yield* seedSessions(database, [sessionID], { time_suspended: Date.now() })
 
+      let runs = 0
       const scope = yield* Scope.make()
       yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
-      const context = yield* buildExecution(scope, () => Effect.void)
+      const context = yield* buildExecution(scope, () => Effect.sync(() => runs++))
       const execution = Context.get(context, SessionExecution.Service)
 
-      yield* execution.resume(sessionID)
-      yield* execution.awaitIdle(sessionID)
-
-      expect(yield* suspensions(database)).toEqual({ [sessionID]: false })
-      expect(yield* eventTypes(database, sessionID)).toEqual([
-        EventV2.versionedType(SessionEvent.Execution.Started.type, 1),
-        EventV2.versionedType(SessionEvent.Execution.Succeeded.type, 1),
-      ])
+      const result = yield* execution.resume(sessionID).pipe(Effect.flip)
+      expect(result).toBeInstanceOf(SessionRunner.ExecutionRecoveryRequiredError)
+      expect(runs).toBe(0)
+      expect(yield* suspensions(database)).toEqual({ [sessionID]: true })
+      expect(yield* eventTypes(database, sessionID)).toEqual([])
     }),
   )
 
@@ -274,14 +272,25 @@ describe("SessionExecution lifecycle", () => {
     }),
   )
 
-  it.effect("surfaces terminal V2 tool effects as recovery evidence without moving disposition", () =>
+  it.effect("surfaces admitted and terminal V2 tool effects as recovery classification inputs", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
       const sessionID = SessionSchema.ID.make("ses_recovery_effects")
       yield* seedSessions(database, [sessionID], { time_suspended: Date.now() })
       const now = Date.now()
-      // Two terminal effects: one bound to a permission grant, one grant-less. Both are evidence
-      // of what already executed; they never move the disposition vocabulary.
+      yield* database.db
+        .run(sql`
+        INSERT INTO session_v2_tool_effect_admission (
+          admission_id, session_id, provider_attempt_id, receipt_id, tool_call_id,
+          tool_name, effect_kind, owner_token, time_created
+        ) VALUES
+          ('adm_1', ${sessionID}, 'attempt_eff', 'receipt_eff', 'call_1', 'write', 'mutating', 'owner_eff', ${now}),
+          ('adm_2', ${sessionID}, 'attempt_eff', 'receipt_eff', 'call_2', 'read', 'read_only', 'owner_eff', ${now}),
+          ('adm_3', ${sessionID}, 'attempt_eff', 'receipt_eff', 'call_3', 'bash', 'mutating', 'owner_eff', ${now})
+      `)
+        .pipe(Effect.orDie)
+      // Two terminal effects: one bound to a permission grant and one grant-less. The third
+      // admission intentionally has no terminal row and therefore has an unknown outcome.
       yield* database.db
         .run(sql`
         INSERT INTO session_v2_tool_effect (
@@ -316,6 +325,7 @@ describe("SessionExecution lifecycle", () => {
           effectKind: "mutating",
           state: "settled",
           grantBound: true,
+          classification: "terminal_consistent",
         },
         {
           effectId: "eff_2",
@@ -326,11 +336,21 @@ describe("SessionExecution lifecycle", () => {
           effectKind: "read_only",
           state: "failed",
           grantBound: false,
+          classification: "recovery_required",
+        },
+        {
+          effectId: "adm_3",
+          receiptId: "receipt_eff",
+          providerAttemptId: "attempt_eff",
+          toolCallId: "call_3",
+          toolName: "bash",
+          effectKind: "mutating",
+          state: "admitted",
+          grantBound: false,
+          classification: "recovery_required",
         },
       ])
-      // Terminal effects are evidence only: with no other recovery input the session stays
-      // claim_only.
-      expect(entry.disposition).toBe("claim_only")
+      expect(entry.disposition).toBe("recovery_required")
     }),
   )
 

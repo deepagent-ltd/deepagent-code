@@ -1,16 +1,24 @@
 export * as CapabilityRuntimeSearch from "./capability-runtime-search"
 
+export const name = "capability_search"
+
 import { DeepAgentCodeToolInventory, type CapabilityManifest } from "./capability-manifest"
 import {
+  CapabilitySearchInput,
+  CapabilitySearchOutput,
   makeCapabilitySearchTool,
+  renderSearchCards,
   searchOutput,
   type SearchAuthorization,
 } from "./capability-search"
-import { capabilityCatalogSnapshotId } from "./capability-catalog"
+import { capabilityCatalog, capabilityCatalogSnapshotId } from "./capability-catalog"
 import { RuntimeFeatures } from "../flag/runtime-features"
 import { Effect, Layer } from "effect"
 import { Tool } from "../tool/tool"
 import { Tools } from "../tool/tools"
+import { AgentV2 } from "../agent"
+import { SessionStore } from "../session/store"
+import { PermissionV2 } from "../permission"
 
 // C4-07 — reconnect the (frozen) capability_search surface's runtime-feature filter
 // to the E2 manifest-derived RuntimeFeatures registry (design §7.2: the capability
@@ -57,6 +65,17 @@ export const runtimeFeatureAuthorization = (): SearchAuthorization => ({
   enabledRuntimeFeatures: enabledRuntimeFeatureSet(),
 })
 
+export function permissionAuthorization(...rulesets: PermissionV2.Ruleset[]): SearchAuthorization {
+  return {
+    ...runtimeFeatureAuthorization(),
+    grantedPermissions: new Set(
+      [...DeepAgentCodeToolInventory.permissionActions].filter(
+        (permission) => !PermissionV2.isActionWhollyDenied(permission, ...rulesets),
+      ),
+    ),
+  }
+}
+
 /**
  * A per-feature runtime-compatibility check against the E2 registry. This is the
  * replacement for the frozen `isAuthorized` runtime half: it consults
@@ -99,10 +118,27 @@ export function runtimeAuthorizedSearch(
 export function makeRuntimeAuthorizedSearchTool(input?: {
   readonly catalog?: ReadonlyArray<CapabilityManifest>
   readonly catalogSnapshotId?: string
+  readonly authorization?: (context: Tool.Context) => Effect.Effect<SearchAuthorization>
 }): Tool.AnyTool {
+  const catalog = input?.catalog ?? capabilityCatalog
+  const snapshotId = input?.catalogSnapshotId ?? capabilityCatalogSnapshotId
+  if (input?.authorization)
+    return Tool.make({
+      description:
+        "Search the DeepAgentCode capability catalog. Returns up to 5 authorized capability cards (summary + entry tools) for a query and intended action. Use to discover which DeepAgentCode features you can operate and when. Never used to load a path/URL.",
+      input: CapabilitySearchInput,
+      output: CapabilitySearchOutput,
+      execute: (call, context) =>
+        input.authorization!(context).pipe(
+          Effect.map((authorization) => searchOutput(catalog, call, authorization, snapshotId)),
+        ),
+      toModelOutput: ({ output }) => [
+        { type: "text", text: renderSearchCards(output.cards, output.catalog_snapshot_id) },
+      ],
+    })
   return makeCapabilitySearchTool({
-    ...(input?.catalog ? { catalog: input.catalog } : {}),
-    catalogSnapshotId: input?.catalogSnapshotId ?? capabilityCatalogSnapshotId,
+    catalog,
+    catalogSnapshotId: snapshotId,
     authorization: runtimeFeatureAuthorization(),
   })
 }
@@ -116,8 +152,21 @@ export function makeRuntimeAuthorizedSearchTool(input?: {
 export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const tools = yield* Tools.Service
+    const sessions = yield* SessionStore.Service
+    const agents = yield* AgentV2.Service
     // The registered name is a build-time constant; an invalid name is a developer
     // defect (fail fast), so the layer error stays `never` like the other built-ins.
-    yield* tools.register({ capability_search: makeRuntimeAuthorizedSearchTool() }).pipe(Effect.orDie)
+    yield* tools
+      .register({
+        [name]: makeRuntimeAuthorizedSearchTool({
+          authorization: (context) =>
+            Effect.gen(function* () {
+              const session = yield* sessions.get(context.sessionID)
+              const agent = yield* agents.resolve(context.agent)
+              return permissionAuthorization(agent?.permissions ?? [], session?.permissions ?? [])
+            }),
+        }),
+      })
+      .pipe(Effect.orDie)
   }),
 )

@@ -2,7 +2,7 @@ export * as Config from "./config"
 
 import path from "path"
 import { type ParseError, parse } from "jsonc-parser"
-import { Context, Effect, Layer, Option, Schema } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import { makeLocationNode } from "./effect/app-node"
 import { FSUtil } from "./fs-util"
 import { Global } from "./global"
@@ -150,9 +150,9 @@ export const layer = Layer.effect(
     const location = yield* Location.Service
     const policy = yield* Policy.Service
     const names = ["config.json", "deepagent-code.json", "deepagent-code.jsonc"]
-    const decodeOptions = { errors: "all", onExcessProperty: "ignore", propertyOrder: "original" } as const
-    const decodeInfo = Schema.decodeUnknownOption(Info, decodeOptions)
-    const decodeV1Info = Schema.decodeUnknownOption(ConfigV1.Info, decodeOptions)
+    const decodeOptions = { errors: "all", onExcessProperty: "error", propertyOrder: "original" } as const
+    const decodeInfo = Schema.decodeUnknownEffect(Info, decodeOptions)
+    const decodeV1Info = Schema.decodeUnknownEffect(ConfigV1.Info, decodeOptions)
 
     const loadFile = Effect.fnUntraced(function* (filepath: string) {
       const text = yield* fs.readFileStringSafe(filepath)
@@ -164,14 +164,20 @@ export const layer = Layer.effect(
         errors,
         { allowTrailingComma: true },
       )
-      if (errors.length) return
+      if (errors.length)
+        return yield* Effect.die(
+          new Error(
+            `Invalid config JSON in ${filepath}: ${errors.map((error) => `${error.error}@${error.offset}`).join(", ")}`,
+          ),
+        )
 
-      const info = Option.getOrUndefined(
-        ConfigMigrateV1.isV1(input)
-          ? decodeV1Info(input).pipe(Option.map(ConfigMigrateV1.migrate), Option.flatMap(decodeInfo))
-          : decodeInfo(input),
+      const info = yield* (ConfigMigrateV1.isV1(input)
+        ? decodeV1Info(input).pipe(Effect.map(ConfigMigrateV1.migrate), Effect.flatMap(decodeInfo))
+        : decodeInfo(input)
+      ).pipe(
+        Effect.mapError((error) => new Error(`Invalid config in ${filepath}: ${error.message}`)),
+        Effect.orDie,
       )
-      if (!info) return
       return new Document({ type: "document", path: filepath, info })
     })
 

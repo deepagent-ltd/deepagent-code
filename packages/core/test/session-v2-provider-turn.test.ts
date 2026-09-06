@@ -99,9 +99,8 @@ describe("V2 provider turn authority", () => {
         errorCode: "provider_stream_failed:transport",
         outcomeHash: Hash.sha256(JSON.stringify(["first"])),
       })
-      // A same-owner indeterminate receipt is the live-process transport-drop retry path: the
-      // owner opens a FRESH receipt at the next ordinal (the quarantined row itself is never
-      // replayed and keeps its terminal state).
+      // The quarantined row itself is never replayed. A fresh receipt may only be opened by an
+      // explicit recovery/continuation decision outside this provider-turn boundary.
       const retried = yield* admit(service, "msg-typed-failure")
       expect(retried.receiptId).not.toBe(receipt.receiptId)
       expect(retried.state).toBe("preparing")

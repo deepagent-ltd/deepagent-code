@@ -39,10 +39,7 @@ import { ModelV2 } from "@deepagent-code/core/model"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { TaskConcurrency } from "./task-concurrency"
 import { TaskDispatcher } from "@/session/task-dispatcher" // L10: durable queue
-import { SessionToolCapability, type ToolCapabilitySnapshot } from "@/session/tool-capability" // P0-10
-import { ToolRegistry } from "@/tool/registry" // P0-10
-import { MCP } from "@/mcp" // P0-10
-import { Plugin } from "@/plugin" // P0-10
+import type { ToolCapabilitySnapshot } from "@/session/tool-capability" // P0-10
 import { KeyedMutex } from "@deepagent-code/core/effect/keyed-mutex"
 import { Log } from "@deepagent-code/core/util/log"
 import { FSUtil } from "@deepagent-code/core/fs-util"
@@ -1207,6 +1204,9 @@ export function runDurableStructuredFinalizer(input: {
 export interface TaskPromptOps {
   cancel(sessionID: SessionID): Effect.Effect<void, unknown>
   resolvePromptParts(template: string): Effect.Effect<SessionPrompt.PromptInput["parts"]>
+  /** Frozen from the fully constructed Session tool surface. The TaskTool itself is created while
+   * ToolRegistry is still building, so it cannot discover this through a circular service lookup. */
+  capabilitySnapshot?(): Effect.Effect<ToolCapabilitySnapshot, unknown>
   prepareTaskInput?(input: SessionPrompt.PromptInput, timeCreated: number): Effect.Effect<SessionV1.WithParts, unknown>
   // E is unknown, not never: the real prompt fails (provider errors) — takeover (1a+1b) relies on
   // that failure channel to judge a crashed attempt, and mock ops in tests must be able to throw.
@@ -1369,11 +1369,6 @@ export const TaskTool = Tool.define(
     const queue = Option.getOrUndefined(yield* Effect.serviceOption(PRQueue.Service))
     const flock = Option.getOrUndefined(yield* Effect.serviceOption(EffectFlock.Service))
     const worktree = Option.getOrUndefined(yield* Effect.serviceOption(Worktree.Service))
-    // P0-10: optional capability services — present when TaskTool runs inside the full session context
-    const toolRegistrySvc = Option.getOrUndefined(yield* Effect.serviceOption(ToolRegistry.Service))
-    const mcpSvc = Option.getOrUndefined(yield* Effect.serviceOption(MCP.Service))
-    const pluginSvc = Option.getOrUndefined(yield* Effect.serviceOption(Plugin.Service))
-
     const run = Effect.fn("TaskTool.execute")(function* (
       params: Schema.Schema.Type<typeof Parameters>,
       ctx: Tool.Context,
@@ -1507,14 +1502,7 @@ export const TaskTool = Tool.define(
         maxWallMs: flags.subagentResearchWallMs ?? DEFAULT_SUBAGENT_RESEARCH_BUDGET.maxWallMs,
         maxNoProgress: flags.subagentNoProgressLimit ?? DEFAULT_SUBAGENT_RESEARCH_BUDGET.maxNoProgress,
       }
-      let capSnap: ToolCapabilitySnapshot | undefined
-      if (toolRegistrySvc && mcpSvc && pluginSvc) {
-        capSnap = yield* SessionToolCapability.snapshot().pipe(
-          Effect.provideService(ToolRegistry.Service, toolRegistrySvc),
-          Effect.provideService(MCP.Service, mcpSvc),
-          Effect.provideService(Plugin.Service, pluginSvc),
-        )
-      }
+      const capSnap = ops.capabilitySnapshot ? yield* ops.capabilitySnapshot() : undefined
       const agentIsWriteCapable = capSnap
         ? capSnap.tools.some(
             (tool) =>
@@ -2258,7 +2246,7 @@ export const TaskTool = Tool.define(
 
         const spawnAttempt = Effect.fn("TaskTool.spawnAttempt")(function* (runState: DurableTaskRun) {
           const resumed = admittedSession
-          const isolate = !resumed && (params.isolation === "worktree" || subagentIsWriteType(next))
+          const isolate = !resumed && (params.isolation === "worktree" || agentIsWriteCapable)
           const worktreeOpt =
             isolate || resumedWorktreeInfo
               ? yield* Effect.serviceOption(Worktree.Service)
@@ -2405,7 +2393,7 @@ export const TaskTool = Tool.define(
                 agentMaxConcurrency,
                 caps,
                 effect:
-                  subagentIsWriteType(next) && !a.worktreeInfo
+                  agentIsWriteCapable && !a.worktreeInfo
                     ? sharedWriteFallbackLocks.withLock(FSUtil.resolve(parent.directory))(runTaskInner())
                     : runTaskInner(),
               }),
@@ -2818,7 +2806,7 @@ export const TaskTool = Tool.define(
       // (unique even within the same millisecond) guarantees no two invocations request the same name.
       // Only the non-git degradation (NotGitError) is tolerated as a shared-directory fallback; any
       // other create failure now FAILS the task loudly instead of silently un-isolating it.
-      const isolate = !admittedSession && (params.isolation === "worktree" || subagentIsWriteType(next))
+      const isolate = !admittedSession && (params.isolation === "worktree" || agentIsWriteCapable)
       const worktreeOpt =
         isolate || resumedWorktreeInfo
           ? yield* Effect.serviceOption(Worktree.Service)
@@ -2911,7 +2899,7 @@ export const TaskTool = Tool.define(
             agentMaxConcurrency,
             caps,
             effect:
-              subagentIsWriteType(next) && !worktreeInfo
+              agentIsWriteCapable && !worktreeInfo
                 ? sharedWriteFallbackLocks.withLock(FSUtil.resolve(parent.directory))(runTaskInner())
                 : runTaskInner(),
           }),

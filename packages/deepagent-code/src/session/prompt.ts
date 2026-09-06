@@ -117,6 +117,7 @@ import { DeepAgentDurableLearning } from "@deepagent-code/core/deepagent/durable
 import { registerLearningReviewerFactory } from "@/deepagent/learning-runtime"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { SessionToolRequestReceiptTable } from "./tool-request-receipt.sql"
+import { SessionToolCapability } from "./tool-capability"
 import { CompactionArtifactTable, CompactionRunTable } from "./compaction-sql"
 import { projectRemoteCompactionReplay } from "./remote-compact"
 import {
@@ -1359,6 +1360,12 @@ export const layer = Layer.effect(
       return {
         cancel: (sessionID: SessionID) => cancel(sessionID),
         resolvePromptParts: (template: string) => resolvePromptParts(template),
+        capabilitySnapshot: () =>
+          SessionToolCapability.snapshot().pipe(
+            Effect.provideService(ToolRegistry.Service, registry),
+            Effect.provideService(MCP.Service, mcp),
+            Effect.provideService(Plugin.Service, plugin),
+          ),
         prepareTaskInput: (input: PromptInput, timeCreated: number) => prepareTaskInput(input, timeCreated),
         prompt: (input: PromptInput) => prompt(input).pipe(Effect.catch(Effect.die)),
       } satisfies TaskPromptOps
@@ -2904,8 +2911,17 @@ export const layer = Layer.effect(
     const ensureV2Session = Effect.fn("SessionPrompt.ensureV2Session")(function* (sessionID: SessionID) {
       const v2ID = SessionV2.ID.make(sessionID)
       const exists = yield* coreV2Session.get(v2ID).pipe(Effect.option)
-      if (Option.isSome(exists)) return
       const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
+      const permissions = SessionV2.permissionsFromLegacy(session.permission)
+      if (Option.isSome(exists)) {
+        // Migration repair for Sessions adopted before permission propagation existed. During the
+        // V2-only transition the public compatibility API still owns these edits, so a non-empty
+        // legacy ruleset must not leave the Core execution projection less restrictive.
+        if (session.permission && JSON.stringify(exists.value.permissions) !== JSON.stringify(permissions)) {
+          yield* coreV2Session.setPermissions({ sessionID: v2ID, permissions }).pipe(Effect.orDie)
+        }
+        return
+      }
       yield* coreV2Session
         .create({
           id: v2ID,
@@ -2915,6 +2931,7 @@ export const layer = Layer.effect(
           },
           ...(session.agent ? { agent: AgentV2.ID.make(session.agent) } : {}),
           ...(session.model ? { model: { id: session.model.id, providerID: session.model.providerID } } : {}),
+          permissions,
         })
         .pipe(
           Effect.catch((error) =>

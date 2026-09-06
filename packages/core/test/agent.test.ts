@@ -138,4 +138,20 @@ describe("AgentV2", () => {
       }
     }),
   )
+
+  it.effect("resolves the legacy build selection to auto without registering a duplicate agent", () =>
+    Effect.gen(function* () {
+      const agent = yield* AgentV2.Service
+      yield* agent.update((editor) =>
+        editor.update(AgentV2.defaultID, (item) => {
+          item.mode = "primary"
+          item.system = "Auto instructions"
+        }),
+      )
+
+      expect(yield* agent.get(AgentV2.ID.make("build"))).toBeUndefined()
+      expect(yield* agent.resolve("build")).toMatchObject({ id: AgentV2.defaultID, system: "Auto instructions" })
+      expect(yield* agent.select("build")).toMatchObject({ id: AgentV2.defaultID, info: { id: AgentV2.defaultID } })
+    }),
+  )
 })

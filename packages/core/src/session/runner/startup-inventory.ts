@@ -8,7 +8,7 @@ export * as StartupInventory from "./startup-inventory"
 // in-process classification surface for the five recovery categories:
 //
 //   provider_attempt (session_provider_attempt)
-//   tool_effect      (session_v2_tool_effect — V2 tool receipt + permission grant evidence)
+//   tool_effect      (session_v2_tool_effect_admission + terminal effect/grant evidence)
 //   task_run         (task_run)
 //   compaction       (event_snapshot_attempt + event_compaction_receipt)
 //   session_activity (session_facade_activity)
@@ -179,6 +179,14 @@ function classifyProviderAttemptItem(row: CategoryRow): StartupInventoryItem {
 }
 
 function classifyToolEffectItem(row: CategoryRow & { readonly grant_state: string | null }): StartupInventoryItem {
+  if (row.state === "admitted")
+    return {
+      category: "tool_effect",
+      id: row.id,
+      classification: "recovery",
+      state: row.state,
+      reason: "tool effect admitted before execution but no terminal evidence exists; outcome unknown and never auto-replayed",
+    }
   if (row.grant_state == null)
     return {
       category: "tool_effect",
@@ -406,9 +414,18 @@ export const classifyStartup = Effect.fn("StartupInventory.classifyStartup")(fun
   const attempts = yield* db.all<CategoryRow>(sql`SELECT attempt_id AS id, state FROM session_provider_attempt`)
   attempts.forEach((row) => accept(classifyProviderAttemptItem(row)))
 
-  // V2 tool effects (tool receipt + permission grant evidence).
+  // V2 tool effects. Admission is the authoritative pre-execution inventory row; absence of a
+  // matching terminal effect is an unknown outcome, not proof that the tool never ran.
   const effects = yield* db.all<{ id: string; state: string; grant_state: string | null }>(
-    sql`SELECT effect_id AS id, state, grant_state FROM session_v2_tool_effect`,
+    sql`
+      SELECT admission.admission_id AS id,
+             COALESCE(effect.state, 'admitted') AS state,
+             effect.grant_state
+      FROM session_v2_tool_effect_admission admission
+      LEFT JOIN session_v2_tool_effect effect
+        ON effect.receipt_id = admission.receipt_id
+       AND effect.tool_call_id = admission.tool_call_id
+    `,
   )
   effects.forEach((row) => accept(classifyToolEffectItem(row)))
 

@@ -121,6 +121,8 @@ import type {
   DeepagentPanelConsultResponses,
   DeepagentPanelStatusErrors,
   DeepagentPanelStatusResponses,
+  DeepagentQueueListErrors,
+  DeepagentQueueListResponses,
   DeepagentReviewsErrors,
   DeepagentReviewsResponses,
   DeepagentWikiEditErrors,
@@ -3087,6 +3089,40 @@ export class Goal extends HeyApiClient {
   }
 }
 
+export class Queue extends HeyApiClient {
+  /**
+   * List the session's pending queued inputs
+   *
+   * W2-3: non-consuming read of durable `queue` inputs awaiting promotion. Mirrors promoteNextQueued ordering; the TUI /queue view renders this.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters: {
+      directory?: string
+      workspace?: string
+      sessionID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "sessionID" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<DeepagentQueueListResponses, DeepagentQueueListErrors, ThrowOnError>({
+      url: "/deepagent/queue",
+      ...options,
+      ...params,
+    })
+  }
+}
+
 export class Wiki extends HeyApiClient {
   /**
    * List Repo & Wiki pages
@@ -3588,6 +3624,11 @@ export class Deepagent extends HeyApiClient {
   private _goal?: Goal
   get goal(): Goal {
     return (this._goal ??= new Goal({ client: this.client }))
+  }
+
+  private _queue?: Queue
+  get queue(): Queue {
+    return (this._queue ??= new Queue({ client: this.client }))
   }
 
   private _wiki?: Wiki
@@ -5209,6 +5250,13 @@ export class Messages extends HeyApiClient {
             code: string
             message: string
             retryable: boolean
+          }
+        | {
+            type: "agent_no_trigger_mention"
+            agentID?: string
+            agentNames?: Array<string>
+            eventID?: string
+            messageID?: string
           }
       replyToID?: string
     },
@@ -10410,7 +10458,7 @@ export class Session3 extends HeyApiClient {
   /**
    * Send message
    *
-   * Durably admit one session input when resume is false. This endpoint does not execute the production SessionPrompt engine.
+   * Durably admit one session input and schedule the Core V2 session runner. Set resume to false for admit-only delivery.
    */
   public prompt<ThrowOnError extends boolean = false>(
     parameters: {

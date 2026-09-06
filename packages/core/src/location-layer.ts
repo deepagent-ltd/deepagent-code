@@ -13,6 +13,7 @@ import { Auth } from "./auth"
 import { Npm } from "./npm"
 import { ModelsDev } from "./models-dev"
 import { FSUtil } from "./fs-util"
+import { Git } from "./git"
 import { Global } from "./global"
 import { Database } from "./database/database"
 import { PermissionV2 } from "./permission"
@@ -120,6 +121,8 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()(
         Layer.provide(services),
       )
       const runner = SessionRunnerLLM.defaultLayer.pipe(
+        Layer.provide(FSUtil.defaultLayer),
+        Layer.provide(Git.defaultLayer),
         Layer.provide(SessionRunnerLLMToolGateSeam),
         Layer.provide(services),
         Layer.provide(model),

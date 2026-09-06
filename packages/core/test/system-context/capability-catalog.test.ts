@@ -8,6 +8,7 @@ import {
   capabilityCatalogMetrics,
   capabilityCatalogSnapshot,
   capabilityL0Line,
+  CurrentGrantedPermissions,
   registerCapabilityCatalog,
   renderCapabilityCatalog,
 } from "@deepagent-code/core/system-context/capability-catalog"
@@ -38,6 +39,19 @@ describe("C4-02 L0 capability catalog", () => {
       const context = yield* registry.load()
       const snapshot = yield* SystemContext.initialize(context)
       expect(Object.keys(snapshot.snapshot)).toContain("deepagent/capability-catalog")
+    }),
+  )
+
+  itRegistry.effect("renders only capabilities granted to the current Session", () =>
+    Effect.gen(function* () {
+      const registry = yield* SystemContextRegistry.Service
+      const initialized = yield* SystemContext.initialize(yield* registry.load()).pipe(
+        Effect.provideService(CurrentGrantedPermissions, new Set(["read", "glob", "grep"])),
+      )
+
+      expect(initialized.baseline).toContain("deepagent.code-read")
+      expect(initialized.baseline).not.toContain("deepagent.code-edit")
+      expect(initialized.baseline).not.toContain("deepagent.shell-execute")
     }),
   )
 })

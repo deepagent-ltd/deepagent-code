@@ -141,6 +141,9 @@ export type PrepareInput = {
   readonly historyMessages: readonly unknown[]
   readonly toolDefinitions: unknown
   readonly toolIDs: readonly string[]
+  readonly toolRegistryIDs?: readonly string[]
+  readonly toolPermissionFilteredIDs?: readonly string[]
+  readonly toolFinalOfferedIDs?: readonly string[]
   readonly toolChoice: "auto" | "required" | "none" | null
   readonly toolResultReferences: readonly string[]
   readonly samplingMaxOutputTokens?: number
@@ -150,6 +153,10 @@ export type PrepareInput = {
   readonly providerTurnSeq: number
   readonly contextSelectionID?: string
   readonly contextProjectionHash?: string
+  readonly contextReadiness?: PreparedProviderTurn.ContextReadiness
+  readonly contextSelectedRefs?: readonly string[]
+  readonly toolCapability?: PreparedProviderTurn.ToolCapability
+  readonly toolLoweringOutcome?: PreparedProviderTurn.ToolLoweringOutcome
   /** C2-04 route/protocol/origin/capability/lowering identity on the prepared attempt record. */
   readonly protocolAttemptIdentity?: ProtocolAttemptIdentity
   readonly protocolAttemptIdentityHash?: string
@@ -811,15 +818,16 @@ export function prepare(input: PrepareInput, wireRequestHash: string) {
     historySourceEndMessageID: input.receipt.historySourceEndMessageId ?? null,
     contextSelectionID: input.contextSelectionID ?? null,
     contextProjectionHash: input.contextProjectionHash ?? null,
-    contextReadiness: input.contextSelectionID === undefined ? "unavailable" : "ready",
-    contextSelectedRefs: [],
-    toolRegistryIDs: input.toolIDs,
-    toolPermissionFilteredIDs: input.toolIDs,
-    toolFinalOfferedIDs: input.toolIDs,
+    contextReadiness:
+      input.contextReadiness ?? (input.contextSelectionID === undefined ? "unavailable" : "ready"),
+    contextSelectedRefs: input.contextSelectedRefs ?? [],
+    toolRegistryIDs: input.toolRegistryIDs ?? input.toolIDs,
+    toolPermissionFilteredIDs: input.toolPermissionFilteredIDs ?? input.toolIDs,
+    toolFinalOfferedIDs: input.toolFinalOfferedIDs ?? input.toolIDs,
     toolDefinitions: input.toolDefinitions,
     toolChoice: input.toolChoice,
-    toolCapability: "supported",
-    toolLoweringOutcome: "ok",
+    toolCapability: input.toolCapability ?? "unknown",
+    toolLoweringOutcome: input.toolLoweringOutcome ?? "ok",
     toolResultReferences: input.toolResultReferences,
     samplingModelID: input.receipt.modelId,
     samplingProviderID: input.receipt.providerId,

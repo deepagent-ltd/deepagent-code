@@ -15,10 +15,10 @@ import { SessionPrompt } from "@/session/prompt"
 import { SessionPromptIntent } from "@/session/prompt-intent"
 import { LegacyExecutionUnavailable, guardLegacyExecution } from "@/session/legacy-execution-zero"
 import { SessionV2 } from "@deepagent-code/core/session"
+import { SessionRuntimeStatus } from "@deepagent-code/core/session/runtime-status"
 import { SessionMutationEpoch } from "@/session/mutation-epoch"
 import { SessionRevert } from "@/session/revert"
 import { SessionRunState } from "@/session/run-state"
-import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
 import { SessionLegacyProviderResolution } from "@/session/legacy-provider-resolution"
 import { DevCampaignMint } from "@/effect/dev-campaign-mint"
@@ -97,7 +97,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const runState = yield* SessionRunState.Service
     const agentSvc = yield* Agent.Service
     const permissionSvc = yield* Permission.Service
-    const statusSvc = yield* SessionStatus.Service
+    const runtimeStatus = yield* SessionRuntimeStatus.Service
     const todoSvc = yield* Todo.Service
     const summary = yield* SessionSummary.Service
     const events = yield* EventV2Bridge.Service
@@ -129,7 +129,17 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     })
 
     const status = Effect.fn("SessionHttpApi.status")(function* () {
-      return Object.fromEntries(yield* statusSvc.list())
+      return Object.fromEntries(
+        [...(yield* runtimeStatus.list)].map(([sessionID, state]) => [
+          sessionID,
+          state === "busy"
+            ? { type: "busy" as const }
+            : {
+                type: "recovery_required" as const,
+                message: "Execution stopped with an unresolved durable claim; inspect recovery before resuming",
+              },
+        ]),
+      )
     })
 
     const requireSession = Effect.fn("SessionHttpApi.requireSession")(function* (sessionID: SessionID) {
@@ -311,10 +321,21 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
         yield* session.setMetadata({ sessionID: ctx.params.sessionID, metadata: ctx.payload.metadata })
       }
       if (ctx.payload.permission !== undefined) {
+        const permission = Permission.merge(current.permission ?? [], ctx.payload.permission)
         yield* session.setPermission({
           sessionID: ctx.params.sessionID,
-          permission: Permission.merge(current.permission ?? [], ctx.payload.permission),
+          permission,
         })
+        if (flags.coreV2Only) {
+          const v2ID = SessionV2.ID.make(ctx.params.sessionID)
+          const adopted = yield* coreV2Session.get(v2ID).pipe(Effect.option)
+          if (Option.isSome(adopted)) {
+            yield* coreV2Session.setPermissions({
+              sessionID: v2ID,
+              permissions: SessionV2.permissionsFromLegacy(permission),
+            }).pipe(Effect.orDie)
+          }
+        }
       }
       if (ctx.payload.time?.archived !== undefined) {
         yield* session.setArchived({ sessionID: ctx.params.sessionID, time: ctx.payload.time.archived })

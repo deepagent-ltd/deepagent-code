@@ -217,12 +217,17 @@ type FacadeRow = typeof SessionFacadeActivityTable.$inferSelect
 const STATUS_LIMIT_CEILING = 20
 
 /**
- * The dispatcher construction effect. Hard requirements are ONLY Database + RuntimeFlags; every
+ * The dispatcher construction effect. Core V2 execution dependencies are explicit; every legacy
  * runner dependency (GoalManager, SessionPrompt, BackgroundJob, SessionSteer, Session/Agent/
  * Provider) is resolved via serviceOption so the registry can build the facade inline from
- * whatever the surrounding graph provides, without adding requirements to ToolRegistry.layer.
+ * whatever the surrounding graph provides. Optional legacy services only control which facade
+ * subkinds are advertised; the V2 owner itself may never disappear behind serviceOption.
  */
-export const build: Effect.Effect<Interface, never, Database.Service | RuntimeFlags.Service> = Effect.gen(function* () {
+export const build: Effect.Effect<
+  Interface,
+  never,
+  Database.Service | RuntimeFlags.Service | SessionV2.Service | Snapshot.Service
+> = Effect.gen(function* () {
   const database = yield* Database.Service
   const { db } = database
   const flags = yield* RuntimeFlags.Service
@@ -233,8 +238,10 @@ export const build: Effect.Effect<Interface, never, Database.Service | RuntimeFl
   const agents = Option.getOrUndefined(yield* Effect.serviceOption(Agent.Service))
   const sessionPrompt = Option.getOrUndefined(yield* Effect.serviceOption(SessionPrompt.Service))
   const provider = Option.getOrUndefined(yield* Effect.serviceOption(Provider.Service))
-  // §16.3 order 3 caller wiring: flag-gated V2 subagent drive for the panel delegation.
-  const { v2Session, snapshot: v2Snapshot } = yield* GoalLoopWiring.resolveV2SubagentDrive()
+  const { v2Session, snapshot: v2Snapshot } = yield* GoalLoopWiring.resolveV2SubagentDrive({
+    v2Session: yield* SessionV2.Service,
+    snapshot: yield* Snapshot.Service,
+  })
 
   // ── facade base-table IO ──────────────────────────────────────────────────────────────────
 

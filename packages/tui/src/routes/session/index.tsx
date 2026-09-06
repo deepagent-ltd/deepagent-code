@@ -457,6 +457,8 @@ export function Session() {
     })
     const status = sync.data.session_status[sessionID]
     if (status?.type === "retry") void DialogAlert.show(dialog, "Retry Error", status.message)
+    if (status?.type === "recovery_required")
+      void DialogAlert.show(dialog, "Recovery Required", status.message)
   }
 
   function moveFirstChild() {
@@ -853,7 +855,8 @@ export function Session() {
       },
       run: async () => {
         const status = sync.data.session_status?.[route.sessionID]
-        if (status?.type !== "idle") await sdk.client.session.abort({ sessionID: route.sessionID }).catch(() => {})
+        if (status?.type === "busy" || status?.type === "retry")
+          await sdk.client.session.abort({ sessionID: route.sessionID }).catch(() => {})
         const revert = session()?.revert?.messageID
         const message = messages().findLast((x) => (!revert || x.id < revert) && x.role === "user")
         if (!message) return

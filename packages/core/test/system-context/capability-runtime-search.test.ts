@@ -4,6 +4,7 @@ import {
   enabledRuntimeFeatureSet,
   layer as searchToolLayer,
   makeRuntimeAuthorizedSearchTool,
+  permissionAuthorization,
   runtimeAuthorizedSearch,
   runtimeFeatureAuthorization,
   runtimeFeatureCompatible,
@@ -15,6 +16,7 @@ import { ToolRegistry } from "@deepagent-code/core/tool/registry"
 import { AgentV2 } from "@deepagent-code/core/agent"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { SessionMessage } from "@deepagent-code/core/session/message"
+import { SessionStore } from "@deepagent-code/core/session/store"
 import { testEffect } from "../lib/effect"
 
 // W4: `RuntimeFeatures.enabled` is env-gated (flip-flag). These cases describe the
@@ -107,10 +109,26 @@ describe("runtime-authorized search + tool (the wired successor)", () => {
     const tool = makeRuntimeAuthorizedSearchTool({ catalogSnapshotId: "capability_catalog:test" })
     expect(tool).toBeTruthy()
   })
+
+  test("Session and Agent wildcard denies remove capabilities from search authorization", () => {
+    const authorization = permissionAuthorization(
+      [{ action: "edit", resource: "*", effect: "allow" }],
+      [{ action: "edit", resource: "*", effect: "deny" }],
+    )
+
+    expect(authorization.grantedPermissions.has("edit")).toBe(false)
+    expect(authorization.grantedPermissions.has("read")).toBe(true)
+  })
 })
 
 describe("K3 production registry assembly registers capability_search", () => {
-  const itRegistry = testEffect(searchToolLayer.pipe(Layer.provideMerge(ToolRegistry.defaultLayer)))
+  const itRegistry = testEffect(
+    searchToolLayer.pipe(
+      Layer.provide(Layer.mock(SessionStore.Service, { get: () => Effect.succeed(undefined) })),
+      Layer.provide(AgentV2.layer),
+      Layer.provideMerge(ToolRegistry.defaultLayer),
+    ),
+  )
 
   itRegistry.effect("the tool is registered in the Location tool registry under its canonical name", () =>
     Effect.gen(function* () {

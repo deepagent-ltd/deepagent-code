@@ -14,6 +14,8 @@ import {
   type LLMRequest,
 } from "@deepagent-code/llm"
 import { AgentGateway } from "../src/agent-gateway"
+import { FSUtil } from "@deepagent-code/core/fs-util"
+import { Git } from "@deepagent-code/core/git"
 import * as OpenAIChat from "@deepagent-code/llm/protocols/openai-chat"
 import * as OpenAIResponses from "@deepagent-code/llm/protocols/openai-responses"
 import { Database } from "@deepagent-code/core/database/database"
@@ -38,10 +40,23 @@ import { SessionRunCoordinator } from "@deepagent-code/core/session/run-coordina
 import { SessionRunner } from "@deepagent-code/core/session/runner"
 import * as SessionRunnerLLM from "@deepagent-code/core/session/runner/llm"
 import { SessionRunnerModel } from "@deepagent-code/core/session/runner/model"
-import { CONTEXT_FEDERATION_PRODUCTION_ENV } from "@deepagent-code/core/context-federation/production-adapters"
+import {
+  CONTEXT_FEDERATION_PRODUCTION_ENV,
+  ProductionV2Sources,
+  type ProductionV2AdapterInput,
+  type ProductionV2LocationIdentity,
+} from "@deepagent-code/core/context-federation/production-adapters"
+import {
+  LocationKey,
+  ProjectScopeKey,
+  SecurityNamespaceID,
+} from "@deepagent-code/core/context-federation/reference"
 import { V2ProviderTurn } from "@deepagent-code/core/session/runner/v2-provider-turn"
 import { V2ToolEffect } from "@deepagent-code/core/session/runner/v2-tool-effect"
-import { V2ToolEffectTable } from "@deepagent-code/core/session/runner/v2-tool-effect.sql"
+import {
+  V2ToolEffectAdmissionTable,
+  V2ToolEffectTable,
+} from "@deepagent-code/core/session/runner/v2-tool-effect.sql"
 import {
   V2ProviderParityReceiptTable,
   V2ProviderTurnReceiptTable,
@@ -72,6 +87,7 @@ import { AgentV2 } from "@deepagent-code/core/agent"
 import { Config } from "@deepagent-code/core/config"
 import { ConfigAgent } from "@deepagent-code/core/config/agent"
 import { ConfigCompaction } from "@deepagent-code/core/config/compaction"
+import { Catalog } from "@deepagent-code/core/catalog"
 import { Tool } from "@deepagent-code/core/tool/tool"
 import { recoverReadDefect } from "@deepagent-code/core/tool/read-failure"
 import {
@@ -88,8 +104,7 @@ import { SkillGuidance } from "@deepagent-code/core/skill/guidance"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { Location } from "@deepagent-code/core/location"
 import { ProviderV2 } from "@deepagent-code/core/provider"
-import { Cause, Context, DateTime, Deferred, Duration, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect"
-import * as TestClock from "effect/testing/TestClock"
+import { Cause, Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Stream } from "effect"
 import { systemError } from "effect/PlatformError"
 import { asc, desc, eq, sql } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
@@ -105,6 +120,13 @@ const selectionEvidence = [
   "- memory: empty [rev memory:no-store] (0 refs)",
 ].join("\n")
 const withSelection = (parts: string[]) => [...parts, selectionEvidence]
+let currentSelectionIdentity: ProductionV2LocationIdentity | undefined
+const selectionSources: ProductionV2AdapterInput = {
+  get identity() {
+    return currentSelectionIdentity
+  },
+}
+const selectionSourcesLayer = Layer.succeed(ProductionV2Sources, selectionSources)
 const providerTurns = V2ProviderTurn.layer.pipe(
   Layer.provide(SessionProviderOwner.layer.pipe(Layer.provide(database))),
   Layer.provide(database),
@@ -117,8 +139,7 @@ const requests: LLMRequest[] = []
 let response: LLMEvent[] = []
 let responses: LLMEvent[][] | undefined
 let responseStream: Stream.Stream<LLMEvent, LLMError> | undefined
-// One-shot sealed streams served in order (call 1, call 2, ...). Elements may be a failure
-// stream (transient transport drop) followed by a sealed success — the retry shape.
+// One-shot sealed streams served in order (call 1, call 2, ...).
 let responseStreams: Array<Stream.Stream<LLMEvent, LLMError>> | undefined
 let streamGate: Deferred.Deferred<void> | undefined
 let streamStarted: Deferred.Deferred<void> | undefined
@@ -227,11 +248,15 @@ const echo = Layer.effectDiscard(
   ),
 ).pipe(Layer.provide(registry))
 let modelResolveHook = Effect.void
+let pricingLookupHook = Effect.void
 let currentModel = model
+let currentModelInfo: ModelV2.Info | undefined
+let currentPricingInfo: ModelV2.Info | undefined
 const models = SessionRunnerModel.layerWith((session) =>
   modelResolveHook.pipe(
     Effect.as({
       model: session.model?.id === "replacement" ? replacementModel : currentModel,
+      ...(currentModelInfo ? { info: currentModelInfo } : {}),
     }),
   ),
 )
@@ -307,6 +332,33 @@ const config = Layer.suspend(
       }),
     ),
 )
+const catalog = Layer.succeed(
+  Catalog.Service,
+  Catalog.Service.of({
+    transform: () => Effect.die("unexpected catalog.transform"),
+    provider: {
+      get: () => Effect.die("unexpected catalog.provider.get"),
+      all: () => Effect.succeed([]),
+      available: () => Effect.succeed([]),
+    },
+    model: {
+      get: (providerID, modelID) =>
+        pricingLookupHook.pipe(
+          Effect.andThen(
+            Effect.suspend(() =>
+              currentPricingInfo
+                ? Effect.succeed(currentPricingInfo)
+                : Effect.fail(new Catalog.ModelNotFoundError({ providerID, modelID })),
+            ),
+          ),
+        ),
+      all: () => Effect.succeed([]),
+      available: () => Effect.succeed([]),
+      default: () => Effect.succeed(Option.none<ModelV2.Info>()),
+      small: () => Effect.succeed(Option.none<ModelV2.Info>()),
+    },
+  }),
+)
 // Config-level agent overrides for the drain-ceiling fallback tests (the production path: the
 // AgentV2 registry is empty in the app runtime, so the budget arrives through config discovery).
 let configAgents: Record<string, ConfigAgent.Info> | undefined
@@ -377,6 +429,8 @@ const settleHookLayer = Layer.succeedContext(
   ),
 )
 const runner = SessionRunnerLLM.layer.pipe(
+  Layer.provide(FSUtil.defaultLayer),
+  Layer.provide(Git.defaultLayer),
   Layer.provide(providerTurns),
   Layer.provide(V2ToolEffect.layer.pipe(Layer.provide(database))),
   Layer.provide(grantLookupLayer),
@@ -394,8 +448,7 @@ const runner = SessionRunnerLLM.layer.pipe(
   Layer.provide(agents),
   Layer.provide(skillGuidance),
   Layer.provide(config),
-  Layer.provide(testOwnerAuthorization),
-  Layer.provide(settleHookLayer),
+  Layer.provide(Layer.mergeAll(catalog, selectionSourcesLayer, testOwnerAuthorization, settleHookLayer)),
 )
 const coordinator = SessionRunCoordinator.layer.pipe(Layer.provide(runner))
 const execution = Layer.effect(
@@ -420,6 +473,8 @@ const sessions = SessionV2.layer.pipe(
   Layer.provide(execution),
 )
 const containedRunner = SessionRunnerLLM.defaultLayer.pipe(
+  Layer.provide(FSUtil.defaultLayer),
+  Layer.provide(Git.defaultLayer),
   Layer.provide(providerTurns),
   Layer.provide(V2ToolEffect.layer.pipe(Layer.provide(database))),
   Layer.provide(grantLookupLayer),
@@ -436,6 +491,7 @@ const containedRunner = SessionRunnerLLM.defaultLayer.pipe(
   Layer.provide(agents),
   Layer.provide(skillGuidance),
   Layer.provide(config),
+  Layer.provide(catalog),
 )
 const containedCoordinator = SessionRunCoordinator.layer.pipe(Layer.provide(containedRunner))
 const containedExecution = Layer.effect(
@@ -478,10 +534,7 @@ const it = testEffect(
     location,
     skillGuidance,
     config,
-    runner,
-    coordinator,
-    execution,
-    sessions,
+    Layer.mergeAll(runner, coordinator, execution, sessions),
   ),
 )
 const contained = testEffect(
@@ -545,7 +598,11 @@ const setup = Effect.gen(function* () {
   systemUnavailable = false
   systemLoadHook = Effect.void
   modelResolveHook = Effect.void
+  pricingLookupHook = Effect.void
+  currentSelectionIdentity = undefined
   currentModel = model
+  currentModelInfo = undefined
+  currentPricingInfo = undefined
   skillBaselines.clear()
   configAgents = undefined
   responses = undefined
@@ -568,6 +625,18 @@ const setup = Effect.gen(function* () {
     .pipe(Effect.orDie)
   yield* insertSession(sessionID)
 })
+
+const registerSwitchAgents = AgentV2.Service.use((agents) =>
+  agents.update((editor) => {
+    editor.update(AgentV2.defaultID, (agent) => {
+      agent.mode = "primary"
+    })
+    editor.update(AgentV2.ID.make("reviewer"), (agent) => {
+      agent.mode = "primary"
+    })
+    editor.default(AgentV2.defaultID)
+  }),
+)
 
 const seedStaleTool = Effect.fn("SessionRunnerTest.seedStaleTool")(function* (callID: string) {
   const eventService = yield* EventV2.Service
@@ -597,9 +666,24 @@ const providerUnavailable = () =>
     reason: new TransportReason({ message: "Provider unavailable" }),
   })
 
-// Non-transport provider failure for the terminal-path tests: the runner retries transient
-// Transport failures (nothing published) up to its budget, so those tests inject a NoRoute
-// refusal instead — same fail-fast shape, never retried.
+const sealedResponse = (events: readonly LLMEvent[], label: string) =>
+  Stream.unwrap(
+    Effect.gen(function* () {
+      const seal = yield* V2ProviderTurn.CurrentRequestSeal
+      if (!seal) return yield* Effect.die("V2 request seal is missing")
+      yield* seal
+        .seal({
+          wireHash: Hash.sha256(`${label}:wire`),
+          bodyHash: Hash.sha256(`${label}:body`),
+          bodyLength: label.length,
+          contentType: "application/json",
+        })
+        .pipe(Effect.orDie)
+      return Stream.fromIterable(events)
+    }),
+  )
+
+// Non-transport provider failure for terminal-path tests that specifically exercise route refusal.
 const providerRefused = () =>
   new LLMError({
     module: "test",
@@ -1415,6 +1499,147 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("filters model-visible tools with the same Session restrictions enforced by leaves", () =>
+    Effect.gen(function* () {
+      yield* setup
+      yield* (yield* Database.Service).db
+        .update(SessionTable)
+        .set({ permission: [{ action: "echo", resource: "*", effect: "deny" }] })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Do not expose denied tools" }), resume: false })
+
+      requests.length = 0
+      responseStream = sealedResponse(
+        fragmentFixture("text", "text-session-permission", ["Done"]).completeEvents,
+        "permission-filtered-tools",
+      )
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(1)
+      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["defect"])
+      const receipt = yield* (yield* Database.Service).db
+        .select()
+        .from(V2ProviderTurnReceiptTable)
+        .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
+      expect(receipt?.prepared_turn).toMatchObject({
+        tool_registry_ids: ["defect", "echo"],
+        tool_permission_filtered_ids: ["defect"],
+        tool_final_offered_ids: ["defect"],
+        context_readiness: "fallback",
+        context_selected_refs: [],
+      })
+    }),
+  )
+
+  it.effect("omits tools and records the real lowering stages when the model does not support tools", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const info = ModelV2.Info.empty(ProviderV2.ID.make("fake"), ModelV2.ID.make("fake-model"))
+      currentModelInfo = new ModelV2.Info({
+        ...info,
+        api: {
+          id: info.id,
+          type: "aisdk",
+          package: "@ai-sdk/openai-compatible",
+          url: "https://example.test/v1",
+          protocol: "openai-compatible.chat",
+        },
+      })
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Use no tools" }), resume: false })
+
+      requests.length = 0
+      responseStream = sealedResponse(
+        fragmentFixture("text", "text-no-tools", ["Done"]).completeEvents,
+        "unsupported-tools",
+      )
+      yield* session.resume(sessionID)
+
+      expect(requests[0]?.tools).toEqual([])
+      const receipt = yield* (yield* Database.Service).db
+        .select()
+        .from(V2ProviderTurnReceiptTable)
+        .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
+      expect(receipt?.prepared_turn).toMatchObject({
+        tool_registry_ids: ["defect", "echo"],
+        tool_permission_filtered_ids: ["defect", "echo"],
+        tool_final_offered_ids: [],
+        tool_capability: "unsupported",
+        tool_lowering_outcome: "omitted_no_support",
+      })
+    }),
+  )
+
+  it.effect("typed-fails an explicitly selected unknown Agent before provider dispatch", () =>
+    Effect.gen(function* () {
+      yield* setup
+      yield* (yield* Database.Service).db
+        .update(SessionTable)
+        .set({ agent: "missing-agent" })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Never run with an unknown agent" }), resume: false })
+      requests.length = 0
+
+      const exit = yield* session.resume(sessionID).pipe(Effect.exit)
+
+      expect(exit._tag).toBe("Failure")
+      if (Exit.isFailure(exit))
+        expect(Option.getOrUndefined(Cause.findErrorOption(exit.cause))).toMatchObject({
+          _tag: "AgentV2.NotFoundError",
+          id: "missing-agent",
+        })
+      expect(requests).toHaveLength(0)
+    }),
+  )
+
+  it.effect("uses the Location-scoped production source frame inside the actual runner", () =>
+    Effect.gen(function* () {
+      yield* setup
+      currentSelectionIdentity = {
+        securityNamespaceId: SecurityNamespaceID.make("ns:runner-production"),
+        projectScopeKey: ProjectScopeKey.make("scope:runner-production"),
+        locationKey: LocationKey.make("location:runner-production"),
+        legacyProjectId: "project:runner-production",
+      }
+      const session = yield* SessionV2.Service
+      yield* session.prompt({
+        sessionID,
+        prompt: new Prompt({ text: "Use the production selection frame" }),
+        resume: false,
+      })
+      responseStream = sealedResponse(
+        fragmentFixture("text", "text-production-frame", ["Done"]).completeEvents,
+        "production-frame",
+      )
+
+      yield* session.resume(sessionID)
+
+      const row = yield* (yield* Database.Service).db
+        .select()
+        .from(SessionContextSelectionTable)
+        .where(eq(SessionContextSelectionTable.session_id, sessionID))
+        .orderBy(desc(SessionContextSelectionTable.revision))
+        .get()
+        .pipe(Effect.orDie)
+      expect(row).toMatchObject({
+        security_namespace_id: "ns:runner-production",
+        project_scope_key: "scope:runner-production",
+        location_key: "location:runner-production",
+      })
+      expect(row?.security_namespace_id).not.toBe("v2:local")
+    }),
+  )
+
   it.effect("W3.8 M3: an explicit =false keeps the request byte-identical (no selection evidence part)", () =>
     Effect.gen(function* () {
       yield* setup
@@ -1456,32 +1681,44 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("uses only DeepAgent system prompt for active deepagent provider sessions", () =>
+  it.effect("composes DeepAgent context with agent and durable System Context for active sessions", () =>
     Effect.gen(function* () {
       yield* setup
       AgentGateway.configure({ enabled: true, agentMode: "high" })
-      const agent = yield* AgentV2.Service
-      yield* agent.update((editor) =>
-        editor.update(AgentV2.ID.make("build"), (agent) => {
-          agent.system = "Build agent instructions"
-          agent.mode = "primary"
-        }),
-      )
-      currentModel = Model.make({ id: "deepagent/default", provider: "deepagent", route: OpenAIChat.route })
-      systemBaseline =
-        "You are deepagent-code, an interactive CLI tool that helps users with software engineering tasks."
-      const session = yield* SessionV2.Service
-      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "First" }), resume: false })
+      try {
+        const agent = yield* AgentV2.Service
+        yield* agent.update((editor) =>
+          editor.update(AgentV2.ID.make("build"), (agent) => {
+            agent.system = "Build agent instructions"
+            agent.mode = "primary"
+          }),
+        )
+        currentModel = Model.make({ id: "deepagent/default", provider: "deepagent", route: OpenAIChat.route })
+        systemBaseline =
+          "You are deepagent-code, an interactive CLI tool that helps users with software engineering tasks."
+        const session = yield* SessionV2.Service
+        yield* session.prompt({ sessionID, prompt: new Prompt({ text: "First" }), resume: false })
 
-      requests.length = 0
-      response = fragmentFixture("text", "text-deepagent", ["Done"]).completeEvents
-      yield* session.resume(sessionID)
+        requests.length = 0
+        response = fragmentFixture("text", "text-deepagent", ["Done"]).completeEvents
+        yield* session.resume(sessionID)
 
-      const system = requests.at(-1)?.system.map((part) => part.text) ?? []
-      expect(system.join("\n")).toContain(AgentGateway.DEEPAGENT_BOOT_MESSAGE)
-      expect(system.join("\n")).not.toContain("Build agent instructions")
-      expect(system.join("\n")).not.toContain("You are deepagent-code")
-      AgentGateway.configure({ enabled: false, agentMode: "high" })
+        const request = requests.at(-1)
+        const system = request?.system.map((part) => part.text).join("\n") ?? ""
+        expect(system).toContain("# DeepAgent Code")
+        expect(system).toContain("# Environment")
+        expect(system).toContain("# Available Tools")
+        expect(system).toContain("echo")
+        expect(system).toContain("Build agent instructions")
+        expect(system).toContain("You are deepagent-code")
+        const runtimeTail = request?.messages.at(-1)
+        expect(runtimeTail?.role).toBe("user")
+        expect(runtimeTail?.content.map((part) => (part.type === "text" ? part.text : "")).join("\n")).toContain(
+          "<deepagent-round-context>",
+        )
+      } finally {
+        AgentGateway.configure({ enabled: false, agentMode: "high" })
+      }
     }),
   )
 
@@ -1544,6 +1781,7 @@ describe("SessionRunnerLLM", () => {
   it.effect("composes selected-agent skill guidance and replaces it after an agent switch", () =>
     Effect.gen(function* () {
       yield* setup
+      yield* registerSwitchAgents
       const session = yield* SessionV2.Service
       const events = yield* EventV2.Service
       // The session's default agent is "auto" (AgentV2.defaultID, renamed from "build" in the mode
@@ -1575,6 +1813,7 @@ describe("SessionRunnerLLM", () => {
   it.effect("retries first-epoch preparation when the selected agent changes during observation", () =>
     Effect.gen(function* () {
       yield* setup
+      yield* registerSwitchAgents
       const session = yield* SessionV2.Service
       const events = yield* EventV2.Service
       skillBaselines.set(AgentV2.ID.make("build"), "Build skills")
@@ -1607,6 +1846,7 @@ describe("SessionRunnerLLM", () => {
   it.effect("opens a queued activity once when the selected agent changes during observation", () =>
     Effect.gen(function* () {
       yield* setup
+      yield* registerSwitchAgents
       const session = yield* SessionV2.Service
       const events = yield* EventV2.Service
       skillBaselines.set(AgentV2.ID.make("build"), "Build skills")
@@ -1643,6 +1883,7 @@ describe("SessionRunnerLLM", () => {
   it.effect("retries an agent switch before the final provider-dispatch boundary", () =>
     Effect.gen(function* () {
       yield* setup
+      yield* registerSwitchAgents
       const session = yield* SessionV2.Service
       const events = yield* EventV2.Service
       const { db } = yield* Database.Service
@@ -1811,6 +2052,7 @@ describe("SessionRunnerLLM", () => {
   it.effect("blocks a cross-agent provider turn while replacement context is unavailable", () =>
     Effect.gen(function* () {
       yield* setup
+      yield* registerSwitchAgents
       const session = yield* SessionV2.Service
       const events = yield* EventV2.Service
       skillBaselines.set(AgentV2.defaultID, "Build skills")
@@ -2507,6 +2749,46 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("projects non-zero cost from the Location catalog pricing snapshot", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const pricing = ModelV2.Info.empty(ProviderV2.ID.make("fake"), ModelV2.ID.make("fake-model"))
+      currentPricingInfo = new ModelV2.Info({
+        ...pricing,
+        cost: [{ input: 1, output: 2, cache: { read: 3, write: 4 } }],
+      })
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Account for this turn" }), resume: false })
+      response = [
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.stepFinish({
+          index: 0,
+          reason: "stop",
+          usage: {
+            inputTokens: 3_000_000,
+            nonCachedInputTokens: 1_000_000,
+            cacheReadInputTokens: 1_000_000,
+            cacheWriteInputTokens: 1_000_000,
+            outputTokens: 1_000_000,
+          },
+        }),
+        LLMEvent.finish({ reason: "stop" }),
+      ]
+
+      yield* session.resume(sessionID)
+
+      expect(yield* session.get(sessionID)).toMatchObject({
+        cost: 10,
+        tokens: {
+          input: 1_000_000,
+          output: 1_000_000,
+          reasoning: 0,
+          cache: { read: 1_000_000, write: 1_000_000 },
+        },
+      })
+    }),
+  )
+
   it.effect("continues with reloaded history after durably settling one local tool call", () =>
     Effect.gen(function* () {
       yield* setup
@@ -2818,13 +3100,25 @@ describe("SessionRunnerLLM", () => {
       // Durable tool-effect authority: each settled call recorded exactly one terminal row bound
       // to the provider attempt/receipt of the turn that offered it, and — with the permission
       // capability seam active — each row binds the grant that authorized the call.
-      const effects = yield* (yield* Database.Service).db
+      const database = yield* Database.Service
+      const admissions = yield* database.db
+        .select()
+        .from(V2ToolEffectAdmissionTable)
+        .where(eq(V2ToolEffectAdmissionTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
+      const effects = yield* database.db
         .select()
         .from(V2ToolEffectTable)
         .where(eq(V2ToolEffectTable.session_id, sessionID))
         .all()
         .pipe(Effect.orDie)
       expect(effects).toHaveLength(2)
+      expect(admissions).toHaveLength(2)
+      expect(admissions.map((admission) => admission.effect_kind)).toEqual(["mutating", "mutating"])
+      expect(new Set(admissions.map((admission) => admission.receipt_id))).toEqual(
+        new Set(effects.map((effect) => effect.receipt_id)),
+      )
       expect(effects.map((effect) => effect.state)).toEqual(["settled", "settled"])
       expect(effects.map((effect) => effect.tool_name)).toEqual(["echo", "echo"])
       expect(effects.map((effect) => effect.tool_call_id)).toEqual(["tool_0", "tool_0"])
@@ -3393,18 +3687,17 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("retries a transient transport drop on a fresh attempt within the retry budget", () =>
+  it.effect("quarantines a transient transport drop without opening a second physical attempt", () =>
     Effect.gen(function* () {
       yield* setup
       const session = yield* SessionV2.Service
       const { db } = yield* Database.Service
-      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Survive transport drop" }), resume: false })
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Quarantine transport drop" }), resume: false })
 
-      // First physical dispatch seals, then dies as a raw transport failure (nothing published —
-      // mid-stream drop, the production shape); the runner quarantines the receipt indeterminate
-      // and re-dispatches on a fresh attempt, which seals and succeeds.
+      // A sealed request may have reached the provider even when the local stream emitted no
+      // assistant event. The only honest outcome is one indeterminate receipt and no automatic
+      // re-dispatch.
       requests.length = 0
-      const recovered = fragmentFixture("text", "text-after-drop", ["Recovered after drop"])
       const sealThen = (wire: string, then: Stream.Stream<LLMEvent, LLMError>) =>
         Stream.unwrap(
           Effect.gen(function* () {
@@ -3421,16 +3714,10 @@ describe("SessionRunnerLLM", () => {
             return then
           }),
         )
-      responseStreams = [
-        sealThen("transport-drop-fail", Stream.fail(providerUnavailable())),
-        sealThen("transport-drop-retry", Stream.fromIterable(recovered.completeEvents)),
-      ]
-      const resume = yield* session.resume(sessionID).pipe(Effect.forkChild)
-      // The retry sleeps its backoff on the TestClock; advance past it so the second attempt runs.
-      yield* TestClock.adjust(Duration.seconds(1))
-      yield* Fiber.join(resume)
+      const failure = providerUnavailable()
+      responseStream = sealThen("transport-drop-fail", Stream.fail(failure))
+      expect(yield* session.resume(sessionID).pipe(Effect.flip)).toBe(failure)
 
-      // The failed attempt quarantined indeterminate; the retry opened a fresh attempt that settled.
       const receipts = yield* db
         .select({ state: V2ProviderTurnReceiptTable.state, errorCode: V2ProviderTurnReceiptTable.error_code })
         .from(V2ProviderTurnReceiptTable)
@@ -3440,12 +3727,47 @@ describe("SessionRunnerLLM", () => {
         .pipe(Effect.orDie)
       expect(receipts).toEqual([
         { state: "indeterminate_after_crash", errorCode: expect.stringMatching(/^provider_stream_failed:/) },
-        { state: "settled", errorCode: null },
       ])
+      expect(requests).toHaveLength(1)
       expect(yield* session.context(sessionID)).toMatchObject([
-        { type: "user", text: "Survive transport drop" },
-        recovered.expectedAssistant,
+        { type: "user", text: "Quarantine transport drop" },
+        { type: "assistant", finish: "error", error: { type: "unknown", message: "Provider unavailable" } },
       ])
+    }),
+  )
+
+  it.effect("refuses provider continuation while a tool admission has no terminal evidence", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Do not replay the unknown tool" }), resume: false })
+      yield* (yield* Database.Service).db
+        .insert(V2ToolEffectAdmissionTable)
+        .values({
+          admission_id: "admission_unknown_tool",
+          session_id: sessionID,
+          provider_attempt_id: "attempt_unknown_tool",
+          receipt_id: "receipt_unknown_tool",
+          tool_call_id: "call_unknown_tool",
+          tool_name: "echo",
+          effect_kind: "mutating",
+          owner_token: "owner_unknown_tool",
+          time_created: Date.now(),
+        })
+        .run()
+        .pipe(Effect.orDie)
+      requests.length = 0
+
+      const exit = yield* session.resume(sessionID).pipe(Effect.exit)
+
+      expect(exit._tag).toBe("Failure")
+      if (Exit.isFailure(exit))
+        expect(Option.getOrUndefined(Cause.findErrorOption(exit.cause))).toMatchObject({
+          _tag: "V2ToolEffect.RecoveryRequiredError",
+          sessionId: sessionID,
+          pending: 1,
+        })
+      expect(requests).toHaveLength(0)
     }),
   )
 
@@ -3460,7 +3782,7 @@ describe("SessionRunnerLLM", () => {
         Effect.orDie,
       )
       let bumped = false
-      modelResolveHook = Effect.suspend(() => {
+      pricingLookupHook = Effect.suspend(() => {
         if (bumped) return Effect.void
         bumped = true
         return db
@@ -4167,8 +4489,11 @@ describe("SessionRunnerLLM", () => {
       requests.length = 0
       responseStream = undefined
       response = []
-      yield* session.resume(sessionID)
-      expect(requests[0]?.messages.map((message) => message.role)).toEqual(["user", "assistant", "tool"])
+      const recovery = yield* session.resume(sessionID).pipe(Effect.exit)
+      expect(Exit.isFailure(recovery)).toBe(true)
+      if (Exit.isFailure(recovery))
+        expect(Cause.squash(recovery.cause)).toBeInstanceOf(V2ToolEffect.RecoveryRequiredError)
+      expect(requests).toHaveLength(0)
     }),
   )
 
@@ -4632,8 +4957,8 @@ describe("SessionRunnerLLM", () => {
       yield* setup
       const session = yield* SessionV2.Service
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Fail raw stream durably" }), resume: false })
-      // Sealed mid-stream transport failures (the production shape) exhaust the runner retry
-      // budget, then propagate; the terminal projection contract below observes the failure.
+      // A sealed mid-stream transport failure propagates after one physical request; the receipt
+      // remains indeterminate while the user-facing projection records the observed failure.
       const failure = providerUnavailable()
       const sealThenFail = (wire: string) =>
         Stream.unwrap(
@@ -4651,14 +4976,10 @@ describe("SessionRunnerLLM", () => {
             return Stream.fail(failure)
           }),
         )
-      responseStreams = [
-        sealThenFail("raw-failure-1"),
-        sealThenFail("raw-failure-2"),
-        sealThenFail("raw-failure-3"),
-      ]
-      const resume = yield* session.resume(sessionID).pipe(Effect.forkChild)
-      yield* TestClock.adjust(Duration.seconds(10))
-      expect(yield* Fiber.join(resume).pipe(Effect.flip)).toBe(failure)
+      requests.length = 0
+      responseStream = sealThenFail("raw-failure-1")
+      expect(yield* session.resume(sessionID).pipe(Effect.flip)).toBe(failure)
+      expect(requests).toHaveLength(1)
       yield* replaySessionProjection(sessionID)
       expect(yield* session.context(sessionID)).toMatchObject([
         { type: "user", text: "Fail raw stream durably" },

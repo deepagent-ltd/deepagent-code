@@ -85,6 +85,8 @@ it.effect("admits one canonical activity and selection for the promoted trigger 
     expect(admission.activityId).toStartWith("activity_")
     expect(admission.selectionId).toBeTruthy()
     expect(admission.authorizationEpoch).toBe(0)
+    expect(admission.readiness).toBe("fallback")
+    expect(admission.selectedRefs).toEqual([])
 
     const second = yield* SessionRunnerCanonical.admitSelection({
       db,

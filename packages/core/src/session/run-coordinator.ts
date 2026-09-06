@@ -71,7 +71,7 @@ export const make = <Key, A, E, Reason = never>(options: {
   readonly drain: (key: Key, mode: Mode) => Effect.Effect<A, E>
   readonly onFailure?: (key: Key, cause: Cause.Cause<E>) => Effect.Effect<void>
   /** Runs once before the first drain in one process-local ownership chain. */
-  readonly started?: (key: Key) => Effect.Effect<void>
+  readonly started?: (key: Key) => Effect.Effect<void, E>
   /** Runs once after the final drain in one process-local ownership chain. */
   readonly settled?: (key: Key, exit: Exit.Exit<A, E>, reason?: Reason) => Effect.Effect<void>
 }): Effect.Effect<Coordinator<Key, A, E, Reason>, never, Scope.Scope> =>

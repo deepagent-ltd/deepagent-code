@@ -221,7 +221,10 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
     const sessionPrompt = yield* SessionPrompt.Service
     const provider = yield* Provider.Service
     // LEGACY-EXECUTION-ZERO: V2 subagent drive resolution for the HTTP panel route.
-    const { v2Session, snapshot: v2Snapshot } = yield* GoalLoopWiring.resolveV2SubagentDrive()
+    const { v2Session, snapshot: v2Snapshot } = yield* GoalLoopWiring.resolveV2SubagentDrive({
+      v2Session: yield* SessionV2.Service,
+      snapshot: yield* Snapshot.Service,
+    })
     const goals = yield* GoalManager.Service
     const database = yield* Database.Service
     const locationIdentity = yield* LocationIdentity.Service
