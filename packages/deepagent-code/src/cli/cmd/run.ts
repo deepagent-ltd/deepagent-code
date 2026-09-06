@@ -720,6 +720,11 @@ export const RunCommand = effectCmd({
         async function loop(client: OpencodeClient, events: Awaited<ReturnType<typeof sdk.event.subscribe>>) {
           const toggles = new Map<string, boolean>()
           const goalMode = args.goal === true
+          // The V2 runner never persists step-start parts, so its json stream has no
+          // turn boundaries. Consumers that group events by step_start/step_finish
+          // (pier's ATIF conversion) need one synthetic step_start per provider turn,
+          // emitted before the first content part of that turn.
+          let turnOpen = false
           // W3 gap repair (design-code-gap-audit B5): per-turn mechanism activation evidence in the
           // CLI json stream. The benchmark trajectories previously could not self-attest which
           // mechanisms fired (the wazero C2 analysis had to reverse-engineer "compact" keyword hits
@@ -800,6 +805,9 @@ export const RunCommand = effectCmd({
               }
 
               if (part.type === "tool" && (part.state.status === "completed" || part.state.status === "error")) {
+                if (!turnOpen && emit("step_start", { part: { type: "step-start" } })) {
+                  turnOpen = true
+                }
                 if (emit("tool_use", { part })) {
                   if (mechanismTrace) {
                     const meta = (part.state as { metadata?: Record<string, unknown> }).metadata ?? {}
@@ -838,10 +846,16 @@ export const RunCommand = effectCmd({
               }
 
               if (part.type === "step-start") {
-                if (emit("step_start", { part })) continue
+                if (emit("step_start", { part })) {
+                  turnOpen = true
+                  continue
+                }
               }
 
               if (part.type === "step-finish") {
+                if (!turnOpen && emit("step_start", { part: { type: "step-start" } })) {
+                  turnOpen = true
+                }
                 if (emit("step_finish", { part })) {
                   if (mechanismTrace) {
                     trace.turn++
@@ -849,11 +863,15 @@ export const RunCommand = effectCmd({
                     emitTrace({ context: { tokens: tokens ?? null } })
                     probeGraphs(client)
                   }
+                  turnOpen = false
                   continue
                 }
               }
 
               if (part.type === "text" && part.time?.end) {
+                if (!turnOpen && emit("step_start", { part: { type: "step-start" } })) {
+                  turnOpen = true
+                }
                 if (emit("text", { part })) continue
                 const text = part.text.trim()
                 if (!text) continue
@@ -867,6 +885,9 @@ export const RunCommand = effectCmd({
               }
 
               if (part.type === "reasoning" && part.time?.end && thinking) {
+                if (!turnOpen && emit("step_start", { part: { type: "step-start" } })) {
+                  turnOpen = true
+                }
                 if (emit("reasoning", { part })) continue
                 const text = part.text.trim()
                 if (!text) continue
