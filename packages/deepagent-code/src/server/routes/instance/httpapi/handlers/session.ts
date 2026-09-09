@@ -116,6 +116,18 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           error.reason + ": " + error.detail + (error.sessionID ? " (session " + error.sessionID + ")" : ""),
       })
 
+    const refuseLegacyRecoveryMutation = (sessionID: SessionID, operation: string) =>
+      flags.coreV2Only
+        ? Effect.fail(
+            new ServiceUnavailableError({
+              service: operation,
+              message:
+                `Core V2-only runtime cannot apply the legacy recovery state machine for ${sessionID}; ` +
+                "use the exact durable maintenance recovery command surface",
+            }),
+          )
+        : Effect.void
+
     const list = Effect.fn("SessionHttpApi.list")(function* (ctx: { query: typeof ListQuery.Type }) {
       return yield* session.list({
         directory: ctx.query.scope === "project" ? undefined : ctx.query.directory,
@@ -612,10 +624,16 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
       payload: typeof PromptPreparePayload.Type
     }) {
-      const queue = yield* Queue.unbounded<unknown>()
+      const queue = yield* Queue.dropping<unknown, Error | Cause.Done>(64)
       yield* preparePromptDraft({
         ctx,
-        onProgress: (preview) => Queue.offerUnsafe(queue, { type: "progress", preview }),
+        onProgress: (preview) => {
+          if (Queue.offerUnsafe(queue, { type: "progress", preview })) return
+          Queue.failCauseUnsafe(
+            queue,
+            Cause.fail(new Error("Prompt preparation consumer exceeded its 64-event buffer")),
+          )
+        },
       }).pipe(
         Effect.tap((result) => Effect.sync(() => Queue.offerUnsafe(queue, { type: "result", result }))),
         Effect.catchCause((cause) =>
@@ -802,8 +820,10 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof ContextAttemptResolvePayload.Type
     }) {
       const current = yield* requireSession(ctx.params.sessionID)
-      // W0-4 — resolveAttempt reads/writes V2 attempt/selection/recovery tables only (the V2
-      // recovery surface), never legacy rows; the firewall does not apply.
+      // This adapter creates a provider-attempt successor without the Core V2 receipt/Session-claim
+      // transaction. It remains available only to historical legacy profiles; V2 uses the exact
+      // durable maintenance recovery command authority.
+      yield* refuseLegacyRecoveryMutation(ctx.params.sessionID, "session.context-attempt-resolution")
       const resolved = yield* contextDiagnosticsSvc
         .resolveAttempt({
           session: current,
@@ -853,7 +873,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof ProviderResolutionPayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
-      // W0-4 — provider recovery resolution is a V2 recovery-surface operation (no legacy rows).
+      yield* refuseLegacyRecoveryMutation(ctx.params.sessionID, "session.provider-resolution")
       const actor = yield* getWorkspaceContext()
       return yield* providerResolutionSvc
         .resolve({ ...ctx.payload, sessionID: ctx.params.sessionID, actorID: actor.userID })
@@ -878,7 +898,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof ContinuationResolutionPayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
-      // W0-4 — continuation resolution (compact state machine) is a V2 recovery-surface op.
+      yield* refuseLegacyRecoveryMutation(ctx.params.sessionID, "session.continuation-resolution")
       const actor = yield* getWorkspaceContext()
       const result = yield* compactSvc
         .resolveContinuation({ ...ctx.payload, sessionID: ctx.params.sessionID, actorID: actor.userID })

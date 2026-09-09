@@ -1,8 +1,8 @@
 import { expect } from "bun:test"
-import { Context, Deferred, Effect, Fiber, Layer, Logger } from "effect"
+import { Cause, Context, Deferred, Effect, Fiber, Layer, Logger } from "effect"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
 import { AppLayer } from "../../src/effect/app-runtime"
-import { EffectBridge } from "@/effect/bridge"
+import { CapacityError, EffectBridge, MAX_ACTIVE_BRIDGE_FIBERS } from "@/effect/bridge"
 import { EventRouteRef, InstanceRef } from "../../src/effect/instance-ref"
 import * as EffectLogger from "@deepagent-code/core/effect/logger"
 import * as Observability from "@deepagent-code/core/effect/observability"
@@ -68,6 +68,24 @@ it.instance(
       expect(current).toBe(test.directory)
     }),
   { git: true },
+)
+
+it.live("EffectBridge bounds detached callback fibers and reuses settled capacity", () =>
+  Effect.gen(function* () {
+    const bridge = yield* EffectBridge.make()
+    const gate = yield* Deferred.make<void>()
+    const fibers = Array.from({ length: MAX_ACTIVE_BRIDGE_FIBERS }, () => bridge.fork(Deferred.await(gate)))
+    const overflow = yield* Fiber.await(bridge.fork(Effect.void))
+
+    expect(
+      overflow._tag === "Failure" &&
+        Cause.squash(overflow.cause) instanceof CapacityError,
+    ).toBe(true)
+
+    yield* Deferred.succeed(gate, undefined)
+    yield* Effect.forEach(fibers, Fiber.await, { discard: true })
+    expect(yield* Fiber.join(bridge.fork(Effect.succeed("reused")))).toBe("reused")
+  }),
 )
 
 it.instance(

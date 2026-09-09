@@ -59,3 +59,5 @@ export namespace Identifier {
     return timeBytes.toString("hex") + randomBase62(LENGTH - 12)
   }
 }
+
+export const createMonotonicID = Identifier.create

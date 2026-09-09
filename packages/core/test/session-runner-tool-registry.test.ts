@@ -463,4 +463,24 @@ describe("ToolRegistry", () => {
       expect(yield* Fiber.join(settlement)).toMatchObject({ result: { type: "text", value: "echo" } })
     }),
   )
+
+  it.effect("bounds Location tool names and per-name overlays", () =>
+    Effect.gen(function* () {
+      const service = yield* ToolRegistry.Service
+      yield* service.register(
+        Object.fromEntries(
+          Array.from({ length: ToolRegistry.MAX_LOCATION_TOOL_NAMES }, (_, index) => [`tool_${index}`, make()]),
+        ),
+      )
+      expect(yield* Effect.flip(service.register({ overflow: make() }))).toMatchObject({
+        _tag: "Tool.RegistrationError",
+      })
+
+      for (let index = 1; index < ToolRegistry.MAX_TOOL_OVERLAYS_PER_NAME; index++)
+        yield* service.register({ tool_0: make() })
+      expect(yield* Effect.flip(service.register({ tool_0: make() }))).toMatchObject({
+        _tag: "Tool.RegistrationError",
+      })
+    }),
+  )
 })

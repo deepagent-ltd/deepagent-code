@@ -42,7 +42,6 @@ beforeEach(() => {
   store = new DocumentStore(root)
 })
 afterEach(() => {
-  DeepAgentLearningLifecycleTrigger.setRuntimeObserver(undefined)
   rmSync(root, { recursive: true, force: true })
 })
 
@@ -226,12 +225,12 @@ describe("startGoal + runToCompletion", () => {
     let paused = true
     const ports: GoalDriverPorts = { ...noopPorts, shouldPause: () => Effect.succeed(paused) }
     const boundaries: DeepAgentLearningLifecycleTrigger.ObserveInput[] = []
-    DeepAgentLearningLifecycleTrigger.setRuntimeObserver({
+    const observer: DeepAgentLearningLifecycleTrigger.RuntimeObserver = {
       observe: async (input) => {
         boundaries.push(input)
         return { state: "skipped", reason: "no_exact_settled_run" }
       },
-    })
+    }
     const { handle } = await Effect.runPromise(
       startGoal({
         deps,
@@ -241,7 +240,11 @@ describe("startGoal + runToCompletion", () => {
       }),
     )
     // Paused ⇒ the driver returns "continue" without marking terminal.
-    const first = await Effect.runPromise(runToCompletion({ deps, handle, ports }))
+    const first = await Effect.runPromise(
+      runToCompletion({ deps, handle, ports }).pipe(
+        Effect.provideService(DeepAgentLearningLifecycleTrigger.CurrentRuntimeObserver, observer),
+      ),
+    )
     expect(first).toBe("continue")
     expect(boundaries).toEqual([
       expect.objectContaining({
@@ -259,7 +262,6 @@ describe("startGoal + runToCompletion", () => {
     store.update(planDocId, JSON.stringify(plan([step("a", "done")])))
     const second = await Effect.runPromise(runToCompletion({ deps, handle, ports }))
     expect(second).toBe("done")
-    DeepAgentLearningLifecycleTrigger.setRuntimeObserver(undefined)
   })
 })
 

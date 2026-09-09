@@ -158,7 +158,7 @@ describe("C0-05 requirement coverage", () => {
 describe("C7-10 HEAD reproducibility (a10 R3 close)", () => {
   test("regenerated manifest matches the HEAD-pinned digest", () => {
     const manifest = generateManifest()
-    expect(manifest.setTreeDigest).toBe("f7960437534a7a1855f21d5cc442cfa2c239dd0a9a71e88b5872d315dd071400")
-    expect(manifest.overallDigest).toBe("49c3573585251a50808498e4c9c1221acaca4ba908270d2dc7a710611ca90dbf")
+    expect(manifest.setTreeDigest).toBe("be728b8d7f7c296b02cd5c116285cf13640bf715ac5166bdc729ca388ee09bed")
+    expect(manifest.overallDigest).toBe("b3a53afc5aca579a82e35896f5d4b62944054ff47a56ee33036f3bce6a1eeeff")
   })
 })

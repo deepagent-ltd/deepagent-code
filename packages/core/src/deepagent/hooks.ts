@@ -14,11 +14,14 @@ export type HookEventName =
 export type HookEvent = { readonly name: HookEventName; readonly payload: Readonly<Record<string, unknown>> }
 export type HookDecision = { readonly decision: "allow" | "block" | "warn" | "continue"; readonly blockReason?: string }
 export type HookHandler = (e: HookEvent) => HookDecision
+export const MAX_HOOK_HANDLERS_PER_EVENT = 64
 
 export class HookPolicy {
   private handlers = new Map<HookEventName, HookHandler[]>()
   on(name: HookEventName, handler: HookHandler): this {
     const arr = this.handlers.get(name) ?? []
+    if (arr.length >= MAX_HOOK_HANDLERS_PER_EVENT)
+      throw new RangeError(`Too many ${name} hook handlers (limit ${MAX_HOOK_HANDLERS_PER_EVENT})`)
     arr.push(handler)
     this.handlers.set(name, arr)
     return this

@@ -8,6 +8,7 @@ import {
   capabilityCatalogMetrics,
   capabilityCatalogSnapshot,
   capabilityL0Line,
+  CurrentAvailableToolNames,
   CurrentGrantedPermissions,
   registerCapabilityCatalog,
   renderCapabilityCatalog,
@@ -52,6 +53,21 @@ describe("C4-02 L0 capability catalog", () => {
       expect(initialized.baseline).toContain("deepagent.code-read")
       expect(initialized.baseline).not.toContain("deepagent.code-edit")
       expect(initialized.baseline).not.toContain("deepagent.shell-execute")
+    }),
+  )
+
+  itRegistry.effect("does not advertise a capability whose entry tool is absent from this Location", () =>
+    Effect.gen(function* () {
+      const registry = yield* SystemContextRegistry.Service
+      const initialized = yield* SystemContext.initialize(yield* registry.load()).pipe(
+        Effect.provideService(
+          CurrentAvailableToolNames,
+          new Set(["read", "glob", "grep", "edit", "write", "apply_patch", "bash", "websearch", "webfetch", "skill"]),
+        ),
+      )
+
+      expect(initialized.baseline).toContain("deepagent.code-read")
+      expect(initialized.baseline).not.toContain("deepagent.context-query")
     }),
   )
 })

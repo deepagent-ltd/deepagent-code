@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync } from "node:fs"
 import { randomUUID } from "node:crypto"
+import { AsyncLocalStorage } from "node:async_hooks"
 import path from "node:path"
 import { writeFileAtomic } from "./atomic-write"
 import * as PlanStore from "./plan-store"
@@ -134,28 +135,46 @@ export type ActiveGoalPointer = {
 // tearing down the loop — the core phase stays "running" and resumes on unpause).
 export type GoalPointerPhase = "running" | "paused" | "done" | "needs_human" | "rolled_back" | "stopped"
 
-let stateDir: string | null = null
-const sessions = new Map<string, SessionRunState>()
+export type RuntimeState = {
+  stateDir: string
+  readonly sessions: Map<string, SessionRunState>
+}
+
+const runtime = new AsyncLocalStorage<RuntimeState>()
+const defaultRuntime: RuntimeState = { stateDir: "", sessions: new Map() }
+
+export const createRuntime = (dir: string): RuntimeState => {
+  const state = { stateDir: path.resolve(dir), sessions: new Map<string, SessionRunState>() }
+  mkdirSync(state.stateDir, { recursive: true })
+  return runtime.run(state, () => {
+    loadFromDisk()
+    return state
+  })
+}
+
+export const withRuntime = <A>(state: RuntimeState, operation: () => A): A => runtime.run(state, operation)
+
+const activeRuntime = (): RuntimeState => runtime.getStore() ?? defaultRuntime
 
 export const configure = (dir: string) => {
-  stateDir = dir
-  mkdirSync(dir, { recursive: true })
+  defaultRuntime.stateDir = path.resolve(dir)
+  mkdirSync(defaultRuntime.stateDir, { recursive: true })
   // I33-1: the structural plan authority (DocumentStore `type:"plan"` doc) roots under the SAME state
   // dir (<dir>/goal/<sid>/graph), so the `plan` tool (via session-state) and the goal path write the
   // same doc. Set the plan-store root here — including for tests that call configure() directly
   // (bypassing the gateway) — so every plan read/write has a configured root.
-  PlanStore.configureRoot(dir)
   // Pointing at a (new) state dir means a fresh session set: clear the in-memory map BEFORE loading, so
   // configure() reflects exactly what's on disk at `dir` and never merges stale sessions from a prior
   // dir. Production calls configure once at gateway init (nothing to lose); tests that configure a fresh
   // tmp dir per case were previously polluted by in-memory sessions surviving across cases/files
   // (loadFromDisk only ADDED entries, never reset), making id-keyed state (e.g. grace counters) leak.
-  sessions.clear()
-  loadFromDisk()
+  defaultRuntime.sessions.clear()
+  PlanStore.configureRoot(defaultRuntime.stateDir)
+  runtime.run(defaultRuntime, loadFromDisk)
 }
 
 export const getOrCreate = (sessionId: string, mode: AgentMode): SessionRunState => {
-  const existing = sessions.get(sessionId)
+  const existing = activeRuntime().sessions.get(sessionId)
   if (existing) return normalizeState(existing)
   const state: SessionRunState = {
     sessionId,
@@ -183,45 +202,45 @@ export const getOrCreate = (sessionId: string, mode: AgentMode): SessionRunState
     lastPlanGateNudgeFingerprint: null,
     packSnapshotId: null,
   }
-  sessions.set(sessionId, state)
+  activeRuntime().sessions.set(sessionId, state)
   saveToDisk()
   return state
 }
 
-export const get = (sessionId: string): SessionRunState | undefined => sessions.get(sessionId)
+export const get = (sessionId: string): SessionRunState | undefined => activeRuntime().sessions.get(sessionId)
 
 export const update = (sessionId: string, patch: Partial<SessionRunState>): SessionRunState => {
-  const state = sessions.get(sessionId)
+  const state = activeRuntime().sessions.get(sessionId)
   if (!state) throw new Error(`No DeepAgent session state for ${sessionId}`)
   Object.assign(state, patch)
-  sessions.set(sessionId, state)
+  activeRuntime().sessions.set(sessionId, state)
   saveToDisk()
   return state
 }
 
 export const recordTokenUsage = (sessionId: string, inputTokens: number, outputTokens: number): void => {
-  const state = sessions.get(sessionId)
+  const state = activeRuntime().sessions.get(sessionId)
   if (!state) return
   state.roundState = updateTokenUsage(state.roundState, inputTokens, outputTokens)
   saveToDisk()
 }
 
 export const recordCandidate = (sessionId: string, candidate: CandidateRef): void => {
-  const state = sessions.get(sessionId)
+  const state = activeRuntime().sessions.get(sessionId)
   if (!state) return
   state.roundState = addCandidate(state.roundState, candidate)
   saveToDisk()
 }
 
 export const recordDiagnosis = (sessionId: string, diagnosis: DiagnosisRef): void => {
-  const state = sessions.get(sessionId)
+  const state = activeRuntime().sessions.get(sessionId)
   if (!state) return
   state.roundState = addDiagnosis(state.roundState, diagnosis)
   saveToDisk()
 }
 
 export const recordValidation = (sessionId: string, results: ValidationResult[], output: string): void => {
-  const state = sessions.get(sessionId)
+  const state = activeRuntime().sessions.get(sessionId)
   if (!state) return
   state.lastValidationResults = results
   state.lastValidationOutput = output
@@ -239,7 +258,7 @@ export const recordValidation = (sessionId: string, results: ValidationResult[],
 }
 
 export const advanceToNextRound = (sessionId: string, decision: import("./mode").RoundDecision): void => {
-  const state = sessions.get(sessionId)
+  const state = activeRuntime().sessions.get(sessionId)
   if (!state) return
   state.roundState = advanceRound(state.roundState, decision)
   saveToDisk()
@@ -254,7 +273,12 @@ export const setPlan = (sessionId: string, plan: PlanDoc): void => {
   // without allowing the new model-tool path to bypass admission.
   const previous = getPlan(sessionId)
   PlanStore.setPlanDoc(sessionId, plan)
-  bindPlan(sessionId, plan, previous, previous == null || planProgressFingerprint(previous) !== planProgressFingerprint(plan))
+  bindPlan(
+    sessionId,
+    plan,
+    previous,
+    previous == null || planProgressFingerprint(previous) !== planProgressFingerprint(plan),
+  )
 }
 
 /** Bind a plan that has already passed PlanStore admission to the hot session latch. */
@@ -264,7 +288,7 @@ export const bindPlan = (
   previousPlan: PlanDoc | null = getPlan(sessionId),
   changed = true,
 ): void => {
-  const state = sessions.get(sessionId)
+  const state = activeRuntime().sessions.get(sessionId)
   if (!state) return
   // A semantic no-op may still be the first time a pre-existing authority is adopted into the hot
   // latch. Bind only the pointer in that case; it is not plan progress and must not clear a stale
@@ -290,7 +314,7 @@ export const bindPlan = (
 // I33-1: read the structural plan from the single DocumentStore authority (plan-store). This is an
 // in-memory shared-index lookup + JSON.parse (F30-1 Part 2), safe on the hot path (every tool call).
 export const getPlan = (sessionId: string): PlanDoc | null => {
-  const planId = sessions.get(sessionId)?.planLatch.plan_id
+  const planId = activeRuntime().sessions.get(sessionId)?.planLatch.plan_id
   if (!planId) return null
   const plan = PlanStore.getPlanDoc(sessionId)
   return plan?.plan_id === planId ? plan : null
@@ -302,30 +326,31 @@ export const getPlan = (sessionId: string): PlanDoc | null => {
 // the session has no explicit choice. This keeps the global `expertPanelDefault` setting authoritative
 // for new conversations while an explicit toggle always wins.
 export const setPanelArmed = (sessionId: string, armed: boolean): void => {
-  const state = sessions.get(sessionId)
+  const state = activeRuntime().sessions.get(sessionId)
   if (!state) return
   state.panelArmed = armed
   saveToDisk()
 }
 
 /** The raw explicit toggle, or null when the session has never toggled it. */
-export const panelArmedChoice = (sessionId: string): boolean | null => sessions.get(sessionId)?.panelArmed ?? null
+export const panelArmedChoice = (sessionId: string): boolean | null =>
+  activeRuntime().sessions.get(sessionId)?.panelArmed ?? null
 
 /**
  * Effective armed state: the explicit per-session choice if set, else the supplied global default. Pass
  * the resolved `expertPanelDefault` setting so the fallback reflects the server's configured default.
  */
 export const resolvePanelArmed = (sessionId: string, globalDefault: boolean): boolean => {
-  const choice = sessions.get(sessionId)?.panelArmed
+  const choice = activeRuntime().sessions.get(sessionId)?.panelArmed
   return choice ?? globalDefault
 }
 
 /** Back-compat: effective armed state with a hard `false` fallback (no global default available). */
-export const isPanelArmed = (sessionId: string): boolean => sessions.get(sessionId)?.panelArmed ?? false
+export const isPanelArmed = (sessionId: string): boolean => activeRuntime().sessions.get(sessionId)?.panelArmed ?? false
 
 // V4.0 — Expert Panel debate-depth preference (composer three-state control). Decoupled from arming.
 export const setPanelRounds = (sessionId: string, rounds: "single" | "multi"): void => {
-  const state = sessions.get(sessionId)
+  const state = activeRuntime().sessions.get(sessionId)
   if (!state) return
   state.panelRounds = rounds
   saveToDisk()
@@ -333,24 +358,24 @@ export const setPanelRounds = (sessionId: string, rounds: "single" | "multi"): v
 
 /** The chosen debate depth, defaulting to "single" when never explicitly chosen. */
 export const panelRounds = (sessionId: string): "single" | "multi" =>
-  sessions.get(sessionId)?.panelRounds ?? "single"
+  activeRuntime().sessions.get(sessionId)?.panelRounds ?? "single"
 
 // V3.9 §D — active-goal pointer. The GoalLoop status doc in the DocumentStore is authoritative; this
 // pointer is the session-local index the server/UI use to find and reflect the running goal.
 export const setActiveGoal = (sessionId: string, pointer: ActiveGoalPointer | null): void => {
-  const state = sessions.get(sessionId)
+  const state = activeRuntime().sessions.get(sessionId)
   if (!state) return
   state.activeGoal = pointer
   saveToDisk()
 }
 
 export const getActiveGoal = (sessionId: string): ActiveGoalPointer | null =>
-  sessions.get(sessionId)?.activeGoal ?? null
+  activeRuntime().sessions.get(sessionId)?.activeGoal ?? null
 
 // Patch just the phase of the active-goal pointer (driver transitions running↔paused, terminal states).
 // No-op when there is no active goal (a stale transition after stop must not resurrect a pointer).
 export const setActiveGoalPhase = (sessionId: string, phase: GoalPointerPhase): void => {
-  const state = sessions.get(sessionId)
+  const state = activeRuntime().sessions.get(sessionId)
   if (!state || state.activeGoal == null) return
   state.activeGoal = { ...state.activeGoal, phase }
   saveToDisk()
@@ -360,7 +385,7 @@ export const setActiveGoalPhase = (sessionId: string, phase: GoalPointerPhase): 
 // executes. No-op when there is no plan (the nudge only applies once the model has a plan to report
 // against).
 export const recordMutation = (sessionId: string): void => {
-  const state = sessions.get(sessionId)
+  const state = activeRuntime().sessions.get(sessionId)
   // I33-1: the nudge only applies once a plan exists — the latch's plan_id is the hot-path pointer
   // (set by setPlan), so we gate on it instead of a stored body.
   if (!state || state.planLatch.plan_id == null) return
@@ -368,22 +393,18 @@ export const recordMutation = (sessionId: string): void => {
   saveToDisk()
 }
 
-export const mutationsSinceReport = (sessionId: string): number => sessions.get(sessionId)?.mutationsSinceReport ?? 0
+export const mutationsSinceReport = (sessionId: string): number =>
+  activeRuntime().sessions.get(sessionId)?.mutationsSinceReport ?? 0
 
 export const validationPassedSinceReport = (sessionId: string): boolean =>
-  sessions.get(sessionId)?.validationPassedSinceReport ?? false
+  activeRuntime().sessions.get(sessionId)?.validationPassedSinceReport ?? false
 
 // Round-context suppression helpers (v4.0.4 → upgraded PR-4)
 // All callers should use suppressValidation / unsuppressValidation / getSuppressedValidations.
 // getSuppressedFingerprints is a backward-compat shim for request.ts transition callers.
 
-export const suppressValidation = (
-  sessionId: string,
-  command: string,
-  exitCode: number,
-  reason: string,
-): void => {
-  const state = sessions.get(sessionId)
+export const suppressValidation = (sessionId: string, command: string, exitCode: number, reason: string): void => {
+  const state = activeRuntime().sessions.get(sessionId)
   if (!state) return
   const fingerprint = `${command} ${exitCode}`
   const existing = state.suppressedValidations.findIndex((v) => v.fingerprint === fingerprint)
@@ -402,7 +423,7 @@ export const suppressValidation = (
 }
 
 export const unsuppressValidation = (sessionId: string, fingerprint: string): void => {
-  const state = sessions.get(sessionId)
+  const state = activeRuntime().sessions.get(sessionId)
   if (!state) return
   const next = state.suppressedValidations.filter((v) => v.fingerprint !== fingerprint)
   if (next.length === state.suppressedValidations.length) return
@@ -411,7 +432,7 @@ export const unsuppressValidation = (sessionId: string, fingerprint: string): vo
 }
 
 export const getSuppressedValidations = (sessionId: string): readonly SuppressedValidation[] =>
-  sessions.get(sessionId)?.suppressedValidations ?? []
+  activeRuntime().sessions.get(sessionId)?.suppressedValidations ?? []
 
 /** Backward-compat shim: returns only the fingerprint strings. Used by request.ts during migration. */
 export const getSuppressedFingerprints = (sessionId: string): readonly string[] =>
@@ -421,7 +442,7 @@ export const isFingerprintSuppressed = (sessionId: string, fingerprint: string):
   getSuppressedValidations(sessionId).some((v) => v.fingerprint === fingerprint)
 
 export const clearSuppressedValidations = (sessionId: string): void => {
-  const state = sessions.get(sessionId)
+  const state = activeRuntime().sessions.get(sessionId)
   if (!state || state.suppressedValidations.length === 0) return
   state.suppressedValidations = []
   saveToDisk()
@@ -442,7 +463,7 @@ export const unsuppressFingerprint = (sessionId: string, fingerprint: string): v
 // U10 / P2-E: a compact summary of the latest validation run, used as step evidence when a step
 // moves to `done`. Null when nothing has been validated yet.
 export const lastValidationSummary = (sessionId: string): string | null => {
-  const state = sessions.get(sessionId)
+  const state = activeRuntime().sessions.get(sessionId)
   if (!state || state.lastValidationResults.length === 0) return null
   const results = state.lastValidationResults
   const passed = results.filter((r) => r.passed).length
@@ -452,7 +473,7 @@ export const lastValidationSummary = (sessionId: string): string | null => {
 
 // U1: flip the latch to stale from a RUNTIME signal (never from the model). Idempotent on reason.
 export const markPlanStale = (sessionId: string, reason: StaleReason): void => {
-  const state = sessions.get(sessionId)
+  const state = activeRuntime().sessions.get(sessionId)
   if (!state) return
   const next = markStale(state.planLatch, reason)
   if (next === state.planLatch) return
@@ -475,11 +496,8 @@ export type UserMessageObservation = "initial" | "same" | "new" | "reopened"
  * "reopened": different ID after completion/failure; starts a fresh activity while retaining
  *   session-scoped preferences and the versioned plan history.
  */
-export const observeUserAdmission = (
-  sessionId: string,
-  admissionMessageId: string,
-): UserMessageObservation => {
-  const state = sessions.get(sessionId)
+export const observeUserAdmission = (sessionId: string, admissionMessageId: string): UserMessageObservation => {
+  const state = activeRuntime().sessions.get(sessionId)
   if (!state) return "initial"
   if (state.lastAdmissionUserMessageId === undefined) {
     state.lastAdmissionUserMessageId = admissionMessageId
@@ -510,14 +528,14 @@ export const observeUserAdmission = (
 
 // U1: clear the latch directly (used by tests / explicit replan); setPlan is the normal path.
 export const clearPlanStale = (sessionId: string): void => {
-  const state = sessions.get(sessionId)
+  const state = activeRuntime().sessions.get(sessionId)
   if (!state) return
   state.planLatch = clearStale(state.planLatch)
   saveToDisk()
 }
 
 export const claimPlanGateNudge = (sessionId: string, fingerprint: string): boolean => {
-  const state = sessions.get(sessionId)
+  const state = activeRuntime().sessions.get(sessionId)
   if (!state || state.lastPlanGateNudgeFingerprint === fingerprint) return false
   state.lastPlanGateNudgeFingerprint = fingerprint
   saveToDisk()
@@ -527,7 +545,7 @@ export const claimPlanGateNudge = (sessionId: string, fingerprint: string): bool
 // U1 anti-deadlock: record that the plan gate just blocked a mutating tool on a stale plan. Advances
 // the runtime grace counter so shouldGraceRelease can fire without the model cooperating.
 export const recordPlanGateBlock = (sessionId: string): void => {
-  const state = sessions.get(sessionId)
+  const state = activeRuntime().sessions.get(sessionId)
   if (!state) return
   state.planLatch = recordGateBlock(state.planLatch)
   saveToDisk()
@@ -536,7 +554,7 @@ export const recordPlanGateBlock = (sessionId: string): void => {
 // U1 anti-deadlock: a mutating tool actually executed (forward progress), so reset the grace counter.
 // No-op when already zero to avoid churning disk writes on the hot path.
 export const resetPlanGateBlocks = (sessionId: string): void => {
-  const state = sessions.get(sessionId)
+  const state = activeRuntime().sessions.get(sessionId)
   if (!state) return
   const next = resetGateBlocks(state.planLatch)
   if (next === state.planLatch) return
@@ -544,10 +562,11 @@ export const resetPlanGateBlocks = (sessionId: string): void => {
   saveToDisk()
 }
 
-export const planLatch = (sessionId: string): PlanLatchState | undefined => sessions.get(sessionId)?.planLatch
+export const planLatch = (sessionId: string): PlanLatchState | undefined =>
+  activeRuntime().sessions.get(sessionId)?.planLatch
 
 export const complete = (sessionId: string): void => {
-  const state = sessions.get(sessionId)
+  const state = activeRuntime().sessions.get(sessionId)
   if (!state) return
   state.roundState = { ...state.roundState, phase: "completed" }
   state.completedAt = new Date().toISOString()
@@ -555,7 +574,7 @@ export const complete = (sessionId: string): void => {
 }
 
 export const fail = (sessionId: string): void => {
-  const state = sessions.get(sessionId)
+  const state = activeRuntime().sessions.get(sessionId)
   if (!state) return
   state.roundState = { ...state.roundState, phase: "failed" }
   state.completedAt = new Date().toISOString()
@@ -569,23 +588,23 @@ export const isBudgetExhausted = (sessionId: string): boolean => {
 }
 
 export const budgetStatus = (sessionId: string): BudgetCheck | undefined => {
-  const state = sessions.get(sessionId)
+  const state = activeRuntime().sessions.get(sessionId)
   if (!state) return
   return budgetCheck(state.roundState, state.budget)
 }
 
 export const cleanup = (sessionId: string): void => {
-  sessions.delete(sessionId)
+  activeRuntime().sessions.delete(sessionId)
   saveToDisk()
 }
 
-export const allSessions = (): ReadonlyMap<string, SessionRunState> => sessions
+export const allSessions = (): ReadonlyMap<string, SessionRunState> => activeRuntime().sessions
 
 export const pruneCompleted = (maxAge_ms = 24 * 60 * 60 * 1000): void => {
   const now = Date.now()
-  for (const [id, state] of sessions) {
+  for (const [id, state] of activeRuntime().sessions) {
     if (state.completedAt && now - new Date(state.completedAt).getTime() > maxAge_ms) {
-      sessions.delete(id)
+      activeRuntime().sessions.delete(id)
     }
   }
   saveToDisk()
@@ -595,24 +614,15 @@ export const pruneCompleted = (maxAge_ms = 24 * 60 * 60 * 1000): void => {
 // heuristics only — a 10KB cap prevents one large paste from bloating sessions.json by ~800KB.
 const MAX_USER_REQUEST_BYTES = 10_000
 
-// PERF: debounce timer handle — collapses many back-to-back saveToDisk() calls (e.g. per streaming
-// delta) into one write at the end of the current JS task. setImmediate fires after I/O callbacks
-// so the write never races with in-progress DB operations.
-let _savePending = false
-
+// This is runtime authority, so each mutation is atomically durable before it returns. A deferred
+// process-global debounce can write through the wrong root after another runtime starts or lose the
+// final mutation on shutdown.
 function saveToDisk() {
-  if (!stateDir) return
-  if (_savePending) return
-  _savePending = true
-  // Schedule the actual write after the current synchronous work finishes. This collapses N
-  // rapid-fire calls (tool result ingestion, round-control advances, plan latch flips …) into a
-  // single atomic write per event-loop turn.
-  setImmediate(flushToDisk)
+  flushToDisk(activeRuntime())
 }
 
-function flushToDisk() {
-  _savePending = false
-  if (!stateDir) return
+function flushToDisk(state: RuntimeState) {
+  if (!state.stateDir) return
   // P2-G: atomic rewrite so a crash can't truncate sessions.json. P2-D: surface write failures to
   // stderr instead of silently dropping run state (a lost session-state write is a real data loss,
   // not something to swallow). Still non-throwing: persistence failure must not crash the turn.
@@ -620,8 +630,8 @@ function flushToDisk() {
     // Build a serialization-safe snapshot: truncate oversized fields so one large session
     // (e.g. a user pasting a multi-hundred-KB document) does not inflate the whole file.
     const data: Record<string, unknown> = {}
-    for (const [id, state] of sessions) {
-      const serialized: Record<string, unknown> = { ...state }
+    for (const [id, session] of state.sessions) {
+      const serialized: Record<string, unknown> = { ...session }
       if (typeof serialized.userRequest === "string" && serialized.userRequest.length > MAX_USER_REQUEST_BYTES) {
         serialized.userRequest = serialized.userRequest.slice(0, MAX_USER_REQUEST_BYTES)
       }
@@ -629,7 +639,7 @@ function flushToDisk() {
     }
     // Compact JSON (no pretty-print): sessions.json is machine-read only; the 2-space indent
     // was adding ~25% bloat to a file that is synchronously read and written on every state change.
-    writeFileAtomic(path.join(stateDir, "sessions.json"), JSON.stringify(data))
+    writeFileAtomic(path.join(state.stateDir, "sessions.json"), JSON.stringify(data))
   } catch (error) {
     console.error("deepagent session-state: failed to persist sessions.json", error)
   }
@@ -693,14 +703,15 @@ function normalizeState(state: SessionRunState): SessionRunState {
   // the `...state` spread above. Once its contents are migrated into `suppressedValidations`, drop the
   // orphan so it is not re-persisted forever as dead data on the next saveToDisk().
   delete (normalized as unknown as Record<string, unknown>).suppressedFingerprints
-  sessions.set(state.sessionId, normalized)
+  activeRuntime().sessions.set(state.sessionId, normalized)
   return normalized
 }
 
 function loadFromDisk() {
-  if (!stateDir) return
+  const state = activeRuntime()
+  if (!state.stateDir) return
   try {
-    const content = readFileSync(path.join(stateDir, "sessions.json"), "utf8")
+    const content = readFileSync(path.join(state.stateDir, "sessions.json"), "utf8")
     // Legacy sessions.json (pre-I33-1) carried the structural plan body on `state.plan`. Read it as an
     // optional field so we can migrate it into the DocumentStore authority, then drop it from state.
     const data = JSON.parse(content) as Record<string, SessionRunState & { plan?: PlanDoc | null }>
@@ -752,12 +763,16 @@ function loadFromDisk() {
           writeLegacyPlanMigrationDiagnostic(id, state.plan, error)
         }
       }
-      sessions.set(id, normalizeState(state))
+      activeRuntime().sessions.set(id, normalizeState(state))
     }
   } catch {}
 }
 
-const writeLegacyPlanMigrationDiagnostic = (sessionId: string, plan: PlanDoc | null | undefined, error: unknown): void => {
+const writeLegacyPlanMigrationDiagnostic = (
+  sessionId: string,
+  plan: PlanDoc | null | undefined,
+  error: unknown,
+): void => {
   const code = error instanceof PlanValidationError ? error.code : "legacy_plan_migration_failed"
   const message = error instanceof Error ? error.message : String(error)
   const store = DocumentStore.shared(PlanStore.planStoreRoot(sessionId))

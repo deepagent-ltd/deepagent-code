@@ -20,6 +20,7 @@ const levelPriority: Record<Level, number> = {
   ERROR: 3,
 }
 const keep = 10
+export const MAX_LOGGERS = 128
 const initializedRunID = "DEEPAGENT_CODE_LOG_INITIALIZED_RUN_ID"
 
 let level: Level = "INFO"
@@ -61,13 +62,29 @@ export function file() {
 export function getLevel(): Level {
   return level
 }
-let write = (msg: any) => {
+const writeStderr = (msg: any) => {
   process.stderr.write(msg)
   return msg.length
 }
+let write = writeStderr
+let closeWrite: (() => Promise<void>) | undefined
+let initialization = Promise.resolve()
 
-export async function init(options: Options) {
+export function init(options: Options) {
+  const next = initialization.then(() => initialize(options))
+  initialization = next.then(
+    () => undefined,
+    () => undefined,
+  )
+  return next
+}
+
+async function initialize(options: Options) {
   if (options.level) level = options.level
+  await closeWrite?.()
+  closeWrite = undefined
+  write = writeStderr
+  logpath = ""
   void cleanup(Global.Path.log)
   if (options.print) return
   logpath = path.join(
@@ -79,6 +96,7 @@ export async function init(options: Options) {
   if (shouldTruncate) await fs.truncate(logpath).catch(() => {})
   if (options.dev && runID) process.env[initializedRunID] = runID
   const stream = createWriteStream(logpath, { flags: "a" })
+  closeWrite = () => new Promise((resolve) => stream.end(resolve))
   write = async (msg: any) => {
     return new Promise((resolve, reject) => {
       stream.write(msg, (err) => {
@@ -114,12 +132,17 @@ function formatError(error: Error, depth = 0): string {
 
 let last = Date.now()
 export function create(tags?: Record<string, any>) {
-  tags = tags || {}
+  return createLogger(tags ?? {}, true)
+}
 
+function createLogger(tags: Record<string, any>, cache: boolean) {
   const service = tags["service"]
-  if (service && typeof service === "string") {
+  const cacheable = cache && typeof service === "string" && Object.keys(tags).length === 1
+  if (cacheable) {
     const cached = loggers.get(service)
     if (cached) {
+      loggers.delete(service)
+      loggers.set(service, cached)
       return cached
     }
   }
@@ -164,11 +187,10 @@ export function create(tags?: Record<string, any>) {
       }
     },
     tag(key: string, value: string) {
-      if (tags) tags[key] = value
-      return result
+      return createLogger({ ...tags, [key]: value }, false)
     },
     clone() {
-      return create({ ...tags })
+      return createLogger({ ...tags }, false)
     },
     time(message: string, extra?: Record<string, any>) {
       const now = Date.now()
@@ -189,7 +211,8 @@ export function create(tags?: Record<string, any>) {
     },
   }
 
-  if (service && typeof service === "string") {
+  if (cacheable) {
+    if (loggers.size >= MAX_LOGGERS) loggers.delete(loggers.keys().next().value!)
     loggers.set(service, result)
   }
 

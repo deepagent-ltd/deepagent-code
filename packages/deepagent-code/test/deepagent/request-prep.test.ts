@@ -89,6 +89,7 @@ async function prepare(
     federatedProjection?: boolean
     releasedKnowledgeSelection?: DeepAgentReleasedSnapshot.Selection
     assembledRequestFingerprint?: boolean
+    tools?: Record<string, any>
   } = {},
 ) {
   return Effect.runPromise(
@@ -105,7 +106,7 @@ async function prepare(
       } as any,
       system: ["You are deepagent-code, an interactive CLI tool that helps users with software engineering tasks."],
       messages: options.messages ?? [{ role: "user", content: "hello" }],
-      tools: {},
+      tools: options.tools ?? {},
       provider: { id: providerID, options: {} } as any,
       auth: undefined,
       plugin,
@@ -422,9 +423,14 @@ describe("DeepAgent request prep", () => {
   })
 
   // L2 (v3.8.0 §L2): the orchestration guidance section is injected on BOTH assembly paths.
+  // RI-07: the DeepAgent path gates the section on a materialized `task` tool (prompt-policy.ts) —
+  // guidance that names a tool must never ship when the tool itself is absent, so the fixture
+  // provides one.
   test("injects the orchestration section on the DeepAgent path (high mode)", async () => {
     AgentGateway.configure({ enabled: true, agentMode: "high" })
-    const prepared = await prepare("deepseek", "deepseek-v4-flash", "ses_orch_deepagent_high")
+    const prepared = await prepare("deepseek", "deepseek-v4-flash", "ses_orch_deepagent_high", {
+      tools: { task: {} },
+    })
     expect(prepared.system[0]).toContain("多-Agent 编排")
     expect(prepared.system[0]).toContain("扇出判据")
     AgentGateway.configure({ enabled: false, agentMode: "high" })

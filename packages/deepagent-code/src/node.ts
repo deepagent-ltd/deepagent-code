@@ -1,9 +1,7 @@
 import { applyRuntimeDefaults, RUNTIME_DEFAULTS_SNAPSHOT_ENV, runtimeDefaultsEnvSnapshot } from "./runtime-defaults"
 
-// W0.1 — the desktop-sidecar entry applies the same production runtime defaults as the CLI entry
-// (src/index.ts) at module load, before the desktop sidecar calls Server.listen. The only reads of
-// these flags (RuntimeFlags config, EventV2Bridge, im.ts gate) happen at request/runtime
-// boundaries, never during this module graph's import evaluation, so this placement is safe.
+// Normalize the environment inherited by subprocesses and compatibility readers. Core V2 feature
+// registries capture immutable snapshots whose unset defaults match this canonical table.
 applyRuntimeDefaults()
 
 if (process.env[RUNTIME_DEFAULTS_SNAPSHOT_ENV] === "1") {

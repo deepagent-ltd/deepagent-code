@@ -129,3 +129,14 @@ void Log.init({
 })
 
 initProjectors()
+
+// Arm the dev V2-owner chain process-wide, after the environment is fully set up but before any
+// test file loads. Context.Reference defaults (CurrentOwnerAuthorizationPublicKey,
+// CurrentOwnerCampaign) cache process-wide on first access, so the FIRST evaluation must already
+// see the armed env — otherwise an unarmed file pins the production key / installation campaign
+// and every owner-gated prompt route in the server suites fails closed (503 v2_owner_unavailable)
+// depending on test-file order. The keypair is the shared process singleton (see
+// test/lib/v2-owner.ts), so the mint and the verifier always agree.
+const { ownerDevKeypair } = await import("./lib/v2-owner")
+process.env["DEEPAGENT_CODE_V2_OWNER_DEV_MINT"] = "1"
+process.env["DEEPAGENT_CODE_V2_OWNER_AUTHORIZATION_PUBLIC_KEY"] = ownerDevKeypair().publicKeyPem

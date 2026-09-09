@@ -8,26 +8,30 @@
  * files cannot enter the denominator (anti-pollution guarantee).
  */
 import ts from "typescript"
-import { existsSync, readFileSync } from "node:fs"
+import { existsSync, readFileSync, readdirSync } from "node:fs"
 import type { HandlerSite, Requirement } from "./types"
 import { declarationNodes, moduleAnchorLine, parseModule, refsInSubtree, rootRepoPath } from "./ast"
 import { DELEGATION_CLIENT_BINDINGS, DELEGATION_SPAWN_BINDINGS, PORTS } from "./authority"
 
 const repoRoot = () => rootRepoPath()
 
-const srcRoots = () => [
-  `${repoRoot()}/packages/core/src`,
-  `${repoRoot()}/packages/deepagent-code/src`,
-  `${repoRoot()}/packages/server/src`,
-  `${repoRoot()}/packages/cli/src`,
-  `${repoRoot()}/packages/desktop/src`,
-  `${repoRoot()}/packages/sdk/js/src`,
-]
+const sourceRootsBelow = (directory: string, depth = 0): readonly string[] =>
+  readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    if (!entry.isDirectory() || entry.name === "node_modules" || entry.name.startsWith(".")) return []
+    const child = `${directory}/${entry.name}`
+    if (entry.name === "src") return [child]
+    return depth < 3 ? sourceRootsBelow(child, depth + 1) : []
+  })
+
+// The caller denominator covers every runnable workspace package, so its import graph must use the
+// same universe. A hand-written root list previously excluded packages/function and made a real
+// ShareStore reach impossible to prove.
+const srcRoots = sourceRootsBelow(`${repoRoot()}/packages`)
 
 const normalize = (p: string) => p.replace(/\.js$/, "").replace(/\.tsx$/, ".ts") + (/\.ts$/.test(p.replace(/\.js$/, "")) ? "" : ".ts")
 
 function insideSrcRoots(path: string): boolean {
-  return srcRoots().some((root) => path.startsWith(`${root}/`))
+  return srcRoots.some((root) => path.startsWith(`${root}/`))
 }
 
 /** Resolve a module specifier relative to the importing file. Undefined when external/unresolvable. */
@@ -305,144 +309,37 @@ export type VerificationScope = {
 }
 
 /**
- * Production-package Core-V2-only profile proof, checked once and cached:
- *   1. the forced-version predicate EXISTS in runtime-flags.ts and its RegExp literal is
- *      extracted from the source itself (no duplicated copy that could silently diverge);
- *   2. that predicate is wired to the injected InstallationVersion (forcedByVersion);
- *   3. the flag folds `forcedByVersion || explicit`, so an explicit override cannot unforce;
- *   4. the production bundler injects DEEPAGENT_CODE_VERSION from the release Script.version;
- *   5. this candidate's frozen package identity (packages/deepagent-code/package.json,
- *      structured release config) satisfies the source-derived regex.
+ * Production Core-V2-only profile proof, checked once and cached. V2 is now an invariant rather
+ * than a release-version cohort: the RuntimeFlags schema must assign `coreV2Only` directly from
+ * `Config.succeed(true)`. An environment reader, version predicate, or boolean fold would restore a
+ * hidden selector for the legacy execution authority and therefore fails this proof.
  */
 type ProfileProof = { readonly ok: boolean; readonly evidence: readonly VerifiedHit[] }
-
-const FORCED_PREDICATE_DECL = "isCoreV2OnlyVersion"
-
-function propertyAssignmentLine(mod: ReturnType<typeof parseModule>, propertyName: string): number | undefined {
-  const sf = mod.sourceFile
-  let found: number | undefined
-  const visit = (node: ts.Node): void => {
-    if (found) return
-    if (ts.isPropertyAssignment(node)) {
-      const name = ts.isIdentifier(node.name) || ts.isStringLiteral(node.name) ? node.name.text : undefined
-      if (name === propertyName) {
-        found = sf.getLineAndCharacterOfPosition(node.getStart()).line + 1
-        return
-      }
-    }
-    ts.forEachChild(node, visit)
-  }
-  visit(sf)
-  return found
-}
-
-function chainContainsText(mod: ReturnType<typeof parseModule>, node: ts.Node, text: string): boolean {
-  let hit = false
-  const visit = (inner: ts.Node): void => {
-    if (hit) return
-    if (ts.isPropertyAccessExpression(inner) && inner.getText(mod.sourceFile) === text) hit = true
-    ts.forEachChild(inner, visit)
-  }
-  visit(node)
-  return hit
-}
 
 let cachedProfile: ProfileProof | undefined
 
 export function verifyProductionProfile(): ProfileProof {
   if (cachedProfile) return cachedProfile
   const flagsMod = parseModule(`${rootRepoPath()}/packages/deepagent-code/src/effect/runtime-flags.ts`)
-  const buildMod = parseModule(`${rootRepoPath()}/packages/deepagent-code/script/build.ts`)
   const evidence: VerifiedHit[] = []
-
-  // 1. Forced-version predicate declaration carries the authority RegExp literal itself.
-  let regexPattern: string | undefined
-  let predicateLine: number | undefined
-  const findPredicate = (node: ts.Node): void => {
-    if (predicateLine !== undefined) return
-    if (
-      ts.isVariableStatement(node) &&
-      node.declarationList.declarations.some(
-        (decl) => ts.isIdentifier(decl.name) && decl.name.text === FORCED_PREDICATE_DECL && decl.initializer,
-      )
-    ) {
-      const decl = node.declarationList.declarations.find(
-        (candidate) => ts.isIdentifier(candidate.name) && candidate.name.text === FORCED_PREDICATE_DECL,
-      )!
-      predicateLine = flagsMod.sourceFile.getLineAndCharacterOfPosition(node.getStart()).line + 1
-      const visit = (inner: ts.Node): void => {
-        if (regexPattern) return
-        if (ts.isRegularExpressionLiteral(inner)) regexPattern = inner.text.slice(1, inner.text.lastIndexOf("/"))
-        ts.forEachChild(inner, visit)
-      }
-      visit(decl.initializer!)
+  let invariantLine: number | undefined
+  const visit = (node: ts.Node): void => {
+    if (invariantLine !== undefined || !ts.isPropertyAssignment(node)) {
+      ts.forEachChild(node, visit)
       return
     }
-    ts.forEachChild(node, findPredicate)
+    const name = ts.isIdentifier(node.name) || ts.isStringLiteral(node.name) ? node.name.text : undefined
+    if (name !== "coreV2Only" || !ts.isCallExpression(node.initializer)) return
+    if (!ts.isPropertyAccessExpression(node.initializer.expression)) return
+    if (node.initializer.expression.getText(flagsMod.sourceFile) !== "Config.succeed") return
+    if (node.initializer.arguments.length !== 1 || node.initializer.arguments[0]?.kind !== ts.SyntaxKind.TrueKeyword) return
+    invariantLine = flagsMod.sourceFile.getLineAndCharacterOfPosition(node.getStart()).line + 1
   }
-  findPredicate(flagsMod.sourceFile)
-
-  const wiringLine = propertyAssignmentLine(flagsMod, "forcedByVersion")
-  const definesInjection = (() => {
-    const sf = buildMod.sourceFile
-    let ok = false
-    const visit = (node: ts.Node): void => {
-      if (ok) return
-      if (ts.isPropertyAssignment(node)) {
-        const name = ts.isIdentifier(node.name) ? node.name.text : undefined
-        if (name === "DEEPAGENT_CODE_VERSION") {
-          ok = chainContainsText(buildMod, node.initializer, "Script.version")
-          return
-        }
-      }
-      ts.forEachChild(node, visit)
-    }
-    visit(sf)
-    return ok
-  })()
-  const injectionLine = definesInjection
-    ? propertyAssignmentLine(buildMod, "DEEPAGENT_CODE_VERSION")
-    : undefined
-
-  // 3. Forced bit wins over the explicit opt-out: `forcedByVersion || explicit`.
-  const foldLines: number[] = []
-  const visitFold = (node: ts.Node): void => {
-    if (
-      ts.isBinaryExpression(node) &&
-      node.operatorToken.kind === ts.SyntaxKind.BarBarToken &&
-      chainContainsText(flagsMod, node.left, "value.forcedByVersion") &&
-      chainContainsText(flagsMod, node.right, "value.explicit")
-    ) {
-      foldLines.push(flagsMod.sourceFile.getLineAndCharacterOfPosition(node.getStart()).line + 1)
-    }
-    ts.forEachChild(node, visitFold)
+  visit(flagsMod.sourceFile)
+  if (invariantLine !== undefined) {
+    evidence.push({ marker: "core-v2-only-invariant", file: flagsMod.file, line: invariantLine })
   }
-  visitFold(flagsMod.sourceFile)
-
-  // 5. Frozen package identity satisfies the source-derived regex (structured release config).
-  let identityMatches = false
-  try {
-    const pkg = JSON.parse(readFileSync(`${rootRepoPath()}/packages/deepagent-code/package.json`, "utf8"))
-    identityMatches =
-      typeof pkg.version === "string" &&
-      typeof regexPattern === "string" &&
-      new RegExp(regexPattern).test(pkg.version)
-  } catch {
-    identityMatches = false
-  }
-
-  const anchorsOk =
-    predicateLine !== undefined &&
-    wiringLine !== undefined &&
-    foldLines.length > 0 &&
-    injectionLine !== undefined
-  if (anchorsOk) {
-    evidence.push({ marker: "core-v2-only-predicate", file: flagsMod.file, line: predicateLine! })
-    evidence.push({ marker: "core-v2-only-wiring", file: flagsMod.file, line: wiringLine! })
-    evidence.push({ marker: "core-v2-only-fold", file: flagsMod.file, line: Math.min(...foldLines) })
-    evidence.push({ marker: "core-v2-only-define-injection", file: buildMod.file, line: injectionLine! })
-  }
-  const proof: ProfileProof = { ok: anchorsOk && identityMatches, evidence }
+  const proof: ProfileProof = { ok: invariantLine !== undefined, evidence }
   cachedProfile = proof
   return proof
 }

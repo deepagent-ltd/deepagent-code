@@ -113,6 +113,7 @@ const seedIndeterminateTurn = (suffix: string, seq = 1) =>
         directory: "/project",
         title: "resolution",
         version: "test",
+        time_suspended: 105,
       })
       .onConflictDoNothing()
       .run()
@@ -229,8 +230,11 @@ it.effect("bridges a resolution exactly once and rejects mismatched bindings", (
   Effect.gen(function* () {
     const seeded = yield* seedIndeterminateTurn("bridge")
     const attemptsService = yield* SessionProviderAttempt.Service
+    const before = yield* attemptsService.get(seeded.attemptId)
     const resolved = yield* resolveAbandoned(seeded.attemptId)
     expect(resolved.attempt.state).toBe("resolved_abandoned")
+    expect(resolved.attempt.attemptVersion).toBe((before?.attemptVersion ?? -1) + 1)
+    expect((yield* attemptsService.get(seeded.attemptId))?.attemptVersion).toBe(resolved.attempt.attemptVersion)
 
     yield* attemptsService.bridgeResolution({
       resolutionId: resolved.resolutionId,

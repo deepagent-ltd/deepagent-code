@@ -97,6 +97,7 @@ const baseState = (input: Partial<State> = {}) =>
     session_diff: {},
     todo: {},
     permission: {},
+    permission_v2: {},
     question: {},
     mcp: {},
     lsp: [],
@@ -789,6 +790,104 @@ describe("applyDirectoryEvent", () => {
       loadLsp() {},
     })
     expect(store.question[sessionID]?.map((x) => x.id)).toEqual(["q_1", "q_3"])
+  })
+
+  test("normalizes permission.v2.asked into the legacy shape and tracks provenance", () => {
+    const sessionID = "ses_1"
+    const [store, setStore] = createStore(
+      baseState({
+        permission: { [sessionID]: [permissionRequest("perm_1", sessionID)] },
+      }),
+    )
+
+    applyDirectoryEvent({
+      event: {
+        type: "permission.v2.asked",
+        properties: {
+          id: "perm_2",
+          sessionID,
+          action: "bash",
+          resources: ["git status"],
+          save: ["git *"],
+          metadata: { reason: "test" },
+          source: { type: "tool", messageID: "msg_1", callID: "call_1" },
+        },
+      },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+    })
+
+    expect(store.permission[sessionID]?.map((x) => x.id)).toEqual(["perm_1", "perm_2"])
+    expect(store.permission[sessionID]?.find((x) => x.id === "perm_2")).toMatchObject({
+      sessionID,
+      permission: "bash",
+      patterns: ["git status"],
+      always: ["git *"],
+      metadata: { reason: "test" },
+      tool: { messageID: "msg_1", callID: "call_1" },
+    })
+    expect(store.permission_v2[sessionID]).toEqual({ perm_2: true })
+
+    applyDirectoryEvent({
+      event: {
+        type: "permission.v2.asked",
+        properties: { id: "perm_2", sessionID, action: "edit", resources: ["a.ts"] },
+      },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+    })
+    const updated = store.permission[sessionID]?.find((x) => x.id === "perm_2")
+    expect(updated?.permission).toBe("edit")
+    expect(updated?.patterns).toEqual(["a.ts"])
+    expect(updated?.always).toEqual([])
+    expect(updated?.tool).toBeUndefined()
+    expect(store.permission_v2[sessionID]?.perm_2).toBe(true)
+
+    applyDirectoryEvent({
+      event: { type: "permission.v2.replied", properties: { sessionID, requestID: "perm_2" } },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+    })
+    expect(store.permission[sessionID]?.map((x) => x.id)).toEqual(["perm_1"])
+    expect(store.permission_v2[sessionID]).toBeUndefined()
+  })
+
+  test("clears v2 provenance on a legacy permission.replied too", () => {
+    const sessionID = "ses_1"
+    const [store, setStore] = createStore(baseState())
+
+    applyDirectoryEvent({
+      event: {
+        type: "permission.v2.asked",
+        properties: { id: "perm_1", sessionID, action: "bash", resources: ["*"] },
+      },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+    })
+    expect(store.permission_v2[sessionID]).toEqual({ perm_1: true })
+
+    applyDirectoryEvent({
+      event: { type: "permission.replied", properties: { sessionID, requestID: "perm_1" } },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+    })
+    expect(store.permission[sessionID]?.map((x) => x.id)).toEqual([])
+    expect(store.permission_v2[sessionID]).toBeUndefined()
   })
 
   test("updates vcs branch in store and cache", () => {

@@ -288,6 +288,8 @@ import type {
   MaintenanceBackupVerifyResponses,
   MaintenanceBootstrapStatusErrors,
   MaintenanceBootstrapStatusResponses,
+  MaintenanceCompositionDigestErrors,
+  MaintenanceCompositionDigestResponses,
   MaintenanceRecoveryCommandErrors,
   MaintenanceRecoveryCommandGetErrors,
   MaintenanceRecoveryCommandGetResponses,
@@ -516,10 +518,6 @@ import type {
   TuiAppendPromptResponses,
   TuiClearPromptErrors,
   TuiClearPromptResponses,
-  TuiControlNextErrors,
-  TuiControlNextResponses,
-  TuiControlResponseErrors,
-  TuiControlResponseResponses,
   TuiExecuteCommandErrors,
   TuiExecuteCommandResponses,
   TuiOpenHelpErrors,
@@ -569,6 +567,8 @@ import type {
   V2SessionCompactResponses,
   V2SessionContextErrors,
   V2SessionContextResponses,
+  V2SessionCreateErrors,
+  V2SessionCreateResponses,
   V2SessionEventsCursorErrors,
   V2SessionEventsCursorResponses,
   V2SessionEventsErrors,
@@ -1743,6 +1743,288 @@ export class Event_ extends HeyApiClient {
       ...options,
       ...params,
     })
+  }
+}
+
+export class Bootstrap extends HeyApiClient {
+  /**
+   * Bootstrap health/status
+   *
+   * Reports the current database bootstrap phase/mode/diagnostics. 200 when ready; a typed 423/503 when in read_only_recovery or blocked_schema.
+   */
+  public status<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<
+      MaintenanceBootstrapStatusResponses,
+      MaintenanceBootstrapStatusErrors,
+      ThrowOnError
+    >({ url: "/bootstrap/status", ...options })
+  }
+}
+
+export class Backup extends HeyApiClient {
+  /**
+   * List backup manifests
+   *
+   * Lists available consistency backups and their manifest identity fields.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters?: {
+      dir?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "dir" }] }])
+    return (options?.client ?? this.client).get<
+      MaintenanceBackupListResponses,
+      MaintenanceBackupListErrors,
+      ThrowOnError
+    >({
+      url: "/backup/list",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Verify a backup
+   *
+   * Runs the §10.4/§10.9 recoverability verification against a backup manifest.
+   */
+  public verify<ThrowOnError extends boolean = false>(
+    parameters: {
+      manifest_path: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "manifest_path" }] }])
+    return (options?.client ?? this.client).get<
+      MaintenanceBackupVerifyResponses,
+      MaintenanceBackupVerifyErrors,
+      ThrowOnError
+    >({
+      url: "/backup/verify",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Verify or restore a backup
+   *
+   * Verifies the selected backup. In the incident-only maintenance shell, dry_run:false acquires the exclusive database owner, quarantines the current DB/WAL/SHM, restores and forward-migrates, then requires a process restart. A live business runtime refuses installation.
+   */
+  public restore<ThrowOnError extends boolean = false>(
+    parameters?: {
+      restoreInput?: RestoreInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "restoreInput", map: "body" }] }])
+    return (options?.client ?? this.client).post<
+      MaintenanceBackupRestoreResponses,
+      MaintenanceBackupRestoreErrors,
+      ThrowOnError
+    >({
+      url: "/backup/restore",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class Upgrade extends HeyApiClient {
+  /**
+   * Upgrade run status
+   *
+   * Reports the active upgrade run state and the migration receipts recorded under it.
+   */
+  public status<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<
+      MaintenanceUpgradeStatusResponses,
+      MaintenanceUpgradeStatusErrors,
+      ThrowOnError
+    >({ url: "/upgrade/status", ...options })
+  }
+}
+
+export class EvidenceExport extends HeyApiClient {
+  /**
+   * Export recovery evidence manifest
+   *
+   * Reserved encrypted evidence-export endpoint; never emits a manifest without an encrypted artifact and unlock authority.
+   */
+  public create<ThrowOnError extends boolean = false>(
+    parameters?: {
+      evidenceExportInput?: EvidenceExportInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "evidenceExportInput", map: "body" }] }])
+    return (options?.client ?? this.client).post<
+      MaintenanceRecoveryEvidenceExportCreateResponses,
+      MaintenanceRecoveryEvidenceExportCreateErrors,
+      ThrowOnError
+    >({
+      url: "/recovery/evidenceExport",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class Recovery extends HeyApiClient {
+  /**
+   * List recovery descriptors
+   *
+   * Lists the C1B recovery descriptors recorded for a session.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters: {
+      session_id: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "session_id" }] }])
+    return (options?.client ?? this.client).get<
+      MaintenanceRecoveryListResponses,
+      MaintenanceRecoveryListErrors,
+      ThrowOnError
+    >({
+      url: "/recovery/list",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Classify + record a recovery command
+   *
+   * Classifies an attempt into the frozen RecoveryDescriptor and records the command.
+   */
+  public command<ThrowOnError extends boolean = false>(
+    parameters?: {
+      recoveryCommandInput?: RecoveryCommandInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "recoveryCommandInput", map: "body" }] }])
+    return (options?.client ?? this.client).post<
+      MaintenanceRecoveryCommandResponses,
+      MaintenanceRecoveryCommandErrors,
+      ThrowOnError
+    >({
+      url: "/recovery/command",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Get a recovery command
+   *
+   * Reads a single recovery command/descriptor record by command id.
+   */
+  public commandGet<ThrowOnError extends boolean = false>(
+    parameters: {
+      command_id: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "command_id" }] }])
+    return (options?.client ?? this.client).get<
+      MaintenanceRecoveryCommandGetResponses,
+      MaintenanceRecoveryCommandGetErrors,
+      ThrowOnError
+    >({
+      url: "/recovery/commandGet",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Read an evidence export manifest
+   *
+   * Reserved encrypted evidence-export endpoint; returns typed 503 until artifact and unlock authorities are available.
+   */
+  public evidenceExport<ThrowOnError extends boolean = false>(
+    parameters: {
+      export_id: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "export_id" }] }])
+    return (options?.client ?? this.client).get<
+      MaintenanceRecoveryEvidenceExportResponses,
+      MaintenanceRecoveryEvidenceExportErrors,
+      ThrowOnError
+    >({
+      url: "/recovery/evidenceExport",
+      ...options,
+      ...params,
+    })
+  }
+
+  private _evidenceExport?: EvidenceExport
+  get evidenceExport2(): EvidenceExport {
+    return (this._evidenceExport ??= new EvidenceExport({ client: this.client }))
+  }
+}
+
+export class Composition extends HeyApiClient {
+  /**
+   * Root composition digest
+   *
+   * Reports the stable composition digest of this process root (session owner, tool registry, database, Location host). The incident-only maintenance shell constructs no business runtime and answers a typed 503 instead.
+   */
+  public digest<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<
+      MaintenanceCompositionDigestResponses,
+      MaintenanceCompositionDigestErrors,
+      ThrowOnError
+    >({ url: "/composition/digest", ...options })
+  }
+}
+
+export class Maintenance extends HeyApiClient {
+  private _bootstrap?: Bootstrap
+  get bootstrap(): Bootstrap {
+    return (this._bootstrap ??= new Bootstrap({ client: this.client }))
+  }
+
+  private _backup?: Backup
+  get backup(): Backup {
+    return (this._backup ??= new Backup({ client: this.client }))
+  }
+
+  private _upgrade?: Upgrade
+  get upgrade(): Upgrade {
+    return (this._upgrade ??= new Upgrade({ client: this.client }))
+  }
+
+  private _recovery?: Recovery
+  get recovery(): Recovery {
+    return (this._recovery ??= new Recovery({ client: this.client }))
+  }
+
+  private _composition?: Composition
+  get composition(): Composition {
+    return (this._composition ??= new Composition({ client: this.client }))
   }
 }
 
@@ -5919,278 +6201,34 @@ export class Formatter extends HeyApiClient {
   }
 }
 
-export class Bootstrap extends HeyApiClient {
-  /**
-   * Bootstrap health/status
-   *
-   * Reports the current database bootstrap phase/mode/diagnostics. 200 when ready; a typed 423/503 when in read_only_recovery or blocked_schema.
-   */
-  public status<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
-    return (options?.client ?? this.client).get<
-      MaintenanceBootstrapStatusResponses,
-      MaintenanceBootstrapStatusErrors,
-      ThrowOnError
-    >({ url: "/bootstrap/status", ...options })
-  }
-}
-
-export class Backup extends HeyApiClient {
-  /**
-   * List backup manifests
-   *
-   * Lists available consistency backups and their manifest identity fields.
-   */
-  public list<ThrowOnError extends boolean = false>(
-    parameters?: {
-      dir?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "dir" }] }])
-    return (options?.client ?? this.client).get<
-      MaintenanceBackupListResponses,
-      MaintenanceBackupListErrors,
-      ThrowOnError
-    >({
-      url: "/backup/list",
-      ...options,
-      ...params,
-    })
-  }
-
-  /**
-   * Verify a backup
-   *
-   * Runs the §10.4/§10.9 recoverability verification against a backup manifest.
-   */
-  public verify<ThrowOnError extends boolean = false>(
-    parameters: {
-      manifest_path: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "manifest_path" }] }])
-    return (options?.client ?? this.client).get<
-      MaintenanceBackupVerifyResponses,
-      MaintenanceBackupVerifyErrors,
-      ThrowOnError
-    >({
-      url: "/backup/verify",
-      ...options,
-      ...params,
-    })
-  }
-
-  /**
-   * Restore (dry-run/status)
-   *
-   * Fixture-gated restore status surface: reports whether a restore could proceed and whether one is in progress. The actual restore install is a service call, not this endpoint (this lane).
-   */
-  public restore<ThrowOnError extends boolean = false>(
-    parameters?: {
-      restoreInput?: RestoreInput
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams([parameters], [{ args: [{ key: "restoreInput", map: "body" }] }])
-    return (options?.client ?? this.client).post<
-      MaintenanceBackupRestoreResponses,
-      MaintenanceBackupRestoreErrors,
-      ThrowOnError
-    >({
-      url: "/backup/restore",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-}
-
-export class Upgrade extends HeyApiClient {
-  /**
-   * Upgrade run status
-   *
-   * Reports the active upgrade run state and the migration receipts recorded under it.
-   */
-  public status<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
-    return (options?.client ?? this.client).get<
-      MaintenanceUpgradeStatusResponses,
-      MaintenanceUpgradeStatusErrors,
-      ThrowOnError
-    >({ url: "/upgrade/status", ...options })
-  }
-}
-
-export class EvidenceExport extends HeyApiClient {
-  /**
-   * Export recovery evidence manifest
-   *
-   * Records an evidence export manifest for a session (default-redacted; the body stays behind the permission gate).
-   */
-  public create<ThrowOnError extends boolean = false>(
-    parameters?: {
-      evidenceExportInput?: EvidenceExportInput
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams([parameters], [{ args: [{ key: "evidenceExportInput", map: "body" }] }])
-    return (options?.client ?? this.client).post<
-      MaintenanceRecoveryEvidenceExportCreateResponses,
-      MaintenanceRecoveryEvidenceExportCreateErrors,
-      ThrowOnError
-    >({
-      url: "/recovery/evidenceExport",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-}
-
-export class Recovery extends HeyApiClient {
-  /**
-   * List recovery descriptors
-   *
-   * Lists the C1B recovery descriptors recorded for a session.
-   */
-  public list<ThrowOnError extends boolean = false>(
-    parameters: {
-      session_id: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "session_id" }] }])
-    return (options?.client ?? this.client).get<
-      MaintenanceRecoveryListResponses,
-      MaintenanceRecoveryListErrors,
-      ThrowOnError
-    >({
-      url: "/recovery/list",
-      ...options,
-      ...params,
-    })
-  }
-
-  /**
-   * Classify + record a recovery command
-   *
-   * Classifies an attempt into the frozen RecoveryDescriptor and records the command.
-   */
-  public command<ThrowOnError extends boolean = false>(
-    parameters?: {
-      recoveryCommandInput?: RecoveryCommandInput
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams([parameters], [{ args: [{ key: "recoveryCommandInput", map: "body" }] }])
-    return (options?.client ?? this.client).post<
-      MaintenanceRecoveryCommandResponses,
-      MaintenanceRecoveryCommandErrors,
-      ThrowOnError
-    >({
-      url: "/recovery/command",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-
-  /**
-   * Get a recovery command
-   *
-   * Reads a single recovery command/descriptor record by command id.
-   */
-  public commandGet<ThrowOnError extends boolean = false>(
-    parameters: {
-      command_id: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "command_id" }] }])
-    return (options?.client ?? this.client).get<
-      MaintenanceRecoveryCommandGetResponses,
-      MaintenanceRecoveryCommandGetErrors,
-      ThrowOnError
-    >({
-      url: "/recovery/commandGet",
-      ...options,
-      ...params,
-    })
-  }
-
-  /**
-   * Read an evidence export manifest
-   *
-   * Reads a redacted evidence export manifest by export id; a settled/expired export is a typed 410.
-   */
-  public evidenceExport<ThrowOnError extends boolean = false>(
-    parameters: {
-      export_id: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "export_id" }] }])
-    return (options?.client ?? this.client).get<
-      MaintenanceRecoveryEvidenceExportResponses,
-      MaintenanceRecoveryEvidenceExportErrors,
-      ThrowOnError
-    >({
-      url: "/recovery/evidenceExport",
-      ...options,
-      ...params,
-    })
-  }
-
-  private _evidenceExport?: EvidenceExport
-  get evidenceExport2(): EvidenceExport {
-    return (this._evidenceExport ??= new EvidenceExport({ client: this.client }))
-  }
-}
-
-export class Maintenance extends HeyApiClient {
-  private _bootstrap?: Bootstrap
-  get bootstrap(): Bootstrap {
-    return (this._bootstrap ??= new Bootstrap({ client: this.client }))
-  }
-
-  private _backup?: Backup
-  get backup(): Backup {
-    return (this._backup ??= new Backup({ client: this.client }))
-  }
-
-  private _upgrade?: Upgrade
-  get upgrade(): Upgrade {
-    return (this._upgrade ??= new Upgrade({ client: this.client }))
-  }
-
-  private _recovery?: Recovery
-  get recovery(): Recovery {
-    return (this._recovery ??= new Recovery({ client: this.client }))
-  }
-}
-
 export class Capability extends HeyApiClient {
   /**
    * Capability catalog snapshot
    *
    * Returns the capability catalog snapshot identity (id/digest) and per-manifest identity fields. Never serializes a procedure body; a body is only reachable through the load path (behind the permission gate).
    */
-  public catalog<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+  public catalog<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
     return (options?.client ?? this.client).get<CapabilityCatalogResponses, CapabilityCatalogErrors, ThrowOnError>({
       url: "/capability/catalog",
       ...options,
+      ...params,
     })
   }
 
@@ -6201,11 +6239,24 @@ export class Capability extends HeyApiClient {
    */
   public search<ThrowOnError extends boolean = false>(
     parameters?: {
+      directory?: string
+      workspace?: string
       capabilitySearchInput?: CapabilitySearchInput
     },
     options?: Options<never, ThrowOnError>,
   ) {
-    const params = buildClientParams([parameters], [{ args: [{ key: "capabilitySearchInput", map: "body" }] }])
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "capabilitySearchInput", map: "body" },
+          ],
+        },
+      ],
+    )
     return (options?.client ?? this.client).post<CapabilitySearchResponses, CapabilitySearchErrors, ThrowOnError>({
       url: "/capability/search",
       ...options,
@@ -6223,12 +6274,33 @@ export class Capability extends HeyApiClient {
    *
    * Returns the recorded capability load receipts (identity/bodyHash/tokenCount, never the body). A body is never serialized here.
    */
-  public loadReceipts<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+  public loadReceipts<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
     return (options?.client ?? this.client).get<
       CapabilityLoadReceiptsResponses,
       CapabilityLoadReceiptsErrors,
       ThrowOnError
-    >({ url: "/capability/loadReceipts", ...options })
+    >({
+      url: "/capability/loadReceipts",
+      ...options,
+      ...params,
+    })
   }
 }
 
@@ -6241,10 +6313,23 @@ export class Context extends HeyApiClient {
   public readiness<ThrowOnError extends boolean = false>(
     parameters: {
       session_id: string
+      directory?: string
+      workspace?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
-    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "session_id" }] }])
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "session_id" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
     return (options?.client ?? this.client).get<ContextReadinessResponses, ContextReadinessErrors, ThrowOnError>({
       url: "/context/readiness",
       ...options,
@@ -6260,10 +6345,23 @@ export class Context extends HeyApiClient {
   public eventsCursor<ThrowOnError extends boolean = false>(
     parameters: {
       session_id: string
+      directory?: string
+      workspace?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
-    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "session_id" }] }])
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "session_id" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
     return (options?.client ?? this.client).get<ContextEventsCursorResponses, ContextEventsCursorErrors, ThrowOnError>({
       url: "/context/eventsCursor",
       ...options,
@@ -6281,6 +6379,8 @@ export class Context extends HeyApiClient {
       session_id: string
       after?: string
       limit?: string
+      directory?: string
+      workspace?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -6292,6 +6392,8 @@ export class Context extends HeyApiClient {
             { in: "query", key: "session_id" },
             { in: "query", key: "after" },
             { in: "query", key: "limit" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
           ],
         },
       ],
@@ -6310,12 +6412,33 @@ export class SystemContext extends HeyApiClient {
    *
    * Reports whether the capability catalog snapshot digest is still consistent with the frozen catalog, the L0 catalog line count/hash, and the recorded capability load receipts (identity/metrics only, never a body).
    */
-  public snapshot<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+  public snapshot<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
     return (options?.client ?? this.client).get<
       SystemContextSnapshotResponses,
       SystemContextSnapshotErrors,
       ThrowOnError
-    >({ url: "/system-context/snapshot", ...options })
+    >({
+      url: "/system-context/snapshot",
+      ...options,
+      ...params,
+    })
   }
 }
 
@@ -9669,75 +9792,6 @@ export class Sync extends HeyApiClient {
   }
 }
 
-export class Control extends HeyApiClient {
-  /**
-   * Get next TUI request
-   *
-   * Retrieve the next TUI request from the queue for processing.
-   */
-  public next<ThrowOnError extends boolean = false>(
-    parameters?: {
-      directory?: string
-      workspace?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).get<TuiControlNextResponses, TuiControlNextErrors, ThrowOnError>({
-      url: "/tui/control/next",
-      ...options,
-      ...params,
-    })
-  }
-
-  /**
-   * Submit TUI response
-   *
-   * Submit a response to the TUI request queue to complete a pending request.
-   */
-  public response<ThrowOnError extends boolean = false>(
-    parameters?: {
-      directory?: string
-      workspace?: string
-      body?: unknown
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { key: "body", map: "body" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<TuiControlResponseResponses, TuiControlResponseErrors, ThrowOnError>({
-      url: "/tui/control/response",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-}
-
 export class Tui extends HeyApiClient {
   /**
    * Append TUI prompt
@@ -10109,11 +10163,6 @@ export class Tui extends HeyApiClient {
       },
     })
   }
-
-  private _control?: Control
-  get control(): Control {
-    return (this._control ??= new Control({ client: this.client }))
-  }
 }
 
 export class TrustedSources extends HeyApiClient {
@@ -10452,6 +10501,52 @@ export class Session3 extends HeyApiClient {
       url: "/api/session",
       ...options,
       ...params,
+    })
+  }
+
+  /**
+   * Create session
+   *
+   * Create or adopt one Core V2 session in the requested location.
+   */
+  public create<ThrowOnError extends boolean = false>(
+    parameters?: {
+      location?: {
+        directory?: string
+        workspace?: string
+      }
+      id?: string
+      agent?: string
+      model?: {
+        id: string
+        providerID: string
+        variant?: string
+      }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "location" },
+            { in: "body", key: "id" },
+            { in: "body", key: "agent" },
+            { in: "body", key: "model" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<V2SessionCreateResponses, V2SessionCreateErrors, ThrowOnError>({
+      url: "/api/session",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
     })
   }
 
@@ -11071,6 +11166,11 @@ export class DeepAgentCodeClient extends HeyApiClient {
     return (this._event ??= new Event_({ client: this.client }))
   }
 
+  private _maintenance?: Maintenance
+  get maintenance(): Maintenance {
+    return (this._maintenance ??= new Maintenance({ client: this.client }))
+  }
+
   private _config?: Config2
   get config(): Config2 {
     return (this._config ??= new Config2({ client: this.client }))
@@ -11154,11 +11254,6 @@ export class DeepAgentCodeClient extends HeyApiClient {
   private _formatter?: Formatter
   get formatter(): Formatter {
     return (this._formatter ??= new Formatter({ client: this.client }))
-  }
-
-  private _maintenance?: Maintenance
-  get maintenance(): Maintenance {
-    return (this._maintenance ??= new Maintenance({ client: this.client }))
   }
 
   private _capability?: Capability

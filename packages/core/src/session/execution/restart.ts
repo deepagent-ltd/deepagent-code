@@ -11,10 +11,12 @@ import {
 import { V2ProviderRecoveryBridgeTable } from "../runner/v2-provider-turn.sql"
 import { SessionProviderOwner } from "../../context-federation/provider-owner"
 import { SessionExecution } from "../execution"
+import { SessionRunner } from "../runner"
 import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
 import { V2ProviderTurnReceiptTable } from "../runner/v2-provider-turn.sql"
 import { V2ToolEffectAdmissionTable, V2ToolEffectTable } from "../runner/v2-tool-effect.sql"
+import { SessionInputTable } from "../sql"
 
 export type RecoveryReceipt = {
   readonly receiptId: string
@@ -38,6 +40,7 @@ export type RecoveryAttempt = {
   readonly requestHash: string
   readonly providerId: string
   readonly ownerToken?: string
+  readonly executionClaimToken?: number
   readonly preparedTurnHash?: string
   readonly wireRequestHash?: string
   readonly resolutionDecision?: "abandoned" | "settled" | "replayed"
@@ -96,6 +99,7 @@ export type RecoveryToolEffect = {
 
 export type PendingRecovery = {
   readonly sessionID: SessionSchema.ID
+  readonly claimToken: number
   readonly turns: readonly RecoveryTurn[]
   readonly tools: readonly RecoveryToolReceipt[]
   readonly tasks: readonly RecoveryTaskRun[]
@@ -110,6 +114,15 @@ export type PendingRecovery = {
     | "terminal_consistent"
     | "authority_conflict"
     | "owned_elsewhere"
+}
+
+export type StartupRedrive = {
+  readonly released: readonly SessionSchema.ID[]
+  readonly woken: readonly SessionSchema.ID[]
+  readonly blocked: ReadonlyArray<{
+    readonly sessionID: SessionSchema.ID
+    readonly disposition: PendingRecovery["disposition"] | "claim_changed"
+  }>
 }
 
 export function classifyTurn(receipt: RecoveryReceipt, attempt?: RecoveryAttempt): RecoveryTurn["classification"] {
@@ -209,6 +222,8 @@ export interface Interface {
   readonly suspendActiveSessions: Effect.Effect<void>
   /** Lists unowned claims requiring explicit recovery classification. Never starts provider work. */
   readonly pendingRecovery: Effect.Effect<ReadonlyArray<PendingRecovery>>
+  /** Exact-releases and re-wakes only provably safe startup work. Past-dispatch work remains fenced. */
+  readonly redriveStartup: Effect.Effect<StartupRedrive, SessionRunner.RunError>
 }
 
 /** Restart continuity actions. The host must invoke them explicitly. */
@@ -220,13 +235,23 @@ export const layer = Layer.effect(
     const store = yield* SessionStore.Service
     const execution = yield* SessionExecution.Service
     const db = (yield* Database.Service).db
-    return Service.of({
+    const service = Service.of({
       suspendActiveSessions: Effect.gen(function* () {
-        yield* Effect.forEach(yield* execution.active, store.claim, { discard: true })
+        yield* Effect.forEach(
+          yield* execution.active,
+          (sessionID) =>
+            store.claimToken(sessionID).pipe(
+              Effect.flatMap((token) =>
+                token === undefined ? Effect.die(`Active Session has no durable claim: ${sessionID}`) : Effect.void,
+              ),
+            ),
+          { discard: true },
+        )
       }),
       pendingRecovery: Effect.gen(function* () {
         const active = yield* execution.active
-        const sessionIDs = (yield* store.listSuspended()).filter((sessionID) => !active.has(sessionID))
+        const claims = (yield* store.listSuspendedClaims()).filter((claim) => !active.has(claim.sessionID))
+        const sessionIDs = claims.map((claim) => claim.sessionID)
         if (sessionIDs.length === 0) return []
         const inventory = yield* db
           .transaction((tx) =>
@@ -252,6 +277,7 @@ export const layer = Layer.effect(
                   attemptRequestHash: SessionProviderAttemptTable.request_hash,
                   attemptProviderId: SessionProviderAttemptTable.provider_id,
                   attemptOwnerToken: SessionProviderAttemptTable.owner_token,
+                  attemptExecutionClaimToken: SessionProviderAttemptTable.execution_claim_token,
                   attemptPreparedTurnHash: SessionProviderAttemptTable.prepared_turn_hash,
                   attemptWireRequestHash: SessionProviderAttemptTable.wire_request_hash,
                   resolutionDecision: SessionProviderAttemptResolutionTable.decision,
@@ -343,6 +369,7 @@ export const layer = Layer.effect(
           )
           .pipe(Effect.orDie)
         return sessionIDs.map((sessionID) => {
+          const claim = claims.find((candidate) => candidate.sessionID === sessionID)!
           const turns = inventory.rows
             .filter((row) => row.sessionID === sessionID)
             .map((row): RecoveryTurn => {
@@ -369,6 +396,7 @@ export const layer = Layer.effect(
                       providerTurnSeq: row.attemptTurnSeq!,
                       requestHash: row.attemptRequestHash!,
                       providerId: row.attemptProviderId!,
+                      executionClaimToken: row.attemptExecutionClaimToken!,
                       ...(row.attemptOwnerToken === null ? {} : { ownerToken: row.attemptOwnerToken }),
                       ...(row.attemptPreparedTurnHash === null
                         ? {}
@@ -381,7 +409,11 @@ export const layer = Layer.effect(
               return {
                 receipt,
                 ...(attempt === undefined ? {} : { attempt }),
-                classification: ownedElsewhere ? "owned_elsewhere" : classifyTurn(receipt, attempt),
+                classification: ownedElsewhere
+                  ? "owned_elsewhere"
+                  : attempt !== undefined && attempt.executionClaimToken !== claim.token
+                    ? "authority_conflict"
+                    : classifyTurn(receipt, attempt),
               }
             })
           const tools = inventory.toolRows
@@ -428,6 +460,7 @@ export const layer = Layer.effect(
             }))
           return {
             sessionID,
+            claimToken: claim.token,
             turns,
             tools,
             tasks,
@@ -441,6 +474,79 @@ export const layer = Layer.effect(
           }
         })
       }),
+      redriveStartup: Effect.gen(function* () {
+        const recoveries = yield* Effect.suspend(() => service.pendingRecovery)
+        const active = yield* execution.active
+        const claims = yield* store.listSuspendedClaims()
+        const pendingInputs = yield* db
+          .all<{ session_id: string; admitted_seq: number }>(sql`
+            SELECT session_id, MAX(admitted_seq) AS admitted_seq
+            FROM ${SessionInputTable}
+            WHERE promoted_seq IS NULL AND delivery IN ('steer', 'queue', 'goal_steer')
+            GROUP BY session_id
+          `)
+          .pipe(Effect.orDie)
+        const released: SessionSchema.ID[] = []
+        const woken: SessionSchema.ID[] = []
+        const blocked: StartupRedrive["blocked"][number][] = []
+        const pendingBySession = new Map(
+          pendingInputs.map((input) => [SessionSchema.ID.make(input.session_id), input.admitted_seq]),
+        )
+        const wakePending = (sessionID: SessionSchema.ID) => {
+          const seq = pendingBySession.get(sessionID)
+          if (seq === undefined) return Effect.void
+          return store.interruptSeq(sessionID).pipe(
+            Effect.flatMap((interruptSeq) => {
+              if (interruptSeq !== undefined && seq <= interruptSeq) return Effect.void
+              woken.push(sessionID)
+              return execution.wake(sessionID, seq)
+            }),
+          )
+        }
+
+        yield* Effect.forEach(
+          recoveries,
+          (recovery) => {
+            if (
+              recovery.disposition !== "claim_only" &&
+              recovery.disposition !== "safe_before_dispatch" &&
+              recovery.disposition !== "terminal_consistent"
+            ) {
+              blocked.push({ sessionID: recovery.sessionID, disposition: recovery.disposition })
+              return Effect.void
+            }
+            return store.release(recovery.sessionID, recovery.claimToken).pipe(
+              Effect.flatMap((didRelease) => {
+                if (!didRelease) {
+                  blocked.push({ sessionID: recovery.sessionID, disposition: "claim_changed" })
+                  return Effect.void
+                }
+                released.push(recovery.sessionID)
+                return wakePending(recovery.sessionID)
+              }),
+            )
+          },
+          { discard: true },
+        )
+
+        const claimed = new Set(claims.map((claim) => claim.sessionID))
+        yield* Effect.forEach(
+          pendingInputs.filter(
+            (input) =>
+              !claimed.has(SessionSchema.ID.make(input.session_id)) &&
+              !active.has(SessionSchema.ID.make(input.session_id)) &&
+              !woken.includes(SessionSchema.ID.make(input.session_id)),
+          ),
+          (input) => {
+            const sessionID = SessionSchema.ID.make(input.session_id)
+            return wakePending(sessionID)
+          },
+          { discard: true },
+        )
+
+        return { released, woken, blocked }
+      }),
     })
+    return service
   }),
 )

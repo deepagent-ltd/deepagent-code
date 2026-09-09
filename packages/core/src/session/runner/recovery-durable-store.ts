@@ -25,6 +25,18 @@ import { and, eq, sql } from "drizzle-orm"
 import { Effect } from "effect"
 import type { EffectDrizzleSqlite } from "@deepagent-code/effect-drizzle-sqlite"
 import { RecoveryCommandContract } from "../../contract/recovery-command"
+import { contentDigest } from "../../contract/digest"
+import {
+  SessionActivityTable,
+  SessionProviderAttemptResolutionTable,
+  SessionProviderAttemptTable,
+  SessionProviderOwnerLeaseTable,
+} from "../../context-federation/session-sql"
+import { SessionProviderOwner } from "../../context-federation/provider-owner"
+import { SessionTable } from "../sql"
+import { SessionSchema } from "../schema"
+import { V2ProviderRecoveryBridgeTable, V2ProviderTurnReceiptTable } from "./v2-provider-turn.sql"
+import { randomUUID } from "node:crypto"
 import type {
   AttemptIdentity,
   CommandRecord,
@@ -311,6 +323,25 @@ export interface DurableRecoveryStore {
     readonly actorId?: string
     readonly createdAt?: number
   }) => Effect.Effect<CommandWriteOutcome, never>
+  /** Atomically records a descriptor and claims its attempt command slot; no orphan descriptor. */
+  readonly putDescriptorAndCommand: (input: {
+    readonly descriptor: RecoveryCommandContract.RecoveryDescriptor
+    readonly sessionId: string
+    readonly activityId: string
+    readonly turnId: string
+    readonly requestHash: string
+    readonly attemptIdentity: AttemptIdentity
+    readonly commandId?: string
+    readonly expectedOwnerToken?: string
+    readonly actorType?: "user" | "administrator" | "system"
+    readonly actorId?: string
+    readonly createdAt?: number
+  }) => Effect.Effect<CommandWriteOutcome, never>
+  /** Apply a committed exact-abandon command to every bound authority in one transaction. */
+  readonly applyExactAbandon: (input: {
+    readonly commandId: string
+    readonly reason: string
+  }) => Effect.Effect<"applied" | "already" | "authority_conflict", never>
   /**
    * Conditional state transition (CAS by `state` match, and by `expected_owner_token`
    * when the caller passes one — design §9.2 C1B-11 fenced writes). `result_hash` is
@@ -509,6 +540,294 @@ export const makeDurableRecoveryStore = (db: Database): DurableRecoveryStore => 
     ).pipe(Effect.orDie)
   })
 
+  const putDescriptorAndCommand = Effect.fn("RecoveryDurableStore.putDescriptorAndCommand")(function* (input: {
+    readonly descriptor: RecoveryCommandContract.RecoveryDescriptor
+    readonly sessionId: string
+    readonly activityId: string
+    readonly turnId: string
+    readonly requestHash: string
+    readonly attemptIdentity: AttemptIdentity
+    readonly commandId?: string
+    readonly expectedOwnerToken?: string
+    readonly actorType?: "user" | "administrator" | "system"
+    readonly actorId?: string
+    readonly createdAt?: number
+  }) {
+    return yield* db.transaction(
+      (tx) =>
+        Effect.gen(function* () {
+          const address = input.commandId ?? recoveryCommandContentAddress(input)
+          const prior = yield* tx.get<CommandDbRow | undefined>(sql`
+            SELECT command_id, descriptor_id, attempt, state, expected_owner_token, result_hash,
+                   actor_type, actor_id, created_at, updated_at
+            FROM recovery_command
+            WHERE json_extract(attempt, '$.sessionId') = ${input.attemptIdentity.sessionId}
+              AND json_extract(attempt, '$.attemptId') = ${input.attemptIdentity.attemptId}
+          `)
+          if (prior) {
+            const decoded = decodeCommandRow(prior)
+            if (!decoded) return yield* Effect.die(new Error("recovery_command attempt decode failed"))
+            if (decoded.requestHash !== input.requestHash)
+              return { status: "mismatch", commandId: address, reason: "request_hash_mismatch" } as const
+            return {
+              status: "existing",
+              commandId: decoded.commandId,
+              record: toCommandRecord(decoded),
+            } satisfies CommandWriteOutcome
+          }
+          const now = input.createdAt ?? Date.now()
+          const descriptorId = recoveryDescriptorId(input.descriptor)
+          yield* tx
+            .insert(SessionProviderRecoveryDescriptorTable)
+            .values({
+              descriptor_id: descriptorId,
+              session_id: input.sessionId,
+              activity_id: input.activityId,
+              turn_id: input.turnId,
+              kind: input.descriptor.descriptorKind,
+              payload: input.descriptor,
+              content_hash: RecoveryCommandContract.recoveryDescriptorDigest(input.descriptor),
+              created_at: now,
+            })
+            .onConflictDoNothing()
+            .run()
+          yield* tx.insert(RecoveryCommandTable).values({
+            command_id: address,
+            descriptor_id: descriptorId,
+            attempt: input.attemptIdentity,
+            state: CommandState.pending,
+            expected_owner_token: input.expectedOwnerToken ?? null,
+            result_hash: null,
+            actor_type: input.actorType ?? null,
+            actor_id: input.actorId ?? null,
+            created_at: now,
+            updated_at: now,
+          }).run()
+          return {
+            status: "recorded",
+            commandId: address,
+            record: newCommandRecord({ ...input, commandId: address, now }),
+          } satisfies CommandWriteOutcome
+        }),
+      { behavior: "immediate" },
+    ).pipe(Effect.orDie)
+  })
+
+  const applyExactAbandon = Effect.fn("RecoveryDurableStore.applyExactAbandon")(function* (input: {
+    readonly commandId: string
+    readonly reason: string
+  }) {
+    return yield* db.transaction(
+      (tx) =>
+        Effect.gen(function* () {
+          const commandRaw = yield* tx.get<CommandDbRow | undefined>(sql`
+            SELECT command_id, descriptor_id, attempt, state, expected_owner_token, result_hash,
+                   actor_type, actor_id, created_at, updated_at
+            FROM recovery_command WHERE command_id = ${input.commandId}
+          `)
+          if (!commandRaw) return "authority_conflict" as const
+          const command = decodeCommandRow(commandRaw)
+          if (!command) return "authority_conflict" as const
+          if (command.state === CommandState.abandoned) return "already" as const
+          if (command.state !== CommandState.pending || !command.descriptorId) return "authority_conflict" as const
+          const descriptorRaw = yield* tx.get<DescriptorDbRow | undefined>(sql`
+            SELECT descriptor_id, session_id, activity_id, turn_id, kind, payload, content_hash, created_at
+            FROM session_provider_recovery_descriptor WHERE descriptor_id = ${command.descriptorId}
+          `)
+          const descriptor = descriptorRaw ? decodeDescriptorRow(descriptorRaw) : undefined
+          if (!descriptor || descriptor.payload.descriptorKind !== "resolvable_exact")
+            return "authority_conflict" as const
+          if (
+            command.actorType === undefined ||
+            command.actorId === undefined ||
+            command.actorType === "system"
+          )
+            return "authority_conflict" as const
+          const attempt = yield* tx
+            .select()
+            .from(SessionProviderAttemptTable)
+            .where(eq(SessionProviderAttemptTable.attempt_id, command.attempt.attemptId))
+            .get()
+          if (
+            !attempt ||
+            attempt.session_id !== command.attempt.sessionId ||
+            attempt.activity_id !== command.attempt.activityId ||
+            attempt.provider_turn_seq !== command.attempt.providerTurnSeq ||
+            attempt.selection_id !== command.attempt.selectionId ||
+            attempt.projection_hash !== command.attempt.projectionHash ||
+            attempt.request_hash !== command.requestHash ||
+            attempt.provider_id !== command.attempt.providerId ||
+            attempt.state !== "indeterminate_after_crash" ||
+            attempt.owner_token === null ||
+            command.expectedOwnerToken !== attempt.owner_token ||
+            descriptor.payload.casTokens.expectedState !== attempt.state ||
+            descriptor.payload.casTokens.expectedVersion !== attempt.attempt_version ||
+            descriptor.payload.casTokens.ownerToken !== attempt.owner_token
+          )
+            return "authority_conflict" as const
+          const receipt = yield* tx
+            .select()
+            .from(V2ProviderTurnReceiptTable)
+            .where(eq(V2ProviderTurnReceiptTable.provider_attempt_id, attempt.attempt_id))
+            .get()
+          if (
+            !receipt ||
+            receipt.session_id !== attempt.session_id ||
+            receipt.activity_id !== attempt.activity_id ||
+            receipt.provider_turn_seq !== attempt.provider_turn_seq ||
+            receipt.provider_id !== attempt.provider_id ||
+            receipt.owner_token !== attempt.owner_token ||
+            receipt.state !== "indeterminate_after_crash" ||
+            (command.attempt.protocol !== undefined && command.attempt.protocol !== receipt.protocol)
+          )
+            return "authority_conflict" as const
+          const staleOwner = yield* tx
+            .select()
+            .from(SessionProviderOwnerLeaseTable)
+            .where(eq(SessionProviderOwnerLeaseTable.owner_token, attempt.owner_token))
+            .get()
+          const now = yield* SessionProviderOwner.observedAtInTransaction(tx)
+          if (!staleOwner || (staleOwner.released_at === null && staleOwner.lease_expires_at > now))
+            return "authority_conflict" as const
+          const session = yield* tx
+            .select({ claimToken: SessionTable.time_suspended })
+            .from(SessionTable)
+            .where(eq(SessionTable.id, SessionSchema.ID.make(attempt.session_id)))
+            .get()
+          if (session?.claimToken !== attempt.execution_claim_token)
+            return "authority_conflict" as const
+
+          const recoveryOwnerToken = `recovery:${randomUUID()}`
+          yield* tx.insert(SessionProviderOwnerLeaseTable).values({
+            owner_token: recoveryOwnerToken,
+            registered_at: databaseNow,
+            heartbeat_at: databaseNow,
+            lease_expires_at: sql`${databaseNow} + 30000`,
+          }).run()
+          yield* tx.run(sql`
+            INSERT INTO database_capability(capability, minimum_reader_protocol, minimum_writer_protocol, installed_at)
+            VALUES ('provider_owner_successor_v1', 3, 3, ${now})
+            ON CONFLICT(capability) DO NOTHING
+          `)
+          const resolutionId = `resolution_${contentDigest({ commandId: command.commandId, decision: "abandoned" })}`
+          yield* tx.insert(SessionProviderAttemptResolutionTable).values({
+            resolution_id: resolutionId,
+            attempt_id: attempt.attempt_id,
+            actor_type: command.actorType ?? "system",
+            actor_id: command.actorId ?? "missing",
+            decision: "abandoned",
+            provider_evidence: null,
+            risk_acknowledged: false,
+            reason: input.reason,
+            created_at: now,
+          }).run()
+          const resolved = yield* tx
+            .update(SessionProviderAttemptTable)
+            .set({
+              state: "resolved_abandoned",
+              attempt_version: sql`${SessionProviderAttemptTable.attempt_version} + 1`,
+              settled_at: now,
+            })
+            .where(
+              and(
+                eq(SessionProviderAttemptTable.attempt_id, attempt.attempt_id),
+                eq(SessionProviderAttemptTable.state, "indeterminate_after_crash"),
+                eq(SessionProviderAttemptTable.attempt_version, attempt.attempt_version),
+                eq(SessionProviderAttemptTable.owner_token, attempt.owner_token),
+              ),
+            )
+            .returning({ attemptId: SessionProviderAttemptTable.attempt_id })
+            .get()
+          if (!resolved) return yield* Effect.fail("provider attempt recovery CAS lost")
+          const activity = yield* tx
+            .update(SessionActivityTable)
+            .set({ state: "interrupted", settled_at: now })
+            .where(
+              and(
+                eq(SessionActivityTable.activity_id, attempt.activity_id),
+                eq(SessionActivityTable.state, "active"),
+              ),
+            )
+            .returning({ activityId: SessionActivityTable.activity_id })
+            .get()
+          if (!activity) return yield* Effect.fail("provider recovery activity CAS lost")
+          yield* tx.insert(V2ProviderRecoveryBridgeTable).values({
+            resolution_id: resolutionId,
+            attempt_id: attempt.attempt_id,
+            receipt_id: receipt.receipt_id,
+            command_id: command.commandId,
+            created_at: now,
+          }).run()
+
+          const terminalDescriptor: RecoveryCommandContract.RecoveryDescriptor = {
+            schemaVersion: "recovery-descriptor.v1",
+            requestHash: attempt.request_hash,
+            provenance: { origin: "recorded", sourceRefs: [attempt.attempt_id, receipt.receipt_id, command.commandId] },
+            baseline: descriptor.payload.baseline,
+            terminalBridge: {
+              bridgeId: resolutionId,
+              bridgeType: "terminal_bridge",
+              terminalRef: "abandoned",
+            },
+            casTokens: {
+              expectedState: "resolved_abandoned",
+              expectedVersion: attempt.attempt_version + 1,
+              ownerToken: attempt.owner_token,
+            },
+            descriptorKind: "resolved",
+            resolved: { resolutionRef: resolutionId, bridgeRef: resolutionId, terminal: "abandoned" },
+          }
+          const descriptorHash = RecoveryCommandContract.recoveryDescriptorDigest(terminalDescriptor)
+          yield* tx.insert(SessionProviderRecoveryDescriptorTable).values({
+            descriptor_id: `descriptor_${descriptorHash}`,
+            session_id: attempt.session_id,
+            activity_id: attempt.activity_id,
+            turn_id: String(attempt.provider_turn_seq),
+            kind: terminalDescriptor.descriptorKind,
+            payload: terminalDescriptor,
+            content_hash: descriptorHash,
+            created_at: now,
+          }).run()
+          const settledCommand = yield* tx
+            .update(RecoveryCommandTable)
+            .set({
+              state: CommandState.abandoned,
+              result_hash: contentDigest({ resolutionId, terminal: "abandoned" }),
+              updated_at: now,
+            })
+            .where(
+              and(
+                eq(RecoveryCommandTable.command_id, command.commandId),
+                eq(RecoveryCommandTable.state, CommandState.pending),
+                eq(RecoveryCommandTable.expected_owner_token, attempt.owner_token),
+              ),
+            )
+            .returning({ commandId: RecoveryCommandTable.command_id })
+            .get()
+          if (!settledCommand) return yield* Effect.fail("recovery command CAS lost")
+          const released = yield* tx
+            .update(SessionTable)
+            .set({ time_suspended: null, time_updated: sql`${SessionTable.time_updated}` })
+            .where(
+              and(
+                eq(SessionTable.id, SessionSchema.ID.make(attempt.session_id)),
+                eq(SessionTable.time_suspended, attempt.execution_claim_token),
+              ),
+            )
+            .returning({ id: SessionTable.id })
+            .get()
+          if (!released) return yield* Effect.fail("session execution claim changed during recovery")
+          yield* tx
+            .update(SessionProviderOwnerLeaseTable)
+            .set({ released_at: databaseNow })
+            .where(eq(SessionProviderOwnerLeaseTable.owner_token, recoveryOwnerToken))
+            .run()
+          return "applied" as const
+        }),
+      { behavior: "immediate" },
+    ).pipe(Effect.orDie)
+  })
+
   const transitionCommand = Effect.fn("RecoveryDurableStore.transitionCommand")(function* (input: {
     readonly commandId: string
     readonly from: CommandState
@@ -673,6 +992,8 @@ export const makeDurableRecoveryStore = (db: Database): DurableRecoveryStore => 
     getDescriptor,
     listDescriptorsBySession,
     putCommand,
+    putDescriptorAndCommand,
+    applyExactAbandon,
     transitionCommand,
     getCommand,
     getCommandForAttempt,
@@ -683,3 +1004,5 @@ export const makeDurableRecoveryStore = (db: Database): DurableRecoveryStore => 
     getExport,
   }
 }
+
+const databaseNow = sql`CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)`

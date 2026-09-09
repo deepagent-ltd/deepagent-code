@@ -18,6 +18,32 @@ import { tmpdirScoped } from "../fixture/fixture"
 
 const it = testEffect(CrossSpawnSpawner.defaultLayer)
 
+it.effect("ReviewerRegistry isolates registrations and finalizers between runtime roots", () =>
+  Effect.gen(function* () {
+    const firstScope = yield* Scope.make()
+    const secondScope = yield* Scope.make()
+    const firstContext = yield* Layer.build(Layer.fresh(DurableLearningRuntime.reviewerRegistryLayer)).pipe(
+      Effect.provideService(Scope.Scope, firstScope),
+    )
+    const secondContext = yield* Layer.build(Layer.fresh(DurableLearningRuntime.reviewerRegistryLayer)).pipe(
+      Effect.provideService(Scope.Scope, secondScope),
+    )
+    const first = Context.get(firstContext, DurableLearningRuntime.CurrentReviewerRegistry)
+    const second = Context.get(secondContext, DurableLearningRuntime.CurrentReviewerRegistry)
+    if (!first || !second) return yield* Effect.die("reviewer registry did not build")
+    const firstReviewer = reviewer("first")
+    const secondReviewer = reviewer("second")
+    yield* first.register(() => firstReviewer).pipe(Effect.provideService(Scope.Scope, firstScope))
+    yield* second.register(() => secondReviewer).pipe(Effect.provideService(Scope.Scope, secondScope))
+
+    expect(first.reviewerForWorkspace("/workspace")).toBe(firstReviewer)
+    expect(second.reviewerForWorkspace("/workspace")).toBe(secondReviewer)
+    yield* Scope.close(firstScope, Exit.void)
+    expect(second.reviewerForWorkspace("/workspace")).toBe(secondReviewer)
+    yield* Scope.close(secondScope, Exit.void)
+  }),
+)
+
 it.effect("DurableLearningRuntime installs record and reconcile methods for AgentGateway", () =>
   Effect.gen(function* () {
     const root = yield* tmpdirScoped()
@@ -83,3 +109,16 @@ it.effect("DurableLearningRuntime installs record and reconcile methods for Agen
     yield* Scope.close(runtimeScope, Exit.void)
   }),
 )
+
+function reviewer(id: string) {
+  return {
+    identity: () =>
+      Effect.succeed({
+        reviewSessionId: `session-${id}`,
+        providerId: `provider-${id}`,
+        modelId: `model-${id}`,
+        policyHash: `policy-${id}`,
+      }),
+    execute: () => Effect.succeed({ verdict: "manual_review" as const, selectedCandidateIds: [] }),
+  }
+}

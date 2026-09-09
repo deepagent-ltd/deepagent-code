@@ -120,12 +120,15 @@ describe("AgentV2", () => {
         "compaction",
         "explore",
         "general",
+        "goal-worker",
         "plan",
         "researcher",
         "summary",
         "title",
       ])
-      for (const item of agents) {
+      // goal-worker is the sanctioned exception: the Goal Loop worker (V3.9 §D) carries out plan
+      // steps, which requires a working ruleset — bash runs the step's validation commands.
+      for (const item of agents.filter((item) => item.id !== AgentV2.ID.make("goal-worker"))) {
         expect(item.permissions.some((rule) => rule.action === "bash" && rule.effect !== "deny")).toBe(false)
       }
 
@@ -136,6 +139,15 @@ describe("AgentV2", () => {
       for (const action of ["bash", "write", "edit", "task", "question"]) {
         expect(PermissionV2.evaluate(action, "*", researcher?.permissions ?? []).effect).toBe("deny")
       }
+
+      const goalWorker = yield* agent.get(AgentV2.ID.make("goal-worker"))
+      expect(goalWorker).toBeDefined()
+      expect(goalWorker?.hidden).toBe(true)
+      expect(goalWorker?.mode).toBe("subagent")
+      for (const action of ["read", "grep", "edit", "write", "bash", "plan"]) {
+        expect(PermissionV2.evaluate(action, "*", goalWorker?.permissions ?? []).effect).toBe("allow")
+      }
+      expect(PermissionV2.evaluate("task", "*", goalWorker?.permissions ?? []).effect).toBe("deny")
     }),
   )
 

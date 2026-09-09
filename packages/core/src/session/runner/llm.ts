@@ -6,12 +6,13 @@ import {
   LLMRequest,
   Message,
   SystemPart,
+  ToolDefinition,
   isContextOverflowFailure,
   type ProviderErrorEvent,
 } from "@deepagent-code/llm"
 import { AgentGateway } from "../../agent-gateway"
 import { desc, eq } from "drizzle-orm"
-import { Cause, Context, DateTime, Effect, Exit, FiberSet, Layer, Option, Schema, Semaphore, Stream } from "effect"
+import { Cause, DateTime, Effect, Exit, FiberSet, Layer, Option, Schema, Semaphore, Stream } from "effect"
 import { AgentV2 } from "../../agent"
 import { Config } from "../../config"
 import { Database } from "../../database/database"
@@ -43,39 +44,33 @@ import { GoalLoop } from "../../deepagent/goal-loop"
 import { getActiveGoal } from "../../deepagent/session-state"
 import { DocumentStore } from "../../deepagent/document-store"
 import { planStoreRoot } from "../../deepagent/plan-store"
-import {
-  type RunError,
-  Service,
-  StepLimitExceededError,
-  CurrentOnSessionSettled,
-  CurrentToolSettleGate,
-  currentToolSettleGate,
-} from "./index"
+import { type RunError, Service, StepLimitExceededError, CurrentOnSessionSettled, CurrentToolSettleGate } from "./index"
 import { SessionRunnerModel } from "./model"
 import { PreparedProviderTurn } from "./prepared-provider-turn"
-import { buildDeepAgentPrompt } from "./deepagent-prompt"
+import { buildDeepAgentPrompt, buildGovernedPlanContext } from "./deepagent-prompt"
 import { V2ToolEffect } from "./v2-tool-effect"
 import { createLLMEventPublisher } from "./publish-llm-event"
+import { normalizeAttachments } from "./attachments"
 import { toLLMMessages } from "./to-llm-message"
 import { SessionRunnerCanonical } from "./canonical-turn"
-import {
-  productionAdaptersEnabled,
-  ProductionV2Sources,
-} from "../../context-federation/production-adapters"
+import { productionAdaptersEnabled, ProductionV2Sources } from "../../context-federation/production-adapters"
+import { CurrentRuntimeFeatures } from "../../flag/runtime-features"
 import { V2ProviderTurn } from "./v2-provider-turn"
 import { V2ProviderTurnReceiptTable } from "./v2-provider-turn.sql"
 import { CanonicalJson } from "../../util/canonical-json"
 import { Hash } from "../../util/hash"
+import { Token } from "../../util/token"
 import { CapabilitySnapshot } from "../../system-context/capability-snapshot"
 // W4.1/P1-1: the snapshot restore reads the DURABLE `session_capability_load` table
 // (the in-process kernel cache is process-local only — a restart would lose it).
 import { capabilityLoadFactOf, recordedCapabilityLoadsForSession } from "../../system-context/capability-load-adapter"
 import { ProjectDocsSync } from "../../deepagent/project-docs-sync"
+import { flipFlagValueOn } from "../../deepagent/flip-flag"
 import { FSUtil } from "../../fs-util"
 import { Git } from "../../git"
 import {
+  buildCapabilityEvidence,
   configDrift,
-  configEvidenceForTurn,
   protocolAttemptIdentityFor,
   protocolAttemptIdentityHash,
   resolveModelProtocol,
@@ -112,8 +107,10 @@ import {
  *   - [x] Authorize and execute recorded local calls through a core-owned registry hook.
  *   - [x] Persist typed success, failure, and provider-executed tool outcomes.
  *   - [x] Start each recorded local call eagerly and await all settlements before continuation.
- *   - [ ] Add scoped runtime context, progress updates, attachment normalization,
- *     plugins, and cancellation settlement.
+ *   - [ ] Add scoped runtime context, progress updates, plugins, and cancellation settlement.
+ *     (Prompt attachments are normalized into wire shape at request construction — text/* inlined,
+ *     directories listed, binary media materialized or capability-gated; see
+ *     `normalizeAttachments` in ./attachments.)
  *   - [x] Reload projected history and start the next explicit provider turn after local tool results.
  *   - [x] Continue for durable user steering accepted during an active provider turn.
  *   - [x] Continue after compaction: pre-turn budget compaction rebuilds the prepared turn
@@ -150,25 +147,161 @@ The maximum number of steps allowed for this task has been reached. Tools are di
 
 Summarize the work completed so far, list any remaining tasks, and recommend what should happen next. Do not make any tool calls.`
 
-// W2-V2: the host-injectable plan gate seam at the runner root — an outer host providing
-// CurrentToolSettleGate flows through serviceOption at build; pure core compositions stay
-// ungated. (Defined here so location-layer imports it along the existing llm.ts edge — a
-// separate module-level const in location-layer created an import cycle / TDZ crash.)
-export const SessionRunnerLLMToolGateSeam = Layer.unwrap(
-  Effect.map(
-    Effect.serviceOption(CurrentToolSettleGate),
-    (provided) =>
-      Option.isSome(provided)
-        ? Layer.succeedContext(Context.make(CurrentToolSettleGate, provided.value))
-        : Layer.effectDiscard(Effect.void),
-  ),
-)
+// V4.0.1 P0b OUTPUT soft-landing (legacy loop parity): a response cut off at the output-token
+// ceiling (finish "length") with no local tool call gets a bounded "continue from the cutoff"
+// synthetic nudge and one more provider turn instead of ending the turn mid-sentence. The
+// continuation budget derives from the durable history itself (trailing assistant-"length" +
+// synthetic-nudge pairs), so no separate durable counter exists and a natural stop automatically
+// resets the run. Env knobs mirror the legacy overflow.ts semantics (kill-switch default ON).
+const OUTPUT_CONTINUATION_MAX = 3
+
+const outputContinuationMax = () => {
+  const raw = Number(process.env["DEEPAGENT_CODE_OUTPUT_CONTINUATION_MAX"])
+  return Number.isInteger(raw) && raw >= 0 ? raw : OUTPUT_CONTINUATION_MAX
+}
+
+const outputSoftLandingEnabled = () => flipFlagValueOn(process.env["DEEPAGENT_CODE_OUTPUT_SOFT_LANDING"], true)
+
+const OUTPUT_CONTINUE_TAIL_TEXT = [
+  "<system-reminder>",
+  "你上一轮的输出因达到输出长度上限被截断（未自然结束）。请直接从被截断处继续，",
+  "不要重复已经输出的内容，也不要重新开头。若已实质完成，简短收尾即可。",
+  "</system-reminder>",
+].join("\n")
+
+const TOOL_INPUT_CONTINUE_TAIL_TEXT = [
+  "<system-reminder>",
+  "你上一轮的工具输入因达到输出长度上限而被截断，系统没有执行该工具，也没有应用其中的文件修改。",
+  "不要原样重发同一个大型 JSON 工具调用。将修改拆小；对于大型 write/edit/apply_patch，改用 `apply_patch_chunk`，",
+  "每个 patchText 块不超过 12000 UTF-8 字节（中文建议不超过约 4000 字）。begin 使用 offset 0；之后每次 append 和最终 commit 都使用上一结果返回的 nextOffset。",
+  "</system-reminder>",
+].join("\n")
+
+const isOutputContinuationNudge = (text: string) =>
+  text === OUTPUT_CONTINUE_TAIL_TEXT || text === TOOL_INPUT_CONTINUE_TAIL_TEXT
+
+// Continuations already consumed by the CURRENT length run: walk the trailing chain of
+// (assistant finish "length" ← synthetic nudge) pairs. Any other tail message breaks the run.
+const countOutputContinuations = (messages: readonly SessionMessage.Message[]) => {
+  let count = 0
+  let index = messages.length - 1
+  while (index >= 0) {
+    const message = messages[index]
+    if (message?.type === "assistant" && message.finish === "length") {
+      index--
+      continue
+    }
+    if (message?.type === "synthetic" && isOutputContinuationNudge(message.text)) {
+      count++
+      index--
+      continue
+    }
+    break
+  }
+  return count
+}
+
+// BUG-010 / RI-127 plan protocol termination budget (legacy SessionProcessor
+// PlanProtocolTracker parity): a malformed, conflicting, or no-progress model plan is
+// recoverable once; the SECOND consecutive violation terminates the turn with a typed
+// assistant error instead of opening another provider turn. Like the output-continuation
+// budget above, the consecutive count derives from durable history (the plan leaf's
+// structured `plan_protocol` outcome on projected tool parts), so no separate counter is
+// persisted across turns.
+const PLAN_PROTOCOL_MAX_ATTEMPTS = 2
+
+type PlanProtocolViolationOutcome = "invalid" | "conflict" | "no_progress"
+
+const planProtocolOutcomeOf = (structured: unknown): PlanProtocolViolationOutcome | "success" | undefined => {
+  if (typeof structured !== "object" || structured === null) return undefined
+  const protocol = (structured as Record<string, unknown>)["plan_protocol"]
+  return protocol === "invalid" || protocol === "conflict" || protocol === "no_progress" || protocol === "success"
+    ? protocol
+    : undefined
+}
+
+const planErrorCodeOf = (structured: unknown) => {
+  if (typeof structured !== "object" || structured === null) return undefined
+  const code = (structured as Record<string, unknown>)["plan_error_code"]
+  return typeof code === "string" ? code : undefined
+}
+
+// Consecutive plan protocol violations at the tail of the CURRENT activity: walk history
+// backwards counting violation-outcome plan parts; a committed plan (success) or the user
+// message that opened the activity ends the run. Non-plan calls neither increment nor reset
+// the count, and a plan part without a settled outcome (pending/running) is skipped — both
+// legacy tracker semantics.
+const countPlanProtocolViolations = (messages: readonly SessionMessage.Message[]) => {
+  let count = 0
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]
+    if (message?.type === "user") break
+    if (message?.type !== "assistant") continue
+    let committed = false
+    for (let partIndex = message.content.length - 1; partIndex >= 0; partIndex--) {
+      const part = message.content[partIndex]
+      if (part?.type !== "tool" || part.name !== "plan") continue
+      if (part.state.status === "error") {
+        count++
+        continue
+      }
+      if (part.state.status !== "completed") continue
+      const outcome = planProtocolOutcomeOf(part.state.structured)
+      if (outcome === undefined || outcome === "success") {
+        committed = true
+        break
+      }
+      count++
+    }
+    if (committed) break
+  }
+  return count
+}
+
+// UPD-002/RI-126 structured output (legacy loop parity): a prompt-admitted json_schema format
+// is delivered either through the wire (`responseFormat` lowered onto Responses `text.format`
+// for Responses-family + format-capable routes) or through a synthesized StructuredOutput
+// tool the model must call exactly once (all other routes). The captured value persists on
+// the assistant through SessionEvent.StructuredCaptured. Copy below is verbatim legacy
+// (prompt.ts STRUCTURED_OUTPUT_DESCRIPTION / buildStructuredOutput*).
+const STRUCTURED_OUTPUT_TOOL_NAME = "StructuredOutput"
+
+const STRUCTURED_OUTPUT_SUCCESS_TEXT = "Structured output captured successfully."
+
+const STRUCTURED_OUTPUT_DESCRIPTION = `Use this tool to return your final response in the requested structured format.
+
+IMPORTANT:
+- You MUST call this tool exactly once at the end of your response
+- The input must be valid JSON matching the required schema
+- Complete all necessary research and tool calls BEFORE calling this tool
+- This tool provides your final answer - no further actions are taken after calling it`
+
+const schemaTopLevelFields = (schema: Record<string, unknown>): string[] => {
+  const props = schema["properties"]
+  if (typeof props !== "object" || props === null) return []
+  return Object.keys(props)
+}
+
+const structuredOutputSystemPrompt = (schema: Record<string, unknown>): string => {
+  const fields = schemaTopLevelFields(schema)
+  const fieldHint =
+    fields.length > 0
+      ? `\nThe StructuredOutput tool requires these top-level fields: ${fields.join(", ")}. Use ONLY these exact field names.`
+      : ""
+  return `IMPORTANT: The user has requested structured output. You MUST use the StructuredOutput tool to provide your final response. Do NOT respond with plain text - you MUST call the StructuredOutput tool with your answer formatted according to the schema.${fieldHint}`
+}
+
+// Wire mode: the provider enforces the schema via text.format, so the tail must NOT reference
+// the (absent) StructuredOutput tool.
+const STRUCTURED_OUTPUT_WIRE_TAIL =
+  "IMPORTANT: The user has requested structured output. Your final response text is schema-constrained by the provider. Reply with ONLY a single JSON value matching the required schema - no Markdown fences, prose, or wrapping."
 
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const events = yield* EventV2.Service
     const llm = yield* LLMClient.Service
+    const gateway = yield* AgentGateway.Runtime
     const agents = yield* AgentV2.Service
     const tools = yield* ToolRegistry.Service
     const models = yield* SessionRunnerModel.Service
@@ -185,25 +318,27 @@ export const layer = Layer.effect(
     const gitService = yield* Git.Service
     // W10: after a drain chain settles, best-effort project docs maintenance. Writes are opt-in
     // (DEEPAGENT_CODE_PROJECT_DOCS_SYNC or `docs_sync` config, default false).
-    const docsSyncEnabled =
-      ProjectDocsSync.writingEnabled(Config.latest(yield* config.entries(), "docs_sync"))
+    const docsSyncEnabled = ProjectDocsSync.writingEnabled(Config.latest(yield* config.entries(), "docs_sync"))
     // W7: host-injectable settle hook (durable-learning admission in the deepagent-code
     // composition); unwired = no-op.
     const onSessionSettled = yield* CurrentOnSessionSettled
     const toolSettleGate = yield* CurrentToolSettleGate
+    // Runtime feature authority: captured once at layer construction (default: the process-start
+    // global), so every forked drain fiber reads the SAME registry and tests inject an explicit
+    // one at the layer instead of flipping process.env mid-process.
+    const runtimeFeatures = yield* CurrentRuntimeFeatures
     const providerTurns = yield* V2ProviderTurn.Service
+    const runtimeIntegrityIdentity = yield* V2ProviderTurn.CurrentRuntimeIntegrityIdentity
     const toolEffects = yield* V2ToolEffect.Service
     const permissionGrantLookup = yield* V2ToolEffect.CurrentPermissionGrantLookup
     // §16.3 order 4 history-epoch bridge: resolved once at layer scope (like the grant lookup) so
     // the captured value reaches every forked drain fiber; undefined keeps the pre-seam identity.
     const historyEpochLookup = yield* V2ProviderTurn.CurrentHistoryEpochLookup
     const contexts = yield* SessionContext.Service
-    const queryAuthorization = Option.getOrUndefined(
-      yield* Effect.serviceOption(ContextQueryAuthorization.Controller),
-    )
-    const selectionSources = yield* Effect.serviceOption(ProductionV2Sources).pipe(
-      Effect.map((option) => Option.getOrElse(option, () => ({}))),
-    )
+    // Location host seams are required production dependencies. Missing wiring must fail the
+    // Location build instead of silently turning graph selection and authorization into no-ops.
+    const queryAuthorization = yield* ContextQueryAuthorization.Controller
+    const selectionSources = yield* ProductionV2Sources
     const ownerAuthorization = yield* V2ProviderTurn.OwnerAuthorization
     const db = (yield* Database.Service).db
     const remoteCompaction = yield* SessionCompaction.CurrentRemoteCompaction
@@ -254,6 +389,29 @@ export const layer = Layer.effect(
     const isQuestionRejected = (cause: Cause.Cause<unknown>) =>
       cause.reasons.some((reason) => Cause.isDieReason(reason) && reason.defect instanceof QuestionV2.RejectedError)
 
+    // Matches both the fetch-abort DOMException and the hand-built AbortErrors used across the
+    // codebase (process.ts, filesystem/ripgrep.ts).
+    const isAbortError = (defect: unknown) => defect instanceof Error && defect.name === "AbortError"
+
+    // Cancel reaches this boundary as a transport AbortError defect: interrupting the drain while it
+    // hangs on the provider body stream aborts the fetch (`InterruptibleResponse` ensures
+    // `controller.abort()`), the body reader teardown then rejects with an AbortError DOMException,
+    // and `Stream.fromReadableStream` (via `Effect.promise`) surfaces that rejection as a defect
+    // that replaces the fiber's interrupt cause outright. The request AbortController is private to
+    // the HTTP client and is only ever aborted by consumption teardown, so an AbortError defect here
+    // IS the interruption artifact — reclassify it as interrupts-only to keep the cancel contract.
+    // Causes that carry any other signal (a typed failure or a non-abort defect alongside) pass
+    // through untouched, so an AbortError outside the interruption context keeps its semantics.
+    const classifyProviderStreamAbort = <A, E>(exit: Exit.Exit<A, E>): Exit.Exit<A, E> => {
+      if (exit._tag !== "Failure") return exit
+      const remaining = exit.cause.reasons.filter(
+        (reason) => !(Cause.isDieReason(reason) && isAbortError(reason.defect)),
+      )
+      if (remaining.length === exit.cause.reasons.length) return exit
+      if (remaining.some((reason) => !Cause.isInterruptReason(reason))) return exit
+      return Exit.failCause(remaining.length === 0 ? Cause.interrupt() : Cause.fromReasons(remaining))
+    }
+
     type TurnTransition =
       // Request preparation observed a concurrent Session change and must restart from durable state.
       | { readonly _tag: "RebuildPreparedTurn"; readonly promotion?: SessionInput.Delivery; readonly step?: number }
@@ -285,24 +443,28 @@ export const layer = Layer.effect(
       session: SessionSchema.Info,
       modelSupportsTools: boolean | undefined,
     ) =>
-      Effect.all([systemContext.load(), skillGuidance.load(agent)], { concurrency: "unbounded" }).pipe(
-        Effect.map(SystemContext.combine),
-        Effect.provideService(
-          CapabilityCatalog.CurrentGrantedPermissions,
-          new Set(
-            modelSupportsTools === false
-              ? []
-              : [...DeepAgentCodeToolInventory.permissionActions].filter(
-                  (permission) =>
-                    !PermissionV2.isActionWhollyDenied(
-                      permission,
-                      agent.info?.permissions ?? [],
-                      session.permissions,
-                    ),
-                ),
+      Effect.gen(function* () {
+        const rulesets = [agent.info?.permissions ?? [], session.permissions]
+        const availableToolNames = new Set(
+          modelSupportsTools === false
+            ? []
+            : (yield* tools.materialize({ rulesets })).definitions.map((definition) => definition.name),
+        )
+        return yield* Effect.all([systemContext.load(), skillGuidance.load(agent)], { concurrency: 2 }).pipe(
+          Effect.map(SystemContext.combine),
+          Effect.provideService(CapabilityCatalog.CurrentAvailableToolNames, availableToolNames),
+          Effect.provideService(
+            CapabilityCatalog.CurrentGrantedPermissions,
+            new Set(
+              modelSupportsTools === false
+                ? []
+                : [...DeepAgentCodeToolInventory.permissionActions].filter(
+                    (permission) => !PermissionV2.isActionWhollyDenied(permission, ...rulesets),
+                  ),
+            ),
           ),
-        ),
-      )
+        )
+      })
 
     // W1.1 — goal_steer delivery (design W1 §1). Each pending goal-directed steer is handed to the
     // ACTIVE goal's durable runtime state via GoalLoop.enqueueGoalSteer; without an active goal (or a
@@ -344,6 +506,9 @@ export const layer = Layer.effect(
       const ownerCampaign = (yield* V2ProviderTurn.CurrentOwnerCampaign) ?? V2ProviderTurn.ownerCampaignFromEnv()
       if (!(yield* ownerAuthorization.authorize(db, ownerCampaign)))
         return yield* new V2ProviderTurn.ConflictError({ reason: "v2_owner_campaign_not_verified" })
+      const integrityIdentity = runtimeIntegrityIdentity
+        ? yield* runtimeIntegrityIdentity.resolve(yield* Effect.context())
+        : undefined
       // W0.5 (blocker-1): the parity exclusion compares the operator's EXPLICIT owner campaign
       // only — the runtime's auto-default (v2-owner-<InstallationVersion>) is the NORMAL production
       // posture and must not disable the shadow-parity verification run that intentionally sets
@@ -363,7 +528,8 @@ export const layer = Layer.effect(
       if (session.agent !== undefined && agent.info === undefined)
         return yield* new AgentV2.NotFoundError({ id: session.agent })
       const { model, info: modelInfo, provider: modelProvider } = yield* models.resolve(session)
-      const modelProtocol = modelInfo ? resolveModelProtocol(modelInfo, modelProvider).protocol : undefined
+      const modelProtocolSelection = modelInfo ? resolveModelProtocol(modelInfo, modelProvider) : undefined
+      const modelProtocol = modelProtocolSelection?.protocol
       const initialized = yield* SessionContextEpoch.initialize(
         db,
         loadSystemContext(agent, session, modelInfo?.capabilities.tools),
@@ -412,24 +578,27 @@ export const layer = Layer.effect(
       // C2-04/B2 residual — bind the protocol attempt identity (route/protocol/origin/capability/
       // lowering) onto the prepared attempt from the already-resolved catalog config, so an exact
       // retry never changes the model protocol/context/capability body mid-attempt (design §2.3,
-      // §4.1 step 8). The business turn consumes cached evidence only (design §5.2: never runs the
-      // probe); a missing entry is `no_evidence` and the identity still derives from the protocol
-      // defaults (capability fingerprint is identical either way, so binding stays deterministic).
+      // §4.1 step 8). This evidence is a pure canonical projection of the exact Location catalog
+      // snapshot. Business turns never consult or mutate the optional process-local probe cache.
       const protocolIdentity =
         modelInfo === undefined
           ? undefined
-          : protocolAttemptIdentityFor(
-              modelInfo,
-              modelProvider,
-              (() => {
-                const evidence = configEvidenceForTurn(modelInfo, modelProvider)
-                return evidence === "no_evidence" ? undefined : evidence
-              })(),
-            )
+          : protocolAttemptIdentityFor(modelInfo, modelProvider, buildCapabilityEvidence(modelInfo, modelProvider))
       const protocolIdentityHash =
         protocolIdentity === undefined ? undefined : protocolAttemptIdentityHash(protocolIdentity)
       const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
       const context = entries.map((entry) => entry.message)
+      // UPD-002/RI-126: the active structured-output format rides the latest user message
+      // (legacy lastUser.format parity). Wire mode requires BOTH a Responses-family route AND
+      // the declared structuredOutput capability — never assumed from the family alone; every
+      // other route keeps the synthesized StructuredOutput tool.
+      const requestedFormat = context.findLast((message) => message.type === "user")?.format
+      const jsonSchemaFormat = requestedFormat?.type === "json_schema" ? requestedFormat : undefined
+      const wireStructuredOutput =
+        jsonSchemaFormat?.schema !== undefined &&
+        (modelProtocol === "openai.responses" || modelProtocol === "openai-compatible.responses") &&
+        modelProtocolSelection?.capabilities.structuredOutput === true
+      const syntheticStructuredOutput = jsonSchemaFormat?.schema !== undefined && !wireStructuredOutput
       const currentUserMessageID = context.findLast((message) => message.type === "user")?.id
       const latestReceipt = currentUserMessageID
         ? undefined
@@ -456,11 +625,25 @@ export const layer = Layer.effect(
       const toolMaterialization = yield* tools.materialize({
         rulesets: [agent.info?.permissions ?? [], session.permissions],
       })
-      const toolDefinitions = modelInfo?.capabilities.tools === false ? [] : toolMaterialization.definitions
+      const toolDefinitions = [
+        ...(modelInfo?.capabilities.tools === false ? [] : toolMaterialization.definitions),
+        // RI-126: the synthesized StructuredOutput tool is advertised but never registered —
+        // its call is intercepted before registry settlement and captured as the final answer.
+        ...(syntheticStructuredOutput && jsonSchemaFormat.schema !== undefined
+          ? [
+              ToolDefinition.make({
+                name: STRUCTURED_OUTPUT_TOOL_NAME,
+                description: STRUCTURED_OUTPUT_DESCRIPTION,
+                inputSchema: jsonSchemaFormat.schema,
+              }),
+            ]
+          : []),
+      ]
       const stepLimitReached = agent.info?.steps !== undefined && currentStep >= agent.info.steps
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
-      const deepagentPrompt = AgentGateway.isActiveDeepAgentRuntime()
+      const deepagentPrompt = gateway.active
         ? yield* buildDeepAgentPrompt({
+            runtime: gateway,
             sessionID: session.id,
             userMessageID: receiptUserMessageID,
             providerID: model.provider,
@@ -470,6 +653,19 @@ export const layer = Layer.effect(
             ...(gitService === undefined ? {} : { git: gitService }),
           })
         : undefined
+      // Governed plan-status fallback (V1 parity, session/llm/request.ts non-managed branch): when
+      // the gateway is enabled but not model-managed (agentMode "general" — `runtime.active` is
+      // false and buildDeepAgentPrompt is skipped), EVERY non-compaction agent with a committed plan
+      // still needs the plan write precondition to advance/replan: the V2 plan gate forces a seeded
+      // session's plan to "high" regardless of agent, so gating on goal-worker alone stranded
+      // general-mode Sessions that were forced to create a plan but could never see plan-status.
+      // V2 compaction (SessionCompaction) dispatches its summary outside this prepare path; the
+      // roster's hidden compaction agent is excluded explicitly for V1 parity.
+      // buildGovernedPlanContext returns undefined without a committed plan — nothing to inject.
+      const governedPlanContext =
+        deepagentPrompt === undefined && agent.id !== AgentV2.ID.make("compaction")
+          ? buildGovernedPlanContext({ runtime: gateway, sessionID: session.id, messages: context })
+          : undefined
       const stableSystemParts = PreparedProviderTurn.mergeSystemParts(
         [agent.info?.system],
         deepagentPrompt?.stableSystemParts ?? [],
@@ -477,10 +673,17 @@ export const layer = Layer.effect(
       )
       const volatileSystemParts: string[] = []
       const requestMessages = [
-        ...toLLMMessages(context, model),
+        ...toLLMMessages(
+          yield* normalizeAttachments(context, modelInfo?.capabilities.input).pipe(
+            Effect.provideService(FSUtil.Service, fs),
+          ),
+          model,
+        ),
         ...(deepagentPrompt?.volatileRoundContext
           ? [Message.user(deepagentPrompt.volatileRoundContext)]
-          : []),
+          : governedPlanContext
+            ? [Message.user(governedPlanContext)]
+            : []),
         ...(stepLimitReached ? [Message.assistant(MAX_STEPS_PROMPT)] : []),
       ]
       let request = LLM.request({
@@ -489,7 +692,12 @@ export const layer = Layer.effect(
         system: stableSystemParts.map(SystemPart.make),
         messages: requestMessages,
         tools: toolDefinitions,
-        toolChoice: stepLimitReached ? "none" : undefined,
+        toolChoice: stepLimitReached ? "none" : syntheticStructuredOutput ? "required" : undefined,
+        // RI-126 wire mode: the Responses protocol lowers this onto `text.format` json_schema;
+        // `strict` stays unset (session schemas are not authored against OpenAI strict mode).
+        ...(wireStructuredOutput && jsonSchemaFormat.schema !== undefined
+          ? { responseFormat: { type: "json" as const, schema: jsonSchemaFormat.schema } }
+          : {}),
         metadata: {
           "deepagent-code": {
             callKind: "session_turn",
@@ -524,7 +732,8 @@ export const layer = Layer.effect(
             }
           : {}),
         sources: selectionSources,
-        ...(queryAuthorization === undefined ? {} : { queryAuthorization }),
+        queryAuthorization,
+        runtimeFeatures,
       })
       // An interrupted turn must terminalize the activity it admitted; otherwise the leftover
       // `active` activity blocks every future queued admission on this Session. The per-turn scope
@@ -532,11 +741,11 @@ export const layer = Layer.effect(
       // released on every exit; a continuation admits and binds its own selection before tools run.
       yield* Effect.addFinalizer((exit) =>
         (Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)
-          ? contexts.settleActivity({ activityId: selectionAdmission.activityId, state: "interrupted" }).pipe(Effect.ignore)
+          ? contexts
+              .settleActivity({ activityId: selectionAdmission.activityId, state: "interrupted" })
+              .pipe(Effect.ignore)
           : Effect.void
-        ).pipe(
-          Effect.ensuring(queryAuthorization?.remove(session.id).pipe(Effect.ignore) ?? Effect.void),
-        ),
+        ).pipe(Effect.ensuring(queryAuthorization.remove(session.id).pipe(Effect.ignore))),
       )
       // W3.6 — after the selection is admitted, the selection graph evidence (refs + brief
       // revision/summary) is appended to the VOLATILE system tail (`deepagentSystem` + the request
@@ -544,12 +753,22 @@ export const layer = Layer.effect(
       // sits after the cache breakpoint and is also recorded in the prepared turn's volatile parts.
       // Gated by the W3 production flag: an explicit `=false` keeps the pre-W3 request byte-identical
       // (staged adapters + no evidence tail).
-      const selectionEvidence = productionAdaptersEnabled()
+      const selectionEvidence = productionAdaptersEnabled(runtimeFeatures)
         ? yield* SessionRunnerCanonical.selectionGraphEvidence(db, selectionAdmission.selectionId)
         : undefined
       if (selectionEvidence !== undefined) {
         volatileSystemParts.push(selectionEvidence)
         request = LLM.updateRequest(request, { system: [...request.system, SystemPart.make(selectionEvidence)] })
+      }
+      // RI-126: the structured-output contract rides the volatile runtime tail (legacy
+      // buildStructuredOutputRuntimeTail parity) — wire mode references the provider-enforced
+      // schema, synthetic mode the StructuredOutput tool.
+      if (jsonSchemaFormat?.schema !== undefined) {
+        const structuredTail = wireStructuredOutput
+          ? STRUCTURED_OUTPUT_WIRE_TAIL
+          : structuredOutputSystemPrompt(jsonSchemaFormat.schema)
+        volatileSystemParts.push(structuredTail)
+        request = LLM.updateRequest(request, { system: [...request.system, SystemPart.make(structuredTail)] })
       }
       // §16.3 order 4: the receipt's history-window identity comes from the optional epoch bridge;
       // unwired compositions (or a lookup fault) keep the ContextEpoch revision exactly as before.
@@ -574,6 +793,19 @@ export const layer = Layer.effect(
         })
       )
         return yield* Effect.die(rebuildPreparedTurn(undefined, currentStep))
+      // Unknown-context-limit host guard (legacy `requestBudget` parity): with no physical limit the
+      // estimate is the only budget line; with a known limit, pre-turn compaction above already gated.
+      const requestBudget = PreparedProviderTurn.budget(
+        model,
+        Token.estimate(
+          JSON.stringify({
+            system: request.system,
+            messages: request.messages,
+            tools: toolDefinitions,
+            toolChoice: request.toolChoice,
+          }),
+        ),
+      )
       // One recoverable boundary: canonical attempt + V2 receipt are created and bound atomically.
       const requestInputHash = Hash.sha256(
         CanonicalJson.stringify({
@@ -584,35 +816,31 @@ export const layer = Layer.effect(
           },
         }),
       )
-      const providerReceipt = (
-        yield* SessionRunnerCanonical.commitTurn({
-          db,
-          contexts,
-          sessionID: session.id,
-          admission: selectionAdmission,
-          receipt: {
-            sessionId: session.id,
-            userMessageId: receiptUserMessageID,
-            historyPromptEpoch,
-            historySourceEndMessageId: context.at(-1)?.id,
-            requestInputHash,
-            providerId: model.provider,
-            modelId: model.id,
-            protocol: model.route.protocol,
-            ownerMode: parityCampaign ? "shadow_v2" : "v2",
-          },
-          ownerToken: providerTurns.ownerToken,
-        })
-      ).receipt
+      const providerReceipt = (yield* SessionRunnerCanonical.commitTurn({
+        db,
+        contexts,
+        sessionID: session.id,
+        admission: selectionAdmission,
+        receipt: {
+          sessionId: session.id,
+          userMessageId: receiptUserMessageID,
+          historyPromptEpoch,
+          historySourceEndMessageId: context.at(-1)?.id,
+          requestInputHash,
+          providerId: model.provider,
+          modelId: model.id,
+          protocol: model.route.protocol,
+          ownerMode: parityCampaign ? "shadow_v2" : "v2",
+        },
+        ownerToken: providerTurns.ownerToken,
+      })).receipt
       // R4 — pricing belongs to the Location catalog and is an explicit runner dependency. A
       // missing catalog model keeps cost 0 rather than guessing, but a composition can no longer
       // silently omit the catalog service and disable accounting for every turn.
-      const pricing = yield* catalog.model
-        .get(ProviderV2.ID.make(model.provider), ModelV2.ID.make(model.id))
-        .pipe(
-          Effect.map((info) => info.cost[0]),
-          Effect.catch(() => Effect.succeed(undefined)),
-        )
+      const pricing = yield* catalog.model.get(ProviderV2.ID.make(model.provider), ModelV2.ID.make(model.id)).pipe(
+        Effect.map((info) => info.cost[0]),
+        Effect.catch(() => Effect.succeed(undefined)),
+      )
       const publisher = createLLMEventPublisher(events, {
         sessionID: session.id,
         agent: agent.id,
@@ -688,7 +916,12 @@ export const layer = Layer.effect(
                 return first === undefined
                   ? {}
                   : {
-                      grant: { receiptId: first.receiptID, ownerId: first.ownerID, state: first.state, version: first.version },
+                      grant: {
+                        receiptId: first.receiptID,
+                        ownerId: first.ownerID,
+                        state: first.state,
+                        version: first.version,
+                      },
                     }
               }),
               // The seam's error channel is never, so a wired lookup can only fail by defect;
@@ -721,15 +954,68 @@ export const layer = Layer.effect(
       // row: the enclosing turn receipt quarantines indeterminate, which is the recovery
       // authority for unknown outcomes (`tapError` observes typed errors only and never
       // captures defects or interrupts).
+      // BUG-010/RI-127: consecutive plan protocol violations already durable in history seed
+      // this turn's budget (legacy restorePlanProtocolFailures parity); in-turn plan
+      // settlements keep counting from there, and the second consecutive violation arms turn
+      // termination below.
+      let planConsecutiveViolations = countPlanProtocolViolations(context)
+      let planProtocolTerminal: { readonly ordinal: number; readonly code: string } | undefined
+      const planResultMetadata = new Map<string, Record<string, unknown>>()
+      const observePlanSettlement = (
+        call: { readonly id: string; readonly name: string },
+        settlement: Effect.Success<ReturnType<ToolRegistry.Materialization["settle"]>>,
+      ): Effect.Success<ReturnType<ToolRegistry.Materialization["settle"]>> => {
+        if (call.name !== "plan") return settlement
+        const failed = settlement.result.type === "error"
+        const structured = "output" in settlement ? settlement.output?.structured : undefined
+        const outcome = failed ? ("invalid" as const) : planProtocolOutcomeOf(structured)
+        if (outcome === undefined || outcome === "success") {
+          planConsecutiveViolations = 0
+          return settlement
+        }
+        planConsecutiveViolations += 1
+        const ordinal = planConsecutiveViolations
+        const code = failed ? undefined : planErrorCodeOf(structured)
+        planResultMetadata.set(call.id, {
+          protocol: outcome,
+          attempt_ordinal: ordinal,
+          ...(code === undefined ? {} : { error_code: code }),
+        })
+        if (ordinal >= PLAN_PROTOCOL_MAX_ATTEMPTS)
+          planProtocolTerminal = { ordinal, code: code ?? outcome }
+        // §7.5 contract: the model sees which attempt this was (first error is correctable,
+        // second terminates) — append the ordinal to the result text exactly like the legacy
+        // processor's "[Plan attempt N of 2]" suffix.
+        const suffix = `\n\n[Plan attempt ${ordinal} of ${PLAN_PROTOCOL_MAX_ATTEMPTS}]`
+        if (failed)
+          return typeof settlement.result.value === "string"
+            ? { ...settlement, result: { ...settlement.result, value: settlement.result.value + suffix } }
+            : settlement
+        if (!("output" in settlement) || settlement.output === undefined) return settlement
+        const lastText = settlement.output.content.findLastIndex((item) => item.type === "text")
+        if (lastText === -1) return settlement
+        return {
+          ...settlement,
+          result:
+            settlement.result.type === "text" && typeof settlement.result.value === "string"
+              ? { ...settlement.result, value: settlement.result.value + suffix }
+              : settlement.result,
+          output: {
+            ...settlement.output,
+            content: settlement.output.content.map((item, index) =>
+              index === lastText && item.type === "text" ? { ...item, text: item.text + suffix } : item,
+            ),
+          },
+        }
+      }
       const settleTool: ToolRegistry.Materialization["settle"] = (input) =>
         Effect.gen(function* () {
           yield* admitToolEffect(input)
           // W2-V2: the plan gate runs BEFORE the tool executes — a block returns a synthetic
           // settled result carrying the correction template (mirroring the V1 wrapper's soft
           // tool-result block), a grace-release pass prepends the reminder to the real output.
-          const gateFn = toolSettleGate ?? currentToolSettleGate()
-          if (gateFn) {
-            const gate = yield* gateFn({
+          if (toolSettleGate) {
+            const gate = yield* toolSettleGate({
               sessionID: input.sessionID,
               toolName: input.call.name,
               args: input.call.input,
@@ -776,7 +1062,12 @@ export const layer = Layer.effect(
           return yield* baseSettleTool(input).pipe(
             Effect.tap((settlement) => recordToolEffect(input, "settled", settlement.result, undefined)),
             Effect.tapError(() =>
-              recordToolEffect(input, "failed", { type: "error", value: "settlement_failed" }, "tool_settlement_failed"),
+              recordToolEffect(
+                input,
+                "failed",
+                { type: "error", value: "settlement_failed" },
+                "tool_settlement_failed",
+              ),
             ),
             Effect.catchDefect((defect) =>
               defect instanceof Error && TOOL_PATH_DEFECT.test(defect.message)
@@ -788,9 +1079,11 @@ export const layer = Layer.effect(
                   ).pipe(Effect.as({ result: { type: "error" as const, value: defect.message } }))
                 : Effect.die(defect),
             ),
+            Effect.map((settlement) => observePlanSettlement(input.call, settlement)),
           )
         })
       let overflowFailure: ProviderErrorEvent | undefined
+      let structuredCapture: { readonly callID: string; readonly value: unknown } | undefined
       const providerEvents: LLMEvent[] = []
       // Any rebuild after admit must terminalize the admitted receipt first: an epoch that is no
       // longer current invalidates the prepared request, and a leftover `preparing` receipt would
@@ -808,6 +1101,24 @@ export const layer = Layer.effect(
           Effect.ignore,
           Effect.uninterruptible,
         )
+      // RI-132: the pre-dispatch host guard is the runner's only `budget.decision` consumption
+      // point. An unknown/invalid context limit never reaches the provider when the estimated
+      // request crosses the guard — the receipt terminalizes failed (no prepared turn, no
+      // dispatch) and the turn ends with a typed assistant error instead of a provider 4xx.
+      if (requestBudget.decision === "unavailable") {
+        const reason = requestBudget.reason ?? "context_limit_unknown"
+        yield* terminalizePreDispatch(reason)
+        yield* publish(
+          LLMEvent.providerError({
+            message:
+              reason === "context_limit_invalid"
+                ? "Provider context limit is invalid; correct the endpoint/model configuration before continuing."
+                : "Provider context limit is unknown; configure an endpoint/model override before continuing this long request.",
+            retryable: false,
+          }),
+        )
+        return { needsContinuation: false, step: currentStep, activityId: selectionAdmission.activityId }
+      }
       const epochCurrent = yield* SessionContextEpoch.current(db, session.id, agent.id, system.revision).pipe(
         Effect.onInterrupt(() => terminalizePreDispatch("turn_aborted_before_dispatch")),
       )
@@ -839,7 +1150,11 @@ export const layer = Layer.effect(
       // W15 (P4): the durable restore is snapshot-scoped — only receipts recorded under the
       // CURRENT catalog snapshot belong to this epoch's loaded facts (mixed-epoch rows would
       // rebuild a snapshot digest that never existed).
-      const sessionLoadFacts = (yield* recordedCapabilityLoadsForSession(db, session.id, CapabilitySnapshot.defaultCatalogSnapshotId())).map(capabilityLoadFactOf)
+      const sessionLoadFacts = (yield* recordedCapabilityLoadsForSession(
+        db,
+        session.id,
+        CapabilitySnapshot.defaultCatalogSnapshotId(),
+      )).map(capabilityLoadFactOf)
       const providerStream = V2ProviderTurn.stream({
         service: providerTurns,
         receipt: providerReceipt,
@@ -849,7 +1164,7 @@ export const layer = Layer.effect(
               receipt: providerReceipt,
               stableSystemParts,
               volatileSystemParts: PreparedProviderTurn.mergeSystemParts(
-                [deepagentPrompt?.volatileRoundContext],
+                [deepagentPrompt?.volatileRoundContext ?? governedPlanContext],
                 volatileSystemParts,
               ),
               historyMessages: requestMessages,
@@ -858,7 +1173,7 @@ export const layer = Layer.effect(
               toolRegistryIDs: toolMaterialization.registeredIDs,
               toolPermissionFilteredIDs: toolMaterialization.permissionFilteredIDs,
               toolFinalOfferedIDs: toolDefinitions.map((tool) => tool.name),
-              toolChoice: stepLimitReached ? "none" : null,
+              toolChoice: stepLimitReached ? "none" : syntheticStructuredOutput ? "required" : null,
               toolResultReferences: context.flatMap((message) =>
                 message.type === "assistant"
                   ? message.content.flatMap((part) =>
@@ -869,7 +1184,7 @@ export const layer = Layer.effect(
                   : [],
               ),
               samplingMaxOutputTokens: request.generation?.maxTokens,
-              budget: PreparedProviderTurn.budget(model),
+              budget: requestBudget,
               userMessageID: receiptUserMessageID,
               activityID: providerReceipt.activityId,
               providerTurnSeq: providerReceipt.providerTurnSeq,
@@ -892,6 +1207,7 @@ export const layer = Layer.effect(
         stream: llm.stream(request).pipe(Stream.tap((event) => Effect.sync(() => providerEvents.push(event)))),
         outcomeArtifact: () => providerEvents,
         errorCode: (error) => `provider_stream_failed:${Hash.sha256(String(error)).slice(0, 16)}`,
+        ...(integrityIdentity === undefined ? {} : { integrityIdentity }),
         // Context overflow is rejected by the provider before any generation or tool call, so it is a
         // proven-terminal failure that may settle as `failed` and drive overflow compaction recovery.
         // Any other post-dispatch typed failure cannot prove a terminal outcome and stays
@@ -910,6 +1226,21 @@ export const layer = Layer.effect(
             }
             yield* publish(event)
             if (event.type !== "tool-call" || event.providerExecuted) return
+            // RI-126: the synthesized StructuredOutput call IS the turn's final answer — capture
+            // its input as the structured value and acknowledge it with the legacy success text
+            // instead of settling through the registry (it is advertised, never registered).
+            if (syntheticStructuredOutput && event.name === STRUCTURED_OUTPUT_TOOL_NAME) {
+              structuredCapture = { callID: event.id, value: event.input }
+              yield* publish(
+                LLMEvent.toolResult({
+                  id: event.id,
+                  name: event.name,
+                  result: { type: "text", value: STRUCTURED_OUTPUT_SUCCESS_TEXT },
+                  output: { structured: {}, content: [{ type: "text", text: STRUCTURED_OUTPUT_SUCCESS_TEXT }] },
+                }),
+              )
+              return
+            }
             if (!stepLimitReached) needsContinuation = true
             const assistantMessageID = yield* publisher.assistantMessageID(event.id)
             yield* Effect.uninterruptibleMask((restore) =>
@@ -921,17 +1252,22 @@ export const layer = Layer.effect(
                   call: event,
                 }),
               ).pipe(
-                Effect.flatMap((settlement) =>
-                  publish(
+                Effect.flatMap((settlement) => {
+                  const planMetadata = planResultMetadata.get(event.id)
+                  return publish(
                     LLMEvent.toolResult({
                       id: event.id,
                       name: event.name,
                       result: settlement.result,
                       output: settlement.output,
+                      // The plan protocol outcome rides the provider-metadata channel onto the
+                      // durable Tool.Success/Failed event (and from there onto the V1 wire part
+                      // metadata), mirroring the legacy plan part metadata contract.
+                      ...(planMetadata === undefined ? {} : { providerMetadata: { plan: planMetadata } }),
                     }),
                     settlement.outputPaths ?? [],
-                  ),
-                ),
+                  )
+                }),
               ),
             ).pipe(FiberSet.run(toolFibers))
           }),
@@ -941,7 +1277,7 @@ export const layer = Layer.effect(
 
       return yield* Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
-          const stream = yield* restore(settledProviderStream).pipe(Effect.exit)
+          const stream = yield* restore(settledProviderStream).pipe(Effect.exit, Effect.map(classifyProviderStreamAbort))
           const failure =
             stream._tag === "Failure" ? Option.getOrUndefined(Cause.findErrorOption(stream.cause)) : undefined
           if (
@@ -1003,6 +1339,104 @@ export const layer = Layer.effect(
             yield* withPublication(publisher.failUnsettledTools("Provider did not return a tool result", true))
           if (stream._tag === "Failure") return yield* Effect.failCause(stream.cause)
           if (settled._tag === "Failure") return yield* Effect.failCause(settled.cause)
+          // UPD-002/RI-126: a captured StructuredOutput call ends the turn — the value persists
+          // on the assistant (StructuredCaptured) and the drain stops without another provider
+          // turn (legacy "no further actions are taken after calling it" parity; finish stays
+          // the provider's "tool-calls").
+          if (structuredCapture) {
+            yield* withPublication(
+              events.publish(SessionEvent.StructuredCaptured, {
+                sessionID: session.id,
+                timestamp: yield* DateTime.now,
+                assistantMessageID: yield* publisher.startAssistant(),
+                value: structuredCapture.value,
+              }),
+            )
+            return { needsContinuation: false, step: currentStep, activityId: selectionAdmission.activityId }
+          }
+          // BUG-010/RI-127 plan protocol termination (legacy PlanProtocolViolationError
+          // parity): the second consecutive model plan failure ends the turn with a typed
+          // assistant error instead of opening another provider turn. V2 folds the name/code
+          // into the UnknownError message on the wire.
+          if (planProtocolTerminal) {
+            yield* withPublication(
+              events.publish(SessionEvent.Step.Failed, {
+                sessionID: session.id,
+                timestamp: yield* DateTime.now,
+                assistantMessageID: yield* publisher.startAssistant(),
+                error: {
+                  type: "unknown",
+                  message:
+                    `PlanProtocolViolation: plan protocol violation budget exhausted after ` +
+                    `${PLAN_PROTOCOL_MAX_ATTEMPTS} consecutive model plan failures ` +
+                    `(attempt ${planProtocolTerminal.ordinal} of ${PLAN_PROTOCOL_MAX_ATTEMPTS}, code: ${planProtocolTerminal.code}).`,
+                },
+              }),
+            )
+            return { needsContinuation: false, step: currentStep, activityId: selectionAdmission.activityId }
+          }
+          // OUTPUT soft-landing (V4.0.1 P0b, legacy loop parity): a length-capped turn with no
+          // local tool call continues instead of ending — a truncated local tool input is first
+          // terminalized as a typed error part (never executed), then a synthetic nudge is
+          // appended and the drain runs one more provider turn. At the continuation cap the turn
+          // simply ends with the length-finished assistant (no failure finalization in V2).
+          if (
+            stream._tag === "Success" &&
+            !publisher.hasProviderError() &&
+            !needsContinuation &&
+            outputSoftLandingEnabled() &&
+            providerEvents.findLast((event) => event.type === "step-finish")?.reason === "length" &&
+            countOutputContinuations(context) < outputContinuationMax()
+          ) {
+            const truncatedInput = publisher.hasUnsettledLocalTool()
+            if (truncatedInput)
+              yield* withPublication(publisher.failUnsettledTools("Tool input was incomplete and was not executed"))
+            yield* events.publish(SessionEvent.Synthetic, {
+              sessionID: session.id,
+              messageID: SessionMessage.ID.create(),
+              timestamp: yield* DateTime.now,
+              text: truncatedInput ? TOOL_INPUT_CONTINUE_TAIL_TEXT : OUTPUT_CONTINUE_TAIL_TEXT,
+            })
+            return {
+              needsContinuation: true,
+              step: currentStep,
+              activityId: selectionAdmission.activityId,
+            }
+          }
+          // UPD-002/RI-126 wire mode: the provider enforced the schema via text.format, so the
+          // final assistant TEXT carries the JSON value. Parse and capture it; an invalid body
+          // ends the turn with a typed error (legacy retried with a correction reminder up to
+          // format.retryCount — that retry loop is a documented residual gap in V2).
+          if (wireStructuredOutput && stream._tag === "Success" && !publisher.hasProviderError() && !needsContinuation) {
+            const wireText = providerEvents
+              .flatMap((event) => (event.type === "text-delta" ? [event.text] : []))
+              .join("")
+              .trim()
+            const parsed =
+              wireText.length > 0 ? Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(wireText) : Option.none()
+            if (Option.isSome(parsed)) {
+              yield* withPublication(
+                events.publish(SessionEvent.StructuredCaptured, {
+                  sessionID: session.id,
+                  timestamp: yield* DateTime.now,
+                  assistantMessageID: yield* publisher.startAssistant(),
+                  value: parsed.value,
+                }),
+              )
+              return { needsContinuation: false, step: currentStep, activityId: selectionAdmission.activityId }
+            }
+            if (wireText.length > 0) {
+              yield* withPublication(
+                events.publish(SessionEvent.Step.Failed, {
+                  sessionID: session.id,
+                  timestamp: yield* DateTime.now,
+                  assistantMessageID: yield* publisher.startAssistant(),
+                  error: { type: "unknown", message: "StructuredOutputError: wire structured output is not valid JSON." },
+                }),
+              )
+              return { needsContinuation: false, step: currentStep, activityId: selectionAdmission.activityId }
+            }
+          }
           if (parityCampaign && providerReceipt)
             yield* providerTurns.recordParityForReceipt({ campaign: parityCampaign, receipt: providerReceipt })
           return {
@@ -1041,12 +1475,7 @@ export const layer = Layer.effect(
     })
 
     const runTurn: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, step) {
-      return yield* runTurnAttempt(
-        sessionID,
-        promotion,
-        step,
-        compaction.compactAfterOverflow,
-      ).pipe(
+      return yield* runTurnAttempt(sessionID, promotion, step, compaction.compactAfterOverflow).pipe(
         Effect.catchDefect(
           Effect.fnUntraced(function* (defect) {
             if (!(defect instanceof TurnTransitionError)) return yield* Effect.die(defect)
@@ -1080,7 +1509,13 @@ export const layer = Layer.effect(
       if (parityCampaign && V2ProviderTurn.ownerCampaignFromEnv())
         return yield* new V2ProviderTurn.ConflictError({ reason: "v2_owner_cannot_record_shadow_parity" })
       yield* failInterruptedTools(input.sessionID)
-      let promotion: SessionInput.Delivery | undefined = hasSteer ? "steer" : hasQueue ? "queue" : hasGoalSteer ? "goal_steer" : undefined
+      let promotion: SessionInput.Delivery | undefined = hasSteer
+        ? "steer"
+        : hasQueue
+          ? "queue"
+          : hasGoalSteer
+            ? "goal_steer"
+            : undefined
       let openActivity = input.force === true || hasSteer || hasQueue || hasGoalSteer
       // W7: the settle hook references the PRIMARY activity of this drain chain (the trigger input),
       // so a multi-activity drain admits one learning run anchored on the prompt that opened it.
@@ -1126,9 +1561,7 @@ export const layer = Layer.effect(
         // finalizer in runTurnAttempt.
         if (activityId !== undefined) {
           settledActivityId = settledActivityId ?? activityId
-          yield* Effect.uninterruptible(contexts.settleActivity({ activityId, state: "settled" })).pipe(
-            Effect.ignore,
-          )
+          yield* Effect.uninterruptible(contexts.settleActivity({ activityId, state: "settled" })).pipe(Effect.ignore)
         }
         openActivity = yield* SessionInput.hasPending(db, input.sessionID, "queue")
         promotion = openActivity ? "queue" : undefined
@@ -1145,11 +1578,14 @@ export const layer = Layer.effect(
       // W7: settle-triggered learning. Best-effort and non-blocking for the turn: a hook failure
       // must never fail a settled drain (same posture as the docs sync tail).
       if (onSessionSettled !== undefined)
-        yield* onSessionSettled({
-          sessionID: input.sessionID,
-          workspacePath: location.project.directory,
-          ...(settledActivityId === undefined ? {} : { activityId: settledActivityId }),
-        }).pipe(Effect.ignore)
+        yield* onSessionSettled(
+          {
+            sessionID: input.sessionID,
+            workspacePath: location.project.directory,
+            ...(settledActivityId === undefined ? {} : { activityId: settledActivityId }),
+          },
+          gateway,
+        ).pipe(Effect.ignore)
     })
 
     return Service.of({

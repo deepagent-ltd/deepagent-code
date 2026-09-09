@@ -4,7 +4,8 @@ import { EventRouteRef, InstanceRef, WorkspaceRef, type EventRoute } from "./ins
 import * as Observability from "@deepagent-code/core/effect/observability"
 import { WorkspaceContext } from "@/control-plane/workspace-context"
 import type { InstanceContext } from "@/project/instance-context"
-import { memoMap } from "@deepagent-code/core/effect/memo-map"
+import { makeMemoMap } from "@deepagent-code/core/effect/memo-map"
+import { ProcessLifecycle } from "@deepagent-code/core/effect/process-lifecycle"
 
 type Refs = {
   instance?: InstanceContext
@@ -33,9 +34,22 @@ export function attach<A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A
   })
 }
 
-export function makeRuntime<I, S, E>(service: Context.Service<I, S>, layer: Layer.Layer<I, E>) {
+export function makeRuntime<I, S, E>(service: Context.Service<I, S>, layer: Layer.Layer<I, E>, name?: string) {
   let rt: ManagedRuntime.ManagedRuntime<I, E> | undefined
-  const getRuntime = () => (rt ??= ManagedRuntime.make(Layer.provideMerge(layer, Observability.layer), { memoMap }))
+  let unregister: (() => void) | undefined
+  const dispose = async () => {
+    const current = rt
+    rt = undefined
+    unregister?.()
+    unregister = undefined
+    await current?.dispose()
+  }
+  const getRuntime = () => {
+    if (rt) return rt
+    rt = ManagedRuntime.make(Layer.provideMerge(layer, Observability.layer), { memoMap: makeMemoMap() })
+    if (name) unregister = ProcessLifecycle.register(name, dispose)
+    return rt
+  }
 
   return {
     runSync: <A, Err>(fn: (svc: S) => Effect.Effect<A, Err, I>) => getRuntime().runSync(attach(service.use(fn))),
@@ -46,5 +60,6 @@ export function makeRuntime<I, S, E>(service: Context.Service<I, S>, layer: Laye
     runFork: <A, Err>(fn: (svc: S) => Effect.Effect<A, Err, I>) => getRuntime().runFork(attach(service.use(fn))),
     runCallback: <A, Err>(fn: (svc: S) => Effect.Effect<A, Err, I>) =>
       getRuntime().runCallback(attach(service.use(fn))),
+    dispose,
   }
 }

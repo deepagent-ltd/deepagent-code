@@ -4,6 +4,7 @@ import { ProjectV2 } from "@deepagent-code/core/project"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { SessionExecution } from "@deepagent-code/core/session/execution"
+import { SessionRestart } from "@deepagent-code/core/session/execution/restart"
 import { SessionRuntimeStatus } from "@deepagent-code/core/session/runtime-status"
 import { SessionSchema } from "@deepagent-code/core/session/schema"
 import { SessionTable } from "@deepagent-code/core/session/sql"
@@ -26,8 +27,9 @@ const execution = Layer.succeed(
   }),
 )
 const store = SessionStore.layer.pipe(Layer.provide(database))
-const status = SessionRuntimeStatus.layer.pipe(Layer.provide(execution), Layer.provide(store))
-const it = testEffect(Layer.mergeAll(database, execution, store, status))
+const restart = SessionRestart.layer.pipe(Layer.provide(database), Layer.provide(execution), Layer.provide(store))
+const status = SessionRuntimeStatus.layer.pipe(Layer.provide(execution), Layer.provide(restart))
+const it = testEffect(Layer.mergeAll(database, execution, store, restart, status))
 
 describe("SessionRuntimeStatus", () => {
   it.effect("distinguishes process-owned work from orphaned durable claims", () =>

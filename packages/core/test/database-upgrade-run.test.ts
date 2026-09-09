@@ -221,4 +221,11 @@ describe("DatabaseUpgradeRun", () => {
       }),
     )
   })
+
+  test("a generator-sealed body hash is independent of the runtime function representation", () => {
+    const first = { id: "migration-a", bodyHash: "source-hash", up: () => Effect.void }
+    const bundled = { id: "migration-a", bodyHash: "source-hash", up: () => Effect.fail("minified") }
+    expect(DatabaseUpgradeRun.migrationBodyHash(first)).toBe("source-hash")
+    expect(DatabaseUpgradeRun.migrationContentHash(first)).toBe(DatabaseUpgradeRun.migrationContentHash(bundled))
+  })
 })

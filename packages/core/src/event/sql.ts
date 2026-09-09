@@ -10,6 +10,19 @@ export const EventSequenceTable = sqliteTable("event_sequence", {
   write_fence_transfer_id: text(),
 })
 
+/**
+ * Durable aggregate deletion fence. This table intentionally has no foreign key to event_sequence:
+ * the fence survives event-stream cleanup and prevents a later sync/import replay from recreating a
+ * deleted aggregate until an explicit retention policy removes it.
+ */
+export const EventAggregateTombstoneTable = sqliteTable("event_aggregate_tombstone", {
+  aggregate_id: text().primaryKey(),
+  deleted_at: integer().notNull(),
+  retention_until: integer().notNull(),
+  reason: text().notNull(),
+  deletion_event_id: text().$type<EventV2.ID>(),
+}, (table) => [index("event_aggregate_tombstone_retention_idx").on(table.retention_until)])
+
 export const EventTable = sqliteTable(
   "event",
   {

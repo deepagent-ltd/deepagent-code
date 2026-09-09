@@ -8,14 +8,16 @@ import { it } from "../lib/effect"
 class Shared extends Context.Service<Shared, { readonly id: number }>()("@test/Shared") {}
 const testDirectory = "/tmp/deepagent-code-test"
 
-it.live("makeRuntime shares dependent layers through the shared memo map", () =>
+it.live("makeRuntime isolates dependent layers and finalizers between runtime roots", () =>
   Effect.gen(function* () {
     let n = 0
+    let finalized = 0
 
     const shared = Layer.effect(
       Shared,
-      Effect.sync(() => {
+      Effect.gen(function* () {
         n += 1
+        yield* Effect.addFinalizer(() => Effect.sync(() => finalized++))
         return Shared.of({ id: n })
       }),
     )
@@ -42,12 +44,16 @@ it.live("makeRuntime shares dependent layers through the shared memo map", () =>
       }),
     ).pipe(Layer.provide(shared))
 
-    const { runPromise: runOne } = makeRuntime(One, one)
-    const { runPromise: runTwo } = makeRuntime(Two, two)
+    const runtimeOne = makeRuntime(One, one)
+    const runtimeTwo = makeRuntime(Two, two)
 
-    expect(yield* Effect.promise(() => runOne((svc) => svc.get()))).toBe(1)
-    expect(yield* Effect.promise(() => runTwo((svc) => svc.get()))).toBe(1)
-    expect(n).toBe(1)
+    expect(yield* Effect.promise(() => runtimeOne.runPromise((svc) => svc.get()))).toBe(1)
+    expect(yield* Effect.promise(() => runtimeTwo.runPromise((svc) => svc.get()))).toBe(2)
+    expect(n).toBe(2)
+    yield* Effect.promise(() => runtimeOne.dispose())
+    expect(finalized).toBe(1)
+    yield* Effect.promise(() => runtimeTwo.dispose())
+    expect(finalized).toBe(2)
   }),
 )
 

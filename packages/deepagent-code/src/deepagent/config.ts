@@ -1,6 +1,7 @@
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { Global } from "@deepagent-code/core/global"
 import { flipFlagValueOn } from "@deepagent-code/core/deepagent/flip-flag"
+import { SettingsStore } from "@/settings/store"
 
 type AgentGatewayConfig = NonNullable<Parameters<typeof AgentGateway.configure>[0]>
 type AgentMode = NonNullable<NonNullable<AgentGatewayConfig>["agentMode"]>
@@ -53,6 +54,14 @@ export function gatewayConfig(config?: ConfigInfo): AgentGatewayConfig {
       bool(options.allowProviderExecutedTools) ?? envBool("DEEPAGENT_ALLOW_PROVIDER_EXECUTED_TOOLS"),
     ...(allowlist ? { allowProviderExecutedToolNames: allowlist } : {}),
   }
+}
+
+export function gatewayConfigFromSettings(settings?: SettingsStore.DeepAgentSettings): AgentGatewayConfig {
+  return gatewayConfig(
+    settings === undefined
+      ? undefined
+      : { provider: { deepagent: { options: { ...settings } } } },
+  )
 }
 
 export function reviewRunsDir(config?: ConfigInfo): string {

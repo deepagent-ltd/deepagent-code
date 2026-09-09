@@ -156,7 +156,7 @@ export const resolveGraphs = Effect.fn("SessionContextResolverV2.resolveGraphs")
     const resolved = yield* Effect.forEach(
       GraphOrder,
       (graph) => resolveGraph(envelope, graph, adapters[graph], perGraphTimeoutMs, startedAt),
-      { concurrency: "unbounded" },
+      { concurrency: 4 },
     )
     const graphStatuses = Object.fromEntries(
       resolved.map((entry) => [entry.graph, entry.status]),

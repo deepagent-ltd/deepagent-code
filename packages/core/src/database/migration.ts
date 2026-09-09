@@ -11,6 +11,7 @@ import { DatabaseMigrationLease as MigrationLease, type MigrationLease as Migrat
 import { PostVerify } from "./post-verify"
 import type { UpgradeRun } from "../contract/upgrade-run"
 import { InstallationVersion, InstallationCommit } from "../installation/version"
+import { readonlyMap, readonlySet } from "../util/readonly-collections"
 
 type Database = EffectDrizzleSqlite.EffectSQLiteDatabase
 type Transaction = Parameters<Parameters<Database["transaction"]>[0]>[0]
@@ -35,7 +36,7 @@ const isLockError = (value: unknown): boolean => {
 const isTransientLockCause = (cause: Cause.Cause<unknown>): boolean => cause.reasons.some(isLockError)
 
 const transientLockRetry = Schedule.spaced("2 seconds").pipe(Schedule.take(30))
-export const historicalAliases = new Map([
+export const historicalAliases = readonlyMap(new Map([
   ["20260530232709_lovely_romulus", "20260511173437_session-metadata"],
   ["20260803000000_subagent_control_plane_l1", "20260803000001_subagent_control_plane_l1"],
   [MigrationIdentity.Historical.finalAuthorities, MigrationIdentity.Canonical.finalAuthorities],
@@ -43,9 +44,11 @@ export const historicalAliases = new Map([
   [MigrationIdentity.Historical.eventSidecarLifecycle, MigrationIdentity.Canonical.eventSidecarLifecycle],
   [MigrationIdentity.Historical.eventSidecarIndexes, MigrationIdentity.Canonical.eventSidecarIndexes],
   [MigrationIdentity.Historical.eventAggregateIndexes, MigrationIdentity.Canonical.eventAggregateIndexes],
-])
+]))
 export const mergedHistoryAnchor = "20260813041400_context_activation_semantic_authority"
-export const mergedHistoryInsertions = new Set([
+/** Compatibility fence: this migration introduced sealed source hashes for subsequent writes. */
+export const legacyContentIdentityBoundary = "20260907130000_migration_journal_content_hash"
+export const mergedHistoryInsertions = readonlySet(new Set([
   "20260812120000_legacy_provider_recovery",
   "20260812130000_legacy_activity_lifecycle_expand",
   "20260812140000_session_diff_manifest",
@@ -68,10 +71,12 @@ export const mergedHistoryInsertions = new Set([
   MigrationIdentity.Canonical.eventSidecarIndexes,
   MigrationIdentity.Canonical.eventAggregateIndexes,
   "20260813150000_single_authority_snapshot_merge",
-])
+]))
 
 export type Migration = {
   id: string
+  /** Generator-sealed source hash. Ad-hoc test migrations may omit it. */
+  bodyHash?: string
   up: (tx: Transaction) => Effect.Effect<void, unknown>
 }
 
@@ -415,9 +420,14 @@ function applyMigrations(
             if (reconcileMergedHistory && migration.id === "20260812120000_legacy_provider_recovery")
               yield* reconcileLegacyProviderRecovery(tx)
             else yield* migration.up(tx)
-            yield* tx.run(
-              sql`INSERT INTO ${sql.identifier("migration")} (id, time_completed) VALUES (${migration.id}, ${Date.now()})`,
-            )
+            const journalColumns = yield* tx.all<{ name: string }>("PRAGMA table_info('migration')")
+            yield* (journalColumns.some((column) => column.name === "content_hash")
+              ? tx.run(
+                  sql`INSERT INTO ${sql.identifier("migration")} (id, time_completed, content_hash) VALUES (${migration.id}, ${Date.now()}, ${DatabaseUpgradeRun.migrationContentHash(migration)})`,
+                )
+              : tx.run(
+                  sql`INSERT INTO ${sql.identifier("migration")} (id, time_completed) VALUES (${migration.id}, ${Date.now()})`,
+                ))
             if (upgrade) {
               yield* DatabaseUpgradeRun.recordReceipt(
                 tx,

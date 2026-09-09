@@ -19,8 +19,12 @@ describe("control-plane two-connection fences", () => {
       await Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
-            const first = yield* Layer.build(Database.layerFromPath(join(root, "control-plane.sqlite")))
-            const second = yield* Layer.build(Database.layerFromPath(join(root, "control-plane.sqlite")))
+            const dbPath = join(root, "control-plane.sqlite")
+            const first = yield* Layer.build(Database.layerFromPath(dbPath))
+            // The first build holds the process-lifetime runtime lock; a second same-process open
+            // must use the already-owned layer or the external-owner preflight fences it as
+            // another active process (same pattern as Restore).
+            const second = yield* Layer.build(Database.ownedLayerFromPath(dbPath))
             const parentSessionID = SessionID.make("ses_two_connection_parent")
             const projectID = Project.ID.make("git-remote:example.com/two-connection")
 

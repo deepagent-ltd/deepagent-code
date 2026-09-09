@@ -15,6 +15,7 @@ export function layer(ctx: InstanceContext) {
       const codeIntel = yield* CodeIntelFacade.Service
       const contextQuery = yield* ContextQueryFacade.Service
       return ContextToolRuntime.Service.of({
+        available: true,
         codeIntel: (input) =>
           codeIntel.execute({ request: input.request, sessionId: input.sessionID, agent: input.agent }).pipe(
             Effect.provideService(InstanceRef, ctx),

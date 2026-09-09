@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, test } from "bun:test"
+import { describe, expect, test } from "bun:test"
+import { mkdtempSync } from "node:fs"
+import os from "node:os"
+import path from "node:path"
 import { Effect, Layer } from "effect"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { SessionRunner } from "@deepagent-code/core/session/runner"
@@ -20,19 +23,17 @@ const retrievalHeadedMutations = [
 ]
 
 const flags = RuntimeFlags.layer({ strictPlanGate: true })
-const gate = V2PlanGate.layer.pipe(Layer.provide(flags))
+const gate = () => {
+  const gateway = AgentGateway.runtimeLayer({
+    baseDir: mkdtempSync(path.join(os.tmpdir(), "deepagent-v2-plan-gate-")),
+    durableLearning: false,
+  })
+  return V2PlanGate.layer.pipe(Layer.provide(flags), Layer.provide(gateway), Layer.merge(gateway))
+}
 
 const mutating = { sessionID, toolName: "write", args: { file_path: "/app/a.go", content: "x" } }
 
 describe("V2 plan gate on unseeded sessions", () => {
-  beforeEach(() => {
-    AgentGateway.DeepAgentSessionState.cleanup(sessionID)
-    AgentGateway.DeepAgentSessionState.cleanup(staleSessionID)
-    retrievalHeadedMutations
-      .map((_, index) => `${sessionID}_retrieval_mutation_${index}`)
-      .forEach(AgentGateway.DeepAgentSessionState.cleanup)
-  })
-
   test("blocks, then releases once after the consecutive-block limit, then blocks again", async () => {
     const decisions = await Effect.runPromise(
       Effect.gen(function* () {
@@ -42,7 +43,7 @@ describe("V2 plan gate on unseeded sessions", () => {
         const out = []
         for (let i = 0; i <= limit + 1; i++) out.push(yield* decide(mutating))
         return out
-      }).pipe(Effect.provide(gate), Effect.scoped),
+      }).pipe(Effect.provide(gate()), Effect.scoped),
     )
 
     const limit = AgentGateway.DeepAgentPlanController.DEFAULT_GRACE_BLOCK_LIMIT
@@ -66,7 +67,7 @@ describe("V2 plan gate on unseeded sessions", () => {
           toolName: "bash",
           args: { command: `grep -n "IndexExpression\\|IsRange\\|COLON" parser/parser.go` },
         })
-      }).pipe(Effect.provide(gate), Effect.scoped),
+      }).pipe(Effect.provide(gate()), Effect.scoped),
     )
     expect(decisions.kind).toBe("pass")
   })
@@ -83,24 +84,26 @@ describe("V2 plan gate on unseeded sessions", () => {
             args: { command },
           }),
         )
-      }).pipe(Effect.provide(gate), Effect.scoped),
+      }).pipe(Effect.provide(gate()), Effect.scoped),
     )
     expect(decisions.map((decision) => decision.kind)).toEqual(["block", "block", "block"])
   })
 
   test("stale latches share the core grace limit", async () => {
-    AgentGateway.DeepAgentSessionState.getOrCreate(staleSessionID, "high")
-    AgentGateway.DeepAgentSessionState.markPlanStale(staleSessionID, "validation_failed")
-
     const decisions = await Effect.runPromise(
       Effect.gen(function* () {
+        const runtime = yield* AgentGateway.Runtime
+        runtime.withStorage(() => {
+          AgentGateway.DeepAgentSessionState.getOrCreate(staleSessionID, "high")
+          AgentGateway.DeepAgentSessionState.markPlanStale(staleSessionID, "validation_failed")
+        })
         const decide = yield* SessionRunner.CurrentToolSettleGate
         if (!decide) return yield* Effect.die("tool settle gate is not wired")
         const out = []
         for (let i = 0; i <= AgentGateway.DeepAgentPlanController.DEFAULT_GRACE_BLOCK_LIMIT; i++)
           out.push(yield* decide({ ...mutating, sessionID: staleSessionID }))
         return out
-      }).pipe(Effect.provide(gate), Effect.scoped),
+      }).pipe(Effect.provide(gate()), Effect.scoped),
     )
 
     expect(AgentGateway.DeepAgentPlanController.DEFAULT_GRACE_BLOCK_LIMIT).toBe(2)

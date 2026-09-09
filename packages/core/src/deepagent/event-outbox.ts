@@ -2,6 +2,7 @@ export * as EventOutbox from "./event-outbox"
 
 import { and, eq, isNull, lte, or } from "drizzle-orm"
 import { Effect } from "effect"
+import { randomUUID } from "node:crypto"
 import { Database } from "../database/database"
 import {
   type EventEnvelope,
@@ -181,7 +182,7 @@ export type ClaimDueResult = {
  * a live lease) becomes re-claimable only after `leaseExpiresAt` (crash recovery).
  */
 export function claimDue(db: DatabaseClient, input: ClaimDueInput): Effect.Effect<ClaimDueResult> {
-  const claimToken = `claim_${input.claimantId}_${input.now}`
+  const claimToken = `claim_${input.claimantId}_${randomUUID()}`
   return Effect.gen(function* () {
     return yield* db
       .transaction(
@@ -307,7 +308,7 @@ export function markFailed(db: DatabaseClient, input: FailInput): Effect.Effect<
       .pipe(Effect.orDie)
     if (!result) return false
     const dead = result.attempt_count >= input.maxAttempts
-    yield* db
+    const updated = yield* db
       .update(DeepAgentEventOutboxTable)
       .set({
         status: dead ? ("dead" as const) : ("pending" as const),
@@ -318,10 +319,18 @@ export function markFailed(db: DatabaseClient, input: FailInput): Effect.Effect<
         last_error: input.reason,
         updated_at: input.now,
       })
-      .where(eq(DeepAgentEventOutboxTable.outbox_id, input.outboxId))
-      .run()
+      .where(
+        and(
+          eq(DeepAgentEventOutboxTable.outbox_id, input.outboxId),
+          eq(DeepAgentEventOutboxTable.claim_token, input.claimToken),
+          eq(DeepAgentEventOutboxTable.status, "publishing"),
+          eq(DeepAgentEventOutboxTable.attempt_count, result.attempt_count),
+        ),
+      )
+      .returning({ outbox_id: DeepAgentEventOutboxTable.outbox_id })
+      .all()
       .pipe(Effect.orDie)
-    return true
+    return updated.length === 1
   })
 }
 

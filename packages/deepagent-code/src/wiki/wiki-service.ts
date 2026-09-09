@@ -7,6 +7,7 @@ import type {
   DocumentStore,
   LinkRel,
 } from "@deepagent-code/core/deepagent/document-store"
+import { readonlySet } from "@deepagent-code/core/util/readonly-collections"
 import * as WikiEvents from "./wiki-events"
 
 /**
@@ -37,12 +38,12 @@ import * as WikiEvents from "./wiki-events"
 
 // The 4 editable types (§B.2 / §B.3): exactly KNOWLEDGE_TYPES. Kept as a local const (not imported
 // from core) so the editable boundary is auditable in one place next to the enforcement.
-export const WIKI_EDITABLE_TYPES: ReadonlySet<DocType> = new Set<DocType>([
+export const WIKI_EDITABLE_TYPES = readonlySet(new Set<DocType>([
   "knowledge",
   "memory",
   "strategy",
   "methodology",
-])
+]))
 
 // Code-graph relations the cross-link projection walks (§B.5, all from §A): references (code→doc),
 // implements (code→requirements), contains (file→symbol), imports (file→file), calls (symbol→symbol).

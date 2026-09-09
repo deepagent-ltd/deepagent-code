@@ -14,6 +14,7 @@ import {
   type LLMRequest,
 } from "@deepagent-code/llm"
 import { AgentGateway } from "../src/agent-gateway"
+import { DeepAgentPlanStore } from "../src/deepagent"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { Git } from "@deepagent-code/core/git"
 import * as OpenAIChat from "@deepagent-code/llm/protocols/openai-chat"
@@ -35,34 +36,32 @@ import { SessionMessage } from "@deepagent-code/core/session/message"
 import { Prompt } from "@deepagent-code/core/session/prompt"
 import { SessionProjector } from "@deepagent-code/core/session/projector"
 import { SessionExecution } from "@deepagent-code/core/session/execution"
+import { SessionExecutionLocal } from "@deepagent-code/core/session/execution/local"
 import { SessionContextEpoch } from "@deepagent-code/core/session/context-epoch"
-import { SessionRunCoordinator } from "@deepagent-code/core/session/run-coordinator"
 import { SessionRunner } from "@deepagent-code/core/session/runner"
 import * as SessionRunnerLLM from "@deepagent-code/core/session/runner/llm"
 import { SessionRunnerModel } from "@deepagent-code/core/session/runner/model"
 import {
-  CONTEXT_FEDERATION_PRODUCTION_ENV,
   ProductionV2Sources,
   type ProductionV2AdapterInput,
   type ProductionV2LocationIdentity,
 } from "@deepagent-code/core/context-federation/production-adapters"
 import {
-  LocationKey,
-  ProjectScopeKey,
-  SecurityNamespaceID,
-} from "@deepagent-code/core/context-federation/reference"
+  CurrentRuntimeFeatures,
+  createRuntimeFeatureRegistry,
+  type RuntimeFeatureRegistry,
+} from "@deepagent-code/core/flag/runtime-features"
+import { LocationKey, ProjectScopeKey, SecurityNamespaceID } from "@deepagent-code/core/context-federation/reference"
 import { V2ProviderTurn } from "@deepagent-code/core/session/runner/v2-provider-turn"
 import { V2ToolEffect } from "@deepagent-code/core/session/runner/v2-tool-effect"
-import {
-  V2ToolEffectAdmissionTable,
-  V2ToolEffectTable,
-} from "@deepagent-code/core/session/runner/v2-tool-effect.sql"
+import { V2ToolEffectAdmissionTable, V2ToolEffectTable } from "@deepagent-code/core/session/runner/v2-tool-effect.sql"
 import {
   V2ProviderParityReceiptTable,
   V2ProviderTurnReceiptTable,
 } from "@deepagent-code/core/session/runner/v2-provider-turn.sql"
 import { SessionProviderOwner } from "@deepagent-code/core/context-federation/provider-owner"
 import { SessionContext } from "@deepagent-code/core/context-federation/session-context"
+import { ContextQueryAuthorization } from "@deepagent-code/core/context-federation/query-authorization"
 import { SessionRunnerCanonical } from "@deepagent-code/core/session/runner/canonical-turn"
 import { SessionCompaction } from "@deepagent-code/core/session/compaction"
 import { DocumentStore } from "@deepagent-code/core/deepagent/document-store"
@@ -100,11 +99,27 @@ import { SessionContextSelectionTable } from "@deepagent-code/core/context-feder
 import { SessionStore } from "@deepagent-code/core/session/store"
 import { SystemContext } from "@deepagent-code/core/system-context"
 import { SystemContextRegistry } from "@deepagent-code/core/system-context/registry"
+import { makeCapabilityLoadTool } from "@deepagent-code/core/system-context/capability-load-tool"
+import { capabilityBodyFor } from "@deepagent-code/core/system-context/capability-bodies"
 import { SkillGuidance } from "@deepagent-code/core/skill/guidance"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { Location } from "@deepagent-code/core/location"
+import { LocationServiceMap } from "@deepagent-code/core/location-layer"
 import { ProviderV2 } from "@deepagent-code/core/provider"
-import { Cause, Context, DateTime, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Stream } from "effect"
+import {
+  Cause,
+  Context,
+  DateTime,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  LayerMap,
+  Option,
+  Schema,
+  Stream,
+} from "effect"
 import { systemError } from "effect/PlatformError"
 import { asc, desc, eq, sql } from "drizzle-orm"
 import { testEffect } from "./lib/effect"
@@ -311,26 +326,25 @@ const skillGuidance = Layer.mock(SkillGuidance.Service, {
         : SystemContext.empty,
     ),
 })
-const config = Layer.suspend(
-  () =>
-    Layer.succeed(
-      Config.Service,
-      Config.Service.of({
-        entries: () =>
-          Effect.succeed([
-            new Config.Document({
-              type: "document",
-              info: new Config.Info({
-                compaction: new ConfigCompaction.Info({
-                  buffer: 3_000,
-                  keep: new ConfigCompaction.Keep({ tokens: 1_000 }),
-                }),
-                ...(configAgents === undefined ? {} : { agents: configAgents }),
+const config = Layer.suspend(() =>
+  Layer.succeed(
+    Config.Service,
+    Config.Service.of({
+      entries: () =>
+        Effect.succeed([
+          new Config.Document({
+            type: "document",
+            info: new Config.Info({
+              compaction: new ConfigCompaction.Info({
+                buffer: 3_000,
+                keep: new ConfigCompaction.Keep({ tokens: 1_000 }),
               }),
+              ...(configAgents === undefined ? {} : { agents: configAgents }),
             }),
-          ]),
-      }),
-    ),
+          }),
+        ]),
+    }),
+  ),
 )
 const catalog = Layer.succeed(
   Catalog.Service,
@@ -374,7 +388,11 @@ const sessionContext = SessionContext.layer.pipe(
 // the default runner composition stays grant-less exactly like compositions without the V2
 // permission capability.
 let grantLookupActive = false
-const permissionGrantLookup = (input: { readonly sessionID: string; readonly toolCallID: string; readonly toolName: string }) =>
+const permissionGrantLookup = (input: {
+  readonly sessionID: string
+  readonly toolCallID: string
+  readonly toolName: string
+}) =>
   Effect.succeed(
     (grantLookupActive
       ? [
@@ -400,9 +418,7 @@ const grantLookupLayer = Layer.succeedContext(
 // instead of the ContextEpoch revision.
 let historyEpochValue: number | undefined
 const historyEpochLookupLayer = Layer.succeedContext(
-  Context.make(V2ProviderTurn.CurrentHistoryEpochLookup, (_sessionID: string) =>
-    Effect.succeed(historyEpochValue),
-  ),
+  Context.make(V2ProviderTurn.CurrentHistoryEpochLookup, (_sessionID: string) => Effect.succeed(historyEpochValue)),
 )
 // §16.3 order 5 F3 — remote compaction seam. remoteCompactionMode: undefined = unwired (local
 // dispatch), "summary" = remote authority produces the summary, "fault" = remote faults (design §5.3:
@@ -428,50 +444,101 @@ const settleHookLayer = Layer.succeedContext(
     }),
   ),
 )
-const runner = SessionRunnerLLM.layer.pipe(
-  Layer.provide(FSUtil.defaultLayer),
-  Layer.provide(Git.defaultLayer),
-  Layer.provide(providerTurns),
-  Layer.provide(V2ToolEffect.layer.pipe(Layer.provide(database))),
-  Layer.provide(grantLookupLayer),
-  Layer.provide(historyEpochLookupLayer),
-  Layer.provide(remoteCompactionLayer),
-  Layer.provide(sessionContext),
-  Layer.provide(database),
-  Layer.provide(store),
-  Layer.provide(events),
-  Layer.provide(client),
-  Layer.provide(registry),
-  Layer.provide(models),
-  Layer.provide(systemContext),
-  Layer.provide(location),
-  Layer.provide(agents),
-  Layer.provide(skillGuidance),
-  Layer.provide(config),
-  Layer.provide(Layer.mergeAll(catalog, selectionSourcesLayer, testOwnerAuthorization, settleHookLayer)),
+const gateway = Layer.succeed(
+  AgentGateway.Runtime,
+  AgentGateway.Runtime.of({
+    get snapshot() {
+      return AgentGateway.snapshot()
+    },
+    get active() {
+      return AgentGateway.isActiveDeepAgentRuntime()
+    },
+    get baseDir() {
+      return AgentGateway.learningAuthorityConfig().baseDir
+    },
+    get runsDir() {
+      return AgentGateway.learningAuthorityConfig().runsDir
+    },
+    get selfLearning() {
+      return AgentGateway.selfLearningPolicy()
+    },
+    get durableLearning() {
+      return AgentGateway.durableLearningEnabled()
+    },
+    withStorage: (operation) => operation(),
+    ensureKnowledgeSeeded: AgentGateway.flushKnowledgeSeed,
+    systemPrompt: AgentGateway.systemPrompt,
+    volatileRoundContext: AgentGateway.volatileRoundContext,
+    volatileContinuationContext: AgentGateway.volatileContinuationContext,
+  }),
 )
-const coordinator = SessionRunCoordinator.layer.pipe(Layer.provide(runner))
-const execution = Layer.effect(
-  SessionExecution.Service,
-  SessionRunCoordinator.Service.pipe(
-    Effect.map((coordinator) =>
-      SessionExecution.Service.of({
-        active: coordinator.active,
-        awaitIdle: coordinator.awaitIdle,
-        resume: coordinator.run,
-        wake: coordinator.wake,
-        interrupt: coordinator.interrupt,
-      }),
+// The runner stack is a function of the runtime-feature registry so a test can run the WHOLE
+// composition against an explicit registry (e.g. the `=false` staged fallback) — the process
+// global is an immutable startup snapshot, so flipping env mid-test is intentionally unobservable.
+const runnerStack = (features?: RuntimeFeatureRegistry) => {
+  const base =
+    features === undefined
+      ? SessionRunnerLLM.layer
+      : SessionRunnerLLM.layer.pipe(Layer.provide(Layer.succeed(CurrentRuntimeFeatures, features)))
+  return base.pipe(
+    Layer.provide(FSUtil.defaultLayer),
+    Layer.provide(Git.defaultLayer),
+    Layer.provide(providerTurns),
+    Layer.provide(V2ToolEffect.layer.pipe(Layer.provide(database))),
+    Layer.provide(grantLookupLayer),
+    Layer.provide(historyEpochLookupLayer),
+    Layer.provide(remoteCompactionLayer),
+    Layer.provide(sessionContext),
+    Layer.provide(database),
+    Layer.provide(store),
+    Layer.provide(events),
+    Layer.provide(client),
+    Layer.provide(registry),
+    Layer.provide(models),
+    Layer.provide(systemContext),
+    Layer.provide(location),
+    Layer.provide(agents),
+    Layer.provide(skillGuidance),
+    Layer.provide(config),
+    Layer.provide(
+      Layer.mergeAll(
+        catalog,
+        selectionSourcesLayer,
+        ContextQueryAuthorization.defaultLayer,
+        testOwnerAuthorization,
+        settleHookLayer,
+        gateway,
+      ),
     ),
-  ),
-).pipe(Layer.provide(coordinator))
-const sessions = SessionV2.layer.pipe(
-  Layer.provide(events),
-  Layer.provide(database),
-  Layer.provide(store),
-  Layer.provide(Project.defaultLayer),
-  Layer.provide(execution),
-)
+  )
+}
+const locationsFor = (runnerLayer: ReturnType<typeof runnerStack>) =>
+  Layer.effect(
+    LocationServiceMap,
+    LayerMap.make(() => runnerLayer).pipe(
+      // This harness supplies its instrumented runner as the complete keyed Location tree.
+      // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
+      Effect.map((service) => service as unknown as LocationServiceMap["Service"]),
+    ),
+  )
+const executionFor = (runnerLayer: ReturnType<typeof runnerStack>) =>
+  SessionExecutionLocal.layer.pipe(
+    Layer.provide(events),
+    Layer.provide(store),
+    Layer.provide(locationsFor(runnerLayer)),
+  )
+const sessionsFor = (runnerLayer: ReturnType<typeof runnerStack>) =>
+  SessionV2.layer.pipe(
+    Layer.provide(events),
+    Layer.provide(database),
+    Layer.provide(store),
+    Layer.provide(Project.defaultLayer),
+    Layer.provide(executionFor(runnerLayer)),
+  )
+const runner = runnerStack()
+const locations = locationsFor(runner)
+const execution = executionFor(runner)
+const sessions = sessionsFor(runner)
 const containedRunner = SessionRunnerLLM.defaultLayer.pipe(
   Layer.provide(FSUtil.defaultLayer),
   Layer.provide(Git.defaultLayer),
@@ -491,23 +558,22 @@ const containedRunner = SessionRunnerLLM.defaultLayer.pipe(
   Layer.provide(agents),
   Layer.provide(skillGuidance),
   Layer.provide(config),
-  Layer.provide(catalog),
-)
-const containedCoordinator = SessionRunCoordinator.layer.pipe(Layer.provide(containedRunner))
-const containedExecution = Layer.effect(
-  SessionExecution.Service,
-  SessionRunCoordinator.Service.pipe(
-    Effect.map((coordinator) =>
-      SessionExecution.Service.of({
-        active: coordinator.active,
-        awaitIdle: coordinator.awaitIdle,
-        resume: coordinator.run,
-        wake: coordinator.wake,
-        interrupt: coordinator.interrupt,
-      }),
-    ),
+  Layer.provide(
+    Layer.mergeAll(catalog, ContextQueryAuthorization.defaultLayer, Layer.succeed(ProductionV2Sources, {}), gateway),
   ),
-).pipe(Layer.provide(containedCoordinator))
+)
+const containedLocations = Layer.effect(
+  LocationServiceMap,
+  LayerMap.make(() => containedRunner).pipe(
+    // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
+    Effect.map((service) => service as unknown as LocationServiceMap["Service"]),
+  ),
+)
+const containedExecution = SessionExecutionLocal.layer.pipe(
+  Layer.provide(events),
+  Layer.provide(store),
+  Layer.provide(containedLocations),
+)
 const containedSessions = SessionV2.layer.pipe(
   Layer.provide(events),
   Layer.provide(database),
@@ -534,7 +600,7 @@ const it = testEffect(
     location,
     skillGuidance,
     config,
-    Layer.mergeAll(runner, coordinator, execution, sessions),
+    Layer.mergeAll(runner, locations, execution, sessions),
   ),
 )
 const contained = testEffect(
@@ -556,10 +622,36 @@ const contained = testEffect(
     location,
     skillGuidance,
     config,
-    containedRunner,
-    containedCoordinator,
-    containedExecution,
-    containedSessions,
+    Layer.mergeAll(containedRunner, containedLocations, containedExecution, containedSessions),
+  ),
+)
+// W3.8 staged-fallback stack: the WHOLE composition runs against an explicit `=false` registry —
+// the kill-switch resolves at process start (immutable snapshot), so the staged path is tested by
+// injecting the registry at the runner layer, never by flipping process.env mid-test.
+const stagedFeatures = createRuntimeFeatureRegistry(undefined, {
+  DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION: "false",
+})
+const stagedRunner = runnerStack(stagedFeatures)
+const staged = testEffect(
+  Layer.mergeAll(
+    database,
+    providerTurns,
+    events,
+    questions,
+    projector,
+    store,
+    client,
+    permission,
+    applications,
+    agents,
+    registry,
+    echo,
+    models,
+    systemContext,
+    location,
+    skillGuidance,
+    config,
+    Layer.mergeAll(stagedRunner, locationsFor(stagedRunner), executionFor(stagedRunner), sessionsFor(stagedRunner)),
   ),
 )
 const sessionID = SessionV2.ID.make("ses_runner_test")
@@ -888,10 +980,10 @@ const verifyPartialFlushOnInterruption = (kind: FragmentKind) =>
       Stream.fromEffect(Deferred.succeed(streamed, undefined)).pipe(Stream.flatMap(() => Stream.never)),
     )
 
-    const runner = yield* SessionRunner.Service
-    const fiber = yield* runner.run({ sessionID, force: true }).pipe(Effect.forkChild)
+    const fiber = yield* session.resume(sessionID).pipe(Effect.forkChild)
     yield* Deferred.await(streamed)
-    yield* Fiber.interrupt(fiber)
+    yield* session.interrupt(sessionID)
+    yield* Fiber.await(fiber)
     expect(yield* session.context(sessionID)).toMatchObject([
       { type: "user", text: prompt },
       {
@@ -1346,7 +1438,7 @@ describe("SessionRunnerLLM", () => {
 
       systemUnavailable = false
       yield* session.prompt({ id: messageID, sessionID, prompt: new Prompt({ text: "First" }) })
-      yield* (yield* SessionRunCoordinator.Service).awaitIdle(sessionID)
+      yield* (yield* SessionExecution.Service).awaitIdle(sessionID)
 
       expect(requests).toHaveLength(1)
       expect(requests[0]?.messages.map((message) => message.role)).toEqual(["user"])
@@ -1495,7 +1587,9 @@ describe("SessionRunnerLLM", () => {
       response = fragmentFixture("text", "text-build", ["Done"]).completeEvents
       yield* session.resume(sessionID)
 
-      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual(withSelection(["Build agent instructions", "Initial context"]))
+      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual(
+        withSelection(["Build agent instructions", "Initial context"]),
+      )
     }),
   )
 
@@ -1587,7 +1681,11 @@ describe("SessionRunnerLLM", () => {
         .run()
         .pipe(Effect.orDie)
       const session = yield* SessionV2.Service
-      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Never run with an unknown agent" }), resume: false })
+      yield* session.prompt({
+        sessionID,
+        prompt: new Prompt({ text: "Never run with an unknown agent" }),
+        resume: false,
+      })
       requests.length = 0
 
       const exit = yield* session.resume(sessionID).pipe(Effect.exit)
@@ -1640,43 +1738,41 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("W3.8 M3: an explicit =false keeps the request byte-identical (no selection evidence part)", () =>
+  staged.effect("W3.8 M3: an explicit =false keeps the request byte-identical (no selection evidence part)", () =>
     Effect.gen(function* () {
       yield* setup
-      const previous = process.env[CONTEXT_FEDERATION_PRODUCTION_ENV]
-      process.env[CONTEXT_FEDERATION_PRODUCTION_ENV] = "false"
-      try {
-        const session = yield* SessionV2.Service
-        yield* session.prompt({ sessionID, prompt: new Prompt({ text: "First" }), resume: false })
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "First" }), resume: false })
 
-        requests.length = 0
-        response = fragmentFixture("text", "text-false-flag", ["Done"]).completeEvents
-        yield* session.resume(sessionID)
+      requests.length = 0
+      response = fragmentFixture("text", "text-false-flag", ["Done"]).completeEvents
+      yield* session.resume(sessionID)
 
-        // The pre-W3 wire shape: no "Context selection (this turn):" tail. The default-ON twin is
-        // asserted by every other runner test (`withSelection`), so this negative proves the
-        // byte-invariance of the explicit kill-switch — the staged adapters + no evidence tail.
-        const system = requests.at(-1)?.system.map((part) => part.text) ?? []
-        expect(system.join("\n")).not.toContain("Context selection (this turn):")
-        expect(system).toEqual(["Initial context"])
-        // Selection row still carries explicit four-graph statuses (staged source_disabled), never
-        // v2-none — the =false fallback stays a REAL selection.
-        const { db } = yield* Database.Service
-        const row = yield* db
-          .select()
-          .from(SessionContextSelectionTable)
-          .where(eq(SessionContextSelectionTable.session_id, sessionID))
-          .orderBy(desc(SessionContextSelectionTable.revision))
-          .get()
-        const statuses = JSON.parse(row?.graph_statuses ?? "{}") as Record<string, { status: string; reasonCode: string }>
-        expect(Object.keys(statuses).sort()).toEqual(["code", "documents", "knowledge", "memory"])
-        for (const status of Object.values(statuses)) {
-          expect(status.status).toBe("degraded_unavailable")
-          expect(status.reasonCode).toBe("source_disabled")
-        }
-      } finally {
-        if (previous === undefined) delete process.env[CONTEXT_FEDERATION_PRODUCTION_ENV]
-        else process.env[CONTEXT_FEDERATION_PRODUCTION_ENV] = previous
+      // The pre-W3 wire shape: no "Context selection (this turn):" tail. The default-ON twin is
+      // asserted by every other runner test (`withSelection`), so this negative proves the
+      // byte-invariance of the explicit kill-switch — the staged adapters + no evidence tail.
+      // The whole composition runs against an explicit `=false` registry (the `staged` stack):
+      // the kill-switch resolves at process start, so mid-process env mutation is not the seam.
+      const system = requests.at(-1)?.system.map((part) => part.text) ?? []
+      expect(system.join("\n")).not.toContain("Context selection (this turn):")
+      expect(system).toEqual(["Initial context"])
+      // Selection row still carries explicit four-graph statuses (staged source_disabled), never
+      // v2-none — the =false fallback stays a REAL selection.
+      const { db } = yield* Database.Service
+      const row = yield* db
+        .select()
+        .from(SessionContextSelectionTable)
+        .where(eq(SessionContextSelectionTable.session_id, sessionID))
+        .orderBy(desc(SessionContextSelectionTable.revision))
+        .get()
+      const statuses = JSON.parse(row?.graph_statuses ?? "{}") as Record<
+        string,
+        { status: string; reasonCode: string }
+      >
+      expect(Object.keys(statuses).sort()).toEqual(["code", "documents", "knowledge", "memory"])
+      for (const status of Object.values(statuses)) {
+        expect(status.status).toBe("degraded_unavailable")
+        expect(status.reasonCode).toBe("source_disabled")
       }
     }),
   )
@@ -1722,6 +1818,113 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  // -------------------------------------------------------------------------------------------------
+  // RI-143 — governed plan-status fallback widened to every non-compaction agent (V1 parity,
+  // session/llm/request.ts non-managed branch). A general-mode gateway (enabled but NOT
+  // model-managed → runtime.active false) with a committed plan injects <plan-status> for ANY
+  // non-compaction agent; without a committed plan nothing is injected; the goal-worker keeps its
+  // injection (regression); the compaction agent stays excluded.
+  // -------------------------------------------------------------------------------------------------
+  const seedCommittedPlan = (sid: string, planID: string) =>
+    DeepAgentPlanStore.setPlanDoc(sid, {
+      plan_id: planID,
+      session_id: sid,
+      goal: "ri-143 goal",
+      assumptions: [],
+      steps: [{ step_id: "step_1", title: "ri-143 step", status: "active" as const }],
+      active_step_id: "step_1",
+      created_at: new Date().toISOString(),
+    })
+  const ri143Turn = Effect.fn("SessionRunnerTest.ri143Turn")(function* (input: {
+    sid: SessionV2.ID
+    agent: string
+    planID?: string
+  }) {
+    const agent = yield* AgentV2.Service
+    yield* agent.update((editor) => {
+      editor.update(AgentV2.ID.make("build"), (item) => {
+        item.mode = "primary"
+      })
+      editor.update(AgentV2.ID.make("goal-worker"), (item) => {
+        item.mode = "subagent"
+        item.hidden = true
+      })
+      editor.update(AgentV2.ID.make("compaction"), (item) => {
+        item.hidden = true
+      })
+    })
+    yield* insertSession(input.sid)
+    yield* (yield* Database.Service).db
+      .update(SessionTable)
+      .set({ agent: input.agent })
+      .where(eq(SessionTable.id, input.sid))
+      .run()
+      .pipe(Effect.orDie)
+    if (input.planID !== undefined) seedCommittedPlan(input.sid, input.planID)
+    const session = yield* SessionV2.Service
+    yield* session.prompt({ sessionID: input.sid, prompt: new Prompt({ text: "advance the plan" }), resume: false })
+    requests.length = 0
+    response = fragmentFixture("text", `text-ri143-${input.agent}`, ["Done"]).completeEvents
+    yield* session.resume(input.sid)
+    return (requests.at(-1)?.messages ?? []).map((message) =>
+      message.content.map((part) => (part.type === "text" ? part.text : "")).join("\n"),
+    )
+  })
+
+  it.effect("injects plan-status for a committed-plan general-mode session on a non-goal-worker agent", () =>
+    Effect.gen(function* () {
+      yield* setup
+      AgentGateway.configure({ enabled: true, agentMode: "general" })
+      try {
+        const texts = yield* ri143Turn({ sid: SessionV2.ID.make("ses_ri143_general"), agent: "build", planID: "plan_ri143_general" })
+        const planStatus = texts.find((text) => text.includes("<plan-status>"))
+        expect(planStatus).toBeDefined()
+        expect(planStatus).toContain("plan_ri143_general")
+      } finally {
+        AgentGateway.configure({ enabled: false, agentMode: "high" })
+      }
+    }),
+  )
+
+  it.effect("injects no plan-status for a general-mode session without a committed plan", () =>
+    Effect.gen(function* () {
+      yield* setup
+      AgentGateway.configure({ enabled: true, agentMode: "general" })
+      try {
+        const texts = yield* ri143Turn({ sid: SessionV2.ID.make("ses_ri143_noplan"), agent: "build" })
+        expect(texts.some((text) => text.includes("<plan-status>"))).toBe(false)
+      } finally {
+        AgentGateway.configure({ enabled: false, agentMode: "high" })
+      }
+    }),
+  )
+
+  it.effect("keeps plan-status injection for the goal-worker (RI-143 regression)", () =>
+    Effect.gen(function* () {
+      yield* setup
+      AgentGateway.configure({ enabled: true, agentMode: "general" })
+      try {
+        const texts = yield* ri143Turn({ sid: SessionV2.ID.make("ses_ri143_worker"), agent: "goal-worker", planID: "plan_ri143_worker" })
+        expect(texts.some((text) => text.includes("<plan-status>"))).toBe(true)
+      } finally {
+        AgentGateway.configure({ enabled: false, agentMode: "high" })
+      }
+    }),
+  )
+
+  it.effect("excludes the compaction agent from plan-status injection (V1 parity)", () =>
+    Effect.gen(function* () {
+      yield* setup
+      AgentGateway.configure({ enabled: true, agentMode: "general" })
+      try {
+        const texts = yield* ri143Turn({ sid: SessionV2.ID.make("ses_ri143_compaction"), agent: "compaction", planID: "plan_ri143_compaction" })
+        expect(texts.some((text) => text.includes("<plan-status>"))).toBe(false)
+      } finally {
+        AgentGateway.configure({ enabled: false, agentMode: "high" })
+      }
+    }),
+  )
+
   it.effect("uses the configured default agent system for omitted-agent sessions", () =>
     Effect.gen(function* () {
       yield* setup
@@ -1744,7 +1947,9 @@ describe("SessionRunnerLLM", () => {
       response = fragmentFixture("text", "text-reviewer", ["Done"]).completeEvents
       yield* session.resume(sessionID)
 
-      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual(withSelection(["Reviewer instructions", "Initial context"]))
+      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual(
+        withSelection(["Reviewer instructions", "Initial context"]),
+      )
       expect((yield* session.messages({ sessionID }))[0]).toMatchObject({ type: "assistant", agent: "reviewer" })
     }),
   )
@@ -1773,7 +1978,9 @@ describe("SessionRunnerLLM", () => {
       response = fragmentFixture("text", "text-selected", ["Done"]).completeEvents
       yield* session.resume(sessionID)
 
-      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual(withSelection(["Reviewer instructions", "Initial context"]))
+      expect(requests.at(-1)?.system.map((part) => part.text)).toEqual(
+        withSelection(["Reviewer instructions", "Initial context"]),
+      )
       expect((yield* session.messages({ sessionID }))[0]).toMatchObject({ type: "assistant", agent: "reviewer" })
     }),
   )
@@ -1945,7 +2152,9 @@ describe("SessionRunnerLLM", () => {
       response = []
       yield* session.resume(sessionID)
       expect(requests.map((request) => request.model)).toEqual([replacementModel])
-      expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([withSelection(["Initial context"])])
+      expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
+        withSelection(["Initial context"]),
+      ])
     }),
   )
 
@@ -2847,6 +3056,60 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("carries the exact capability L2 body into the continuation provider request", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      const tools = yield* ToolRegistry.Service
+      yield* tools.register({ capability_load: makeCapabilityLoadTool({ db }) }).pipe(Effect.orDie)
+      const session = yield* SessionV2.Service
+      yield* session.prompt({
+        sessionID,
+        prompt: new Prompt({ text: "Load the code-reading procedure" }),
+        resume: false,
+      })
+
+      requests.length = 0
+      responses = [
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.toolCall({
+            id: "call-capability-load",
+            name: "capability_load",
+            input: {
+              schemaVersion: "capability-load-request.v1",
+              capabilityId: "deepagent.code-read",
+              reason: "operation_guidance",
+              expectedActions: ["read"],
+            },
+          }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.textStart({ id: "text-after-capability" }),
+          LLMEvent.textDelta({ id: "text-after-capability", text: "Procedure loaded" }),
+          LLMEvent.textEnd({ id: "text-after-capability" }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ],
+      ]
+
+      yield* session.resume(sessionID)
+
+      const body = capabilityBodyFor("deepagent.code-read", "1.0.0-beta.0")!.body
+      const toolResult = requests[1]?.messages
+        .flatMap((message) => (message.role === "tool" ? message.content : []))
+        .find((content) => content.type === "tool-result")?.result
+      expect(requests).toHaveLength(2)
+      expect(JSON.stringify(requests[0])).not.toContain(body.split("\n")[1]!)
+      expect(toolResult).toMatchObject({ type: "text" })
+      if (toolResult?.type === "text") expect(String(toolResult.value)).toContain(body)
+      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "assistant", "tool"])
+    }),
+  )
+
   it.effect("reloads a model switch before a tool-driven continuation turn", () =>
     Effect.gen(function* () {
       yield* setup
@@ -3126,10 +3389,7 @@ describe("SessionRunnerLLM", () => {
       expect(new Set(effects.map((effect) => effect.receipt_id)).size).toBe(2)
       expect(new Set(effects.map((effect) => effect.provider_attempt_id)).size).toBe(2)
       expect(effects.every((effect) => effect.outcome_hash.length === 64)).toBe(true)
-      expect(effects.map((effect) => effect.grant_receipt_id)).toEqual([
-        "grant_receipt_tool_0",
-        "grant_receipt_tool_0",
-      ])
+      expect(effects.map((effect) => effect.grant_receipt_id)).toEqual(["grant_receipt_tool_0", "grant_receipt_tool_0"])
       expect(effects.every((effect) => effect.grant_owner_id === "grant_owner_1")).toBe(true)
       expect(effects.every((effect) => effect.grant_state === "settled" && effect.grant_version === 3)).toBe(true)
       expect(yield* session.context(sessionID)).toMatchObject([
@@ -3583,7 +3843,7 @@ describe("SessionRunnerLLM", () => {
 
       expect(requests).toHaveLength(2)
       expect(userTexts(requests[1]!)).toEqual(["Start working", "First steer", "Second steer"])
-      yield* (yield* SessionRunCoordinator.Service).wake(sessionID)
+      yield* (yield* SessionExecution.Service).wake(sessionID)
       yield* Effect.yieldNow
       expect(requests).toHaveLength(2)
     }),
@@ -3622,7 +3882,6 @@ describe("SessionRunnerLLM", () => {
     Effect.gen(function* () {
       yield* setup
       const session = yield* SessionV2.Service
-      const runner = yield* SessionRunner.Service
       const { db } = yield* Database.Service
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Stream fails after dispatch" }), resume: false })
       const failure = providerRefused()
@@ -3676,7 +3935,7 @@ describe("SessionRunnerLLM", () => {
         }),
       )
       requests.length = 0
-      yield* runner.run({ sessionID, force: true })
+      yield* session.resume(sessionID)
       const after = yield* receipts()
       expect(after[0]).toMatchObject({
         receipt_id: first[0]?.receipt_id,
@@ -3740,7 +3999,11 @@ describe("SessionRunnerLLM", () => {
     Effect.gen(function* () {
       yield* setup
       const session = yield* SessionV2.Service
-      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Do not replay the unknown tool" }), resume: false })
+      yield* session.prompt({
+        sessionID,
+        prompt: new Prompt({ text: "Do not replay the unknown tool" }),
+        resume: false,
+      })
       yield* (yield* Database.Service).db
         .insert(V2ToolEffectAdmissionTable)
         .values({
@@ -3778,9 +4041,11 @@ describe("SessionRunnerLLM", () => {
       const { db } = yield* Database.Service
       // The in-memory database is shared across tests; reset any epoch left behind for this Session
       // so the rebuild observation starts from a deterministic first-epoch flow.
-      yield* db.delete(SessionContextEpochTable).where(eq(SessionContextEpochTable.session_id, sessionID)).run().pipe(
-        Effect.orDie,
-      )
+      yield* db
+        .delete(SessionContextEpochTable)
+        .where(eq(SessionContextEpochTable.session_id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
       let bumped = false
       pricingLookupHook = Effect.suspend(() => {
         if (bumped) return Effect.void
@@ -4073,7 +4338,7 @@ describe("SessionRunnerLLM", () => {
       })
 
       requests.length = 0
-      yield* (yield* SessionRunCoordinator.Service).wake(sessionID)
+      yield* (yield* SessionExecution.Service).wake(sessionID)
       yield* Effect.yieldNow
 
       expect(requests).toHaveLength(1)
@@ -4123,7 +4388,7 @@ describe("SessionRunnerLLM", () => {
         LLMEvent.finish({ reason: "stop" }),
       ]
 
-      yield* (yield* SessionRunCoordinator.Service).wake(sessionID)
+      yield* (yield* SessionExecution.Service).wake(sessionID)
       while (requests.length === 0) yield* Effect.yieldNow
 
       expect(userTexts(requests[0]!)).toEqual(["Recover promoted input"])
@@ -4520,6 +4785,50 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("reclassifies the transport abort defect when a hung provider stream is interrupted", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Interrupt hanging transport" }), resume: false })
+      requests.length = 0
+      const bodyOpened = yield* Deferred.make<void>()
+      const controller = new AbortController()
+      // Faithful stand-in for the production body stream: InterruptibleResponse wraps
+      // `Stream.fromReadableStream` in `Stream.ensuring(... controller.abort())`, so interrupting
+      // the drain aborts the fetch and the reader teardown rejects with an AbortError DOMException,
+      // which surfaces as a defect that replaces the fiber's interrupt cause.
+      responseStream = Stream.unwrap(
+        Effect.as(
+          Deferred.succeed(bodyOpened, undefined),
+          Stream.ensuring(
+            Stream.fromReadableStream({
+              evaluate: () =>
+                new ReadableStream<LLMEvent>({
+                  start(body) {
+                    controller.signal.addEventListener("abort", () =>
+                      body.error(new DOMException("The operation was aborted.", "AbortError")),
+                    )
+                  },
+                }),
+              onError: () => providerUnavailable(),
+            }),
+            Effect.sync(() => controller.abort()),
+          ),
+        ),
+      )
+
+      const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
+      yield* Deferred.await(bodyOpened)
+      yield* Effect.yieldNow
+      yield* session.interrupt(sessionID)
+      const exit = yield* Fiber.await(run)
+
+      expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBeTrue()
+      expect(requests).toHaveLength(1)
+      yield* session.interrupt(sessionID)
+    }),
+  )
+
   it.effect("durably fails blocked local tools when interrupted while awaiting settlement", () =>
     Effect.gen(function* () {
       yield* setup
@@ -4534,10 +4843,9 @@ describe("SessionRunnerLLM", () => {
         LLMEvent.finish({ reason: "tool-calls" }),
       ]
 
-      const runner = yield* SessionRunner.Service
-      const run = yield* runner.run({ sessionID, force: true }).pipe(Effect.forkChild)
+      const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
       while (executions.length === 0) yield* Effect.yieldNow
-      yield* Fiber.interrupt(run)
+      yield* session.interrupt(sessionID)
       toolExecutionGate = undefined
 
       expect(yield* Fiber.await(run)).toMatchObject({ _tag: "Failure" })
@@ -4693,7 +5001,13 @@ describe("SessionRunnerLLM", () => {
           }),
         ),
       )
-      responses = [[LLMEvent.stepStart({ index: 0 }), LLMEvent.stepFinish({ index: 0, reason: "stop" }), LLMEvent.finish({ reason: "stop" })]]
+      responses = [
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ],
+      ]
       yield* session.resume(sessionID)
       expect(requests).toHaveLength(30)
       // 29 tool turns + 1 final stop turn all ran; the transcript carries every assistant row.
@@ -4741,7 +5055,13 @@ describe("SessionRunnerLLM", () => {
           }),
         ),
       )
-      responses = [[LLMEvent.stepStart({ index: 0 }), LLMEvent.stepFinish({ index: 0, reason: "stop" }), LLMEvent.finish({ reason: "stop" })]]
+      responses = [
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ],
+      ]
       yield* session.resume(sessionID)
       expect(requests).toHaveLength(30)
     }),
@@ -4829,7 +5149,7 @@ describe("SessionRunnerLLM", () => {
     Effect.gen(function* () {
       yield* setup
       const session = yield* SessionV2.Service
-      const coordinator = yield* SessionRunCoordinator.Service
+      const execution = yield* SessionExecution.Service
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Loop forever" }), resume: false })
 
       requests.length = 0
@@ -4844,7 +5164,7 @@ describe("SessionRunnerLLM", () => {
 
       const run = yield* session.resume(sessionID).pipe(Effect.forkChild)
       yield* Deferred.await(streamStarted)
-      yield* coordinator.wake(sessionID)
+      yield* execution.wake(sessionID)
       yield* Deferred.succeed(streamGate, undefined)
       expect(yield* Fiber.join(run).pipe(Effect.flip)).toMatchObject({ _tag: "SessionRunner.StepLimitExceededError" })
       streamGate = undefined
@@ -5304,9 +5624,7 @@ describe("SessionRunnerLLM", () => {
       const state = readGoalState(store, sessionID, handle.goalId)
       expect(state).toBeDefined()
       const runtime = JSON.parse(state!.body) as { pendingSteers: readonly { id: string; text: string }[] }
-      expect(runtime.pendingSteers).toEqual([
-        expect.objectContaining({ text: "Weigh the edge case before finishing" }),
-      ])
+      expect(runtime.pendingSteers).toEqual([expect.objectContaining({ text: "Weigh the edge case before finishing" })])
       // The session_input row is stamped consumed (idempotent by row id).
       const { db } = yield* Database.Service
       const row = yield* db

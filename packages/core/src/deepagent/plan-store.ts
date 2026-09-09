@@ -14,6 +14,7 @@
 // visible to the goal driver and vice versa, with no second cache to drift. The shared index IS the
 // hot cache: getPlanDoc is an in-memory Map lookup + a JSON.parse, not a disk read.
 import path from "node:path"
+import { AsyncLocalStorage } from "node:async_hooks"
 import { DocumentConflictError, DocumentStore, type Provenance } from "./document-store"
 import {
   PlanConflictError,
@@ -39,17 +40,25 @@ export const planDescription = (sessionId: string): string => `session plan ${se
 // goal store uses, so the two paths converge on one doc. Set by configureRoot (called from the same
 // gateway configure that sets session-state's dir), so core never has to import the deepagent-code
 // goal-manager resolver.
-let stateDir: string | null = null
+export type RuntimeState = { readonly stateDir: string }
+
+const runtime = new AsyncLocalStorage<RuntimeState>()
+let defaultStateDir: string | null = null
+
+export const createRuntime = (dir: string): RuntimeState => ({ stateDir: path.resolve(dir) })
+
+export const withRuntime = <A>(state: RuntimeState, operation: () => A): A => runtime.run(state, operation)
 
 export const configureRoot = (dir: string): void => {
-  stateDir = dir
+  defaultStateDir = path.resolve(dir)
 }
 
 // planStoreRoot(sid) === goalStoreRoot(sid) === <stateDir>/goal/<sid>/graph. Kept private-by-convention
 // (exported for the goal path + tests to assert convergence). Throws if used before configureRoot — a
 // plan write with no configured root is a wiring bug, not something to silently drop.
 export const planStoreRoot = (sessionId: string): string => {
-  if (!stateDir) throw new Error("plan-store: configureRoot() not called (no state dir)")
+  const stateDir = runtime.getStore()?.stateDir ?? defaultStateDir
+  if (!stateDir) throw new Error("plan-store: no runtime state dir")
   return path.join(stateDir, "goal", sessionId, "graph")
 }
 
@@ -181,7 +190,11 @@ const provenanceFor = (origin: PlanWriteOrigin, sessionId: string): Provenance =
 export type SpecDocKind = "requirements" | "design" | "worklog"
 
 const specSlug = (value: string): string =>
-  value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "untitled"
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48) || "untitled"
 
 export const writeSpecDoc = (
   sessionId: string,

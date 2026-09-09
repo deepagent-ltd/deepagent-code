@@ -253,16 +253,37 @@ export function mergeSystemParts(...groups: ReadonlyArray<ReadonlyArray<string |
   return groups.flatMap((group) => group.filter((part): part is string => part !== undefined && part.length > 0))
 }
 
+const positiveEnv = (name: string, fallback: number) => {
+  const value = Number(process.env[name])
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback
+}
+
 // Shared by the session runner and the compaction summary turn so every durable receipt budgets the
 // same way; compaction cannot import the runner layer without a module cycle.
-export function budget(model: Model): Budget {
+//
+// An absent/zero context limit means UNKNOWN (legacy `requestBudget` parity): the host guard
+// (DEEPAGENT_CODE_UNKNOWN_CONTEXT_GUARD, default 32k) is the only budget line, so the estimate
+// decides. The runner consumes `decision` as a pre-dispatch guard; the receipt records the outcome.
+export function budget(model: Model, estimatedFullRequestTokens = 0): Budget {
   const context = model.route.defaults.limits?.input ?? model.route.defaults.limits?.context
   const output = model.route.defaults.limits?.output ?? 0
-  if (!context || !Number.isFinite(context) || context <= 0)
+  if (context === undefined || context === 0) {
+    const hostGuard = positiveEnv("DEEPAGENT_CODE_UNKNOWN_CONTEXT_GUARD", 32_768)
+    return {
+      decision: estimatedFullRequestTokens < hostGuard ? "ok" : "unavailable",
+      ...(estimatedFullRequestTokens >= hostGuard ? { reason: "context_limit_unknown" as const } : {}),
+      estimatedFullRequestTokens,
+      physicalInputBudget: hostGuard,
+      reservedOutputTokens: output,
+      safetyMargin: 0,
+      provenance: "host_guard",
+    }
+  }
+  if (!Number.isFinite(context) || context < 0)
     return {
       decision: "unavailable",
-      reason: context === undefined ? "context_limit_unknown" : "context_limit_invalid",
-      estimatedFullRequestTokens: 0,
+      reason: "context_limit_invalid",
+      estimatedFullRequestTokens,
       physicalInputBudget: 0,
       reservedOutputTokens: output,
       safetyMargin: 0,
@@ -270,7 +291,7 @@ export function budget(model: Model): Budget {
     }
   return {
     decision: "ok",
-    estimatedFullRequestTokens: 0,
+    estimatedFullRequestTokens,
     physicalInputBudget: context,
     reservedOutputTokens: output,
     safetyMargin: 0,

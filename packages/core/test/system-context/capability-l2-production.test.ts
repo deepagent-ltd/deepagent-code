@@ -13,7 +13,11 @@ import { ToolRegistry } from "@deepagent-code/core/tool/registry"
 import { Tools } from "@deepagent-code/core/tool/tools"
 import { Tool } from "@deepagent-code/core/tool/tool"
 import { builtinToolNames } from "@deepagent-code/core/tool/builtins"
-import { RuntimeFeatures, UnknownRuntimeFeatureError } from "@deepagent-code/core/flag/runtime-features"
+import {
+  RuntimeFeatures,
+  createRuntimeFeatureRegistry,
+  UnknownRuntimeFeatureError,
+} from "@deepagent-code/core/flag/runtime-features"
 import { Project } from "@deepagent-code/core/project"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { AbsolutePath } from "@deepagent-code/core/schema"
@@ -23,6 +27,7 @@ import { V2ProviderTurnReceiptTable } from "@deepagent-code/core/session/runner/
 import { capabilityCatalog, capabilityCatalogSnapshotId } from "@deepagent-code/core/system-context/capability-catalog"
 import { makeRuntimeAuthorizedSearchTool } from "@deepagent-code/core/system-context/capability-runtime-search"
 import {
+  type CapabilityLoadToolOutput,
   makeCapabilityLoadTool,
   makeDefaultCapabilityLoadTurnIdentity,
   makeDomainPackLoadTool,
@@ -34,8 +39,11 @@ import {
   type CapabilityLoadRequest,
   type CapabilityLoadTurnIdentity,
 } from "@deepagent-code/core/system-context/capability-load-adapter"
-import { resetCapabilityLoader, recordedCapabilityLoads } from "@deepagent-code/core/system-context/capability-loader"
-import { capabilitySnapshotRefFor, rebuildSnapshotFromReceipts } from "@deepagent-code/core/system-context/capability-snapshot"
+import { resetCapabilityLoader } from "@deepagent-code/core/system-context/capability-loader-memory"
+import {
+  capabilitySnapshotRefFor,
+  rebuildSnapshotFromReceipts,
+} from "@deepagent-code/core/system-context/capability-snapshot"
 import {
   assertInventoryMatchesRegistry,
   CatalogRegistryMismatchError,
@@ -175,7 +183,13 @@ function seedSessionRows(db: Database.Interface["db"], sessionId: SessionSchema.
 /** Insert one provider-turn receipt row (the turn-identity seam's source of truth). */
 function insertTurnRow(
   db: Database.Interface["db"],
-  row: { readonly receiptId: string; readonly ordinal: number; readonly activityId: string; readonly turnSeq: number; readonly createdAt: number },
+  row: {
+    readonly receiptId: string
+    readonly ordinal: number
+    readonly activityId: string
+    readonly turnSeq: number
+    readonly createdAt: number
+  },
 ) {
   return db
     .insert(V2ProviderTurnReceiptTable)
@@ -221,8 +235,10 @@ describe("session-scoped load: two sessions load the same body (W4 step 2)", () 
         expect(second.state.state).toBe("loaded")
         expect(first.body).toBeTruthy()
         expect(second.body).toBe(first.body)
-        // Both are registered for the session-snapshot filter (one per session).
-        expect(recordedCapabilityLoads()).toHaveLength(2)
+        expect(yield* recordedCapabilityLoadsForSession(db, SESSION, capabilityCatalogSnapshotId)).toHaveLength(1)
+        expect(
+          yield* recordedCapabilityLoadsForSession(db, SessionV2.ID.make("ses_l2_other"), capabilityCatalogSnapshotId),
+        ).toHaveLength(1)
       }).pipe(Effect.provide(Database.layerFromPath(":memory:"))),
     )
   })
@@ -231,8 +247,16 @@ describe("session-scoped load: two sessions load the same body (W4 step 2)", () 
     await Effect.runPromise(
       Effect.gen(function* () {
         const { db } = yield* Database.Service
-        const first = yield* sessionCapabilityLoad(db, { request: requestFor("deepagent.code-read"), identity: IDENTITY, contextEpoch: "epoch-l2" })
-        const retry = yield* sessionCapabilityLoad(db, { request: requestFor("deepagent.code-read"), identity: IDENTITY, contextEpoch: "epoch-l2" })
+        const first = yield* sessionCapabilityLoad(db, {
+          request: requestFor("deepagent.code-read"),
+          identity: IDENTITY,
+          contextEpoch: "epoch-l2",
+        })
+        const retry = yield* sessionCapabilityLoad(db, {
+          request: requestFor("deepagent.code-read"),
+          identity: IDENTITY,
+          contextEpoch: "epoch-l2",
+        })
         expect(first.state.state).toBe("loaded")
         expect(retry.state.state).toBe("already_loaded")
         expect(retry.body).toBe(first.body)
@@ -247,8 +271,20 @@ describe("default capability_load turn identity: the LATEST provider turn row (W
       Effect.gen(function* () {
         const { db } = yield* Database.Service
         yield* seedSessionRows(db, SESSION)
-        yield* insertTurnRow(db, { receiptId: "rcpt-old", ordinal: 1, activityId: "act-old", turnSeq: 1, createdAt: 1000 })
-        yield* insertTurnRow(db, { receiptId: "rcpt-new", ordinal: 2, activityId: "act-new", turnSeq: 2, createdAt: 2000 })
+        yield* insertTurnRow(db, {
+          receiptId: "rcpt-old",
+          ordinal: 1,
+          activityId: "act-old",
+          turnSeq: 1,
+          createdAt: 1000,
+        })
+        yield* insertTurnRow(db, {
+          receiptId: "rcpt-new",
+          ordinal: 2,
+          activityId: "act-new",
+          turnSeq: 2,
+          createdAt: 2000,
+        })
         // Contract: the receipt committed BEFORE the current provider dispatch is the
         // latest row — ASC took the FIRST turn, mis-binding audit + leaking the per-turn
         // budget into every later turn.
@@ -293,20 +329,19 @@ describe("durable receipt: write table → NEW store instance (new DB connection
   test("a receipt written through one DB connection is read back by a NEW connection and rebuilds the same snapshot", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {
-        // Connection A: load through the kernel (records the in-module receipt + the durable row).
-        yield* Effect.gen(function* () {
+        // Connection A: the durable transaction records the authoritative row.
+        const before = yield* Effect.gen(function* () {
           const { db } = yield* Database.Service
-          yield* sessionCapabilityLoad(db, { request: requestFor("deepagent.code-read"), identity: IDENTITY, contextEpoch: "epoch-l2" })
+          yield* sessionCapabilityLoad(db, {
+            request: requestFor("deepagent.code-read"),
+            identity: IDENTITY,
+            contextEpoch: "epoch-l2",
+          })
+          const receipts = yield* recordedCapabilityLoadsForSession(db, SESSION, capabilityCatalogSnapshotId)
+          return rebuildSnapshotFromReceipts(receipts.map(capabilityLoadFactOf), capabilityCatalog)
         }).pipe(Effect.provide(Database.layerFromPath(file)))
-        // The in-memory snapshot facts at dispatch time (design §7.5: the snapshot is built
-        // from the loaded hashes; bodies are not kept in the prefix). The kernel receipts are
-        // folded to the session facts exactly like the runner does (llm.ts snapshot filter).
-        const before = rebuildSnapshotFromReceipts(
-          recordedCapabilityLoads().map((receipt) => ({ capabilityId: receipt.capabilityId, bodyHash: receipt.bodyHash })),
-          capabilityCatalog,
-        )
 
-        // Simulated restart: the kernel store is gone, only the durable rows remain.
+        // Simulated restart: process-local test state is gone; only durable rows remain.
         resetCapabilityLoader()
 
         // Connection B: a NEW store/DB connection re-reads the durable receipt and the
@@ -332,11 +367,14 @@ describe("durable receipt: write table → NEW store instance (new DB connection
         // Connection A: the production adapter writes the durable row.
         yield* Effect.gen(function* () {
           const { db } = yield* Database.Service
-          yield* sessionCapabilityLoad(db, { request: requestFor("deepagent.code-edit"), identity: IDENTITY, contextEpoch: "epoch-l2" })
+          yield* sessionCapabilityLoad(db, {
+            request: requestFor("deepagent.code-edit"),
+            identity: IDENTITY,
+            contextEpoch: "epoch-l2",
+          })
         }).pipe(Effect.provide(Database.layerFromPath(file)))
         // Simulated restart: the process-local kernel cache is gone.
         resetCapabilityLoader()
-        expect(recordedCapabilityLoads()).toHaveLength(0)
         // Connection B: EXACTLY the llm.ts restore expression (durable read → fact
         // mapping → snapshot ref). The read is the restoration authority in a new
         // process — no in-memory state is consulted.
@@ -351,6 +389,68 @@ describe("durable receipt: write table → NEW store instance (new DB connection
       }),
     )
   })
+
+  test("simulated restart preserves exact-retry state and the per-turn budget", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* Effect.gen(function* () {
+          const { db } = yield* Database.Service
+          yield* sessionCapabilityLoad(db, {
+            request: requestFor("deepagent.code-read"),
+            identity: IDENTITY,
+            contextEpoch: "epoch-l2",
+          })
+          yield* sessionCapabilityLoad(db, {
+            request: requestFor("deepagent.code-edit"),
+            identity: IDENTITY,
+            contextEpoch: "epoch-l2",
+          })
+        }).pipe(Effect.provide(Database.layerFromPath(file)))
+        resetCapabilityLoader()
+        yield* Effect.gen(function* () {
+          const { db } = yield* Database.Service
+          const retry = yield* sessionCapabilityLoad(db, {
+            request: requestFor("deepagent.code-read"),
+            identity: IDENTITY,
+            contextEpoch: "epoch-l2",
+          })
+          const third = yield* sessionCapabilityLoad(db, {
+            request: requestFor("deepagent.shell-execute"),
+            identity: IDENTITY,
+            contextEpoch: "epoch-l2",
+          })
+          expect(retry.state.state).toBe("already_loaded")
+          expect(third.state.state).toBe("budget_exceeded")
+          expect(yield* recordedCapabilityLoadsForSession(db, SESSION, capabilityCatalogSnapshotId)).toHaveLength(2)
+        }).pipe(Effect.provide(Database.layerFromPath(file)))
+      }),
+    )
+  })
+
+  test("two independent databases never share capability load identity or budget", async () => {
+    const first = await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        return yield* sessionCapabilityLoad(db, {
+          request: requestFor("deepagent.code-read"),
+          identity: IDENTITY,
+          contextEpoch: "epoch-l2",
+        })
+      }).pipe(Effect.provide(Database.layerFromPath(":memory:"))),
+    )
+    const second = await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        return yield* sessionCapabilityLoad(db, {
+          request: requestFor("deepagent.code-read"),
+          identity: IDENTITY,
+          contextEpoch: "epoch-l2",
+        })
+      }).pipe(Effect.provide(Database.layerFromPath(":memory:"))),
+    )
+    expect(first.state.state).toBe("loaded")
+    expect(second.state.state).toBe("loaded")
+  })
 })
 
 describe("capability_load tool settle: budget gate + audit receipt + snapshot change (W4 step 4)", () => {
@@ -363,11 +463,20 @@ describe("capability_load tool settle: budget gate + audit receipt + snapshot ch
         yield* registerLoadTools(db)
         const settlement = yield* settleLoadCall("call-load-1", "deepagent.code-read")
 
-        // Model-visible text: the card + a bounded preview (never the full body).
+        // Model-visible text and structured settlement both carry the exact, hash-validated body.
         expect(settlement.result.type).toBe("text")
         const text = String(settlement.result.value)
-        expect(text).toContain("Body preview:")
+        const body = capabilityBodyFor("deepagent.code-read", "1.0.0-beta.0")!.body
+        expect(text).toContain("Procedure body:")
         expect(text).toContain("deepagent.code-read")
+        expect(text).toContain(body)
+        expect(text).toContain(body.split("\n")[1]!)
+        expect((settlement.output?.structured as CapabilityLoadToolOutput).body).toBe(body)
+
+        const retry = yield* settleLoadCall("call-load-retry", "deepagent.code-read")
+        expect((retry.output?.structured as CapabilityLoadToolOutput).state.state).toBe("already_loaded")
+        expect((retry.output?.structured as CapabilityLoadToolOutput).body).toBe(body)
+        expect(String(retry.result.value)).toContain(body)
 
         // Durable audit receipt in session_capability_load.
         const receipts = yield* recordedCapabilityLoadsForSession(db, SESSION, capabilityCatalogSnapshotId)
@@ -378,10 +487,7 @@ describe("capability_load tool settle: budget gate + audit receipt + snapshot ch
 
         // Snapshot change: the loaded capability is now part of the epoch's loadedCapabilities
         // (folded to the session facts exactly like the runner does).
-        const snapshot = rebuildSnapshotFromReceipts(
-          recordedCapabilityLoads().map((receipt) => ({ capabilityId: receipt.capabilityId, bodyHash: receipt.bodyHash })),
-          capabilityCatalog,
-        )
+        const snapshot = rebuildSnapshotFromReceipts(receipts.map(capabilityLoadFactOf), capabilityCatalog)
         expect(snapshot.loadedCapabilities).toContainEqual(capabilityLoadFactOf(receipts[0]!))
       }).pipe(Effect.provide(toolLayer), Effect.scoped),
     )
@@ -398,6 +504,7 @@ describe("capability_load tool settle: budget gate + audit receipt + snapshot ch
         const third = yield* settleLoadCall("call-load-c", "deepagent.shell-execute")
         expect(third.result.type).toBe("text")
         expect(String(third.result.value)).toContain("budget")
+        expect((third.output?.structured as CapabilityLoadToolOutput).body).toBeUndefined()
         // Only the two actually-loaded bodies have durable rows.
         const receipts = yield* recordedCapabilityLoadsForSession(db, SESSION, capabilityCatalogSnapshotId)
         expect(receipts).toHaveLength(2)
@@ -457,7 +564,7 @@ describe("capability_load snapshot id: runtime-authoritative (W4.1 P0-2)", () =>
         const settlement = yield* settleLoadCall("call-omit-snap", "deepagent.code-read")
         expect(settlement.result.type).toBe("text")
         expect(String(settlement.result.value)).toContain("deepagent.code-read")
-        expect(String(settlement.result.value)).toContain("Body preview:")
+        expect(String(settlement.result.value)).toContain("Procedure body:")
         const receipts = yield* recordedCapabilityLoadsForSession(db, SESSION, capabilityCatalogSnapshotId)
         expect(receipts).toHaveLength(1)
         expect(receipts[0]!.catalogSnapshotId).toBe(capabilityCatalogSnapshotId)
@@ -471,6 +578,7 @@ describe("capability_load snapshot id: runtime-authoritative (W4.1 P0-2)", () =>
         yield* registerLoadTools(db)
         const settlement = yield* settleLoadCall("call-wrong-snap", "deepagent.code-read", "capability_catalog:stale")
         expect(String(settlement.result.value)).toContain("catalog_snapshot_mismatch")
+        expect((settlement.output?.structured as CapabilityLoadToolOutput).body).toBeUndefined()
         // A mismatched snapshot loads nothing — no durable fact.
         const receipts = yield* recordedCapabilityLoadsForSession(db, SESSION, capabilityCatalogSnapshotId)
         expect(receipts).toHaveLength(0)
@@ -516,7 +624,9 @@ describe("capability_load snapshot id: runtime-authoritative (W4.1 P0-2)", () =>
         const { db } = yield* Database.Service
         const tool = makeCapabilityLoadTool({ db, turnIdentity: () => Effect.succeed(IDENTITY) })
         const definition = Tool.definition("capability_load", tool)
-        const inputSchema = (definition as unknown as { inputSchema: { required?: string[]; properties?: Record<string, unknown> } }).inputSchema
+        const inputSchema = (
+          definition as unknown as { inputSchema: { required?: string[]; properties?: Record<string, unknown> } }
+        ).inputSchema
         expect(inputSchema.properties?.["catalogSnapshotId"]).toBeTruthy()
         expect(inputSchema.required ?? []).not.toContain("catalogSnapshotId")
       }).pipe(Effect.provide(Database.layerFromPath(":memory:"))),
@@ -546,47 +656,52 @@ describe("runtime-authorized search binds the REAL catalog snapshot id (W4 step 
 })
 
 describe("RuntimeFeatures.enabled mirrors the flip-flag table (W4 step 6)", () => {
-  afterEach(() => {
-    delete process.env["DEEPAGENT_CODE_EVENT_V2_ADMISSION"]
-    delete process.env["DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE"]
-    delete process.env["DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION"]
-    delete process.env["DEEPAGENT_CODE_CONTEXT_QUERY_TOOLS_V2"]
-  })
-
   test("event.v2.admission: unset defaults ON (W0.1 table) and the defined values follow flipFlagValueOn", () => {
-    delete process.env["DEEPAGENT_CODE_EVENT_V2_ADMISSION"]
-    expect(RuntimeFeatures.enabled("event.v2.admission")).toBe(true)
-    process.env["DEEPAGENT_CODE_EVENT_V2_ADMISSION"] = "false"
-    expect(RuntimeFeatures.enabled("event.v2.admission")).toBe(false)
-    process.env["DEEPAGENT_CODE_EVENT_V2_ADMISSION"] = "0"
-    expect(RuntimeFeatures.enabled("event.v2.admission")).toBe(false)
-    process.env["DEEPAGENT_CODE_EVENT_V2_ADMISSION"] = ""
-    expect(RuntimeFeatures.enabled("event.v2.admission")).toBe(false)
-    process.env["DEEPAGENT_CODE_EVENT_V2_ADMISSION"] = "true"
-    expect(RuntimeFeatures.enabled("event.v2.admission")).toBe(true)
+    expect(createRuntimeFeatureRegistry(undefined, {}).enabled("event.v2.admission")).toBe(true)
+    for (const value of ["false", "0", ""]) {
+      expect(
+        createRuntimeFeatureRegistry(undefined, { DEEPAGENT_CODE_EVENT_V2_ADMISSION: value }).enabled(
+          "event.v2.admission",
+        ),
+      ).toBe(false)
+    }
+    expect(
+      createRuntimeFeatureRegistry(undefined, { DEEPAGENT_CODE_EVENT_V2_ADMISSION: "true" }).enabled(
+        "event.v2.admission",
+      ),
+    ).toBe(true)
   })
 
   test("event.v2.im_single_write defaults ON and follows its env", () => {
-    delete process.env["DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE"]
-    expect(RuntimeFeatures.enabled("event.v2.im_single_write")).toBe(true)
-    process.env["DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE"] = "false"
-    expect(RuntimeFeatures.enabled("event.v2.im_single_write")).toBe(false)
+    expect(createRuntimeFeatureRegistry(undefined, {}).enabled("event.v2.im_single_write")).toBe(true)
+    expect(
+      createRuntimeFeatureRegistry(undefined, { DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE: "false" }).enabled(
+        "event.v2.im_single_write",
+      ),
+    ).toBe(false)
   })
 
   test("context_federation_v2 defaults ON (W3.8 M1: production semantic) and follows the gate env", () => {
-    delete process.env["DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION"]
-    expect(RuntimeFeatures.enabled("context_federation_v2")).toBe(true)
-    process.env["DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION"] = "false"
-    expect(RuntimeFeatures.enabled("context_federation_v2")).toBe(false)
-    process.env["DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION"] = "true"
-    expect(RuntimeFeatures.enabled("context_federation_v2")).toBe(true)
+    expect(createRuntimeFeatureRegistry(undefined, {}).enabled("context_federation_v2")).toBe(true)
+    expect(
+      createRuntimeFeatureRegistry(undefined, { DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION: "false" }).enabled(
+        "context_federation_v2",
+      ),
+    ).toBe(false)
+    expect(
+      createRuntimeFeatureRegistry(undefined, { DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION: "true" }).enabled(
+        "context_federation_v2",
+      ),
+    ).toBe(true)
   })
 
   test("context_query_tools_v2 defaults ON with canonical Core consumers and follows its kill switch", () => {
-    delete process.env["DEEPAGENT_CODE_CONTEXT_QUERY_TOOLS_V2"]
-    expect(RuntimeFeatures.enabled("context_query_tools_v2")).toBe(true)
-    process.env["DEEPAGENT_CODE_CONTEXT_QUERY_TOOLS_V2"] = "false"
-    expect(RuntimeFeatures.enabled("context_query_tools_v2")).toBe(false)
+    expect(createRuntimeFeatureRegistry(undefined, {}).enabled("context_query_tools_v2")).toBe(true)
+    expect(
+      createRuntimeFeatureRegistry(undefined, { DEEPAGENT_CODE_CONTEXT_QUERY_TOOLS_V2: "false" }).enabled(
+        "context_query_tools_v2",
+      ),
+    ).toBe(false)
   })
 
   test("an unknown feature still throws the typed UnknownRuntimeFeatureError", () => {
@@ -614,7 +729,9 @@ describe("inventory ↔ registry consistency gate (W4 step 7)", () => {
 
   test("a stable manifest advertising a tool that is not registered still throws (parametrized catalog)", () => {
     const badCatalog = capabilityCatalog.map((manifest) =>
-      manifest.id === "deepagent.code-read" ? { ...manifest, entry_tools: ["no_such_tool", ...manifest.entry_tools] } : manifest,
+      manifest.id === "deepagent.code-read"
+        ? { ...manifest, entry_tools: ["no_such_tool", ...manifest.entry_tools] }
+        : manifest,
     )
     expect(() => assertInventoryMatchesRegistry(builtinToolNames, badCatalog)).toThrow(CatalogRegistryMismatchError)
   })

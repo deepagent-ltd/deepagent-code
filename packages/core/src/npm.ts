@@ -267,7 +267,7 @@ export const defaultLayer = layer.pipe(
   Layer.provide(NodeFileSystem.layer),
 )
 
-const { runPromise } = makeRuntime(Service, defaultLayer)
+const { runPromise } = makeRuntime(Service, defaultLayer, "core.npm")
 
 export async function install(...args: Parameters<Interface["install"]>) {
   return runPromise((svc) => svc.install(...args))

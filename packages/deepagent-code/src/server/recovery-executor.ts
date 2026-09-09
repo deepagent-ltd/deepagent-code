@@ -3,35 +3,36 @@ export * as RecoveryExecutor from "./recovery-executor"
 import { Context, Effect, Layer } from "effect"
 import { sql } from "drizzle-orm"
 import { Database } from "@deepagent-code/core/database/database"
-import { SessionProviderRecovery, SessionProviderRecoveryDurable } from "@deepagent-code/core/session/runner"
+import { SessionProviderRecoveryDurable } from "@deepagent-code/core/session/runner"
 import * as Log from "@deepagent-code/core/util/log"
 
-// W2.2 — production wiring of the C1B recovery executors.
+// W2.2 — the production C1B recovery-command executor.
 //
-// W2/W2.1 delivered the three W2 tables, the DB-backed durable store and the durable
-// `SessionProviderRecovery` service (`durableLayerWith`), but the durable service was
-// NEVER provided in a production composition and no code ran a recorded recovery
-// command to its terminal state — after a kill-9 restart the `recovery`-class
-// descriptors were classified by the startup inventory for UI/maintenance only
-// (`StartupInventory.classifyStartup`, §10.7 recovery order) and their `pending`
-// commands stayed unexecuted.
+// A kill-9 restart leaves the committed-but-unapplied recovery commands as `pending`
+// `recovery_command` rows (the startup inventory classifies their descriptors for
+// UI/maintenance — `StartupInventory.classifyStartup`, §10.7 recovery order). This
+// module applies them: `drain` scans the pending rows and `applyOne` dispatches on the
+// descriptor class. Only the `resolvable_exact` abandon exit is derivable from durable
+// rows alone; it is applied by the durable store's `applyExactAbandon` in ONE immediate
+// transaction — the attempt-resolution row, the recovery bridge, the terminal `resolved`
+// descriptor, the attempt → resolved_abandoned / activity → interrupted / command →
+// abandoned CAS, and the Session execution-claim release. A command that cannot be
+// applied stays `pending` and is logged; the next boot or an admin action re-attempts it.
 //
-// This module closes that gap with the smallest real chain:
-//   1. `recoveryDurableLayer` — the composition seam that provides the DB-backed
-//      `SessionProviderRecovery.Service`, built over the `Database.Service` the
-//      composition already owns. SINGLE-INSTANCE semantics: there is no clustering —
-//      one local process owns the one business database, so the service semaphore +
-//      SQLite immediate-transaction CAS are the write authority.
-//   2. `layer` — the durable recovery-command executor. At composition build
-//      (= process boot, after migration + the startup-inventory post-verify) it scans
-//      the `pending` `recovery_command` rows and applies the exit the descriptor
-//      class authorizes. The drain never fails the boot: a command that cannot be
-//      applied stays `pending` and is logged (the next boot or an admin action
-//      re-attempts it).
+// Two production entry points share this executor:
+//   1. startup drain — building `layer` runs a drain at process boot (composed in
+//      src/effect/app-runtime.ts and the instance route graph
+//      src/server/routes/instance/httpapi/server.ts);
+//   2. maintenance — the recovery-command handler (handlers/maintenance.ts,
+//      `executeRecovery`) records the actor's command and runs a drain inline.
 //
-// Boundary (W2 scope, unchanged): C1B evidence status records, baseline repairs, fork
-// fences and abandon receipts remain process-local (the `durableServiceWith` memory
-// Ref); the DB persists descriptors, commands and evidence exports only. The
+// Wiring note: the executor talks to the durable STORE directly
+// (`SessionProviderRecoveryDurable.makeDurableRecoveryStore`). The earlier
+// `SessionProviderRecovery.durableLayerWith` composition seam is retired — no production
+// composition provides that service layer (the core durable-store tests exercise it).
+//
+// Boundary (W2 scope, unchanged): baseline repairs and fork exits require additional
+// durable authorities and are therefore kept pending. The
 // `v2-provider-turn` turn-terminal descriptors carry NO command row — they are the
 // audit record for settled/failed/indeterminate terminals and are never executed here
 // (a `resolved`-kind command, if one ever existed, is kept pending by policy).
@@ -128,7 +129,6 @@ const pendingCommands = Effect.fn("RecoveryExecutor.pendingCommands")(function* 
  */
 const applyOne = Effect.fn("RecoveryExecutor.applyOne")(function* (
   db: BusinessDb,
-  recovery: SessionProviderRecovery.Interface,
   row: SessionProviderRecoveryDurable.CommandRow,
 ) {
   const kept = (reason: string): PendingExitOutcome => ({ commandId: row.commandId, status: "kept_pending", reason })
@@ -144,19 +144,15 @@ const applyOne = Effect.fn("RecoveryExecutor.applyOne")(function* (
   // permission model never grants a system actor an exit), stays pending.
   if (row.actorType === undefined || row.actorId === undefined) return kept(KeptPendingReason.no_actor)
   if (row.actorType === "system") return kept(KeptPendingReason.system_actor_refused)
-  return yield* recovery
-    .abandonExact({
-      actor: { type: row.actorType, id: row.actorId },
-      requestHash: row.requestHash,
-      attemptIdentity: row.attempt,
-      // Deterministic authority reason for the network-unknown recovery flow (the
-      // frozen contract's bounded reason code; the recorded row carries no reason).
-      reasonCode: "network_unknown",
+  return yield* storeOf(db)
+    .applyExactAbandon({
+      commandId: row.commandId,
+      reason: "network_unknown",
     })
     .pipe(
       Effect.map((outcome): PendingExitOutcome =>
-        outcome.status === "conflict"
-          ? kept(`abandon_conflict:${outcome.reason}`)
+        outcome === "authority_conflict"
+          ? kept("abandon_conflict:authority_conflict")
           : { commandId: row.commandId, status: "applied", to: "abandoned" },
       ),
       Effect.catchCause((cause): Effect.Effect<PendingExitOutcome, never> =>
@@ -173,19 +169,23 @@ const causeLabel = (cause: unknown): string => {
   }
 }
 
-/** The executor over a composition-owned database + the durable recovery service. */
-export const makeRecoveryExecutor = (db: BusinessDb, recovery: SessionProviderRecovery.Interface): Interface => {
+/** The executor over a composition-owned database + the durable recovery store. */
+export const makeRecoveryExecutor = (db: BusinessDb): Interface => {
   const runDrain = Effect.fn("RecoveryExecutor.drain")(function* () {
     const rows = yield* pendingCommands(db)
     if (rows.length === 0) return { scanned: 0, applied: 0, keptPending: [], failed: [] } satisfies DrainReport
     const outcomes = yield* Effect.forEach(
       rows,
-      (row) => applyOne(db, recovery, row),
+      (row) => applyOne(db, row),
       { concurrency: 1 },
     )
     const applied = outcomes.filter((outcome): outcome is Extract<PendingExitOutcome, { status: "applied" }> => outcome.status === "applied")
-    const keptPending = outcomes.filter((outcome): outcome is Extract<PendingExitOutcome, { status: "kept_pending" }> => outcome.status === "kept_pending")
-    const failed = outcomes.filter((outcome): outcome is Extract<PendingExitOutcome, { status: "apply_failed" }> => outcome.status === "apply_failed")
+    const keptPending = outcomes
+      .filter((outcome): outcome is Extract<PendingExitOutcome, { status: "kept_pending" }> => outcome.status === "kept_pending")
+      .map((outcome) => ({ commandId: outcome.commandId, reason: outcome.reason }))
+    const failed = outcomes
+      .filter((outcome): outcome is Extract<PendingExitOutcome, { status: "apply_failed" }> => outcome.status === "apply_failed")
+      .map((outcome) => ({ commandId: outcome.commandId, error: outcome.error }))
     const report: DrainReport = { scanned: rows.length, applied: applied.length, keptPending, failed }
     log.info("recovery_executor_drain", { scanned: report.scanned, applied: report.applied, keptPending: report.keptPending.length, failed: report.failed.length })
     for (const pending of report.keptPending) {
@@ -208,37 +208,16 @@ export const makeRecoveryExecutor = (db: BusinessDb, recovery: SessionProviderRe
 }
 
 /**
- * The composition seam: `SessionProviderRecovery.Service` bound to the DB-backed
- * durable service over the composition's `Database.Service` — the same connection the
- * rest of the graph uses (single-instance local process; no clustering).
- */
-export const recoveryDurableLayer: Layer.Layer<SessionProviderRecovery.Service, never, Database.Service> = Layer.effect(
-  SessionProviderRecovery.Service,
-  Effect.gen(function* () {
-    const database = yield* Database.Service
-    return yield* Effect.scoped(
-      Effect.gen(function* () {
-        // The durable service holds no scoped resources (it wraps the shared db
-        // handle); the build scope closes immediately and is not part of the seam.
-        const built = yield* Layer.build(SessionProviderRecovery.durableLayerWith(database.db))
-        return Context.get(built, SessionProviderRecovery.Service)
-      }),
-    )
-  }),
-)
-
-/**
  * The production executor layer. Building it = process boot after a (possibly) crash:
  * the startup drain applies the committed-but-unapplied recovery commands. It runs
  * after the Database layer (migration + startup-inventory post-verify) and NEVER
  * fails the boot — per-command failures leave the row `pending` for the next boot.
  */
-export const layer: Layer.Layer<Service, never, Database.Service | SessionProviderRecovery.Service> = Layer.effect(
+export const layer: Layer.Layer<Service, never, Database.Service> = Layer.effect(
   Service,
   Effect.gen(function* () {
     const database = yield* Database.Service
-    const recovery = yield* SessionProviderRecovery.Service
-    const executor = makeRecoveryExecutor(database.db, recovery)
+    const executor = makeRecoveryExecutor(database.db)
     const report: DrainReport = yield* executor.drain.pipe(
       Effect.catchCause((cause): Effect.Effect<DrainReport, never> =>
         Effect.succeed({ scanned: 0, applied: 0, keptPending: [], failed: [{ commandId: "drain", error: causeLabel(cause) }] }),

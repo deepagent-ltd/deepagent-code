@@ -77,7 +77,7 @@ describe("gateway client auth", () => {
           refreshed = true
           return json({ accessToken: "fresh" })
         }
-        const auth = (init?.headers as Record<string, string> | undefined)?.["authorization"] ?? null
+        const auth = new Headers(init?.headers).get("authorization")
         seenAuth.push(auth)
         if (!refreshed) return new Response("", { status: 401 })
         return json({
@@ -98,6 +98,28 @@ describe("gateway client auth", () => {
     // First attempt with the old token, retry with the refreshed one.
     expect(seenAuth[0]).toBe("Bearer old")
     expect(seenAuth[1]).toBe("Bearer fresh")
+  })
+
+  test("coalesces concurrent token refreshes", async () => {
+    let calls = 0
+    let resolve!: (response: Response) => void
+    const response = new Promise<Response>((done) => {
+      resolve = done
+    })
+    const client = createGatewayClient({
+      gatewayUrl: "https://gw.test",
+      fetch: mockFetch(() => {
+        calls++
+        return response
+      }),
+    })
+
+    const first = client.refresh()
+    const second = client.refresh()
+    expect(first).toBe(second)
+    expect(calls).toBe(1)
+    resolve(json({ accessToken: "fresh" }))
+    expect(await Promise.all([first, second])).toEqual(["fresh", "fresh"])
   })
 
   test("getContainer returns null on 404", async () => {

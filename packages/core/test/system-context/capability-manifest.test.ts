@@ -3,8 +3,10 @@ import { builtinToolNames } from "@deepagent-code/core/tool/builtins"
 import {
   CapabilityBudget,
   DeepAgentCodeToolInventory,
+  InventoryRegistryDriftError,
   assertCapabilityCatalogConsistent,
   assertCapabilityManifestConsistent,
+  assertInventoryCoversBuiltinTools,
   capabilityCatalogDigest,
   capabilityManifestSignature,
   decodeCapabilityManifest,
@@ -223,5 +225,37 @@ describe("C4-01 first batch", () => {
     // The manifest ids/summaries are the source; the rendered L0 stays small.
     expect(CapabilityBudget.l0MaxTokens).toBe(700)
     expect(CapabilityBudget.l0MaxBytes).toBe(4096)
+  })
+})
+
+describe("RI-113 inventory ↔ builtin registry exact gate", () => {
+  test("the product tool inventory equals the shipped builtin registry exactly", () => {
+    expect(() => assertInventoryCoversBuiltinTools(builtinToolNames, DeepAgentCodeToolInventory)).not.toThrow()
+    expect([...DeepAgentCodeToolInventory.toolNames].sort()).toEqual([...builtinToolNames].sort())
+  })
+
+  test("drift in either direction fails the gate", () => {
+    const driftOf = (toolNames: ReadonlySet<string>) => {
+      try {
+        assertInventoryCoversBuiltinTools(builtinToolNames, { ...DeepAgentCodeToolInventory, toolNames })
+        return null
+      } catch (error) {
+        return error instanceof InventoryRegistryDriftError ? error : null
+      }
+    }
+    const missing = driftOf(new Set([...DeepAgentCodeToolInventory.toolNames].filter((tool) => tool !== "plan")))
+    expect(missing?.missingFromInventory).toEqual(["plan"])
+    expect(missing?.missingFromRegistry).toEqual([])
+    const phantom = driftOf(new Set([...DeepAgentCodeToolInventory.toolNames, "phantom_tool"]))
+    expect(phantom?.missingFromRegistry).toEqual(["phantom_tool"])
+    expect(phantom?.missingFromInventory).toEqual([])
+  })
+
+  test("every builtin tool with a static permission action is catalogued in the inventory", () => {
+    // The registered tools declare these actions (Tool.withPermission); capability_search
+    // intentionally has none (per-call derived authorization).
+    for (const action of ["read", "glob", "grep", "edit", "bash", "websearch", "webfetch", "question", "skill", "plan", "code_intel", "context_query", "capability.read"]) {
+      expect(DeepAgentCodeToolInventory.permissionActions.has(action)).toBe(true)
+    }
   })
 })

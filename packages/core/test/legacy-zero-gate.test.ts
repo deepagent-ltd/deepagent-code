@@ -1,17 +1,20 @@
 /**
  * C0-08 legacy-zero inventory gate tests.
  *
- * User decision D2 (2026-09-03): the EXIT gate covers the V2-default entry set — it fails only
- * on double-write or selection-bridge authority. `legacy` dims (910: the explicit V1 rollback
- * surface PART D guarantees) and `adapter` dims (3: the sanctioned V2↔AI-SDK/recovery
- * translation faces) are TRIPWIRES — still counted, printed, snapshotted, and pinned by the
- * frozen-counter red oracle below, but never exit-blocking. The counter tests verify the
+ * The EXIT gate covers the V2 production entry set and fails on legacy, double-write,
+ * unclassified, or selection-bridge authority. Sanctioned non-V1 adapters remain informational.
+ * The counter tests verify the
  * COUNTER implementation against a small fixture inventory and the real buildInventory()
  * output; mustBeZero() is asserted GREEN on the current tree and to throw on double-write
  * authority.
  */
 import { describe, expect, test } from "bun:test"
+import { createHash } from "node:crypto"
+import { readFileSync } from "node:fs"
+import path from "node:path"
 import { buildInventory } from "../script/caller-inventory/build"
+import { rootRepoPath } from "../script/caller-inventory/ast"
+import { tmpdir } from "./fixture/tmpdir"
 import {
   DIMENSIONS,
   SURFACE_IDS,
@@ -121,8 +124,8 @@ describe("C0-08 legacy-zero counter (fixture inventory)", () => {
 
   test("violations enumerate every violating entry x dimension", () => {
     const violations = violationsFor(dirtyFixture())
-    expect(violations.length).toBe(9)
-    expect(violationsByVerdict(violations)).toEqual({ legacy: 7, double_write: 1, adapter: 1 })
+    expect(violations.length).toBe(8)
+    expect(violationsByVerdict(violations)).toEqual({ legacy: 7, double_write: 1 })
     expect(violations.some((v) => v.entryId === "fixture.v2-bridge" && v.dimension === "event_producer_consumer" && v.verdict === "double_write")).toBe(true)
     for (const violation of violations) expect(violation.evidence.length).toBeGreaterThan(0)
   })
@@ -133,7 +136,7 @@ describe("C0-08 legacy-zero counter (fixture inventory)", () => {
     expect(caught).toBeInstanceOf(LegacyZeroError)
     const error = caught as LegacyZeroError
     expect(error.counters.legacyDims).toBe(7)
-    expect(error.violations.length).toBe(9)
+    expect(error.violations.length).toBe(8)
     expect(error.message).toContain("legacy-zero gate FAILED")
     expect(error.message).toContain("fixture.v2-bridge :: event_producer_consumer :: double_write")
   })
@@ -147,17 +150,15 @@ describe("C0-08 legacy-zero counter (fixture inventory)", () => {
     expect(counters.adapterDims).toBe(0)
   })
 
-  test("mustBeZero ignores tripwire-only violations (D2: legacy/adapter never block the exit gate)", () => {
-    const tripwireOnly = fixtureInventory([
-      makeEntry("fixture.legacy-owner", "im", allRoles("legacy")),
-      makeEntry("fixture.legacy-adapter", "recovery", allRoles("adapter")),
-    ])
-    const digest = mustBeZero(tripwireOnly, [])
+  test("mustBeZero permits sanctioned adapters but rejects legacy authority", () => {
+    const adapterOnly = fixtureInventory([makeEntry("fixture.adapter", "provider", allRoles("adapter"))])
+    const digest = mustBeZero(adapterOnly, [])
     expect(digest).toMatch(SHA256)
-    const counters = computeCounters(tripwireOnly)
-    expect(counters.legacyDims).toBeGreaterThan(0)
+    const counters = computeCounters(adapterOnly)
+    expect(counters.legacyDims).toBe(0)
     expect(counters.adapterDims).toBeGreaterThan(0)
     expect(counters.doubleWrite).toBe(0)
+    expect(() => mustBeZero(fixtureInventory([makeEntry("fixture.legacy-owner", "im", allRoles("legacy"))]), [])).toThrow(LegacyZeroError)
   })
 
   test("empty inventory yields all-zero counters and no violations", () => {
@@ -173,7 +174,7 @@ describe("C0-08 legacy-zero counter (fixture inventory)", () => {
   })
 
   test("zero-target verdict set is frozen", () => {
-    expect(ZERO_TARGET_VERDICTS).toEqual(["legacy", "double_write", "adapter"])
+    expect(ZERO_TARGET_VERDICTS).toEqual(["legacy", "double_write"])
   })
 })
 
@@ -183,12 +184,13 @@ describe("C0-08 legacy-zero gate real inventory (actual frozen numbers)", () => 
 
   test("frozen counters match the C0-01 report (red oracle, never hidden)", () => {
     const counters = currentTreeCounts(inventory)
-    expect(counters.legacyDims).toBe(910)
+    expect(counters.legacyDims).toBe(791)
     expect(counters.doubleWrite).toBe(0)
     expect(counters.doubleWriteEntries).toBe(0)
-    expect(counters.v2Dims).toBe(26)
+    expect(counters.v2Dims).toBe(124)
     expect(counters.adapterDims).toBe(3)
-    expect(counters.readOnlyDims).toBe(1847)
+    // 2026-09-08 step 5c 重钉:遗留清仓波的 src 改动使 read-only 面收缩(1896→1889)。
+    expect(counters.readOnlyDims).toBe(1889)
     expect(counters.unclassifiedDims).toBe(0)
   })
 
@@ -224,13 +226,10 @@ describe("C0-08 legacy-zero gate real inventory (actual frozen numbers)", () => 
     }
   })
 
-  test("mustBeZero is GREEN on the current tree (D2: exit = V2-default entry set; tripwirs pinned by the frozen counters)", () => {
-    const digest = mustBeZero(inventory)
-    expect(digest).toMatch(SHA256)
-    // Tripwire counters stay pinned here — a drift in the legacy/adapter surfaces must show
-    // up in this red oracle even though it no longer blocks the exit gate.
+  test("mustBeZero is RED while any production caller retains legacy authority", () => {
+    expect(() => mustBeZero(inventory)).toThrow(LegacyZeroError)
     const counters = currentTreeCounts(inventory)
-    expect(counters.legacyDims).toBe(910)
+    expect(counters.legacyDims).toBe(791)
     expect(counters.doubleWrite).toBe(0)
     expect(counters.adapterDims).toBe(3)
   })
@@ -263,12 +262,14 @@ describe("C0-08 legacy-zero gate snapshot (byte-stable)", () => {
 
   test("snapshot counters carry the frozen red numbers", () => {
     const snapshot = buildSnapshot(inventory, bridgeSites)
-    expect(snapshot.counters.legacyDims).toBe(910)
+    expect(snapshot.counters.legacyDims).toBe(791)
     expect(snapshot.counters.doubleWrite).toBe(0)
     expect(snapshot.counters.adapterDims).toBe(3)
-    expect(snapshot.counters.v2Dims).toBe(26)
-    expect(snapshot.entries).toBe(398)
-    expect(snapshot.roles).toBe(2786)
+    expect(snapshot.counters.v2Dims).toBe(124)
+    // 2026-09-08 step 5c 重钉:同批漂移(402→401)。
+    expect(snapshot.entries).toBe(401)
+    // 2026-09-08 step 5c 重钉:同批漂移(2814→2807)。
+    expect(snapshot.roles).toBe(2807)
     expect(snapshot.selectionBridgeUsages).toBe(0)
   })
 
@@ -280,6 +281,48 @@ describe("C0-08 legacy-zero gate snapshot (byte-stable)", () => {
     try { returned = redOracle(inventory) } finally { console.log = original }
     expect(returned).toBeDefined()
     expect(returned!.snapshotDigest).toBe(buildSnapshot(inventory, bridgeSites).snapshotDigest)
-    expect(captured.join("\n")).toContain("legacy_dims        910")
+    expect(captured.join("\n")).toContain("legacy_dims        791")
+  })
+
+  test("the snapshot digest binds evidence-anchor CONTENT: a content-only edit under identical file:line anchors flips it", async () => {
+    await using tmp = await tmpdir()
+    const anchor = path.join(tmp.path, "anchor.ts")
+    const repoFile = path.relative(rootRepoPath(), anchor)
+    const anchorEntry = (): ClassifiedEntry => ({
+      entry: { id: "fixture.anchor", surface: "composition", kind: "fixture", name: "fixture.anchor", repoFile, line: 1 },
+      handlers: [],
+      roles: DIMENSIONS.map((dimension): RoleClassification => ({
+        dimension,
+        verdict: "v2",
+        evidence: [{ repoFile, line: 1, marker: "reach:anchor", distance: 0 }],
+      })),
+      unclassifiedCount: 0,
+    })
+
+    await Bun.write(anchor, "export const anchor = 1\n")
+    const before = buildSnapshot(fixtureInventory([anchorEntry()]), [])
+    await Bun.write(anchor, "export const anchor = 2\n")
+    const after = buildSnapshot(fixtureInventory([anchorEntry()]), [])
+
+    // Identical entries/counters/anchors — only the file bytes changed.
+    expect(after.entries).toBe(before.entries)
+    expect(after.counters).toEqual(before.counters)
+    expect(after.snapshotDigest).not.toBe(before.snapshotDigest)
+    expect(before.evidenceFileDigests[repoFile]).not.toBe(after.evidenceFileDigests[repoFile])
+    expect(after.evidenceFileDigests[repoFile]).toBe(
+      createHash("sha256").update(readFileSync(anchor, "utf8")).digest("hex"),
+    )
+  })
+
+  test("evidence digests cover the real inventory anchors and match the bytes on disk", () => {
+    const snapshot = buildSnapshot(inventory, bridgeSites)
+    const digests = Object.entries(snapshot.evidenceFileDigests)
+    expect(digests.length).toBeGreaterThan(0)
+    expect(
+      digests.map(([file]) => file),
+    ).toEqual(digests.map(([file]) => file).sort())
+    for (const [file, digest] of digests) {
+      expect(digest).toBe(createHash("sha256").update(readFileSync(path.join(rootRepoPath(), file), "utf8")).digest("hex"))
+    }
   })
 })

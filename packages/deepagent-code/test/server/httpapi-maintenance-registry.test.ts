@@ -2,13 +2,13 @@ import { describe, expect, test } from "bun:test"
 import { Effect, Layer } from "effect"
 import { Database } from "@deepagent-code/core/database/database"
 import { SessionProviderRecovery, SessionProviderRecoveryDurable } from "@deepagent-code/core/session/runner"
-import { Service as MaintenanceRegistryService, DefaultEvidenceExportTtlMs, layer } from "../../src/server/routes/instance/httpapi/maintenance-registry"
+import { Service as MaintenanceRegistryService, layer } from "../../src/server/routes/instance/httpapi/maintenance-registry"
 import type { RecoveryDescriptorRecord } from "../../src/server/routes/instance/httpapi/maintenance-registry"
 
 // C6-01 maintenance surface state (design §11.1) — W2: the recovery command/descriptor/
-// evidence-export records are DURABLE (core's DB-backed store) so these tests exercise
+// records are DURABLE (core's DB-backed store) so these tests exercise
 // the exact behaviors the handlers rely on (restore-in-progress 409, per-session
-// listing, request-hash lookup, evidence export TTL/redaction) against an in-memory
+// listing and request-hash lookup) against an in-memory
 // database shared with the layer.
 
 const database = Database.layerFromPath(":memory:")
@@ -53,6 +53,8 @@ const record = (overrides: Partial<RecoveryDescriptorRecord> = {}): RecoveryDesc
   actorType: "user",
   actorId: "actor_1",
   createdAt: 1,
+  attemptIdentity: fixtureAttempt({}),
+  expectedOwnerToken: "owner_1",
   ...overrides,
 })
 
@@ -165,24 +167,4 @@ describe("maintenance registry", () => {
       }),
     ))
 
-  test("evidence export is created with a TTL and read by id; unknown export is undefined", () =>
-    run(
-      Effect.gen(function* () {
-        const r = yield* MaintenanceRegistryService
-        const before = Date.now()
-        const manifest = yield* r.createExport({ sessionId: "sess_1", contentHash: "sha256:abc" })
-        expect(manifest.exportId).toBeString()
-        expect(manifest.sessionId).toBe("sess_1")
-        expect(manifest.ownerSessionId).toBe("sess_1")
-        expect(manifest.contentHash).toBe("sha256:abc")
-        // Default TTL is 7 days.
-        expect(manifest.expiresAt - manifest.exportedAt).toBe(DefaultEvidenceExportTtlMs)
-        expect(manifest.exportedAt).toBeGreaterThanOrEqual(before)
-
-        const fetched = yield* r.getExport(manifest.exportId)
-        expect(fetched?.exportId).toBe(manifest.exportId)
-        const missing = yield* r.getExport("exp_missing")
-        expect(missing).toBeUndefined()
-      }),
-    ))
 })

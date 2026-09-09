@@ -117,7 +117,7 @@ import { DeepAgentDurableLearning } from "@deepagent-code/core/deepagent/durable
 import { registerLearningReviewerFactory } from "@/deepagent/learning-runtime"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { SessionToolRequestReceiptTable } from "./tool-request-receipt.sql"
-import { SessionToolCapability } from "./tool-capability"
+import { SessionToolCapability, type ToolCapabilitySnapshot } from "./tool-capability"
 import { CompactionArtifactTable, CompactionRunTable } from "./compaction-sql"
 import { projectRemoteCompactionReplay } from "./remote-compact"
 import {
@@ -143,7 +143,6 @@ import { SessionFederatedContext } from "@/context-federation/session-context-ru
 import { ContextFederationReadiness } from "@/context-federation/readiness"
 import { ContextActivationReceipt } from "@/context-federation/activation-receipt"
 import { ContextFederationProviderOwnerRuntime } from "@/context-federation/provider-owner-runtime"
-import { V2RunnerFrame } from "@/session/v2-runner-frame"
 import { PreparedProviderTurn } from "@deepagent-code/core/session/runner/prepared-provider-turn"
 import { V2ProviderTurn } from "@deepagent-code/core/session/runner/v2-provider-turn"
 import { SessionRunnerCanonical } from "@deepagent-code/core/session/runner/canonical-turn"
@@ -155,6 +154,7 @@ import { ProviderV2 } from "@deepagent-code/core/provider"
 import {
   AgentAttachment,
   FileAttachment,
+  OutputFormat,
   Prompt,
   ReferenceAttachment,
   Source,
@@ -890,6 +890,21 @@ function taskNotification(metadata: unknown) {
   return { runID, outboxID }
 }
 
+// RI-135: the V2 admission mirror persists message metadata (legacy createUserMessage parity) so the
+// task_notification redelivery short-circuit in prompt() can reconcile outbox retries against the
+// persisted user row. The prompt_pipeline mode literal is normalized at admission: the legacy "wish"
+// wire value maps to "intelligence"; an unrecognized mode degrades to "direct_override" exactly like
+// the legacy submission branch. A block without a mode literal (e.g. confirmed-draft submissions,
+// whose evidence lives at the admission level) passes through untouched.
+function mirrorAdmissionMetadata(metadata: PromptInput["metadata"]) {
+  if (!isRecord(metadata)) return undefined
+  const deepagent = isRecord(metadata.deepagent) ? metadata.deepagent : undefined
+  const pipeline = deepagent && isRecord(deepagent.prompt_pipeline) ? deepagent.prompt_pipeline : undefined
+  if (!deepagent || !pipeline || typeof pipeline.mode !== "string") return metadata
+  const mode = promptPipelineRequest(metadata).mode ?? "direct_override"
+  return { ...metadata, deepagent: { ...deepagent, prompt_pipeline: { ...pipeline, mode } } }
+}
+
 // §S1.2 — a goal in one of these phases is no longer ticking, so a "goal_steer" would never be drained.
 // promptOrSteer routes to the plain "steer" channel (or a fresh turn) instead. Mirrors goal-manager's
 // isTerminalGoalPhase (kept as a local const to avoid a circular import: goal-manager imports this file).
@@ -936,14 +951,24 @@ export interface Interface {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
   readonly prompt: (
     input: PromptInput,
-  ) => Effect.Effect<SessionV1.WithParts, Image.Error | SessionPromptIntent.Error | Session.BusyError | LegacyExecutionUnavailable>
+  ) => Effect.Effect<
+    SessionV1.WithParts,
+    Image.Error | SessionPromptIntent.Error | Session.BusyError | LegacyExecutionUnavailable
+  >
   readonly promptAsync: (
     input: PromptInput,
-  ) => Effect.Effect<PromptAdmissionReceipt, Image.Error | SessionPromptIntent.Error | Session.BusyError | LegacyExecutionUnavailable>
+  ) => Effect.Effect<
+    PromptAdmissionReceipt,
+    Image.Error | SessionPromptIntent.Error | Session.BusyError | LegacyExecutionUnavailable
+  >
   readonly prepareTaskInput: (
     input: PromptInput,
     timeCreated: number,
   ) => Effect.Effect<SessionV1.WithParts, Image.Error | SessionPromptIntent.Error>
+  // RI-40: the admission-time tool capability snapshot exactly as the task tool receives it through
+  // ops() (real registry/MCP/plugin projection) — exposed so hosts and the production request oracle
+  // observe the same frozen capability surface Task admission consumes.
+  readonly capabilitySnapshot: () => Effect.Effect<ToolCapabilitySnapshot, unknown>
   // V4.1 §S1.1: buffer a mid-turn user message into the durable steer queue for absorption at the next
   // model-request boundary of the live turn loop. This is the admit() API; S1.2 wires the busy-session
   // ingress that decides WHEN to route a message here vs. the normal prompt() path. Idempotent on `id`.
@@ -962,15 +987,23 @@ export interface Interface {
   // own busy semantics), preserving pre-steering behavior exactly.
   readonly promptOrSteer: (
     input: PromptInput,
-  ) => Effect.Effect<PromptOrSteerResult, Image.Error | SessionPromptIntent.Error | Session.BusyError | LegacyExecutionUnavailable>
+  ) => Effect.Effect<
+    PromptOrSteerResult,
+    Image.Error | SessionPromptIntent.Error | Session.BusyError | LegacyExecutionUnavailable
+  >
   readonly loop: (
-      input: LoopInput,
-      onRunning?: Effect.Effect<void>,
-    ) => Effect.Effect<SessionV1.WithParts, LegacyExecutionUnavailable | SessionPromptIntent.Conflict>
-  readonly shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError | LegacyExecutionUnavailable>
+    input: LoopInput,
+    onRunning?: Effect.Effect<void>,
+  ) => Effect.Effect<SessionV1.WithParts, LegacyExecutionUnavailable | SessionPromptIntent.Conflict>
+  readonly shell: (
+    input: ShellInput,
+  ) => Effect.Effect<SessionV1.WithParts, Session.BusyError | LegacyExecutionUnavailable>
   readonly command: (
     input: CommandInput,
-  ) => Effect.Effect<SessionV1.WithParts, Image.Error | SessionPromptIntent.Error | Session.BusyError | LegacyExecutionUnavailable>
+  ) => Effect.Effect<
+    SessionV1.WithParts,
+    Image.Error | SessionPromptIntent.Error | Session.BusyError | LegacyExecutionUnavailable
+  >
   readonly resolvePromptParts: (template: string) => Effect.Effect<PromptInput["parts"]>
   readonly refineIntelligenceDraft: (input: {
     sessionID: SessionID
@@ -1129,12 +1162,18 @@ type PromptLifecycle = {
 type ExecutePrompt = (
   input: PromptInput,
   lifecycle?: PromptLifecycle,
-) => Effect.Effect<SessionV1.WithParts, Image.Error | SessionPromptIntent.Error | Session.BusyError | LegacyExecutionUnavailable>
+) => Effect.Effect<
+  SessionV1.WithParts,
+  Image.Error | SessionPromptIntent.Error | Session.BusyError | LegacyExecutionUnavailable
+>
 
 type ExecutePromptOrSteer = (
   input: PromptInput,
   lifecycle?: PromptLifecycle,
-) => Effect.Effect<PromptOrSteerResult, Image.Error | SessionPromptIntent.Error | Session.BusyError | LegacyExecutionUnavailable>
+) => Effect.Effect<
+  PromptOrSteerResult,
+  Image.Error | SessionPromptIntent.Error | Session.BusyError | LegacyExecutionUnavailable
+>
 
 export const layer = Layer.effect(
   Service,
@@ -1311,11 +1350,10 @@ export const layer = Layer.effect(
             : Effect.void,
         ),
       )
-    // BUG-003 restart recovery: settle federation activities left `active` by a dead run loop,
-    // mirroring the legacy recovery above (both run once at process start; without this the
-    // session's partial unique index stays locked and every new input attaches to the stale
-    // activity). Failures are logged, never fatal — startup must not die on best-effort cleanup.
-    if (federation) {
+    // Legacy restart cleanup must never mutate Core V2 recovery authority. An active V2 activity
+    // paired with an indeterminate provider attempt is intentionally retained until the exact
+    // recovery transaction settles attempt/activity/bridge/claim together.
+    if (federation && !flags.coreV2Only) {
       yield* federation.settleOrphanedActivities().pipe(
         Effect.tap((count) =>
           count > 0 ? Effect.logWarning(`settled ${count} orphaned federated activities after restart`) : Effect.void,
@@ -1356,16 +1394,19 @@ export const layer = Layer.effect(
       }
       return current
     })
+    // RI-40: single wiring for the admission-time capability snapshot — ops() (the task tool's
+    // promptOps) and the public service surface must serve the identical frozen projection.
+    const capabilitySnapshot = () =>
+      SessionToolCapability.snapshot().pipe(
+        Effect.provideService(ToolRegistry.Service, registry),
+        Effect.provideService(MCP.Service, mcp),
+        Effect.provideService(Plugin.Service, plugin),
+      )
     const ops = Effect.fn("SessionPrompt.ops")(function* () {
       return {
         cancel: (sessionID: SessionID) => cancel(sessionID),
         resolvePromptParts: (template: string) => resolvePromptParts(template),
-        capabilitySnapshot: () =>
-          SessionToolCapability.snapshot().pipe(
-            Effect.provideService(ToolRegistry.Service, registry),
-            Effect.provideService(MCP.Service, mcp),
-            Effect.provideService(Plugin.Service, plugin),
-          ),
+        capabilitySnapshot,
         prepareTaskInput: (input: PromptInput, timeCreated: number) => prepareTaskInput(input, timeCreated),
         prompt: (input: PromptInput) => prompt(input).pipe(Effect.catch(Effect.die)),
       } satisfies TaskPromptOps
@@ -1376,6 +1417,9 @@ export const layer = Layer.effect(
       // (process-local interrupt, idle = no-op) instead of the legacy run-state cancel.
       if (flags.coreV2Only) {
         yield* coreV2Session.interrupt(sessionID)
+        // RI-128: the `!` shell lane lives on the run-state Runner, decoupled from the V2 drain —
+        // bridge cancel to it so a running shell aborts (and a loop queued behind it is released).
+        yield* state.cancelShell(sessionID)
         return
       }
       yield* elog.info("cancel", { sessionID })
@@ -1458,7 +1502,7 @@ export const layer = Layer.effect(
             mime: stat.type === "Directory" ? "application/x-directory" : "text/plain",
           })
         }),
-        { concurrency: "unbounded", discard: true },
+        { concurrency: 16, discard: true },
       )
       return parts
     })
@@ -2645,7 +2689,7 @@ export const layer = Layer.effect(
         }
       }
 
-      const resolvedParts = yield* Effect.forEach(submittedParts, resolvePart, { concurrency: "unbounded" }).pipe(
+      const resolvedParts = yield* Effect.forEach(submittedParts, resolvePart, { concurrency: 16 }).pipe(
         Effect.map((x) => x.flat().map(assign)),
       )
 
@@ -2878,10 +2922,22 @@ export const layer = Layer.effect(
       const agents = input.parts.flatMap((part) =>
         part.type === "agent" ? [new AgentAttachment({ name: part.name })] : [],
       )
+      // RI-126: a json_schema format request rides the V2 admission (core runner consumes it
+      // from the projected user message); text format is the default and needs no marker.
+      const requestedFormat = input.format === undefined ? undefined : decodeFormatSync(input.format)
+      const format =
+        requestedFormat?.type === "json_schema"
+          ? new OutputFormat({
+              type: "json_schema",
+              schema: requestedFormat.schema,
+              retryCount: requestedFormat.retryCount,
+            })
+          : undefined
       return new Prompt({
         text,
         ...(files.length > 0 ? { files } : {}),
         ...(agents.length > 0 ? { agents } : {}),
+        ...(format === undefined ? {} : { format }),
       })
     }
 
@@ -2935,19 +2991,17 @@ export const layer = Layer.effect(
         })
         .pipe(
           Effect.catch((error) =>
-            elog.warn("v2 session adoption failed", {
-              sessionID,
-              error: String((error as { message?: unknown }).message ?? error),
-            }).pipe(Effect.asVoid),
+            elog
+              .warn("v2 session adoption failed", {
+                sessionID,
+                error: String((error as { message?: unknown }).message ?? error),
+              })
+              .pipe(Effect.asVoid),
           ),
         )
     })
 
-
-    const promptV2 = Effect.fn("SessionPrompt.promptV2")(function* (
-      input: PromptInput,
-      lifecycle?: PromptLifecycle,
-    ) {
+    const promptV2 = Effect.fn("SessionPrompt.promptV2")(function* (input: PromptInput, lifecycle?: PromptLifecycle) {
       // Call-time qualification: the campaign is minted by the r0 flow (possibly after server start),
       // so the layer-build snapshot is NOT the authority — read both the campaign tag and the
       // authorization at call time (mirrors the loop's V2-branch re-check).
@@ -2961,16 +3015,59 @@ export const layer = Layer.effect(
       yield* ensureV2Session(input.sessionID)
       const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
       const agentName = input.agent ?? session.agent ?? "build"
-      const agentMode = Option.getOrUndefined(yield* agents.get(agentName).pipe(Effect.option))?.mode ?? agentName
+      // RI-136: admission fails fast on an unknown agent (legacy createUserMessage parity) — the V2
+      // mirror must never display a name the execution side could not resolve.
+      const resolvedAgent = Option.getOrUndefined(yield* agents.get(agentName).pipe(Effect.option))
+      if (!resolvedAgent) {
+        const available = (yield* agents.list()).filter((item) => !item.hidden).map((item) => item.name)
+        const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
+        throw new NamedError.Unknown({ message: `Agent not found: "${agentName}".${hint}` })
+      }
+      const agentMode = resolvedAgent.mode ?? agentName
       // P2-6 (rN): this model identity is used ONLY for the V1 mirror row (display fidelity); the
       // drain's model resolution happens in the core runner from the V2 session store. The final
       // "test/test" fallback is a last-resort mirror label, never an execution input.
-      const model =
-        input.model ??
+      const model = input.model ??
         (session.model ? { providerID: session.model.providerID, modelID: session.model.id } : undefined) ??
-        Option.getOrUndefined(yield* provider.defaultModel().pipe(Effect.option)) ??
-        { providerID: ProviderV2.ID.make("test"), modelID: ModelV2.ID.make("test") }
+        resolvedAgent.model ??
+        Option.getOrUndefined(yield* provider.defaultModel().pipe(Effect.option)) ?? {
+          providerID: ProviderV2.ID.make("test"),
+          modelID: ModelV2.ID.make("test"),
+        }
+      // RI-134: variant resolution mirrors the legacy createUserMessage contract — an explicit
+      // input.variant always wins; the agent's configured variant applies only when the resolved
+      // model is the agent's own model and that model declares the variant.
+      const sameAgentModel =
+        resolvedAgent.model !== undefined &&
+        model.providerID === resolvedAgent.model.providerID &&
+        model.modelID === resolvedAgent.model.modelID
+      const fullModel =
+        input.variant === undefined && resolvedAgent.variant !== undefined && sameAgentModel
+          ? yield* provider
+              .getModel(model.providerID, model.modelID)
+              .pipe(Effect.catchIf(Provider.ModelNotFoundError.isInstance, () => Effect.succeed(undefined)))
+          : undefined
+      const variant =
+        input.variant ??
+        (resolvedAgent.variant !== undefined && fullModel?.variants?.[resolvedAgent.variant] !== undefined
+          ? resolvedAgent.variant
+          : undefined)
       const v2SessionID = SessionV2.ID.make(input.sessionID)
+      // The requested prompt model is a V2 execution input, not a mirror label: persist it onto
+      // the V2 session BEFORE admission so the drain's catalog resolution sees the caller's choice.
+      // An unknown model must keep failing (regression #27371) instead of silently falling back to
+      // the catalog default — the refusal surfaces from the drain's catalog lookup.
+      if (input.model)
+        yield* coreV2Session
+          .switchModel({
+            sessionID: v2SessionID,
+            model: {
+              id: ModelV2.ID.make(input.model.modelID),
+              providerID: ProviderV2.ID.make(input.model.providerID),
+              ...(variant === undefined ? {} : { variant: ModelV2.VariantID.make(variant) }),
+            },
+          })
+          .pipe(Effect.orDie)
       // P1-1: resume:false is the admission-before-wake contract — the interactive path drains
       // explicitly via loop(); a wake would race the drain into a second provider dispatch.
       const admittedInput = yield* coreV2Session
@@ -3011,16 +3108,58 @@ export const layer = Layer.effect(
       // row, which only exists once the V2 user message has been mirrored.
       yield* evidence
       if (input.noReply === true) {
-        const userRow = yield* sessions.findMessage(input.sessionID, (message) => message.info.role === "user").pipe(
-          Effect.orDie,
-        )
-        if (Option.isNone(userRow))
-          return yield* refuseLegacyExecution({
+        // RI-124 adjudication (mirror-after-admission): admission is admit-only (P1-1 resume:false),
+        // so the visible V2 user message is promoted only by the NEXT drain — neither the mirror
+        // above nor the core journal→V1-wire egress can see it yet. Mirror the user row straight
+        // from the admission receipt in the deterministic shape the core egress derives at
+        // promotion (core projector legacyUserRow), plus the admission-side extras the egress never
+        // authors: the resolved model variant (RI-134) and the normalized message metadata
+        // (RI-135). The egress only CREATES user rows it cannot see, so the later promotion publish
+        // is a no-op and the two writers never disagree. This replaces the legacy findMessage
+        // fallback, which 503'd fresh sessions post-admission and returned a STALE earlier user
+        // message on sessions with history.
+        const created = DateTime.toEpochMillis(admittedInput.timeCreated)
+        const messageID = SessionV1.MessageID.ascending(admittedInput.id)
+        const metadata = mirrorAdmissionMetadata(input.metadata)
+        const info: SessionV1.Info = {
+          id: messageID,
+          sessionID: input.sessionID,
+          role: "user",
+          time: { created },
+          agent: agentName,
+          model: {
+            providerID: ProviderV2.ID.make(model.providerID),
+            modelID: ModelV2.ID.make(model.modelID),
+            ...(variant === undefined ? {} : { variant }),
+          },
+          ...(metadata === undefined ? {} : { metadata }),
+        }
+        const parts: SessionV1.Part[] = []
+        if (admittedInput.prompt.text) {
+          parts.push({
+            id: SessionV1.PartID.ascending(`prt_${admittedInput.id.slice("msg_".length)}_0`),
             sessionID: input.sessionID,
-            reason: "v2_owner_unavailable",
-            detail: "V2 owner admitted the input but no user message was mirrored",
+            messageID,
+            type: "text",
+            text: admittedInput.prompt.text,
+            time: { start: created, end: created },
           })
-        return Option.getOrThrow(userRow)
+        }
+        for (const [index, file] of (admittedInput.prompt.files ?? []).entries()) {
+          parts.push({
+            id: SessionV1.PartID.ascending(`prt_${admittedInput.id.slice("msg_".length)}_f${index}`),
+            sessionID: input.sessionID,
+            messageID,
+            type: "file",
+            url: file.uri,
+            mime: file.mime,
+            ...(file.name === undefined ? {} : { filename: file.name }),
+            time: { start: created, end: created },
+          } as SessionV1.Part)
+        }
+        yield* sessions.updateMessage(info)
+        yield* Effect.forEach(parts, (part) => sessions.updatePart(part))
+        return { info, parts }
       }
       return yield* loop({ sessionID: input.sessionID, drainFirst: true }).pipe(Effect.ensuring(evidence))
     })
@@ -3265,38 +3404,38 @@ export const layer = Layer.effect(
           yield* pauseAtActivityCrashPoint("after_admit_and_bind")
           if (lifecycle) yield* lifecycle.ready({ messageID: admitted.message.info.id, delivery: "turn" })
           return yield* runLoop(input.sessionID, false, run, undefined, firstProviderTurnID)
-        }).pipe(
-          Effect.ensuring(status.set(input.sessionID, { type: "idle" })),
-        ).pipe(
-          // BUG-008: terminalize on EVERY abnormal exit, not only interruption. A failure or defect
-          // between admit (which claims the legacy activity run) and runLoop's own exit hook
-          // previously left the activity `active`; the next admission then refused with "requires
-          // recovery before a new turn". finalizeCancellationBeforeProgress is CAS-guarded, so the
-          // loop-level hook and this handler are safe to both run.
-          Effect.onExit((exit) => {
-            if (Exit.isSuccess(exit)) return Effect.void
-            const interrupted = Cause.interruptors(exit.cause).size > 0
-            const run = ownedRun.value
-            return Effect.all(
-              [
-                settleFederatedActivity(input.sessionID, interrupted ? "interrupted" : "failed"),
-                run
-                  ? SessionPromptIntent.finalizeCancellationBeforeProgress(run).pipe(
-                      Effect.provideService(Database.Service, database),
-                      Effect.flatMap((result) =>
-                        result ? publishActivityProjection(result.invalidation) : Effect.void,
-                      ),
-                      // The loop-level hook may have committed a terminal with a different decision
-                      // shape already (failure exit); the activity is terminal either way, so the
-                      // divergent replay is benign here.
-                      Effect.catchTag("SessionPromptIntent.Conflict", () => Effect.void),
-                    )
-                  : Effect.void,
-              ],
-              { discard: true },
-            )
-          }),
-        ),
+        })
+          .pipe(Effect.ensuring(status.set(input.sessionID, { type: "idle" })))
+          .pipe(
+            // BUG-008: terminalize on EVERY abnormal exit, not only interruption. A failure or defect
+            // between admit (which claims the legacy activity run) and runLoop's own exit hook
+            // previously left the activity `active`; the next admission then refused with "requires
+            // recovery before a new turn". finalizeCancellationBeforeProgress is CAS-guarded, so the
+            // loop-level hook and this handler are safe to both run.
+            Effect.onExit((exit) => {
+              if (Exit.isSuccess(exit)) return Effect.void
+              const interrupted = Cause.interruptors(exit.cause).size > 0
+              const run = ownedRun.value
+              return Effect.all(
+                [
+                  settleFederatedActivity(input.sessionID, interrupted ? "interrupted" : "failed"),
+                  run
+                    ? SessionPromptIntent.finalizeCancellationBeforeProgress(run).pipe(
+                        Effect.provideService(Database.Service, database),
+                        Effect.flatMap((result) =>
+                          result ? publishActivityProjection(result.invalidation) : Effect.void,
+                        ),
+                        // The loop-level hook may have committed a terminal with a different decision
+                        // shape already (failure exit); the activity is terminal either way, so the
+                        // divergent replay is benign here.
+                        Effect.catchTag("SessionPromptIntent.Conflict", () => Effect.void),
+                      )
+                    : Effect.void,
+                ],
+                { discard: true },
+              )
+            }),
+          ),
       )
       if (isStructuredFinalizer(input.metadata)) return first
       // V3 Plan A: mode-driven multi-round autonomous loop for high/max/ultra. It remains
@@ -6087,6 +6226,13 @@ export const layer = Layer.effect(
         const goal = AgentGateway.DeepAgentSessionState.getActiveGoal(input.sessionID)
         if (goal != null && !TERMINAL_GOAL_PHASES.has(goal.phase)) {
           const admitted = yield* promptV2GoalSteer(input, lifecycle)
+          // V4.1 governance audit, aligned with the legacy goal-steer branch below: length-only
+          // detail (bounded + PII-light), best-effort, after admission + lifecycle receipt. The
+          // text comes from the same interactiveV2Prompt mapping the admission just made — the
+          // admitted record is the V2 owner's return value and is not a reliable text source.
+          writeGovernanceAudit(input.sessionID, goal.goalId, "steer", {
+            textChars: interactiveV2Prompt(input).text.trim().length,
+          })
           return { kind: "steer_v2" as const, delivery: "goal_steer" as const, admitted }
         }
         const message = yield* promptV2(input, lifecycle)
@@ -6156,9 +6302,10 @@ export const layer = Layer.effect(
 
     const promptAsync: (
       input: PromptInput,
-    ) => Effect.Effect<PromptAdmissionReceipt, Image.Error | SessionPromptIntent.Error | Session.BusyError | LegacyExecutionUnavailable> = Effect.fn(
-      "SessionPrompt.promptAsync",
-    )(function* (input: PromptInput) {
+    ) => Effect.Effect<
+      PromptAdmissionReceipt,
+      Image.Error | SessionPromptIntent.Error | Session.BusyError | LegacyExecutionUnavailable
+    > = Effect.fn("SessionPrompt.promptAsync")(function* (input: PromptInput) {
       // 1.4.8.r0: under the V2-only profile prompt-async is a pure durable V2 admission.
       if (flags.coreV2Only) {
         const ownerCampaignNow = yield* V2ProviderTurn.CurrentOwnerCampaign
@@ -6191,7 +6338,9 @@ export const layer = Layer.effect(
               Effect.fail(
                 new SessionPromptIntent.Conflict({
                   intentID: String(input.sessionID),
-                  reason: String((error as { message?: unknown }).message ?? (error as { _tag?: unknown })._tag ?? error),
+                  reason: String(
+                    (error as { message?: unknown }).message ?? (error as { _tag?: unknown })._tag ?? error,
+                  ),
                 }),
               ),
             ),
@@ -6204,11 +6353,12 @@ export const layer = Layer.effect(
         const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
         const agentName = input.agent ?? session.agent ?? "build"
         const agentMode = Option.getOrUndefined(yield* agents.get(agentName).pipe(Effect.option))?.mode ?? agentName
-        const model =
-          input.model ??
+        const model = input.model ??
           (session.model ? { providerID: session.model.providerID, modelID: session.model.id } : undefined) ??
-          Option.getOrUndefined(yield* provider.defaultModel().pipe(Effect.option)) ??
-          { providerID: ProviderV2.ID.make("test"), modelID: ModelV2.ID.make("test") }
+          Option.getOrUndefined(yield* provider.defaultModel().pipe(Effect.option)) ?? {
+            providerID: ProviderV2.ID.make("test"),
+            modelID: ModelV2.ID.make("test"),
+          }
         const evidence = recordTurnEvidence({
           sessions,
           session: coreV2Session,
@@ -6346,9 +6496,7 @@ export const layer = Layer.effect(
       // after server start). Unqualified => typed refusal below.
       // P2-4: under the profile the campaign is call-time (minted after start); outside the profile
       // the layer-build value is authoritative — byte-identical to the pre-r0 behavior.
-      const ownerCampaignNow = flags.coreV2Only
-        ? yield* V2ProviderTurn.CurrentOwnerCampaign
-        : ownerCampaign
+      const ownerCampaignNow = flags.coreV2Only ? yield* V2ProviderTurn.CurrentOwnerCampaign : ownerCampaign
       const v2OwnerSelected = flags.coreV2Only
         ? yield* V2ProviderTurn.ownerQualified(database.db, ownerCampaignNow)
         : federationRollout.enabled.coreV2ExecutionOwner
@@ -6367,13 +6515,13 @@ export const layer = Layer.effect(
         if (parityCampaign)
           return yield* Effect.die(new Error("V2 owner and parity recorder cannot run in the same process"))
         if (!(yield* V2ProviderTurn.ownerQualified(database.db, ownerCampaignNow)))
-          return yield* (flags.coreV2Only
+          return yield* flags.coreV2Only
             ? refuseLegacyExecution({
                 sessionID: input.sessionID,
                 reason: "v2_owner_unavailable",
                 detail: "V2 owner qualification is not verified: " + (ownerCampaignNow ?? "none"),
               })
-            : Effect.die(new Error("V2 owner qualification is not verified: " + (ownerCampaignNow ?? "none"))))
+            : Effect.die(new Error("V2 owner qualification is not verified: " + (ownerCampaignNow ?? "none")))
         // R6 — the guard's purpose is preventing a CONCURRENT legacy dispatch while V2 owns the
         // session. Non-terminal legacy receipts whose owner lease is dead are harmless residue of
         // a crashed legacy run (V1-mode crash before flipping to the V2-only profile); refusing on
@@ -6396,20 +6544,23 @@ export const layer = Layer.effect(
                 "streaming",
               ]),
               isNull(SessionProviderOwnerLeaseTable.released_at),
-              gt(SessionProviderOwnerLeaseTable.lease_expires_at, sql`CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)`),
+              gt(
+                SessionProviderOwnerLeaseTable.lease_expires_at,
+                sql`CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)`,
+              ),
             ),
           )
           .get()
           .pipe(Effect.orDie)
         if (liveLegacyOwner)
-          return yield* (flags.coreV2Only
+          return yield* flags.coreV2Only
             ? refuseLegacyExecution({
                 sessionID: input.sessionID,
                 reason: "v2_owner_unavailable",
                 detail: `Legacy provider owner is still active: ${input.sessionID}`,
               })
-            : Effect.die(new Error(`Legacy provider owner is still active: ${input.sessionID}`)))
-        return yield* Effect.gen(function* () {
+            : Effect.die(new Error(`Legacy provider owner is still active: ${input.sessionID}`))
+        const v2Drain = Effect.gen(function* () {
           yield* elog.info("v2 owner branch selected", {
             sessionID: input.sessionID,
             owner: "v2",
@@ -6433,13 +6584,13 @@ export const layer = Layer.effect(
           // 1.4.8.r0: under the V2-only profile the rollout readiness gate does not apply — owner
           // qualification (checked above at call time) is the authority.
           if (!flags.coreV2Only && !ownerDecision.enabled.coreV2ExecutionOwner)
-            return yield* (flags.coreV2Only
+            return yield* flags.coreV2Only
               ? refuseLegacyExecution({
                   sessionID: input.sessionID,
                   reason: "v2_owner_unavailable",
                   detail: "V2 owner readiness gate is closed for the V2-only profile",
                 })
-              : Effect.die(new Error(`V2 owner readiness gate is closed: ${input.sessionID}`)))
+              : Effect.die(new Error(`V2 owner readiness gate is closed: ${input.sessionID}`))
           // W4-6/6b-2: the F-17 in-process mirror is RETIRED. The journal→V1-wire egress in the
           // core projector (post-commit listener + durable fingerprint cursor) now derives the
           // wire rows for this drain as session.next.* events commit — crash-safe and
@@ -6521,13 +6672,13 @@ export const layer = Layer.effect(
             (message): message is SessionMessage.Assistant => message.type === "assistant",
           )
           if (!assistant)
-            return yield* (flags.coreV2Only
+            return yield* flags.coreV2Only
               ? refuseLegacyExecution({
                   sessionID: input.sessionID,
                   reason: "v2_owner_unavailable",
                   detail: `V2 owner produced no assistant message: ${input.sessionID}`,
                 })
-              : Effect.die(new Error(`V2 owner produced no assistant message: ${input.sessionID}`)))
+              : Effect.die(new Error(`V2 owner produced no assistant message: ${input.sessionID}`))
           // 6b-2: the settle-time return derives from the folded V2 state through the same
           // canonical converter the egress uses (legacyAssistant). No wire-table write happens
           // here — the egress owns the wire rows now; this is only the loop's return value.
@@ -6544,6 +6695,12 @@ export const layer = Layer.effect(
             message: assistant,
           })
         }).pipe(Effect.ensuring(status.set(input.sessionID, { type: "idle" })))
+        // RI-128: a shell holds the session lane exclusively (V1 parity). While one runs, the loop
+        // queues behind it on the run-state Runner instead of draining concurrently; cancel then
+        // releases the queued loop with the interrupted-turn assistant via the lane's onInterrupt.
+        if (yield* state.shellBusy(input.sessionID))
+          return yield* state.ensureRunning(input.sessionID, lastAssistant(input.sessionID), v2Drain)
+        return yield* v2Drain
       }
       if (flags.coreV2Only)
         return yield* refuseLegacyExecution({
@@ -6672,24 +6829,26 @@ export const layer = Layer.effect(
           )
         }).pipe(Effect.provideService(InstanceRef, ctx)),
       )
-    const unregisterCompactionRecovery = registerInitializer(wakeCommittedContinuations)
+    const unregisterCompactionRecovery = yield* registerInitializer(wakeCommittedContinuations)
     const currentInstance = yield* InstanceRef
     if (currentInstance) {
       yield* Effect.promise(() => wakeCommittedContinuations(currentInstance)).pipe(Effect.forkIn(scope))
     }
 
-    const shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError | LegacyExecutionUnavailable> = Effect.fn(
+    const shell: (
+      input: ShellInput,
+    ) => Effect.Effect<SessionV1.WithParts, Session.BusyError | LegacyExecutionUnavailable> = Effect.fn(
       "SessionPrompt.shell",
     )(function* (input: ShellInput) {
-        // W0-2 — the shell route is a PROJECTION-LAYER surface, not legacy execution: it spawns a
-        // child process and mirrors the turn as V1 wire rows via sessions.updateMessage/updatePart
-        // (EventV2 publishes, the same projection class the F-17 mirror uses). It writes no
-        // session_intent / session_steer / session_tool_request_receipt rows and never calls the
-        // provider, so the LEGACY-EXECUTION-ZERO firewall does not apply (D2 classification:
-        // projection adapter). This restores the `!` shell mode under the V2-only profile.
-        const ready = yield* Latch.make()
-        return yield* state.startShell(input.sessionID, lastAssistant(input.sessionID), shellImpl(input, ready), ready)
-      })
+      // W0-2 — the shell route is a PROJECTION-LAYER surface, not legacy execution: it spawns a
+      // child process and mirrors the turn as V1 wire rows via sessions.updateMessage/updatePart
+      // (EventV2 publishes, the same projection class the F-17 mirror uses). It writes no
+      // session_intent / session_steer / session_tool_request_receipt rows and never calls the
+      // provider, so the LEGACY-EXECUTION-ZERO firewall does not apply (D2 classification:
+      // projection adapter). This restores the `!` shell mode under the V2-only profile.
+      const ready = yield* Latch.make()
+      return yield* state.startShell(input.sessionID, lastAssistant(input.sessionID), shellImpl(input, ready), ready)
+    })
 
     const command = Effect.fn("SessionPrompt.command")(function* (input: CommandInput) {
       // 1.4.8.r0: template expansion happens here (may run embedded !-shell blocks / plugin hooks —
@@ -6812,7 +6971,7 @@ export const layer = Layer.effect(
     })
 
     const notificationWorkers = new Map<string, Fiber.Fiber<void, never>>()
-    const startNotificationWorker = registerInitializer((ctx) =>
+    const startNotificationWorker = yield* registerInitializer((ctx) =>
       Effect.runPromise(
         Effect.gen(function* () {
           // In durable mode, TaskDelivery.startDeliveryLoop is the authority for delivery.
@@ -6864,7 +7023,7 @@ export const layer = Layer.effect(
         }),
       ),
     )
-    const stopNotificationWorker = registerDisposer((directory) => {
+    const stopNotificationWorker = yield* registerDisposer((directory) => {
       const worker = notificationWorkers.get(directory)
       if (!worker) return Promise.resolve()
       notificationWorkers.delete(directory)
@@ -6876,7 +7035,7 @@ export const layer = Layer.effect(
     // circular layer dependency.
     const durableWorkers = new Map<string, ReadonlyArray<Fiber.Fiber<void, never>>>()
     const durableLeases = new Map<string, DurableExecutorLease>()
-    const unregisterDurableInitializer = registerInitializer((ctx) => {
+    const unregisterDurableInitializer = yield* registerInitializer((ctx) => {
       // Reserve synchronously: multiple Service instances are registered globally and may otherwise
       // race through asynchronous startup in the same process.
       if (flags.subagentControlPlane !== "durable") return Promise.resolve()
@@ -7120,7 +7279,7 @@ export const layer = Layer.effect(
         ),
       )
     }
-    const unregisterDurableDisposer = registerDisposer(disposeDurableWorkers)
+    const unregisterDurableDisposer = yield* registerDisposer(disposeDurableWorkers)
     yield* Effect.addFinalizer(() =>
       Effect.gen(function* () {
         startNotificationWorker()
@@ -7140,6 +7299,7 @@ export const layer = Layer.effect(
       prompt,
       promptAsync,
       prepareTaskInput,
+      capabilitySnapshot,
       steer,
       promptOrSteer,
       loop,
@@ -7149,15 +7309,14 @@ export const layer = Layer.effect(
       refineIntelligenceDraft,
       latestSuggestion,
     })
-    const unregisterLearningReviewer = registerLearningReviewerFactory(() =>
+    yield* registerLearningReviewerFactory(() =>
       createLearningReviewerPort({ sessions, agents, provider, prompt: service, instances }),
     )
-    yield* Effect.addFinalizer(() => Effect.sync(unregisterLearningReviewer).pipe(Effect.asVoid))
     return service
   }),
 )
 
-export const defaultLayer = Layer.suspend(() =>
+export const productionLayer = Layer.suspend(() =>
   layer.pipe(
     Layer.provide(SessionRunState.defaultLayer),
     Layer.provide(SessionStatus.defaultLayer),
@@ -7202,17 +7361,13 @@ export const defaultLayer = Layer.suspend(() =>
         SessionSteer.defaultLayer,
         Git.defaultLayer,
         PRQueue.layer.pipe(Layer.orDie),
-        SessionV2.liveLayer,
-        // W3.10 — V2 runner real frame (O-W3-10): LAST-WINS within this merge over the live layer's
-        // internal LocationServiceMap.layer. Per-location runner trees (this subtree drives V2 runs
-        // through SessionV2.resume) build with the ref's instance context + a ProductionV2Sources
-        // override carrying the REAL location identity (currentIdentity of the current instance
-        // handle) — the same derivation the C6 readiness probe uses.
-        V2RunnerFrame.runnerFrameLocationMapLayer,
       ),
     ),
   ),
 )
+
+/** Standalone default. Production roots must provide one shared SessionV2 runtime to productionLayer. */
+export const defaultLayer = productionLayer.pipe(Layer.provide(SessionV2.liveLayer))
 const ModelRef = Schema.Struct({
   providerID: ProviderV2.ID,
   modelID: ModelV2.ID,

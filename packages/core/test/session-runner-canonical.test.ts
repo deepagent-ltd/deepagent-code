@@ -48,6 +48,9 @@ const seed = Effect.gen(function* () {
       directory: "/project",
       title: "canonical",
       version: "test",
+      // The runner holds the Session execution claim; prepareInTransaction refuses
+      // (session_execution_claim_missing) without it.
+      time_suspended: 104,
     })
     .onConflictDoNothing()
     .run()
@@ -278,6 +281,7 @@ const seamSeed = Effect.gen(function* () {
       directory: "/project",
       title: "canonical seam",
       version: "test",
+      time_suspended: 104,
     })
     .onConflictDoNothing()
     .run()
@@ -381,6 +385,7 @@ const staleSeed = Effect.gen(function* () {
       directory: "/project",
       title: "canonical stale",
       version: "test",
+      time_suspended: 104,
     })
     .onConflictDoNothing()
     .run()
@@ -475,7 +480,7 @@ it.effect("blocks a streaming attempt while its owner lease is live, with the re
   }),
 )
 
-it.effect("quarantines a dead-owner streaming attempt and opens a fresh one on the explicit input", () =>
+it.effect("refuses a dead-owner attempt when its receipt was not advanced to the same state", () =>
   Effect.gen(function* () {
     yield* seed
     yield* staleSeed
@@ -516,7 +521,7 @@ it.effect("quarantines a dead-owner streaming attempt and opens a fresh one on t
     yield* forceInFlight(crashed.attempt.attemptId, dyingToken)
     yield* owners.release({ ownerToken: dyingToken })
 
-    const fresh = yield* SessionRunnerCanonical.commitTurn({
+    const blocked = yield* SessionRunnerCanonical.commitTurn({
       db,
       contexts: yield* SessionContext.Service,
       sessionID: staleSessionID,
@@ -533,20 +538,17 @@ it.effect("quarantines a dead-owner streaming attempt and opens a fresh one on t
         ownerMode: "v2" as const,
       },
       ownerToken: providerTurns.ownerToken,
-    })
-    expect(fresh.attempt.attemptId).not.toBe(crashed.attempt.attemptId)
-    expect(fresh.attempt.providerTurnSeq).toBe(crashed.attempt.providerTurnSeq + 1)
-    const quarantinedAttempt = yield* db
+    }).pipe(Effect.flip)
+    expect(blocked).toBeInstanceOf(SessionRunnerCanonical.AdmissionError)
+    expect((blocked as SessionRunnerCanonical.AdmissionError).reason).toBe("stale_provider_receipt_binding_conflict")
+    const unchangedAttempt = yield* db
       .select({ state: SessionProviderAttemptTable.state, error_code: SessionProviderAttemptTable.error_code })
       .from(SessionProviderAttemptTable)
       .where(eq(SessionProviderAttemptTable.attempt_id, crashed.attempt.attemptId))
       .get()
       .pipe(Effect.orDie)
-    expect(quarantinedAttempt?.state).toBe("indeterminate_after_crash")
-    expect(quarantinedAttempt?.error_code).toBe("process_recovery")
-    // Receipt-side quarantine (dispatching/streaming -> indeterminate_after_crash, terminal
-    // descriptor) mirrors V2ProviderTurn.recover's predicate and is exercised by the live kill-9
-    // repro; driving a receipt to `dispatching` here would require faking the full W8 seal.
+    expect(unchangedAttempt?.state).toBe("dispatching")
+    expect(unchangedAttempt?.error_code).toBeNull()
   }),
 )
 
@@ -653,6 +655,7 @@ it.effect("refuses new turns once the consecutive crash-resume budget is exhaust
         directory: "/project",
         title: "canonical budget",
         version: "test",
+        time_suspended: 104,
       })
       .onConflictDoNothing()
       .run()

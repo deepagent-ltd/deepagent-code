@@ -10,10 +10,18 @@ import {
 import { LocationIdentity } from "@deepagent-code/core/context-federation/identity"
 import { SessionContext } from "@deepagent-code/core/context-federation/session-context"
 import { SessionRunnerCanonical } from "@deepagent-code/core/session/runner/canonical-turn"
+import { SessionRunner } from "@deepagent-code/core/session/runner"
+import { V2ProviderTurn } from "@deepagent-code/core/session/runner/v2-provider-turn"
 import { SessionSchema } from "@deepagent-code/core/session/schema"
-import { SecurityNamespaceID } from "@deepagent-code/core/context-federation/reference"
+import {
+  IndexSpaceID,
+  LocationKey,
+  ProjectScopeKey,
+  SecurityNamespaceID,
+} from "@deepagent-code/core/context-federation/reference"
 import { SessionContextSelectionTable } from "@deepagent-code/core/context-federation/session-sql"
 import { Database } from "@deepagent-code/core/database/database"
+import { EventV2 } from "@deepagent-code/core/event"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { SessionMessage } from "@deepagent-code/core/session/message"
@@ -21,6 +29,14 @@ import { Prompt } from "@deepagent-code/core/session/prompt"
 import { SessionInputTable, SessionTable } from "@deepagent-code/core/session/sql"
 import { Project } from "@deepagent-code/core/project"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
+import { ToolRegistry } from "@deepagent-code/core/tool/registry"
+import { Flag } from "@deepagent-code/core/flag/flag"
+import {
+  LocationRuntimeHost,
+  LocationServiceMap,
+  locationServiceMapDependencies,
+} from "@deepagent-code/core/location-layer"
+import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { CodeQuery } from "@deepagent-code/core/code-intelligence/query"
 import { ContextToolRuntime } from "@deepagent-code/core/context-federation/tool-runtime"
 import { LSP } from "@/lsp/lsp"
@@ -40,6 +56,7 @@ import { InstanceBootstrap } from "@/project/bootstrap-service"
 import { CodeIntelFacade } from "@/code-intelligence/facade"
 import { ContextQueryFacade } from "@/context-federation/context-query-facade"
 import { InstanceRef } from "@/effect/instance-ref"
+import { RuntimeFlags } from "@/effect/runtime-flags"
 import { tmpdir } from "../fixture/fixture"
 import path from "node:path"
 
@@ -82,17 +99,18 @@ describe("W3.10 V2 runner frame host hook (deepagent-code composition)", () => {
     await Bun.write(path.join(root, "README.md"), "# Project Architecture\nshared design notes\n")
 
     const database = Database.layerFromPath(path.join(stateRoot, "metadata.sqlite"))
-    const contexts = SessionContext.layer.pipe(
-      Layer.provide(SessionRunnerCanonical.degradedArtifactStore),
-      Layer.provide(database),
-    )
+    const contexts = SessionContext.layer.pipe(Layer.provide(SessionRunnerCanonical.degradedArtifactStore))
     const sessionID = SessionSchema.ID.make("ses_w310")
 
     const program = Effect.gen(function* () {
+      const ownedDatabase = yield* Database.Service
       // --- real location identity for the fixture directory (registered_root: the canonical
       // durable-knowledge derivation on the legacy project id) ---
       const identityCtx = yield* Layer.build(
-        LocationIdentity.layer.pipe(Layer.provideMerge(database), Layer.provide(FSUtil.defaultLayer)),
+        LocationIdentity.layer.pipe(
+          Layer.provide(Layer.succeed(Database.Service, ownedDatabase)),
+          Layer.provide(FSUtil.defaultLayer),
+        ),
       )
       const resolvedIdentity = yield* Context.get(identityCtx, LocationIdentity.Service).resolve({
         boundary: { kind: "implicit_local" },
@@ -157,11 +175,10 @@ describe("W3.10 V2 runner frame host hook (deepagent-code composition)", () => {
       const outerSeamLayer = Layer.unwrap(
         Effect.gen(function* () {
           const code = yield* Layer.build(codeLayer).pipe(Effect.map((built) => Context.get(built, CodeQuery.Service)))
-          const db = Context.get(yield* Layer.build(database), Database.Service).db
           const value: ProductionV2AdapterInput = ProductionSources.productionInput({
             runtime,
             code,
-            db,
+            db: ownedDatabase.db,
             workspaceDirectory: root,
           })
           // W3.9 production reality: the OUTER seam carries NO identity (app-level build) — the
@@ -169,7 +186,13 @@ describe("W3.10 V2 runner frame host hook (deepagent-code composition)", () => {
           return Layer.succeed(ProductionV2Sources, value)
         }),
       )
-      const hookLayer = V2RunnerFrame.runnerFrameSeamFor(Location.Ref.make({ directory: AbsolutePath.make(root) }))
+      const outerSeam = yield* Layer.build(outerSeamLayer).pipe(
+        Effect.map((built) => Context.get(built, ProductionV2Sources)),
+      )
+      const hookLayer = V2RunnerFrame.runnerFrameSeamFor(
+        Location.Ref.make({ directory: AbsolutePath.make(root) }),
+        outerSeam,
+      )
 
       const admission = Effect.gen(function* () {
         // --- durable seats (session/input rows for the canonical admission) ---
@@ -182,7 +205,14 @@ describe("W3.10 V2 runner frame host hook (deepagent-code composition)", () => {
           .pipe(Effect.orDie)
         yield* db
           .insert(SessionTable)
-          .values({ id: sessionID, project_id: Project.ID.global, slug: "w310", directory: root, title: "w310", version: "test" })
+          .values({
+            id: sessionID,
+            project_id: Project.ID.global,
+            slug: "w310",
+            directory: root,
+            title: "w310",
+            version: "test",
+          })
           .onConflictDoNothing()
           .run()
           .pipe(Effect.orDie)
@@ -250,9 +280,8 @@ describe("W3.10 V2 runner frame host hook (deepagent-code composition)", () => {
         Effect.provide(Layer.succeed(LocationIndexRuntime.Service, runtime)),
         Effect.provide(InstanceStore.defaultLayer.pipe(Layer.provide(noopBootstrap))),
         Effect.provide(contexts),
-        Effect.provide(database),
       )
-    }).pipe(Effect.scoped)
+    }).pipe(Effect.provide(database), Effect.scoped)
 
     await Effect.runPromise(program)
   })
@@ -270,16 +299,15 @@ describe("W3.10 V2 runner frame host hook (deepagent-code composition)", () => {
       })
       const db = Context.get(yield* Layer.build(database), Database.Service).db
       const code = { query: () => Effect.succeed({} as never) } as unknown as CodeQuery.Interface
-      const outerSeamLayer = Layer.succeed(
-        ProductionV2Sources,
-        ProductionSources.productionInput({ runtime, code, db, workspaceDirectory: root }),
+      const outerSeam = ProductionSources.productionInput({ runtime, code, db, workspaceDirectory: root })
+      const hookLayer = V2RunnerFrame.runnerFrameSeamFor(
+        Location.Ref.make({ directory: AbsolutePath.make(root) }),
+        outerSeam,
       )
-      const hookLayer = V2RunnerFrame.runnerFrameSeamFor(Location.Ref.make({ directory: AbsolutePath.make(root) }))
       const seam = yield* Layer.build(hookLayer).pipe(
         Effect.map((built) => Context.get(built, ProductionV2Sources)),
         Effect.provide(InstanceStore.defaultLayer.pipe(Layer.provide(noopBootstrap))),
         Effect.provide(Layer.succeed(LocationIndexRuntime.Service, runtime)),
-        Effect.provide(outerSeamLayer),
       )
       // No handle => identity stays undefined => the v2:local degradation frame (never a fake).
       expect(seam.identity).toBeUndefined()
@@ -294,17 +322,20 @@ describe("W3.10 V2 runner frame host hook (deepagent-code composition)", () => {
     const root = path.join(fixture.path, "repo")
     let observedDirectory: string | undefined
     const codeIntel = Layer.mock(CodeIntelFacade.Service, {
-      execute: () => Effect.gen(function* () {
-        observedDirectory = (yield* InstanceRef)?.directory
-        return codeIntelResult
-      }),
+      execute: () =>
+        Effect.gen(function* () {
+          observedDirectory = (yield* InstanceRef)?.directory
+          return codeIntelResult
+        }),
     })
     const contextQuery = Layer.mock(ContextQueryFacade.Service, {
       execute: () => Effect.die("unused"),
     })
     const program = Effect.gen(function* () {
       const runtime = Context.get(
-        yield* Layer.build(V2RunnerFrame.runnerFrameContextToolsFor(Location.Ref.make({ directory: AbsolutePath.make(root) }))),
+        yield* Layer.build(
+          V2RunnerFrame.runnerFrameContextToolsFor(Location.Ref.make({ directory: AbsolutePath.make(root) })),
+        ),
         ContextToolRuntime.Service,
       )
       const output = yield* runtime.codeIntel({
@@ -316,11 +347,119 @@ describe("W3.10 V2 runner frame host hook (deepagent-code composition)", () => {
       expect(observedDirectory).toBe(root)
     }).pipe(
       Effect.provide(InstanceStore.defaultLayer.pipe(Layer.provide(noopBootstrap))),
+      Effect.provide(availableRuntime(root)),
       Effect.provide(codeIntel),
       Effect.provide(contextQuery),
       Effect.scoped,
     )
     await Effect.runPromise(program)
+  })
+
+  test("the keyed Location registry advertises graph tools only when a real index handle exists", async () => {
+    await using fixture = await tmpdir()
+    const unavailableRoot = path.join(fixture.path, "unavailable")
+    const availableRoot = path.join(fixture.path, "available")
+    await Bun.write(path.join(unavailableRoot, "README.md"), "# unavailable host\n")
+    await Bun.write(path.join(availableRoot, "README.md"), "# available host\n")
+    const previous = Flag.DEEPAGENT_CODE_DISABLE_MODELS_FETCH
+    Flag.DEEPAGENT_CODE_DISABLE_MODELS_FETCH = true
+    try {
+      let available = false
+      const runtime = Layer.mock(LocationIndexRuntime.Service, {
+        init: () => Effect.void,
+        current: () => (available ? Effect.succeed(indexHandle(availableRoot)) : Effect.succeed(undefined)),
+      })
+      const host = V2RunnerFrame.runnerFrameHostLayer.pipe(
+        Layer.provide(Layer.succeed(ProductionV2Sources, {})),
+        Layer.provide(RuntimeFlags.defaultLayer),
+        Layer.provide(InstanceStore.defaultLayer.pipe(Layer.provide(noopBootstrap))),
+        Layer.provide(runtime),
+        Layer.provide(Layer.mock(CodeIntelFacade.Service, { execute: () => Effect.succeed(codeIntelResult) })),
+        Layer.provide(Layer.mock(ContextQueryFacade.Service, { execute: () => Effect.die("unused") })),
+      )
+      const locations = LocationServiceMap.layerNoDeps.pipe(
+        Layer.provide([
+          ...locationServiceMapDependencies(
+            host,
+            Database.defaultLayer,
+            EventV2.defaultLayer,
+            AgentGateway.runtimeLayer({ enabled: false, agentMode: "high" }),
+          ),
+        ]),
+      )
+      const definitions = (root: string) =>
+        Effect.runPromise(
+          Effect.gen(function* () {
+            return (yield* (yield* ToolRegistry.Service).materialize()).definitions.map((tool) => tool.name)
+          }).pipe(
+            Effect.provide(LocationServiceMap.get({ directory: AbsolutePath.make(root) })),
+            Effect.provide(locations),
+            Effect.scoped,
+          ),
+        )
+      const unavailableDefinitions = await definitions(unavailableRoot)
+      expect(unavailableDefinitions).not.toContain("code_intel")
+      expect(unavailableDefinitions).not.toContain("context_query")
+      available = true
+      const availableDefinitions = await definitions(availableRoot)
+      expect(availableDefinitions).toContain("code_intel")
+      expect(availableDefinitions).toContain("context_query")
+    } finally {
+      Flag.DEEPAGENT_CODE_DISABLE_MODELS_FETCH = previous
+    }
+  }, 15_000)
+
+  test("the host carries plan-gate and settle hooks into the keyed Location scope", async () => {
+    await using fixture = await tmpdir()
+    const root = path.join(fixture.path, "repo")
+    await Bun.write(path.join(root, "README.md"), "# host hooks\n")
+    let settled = 0
+    const host = V2RunnerFrame.runnerFrameHostLayer.pipe(
+      Layer.provide(Layer.succeed(ProductionV2Sources, {})),
+      Layer.provide(RuntimeFlags.layer({ strictPlanGate: true })),
+      Layer.provide(InstanceStore.defaultLayer.pipe(Layer.provide(noopBootstrap))),
+      Layer.provide(
+        Layer.mock(LocationIndexRuntime.Service, {
+          init: () => Effect.void,
+          current: () => Effect.succeed(undefined),
+        }),
+      ),
+      Layer.provide(Layer.mock(CodeIntelFacade.Service, { execute: () => Effect.succeed(codeIntelResult) })),
+      Layer.provide(Layer.mock(ContextQueryFacade.Service, { execute: () => Effect.die("unused") })),
+      Layer.provide(Layer.succeed(SessionRunner.CurrentOnSessionSettled, () => Effect.sync(() => settled++))),
+      Layer.provide(Layer.succeed(V2ProviderTurn.CurrentHistoryEpochLookup, () => Effect.succeed(37))),
+    )
+    const program = Effect.gen(function* () {
+      const runtimeHost = yield* LocationRuntimeHost
+      yield* Effect.gen(function* () {
+        const gate = yield* SessionRunner.CurrentToolSettleGate
+        const onSessionSettled = yield* SessionRunner.CurrentOnSessionSettled
+        const gateway = yield* AgentGateway.Runtime
+        const historyEpochLookup = yield* V2ProviderTurn.CurrentHistoryEpochLookup
+        const runtimeIdentityResolver = yield* V2ProviderTurn.CurrentRuntimeIntegrityIdentity
+        expect(gate).toBeDefined()
+        expect(onSessionSettled).toBeDefined()
+        expect(historyEpochLookup).toBeDefined()
+        expect(runtimeIdentityResolver).toBeDefined()
+        if (!gate || !onSessionSettled || !historyEpochLookup || !runtimeIdentityResolver) return
+        expect(yield* gate({ sessionID: "ses_host_gate", toolName: "edit", args: {} })).toMatchObject({
+          kind: "block",
+        })
+        yield* onSessionSettled(
+          {
+            sessionID: SessionSchema.ID.make("ses_host_settle"),
+            workspacePath: root,
+          },
+          gateway,
+        )
+        expect(yield* historyEpochLookup(SessionSchema.ID.make("ses_host_epoch"))).toBe(37)
+      }).pipe(
+        Effect.provide(runtimeHost.layer(Location.Ref.make({ directory: AbsolutePath.make(root) }))),
+        Effect.provide(AgentGateway.runtimeLayer({ baseDir: root, durableLearning: false })),
+      )
+    }).pipe(Effect.provide(host), Effect.scoped)
+    await Effect.runPromise(program)
+    expect(settled).toBe(1)
   })
 })
 
@@ -343,3 +482,22 @@ const codeIntelResult: CodeIntelFacade.Result = {
   hits: [],
   truncated: false,
 }
+
+const indexHandle = (root: string) => ({
+  identity: {
+    securityNamespaceId: SecurityNamespaceID.make("sec_test_host"),
+    locationKey: LocationKey.make(`loc_${root}`),
+    projectScopeKey: ProjectScopeKey.make("prj_test_host"),
+    indexSpaceId: IndexSpaceID.make("idx_test_host"),
+    canonicalRoot: AbsolutePath.make(root),
+  },
+  // Registry availability only needs the durable handle to exist; query behavior is supplied by
+  // the facade mocks in these tests.
+  coordinator: {} as LocationIndexCoordinator.Interface,
+})
+
+const availableRuntime = (root: string) =>
+  Layer.mock(LocationIndexRuntime.Service, {
+    init: () => Effect.void,
+    current: () => Effect.succeed(indexHandle(root)),
+  })

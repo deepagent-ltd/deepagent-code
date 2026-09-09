@@ -13,7 +13,7 @@ import {
   TaskRunEventTable,
   TaskRunTable,
 } from "@deepagent-code/core/session/sql"
-import { Context, Effect, Exit, Layer } from "effect"
+import { Effect, Exit, Layer } from "effect"
 import { count, eq, sql } from "drizzle-orm"
 import { MessageID, SessionID } from "../../src/session/schema"
 import {
@@ -97,26 +97,21 @@ const admit = (input?: {
   })
 
 describe("TaskRun durable store", () => {
-  const recorderContext = Context.make(V2TaskRunReceipt.CurrentTaskRunTerminalRecorder, V2TaskRunReceipt.recordInTransaction)
-  const wired = <A, E, R>(effect: Effect.Effect<A, E, R>) => effect.pipe(Effect.provideContext(recorderContext))
-
-  it.effect("records a compensation receipt inside the settlement transaction when wired", () =>
+  it.effect("always records a compensation receipt inside the settlement transaction", () =>
     Effect.gen(function* () {
       yield* setup
       const { db } = yield* Database.Service
       const admitted = yield* admit({ messageID: MessageID.ascending("msg_receipt_wired"), callID: "call-receipt" })
       const claimed = yield* claimTaskProvisioning({ run: admitted.run, owner: "worker", now: 1 })
       const running = yield* startTaskRun(claimed!, "worker", 2)
-      const settled = yield* wired(
-        settleTaskRun({
-          run: running!,
-          owner: "worker",
-          state: "completed",
-          reason: "text_output_valid",
-          output: '{"result":"ok"}',
-          now: 3,
-        }),
-      )
+      const settled = yield* settleTaskRun({
+        run: running!,
+        owner: "worker",
+        state: "completed",
+        reason: "text_output_valid",
+        output: '{"result":"ok"}',
+        now: 3,
+      })
       expect(settled.won).toBe(true)
       // The compensation receipt is recorded atomically with the settlement, bound to the run.
       const receipts = yield* db
@@ -133,8 +128,7 @@ describe("TaskRun durable store", () => {
         reason: "text_output_valid",
         owner_token: "worker",
       })
-      // Unwired compositions stay receipt-less.
-      const other = yield* admit({ messageID: MessageID.ascending("msg_receipt_unwired"), callID: "call-unwired" })
+      const other = yield* admit({ messageID: MessageID.ascending("msg_receipt_required"), callID: "call-required" })
       const otherClaimed = yield* claimTaskProvisioning({ run: other.run, owner: "worker", now: 4 })
       const otherRunning = yield* startTaskRun(otherClaimed!, "worker", 5)
       const otherSettled = yield* settleTaskRun({
@@ -152,7 +146,7 @@ describe("TaskRun durable store", () => {
           .where(eq(V2TaskRunReceiptTable.run_id, other.run.runID))
           .all()
           .pipe(Effect.orDie),
-      ).toHaveLength(0)
+      ).toHaveLength(1)
     }),
   )
 
@@ -181,16 +175,14 @@ describe("TaskRun durable store", () => {
       )
       // A divergent settlement is a conflict; the whole settlement transaction rolls back,
       // including the notification outbox row carried in the same transaction.
-      const second = yield* wired(
-        settleTaskRun({
+      const second = yield* settleTaskRun({
           run: running!,
           owner: "worker",
           state: "completed",
           reason: "divergent_settlement",
           notification: { directory: "/project", payload: { agent: "build", text: "complete" } },
           now: 4,
-        }),
-      ).pipe(Effect.exit)
+        }).pipe(Effect.exit)
       expect(second._tag).toBe("Failure")
       expect(
         (
@@ -230,9 +222,7 @@ describe("TaskRun durable store", () => {
       const admitted = yield* admit({ messageID: MessageID.ascending("msg_receipt_error_fold"), callID: "call-fold" })
       const claimed = yield* claimTaskProvisioning({ run: admitted.run, owner: "worker", now: 1 })
       const running = yield* startTaskRun(claimed!, "worker", 2)
-      yield* wired(
-        settleTaskRun({ run: running!, owner: "worker", state: "error", reason: "child_crashed", now: 3 }),
-      )
+      yield* settleTaskRun({ run: running!, owner: "worker", state: "error", reason: "child_crashed", now: 3 })
       const receipts = yield* db
         .select()
         .from(V2TaskRunReceiptTable)
@@ -261,7 +251,7 @@ describe("TaskRun durable store", () => {
           .pipe(Effect.orDie)
       // Interrupt of an admitted run settles it as cancelled with a control-plane receipt.
       const admitted = yield* admit({ messageID: MessageID.ascending("msg_receipt_interrupt"), callID: "call-int" })
-      yield* wired(requestInterrupt({ runID: admitted.run.runID, reason: "user_interrupt", now: 1 }))
+      yield* requestInterrupt({ runID: admitted.run.runID, reason: "user_interrupt", now: 1 })
       expect(yield* receiptsFor(admitted.run.runID)).toEqual([
         expect.objectContaining({
           state: "cancelled",
@@ -271,7 +261,7 @@ describe("TaskRun durable store", () => {
       ])
       // Control-plane close of an admitted run records a closed receipt.
       const closable = yield* admit({ messageID: MessageID.ascending("msg_receipt_close"), callID: "call-close" })
-      yield* wired(requestClose({ rootRunID: closable.run.runID, reason: "session_closed", now: 2 }))
+      yield* requestClose({ rootRunID: closable.run.runID, reason: "session_closed", now: 2 })
       expect(yield* receiptsFor(closable.run.runID)).toEqual([
         expect.objectContaining({
           state: "closed",
@@ -281,14 +271,12 @@ describe("TaskRun durable store", () => {
       ])
       // Pre-execution failure of an admitted run records a failed receipt.
       const failing = yield* admit({ messageID: MessageID.ascending("msg_receipt_fail"), callID: "call-fail" })
-      yield* wired(
-        failAdmittedTaskRun({
+      yield* failAdmittedTaskRun({
           run: failing.run,
           reason: "provisioning_failed",
           error: { code: "provisioning_failed", message: "nope" },
           now: 3,
-        }),
-      )
+        })
       expect(yield* receiptsFor(failing.run.runID)).toEqual([
         expect.objectContaining({
           state: "failed",
@@ -296,10 +284,9 @@ describe("TaskRun durable store", () => {
           owner_token: "control-plane",
         }),
       ])
-      // Unwired control-plane settlements stay receipt-less.
       const bare = yield* admit({ messageID: MessageID.ascending("msg_receipt_bare"), callID: "call-bare" })
       yield* requestInterrupt({ runID: bare.run.runID, reason: "user_interrupt", now: 4 })
-      expect(yield* receiptsFor(bare.run.runID)).toHaveLength(0)
+      expect(yield* receiptsFor(bare.run.runID)).toHaveLength(1)
     }),
   )
 
@@ -313,7 +300,7 @@ describe("TaskRun durable store", () => {
         deliveryMode: "background",
       })
       yield* claimTaskProvisioning({ run: admission.run, owner: "worker", now: 100, leaseMs: 50 })
-      const recovered = yield* wired(recoverExpiredTaskRuns({ directory: "/project", now: 150 }))
+      const recovered = yield* recoverExpiredTaskRuns({ directory: "/project", now: 150 })
       expect(recovered).toHaveLength(1)
       expect(
         yield* db
@@ -347,8 +334,7 @@ describe("TaskRun durable store", () => {
       const first = yield* admit({ messageID: MessageID.ascending("msg_receipt_exec_done"), callID: "call-exec-1" })
       const firstClaimed = yield* claimTaskProvisioning({ run: first.run, owner: "worker", now: 1 })
       const firstRunning = yield* startTaskRun(firstClaimed!, "worker", 2)
-      const firstSettled = yield* wired(
-        settleRun({
+      const firstSettled = yield* settleRun({
           runID: firstRunning!.runID,
           parentSessionID,
           ownerToken: "worker",
@@ -361,8 +347,7 @@ describe("TaskRun durable store", () => {
           output: "done",
           childSessionID: firstRunning!.childSessionID,
           now: 3,
-        }),
-      )
+        })
       expect(firstSettled.won).toBe(true)
       expect(yield* receiptsFor(firstRunning!.runID)).toEqual([
         expect.objectContaining({
@@ -383,8 +368,7 @@ describe("TaskRun durable store", () => {
       const secondClaimed = yield* claimTaskProvisioning({ run: second.run, owner: "worker", now: 4 })
       const secondRunning = yield* startTaskRun(secondClaimed!, "worker", 5)
       yield* requestInterrupt({ runID: secondRunning!.runID, reason: "user_stop", now: 6 })
-      const secondSettled = yield* wired(
-        settleRun({
+      const secondSettled = yield* settleRun({
           runID: secondRunning!.runID,
           parentSessionID,
           ownerToken: "worker",
@@ -396,8 +380,7 @@ describe("TaskRun durable store", () => {
           reason: "executor_error",
           childSessionID: secondRunning!.childSessionID,
           now: 7,
-        }),
-      )
+        })
       expect(secondSettled.won).toBe(true)
       expect(secondSettled.finalState).toBe("interrupted")
       expect(yield* receiptsFor(secondRunning!.runID)).toEqual([
@@ -425,7 +408,7 @@ describe("TaskRun durable store", () => {
         callID: "call-prestart",
       })
       yield* enqueueRun({ runID: admitted.run.runID, runVersion: admitted.run.version })
-      yield* wired(claimRun({ ownerToken: "worker", directory: "/project", maxPrestartAttempts: 0 }))
+      yield* claimRun({ ownerToken: "worker", directory: "/project", maxPrestartAttempts: 0 })
       expect(
         yield* db
           .select()
@@ -558,12 +541,13 @@ describe("TaskRun durable store", () => {
     Effect.gen(function* () {
       const directory = yield* tmpdirScoped()
       const filename = `${directory}/task-run.sqlite`
-      const databases = yield* Effect.all(
-        [Database.layerFromPath(filename), Database.layerFromPath(filename)].map((layer) =>
-          Layer.build(layer.pipe(Layer.provide(CrossSpawnSpawner.defaultLayer))),
-        ),
-        { concurrency: "unbounded" },
-      )
+      // Two real connections on one file: `layerFromPath` memo-hits the outer test layer's
+      // :memory: Database via the ambient CurrentMemoMap (its inner `layer` is a module
+      // singleton), so both opens use fresh `ownedLayerFromPath` layers instead.
+      const databases = [
+        yield* Layer.build(Database.ownedLayerFromPath(filename)),
+        yield* Layer.build(Database.ownedLayerFromPath(filename)),
+      ]
       yield* setup.pipe(Effect.provide(databases[0]))
       const messageID = MessageID.ascending("msg_concurrent_admission")
       const admissions = yield* Effect.all(
@@ -715,12 +699,13 @@ describe("TaskRun durable store", () => {
     Effect.gen(function* () {
       const directory = yield* tmpdirScoped()
       const filename = `${directory}/task-run-recovery.sqlite`
-      const databases = yield* Effect.all(
-        [Database.layerFromPath(filename), Database.layerFromPath(filename)].map((layer) =>
-          Layer.build(layer.pipe(Layer.provide(CrossSpawnSpawner.defaultLayer))),
-        ),
-        { concurrency: "unbounded" },
-      )
+      // Two real connections on one file: `layerFromPath` memo-hits the outer test layer's
+      // :memory: Database via the ambient CurrentMemoMap (its inner `layer` is a module
+      // singleton), so both opens use fresh `ownedLayerFromPath` layers instead.
+      const databases = [
+        yield* Layer.build(Database.ownedLayerFromPath(filename)),
+        yield* Layer.build(Database.ownedLayerFromPath(filename)),
+      ]
       yield* setup.pipe(Effect.provide(databases[0]))
       const admission = yield* admit({ messageID: MessageID.ascending("msg_recovery") }).pipe(
         Effect.provide(databases[0]),

@@ -9,7 +9,7 @@ import matter from "gray-matter"
 import { EOL } from "os"
 import type { Argv } from "yargs"
 import { Effect } from "effect"
-import { effectCmd } from "../effect-cmd"
+import { CliError, effectCmd } from "../effect-cmd"
 
 type AgentMode = "all" | "primary" | "subagent"
 
@@ -134,7 +134,7 @@ const AgentCreateCommand = effectCmd({
       const model = args.model ? Provider.parseModel(args.model) : undefined
       const generated = await runLocalEffect(agentSvc.generate({ description, model })).catch((error) => {
         spinner.stop(`LLM failed to generate agent: ${error.message}`, 1)
-        if (isFullyNonInteractive) process.exit(1)
+        if (isFullyNonInteractive) throw new CliError({ message: error.message, exitCode: 1 })
         throw new UI.CancelledError()
       })
       spinner.stop(`Agent ${generated.identifier} generated`)
@@ -215,8 +215,7 @@ const AgentCreateCommand = effectCmd({
 
       if (await Filesystem.exists(filePath)) {
         if (isFullyNonInteractive) {
-          console.error(`Error: Agent file already exists: ${filePath}`)
-          process.exit(1)
+          throw new CliError({ message: `Agent file already exists: ${filePath}`, exitCode: 1 })
         }
         prompts.log.error(`Agent file already exists: ${filePath}`)
         throw new UI.CancelledError()

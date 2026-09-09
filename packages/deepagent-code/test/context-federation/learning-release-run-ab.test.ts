@@ -517,6 +517,9 @@ function seedAuthority(input: {
         version: "test",
         time_created: 1,
         time_updated: 1,
+        // RI-53: provider attempt prepare requires an active execution claim on the session
+        // row (CAS token in time_suspended); the claim is held for the whole test.
+        time_suspended: 1,
       })
       .run()
     yield* input.db

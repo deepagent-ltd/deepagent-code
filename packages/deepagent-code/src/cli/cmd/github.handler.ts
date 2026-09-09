@@ -325,7 +325,7 @@ export const githubInstall = Effect.fn("Cli.github.install")(function* () {
             `https://api.deepagent.ltd/get_github_app_installation?owner=${app.owner}&repo=${app.repo}`,
           )
             .then((res) => res.json())
-            .then((data) => data.installation)
+            .then((data) => data.installed)
         }
       }
 
@@ -397,8 +397,9 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
 
     const context = isMock ? (JSON.parse(args.event!) as Context) : github.context
     if (!SUPPORTED_EVENTS.includes(context.eventName as (typeof SUPPORTED_EVENTS)[number])) {
-      core.setFailed(`Unsupported event type: ${context.eventName}`)
-      process.exit(1)
+      const message = `Unsupported event type: ${context.eventName}`
+      core.setFailed(message)
+      throw new Error(message)
     }
 
     // Determine event category for routing
@@ -659,7 +660,7 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
         await revokeAppToken()
       }
     }
-    process.exit(exitCode)
+    process.exitCode = exitCode
 
     function normalizeModel() {
       const value = process.env["MODEL"]

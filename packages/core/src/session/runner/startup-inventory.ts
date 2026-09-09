@@ -5,13 +5,20 @@ export * as StartupInventory from "./startup-inventory"
 // After migration and BEFORE open admission, the boot must classify every durable
 // recovery surface into a deterministic bucket and prove the inventory is TOTAL
 // (`unclassified = 0`) before it may advance to `ready`. This module is the single
-// in-process classification surface for the five recovery categories:
+// in-process classification surface for the durable recovery categories:
 //
 //   provider_attempt (session_provider_attempt)
 //   tool_effect      (session_v2_tool_effect_admission + terminal effect/grant evidence)
 //   task_run         (task_run)
 //   compaction       (event_snapshot_attempt + event_compaction_receipt)
 //   session_activity (session_facade_activity)
+//   recovery_descriptor (session_provider_recovery_descriptor)
+//   recovery_command (recovery_command plus exact provider authority)
+//   session_input    (session_input durable admission queue)
+//   provider_binding (session_v2_provider_turn_receipt ↔ session_provider_attempt)
+//   event_outbox     (deepagent_event_outbox publisher ledger)
+//   event_delivery   (deepagent_event_consumer_delivery consumer ledger)
+//   sync_projection  (event_sync_backfill + event_sync_sequence authority)
 //
 // Vocabulary (design §10.7 / design §2.2):
 //   safe_before_dispatch — provably pre-dispatch (requeue-eligible; NEVER auto-replayed
@@ -39,11 +46,12 @@ import { sql } from "drizzle-orm"
 import { Effect } from "effect"
 import type { EffectDrizzleSqlite } from "@deepagent-code/effect-drizzle-sqlite"
 import { decodeDescriptorRow } from "./recovery-durable-store"
+import { decodeCommandRow } from "./recovery-durable-store"
 import type { DescriptorDbRow, DescriptorRow } from "./recovery-durable-store"
 
 type Database = EffectDrizzleSqlite.EffectSQLiteDatabase
 
-/** The five durable recovery surfaces the startup inventory classifies. */
+/** The durable recovery surfaces the startup inventory classifies. */
 export type StartupCategory =
   | "provider_attempt"
   | "tool_effect"
@@ -51,6 +59,12 @@ export type StartupCategory =
   | "compaction"
   | "session_activity"
   | "recovery_descriptor"
+  | "recovery_command"
+  | "session_input"
+  | "provider_binding"
+  | "event_outbox"
+  | "event_delivery"
+  | "sync_projection"
 
 export const StartupCategories: readonly StartupCategory[] = [
   "provider_attempt",
@@ -59,6 +73,12 @@ export const StartupCategories: readonly StartupCategory[] = [
   "compaction",
   "session_activity",
   "recovery_descriptor",
+  "recovery_command",
+  "session_input",
+  "provider_binding",
+  "event_outbox",
+  "event_delivery",
+  "sync_projection",
 ]
 
 /** The deterministic classification bucket for one durable item. */
@@ -150,11 +170,21 @@ const providerAttempt: Readonly<Record<string, InventoryClassification>> = {
   resolved_replayed: "resolved",
 }
 
+type ProviderAttemptRow = CategoryRow & {
+  readonly execution_claim_token: number
+  readonly current_session_claim_token: number | null
+  readonly resolution_decision: string | null
+  readonly bridge_attempt_id: string | null
+  readonly bridge_receipt_id: string | null
+  readonly receipt_attempt_id: string | null
+  readonly receipt_state: string | null
+}
+
 const taskRunTerminal = new Set(["completed", "error", "cancelled", "interrupted", "failed", "closed"])
 const taskRunPredispatch = new Set(["admitted", "queued", "provisioning"])
 const taskRunActive = new Set(["researching", "finalizing", "running", "recovery_required"])
 
-function classifyProviderAttemptItem(row: CategoryRow): StartupInventoryItem {
+function classifyProviderAttemptItem(row: ProviderAttemptRow): StartupInventoryItem {
   const classification = providerAttempt[row.state]
   if (classification === undefined)
     return {
@@ -164,6 +194,43 @@ function classifyProviderAttemptItem(row: CategoryRow): StartupInventoryItem {
       state: row.state,
       reason: `unknown provider_attempt state '${row.state}'`,
     }
+  // A live attempt (prepared/dispatching/streaming) is only provable while it still holds the
+  // Session's current execution claim: a live state without that exact claim means an executor
+  // vanished without settling. `indeterminate_after_crash` is already terminal quarantine
+  // evidence — the attempt never executes again, so a claim released by interrupt settlement
+  // (or superseded by a later drain) cannot change what the row is: past dispatch, unknown
+  // outcome, never auto-replayed. Only a missing/zeroed claim token stays fail-closed there.
+  const livePreQuarantine =
+    row.state === "prepared" || row.state === "dispatching" || row.state === "streaming"
+  if (
+    (livePreQuarantine || row.state === "indeterminate_after_crash") &&
+    (row.execution_claim_token <= 0 ||
+      (livePreQuarantine && row.current_session_claim_token !== row.execution_claim_token))
+  )
+    return {
+      category: "provider_attempt",
+      id: row.id,
+      classification: "unclassified",
+      state: row.state,
+      reason: "provider attempt lacks its exact current Session execution claim",
+    }
+  if (row.state.startsWith("resolved_")) {
+    const decision = row.state.slice("resolved_".length)
+    if (
+      row.resolution_decision !== decision ||
+      row.bridge_attempt_id !== row.id ||
+      row.bridge_receipt_id === null ||
+      row.receipt_attempt_id !== row.id ||
+      row.receipt_state !== "indeterminate_after_crash"
+    )
+      return {
+        category: "provider_attempt",
+        id: row.id,
+        classification: "unclassified",
+        state: row.state,
+        reason: "resolved provider attempt lacks its exact resolution, V2 bridge, and indeterminate receipt",
+      }
+  }
   return {
     category: "provider_attempt",
     id: row.id,
@@ -179,6 +246,14 @@ function classifyProviderAttemptItem(row: CategoryRow): StartupInventoryItem {
 }
 
 function classifyToolEffectItem(row: CategoryRow & { readonly grant_state: string | null }): StartupInventoryItem {
+  if (row.state !== "admitted" && row.state !== "settled" && row.state !== "failed")
+    return {
+      category: "tool_effect",
+      id: row.id,
+      classification: "unclassified",
+      state: row.state,
+      reason: `unknown tool effect state '${row.state}'`,
+    }
   if (row.state === "admitted")
     return {
       category: "tool_effect",
@@ -334,6 +409,350 @@ function classifySessionActivityItem(row: CategoryRow): StartupInventoryItem {
   }
 }
 
+type RecoveryCommandInventoryRow = {
+  readonly command_id: string
+  readonly descriptor_id: string | null
+  readonly attempt: string
+  readonly state: string
+  readonly expected_owner_token: string | null
+  readonly result_hash: string | null
+  readonly actor_type: string | null
+  readonly actor_id: string | null
+  readonly created_at: number
+  readonly updated_at: number
+  readonly descriptor_session_id: string | null
+  readonly descriptor_activity_id: string | null
+  readonly descriptor_turn_id: string | null
+  readonly descriptor_kind: string | null
+  readonly descriptor_payload: string | null
+  readonly descriptor_content_hash: string | null
+  readonly descriptor_created_at: number | null
+  readonly attempt_state: string | null
+  readonly attempt_version: number | null
+  readonly attempt_session_id: string | null
+  readonly attempt_activity_id: string | null
+  readonly attempt_turn_seq: number | null
+  readonly attempt_selection_id: string | null
+  readonly attempt_projection_hash: string | null
+  readonly attempt_request_hash: string | null
+  readonly attempt_provider_id: string | null
+  readonly attempt_owner_token: string | null
+  readonly attempt_execution_claim_token: number | null
+  readonly current_session_claim_token: number | null
+  readonly resolution_decision: string | null
+  readonly bridge_command_id: string | null
+}
+
+function classifyRecoveryCommandItem(row: RecoveryCommandInventoryRow): StartupInventoryItem {
+  const command = decodeCommandRow(row)
+  const descriptor =
+    row.descriptor_id !== null &&
+    row.descriptor_session_id !== null &&
+    row.descriptor_activity_id !== null &&
+    row.descriptor_turn_id !== null &&
+    row.descriptor_kind !== null &&
+    row.descriptor_payload !== null &&
+    row.descriptor_content_hash !== null &&
+    row.descriptor_created_at !== null
+      ? decodeDescriptorRow({
+          descriptor_id: row.descriptor_id,
+          session_id: row.descriptor_session_id,
+          activity_id: row.descriptor_activity_id,
+          turn_id: row.descriptor_turn_id,
+          kind: row.descriptor_kind,
+          payload: row.descriptor_payload,
+          content_hash: row.descriptor_content_hash,
+          created_at: row.descriptor_created_at,
+        })
+      : undefined
+  const item = (classification: InventoryClassification, reason: string): StartupInventoryItem => ({
+    category: "recovery_command",
+    id: row.command_id,
+    classification,
+    state: row.state,
+    reason,
+  })
+  if (!command) return item("unclassified", "recovery command payload or state is unverifiable")
+  if (!descriptor) return item("unclassified", "recovery command has no verifiable bound descriptor")
+  if (
+    descriptor.sessionId !== command.attempt.sessionId ||
+    descriptor.activityId !== command.attempt.activityId ||
+    descriptor.payload.requestHash !== command.requestHash ||
+    row.attempt_state === null ||
+    row.attempt_version === null ||
+    row.attempt_session_id !== command.attempt.sessionId ||
+    row.attempt_activity_id !== command.attempt.activityId ||
+    row.attempt_turn_seq !== command.attempt.providerTurnSeq ||
+    row.attempt_selection_id !== command.attempt.selectionId ||
+    row.attempt_projection_hash !== command.attempt.projectionHash ||
+    row.attempt_request_hash !== command.requestHash ||
+    row.attempt_provider_id !== command.attempt.providerId ||
+    row.attempt_owner_token === null ||
+    command.expectedOwnerToken !== row.attempt_owner_token ||
+    row.attempt_execution_claim_token === null ||
+    row.attempt_execution_claim_token <= 0
+  )
+    return item("unclassified", "recovery command exact provider-attempt binding is missing or mismatched")
+  if (command.state === "pending") {
+    if (
+      row.current_session_claim_token !== row.attempt_execution_claim_token ||
+      descriptor.payload.descriptorKind === "resolved" ||
+      descriptor.payload.casTokens.expectedState !== row.attempt_state ||
+      descriptor.payload.casTokens.expectedVersion !== row.attempt_version ||
+      descriptor.payload.casTokens.ownerToken !== row.attempt_owner_token
+    )
+      return item("unclassified", "pending recovery command CAS authority is stale or already resolved")
+    return item("recovery", "committed recovery command awaits exact authority application")
+  }
+  if (command.state === "abandoned") {
+    if (
+      row.attempt_state !== "resolved_abandoned" ||
+      row.resolution_decision !== "abandoned" ||
+      row.bridge_command_id !== command.commandId ||
+      command.resultHash === undefined ||
+      row.current_session_claim_token === row.attempt_execution_claim_token
+    )
+      return item("unclassified", "abandoned command lacks its exact terminal result, provider resolution, bridge, or claim release")
+    return item("resolved", "abandoned command is bound to the exact terminal provider authority")
+  }
+  if (command.state === "settled" || command.state === "forked")
+    return item("unclassified", `terminal '${command.state}' command has no durable V2 authority classifier`)
+  return item("unclassified", `unknown recovery command state '${row.state}'`)
+}
+
+function classifySessionInputItem(
+  row: CategoryRow & { readonly delivery: string; readonly promoted_seq: number | null },
+): StartupInventoryItem {
+  if (!['steer', 'queue', 'goal_steer'].includes(row.delivery))
+    return {
+      category: "session_input",
+      id: row.id,
+      classification: "unclassified",
+      state: row.state,
+      reason: `unknown session_input delivery '${row.delivery}'`,
+    }
+  return {
+    category: "session_input",
+    id: row.id,
+    classification: row.promoted_seq === null ? "safe_before_dispatch" : "resolved",
+    state: row.state,
+    reason:
+      row.promoted_seq === null
+        ? "durable input admitted but not promoted; provably pending work"
+        : "durable input already promoted into canonical history",
+  }
+}
+
+type ProviderBindingRow = CategoryRow & {
+  readonly provider_attempt_id: string | null
+  readonly receipt_session_id: string
+  readonly receipt_activity_id: string
+  readonly receipt_turn_seq: number
+  readonly receipt_request_hash: string
+  readonly receipt_provider_id: string
+  readonly receipt_owner_token: string
+  readonly attempt_state: string | null
+  readonly attempt_session_id: string | null
+  readonly attempt_activity_id: string | null
+  readonly attempt_turn_seq: number | null
+  readonly attempt_request_hash: string | null
+  readonly attempt_provider_id: string | null
+  readonly attempt_owner_token: string | null
+  readonly bridge_receipt_id: string | null
+}
+
+function classifyProviderBindingItem(row: ProviderBindingRow): StartupInventoryItem {
+  const receiptStates = ["preparing", "dispatching", "streaming", "settled", "failed", "indeterminate_after_crash"]
+  if (!receiptStates.includes(row.state))
+    return {
+      category: "provider_binding",
+      id: row.id,
+      classification: "unclassified",
+      state: row.state,
+      reason: `unknown provider receipt state '${row.state}'`,
+    }
+  if (
+    row.provider_attempt_id === null ||
+    row.attempt_state === null ||
+    row.attempt_session_id !== row.receipt_session_id ||
+    row.attempt_activity_id !== row.receipt_activity_id ||
+    row.attempt_turn_seq !== row.receipt_turn_seq ||
+    row.attempt_request_hash !== row.receipt_request_hash ||
+    row.attempt_provider_id !== row.receipt_provider_id ||
+    row.attempt_owner_token !== row.receipt_owner_token
+  )
+    return {
+      category: "provider_binding",
+      id: row.id,
+      classification: "unclassified",
+      state: row.state,
+      reason: "provider receipt/attempt exact binding missing or mismatched",
+    }
+  const compatible =
+    (row.state === "preparing" && row.attempt_state === "prepared") ||
+    row.state === row.attempt_state ||
+    (row.state === "indeterminate_after_crash" &&
+      ["resolved_abandoned", "resolved_settled", "resolved_replayed"].includes(row.attempt_state) &&
+      row.bridge_receipt_id === row.id)
+  if (!compatible)
+    return {
+      category: "provider_binding",
+      id: row.id,
+      classification: "unclassified",
+      state: `${row.state}:${row.attempt_state}`,
+      reason: "provider receipt/attempt states are not a valid atomic pair",
+    }
+  const classification =
+    ["settled", "failed"].includes(row.state) || row.attempt_state.startsWith("resolved_")
+      ? "resolved"
+      : row.state === "preparing"
+        ? "safe_before_dispatch"
+        : "recovery"
+  return {
+    category: "provider_binding",
+    id: row.id,
+    classification,
+    state: `${row.state}:${row.attempt_state}`,
+    reason:
+      classification === "resolved"
+        ? "receipt and attempt have matching terminal evidence"
+        : classification === "safe_before_dispatch"
+          ? "receipt and attempt are atomically bound before dispatch"
+          : "receipt and attempt are atomically bound past dispatch; explicit recovery required",
+  }
+}
+
+function classifyEventOutboxItem(
+  row: CategoryRow & {
+    readonly claim_token: string | null
+    readonly claimant_id: string | null
+    readonly lease_expires_at: number | null
+    readonly published_at: number | null
+    readonly registered_consumers: number
+    readonly assigned_consumers: number
+  },
+): StartupInventoryItem {
+  if (!['pending', 'publishing', 'published', 'dead'].includes(row.state))
+    return {
+      category: "event_outbox",
+      id: row.id,
+      classification: "unclassified",
+      state: row.state,
+      reason: `unknown event outbox state '${row.state}'`,
+    }
+  const publishingBindingValid =
+    row.state !== "publishing" ||
+    (row.claim_token !== null && row.claimant_id !== null && row.lease_expires_at !== null)
+  const publishedEvidenceValid = row.state !== "published" || row.published_at !== null
+  if (!publishingBindingValid || !publishedEvidenceValid)
+    return {
+      category: "event_outbox",
+      id: row.id,
+      classification: "unclassified",
+      state: row.state,
+      reason: !publishingBindingValid
+        ? "publishing outbox row lacks a complete claim/lease"
+        : "published outbox row lacks publication evidence",
+    }
+  if (row.state === "published" && row.assigned_consumers !== row.registered_consumers)
+    return {
+      category: "event_outbox",
+      id: row.id,
+      classification: "recovery",
+      state: row.state,
+      reason: "published outbox row requires deterministic consumer-assignment repair",
+    }
+  return {
+    category: "event_outbox",
+    id: row.id,
+    classification: row.state === "pending" ? "safe_before_dispatch" : row.state === "publishing" ? "recovery" : "resolved",
+    state: row.state,
+    reason:
+      row.state === "pending"
+        ? "committed outbox event is pending physical publication"
+        : row.state === "publishing"
+          ? "outbox event may have crossed dispatch; lease-fenced recovery required"
+          : "outbox event is terminal",
+  }
+}
+
+function classifyEventDeliveryItem(
+  row: CategoryRow & {
+    readonly claim_token: string | null
+    readonly claimant_id: string | null
+    readonly lease_expires_at: number | null
+    readonly resolved_at: number | null
+  },
+): StartupInventoryItem {
+  if (!['pending', 'claimed', 'resolved', 'dead'].includes(row.state))
+    return {
+      category: "event_delivery",
+      id: row.id,
+      classification: "unclassified",
+      state: row.state,
+      reason: `unknown event delivery state '${row.state}'`,
+    }
+  if (
+    (row.state === "claimed" &&
+      (row.claim_token === null || row.claimant_id === null || row.lease_expires_at === null)) ||
+    (row.state === "resolved" && row.resolved_at === null)
+  )
+    return {
+      category: "event_delivery",
+      id: row.id,
+      classification: "unclassified",
+      state: row.state,
+      reason: row.state === "claimed" ? "claimed delivery lacks a complete claim/lease" : "resolved delivery lacks terminal evidence",
+    }
+  return {
+    category: "event_delivery",
+    id: row.id,
+    classification: row.state === "pending" ? "safe_before_dispatch" : row.state === "claimed" ? "recovery" : "resolved",
+    state: row.state,
+    reason:
+      row.state === "pending"
+        ? "consumer delivery is pending dispatch"
+        : row.state === "claimed"
+          ? "consumer delivery may have crossed dispatch; lease-fenced recovery required"
+          : "consumer delivery is terminal",
+  }
+}
+
+function classifySyncProjectionItem(
+  row: CategoryRow & {
+    readonly cursor_rowid: number | null
+    readonly high_water_rowid: number | null
+    readonly completed_at: number | null
+    readonly backfill_complete: number | null
+  },
+): StartupInventoryItem {
+  if (
+    !['pending', 'complete'].includes(row.state) ||
+    row.cursor_rowid === null ||
+    row.high_water_rowid === null ||
+    row.backfill_complete === null ||
+    row.cursor_rowid < 0 ||
+    row.cursor_rowid > row.high_water_rowid ||
+    (row.state === "pending" && row.backfill_complete !== 0) ||
+    (row.state === "complete" &&
+      (row.backfill_complete !== 1 || row.cursor_rowid !== row.high_water_rowid || row.completed_at === null))
+  )
+    return {
+      category: "sync_projection",
+      id: row.id,
+      classification: "unclassified",
+      state: row.state,
+      reason: "event sync backfill/cursor authority is missing or inconsistent",
+    }
+  return {
+    category: "sync_projection",
+    id: row.id,
+    classification: row.state === "pending" ? "safe_before_dispatch" : "resolved",
+    state: row.state,
+    reason: row.state === "pending" ? "event sync projection has bounded pending repair work" : "event sync projection authority is complete",
+  }
+}
+
 // W2 — the durable C1B recovery descriptor surface (design §W2). Every row of the
 // descriptor table is a classified five-class object; kind `resolved` is terminal
 // (resolved), the other four classes are past-dispatch recoveries (never an automatic
@@ -401,9 +820,19 @@ export const classifyStartup = Effect.fn("StartupInventory.classifyStartup")(fun
     compaction: emptyCounts(),
     session_activity: emptyCounts(),
     recovery_descriptor: emptyCounts(),
+    recovery_command: emptyCounts(),
+    session_input: emptyCounts(),
+    provider_binding: emptyCounts(),
+    event_outbox: emptyCounts(),
+    event_delivery: emptyCounts(),
+    sync_projection: emptyCounts(),
   }
   const unclassifiedItems: StartupInventoryItem[] = []
-  const observedAt = Date.now()
+  const clock = yield* db.get<{ observed_at: number }>(sql`
+    SELECT CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) AS observed_at
+  `)
+  if (!clock) return yield* Effect.die("startup inventory database clock unavailable")
+  const observedAt = clock.observed_at
 
   const accept = (item: StartupInventoryItem): void => {
     tallyCounts(byCategory, item.category, item)
@@ -411,7 +840,24 @@ export const classifyStartup = Effect.fn("StartupInventory.classifyStartup")(fun
   }
 
   // Provider attempts.
-  const attempts = yield* db.all<CategoryRow>(sql`SELECT attempt_id AS id, state FROM session_provider_attempt`)
+  const attempts = yield* db.all<ProviderAttemptRow>(sql`
+    SELECT attempt.attempt_id AS id, attempt.state, attempt.execution_claim_token,
+           session.time_suspended AS current_session_claim_token,
+           resolution.decision AS resolution_decision,
+           bridge.attempt_id AS bridge_attempt_id,
+           bridge.receipt_id AS bridge_receipt_id,
+           receipt.provider_attempt_id AS receipt_attempt_id,
+           receipt.state AS receipt_state
+    FROM session_provider_attempt attempt
+    LEFT JOIN session ON session.id = attempt.session_id
+    LEFT JOIN session_provider_attempt_resolution resolution
+      ON resolution.attempt_id = attempt.attempt_id
+    LEFT JOIN session_v2_provider_recovery_bridge bridge
+      ON bridge.attempt_id = attempt.attempt_id
+     AND bridge.resolution_id = resolution.resolution_id
+    LEFT JOIN session_v2_provider_turn_receipt receipt
+      ON receipt.receipt_id = bridge.receipt_id
+  `)
   attempts.forEach((row) => accept(classifyProviderAttemptItem(row)))
 
   // V2 tool effects. Admission is the authoritative pre-execution inventory row; absence of a
@@ -444,9 +890,11 @@ export const classifyStartup = Effect.fn("StartupInventory.classifyStartup")(fun
   receipts.forEach((row) => accept(classifyCompactionItem({ ...row, table: "receipt" })))
 
   // Session activity.
-  const activities = yield* db.all<CategoryRow>(
-    sql`SELECT activity_id AS id, state FROM session_facade_activity`,
-  )
+  const activities = yield* db.all<CategoryRow>(sql`
+    SELECT 'core:' || activity_id AS id, state FROM session_activity
+    UNION ALL
+    SELECT 'facade:' || activity_id AS id, state FROM session_facade_activity
+  `)
   activities.forEach((row) => accept(classifySessionActivityItem(row)))
 
   // W2 recovery descriptors: one item per durable descriptor row (append-only
@@ -472,31 +920,132 @@ export const classifyStartup = Effect.fn("StartupInventory.classifyStartup")(fun
     accept(classifyRecoveryDescriptorItem(decoded))
   }
 
-  const total =
-    byCategory.provider_attempt.safe_before_dispatch +
-    byCategory.provider_attempt.recovery +
-    byCategory.provider_attempt.resolved +
-    byCategory.provider_attempt.unclassified +
-    byCategory.tool_effect.safe_before_dispatch +
-    byCategory.tool_effect.recovery +
-    byCategory.tool_effect.resolved +
-    byCategory.tool_effect.unclassified +
-    byCategory.task_run.safe_before_dispatch +
-    byCategory.task_run.recovery +
-    byCategory.task_run.resolved +
-    byCategory.task_run.unclassified +
-    byCategory.compaction.safe_before_dispatch +
-    byCategory.compaction.recovery +
-    byCategory.compaction.resolved +
-    byCategory.compaction.unclassified +
-    byCategory.session_activity.safe_before_dispatch +
-    byCategory.session_activity.recovery +
-    byCategory.session_activity.resolved +
-    byCategory.session_activity.unclassified +
-    byCategory.recovery_descriptor.safe_before_dispatch +
-    byCategory.recovery_descriptor.recovery +
-    byCategory.recovery_descriptor.resolved +
-    byCategory.recovery_descriptor.unclassified
+  const commands = yield* db.all<RecoveryCommandInventoryRow>(sql`
+    SELECT command.command_id, command.descriptor_id, command.attempt, command.state,
+           command.expected_owner_token, command.result_hash, command.actor_type,
+           command.actor_id, command.created_at, command.updated_at,
+           descriptor.session_id AS descriptor_session_id,
+           descriptor.activity_id AS descriptor_activity_id,
+           descriptor.turn_id AS descriptor_turn_id,
+           descriptor.kind AS descriptor_kind,
+           descriptor.payload AS descriptor_payload,
+           descriptor.content_hash AS descriptor_content_hash,
+           descriptor.created_at AS descriptor_created_at,
+           attempt.state AS attempt_state,
+           attempt.attempt_version,
+           attempt.session_id AS attempt_session_id,
+           attempt.activity_id AS attempt_activity_id,
+           attempt.provider_turn_seq AS attempt_turn_seq,
+           attempt.selection_id AS attempt_selection_id,
+           attempt.projection_hash AS attempt_projection_hash,
+           attempt.request_hash AS attempt_request_hash,
+           attempt.provider_id AS attempt_provider_id,
+           attempt.owner_token AS attempt_owner_token,
+           attempt.execution_claim_token AS attempt_execution_claim_token,
+           session.time_suspended AS current_session_claim_token,
+           resolution.decision AS resolution_decision,
+           bridge.command_id AS bridge_command_id
+    FROM recovery_command command
+    LEFT JOIN session_provider_recovery_descriptor descriptor
+      ON descriptor.descriptor_id = command.descriptor_id
+    LEFT JOIN session_provider_attempt attempt
+      ON attempt.attempt_id = json_extract(command.attempt, '$.attemptId')
+    LEFT JOIN session ON session.id = attempt.session_id
+    LEFT JOIN session_provider_attempt_resolution resolution
+      ON resolution.attempt_id = attempt.attempt_id
+    LEFT JOIN session_v2_provider_recovery_bridge bridge
+      ON bridge.attempt_id = attempt.attempt_id
+     AND bridge.resolution_id = resolution.resolution_id
+  `)
+  commands.forEach((row) => accept(classifyRecoveryCommandItem(row)))
+
+  const inputs = yield* db.all<CategoryRow & { delivery: string; promoted_seq: number | null }>(sql`
+    SELECT id, delivery, promoted_seq,
+           delivery || ':' || CASE WHEN promoted_seq IS NULL THEN 'pending' ELSE 'promoted' END AS state
+    FROM session_input
+  `)
+  inputs.forEach((row) => accept(classifySessionInputItem(row)))
+
+  const bindings = yield* db.all<ProviderBindingRow>(sql`
+    SELECT receipt.receipt_id AS id, receipt.state,
+           receipt.provider_attempt_id,
+           receipt.session_id AS receipt_session_id,
+           receipt.activity_id AS receipt_activity_id,
+           receipt.provider_turn_seq AS receipt_turn_seq,
+           receipt.request_input_hash AS receipt_request_hash,
+           receipt.provider_id AS receipt_provider_id,
+           receipt.owner_token AS receipt_owner_token,
+           attempt.state AS attempt_state,
+           attempt.session_id AS attempt_session_id,
+           attempt.activity_id AS attempt_activity_id,
+           attempt.provider_turn_seq AS attempt_turn_seq,
+           attempt.request_hash AS attempt_request_hash,
+           attempt.provider_id AS attempt_provider_id,
+           attempt.owner_token AS attempt_owner_token,
+           bridge.receipt_id AS bridge_receipt_id
+    FROM session_v2_provider_turn_receipt receipt
+    LEFT JOIN session_provider_attempt attempt
+      ON attempt.attempt_id = receipt.provider_attempt_id
+    LEFT JOIN session_v2_provider_recovery_bridge bridge
+      ON bridge.attempt_id = attempt.attempt_id
+     AND bridge.receipt_id = receipt.receipt_id
+  `)
+  bindings.forEach((row) => accept(classifyProviderBindingItem(row)))
+
+  const outbox = yield* db.all<
+    CategoryRow & {
+      claim_token: string | null
+      claimant_id: string | null
+      lease_expires_at: number | null
+      published_at: number | null
+      registered_consumers: number
+      assigned_consumers: number
+    }
+  >(sql`
+    SELECT outbox.outbox_id AS id, outbox.status AS state,
+           outbox.claim_token, outbox.claimant_id, outbox.lease_expires_at, outbox.published_at,
+           (SELECT COUNT(*) FROM deepagent_event_consumer) AS registered_consumers,
+           (SELECT COUNT(*) FROM deepagent_event_consumer_delivery delivery
+              WHERE delivery.outbox_id = outbox.outbox_id) AS assigned_consumers
+    FROM deepagent_event_outbox outbox
+  `)
+  outbox.forEach((row) => accept(classifyEventOutboxItem(row)))
+
+  const deliveries = yield* db.all<
+    CategoryRow & {
+      claim_token: string | null
+      claimant_id: string | null
+      lease_expires_at: number | null
+      resolved_at: number | null
+    }
+  >(sql`
+    SELECT outbox_id || ':' || consumer_key AS id, status AS state,
+           claim_token, claimant_id, lease_expires_at, resolved_at
+    FROM deepagent_event_consumer_delivery
+  `)
+  deliveries.forEach((row) => accept(classifyEventDeliveryItem(row)))
+
+  const projections = yield* db.all<
+    CategoryRow & {
+      cursor_rowid: number | null
+      high_water_rowid: number | null
+      completed_at: number | null
+      backfill_complete: number | null
+    }
+  >(sql`
+    SELECT 'authority:1' AS id, COALESCE(backfill.state, 'missing') AS state,
+           backfill.cursor_rowid, backfill.high_water_rowid, backfill.completed_at,
+           sequence.backfill_complete
+    FROM (SELECT 1 AS id) authority
+    LEFT JOIN event_sync_backfill backfill ON backfill.id = authority.id
+    LEFT JOIN event_sync_sequence sequence ON sequence.id = authority.id
+  `)
+  projections.forEach((row) => accept(classifySyncProjectionItem(row)))
+
+  const total = StartupCategories.reduce(
+    (sum, category) => sum + InventoryClassifications.reduce((categorySum, classification) => categorySum + byCategory[category][classification], 0),
+    0,
+  )
 
   return { total, byCategory, unclassifiedItems, ready: gateReady({ unclassifiedItems }) } satisfies StartupInventory
 })

@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import { mkdir, writeFile } from "node:fs/promises"
 import path from "node:path"
 import type { TerminalColors } from "@opentui/core"
-import { DEFAULT_THEMES, addTheme, allThemes, hasTheme, resolveTheme, terminalMode } from "../src/theme"
+import { DEFAULT_THEMES, PLUGIN_THEME_LIMIT, addTheme, allThemes, hasTheme, resolveTheme, terminalMode } from "../src/theme"
 import { discoverThemes } from "../src/context/theme"
 import { tmpdir } from "./fixture/fixture"
 
@@ -35,6 +35,16 @@ test("hasTheme checks theme presence", () => {
   expect(hasTheme(name)).toBe(false)
   expect(addTheme(name, DEFAULT_THEMES["deepagent-code"])).toBe(true)
   expect(hasTheme(name)).toBe(true)
+})
+
+test("plugin theme store rejects names beyond its process bound", () => {
+  const prefix = `plugin-theme-bound-${Date.now()}-`
+  const accepted = Array.from({ length: PLUGIN_THEME_LIMIT + 1 }, (_, index) =>
+    addTheme(prefix + index, DEFAULT_THEMES["deepagent-code"]),
+  ).filter(Boolean)
+
+  expect(accepted.length).toBeLessThanOrEqual(PLUGIN_THEME_LIMIT)
+  expect(accepted.length).toBeLessThan(PLUGIN_THEME_LIMIT + 1)
 })
 
 test("resolveTheme rejects circular color refs", () => {

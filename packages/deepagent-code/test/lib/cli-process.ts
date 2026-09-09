@@ -79,6 +79,19 @@ function isolatedEnv(home: string, configJson: string): Record<string, string> {
     DEEPAGENT_CODE_DISABLE_MODELS_FETCH: "1",
     DEEPAGENT_CODE_AUTH_CONTENT: "{}",
     DEEPAGENT_MODE: "general",
+    // The CLI subprocess tests exercise CLI flags, not the plan gate; the gate (default ON, a V2
+    // runner seam) would block every mutating tool call before any permission decision. Suites
+    // that specifically want the gate override this via opts.env.
+    DEEPAGENT_CODE_STRICT_PLAN_GATE: "false",
+    // The child is an isolated dev install: it must bootstrap its OWN V2 owner chain (dev mint
+    // signs with the child's state-dir keypair, the verifier discovers the same keypair). The test
+    // process preloads DEEPAGENT_CODE_V2_OWNER_AUTHORIZATION_PUBLIC_KEY for IN-PROCESS suites;
+    // inheriting it here would pin the child's verifier to a foreign key and fail every
+    // owner-gated prompt closed (503 v2_owner_unavailable). Empty string = fall through to
+    // state-dir discovery. Same for an inherited explicit campaign, which would skip the mint.
+    DEEPAGENT_CODE_V2_OWNER_DEV_MINT: "1",
+    DEEPAGENT_CODE_V2_OWNER_AUTHORIZATION_PUBLIC_KEY: "",
+    DEEPAGENT_CODE_V2_OWNER_CAMPAIGN: "",
   }
 }
 
@@ -122,9 +135,11 @@ export type ServeHandle = {
   readonly url: string
   readonly hostname: string
   readonly port: number
-  // Sends SIGTERM. The scope finalizer also calls this, so tests rarely need
-  // to invoke it directly — useful for tests that assert exit behavior.
-  readonly kill: () => void
+  // Sends SIGTERM by default; pass "SIGKILL" for a kill-9 crash (no finalizers run in
+  // the child — the crash-recovery oracle's trigger). The scope finalizer always uses
+  // SIGTERM, so tests rarely need to invoke this directly — useful for tests that
+  // assert exit behavior.
+  readonly kill: (signal?: "SIGTERM" | "SIGKILL") => void
   // Resolves with the exit code once the process exits. Bun returns a number.
   readonly exited: Promise<number>
 }
@@ -200,6 +215,13 @@ export function withCliFixture<A, E>(
     const home = yield* fs.makeTempDirectoryScoped({ prefix: "oc-cli-" })
 
     const configJson = JSON.stringify(testProviderConfig(llm.url))
+    // The V2 location config (packages/core/src/config.ts) discovers config from FILES only — it
+    // never reads DEEPAGENT_CODE_CONFIG_CONTENT. Without a real config file the per-location
+    // Catalog never learns the test provider and every V2 drain dies with ModelNotSelectedError.
+    // Write the canonical global config name (config.jsonc) directly: the app config service would
+    // consolidate config.json into it at startup anyway, and the core V2 reader loads it for every
+    // location in the child.
+    yield* Effect.promise(() => Bun.write(path.join(home, ".deepagent", "code", "config.jsonc"), configJson))
     const env = isolatedEnv(home, configJson)
 
     const spawn = Effect.fn("deepagentCode.spawn")(function* (args: string[], opts?: SpawnOpts) {
@@ -325,8 +347,8 @@ export function withCliFixture<A, E>(
         url: match.url,
         hostname: match.hostname,
         port: match.port,
-        kill: () => {
-          proc.kill()
+        kill: (signal?: "SIGTERM" | "SIGKILL") => {
+          proc.kill(signal)
         },
         exited: proc.exited as Promise<number>,
       } satisfies ServeHandle

@@ -28,7 +28,7 @@ import {
   type CapabilityLoadTurnIdentity,
 } from "./capability-load-adapter"
 
-// W4 — the production `capability_load` / `domain_pack_load` tools (design §7.3-7.5,
+// W4 — the production `capability_load` tool and the inactive `domain_pack_load` prototype (design §7.3-7.5,
 // docs/core-v2.0-beta/v2.0-design.md §W4 步骤 4). The input is the FROZEN contract
 // `CapabilityLoadRequest` (the model only names a capability / snapshot / reason / expected
 // actions — never a path, URL or body). Execution resolves the manifest from the runtime
@@ -36,16 +36,16 @@ import {
 // adapter (budget gate included: an over-limit body/turn settles as the typed frozen
 // `budget_exceeded` state — the body is never returned) and persists the durable receipt
 // (`session_capability_load`). The model-visible text is the L1 card (id/version/summary/
-// entry tools) plus a bounded body preview — never the full body (design §7.3 L2 disclosure).
+// entry tools) plus the exact hash- and budget-validated procedure body (design §7.3 L2 disclosure).
 //
 // The tools are authorized by the `capability.read` permission (Tool.withPermission) — load
 // is disclosure/read; capability content is guidance, not permission (design §7.6), so the
 // load tool never grants anything and never writes outside the receipt table.
 
-/** The load tool's structured output: the frozen load state + a bounded body preview. */
+/** The load tool's structured output: the frozen load state + exact validated L2 body on success. */
 export const CapabilityLoadToolOutput = Schema.Struct({
   state: ContentLoadState,
-  body_preview: Schema.String.pipe(Schema.optional),
+  body: Schema.String.pipe(Schema.optional),
   token_count: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(Schema.optional),
   byte_count: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(Schema.optional),
   /** Byte-stable content digest of the durable receipt (loadedAt stripped) — audit binding. */
@@ -93,21 +93,21 @@ export interface CapabilityLoadToolOptions {
  * `turnIdentity` is not injected) and is exercised through
  * `packages/core/test/system-context/capability-l2-production.test.ts`.
  */
-export const makeDefaultCapabilityLoadTurnIdentity = (
-  db: Database.Interface["db"],
-): ((sessionID: SessionSchema.ID) => Effect.Effect<CapabilityLoadTurnIdentity>) => (sessionID) =>
-  Effect.gen(function* () {
-    const row = yield* db
-      .select()
-      .from(V2ProviderTurnReceiptTable)
-      .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID))
-      .orderBy(desc(V2ProviderTurnReceiptTable.created_at), desc(V2ProviderTurnReceiptTable.request_ordinal))
-      .limit(1)
-      .get()
-      .pipe(Effect.orDie)
-    if (!row) return { sessionId: sessionID, activityId: "", turnId: "" }
-    return { sessionId: sessionID, activityId: row.activity_id, turnId: String(row.provider_turn_seq) }
-  })
+export const makeDefaultCapabilityLoadTurnIdentity =
+  (db: Database.Interface["db"]): ((sessionID: SessionSchema.ID) => Effect.Effect<CapabilityLoadTurnIdentity>) =>
+  (sessionID) =>
+    Effect.gen(function* () {
+      const row = yield* db
+        .select()
+        .from(V2ProviderTurnReceiptTable)
+        .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID))
+        .orderBy(desc(V2ProviderTurnReceiptTable.created_at), desc(V2ProviderTurnReceiptTable.request_ordinal))
+        .limit(1)
+        .get()
+        .pipe(Effect.orDie)
+      if (!row) return { sessionId: sessionID, activityId: "", turnId: "" }
+      return { sessionId: sessionID, activityId: row.activity_id, turnId: String(row.provider_turn_seq) }
+    })
 
 /** A ready-to-register `capability_load` tool (W4 production entry, permission `capability.read`). */
 export function makeCapabilityLoadTool(options: CapabilityLoadToolOptions): Tool.AnyTool {
@@ -123,7 +123,7 @@ export function makeCapabilityLoadTool(options: CapabilityLoadToolOptions): Tool
   return Tool.withPermission(
     Tool.make({
       description:
-        "Load the L2 procedure body of a DeepAgentCode capability (by capability id, from the current catalog snapshot) and receive its summary + a bounded body preview. Use after capability_search found a card for the intended action. Never used to load a path, URL or arbitrary content.",
+        "Load the exact hash- and budget-validated L2 procedure body of a DeepAgentCode capability from the current catalog snapshot. Use after capability_search found a card for the intended action. Never used to load a path, URL or arbitrary content.",
       input: CapabilityLoadToolInput,
       output: CapabilityLoadToolOutput,
       execute: (input, context) => {
@@ -156,6 +156,11 @@ export function makeCapabilityLoadTool(options: CapabilityLoadToolOptions): Tool
             requiredRuntimeFeatures: manifest.required_runtime_features,
           }
           const out = yield* sessionCapabilityLoad(db, { request, identity, contextEpoch: resolvedSnapshotId })
+          if ((out.state.state === "loaded" || out.state.state === "already_loaded") && out.body === undefined) {
+            return yield* Effect.fail(
+              new ToolFailure({ message: "Capability load succeeded without its validated body" }),
+            )
+          }
           return renderLoadOutput(out.state, out.body, out.receipt)
         }).pipe(Effect.mapError((error) => new ToolFailure({ message: messageOf(error) })))
       },
@@ -166,11 +171,10 @@ export function makeCapabilityLoadTool(options: CapabilityLoadToolOptions): Tool
 }
 
 /**
- * A ready-to-register `domain_pack_load` tool (same shape as `capability_load`). Domain
- * packs are not active in this runtime wave: the tool always settles as the typed frozen
- * `not_found(domain_pack_not_active)` — never a fabricated pack. It is registered so the
- * model-facing surface is honest and stable; the pack lane lands the kernel path when packs
- * ship.
+ * An inactive `domain_pack_load` prototype (same shape as `capability_load`). Domain
+ * packs are not active in this runtime wave, so this is intentionally NOT registered in
+ * the production layer. Tests may exercise the typed unavailable result while the pack
+ * lane is being built, but the model must never be offered a tool that always fails.
  */
 export function makeDomainPackLoadTool(options: CapabilityLoadToolOptions): Tool.AnyTool {
   const turnIdentity = options.turnIdentity ?? makeDefaultCapabilityLoadTurnIdentity(options.db)
@@ -200,13 +204,18 @@ function notFound(
 }
 
 /** Typed disabled outputs (frozen DisabledReason union). */
-function disabledReason(reasonCode: "maintenance_only" | "disabled" | "unavailable" | "incompatible_runtime"): CapabilityLoadToolOutput {
+function disabledReason(
+  reasonCode: "maintenance_only" | "disabled" | "unavailable" | "incompatible_runtime",
+): CapabilityLoadToolOutput {
   return { state: { state: "disabled", reasonCode } }
 }
 
 /** The frozen `disabled` reasons map 1:1 from availability (never advertise an unusable capability). */
-function disabledReasonOf(availability: CapabilityManifest["availability"]): "maintenance_only" | "disabled" | "unavailable" {
-  if (availability === "maintenance_only" || availability === "disabled" || availability === "unavailable") return availability
+function disabledReasonOf(
+  availability: CapabilityManifest["availability"],
+): "maintenance_only" | "disabled" | "unavailable" {
+  if (availability === "maintenance_only" || availability === "disabled" || availability === "unavailable")
+    return availability
   return "disabled"
 }
 
@@ -227,24 +236,15 @@ function renderLoadOutput(
   receipt: CapabilityLoadReceipt,
 ): CapabilityLoadToolOutput {
   if (state.state === "loaded" || state.state === "already_loaded") {
-    const preview = bodyPreview(body ?? "")
     return {
       state,
-      ...(preview === undefined ? {} : { body_preview: preview }),
+      ...(body === undefined ? {} : { body }),
       token_count: state.state === "loaded" ? state.tokenCount : receipt.tokenCount,
       byte_count: state.state === "loaded" ? state.byteCount : receipt.byteCount,
       receipt_digest: capabilityLoadReceiptDigest(receipt),
     }
   }
   return { state }
-}
-
-/** Bounded deterministic body preview (first line, capped) — never the full body. */
-function bodyPreview(body: string): string | undefined {
-  if (body.length === 0) return undefined
-  const head = body.split("\n")[0] ?? body.slice(0, 80)
-  const limit = 240
-  return head.length > limit ? `${head.slice(0, limit)}…` : head
 }
 
 function renderLoadText(
@@ -255,12 +255,12 @@ function renderLoadText(
   switch (state.state) {
     case "loaded": {
       const card = cardLine(catalog, state.bodyRef)
-      return card === undefined
-        ? `Loaded capability ${state.bodyRef} (${state.tokenCount} tokens, ${state.byteCount} bytes).`
-        : `${card}\nBody preview: ${output.body_preview ?? "(none)"} (${state.tokenCount} tokens, ${state.byteCount} bytes).`
+      return `${card ?? `Loaded capability ${state.bodyRef}.`}\nProcedure body:\n${output.body ?? ""}\n(${state.tokenCount} tokens, ${state.byteCount} bytes).`
     }
-    case "already_loaded":
-      return `Capability ${state.bodyRef} is already loaded in this session; body preview below (${output.token_count ?? 0} tokens).`
+    case "already_loaded": {
+      const card = cardLine(catalog, state.bodyRef)
+      return `${card ?? `Capability ${state.bodyRef} is already loaded in this session.`}\nProcedure body:\n${output.body ?? ""}\n(${output.token_count ?? 0} tokens).`
+    }
     case "denied":
       return `Capability load denied: ${state.reasonCode}.`
     case "disabled":
@@ -288,7 +288,7 @@ function messageOf(error: unknown): string {
   return String(error)
 }
 
-/** Production registration: register both load tools into the Location tool registry. */
+/** Production registration: only register capabilities that have an executable authority. */
 export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const tools = yield* Tools.Service
@@ -296,7 +296,6 @@ export const layer = Layer.effectDiscard(
     yield* tools
       .register({
         [capabilityLoadName]: makeCapabilityLoadTool({ db }),
-        [domainPackLoadName]: makeDomainPackLoadTool({ db }),
       })
       .pipe(Effect.orDie)
   }),

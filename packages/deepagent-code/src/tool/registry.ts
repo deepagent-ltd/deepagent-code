@@ -524,7 +524,7 @@ const layerWithFacades: Layer.Layer<
             formatValidationError: tool.formatValidationError,
           }
         }),
-        { concurrency: "unbounded" },
+        { concurrency: 16 },
       )
     })
 
@@ -550,7 +550,7 @@ const noopBootstrapInstanceStore = InstanceStore.defaultLayer.pipe(
   Layer.provide(Layer.succeed(InstanceBootstrap.Service, InstanceBootstrap.Service.of({ run: Effect.void }))),
 )
 
-export const defaultLayer = Layer.suspend(() =>
+export const productionLayer = Layer.suspend(() =>
   layer.pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -601,12 +601,14 @@ export const defaultLayer = Layer.suspend(() =>
         Git.defaultLayer,
         EffectFlock.defaultLayer,
         PRQueue.layer.pipe(Layer.orDie),
-        SessionV2.liveLayer,
         Snapshot.defaultLayer,
       ),
     ),
   ),
 )
+
+/** Standalone default. Production roots must provide one shared SessionV2 runtime to productionLayer. */
+export const defaultLayer = productionLayer.pipe(Layer.provide(SessionV2.liveLayer))
 
 function isZodType(value: unknown): value is z.ZodType {
   return typeof value === "object" && value !== null && "_zod" in value

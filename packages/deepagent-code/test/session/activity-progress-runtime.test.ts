@@ -214,10 +214,7 @@ const testLLMLayer = (runtimeFlags: Layer.Layer<RuntimeFlags.Service>) =>
     Layer.provide(ProviderSvc.defaultLayer),
     Layer.provide(Plugin.defaultLayer),
     Layer.provide(
-      Layer.mergeAll(
-        AgentGateway.layer({ enabled: true, runsDir: Global.Path.agent.runs }),
-        LLMClient.layer.pipe(Layer.provide(Layer.mergeAll(RequestExecutor.defaultLayer, WebSocketExecutor.layer))),
-      ),
+      LLMClient.layer.pipe(Layer.provide(Layer.mergeAll(RequestExecutor.defaultLayer, WebSocketExecutor.layer))),
     ),
     Layer.provide(runtimeFlags),
   )
@@ -238,6 +235,11 @@ function makePrompt() {
   const runtimeFlags = RuntimeFlags.layer({
     experimentalEventSystem: true,
     coreV2ExecutionOwner: false,
+    // These regressions exercise the LEGACY executor (the activity crash points and the §7.1
+    // progress/activity authority live only in the legacy prompt/loop branches). coreV2Only is
+    // now hardwired on for production, so the harness composes the pre-profile legacy flags
+    // explicitly; under coreV2Only the owner gate refuses prompt.prompt and the markers never fire.
+    coreV2Only: false,
   })
   const deps = Layer.mergeAll(
     Session.defaultLayer,

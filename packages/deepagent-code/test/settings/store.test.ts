@@ -29,8 +29,18 @@ describe("SettingsStore", () => {
     expect(await SettingsStore.read()).toEqual({})
   })
 
+  test("refuses to overwrite a corrupt settings file", async () => {
+    await fs.writeFile(settingsFile(), "{broken")
+
+    await expect(SettingsStore.read()).rejects.toThrow("Cannot read settings")
+    await expect(SettingsStore.update({ deepagent: { agentMode: "high" } })).rejects.toThrow("Cannot read settings")
+    expect(await fs.readFile(settingsFile(), "utf8")).toBe("{broken")
+  })
+
   test("update persists deepagent settings and reports changed", async () => {
-    const first = await SettingsStore.update({ deepagent: { agentMode: "xhigh", intelligenceModel: "zhipuai/glm-4.7" } })
+    const first = await SettingsStore.update({
+      deepagent: { agentMode: "xhigh", intelligenceModel: "zhipuai/glm-4.7" },
+    })
     expect(first.changed).toBe(true)
     expect(first.settings.deepagent).toEqual({ agentMode: "xhigh", intelligenceModel: "zhipuai/glm-4.7" })
 
@@ -78,6 +88,25 @@ describe("SettingsStore", () => {
     expect(merged.settings.deepagent).toEqual({ agentMode: "high", selfLearning: "auto" })
   })
 
+  test("serializes concurrent disjoint updates without losing either field", async () => {
+    await Promise.all([
+      SettingsStore.update({ deepagent: { agentMode: "xhigh" } }),
+      SettingsStore.update({ deepagent: { selfLearning: "auto" } }),
+    ])
+
+    SettingsStore.invalidate()
+    expect((await SettingsStore.read()).deepagent).toEqual({ agentMode: "xhigh", selfLearning: "auto" })
+  })
+
+  test("re-reads disk under the update lock instead of merging from a stale cache", async () => {
+    await SettingsStore.update({ deepagent: { agentMode: "high" } })
+    await fs.writeFile(settingsFile(), JSON.stringify({ deepagent: { selfLearning: "manual" } }))
+
+    await SettingsStore.update({ deepagent: { subagentIntensity: "downgrade" } })
+    SettingsStore.invalidate()
+    expect((await SettingsStore.read()).deepagent).toEqual({ selfLearning: "manual", subagentIntensity: "downgrade" })
+  })
+
   test("subagentIntensity round-trips (write → read back)", async () => {
     const w = await SettingsStore.update({ deepagent: { subagentIntensity: "downgrade" } })
     expect(w.changed).toBe(true)
@@ -109,10 +138,7 @@ describe("SettingsStore", () => {
   })
 
   test("non-boolean expertPanelDefault is dropped on read", async () => {
-    await fs.writeFile(
-      settingsFile(),
-      JSON.stringify({ deepagent: { expertPanelDefault: "yes", agentMode: "high" } }),
-    )
+    await fs.writeFile(settingsFile(), JSON.stringify({ deepagent: { expertPanelDefault: "yes", agentMode: "high" } }))
     SettingsStore.invalidate()
     expect((await SettingsStore.read()).deepagent).toEqual({ agentMode: "high" })
   })

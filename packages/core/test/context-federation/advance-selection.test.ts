@@ -230,7 +230,7 @@ function seedSession() {
     yield* db.insert(ProjectTable).values({ id: projectId, worktree: AbsolutePath.make("/tmp/advance-test"), sandboxes: [] }).run()
     yield* db
       .insert(SessionTable)
-      .values({ id: sessionId, project_id: projectId, slug: "advance-test", directory: "/tmp/advance-test", title: "Advance test", version: "test" })
+      .values({ id: sessionId, project_id: projectId, slug: "advance-test", directory: "/tmp/advance-test", title: "Advance test", version: "test", time_suspended: 101 })
       .run()
     yield* db
       .insert(SessionInputTable)

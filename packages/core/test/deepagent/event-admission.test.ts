@@ -7,6 +7,7 @@ import { join } from "node:path"
 import { Database } from "@deepagent-code/core/database/database"
 import { DatabaseMigration } from "@deepagent-code/core/database/migration"
 import { EventAdmission } from "@deepagent-code/core/deepagent/event-admission"
+import { createRuntimeFeatureRegistry } from "@deepagent-code/core/flag/runtime-features"
 import { DeepAgentEventAdmissionTable, eventAdmissionMigration } from "@deepagent-code/core/deepagent/event-admission-sql"
 import { EventWorkEnvelope } from "@deepagent-code/core/deepagent/event-work-envelope"
 import type { EventWorkEnvelope as WorkEnvelope } from "@deepagent-code/core/contract/event-envelope"
@@ -19,6 +20,9 @@ import { commandReg, makeRegistry, verifiedCommand, HASH } from "./event-fixture
 type Db = Database.Interface["db"]
 
 const registry = makeRegistry()
+const admissionOff = createRuntimeFeatureRegistry(undefined, {
+  [EventAdmission.EVENT_V2_ADMISSION_ENV]: "false",
+})
 
 const budget: WorkBudget = {
   maxTokens: 8000,
@@ -180,19 +184,22 @@ describe("C5-04 envelope-hash-bound admission", () => {
 
 describe("C5-04 admission is fail-closed + default OFF", () => {
   test("when the switch is OFF, admission is a typed refusal (the legacy path stays authoritative)", async () => {
-    process.env[EventAdmission.EVENT_V2_ADMISSION_ENV] = "false"
-    try {
-      await run(
-        Effect.gen(function* () {
-          const db = (yield* Database.Service).db
-          const envelope = build()
-          const err = yield* refusalOf(EventAdmission.admit(db, { envelope, sessionID: SESSION, adapter: recorder([]), now: 10 }))
-          expect(err?.reason).toBe("admission_disabled")
-        }),
-      )
-    } finally {
-      process.env[EventAdmission.EVENT_V2_ADMISSION_ENV] = "true"
-    }
+    await run(
+      Effect.gen(function* () {
+        const db = (yield* Database.Service).db
+        const envelope = build()
+        const err = yield* refusalOf(
+          EventAdmission.admit(db, {
+            envelope,
+            sessionID: SESSION,
+            adapter: recorder([]),
+            now: 10,
+            runtimeFeatures: admissionOff,
+          }),
+        )
+        expect(err?.reason).toBe("admission_disabled")
+      }),
+    )
   })
 
   test("coordination/operational noise is never admitted even when the switch is ON", async () => {
@@ -493,24 +500,25 @@ describe("W5 receipt honesty — effect-first receipt with terminal states", () 
   })
 
   test("W5 F3: a DISABLED refusal writes a `refused` row with the reason", async () => {
-    process.env[EventAdmission.EVENT_V2_ADMISSION_ENV] = "false"
-    try {
-      await run(
-        Effect.gen(function* () {
-          const db = (yield* Database.Service).db
-          const envelope = build()
-          const err = yield* refusalOf(
-            EventAdmission.admit(db, { envelope, sessionID: SESSION, adapter: recorder([]), now: 10 }),
-          )
-          expect(err?.reason).toBe("admission_disabled")
-          const row = yield* EventAdmission.admissionFor(db, envelope.eventRef)
-          expect(row?.status).toBe("refused")
-          expect(row?.reason).toBe("admission_disabled")
-        }),
-      )
-    } finally {
-      process.env[EventAdmission.EVENT_V2_ADMISSION_ENV] = "true"
-    }
+    await run(
+      Effect.gen(function* () {
+        const db = (yield* Database.Service).db
+        const envelope = build()
+        const err = yield* refusalOf(
+          EventAdmission.admit(db, {
+            envelope,
+            sessionID: SESSION,
+            adapter: recorder([]),
+            now: 10,
+            runtimeFeatures: admissionOff,
+          }),
+        )
+        expect(err?.reason).toBe("admission_disabled")
+        const row = yield* EventAdmission.admissionFor(db, envelope.eventRef)
+        expect(row?.status).toBe("refused")
+        expect(row?.reason).toBe("admission_disabled")
+      }),
+    )
   })
 
   test("W5 F3: a DIGEST-MISMATCH refusal (over a NOT-resolved receipt) writes a `refused` row keeping the original digest + anchor", async () => {

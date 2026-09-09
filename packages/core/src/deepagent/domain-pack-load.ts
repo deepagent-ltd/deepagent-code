@@ -2,11 +2,8 @@ export * as DomainPackLoad from "./domain-pack-load"
 
 import { contentDigest } from "../contract/digest"
 import type { CapabilityLoadDeniedReason } from "../contract/capability-load"
-import {
-  loadCapabilityBody,
-  type CapabilityLoadGrounds,
-  type CapabilityLoadResult,
-} from "../system-context/capability-loader"
+import type { CapabilityLoadGrounds, CapabilityLoadResult } from "../system-context/capability-loader"
+import { loadCapabilityBody } from "../system-context/capability-loader-memory"
 
 // C4-06 — `domain_pack_load`: a domain-pack body load that reuses the durable
 // capability loader kernel (C4-04). The kernel provides the byte-stable identity,

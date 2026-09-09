@@ -3,7 +3,7 @@ import { spawn } from "child_process"
 import fs from "fs/promises"
 import path from "path"
 import os from "os"
-import { Cause, Effect, Exit, Layer } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer } from "effect"
 import { testEffect } from "../lib/effect"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
@@ -381,6 +381,47 @@ describe("util.effect-flock", () => {
           await fs.rm(tmp, { recursive: true, force: true })
         }
       }),
+    30_000,
+  )
+
+  it.live(
+    "interrupted acquire against a killed holder disposes well before STALE_MS",
+    Effect.gen(function* () {
+      const flock = yield* EffectFlock.Service
+      const tmp = yield* Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "eflock-interrupt-")))
+      const dir = path.join(tmp, "locks")
+      const ready = path.join(tmp, "ready")
+      const key = "eflock:interrupt"
+
+      const proc = spawnWorker({ key, dir, ready, holdMs: 120_000 })
+
+      const oracle = Effect.gen(function* () {
+        yield* Effect.promise(() => waitForFile(ready, 5_000))
+        // SIGKILL strands a fresh lock dir — a masked acquire would sit in its
+        // retry loop until the heartbeat goes stale (~60s)
+        proc.kill("SIGKILL")
+        yield* Effect.promise(() => new Promise((resolve) => proc.once("close", resolve)))
+
+        const fiber = yield* Effect.scoped(flock.acquire(key, dir)).pipe(Effect.forkChild)
+        yield* Effect.sleep(1_000)
+
+        const start = Date.now()
+        yield* Fiber.interrupt(fiber)
+        const disposeMs = Date.now() - start
+        const exit = yield* Fiber.await(fiber)
+
+        expect(disposeMs).toBeLessThan(5_000)
+        expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true)
+      })
+
+      yield* Effect.ensuring(
+        oracle,
+        Effect.promise(async () => {
+          await stopWorker(proc).catch(() => {})
+          await fs.rm(tmp, { recursive: true, force: true })
+        }),
+      )
+    }),
     30_000,
   )
 })

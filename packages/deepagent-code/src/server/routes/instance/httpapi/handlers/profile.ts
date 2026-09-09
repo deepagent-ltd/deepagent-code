@@ -1,7 +1,7 @@
 /**
  * P1H (S1-v3.7): Profile HTTP handler — PAP profiling routes.
  *
- * Maintains a process-scoped in-memory run store (Map<runId, ProfileRunEntry>).
+ * Maintains a root-owned, bounded in-memory run store namespaced by Instance directory.
  * POST /profile/run fires the run asynchronously and returns the runId.
  * GET  /profile/result / hotspots poll the run store and read the artifact.
  * GET  /profile/runs lists recent entries.
@@ -30,30 +30,17 @@ const log = Log.create({ service: "profile.handler" })
 // ── In-memory run store ───────────────────────────────────────────────────────
 
 const MAX_RUN_HISTORY = 20
+const MAX_PROCESS_RUN_HISTORY = 100
 
 export interface ProfileRunEntry {
   readonly runId: string
   readonly adapterId: string
   readonly program: string
+  readonly ownerDirectory: string
   status: "running" | "done" | "error"
   artifactPath?: string
   error?: string
   readonly startedAt: number
-}
-
-/** Process-scoped run store. Lives as long as the server process. */
-const runStore = new Map<string, ProfileRunEntry>()
-/** Insertion-order list of runIds (capped at MAX_RUN_HISTORY). */
-const runOrder: string[] = []
-
-function storeRun(entry: ProfileRunEntry): void {
-  runStore.set(entry.runId, entry)
-  runOrder.push(entry.runId)
-  // Evict oldest entry when we exceed the cap.
-  if (runOrder.length > MAX_RUN_HISTORY) {
-    const oldest = runOrder.shift()!
-    runStore.delete(oldest)
-  }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -91,6 +78,14 @@ function formatHotspot(h: {
 export const profileHandlers = HttpApiBuilder.group(InstanceHttpApi, "profile", (handlers) =>
   Effect.gen(function* () {
     const base = yield* RuntimeBase.Service
+    const runStore = new Map<string, ProfileRunEntry>()
+    const runOrder: string[] = []
+    const storeRun = (entry: ProfileRunEntry) => {
+      runStore.set(entry.runId, entry)
+      runOrder.push(entry.runId)
+      if (runOrder.length <= MAX_PROCESS_RUN_HISTORY) return
+      runStore.delete(runOrder.shift()!)
+    }
 
     // ── run ──────────────────────────────────────────────────────────────────
     const run = Effect.fn("ProfileHttpApi.run")(function* (ctx: {
@@ -114,6 +109,7 @@ export const profileHandlers = HttpApiBuilder.group(InstanceHttpApi, "profile", 
         runId,
         adapterId,
         program,
+        ownerDirectory: instance.directory,
         status: "running",
         startedAt: Date.now(),
       }
@@ -186,11 +182,10 @@ export const profileHandlers = HttpApiBuilder.group(InstanceHttpApi, "profile", 
     })
 
     // ── result ────────────────────────────────────────────────────────────────
-    const result = Effect.fn("ProfileHttpApi.result")(function* (ctx: {
-      query: { runId: string }
-    }) {
+    const result = Effect.fn("ProfileHttpApi.result")(function* (ctx: { query: { runId: string } }) {
+      const instance = yield* InstanceState.context
       const entry = runStore.get(ctx.query.runId)
-      if (!entry) {
+      if (!entry || entry.ownerDirectory !== instance.directory) {
         return { status: "error" as const, error: "runId not found" }
       }
       if (entry.status === "running") {
@@ -215,23 +210,26 @@ export const profileHandlers = HttpApiBuilder.group(InstanceHttpApi, "profile", 
     const hotspots = Effect.fn("ProfileHttpApi.hotspots")(function* (ctx: {
       query: { runId: string; limit?: number | undefined }
     }) {
+      const instance = yield* InstanceState.context
       const entry = runStore.get(ctx.query.runId)
-      if (!entry || entry.status !== "done" || !entry.artifactPath) return []
+      if (!entry || entry.ownerDirectory !== instance.directory || entry.status !== "done" || !entry.artifactPath)
+        return []
 
       const artifact = yield* Effect.promise(() => readArtifact(entry.artifactPath!))
       if (!artifact) return []
 
       const limit = ctx.query.limit ?? 10
-      const sorted = [...artifact.profile.hotspots]
-        .sort((a, b) => b.self_pct - a.self_pct)
-        .slice(0, limit)
+      const sorted = [...artifact.profile.hotspots].sort((a, b) => b.self_pct - a.self_pct).slice(0, limit)
       return sorted.map(formatHotspot)
     })
 
     // ── runs ──────────────────────────────────────────────────────────────────
     const runs = Effect.fn("ProfileHttpApi.runs")(function* () {
-      // Return newest first.
-      const recent = [...runOrder].reverse().slice(0, MAX_RUN_HISTORY)
+      const instance = yield* InstanceState.context
+      const recent = runOrder
+        .toReversed()
+        .filter((id) => runStore.get(id)?.ownerDirectory === instance.directory)
+        .slice(0, MAX_RUN_HISTORY)
       return recent.map((id) => {
         const e = runStore.get(id)!
         return {
@@ -243,10 +241,6 @@ export const profileHandlers = HttpApiBuilder.group(InstanceHttpApi, "profile", 
       })
     })
 
-    return handlers
-      .handle("run", run)
-      .handle("result", result)
-      .handle("hotspots", hotspots)
-      .handle("runs", runs)
+    return handlers.handle("run", run).handle("result", result).handle("hotspots", hotspots).handle("runs", runs)
   }),
 ).pipe(Layer.provide(RuntimeBase.layer))

@@ -15,6 +15,7 @@ import { EventV2 } from "@deepagent-code/core/event"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { Git } from "@deepagent-code/core/git"
 import { Location } from "@deepagent-code/core/location"
+import { LocationServiceMap } from "@deepagent-code/core/location-layer"
 import { PermissionV2 } from "@deepagent-code/core/permission"
 import { Project } from "@deepagent-code/core/project"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
@@ -22,9 +23,10 @@ import { QuestionV2 } from "@deepagent-code/core/question"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { SessionContext } from "@deepagent-code/core/context-federation/session-context"
+import { ContextQueryAuthorization } from "@deepagent-code/core/context-federation/query-authorization"
+import { ProductionV2Sources } from "@deepagent-code/core/context-federation/production-adapters"
 import { SessionExecution } from "@deepagent-code/core/session/execution"
-import { SessionRunCoordinator } from "@deepagent-code/core/session/run-coordinator"
-import { SessionRunner } from "@deepagent-code/core/session/runner"
+import { SessionExecutionLocal } from "@deepagent-code/core/session/execution/local"
 import * as SessionRunnerLLM from "@deepagent-code/core/session/runner/llm"
 import { SessionRunnerModel } from "@deepagent-code/core/session/runner/model"
 import { SessionProviderOwner } from "@deepagent-code/core/context-federation/provider-owner"
@@ -48,7 +50,7 @@ import { LearningAdmissionOutboxTable } from "@deepagent-code/core/deepagent/lea
 import { LearningJobTable } from "@deepagent-code/core/deepagent/learning-job.sql"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { Hash } from "@deepagent-code/core/util/hash"
-import { Effect, Layer, Option, Schema, Stream } from "effect"
+import { Effect, Layer, LayerMap, Option, Schema, Stream } from "effect"
 import { eq, sql } from "drizzle-orm"
 import { testEffect } from "../lib/effect"
 import { onSessionSettled, onSessionSettledSeamLayer } from "@/deepagent/learning-runtime"
@@ -59,7 +61,9 @@ import { onSessionSettled, onSessionSettledSeamLayer } from "@/deepagent/learnin
 // compositions provide. Asserts the full outbox → admitted-job path in both flag postures.
 
 const root = mkdtempSync(path.join(tmpdir(), "deepagent-w7-learning-v2-"))
-const database = Database.layerFromPath(path.join(root, "learning.sqlite"))
+// Every test gets a fresh runtime build. Keep its deliberately-faulted provider receipts isolated
+// so an indeterminate-state assertion cannot poison the next test's startup inventory.
+const database = Database.layerFromPath(":memory:")
 
 const providerTurns = V2ProviderTurn.layer.pipe(
   Layer.provide(SessionProviderOwner.layer.pipe(Layer.provide(database))),
@@ -156,7 +160,10 @@ const config = Layer.succeed(
         new Config.Document({
           type: "document",
           info: new Config.Info({
-            compaction: new ConfigCompaction.Info({ buffer: 3_000, keep: new ConfigCompaction.Keep({ tokens: 1_000 }) }),
+            compaction: new ConfigCompaction.Info({
+              buffer: 3_000,
+              keep: new ConfigCompaction.Keep({ tokens: 1_000 }),
+            }),
           }),
         }),
       ]),
@@ -189,6 +196,14 @@ const sessionContext = SessionContext.layer.pipe(
   Layer.provide(database),
 )
 const runner = SessionRunnerLLM.layer.pipe(
+  Layer.provide(
+    AgentGateway.runtimeLayer({
+      enabled: true,
+      agentMode: "high",
+      baseDir: root,
+      runsDir: path.join(root, "runs"),
+    }),
+  ),
   Layer.provide(FSUtil.defaultLayer),
   Layer.provide(Git.defaultLayer),
   Layer.provide(providerTurns),
@@ -205,28 +220,32 @@ const runner = SessionRunnerLLM.layer.pipe(
   Layer.provide(agents),
   Layer.provide(skillGuidance),
   Layer.provide(config),
-  Layer.provide(catalog),
-  Layer.provide(testOwnerAuthorization),
   // W7: the runner's settle-hook seam — the SAME layer the production compositions provide. The
   // production wiring satisfies the seam's Database at the provide site (Database.defaultLayer); the
   // harness here satisfies it with the isolated test database.
-  Layer.provide(onSessionSettledSeamLayer.pipe(Layer.provide(database))),
-)
-const coordinator = SessionRunCoordinator.layer.pipe(Layer.provide(runner))
-const execution = Layer.effect(
-  SessionExecution.Service,
-  SessionRunCoordinator.Service.pipe(
-    Effect.map((coordinatorService) =>
-      SessionExecution.Service.of({
-        active: coordinatorService.active,
-        awaitIdle: coordinatorService.awaitIdle,
-        resume: coordinatorService.run,
-        wake: coordinatorService.wake,
-        interrupt: coordinatorService.interrupt,
-      }),
+  Layer.provide(
+    Layer.mergeAll(
+      catalog,
+      ContextQueryAuthorization.defaultLayer,
+      Layer.succeed(ProductionV2Sources, {}),
+      testOwnerAuthorization,
+      onSessionSettledSeamLayer.pipe(Layer.provide(database)),
     ),
   ),
-).pipe(Layer.provide(coordinator))
+)
+const locations = Layer.effect(
+  LocationServiceMap,
+  LayerMap.make(() => runner).pipe(
+    // This harness supplies the learning runner as the complete keyed Location tree.
+    // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
+    Effect.map((service) => service as unknown as LocationServiceMap["Service"]),
+  ),
+)
+const execution = SessionExecutionLocal.layer.pipe(
+  Layer.provide(events),
+  Layer.provide(store),
+  Layer.provide(locations),
+)
 const sessions = SessionV2.layer.pipe(
   Layer.provide(events),
   Layer.provide(database),
@@ -236,7 +255,7 @@ const sessions = SessionV2.layer.pipe(
 )
 
 const it = testEffect(
-  Layer.mergeAll(database, providerTurns, events, questions, projector, store, runner, coordinator, execution, sessions),
+  Layer.mergeAll(database, providerTurns, events, questions, projector, store, runner, execution, sessions),
 )
 
 const sessionID = SessionSchema.ID.make("ses_w7_learning_settle")
@@ -301,58 +320,68 @@ const settleOnce = Effect.gen(function* () {
   ]
   requests.length = 0
   yield* session.prompt({ sessionID, prompt: new Prompt({ text: "W7 settle prompt" }), resume: false })
-  yield* SessionRunner.Service.use((svc) => svc.run({ sessionID, force: true }))
+  yield* session.resume(sessionID)
   expect(requests.length).toBeGreaterThan(0)
 })
 
 describe("W7 V2 session settle → durable learning admission", () => {
-  it.effect(
-    "admits one session_finalization learning run per settled activity when durableLearning is ON",
-    () =>
-      Effect.gen(function* () {
-        yield* clearLearningTables
-        yield* configureGateway(true)
-        yield* settleOnce
-        const { db } = yield* Database.Service
-        const outbox = yield* db
-          .select()
-          .from(LearningAdmissionOutboxTable)
-          .where(eq(LearningAdmissionOutboxTable.session_id, sessionID))
-          .all()
-          .pipe(Effect.orDie)
-        expect(outbox).toHaveLength(1)
-        expect(outbox[0]).toMatchObject({ trigger: "session_finalization", state: "admitted" })
-        // W15 (P2): the real settled activity admits with finalStatus completed + its dispatched
-        // round count (the receipt state gate reads the actual terminal, not a hardcoded value).
-        const intent = JSON.parse(outbox[0]!.payload_json) as { final_status: string; total_rounds: number }
-        expect(intent.final_status).toBe("completed")
-        expect(intent.total_rounds).toBe(1)
-        const job = yield* db
-          .select()
-          .from(LearningJobTable)
-          .where(eq(LearningJobTable.session_id, sessionID))
-          .get()
-          .pipe(Effect.orDie)
-        expect(job).toMatchObject({
-          session_id: sessionID,
-          trigger: "session_finalization",
-          policy: "manual_review",
-          run_id: expect.stringMatching(/^v2_/),
-        })
-      }),
+  it.effect("admits one session_finalization learning run per settled activity when durableLearning is ON", () =>
+    Effect.gen(function* () {
+      yield* clearLearningTables
+      yield* configureGateway(true)
+      yield* settleOnce
+      const { db } = yield* Database.Service
+      const outbox = yield* db
+        .select()
+        .from(LearningAdmissionOutboxTable)
+        .where(eq(LearningAdmissionOutboxTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
+      expect(outbox).toHaveLength(1)
+      expect(outbox[0]).toMatchObject({ trigger: "session_finalization", state: "admitted" })
+      // W15 (P2): the real settled activity admits with finalStatus completed + its dispatched
+      // round count (the receipt state gate reads the actual terminal, not a hardcoded value).
+      const intent = JSON.parse(outbox[0]!.payload_json) as { final_status: string; total_rounds: number }
+      expect(intent.final_status).toBe("completed")
+      expect(intent.total_rounds).toBe(1)
+      const job = yield* db
+        .select()
+        .from(LearningJobTable)
+        .where(eq(LearningJobTable.session_id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
+      expect(job).toMatchObject({
+        session_id: sessionID,
+        trigger: "session_finalization",
+        policy: "manual_review",
+        run_id: expect.stringMatching(/^v2_/),
+      })
+    }),
   )
 
-  it.effect(
-    "keeps the legacy-only posture (no V2 admission) when DEEPAGENT_DURABLE_LEARNING is off",
-    () =>
-      Effect.gen(function* () {
-        yield* clearLearningTables
-        yield* configureGateway(false)
-        yield* settleOnce
-        const { db } = yield* Database.Service
-        const outbox = yield* db.select().from(LearningAdmissionOutboxTable).all().pipe(Effect.orDie)
-        expect(outbox).toHaveLength(0)
-      }),
+  it.effect("an explicit V2 runtime with durable learning off admits nothing", () =>
+    Effect.gen(function* () {
+      yield* clearLearningTables
+      yield* seedSession
+      const runtime = yield* AgentGateway.Runtime.pipe(
+        Effect.provide(
+          AgentGateway.runtimeLayer({
+            enabled: true,
+            agentMode: "high",
+            baseDir: root,
+            runsDir: path.join(root, "disabled-runs"),
+            durableLearning: false,
+          }),
+        ),
+      )
+      yield* onSessionSettled(yield* Database.Service)(
+        { sessionID, workspacePath: root, activityId: "activity_learning_disabled" },
+        runtime,
+      )
+      const { db } = yield* Database.Service
+      const outbox = yield* db.select().from(LearningAdmissionOutboxTable).all().pipe(Effect.orDie)
+      expect(outbox).toHaveLength(0)
+    }),
   )
 
   it.effect("a forced drain without a dispatched activity admits nothing", () =>
@@ -376,7 +405,7 @@ describe("W7 V2 session settle → durable learning admission", () => {
         .run()
         .pipe(Effect.orDie)
       response = []
-      yield* SessionRunner.Service.use((svc) => svc.run({ sessionID: emptySessionID, force: true }))
+      yield* SessionExecution.Service.use((service) => service.resume(emptySessionID))
       const outbox = yield* db.select().from(LearningAdmissionOutboxTable).all().pipe(Effect.orDie)
       expect(outbox).toHaveLength(0)
     }),
@@ -535,7 +564,11 @@ describe("W15 onSessionSettled reads the V2 receipt terminal state (P2)", () => 
     Effect.gen(function* () {
       yield* clearLearningTables
       yield* configureGateway(true)
-      yield* seedReceipt({ activityId: "activity_w15_indeterminate", state: "indeterminate_after_crash", requestOrdinal: 102 })
+      yield* seedReceipt({
+        activityId: "activity_w15_indeterminate",
+        state: "indeterminate_after_crash",
+        requestOrdinal: 102,
+      })
       yield* onSessionSettled(yield* Database.Service)({
         sessionID,
         workspacePath: root,

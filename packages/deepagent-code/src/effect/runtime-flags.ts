@@ -1,7 +1,6 @@
 import { Config, ConfigProvider, Context, Effect, Layer, Option } from "effect"
 import { ConfigService } from "@/effect/config-service"
 import { flipFlagValueOn } from "@deepagent-code/core/deepagent/flip-flag"
-import { InstallationVersion } from "@deepagent-code/core/installation/version"
 
 const bool = (name: string) => Config.boolean(name).pipe(Config.withDefault(false))
 // A capability that ships ON by default but can be explicitly disabled with `=false` (U5: background
@@ -27,8 +26,6 @@ const positiveIntegerWithDefault = (name: string, fallback: number) =>
   )
 export const DEFAULT_SUBAGENT_TIMEOUT_MS = 30 * 60_000
 export const DEFAULT_SUBAGENT_OUTPUT_MAX_CHARS = 8_000
-export const isCoreV2OnlyVersion = (version: string) =>
-  /^(?:1\.4\.8(?=[.-]|$)|2\.0(?:\.0-)?(?:alpha|beta)(?=[.-]|\d|$)|0\.0\.0-core-v2)/.test(version)
 const experimental = bool("DEEPAGENT_CODE_EXPERIMENTAL")
 const enabledByExperimental = (name: string) =>
   Config.all({ experimental, enabled: Config.boolean(name).pipe(Config.option) }).pipe(
@@ -145,13 +142,9 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // unqualified owners still fail closed at the ownerCampaign gate (v2_owner_campaign_not_verified).
   // W0.1: runtime-defaults.ts 单点化后此处保持语义一致.
   coreV2ExecutionOwner: flagDefaultOn("DEEPAGENT_CODE_CORE_V2_EXECUTION_OWNER"),
-  // Core V2 alpha profile: an unavailable/unqualified V2 owner fails closed
-  // instead of entering the legacy SessionPrompt executor. This is a kill switch for admission,
-  // never a legacy fallback selector.
-  coreV2Only: Config.all({
-    forcedByVersion: Config.succeed(isCoreV2OnlyVersion(InstallationVersion)),
-    explicit: bool("DEEPAGENT_CODE_CORE_V2_ONLY"),
-  }).pipe(Config.map((value) => value.forcedByVersion || value.explicit)),
+  // Core V2 is the only production execution authority. This is deliberately not configurable:
+  // an unavailable/unqualified V2 owner fails closed and can never select the legacy executor.
+  coreV2Only: Config.succeed(true),
   contextFederationKillSwitch: bool("DEEPAGENT_CODE_CONTEXT_FEDERATION_KILL_SWITCH"),
   contextFederationRolloutStage: Config.string("DEEPAGENT_CODE_CONTEXT_FEDERATION_ROLLOUT_STAGE").pipe(
     Config.withDefault("all"),

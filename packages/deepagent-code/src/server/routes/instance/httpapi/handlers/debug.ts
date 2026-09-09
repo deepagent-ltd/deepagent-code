@@ -14,7 +14,7 @@ import { DebugService } from "@/debug/service"
 import { DebugAdapter } from "@/debug/adapter"
 import { RuntimeBase } from "@/runtime/base"
 import * as Log from "@deepagent-code/core/util/log"
-import { Effect, Layer, Queue } from "effect"
+import { Cause, Effect, Layer, Queue } from "effect"
 import * as Stream from "effect/Stream"
 import { HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
@@ -188,23 +188,22 @@ export const debugHandlers = HttpApiBuilder.group(InstanceHttpApi, "debug", (han
       const instance = yield* InstanceState.context
       const filterSessionId = ctx.query.sessionId
 
-      const queue = yield* Queue.unbounded<EventV2.Payload>()
+      const queue = yield* Queue.dropping<EventV2.Payload, Error | Cause.Done>(1024)
       const unsubscribe = yield* events.listen((event) =>
-        Effect.sync(() => Queue.offerUnsafe(queue, event)),
+        Effect.sync(() => {
+          if (event.location?.directory !== instance.directory || !DEBUG_EVENT_TYPES.has(event.type)) return
+          if (
+            filterSessionId &&
+            (event.data as { sessionId?: string } | undefined)?.sessionId !== filterSessionId
+          )
+            return
+          if (Queue.offerUnsafe(queue, event)) return
+          Queue.failCauseUnsafe(queue, Cause.fail(new Error("Debug event consumer exceeded its 1024-event buffer")))
+        }),
       )
       yield* Effect.addFinalizer(() => unsubscribe)
 
       const stream = Stream.fromQueue(queue).pipe(
-        // Filter to the right instance
-        Stream.filter((e) => e.location?.directory === instance.directory),
-        // Only debug.* event types
-        Stream.filter((e) => DEBUG_EVENT_TYPES.has(e.type)),
-        // Optionally restrict to one session
-        Stream.filter((e) => {
-          if (!filterSessionId) return true
-          const sid = (e.data as { sessionId?: string } | undefined)?.sessionId
-          return sid === filterSessionId
-        }),
         Stream.map((e) => sseData({ type: e.type, data: e.data })),
         Stream.pipeThroughChannel(Sse.encode()),
         Stream.encodeText,

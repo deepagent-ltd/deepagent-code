@@ -9,6 +9,7 @@ import { contentDigest } from "@deepagent-code/core/contract/digest"
 import { decodeEventWorkEnvelope, encodeEventWorkEnvelope, eventWorkEnvelopeDigest, type EventWorkEnvelope } from "@deepagent-code/core/contract/event-envelope"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { SessionMessage } from "@deepagent-code/core/session/message"
+import { createRuntimeFeatureRegistry } from "@deepagent-code/core/flag/runtime-features"
 import {
   spoolDrainPass,
   CONSUMER_FAILURE_KIND,
@@ -23,6 +24,9 @@ import {
 // drain commits the row `resolved` + the admission receipt `resolved`.
 
 type Db = Database.Interface["db"]
+const admissionOff = createRuntimeFeatureRegistry(undefined, {
+  [EventAdmission.EVENT_V2_ADMISSION_ENV]: "false",
+})
 
 // Frozen-contract bounded work envelope (never the raw payload) — same shape the coalescing lane spools.
 const envelopeFor = (eventRef: string): EventWorkEnvelope =>
@@ -286,22 +290,20 @@ describe("W5 DLQ visibility — spool drain failure → event_consumer_failure r
   })
 
   test("the drain is INERT when the V2 admission switch is OFF (never dead-letters live work)", async () => {
-    const was = process.env[EventAdmission.EVENT_V2_ADMISSION_ENV]
-    process.env[EventAdmission.EVENT_V2_ADMISSION_ENV] = "false"
-    try {
-      await runWithDb((db) =>
-        Effect.gen(function* () {
-          const envelope = envelopeFor("event://w5-spool-off")
-          yield* EventSpool.enqueue(db, { envelope, sessionID: "ses_w5_off", priority: "high", now: 10 })
-          yield* spoolDrainPass({ db, v2Session: succeedingV2Session({ prompts: 0 }), now: () => 30_000 })
-          const row = yield* EventSpool.getByRef(db, envelope.eventRef)
-          expect(row?.status).toBe("pending")
-          expect(row?.attempts).toBe(0)
-        }),
-      )
-    } finally {
-      if (was === undefined) delete process.env[EventAdmission.EVENT_V2_ADMISSION_ENV]
-      else process.env[EventAdmission.EVENT_V2_ADMISSION_ENV] = was
-    }
+    await runWithDb((db) =>
+      Effect.gen(function* () {
+        const envelope = envelopeFor("event://w5-spool-off")
+        yield* EventSpool.enqueue(db, { envelope, sessionID: "ses_w5_off", priority: "high", now: 10 })
+        yield* spoolDrainPass({
+          db,
+          v2Session: succeedingV2Session({ prompts: 0 }),
+          now: () => 30_000,
+          runtimeFeatures: admissionOff,
+        })
+        const row = yield* EventSpool.getByRef(db, envelope.eventRef)
+        expect(row?.status).toBe("pending")
+        expect(row?.attempts).toBe(0)
+      }),
+    )
   })
 })

@@ -14,6 +14,7 @@ import { IMRepository } from "@deepagent-code/core/im/repository"
 import type { IMRepositoryInterface } from "@deepagent-code/core/im/repository"
 import { IMBroadcasterService } from "@deepagent-code/core/im/broadcaster"
 import { isEventV2AdmissionEnabled } from "@deepagent-code/core/deepagent/event-admission"
+import type { RuntimeFeatureRegistry } from "@deepagent-code/core/flag/runtime-features"
 import { declaresMentionTrigger, MENTION_TRIGGER } from "@/agent/agent"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import * as Log from "@deepagent-code/core/util/log"
@@ -298,6 +299,7 @@ export interface Interface {
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/EventDispatcher") {}
 
 export interface LayerOptions {
+  readonly runtimeFeatures?: RuntimeFeatureRegistry
   readonly dispatchPort?: DispatchPort
   // W0.4 — the mention-routing receipt port. Defaults to the IM-backed writer (IMRepository message with
   // metadata.type = agent_no_trigger_mention; log-only fallback), injectable for deterministic tests.
@@ -569,7 +571,7 @@ export const layerWith = (options?: LayerOptions) =>
             // written, which is the documented explicit-disabled semantic). With the event path off the
             // flag_disabled fail-closed drop stays authoritative.
             const mentions = mentionNamesFor(event)
-            if (mentions.length > 0 && isEventV2AdmissionEnabled()) {
+            if (mentions.length > 0 && isEventV2AdmissionEnabled(options?.runtimeFeatures)) {
               return yield* handleMention(event, agents, mentions)
             }
           }

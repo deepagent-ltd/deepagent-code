@@ -59,7 +59,6 @@ beforeEach(() => {
 })
 
 afterEach(() => {
-  DeepAgentLearningLifecycleTrigger.setRuntimeObserver(undefined)
   rmSync(root, { recursive: true, force: true })
 })
 
@@ -77,21 +76,17 @@ describe("learning lifecycle closed loop (E2E, no LLM)", () => {
 
         // Mirror learning-runtime.ts:54-62 — the server runtime registers the observer that the
         // idle caller (SessionRunState Runner.onIdle) reaches via `notify`.
-        DeepAgentLearningLifecycleTrigger.setRuntimeObserver({
+        const observer: DeepAgentLearningLifecycleTrigger.RuntimeObserver = {
           observe: (input) =>
-            Effect.runPromise(
-              DeepAgentLearningLifecycleTrigger.observe(db, input, { authorityRoot: root, runsDir }),
-            ),
-        })
+            Effect.runPromise(DeepAgentLearningLifecycleTrigger.observe(db, input, { authorityRoot: root, runsDir })),
+        }
 
-        const outcome = yield* Effect.promise(() =>
-          DeepAgentLearningLifecycleTrigger.notify({
-            trigger: "idle",
-            boundaryKey: `session-idle:${SESSION_ID}`,
-            sessionID: SESSION_ID,
-            match: "session",
-          }),
-        )
+        const outcome = yield* DeepAgentLearningLifecycleTrigger.notify({
+          trigger: "idle",
+          boundaryKey: `session-idle:${SESSION_ID}`,
+          sessionID: SESSION_ID,
+          match: "session",
+        }).pipe(Effect.provideService(DeepAgentLearningLifecycleTrigger.CurrentRuntimeObserver, observer))
         expect(outcome).toMatchObject({ state: "admitted", runId: RUN_A_ID })
 
         const receipt = yield* db.select().from(LearningLifecycleTriggerTable).get()
@@ -229,8 +224,6 @@ describe("learning lifecycle closed loop (E2E, no LLM)", () => {
   })
 
   test("unregistered observer (pure CLI path) skips silently without a defect", async () => {
-    DeepAgentLearningLifecycleTrigger.setRuntimeObserver(undefined)
-
     await run(
       Effect.gen(function* () {
         const db = (yield* Database.Service).db
@@ -239,23 +232,19 @@ describe("learning lifecycle closed loop (E2E, no LLM)", () => {
         // Effect.ignore, so an unregistered observer must resolve — never reject or defect.
         // FEAT-004: the unregistered-observer skip is its OWN reason code — distinct from an
         // observer that ran but found no matching settled run (`no_exact_settled_run`).
-        const idle = yield* Effect.promise(() =>
-          DeepAgentLearningLifecycleTrigger.notify({
-            trigger: "idle",
-            boundaryKey: `session-idle:${SESSION_ID}`,
-            sessionID: SESSION_ID,
-            match: "session",
-          }),
-        )
+        const idle = yield* DeepAgentLearningLifecycleTrigger.notify({
+          trigger: "idle",
+          boundaryKey: `session-idle:${SESSION_ID}`,
+          sessionID: SESSION_ID,
+          match: "session",
+        })
         expect(idle).toEqual({ state: "skipped", reason: "no_observer_registered" })
 
-        const projectSwitch = yield* Effect.promise(() =>
-          DeepAgentLearningLifecycleTrigger.notify({
-            trigger: "project_switch",
-            boundaryKey: `project-switch:${path.join(root, "workspace")}`,
-            directory: path.join(root, "workspace"),
-          }),
-        ).pipe(Effect.ignore)
+        const projectSwitch = yield* DeepAgentLearningLifecycleTrigger.notify({
+          trigger: "project_switch",
+          boundaryKey: `project-switch:${path.join(root, "workspace")}`,
+          directory: path.join(root, "workspace"),
+        }).pipe(Effect.ignore)
         expect(projectSwitch).toBeUndefined()
 
         expect(yield* db.select({ count: count() }).from(LearningLifecycleTriggerTable).get()).toEqual({ count: 0 })
@@ -329,7 +318,10 @@ function writeRunAFinalization(input: { readonly root: string; readonly workspac
     },
   }
   writeFileSync(terminalPath, terminal)
-  writeFileSync(receiptPath, CanonicalJson.stringify(DeepAgentDurableLearning.localAdmissionReceipt(bound, "submitted")))
+  writeFileSync(
+    receiptPath,
+    CanonicalJson.stringify(DeepAgentDurableLearning.localAdmissionReceipt(bound, "submitted")),
+  )
 }
 
 function seedProjectAndSession(db: Database.Interface["db"], workspace: string) {

@@ -16,6 +16,7 @@ import type { ServerEvent, IMWebSocketConnection } from "@deepagent-code/core/im
 import { RuntimeFlags } from "../../src/effect/runtime-flags"
 import { runtimeDefaultsFromEnv, EVENT_V2_ADMISSION_ENV } from "../../src/runtime-defaults"
 import { testEffect } from "../lib/effect"
+import { createRuntimeFeatureRegistry, type RuntimeFeatureRegistry } from "@deepagent-code/core/flag/runtime-features"
 
 // W0.4 — @mention 路由修复与默认统一 (docs/core-v2.0-beta/v2.0-design.md W0.4).
 //
@@ -51,6 +52,7 @@ const setNow = (t: number) => {
   clock = t
 }
 const now = () => clock
+const admissionOff = createRuntimeFeatureRegistry(undefined, { [EVENT_V2_ADMISSION_ENV]: "false" })
 
 // Dispatch-port spy: records routed events/targets.
 let recorded: EventDispatcher.DispatchRequest[] = []
@@ -95,13 +97,14 @@ const coreLayer = () =>
     Layer.provideMerge(Database.layerFromPath(":memory:")),
   )
 
-const makeLayer = (agents: AgentDescriptor[]) => {
+const makeLayer = (agents: AgentDescriptor[], runtimeFeatures?: RuntimeFeatureRegistry) => {
   const core = coreLayer()
   const dispatcher = EventDispatcher.layerWith({
     dispatchPort: recordingPort,
     mentionReceiptPort: recordingReceiptPort,
     runLoops: false,
     now,
+    ...(runtimeFeatures ? { runtimeFeatures } : {}),
   }).pipe(
     Layer.provide(core),
     Layer.provide(agentListLayer(agents)),
@@ -410,29 +413,23 @@ describe("W0.4 mention router — P8 mixed mentions", () => {
 })
 
 describe("W0.4 mention router — P1/P2 admission gate", () => {
-  const it = testEffect(makeLayer([declaringAgent]))
+  const it = testEffect(makeLayer([declaringAgent], admissionOff))
 
   it.effect("v4 ON + admission OFF: mention branch skipped → pure-router fallback (no dispatch, no receipt)", () =>
     Effect.gen(function* () {
       resetRecorder()
       resetReceipts()
       setNow(1_000)
-      const previous = process.env[EVENT_V2_ADMISSION_ENV]
-      process.env[EVENT_V2_ADMISSION_ENV] = "false"
-      try {
-        const bus = yield* DeepAgentEventBus.Service
-        const dispatcher = yield* EventDispatcher.Service
-        const event = yield* bus.publish(mentionInput())
-        const decision = yield* dispatcher.handle(event)
-        // Design note 4: v4 ON ∧ admission OFF = explicit fall-back-to-legacy — the dispatcher's mention
-        // branch does NOT take over (the legacy synchronous executor in the IM handler runs instead).
-        // The event keeps the pre-W0.4 pure-router path (no_match for this registry — no dispatch/receipt).
-        expect(decision).toMatchObject({ type: "dropped", reason: "no_match" })
-        expect(recorded.length).toBe(0)
-        expect(receipted.length).toBe(0)
-      } finally {
-        process.env[EVENT_V2_ADMISSION_ENV] = previous
-      }
+      const bus = yield* DeepAgentEventBus.Service
+      const dispatcher = yield* EventDispatcher.Service
+      const event = yield* bus.publish(mentionInput())
+      const decision = yield* dispatcher.handle(event)
+      // Design note 4: v4 ON ∧ admission OFF = explicit fall-back-to-legacy — the dispatcher's mention
+      // branch does NOT take over (the legacy synchronous executor in the IM handler runs instead).
+      // The event keeps the pre-W0.4 pure-router path (no_match for this registry — no dispatch/receipt).
+      expect(decision).toMatchObject({ type: "dropped", reason: "no_match" })
+      expect(recorded.length).toBe(0)
+      expect(receipted.length).toBe(0)
     }),
   )
 })

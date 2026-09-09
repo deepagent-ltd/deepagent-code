@@ -93,18 +93,31 @@ const record = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
 const legacyCreatedType = EventV2.versionedType(SessionV1.Event.Created.type, 1)
 const nativeCreatedType = EventV2.versionedType(SessionEvent.Created.type, 2)
+const nativeUpdatedType = EventV2.versionedType(SessionEvent.Updated.type, 2)
+const nativeRevertType = EventV2.versionedType(SessionEvent.RevertChanged.type, 1)
+const legacyDeletedType = EventV2.versionedType(SessionV1.Event.Deleted.type, 1)
+const nativeDeletedType = EventV2.versionedType(SessionEvent.Deleted.type, 2)
 const createdTypes = new Set([legacyCreatedType, nativeCreatedType])
 
 function eventPlacement(event: EventV2.SerializedEvent) {
   if (
     event.type !== legacyCreatedType &&
     event.type !== nativeCreatedType &&
-    event.type !== EventV2.versionedType(SessionV1.Event.Updated.type, 1)
+    event.type !== nativeUpdatedType &&
+    event.type !== nativeRevertType &&
+    event.type !== EventV2.versionedType(SessionV1.Event.Updated.type, 1) &&
+    event.type !== legacyDeletedType &&
+    event.type !== nativeDeletedType
   )
     return
   const info = record(event.data.info) ? event.data.info : undefined
   if (!info || typeof info.projectID !== "string") return "conflict" as const
-  if (event.type === nativeCreatedType) {
+  if (
+    event.type === nativeCreatedType ||
+    event.type === nativeUpdatedType ||
+    event.type === nativeDeletedType ||
+    event.type === nativeRevertType
+  ) {
     const location = record(info.location) ? info.location : undefined
     if (!location || typeof location.directory !== "string") return "conflict" as const
     return {
@@ -271,7 +284,13 @@ export const syncHandlers = HttpApiBuilder.group(InstanceHttpApi, "sync", (handl
         last: payload.at(-1)?.seq,
         directory: ctx.payload.directory,
       })
-      yield* events.replayAll(payload, { ownerID, strictOwner: true })
+      yield* events.replayAll(payload, { ownerID, strictOwner: true }).pipe(
+        Effect.catchDefect((defect) =>
+          Schema.is(EventV2.InvalidSyncEventError)(defect)
+            ? Effect.fail(new ConflictError({ resource: `session:${source}`, message: defect.message }))
+            : Effect.die(defect),
+        ),
+      )
       log.info("sync replay complete", {
         sessionID: source,
         events: payload.length,

@@ -8,6 +8,7 @@ import type { SessionMessage } from "../message"
 import { BuiltInTools } from "../../tool/builtins"
 
 export type Input = {
+  readonly runtime: AgentGateway.RuntimeInterface
   readonly sessionID: string
   readonly userMessageID: string
   readonly providerID: string
@@ -18,7 +19,7 @@ export type Input = {
 }
 
 export const buildDeepAgentPrompt = Effect.fn("SessionRunner.buildDeepAgentPrompt")(function* (input: Input) {
-  const mode = AgentGateway.snapshot().agentMode
+  const mode = input.runtime.snapshot.agentMode
   const latestUser = input.messages.findLast((message) => message.type === "user")
   const repo = input.git ? yield* input.git.find(AbsolutePath.make(input.directory)) : undefined
   const branch = repo && input.git ? yield* input.git.branch(repo.directory) : undefined
@@ -45,33 +46,67 @@ export const buildDeepAgentPrompt = Effect.fn("SessionRunner.buildDeepAgentPromp
     userRequest: latestUser?.text ?? null,
     workspacePath: input.directory,
   }
-  AgentGateway.DeepAgentOrchestrator.initSession(orchestratorInput)
-  if (latestUser?.id === input.userMessageID) {
-    const observation = AgentGateway.DeepAgentSessionState.observeUserAdmission(input.sessionID, input.userMessageID)
-    if (observation === "new") AgentGateway.DeepAgentSessionState.markPlanStale(input.sessionID, "user_appended")
-  }
-  const context = AgentGateway.DeepAgentOrchestrator.buildPromptContext(orchestratorInput)
   const latest = input.messages.at(-1)
   const continuation =
     latest?.type === "assistant" &&
     latest.content.some(
       (part) => part.type === "tool" && (part.state.status === "completed" || part.state.status === "error"),
     )
-  const plan = yield* Effect.sync(() => {
+  const context = input.runtime.withStorage(() => {
+    AgentGateway.DeepAgentOrchestrator.initSession(orchestratorInput)
+    if (latestUser?.id === input.userMessageID) {
+      const observation = AgentGateway.DeepAgentSessionState.observeUserAdmission(input.sessionID, input.userMessageID)
+      if (observation === "new") AgentGateway.DeepAgentSessionState.markPlanStale(input.sessionID, "user_appended")
+    }
+    return AgentGateway.DeepAgentOrchestrator.buildPromptContext(orchestratorInput)
+  })
+  const plan = yield* Effect.sync(() =>
+    input.runtime.withStorage(() => {
+      const current = AgentGateway.DeepAgentPlanStore.getPlanDoc(input.sessionID)
+      const ref = AgentGateway.DeepAgentPlanStore.planDocRef(input.sessionID)
+      if (!current || !ref) return undefined
+      return AgentGateway.DeepAgentPlanController.renderPlanWriteContext(
+        current,
+        ref.version,
+        continuation ? "continuation" : "full",
+      )
+    }),
+  ).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+  return {
+    context,
+    stableSystemParts: input.runtime.systemPrompt(input.providerID, context),
+    volatileRoundContext: continuation
+      ? input.runtime.volatileContinuationContext(plan)
+      : input.runtime.volatileRoundContext(context, plan),
+  }
+})
+
+// V1 parity fallback (session/llm/request.ts non-managed branch): a governed turn must see the
+// authoritative plan write precondition even when the gateway runtime is enabled but NOT
+// model-managed (e.g. agentMode "general" — `runtime.active` is false and buildDeepAgentPrompt is
+// skipped). This covers every non-compaction agent, not only the goal-worker: the V2 plan gate
+// forces a seeded session's plan to "high" regardless of agent, and without the precondition the
+// plan tool's advance cannot supply the exact expected_plan_id/expected_version. Returns undefined
+// when the session has no committed plan — nothing to inject.
+export const buildGovernedPlanContext = (input: {
+  readonly runtime: AgentGateway.RuntimeInterface
+  readonly sessionID: string
+  readonly messages: readonly SessionMessage.Message[]
+}): string | undefined =>
+  input.runtime.withStorage(() => {
     const current = AgentGateway.DeepAgentPlanStore.getPlanDoc(input.sessionID)
     const ref = AgentGateway.DeepAgentPlanStore.planDocRef(input.sessionID)
     if (!current || !ref) return undefined
-    return AgentGateway.DeepAgentPlanController.renderPlanWriteContext(
+    const latest = input.messages.at(-1)
+    const continuation =
+      latest?.type === "assistant" &&
+      latest.content.some(
+        (part) => part.type === "tool" && (part.state.status === "completed" || part.state.status === "error"),
+      )
+    const snapshot = AgentGateway.DeepAgentPlanController.renderPlanWriteContext(
       current,
       ref.version,
       continuation ? "continuation" : "full",
     )
-  }).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
-  return {
-    context,
-    stableSystemParts: AgentGateway.systemPrompt(input.providerID, context),
-    volatileRoundContext: continuation
-      ? AgentGateway.volatileContinuationContext(plan)
-      : AgentGateway.volatileRoundContext(context, plan),
-  }
-})
+    return AgentGateway.volatilePlanContext(`<plan-status>\n${snapshot}\n</plan-status>`)
+  })

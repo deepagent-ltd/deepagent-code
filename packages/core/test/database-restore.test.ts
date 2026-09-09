@@ -6,6 +6,7 @@ import { Effect } from "effect"
 import { Backup } from "@deepagent-code/core/database/backup"
 import { Restore, RestoreError } from "@deepagent-code/core/database/restore"
 import { Database } from "@deepagent-code/core/database/database"
+import { DatabaseMigrationLease } from "@deepagent-code/core/database/migration-lease"
 import { tmpdir } from "./fixture/tmpdir"
 
 // C1A-13 VERIFIED RESTORE. Restore requires an explicit verified backup; it quarantines the current
@@ -61,6 +62,30 @@ const backUp = (source: string, destDir: string) =>
   Effect.runPromise(Backup.create({ sourcePath: source, destDir, buildId: "build-1" }))
 
 describe("Restore verified (C1A-13)", () => {
+  test("refusal: an active runtime owner fences the target before replacement", async () => {
+    await using tmp = await tmpdir()
+    const good = path.join(tmp.path, "good.db")
+    const live = path.join(tmp.path, "live.db")
+    const backupDir = await mkBackupDir(tmp.path)
+    await makeGoodDb(good)
+    const manifest = await backUp(good, backupDir)
+    seedCorrupt(live)
+
+    const owner = await Effect.runPromise(
+      DatabaseMigrationLease.acquireProcessLock(`${live}.runtime.lock`, { staleMs: 15_000, timeoutMs: 100 }),
+    )
+    try {
+      const error = await Effect.runPromise(
+        Restore.restoreVerified({ dbPath: live, backup: manifest }).pipe(Effect.flip),
+      )
+      expect(error).toBeInstanceOf(RestoreError)
+      expect(error.code).toBe("target_busy")
+      expect(markerOf(live)).toEqual([{ id: "corrupt" }])
+    } finally {
+      await Effect.runPromise(owner.release)
+    }
+  }, 60_000)
+
   test("success: backup a good DB, corrupt the live DB, restore -> integrity + data + journal present", async () => {
     await using tmp = await tmpdir()
     const good = path.join(tmp.path, "good.db")

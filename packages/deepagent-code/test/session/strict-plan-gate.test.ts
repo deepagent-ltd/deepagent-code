@@ -155,18 +155,35 @@ describe("W6 strictPlanGate escalation (session/tools.ts)", () => {
     AgentGateway.DeepAgentSessionState.configure(mkdtempSync(path.join(tmpdir(), "strict-gate-")))
   })
 
+  // F-20 contract: a plan-gate block is a typed LLM.ToolFailure REJECTION (the UI part renders
+  // status "error" with the template as the error text, and effect-evidence classifies tool_error),
+  // not a fake success result whose output carries the template. Returns the failure message for
+  // content assertions.
+  const expectPlanGateBlock = async (execute: Promise<unknown>): Promise<string> => {
+    const rejection = await execute.then(
+      () => {
+        throw new Error("expected the plan gate to reject the mutating call")
+      },
+      (error: unknown) => error,
+    )
+    expect(rejection).toMatchObject({
+      _tag: "LLM.ToolFailure",
+      metadata: { planGateBlocked: true, title: "Plan update required" },
+    })
+    return String((rejection as Error).message)
+  }
+
   test("stale latch + mutating tool → blocked and the tool is NOT executed (P1-1b / P3-1)", async () => {
     let executed = 0
     const tools = await Effect.runPromise(makeHarness("edit", {}, () => executed++))
     AgentGateway.DeepAgentSessionState.getOrCreate(String(sessionID), "high")
     AgentGateway.DeepAgentSessionState.markPlanStale(String(sessionID), "user_appended")
 
-    const result = await tools.edit!.execute!({}, { toolCallId: "call-1", messages: [] })
-    expect(result).toMatchObject({ title: "Plan update required" })
+    const message = await expectPlanGateBlock(tools.edit!.execute!({}, { toolCallId: "call-1", messages: [] }))
     // P2-1: the block message must NOT carry the warn-path "still proceeds" phrasing.
-    expect(String(result.output)).not.toContain("this action still proceeds")
-    expect(String(result.output)).toContain("blocked until the plan is re-synced")
-    expect(String(result.output)).toContain("`plan`")
+    expect(message).not.toContain("this action still proceeds")
+    expect(message).toContain("blocked until the plan is re-synced")
+    expect(message).toContain("`plan`")
     expect(executed).toBe(0)
     // the block increments the runtime grace counter (P1-1a counting path)
     expect(AgentGateway.DeepAgentSessionState.planLatch(String(sessionID))!.consecutive_blocks).toBe(1)
@@ -216,13 +233,13 @@ describe("W6 strictPlanGate escalation (session/tools.ts)", () => {
     const tools = await Effect.runPromise(makeHarness("edit", {}, () => executed++))
     AgentGateway.DeepAgentSessionState.getOrCreate(String(sessionID), "high")
 
-    const result = await tools.edit!.execute!({}, { toolCallId: "call-w2a", messages: [] })
-    expect(result).toMatchObject({ title: "Plan update required" })
-    expect(String(result.output)).toContain("No plan exists yet")
-    // the trivial escape is stated AND machine-copyable (schema-valid create payload)
-    expect(String(result.output)).toContain("one-step plan")
-    expect(String(result.output)).toContain('"operation":"create"')
-    expect(String(result.output)).toContain('"expected_version":null')
+    const message = await expectPlanGateBlock(tools.edit!.execute!({}, { toolCallId: "call-w2a", messages: [] }))
+    expect(message).toContain("create a plan first via the `plan` tool")
+    // the trivial escape is stated AND machine-copyable (schema-valid create payload;
+    // expected_version is Schema.optional — "Use null (or omit) for create", plan.ts)
+    expect(message).toContain("one step is fine")
+    expect(message).toContain('"operation":"create"')
+    expect(message).toContain('"status":"active"')
     expect(executed).toBe(0)
     expect(AgentGateway.DeepAgentSessionState.planLatch(String(sessionID))!.consecutive_blocks).toBe(1)
   })
@@ -243,18 +260,15 @@ describe("W6 strictPlanGate escalation (session/tools.ts)", () => {
     AgentGateway.DeepAgentSessionState.getOrCreate(String(sessionID), "high")
     const limit = AgentGateway.DeepAgentPlanController.DEFAULT_GRACE_BLOCK_LIMIT
 
-    const results = []
-    for (let i = 0; i <= limit; i++) {
-      results.push(await tools.edit!.execute!({}, { toolCallId: `call-w2c-${i}`, messages: [] }))
+    for (let i = 0; i < limit; i++) {
+      await expectPlanGateBlock(tools.edit!.execute!({}, { toolCallId: `call-w2c-${i}`, messages: [] }))
     }
-    expect(results.slice(0, limit).map((r) => r.title)).toEqual(Array(limit).fill("Plan update required"))
+    const released = await tools.edit!.execute!({}, { toolCallId: `call-w2c-${limit}`, messages: [] })
     expect(executed).toBe(1)
-    const released = results[limit]!
-    expect(String(released.output)).toContain("released ONCE")
-    expect(String(released.output)).toContain("No plan was ever created")
+    expect(String(released.output)).toContain("Plan gate released this call after")
+    expect(String(released.output)).toContain("the next mutating call blocks again")
     // released call reset the counter → next mutating call is held again
-    const next = await tools.edit!.execute!({}, { toolCallId: "call-w2c-after", messages: [] })
-    expect(next.title).toBe("Plan update required")
+    await expectPlanGateBlock(tools.edit!.execute!({}, { toolCallId: "call-w2c-after", messages: [] }))
   })
 
   test("W2: lightweight mode (general) never no-plan-blocks", async () => {
@@ -274,15 +288,13 @@ describe("W6 strictPlanGate escalation (session/tools.ts)", () => {
     AgentGateway.DeepAgentSessionState.markPlanStale(String(sessionID), "no_progress")
     const limit = AgentGateway.DeepAgentPlanController.DEFAULT_GRACE_BLOCK_LIMIT
 
-    const results = []
-    for (let i = 0; i <= limit; i++) {
-      results.push(await tools.edit!.execute!({}, { toolCallId: `call-${i}`, messages: [] }))
+    // exactly `limit` blocks first (each a typed ToolFailure rejection), then one release
+    for (let i = 0; i < limit; i++) {
+      await expectPlanGateBlock(tools.edit!.execute!({}, { toolCallId: `call-${i}`, messages: [] }))
     }
-    // exactly `limit` blocks first, then one release
-    expect(results.slice(0, limit).map((r) => r.title)).toEqual(Array(limit).fill("Plan update required"))
+    const released = await tools.edit!.execute!({}, { toolCallId: `call-${limit}`, messages: [] })
     // ONLY the released call reached the real tool
     expect(executed).toBe(1)
-    const released = results[limit]!
     expect(released.title).not.toBe("Plan update required")
     expect(String(released.output)).toContain("edit executed")
     // the release carries the strong reminder; the real tool output follows verbatim
@@ -290,8 +302,7 @@ describe("W6 strictPlanGate escalation (session/tools.ts)", () => {
     expect(String(released.output)).toContain("plan gate already blocked")
     expect(executed).toBe(1)
     // the executing call reset the counter → the next stale call is blocked again (released once)
-    const next = await tools.edit!.execute!({}, { toolCallId: "call-after", messages: [] })
-    expect(next.title).toBe("Plan update required")
+    await expectPlanGateBlock(tools.edit!.execute!({}, { toolCallId: "call-after", messages: [] }))
   })
 
   test("subagent session without plan-write → stale is warn-only, NOT blocked (P1-1c)", async () => {
@@ -320,8 +331,7 @@ describe("W6 strictPlanGate escalation (session/tools.ts)", () => {
     AgentGateway.DeepAgentSessionState.getOrCreate(String(sessionID), "high")
     AgentGateway.DeepAgentSessionState.markPlanStale(String(sessionID), "user_appended")
 
-    const result = await tools.edit!.execute!({}, { toolCallId: "call-1", messages: [] })
-    expect(result).toMatchObject({ title: "Plan update required" })
+    await expectPlanGateBlock(tools.edit!.execute!({}, { toolCallId: "call-1", messages: [] }))
     expect(executed).toBe(0)
   })
 
@@ -343,8 +353,7 @@ describe("W6 strictPlanGate escalation (session/tools.ts)", () => {
     AgentGateway.DeepAgentSessionState.getOrCreate(String(sessionID), "high")
     AgentGateway.DeepAgentSessionState.markPlanStale(String(sessionID), "user_appended")
 
-    const result = await tools.edit!.execute!({}, { toolCallId: "call-1", messages: [] })
-    expect(result).toMatchObject({ title: "Plan update required" })
+    await expectPlanGateBlock(tools.edit!.execute!({}, { toolCallId: "call-1", messages: [] }))
     expect(executed).toBe(0)
   })
 

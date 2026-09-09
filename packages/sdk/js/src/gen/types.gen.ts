@@ -8,6 +8,7 @@ export type Event =
   | EventSessionCreated
   | EventSessionUpdated
   | EventSessionDeleted
+  | EventSessionDiff
   | EventMessageUpdated
   | EventMessageRemoved
   | EventMessagePartUpdated
@@ -26,6 +27,7 @@ export type Event =
   | EventSessionExecutionInterrupted
   | EventSessionNextContextUpdated
   | EventSessionNextSynthetic
+  | EventSessionNextStructuredCaptured
   | EventSessionNextShellStarted
   | EventSessionNextShellEnded
   | EventSessionNextStepStarted
@@ -81,7 +83,6 @@ export type Event =
   | EventProjectUpdated
   | EventWorktreeReady
   | EventWorktreeFailed
-  | EventSessionDiff
   | EventSessionError
   | EventInstallationUpdated
   | EventInstallationUpdateAvailable
@@ -760,6 +761,7 @@ export type Prompt = {
   files?: Array<PromptFileAttachment>
   agents?: Array<PromptAgentAttachment>
   references?: Array<PromptReferenceAttachment>
+  format?: PromptOutputFormat
 }
 
 export type Pty = {
@@ -770,21 +772,6 @@ export type Pty = {
   cwd: string
   status: "running" | "exited"
   pid: number
-}
-
-export type Todo = {
-  /**
-   * Brief description of the task
-   */
-  content: string
-  /**
-   * Current status of the task: pending, in_progress, completed, cancelled
-   */
-  status: string
-  /**
-   * Priority level of the task: high, medium, low
-   */
-  priority: string
 }
 
 export type QuestionOption = {
@@ -858,9 +845,7 @@ export type GlobalEvent = {
         type: "session.created"
         properties: {
           sessionID: string
-          info: SessionV2Info
-          slug: string
-          version: string
+          info: Session
         }
       }
     | {
@@ -877,6 +862,15 @@ export type GlobalEvent = {
         properties: {
           sessionID: string
           info: Session
+        }
+      }
+    | {
+        id: string
+        type: "session.diff"
+        properties: {
+          sessionID: string
+          diff: Array<SnapshotFileDiff>
+          manifest?: SnapshotDiffManifestDescriptor
         }
       }
     | {
@@ -911,6 +905,14 @@ export type GlobalEvent = {
           sessionID: string
           messageID: string
           partID: string
+        }
+      }
+    | {
+        id: string
+        type: "session.updated"
+        properties: {
+          sessionID: string
+          info: Session
         }
       }
     | {
@@ -1049,6 +1051,16 @@ export type GlobalEvent = {
           sessionID: string
           messageID: string
           text: string
+        }
+      }
+    | {
+        id: string
+        type: "session.next.structured.captured"
+        properties: {
+          timestamp: number
+          sessionID: string
+          assistantMessageID: string
+          value: unknown
         }
       }
     | {
@@ -1502,7 +1514,7 @@ export type GlobalEvent = {
         type: "todo.updated"
         properties: {
           sessionID: string
-          todos: Array<Todo>
+          todos: Array<SessionTodoInfo>
         }
       }
     | {
@@ -1666,35 +1678,6 @@ export type GlobalEvent = {
         type: "worktree.failed"
         properties: {
           message: string
-        }
-      }
-    | {
-        id: string
-        type: "session.diff"
-        properties: {
-          sessionID: string
-          diff: Array<SnapshotFileDiff>
-          manifest?: {
-            completeness: "complete" | "truncated"
-            truncationReasons: Array<
-              | "candidate_file_limit"
-              | "discovery_output_limit"
-              | "discovery_failed"
-              | "manifest_bytes_limit"
-              | "source_file_limit"
-              | "source_total_limit"
-              | "patch_file_limit"
-              | "patch_total_limit"
-              | "materialization_failed"
-              | "time_limit"
-            >
-            manifestHash: string
-            totalFiles: number
-            totalFilesExact: boolean
-            statisticsExact?: boolean
-            includedFiles: number
-            truncatedFiles: number
-          }
         }
       }
     | {
@@ -1924,46 +1907,54 @@ export type GlobalEvent = {
         }
       }
     | EventServerInstanceDisposed
-    | SyncEventSessionCreated
-    | SyncEventSessionUpdated
-    | SyncEventSessionDeleted
-    | SyncEventMessageUpdated
-    | SyncEventMessageRemoved
-    | SyncEventMessagePartUpdated
-    | SyncEventMessagePartRemoved
-    | SyncEventSessionNextAgentSwitched
-    | SyncEventSessionNextModelSwitched
-    | SyncEventSessionNextPermissionsChanged
-    | SyncEventSessionNextMoved
-    | SyncEventSessionNextPrompted
-    | SyncEventSessionNextPromptAdmitted
-    | SyncEventSessionNextPromptPromoted
-    | SyncEventSessionNextInterruptRequested
-    | SyncEventSessionExecutionStarted
-    | SyncEventSessionExecutionSucceeded
-    | SyncEventSessionExecutionFailed
-    | SyncEventSessionExecutionInterrupted
-    | SyncEventSessionNextContextUpdated
-    | SyncEventSessionNextSynthetic
-    | SyncEventSessionNextShellStarted
-    | SyncEventSessionNextShellEnded
-    | SyncEventSessionNextStepStarted
-    | SyncEventSessionNextStepEnded
-    | SyncEventSessionNextStepFailed
-    | SyncEventSessionNextTextStarted
-    | SyncEventSessionNextTextEnded
-    | SyncEventSessionNextReasoningStarted
-    | SyncEventSessionNextReasoningEnded
-    | SyncEventSessionNextToolInputStarted
-    | SyncEventSessionNextToolInputEnded
-    | SyncEventSessionNextToolCalled
-    | SyncEventSessionNextToolProgress
-    | SyncEventSessionNextToolSuccess
-    | SyncEventSessionNextToolFailed
-    | SyncEventSessionNextRetried
-    | SyncEventSessionNextCompactionStarted
-    | SyncEventSessionNextCompactionEnded
-    | SyncEventSessionCompacted
+    | SyncEventSessionCreated1
+    | SyncEventSessionUpdated1
+    | SyncEventSessionDeleted1
+    | SyncEventSessionDiff1
+    | SyncEventMessageUpdated1
+    | SyncEventMessageRemoved1
+    | SyncEventMessagePartUpdated1
+    | SyncEventMessagePartRemoved1
+    | SyncEventSessionCreated2
+    | SyncEventSessionUpdated2
+    | SyncEventSessionDiff2
+    | SyncEventSessionRevert1
+    | SyncEventSessionDeleted2
+    | SyncEventSessionNextAgentSwitched1
+    | SyncEventSessionNextModelSwitched1
+    | SyncEventSessionNextPermissionsChanged1
+    | SyncEventSessionNextMoved1
+    | SyncEventSessionNextPrompted1
+    | SyncEventSessionNextPromptAdmitted1
+    | SyncEventSessionNextPromptPromoted1
+    | SyncEventSessionNextInterruptRequested1
+    | SyncEventSessionExecutionStarted1
+    | SyncEventSessionExecutionSucceeded1
+    | SyncEventSessionExecutionFailed1
+    | SyncEventSessionExecutionInterrupted1
+    | SyncEventSessionNextContextUpdated1
+    | SyncEventSessionNextSynthetic1
+    | SyncEventSessionNextStructuredCaptured1
+    | SyncEventSessionNextShellStarted1
+    | SyncEventSessionNextShellEnded1
+    | SyncEventSessionNextStepStarted1
+    | SyncEventSessionNextStepEnded2
+    | SyncEventSessionNextStepFailed2
+    | SyncEventSessionNextTextStarted1
+    | SyncEventSessionNextTextEnded1
+    | SyncEventSessionNextReasoningStarted1
+    | SyncEventSessionNextReasoningEnded1
+    | SyncEventSessionNextToolInputStarted1
+    | SyncEventSessionNextToolInputEnded1
+    | SyncEventSessionNextToolCalled1
+    | SyncEventSessionNextToolProgress1
+    | SyncEventSessionNextToolSuccess1
+    | SyncEventSessionNextToolFailed1
+    | SyncEventSessionNextRetried1
+    | SyncEventSessionNextCompactionStarted1
+    | SyncEventSessionNextCompactionEnded1
+    | SyncEventSessionNextCompactionEnded2
+    | SyncEventSessionCompacted1
 }
 
 /**
@@ -2443,6 +2434,486 @@ export type ProjectListItem = {
   id: string
   worktree: string
   name?: string
+}
+
+export type BootstrapDiagnostics = {
+  stableCode: string
+  mode: "ready" | "read_only_recovery" | "blocked_schema"
+  phase:
+    | "shell_start"
+    | "preflight_read_only"
+    | "backup_required"
+    | "backup_verifying"
+    | "migration_applying"
+    | "recovery_reconciling"
+    | "post_verify"
+    | "ready"
+    | "read_only_recovery"
+    | "blocked_schema"
+  sqliteExtendedCode?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  runId?: string
+  migrationId?: string
+  table?: string
+  key?: string
+  constraint?: string
+  trigger?: boolean
+  buildDigest: string
+  correlationId: string
+  message: string
+}
+
+export type BootstrapState = {
+  phase:
+    | "shell_start"
+    | "preflight_read_only"
+    | "backup_required"
+    | "backup_verifying"
+    | "migration_applying"
+    | "recovery_reconciling"
+    | "post_verify"
+    | "ready"
+    | "read_only_recovery"
+    | "blocked_schema"
+  mode: "ready" | "read_only_recovery" | "blocked_schema"
+  ready: boolean
+  diagnostics: BootstrapDiagnostics
+  next:
+    | {
+        action: "proceed"
+        to:
+          | "shell_start"
+          | "preflight_read_only"
+          | "backup_required"
+          | "backup_verifying"
+          | "migration_applying"
+          | "recovery_reconciling"
+          | "post_verify"
+          | "ready"
+          | "read_only_recovery"
+          | "blocked_schema"
+      }
+    | {
+        action: "pause"
+        to:
+          | "shell_start"
+          | "preflight_read_only"
+          | "backup_required"
+          | "backup_verifying"
+          | "migration_applying"
+          | "recovery_reconciling"
+          | "post_verify"
+          | "ready"
+          | "read_only_recovery"
+          | "blocked_schema"
+      }
+}
+
+export type ApiBadRequest = {
+  name: "ApiBadRequest"
+  data: {
+    schemaVersion: "stable-error.v1"
+    code: string
+    category:
+      | "bootstrap"
+      | "migration"
+      | "backup_verify"
+      | "restore"
+      | "recovery"
+      | "provider"
+      | "model_route"
+      | "selection"
+      | "capability"
+      | "event"
+      | "cursor"
+      | "session"
+      | "permission"
+      | "validation"
+      | "conflict"
+      | "malformed"
+      | "internal"
+      | "unavailable"
+      | "not_found"
+    retryability: "retryable" | "not_retryable" | "indeterminate"
+    httpStatus: 400 | 403 | 404 | 409 | 410 | 423 | 503
+    resource: string
+    correlationId: string
+    message: string
+    expected?: string
+    actual?: string
+  }
+}
+
+export type ApiForbidden = {
+  name: "ApiForbidden"
+  data: {
+    schemaVersion: "stable-error.v1"
+    code: string
+    category:
+      | "bootstrap"
+      | "migration"
+      | "backup_verify"
+      | "restore"
+      | "recovery"
+      | "provider"
+      | "model_route"
+      | "selection"
+      | "capability"
+      | "event"
+      | "cursor"
+      | "session"
+      | "permission"
+      | "validation"
+      | "conflict"
+      | "malformed"
+      | "internal"
+      | "unavailable"
+      | "not_found"
+    retryability: "retryable" | "not_retryable" | "indeterminate"
+    httpStatus: 400 | 403 | 404 | 409 | 410 | 423 | 503
+    resource: string
+    correlationId: string
+    message: string
+    expected?: string
+    actual?: string
+  }
+}
+
+export type ApiNotFound = {
+  name: "ApiNotFound"
+  data: {
+    schemaVersion: "stable-error.v1"
+    code: string
+    category:
+      | "bootstrap"
+      | "migration"
+      | "backup_verify"
+      | "restore"
+      | "recovery"
+      | "provider"
+      | "model_route"
+      | "selection"
+      | "capability"
+      | "event"
+      | "cursor"
+      | "session"
+      | "permission"
+      | "validation"
+      | "conflict"
+      | "malformed"
+      | "internal"
+      | "unavailable"
+      | "not_found"
+    retryability: "retryable" | "not_retryable" | "indeterminate"
+    httpStatus: 400 | 403 | 404 | 409 | 410 | 423 | 503
+    resource: string
+    correlationId: string
+    message: string
+    expected?: string
+    actual?: string
+  }
+}
+
+export type ApiConflict = {
+  name: "ApiConflict"
+  data: {
+    schemaVersion: "stable-error.v1"
+    code: string
+    category:
+      | "bootstrap"
+      | "migration"
+      | "backup_verify"
+      | "restore"
+      | "recovery"
+      | "provider"
+      | "model_route"
+      | "selection"
+      | "capability"
+      | "event"
+      | "cursor"
+      | "session"
+      | "permission"
+      | "validation"
+      | "conflict"
+      | "malformed"
+      | "internal"
+      | "unavailable"
+      | "not_found"
+    retryability: "retryable" | "not_retryable" | "indeterminate"
+    httpStatus: 400 | 403 | 404 | 409 | 410 | 423 | 503
+    resource: string
+    correlationId: string
+    message: string
+    expected?: string
+    actual?: string
+  }
+}
+
+export type ApiGone = {
+  name: "ApiGone"
+  data: {
+    schemaVersion: "stable-error.v1"
+    code: string
+    category:
+      | "bootstrap"
+      | "migration"
+      | "backup_verify"
+      | "restore"
+      | "recovery"
+      | "provider"
+      | "model_route"
+      | "selection"
+      | "capability"
+      | "event"
+      | "cursor"
+      | "session"
+      | "permission"
+      | "validation"
+      | "conflict"
+      | "malformed"
+      | "internal"
+      | "unavailable"
+      | "not_found"
+    retryability: "retryable" | "not_retryable" | "indeterminate"
+    httpStatus: 400 | 403 | 404 | 409 | 410 | 423 | 503
+    resource: string
+    correlationId: string
+    message: string
+    expected?: string
+    actual?: string
+  }
+}
+
+export type ApiLocked = {
+  name: "ApiLocked"
+  data: {
+    schemaVersion: "stable-error.v1"
+    code: string
+    category:
+      | "bootstrap"
+      | "migration"
+      | "backup_verify"
+      | "restore"
+      | "recovery"
+      | "provider"
+      | "model_route"
+      | "selection"
+      | "capability"
+      | "event"
+      | "cursor"
+      | "session"
+      | "permission"
+      | "validation"
+      | "conflict"
+      | "malformed"
+      | "internal"
+      | "unavailable"
+      | "not_found"
+    retryability: "retryable" | "not_retryable" | "indeterminate"
+    httpStatus: 400 | 403 | 404 | 409 | 410 | 423 | 503
+    resource: string
+    correlationId: string
+    message: string
+    expected?: string
+    actual?: string
+  }
+}
+
+export type ApiUnavailable = {
+  name: "ApiUnavailable"
+  data: {
+    schemaVersion: "stable-error.v1"
+    code: string
+    category:
+      | "bootstrap"
+      | "migration"
+      | "backup_verify"
+      | "restore"
+      | "recovery"
+      | "provider"
+      | "model_route"
+      | "selection"
+      | "capability"
+      | "event"
+      | "cursor"
+      | "session"
+      | "permission"
+      | "validation"
+      | "conflict"
+      | "malformed"
+      | "internal"
+      | "unavailable"
+      | "not_found"
+    retryability: "retryable" | "not_retryable" | "indeterminate"
+    httpStatus: 400 | 403 | 404 | 409 | 410 | 423 | 503
+    resource: string
+    correlationId: string
+    message: string
+    expected?: string
+    actual?: string
+  }
+}
+
+export type BackupInfo = {
+  fileName: string
+  filePath: string
+  sizeBytes: number
+  sha256: string
+  createdAt: number
+}
+
+export type BackupList = {
+  backups: Array<BackupInfo>
+  count: number
+}
+
+export type BackupVerify =
+  | {
+      ok: true
+      quickCheck: string
+      foreignKeyCount: number
+      journalMode: string
+      synchronous: number
+      capabilityCompatible: true
+      capabilityCount: number
+      migrationCount: number
+      sqliteMasterCount: number
+      sessionCount: number
+      hashMatch: true
+      schemaDigestMatch: true
+    }
+  | {
+      ok: false
+      reason: string
+      detail: string
+    }
+
+export type RestoreInput = {
+  backup_manifest_ref: string
+  target?: string
+  dry_run?: boolean
+}
+
+export type RestoreStatus = {
+  status: "dry_run" | "restored" | "failed"
+  inProgress: boolean
+  restoreId?: string
+  sourceFile?: string
+  message: string
+}
+
+export type MigrationReceipt = {
+  receiptId: string
+  migrationId: string
+  contentHash: string
+  ordinal: number
+  runId: string
+  result: string
+  startedAt: number
+  completedAt: number
+}
+
+export type UpgradeStatus = {
+  active: boolean
+  run?: UpgradeRunUpgradeRun
+  receipts: Array<MigrationReceipt>
+  count: number
+}
+
+export type RecoveryList = {
+  descriptors: Array<
+    | RecoveryExactDescriptor
+    | RecoveryRepairableDescriptor
+    | RecoveryForkDescriptor
+    | RecoveryCoordinationDescriptor
+    | RecoveryResolvedDescriptor
+  >
+  count: number
+}
+
+export type RecoveryCommandInput = {
+  session_id: string
+  attempt_id: string
+  request_hash: string
+  actor_type: "user" | "administrator" | "system"
+  actor_id: string
+  activity_id?: string
+  provider_id?: string
+}
+
+export type RecoveryCommandResult = {
+  command_id: string
+  descriptor:
+    | RecoveryExactDescriptor
+    | RecoveryRepairableDescriptor
+    | RecoveryForkDescriptor
+    | RecoveryCoordinationDescriptor
+    | RecoveryResolvedDescriptor
+}
+
+export type RecoveryDescriptorRecord = {
+  commandId: string
+  sessionId: string
+  attemptId: string
+  requestHash: string
+  descriptor:
+    | RecoveryExactDescriptor
+    | RecoveryRepairableDescriptor
+    | RecoveryForkDescriptor
+    | RecoveryCoordinationDescriptor
+    | RecoveryResolvedDescriptor
+  actorType: "user" | "administrator" | "system"
+  actorId: string
+  createdAt: number
+}
+
+export type EvidenceExportManifest = {
+  exportId: string
+  sessionId: string
+  ownerSessionId: string
+  exportedAt: number
+  expiresAt: number
+  contentHash: string
+}
+
+export type EvidenceExportInput = {
+  session_id: string
+}
+
+export type CompositionSessionOwnerDigest = {
+  execution: string
+  placement: string
+  coordination: string
+  services: Array<string>
+}
+
+export type CompositionToolRegistryDigest = {
+  count: number
+  ids: Array<string>
+  digest: string
+}
+
+export type CompositionDatabaseDigest = {
+  path: string
+  migrationRegistryDigest: string
+  bootstrapDigest?: string
+  readerProtocol: number
+  writerProtocol: number
+}
+
+export type CompositionLocationHostDigest = {
+  host: string
+  map: string
+  idleTimeToLive: string
+  seams: Array<string>
+}
+
+export type CompositionDigestRecord = {
+  version: 1
+  digest: string
+  sessionOwner: CompositionSessionOwnerDigest
+  toolRegistry: CompositionToolRegistryDigest
+  database: CompositionDatabaseDigest
+  locationHost: CompositionLocationHostDigest
 }
 
 export type Model = {
@@ -3278,449 +3749,6 @@ export type FormatterStatus = {
   name: string
   extensions: Array<string>
   enabled: boolean
-}
-
-export type BootstrapDiagnostics = {
-  stableCode: string
-  mode: "ready" | "read_only_recovery" | "blocked_schema"
-  phase:
-    | "shell_start"
-    | "preflight_read_only"
-    | "backup_required"
-    | "backup_verifying"
-    | "migration_applying"
-    | "recovery_reconciling"
-    | "post_verify"
-    | "ready"
-    | "read_only_recovery"
-    | "blocked_schema"
-  sqliteExtendedCode?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-  runId?: string
-  migrationId?: string
-  table?: string
-  key?: string
-  constraint?: string
-  trigger?: boolean
-  buildDigest: string
-  correlationId: string
-  message: string
-}
-
-export type BootstrapState = {
-  phase:
-    | "shell_start"
-    | "preflight_read_only"
-    | "backup_required"
-    | "backup_verifying"
-    | "migration_applying"
-    | "recovery_reconciling"
-    | "post_verify"
-    | "ready"
-    | "read_only_recovery"
-    | "blocked_schema"
-  mode: "ready" | "read_only_recovery" | "blocked_schema"
-  ready: boolean
-  diagnostics: BootstrapDiagnostics
-  next:
-    | {
-        action: "proceed"
-        to:
-          | "shell_start"
-          | "preflight_read_only"
-          | "backup_required"
-          | "backup_verifying"
-          | "migration_applying"
-          | "recovery_reconciling"
-          | "post_verify"
-          | "ready"
-          | "read_only_recovery"
-          | "blocked_schema"
-      }
-    | {
-        action: "pause"
-        to:
-          | "shell_start"
-          | "preflight_read_only"
-          | "backup_required"
-          | "backup_verifying"
-          | "migration_applying"
-          | "recovery_reconciling"
-          | "post_verify"
-          | "ready"
-          | "read_only_recovery"
-          | "blocked_schema"
-      }
-}
-
-export type ApiBadRequest = {
-  name: "ApiBadRequest"
-  data: {
-    schemaVersion: "stable-error.v1"
-    code: string
-    category:
-      | "bootstrap"
-      | "migration"
-      | "backup_verify"
-      | "restore"
-      | "recovery"
-      | "provider"
-      | "model_route"
-      | "selection"
-      | "capability"
-      | "event"
-      | "cursor"
-      | "session"
-      | "permission"
-      | "validation"
-      | "conflict"
-      | "malformed"
-      | "internal"
-      | "unavailable"
-      | "not_found"
-    retryability: "retryable" | "not_retryable" | "indeterminate"
-    httpStatus: 400 | 403 | 404 | 409 | 410 | 423 | 503
-    resource: string
-    correlationId: string
-    message: string
-    expected?: string
-    actual?: string
-  }
-}
-
-export type ApiForbidden = {
-  name: "ApiForbidden"
-  data: {
-    schemaVersion: "stable-error.v1"
-    code: string
-    category:
-      | "bootstrap"
-      | "migration"
-      | "backup_verify"
-      | "restore"
-      | "recovery"
-      | "provider"
-      | "model_route"
-      | "selection"
-      | "capability"
-      | "event"
-      | "cursor"
-      | "session"
-      | "permission"
-      | "validation"
-      | "conflict"
-      | "malformed"
-      | "internal"
-      | "unavailable"
-      | "not_found"
-    retryability: "retryable" | "not_retryable" | "indeterminate"
-    httpStatus: 400 | 403 | 404 | 409 | 410 | 423 | 503
-    resource: string
-    correlationId: string
-    message: string
-    expected?: string
-    actual?: string
-  }
-}
-
-export type ApiNotFound = {
-  name: "ApiNotFound"
-  data: {
-    schemaVersion: "stable-error.v1"
-    code: string
-    category:
-      | "bootstrap"
-      | "migration"
-      | "backup_verify"
-      | "restore"
-      | "recovery"
-      | "provider"
-      | "model_route"
-      | "selection"
-      | "capability"
-      | "event"
-      | "cursor"
-      | "session"
-      | "permission"
-      | "validation"
-      | "conflict"
-      | "malformed"
-      | "internal"
-      | "unavailable"
-      | "not_found"
-    retryability: "retryable" | "not_retryable" | "indeterminate"
-    httpStatus: 400 | 403 | 404 | 409 | 410 | 423 | 503
-    resource: string
-    correlationId: string
-    message: string
-    expected?: string
-    actual?: string
-  }
-}
-
-export type ApiConflict = {
-  name: "ApiConflict"
-  data: {
-    schemaVersion: "stable-error.v1"
-    code: string
-    category:
-      | "bootstrap"
-      | "migration"
-      | "backup_verify"
-      | "restore"
-      | "recovery"
-      | "provider"
-      | "model_route"
-      | "selection"
-      | "capability"
-      | "event"
-      | "cursor"
-      | "session"
-      | "permission"
-      | "validation"
-      | "conflict"
-      | "malformed"
-      | "internal"
-      | "unavailable"
-      | "not_found"
-    retryability: "retryable" | "not_retryable" | "indeterminate"
-    httpStatus: 400 | 403 | 404 | 409 | 410 | 423 | 503
-    resource: string
-    correlationId: string
-    message: string
-    expected?: string
-    actual?: string
-  }
-}
-
-export type ApiGone = {
-  name: "ApiGone"
-  data: {
-    schemaVersion: "stable-error.v1"
-    code: string
-    category:
-      | "bootstrap"
-      | "migration"
-      | "backup_verify"
-      | "restore"
-      | "recovery"
-      | "provider"
-      | "model_route"
-      | "selection"
-      | "capability"
-      | "event"
-      | "cursor"
-      | "session"
-      | "permission"
-      | "validation"
-      | "conflict"
-      | "malformed"
-      | "internal"
-      | "unavailable"
-      | "not_found"
-    retryability: "retryable" | "not_retryable" | "indeterminate"
-    httpStatus: 400 | 403 | 404 | 409 | 410 | 423 | 503
-    resource: string
-    correlationId: string
-    message: string
-    expected?: string
-    actual?: string
-  }
-}
-
-export type ApiLocked = {
-  name: "ApiLocked"
-  data: {
-    schemaVersion: "stable-error.v1"
-    code: string
-    category:
-      | "bootstrap"
-      | "migration"
-      | "backup_verify"
-      | "restore"
-      | "recovery"
-      | "provider"
-      | "model_route"
-      | "selection"
-      | "capability"
-      | "event"
-      | "cursor"
-      | "session"
-      | "permission"
-      | "validation"
-      | "conflict"
-      | "malformed"
-      | "internal"
-      | "unavailable"
-      | "not_found"
-    retryability: "retryable" | "not_retryable" | "indeterminate"
-    httpStatus: 400 | 403 | 404 | 409 | 410 | 423 | 503
-    resource: string
-    correlationId: string
-    message: string
-    expected?: string
-    actual?: string
-  }
-}
-
-export type ApiUnavailable = {
-  name: "ApiUnavailable"
-  data: {
-    schemaVersion: "stable-error.v1"
-    code: string
-    category:
-      | "bootstrap"
-      | "migration"
-      | "backup_verify"
-      | "restore"
-      | "recovery"
-      | "provider"
-      | "model_route"
-      | "selection"
-      | "capability"
-      | "event"
-      | "cursor"
-      | "session"
-      | "permission"
-      | "validation"
-      | "conflict"
-      | "malformed"
-      | "internal"
-      | "unavailable"
-      | "not_found"
-    retryability: "retryable" | "not_retryable" | "indeterminate"
-    httpStatus: 400 | 403 | 404 | 409 | 410 | 423 | 503
-    resource: string
-    correlationId: string
-    message: string
-    expected?: string
-    actual?: string
-  }
-}
-
-export type BackupInfo = {
-  fileName: string
-  filePath: string
-  sizeBytes: number
-  sha256: string
-  createdAt: number
-}
-
-export type BackupList = {
-  backups: Array<BackupInfo>
-  count: number
-}
-
-export type BackupVerify =
-  | {
-      ok: true
-      quickCheck: string
-      foreignKeyCount: number
-      journalMode: string
-      synchronous: number
-      capabilityCompatible: true
-      capabilityCount: number
-      migrationCount: number
-      sqliteMasterCount: number
-      sessionCount: number
-      hashMatch: true
-      schemaDigestMatch: true
-    }
-  | {
-      ok: false
-      reason: string
-      detail: string
-    }
-
-export type RestoreInput = {
-  backup_manifest_ref: string
-  target?: string
-  dry_run?: boolean
-}
-
-export type RestoreStatus = {
-  status: "dry_run" | "restored" | "failed"
-  inProgress: boolean
-  restoreId?: string
-  sourceFile?: string
-  message: string
-}
-
-export type MigrationReceipt = {
-  receiptId: string
-  migrationId: string
-  contentHash: string
-  ordinal: number
-  runId: string
-  result: string
-  startedAt: number
-  completedAt: number
-}
-
-export type UpgradeStatus = {
-  active: boolean
-  run?: UpgradeRunUpgradeRun
-  receipts: Array<MigrationReceipt>
-  count: number
-}
-
-export type RecoveryList = {
-  descriptors: Array<
-    | RecoveryExactDescriptor
-    | RecoveryRepairableDescriptor
-    | RecoveryForkDescriptor
-    | RecoveryCoordinationDescriptor
-    | RecoveryResolvedDescriptor
-  >
-  count: number
-}
-
-export type RecoveryCommandInput = {
-  session_id: string
-  attempt_id: string
-  request_hash: string
-  actor_type: "user" | "administrator" | "system"
-  actor_id: string
-  activity_id?: string
-  provider_id?: string
-}
-
-export type RecoveryCommandResult = {
-  command_id: string
-  descriptor:
-    | RecoveryExactDescriptor
-    | RecoveryRepairableDescriptor
-    | RecoveryForkDescriptor
-    | RecoveryCoordinationDescriptor
-    | RecoveryResolvedDescriptor
-}
-
-export type RecoveryDescriptorRecord = {
-  commandId: string
-  sessionId: string
-  attemptId: string
-  requestHash: string
-  descriptor:
-    | RecoveryExactDescriptor
-    | RecoveryRepairableDescriptor
-    | RecoveryForkDescriptor
-    | RecoveryCoordinationDescriptor
-    | RecoveryResolvedDescriptor
-  actorType: "user" | "administrator" | "system"
-  actorId: string
-  createdAt: number
-}
-
-export type EvidenceExportManifest = {
-  exportId: string
-  sessionId: string
-  ownerSessionId: string
-  exportedAt: number
-  expiresAt: number
-  contentHash: string
-}
-
-export type EvidenceExportInput = {
-  session_id: string
 }
 
 export type CapabilityCatalog = {
@@ -5049,37 +5077,6 @@ export type LocationRef = {
   workspaceID?: string
 }
 
-export type SessionV2Info = {
-  id: string
-  parentID?: string
-  projectID: string
-  agent?: string
-  permissions: PermissionV2Ruleset
-  model?: {
-    id: string
-    providerID: string
-    variant?: string
-  }
-  cost: number
-  tokens: {
-    input: number
-    output: number
-    reasoning: number
-    cache: {
-      read: number
-      write: number
-    }
-  }
-  time: {
-    created: number
-    updated: number
-    archived?: number
-  }
-  title: string
-  location: LocationRef
-  subpath?: string
-}
-
 export type PromptSource = {
   start: number
   end: number
@@ -5109,6 +5106,14 @@ export type PromptReferenceAttachment = {
   targetUri?: string
   problem?: string
   source?: PromptSource
+}
+
+export type PromptOutputFormat = {
+  type: "text" | "json_schema"
+  schema?: {
+    [key: string]: unknown
+  }
+  retryCount?: number
 }
 
 export type SessionErrorUnknown = {
@@ -5336,6 +5341,21 @@ export type QuestionV2Tool = {
 
 export type QuestionV2Answer = Array<string>
 
+export type SessionTodoInfo = {
+  /**
+   * Brief description of the task
+   */
+  content: string
+  /**
+   * Current status of the task: pending, in_progress, completed, cancelled
+   */
+  status: string
+  /**
+   * Priority level of the task: high, medium, low
+   */
+  priority: string
+}
+
 export type EventServerInstanceDisposed = {
   id: string
   type: "server.instance.disposed"
@@ -5344,7 +5364,202 @@ export type EventServerInstanceDisposed = {
   }
 }
 
-export type SyncEventSessionCreated = {
+export type SyncEventSessionCreated1 = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.created.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      sessionID: string
+      info: Session
+    }
+  }
+}
+
+export type SyncEventSessionUpdated1 = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.updated.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      sessionID: string
+      info: Session
+    }
+  }
+}
+
+export type SyncEventSessionDeleted1 = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.deleted.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      sessionID: string
+      info: Session
+    }
+  }
+}
+
+export type SyncEventSessionDiff1 = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.diff.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      sessionID: string
+      diff: Array<SnapshotFileDiff>
+      manifest?: SnapshotDiffManifestDescriptor
+    }
+  }
+}
+
+export type SyncEventMessageUpdated1 = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "message.updated.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      sessionID: string
+      info: Message
+    }
+  }
+}
+
+export type SyncEventMessageRemoved1 = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "message.removed.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      sessionID: string
+      messageID: string
+    }
+  }
+}
+
+export type SyncEventMessagePartUpdated1 = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "message.part.updated.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      sessionID: string
+      part: Part
+      time: number
+    }
+  }
+}
+
+export type SyncEventMessagePartRemoved1 = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "message.part.removed.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      sessionID: string
+      messageID: string
+      partID: string
+    }
+  }
+}
+
+export type SessionDiffManifestDescriptor = {
+  completeness: "complete" | "truncated"
+  truncationReasons: Array<
+    | "candidate_file_limit"
+    | "discovery_output_limit"
+    | "discovery_failed"
+    | "manifest_bytes_limit"
+    | "source_file_limit"
+    | "source_total_limit"
+    | "patch_file_limit"
+    | "patch_total_limit"
+    | "materialization_failed"
+    | "time_limit"
+  >
+  manifestHash: string
+  totalFiles: number
+  totalFilesExact: boolean
+  statisticsExact?: boolean
+  includedFiles: number
+  truncatedFiles: number
+}
+
+export type SessionSummary = {
+  additions: number
+  deletions: number
+  files: number
+  diffManifest?: SessionDiffManifestDescriptor
+}
+
+export type SessionMetadata = {
+  [key: string]: unknown
+}
+
+export type SessionShare = {
+  url: string
+}
+
+export type SessionV2Info = {
+  id: string
+  parentID?: string
+  projectID: string
+  agent?: string
+  permissions: PermissionV2Ruleset
+  model?: {
+    id: string
+    providerID: string
+    variant?: string
+  }
+  cost: number
+  tokens: {
+    input: number
+    output: number
+    reasoning: number
+    cache: {
+      read: number
+      write: number
+    }
+  }
+  time: {
+    created: number
+    updated: number
+    archived?: number
+  }
+  title: string
+  summary?: SessionSummary
+  metadata?: SessionMetadata
+  share?: SessionShare
+  preview?: string
+  location: LocationRef
+  subpath?: string
+}
+
+export type SyncEventSessionCreated2 = {
   type: "sync"
   id: string
   syncEvent: {
@@ -5361,99 +5576,94 @@ export type SyncEventSessionCreated = {
   }
 }
 
-export type SyncEventSessionUpdated = {
+export type SyncEventSessionUpdated2 = {
   type: "sync"
   id: string
   syncEvent: {
-    type: "session.updated.1"
+    type: "session.updated.2"
     id: string
     seq: number
     aggregateID: string
     data: {
       sessionID: string
-      info: Session
+      info: SessionV2Info
+      slug: string
+      version: string
     }
   }
 }
 
-export type SyncEventSessionDeleted = {
+export type SessionFileDiff = {
+  file?: string
+  patch?: string
+  additions: number
+  deletions: number
+  status?: "added" | "deleted" | "modified"
+}
+
+export type SyncEventSessionDiff2 = {
   type: "sync"
   id: string
   syncEvent: {
-    type: "session.deleted.1"
+    type: "session.diff.2"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      summary: SessionSummary
+      diff: Array<SessionFileDiff>
+    }
+  }
+}
+
+export type SessionRevert = {
+  messageID: string
+  partID?: string
+  snapshot?: string
+  diff?: string
+}
+
+export type SyncEventSessionRevert1 = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.revert.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      info: SessionV2Info
+      slug: string
+      version: string
+      mutationEpoch: number
+      revert: SessionRevert
+      summary?: SessionSummary
+    }
+  }
+}
+
+export type SyncEventSessionDeleted2 = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.deleted.2"
     id: string
     seq: number
     aggregateID: string
     data: {
       sessionID: string
-      info: Session
+      info: SessionV2Info
+      slug: string
+      version: string
     }
   }
 }
 
-export type SyncEventMessageUpdated = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "message.updated.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      sessionID: string
-      info: Message
-    }
-  }
-}
-
-export type SyncEventMessageRemoved = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "message.removed.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      sessionID: string
-      messageID: string
-    }
-  }
-}
-
-export type SyncEventMessagePartUpdated = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "message.part.updated.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      sessionID: string
-      part: Part
-      time: number
-    }
-  }
-}
-
-export type SyncEventMessagePartRemoved = {
-  type: "sync"
-  id: string
-  syncEvent: {
-    type: "message.part.removed.1"
-    id: string
-    seq: number
-    aggregateID: string
-    data: {
-      sessionID: string
-      messageID: string
-      partID: string
-    }
-  }
-}
-
-export type SyncEventSessionNextAgentSwitched = {
+export type SyncEventSessionNextAgentSwitched1 = {
   type: "sync"
   id: string
   syncEvent: {
@@ -5470,7 +5680,7 @@ export type SyncEventSessionNextAgentSwitched = {
   }
 }
 
-export type SyncEventSessionNextModelSwitched = {
+export type SyncEventSessionNextModelSwitched1 = {
   type: "sync"
   id: string
   syncEvent: {
@@ -5491,7 +5701,7 @@ export type SyncEventSessionNextModelSwitched = {
   }
 }
 
-export type SyncEventSessionNextPermissionsChanged = {
+export type SyncEventSessionNextPermissionsChanged1 = {
   type: "sync"
   id: string
   syncEvent: {
@@ -5507,7 +5717,7 @@ export type SyncEventSessionNextPermissionsChanged = {
   }
 }
 
-export type SyncEventSessionNextMoved = {
+export type SyncEventSessionNextMoved1 = {
   type: "sync"
   id: string
   syncEvent: {
@@ -5524,7 +5734,7 @@ export type SyncEventSessionNextMoved = {
   }
 }
 
-export type SyncEventSessionNextPrompted = {
+export type SyncEventSessionNextPrompted1 = {
   type: "sync"
   id: string
   syncEvent: {
@@ -5542,7 +5752,7 @@ export type SyncEventSessionNextPrompted = {
   }
 }
 
-export type SyncEventSessionNextPromptAdmitted = {
+export type SyncEventSessionNextPromptAdmitted1 = {
   type: "sync"
   id: string
   syncEvent: {
@@ -5560,7 +5770,7 @@ export type SyncEventSessionNextPromptAdmitted = {
   }
 }
 
-export type SyncEventSessionNextPromptPromoted = {
+export type SyncEventSessionNextPromptPromoted1 = {
   type: "sync"
   id: string
   syncEvent: {
@@ -5578,7 +5788,7 @@ export type SyncEventSessionNextPromptPromoted = {
   }
 }
 
-export type SyncEventSessionNextInterruptRequested = {
+export type SyncEventSessionNextInterruptRequested1 = {
   type: "sync"
   id: string
   syncEvent: {
@@ -5593,7 +5803,7 @@ export type SyncEventSessionNextInterruptRequested = {
   }
 }
 
-export type SyncEventSessionExecutionStarted = {
+export type SyncEventSessionExecutionStarted1 = {
   type: "sync"
   id: string
   syncEvent: {
@@ -5608,7 +5818,7 @@ export type SyncEventSessionExecutionStarted = {
   }
 }
 
-export type SyncEventSessionExecutionSucceeded = {
+export type SyncEventSessionExecutionSucceeded1 = {
   type: "sync"
   id: string
   syncEvent: {
@@ -5623,7 +5833,7 @@ export type SyncEventSessionExecutionSucceeded = {
   }
 }
 
-export type SyncEventSessionExecutionFailed = {
+export type SyncEventSessionExecutionFailed1 = {
   type: "sync"
   id: string
   syncEvent: {
@@ -5639,7 +5849,7 @@ export type SyncEventSessionExecutionFailed = {
   }
 }
 
-export type SyncEventSessionExecutionInterrupted = {
+export type SyncEventSessionExecutionInterrupted1 = {
   type: "sync"
   id: string
   syncEvent: {
@@ -5655,7 +5865,7 @@ export type SyncEventSessionExecutionInterrupted = {
   }
 }
 
-export type SyncEventSessionNextContextUpdated = {
+export type SyncEventSessionNextContextUpdated1 = {
   type: "sync"
   id: string
   syncEvent: {
@@ -5672,7 +5882,7 @@ export type SyncEventSessionNextContextUpdated = {
   }
 }
 
-export type SyncEventSessionNextSynthetic = {
+export type SyncEventSessionNextSynthetic1 = {
   type: "sync"
   id: string
   syncEvent: {
@@ -5689,7 +5899,24 @@ export type SyncEventSessionNextSynthetic = {
   }
 }
 
-export type SyncEventSessionNextShellStarted = {
+export type SyncEventSessionNextStructuredCaptured1 = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.structured.captured.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      assistantMessageID: string
+      value: unknown
+    }
+  }
+}
+
+export type SyncEventSessionNextShellStarted1 = {
   type: "sync"
   id: string
   syncEvent: {
@@ -5707,7 +5934,7 @@ export type SyncEventSessionNextShellStarted = {
   }
 }
 
-export type SyncEventSessionNextShellEnded = {
+export type SyncEventSessionNextShellEnded1 = {
   type: "sync"
   id: string
   syncEvent: {
@@ -5724,7 +5951,7 @@ export type SyncEventSessionNextShellEnded = {
   }
 }
 
-export type SyncEventSessionNextStepStarted = {
+export type SyncEventSessionNextStepStarted1 = {
   type: "sync"
   id: string
   syncEvent: {
@@ -5747,7 +5974,7 @@ export type SyncEventSessionNextStepStarted = {
   }
 }
 
-export type SyncEventSessionNextStepEnded = {
+export type SyncEventSessionNextStepEnded2 = {
   type: "sync"
   id: string
   syncEvent: {
@@ -5775,7 +6002,7 @@ export type SyncEventSessionNextStepEnded = {
   }
 }
 
-export type SyncEventSessionNextStepFailed = {
+export type SyncEventSessionNextStepFailed2 = {
   type: "sync"
   id: string
   syncEvent: {
@@ -5792,7 +6019,7 @@ export type SyncEventSessionNextStepFailed = {
   }
 }
 
-export type SyncEventSessionNextTextStarted = {
+export type SyncEventSessionNextTextStarted1 = {
   type: "sync"
   id: string
   syncEvent: {
@@ -5809,7 +6036,7 @@ export type SyncEventSessionNextTextStarted = {
   }
 }
 
-export type SyncEventSessionNextTextEnded = {
+export type SyncEventSessionNextTextEnded1 = {
   type: "sync"
   id: string
   syncEvent: {
@@ -5827,7 +6054,7 @@ export type SyncEventSessionNextTextEnded = {
   }
 }
 
-export type SyncEventSessionNextReasoningStarted = {
+export type SyncEventSessionNextReasoningStarted1 = {
   type: "sync"
   id: string
   syncEvent: {
@@ -5849,7 +6076,7 @@ export type SyncEventSessionNextReasoningStarted = {
   }
 }
 
-export type SyncEventSessionNextReasoningEnded = {
+export type SyncEventSessionNextReasoningEnded1 = {
   type: "sync"
   id: string
   syncEvent: {
@@ -5872,7 +6099,7 @@ export type SyncEventSessionNextReasoningEnded = {
   }
 }
 
-export type SyncEventSessionNextToolInputStarted = {
+export type SyncEventSessionNextToolInputStarted1 = {
   type: "sync"
   id: string
   syncEvent: {
@@ -5890,7 +6117,7 @@ export type SyncEventSessionNextToolInputStarted = {
   }
 }
 
-export type SyncEventSessionNextToolInputEnded = {
+export type SyncEventSessionNextToolInputEnded1 = {
   type: "sync"
   id: string
   syncEvent: {
@@ -5908,7 +6135,7 @@ export type SyncEventSessionNextToolInputEnded = {
   }
 }
 
-export type SyncEventSessionNextToolCalled = {
+export type SyncEventSessionNextToolCalled1 = {
   type: "sync"
   id: string
   syncEvent: {
@@ -5937,7 +6164,7 @@ export type SyncEventSessionNextToolCalled = {
   }
 }
 
-export type SyncEventSessionNextToolProgress = {
+export type SyncEventSessionNextToolProgress1 = {
   type: "sync"
   id: string
   syncEvent: {
@@ -5958,7 +6185,7 @@ export type SyncEventSessionNextToolProgress = {
   }
 }
 
-export type SyncEventSessionNextToolSuccess = {
+export type SyncEventSessionNextToolSuccess1 = {
   type: "sync"
   id: string
   syncEvent: {
@@ -5989,7 +6216,7 @@ export type SyncEventSessionNextToolSuccess = {
   }
 }
 
-export type SyncEventSessionNextToolFailed = {
+export type SyncEventSessionNextToolFailed1 = {
   type: "sync"
   id: string
   syncEvent: {
@@ -6016,7 +6243,7 @@ export type SyncEventSessionNextToolFailed = {
   }
 }
 
-export type SyncEventSessionNextRetried = {
+export type SyncEventSessionNextRetried1 = {
   type: "sync"
   id: string
   syncEvent: {
@@ -6033,7 +6260,7 @@ export type SyncEventSessionNextRetried = {
   }
 }
 
-export type SyncEventSessionNextCompactionStarted = {
+export type SyncEventSessionNextCompactionStarted1 = {
   type: "sync"
   id: string
   syncEvent: {
@@ -6050,7 +6277,24 @@ export type SyncEventSessionNextCompactionStarted = {
   }
 }
 
-export type SyncEventSessionNextCompactionEnded = {
+export type SyncEventSessionNextCompactionEnded1 = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.next.compaction.ended.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      text: string
+      include?: string
+    }
+  }
+}
+
+export type SyncEventSessionNextCompactionEnded2 = {
   type: "sync"
   id: string
   syncEvent: {
@@ -6069,7 +6313,7 @@ export type SyncEventSessionNextCompactionEnded = {
   }
 }
 
-export type SyncEventSessionCompacted = {
+export type SyncEventSessionCompacted1 = {
   type: "sync"
   id: string
   syncEvent: {
@@ -6462,6 +6706,7 @@ export type SessionMessageUser = {
   files?: Array<PromptFileAttachment>
   agents?: Array<PromptAgentAttachment>
   references?: Array<PromptReferenceAttachment>
+  format?: PromptOutputFormat
   type: "user"
 }
 
@@ -6616,6 +6861,7 @@ export type SessionMessageAssistant = {
     start?: string
     end?: string
   }
+  structured?: unknown
   finish?: string
   cost?: number
   tokens?: {
@@ -6784,9 +7030,7 @@ export type EventSessionCreated = {
   type: "session.created"
   properties: {
     sessionID: string
-    info: SessionV2Info
-    slug: string
-    version: string
+    info: Session
   }
 }
 
@@ -6805,6 +7049,16 @@ export type EventSessionDeleted = {
   properties: {
     sessionID: string
     info: Session
+  }
+}
+
+export type EventSessionDiff = {
+  id: string
+  type: "session.diff"
+  properties: {
+    sessionID: string
+    diff: Array<SnapshotFileDiff>
+    manifest?: SnapshotDiffManifestDescriptor
   }
 }
 
@@ -6995,6 +7249,17 @@ export type EventSessionNextSynthetic = {
     sessionID: string
     messageID: string
     text: string
+  }
+}
+
+export type EventSessionNextStructuredCaptured = {
+  id: string
+  type: "session.next.structured.captured"
+  properties: {
+    timestamp: number
+    sessionID: string
+    assistantMessageID: string
+    value: unknown
   }
 }
 
@@ -7605,7 +7870,7 @@ export type EventTodoUpdated = {
   type: "todo.updated"
   properties: {
     sessionID: string
-    todos: Array<Todo>
+    todos: Array<SessionTodoInfo>
   }
 }
 
@@ -7728,36 +7993,6 @@ export type EventWorktreeFailed = {
   type: "worktree.failed"
   properties: {
     message: string
-  }
-}
-
-export type EventSessionDiff = {
-  id: string
-  type: "session.diff"
-  properties: {
-    sessionID: string
-    diff: Array<SnapshotFileDiff>
-    manifest?: {
-      completeness: "complete" | "truncated"
-      truncationReasons: Array<
-        | "candidate_file_limit"
-        | "discovery_output_limit"
-        | "discovery_failed"
-        | "manifest_bytes_limit"
-        | "source_file_limit"
-        | "source_total_limit"
-        | "patch_file_limit"
-        | "patch_total_limit"
-        | "materialization_failed"
-        | "time_limit"
-      >
-      manifestHash: string
-      totalFiles: number
-      totalFilesExact: boolean
-      statisticsExact?: boolean
-      includedFiles: number
-      truncatedFiles: number
-    }
   }
 }
 
@@ -8453,6 +8688,567 @@ export type EventSubscribeResponses = {
 }
 
 export type EventSubscribeResponse = EventSubscribeResponses[keyof EventSubscribeResponses]
+
+export type MaintenanceBootstrapStatusData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/bootstrap/status"
+}
+
+export type MaintenanceBootstrapStatusErrors = {
+  /**
+   * ApiBadRequest
+   */
+  400: ApiBadRequest
+  /**
+   * ApiForbidden
+   */
+  403: ApiForbidden
+  /**
+   * ApiNotFound
+   */
+  404: ApiNotFound
+  /**
+   * ApiConflict
+   */
+  409: ApiConflict
+  /**
+   * ApiGone
+   */
+  410: ApiGone
+  /**
+   * ApiLocked
+   */
+  423: ApiLocked
+  /**
+   * ApiUnavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceBootstrapStatusError = MaintenanceBootstrapStatusErrors[keyof MaintenanceBootstrapStatusErrors]
+
+export type MaintenanceBootstrapStatusResponses = {
+  /**
+   * Current bootstrap state
+   */
+  200: BootstrapState
+}
+
+export type MaintenanceBootstrapStatusResponse =
+  MaintenanceBootstrapStatusResponses[keyof MaintenanceBootstrapStatusResponses]
+
+export type MaintenanceBackupListData = {
+  body?: never
+  path?: never
+  query?: {
+    dir?: string
+  }
+  url: "/backup/list"
+}
+
+export type MaintenanceBackupListErrors = {
+  /**
+   * ApiBadRequest
+   */
+  400: ApiBadRequest
+  /**
+   * ApiForbidden
+   */
+  403: ApiForbidden
+  /**
+   * ApiNotFound
+   */
+  404: ApiNotFound
+  /**
+   * ApiConflict
+   */
+  409: ApiConflict
+  /**
+   * ApiGone
+   */
+  410: ApiGone
+  /**
+   * ApiLocked
+   */
+  423: ApiLocked
+  /**
+   * ApiUnavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceBackupListError = MaintenanceBackupListErrors[keyof MaintenanceBackupListErrors]
+
+export type MaintenanceBackupListResponses = {
+  /**
+   * Backup manifest list
+   */
+  200: BackupList
+}
+
+export type MaintenanceBackupListResponse = MaintenanceBackupListResponses[keyof MaintenanceBackupListResponses]
+
+export type MaintenanceBackupVerifyData = {
+  body?: never
+  path?: never
+  query: {
+    manifest_path: string
+  }
+  url: "/backup/verify"
+}
+
+export type MaintenanceBackupVerifyErrors = {
+  /**
+   * ApiBadRequest
+   */
+  400: ApiBadRequest
+  /**
+   * ApiForbidden
+   */
+  403: ApiForbidden
+  /**
+   * ApiNotFound
+   */
+  404: ApiNotFound
+  /**
+   * ApiConflict
+   */
+  409: ApiConflict
+  /**
+   * ApiGone
+   */
+  410: ApiGone
+  /**
+   * ApiLocked
+   */
+  423: ApiLocked
+  /**
+   * ApiUnavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceBackupVerifyError = MaintenanceBackupVerifyErrors[keyof MaintenanceBackupVerifyErrors]
+
+export type MaintenanceBackupVerifyResponses = {
+  /**
+   * Backup verify result
+   */
+  200: BackupVerify
+}
+
+export type MaintenanceBackupVerifyResponse = MaintenanceBackupVerifyResponses[keyof MaintenanceBackupVerifyResponses]
+
+export type MaintenanceBackupRestoreData = {
+  body?: RestoreInput
+  path?: never
+  query?: never
+  url: "/backup/restore"
+}
+
+export type MaintenanceBackupRestoreErrors = {
+  /**
+   * ApiBadRequest
+   */
+  400: ApiBadRequest
+  /**
+   * ApiForbidden
+   */
+  403: ApiForbidden
+  /**
+   * ApiNotFound
+   */
+  404: ApiNotFound
+  /**
+   * ApiConflict
+   */
+  409: ApiConflict
+  /**
+   * ApiGone
+   */
+  410: ApiGone
+  /**
+   * ApiLocked
+   */
+  423: ApiLocked
+  /**
+   * ApiUnavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceBackupRestoreError = MaintenanceBackupRestoreErrors[keyof MaintenanceBackupRestoreErrors]
+
+export type MaintenanceBackupRestoreResponses = {
+  /**
+   * Verified restore status
+   */
+  200: RestoreStatus
+}
+
+export type MaintenanceBackupRestoreResponse =
+  MaintenanceBackupRestoreResponses[keyof MaintenanceBackupRestoreResponses]
+
+export type MaintenanceUpgradeStatusData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/upgrade/status"
+}
+
+export type MaintenanceUpgradeStatusErrors = {
+  /**
+   * ApiBadRequest
+   */
+  400: ApiBadRequest
+  /**
+   * ApiForbidden
+   */
+  403: ApiForbidden
+  /**
+   * ApiNotFound
+   */
+  404: ApiNotFound
+  /**
+   * ApiConflict
+   */
+  409: ApiConflict
+  /**
+   * ApiGone
+   */
+  410: ApiGone
+  /**
+   * ApiLocked
+   */
+  423: ApiLocked
+  /**
+   * ApiUnavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceUpgradeStatusError = MaintenanceUpgradeStatusErrors[keyof MaintenanceUpgradeStatusErrors]
+
+export type MaintenanceUpgradeStatusResponses = {
+  /**
+   * Upgrade run status
+   */
+  200: UpgradeStatus
+}
+
+export type MaintenanceUpgradeStatusResponse =
+  MaintenanceUpgradeStatusResponses[keyof MaintenanceUpgradeStatusResponses]
+
+export type MaintenanceRecoveryListData = {
+  body?: never
+  path?: never
+  query: {
+    session_id: string
+  }
+  url: "/recovery/list"
+}
+
+export type MaintenanceRecoveryListErrors = {
+  /**
+   * ApiBadRequest
+   */
+  400: ApiBadRequest
+  /**
+   * ApiForbidden
+   */
+  403: ApiForbidden
+  /**
+   * ApiNotFound
+   */
+  404: ApiNotFound
+  /**
+   * ApiConflict
+   */
+  409: ApiConflict
+  /**
+   * ApiGone
+   */
+  410: ApiGone
+  /**
+   * ApiLocked
+   */
+  423: ApiLocked
+  /**
+   * ApiUnavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceRecoveryListError = MaintenanceRecoveryListErrors[keyof MaintenanceRecoveryListErrors]
+
+export type MaintenanceRecoveryListResponses = {
+  /**
+   * Recovery descriptors for a session
+   */
+  200: RecoveryList
+}
+
+export type MaintenanceRecoveryListResponse = MaintenanceRecoveryListResponses[keyof MaintenanceRecoveryListResponses]
+
+export type MaintenanceRecoveryCommandData = {
+  body?: RecoveryCommandInput
+  path?: never
+  query?: never
+  url: "/recovery/command"
+}
+
+export type MaintenanceRecoveryCommandErrors = {
+  /**
+   * ApiBadRequest
+   */
+  400: ApiBadRequest
+  /**
+   * ApiForbidden
+   */
+  403: ApiForbidden
+  /**
+   * ApiNotFound
+   */
+  404: ApiNotFound
+  /**
+   * ApiConflict
+   */
+  409: ApiConflict
+  /**
+   * ApiGone
+   */
+  410: ApiGone
+  /**
+   * ApiLocked
+   */
+  423: ApiLocked
+  /**
+   * ApiUnavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceRecoveryCommandError = MaintenanceRecoveryCommandErrors[keyof MaintenanceRecoveryCommandErrors]
+
+export type MaintenanceRecoveryCommandResponses = {
+  /**
+   * Classified recovery command
+   */
+  200: RecoveryCommandResult
+}
+
+export type MaintenanceRecoveryCommandResponse =
+  MaintenanceRecoveryCommandResponses[keyof MaintenanceRecoveryCommandResponses]
+
+export type MaintenanceRecoveryCommandGetData = {
+  body?: never
+  path?: never
+  query: {
+    command_id: string
+  }
+  url: "/recovery/commandGet"
+}
+
+export type MaintenanceRecoveryCommandGetErrors = {
+  /**
+   * ApiBadRequest
+   */
+  400: ApiBadRequest
+  /**
+   * ApiForbidden
+   */
+  403: ApiForbidden
+  /**
+   * ApiNotFound
+   */
+  404: ApiNotFound
+  /**
+   * ApiConflict
+   */
+  409: ApiConflict
+  /**
+   * ApiGone
+   */
+  410: ApiGone
+  /**
+   * ApiLocked
+   */
+  423: ApiLocked
+  /**
+   * ApiUnavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceRecoveryCommandGetError =
+  MaintenanceRecoveryCommandGetErrors[keyof MaintenanceRecoveryCommandGetErrors]
+
+export type MaintenanceRecoveryCommandGetResponses = {
+  /**
+   * Recovery command record
+   */
+  200: RecoveryDescriptorRecord
+}
+
+export type MaintenanceRecoveryCommandGetResponse =
+  MaintenanceRecoveryCommandGetResponses[keyof MaintenanceRecoveryCommandGetResponses]
+
+export type MaintenanceRecoveryEvidenceExportData = {
+  body?: never
+  path?: never
+  query: {
+    export_id: string
+  }
+  url: "/recovery/evidenceExport"
+}
+
+export type MaintenanceRecoveryEvidenceExportErrors = {
+  /**
+   * ApiBadRequest
+   */
+  400: ApiBadRequest
+  /**
+   * ApiForbidden
+   */
+  403: ApiForbidden
+  /**
+   * ApiNotFound
+   */
+  404: ApiNotFound
+  /**
+   * ApiConflict
+   */
+  409: ApiConflict
+  /**
+   * ApiGone
+   */
+  410: ApiGone
+  /**
+   * ApiLocked
+   */
+  423: ApiLocked
+  /**
+   * ApiUnavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceRecoveryEvidenceExportError =
+  MaintenanceRecoveryEvidenceExportErrors[keyof MaintenanceRecoveryEvidenceExportErrors]
+
+export type MaintenanceRecoveryEvidenceExportResponses = {
+  /**
+   * Evidence export manifest
+   */
+  200: EvidenceExportManifest
+}
+
+export type MaintenanceRecoveryEvidenceExportResponse =
+  MaintenanceRecoveryEvidenceExportResponses[keyof MaintenanceRecoveryEvidenceExportResponses]
+
+export type MaintenanceRecoveryEvidenceExportCreateData = {
+  body?: EvidenceExportInput
+  path?: never
+  query?: never
+  url: "/recovery/evidenceExport"
+}
+
+export type MaintenanceRecoveryEvidenceExportCreateErrors = {
+  /**
+   * ApiBadRequest
+   */
+  400: ApiBadRequest
+  /**
+   * ApiForbidden
+   */
+  403: ApiForbidden
+  /**
+   * ApiNotFound
+   */
+  404: ApiNotFound
+  /**
+   * ApiConflict
+   */
+  409: ApiConflict
+  /**
+   * ApiGone
+   */
+  410: ApiGone
+  /**
+   * ApiLocked
+   */
+  423: ApiLocked
+  /**
+   * ApiUnavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceRecoveryEvidenceExportCreateError =
+  MaintenanceRecoveryEvidenceExportCreateErrors[keyof MaintenanceRecoveryEvidenceExportCreateErrors]
+
+export type MaintenanceRecoveryEvidenceExportCreateResponses = {
+  /**
+   * Evidence export manifest
+   */
+  200: EvidenceExportManifest
+}
+
+export type MaintenanceRecoveryEvidenceExportCreateResponse =
+  MaintenanceRecoveryEvidenceExportCreateResponses[keyof MaintenanceRecoveryEvidenceExportCreateResponses]
+
+export type MaintenanceCompositionDigestData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/composition/digest"
+}
+
+export type MaintenanceCompositionDigestErrors = {
+  /**
+   * ApiBadRequest
+   */
+  400: ApiBadRequest
+  /**
+   * ApiForbidden
+   */
+  403: ApiForbidden
+  /**
+   * ApiNotFound
+   */
+  404: ApiNotFound
+  /**
+   * ApiConflict
+   */
+  409: ApiConflict
+  /**
+   * ApiGone
+   */
+  410: ApiGone
+  /**
+   * ApiLocked
+   */
+  423: ApiLocked
+  /**
+   * ApiUnavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceCompositionDigestError =
+  MaintenanceCompositionDigestErrors[keyof MaintenanceCompositionDigestErrors]
+
+export type MaintenanceCompositionDigestResponses = {
+  /**
+   * Root composition digest
+   */
+  200: CompositionDigestRecord
+}
+
+export type MaintenanceCompositionDigestResponse =
+  MaintenanceCompositionDigestResponses[keyof MaintenanceCompositionDigestResponses]
 
 export type ConfigGetData = {
   body?: never
@@ -13028,550 +13824,43 @@ export type FormatterStatusResponses = {
 
 export type FormatterStatusResponse = FormatterStatusResponses[keyof FormatterStatusResponses]
 
-export type MaintenanceBootstrapStatusData = {
-  body?: never
-  path?: never
-  query?: never
-  url: "/bootstrap/status"
-}
-
-export type MaintenanceBootstrapStatusErrors = {
-  /**
-   * Bad request
-   */
-  400: ApiBadRequest
-  /**
-   * Forbidden
-   */
-  403: ApiForbidden
-  /**
-   * Not found
-   */
-  404: ApiNotFound
-  /**
-   * Conflict
-   */
-  409: ApiConflict
-  /**
-   * Gone (retention floor exceeded)
-   */
-  410: ApiGone
-  /**
-   * Locked
-   */
-  423: ApiLocked
-  /**
-   * Service unavailable
-   */
-  503: ApiUnavailable
-}
-
-export type MaintenanceBootstrapStatusError = MaintenanceBootstrapStatusErrors[keyof MaintenanceBootstrapStatusErrors]
-
-export type MaintenanceBootstrapStatusResponses = {
-  /**
-   * Current bootstrap state
-   */
-  200: BootstrapState
-}
-
-export type MaintenanceBootstrapStatusResponse =
-  MaintenanceBootstrapStatusResponses[keyof MaintenanceBootstrapStatusResponses]
-
-export type MaintenanceBackupListData = {
-  body?: never
-  path?: never
-  query?: {
-    dir?: string
-  }
-  url: "/backup/list"
-}
-
-export type MaintenanceBackupListErrors = {
-  /**
-   * Bad request
-   */
-  400: ApiBadRequest
-  /**
-   * Forbidden
-   */
-  403: ApiForbidden
-  /**
-   * Not found
-   */
-  404: ApiNotFound
-  /**
-   * Conflict
-   */
-  409: ApiConflict
-  /**
-   * Gone (retention floor exceeded)
-   */
-  410: ApiGone
-  /**
-   * Locked
-   */
-  423: ApiLocked
-  /**
-   * Service unavailable
-   */
-  503: ApiUnavailable
-}
-
-export type MaintenanceBackupListError = MaintenanceBackupListErrors[keyof MaintenanceBackupListErrors]
-
-export type MaintenanceBackupListResponses = {
-  /**
-   * Backup manifest list
-   */
-  200: BackupList
-}
-
-export type MaintenanceBackupListResponse = MaintenanceBackupListResponses[keyof MaintenanceBackupListResponses]
-
-export type MaintenanceBackupVerifyData = {
-  body?: never
-  path?: never
-  query: {
-    manifest_path: string
-  }
-  url: "/backup/verify"
-}
-
-export type MaintenanceBackupVerifyErrors = {
-  /**
-   * Bad request
-   */
-  400: ApiBadRequest
-  /**
-   * Forbidden
-   */
-  403: ApiForbidden
-  /**
-   * Not found
-   */
-  404: ApiNotFound
-  /**
-   * Conflict
-   */
-  409: ApiConflict
-  /**
-   * Gone (retention floor exceeded)
-   */
-  410: ApiGone
-  /**
-   * Locked
-   */
-  423: ApiLocked
-  /**
-   * Service unavailable
-   */
-  503: ApiUnavailable
-}
-
-export type MaintenanceBackupVerifyError = MaintenanceBackupVerifyErrors[keyof MaintenanceBackupVerifyErrors]
-
-export type MaintenanceBackupVerifyResponses = {
-  /**
-   * Backup verify result
-   */
-  200: BackupVerify
-}
-
-export type MaintenanceBackupVerifyResponse = MaintenanceBackupVerifyResponses[keyof MaintenanceBackupVerifyResponses]
-
-export type MaintenanceBackupRestoreData = {
-  body?: RestoreInput
-  path?: never
-  query?: never
-  url: "/backup/restore"
-}
-
-export type MaintenanceBackupRestoreErrors = {
-  /**
-   * Bad request
-   */
-  400: ApiBadRequest
-  /**
-   * Forbidden
-   */
-  403: ApiForbidden
-  /**
-   * Not found
-   */
-  404: ApiNotFound
-  /**
-   * Conflict
-   */
-  409: ApiConflict
-  /**
-   * Gone (retention floor exceeded)
-   */
-  410: ApiGone
-  /**
-   * Locked
-   */
-  423: ApiLocked
-  /**
-   * Service unavailable
-   */
-  503: ApiUnavailable
-}
-
-export type MaintenanceBackupRestoreError = MaintenanceBackupRestoreErrors[keyof MaintenanceBackupRestoreErrors]
-
-export type MaintenanceBackupRestoreResponses = {
-  /**
-   * Restore dry-run status
-   */
-  200: RestoreStatus
-}
-
-export type MaintenanceBackupRestoreResponse =
-  MaintenanceBackupRestoreResponses[keyof MaintenanceBackupRestoreResponses]
-
-export type MaintenanceUpgradeStatusData = {
-  body?: never
-  path?: never
-  query?: never
-  url: "/upgrade/status"
-}
-
-export type MaintenanceUpgradeStatusErrors = {
-  /**
-   * Bad request
-   */
-  400: ApiBadRequest
-  /**
-   * Forbidden
-   */
-  403: ApiForbidden
-  /**
-   * Not found
-   */
-  404: ApiNotFound
-  /**
-   * Conflict
-   */
-  409: ApiConflict
-  /**
-   * Gone (retention floor exceeded)
-   */
-  410: ApiGone
-  /**
-   * Locked
-   */
-  423: ApiLocked
-  /**
-   * Service unavailable
-   */
-  503: ApiUnavailable
-}
-
-export type MaintenanceUpgradeStatusError = MaintenanceUpgradeStatusErrors[keyof MaintenanceUpgradeStatusErrors]
-
-export type MaintenanceUpgradeStatusResponses = {
-  /**
-   * Upgrade run status
-   */
-  200: UpgradeStatus
-}
-
-export type MaintenanceUpgradeStatusResponse =
-  MaintenanceUpgradeStatusResponses[keyof MaintenanceUpgradeStatusResponses]
-
-export type MaintenanceRecoveryListData = {
-  body?: never
-  path?: never
-  query: {
-    session_id: string
-  }
-  url: "/recovery/list"
-}
-
-export type MaintenanceRecoveryListErrors = {
-  /**
-   * Bad request
-   */
-  400: ApiBadRequest
-  /**
-   * Forbidden
-   */
-  403: ApiForbidden
-  /**
-   * Not found
-   */
-  404: ApiNotFound
-  /**
-   * Conflict
-   */
-  409: ApiConflict
-  /**
-   * Gone (retention floor exceeded)
-   */
-  410: ApiGone
-  /**
-   * Locked
-   */
-  423: ApiLocked
-  /**
-   * Service unavailable
-   */
-  503: ApiUnavailable
-}
-
-export type MaintenanceRecoveryListError = MaintenanceRecoveryListErrors[keyof MaintenanceRecoveryListErrors]
-
-export type MaintenanceRecoveryListResponses = {
-  /**
-   * Recovery descriptors for a session
-   */
-  200: RecoveryList
-}
-
-export type MaintenanceRecoveryListResponse = MaintenanceRecoveryListResponses[keyof MaintenanceRecoveryListResponses]
-
-export type MaintenanceRecoveryCommandData = {
-  body?: RecoveryCommandInput
-  path?: never
-  query?: never
-  url: "/recovery/command"
-}
-
-export type MaintenanceRecoveryCommandErrors = {
-  /**
-   * Bad request
-   */
-  400: ApiBadRequest
-  /**
-   * Forbidden
-   */
-  403: ApiForbidden
-  /**
-   * Not found
-   */
-  404: ApiNotFound
-  /**
-   * Conflict
-   */
-  409: ApiConflict
-  /**
-   * Gone (retention floor exceeded)
-   */
-  410: ApiGone
-  /**
-   * Locked
-   */
-  423: ApiLocked
-  /**
-   * Service unavailable
-   */
-  503: ApiUnavailable
-}
-
-export type MaintenanceRecoveryCommandError = MaintenanceRecoveryCommandErrors[keyof MaintenanceRecoveryCommandErrors]
-
-export type MaintenanceRecoveryCommandResponses = {
-  /**
-   * Classified recovery command
-   */
-  200: RecoveryCommandResult
-}
-
-export type MaintenanceRecoveryCommandResponse =
-  MaintenanceRecoveryCommandResponses[keyof MaintenanceRecoveryCommandResponses]
-
-export type MaintenanceRecoveryCommandGetData = {
-  body?: never
-  path?: never
-  query: {
-    command_id: string
-  }
-  url: "/recovery/commandGet"
-}
-
-export type MaintenanceRecoveryCommandGetErrors = {
-  /**
-   * Bad request
-   */
-  400: ApiBadRequest
-  /**
-   * Forbidden
-   */
-  403: ApiForbidden
-  /**
-   * Not found
-   */
-  404: ApiNotFound
-  /**
-   * Conflict
-   */
-  409: ApiConflict
-  /**
-   * Gone (retention floor exceeded)
-   */
-  410: ApiGone
-  /**
-   * Locked
-   */
-  423: ApiLocked
-  /**
-   * Service unavailable
-   */
-  503: ApiUnavailable
-}
-
-export type MaintenanceRecoveryCommandGetError =
-  MaintenanceRecoveryCommandGetErrors[keyof MaintenanceRecoveryCommandGetErrors]
-
-export type MaintenanceRecoveryCommandGetResponses = {
-  /**
-   * Recovery command record
-   */
-  200: RecoveryDescriptorRecord
-}
-
-export type MaintenanceRecoveryCommandGetResponse =
-  MaintenanceRecoveryCommandGetResponses[keyof MaintenanceRecoveryCommandGetResponses]
-
-export type MaintenanceRecoveryEvidenceExportData = {
-  body?: never
-  path?: never
-  query: {
-    export_id: string
-  }
-  url: "/recovery/evidenceExport"
-}
-
-export type MaintenanceRecoveryEvidenceExportErrors = {
-  /**
-   * Bad request
-   */
-  400: ApiBadRequest
-  /**
-   * Forbidden
-   */
-  403: ApiForbidden
-  /**
-   * Not found
-   */
-  404: ApiNotFound
-  /**
-   * Conflict
-   */
-  409: ApiConflict
-  /**
-   * Gone (retention floor exceeded)
-   */
-  410: ApiGone
-  /**
-   * Locked
-   */
-  423: ApiLocked
-  /**
-   * Service unavailable
-   */
-  503: ApiUnavailable
-}
-
-export type MaintenanceRecoveryEvidenceExportError =
-  MaintenanceRecoveryEvidenceExportErrors[keyof MaintenanceRecoveryEvidenceExportErrors]
-
-export type MaintenanceRecoveryEvidenceExportResponses = {
-  /**
-   * Evidence export manifest
-   */
-  200: EvidenceExportManifest
-}
-
-export type MaintenanceRecoveryEvidenceExportResponse =
-  MaintenanceRecoveryEvidenceExportResponses[keyof MaintenanceRecoveryEvidenceExportResponses]
-
-export type MaintenanceRecoveryEvidenceExportCreateData = {
-  body?: EvidenceExportInput
-  path?: never
-  query?: never
-  url: "/recovery/evidenceExport"
-}
-
-export type MaintenanceRecoveryEvidenceExportCreateErrors = {
-  /**
-   * Bad request
-   */
-  400: ApiBadRequest
-  /**
-   * Forbidden
-   */
-  403: ApiForbidden
-  /**
-   * Not found
-   */
-  404: ApiNotFound
-  /**
-   * Conflict
-   */
-  409: ApiConflict
-  /**
-   * Gone (retention floor exceeded)
-   */
-  410: ApiGone
-  /**
-   * Locked
-   */
-  423: ApiLocked
-  /**
-   * Service unavailable
-   */
-  503: ApiUnavailable
-}
-
-export type MaintenanceRecoveryEvidenceExportCreateError =
-  MaintenanceRecoveryEvidenceExportCreateErrors[keyof MaintenanceRecoveryEvidenceExportCreateErrors]
-
-export type MaintenanceRecoveryEvidenceExportCreateResponses = {
-  /**
-   * Evidence export manifest
-   */
-  200: EvidenceExportManifest
-}
-
-export type MaintenanceRecoveryEvidenceExportCreateResponse =
-  MaintenanceRecoveryEvidenceExportCreateResponses[keyof MaintenanceRecoveryEvidenceExportCreateResponses]
-
 export type CapabilityCatalogData = {
   body?: never
   path?: never
-  query?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
   url: "/capability/catalog"
 }
 
 export type CapabilityCatalogErrors = {
   /**
-   * Bad request
+   * ApiBadRequest | InvalidRequestError
    */
-  400: ApiBadRequest
+  400: ApiBadRequest | InvalidRequestError
   /**
-   * Forbidden
+   * ApiForbidden
    */
   403: ApiForbidden
   /**
-   * Not found
+   * ApiNotFound
    */
   404: ApiNotFound
   /**
-   * Conflict
+   * ApiConflict
    */
   409: ApiConflict
   /**
-   * Gone (retention floor exceeded)
+   * ApiGone
    */
   410: ApiGone
   /**
-   * Locked
+   * ApiLocked
    */
   423: ApiLocked
   /**
-   * Service unavailable
+   * ApiUnavailable
    */
   503: ApiUnavailable
 }
@@ -13590,37 +13879,40 @@ export type CapabilityCatalogResponse = CapabilityCatalogResponses[keyof Capabil
 export type CapabilitySearchData = {
   body?: CapabilitySearchInput
   path?: never
-  query?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
   url: "/capability/search"
 }
 
 export type CapabilitySearchErrors = {
   /**
-   * Bad request
+   * ApiBadRequest | InvalidRequestError
    */
-  400: ApiBadRequest
+  400: ApiBadRequest | InvalidRequestError
   /**
-   * Forbidden
+   * ApiForbidden
    */
   403: ApiForbidden
   /**
-   * Not found
+   * ApiNotFound
    */
   404: ApiNotFound
   /**
-   * Conflict
+   * ApiConflict
    */
   409: ApiConflict
   /**
-   * Gone (retention floor exceeded)
+   * ApiGone
    */
   410: ApiGone
   /**
-   * Locked
+   * ApiLocked
    */
   423: ApiLocked
   /**
-   * Service unavailable
+   * ApiUnavailable
    */
   503: ApiUnavailable
 }
@@ -13655,37 +13947,40 @@ export type CapabilitySearchResponse = CapabilitySearchResponses[keyof Capabilit
 export type CapabilityLoadReceiptsData = {
   body?: never
   path?: never
-  query?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
   url: "/capability/loadReceipts"
 }
 
 export type CapabilityLoadReceiptsErrors = {
   /**
-   * Bad request
+   * ApiBadRequest | InvalidRequestError
    */
-  400: ApiBadRequest
+  400: ApiBadRequest | InvalidRequestError
   /**
-   * Forbidden
+   * ApiForbidden
    */
   403: ApiForbidden
   /**
-   * Not found
+   * ApiNotFound
    */
   404: ApiNotFound
   /**
-   * Conflict
+   * ApiConflict
    */
   409: ApiConflict
   /**
-   * Gone (retention floor exceeded)
+   * ApiGone
    */
   410: ApiGone
   /**
-   * Locked
+   * ApiLocked
    */
   423: ApiLocked
   /**
-   * Service unavailable
+   * ApiUnavailable
    */
   503: ApiUnavailable
 }
@@ -13706,37 +14001,39 @@ export type ContextReadinessData = {
   path?: never
   query: {
     session_id: string
+    directory?: string
+    workspace?: string
   }
   url: "/context/readiness"
 }
 
 export type ContextReadinessErrors = {
   /**
-   * Bad request
+   * ApiBadRequest | InvalidRequestError
    */
-  400: ApiBadRequest
+  400: ApiBadRequest | InvalidRequestError
   /**
-   * Forbidden
+   * ApiForbidden
    */
   403: ApiForbidden
   /**
-   * Not found
+   * ApiNotFound
    */
   404: ApiNotFound
   /**
-   * Conflict
+   * ApiConflict
    */
   409: ApiConflict
   /**
-   * Gone (retention floor exceeded)
+   * ApiGone
    */
   410: ApiGone
   /**
-   * Locked
+   * ApiLocked
    */
   423: ApiLocked
   /**
-   * Service unavailable
+   * ApiUnavailable
    */
   503: ApiUnavailable
 }
@@ -13757,37 +14054,39 @@ export type ContextEventsCursorData = {
   path?: never
   query: {
     session_id: string
+    directory?: string
+    workspace?: string
   }
   url: "/context/eventsCursor"
 }
 
 export type ContextEventsCursorErrors = {
   /**
-   * Bad request
+   * ApiBadRequest | InvalidRequestError
    */
-  400: ApiBadRequest
+  400: ApiBadRequest | InvalidRequestError
   /**
-   * Forbidden
+   * ApiForbidden
    */
   403: ApiForbidden
   /**
-   * Not found
+   * ApiNotFound
    */
   404: ApiNotFound
   /**
-   * Conflict
+   * ApiConflict
    */
   409: ApiConflict
   /**
-   * Gone (retention floor exceeded)
+   * ApiGone
    */
   410: ApiGone
   /**
-   * Locked
+   * ApiLocked
    */
   423: ApiLocked
   /**
-   * Service unavailable
+   * ApiUnavailable
    */
   503: ApiUnavailable
 }
@@ -13810,37 +14109,39 @@ export type ContextEventsData = {
     session_id: string
     after?: string
     limit?: string
+    directory?: string
+    workspace?: string
   }
   url: "/context/events"
 }
 
 export type ContextEventsErrors = {
   /**
-   * Bad request
+   * ApiBadRequest | InvalidRequestError
    */
-  400: ApiBadRequest
+  400: ApiBadRequest | InvalidRequestError
   /**
-   * Forbidden
+   * ApiForbidden
    */
   403: ApiForbidden
   /**
-   * Not found
+   * ApiNotFound
    */
   404: ApiNotFound
   /**
-   * Conflict
+   * ApiConflict
    */
   409: ApiConflict
   /**
-   * Gone (retention floor exceeded)
+   * ApiGone
    */
   410: ApiGone
   /**
-   * Locked
+   * ApiLocked
    */
   423: ApiLocked
   /**
-   * Service unavailable
+   * ApiUnavailable
    */
   503: ApiUnavailable
 }
@@ -13859,37 +14160,40 @@ export type ContextEventsResponse = ContextEventsResponses[keyof ContextEventsRe
 export type SystemContextSnapshotData = {
   body?: never
   path?: never
-  query?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
   url: "/system-context/snapshot"
 }
 
 export type SystemContextSnapshotErrors = {
   /**
-   * Bad request
+   * ApiBadRequest | InvalidRequestError
    */
-  400: ApiBadRequest
+  400: ApiBadRequest | InvalidRequestError
   /**
-   * Forbidden
+   * ApiForbidden
    */
   403: ApiForbidden
   /**
-   * Not found
+   * ApiNotFound
    */
   404: ApiNotFound
   /**
-   * Conflict
+   * ApiConflict
    */
   409: ApiConflict
   /**
-   * Gone (retention floor exceeded)
+   * ApiGone
    */
   410: ApiGone
   /**
-   * Locked
+   * ApiLocked
    */
   423: ApiLocked
   /**
-   * Service unavailable
+   * ApiUnavailable
    */
   503: ApiUnavailable
 }
@@ -15502,7 +15806,7 @@ export type SessionTodoResponses = {
   /**
    * Todo list
    */
-  200: Array<Todo>
+  200: Array<SessionTodoInfo>
 }
 
 export type SessionTodoResponse = SessionTodoResponses[keyof SessionTodoResponses]
@@ -16923,28 +17227,9 @@ export type SessionContextDiagnosticsResponses = {
     metrics: {
       selections: number
       tokens: number
-      shadow: {
-        comparisons: number
-        legacyKnowledgeRefs: number
-        legacyMemoryRefs: number
-        federated: {
-          code: number
-          knowledge: number
-          memory: number
-          documents: number
-        }
-        knowledgeMemoryDelta: number
-      }
       graphs: Array<{
         graph: "code" | "knowledge" | "memory" | "documents"
-        queries: number
-        candidates: number
         selected: number
-        rejected: number
-        redacted: number
-        averageLatencyMs: number
-        maxLatencyMs: number
-        lastLatencyMs: number
         lastObservedAt?: number
         status?:
           | {
@@ -18237,65 +18522,6 @@ export type TuiSelectSessionResponses = {
 
 export type TuiSelectSessionResponse = TuiSelectSessionResponses[keyof TuiSelectSessionResponses]
 
-export type TuiControlNextData = {
-  body?: never
-  path?: never
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/tui/control/next"
-}
-
-export type TuiControlNextErrors = {
-  /**
-   * Bad request
-   */
-  400: BadRequestError
-}
-
-export type TuiControlNextError = TuiControlNextErrors[keyof TuiControlNextErrors]
-
-export type TuiControlNextResponses = {
-  /**
-   * Next TUI request
-   */
-  200: {
-    path: string
-    body: unknown
-  }
-}
-
-export type TuiControlNextResponse = TuiControlNextResponses[keyof TuiControlNextResponses]
-
-export type TuiControlResponseData = {
-  body?: unknown
-  path?: never
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/tui/control/response"
-}
-
-export type TuiControlResponseErrors = {
-  /**
-   * Bad request
-   */
-  400: BadRequestError
-}
-
-export type TuiControlResponseError = TuiControlResponseErrors[keyof TuiControlResponseErrors]
-
-export type TuiControlResponseResponses = {
-  /**
-   * Response submitted successfully
-   */
-  200: boolean
-}
-
-export type TuiControlResponseResponse = TuiControlResponseResponses[keyof TuiControlResponseResponses]
-
 export type ExperimentalWorkspaceAdapterListData = {
   body?: never
   path?: never
@@ -18727,6 +18953,50 @@ export type V2SessionListResponses = {
 }
 
 export type V2SessionListResponse = V2SessionListResponses[keyof V2SessionListResponses]
+
+export type V2SessionCreateData = {
+  body: {
+    id?: string
+    agent?: string
+    model?: {
+      id: string
+      providerID: string
+      variant?: string
+    }
+  }
+  path?: never
+  query?: {
+    location?: {
+      directory?: string
+      workspace?: string
+    }
+  }
+  url: "/api/session"
+}
+
+export type V2SessionCreateErrors = {
+  /**
+   * InvalidRequestError
+   */
+  400: InvalidRequestError
+  /**
+   * UnauthorizedError
+   */
+  401: UnauthorizedError
+}
+
+export type V2SessionCreateError = V2SessionCreateErrors[keyof V2SessionCreateErrors]
+
+export type V2SessionCreateResponses = {
+  /**
+   * Success
+   */
+  200: {
+    data: SessionV2Info
+  }
+}
+
+export type V2SessionCreateResponse = V2SessionCreateResponses[keyof V2SessionCreateResponses]
 
 export type V2SessionPromptData = {
   body: {

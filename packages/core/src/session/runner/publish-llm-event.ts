@@ -227,6 +227,13 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
     return tool ? Effect.succeed(tool.assistantMessageID) : Effect.die(`Unknown tool call: ${callID}`)
   }
 
+  // A length-capped stream leaves a truncated LOCAL tool input unsettled (input started, never
+  // called); provider-executed tools are excluded since the provider owns their outcome.
+  const hasUnsettledLocalTool = () => {
+    for (const tool of tools.values()) if (!tool.settled && !tool.providerExecuted) return true
+    return false
+  }
+
   const publish = Effect.fn("SessionRunner.publishLLMEvent")(function* (
     event: LLMEvent,
     outputPaths: ReadonlyArray<string> = [],
@@ -418,6 +425,7 @@ export const createLLMEventPublisher = (events: EventV2.Interface, input: Input)
     failUnsettledTools,
     hasAssistantStarted: () => assistantMessageID !== undefined,
     hasProviderError: () => providerFailed,
+    hasUnsettledLocalTool,
     startAssistant,
     assistantMessageID: assistantMessageIDForTool,
   }

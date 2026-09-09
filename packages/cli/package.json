@@ -5,7 +5,6 @@
   "type": "module",
   "license": "AGPL-3.0-or-later",
   "bin": {
-    "dacode": "./bin/lildax.cjs",
     "lildax": "./bin/lildax.cjs"
   },
   "files": [

@@ -19,8 +19,10 @@ import {
   classifyTurn,
 } from "@deepagent-code/core/session/execution/restart"
 import { SessionRunner } from "@deepagent-code/core/session/runner"
+import { SessionMessage } from "@deepagent-code/core/session/message"
+import { Prompt } from "@deepagent-code/core/session/prompt"
 import { SessionSchema } from "@deepagent-code/core/session/schema"
-import { SessionTable } from "@deepagent-code/core/session/sql"
+import { SessionInputTable, SessionTable } from "@deepagent-code/core/session/sql"
 import { SessionStore } from "@deepagent-code/core/session/store"
 import { V2ProviderTurnReceiptTable } from "@deepagent-code/core/session/runner/v2-provider-turn.sql"
 import { testEffect } from "./lib/effect"
@@ -109,13 +111,14 @@ describe("SessionExecution lifecycle", () => {
       yield* seedSessions(database, [sessionID])
       const updated = yield* sessionUpdated(database, sessionID)
 
-      yield* store.claim(sessionID)
-      yield* store.claim(sessionID)
+      const token = yield* store.claim(sessionID)
+      expect(token).toBeNumber()
+      expect(yield* store.claim(sessionID)).toBeUndefined()
       expect(yield* suspensions(database)).toEqual({ [sessionID]: true })
       expect(yield* sessionUpdated(database, sessionID)).toBe(updated)
 
-      yield* store.release(sessionID)
-      yield* store.release(sessionID)
+      expect(yield* store.release(sessionID, token! + 1)).toBe(false)
+      expect(yield* store.release(sessionID, token!)).toBe(true)
       expect(yield* suspensions(database)).toEqual({ [sessionID]: false })
       expect(yield* sessionUpdated(database, sessionID)).toBe(updated)
     }),
@@ -204,7 +207,8 @@ describe("SessionExecution lifecycle", () => {
       const database = yield* Database.Service
       const first = SessionSchema.ID.make("ses_recovery_first")
       const second = SessionSchema.ID.make("ses_recovery_second")
-      yield* seedSessions(database, [first, second], { time_suspended: Date.now() })
+      const claimToken = Date.now()
+      yield* seedSessions(database, [first, second], { time_suspended: claimToken })
       const now = Date.now()
       yield* (yield* SessionProviderOwner.Service).register({ ownerToken: "recovery-owner", leaseMs: 60_000 })
       yield* database.db
@@ -245,6 +249,7 @@ describe("SessionExecution lifecycle", () => {
         [
           {
             sessionID: first,
+            claimToken,
             turns: [
               {
                 receipt: {
@@ -264,11 +269,136 @@ describe("SessionExecution lifecycle", () => {
             effects: [],
             disposition: "owned_elsewhere" as const,
           },
-          { sessionID: second, turns: [], tools: [], tasks: [], effects: [], disposition: "claim_only" as const },
+          {
+            sessionID: second,
+            claimToken,
+            turns: [],
+            tools: [],
+            tasks: [],
+            effects: [],
+            disposition: "claim_only" as const,
+          },
         ].toSorted((left, right) => left.sessionID.localeCompare(right.sessionID)),
       )
       expect(providerCalls).toEqual([])
       expect(yield* suspensions(database)).toEqual({ [first]: true, [second]: true })
+    }),
+  )
+
+  it.effect("startup redrive exact-releases safe claims and wakes pending durable inputs once", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const claimed = SessionSchema.ID.make("ses_redrive_claimed")
+      const unclaimed = SessionSchema.ID.make("ses_redrive_unclaimed")
+      const claimToken = Date.now()
+      yield* seedSessions(database, [claimed], { time_suspended: claimToken })
+      yield* seedSessions(database, [unclaimed])
+      yield* database.db
+        .insert(SessionInputTable)
+        .values([
+          {
+            id: SessionMessage.ID.make("msg_redrive_claimed"),
+            session_id: claimed,
+            prompt: new Prompt({ text: "claimed" }),
+            delivery: "steer",
+            admitted_seq: 1,
+          },
+          {
+            id: SessionMessage.ID.make("msg_redrive_unclaimed"),
+            session_id: unclaimed,
+            prompt: new Prompt({ text: "unclaimed" }),
+            delivery: "queue",
+            admitted_seq: 1,
+          },
+        ])
+        .run()
+        .pipe(Effect.orDie)
+
+      const providerCalls: SessionSchema.ID[] = []
+      const scope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+      const context = yield* buildExecution(scope, ({ sessionID }) =>
+        Effect.sync(() => {
+          providerCalls.push(sessionID)
+        }),
+      )
+      const restart = Context.get(context, SessionRestart.Service)
+      const execution = Context.get(context, SessionExecution.Service)
+
+      expect(yield* restart.redriveStartup).toEqual({
+        released: [claimed],
+        woken: [claimed, unclaimed],
+        blocked: [],
+      })
+      yield* Effect.forEach([claimed, unclaimed], execution.awaitIdle, { discard: true })
+      expect(providerCalls.toSorted()).toEqual([claimed, unclaimed].toSorted())
+      expect(yield* suspensions(database)).toEqual({ [claimed]: false, [unclaimed]: false })
+    }),
+  )
+
+  it.effect("keeps stale advisory wakes stopped across an execution-layer restart", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const sessionID = SessionSchema.ID.make("ses_restart_interrupt_barrier")
+      yield* seedSessions(database, [sessionID])
+      yield* database.db
+        .update(SessionTable)
+        .set({ interrupt_seq: 2 })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
+
+      let runs = 0
+      const scope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+      const context = yield* buildExecution(scope, () => Effect.sync(() => runs++))
+      const execution = Context.get(context, SessionExecution.Service)
+
+      yield* execution.wake(sessionID, 2)
+      expect(yield* execution.active).toEqual(new Set())
+      expect(runs).toBe(0)
+
+      yield* execution.wake(sessionID, 3)
+      yield* execution.awaitIdle(sessionID)
+      expect(runs).toBe(1)
+
+      yield* execution.resume(sessionID)
+      expect(runs).toBe(2)
+    }),
+  )
+
+  it.effect("does not auto-redrive pending inputs admitted before a durable interrupt", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const sessionID = SessionSchema.ID.make("ses_redrive_interrupt_barrier")
+      yield* seedSessions(database, [sessionID], { time_suspended: 1 })
+      yield* database.db
+        .update(SessionTable)
+        .set({ interrupt_seq: 2 })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
+      yield* database.db
+        .insert(SessionInputTable)
+        .values({
+          id: SessionMessage.ID.make("msg_redrive_interrupted"),
+          session_id: sessionID,
+          prompt: new Prompt({ text: "stay stopped" }),
+          delivery: "queue",
+          admitted_seq: 1,
+        })
+        .run()
+        .pipe(Effect.orDie)
+
+      let runs = 0
+      const scope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+      const context = yield* buildExecution(scope, () => Effect.sync(() => runs++))
+      const restart = Context.get(context, SessionRestart.Service)
+
+      expect(yield* restart.redriveStartup).toEqual({ released: [sessionID], woken: [], blocked: [] })
+      expect(runs).toBe(0)
+      expect(yield* suspensions(database)).toEqual({ [sessionID]: false })
     }),
   )
 

@@ -13,16 +13,13 @@ import {
   type CapabilityLevel,
 } from "../contract/capability-load"
 import { Database } from "../database/database"
+import { SessionTable } from "../session/sql"
 import { SessionCapabilityLoadTable } from "./capability-load.sql"
 import { CapabilityBudget } from "./capability-manifest"
 import {
-  CapabilityL2BudgetExceededError,
-  CapabilityTurnBudgetExceededError,
-  capabilityLoad,
+  CapabilityBodyHashMismatchError,
   capabilityLoaderIdentity,
-  recordedCapabilityLoads,
-  resetCapabilityLoader,
-  turnBudgetView,
+  evaluateCapabilityBody,
   type CapabilityLoadResult,
 } from "./capability-loader"
 
@@ -154,11 +151,12 @@ export const capabilityLoadResultHash = (state: ContentLoadState, bodyHash: stri
   contentDigest({ state, bodyHash })
 
 /** Derive a deterministic permission fingerprint from required + granted permissions. */
-export const permissionBinding = (
-  request: CapabilityLoadRequest,
-): ContentPermissionBinding => {
+export const permissionBinding = (request: CapabilityLoadRequest): ContentPermissionBinding => {
   const granted = request.grantedPermissions ?? []
-  const fingerprint = contentDigest({ required: [...request.requiredPermissions].toSorted(), granted: [...granted].toSorted() })
+  const fingerprint = contentDigest({
+    required: [...request.requiredPermissions].toSorted(),
+    granted: [...granted].toSorted(),
+  })
   return { permissionFingerprint: fingerprint, required: [...request.requiredPermissions], granted: [...granted] }
 }
 
@@ -168,19 +166,6 @@ export const runtimeCompatibilityHash = (request: CapabilityLoadRequest): string
     runtimeRequired: [...(request.requiredRuntimeFeatures ?? [])].toSorted(),
     runtimeHash: request.runtimeHash,
   })
-
-/** Derive a deterministic per-turn budget snapshot from the (session, turn) budget map. */
-export const budgetSnapshotFor = (sessionId: string, turnId: string, state: ContentLoadState): CapabilityLoadBudgetSnapshot => {
-  const view = turnBudgetView(sessionId, turnId)
-  const count = view.newLoads
-  const tokens = view.newTokens
-  const atLimit = count >= CapabilityBudget.l2PerTurnMaxNew || tokens >= CapabilityBudget.l2PerTurnMaxNewTokens
-  return {
-    budgetState: state.state === "budget_exceeded" ? "exceeded" : atLimit ? "at_limit" : "within",
-    newLoadsThisTurn: count,
-    newTokensThisTurn: tokens,
-  }
-}
 
 /**
  * Build the FROZEN CapabilityLoadReceipt (`session_capability_load`) for a load.
@@ -196,13 +181,15 @@ export function buildCapabilityLoadReceipt(args: {
   readonly identity: CapabilityLoadTurnIdentity
   readonly result: CapabilityLoadResult
   readonly contextEpoch: string
+  readonly budget: CapabilityLoadBudgetSnapshot
   readonly level?: CapabilityLevel
   readonly loadedAt?: number
 }): ContractLoadReceipt {
   const { request, identity, result } = args
-  const state = mapCapabilityLoadResult(result, { newThisTurn: turnBudgetView(identity.sessionId, identity.turnId).newLoads })
+  const state = mapCapabilityLoadResult(result, {
+    newThisTurn: args.budget.newLoadsThisTurn,
+  })
   const level: CapabilityLevel = args.level ?? "L2"
-  const budget = budgetSnapshotFor(identity.sessionId, identity.turnId, state)
   const binding = permissionBinding(request)
   const rtc = runtimeCompatibilityHash(request)
   const requestHash = capabilityLoadRequestHash(request, identity)
@@ -211,7 +198,8 @@ export function buildCapabilityLoadReceipt(args: {
     result.state === "available" && request.supersedingRef !== undefined && request.supersedingRef !== ""
       ? request.supersedingRef
       : undefined
-  const tokenCount = result.state === "available" ? result.tokenCount : result.state === "budget_exceeded" ? result.requestedTokens : 0
+  const tokenCount =
+    result.state === "available" ? result.tokenCount : result.state === "budget_exceeded" ? result.requestedTokens : 0
   const byteCount = result.state === "available" ? result.byteCount : 0
 
   return decodeCapabilityLoadReceipt({
@@ -235,9 +223,9 @@ export function buildCapabilityLoadReceipt(args: {
     supersedes,
     tokenCount,
     byteCount,
-    budgetState: budget.budgetState,
-    newLoadsThisTurn: budget.newLoadsThisTurn,
-    newTokensThisTurn: budget.newTokensThisTurn,
+    budgetState: args.budget.budgetState,
+    newLoadsThisTurn: args.budget.newLoadsThisTurn,
+    newTokensThisTurn: args.budget.newTokensThisTurn,
     contextEpoch: args.contextEpoch,
     loadedAt: args.loadedAt ?? 0,
     state,
@@ -272,17 +260,17 @@ export const loadIdentityFor = (bound: CapabilityLoadRequest & CapabilityLoadTur
 /**
  * Run one capability load through the K2 kernel with the frozen receipt binding,
  * bound to a real session/activity/turn identity. This is the production `capability_load`
- * path the runner reuses: it charges the per-turn budget, maps the kernel result to
+ * path the runner reuses: one database transaction reads the durable per-turn budget,
+ * validates the body, maps the result,
  * the frozen ContentLoadState, returns the frozen CapabilityLoadReceipt alongside
  * the loaded body (when present) and persists the receipt to the durable
  * `session_capability_load` table (design §7.5) — an exact retry converges on the
- * same row (unique (session_id, capability_id, body_hash)); a retry of a body the
- * kernel already holds returns `already_loaded` WITH the body (the W4 kernel
- * `existing` carries it). Never loads as part of the call: the caller passes a body +
+ * same row (unique (session_id, catalog_snapshot_id, capability_id, body_hash)); a retry
+ * returns the durable winner as `already_loaded` WITH the caller-verified body. Never loads as part of the call: the caller passes a body +
  * declared digest already verified against a signed bundle / trusted pack.
  *
- * The persistence is a transaction over the receipt insert (insert-or-ignore by the
- * exact-retry key) and only records states that represent an actually-loaded body
+ * The persistence is a transaction over budget read, validation and receipt insert
+ * (insert-or-reread by the exact-retry key) and only records states that represent an actually-loaded body
  * (`loaded` / `already_loaded`): a denied/not_found/budget_exceeded attempt loaded
  * nothing, so it leaves no durable fact. Mapped/lookup failures are typed defects.
  *
@@ -299,80 +287,168 @@ export function sessionCapabilityLoad(
     readonly level?: CapabilityLevel
     readonly loadedAt?: number
   },
-): Effect.Effect<{ readonly state: ContentLoadState; readonly receipt: ContractLoadReceipt; readonly body: string | undefined }, never> {
-  const out = computeCapabilityLoad(args)
-  return persistLoadReceipt(db, out, args.request.capabilityId).pipe(Effect.as(out))
+): Effect.Effect<
+  { readonly state: ContentLoadState; readonly receipt: ContractLoadReceipt; readonly body: string | undefined },
+  never
+> {
+  return db
+    .transaction((tx) =>
+      Effect.gen(function* () {
+        const existing = yield* tx
+          .select()
+          .from(SessionCapabilityLoadTable)
+          .where(
+            and(
+              eq(SessionCapabilityLoadTable.session_id, args.identity.sessionId),
+              eq(SessionCapabilityLoadTable.catalog_snapshot_id, args.request.catalogSnapshotId),
+              eq(SessionCapabilityLoadTable.capability_id, args.request.capabilityId),
+              eq(SessionCapabilityLoadTable.body_hash, args.request.bodyHash),
+            ),
+          )
+          .get()
+          .pipe(Effect.orDie)
+        const rows = yield* tx
+          .select({
+            loadId: SessionCapabilityLoadTable.load_id,
+            tokenCount: SessionCapabilityLoadTable.token_count,
+          })
+          .from(SessionCapabilityLoadTable)
+          .where(
+            and(
+              eq(SessionCapabilityLoadTable.session_id, args.identity.sessionId),
+              eq(SessionCapabilityLoadTable.turn_id, args.identity.turnId),
+            ),
+          )
+          .all()
+          .pipe(Effect.orDie)
+        const out = computeDurableCapabilityLoad(
+          args,
+          {
+            newLoads: rows.length,
+            newTokens: rows.reduce((total, row) => total + row.tokenCount, 0),
+          },
+          existing,
+        )
+        if (out.state.state !== "loaded") return out
+        const inserted = yield* tx
+          .insert(SessionCapabilityLoadTable)
+          .values(toLoadReceiptRow(out.receipt, args.request.capabilityId))
+          .onConflictDoNothing()
+          .returning()
+          .get()
+          .pipe(Effect.orDie)
+        if (inserted) return out
+        const winner = yield* tx
+          .select()
+          .from(SessionCapabilityLoadTable)
+          .where(
+            and(
+              eq(SessionCapabilityLoadTable.session_id, args.identity.sessionId),
+              eq(SessionCapabilityLoadTable.catalog_snapshot_id, args.request.catalogSnapshotId),
+              eq(SessionCapabilityLoadTable.capability_id, args.request.capabilityId),
+              eq(SessionCapabilityLoadTable.body_hash, args.request.bodyHash),
+            ),
+          )
+          .get()
+          .pipe(Effect.orDie)
+        if (!winner) return yield* Effect.die(new Error("capability load insert lost without a durable winner"))
+        return existingLoad(winner, args.request.body)
+      }),
+    )
+    .pipe(Effect.orDie)
 }
 
-/** The pure kernel + receipt computation (kept separable so the write path stays a thin shell). */
-function computeCapabilityLoad(args: {
-  readonly request: CapabilityLoadRequest
-  readonly identity: CapabilityLoadTurnIdentity
-  readonly contextEpoch: string
-  readonly level?: CapabilityLevel
-  readonly loadedAt?: number
-}): { readonly state: ContentLoadState; readonly receipt: ContractLoadReceipt; readonly body: string | undefined } {
-  const { request, identity } = args
-  const bound = withTurnIdentity(request, identity)
-  let result: CapabilityLoadResult
-  try {
-    result = capabilityLoad({
+/** Pure validation + durable-budget computation. It never consults the process-local kernel maps. */
+function computeDurableCapabilityLoad(
+  args: {
+    readonly request: CapabilityLoadRequest
+    readonly identity: CapabilityLoadTurnIdentity
+    readonly contextEpoch: string
+    readonly level?: CapabilityLevel
+    readonly loadedAt?: number
+  },
+  budget: { readonly newLoads: number; readonly newTokens: number },
+  existing?: LoadReceiptRow,
+): {
+  readonly state: ContentLoadState
+  readonly receipt: ContractLoadReceipt
+  readonly body: string | undefined
+} {
+  const bound = withTurnIdentity(args.request, args.identity)
+  if (bound.declaredDigest !== undefined && bound.declaredDigest !== bound.bodyHash)
+    throw new CapabilityBodyHashMismatchError({
+      capabilityId: bound.capabilityId,
+      bodyRef: bound.bodyRef,
+      expected: bound.bodyHash,
+      actual: bound.declaredDigest,
+    })
+  const validated = evaluateCapabilityBody(
+    loadIdentityFor(bound),
+    { body: bound.body, declaredDigest: bound.declaredDigest },
+    {
+      bodyRef: bound.bodyRef,
       capabilityId: bound.capabilityId,
       version: bound.version,
-      bodyHash: bound.bodyHash,
       runtimeHash: bound.runtimeHash,
       permissionHash: bound.permissionHash,
-      bodyRef: bound.bodyRef,
-      sessionIdentity: bound.sessionId,
-      turnIdentity: bound.turnId,
-      body: bound.body,
-      declaredDigest: bound.declaredDigest,
       supersedingRef: bound.supersedingRef,
       deniedReason: bound.deniedReason,
-    })
-  } catch (error) {
-    // The frozen ContentLoadState carries a `budget_exceeded` state. The gated
-    // `capability_load` entry surfaces an over-budget body/turn as a typed throw;
-    // the adapter re-forms it as the frozen budget_exceeded ContentLoadState so
-    // the durable receipt can record the outcome (it never loads the body).
-    result = budgetExceededState(error)
+      sessionId: bound.sessionId,
+      turnId: bound.turnId,
+    },
+  )
+  if (validated.state === "available" && existing) return existingLoad(existing, validated.body)
+  const result =
+    validated.state === "available" &&
+    (budget.newLoads + 1 > CapabilityBudget.l2PerTurnMaxNew ||
+      budget.newTokens + validated.tokenCount > CapabilityBudget.l2PerTurnMaxNewTokens)
+      ? ({
+          state: "budget_exceeded",
+          level: "L2",
+          limitTokens: CapabilityBudget.l2PerTurnMaxNewTokens,
+          requestedTokens: budget.newTokens + validated.tokenCount,
+        } satisfies CapabilityLoadResult)
+      : validated
+  const snapshot = {
+    budgetState:
+      result.state === "budget_exceeded"
+        ? ("exceeded" as const)
+        : budget.newLoads + (result.state === "available" ? 1 : 0) >= CapabilityBudget.l2PerTurnMaxNew ||
+            budget.newTokens + (result.state === "available" ? result.tokenCount : 0) >=
+              CapabilityBudget.l2PerTurnMaxNewTokens
+          ? ("at_limit" as const)
+          : ("within" as const),
+    newLoadsThisTurn: budget.newLoads + (result.state === "available" ? 1 : 0),
+    newTokensThisTurn: budget.newTokens + (result.state === "available" ? result.tokenCount : 0),
   }
   const receipt = buildCapabilityLoadReceipt({
     request: bound,
-    identity,
+    identity: args.identity,
     result,
     contextEpoch: args.contextEpoch,
+    budget: snapshot,
     level: args.level,
     loadedAt: args.loadedAt,
   })
-  const body =
-    result.state === "available" || result.state === "existing" ? result.body : undefined
+  const body = result.state === "available" || result.state === "existing" ? result.body : undefined
   return { state: receipt.state, receipt, body }
 }
 
 /** The durable load receipt row (JSON columns decoded by Drizzle; exact-retry key in the schema). */
 type LoadReceiptRow = typeof SessionCapabilityLoadTable.$inferSelect
 
-/** Insert the receipt row in one transaction; the unique key makes an exact retry a no-op. */
-function persistLoadReceipt(
-  db: Database.Interface["db"],
-  out: { readonly state: ContentLoadState; readonly receipt: ContractLoadReceipt },
-  capabilityId: string,
-) {
-  if (out.state.state !== "loaded" && out.state.state !== "already_loaded") return Effect.void
-  return db
-    .transaction((tx) =>
-      tx
-        .insert(SessionCapabilityLoadTable)
-        .values(toLoadReceiptRow(out.receipt, capabilityId))
-        .onConflictDoNothing()
-        .run()
-        .pipe(Effect.orDie),
-    )
-    .pipe(Effect.orDie)
+function existingLoad(row: LoadReceiptRow, body: string | undefined) {
+  return {
+    state: { state: "already_loaded", bodyRef: row.body_ref } satisfies ContentLoadState,
+    receipt: receiptFromRow(row),
+    body,
+  }
 }
 
-function toLoadReceiptRow(receipt: ContractLoadReceipt, capabilityId: string): typeof SessionCapabilityLoadTable.$inferInsert {
+function toLoadReceiptRow(
+  receipt: ContractLoadReceipt,
+  capabilityId: string,
+): typeof SessionCapabilityLoadTable.$inferInsert {
   return {
     load_id: receipt.loadId,
     schema_version: receipt.schemaVersion,
@@ -449,7 +525,9 @@ function receiptFromRow(row: LoadReceiptRow): ContractLoadReceipt {
  * receipt does not carry `capabilityId` top-level (it is bound through `body_ref`),
  * so the snapshot fact derives it from the body ref — `capability://<id>@<version>`.
  */
-export const capabilityLoadFactOf = (receipt: ContractLoadReceipt): { readonly capabilityId: string; readonly bodyHash: string } => ({
+export const capabilityLoadFactOf = (
+  receipt: ContractLoadReceipt,
+): { readonly capabilityId: string; readonly bodyHash: string } => ({
   capabilityId: receipt.bodyRef.split("@")[0]!.slice("capability://".length),
   bodyHash: receipt.bodyHash,
 })
@@ -494,21 +572,20 @@ export function recordedCapabilityLoadsForSession(
   })
 }
 
-function budgetExceededState(error: unknown): CapabilityLoadResult {
-  if (error instanceof CapabilityL2BudgetExceededError) {
-    return {
-      state: "budget_exceeded",
-      level: error.level,
-      limitTokens: error.limitTokens,
-      requestedTokens: error.requestedTokens,
-    }
-  }
-  if (error instanceof CapabilityTurnBudgetExceededError) {
-    return { state: "budget_exceeded", level: error.level, limitTokens: error.limitTokens, requestedTokens: error.newTokens }
-  }
-  throw error
+export function recordedCapabilityLoadsForDirectory(db: Database.Interface["db"], directory: string) {
+  return Effect.gen(function* () {
+    const rows = yield* db
+      .select({ load: SessionCapabilityLoadTable })
+      .from(SessionCapabilityLoadTable)
+      .innerJoin(SessionTable, eq(SessionTable.id, SessionCapabilityLoadTable.session_id))
+      .where(eq(SessionTable.directory, directory))
+      .orderBy(SessionCapabilityLoadTable.load_id)
+      .all()
+      .pipe(Effect.orDie)
+    return rows.map((row) => ({
+      identity: row.load.load_id,
+      capabilityId: row.load.capability_id,
+      receipt: receiptFromRow(row.load),
+    }))
+  })
 }
-
-// Re-export the kernel's observable surface so callers can test/observe the adapter
-// against the single loader (reset for test isolation, receipts for observability).
-export { recordedCapabilityLoads, resetCapabilityLoader }

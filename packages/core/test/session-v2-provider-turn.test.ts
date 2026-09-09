@@ -1,26 +1,55 @@
 import { describe, expect } from "bun:test"
-import { sql } from "drizzle-orm"
+import { generateKeyPairSync } from "node:crypto"
+import { eq, sql } from "drizzle-orm"
 import { Layer, Effect, Stream } from "effect"
 import { Database } from "../src/database/database"
+import { SessionProviderAttempt } from "../src/context-federation/provider-attempt"
 import { SessionProviderOwner } from "../src/context-federation/provider-owner"
+import { LocationKey, ProjectScopeKey, SecurityNamespaceID } from "../src/context-federation/reference"
+import {
+  SessionActivityTable,
+  SessionContextSelectionTable,
+  SessionContextValidationTable,
+} from "../src/context-federation/session-sql"
+import {
+  LocationIdentityTable,
+  ProjectScopeIdentityTable,
+  SecurityNamespaceTable,
+} from "../src/context-federation/sql"
 import { ProjectV2 } from "../src/project"
 import { ProjectTable } from "../src/project/sql"
 import { AbsolutePath } from "../src/schema"
+import { SessionMessage } from "../src/session/message"
+import { Prompt } from "../src/session/prompt"
 import { SessionSchema } from "../src/session/schema"
-import { SessionTable } from "../src/session/sql"
+import { SessionInputTable, SessionTable } from "../src/session/sql"
 import { PreparedProviderTurn } from "../src/session/runner/prepared-provider-turn"
 import { V2ProviderTurn } from "../src/session/runner/v2-provider-turn"
-import { V2ProviderParityReceiptTable } from "../src/session/runner/v2-provider-turn.sql"
+import {
+  RuntimeIntegrityEvidenceArtifactTable,
+  V2ProviderParityReceiptTable,
+  V2ProviderTurnReceiptTable,
+} from "../src/session/runner/v2-provider-turn.sql"
+import { ModelProtocolContract } from "../src/contract/model-protocol"
+import { RuntimeIntegrityEvidenceContract } from "../src/contract/runtime-integrity-evidence"
 import { ContextFederationExecutionParity } from "../src/context-federation/execution-parity"
 import { Hash } from "../src/util/hash"
 import { testEffect } from "./lib/effect"
 
 const database = Database.layerFromPath(":memory:")
 const owners = SessionProviderOwner.layer.pipe(Layer.provide(database))
+const attempts = SessionProviderAttempt.layer.pipe(Layer.provide(database))
 const turns = V2ProviderTurn.layer.pipe(Layer.provide(owners), Layer.provide(database))
-const it = testEffect(Layer.mergeAll(database, owners, turns))
+const it = testEffect(Layer.mergeAll(database, owners, attempts, turns))
 const projectId = ProjectV2.ID.make("project-v2-provider-turn")
 const sessionId = SessionSchema.ID.make("ses_v2_provider_turn")
+const activityId = "act_v2_provider_turn"
+const triggerId = SessionMessage.ID.make("msg_v2_provider_turn_trigger")
+const selectionId = "selection_v2_provider_turn"
+const projectionHash = "projection-v2-provider-turn"
+const namespace = SecurityNamespaceID.make("sec_v2_provider_turn")
+const projectScope = ProjectScopeKey.make("prj_v2_provider_turn")
+const locationKey = LocationKey.make("loc_v2_provider_turn")
 
 describe("V2 provider turn authority", () => {
   it.live("seals and settles a naturally completed stream exactly once", () =>
@@ -52,6 +81,161 @@ describe("V2 provider turn authority", () => {
       expect(recorded?.preparedTurnHash).toBe(
         PreparedProviderTurn.preparedTurnHash(recorded?.preparedTurn as PreparedProviderTurn.PreparedProviderTurn),
       )
+    }),
+  )
+
+  it.live("automatically persists integrity evidence when the production identity is supplied", () =>
+    Effect.gen(function* () {
+      yield* seed()
+      const service = yield* V2ProviderTurn.Service
+      const receipt = yield* admit(service, "msg-integrity-auto")
+      const identity: RuntimeIntegrityEvidenceContract.RuntimeIdentity = {
+        candidateID: "candidate-auto",
+        commit: "commit-auto",
+        tree: "tree-auto",
+        packageDigest: Hash.sha256("package-auto"),
+        schemaDigest: Hash.sha256("schema-auto"),
+        rootCompositionDigest: Hash.sha256("root-auto"),
+        databaseSchemaDigest: Hash.sha256("database-auto"),
+        eventSchemaDigest: Hash.sha256("event-auto"),
+        capabilityManifestDigest: Hash.sha256("capability-auto"),
+      }
+      yield* V2ProviderTurn.stream({
+        service,
+        receipt,
+        prepare: (wireHash) => prepared(receipt, wireHash, true),
+        stream: sealedStream("wire-integrity-auto", ["done"]),
+        outcomeArtifact: () => ["done"],
+        errorCode: () => "provider_failed",
+        integrityIdentity: identity,
+      }).pipe(Stream.runCollect)
+      const stored = yield* service.get(receipt.receiptId)
+      expect(stored?.integrityEvidence?.identity).toEqual(identity)
+      expect(stored?.integrityEvidenceHash).toMatch(/^[0-9a-f]{64}$/)
+      expect(
+        yield* service.getIntegrityEvidenceArtifact(`rie_${stored?.integrityEvidenceHash}`),
+      ).toMatchObject({ receiptID: receipt.receiptId })
+      expect(yield* service.listIntegrityEvidenceArtifacts()).toHaveLength(1)
+      expect(
+        yield* service.listIntegrityEvidenceArtifacts({ limit: 0 }).pipe(Effect.exit),
+      ).toMatchObject({ _tag: "Failure" })
+    }),
+  )
+
+  it.live("exports and persists one immutable runtime-integrity evidence bundle", () =>
+    Effect.gen(function* () {
+      yield* seed()
+      const service = yield* V2ProviderTurn.Service
+      const receipt = yield* admit(service, "msg-integrity-evidence")
+      const protocolAttemptIdentity: ModelProtocolContract.ProtocolAttemptIdentity = {
+        protocol: "openai-compatible.chat",
+        routeId: "route-test",
+        originId: "origin-test",
+        endpointOriginHash: Hash.sha256("endpoint-test"),
+        capabilityFingerprint: Hash.sha256("capability-test"),
+        loweringVersion: 1,
+        protocolRevision: 1,
+      }
+      const turn = V2ProviderTurn.prepare(
+        {
+          receipt,
+          stableSystemParts: ["stable"],
+          volatileSystemParts: ["volatile"],
+          historyMessages: [{ role: "user", content: receipt.userMessageId }],
+          activityID: receipt.activityId,
+          providerTurnSeq: receipt.providerTurnSeq,
+          toolDefinitions: [],
+          toolIDs: [],
+          toolChoice: null,
+          toolResultReferences: [],
+          budget: {
+            decision: "ok",
+            estimatedFullRequestTokens: 16,
+            physicalInputBudget: 1_000,
+            reservedOutputTokens: 100,
+            safetyMargin: 50,
+            provenance: "model_limit",
+          },
+          userMessageID: receipt.userMessageId,
+          protocolAttemptIdentity,
+          protocolAttemptIdentityHash: ModelProtocolContract.protocolAttemptIdentityDigest(protocolAttemptIdentity),
+        },
+        Hash.sha256("wire-integrity-evidence"),
+      )
+      const sealed = yield* service.seal(receipt, turn, {
+        wireHash: turn.wire_request_hash,
+        bodyHash: Hash.sha256("body-integrity-evidence"),
+        bodyLength: 1,
+        contentType: "application/json",
+      })
+      const settled = yield* service.settle({
+        receipt: sealed,
+        outcome: "settled",
+        outcomeArtifact: ["done"],
+      })
+      const identity: ModelProtocolContract.ProtocolAttemptIdentity = protocolAttemptIdentity
+      const runtimeIdentity: RuntimeIntegrityEvidenceContract.RuntimeIdentity = {
+        candidateID: "candidate-test",
+        commit: "commit-test",
+        tree: "tree-test",
+        packageDigest: Hash.sha256("package-test"),
+        schemaDigest: Hash.sha256("schema-test"),
+        rootCompositionDigest: Hash.sha256("root-test"),
+        databaseSchemaDigest: Hash.sha256("database-test"),
+        eventSchemaDigest: Hash.sha256("event-test"),
+        capabilityManifestDigest: Hash.sha256("manifest-test"),
+      }
+      const exported = yield* service.persistIntegrityEvidence({
+        receiptId: settled.receiptId,
+        identity: runtimeIdentity,
+      })
+      expect(exported.terminal.status).toBe("settled")
+      expect(exported.route.protocol).toBe(identity.protocol)
+      expect(exported.physicalCallCount).toBe(1)
+      const stored = yield* service.get(settled.receiptId)
+      expect(stored?.integrityEvidenceHash).toBe(RuntimeIntegrityEvidenceContract.runtimeIntegrityEvidenceDigest(exported))
+      expect(stored?.integrityEvidence).toEqual(exported)
+      expect(yield* service.persistIntegrityEvidence({ receiptId: settled.receiptId, identity: runtimeIdentity })).toEqual(exported)
+      const keyPair = generateKeyPairSync("ed25519")
+      const signed = RuntimeIntegrityEvidenceContract.signRuntimeIntegrityEvidence({
+        evidence: exported,
+        keyID: "provider-turn-test-key",
+        privateKeyPem: keyPair.privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+      })
+      expect(
+        yield* service.persistSignedIntegrityEvidence({
+          receiptId: settled.receiptId,
+          signed,
+          publicKeyPem: keyPair.publicKey.export({ type: "spki", format: "pem" }).toString(),
+        }),
+      ).toEqual(signed)
+      expect((yield* service.get(settled.receiptId))?.integrityEvidenceSignature).toEqual(signed)
+      const db = (yield* Database.Service).db
+      const artifactID = `rie_${RuntimeIntegrityEvidenceContract.runtimeIntegrityEvidenceDigest(exported)}`
+      expect(yield* service.getIntegrityEvidenceArtifact(artifactID)).toMatchObject({
+        artifactID,
+        receiptID: settled.receiptId,
+        evidenceHash: RuntimeIntegrityEvidenceContract.runtimeIntegrityEvidenceDigest(exported),
+        signature: signed,
+      })
+      expect(yield* service.getIntegrityEvidenceArtifact(artifactID)).toMatchObject({ artifactID })
+      expect(
+        yield* service
+          .persistSignedIntegrityEvidence({
+            receiptId: settled.receiptId,
+            signed: { ...signed, evidenceDigest: Hash.sha256("tampered") },
+            publicKeyPem: keyPair.publicKey.export({ type: "spki", format: "pem" }).toString(),
+          })
+          .pipe(Effect.exit),
+      ).toMatchObject({ _tag: "Failure" })
+      expect(
+        yield* db
+          .update(RuntimeIntegrityEvidenceArtifactTable)
+          .set({ evidence_hash: Hash.sha256("tampered") })
+          .where(eq(RuntimeIntegrityEvidenceArtifactTable.artifact_id, artifactID))
+          .run()
+          .pipe(Effect.exit),
+      ).toMatchObject({ _tag: "Failure" })
     }),
   )
 
@@ -305,27 +489,166 @@ function seed() {
         directory: "/tmp/v2-provider-turn",
         title: "V2 provider turn",
         version: "test",
+        time_suspended: 104,
+      })
+      .onConflictDoNothing()
+      .run()
+    yield* db
+      .insert(SecurityNamespaceTable)
+      .values({ id: namespace, kind: "implicit_local", binding_hash: "namespace-binding", created_at: 1 })
+      .onConflictDoNothing()
+      .run()
+    yield* db
+      .insert(ProjectScopeIdentityTable)
+      .values({
+        security_namespace_id: namespace,
+        project_scope_key: projectScope,
+        project_kind: "registered_root",
+        project_identity_hash: "project-identity",
+        observed_project_id: projectId,
+        created_at: 1,
+      })
+      .onConflictDoNothing()
+      .run()
+    yield* db
+      .insert(LocationIdentityTable)
+      .values({
+        security_namespace_id: namespace,
+        location_key: locationKey,
+        project_scope_key: projectScope,
+        canonical_root: "/tmp/v2-provider-turn",
+        observed_project_id: projectId,
+        created_at: 1,
+      })
+      .onConflictDoNothing()
+      .run()
+    yield* db
+      .insert(SessionInputTable)
+      .values({
+        id: triggerId,
+        session_id: sessionId,
+        prompt: new Prompt({ text: "trigger" }),
+        delivery: "steer",
+        admitted_seq: 0,
+        promoted_seq: 0,
+      })
+      .onConflictDoNothing()
+      .run()
+    yield* db
+      .insert(SessionActivityTable)
+      .values({
+        activity_id: activityId,
+        session_id: sessionId,
+        ordinal: 0,
+        trigger_input_id: triggerId,
+        delivery: "steer",
+        state: "active",
+        created_at: 1,
       })
       .onConflictDoNothing()
       .run()
   })
 }
 
+// A terminal receipt must be bound to one exact canonical provider attempt (the production path
+// binds inside the canonical-turn admission transaction). admit therefore seeds the attempt's
+// selection + validation evidence and binds before returning, mirroring that contract: attempt
+// session/activity/turn-seq/provider/owner/request-hash must equal the receipt's exactly.
 function admit(service: V2ProviderTurn.Interface, messageId: string) {
-  return service.admit({
-    sessionId,
-    userMessageId: messageId,
-    historyPromptEpoch: 1,
-    historySourceEndMessageId: messageId,
-    requestInputHash: Hash.sha256(`${messageId}-request`),
-    providerId: "provider-test",
-    modelId: "model-test",
-    protocol: "openai-chat",
-    ownerMode: "v2",
+  return Effect.gen(function* () {
+    const db = (yield* Database.Service).db
+    const attempts = yield* SessionProviderAttempt.Service
+    const receipt = yield* service.admit({
+      sessionId,
+      userMessageId: messageId,
+      activityId,
+      historyPromptEpoch: 1,
+      historySourceEndMessageId: messageId,
+      requestInputHash: Hash.sha256(`${messageId}-request`),
+      providerId: "provider-test",
+      modelId: "model-test",
+      protocol: "openai-chat",
+      ownerMode: "v2",
+    })
+    yield* db
+      .insert(SessionContextSelectionTable)
+      .values({
+        selection_id: selectionId,
+        session_id: sessionId,
+        activity_id: activityId,
+        revision: 0,
+        trigger_input_id: triggerId,
+        location_key: locationKey,
+        security_namespace_id: namespace,
+        project_scope_key: projectScope,
+        query_fingerprint: "query-v1",
+        authorization_fingerprint: "auth-v1",
+        authorization_epoch: 2,
+        execution_fingerprint: "execution-v1",
+        selected_source_fingerprint: "sources-v2-provider-turn",
+        observed_location_mutation_epoch: 9,
+        next_revalidation_at: 1_000,
+        released_knowledge_binding_state: "unavailable",
+        released_knowledge_exact_refs: [],
+        released_knowledge_exact_refs_fingerprint: Hash.sha256("[]"),
+        graph_revisions: "{}",
+        graph_statuses: "{}",
+        selected_refs: "[]",
+        projection: "projection",
+        projection_hash: projectionHash,
+        token_count: 1,
+        artifact_write_status: "degraded_unavailable",
+        inline_audit: "{}",
+        created_at: 100,
+      })
+      .onConflictDoNothing()
+      .run()
+    yield* db
+      .insert(SessionContextValidationTable)
+      .values({
+        validation_id: `validation_v2_provider_turn_${receipt.providerTurnSeq}`,
+        selection_id: selectionId,
+        provider_turn_seq: receipt.providerTurnSeq,
+        authorization_epoch: 2,
+        egress_epoch: 3,
+        observed_location_mutation_epoch: 9,
+        selected_source_fingerprint: "sources-v2-provider-turn",
+        validated_at: 100,
+        valid_until: 500,
+        outcome: "valid",
+        reason_code: "current",
+      })
+      .onConflictDoNothing()
+      .run()
+    const attempt = yield* attempts.prepare({
+      sessionId,
+      activityId,
+      providerTurnSeq: receipt.providerTurnSeq,
+      selectionId,
+      projectionHash,
+      requestHash: receipt.requestInputHash,
+      providerId: receipt.providerId,
+      ownerToken: receipt.ownerToken,
+      authorizationEpoch: 2,
+      egressEpoch: 3,
+      selectedSourceFingerprint: "sources-v2-provider-turn",
+      observedLocationMutationEpoch: 9,
+      now: 150,
+    })
+    return yield* service.bindAttempt(receipt, attempt.attemptId)
   })
 }
 
-function prepared(receipt: V2ProviderTurn.Receipt, wireHash: string) {
+function prepared(receipt: V2ProviderTurn.Receipt, wireHash: string, includeProtocolIdentity = false) {
+  const protocolAttemptIdentity: ModelProtocolContract.ProtocolAttemptIdentity = {
+    protocol: "openai-compatible.chat",
+    routeId: "route-auto",
+    originId: "origin-auto",
+    endpointOriginHash: Hash.sha256("endpoint-auto"),
+    capabilityFingerprint: Hash.sha256("capability-auto"),
+    loweringVersion: 1,
+    protocolRevision: 1,
+  }
   return V2ProviderTurn.prepare(
     {
       receipt,
@@ -347,6 +670,12 @@ function prepared(receipt: V2ProviderTurn.Receipt, wireHash: string) {
         provenance: "model_limit",
       },
       userMessageID: receipt.userMessageId,
+      ...(includeProtocolIdentity
+        ? {
+            protocolAttemptIdentity,
+            protocolAttemptIdentityHash: ModelProtocolContract.protocolAttemptIdentityDigest(protocolAttemptIdentity),
+          }
+        : {}),
     },
     wireHash,
   )

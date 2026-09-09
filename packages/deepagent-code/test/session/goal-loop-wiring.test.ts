@@ -1405,10 +1405,12 @@ describe("V3.9 §D/§F.3 wiring — makeGoalLoopWiring flag gate", () => {
     expect(typeof deps!.now).toBe("function")
   })
 })
-// LEGACY-EXECUTION-ZERO: the subagent-drive V2 seam resolution must (a) stay legacy when both the
-// experimental flag and the V2-only profile are off, (b) resolve the V2 stack when the flag is on,
-// (c) FORCE the V2 stack under the V2-only profile even with the flag off, and (d) refuse typed at
-// layer build when the V2-only profile runs without the SessionV2 stack in the composition root.
+// LEGACY-EXECUTION-ZERO: the subagent-drive V2 seam resolution must (a) never fall back to legacy —
+// `coreV2Only` is hardcoded `Config.succeed(true)` in runtime-flags.ts (fail-closed, RI-122), so
+// "profile OFF" is no longer representable and the experimental flag alone cannot reselect the
+// legacy executor, (b) resolve the V2 stack when the flag is on, (c) FORCE the V2 stack under the
+// V2-only profile even with the flag off, and (d) refuse typed at layer build when the V2-only
+// profile runs without the SessionV2 stack in the composition root.
 const stubSessionV2 = SessionV2.Service.of({
   list: () => Effect.die("stub unused"),
   create: () => Effect.die("stub unused"),
@@ -1436,13 +1438,14 @@ const resolveDrive = (overrides: Partial<RuntimeFlags.Info>) =>
   }).pipe(Effect.provide(RuntimeFlags.layer({ ...overrides })))
 
 describe("resolveV2SubagentDrive (LEGACY-EXECUTION-ZERO)", () => {
-  test("flag OFF and profile OFF resolves no V2 seam (legacy stays the default)", async () => {
-    // W6-1: the flag now DEFAULTS ON, so "flag OFF" has to be stated explicitly (empty overrides
-    // would leave the default ON and silently change what this test is exercising).
+  test("flag OFF alone still resolves the V2 seam — coreV2Only is hardcoded fail-closed (RI-122)", async () => {
+    // RI-122: runtime-flags.ts hardcodes `coreV2Only: Config.succeed(true)`; "profile OFF" is no
+    // longer representable, so `experimentalV2SubagentDrive: false` with no profile override must
+    // STILL resolve the V2 seam — the legacy executor is not selectable.
     const { v2Session } = await Effect.runPromise(
       resolveDrive({ experimentalV2SubagentDrive: false }),
     )
-    expect(v2Session).toBeUndefined()
+    expect(v2Session).toBe(stubSessionV2)
   })
 
   test("flag defaults ON → resolves the V2 seam from the composition root when the stack is present", async () => {

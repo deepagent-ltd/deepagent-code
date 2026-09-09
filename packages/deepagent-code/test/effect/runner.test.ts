@@ -540,6 +540,46 @@ describe("Runner", () => {
     }),
   )
 
+  it.live(
+    "cancelShell stops a shell with a queued run",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      const runner = Runner.make<string>(s)
+
+      const sh = yield* runner.startShell(Effect.never.pipe(Effect.as("aborted"))).pipe(Effect.forkChild)
+      yield* waitForState(runner, "Shell")
+
+      const run = yield* runner.ensureRunning(Effect.succeed("y")).pipe(Effect.forkChild)
+      yield* waitForState(runner, "ShellThenRun")
+
+      yield* runner.cancelShell
+      expect(runner.busy).toBe(false)
+
+      expect(Exit.isFailure(yield* Fiber.await(sh))).toBe(true)
+      expect(Exit.isFailure(yield* Fiber.await(run))).toBe(true)
+    }),
+  )
+
+  it.live(
+    "cancelShell leaves running work untouched",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      const runner = Runner.make<string>(s)
+      const gate = yield* Deferred.make<void>()
+
+      const fiber = yield* runner.ensureRunning(Deferred.await(gate).pipe(Effect.as("ran"))).pipe(Effect.forkChild)
+      yield* waitForState(runner, "Running")
+
+      yield* runner.cancelShell
+      expect(runner.state._tag).toBe("Running")
+      expect(runner.busy).toBe(true)
+
+      yield* Deferred.succeed(gate, undefined)
+      expect(yield* Fiber.join(fiber)).toBe("ran")
+      expect(runner.state._tag).toBe("Idle")
+    }),
+  )
+
   // --- lifecycle callbacks ---
 
   it.live(

@@ -3,6 +3,7 @@ import { Config, ConfigProvider, Layer } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpRouter, HttpServer } from "effect/unstable/http"
 import { layerWebSocketConstructorGlobal } from "effect/unstable/socket/Socket"
 import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
+import { RuntimeFlags } from "../../src/effect/runtime-flags"
 import { createServer } from "node:http"
 
 // NodeHttpServer.layerTest binds the unspecified host (server.address() is "::"), which
@@ -23,20 +24,31 @@ const layerTestLoopback = HttpServer.layerTestClient.pipe(
   Layer.provideMerge(NodeHttpServer.layer(createServer, { port: 0, host: "127.0.0.1" })),
 ) as unknown as typeof NodeHttpServer.layerTest
 
-const servedRoutes: Layer.Layer<never, Config.ConfigError, HttpServer.HttpServer> = HttpRouter.serve(
-  HttpApiApp.routes,
-  {
-    disableListenLog: true,
-    disableLogger: true,
-  },
-)
-
-export function httpApiLayerWithConfig(input: Record<string, unknown>) {
+export function httpApiLayerWithRuntimeFlags(
+  runtimeFlagsLayer: Layer.Layer<RuntimeFlags.Service>,
+  input: Record<string, unknown> = {},
+) {
+  const configProvider = ConfigProvider.layer(ConfigProvider.fromUnknown(input))
+  const servedRoutes: Layer.Layer<never, Config.ConfigError, HttpServer.HttpServer> = HttpRouter.serve(
+    HttpApiApp.createRoutes(undefined, runtimeFlagsLayer),
+    {
+      disableListenLog: true,
+      disableLogger: true,
+    },
+  )
   return servedRoutes.pipe(
     Layer.provide(layerWebSocketConstructorGlobal),
     Layer.provideMerge(layerTestLoopback),
     Layer.provideMerge(NodeServices.layer),
-    Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown(input))),
+    Layer.provide(configProvider),
+  )
+}
+
+export function httpApiLayerWithConfig(input: Record<string, unknown>) {
+  const configProvider = ConfigProvider.layer(ConfigProvider.fromUnknown(input))
+  return httpApiLayerWithRuntimeFlags(
+    RuntimeFlags.defaultLayer.pipe(Layer.provide(configProvider)),
+    input,
   )
 }
 

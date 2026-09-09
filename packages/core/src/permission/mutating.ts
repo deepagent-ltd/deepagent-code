@@ -8,7 +8,11 @@
 // Consumers: the GUI directory read-only mode (packages/app) and the CLI
 // `run --permission-mode read-only` auto-responder (packages/deepagent-code)
 // must agree on this set, so it lives in core.
-export const MUTATING_PERMISSIONS = new Set(["edit", "write", "patch", "bash", "task", "external_directory"])
+import { readonlySet } from "../util/readonly-collections"
+
+export const MUTATING_PERMISSIONS = readonlySet(
+  new Set(["edit", "write", "patch", "bash", "task", "external_directory"]),
+)
 
 export function isMutatingPermission(permission: string) {
   return MUTATING_PERMISSIONS.has(permission)

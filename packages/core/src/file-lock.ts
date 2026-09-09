@@ -23,6 +23,7 @@ export interface FileLockEntry {
 
 export const HUMAN_LOCK_TTL_MS = 30_000
 export const AGENT_LOCK_TTL_MS = 60_000  // 单次写操作上限
+export const MAX_ACTIVE_LOCKS = 4096
 
 export interface Interface {
   /** 获取锁。human 锁覆盖 agent 锁；同类锁冲突返回 null。 */
@@ -78,6 +79,7 @@ export const layer = Layer.succeed(
           return null
         }
       }
+      if (locks.size >= MAX_ACTIVE_LOCKS) return null
       const ttl = kind === "human" ? HUMAN_LOCK_TTL_MS : AGENT_LOCK_TTL_MS
       const entry: FileLockEntry = {
         lockId: randomUUID(),

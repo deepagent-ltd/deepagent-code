@@ -63,6 +63,88 @@ export const Created = EventV2.define({
 })
 export type Created = typeof Created.Type
 
+/**
+ * Native V2 update authority for the Session info fields `SessionSchema.Info` models (title,
+ * agent, model, cost, tokens, permissions, metadata, share, preview, parent, time.updated,
+ * time.archived). Summary and revert have independent V2 event authorities (`session.diff.2` and
+ * `session.revert.1`) so this update cannot erase their state. Version 1 of `session.updated`
+ * remains decodable as the compatibility/import wire event. `slug`/`version`
+ * mirror the created event: they are immutable identity attributes the client egress adapter needs
+ * to rebuild the legacy shape.
+ */
+export const Updated = EventV2.define({
+  type: "session.updated",
+  sync: {
+    aggregate: "sessionID",
+    version: 2,
+  },
+  schema: {
+    sessionID: SessionSchema.ID,
+    info: SessionSchema.Info,
+    slug: Schema.String,
+    version: Schema.String,
+  },
+})
+export type Updated = typeof Updated.Type
+
+/**
+ * Native V2 diff authority. The summary is metadata-only and the independent `diff` payload keeps
+ * file descriptors/artifacts out of SessionSchema.Info. Version 1 remains the legacy ephemeral
+ * compatibility shape in DeepAgentCode; both versions share the `session.diff` event family.
+ */
+export const DiffUpdated = EventV2.define({
+  type: "session.diff",
+  sync: {
+    aggregate: "sessionID",
+    version: 2,
+  },
+  schema: {
+    ...Base,
+    summary: SessionSchema.Summary,
+    diff: Schema.Array(SessionSchema.FileDiff),
+  },
+})
+export type DiffUpdated = typeof DiffUpdated.Type
+
+/** Native V2 revert authority. `null` is an explicit unrevert and mutationEpoch is a CAS fence. */
+export const RevertChanged = EventV2.define({
+  type: "session.revert",
+  sync: {
+    aggregate: "sessionID",
+    version: 1,
+  },
+  schema: {
+    ...Base,
+    info: SessionSchema.Info,
+    slug: Schema.String,
+    version: Schema.String,
+    mutationEpoch: NonNegativeInt,
+    revert: Schema.NullOr(SessionSchema.Revert),
+    summary: SessionSchema.Summary.pipe(Schema.optional),
+  },
+})
+export type RevertChanged = typeof RevertChanged.Type
+
+/**
+ * Native V2 deletion authority. The full V2 info mirror is carried so the compatibility egress
+ * can still emit the legacy `session.deleted.1` payload, while the durable event itself remains
+ * terminal and installs the aggregate deletion fence.
+ */
+export const Deleted = EventV2.define({
+  type: "session.deleted",
+  sync: {
+    aggregate: "sessionID",
+    version: 2,
+  },
+  schema: {
+    sessionID: SessionSchema.ID,
+    info: SessionSchema.Info,
+    slug: Schema.String,
+    version: Schema.String,
+  },
+})
+export type Deleted = typeof Deleted.Type
+
 export const UnknownError = Schema.Struct({
   type: Schema.Literal("unknown"),
   message: Schema.String,
@@ -220,6 +302,20 @@ export const Synthetic = EventV2.define({
   },
 })
 export type Synthetic = typeof Synthetic.Type
+
+// RI-126: the runner captured the turn's structured-output value (synthetic StructuredOutput
+// tool call input, or the schema-constrained final text parsed on a wire-format route). The
+// value lands on the projected assistant message (`structured`) and the V1 wire info.
+export const StructuredCaptured = EventV2.define({
+  type: "session.next.structured.captured",
+  ...options,
+  schema: {
+    ...Base,
+    assistantMessageID: SessionMessageID.ID,
+    value: Schema.Unknown,
+  },
+})
+export type StructuredCaptured = typeof StructuredCaptured.Type
 
 export namespace Shell {
   export const Started = EventV2.define({
@@ -544,6 +640,10 @@ export namespace Compaction {
 
 const DurableDefinitions = [
   Created,
+  Updated,
+  DiffUpdated,
+  RevertChanged,
+  Deleted,
   AgentSwitched,
   ModelSwitched,
   PermissionsChanged,
@@ -558,6 +658,7 @@ const DurableDefinitions = [
   Execution.Interrupted,
   ContextUpdated,
   Synthetic,
+  StructuredCaptured,
   Shell.Started,
   Shell.Ended,
   Step.Started,

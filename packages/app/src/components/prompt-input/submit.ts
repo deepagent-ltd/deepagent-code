@@ -866,7 +866,11 @@ export function createPromptSubmit(input: PromptSubmitInput) {
 
     const waitForWorktree = async () => {
       const worktree = WorktreeState.get(sdk.scope, sessionDirectory)
-      if (!worktree || worktree.status !== "pending") return true
+      if (!worktree) return true
+      if (worktree.status !== "pending") {
+        WorktreeState.forget(sdk.scope, sessionDirectory)
+        return true
+      }
 
       if (sessionDirectory === projectDirectory) {
         sync.set("session_status", session.id, { type: "busy" })
@@ -914,6 +918,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
           clearTimeout(timer.id)
         },
       )
+      WorktreeState.forget(sdk.scope, sessionDirectory)
       pending.delete(pendingKey(session.id))
       if (controller.signal.aborted) return false
       if (result.status === "failed") throw new Error(result.message)

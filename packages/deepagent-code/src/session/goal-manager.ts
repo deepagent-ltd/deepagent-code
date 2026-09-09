@@ -871,11 +871,11 @@ const planEditAdmission = <A>(operation: () => A): Effect.Effect<A, GoalPlanEdit
     },
   })
 
-export const defaultLayer = Layer.suspend(() =>
+export const productionLayer = Layer.suspend(() =>
   layer.pipe(
     Layer.provide(Session.defaultLayer),
     Layer.provide(Agent.defaultLayer),
-    Layer.provide(SessionPrompt.defaultLayer),
+    Layer.provide(SessionPrompt.productionLayer),
     Layer.provide(SessionRevert.defaultLayer),
     Layer.provide(SessionSteer.defaultLayer),
     Layer.provide(EventV2Bridge.defaultLayer),
@@ -883,11 +883,13 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(Provider.defaultLayer),
     Layer.provide(LSP.defaultLayer),
     Layer.provide(RuntimeFlags.defaultLayer),
-    Layer.provide(SessionV2.liveLayer),
     Layer.provide(Snapshot.defaultLayer),
     Layer.provide(DeepAgentEventBus.defaultLayer),
     Layer.provide(ApprovalQueue.defaultLayer),
   ),
 )
+
+/** Standalone default. Production roots must provide one shared SessionV2 runtime to productionLayer. */
+export const defaultLayer = productionLayer.pipe(Layer.provide(SessionV2.liveLayer))
 
 export * as GoalManager from "./goal-manager"

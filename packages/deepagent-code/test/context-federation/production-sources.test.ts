@@ -9,6 +9,7 @@ import {
   type ProductionV2AdapterInput,
 } from "@deepagent-code/core/context-federation/production-adapters"
 import { stagedV2Adapters } from "@deepagent-code/core/context-federation/staged-adapters-v2"
+import { createRuntimeFeatureRegistry } from "@deepagent-code/core/flag/runtime-features"
 import {
   IndexSpaceID,
   LocationKey,
@@ -168,12 +169,11 @@ describe("W3.7 production sources (deepagent-code composition)", () => {
     const database = Database.layerFromPath(metadataPath)
     await Effect.runPromise(
       Effect.gen(function* () {
-        const dbCtx = yield* Layer.build(database)
-        const db = Context.get(dbCtx, Database.Service).db
-        const identityCtx = yield* Layer.build(
+        const ctx = yield* Layer.build(
           LocationIdentity.layer.pipe(Layer.provideMerge(database), Layer.provide(FSUtil.defaultLayer)),
         )
-        const resolvedIdentity = yield* Context.get(identityCtx, LocationIdentity.Service).resolve({
+        const db = Context.get(ctx, Database.Service).db
+        const resolvedIdentity = yield* Context.get(ctx, LocationIdentity.Service).resolve({
           boundary: { kind: "implicit_local" },
           directory: AbsolutePath.make(root),
           project: { kind: "registered_root" },
@@ -369,22 +369,18 @@ describe("W3.7 production sources (deepagent-code composition)", () => {
   })
 
   test("flag=false falls back to staged adapters (existing behavior, sources ignored)", async () => {
-    const original = process.env[CONTEXT_FEDERATION_PRODUCTION_ENV]
-    try {
-      process.env[CONTEXT_FEDERATION_PRODUCTION_ENV] = "false"
-      expect(productionAdaptersEnabled()).toBe(false)
-      const resolved = await Effect.runPromise(
-        SessionContextResolverV2.resolveGraphs(envelope(envelopeIdentity(), "anything"), stagedV2Adapters(), 5_000),
-      )
-      for (const [graph, record] of Object.entries(resolved.graphStatuses)) {
-        expect(record.status).toBe("degraded_unavailable")
-        expect(record.reasonCode).toBe("source_disabled")
-      }
-    } finally {
-      if (original === undefined) delete process.env[CONTEXT_FEDERATION_PRODUCTION_ENV]
-      else process.env[CONTEXT_FEDERATION_PRODUCTION_ENV] = original
-      expect(productionAdaptersEnabled()).toBe(true)
+    // RuntimeFeatures is an import-time process snapshot: exercise the kill-switch through an
+    // injected registry (production-adapters.ts docstring), never by mutating process.env.
+    const off = createRuntimeFeatureRegistry(undefined, { [CONTEXT_FEDERATION_PRODUCTION_ENV]: "false" })
+    expect(productionAdaptersEnabled(off)).toBe(false)
+    const resolved = await Effect.runPromise(
+      SessionContextResolverV2.resolveGraphs(envelope(envelopeIdentity(), "anything"), stagedV2Adapters(), 5_000),
+    )
+    for (const [graph, record] of Object.entries(resolved.graphStatuses)) {
+      expect(record.status).toBe("degraded_unavailable")
+      expect(record.reasonCode).toBe("source_disabled")
     }
+    expect(productionAdaptersEnabled()).toBe(true)
   })
 
   test("location-layer seam forwards the outer ProductionV2Sources value (host injection mechanism)", async () => {

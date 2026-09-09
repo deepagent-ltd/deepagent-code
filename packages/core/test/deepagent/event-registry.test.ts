@@ -100,6 +100,18 @@ describe("EventRegistry create + lookup", () => {
     expect(next.lookup("new.command")).toBeDefined()
     expect(registry.lookup("new.command")).toBeUndefined()
   })
+
+  test("rejects duplicate identities and unbounded registration", () => {
+    expect(() => createEventRegistry([commandReg, commandReg])).toThrow("Duplicate event registration")
+    expect(() =>
+      createEventRegistry(
+        Array.from({ length: EventRegistry.MAX_EVENT_TYPE_REGISTRATIONS + 1 }, (_, index) => ({
+          ...commandReg,
+          eventType: `event.${index}`,
+        })),
+      ),
+    ).toThrow(`limit exceeded (${EventRegistry.MAX_EVENT_TYPE_REGISTRATIONS})`)
+  })
 })
 
 describe("EventRegistry publisher policy (fail-closed)", () => {

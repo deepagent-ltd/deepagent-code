@@ -26,7 +26,7 @@ import {
   TextPart,
   ToolPart,
   UserMessage,
-  Todo,
+  SessionTodoInfo,
   QuestionAnswer,
   QuestionInfo,
 } from "@deepagent-code/sdk"
@@ -2449,7 +2449,7 @@ ToolRegistry.register({
     const subtitle = createMemo(() => {
       const list = todos()
       if (list.length === 0) return ""
-      return `${list.filter((t: Todo) => t.status === "completed").length}/${list.length}`
+      return `${list.filter((t: SessionTodoInfo) => t.status === "completed").length}/${list.length}`
     })
 
     return (
@@ -2465,7 +2465,7 @@ ToolRegistry.register({
         <Show when={todos().length}>
           <div data-component="todos">
             <For each={todos()}>
-              {(todo: Todo) => (
+              {(todo: SessionTodoInfo) => (
                 <Checkbox readOnly checked={todo.status === "completed"}>
                   <span
                     data-slot="message-part-todo-content"

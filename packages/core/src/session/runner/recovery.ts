@@ -26,10 +26,11 @@ export * as SessionProviderRecovery from "./recovery"
 // W2/W2-1 honest scope note: this file holds BOTH the process-local store-backed service
 // (`layer`) and the durable DB-backed service (`durableLayerWith`). The durable service is
 // the kill-9-survivor surface and is exercised by recovery-durable-store.test.ts.
-// W2.2 wiring note: `durableLayerWith` is NOW the production service — the deepagent-code
-// server route graph and the app runtime provide it over the composition's Database
-// (single-instance local process; no clustering) and the RecoveryExecutor drains the
-// pending recovery commands at process boot. The terminal-descriptor write
+// W2.2 wiring note: the deepagent-code RecoveryExecutor drains the pending recovery
+// commands at process boot through the durable STORE (`makeDurableRecoveryStore` →
+// `applyExactAbandon`, one immediate transaction per command); no production composition
+// provides `durableLayerWith` (the retired composition seam — core durable-store tests
+// exercise it). The terminal-descriptor write
 // (v2-provider-turn.ts `writeTurnTerminalDescriptor`) and the startup inventory
 // classification (startup-inventory.ts) are the audit/read side; the W2 boundary stays:
 // C1B evidence status records, baseline repairs, fork fences and abandon receipts are
@@ -412,7 +413,7 @@ function bridgeOf(input: ClassifyInput): RecoveryCommandContract.RecoveryTermina
  */
 export function classify(input: ClassifyInput): RecoveryCommandContract.RecoveryDescriptor {
   if (input.resolution) {
-    return {
+    return validatedDescriptor({
       schemaVersion: "recovery-descriptor.v1",
       requestHash: input.attempt.requestHash,
       provenance: provenanceOf(input),
@@ -425,7 +426,7 @@ export function classify(input: ClassifyInput): RecoveryCommandContract.Recovery
         bridgeRef: input.resolution.bridgeRef,
         terminal: input.resolution.terminal,
       },
-    }
+    })
   }
 
   const baselineState = input.baseline?.state ?? "present"
@@ -439,7 +440,7 @@ export function classify(input: ClassifyInput): RecoveryCommandContract.Recovery
     !input.workspaceConflict
 
   if (baselineState === "present" && verifiable) {
-    return {
+    return validatedDescriptor({
       schemaVersion: "recovery-descriptor.v1",
       requestHash: input.attempt.requestHash,
       provenance: provenanceOf(input),
@@ -454,11 +455,11 @@ export function classify(input: ClassifyInput): RecoveryCommandContract.Recovery
         baselineHash: input.baseline?.baselineHash ?? input.attempt.requestHash,
         allVerified: true,
       },
-    }
+    })
   }
 
   if ((baselineState === "missing" || baselineState === "corrupt") && input.baseline?.sourceSnapshotRef) {
-    return {
+    return validatedDescriptor({
       schemaVersion: "recovery-descriptor.v1",
       requestHash: input.attempt.requestHash,
       provenance: provenanceOf(input),
@@ -471,11 +472,11 @@ export function classify(input: ClassifyInput): RecoveryCommandContract.Recovery
         sourceSnapshotRef: input.baseline.sourceSnapshotRef,
         canReconstruct: true,
       },
-    }
+    })
   }
 
   if (input.safeBoundary?.safeBoundaryRef) {
-    return {
+    return validatedDescriptor({
       schemaVersion: "recovery-descriptor.v1",
       requestHash: input.attempt.requestHash,
       provenance: provenanceOf(input),
@@ -489,10 +490,10 @@ export function classify(input: ClassifyInput): RecoveryCommandContract.Recovery
         reasonCode: "safe_boundary_none",
         originalSessionReadOnly: true,
       },
-    }
+    })
   }
 
-  return {
+  return validatedDescriptor({
     schemaVersion: "recovery-descriptor.v1",
     requestHash: input.attempt.requestHash,
     provenance: provenanceOf(input),
@@ -505,7 +506,12 @@ export function classify(input: ClassifyInput): RecoveryCommandContract.Recovery
       requiredActor: "admin",
       ...(input.baseline?.sourceSnapshotRef ? { evidenceExportRef: input.baseline.sourceSnapshotRef } : {}),
     },
-  }
+  })
+}
+
+/** Keep the domain classifier and the public wire contract on the same decoded Type side. */
+function validatedDescriptor(input: unknown): RecoveryCommandContract.RecoveryDescriptor {
+  return RecoveryCommandContract.decodeRecoveryDescriptor(input)
 }
 
 /** Pick the most specific frozen reason code for a coordination descriptor. */
@@ -1421,7 +1427,12 @@ export const layer = Layer.effect(
 
 type Database = EffectDrizzleSqlite.EffectSQLiteDatabase
 
-/** The resolver's exit descriptor for a terminal command effect (idempotent, content-addressed). */
+/**
+ * The resolver's exit descriptor for a terminal command effect (idempotent, content-addressed).
+ * Core-contract helper for this service's own executors only: the recovery-executor
+ * production path's terminal `resolved` descriptor is written exclusively by the durable
+ * store's `applyExactAbandon` (recovery-durable-store.ts), never here.
+ */
 function resolvedExitDescriptor(input: {
   readonly requestHash: string
   readonly attempt: AttemptIdentity
@@ -1473,17 +1484,23 @@ const durableServiceWith = (db: Database) =>
 
     const commitMemory = (state: RecoveryStoreState): Effect.Effect<void> => Ref.set(memory, state)
 
-    const putDescriptorFor = (input: {
+    const putDescriptorAndCommandFor = (input: {
       readonly descriptor: RecoveryCommandContract.RecoveryDescriptor
       readonly attempt: AttemptIdentity
+      readonly actor?: { readonly type: "user" | "administrator" | "system"; readonly id: string }
+      readonly expectedOwnerToken?: string
       readonly createdAt?: number
     }) =>
-      store.putDescriptor({
+      store.putDescriptorAndCommand({
         descriptor: input.descriptor,
         sessionId: input.attempt.sessionId,
         activityId: input.attempt.activityId,
         turnId: String(input.attempt.providerTurnSeq),
-        createdAt: input.createdAt,
+        requestHash: input.attempt.requestHash,
+        attemptIdentity: input.attempt,
+        ...(input.actor ? { actorType: input.actor.type, actorId: input.actor.id } : {}),
+        ...(input.expectedOwnerToken ? { expectedOwnerToken: input.expectedOwnerToken } : {}),
+        ...(input.createdAt === undefined ? {} : { createdAt: input.createdAt }),
       })
 
     const resolve = Effect.fn("SessionProviderRecovery.resolve")(function* (input: ResolveInput) {
@@ -1515,11 +1532,10 @@ const durableServiceWith = (db: Database) =>
           permissionIncomplete: input.permissionIncomplete ?? false,
           workspaceConflict: input.workspaceConflict ?? false,
         })
-        const descriptorWrite = yield* putDescriptorFor({ descriptor, attempt: input.attemptIdentity })
-        const write = yield* store.putCommand({
-          requestHash: input.requestHash,
-          attemptIdentity: input.attemptIdentity,
-          descriptorId: descriptorWrite.descriptorId,
+        const write = yield* putDescriptorAndCommandFor({
+          descriptor,
+          attempt: input.attemptIdentity,
+          actor: input.actor,
           expectedOwnerToken: input.ownerToken,
         })
         return {
@@ -1713,19 +1729,16 @@ const durableServiceWith = (db: Database) =>
             return yield* Effect.fail(new RecoveryTransactionAbortedError({ operation: "abandon_exact" }))
           }
           if (tx.outcome.status === "conflict") return tx.outcome
-          const descriptorWrite = yield* putDescriptorFor({
-            descriptor: resolvedExitDescriptor({
-              requestHash: input.requestHash,
-              attempt: input.attemptIdentity,
-              terminal: "abandoned",
-              resolutionRef: tx.outcome.commandId,
-            }),
-            attempt: input.attemptIdentity,
-          })
-          const cas = yield* store.putCommand({
+          const descriptor = resolvedExitDescriptor({
             requestHash: input.requestHash,
-            attemptIdentity: input.attemptIdentity,
-            descriptorId: descriptorWrite.descriptorId,
+            attempt: input.attemptIdentity,
+            terminal: "abandoned",
+            resolutionRef: tx.outcome.commandId,
+          })
+          const cas = yield* putDescriptorAndCommandFor({
+            descriptor,
+            attempt: input.attemptIdentity,
+            actor: input.actor,
           })
           if (cas.status === "mismatch") {
             return yield* Effect.fail(new MismatchError({ reason: "request_hash_mismatch" }))
@@ -1815,7 +1828,7 @@ const durableServiceWith = (db: Database) =>
             return yield* Effect.fail(new RecoveryTransactionAbortedError({ operation: "repair_baseline_and_abandon" }))
           }
           if (tx.outcome.status === "conflict") return tx.outcome
-          const descriptorWrite = yield* putDescriptorFor({
+          const cas = yield* putDescriptorAndCommandFor({
             descriptor: resolvedExitDescriptor({
               requestHash: input.requestHash,
               attempt: input.attemptIdentity,
@@ -1823,11 +1836,7 @@ const durableServiceWith = (db: Database) =>
               resolutionRef: tx.outcome.abandon.commandId,
             }),
             attempt: input.attemptIdentity,
-          })
-          const cas = yield* store.putCommand({
-            requestHash: input.requestHash,
-            attemptIdentity: input.attemptIdentity,
-            descriptorId: descriptorWrite.descriptorId,
+            actor: input.actor,
           })
           if (cas.status === "mismatch") {
             return yield* Effect.fail(new MismatchError({ reason: "request_hash_mismatch" }))
@@ -1902,7 +1911,7 @@ const durableServiceWith = (db: Database) =>
             return yield* Effect.fail(new RecoveryTransactionAbortedError({ operation: "fork_from_safe_boundary" }))
           }
           if (tx.outcome.status === "conflict") return tx.outcome
-          const descriptorWrite = yield* putDescriptorFor({
+          const cas = yield* putDescriptorAndCommandFor({
             descriptor: resolvedExitDescriptor({
               requestHash: input.requestHash,
               attempt: input.attemptIdentity,
@@ -1910,11 +1919,7 @@ const durableServiceWith = (db: Database) =>
               resolutionRef: tx.outcome.forkRef,
             }),
             attempt: input.attemptIdentity,
-          })
-          const cas = yield* store.putCommand({
-            requestHash: input.requestHash,
-            attemptIdentity: input.attemptIdentity,
-            descriptorId: descriptorWrite.descriptorId,
+            actor: input.actor,
           })
           if (cas.status === "mismatch") {
             return yield* Effect.fail(new MismatchError({ reason: "request_hash_mismatch" }))
@@ -2083,7 +2088,7 @@ const durableServiceWith = (db: Database) =>
             payloadHash: evidence.payloadHash,
             recordedAt: input.now ?? Date.now(),
           }
-          const descriptorWrite = yield* putDescriptorFor({
+          const casCommand = yield* putDescriptorAndCommandFor({
             descriptor: resolvedExitDescriptor({
               requestHash: input.requestHash,
               attempt: input.attemptIdentity,
@@ -2091,12 +2096,7 @@ const durableServiceWith = (db: Database) =>
               resolutionRef: evidenceRef,
             }),
             attempt: input.attemptIdentity,
-            createdAt: input.now,
-          })
-          const casCommand = yield* store.putCommand({
-            requestHash: input.requestHash,
-            attemptIdentity: input.attemptIdentity,
-            descriptorId: descriptorWrite.descriptorId,
+            actor: input.actor,
             createdAt: input.now,
           })
           if (casCommand.status === "mismatch") {
@@ -2315,23 +2315,24 @@ const durableServiceWith = (db: Database) =>
   })
 
 /**
- * W2 — the production recovery layer bound to the business DB. The command/descriptor/
+ * W2 — the DB-backed recovery service bound to a business DB. The command/descriptor/
  * export surfaces survive a kill-9 restart; the frozen contract and typed outcomes are
  * identical to the in-memory `layer` (see `durableServiceWith`).
  *
- * W2.2 wiring status (2026-09-02): this `durableLayerWith` / `durableServiceWith` IS the
- * production recovery service. The deepagent-code compositions (server route graph +
- * app runtime) provide it over the composition's Database and the RecoveryExecutor
- * drains pending recovery commands at process boot:
- *   - provider-turn terminal descriptors (v2-provider-turn.ts `writeTurnTerminalDescriptor`);
- *   - the maintenance command/evidence-export registry (deepagent-code maintenance-registry);
- *   - the startup inventory classification (startup-inventory.ts);
- *   - recovery-command execution after a kill-9 restart (deepagent-code RecoveryExecutor;
- *     see recovery-executor.ts for the per-class exit policy — resolvable_exact → abandon
- *     replay, the other classes kept pending).
- * W2 boundary (unchanged, honest): C1B evidence status records, baseline repairs, fork
- * fences and abandon receipts remain process-local (the `memory` Ref above), and the
- * turn-terminal descriptors written WITHOUT a command row are audit-only — they never
- * enter execution.
+ * Wiring status: NO production composition provides this layer. The deepagent-code
+ * production path executes recovery commands through the durable STORE directly —
+ * `RecoveryExecutor` (deepagent-code server/recovery-executor.ts) calls
+ * `makeDurableRecoveryStore(db).applyExactAbandon(...)`, one immediate transaction per
+ * command, reached at process boot (startup drain on the executor layer build) and from
+ * the maintenance surface (`executeRecovery`). This layer is exercised by the core
+ * durable-store tests (recovery-durable-store.test.ts) and remains the DB-backed service
+ * for any composition that wants the full C1B executor vocabulary.
+ *
+ * The audit/read side is unchanged: provider-turn terminal descriptors
+ * (v2-provider-turn.ts `writeTurnTerminalDescriptor`) and the startup inventory
+ * classification (startup-inventory.ts). W2 boundary (unchanged, honest): C1B evidence
+ * status records, baseline repairs, fork fences and abandon receipts remain
+ * process-local (the `memory` Ref above), and the turn-terminal descriptors written
+ * WITHOUT a command row are audit-only — they never enter execution.
  */
 export const durableLayerWith = (db: Database) => Layer.effect(Service, durableServiceWith(db))

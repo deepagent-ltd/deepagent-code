@@ -3,7 +3,6 @@ import { ConfigProvider, Effect, Layer } from "effect"
 import {
   DEFAULT_SUBAGENT_OUTPUT_MAX_CHARS,
   DEFAULT_SUBAGENT_TIMEOUT_MS,
-  isCoreV2OnlyVersion,
   RuntimeFlags,
 } from "../../src/effect/runtime-flags"
 import { it } from "../lib/effect"
@@ -14,31 +13,6 @@ const fromConfig = (input: Record<string, unknown>) =>
 const readFlags = RuntimeFlags.Service.useSync((flags) => flags)
 
 describe("RuntimeFlags", () => {
-  it.effect("forces the Core V2 alpha/beta release series into V2-only mode", () =>
-    Effect.sync(() => {
-      expect(isCoreV2OnlyVersion("1.4.7")).toBe(false)
-      expect(isCoreV2OnlyVersion("1.4.8")).toBe(true)
-      expect(isCoreV2OnlyVersion("1.4.8-r0")).toBe(true)
-      expect(isCoreV2OnlyVersion("1.4.8.r3")).toBe(true)
-      expect(isCoreV2OnlyVersion("1.4.8.5")).toBe(true)
-      expect(isCoreV2OnlyVersion("1.4.8rc1")).toBe(false)
-      expect(isCoreV2OnlyVersion("1.4.80")).toBe(false)
-      expect(isCoreV2OnlyVersion("1.4.70")).toBe(false)
-      expect(isCoreV2OnlyVersion("2.0alpha")).toBe(true)
-      expect(isCoreV2OnlyVersion("2.0alpha.1")).toBe(true)
-      expect(isCoreV2OnlyVersion("2.0beta")).toBe(true)
-      expect(isCoreV2OnlyVersion("2.0.0-alpha.0")).toBe(true)
-      expect(isCoreV2OnlyVersion("2.0.0-alpha.1")).toBe(true)
-      expect(isCoreV2OnlyVersion("2.0.0-alpha15")).toBe(true)
-      expect(isCoreV2OnlyVersion("2.0.0-beta.0")).toBe(true)
-      expect(isCoreV2OnlyVersion("2.0.0-beta.1")).toBe(true)
-      expect(isCoreV2OnlyVersion("2.0.0-beta15")).toBe(true)
-      expect(isCoreV2OnlyVersion("2.0.1-alpha.0")).toBe(false)
-      expect(isCoreV2OnlyVersion("2.0.1-beta.0")).toBe(false)
-      expect(isCoreV2OnlyVersion("2.0.0")).toBe(false)
-    }),
-  )
-
   it.effect("defaultLayer defaults autoShare to false", () =>
     Effect.gen(function* () {
       const flags = yield* readFlags.pipe(Effect.provide(fromConfig({})))
@@ -94,7 +68,7 @@ describe("RuntimeFlags", () => {
         contextProjectionV2: true,
         contextQueryToolsV2: true,
         coreV2ExecutionOwner: true,
-        coreV2Only: false,
+        coreV2Only: true,
       })
 
       const disabled = yield* readFlags.pipe(
@@ -111,6 +85,10 @@ describe("RuntimeFlags", () => {
       expect(explicit.coreV2ExecutionOwner).toBe(true)
       const v2Only = yield* readFlags.pipe(Effect.provide(fromConfig({ DEEPAGENT_CODE_CORE_V2_ONLY: "true" })))
       expect(v2Only.coreV2Only).toBe(true)
+      const noLegacyFallback = yield* readFlags.pipe(
+        Effect.provide(fromConfig({ DEEPAGENT_CODE_CORE_V2_ONLY: "false" })),
+      )
+      expect(noLegacyFallback.coreV2Only).toBe(true)
     }),
   )
 

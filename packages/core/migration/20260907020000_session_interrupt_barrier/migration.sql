@@ -1,0 +1,1 @@
+ALTER TABLE `session` ADD `interrupt_seq` integer;

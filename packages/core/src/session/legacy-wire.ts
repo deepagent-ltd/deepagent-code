@@ -83,6 +83,7 @@ export function legacyAssistant(input: {
       ...(input.message.error
         ? { error: { name: "UnknownError", data: { message: input.message.error.message } } }
         : {}),
+      ...(input.message.structured === undefined ? {} : { structured: input.message.structured }),
       parentID: input.parentMessageID,
       modelID: input.message.model.id,
       providerID: input.message.model.providerID,

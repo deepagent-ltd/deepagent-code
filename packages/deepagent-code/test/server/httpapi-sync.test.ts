@@ -27,6 +27,7 @@ import { EventV2 } from "@deepagent-code/core/event"
 import { eq, sql } from "drizzle-orm"
 import { HttpServer } from "effect/unstable/http"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
+import { SessionEvent } from "@deepagent-code/core/session/event"
 import { SessionTable } from "@deepagent-code/core/session/sql"
 import { encodeReplayRequestPrefix } from "@/sync/replay-protocol"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
@@ -665,6 +666,145 @@ describe("sync HttpApi", () => {
         })
 
         expect(response.status, yield* response.text).toBe(409)
+        expect(
+          yield* db.select().from(SessionTable).where(eq(SessionTable.id, session.id)).get().pipe(Effect.orDie),
+        ).toEqual(beforeSession)
+        expect(
+          yield* db
+            .select()
+            .from(EventSequenceTable)
+            .where(eq(EventSequenceTable.aggregate_id, session.id))
+            .get()
+            .pipe(Effect.orDie),
+        ).toEqual(beforeSequence)
+        expect(
+          yield* db
+            .select()
+            .from(EventTable)
+            .where(eq(EventTable.aggregate_id, session.id))
+            .all()
+            .pipe(Effect.orDie),
+        ).toEqual(beforeEvents)
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+    15_000,
+  )
+
+  it.instance(
+    "replays a native created.2/updated.2 batch that matches the current placement",
+    () =>
+      Effect.gen(function* () {
+        const tmp = yield* TestInstance
+        const headers = { "x-deepagent-code-directory": tmp.directory, "content-type": "application/json" }
+        const session = yield* Session.use.create({ title: "native replay", workspaceID: syncWorkspaceID })
+        yield* Session.use.setTitle({ sessionID: session.id, title: "native replay updated" })
+        const { db } = yield* Database.Service
+        const rows = yield* db
+          .select()
+          .from(EventTable)
+          .where(eq(EventTable.aggregate_id, session.id))
+          .all()
+          .pipe(Effect.orDie)
+        const updated = rows.find((event) => event.type === EventV2.versionedType(SessionEvent.Updated.type, 2))
+        expect(updated).toBeDefined()
+        yield* db
+          .delete(EventSequenceTable)
+          .where(eq(EventSequenceTable.aggregate_id, session.id))
+          .run()
+          .pipe(Effect.orDie)
+        yield* db.delete(SessionTable).where(eq(SessionTable.id, session.id)).run().pipe(Effect.orDie)
+
+        const replayed = yield* requestInDirectory(SyncPaths.replay, tmp.directory, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            directory: tmp.directory,
+            events: [
+              {
+                id: EventV2.ID.make("evt_native_created_replay"),
+                aggregateID: session.id,
+                seq: 0,
+                type: EventV2.versionedType(SessionEvent.Created.type, 2),
+                data: updated!.data,
+              },
+              {
+                id: updated!.id,
+                aggregateID: session.id,
+                seq: updated!.seq,
+                type: updated!.type,
+                data: updated!.data,
+              },
+            ],
+          }),
+        })
+
+        const body = yield* replayed.text
+        expect(replayed.status, body).toBe(200)
+        expect(JSON.parse(body)).toEqual({ sessionID: session.id })
+        expect((yield* Session.use.get(session.id)).title).toBe("native replay updated")
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+    15_000,
+  )
+
+  it.instance(
+    "rejects native session.updated.2 placement drift at the replay precheck",
+    () =>
+      Effect.gen(function* () {
+        const tmp = yield* TestInstance
+        const headers = { "x-deepagent-code-directory": tmp.directory, "content-type": "application/json" }
+        const session = yield* Session.use.create({ title: "native drift", workspaceID: syncWorkspaceID })
+        yield* Session.use.setTitle({ sessionID: session.id, title: "native drift updated" })
+        const { db } = yield* Database.Service
+        const beforeSession = yield* db
+          .select()
+          .from(SessionTable)
+          .where(eq(SessionTable.id, session.id))
+          .get()
+          .pipe(Effect.orDie)
+        const beforeSequence = yield* db
+          .select()
+          .from(EventSequenceTable)
+          .where(eq(EventSequenceTable.aggregate_id, session.id))
+          .get()
+          .pipe(Effect.orDie)
+        const beforeEvents = yield* db
+          .select()
+          .from(EventTable)
+          .where(eq(EventTable.aggregate_id, session.id))
+          .all()
+          .pipe(Effect.orDie)
+        const updated = beforeEvents.find(
+          (event) => event.type === EventV2.versionedType(SessionEvent.Updated.type, 2),
+        )
+        expect(updated).toBeDefined()
+        expect(beforeSequence).toBeDefined()
+        const data = updated!.data as { sessionID: string; info: Record<string, unknown> }
+        const location = data.info.location as Record<string, unknown>
+
+        const response = yield* requestInDirectory(SyncPaths.replay, tmp.directory, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            directory: tmp.directory,
+            events: [
+              {
+                id: EventV2.ID.make("evt_native_updated_drift"),
+                aggregateID: session.id,
+                seq: beforeSequence!.seq + 1,
+                type: updated!.type,
+                data: {
+                  ...data,
+                  info: { ...data.info, location: { ...location, directory: `${tmp.directory}-other` } },
+                },
+              },
+            ],
+          }),
+        })
+
+        const body = (yield* response.json) as { message: string }
+        expect(response.status).toBe(409)
+        expect(body.message).toContain("durable transfer operation receipt")
         expect(
           yield* db.select().from(SessionTable).where(eq(SessionTable.id, session.id)).get().pipe(Effect.orDie),
         ).toEqual(beforeSession)

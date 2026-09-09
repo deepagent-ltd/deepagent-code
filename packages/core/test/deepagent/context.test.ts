@@ -28,12 +28,33 @@ beforeEach(() => {
 })
 afterEach(() => {
   rmSync(base, { recursive: true, force: true })
-  knowledgeSource.invalidateCache()
+  if (knowledgeSource.isConfigured()) knowledgeSource.invalidateCache()
+  knowledgeSource.reset()
 })
 
 const runStore = (): DocumentStoreT => new DocumentStore(path.join(base, "run"))
 
 describe("session ledger (C2)", () => {
+  test("generated entry ids do not collide across process restarts at the same timestamp", async () => {
+    const fixture = new URL("../fixture/ledger-id-worker.ts", import.meta.url)
+    const ids = await Promise.all(
+      [0, 1].map(async () => {
+        const child = Bun.spawn([process.execPath, fixture.pathname], { stdout: "pipe", stderr: "pipe" })
+        const [stdout, stderr, exit] = await Promise.all([
+          new Response(child.stdout).text(),
+          new Response(child.stderr).text(),
+          child.exited,
+        ])
+        if (exit !== 0) throw new Error(stderr)
+        return stdout
+      }),
+    )
+
+    expect(ids[0]).toStartWith("led_goal_")
+    expect(ids[1]).toStartWith("led_goal_")
+    expect(ids[0]).not.toBe(ids[1])
+  })
+
   test("applyUpdate appends, marks done/superseded, and keeps a single active next", () => {
     let l = Ledger.emptyLedger("s1", 1)
     l = Ledger.applyUpdate(l, { append: [{ kind: "goal", text: "ship feature", id: "g1" }] }, 2)

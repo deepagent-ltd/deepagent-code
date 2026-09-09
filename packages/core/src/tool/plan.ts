@@ -80,8 +80,14 @@ export const Parameters = Schema.Struct({
   }),
 })
 
+// plan_protocol/plan_error_code mirror the legacy plan-write tool's metadata contract: the V2
+// runner's plan protocol budget reads the outcome from the settled structured output (and from
+// projected history) to count consecutive model plan failures toward termination. The model
+// still sees only `output` text (toModelOutput).
 const Output = Schema.Struct({
   output: Schema.String,
+  plan_protocol: Schema.optional(Schema.Literals(["success", "invalid", "conflict", "no_progress"])),
+  plan_error_code: Schema.optional(Schema.String),
 })
 
 export const name = "plan"
@@ -149,6 +155,8 @@ export const layer = Layer.effectDiscard(
                       output:
                         "The plan changed before this update was committed. Re-read the current plan and retry with its exact expected_plan_id and expected_version." +
                         renderPlanRetryBase(current, currentRef),
+                      plan_protocol: "conflict" as const,
+                      plan_error_code: "plan_conflict",
                     }
                   }
                   if (error instanceof controller.PlanValidationError) {
@@ -161,6 +169,8 @@ export const layer = Layer.effectDiscard(
                     return {
                       output:
                         ("The plan was not committed (" + error.code + ")." + offendingText + terminalHint + " Correct the plan payload and retry once." + renderModelPlanCorrection(params, error.code, previous, ref)),
+                      plan_protocol: "invalid" as const,
+                      plan_error_code: error.code,
                     }
                   }
                   return yield* Effect.die(error)
@@ -181,7 +191,10 @@ export const layer = Layer.effectDiscard(
                 const summary =
                   (changeLines.length > 0 ? `\n\nChanges: ${changeLines.join("; ")}` : "") +
                   (acceptanceWarnings.length > 0 ? `\n\n⚠ ${acceptanceWarnings.join("; ")}. Verify before finalizing.` : "")
-                return { output: renderModelPlanSuccess(plan, version, summary, changed) }
+                return {
+                  output: renderModelPlanSuccess(plan, version, summary, changed),
+                  plan_protocol: changed ? ("success" as const) : ("no_progress" as const),
+                }
               }),
           }),
           "plan",

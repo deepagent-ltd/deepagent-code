@@ -28,6 +28,9 @@ import { getWorkspaceContext } from "../utils/workspace-context"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
+import { RateLimiter } from "@deepagent-code/core/deepagent/rate-limiter"
+import type { RuntimeFeatureRegistry } from "@deepagent-code/core/flag/runtime-features"
+import { boundedPositiveInteger } from "./im-config"
 
 const IMAttachmentID = IMID.AttachmentID
 
@@ -43,8 +46,11 @@ const IMAttachmentID = IMID.AttachmentID
  * @mention is never silently dropped (it executes — no receipt is written, which is the documented
  * "explicitly disabled admission = fall back to legacy" semantic, not a silent loss). Exported for
  * deterministic testing of the flag-gated branch. */
-export const shouldExecuteLegacyAgentMentions = (mentionCount: number, v4EventDrivenIm: boolean): boolean =>
-  mentionCount > 0 && !(v4EventDrivenIm && isEventV2AdmissionEnabled())
+export const shouldExecuteLegacyAgentMentions = (
+  mentionCount: number,
+  v4EventDrivenIm: boolean,
+  runtimeFeatures?: RuntimeFeatureRegistry,
+): boolean => mentionCount > 0 && !(v4EventDrivenIm && isEventV2AdmissionEnabled(runtimeFeatures))
 
 const IM_MAX_MESSAGE_LENGTH = 100000 // 增加到 100k，更灵活
 
@@ -87,43 +93,6 @@ const toAttachmentResponse = (a: IMAttachment) => ({
 // AttachmentStorage core (@deepagent-code/core/im/attachment-storage) so they are unit-testable without
 // the multipart HTTP transport. The handler just calls into it.
 
-// Simple in-memory rate limiter
-class RateLimiter {
-  private buckets = new Map<string, { count: number; resetAt: number }>()
-  private nextCleanupAt = Date.now() + 5 * 60 * 1000
-
-  check(key: string, limit: number, windowMs: number): boolean {
-    const now = Date.now()
-    if (now >= this.nextCleanupAt) {
-      this.cleanup(now)
-      this.nextCleanupAt = now + 5 * 60 * 1000
-    }
-    const bucket = this.buckets.get(key)
-
-    if (!bucket || now >= bucket.resetAt) {
-      this.buckets.set(key, { count: 1, resetAt: now + windowMs })
-      return true
-    }
-
-    if (bucket.count >= limit) {
-      return false
-    }
-
-    bucket.count++
-    return true
-  }
-
-  private cleanup(now: number) {
-    for (const [key, bucket] of this.buckets.entries()) {
-      if (now >= bucket.resetAt) {
-        this.buckets.delete(key)
-      }
-    }
-  }
-}
-
-const rateLimiter = new RateLimiter()
-
 const mapRepositoryError = <A, E, R>(effect: Effect.Effect<A, E | IMRepositoryError, R>) =>
   effect.pipe(
     Effect.catchIf(
@@ -139,14 +108,15 @@ const mapRepositoryError = <A, E, R>(effect: Effect.Effect<A, E | IMRepositoryEr
   )
 
 // 配置：可以通过环境变量调整
-const getRateLimit = () => parseInt(process.env.IM_RATE_LIMIT_PER_MINUTE || "200", 10) // 默认 200/分钟，更宽松
-const getMaxMessageLength = () => parseInt(process.env.IM_MAX_MESSAGE_LENGTH || "100000", 10) // 默认 100k
+const getRateLimit = () => boundedPositiveInteger(process.env.IM_RATE_LIMIT_PER_MINUTE, 200, 10_000)
+const getMaxMessageLength = () => boundedPositiveInteger(process.env.IM_MAX_MESSAGE_LENGTH, 100_000, 1_000_000)
 
 export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers) =>
   Effect.gen(function* () {
     const repo = yield* IMRepository
     const broadcaster = yield* IMBroadcasterService
     const agentListProvider = yield* AgentListProviderService
+    const rateLimiter = new RateLimiter.Service()
     // V4.0 §B1 — the flag + bus for the double-write (user message persist → publish im.message.created).
     const flags = yield* RuntimeFlags.Service
     const eventBus = yield* DeepAgentEventBus.Service

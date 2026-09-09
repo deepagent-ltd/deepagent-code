@@ -39,7 +39,6 @@ import { LiveContextArtifactStore } from "./artifact-service"
 import { LiveFederatedContextQuery } from "./federated-query-service"
 import { LiveContextQueryAuthorization } from "./query-authorization"
 import { LiveContextTokenCodec } from "./token-service"
-import { ContextFederationObservability } from "./observability"
 
 const ValidationMs = 60_000
 const SelectionLifetimeMs = 14 * 60_000
@@ -414,60 +413,52 @@ export const layer = Layer.effect(
         statuses: input.statuses,
       })
       const selectedSourceFingerprint = sourceFingerprint(fitted.map((item) => item.hit))
-      return contexts
-        .commitSelection({
-          securityNamespaceId: input.identity.securityNamespaceId,
-          projectScopeKey: input.identity.projectScopeKey,
-          sessionId: SessionSchema.ID.make(input.sessionId),
-          activityId: input.activityId,
-          revision: input.revision,
-          triggerInputId: input.triggerInputId,
-          locationKey: input.identity.locationKey,
-          promotedInputIds: input.inputIds,
-          queryFingerprint: input.queryFingerprint,
-          authorizationFingerprint: input.authorizationFingerprint,
-          authorizationEpoch: input.envelope.principal.authorizationEpoch,
-          executionFingerprint: input.executionFingerprint,
-          selectedSourceFingerprint,
-          observedLocationMutationEpoch: input.mutationEpoch,
-          nextRevalidationAt: input.now + SelectionLifetimeMs,
-          releasedKnowledgeBinding: DeepAgentReleasedSnapshot.binding(input.releasedKnowledgeSelection),
-          graphRevisions: graphRevisions(
-            input.sourceStatuses,
-            fitted.map((item) => item.hit),
+      return contexts.commitSelection({
+        securityNamespaceId: input.identity.securityNamespaceId,
+        projectScopeKey: input.identity.projectScopeKey,
+        sessionId: SessionSchema.ID.make(input.sessionId),
+        activityId: input.activityId,
+        revision: input.revision,
+        triggerInputId: input.triggerInputId,
+        locationKey: input.identity.locationKey,
+        promotedInputIds: input.inputIds,
+        queryFingerprint: input.queryFingerprint,
+        authorizationFingerprint: input.authorizationFingerprint,
+        authorizationEpoch: input.envelope.principal.authorizationEpoch,
+        executionFingerprint: input.executionFingerprint,
+        selectedSourceFingerprint,
+        observedLocationMutationEpoch: input.mutationEpoch,
+        nextRevalidationAt: input.now + SelectionLifetimeMs,
+        releasedKnowledgeBinding: DeepAgentReleasedSnapshot.binding(input.releasedKnowledgeSelection),
+        graphRevisions: graphRevisions(
+          input.sourceStatuses,
+          fitted.map((item) => item.hit),
+        ),
+        graphStatuses: input.sourceStatuses,
+        selectedRefs: fitted.map(({ hit, token, provenanceTokens, relations }) => ({
+          ref: hit.ref,
+          token,
+          provenanceTokens,
+          relations,
+          freshness: hit.validity?.state ?? "unknown",
+          sensitivity: hit.sensitivity,
+          score: hit.score,
+          reason: hit.relationPath?.map((item) => item.relation).join(" > ") || "federated_rank",
+          excerpt: (hit.excerpt ?? hit.title).slice(0, 1_000),
+          projectionStart: rendered.offsets[token]!.start,
+          projectionEnd: rendered.offsets[token]!.end,
+        })),
+        rendered,
+        artifact: {
+          rankingVersion: "federated-rrf-v1",
+          rejected: input.sourceStatuses.flatMap((status) =>
+            status.kind === "blocked" || status.kind === "partial"
+              ? [{ graph: status.graph, reasonCode: status.reasonCode }]
+              : [],
           ),
-          graphStatuses: input.sourceStatuses,
-          selectedRefs: fitted.map(({ hit, token, provenanceTokens, relations }) => ({
-            ref: hit.ref,
-            token,
-            provenanceTokens,
-            relations,
-            freshness: hit.validity?.state ?? "unknown",
-            sensitivity: hit.sensitivity,
-            score: hit.score,
-            reason: hit.relationPath?.map((item) => item.relation).join(" > ") || "federated_rank",
-            excerpt: (hit.excerpt ?? hit.title).slice(0, 1_000),
-            projectionStart: rendered.offsets[token]!.start,
-            projectionEnd: rendered.offsets[token]!.end,
-          })),
-          rendered,
-          artifact: {
-            rankingVersion: "federated-rrf-v1",
-            rejected: input.sourceStatuses.flatMap((status) =>
-              status.kind === "blocked" || status.kind === "partial"
-                ? [{ graph: status.graph, reasonCode: status.reasonCode }]
-                : [],
-            ),
-          },
-          now: input.now,
-        })
-        .pipe(
-          Effect.tap((selection) =>
-            Effect.sync(() =>
-              ContextFederationObservability.observeSelection(selection.selectionId, selection.tokenCount),
-            ),
-          ),
-        )
+        },
+        now: input.now,
+      })
     }
 
     const prepareProviderTurn: Interface["prepareProviderTurn"] = (input) =>
@@ -799,20 +790,22 @@ const contextLayer = SessionContext.layer.pipe(Layer.provide(Layer.merge(databas
 const attemptLayer = SessionProviderAttempt.layer.pipe(Layer.provide(databaseLayer))
 const queryLayer = LiveFederatedContextQuery.productionLayer.pipe(Layer.provide(LocationIndexRuntime.defaultLayer))
 
-export const defaultLayer: Layer.Layer<Service> = layer.pipe(
-  Layer.provide(
-    Layer.mergeAll(
-      databaseLayer,
-      LocationIndexRuntime.defaultLayer,
-      LiveContextQueryAuthorization.defaultLayer,
-      tokenLayer,
-      artifactLayer,
-      contextLayer,
-      attemptLayer,
-      queryLayer,
+export const defaultLayer: Layer.Layer<Service> = layer
+  .pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        databaseLayer,
+        LocationIndexRuntime.defaultLayer,
+        LiveContextQueryAuthorization.defaultLayer,
+        tokenLayer,
+        artifactLayer,
+        contextLayer,
+        attemptLayer,
+        queryLayer,
+      ),
     ),
-  ),
-).pipe(Layer.orDie)
+  )
+  .pipe(Layer.orDie)
 
 function envelopeFor(input: {
   readonly session: Session.Info

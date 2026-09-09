@@ -15,6 +15,7 @@ export type ScenarioOverride = "direct" | "intelligence"
 
 const scenarioOverride = new Map<string, ScenarioOverride>()
 const listeners = new Set<() => void>()
+const OVERRIDE_LIMIT = 128
 
 const notifyScenarioOverrideListeners = () => {
   for (const listener of listeners) listener()
@@ -26,6 +27,8 @@ export const subscribeScenarioOverride = (listener: () => void): (() => void) =>
 }
 
 export const setScenarioOverride = (key: string, mode: ScenarioOverride): void => {
+  if (!scenarioOverride.has(key) && scenarioOverride.size >= OVERRIDE_LIMIT)
+    scenarioOverride.delete(scenarioOverride.keys().next().value!)
   scenarioOverride.set(key, mode)
   notifyScenarioOverrideListeners()
 }

@@ -5,7 +5,7 @@ import { Effect } from "effect"
 import type { Database } from "../database/database"
 import type { EventWorkEnvelope } from "../contract/event-envelope"
 import { EventAdmission, type SessionWorkAdapter } from "./event-admission"
-import { flipFlagValueOn } from "./flip-flag"
+import { RuntimeFeatures, type RuntimeFeatureRegistry } from "../flag/runtime-features"
 import { ImSingleWriteTable, type ImSingleWriteStatus } from "./im-single-write-sql"
 
 // C5-09 — IM SINGLE-WRITE. Design authority: docs/core-v2.0-beta/design.md §B1 (the IM double-write:
@@ -36,12 +36,11 @@ import { ImSingleWriteTable, type ImSingleWriteStatus } from "./im-single-write-
 
 type DatabaseClient = Database.Interface["db"]
 
-/** The typed feature switch for the IM single-write path. C7-05 ships it ON via the PRODUCTION
- * runtime entrypoints (packages/deepagent-code/src/index.ts sets the env); the predicate stays
- * explicit-env. `=false`/`=0` restores the legacy double-write path as the authority. */
+/** The typed feature switch for the IM single-write path. Unset is ON in every composition;
+ * `=false`/`=0` is the explicit operational kill switch. */
 export const IM_SINGLE_WRITE_ENV = "DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE"
-export const isEventV2ImSingleWriteEnabled = (): boolean =>
-  flipFlagValueOn(process.env[IM_SINGLE_WRITE_ENV], false)
+export const isEventV2ImSingleWriteEnabled = (features: RuntimeFeatureRegistry = RuntimeFeatures): boolean =>
+  features.enabled("event.v2.im_single_write")
 
 /** Why an IM single-write was refused. Fail-closed; each reason is a typed refusal. */
 export type ImSingleWriteErrorReason =
@@ -115,6 +114,8 @@ export interface ImSingleWriteAdmitInput {
   readonly sessionAdapter: SessionWorkAdapter
   readonly resume?: boolean
   readonly now: number
+  /** Startup-scoped feature snapshot; production uses the canonical process-start snapshot. */
+  readonly runtimeFeatures?: RuntimeFeatureRegistry
 }
 
 export type ImSingleWriteResult =
@@ -135,7 +136,7 @@ export type ImSingleWriteResult =
  * EventV2Bridge. Kept as the frozen §B1 contract surface. */
 export function admit(db: DatabaseClient, input: ImSingleWriteAdmitInput): Effect.Effect<ImSingleWriteResult, ImSingleWriteError> {
   return Effect.gen(function* () {
-    if (!isEventV2ImSingleWriteEnabled()) {
+    if (!isEventV2ImSingleWriteEnabled(input.runtimeFeatures)) {
       return yield* fail("im_single_write_unavailable", input.imMessageId, "IM single-write is OFF; the legacy double-write path stays authoritative")
     }
     if (!input.envelope || typeof input.envelope.eventRef !== "string" || input.envelope.eventRef.length === 0) {
@@ -161,6 +162,7 @@ export function admit(db: DatabaseClient, input: ImSingleWriteAdmitInput): Effec
       adapter: input.sessionAdapter,
       resume: input.resume ?? true,
       now: input.now,
+      ...(input.runtimeFeatures ? { runtimeFeatures: input.runtimeFeatures } : {}),
     }).pipe(
       Effect.mapError(
         (error) =>

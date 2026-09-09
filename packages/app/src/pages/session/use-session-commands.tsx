@@ -13,14 +13,13 @@ import { useSync } from "@/context/sync"
 import { useTerminalHosts } from "@/context/terminal"
 import { showToast } from "@/utils/toast"
 import { findLast } from "@deepagent-code/core/util/array"
-import { createSessionTabs } from "@/pages/session/helpers"
+import { createForkRequestRegistry, createSessionTabs } from "@/pages/session/helpers"
 import { extractPromptFromParts } from "@/utils/prompt"
-import { UserMessage } from "@deepagent-code/sdk"
+import { type Session, UserMessage } from "@deepagent-code/sdk"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { errorMessage } from "@/pages/layout/helpers"
 import { useSettings } from "@/context/settings"
 import { formatTranscript } from "@/utils/transcript"
-import { Identifier } from "@/utils/id"
 import { createPromptStash } from "@/pages/session/prompt-stash"
 import { DialogPromptStash } from "@/components/dialog-prompt-stash"
 
@@ -52,7 +51,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   const terminalHosts = useTerminalHosts()
   const layout = useLayout()
   const navigate = useNavigate()
-  const forkIntents = new Map<string, string>()
+  const forkRequests = createForkRequestRegistry<Session>()
   const { params, tabs, view } = useSessionLayout()
 
   const info = () => {
@@ -403,12 +402,8 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   const fork = async () => {
     const sessionID = params.id
     if (!sessionID) return
-    const intentID = forkIntents.get(sessionID) ?? Identifier.ascending("fork")
-    forkIntents.set(sessionID, intentID)
-
-    const forked = await sdk.client.session
-      .fork({ sessionID, intentID })
-      .then((x) => x.data)
+    const forked = await forkRequests
+      .request(sessionID, (intentID) => sdk.client.session.fork({ sessionID, intentID }).then((result) => result.data))
       .catch((err) => {
         showToast({
           title: language.t("common.requestFailed"),
@@ -417,7 +412,6 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
         return undefined
       })
     if (!forked) return
-    forkIntents.delete(sessionID)
 
     local.session.promote(sdk.directory, forked.id)
     layout.handoff.setTabs(local.slug(), forked.id)

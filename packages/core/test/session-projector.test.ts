@@ -47,6 +47,44 @@ const assistantRow = (
 }
 
 describe("SessionProjector", () => {
+  it.effect("projects a monotonic durable interrupt boundary without changing visible update time", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      yield* db
+        .insert(ProjectTable)
+        .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: sessionID,
+          project_id: Project.ID.global,
+          slug: "test",
+          directory: "/project",
+          title: "test",
+          version: "test",
+          time_updated: 7,
+        })
+        .run()
+        .pipe(Effect.orDie)
+
+      const event = yield* (yield* EventV2.Service).publish(SessionEvent.InterruptRequested, {
+        sessionID,
+        timestamp: created,
+      })
+      if (event.seq === undefined) return yield* Effect.die("Interrupt event has no aggregate sequence")
+      const session = yield* db
+        .select({ interruptSeq: SessionTable.interrupt_seq, updated: SessionTable.time_updated })
+        .from(SessionTable)
+        .where(eq(SessionTable.id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
+
+      expect(session).toEqual({ interruptSeq: event.seq, updated: 7 })
+    }),
+  )
+
   it.effect("decodes legacy diff manifest descriptors without statisticsExact", () =>
     Effect.sync(() => {
       const decoded = Schema.decodeUnknownSync(SessionV1.User)({

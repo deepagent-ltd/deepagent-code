@@ -58,6 +58,18 @@ describe("RuntimeFeatures.enabled (fail-closed on unknown feature)", () => {
     expect(RuntimeFeatures.enabled("context_query_tools_v2")).toBe(true)
   })
 
+  test("captures immutable startup values and isolates independent roots", () => {
+    const on = createRuntimeFeatureRegistry(undefined, {
+      DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION: "true",
+    })
+    const offEnv = { DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION: "false" }
+    const off = createRuntimeFeatureRegistry(undefined, offEnv)
+    offEnv.DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION = "true"
+
+    expect(on.enabled("context_federation_v2")).toBe(true)
+    expect(off.enabled("context_federation_v2")).toBe(false)
+  })
+
   test("an unknown feature throws a typed UnknownRuntimeFeatureError (never a silent false)", () => {
     expect(() => RuntimeFeatures.enabled("context_federation_v9")).toThrow(UnknownRuntimeFeatureError)
     try {

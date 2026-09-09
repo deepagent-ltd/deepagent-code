@@ -74,6 +74,19 @@ describe("V3 promotion gate", () => {
     expect(fingerprint(cand())).toBe(fingerprint(cand()))
   })
 
+  test("preserves concurrent-instance additions without whole-file lost updates", () => {
+    const first = new RejectedBuffer(dir)
+    const second = new RejectedBuffer(dir)
+    const firstFingerprint = fingerprint(cand({ summary: "first" }))
+    const secondFingerprint = fingerprint(cand({ summary: "second" }))
+    first.add(firstFingerprint, "first reason")
+    second.add(secondFingerprint, "second reason")
+
+    const reopened = new RejectedBuffer(dir)
+    expect(reopened.has(firstFingerprint)).toBe(true)
+    expect(reopened.has(secondFingerprint)).toBe(true)
+  })
+
   test("approval preserves the staged candidate identity and the retriever can load it", () => {
     knowledgeSource.configure(dir)
     const store = openUserGlobalStore(dir)

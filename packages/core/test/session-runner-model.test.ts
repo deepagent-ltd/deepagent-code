@@ -305,8 +305,8 @@ describe("SessionRunnerModel", () => {
   )
 })
 
-describe("W8 production seam: location resolve refreshes config evidence once", () => {
-  it.effect("calls refreshConfigEvidence on the first resolve, reusing the cache afterwards (no per-request probe)", () =>
+describe("W8 production seam: Location resolution is independent of process-local probe state", () => {
+  it.effect("does not invoke or populate the optional probe cache during model resolution", () =>
     Effect.gen(function* () {
       const modelInfo = model({
         type: "aisdk",
@@ -363,15 +363,11 @@ describe("W8 production seam: location resolve refreshes config evidence once", 
       try {
         const resolved = yield* resolve()
         expect(resolved.info?.id).toBe(modelInfo.id)
-        // Exactly ONE explicit configuration action for the config — and the business-turn
-        // evidence lookup now finds the cached entry instead of the always-missing no_evidence.
-        expect(probed).toEqual([modelInfo.id])
-        expect(ModelProtocol.configEvidenceForTurn(modelInfo, providerInfo)).not.toBe("no_evidence")
+        expect(probed).toEqual([])
+        expect(ModelProtocol.configEvidenceForTurn(modelInfo, providerInfo)).toBe("no_evidence")
 
-        // A second resolve of the same config must NOT re-probe (design: probe is a configuration
-        // action, never a per-request crawl).
         yield* resolve()
-        expect(probed).toEqual([modelInfo.id])
+        expect(probed).toEqual([])
       } finally {
         ModelProtocol.resetProbeHook()
       }

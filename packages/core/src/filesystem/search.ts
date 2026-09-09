@@ -558,7 +558,7 @@ export const defaultLayer: Layer.Layer<Service> = layer.pipe(
   Layer.provide(FSUtil.defaultLayer),
 )
 
-const { runPromise } = makeRuntime(Service, defaultLayer)
+const { runPromise } = makeRuntime(Service, defaultLayer, "core.filesystem.search")
 
 export function tree(input: Ripgrep.TreeInput) {
   return runPromise((svc) => svc.tree(input))

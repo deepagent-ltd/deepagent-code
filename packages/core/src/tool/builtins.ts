@@ -16,6 +16,7 @@ import { PlanWriteTool } from "./plan"
 import { CapabilityRuntimeSearch } from "../system-context/capability-runtime-search"
 import { CapabilityLoadTool } from "../system-context/capability-load-tool"
 import { ContextQueryTools } from "./context-query-tools"
+import { readonlySet } from "../util/readonly-collections"
 
 /**
  * The shipped built-in tool names (the exact registry names `locationLayer`
@@ -24,7 +25,7 @@ import { ContextQueryTools } from "./context-query-tools"
  * (`assertInventoryMatchesRegistry`). Kept in the same module as the layer so the
  * set and the registration cannot drift silently.
  */
-export const builtinToolNames: ReadonlySet<string> = new Set([
+export const builtinToolNames = readonlySet(new Set([
   ApplyPatchTool.name,
   BashTool.name,
   EditTool.name,
@@ -39,10 +40,9 @@ export const builtinToolNames: ReadonlySet<string> = new Set([
   WriteTool.name,
   CapabilityRuntimeSearch.name,
   CapabilityLoadTool.capabilityLoadName,
-  CapabilityLoadTool.domainPackLoadName,
   ContextQueryTools.codeIntelName,
   ContextQueryTools.contextQueryName,
-])
+]))
 
 /**
  * Composes only the shipped Location-scoped built-in tool transforms.

@@ -704,6 +704,16 @@ export const Event = {
       info: SessionInfo,
     },
   }),
+  // Legacy diff shape retained as sync v1 for import/egress. New producers use session.diff.2.
+  Diff: EventV2.define({
+    type: "session.diff",
+    ...options,
+    schema: {
+      sessionID: SessionSchema.ID,
+      diff: Schema.Array(FileDiff),
+      manifest: Schema.optional(DiffManifestDescriptor),
+    },
+  }),
   MessageUpdated: EventV2.define({
     type: "message.updated",
     ...options,

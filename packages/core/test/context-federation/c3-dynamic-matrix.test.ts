@@ -609,7 +609,7 @@ function seedSession() {
       .values({ security_namespace_id: ns, location_key: loc, project_scope_key: proj, canonical_root: "/tmp/c3-dyn", observed_project_id: projectId, created_at: 1_000 })
       .run()
     yield* db.insert(ProjectTable).values({ id: projectId, worktree: AbsolutePath.make("/tmp/c3-dyn"), sandboxes: [] }).run()
-    yield* db.insert(SessionTable).values({ id: sessionId, project_id: projectId, slug: "c3-dyn", directory: "/tmp/c3-dyn", title: "C3 dyn", version: "test" }).run()
+    yield* db.insert(SessionTable).values({ id: sessionId, project_id: projectId, slug: "c3-dyn", directory: "/tmp/c3-dyn", title: "C3 dyn", version: "test", time_suspended: 103 }).run()
     yield* db
       .insert(SessionInputTable)
       .values({ id: triggerId, session_id: sessionId, prompt: new Prompt({ text: "trigger" }), delivery: "steer", admitted_seq: 0, promoted_seq: 0 })

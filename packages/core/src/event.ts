@@ -6,6 +6,7 @@ import { Database } from "./database/database"
 import {
   EventArtifactTable,
   EventArtifactChunkTable,
+  EventAggregateTombstoneTable,
   EventCompactionReceiptTable,
   EventDedupeTable,
   EventSequenceTable,
@@ -207,6 +208,141 @@ export const ARTIFACT_CHUNK_BYTES = 256 * 1024
 export const LEGACY_ARTIFACT_MAX_SOURCE_BYTES = 64 * 1024 * 1024
 export const LEGACY_ARTIFACT_MAX_BODY_BYTES = 64 * 1024 * 1024
 export const LEGACY_ARTIFACT_MAX_FILES = 10_000
+export const AGGREGATE_TOMBSTONE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
+export const AGGREGATE_TOMBSTONE_SWEEP_BATCH = 100
+const aggregateDeletionTypes = new Set(["session.deleted.1", "session.deleted.2"])
+
+const removeAggregateRowsInTransaction = (db: Database.Interface["db"], aggregateID: string) =>
+  Effect.gen(function* () {
+    const snapshots = yield* db
+      .select({ snapshotID: EventSnapshotTable.snapshot_id })
+      .from(EventSnapshotTable)
+      .where(eq(EventSnapshotTable.aggregate_id, aggregateID))
+      .all()
+      .pipe(Effect.orDie)
+    const attempts = yield* db
+      .select({ snapshotID: EventSnapshotAttemptTable.snapshot_id })
+      .from(EventSnapshotAttemptTable)
+      .where(eq(EventSnapshotAttemptTable.aggregate_id, aggregateID))
+      .all()
+      .pipe(Effect.orDie)
+    const snapshotIDs = [...new Set([...snapshots, ...attempts].map((row) => row.snapshotID))]
+    const snapshotRowsCondition = snapshotIDs.length > 0
+      ? or(eq(EventSnapshotRowTable.aggregate_id, aggregateID), inArray(EventSnapshotRowTable.snapshot_id, snapshotIDs))
+      : eq(EventSnapshotRowTable.aggregate_id, aggregateID)
+    const rowHashes = yield* db
+      .select({ rowHash: EventSnapshotRowTable.row_hash })
+      .from(EventSnapshotRowTable)
+      .where(snapshotRowsCondition)
+      .all()
+      .pipe(Effect.orDie)
+    const artifactIDs = yield* db
+      .selectDistinct({ id: FilePartArtifactBindingTable.artifact_id })
+      .from(FilePartArtifactBindingTable)
+      .where(eq(FilePartArtifactBindingTable.aggregate_id, aggregateID))
+      .all()
+      .pipe(Effect.orDie)
+    // The snapshot guards intentionally reject deleting rows while an aggregate sequence still
+    // points at a snapshot. Remove the sequence first; its cleanup trigger removes active
+    // snapshot/attempt metadata, after which the row/chunk guards permit the final cleanup.
+    yield* db.delete(EventSequenceTable).where(eq(EventSequenceTable.aggregate_id, aggregateID)).run()
+    yield* db.delete(EventSnapshotRowTable).where(snapshotRowsCondition).run().pipe(Effect.orDie)
+    if (rowHashes.length > 0)
+      yield* db
+        .delete(EventSnapshotChunkTable)
+        .where(and(
+          inArray(EventSnapshotChunkTable.row_hash, rowHashes.map((row) => row.rowHash)),
+          sql`NOT EXISTS (SELECT 1 FROM ${EventSnapshotRowTable} WHERE ${EventSnapshotRowTable.row_hash} = ${EventSnapshotChunkTable.row_hash})`,
+        ))
+        .run()
+        .pipe(Effect.orDie)
+    yield* db
+      .delete(EventSyncIndexTable)
+      .where(eq(EventSyncIndexTable.aggregate_id, aggregateID))
+      .run()
+      .pipe(Effect.orDie)
+    if (artifactIDs.length > 0)
+      yield* db.run(sql`
+        DELETE FROM file_part_artifact
+        WHERE artifact_id IN ${artifactIDs.map((row) => row.id)}
+          AND NOT EXISTS (
+            SELECT 1 FROM file_part_artifact_binding binding
+            WHERE binding.artifact_id = file_part_artifact.artifact_id
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM file_part_artifact_import imported
+            WHERE imported.artifact_id = file_part_artifact.artifact_id
+          )
+      `).pipe(Effect.orDie)
+  })
+
+const removeAggregateRows = (db: Database.Interface["db"], aggregateID: string) =>
+  db.transaction(() => removeAggregateRowsInTransaction(db, aggregateID), { behavior: "immediate" }).pipe(Effect.orDie)
+
+/** Remove expired deletion fences together with any late event-side rows in one transaction. */
+export function sweepExpiredAggregateTombstones(
+  db: Database.Interface["db"],
+  now = Date.now(),
+  limit = AGGREGATE_TOMBSTONE_SWEEP_BATCH,
+) {
+  return db
+    .transaction(
+      () =>
+        Effect.gen(function* () {
+          const expired = yield* db
+            .select({ aggregateID: EventAggregateTombstoneTable.aggregate_id })
+            .from(EventAggregateTombstoneTable)
+            .where(lte(EventAggregateTombstoneTable.retention_until, now))
+            .limit(Math.min(Math.max(limit, 1), AGGREGATE_TOMBSTONE_SWEEP_BATCH))
+            .all()
+            .pipe(Effect.orDie)
+          for (const row of expired) {
+            yield* removeAggregateRowsInTransaction(db, row.aggregateID)
+            yield* db
+              .delete(EventAggregateTombstoneTable)
+              .where(
+                and(
+                  eq(EventAggregateTombstoneTable.aggregate_id, row.aggregateID),
+                  lte(EventAggregateTombstoneTable.retention_until, now),
+                ),
+              )
+              .run()
+              .pipe(Effect.orDie)
+          }
+          return expired.length
+        }),
+      { behavior: "immediate" },
+    )
+    .pipe(Effect.orDie)
+}
+
+export function deleteAggregate(
+  db: Database.Interface["db"],
+  aggregateID: string,
+  options?: PublishOptions["tombstone"],
+) {
+  const now = Date.now()
+  return db
+    .transaction(
+      () =>
+        Effect.gen(function* () {
+          yield* db
+            .insert(EventAggregateTombstoneTable)
+            .values({
+              aggregate_id: aggregateID,
+              deleted_at: now,
+              retention_until: now + Math.max(options?.retentionMs ?? AGGREGATE_TOMBSTONE_RETENTION_MS, 0),
+              reason: options?.reason ?? "aggregate_deleted",
+            })
+            .onConflictDoNothing()
+            .run()
+            .pipe(Effect.orDie)
+          yield* removeAggregateRowsInTransaction(db, aggregateID)
+        }),
+      { behavior: "immediate" },
+    )
+    .pipe(Effect.orDie)
+}
 
 export class EncodedPayloadTooLargeError extends Schema.TaggedErrorClass<EncodedPayloadTooLargeError>()(
   "EventV2.EncodedPayloadTooLarge",
@@ -297,6 +433,14 @@ export interface PublishOptions {
   readonly idempotent?: boolean
   readonly metadata?: Record<string, unknown>
   readonly location?: Location.Ref
+  /**
+   * Insert a durable deletion fence in the same transaction as the synchronized event and its
+   * projectors. The fence intentionally survives `remove()` event-stream cleanup.
+   */
+  readonly tombstone?: {
+    readonly reason?: string
+    readonly retentionMs?: number
+  }
   /**
    * Local operational projection committed atomically with a synchronized event — the hook runs INSIDE
    * the same transaction as the durable event row. Exact idempotent publish retries run this hook again
@@ -428,6 +572,8 @@ export interface Interface {
     readonly now?: number
   }) => Effect.Effect<{ readonly processed: number; readonly complete: boolean }>
   readonly remove: (aggregateID: string) => Effect.Effect<void>
+  readonly isDeleted?: (aggregateID: string) => Effect.Effect<boolean>
+  readonly deleteAggregate?: (aggregateID: string, options?: PublishOptions["tombstone"]) => Effect.Effect<void>
   readonly claim: (aggregateID: string, ownerID: string) => Effect.Effect<void>
 }
 
@@ -444,7 +590,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
   Layer.effect(
     Service,
     Effect.gen(function* () {
-      const all = yield* PubSub.unbounded<Payload>()
+      const all = yield* PubSub.sliding<Payload>(1024)
       const synchronized = new Map<string, Set<PubSub.PubSub<void>>>()
       const typed = new Map<string, PubSub.PubSub<Payload>>()
       // Synchronized definitions are routed by their full wire identity (`type.version`).
@@ -454,7 +600,23 @@ export const layerWith = (layerOptions?: LayerOptions) =>
       const commitGuards = new Array<CommitGuard>()
       const listeners = new Array<Listener>()
       const syncHandlers = new Array<Sync>()
+      let activeStreams = 0
       const { db } = yield* Database.Service
+
+      const boundedStream = <A, E, R>(stream: Stream.Stream<A, E, R>): Stream.Stream<A, E, R> =>
+        Stream.unwrap(
+          Effect.acquireRelease(
+            Effect.sync(() => {
+              if (activeStreams >= 2048) throw new Error("Event stream limit exceeded (2048)")
+              activeStreams++
+              return stream
+            }),
+            () =>
+              Effect.sync(() => {
+                activeStreams--
+              }),
+          ),
+        )
 
       const definitionKey = (definition: Definition) =>
         definition.sync ? versionedType(definition.type, definition.sync.version) : definition.type
@@ -475,7 +637,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
           const key = definitionKey(definition)
           const existing = typed.get(key)
           if (existing) return existing
-          const pubsub = yield* PubSub.unbounded<Payload>()
+          const pubsub = yield* PubSub.sliding<Payload>(1024)
           typed.set(key, pubsub)
           return pubsub
         })
@@ -504,6 +666,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
         commit?: (seq: number, event: Payload) => Effect.Effect<void, unknown>,
         idempotent = false,
         deferDurableWake = false,
+        tombstoneOptions?: PublishOptions["tombstone"],
       ) {
         return Effect.gen(function* () {
           const sync = definition.sync
@@ -576,6 +739,59 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                             .get()
                             .pipe(Effect.orDie)
                           const latest = row?.seq ?? -1
+                          const deletionType = aggregateDeletionTypes.has(versionedType(definition.type, sync.version))
+                          const tombstone = yield* db
+                            .select()
+                            .from(EventAggregateTombstoneTable)
+                            .where(eq(EventAggregateTombstoneTable.aggregate_id, aggregateID))
+                            .get()
+                            .pipe(Effect.orDie)
+                          if (tombstone) {
+                            if (idempotent && tombstone.deletion_event_id === event.id && deletionType) {
+                              const existing = yield* db
+                                .select()
+                                .from(EventTable)
+                                .where(eq(EventTable.id, event.id))
+                                .get()
+                                .pipe(Effect.orDie)
+                              if (
+                                existing &&
+                                existing.aggregate_id === aggregateID &&
+                                existing.type === versionedType(definition.type, sync.version) &&
+                                isDeepStrictEqual(existing.data, encoded)
+                              )
+                                return { aggregateID, seq: existing.seq, inserted: false, event }
+                            }
+                            return yield* Effect.die(
+                              new InvalidSyncEventError({
+                                type: event.type,
+                                message: `Aggregate ${aggregateID} was deleted at ${tombstone.deleted_at} and cannot accept new events`,
+                              }),
+                            )
+                          }
+                          if (tombstoneOptions || deletionType) {
+                            const now = Date.now()
+                            const inserted = yield* db
+                              .insert(EventAggregateTombstoneTable)
+                              .values({
+                                aggregate_id: aggregateID,
+                                deleted_at: now,
+                                retention_until: now + Math.max(tombstoneOptions?.retentionMs ?? AGGREGATE_TOMBSTONE_RETENTION_MS, 0),
+                                reason: tombstoneOptions?.reason ?? "aggregate_deleted",
+                                deletion_event_id: event.id,
+                              })
+                              .onConflictDoNothing()
+                              .returning({ aggregateID: EventAggregateTombstoneTable.aggregate_id })
+                              .get()
+                              .pipe(Effect.orDie)
+                            if (!inserted)
+                              return yield* Effect.die(
+                                new InvalidSyncEventError({
+                                  type: event.type,
+                                  message: `Aggregate ${aggregateID} deletion fence was concurrently created`,
+                                }),
+                              )
+                          }
                           if (input?.strictOwner && row?.ownerID && row.ownerID !== input.ownerID) {
                             yield* Effect.die(
                               new InvalidSyncEventError({
@@ -853,6 +1069,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
         event: Payload<D>,
         commit?: PublishOptions["commit"],
         idempotent = false,
+        tombstone?: PublishOptions["tombstone"],
       ) {
         return Effect.gen(function* () {
           const durable = definition.sync !== undefined
@@ -864,7 +1081,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
               }),
             )
           if (durable) {
-            const committed = yield* commitSyncEvent(definition, event as Payload, undefined, commit, idempotent)
+            const committed = yield* commitSyncEvent(definition, event as Payload, undefined, commit, idempotent, false, tombstone)
             if (committed) {
               event = { ...(committed.event ?? event), seq: committed.seq } as Payload<D>
               if (committed.inserted) {
@@ -933,6 +1150,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
             } as Payload<D>,
             options?.commit,
             options?.idempotent,
+            options?.tombstone,
           )
         })
       }
@@ -2390,34 +2608,25 @@ export const layerWith = (layerOptions?: LayerOptions) =>
       }
 
       function remove(aggregateID: string) {
-        return db
-          .transaction(() =>
-            Effect.gen(function* () {
-              const artifactIDs = yield* db
-                .selectDistinct({ id: FilePartArtifactBindingTable.artifact_id })
-                .from(FilePartArtifactBindingTable)
-                .where(eq(FilePartArtifactBindingTable.aggregate_id, aggregateID))
-                .all()
-                .pipe(Effect.orDie)
-              yield* db.delete(EventSequenceTable).where(eq(EventSequenceTable.aggregate_id, aggregateID)).run()
-              if (artifactIDs.length > 0)
-                yield* db.run(sql`
-                  DELETE FROM file_part_artifact
-                  WHERE artifact_id IN ${artifactIDs.map((row) => row.id)}
-                    AND NOT EXISTS (
-                      SELECT 1 FROM file_part_artifact_binding binding
-                      WHERE binding.artifact_id = file_part_artifact.artifact_id
-                    )
-                    AND NOT EXISTS (
-                      SELECT 1 FROM file_part_artifact_import imported
-                      WHERE imported.artifact_id = file_part_artifact.artifact_id
-                    )
-                `).pipe(Effect.orDie)
-            }),
-            { behavior: "immediate" },
-          )
-          .pipe(Effect.orDie)
+        return removeAggregateRows(db, aggregateID)
       }
+
+      const isDeleted = Effect.fn("EventV2.isDeleted")(function* (aggregateID: string) {
+        const tombstone = yield* db
+          .select({ aggregateID: EventAggregateTombstoneTable.aggregate_id })
+          .from(EventAggregateTombstoneTable)
+          .where(eq(EventAggregateTombstoneTable.aggregate_id, aggregateID))
+          .get()
+          .pipe(Effect.orDie)
+        return tombstone !== undefined
+      })
+
+      const deleteAggregateEffect = Effect.fn("EventV2.deleteAggregate")(function* (
+        aggregateID: string,
+        options?: PublishOptions["tombstone"],
+      ) {
+        yield* deleteAggregate(db, aggregateID, options)
+      })
 
       function claim(aggregateID: string, ownerID: string) {
         return db
@@ -2429,11 +2638,13 @@ export const layerWith = (layerOptions?: LayerOptions) =>
       }
 
       const subscribe = <D extends Definition>(definition: D): Stream.Stream<Payload<D>> =>
-        Stream.unwrap(getOrCreate(definition).pipe(Effect.map((pubsub) => Stream.fromPubSub(pubsub)))).pipe(
-          Stream.map((event) => event as Payload<D>),
+        boundedStream(
+          Stream.unwrap(getOrCreate(definition).pipe(Effect.map((pubsub) => Stream.fromPubSub(pubsub)))).pipe(
+            Stream.map((event) => event as Payload<D>),
+          ),
         )
 
-      const streamAll = (): Stream.Stream<Payload> => Stream.fromPubSub(all)
+      const streamAll = (): Stream.Stream<Payload> => boundedStream(Stream.fromPubSub(all))
 
       const decodeSerializedEvent = (event: SerializedEvent): Effect.Effect<CursorEvent> =>
         Effect.gen(function* () {
@@ -2599,7 +2810,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
         readonly aggregateID: string
         readonly after?: Cursor
       }): Stream.Stream<CursorEvent> =>
-        Stream.unwrap(
+        boundedStream(Stream.unwrap(
           Effect.gen(function* () {
             const synchronized = yield* subscribeSynchronized(input.aggregateID)
             let cursor = input.after ?? -1
@@ -2634,10 +2845,11 @@ export const layerWith = (layerOptions?: LayerOptions) =>
             )
             return Stream.concat(drain(), live)
           }),
-        )
+        ))
 
       const listen = (listener: Listener): Effect.Effect<Unsubscribe> =>
         Effect.sync(() => {
+          if (listeners.length >= 2048) throw new Error("Event listener limit exceeded (2048)")
           listeners.push(listener)
           return Effect.sync(() => {
             const index = listeners.indexOf(listener)
@@ -2647,6 +2859,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
 
       const sync = (handler: Sync): Effect.Effect<Unsubscribe> =>
         Effect.sync(() => {
+          if (syncHandlers.length >= 256) throw new Error("Event sync handler limit exceeded (256)")
           syncHandlers.push(handler)
           return Effect.sync(() => {
             const index = syncHandlers.indexOf(handler)
@@ -2656,6 +2869,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
 
       const beforeCommit = (guard: CommitGuard): Effect.Effect<void> =>
         Effect.sync(() => {
+          if (commitGuards.length >= 256) throw new Error("Event commit guard limit exceeded (256)")
           commitGuards.push(guard)
         })
 
@@ -2663,6 +2877,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
         Effect.sync(() => {
           const key = definitionKey(definition)
           const list = projectors.get(key) ?? []
+          if (list.length >= 64) throw new Error(`Event projector limit exceeded for ${key} (64)`)
           list.push((event) => projector(event as Payload<D>))
           projectors.set(key, list)
         })
@@ -2799,6 +3014,8 @@ export const layerWith = (layerOptions?: LayerOptions) =>
         importSnapshotBundle,
         backfillSyncIndex,
         remove,
+        isDeleted,
+        deleteAggregate: deleteAggregateEffect,
         claim,
       })
     }),

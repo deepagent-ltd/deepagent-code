@@ -20,6 +20,7 @@ import type { SubagentTurnRunner, SubagentTurnResult } from "./goal-loop-wiring"
 import type { EventDispatcher } from "./event-dispatcher"
 import { SYSTEM_PRINCIPAL } from "./event-dispatcher"
 import { isEventV2AdmissionEnabled } from "@deepagent-code/core/deepagent/event-admission"
+import type { RuntimeFeatureRegistry } from "@deepagent-code/core/flag/runtime-features"
 import { EventAdmissionWiring } from "@deepagent-code/core/deepagent/event-admission-wiring"
 import { SessionID } from "./schema"
 import * as Log from "@deepagent-code/core/util/log"
@@ -105,6 +106,7 @@ export interface EventV2AdmissionBridge {
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/MultiAgentRuntime") {}
 
 export interface LayerOptions {
+  readonly runtimeFeatures?: RuntimeFeatureRegistry
   // the one-turn runner (production: makeTaskSubagentRunner). Tests inject a fake.
   readonly runner: SubagentTurnRunner
   // Deterministic partition seam. Production uses TaskPartitioner.partition with stable event IDs;
@@ -960,7 +962,7 @@ export const layerWith = (options: LayerOptions) =>
               )
             }
 
-            const settled = yield* Effect.all(running, { concurrency: "unbounded" })
+            const settled = yield* Effect.all(running, { concurrency: 16 })
             for (const { subtask, agent, capable, lease, result } of settled) {
               if (result.ok) {
                 const artifacts = [
@@ -1159,7 +1161,7 @@ export const layerWith = (options: LayerOptions) =>
       // (retrying won't change the registry/gates); only deferred + runner_failed + dep_not_met retry.
       const dispatch: Interface["dispatch"] = (request) => {
         // C5-04 — the V2 admission path is authoritative when the switch is ON + a seam is present.
-        if (isEventV2AdmissionEnabled() && options.eventV2Admission) return dispatchV2(request)
+        if (isEventV2AdmissionEnabled(options.runtimeFeatures) && options.eventV2Admission) return dispatchV2(request)
         return coordinate(request.event).pipe(
           Effect.flatMap((summary) =>
             summary.hasUnfinished

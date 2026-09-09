@@ -6,8 +6,14 @@ import { SessionProviderOwner } from "../src/context-federation/provider-owner"
 import { ProjectV2 } from "../src/project"
 import { ProjectTable } from "../src/project/sql"
 import { AbsolutePath } from "../src/schema"
+import { Prompt } from "../src/session/prompt"
 import { SessionSchema } from "../src/session/schema"
-import { SessionTable } from "../src/session/sql"
+import { ModelProtocolContract } from "../src/contract/model-protocol"
+import { SessionInputTable, SessionTable } from "../src/session/sql"
+import { SessionActivityTable, SessionContextSelectionTable, SessionProviderAttemptTable } from "../src/context-federation/session-sql"
+import { LocationIdentityTable, ProjectScopeIdentityTable, SecurityNamespaceTable } from "../src/context-federation/sql"
+import { LocationKey, ProjectScopeKey, SecurityNamespaceID } from "../src/context-federation/reference"
+import { SessionMessage } from "../src/session/message"
 import { V2OwnerAuthorization } from "../src/session/runner/v2-owner-authorization"
 import { V2OwnerAuthorizationTable } from "../src/session/runner/v2-owner-authorization.sql"
 import { V2ProviderTurn } from "../src/session/runner/v2-provider-turn"
@@ -57,6 +63,15 @@ const prepareOracleTurn = (receipt: V2ProviderTurn.Receipt) =>
         provenance: "model_limit",
       },
       userMessageID: receipt.userMessageId,
+      protocolAttemptIdentity: {
+        protocol: "openai-compatible.chat",
+        routeId: "provider-test/model-test",
+        originId: "test",
+        endpointOriginHash: Hash.sha256("test-origin"),
+        capabilityFingerprint: Hash.sha256("test-capabilities"),
+        loweringVersion: 1,
+        protocolRevision: 1,
+      } satisfies ModelProtocolContract.ProtocolAttemptIdentity,
     },
     Hash.sha256("wire-oracle"),
   )
@@ -147,15 +162,16 @@ describe("V2 owner qualification gate", () => {
       const service = yield* V2ProviderTurn.Service
       const receipt = yield* service.admit({
         sessionId,
-        userMessageId: "msg-oracle",
+        userMessageId: "msg_oracle",
         historyPromptEpoch: 1,
-        historySourceEndMessageId: "msg-oracle",
-        requestInputHash: Hash.sha256("msg-oracle-request"),
+        historySourceEndMessageId: "msg_oracle",
+        requestInputHash: Hash.sha256("msg_oracle-request"),
         providerId: "provider-test",
         modelId: "model-test",
         protocol: "openai-chat",
         ownerMode: "v2",
       })
+      yield* bindOracleAttempt(db, receipt)
       const prepared = prepareOracleTurn(receipt)
       const stream = Stream.unwrap(
         V2ProviderTurn.CurrentRequestSeal.pipe(
@@ -231,5 +247,126 @@ function seedAuthorization(db: Database.Interface["db"], fields: typeof signed) 
       })
       .run()
       .pipe(Effect.orDie)
+  })
+}
+
+function bindOracleAttempt(db: Database.Interface["db"], receipt: V2ProviderTurn.Receipt) {
+  return Effect.gen(function* () {
+    yield* db
+      .insert(SessionInputTable)
+      .values({
+        id: SessionMessage.ID.make(receipt.userMessageId),
+        session_id: receipt.sessionId,
+        prompt: new Prompt({ text: "oracle" }),
+        delivery: "steer",
+        admitted_seq: 0,
+        promoted_seq: 0,
+        time_created: 1,
+      })
+      .onConflictDoNothing()
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
+      .insert(SessionActivityTable)
+      .values({
+        activity_id: receipt.activityId,
+        session_id: receipt.sessionId,
+        ordinal: 0,
+        trigger_input_id: SessionMessage.ID.make(receipt.userMessageId),
+        delivery: "steer",
+        state: "active",
+        created_at: 1,
+      })
+      .onConflictDoNothing()
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
+      .insert(SecurityNamespaceTable)
+      .values({
+        id: "security-v2-owner-auth",
+        kind: "implicit_local",
+        binding_hash: Hash.sha256("security-v2-owner-auth"),
+        created_at: 1,
+      })
+      .onConflictDoNothing()
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
+      .insert(ProjectScopeIdentityTable)
+      .values({
+        security_namespace_id: SecurityNamespaceID.make("security-v2-owner-auth"),
+        project_scope_key: ProjectScopeKey.make("project-scope-v2-owner-auth"),
+        project_kind: "registered_root",
+        project_identity_hash: Hash.sha256("project-v2-owner-auth"),
+        created_at: 1,
+      })
+      .onConflictDoNothing()
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
+      .insert(LocationIdentityTable)
+      .values({
+        security_namespace_id: SecurityNamespaceID.make("security-v2-owner-auth"),
+        location_key: LocationKey.make("location-v2-owner-auth"),
+        project_scope_key: ProjectScopeKey.make("project-scope-v2-owner-auth"),
+        canonical_root: "/tmp/v2-owner-auth",
+        created_at: 1,
+      })
+      .onConflictDoNothing()
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
+      .insert(SessionContextSelectionTable)
+      .values({
+        selection_id: "selection-v2-owner-auth",
+        session_id: receipt.sessionId,
+        activity_id: receipt.activityId,
+        revision: 0,
+        trigger_input_id: SessionMessage.ID.make(receipt.userMessageId),
+        location_key: LocationKey.make("location-v2-owner-auth"),
+        security_namespace_id: SecurityNamespaceID.make("security-v2-owner-auth"),
+        project_scope_key: ProjectScopeKey.make("project-scope-v2-owner-auth"),
+        query_fingerprint: "query-v2-owner-auth",
+        authorization_fingerprint: "authorization-v2-owner-auth",
+        authorization_epoch: 1,
+        execution_fingerprint: "execution-v2-owner-auth",
+        selected_source_fingerprint: "source-v2-owner-auth",
+        observed_location_mutation_epoch: 0,
+        next_revalidation_at: 2_000_000_000_000,
+        released_knowledge_binding_state: "unavailable",
+        released_knowledge_exact_refs: [],
+        released_knowledge_exact_refs_fingerprint: Hash.sha256("[]"),
+        graph_revisions: "{}",
+        graph_statuses: "{}",
+        selected_refs: "[]",
+        projection: "{}",
+        projection_hash: "projection-v2-owner-auth",
+        token_count: 0,
+        artifact_write_status: "degraded_unavailable",
+        inline_audit: "{}",
+        created_at: 1,
+      })
+      .onConflictDoNothing()
+      .run()
+      .pipe(Effect.orDie)
+    yield* db
+      .insert(SessionProviderAttemptTable)
+      .values({
+        attempt_id: "attempt-v2-owner-auth",
+        session_id: receipt.sessionId,
+        activity_id: receipt.activityId,
+        provider_turn_seq: receipt.providerTurnSeq,
+        selection_id: "selection-v2-owner-auth",
+        projection_hash: "projection-v2-owner-auth",
+        request_hash: receipt.requestInputHash,
+        provider_id: receipt.providerId,
+        owner_token: receipt.ownerToken,
+        state: "prepared",
+        created_at: 1,
+      })
+      .run()
+      .pipe(Effect.orDie)
+    const service = yield* V2ProviderTurn.Service
+    yield* service.bindAttempt(receipt, "attempt-v2-owner-auth")
   })
 }
