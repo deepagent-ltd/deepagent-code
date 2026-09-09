@@ -1,8 +1,8 @@
 export * as SessionV2 from "./session"
 export * from "./session/schema"
 
-import { Cause, DateTime, Effect, Exit, Layer, Schema, Context, Stream } from "effect"
-import { and, asc, desc, eq, gt, inArray, like, lt, or, type SQL } from "drizzle-orm"
+import { Cause, DateTime, Effect, Exit, Layer, Option, Schema, Context, Stream } from "effect"
+import { and, asc, desc, eq, gt, inArray, like, lt, notLike, or, type SQL } from "drizzle-orm"
 import { ProjectV2 } from "./project"
 import { WorkspaceV2 } from "./workspace"
 import { ModelV2 } from "./model"
@@ -33,6 +33,8 @@ import { MessageDecodeError, SessionNotFound } from "./session/error"
 import { SessionEvent } from "./session/event"
 import { SessionInput } from "./session/input"
 import { PermissionV2 } from "./permission"
+import { PluginBoot } from "./plugin/boot"
+import { LocationServiceMap } from "./location-layer"
 
 // get project -> project.locations
 //
@@ -56,6 +58,8 @@ const ListInputBase = {
   limit: PositiveInt.pipe(Schema.optional),
   order: Schema.Literals(["asc", "desc"]).pipe(Schema.optional),
   anchor: ListAnchor.pipe(Schema.optional),
+  // Internal infrastructure sessions (learning reviewer) are hidden unless explicitly requested.
+  includeInternal: Schema.Boolean.pipe(Schema.optional),
 }
 
 const ListDirectoryInput = Schema.Struct({
@@ -144,7 +148,25 @@ export class PromptConflictError extends Schema.TaggedErrorClass<PromptConflictE
   messageID: SessionMessage.ID,
 }) {}
 
-export type Error = NotFoundError | MessageDecodeError | OperationUnavailableError | PromptConflictError
+/**
+ * The requested agent exists in the Location roster but is not directly selectable for a Session
+ * (`mode: "subagent"` or `hidden` — the same rule AgentV2 applies when selecting the default agent).
+ * Internal agents (goal-worker, compaction, title, summary) are driven by name by their owning
+ * machinery; admitting one as a user-selected Session agent would strand the Session on an agent the
+ * per-turn default-resolution can never pick.
+ */
+export class AgentNotSelectableError extends Schema.TaggedErrorClass<AgentNotSelectableError>()(
+  "Session.AgentNotSelectableError",
+  { id: AgentV2.ID },
+) {}
+
+export type Error =
+  | NotFoundError
+  | MessageDecodeError
+  | OperationUnavailableError
+  | PromptConflictError
+  | AgentNotSelectableError
+  | AgentV2.NotFoundError
 
 // W4-6 — the canonical V2→V1 wire converter now lives in session/legacy-wire.ts (extracted so
 // the core projector can import it without a module cycle; this re-export keeps the host
@@ -348,7 +370,9 @@ function compareMessageTime(left: SessionMessage.Message, right: SessionMessage.
 
 export interface Interface {
   readonly list: (input?: ListInput) => Effect.Effect<SessionSchema.Info[]>
-  readonly create: (input: CreateInput) => Effect.Effect<SessionSchema.Info>
+  readonly create: (
+    input: CreateInput,
+  ) => Effect.Effect<SessionSchema.Info, AgentV2.NotFoundError | AgentNotSelectableError>
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.Info, NotFoundError>
   readonly messages: (input: {
     sessionID: SessionSchema.ID
@@ -373,7 +397,7 @@ export interface Interface {
   readonly switchAgent: (input: {
     sessionID: SessionSchema.ID
     agent: string
-  }) => Effect.Effect<void, NotFoundError>
+  }) => Effect.Effect<void, NotFoundError | AgentV2.NotFoundError | AgentNotSelectableError>
   readonly switchModel: (input: {
     sessionID: SessionSchema.ID
     model: ModelV2.Ref
@@ -417,6 +441,7 @@ export const layer = Layer.effect(
     const projects = yield* ProjectV2.Service
     const execution = yield* SessionExecution.Service
     const store = yield* SessionStore.Service
+    const locations = yield* Effect.serviceOption(LocationServiceMap)
     const decodeMessage = Schema.decodeUnknownEffect(SessionMessage.Message)
     const isDurableSessionEvent = Schema.is(SessionEvent.Durable)
     const scope = yield* Effect.scope
@@ -432,6 +457,29 @@ export const layer = Layer.effect(
         Effect.forkIn(scope, { startImmediately: true }),
         Effect.asVoid,
       )
+
+    // RI-04 — admission-side agent validation for create/switchAgent. The roster is Location-scoped
+    // and populated asynchronously by PluginBoot (forkScoped at boot), so the check AWAITS boot
+    // before resolving: an id missing after a completed boot is a confirmed miss, never a
+    // startup-race guess, and an agent registered late during boot still admits. A composition
+    // without a LocationServiceMap (unit tests, noop execution) skips the check — the runner's
+    // per-turn AgentV2.NotFoundError stays the last defense there. The selectable rule mirrors
+    // AgentV2's own default-selection rule (not subagent, not hidden).
+    const requireSelectableAgent = Effect.fn("V2Session.requireSelectableAgent")(function* (
+      location: Location.Ref,
+      agent: AgentV2.ID,
+    ) {
+      if (Option.isNone(locations)) return
+      const services = yield* Effect.all({
+        boot: Effect.serviceOption(PluginBoot.Service),
+        agents: Effect.serviceOption(AgentV2.Service),
+      }).pipe(Effect.provide(locations.value.get(location)))
+      if (Option.isNone(services.agents)) return
+      if (Option.isSome(services.boot)) yield* services.boot.value.wait()
+      const resolved = yield* services.agents.value.resolve(agent)
+      if (resolved === undefined) return yield* new AgentV2.NotFoundError({ id: agent })
+      if (resolved.mode === "subagent" || resolved.hidden) return yield* new AgentNotSelectableError({ id: agent })
+    })
 
     const decode = (row: typeof SessionMessageTable.$inferSelect) =>
       decodeMessage({ ...row.data, id: row.id, type: row.type }).pipe(
@@ -535,6 +583,9 @@ export const layer = Layer.effect(
         const sessionID = input.id ?? SessionSchema.ID.create()
         const recorded = yield* store.get(sessionID)
         if (recorded) return recorded
+        // RI-04 — validate the requested agent against the Location roster BEFORE projecting the
+        // created Session. Adopted/existing Sessions return above without re-validation.
+        if (input.agent !== undefined) yield* requireSelectableAgent(input.location, input.agent)
         const project = yield* projects.resolve(input.location.directory)
         yield* db
           .insert(ProjectTable)
@@ -594,6 +645,8 @@ export const layer = Layer.effect(
         const order = direction === "previous" ? (requestedOrder === "asc" ? "desc" : "asc") : requestedOrder
         const sortColumn = SessionTable.time_created
         const conditions: SQL[] = []
+        if (input.includeInternal !== true)
+          conditions.push(notLike(SessionTable.id, `${SessionSchema.LEARNING_REVIEWER_SESSION_PREFIX}%`))
         if ("directory" in input) conditions.push(eq(SessionTable.directory, input.directory))
         if (input.workspaceID) conditions.push(eq(SessionTable.workspace_id, input.workspaceID))
         if ("project" in input) conditions.push(eq(SessionTable.project_id, input.project))
@@ -744,12 +797,16 @@ export const layer = Layer.effect(
           reason: "manual skill invocation is not wired: skill guidance composes into the next turn's system context only",
         })
       }),
-      // W1.2 — switchAgent is REAL: the AgentSwitched event is the established switch service (the
-      // projector updates the Session's agent and requests a ContextEpoch replacement at the next
-      // provider-turn boundary, exactly like the sibling switchModel path). No AgentV2 dependency is
-      // needed — the event owns the transition; the agent roster is resolved per-turn by the runner.
+      // W1.2 (revised by RI-04) — switchAgent is REAL: the AgentSwitched event still owns the
+      // transition (the projector updates the Session's agent and requests a ContextEpoch replacement
+      // at the next provider-turn boundary, exactly like the sibling switchModel path), but admission
+      // now validates the target agent against the Location roster FIRST (RI-04): an unknown id fails
+      // AgentV2.NotFoundError and a non-selectable (subagent/hidden) agent fails
+      // Session.AgentNotSelectableError, instead of projecting a switch the per-turn runner resolve
+      // would reject later. The event owns the transition; admission owns the refusal.
       switchAgent: Effect.fn("V2Session.switchAgent")(function* (input) {
-        yield* result.get(input.sessionID)
+        const session = yield* result.get(input.sessionID)
+        yield* requireSelectableAgent(session.location, AgentV2.ID.make(input.agent))
         yield* events.publish(SessionEvent.AgentSwitched, {
           sessionID: input.sessionID,
           messageID: SessionMessage.ID.create(),
@@ -855,8 +912,9 @@ export const defaultLayer = layer.pipe(
   Layer.orDie,
 )
 
-export const liveLayer = layer.pipe(
-  Layer.provide(SessionExecutionLocal.liveLayer),
+/** Production Session service with an explicitly supplied Location map. */
+export const runtimeLayer = layer.pipe(
+  Layer.provide(SessionExecutionLocal.defaultLayer),
   Layer.provide(SessionStore.defaultLayer),
   Layer.provide(SessionProjector.defaultLayer),
   Layer.provide(EventV2.defaultLayer),
@@ -864,3 +922,6 @@ export const liveLayer = layer.pipe(
   Layer.provide(ProjectV2.defaultLayer),
   Layer.orDie,
 )
+
+/** Standalone production default. Hosts with application Location services must use runtimeLayer. */
+export const liveLayer = runtimeLayer.pipe(Layer.provide(LocationServiceMap.layer))

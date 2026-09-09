@@ -14,35 +14,70 @@ import { SessionRunner } from "@deepagent-code/core/session/runner"
 import { V2ProviderTurnReceiptTable } from "@deepagent-code/core/session/runner/v2-provider-turn.sql"
 import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
 import { Hash } from "@deepagent-code/core/util/hash"
-import { Cause, Context, Duration, Effect, Layer, Schedule } from "effect"
+import { Cause, Context, Duration, Effect, Layer, Schedule, Scope } from "effect"
 
 const pollInterval = Duration.seconds(1)
 
 type ReviewerFactory = (workspacePath: string) => DeepAgentDurableLearning.ReviewerPort | undefined
-const reviewerFactories = new Map<symbol, ReviewerFactory>()
 
-export const registerLearningReviewerFactory = (factory: ReviewerFactory) => {
-  const token = Symbol("learning-reviewer-factory")
-  reviewerFactories.set(token, factory)
-  return () => reviewerFactories.delete(token)
+export interface ReviewerRegistryInterface {
+  readonly register: (factory: ReviewerFactory) => Effect.Effect<void, never, Scope.Scope>
+  readonly reviewerForWorkspace: (workspacePath: string) => DeepAgentDurableLearning.ReviewerPort | undefined
 }
 
-function reviewerForWorkspace(workspacePath: string) {
-  return [...reviewerFactories.values()]
-    .toReversed()
-    .map((factory) => factory(workspacePath))
-    .find((reviewer) => reviewer !== undefined)
-}
+export const CurrentReviewerRegistry = Context.Reference<ReviewerRegistryInterface | undefined>(
+  "@deepagent-code/DurableLearningRuntime/ReviewerRegistry",
+  { defaultValue: () => undefined },
+)
+
+export const reviewerRegistryLayer = Layer.effectContext(
+  Effect.gen(function* () {
+    const factories = new Map<symbol, ReviewerFactory>()
+    yield* Effect.addFinalizer(() => Effect.sync(() => factories.clear()))
+    const registry: ReviewerRegistryInterface = {
+      register: Effect.fn("DurableLearningRuntime.ReviewerRegistry.register")(function* (factory) {
+        const token = Symbol("learning-reviewer-factory")
+        factories.set(token, factory)
+        yield* Effect.addFinalizer(() => Effect.sync(() => factories.delete(token)))
+      }),
+      reviewerForWorkspace: (workspacePath) =>
+        [...factories.values()]
+          .toReversed()
+          .map((factory) => factory(workspacePath))
+          .find((reviewer) => reviewer !== undefined),
+    }
+    return Context.make(CurrentReviewerRegistry, registry)
+  }),
+)
+
+export const registerLearningReviewerFactory = Effect.fn("DurableLearningRuntime.registerLearningReviewerFactory")(
+  function* (factory: ReviewerFactory) {
+    const registry = yield* CurrentReviewerRegistry
+    if (!registry) return
+    yield* registry.register(factory)
+  },
+)
+
+export const learningAuthority = (database: Database.Interface): AgentGateway.LearningAuthority => ({
+  record: (admission) => Effect.runPromise(DeepAgentDurableLearning.record(database.db, admission).pipe(Effect.asVoid)),
+  enqueue: (admission) =>
+    Effect.runPromise(
+      DeepAgentDurableLearning.admit(database.db, admission, {
+        authorityRoot: Global.Path.agent.data,
+      }).pipe(Effect.asVoid),
+    ),
+})
 
 export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const database = yield* Database.Service
+    const reviewers = yield* CurrentReviewerRegistry
     const owner = `learning-worker:${process.pid}:${crypto.randomUUID()}`
     const tick = Effect.suspend(() =>
       DeepAgentDurableLearning.drain(database.db, {
         owner,
         authorityRoot: Global.Path.agent.data,
-        reviewerForWorkspace,
+        reviewerForWorkspace: reviewers?.reviewerForWorkspace,
       }),
     ).pipe(
       Effect.catchCause((cause) =>
@@ -50,29 +85,10 @@ export const layer = Layer.effectDiscard(
       ),
     )
 
-    AgentGateway.setLearningAuthority({
-      record: (admission) =>
-        Effect.runPromise(DeepAgentDurableLearning.record(database.db, admission).pipe(Effect.asVoid)),
-      enqueue: (admission) =>
-        Effect.runPromise(
-          DeepAgentDurableLearning.admit(database.db, admission, {
-            authorityRoot: Global.Path.agent.data,
-          }).pipe(Effect.asVoid),
-        ),
-    })
-    DeepAgentLearningLifecycleTrigger.setRuntimeObserver({
-      observe: (input) =>
-        Effect.runPromise(
-          DeepAgentLearningLifecycleTrigger.observe(database.db, input, {
-            authorityRoot: Global.Path.agent.data,
-            runsDir: Global.Path.agent.runs,
-          }),
-        ),
-    })
+    const releaseLearningAuthority = AgentGateway.setLearningAuthority(learningAuthority(database))
     yield* Effect.addFinalizer(() =>
       Effect.sync(() => {
-        AgentGateway.setLearningAuthority(undefined)
-        DeepAgentLearningLifecycleTrigger.setRuntimeObserver(undefined)
+        releaseLearningAuthority()
       }),
     )
 
@@ -88,7 +104,23 @@ export const layer = Layer.effectDiscard(
   }),
 )
 
-export const defaultLayer = layer.pipe(Layer.provide(Database.defaultLayer))
+export const defaultLayer = layer.pipe(Layer.provide(Database.defaultLayer), Layer.provide(reviewerRegistryLayer))
+
+export const lifecycleObserverLayer = Layer.effect(
+  DeepAgentLearningLifecycleTrigger.CurrentRuntimeObserver,
+  Effect.gen(function* () {
+    const database = yield* Database.Service
+    return {
+      observe: (input: DeepAgentLearningLifecycleTrigger.ObserveInput) =>
+        Effect.runPromise(
+          DeepAgentLearningLifecycleTrigger.observe(database.db, input, {
+            authorityRoot: Global.Path.agent.data,
+            runsDir: Global.Path.agent.runs,
+          }),
+        ),
+    }
+  }),
+)
 
 // ---------------------------------------------------------------------------
 // W7 — settle-triggered durable learning (the SessionRunner `onSessionSettled` hook).
@@ -115,41 +147,46 @@ export const defaultLayer = layer.pipe(Layer.provide(Database.defaultLayer))
 // before W7 (no V2 admission).
 // ---------------------------------------------------------------------------
 
-export function onSessionSettled(database: Database.Interface): (input: SessionRunner.OnSessionSettledInput) => Effect.Effect<void> {
-  return (input) =>
-    Effect.gen(function* () {
+export function onSessionSettled(
+  database: Database.Interface,
+): (input: SessionRunner.OnSessionSettledInput, runtime?: AgentGateway.RuntimeInterface) => Effect.Effect<void> {
+  return (input, runtime) => {
+    const withStorage = runtime?.withStorage ?? (<A>(operation: () => A) => operation())
+    return Effect.gen(function* () {
       if (input.activityId === undefined) return
       // W4 (gap audit B3): the completion worklog — RUNNER facts only (plan terminal state),
       // written at settle into the run document set next to the plan. Model self-reports never
       // enter it (V3.3 completion-report contract). Independent of the learning flag: this is
       // the run's own record, not learning extraction.
       yield* Effect.sync(() => {
-        const plan = AgentGateway.DeepAgentPlanStore.getPlanDoc(input.sessionID)
-        if (!plan) return
-        const progress = AgentGateway.DeepAgentPlanController.planProgress(plan)
-        AgentGateway.DeepAgentPlanStore.writeSpecDoc(input.sessionID, {
-          kind: "worklog",
-          title: "completion",
-          origin: "runner",
-          body: JSON.stringify(
-            {
-              plan_id: plan.plan_id,
-              goal: plan.goal,
-              steps_done: progress.done,
-              steps_total: progress.total,
-              completed: progress.done === progress.total,
-              activity: input.activityId,
-            },
-            null,
-            2,
-          ),
+        withStorage(() => {
+          const plan = AgentGateway.DeepAgentPlanStore.getPlanDoc(input.sessionID)
+          if (!plan) return
+          const progress = AgentGateway.DeepAgentPlanController.planProgress(plan)
+          AgentGateway.DeepAgentPlanStore.writeSpecDoc(input.sessionID, {
+            kind: "worklog",
+            title: "completion",
+            origin: "runner",
+            body: JSON.stringify(
+              {
+                plan_id: plan.plan_id,
+                goal: plan.goal,
+                steps_done: progress.done,
+                steps_total: progress.total,
+                completed: progress.done === progress.total,
+                activity: input.activityId,
+              },
+              null,
+              2,
+            ),
+          })
         })
       }).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("completion worklog write failed", { cause }).pipe(Effect.asVoid),
         ),
       )
-      if (!AgentGateway.durableLearningEnabled()) return
+      if (!(runtime?.durableLearning ?? AgentGateway.durableLearningEnabled())) return
       const session = yield* database.db
         .select({ projectId: SessionTable.project_id, directory: SessionTable.directory })
         .from(SessionTable)
@@ -157,9 +194,11 @@ export function onSessionSettled(database: Database.Interface): (input: SessionR
         .get()
         .pipe(Effect.orDie)
       if (!session) return
-      const { baseDir, runsDir } = AgentGateway.learningAuthorityConfig()
+      const config = runtime ?? AgentGateway.learningAuthorityConfig()
+      const baseDir = config.baseDir
+      const runsDir = config.runsDir
       const runID = `v2_${input.activityId}`
-      const mode = AgentGateway.snapshot().agentMode
+      const mode = runtime?.snapshot.agentMode ?? AgentGateway.snapshot().agentMode
       const roundState = createInitialRoundState(mode)
       // W15 (P2) — non-rebuilt / non-isolation rounds only. The row set distinguishes both:
       //   - isolation: shadow-parity probe rows carry `owner_mode = 'shadow_v2'` (never a learning
@@ -236,7 +275,10 @@ export function onSessionSettled(database: Database.Interface): (input: SessionR
           totalRounds: roundState.round,
           finalStatus: "completed",
           trigger: "session_finalization",
-          policy: AgentGateway.selfLearningPolicy() === "auto" ? "auto_merge_safe_project" : "manual_review",
+          policy:
+            (runtime?.selfLearning ?? AgentGateway.selfLearningPolicy()) === "auto"
+              ? "auto_merge_safe_project"
+              : "manual_review",
         },
       }
       const fingerprint = DeepAgentDurableLearning.admissionFingerprint(admission)
@@ -268,6 +310,7 @@ export function onSessionSettled(database: Database.Interface): (input: SessionR
         Effect.logWarning("V2 settle learning admission failed", { cause: Cause.pretty(cause) }),
       ),
     )
+  }
 }
 
 /** W7 — the runner seam: inject the real settle hook into the SessionRunner subtree. Provided the

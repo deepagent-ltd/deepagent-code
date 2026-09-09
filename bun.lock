@@ -92,7 +92,6 @@
         "@sentry/vite-plugin": "catalog:",
         "@tailwindcss/vite": "catalog:",
         "@tsconfig/bun": "1.0.9",
-        "@types/bun": "catalog:",
         "@types/luxon": "catalog:",
         "@types/node": "catalog:",
         "@typescript/native-preview": "catalog:",
@@ -106,7 +105,6 @@
       "name": "@deepagent-code/cli",
       "version": "2.0.0-beta.0",
       "bin": {
-        "dacode": "./bin/lildax.cjs",
         "lildax": "./bin/lildax.cjs",
       },
       "dependencies": {
@@ -131,9 +129,6 @@
     "packages/core": {
       "name": "@deepagent-code/core",
       "version": "2.0.0-beta.0",
-      "bin": {
-        "deepagent-code": "./bin/deepagent-code",
-      },
       "dependencies": {
         "@ai-sdk/alibaba": "1.0.17",
         "@ai-sdk/amazon-bedrock": "4.0.112",
@@ -443,6 +438,7 @@
       },
       "devDependencies": {
         "@tsconfig/node22": "22.0.2",
+        "@types/bun": "catalog:",
         "@types/node": "catalog:",
         "@types/ws": "8.18.1",
         "typescript": "catalog:",

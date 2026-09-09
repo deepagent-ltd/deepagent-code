@@ -1,5 +1,5 @@
 export { LLMClient } from "./route/client"
-export { registerClientMiddleware, type ClientMiddleware } from "./route/client"
+export { Middleware as ClientMiddlewareService, type ClientMiddleware } from "./route/client"
 export { Auth } from "./route/auth"
 export { Provider } from "./provider"
 export { isContextOverflow, isContextOverflowFailure } from "./provider-error"

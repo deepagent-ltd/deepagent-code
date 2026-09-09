@@ -77,9 +77,11 @@ export const DocsCommand = effectCmd({
               // High-1: ASCENDING by updated time — the LOG writer inserts each session's entry at
               // its newest-first position (and typically prepends), so old→new traversal finishes
               // with the newest session on top instead of inverted.
-              const parents = scoped.filter((session) => session.parentID === undefined).toSorted(
-                (a, b) => DateTime.toEpochMillis(a.time.updated) - DateTime.toEpochMillis(b.time.updated),
-              )
+              const parents = scoped
+                .filter((session) => session.parentID === undefined && !ProjectDocsSync.isLearningReviewerSession(session.id))
+                .toSorted(
+                  (a, b) => DateTime.toEpochMillis(a.time.updated) - DateTime.toEpochMillis(b.time.updated),
+                )
               const targets = args.session
                 ? parents.filter((session) => session.id === args.session)
                 : parents

@@ -5,7 +5,7 @@ import type {
   Session,
   Part,
   Config,
-  Todo,
+  SessionTodoInfo,
   Command,
   PermissionRequest,
   QuestionRequest,
@@ -98,7 +98,7 @@ export const {
         [sessionID: string]: SnapshotFileDiff[]
       }
       todo: {
-        [sessionID: string]: Todo[]
+        [sessionID: string]: SessionTodoInfo[]
       }
       message: {
         [sessionID: string]: Message[]
@@ -157,6 +157,9 @@ export const {
     const fullSyncedSessions = new Set<string>()
     const syncingSessions = new Map<string, Promise<void>>()
     const hydratingSessions = new Map<string, { messages: Set<string>; parts: Set<string> }>()
+    // Provenance for permission requests normalized from permission.v2.asked: their replies must
+    // go through the session-scoped V2 route (legacy /permission/:id/reply 404s on PermissionV2).
+    const v2PermissionRequests = new Set<string>()
     const touchMessage = (sessionID: string, messageID: string) => {
       hydratingSessions.get(sessionID)?.messages.add(messageID)
     }
@@ -180,45 +183,77 @@ export const {
         .then((x) => (x.data ?? []).toSorted((a, b) => a.id.localeCompare(b.id)))
     }
 
+    const upsertPermission = (request: PermissionRequest) => {
+      const requests = store.permission[request.sessionID]
+      if (!requests) {
+        setStore("permission", request.sessionID, [request])
+        return
+      }
+      const match = search(requests, request.id, (r) => r.id)
+      if (match.found) {
+        setStore("permission", request.sessionID, match.index, reconcile(request))
+        return
+      }
+      setStore(
+        "permission",
+        request.sessionID,
+        produce((draft) => {
+          draft.splice(match.index, 0, request)
+        }),
+      )
+    }
+
+    const removePermission = (sessionID: string, requestID: string) => {
+      const requests = store.permission[sessionID]
+      if (!requests) return
+      const match = search(requests, requestID, (r) => r.id)
+      if (!match.found) return
+      setStore(
+        "permission",
+        sessionID,
+        produce((draft) => {
+          draft.splice(match.index, 1)
+        }),
+      )
+    }
+
     event.subscribe((event, { workspace }) => {
       switch (event.type) {
         case "server.instance.disposed":
           void bootstrap()
           break
-        case "permission.replied": {
-          const requests = store.permission[event.properties.sessionID]
-          if (!requests) break
-          const match = search(requests, event.properties.requestID, (r) => r.id)
-          if (!match.found) break
-          setStore(
-            "permission",
-            event.properties.sessionID,
-            produce((draft) => {
-              draft.splice(match.index, 1)
-            }),
-          )
+        case "permission.replied":
+        case "permission.v2.replied": {
+          v2PermissionRequests.delete(event.properties.requestID)
+          removePermission(event.properties.sessionID, event.properties.requestID)
           break
         }
 
         case "permission.asked": {
-          const request = event.properties
-          const requests = store.permission[request.sessionID]
-          if (!requests) {
-            setStore("permission", request.sessionID, [request])
-            break
-          }
-          const match = search(requests, request.id, (r) => r.id)
-          if (match.found) {
-            setStore("permission", request.sessionID, match.index, reconcile(request))
-            break
-          }
-          setStore(
-            "permission",
-            request.sessionID,
-            produce((draft) => {
-              draft.splice(match.index, 0, request)
-            }),
-          )
+          upsertPermission(event.properties)
+          break
+        }
+
+        case "permission.v2.asked": {
+          // V2 asks carry the PermissionV2 vocabulary (action/resources); normalize to the legacy
+          // PermissionRequest shape the dialog renders and record provenance for the reply route.
+          v2PermissionRequests.add(event.properties.id)
+          upsertPermission({
+            id: event.properties.id,
+            sessionID: event.properties.sessionID,
+            permission: event.properties.action,
+            patterns: event.properties.resources,
+            metadata: event.properties.metadata ?? {},
+            always: event.properties.save ?? [],
+            ...(event.properties.source
+              ? {
+                  tool: {
+                    messageID: event.properties.source.messageID,
+                    callID: event.properties.source.callID,
+                  },
+                }
+              : {}),
+          })
           break
         }
 
@@ -586,6 +621,9 @@ export const {
       },
       get path() {
         return project.instance.path()
+      },
+      permissionV2(requestID: string) {
+        return v2PermissionRequests.has(requestID)
       },
       session: {
         get(sessionID: string) {

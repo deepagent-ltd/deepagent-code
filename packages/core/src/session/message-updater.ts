@@ -101,6 +101,11 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
   return Effect.gen(function* () {
     yield* SessionEvent.All.match(event, {
       "session.created": () => Effect.void,
+      // Session info mirror events carry no message content.
+      "session.updated": () => Effect.void,
+      "session.diff": () => Effect.void,
+      "session.revert": () => Effect.void,
+      "session.deleted": () => Effect.void,
       "session.execution.started": () => Effect.void,
       "session.execution.succeeded": () => Effect.void,
       "session.execution.failed": () => Effect.void,
@@ -139,6 +144,7 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
             files: event.data.prompt.files,
             agents: event.data.prompt.agents,
             references: event.data.prompt.references,
+            format: event.data.prompt.format,
             time: { created: event.data.timestamp },
           }),
         )
@@ -165,6 +171,11 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
             time: { created: event.data.timestamp },
           }),
         )
+      },
+      "session.next.structured.captured": (event) => {
+        return updateOwnedAssistant(event.data.assistantMessageID, (draft) => {
+          draft.structured = event.data.value
+        })
       },
       "session.next.shell.started": (event) => {
         return adapter.appendMessage(

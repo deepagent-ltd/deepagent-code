@@ -12,6 +12,7 @@ import { ACPSession } from "@/acp/session"
 
 type PermissionEvent = Extract<Event, { type: "permission.asked" }>
 type PermissionReplyParams = Parameters<OpencodeClient["permission"]["reply"]>[0]
+type V2PermissionReplyParams = Parameters<OpencodeClient["v2"]["session"]["permission"]["reply"]>[0]
 type SessionUpdateParams = Parameters<AgentSideConnection["sessionUpdate"]>[0]
 
 const pollUntil = async (
@@ -38,6 +39,7 @@ function createHarness(
     Promise.resolve({ outcome: { outcome: "selected", optionId: "once" } }),
 ) {
   const replies: PermissionReplyParams[] = []
+  const v2Replies: V2PermissionReplyParams[] = []
   const requests: RequestPermissionRequest[] = []
   const updates: SessionUpdateParams[] = []
   const session = makeSessionService()
@@ -46,6 +48,16 @@ function createHarness(
       reply: (params: PermissionReplyParams) => {
         replies.push(params)
         return Promise.resolve({ data: true })
+      },
+    },
+    v2: {
+      session: {
+        permission: {
+          reply: (params: V2PermissionReplyParams) => {
+            v2Replies.push(params)
+            return Promise.resolve({ data: true })
+          },
+        },
       },
     },
     session: {
@@ -64,7 +76,7 @@ function createHarness(
   } satisfies Pick<AgentSideConnection, "requestPermission" | "sessionUpdate">
   const subscription = new ACPEvent.Subscription({ sdk, connection, session })
 
-  return { connection, replies, requests, sdk, session, subscription, updates }
+  return { connection, replies, requests, sdk, session, subscription, updates, v2Replies }
 }
 
 async function createSession(session: ACPSession.Interface, sessionId: string, cwd = "/workspace") {
@@ -163,6 +175,7 @@ describe("acp permissions", () => {
       ],
     })
     expect(harness.replies).toEqual([{ requestID: "perm_1", reply: "once", directory: "/workspace" }])
+    expect(harness.v2Replies).toHaveLength(0)
   })
 
   it("forwards external_directory metadata and locations to requestPermission", async () => {
@@ -301,7 +314,29 @@ describe("acp permissions", () => {
         kind: "edit",
       },
     })
-    await pollUntil(() => harness.replies.length === 1, "v2 permission was never replied")
-    expect(harness.replies[0]).toMatchObject({ requestID: "per_v2", reply: "once" })
+    await pollUntil(() => harness.v2Replies.length === 1, "v2 permission was never replied")
+    expect(harness.v2Replies).toEqual([{ sessionID: "ses_v2", requestID: "per_v2", reply: "once" }])
+    expect(harness.replies).toHaveLength(0)
+  })
+
+  it("rejects a v2 ask through the V2 route when the outcome is not selected", async () => {
+    const harness = createHarness(() => Promise.resolve({ outcome: { outcome: "cancelled" } }))
+    await createSession(harness.session, "ses_v2")
+
+    harness.subscription.handlePermission({
+      type: "permission.v2.asked",
+      properties: {
+        id: "per_v2_reject",
+        sessionID: "ses_v2",
+        action: "bash",
+        resources: ["*"],
+        metadata: { command: "printf hello" },
+        source: { callID: "call_v2_reject" },
+      },
+    })
+
+    await pollUntil(() => harness.v2Replies.length === 1, "v2 permission was never rejected")
+    expect(harness.v2Replies).toEqual([{ sessionID: "ses_v2", requestID: "per_v2_reject", reply: "reject" }])
+    expect(harness.replies).toHaveLength(0)
   })
 })

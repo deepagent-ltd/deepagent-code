@@ -36,6 +36,32 @@ afterEach(async () => {
 })
 
 describe("durable learning lifecycle trigger authority", () => {
+  test("independent runtime contexts cannot replace each other's observer", async () => {
+    const oldObserver: DeepAgentLearningLifecycleTrigger.RuntimeObserver = {
+      observe: async () => ({ state: "skipped", reason: "no_exact_settled_run" }),
+    }
+    const newObserver: DeepAgentLearningLifecycleTrigger.RuntimeObserver = {
+      observe: async () => ({ state: "prepared", receiptId: "receipt-new", runId: "run-new" }),
+    }
+    const notification = DeepAgentLearningLifecycleTrigger.notify({
+      trigger: "idle",
+      boundaryKey: "root-isolation",
+      sessionID: "ses_successor",
+      match: "session",
+    })
+
+    expect(
+      await Effect.runPromise(
+        notification.pipe(Effect.provideService(DeepAgentLearningLifecycleTrigger.CurrentRuntimeObserver, newObserver)),
+      ),
+    ).toEqual({ state: "prepared", receiptId: "receipt-new", runId: "run-new" })
+    expect(
+      await Effect.runPromise(
+        notification.pipe(Effect.provideService(DeepAgentLearningLifecycleTrigger.CurrentRuntimeObserver, oldObserver)),
+      ),
+    ).toEqual({ state: "skipped", reason: "no_exact_settled_run" })
+  })
+
   test("admits and deduplicates an idle trigger from a real settled AgentGateway run", async () => {
     await run(
       Effect.gen(function* () {

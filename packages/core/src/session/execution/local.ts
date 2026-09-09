@@ -18,6 +18,7 @@ export const layer = Layer.effect(
     const store = yield* SessionStore.Service
     const locations = yield* LocationServiceMap
     const events = yield* EventV2.Service
+    const ownedClaims = new Map<SessionSchema.ID, number>()
     const reportLifecycle = (sessionID: SessionSchema.ID, effect: Effect.Effect<void>) =>
       effect.pipe(
         Effect.tapCause((cause) =>
@@ -32,15 +33,25 @@ export const layer = Layer.effect(
     const claimOnCommit = (sessionID: SessionSchema.ID) => ({
       commit: () =>
         store.claim(sessionID).pipe(
-          Effect.flatMap((claimed) =>
-            claimed
-              ? Effect.void
-              : Effect.fail(new SessionRunner.ExecutionRecoveryRequiredError({ sessionID })),
+          Effect.flatMap((token) =>
+            token === undefined
+              ? Effect.fail(new SessionRunner.ExecutionRecoveryRequiredError({ sessionID }))
+              : Effect.sync(() => ownedClaims.set(sessionID, token)),
           ),
         ),
     })
     const releaseOnCommit = (sessionID: SessionSchema.ID) => ({
-      commit: () => store.release(sessionID),
+      commit: () => {
+        const token = ownedClaims.get(sessionID)
+        if (token === undefined) return Effect.die(`Session execution claim token missing: ${sessionID}`)
+        return store.release(sessionID, token).pipe(
+          Effect.flatMap((released) =>
+            released
+              ? Effect.sync(() => ownedClaims.delete(sessionID))
+              : Effect.die(`Session execution claim token changed: ${sessionID}`),
+          ),
+        )
+      },
     })
     const coordinator = yield* SessionRunCoordinator.make<
       SessionSchema.ID,
@@ -121,7 +132,14 @@ export const layer = Layer.effect(
       active: coordinator.active,
       interrupt: (sessionID, seq) => coordinator.interrupt(sessionID, seq, "user"),
       resume: coordinator.run,
-      wake: coordinator.wake,
+      wake: (sessionID, seq) =>
+        store.interruptSeq(sessionID).pipe(
+          Effect.flatMap((interruptSeq) =>
+            interruptSeq !== undefined && (seq === undefined || seq <= interruptSeq)
+              ? Effect.void
+              : coordinator.wake(sessionID, seq),
+          ),
+        ),
       awaitIdle: coordinator.awaitIdle,
     })
   }),

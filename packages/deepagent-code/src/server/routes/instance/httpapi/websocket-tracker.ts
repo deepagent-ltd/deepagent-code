@@ -2,6 +2,7 @@ import { Context, Deferred, Effect, Layer, Option, Scope } from "effect"
 import * as Socket from "effect/unstable/socket/Socket"
 
 export const SERVER_CLOSING_EVENT = () => new Socket.CloseEvent(1001, "server closing")
+export const MAX_TRACKED_WEBSOCKETS = 1024
 
 type Close = Effect.Effect<void, unknown>
 
@@ -26,6 +27,7 @@ export const layer = Layer.sync(Service)(() => {
       Effect.gen(function* () {
         if (closing) return { accepted: false, shutdown: Effect.void }
         const entry = { close, shutdown: yield* Deferred.make<void>() }
+        if (sockets.size >= MAX_TRACKED_WEBSOCKETS) return { accepted: false, shutdown: Effect.void }
         sockets.add(entry)
         yield* Effect.addFinalizer(() =>
           Effect.sync(() => {
@@ -54,7 +56,7 @@ export const layer = Layer.sync(Service)(() => {
             yield* Deferred.succeed(entry.shutdown, undefined)
           }),
         ),
-        { concurrency: "unbounded", discard: true },
+        { concurrency: 16, discard: true },
       )
       yield* Deferred.succeed(closed, undefined)
     }),

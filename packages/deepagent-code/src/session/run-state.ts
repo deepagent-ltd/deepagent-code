@@ -8,9 +8,10 @@ import { SessionID } from "./schema"
 import { SessionStatus } from "./status"
 import type { Image } from "@/image/image"
 import type { SessionPromptIntent } from "./prompt-intent"
+import type { LegacyExecutionUnavailable } from "./legacy-execution-zero"
 import { DeepAgentLearningLifecycleTrigger } from "@deepagent-code/core/deepagent/learning-lifecycle-trigger"
 
-type RunError = Image.Error | SessionPromptIntent.Error
+type RunError = Image.Error | SessionPromptIntent.Error | LegacyExecutionUnavailable
 
 export interface Interface {
   readonly assertNotBusy: (sessionID: SessionID) => Effect.Effect<void, Session.BusyError>
@@ -20,6 +21,10 @@ export interface Interface {
   // as the turn ends is still durably buffered and re-drained; see the ingress `promptOrSteer`).
   readonly isBusy: (sessionID: SessionID) => Effect.Effect<boolean>
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
+  /** Cancels the session lane only while a shell holds it; a running/idle lane is untouched. */
+  readonly cancelShell: (sessionID: SessionID) => Effect.Effect<void>
+  /** True while the session lane is held by a shell (optionally with a queued run behind it). */
+  readonly shellBusy: (sessionID: SessionID) => Effect.Effect<boolean>
   readonly ensureRunning: (
     sessionID: SessionID,
     onInterrupt: Effect.Effect<SessionV1.WithParts>,
@@ -56,7 +61,7 @@ export const layer = Layer.effect(
         yield* Effect.addFinalizer(
           Effect.fnUntraced(function* () {
             yield* Effect.forEach(runners.values(), (runner) => runner.cancel, {
-              concurrency: "unbounded",
+              concurrency: 16,
               discard: true,
             })
             runners.clear()
@@ -76,14 +81,12 @@ export const layer = Layer.effect(
       const next = Runner.make<SessionV1.WithParts, RunError>(data.scope, {
         onIdle: Effect.gen(function* () {
           data.runners.delete(sessionID)
-          yield* Effect.promise(() =>
-            DeepAgentLearningLifecycleTrigger.notify({
-              trigger: "idle",
-              boundaryKey: `session-idle:${sessionID}`,
-              sessionID,
-              match: "session",
-            }),
-          ).pipe(Effect.ignore)
+          yield* DeepAgentLearningLifecycleTrigger.notify({
+            trigger: "idle",
+            boundaryKey: `session-idle:${sessionID}`,
+            sessionID,
+            match: "session",
+          }).pipe(Effect.ignore)
           yield* status.set(sessionID, { type: "idle" })
         }),
         onBusy: status.set(sessionID, { type: "busy" }),
@@ -113,6 +116,19 @@ export const layer = Layer.effect(
         return
       }
       yield* existing.cancel
+    })
+
+    const cancelShell = Effect.fn("SessionRunState.cancelShell")(function* (sessionID: SessionID) {
+      const data = yield* InstanceState.get(state)
+      const existing = data.runners.get(sessionID)
+      if (!existing) return
+      yield* existing.cancelShell
+    })
+
+    const shellBusy = Effect.fn("SessionRunState.shellBusy")(function* (sessionID: SessionID) {
+      const data = yield* InstanceState.get(state)
+      const tag = data.runners.get(sessionID)?.state._tag
+      return tag === "Shell" || tag === "ShellThenRun"
     })
 
     const ensureRunning = Effect.fn("SessionRunState.ensureRunning")(function* (
@@ -167,6 +183,8 @@ export const layer = Layer.effect(
       assertNotBusy,
       isBusy,
       cancel,
+      cancelShell,
+      shellBusy,
       ensureRunning,
       startRunning,
       markFinalizing,
@@ -209,7 +227,7 @@ const cancelBackgroundJobs = Effect.fn("SessionRunState.cancelBackgroundJobs")(f
             }),
           ),
         ),
-      { concurrency: "unbounded", discard: true },
+      { concurrency: 16, discard: true },
     )
     batch = jobs.filter(matches)
   }

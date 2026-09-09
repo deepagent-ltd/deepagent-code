@@ -6,9 +6,8 @@ import type { ContentLoadState, ContentPermissionBinding } from "../contract/cap
 // the frozen contract `CapabilityLoadReceipt` is stored field-by-field (snake_case
 // columns; the tagged `state` union and the `permissionBinding` are JSON columns), plus
 // the derived `capability_id` the receipt does not carry top-level (it is bound through
-// `body_ref`/the request) — the unique index (session_id, capability_id, body_hash) is
-// the exact-retry key: one row per (session, capability, body) is the authoritative
-// first-load fact, and re-dispatching the same load converges on the same row.
+// `body_ref`/the request) — the unique index includes the catalog snapshot so each Context
+// Epoch can restore its own load facts without mixing or suppressing another snapshot.
 //
 // The matching TypeScript migration is generated from this schema by
 // `bun run script/migration.ts` (drizzle-kit; the generated id is the migration id in
@@ -48,8 +47,9 @@ export const SessionCapabilityLoadTable = sqliteTable(
     state: text({ mode: "json" }).$type<ContentLoadState>().notNull(),
   },
   (table) => [
-    uniqueIndex("session_capability_load_session_capability_body_idx").on(
+    uniqueIndex("session_capability_load_snapshot_capability_body_idx").on(
       table.session_id,
+      table.catalog_snapshot_id,
       table.capability_id,
       table.body_hash,
     ),

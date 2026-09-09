@@ -557,8 +557,14 @@ describe("SessionProviderRecoveryDurable store (W2)", () => {
         const after = yield* store.getCommand(outcome.commandId)
         expect(after?.state).toBe("abandoned")
         expect(after?.resultHash).toBeString()
-        const resolvedKinds = (yield* store.listDescriptorsBySession(attempt.sessionId)).map((row) => row.kind)
-        expect(resolvedKinds).toContain("resolved")
+        // The attempt's command slot is one-per-attempt (content-addressed CAS): abandonExact
+        // settles the resolve-created slot in place, so the slot keeps its bound resolve-classified
+        // descriptor. The terminal `resolved` descriptor is written by applyExactAbandon together
+        // with the provider-authority application (resolution/bridge/claim release), not by this
+        // commit-side transition.
+        const afterDescriptors = yield* store.listDescriptorsBySession(attempt.sessionId)
+        expect(afterDescriptors.map((row) => row.kind)).toEqual(["resolvable_exact"])
+        expect(after?.descriptorId).toBe(afterDescriptors[0]!.descriptorId)
       }),
     )
   })
@@ -572,16 +578,37 @@ describe("SessionProviderRecoveryDurable store (W2)", () => {
         const db = yield* makeDb
         yield* createTables(db)
         // Crash-left durable state: one indeterminate attempt + its recovery descriptors.
+        // The startup-inventory read surface mirrors the tracked schema's columns; empty tables
+        // classify to no items and the seeded sync authority keeps the inventory total.
+        yield* db.run(sql`CREATE TABLE session (id TEXT PRIMARY KEY, time_suspended INTEGER)`)
         yield* db.run(sql`
-          CREATE TABLE session_provider_attempt (attempt_id TEXT PRIMARY KEY, state TEXT NOT NULL)
+          CREATE TABLE session_provider_attempt (
+            attempt_id TEXT PRIMARY KEY, state TEXT NOT NULL, session_id TEXT, activity_id TEXT,
+            provider_turn_seq INTEGER, attempt_version INTEGER,
+            execution_claim_token INTEGER NOT NULL DEFAULT 1, selection_id TEXT,
+            projection_hash TEXT, request_hash TEXT, provider_id TEXT, owner_token TEXT
+          )
         `)
-        yield* db.run(sql`INSERT INTO session_provider_attempt VALUES ('att_durable', 'indeterminate_after_crash')`)
+        yield* db.run(sql`INSERT INTO session_provider_attempt (attempt_id, state) VALUES ('att_durable', 'indeterminate_after_crash')`)
         // The other startup surfaces classifyStartup reads (empty => no items).
-        yield* db.run(sql`CREATE TABLE session_v2_tool_effect (effect_id TEXT PRIMARY KEY, state TEXT NOT NULL, grant_state TEXT)`)
+        yield* db.run(sql`CREATE TABLE session_v2_tool_effect_admission (admission_id TEXT PRIMARY KEY, receipt_id TEXT NOT NULL, tool_call_id TEXT NOT NULL)`)
+        yield* db.run(sql`CREATE TABLE session_v2_tool_effect (effect_id TEXT PRIMARY KEY, receipt_id TEXT NOT NULL, tool_call_id TEXT NOT NULL, state TEXT NOT NULL, grant_state TEXT)`)
         yield* db.run(sql`CREATE TABLE task_run (run_id TEXT PRIMARY KEY, state TEXT NOT NULL, execution_owner TEXT, lease_expires_at INTEGER)`)
         yield* db.run(sql`CREATE TABLE event_snapshot_attempt (snapshot_id TEXT PRIMARY KEY, state TEXT NOT NULL)`)
         yield* db.run(sql`CREATE TABLE event_compaction_receipt (aggregate_id TEXT PRIMARY KEY, state TEXT NOT NULL)`)
         yield* db.run(sql`CREATE TABLE session_facade_activity (activity_id TEXT PRIMARY KEY, state TEXT NOT NULL)`)
+        yield* db.run(sql`CREATE TABLE session_activity (activity_id TEXT PRIMARY KEY, state TEXT NOT NULL)`)
+        yield* db.run(sql`CREATE TABLE session_provider_attempt_resolution (resolution_id TEXT PRIMARY KEY, attempt_id TEXT NOT NULL, decision TEXT NOT NULL)`)
+        yield* db.run(sql`CREATE TABLE session_v2_provider_recovery_bridge (resolution_id TEXT PRIMARY KEY, attempt_id TEXT NOT NULL, receipt_id TEXT NOT NULL, command_id TEXT NOT NULL)`)
+        yield* db.run(sql`CREATE TABLE session_input (id TEXT PRIMARY KEY, delivery TEXT NOT NULL, promoted_seq INTEGER)`)
+        yield* db.run(sql`CREATE TABLE session_v2_provider_turn_receipt (receipt_id TEXT PRIMARY KEY, state TEXT NOT NULL, provider_attempt_id TEXT, session_id TEXT NOT NULL, activity_id TEXT NOT NULL, provider_turn_seq INTEGER NOT NULL, request_input_hash TEXT NOT NULL, provider_id TEXT NOT NULL, owner_token TEXT NOT NULL)`)
+        yield* db.run(sql`CREATE TABLE deepagent_event_outbox (outbox_id TEXT PRIMARY KEY, status TEXT NOT NULL, claim_token TEXT, claimant_id TEXT, lease_expires_at INTEGER, published_at INTEGER)`)
+        yield* db.run(sql`CREATE TABLE deepagent_event_consumer (consumer_key TEXT PRIMARY KEY)`)
+        yield* db.run(sql`CREATE TABLE deepagent_event_consumer_delivery (outbox_id TEXT NOT NULL, consumer_key TEXT NOT NULL, status TEXT NOT NULL, claim_token TEXT, claimant_id TEXT, lease_expires_at INTEGER, resolved_at INTEGER, PRIMARY KEY(outbox_id, consumer_key))`)
+        yield* db.run(sql`CREATE TABLE event_sync_backfill (id INTEGER PRIMARY KEY, state TEXT NOT NULL, cursor_rowid INTEGER NOT NULL, high_water_rowid INTEGER NOT NULL, completed_at INTEGER)`)
+        yield* db.run(sql`CREATE TABLE event_sync_sequence (id INTEGER PRIMARY KEY, backfill_complete INTEGER NOT NULL)`)
+        yield* db.run(sql`INSERT INTO event_sync_backfill VALUES (1, 'complete', 0, 0, 1)`)
+        yield* db.run(sql`INSERT INTO event_sync_sequence VALUES (1, 1)`)
         const store = SessionProviderRecoveryDurable.makeDurableRecoveryStore(db)
         for (const descriptor of fiveClassDescriptors()) {
           yield* store.putDescriptor({
@@ -617,6 +644,7 @@ describe("V2ProviderTurn terminal descriptors (W2)", () => {
     session_id: "ses_1",
     activity_id: "act_1",
     provider_turn_seq: 3,
+    attempt_version: 4,
     provider_attempt_id: null,
     request_input_hash: H64("r"),
     owner_token: "owner_1",

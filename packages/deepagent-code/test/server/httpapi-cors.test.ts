@@ -4,7 +4,6 @@ import { describe, expect } from "bun:test"
 import { Config, ConfigProvider, Effect, Layer } from "effect"
 import { HttpClient, HttpClientRequest, HttpRouter, HttpServer } from "effect/unstable/http"
 import * as Socket from "effect/unstable/socket/Socket"
-import { Server } from "../../src/server/server"
 import { InstancePaths } from "../../src/server/routes/instance/httpapi/groups/instance"
 import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
 import { resetDatabase } from "../fixture/db"
@@ -86,20 +85,24 @@ describe("HttpApi CORS", () => {
 
   it.live("uses custom CORS origins passed to the server", () =>
     Effect.gen(function* () {
-      const listener = yield* Effect.acquireRelease(
-        Effect.promise(() => Server.listen({ hostname: "127.0.0.1", port: 0, cors: ["https://custom.example"] })),
-        (listener) => Effect.promise(() => listener.stop(true)),
-      )
-
+      const handler = HttpRouter.toWebHandler(
+        HttpApiApp.createRoutes({ cors: ["https://custom.example"] }).pipe(
+          Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DEEPAGENT_CODE_SERVER_PASSWORD: "secret" }))),
+        ),
+        { disableLogger: true },
+      ).handler
       const response = yield* Effect.promise(() =>
-        fetch(new URL(InstancePaths.path, listener.url), {
-          method: "OPTIONS",
-          headers: {
-            origin: "https://custom.example",
-            "access-control-request-method": "GET",
-            "access-control-request-headers": "authorization",
-          },
-        }),
+        handler(
+          new Request(new URL(InstancePaths.path, "http://localhost"), {
+            method: "OPTIONS",
+            headers: {
+              origin: "https://custom.example",
+              "access-control-request-method": "GET",
+              "access-control-request-headers": "authorization",
+            },
+          }),
+          HttpApiApp.context,
+        ),
       )
 
       expect(response.status).toBe(204)
@@ -107,14 +110,17 @@ describe("HttpApi CORS", () => {
       expect(response.headers.get("access-control-allow-headers")).toBe("authorization")
 
       const rejected = yield* Effect.promise(() =>
-        fetch(new URL(InstancePaths.path, listener.url), {
-          method: "OPTIONS",
-          headers: {
-            origin: "https://evil.example",
-            "access-control-request-method": "GET",
-            "access-control-request-headers": "authorization",
-          },
-        }),
+        handler(
+          new Request(new URL(InstancePaths.path, "http://localhost"), {
+            method: "OPTIONS",
+            headers: {
+              origin: "https://evil.example",
+              "access-control-request-method": "GET",
+              "access-control-request-headers": "authorization",
+            },
+          }),
+          HttpApiApp.context,
+        ),
       )
 
       expect(rejected.status).toBe(204)

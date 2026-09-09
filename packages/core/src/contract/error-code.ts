@@ -14,7 +14,7 @@ export const ErrorVersion = {
   retryability: 1,
   httpStatus: 1,
   category: 1,
-  registry: 1,
+  registry: 2,
 } as const
 
 /**
@@ -82,7 +82,7 @@ export const ErrorCodeEntry = Schema.Struct({
 export type ErrorCodeEntry = typeof ErrorCodeEntry.Type
 
 /**
- * The frozen seed registry (ErrorVersion.registry = 1).
+ * The frozen registry (ErrorVersion.registry = 2).
  * Codes are grouped by domain; each entry's classification is the single
  * authority for client/server retry + HTTP mapping behavior. Codes are
  * SEEDED from the frozen W1 contracts' typed errors and the design risk
@@ -110,6 +110,7 @@ export const ERROR_CODE_REGISTRY: readonly ErrorCodeEntry[] = [
   { code: "recovery_terminal_bridge_missing", category: "recovery", retryability: "not_retryable", httpStatus: 410, meaning: "Terminal bridge was not written; attempt is not settled." },
   { code: "recovery_command_hash_mismatch", category: "recovery", retryability: "not_retryable", httpStatus: 409, meaning: "A recovery command for the same attempt carried a different request hash." },
   { code: "recovery_active_descriptor_incomplete", category: "recovery", retryability: "indeterminate", httpStatus: 503, meaning: "A recovery descriptor is active but incomplete; coordination required." },
+  { code: "recovery_evidence_export_unavailable", category: "recovery", retryability: "not_retryable", httpStatus: 503, meaning: "Encrypted recovery evidence export is not available in this runtime." },
   { code: "model_protocol_compatible_fixed_by_default", category: "model_route", retryability: "not_retryable", httpStatus: 400, meaning: "Compatible models were fixed to Chat; explicit protocol selection required." },
   { code: "model_protocol_selection_required", category: "model_route", retryability: "not_retryable", httpStatus: 400, meaning: "Provider config lacks an explicit protocol/capability selection." },
   { code: "remote_compact_not_eligible", category: "model_route", retryability: "not_retryable", httpStatus: 400, meaning: "Remote compact requested on a non-Responses-capable route." },

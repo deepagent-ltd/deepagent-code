@@ -23,6 +23,7 @@ const permission = Layer.mock(PermissionV2.Service, {
 const runtime = Layer.succeed(
   ContextToolRuntime.Service,
   ContextToolRuntime.Service.of({
+    available: true,
     codeIntel: (input) =>
       Effect.sync(() => {
         calls.push({ tool: "code_intel", intent: input.request.intent, sessionID: input.sessionID })

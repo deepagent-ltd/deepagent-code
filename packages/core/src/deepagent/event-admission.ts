@@ -12,9 +12,11 @@ import {
 } from "../contract/event-envelope"
 import { EventWorkEnvelope as EnvelopePolicy } from "./event-work-envelope"
 import { DeepAgentEventAdmissionTable, type EventAdmissionStatus } from "./event-admission-sql"
-import { flipFlagValueOn } from "./flip-flag"
+import { RuntimeFeatures, type RuntimeFeatureRegistry } from "../flag/runtime-features"
 
-// C5-04 — V2 ADMISSION BRIDGE (default OFF). Design authority: docs/core-v2.0-beta/design.md
+export type { RuntimeFeatureRegistry } from "../flag/runtime-features"
+
+// C5-04 — V2 ADMISSION BRIDGE (default ON). Design authority: docs/core-v2.0-beta/design.md
 // §8.4 ("V2 admission receipt 绑定 envelope hash" — the admission receipt binds the bounded work
 // envelope hash) + §8.5 (event -> durable V2 work; each node is a durable SessionV2 admission) +
 // §8.7 (event turn runner must call SessionV2/SessionExecution, never legacy SessionPrompt.prompt).
@@ -32,24 +34,20 @@ import { flipFlagValueOn } from "./flip-flag"
 //       in-memory tool loop (AGENTS.md "V2 Session Core"). The actual SessionV2.prompt call is the
 //       caller-supplied `adapter`, so this module has no legacy-session dependency at all.
 //
-// DEFAULT OFF: the admission path is gated by a module-local typed switch (`isEventV2AdmissionEnabled`,
-// default OFF). The frozen capability catalog has no event-v2-admission runtime feature (C4 frozen — see
-// `RuntimeFeatures`/`DeepAgentCodeToolInventory.runtimeFeatures`), so per the wave manifest §2 this lane
-// uses the F3 shadow pattern: a module-local switch default OFF + a catalog-promotion item. Until the
-// feature is promoted + toggled ON, the legacy event turn path remains authoritative and unchanged.
+// DEFAULT ON: the manifest-derived RuntimeFeatures registry and every production composition share
+// this same default. An explicit `false`/`0` remains the fail-visible operational kill switch; behavior
+// must not depend on whether a caller happened to import the CLI/desktop entrypoint first.
 //
 // LAYERING: `core`. The envelope is the only model-facing input; the only session dependency is the
 // caller-injected `adapter` (SessionV2.prompt in production wiring). No legacy session import.
 
 type DatabaseClient = Database.Interface["db"]
 
-/** The typed feature switch for the V2 admission path. C7-05 ships it ON via the PRODUCTION
- * runtime entrypoints (packages/deepagent-code/src/index.ts sets the env); the predicate stays
- * explicit-env so isolated test/daemon contexts keep their own behavior. `=false`/`=0` restores
- * the legacy event turn path as the authority. */
+/** The typed feature switch for the V2 admission path. Unset is ON in every composition;
+ * `=false`/`=0` is the explicit operational kill switch. */
 export const EVENT_V2_ADMISSION_ENV = "DEEPAGENT_CODE_EVENT_V2_ADMISSION"
-export const isEventV2AdmissionEnabled = (): boolean =>
-  flipFlagValueOn(process.env[EVENT_V2_ADMISSION_ENV], false)
+export const isEventV2AdmissionEnabled = (features: RuntimeFeatureRegistry = RuntimeFeatures): boolean =>
+  features.enabled("event.v2.admission")
 
 /** Why an admission was refused. Fail-closed; each reason is a typed refusal. */
 export type AdmissionErrorReason =
@@ -179,6 +177,8 @@ export interface AdmitInput {
   /** The session adapter to perform the durable SessionV2 admission. */
   readonly adapter: SessionWorkAdapter
   readonly now: number
+  /** Startup-scoped feature snapshot; production uses the canonical process-start snapshot. */
+  readonly runtimeFeatures?: RuntimeFeatureRegistry
 }
 
 export type AdmitResult =
@@ -334,7 +334,7 @@ const recordStrategicRefusal = (
  */
 export function admit(db: DatabaseClient, input: AdmitInput): Effect.Effect<AdmitResult, EventAdmissionError> {
   return Effect.gen(function* () {
-    if (!isEventV2AdmissionEnabled()) {
+    if (!isEventV2AdmissionEnabled(input.runtimeFeatures)) {
       // W5 F3 — a strategic refusal is ALSO a refused receipt (the last attempt was refused: disabled).
       yield* recordStrategicRefusal(db, {
         envelope: input.envelope,

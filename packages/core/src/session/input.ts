@@ -510,5 +510,6 @@ const toMessage = (input: Admitted) =>
     files: input.prompt.files,
     agents: input.prompt.agents,
     references: input.prompt.references,
+    format: input.prompt.format,
     time: { created: input.timeCreated },
   })

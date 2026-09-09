@@ -304,15 +304,13 @@ export const runOneTick = (
       // A steer staged BEFORE a pause is NOT stamped consumed (the tick that would absorb it never ran),
       // so it stays pending and is re-drained on resume — no guidance is lost across a pause. A plan edit
       // enqueued during pause likewise stays pending and is applied on the first post-resume iteration.
-      yield* Effect.promise(() =>
-        DeepAgentLearningLifecycleTrigger.notify({
-          trigger: "pause",
-          boundaryKey: `goal-pause:${input.handle.goalId}`,
-          sessionID: input.handle.sessionId,
-          match: "parent",
-          goalID: input.handle.goalId,
-        }),
-      ).pipe(Effect.ignore)
+      yield* DeepAgentLearningLifecycleTrigger.notify({
+        trigger: "pause",
+        boundaryKey: `goal-pause:${input.handle.goalId}`,
+        sessionID: input.handle.sessionId,
+        match: "parent",
+        goalID: input.handle.goalId,
+      }).pipe(Effect.ignore)
       return { outcome: "continue", progress: "paused" }
     }
 

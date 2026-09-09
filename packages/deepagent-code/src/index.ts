@@ -45,15 +45,11 @@ import { Heap } from "./cli/heap"
 import { ensureProcessMetadata } from "@deepagent-code/core/util/deepagent-code-process"
 import { isRecord } from "@/util/record"
 import { applyRuntimeDefaults, RUNTIME_DEFAULTS_SNAPSHOT_ENV, runtimeDefaultsEnvSnapshot } from "./runtime-defaults"
+import { ProcessLifecycle } from "./effect/process-lifecycle"
 
-// W0.1 — the production runtime defaults (V2 event admission / IM single-write / Core V2 execution
-// owner / four-graph federation) are applied straight after this entry's static imports evaluate,
-// before any RuntimeFlags or event reader below can run, and before yargs.parse() reaches the
-// middleware. The desktop sidecar (src/node.ts) applies the same single call, so the two entries
-// cannot diverge; default values live in one module only (src/runtime-defaults.ts). This placement
-// is safe today because no module in this import graph reads these envs during evaluation — any
-// future evaluation-time read after this point would silently see the unset (legacy-OFF) value and
-// must go through RuntimeFlags/event readers instead.
+// Normalize the environment inherited by subprocesses and compatibility readers. Core V2 feature
+// registries capture their own immutable value at construction; their canonical unset defaults are
+// identical to this table, so static ESM evaluation order cannot change feature authority.
 applyRuntimeDefaults()
 
 if (process.env[RUNTIME_DEFAULTS_SNAPSHOT_ENV] === "1") {
@@ -200,7 +196,7 @@ const cli = yargs(args)
       cli.showHelp(show)
     }
     if (err) throw err
-    process.exit(1)
+    process.exitCode = 1
   })
   .strict()
 
@@ -255,9 +251,20 @@ try {
   }
   process.exitCode = 1
 } finally {
-  // Some subprocesses don't react properly to SIGTERM and similar signals.
-  // Most notably, some docker-container-based MCP servers don't handle such signals unless
-  // run using `docker run --init`.
-  // Explicitly exit to avoid any hanging subprocesses.
+  const { AppRuntime } = await import("./effect/app-runtime")
+  const cleanup = await Promise.race([
+    Promise.allSettled([AppRuntime.dispose(), ProcessLifecycle.disposeAll()]),
+    Bun.sleep(2_000).then(() => undefined),
+  ])
+  if (cleanup) {
+    cleanup
+      .flatMap((result) => (result.status === "rejected" ? [result.reason] : []))
+      .forEach((error) => Log.Default.error("process resource cleanup failed", { error: errorMessage(error) }))
+  } else {
+    Log.Default.warn("process resource cleanup exceeded shutdown budget", { budgetMs: 2_000 })
+  }
+  Heap.stop()
+  // Some external subprocesses do not react to scope interruption. Exit only after the application
+  // runtime has had a bounded opportunity to run every registered finalizer.
   process.exit()
 }

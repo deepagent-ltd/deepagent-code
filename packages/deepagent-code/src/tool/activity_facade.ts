@@ -12,6 +12,7 @@
  * are read-only and never ask. Visibility: gated by DEEPAGENT_CODE_ACTIVITY_FACADE (staged off)
  * and primary-agent-only in the registry projection (mirrors pr_finalize).
  */
+import { readonlySet } from "@deepagent-code/core/util/readonly-collections"
 import { Effect, Schema } from "effect"
 import * as Tool from "./tool"
 import { FacadeActivity } from "@/session/facade-activity"
@@ -284,9 +285,9 @@ export const ActivityControlTool = Tool.define(
 )
 
 /** Tool ids registered under the activity facade gate (used by the registry's primary-only filter). */
-export const ACTIVITY_FACADE_TOOL_IDS: ReadonlySet<string> = new Set([
+export const ACTIVITY_FACADE_TOOL_IDS = readonlySet<string>(new Set([
   ActivityStartTool.id,
   ActivityStatusTool.id,
   ActivityResultTool.id,
   ActivityControlTool.id,
-])
+]))

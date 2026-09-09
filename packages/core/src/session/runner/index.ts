@@ -15,6 +15,7 @@ import type { AdmissionError } from "./canonical-turn"
 import type { Error as V2ProviderTurnError } from "./v2-provider-turn"
 import type { RecoveryRequiredError } from "./v2-tool-effect"
 import type { NotFoundError } from "../../agent"
+import type { RuntimeInterface } from "../../agent-gateway"
 
 /** W7 — settle hook input. `activityId` is the durable activity that just settled; it is absent
  * when the drain ran without dispatching any provider turn (e.g. an early no-op wake). */
@@ -28,7 +29,7 @@ export type OnSessionSettledInput = {
  * tail. Unwired (`undefined` default) = no-op; the deepagent-code composition injects the
  * durable-learning admission implementation. */
 export const CurrentOnSessionSettled = Context.Reference<
-  ((input: OnSessionSettledInput) => Effect.Effect<void>) | undefined
+  ((input: OnSessionSettledInput, runtime: RuntimeInterface) => Effect.Effect<void>) | undefined
 >("@deepagent-code/v2/SessionRunner/OnSessionSettled", { defaultValue: () => undefined })
 
 // W2-V2 seam: the plan gate (understand→plan→execute discipline) lives in the deepagent-code
@@ -45,21 +46,6 @@ export type ToolSettleGateDecision = { kind: "pass"; reminder?: string } | { kin
 export const CurrentToolSettleGate = Context.Reference<
   ((input: ToolSettleGateInput) => Effect.Effect<ToolSettleGateDecision>) | undefined
 >("@deepagent-code/v2/SessionRunner/ToolSettleGate", { defaultValue: () => undefined })
-
-// Module-level registrar (the learning-runtime reviewer-factory pattern): the runner tree builds
-// inside per-location layer scopes where outer graph provides do not reliably flow (run-mode
-// evidence: the httpapi-root Reference provide never reached the runner's layer build). A host
-// registers the gate implementation at composition build; the runner reads it at SETTLE time —
-// immune to layer scoping.
-type ToolSettleGateFn = (input: ToolSettleGateInput) => Effect.Effect<ToolSettleGateDecision>
-const gateRegistry = new Map<symbol, ToolSettleGateFn>()
-export const registerToolSettleGate = (fn: ToolSettleGateFn) => {
-  const token = Symbol("v2-tool-settle-gate")
-  gateRegistry.set(token, fn)
-  return () => gateRegistry.delete(token)
-}
-export const currentToolSettleGate = (): ToolSettleGateFn | undefined =>
-  [...gateRegistry.values()].toReversed()[0]
 
 // R3 — the message carries the diagnosis (TaggedErrorClass otherwise renders an empty message
 // on every log/SSE surface that prints `error.message`).

@@ -41,7 +41,12 @@ const GOAL_MANAGER: Requirement = { kind: "reach", pathSuffix: AUTHORITY.GOAL_MA
 const LEGACY_CANONICALIZER: Requirement = { kind: "reach", pathSuffix: AUTHORITY.LEGACY_CANONICALIZER }
 const LEGACY_PROVIDER_RESOLUTION: Requirement = { kind: "reach", pathSuffix: AUTHORITY.LEGACY_PROVIDER_RESOLUTION }
 const LEGACY_SESSION_CORE: Requirement = { kind: "reach", pathSuffix: AUTHORITY.LEGACY_SESSION_CORE }
-const INSTANCE_STATE: Requirement = { kind: "reach", pathSuffix: "packages/deepagent-code/src/effect/instance-state.ts" }
+const V2_SESSION_CORE: Requirement = { kind: "reach", pathSuffix: AUTHORITY.V2_SESSION_CORE }
+const V2_SESSION_RUNTIME: Requirement = { kind: "reach", pathSuffix: AUTHORITY.V2_SESSION_RUNTIME }
+const INSTANCE_STATE: Requirement = {
+  kind: "reach",
+  pathSuffix: "packages/deepagent-code/src/effect/instance-state.ts",
+}
 
 const AUTHORITY_WRITERS: readonly string[] = [
   AUTHORITY.LEGACY_PROMPT,
@@ -91,6 +96,9 @@ function all7(claim: VerdictRule): EntryRules {
 function legacyAll7(requirements: readonly Requirement[]): EntryRules {
   return all7(legacy(requirements))
 }
+function v2All7(requirements: readonly Requirement[]): EntryRules {
+  return all7(v2(requirements))
+}
 
 const READ_ONLY_NOBODY_REQS: readonly Requirement[] = [
   notBody("promptSvc.promptOrSteer"),
@@ -119,10 +127,6 @@ function readOnlyNoBody(readReach: string = "packages/deepagent-code/src/effect/
   // instance/workspace context reader all instance HTTP handlers use), never a self-reach.
   return all7(readOnly([{ kind: "reach" as const, pathSuffix: readReach }, ...READ_ONLY_NOBODY_REQS]))
 }
-function readOnlyNoReach(): EntryRules {
-  return all7(readOnly(AUTHORITY_WRITERS.map(noReachPath)))
-}
-
 /** Same verdict on owned dims; EVERY other dimension read_only via the given requirements. */
 function withReadOnlyRest(
   owned: Readonly<Partial<Record<Dimension, VerdictRule>>>,
@@ -153,7 +157,11 @@ const EVENT_CONSUMER_READONLY: readonly Requirement[] = [
   // guarded a non-writer and was unsound by construction; the writer noReach guards above remain.
 ]
 
-const LEGACY_READONLY_REST: readonly Requirement[] = [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")]
+const LEGACY_READONLY_REST: readonly Requirement[] = [
+  notBody("promptSvc.promptOrSteer"),
+  notBody("SessionV2.prompt"),
+  notBody("events.publish"),
+]
 
 export const RULE_PACKS: readonly RulePack[] = [
   // ===========================================================================
@@ -171,39 +179,104 @@ export const RULE_PACKS: readonly RulePack[] = [
   // ===========================================================================
   {
     match: (id) => id === "provider.model-catalog-parse",
-    rules: withReadOnlyRest({}, [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish"), notBody("EventV2.Cursor")], "packages/core/src/model.ts"),
+    rules: withReadOnlyRest(
+      {},
+      [
+        notBody("promptSvc.promptOrSteer"),
+        notBody("SessionV2.prompt"),
+        notBody("events.publish"),
+        notBody("EventV2.Cursor"),
+      ],
+      "packages/core/src/model.ts",
+    ),
   },
   {
     match: (id) => id === "provider.provider-v2-schema",
-    rules: withReadOnlyRest({}, [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish"), notBody("EventV2.Cursor")], "packages/core/src/provider.ts"),
+    rules: withReadOnlyRest(
+      {},
+      [
+        notBody("promptSvc.promptOrSteer"),
+        notBody("SessionV2.prompt"),
+        notBody("events.publish"),
+        notBody("EventV2.Cursor"),
+      ],
+      "packages/core/src/provider.ts",
+    ),
   },
   {
     match: (id) => id === "provider.model-request-resolver",
-    rules: withReadOnlyRest({}, [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish"), notBody("EventV2.Cursor")], "packages/core/src/model-request.ts"),
+    rules: withReadOnlyRest(
+      {},
+      [
+        notBody("promptSvc.promptOrSteer"),
+        notBody("SessionV2.prompt"),
+        notBody("events.publish"),
+        notBody("EventV2.Cursor"),
+      ],
+      "packages/core/src/model-request.ts",
+    ),
   },
   {
     match: (id) => id === "event.deepagent-bus",
-    rules: withReadOnlyRest({ event_producer_consumer: v2([V2_EVENT_BUS]) }, EVENT_CONSUMER_READONLY, "packages/core/src/deepagent/deepagent-event-bus.ts"),
+    rules: withReadOnlyRest(
+      { event_producer_consumer: v2([V2_EVENT_BUS]) },
+      EVENT_CONSUMER_READONLY,
+      "packages/core/src/deepagent/deepagent-event-bus.ts",
+    ),
   },
   {
     match: (id) => id === "event.event-router",
-    rules: withReadOnlyRest({ event_producer_consumer: v2([V2_EVENT_ROUTER]) }, EVENT_CONSUMER_READONLY, "packages/core/src/deepagent/event-router.ts"),
+    rules: withReadOnlyRest(
+      { event_producer_consumer: v2([V2_EVENT_ROUTER]) },
+      EVENT_CONSUMER_READONLY,
+      "packages/core/src/deepagent/event-router.ts",
+    ),
   },
   {
     match: (id) => id === "event.goal-tick-consumer",
-    rules: withReadOnlyRest({ event_producer_consumer: v2([V2_EVENT_BUS]) }, EVENT_CONSUMER_READONLY, "packages/deepagent-code/src/session/goal-tick-consumer.ts"),
+    rules: withReadOnlyRest(
+      { event_producer_consumer: v2([V2_EVENT_BUS]) },
+      EVENT_CONSUMER_READONLY,
+      "packages/deepagent-code/src/session/goal-tick-consumer.ts",
+    ),
   },
   {
     match: (id) => id === "event.panel-convene-consumer",
-    rules: withReadOnlyRest({ event_producer_consumer: v2([V2_EVENT_BUS]) }, EVENT_CONSUMER_READONLY, "packages/deepagent-code/src/panel/panel-convene-consumer.ts"),
+    rules: withReadOnlyRest(
+      { event_producer_consumer: v2([V2_EVENT_BUS]) },
+      EVENT_CONSUMER_READONLY,
+      "packages/deepagent-code/src/panel/panel-convene-consumer.ts",
+    ),
   },
   {
     match: (id) => id === "recovery.session-execution-restart",
-    rules: withReadOnlyRest({ recovery_owner: v2([{ kind: "reach", pathSuffix: AUTHORITY.V2_EXECUTION_RESTART }]) }, [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish"), notBody("EventV2.Cursor")], "packages/core/src/session/execution/restart.ts"),
+    rules: withReadOnlyRest(
+      { recovery_owner: v2([{ kind: "reach", pathSuffix: AUTHORITY.V2_EXECUTION_RESTART }]) },
+      [
+        notBody("promptSvc.promptOrSteer"),
+        notBody("SessionV2.prompt"),
+        notBody("events.publish"),
+        notBody("EventV2.Cursor"),
+      ],
+      "packages/core/src/session/execution/restart.ts",
+    ),
   },
   {
     match: (id) => id === "recovery.provider-owner-runtime",
-    rules: withReadOnlyRest({ recovery_owner: adapter([{ kind: "reach", pathSuffix: "packages/deepagent-code/src/context-federation/provider-owner-runtime.ts" }]) }, [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish"), notBody("EventV2.Cursor")], "packages/deepagent-code/src/context-federation/provider-owner-runtime.ts"),
+    rules: withReadOnlyRest(
+      {
+        recovery_owner: adapter([
+          { kind: "reach", pathSuffix: "packages/deepagent-code/src/context-federation/provider-owner-runtime.ts" },
+        ]),
+      },
+      [
+        notBody("promptSvc.promptOrSteer"),
+        notBody("SessionV2.prompt"),
+        notBody("events.publish"),
+        notBody("EventV2.Cursor"),
+      ],
+      "packages/deepagent-code/src/context-federation/provider-owner-runtime.ts",
+    ),
   },
 
   // ---- C6 API surfaces (capability/context/maintenance/system-context groups): instance-plane
@@ -225,7 +298,20 @@ export const RULE_PACKS: readonly RulePack[] = [
   {
     match: (id) =>
       id.startsWith("http.instance.session.") &&
-      ["prompt", "promptAsync", "promptPrepare", "promptPrepareStream", "promptSuggestion", "command", "shell", "abort", "summarize", "init", "contextAttemptResolve", "continuationResolutionResolve"].includes(id.slice("http.instance.session.".length)),
+      [
+        "prompt",
+        "promptAsync",
+        "promptPrepare",
+        "promptPrepareStream",
+        "promptSuggestion",
+        "command",
+        "shell",
+        "abort",
+        "summarize",
+        "init",
+        "contextAttemptResolve",
+        "continuationResolutionResolve",
+      ].includes(id.slice("http.instance.session.".length)),
     rules: legacyAll7([LEGACY_PROMPT, body("promptSvc")]),
   },
   // ---- session create/fork (legacy Session session-lifecycle writers) ----
@@ -240,11 +326,40 @@ export const RULE_PACKS: readonly RulePack[] = [
   {
     match: (id) =>
       id.startsWith("http.instance.session.") &&
-      ["get", "list", "status", "messages", "message", "plan", "diff", "todo", "exportSnapshot", "importSnapshot", "remove", "revert", "unrevert", "share", "unshare", "update", "deleteMessage", "deletePart", "updatePart", "permissionRespond", "contextCohort", "contextDiagnostics", "continuationResolutionList", "diffArtifactFile", "diffArtifactMaintenance", "diffArtifactManifest", "children"].includes(id.slice("http.instance.session.".length)),
+      [
+        "get",
+        "list",
+        "status",
+        "messages",
+        "message",
+        "plan",
+        "diff",
+        "todo",
+        "exportSnapshot",
+        "importSnapshot",
+        "remove",
+        "revert",
+        "unrevert",
+        "share",
+        "unshare",
+        "update",
+        "deleteMessage",
+        "deletePart",
+        "updatePart",
+        "permissionRespond",
+        "contextCohort",
+        "contextDiagnostics",
+        "continuationResolutionList",
+        "diffArtifactFile",
+        "diffArtifactMaintenance",
+        "diffArtifactManifest",
+        "children",
+      ].includes(id.slice("http.instance.session.".length)),
     rules: readOnlyNoBody(),
   },
   {
-    match: (id) => id === "http.instance.session.providerResolutionResolve" || id === "http.instance.session.providerResolutionList",
+    match: (id) =>
+      id === "http.instance.session.providerResolutionResolve" || id === "http.instance.session.providerResolutionList",
     rules: withReadOnlyRest(
       { provider_tool_writer: legacy([LEGACY_PROVIDER_RESOLUTION, body("providerResolutionSvc")]) },
       [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")],
@@ -255,7 +370,9 @@ export const RULE_PACKS: readonly RulePack[] = [
   {
     match: (id) =>
       id.startsWith("http.instance.deepagent.") &&
-      ["goalEditPlan", "goalPause", "goalResume", "goalStart", "goalStop"].includes(id.slice("http.instance.deepagent.".length)),
+      ["goalEditPlan", "goalPause", "goalResume", "goalStart", "goalStop"].includes(
+        id.slice("http.instance.deepagent.".length),
+      ),
     rules: legacyAll7([LEGACY_PROMPT, body("experimentalGoalLoop")]),
   },
   {
@@ -269,7 +386,9 @@ export const RULE_PACKS: readonly RulePack[] = [
   {
     match: (id) =>
       id.startsWith("http.instance.deepagent.") &&
-      ["knowledgeRejectIds", "knowledgeReleaseBaseline", "knowledgeShipGate"].includes(id.slice("http.instance.deepagent.".length)),
+      ["knowledgeRejectIds", "knowledgeReleaseBaseline", "knowledgeShipGate"].includes(
+        id.slice("http.instance.deepagent.".length),
+      ),
     rules: legacyAll7([LEGACY_PROMPT, body("AgentGateway.DeepAgentKnowledgeSource")]),
   },
   {
@@ -287,7 +406,25 @@ export const RULE_PACKS: readonly RulePack[] = [
   {
     match: (id) =>
       id.startsWith("http.instance.deepagent.") &&
-      ["goalStartable", "goalStatus", "envFacts", "envFactsDecide", "envFactsModify", "knowledgeApprove", "knowledgePending", "knowledgeReviewSummary", "promote", "reject", "reviews", "wikiEdit", "wikiExecutionArchive", "wikiPage", "wikiPages", "wikiSearch", "queuedInputs"].includes(id.slice("http.instance.deepagent.".length)),
+      [
+        "goalStartable",
+        "goalStatus",
+        "envFacts",
+        "envFactsDecide",
+        "envFactsModify",
+        "knowledgeApprove",
+        "knowledgePending",
+        "knowledgeReviewSummary",
+        "promote",
+        "reject",
+        "reviews",
+        "wikiEdit",
+        "wikiExecutionArchive",
+        "wikiPage",
+        "wikiPages",
+        "wikiSearch",
+        "queuedInputs",
+      ].includes(id.slice("http.instance.deepagent.".length)),
     rules: readOnlyNoBody(),
   },
 
@@ -327,11 +464,13 @@ export const RULE_PACKS: readonly RulePack[] = [
 
   // ---- tui ----
   {
-    match: (id) => id.startsWith("http.instance.tui.") && id !== "http.instance.tui.controlNext" && id !== "http.instance.tui.controlResponse",
+    match: (id) => id.startsWith("http.instance.tui."),
     rules: legacyAll7([LEGACY_PROMPT, body("events.publish")]),
   },
   {
-    match: (id) => id === "http.instance.tui.controlNext" || id === "http.instance.tui.controlResponse" || id === "http.instance.im.createGroup" || id === "http.instance.im-websocket.connect",
+    match: (id) =>
+      id === "http.instance.im.createGroup" ||
+      id === "http.instance.im-websocket.connect",
     rules: readOnlyNoBody(),
   },
 
@@ -345,7 +484,16 @@ export const RULE_PACKS: readonly RulePack[] = [
   {
     match: (id) =>
       id.startsWith("http.instance.sync.") &&
-      ["artifacts", "checkpointCompact", "checkpointDiscard", "checkpointFinalize", "checkpointPrepare", "checkpointStage", "fileArtifacts", "snapshotRows"].includes(id.slice("http.instance.sync.".length)),
+      [
+        "artifacts",
+        "checkpointCompact",
+        "checkpointDiscard",
+        "checkpointFinalize",
+        "checkpointPrepare",
+        "checkpointStage",
+        "fileArtifacts",
+        "snapshotRows",
+      ].includes(id.slice("http.instance.sync.".length)),
     rules: withReadOnlyRest(
       {
         event_producer_consumer: v2([PROJECTOR, body("EventV2")]),
@@ -371,24 +519,29 @@ export const RULE_PACKS: readonly RulePack[] = [
     ),
   },
 
-  // ---- event subscribe (legacy event-plane consumer, no handler body) ----
+  // ---- event subscribe ----
   {
     match: (id) => id === "http.instance.event.subscribe",
     rules: legacyAll7([LEGACY_PROMPT]),
   },
   {
     match: (id) => id === "http.server.server.event.event.subscribe",
-    rules: legacyAll7([LEGACY_SESSION_CORE]),
+    rules: all7(readOnly([{ kind: "reach", pathSuffix: "packages/core/src/event.ts" }, body("events.all")])),
   },
 
-  // ---- legacy server session/message planes (old packages/server path: drives the CORE
-  // Session service, a legacy authority, and the old server session operations) ----
+  // ---- Core V2 server session control operations ----
   {
     match: (id) =>
-      id.startsWith("http.server.server.session.") ||
-      id === "http.server.server.message.session.messages" ||
-      id === "http.server.server.event.event.subscribe",
-    rules: legacyAll7([LEGACY_SESSION_CORE]),
+      id === "http.server.server.session.session.create" ||
+      id === "http.server.server.session.session.prompt" ||
+      id === "http.server.server.session.session.compact" ||
+      id === "http.server.server.session.session.wait",
+    rules: v2All7([V2_SESSION_CORE]),
+  },
+  // Query/tail operations consume the V2 projection and EventV2 journal but do not own a write.
+  {
+    match: (id) => id === "http.server.server.message.session.messages" || id.startsWith("http.server.server.session."),
+    rules: readOnlyNoBody(AUTHORITY.V2_SESSION_CORE),
   },
 
   // ---- server read-only catalog / provider / skill ----
@@ -403,24 +556,36 @@ export const RULE_PACKS: readonly RulePack[] = [
   // model/catalog/session-schema modules (a genuine reader), never the instance middleware.
   {
     match: (id) =>
-      id.startsWith("http.server.server.fs.") || id.startsWith("http.server.server.health.") ||
-      id.startsWith("http.server.server.permission.") || id.startsWith("http.server.server.question.") ||
-      id.startsWith("http.server.server.command.") || id.startsWith("http.server.server.agent."),
+      id.startsWith("http.server.server.fs.") ||
+      id.startsWith("http.server.server.health.") ||
+      id.startsWith("http.server.server.permission.") ||
+      id.startsWith("http.server.server.question.") ||
+      id.startsWith("http.server.server.command.") ||
+      id.startsWith("http.server.server.agent."),
     rules: readOnlyNoBody("packages/core/src/session/schema.ts"),
   },
 
   // ---- HTTP infra read-only groups ----
   {
     match: (id) =>
-      id.startsWith("http.instance.config.") || id.startsWith("http.instance.control.") ||
-      id.startsWith("http.instance.debug.") || id.startsWith("http.instance.file.") ||
-      id.startsWith("http.instance.mcp.") || id.startsWith("http.instance.pty.") ||
-      id.startsWith("http.instance.pty-connect.") || id.startsWith("http.instance.question.") ||
-      id.startsWith("http.instance.reference.") || id.startsWith("http.instance.permission.") ||
-      id.startsWith("http.instance.oversight.") || id.startsWith("http.instance.profile.") ||
-      id.startsWith("http.instance.project.") || id.startsWith("http.instance.projectCopy.") ||
-      id.startsWith("http.instance.workspace.") || id.startsWith("http.instance.workspaceConfig.") ||
-      id.startsWith("http.instance.instance.") || id.startsWith("http.instance.experimental.") ||
+      id.startsWith("http.instance.config.") ||
+      id.startsWith("http.instance.control.") ||
+      id.startsWith("http.instance.debug.") ||
+      id.startsWith("http.instance.file.") ||
+      id.startsWith("http.instance.mcp.") ||
+      id.startsWith("http.instance.pty.") ||
+      id.startsWith("http.instance.pty-connect.") ||
+      id.startsWith("http.instance.question.") ||
+      id.startsWith("http.instance.reference.") ||
+      id.startsWith("http.instance.permission.") ||
+      id.startsWith("http.instance.oversight.") ||
+      id.startsWith("http.instance.profile.") ||
+      id.startsWith("http.instance.project.") ||
+      id.startsWith("http.instance.projectCopy.") ||
+      id.startsWith("http.instance.workspace.") ||
+      id.startsWith("http.instance.workspaceConfig.") ||
+      id.startsWith("http.instance.instance.") ||
+      id.startsWith("http.instance.experimental.") ||
       id.startsWith("http.instance.provider."),
     rules: readOnlyNoBody(),
   },
@@ -446,13 +611,45 @@ export const RULE_PACKS: readonly RulePack[] = [
   // ===========================================================================
   {
     match: (id) =>
-      id === "composition.app-runtime-layers" || id === "composition.dacode-cli-entry" ||
+      id === "composition.app-runtime-layers" ||
+      id === "composition.dacode-cli-entry" ||
       id === "composition.instance-httpapi-stack",
     rules: legacyAll7([LEGACY_PROMPT]),
   },
   {
     match: (id) => id === "composition.server-web-handler" || id === "composition.lildax-runtime",
-    rules: legacyAll7([LEGACY_SESSION_CORE]),
+    rules: v2All7([V2_SESSION_RUNTIME]),
+  },
+  {
+    // The public SDK launcher spawns the formal deepagent-code process. Keep that
+    // library entrypoint in the denominator because every embedded integration can
+    // otherwise bypass the process-root inventory.
+    match: (id) => id === "composition.sdk-server-launcher",
+    rules: legacyAll7([{ kind: "reach", pathSuffix: "packages/sdk/js/src/server.ts" }]),
+  },
+  {
+    // Slack launches the packaged product but its own authority path is exclusively
+    // the Core V2 create/admit/wait/projection SDK surface. Keep all four calls in the
+    // proof so a future fallback to client.session.* cannot inherit a V2 verdict.
+    match: (id) => id === "composition.slack-bot",
+    rules: v2All7([
+      { kind: "callChain", fileSuffix: "packages/slack/src/index.ts", chain: "deepagentCode.client.v2.session.create" },
+      { kind: "callChain", fileSuffix: "packages/slack/src/index.ts", chain: "deepagentCode.client.v2.session.prompt" },
+      { kind: "callChain", fileSuffix: "packages/slack/src/index.ts", chain: "deepagentCode.client.v2.session.wait" },
+      {
+        kind: "callChain",
+        fileSuffix: "packages/slack/src/index.ts",
+        chain: "deepagentCode.client.v2.session.messages",
+      },
+    ]),
+  },
+  {
+    // The share backend stores/streams published artifacts but does not admit or execute an
+    // agent Session. The positive reach to its filesystem ShareStore proves what it actually
+    // reads/writes; absence of the seven DeepAgent authority modules is only supporting evidence,
+    // never the sole reason for a read_only verdict.
+    match: (id) => id === "composition.share-backend",
+    rules: readOnlyNoBody("packages/function/src/store.ts"),
   },
 
   // lildax CLI commands run inside the lildax Handlers runtime which provides the legacy server
@@ -460,7 +657,7 @@ export const RULE_PACKS: readonly RulePack[] = [
   // drive the legacy server, so they are legacy.
   {
     match: (id) => id.startsWith("cli.lildax."),
-    rules: legacyAll7([{ kind: "reach", pathSuffix: "packages/server/src/routes.ts" }]),
+    rules: v2All7([{ kind: "reach", pathSuffix: "packages/server/src/routes.ts" }, V2_SESSION_RUNTIME]),
   },
   // Panel / IM orchestration components (panel.orchestrator/arbiter, im.agent-orchestrator,
   // im.agent-reply-sink) resolve their authority through dynamic dispatch / DI to a receiver that
@@ -469,8 +666,11 @@ export const RULE_PACKS: readonly RulePack[] = [
 
   {
     match: (id) =>
-      id === "task.goal-manager" || id === "task.goal-loop-wiring" ||
-      id === "background.job" || id === "panel.consult" || id === "panel.panelist-runner",
+      id === "task.goal-manager" ||
+      id === "task.goal-loop-wiring" ||
+      id === "background.job" ||
+      id === "panel.consult" ||
+      id === "panel.panelist-runner",
     rules: legacyAll7([LEGACY_PROMPT]),
   },
   {
@@ -488,7 +688,11 @@ export const RULE_PACKS: readonly RulePack[] = [
   // IM server-side pipeline (legacy SessionPrompt)
   // ===========================================================================
   {
-    match: (id) => id === "im.agent-executor" || id === "im.agent-progress-stream" || id === "im.agent-orchestrator" || id === "im.agent-reply-sink",
+    match: (id) =>
+      id === "im.agent-executor" ||
+      id === "im.agent-progress-stream" ||
+      id === "im.agent-orchestrator" ||
+      id === "im.agent-reply-sink",
     rules: legacyAll7([LEGACY_PROMPT]),
   },
 
@@ -497,23 +701,46 @@ export const RULE_PACKS: readonly RulePack[] = [
   // ===========================================================================
   {
     match: (id) => id === "event.deepagent-bus",
-    rules: withReadOnlyRest({ event_producer_consumer: v2([V2_EVENT_BUS]) }, EVENT_CONSUMER_READONLY, "packages/core/src/event.ts"),
+    rules: withReadOnlyRest(
+      { event_producer_consumer: v2([V2_EVENT_BUS]) },
+      EVENT_CONSUMER_READONLY,
+      "packages/core/src/event.ts",
+    ),
   },
   {
     match: (id) => id === "event.event-router",
-    rules: withReadOnlyRest({ event_producer_consumer: v2([V2_EVENT_ROUTER]) }, EVENT_CONSUMER_READONLY, "packages/core/src/event.ts"),
+    rules: withReadOnlyRest(
+      { event_producer_consumer: v2([V2_EVENT_ROUTER]) },
+      EVENT_CONSUMER_READONLY,
+      "packages/core/src/event.ts",
+    ),
   },
   {
-    match: (id) => id === "event.goal-tick-consumer" || id === "event.panel-convene-consumer" || id === "event.wiki-event-driven-archiver",
-    rules: withReadOnlyRest({ event_producer_consumer: v2([V2_EVENT_BUS]) }, EVENT_CONSUMER_READONLY, "packages/core/src/event.ts"),
+    match: (id) =>
+      id === "event.goal-tick-consumer" ||
+      id === "event.panel-convene-consumer" ||
+      id === "event.wiki-event-driven-archiver",
+    rules: withReadOnlyRest(
+      { event_producer_consumer: v2([V2_EVENT_BUS]) },
+      EVENT_CONSUMER_READONLY,
+      "packages/core/src/event.ts",
+    ),
   },
   {
     match: (id) => id === "event.legacy-canonicalizer-daemon",
-    rules: withReadOnlyRest({ event_producer_consumer: adapter([LEGACY_CANONICALIZER]) }, EVENT_CONSUMER_READONLY, "packages/core/src/event.ts"),
+    rules: withReadOnlyRest(
+      { event_producer_consumer: adapter([LEGACY_CANONICALIZER]) },
+      EVENT_CONSUMER_READONLY,
+      "packages/core/src/event.ts",
+    ),
   },
   {
     match: (id) => id === "event.v2-bridge",
-    rules: withReadOnlyRest({}, [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")], "packages/core/src/event.ts"),
+    rules: withReadOnlyRest(
+      {},
+      [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")],
+      "packages/core/src/event.ts",
+    ),
   },
 
   // Desktop / lildax lifecycle entry points are spawner/sidecar launchers whose authority receiver
@@ -549,18 +776,38 @@ export const RULE_PACKS: readonly RulePack[] = [
   },
   {
     match: (id) => id === "recovery.database-binding",
-    rules: withReadOnlyRest({ recovery_owner: readOnly([RECOVERY_BINDING]) }, [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")], "packages/core/src/database/recovery-binding.ts"),
+    rules: withReadOnlyRest(
+      { recovery_owner: readOnly([RECOVERY_BINDING]) },
+      [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")],
+      "packages/core/src/database/recovery-binding.ts",
+    ),
   },
   {
     match: (id) => id === "recovery.session-execution-restart",
-    rules: withReadOnlyRest({ recovery_owner: v2([{ kind: "reach", pathSuffix: AUTHORITY.V2_EXECUTION_RESTART }]) }, [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")], "packages/core/src/session/execution/local.ts"),
+    rules: withReadOnlyRest(
+      { recovery_owner: v2([{ kind: "reach", pathSuffix: AUTHORITY.V2_EXECUTION_RESTART }]) },
+      [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")],
+      "packages/core/src/session/execution/local.ts",
+    ),
   },
   {
     match: (id) => id === "recovery.task-recovery-tool",
-    rules: withReadOnlyRest({ recovery_owner: legacy([{ kind: "reach", pathSuffix: "packages/deepagent-code/src/tool/task_recovery.ts" }]) }, [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")], "packages/deepagent-code/src/tool/task.ts"),
+    rules: withReadOnlyRest(
+      { recovery_owner: legacy([{ kind: "reach", pathSuffix: "packages/deepagent-code/src/tool/task_recovery.ts" }]) },
+      [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")],
+      "packages/deepagent-code/src/tool/task.ts",
+    ),
   },
   {
     match: (id) => id === "recovery.provider-owner-runtime",
-    rules: withReadOnlyRest({ recovery_owner: adapter([{ kind: "reach", pathSuffix: "packages/deepagent-code/src/context-federation/provider-owner-runtime.ts" }]) }, [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")], "packages/deepagent-code/src/context-federation/query-authorization.ts"),
+    rules: withReadOnlyRest(
+      {
+        recovery_owner: adapter([
+          { kind: "reach", pathSuffix: "packages/deepagent-code/src/context-federation/provider-owner-runtime.ts" },
+        ]),
+      },
+      [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")],
+      "packages/deepagent-code/src/context-federation/query-authorization.ts",
+    ),
   },
-];
+]

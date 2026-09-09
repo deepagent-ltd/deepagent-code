@@ -3,62 +3,48 @@ import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { EVENT_V2_ADMISSION_ENV, isEventV2AdmissionEnabled } from "../../src/deepagent/event-admission"
 import { IM_SINGLE_WRITE_ENV, isEventV2ImSingleWriteEnabled } from "../../src/deepagent/im-single-write"
+import { createRuntimeFeatureRegistry } from "../../src/flag/runtime-features"
 
 // C7-05 contract: the V2 admission + IM single-write authorities ship ON through the PRODUCTION
-// runtime entrypoint (packages/deepagent-code/src/index.ts applies the shared runtime defaults —
-// `applyRuntimeDefaults()` — which sets both envs for the process); the switches themselves stay
-// explicit-env so isolated test/daemon contexts keep their own behavior, and `=false`/`=0`
-// restores the legacy authorities. The shared flag table is `core/deepagent/flip-flag`
+// runtime entrypoint and in direct server/embedded compositions. `applyRuntimeDefaults()` makes the
+// effective values observable in the process environment, while the gates themselves use the same
+// default. `=false`/`=0` remains the explicit kill switch. The shared flag table is `core/deepagent/flip-flag`
 // (`flipFlagValueOn`): for every DEFINED value both sides agree exactly (trim+lowercase;
-// ""/"false"/"0" → OFF; any other → ON); only `undefined` differs by context (entry: ON,
-// gate: OFF). The runtime double-write=0 proof lives in the flag-gated suites (event-v2-bridge
+// ""/"false"/"0" → OFF; any other → ON), including identical `undefined` behavior. The runtime
+// double-write=0 proof lives in the flag-gated suites (event-v2-bridge
 // emit counter 0 under ON, IM caller gate skip under ON).
 
-const withEnv = (name: string, value: string | undefined, fn: () => void) => {
-  const previous = process.env[name]
-  if (value === undefined) delete process.env[name]
-  else process.env[name] = value
-  try {
-    fn()
-  } finally {
-    if (previous === undefined) delete process.env[name]
-    else process.env[name] = previous
-  }
-}
+const features = (env: Readonly<Record<string, string | undefined>>) =>
+  createRuntimeFeatureRegistry(undefined, env)
 
 describe("C7-05 flip contract (production-entry ON + explicit kill-switch)", () => {
-  test("the switches are explicit-env: unset ⇒ legacy (OFF), =true ⇒ V2 (ON)", () => {
-    withEnv(EVENT_V2_ADMISSION_ENV, undefined, () => expect(isEventV2AdmissionEnabled()).toBe(false))
-    withEnv(EVENT_V2_ADMISSION_ENV, "true", () => expect(isEventV2AdmissionEnabled()).toBe(true))
-    withEnv(EVENT_V2_ADMISSION_ENV, "1", () => expect(isEventV2AdmissionEnabled()).toBe(true))
-    withEnv(IM_SINGLE_WRITE_ENV, undefined, () => expect(isEventV2ImSingleWriteEnabled()).toBe(false))
-    withEnv(IM_SINGLE_WRITE_ENV, "true", () => expect(isEventV2ImSingleWriteEnabled()).toBe(true))
+  test("the switches are entrypoint-independent: unset and =true both select V2", () => {
+    expect(isEventV2AdmissionEnabled(features({}))).toBe(true)
+    expect(isEventV2AdmissionEnabled(features({ [EVENT_V2_ADMISSION_ENV]: "true" }))).toBe(true)
+    expect(isEventV2AdmissionEnabled(features({ [EVENT_V2_ADMISSION_ENV]: "1" }))).toBe(true)
+    expect(isEventV2ImSingleWriteEnabled(features({}))).toBe(true)
+    expect(isEventV2ImSingleWriteEnabled(features({ [IM_SINGLE_WRITE_ENV]: "true" }))).toBe(true)
   })
 
   test("defined values follow the shared flip-flag table (W0.1 semantic convergence)", () => {
     // table: trim+lowercase; ""/"false"/"0" → OFF; any other defined value → ON (== runtime defaults)
-    withEnv(EVENT_V2_ADMISSION_ENV, "", () => expect(isEventV2AdmissionEnabled()).toBe(false))
-    withEnv(EVENT_V2_ADMISSION_ENV, " 0 ", () => expect(isEventV2AdmissionEnabled()).toBe(false))
-    withEnv(EVENT_V2_ADMISSION_ENV, "FALSE", () => expect(isEventV2AdmissionEnabled()).toBe(false))
-    withEnv(EVENT_V2_ADMISSION_ENV, " true", () => expect(isEventV2AdmissionEnabled()).toBe(true))
-    withEnv(EVENT_V2_ADMISSION_ENV, "yes", () => expect(isEventV2AdmissionEnabled()).toBe(true))
-    withEnv(EVENT_V2_ADMISSION_ENV, "2", () => expect(isEventV2AdmissionEnabled()).toBe(true))
+    for (const value of ["", " 0 ", "FALSE"])
+      expect(isEventV2AdmissionEnabled(features({ [EVENT_V2_ADMISSION_ENV]: value }))).toBe(false)
+    for (const value of [" true", "yes", "2", "off", "no"])
+      expect(isEventV2AdmissionEnabled(features({ [EVENT_V2_ADMISSION_ENV]: value }))).toBe(true)
     // W0.5 (audit 9): only /^(false|0)$/ (plus "") are OFF by the table — "off"/"no" are NOT off
     // values and must stay ON; do not "fix" them into OFF.
-    withEnv(EVENT_V2_ADMISSION_ENV, "off", () => expect(isEventV2AdmissionEnabled()).toBe(true))
-    withEnv(EVENT_V2_ADMISSION_ENV, "no", () => expect(isEventV2AdmissionEnabled()).toBe(true))
-    withEnv(IM_SINGLE_WRITE_ENV, "", () => expect(isEventV2ImSingleWriteEnabled()).toBe(false))
-    withEnv(IM_SINGLE_WRITE_ENV, "false ", () => expect(isEventV2ImSingleWriteEnabled()).toBe(false))
-    withEnv(IM_SINGLE_WRITE_ENV, "yes", () => expect(isEventV2ImSingleWriteEnabled()).toBe(true))
-    withEnv(IM_SINGLE_WRITE_ENV, "off", () => expect(isEventV2ImSingleWriteEnabled()).toBe(true))
-    withEnv(IM_SINGLE_WRITE_ENV, "no", () => expect(isEventV2ImSingleWriteEnabled()).toBe(true))
+    for (const value of ["", "false "])
+      expect(isEventV2ImSingleWriteEnabled(features({ [IM_SINGLE_WRITE_ENV]: value }))).toBe(false)
+    for (const value of ["yes", "off", "no"])
+      expect(isEventV2ImSingleWriteEnabled(features({ [IM_SINGLE_WRITE_ENV]: value }))).toBe(true)
   })
 
   test("kill-switch =false / =0 restores the legacy authority", () => {
-    withEnv(EVENT_V2_ADMISSION_ENV, "false", () => expect(isEventV2AdmissionEnabled()).toBe(false))
-    withEnv(EVENT_V2_ADMISSION_ENV, "0", () => expect(isEventV2AdmissionEnabled()).toBe(false))
-    withEnv(IM_SINGLE_WRITE_ENV, "false", () => expect(isEventV2ImSingleWriteEnabled()).toBe(false))
-    withEnv(IM_SINGLE_WRITE_ENV, "0", () => expect(isEventV2ImSingleWriteEnabled()).toBe(false))
+    expect(isEventV2AdmissionEnabled(features({ [EVENT_V2_ADMISSION_ENV]: "false" }))).toBe(false)
+    expect(isEventV2AdmissionEnabled(features({ [EVENT_V2_ADMISSION_ENV]: "0" }))).toBe(false)
+    expect(isEventV2ImSingleWriteEnabled(features({ [IM_SINGLE_WRITE_ENV]: "false" }))).toBe(false)
+    expect(isEventV2ImSingleWriteEnabled(features({ [IM_SINGLE_WRITE_ENV]: "0" }))).toBe(false)
   })
 
   test("the production entrypoints enable both authorities via runtime-defaults", () => {
@@ -86,11 +72,8 @@ describe("C7-05 flip contract (production-entry ON + explicit kill-switch)", () 
   })
 
   test("the two switches are independent", () => {
-    withEnv(EVENT_V2_ADMISSION_ENV, "false", () => {
-      withEnv(IM_SINGLE_WRITE_ENV, "true", () => {
-        expect(isEventV2AdmissionEnabled()).toBe(false)
-        expect(isEventV2ImSingleWriteEnabled()).toBe(true)
-      })
-    })
+    const snapshot = features({ [EVENT_V2_ADMISSION_ENV]: "false", [IM_SINGLE_WRITE_ENV]: "true" })
+    expect(isEventV2AdmissionEnabled(snapshot)).toBe(false)
+    expect(isEventV2ImSingleWriteEnabled(snapshot)).toBe(true)
   })
 })

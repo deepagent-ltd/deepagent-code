@@ -23,6 +23,7 @@ export const layer = Layer.effectDiscard(
     const tools = yield* Tools.Service
     const permission = yield* PermissionV2.Service
     const runtime = yield* ContextToolRuntime.Service
+    if (!runtime.available) return
 
     yield* tools
       .register({

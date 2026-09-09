@@ -46,6 +46,19 @@ describe("RateLimiter.check", () => {
     // fresh key survived → still over its limit within its window.
     expect(rl.check("fresh", 1, 60_000, t0 + 20_000)).toBe(false)
   })
+
+  test("fails closed at the hard bucket bound and reclaims expired capacity", () => {
+    const rl = new RateLimiter.Service(2)
+    const t0 = 1_000_000
+    expect(rl.check("a", 1, 10_000, t0)).toBe(true)
+    expect(rl.check("b", 1, 60_000, t0)).toBe(true)
+    expect(rl.check("c", 1, 60_000, t0)).toBe(false)
+    expect(rl.size()).toBe(2)
+
+    expect(rl.check("c", 1, 60_000, t0 + 10_000)).toBe(true)
+    expect(rl.size()).toBe(2)
+    expect(rl.check("b", 1, 60_000, t0 + 10_000)).toBe(false)
+  })
 })
 
 describe("RateLimiter defaults (§E2 lenient)", () => {
@@ -53,5 +66,6 @@ describe("RateLimiter defaults (§E2 lenient)", () => {
     expect(RateLimiter.EVENT_PUBLISH_PER_WORKSPACE).toEqual({ limit: 1000, windowMs: 60_000 })
     expect(RateLimiter.AGENT_PUSH_PER_AGENT_GROUP).toEqual({ limit: 20, windowMs: 3_600_000 })
     expect(RateLimiter.AGENT_EXEC_CONCURRENT_PER_WORKSPACE).toBe(5)
+    expect(RateLimiter.MAX_LIVE_BUCKETS).toBe(10_000)
   })
 })

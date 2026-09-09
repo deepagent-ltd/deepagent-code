@@ -4,7 +4,7 @@ import { Hash } from "@deepagent-code/core/util/hash"
 import { sessionCapabilityLoad, type CapabilityLoadRequest, type CapabilityLoadTurnIdentity } from "@deepagent-code/core/system-context/capability-load-adapter"
 import { Database } from "@deepagent-code/core/database/database"
 import { loadDomainPack, resetDomainPackLoader } from "@deepagent-code/core/deepagent/domain-pack-load"
-import { resetCapabilityLoader, recordedCapabilityLoads } from "@deepagent-code/core/system-context/capability-loader"
+import { resetCapabilityLoader, recordedCapabilityLoads } from "@deepagent-code/core/system-context/capability-loader-memory"
 import { assertContentLoadExactRetry, ContentLoadRetryMismatchError, assertCapabilityBodyPresent } from "@deepagent-code/core/contract/capability-load"
 
 // C4-10 — adversarial: prompt injection, malicious user pack, hash drift every which
@@ -21,6 +21,14 @@ const load = (args: Parameters<typeof sessionCapabilityLoad>[1]) =>
     Effect.gen(function* () {
       const { db } = yield* Database.Service
       return yield* sessionCapabilityLoad(db, args)
+    }).pipe(Effect.provide(Database.layerFromPath(":memory:"))),
+  )
+
+const loadTogether = (requests: ReadonlyArray<Parameters<typeof sessionCapabilityLoad>[1]>) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      return yield* Effect.forEach(requests, (request) => sessionCapabilityLoad(db, request))
     }).pipe(Effect.provide(Database.layerFromPath(":memory:"))),
   )
 
@@ -176,18 +184,22 @@ describe("hash drift (body vs manifest, manifest vs catalog) is a typed failure"
 // --- model loop: per-turn budget + recursion bound ------------------------------
 describe("model loop (a model repeatedly invoking capability_load is bounded)", () => {
   test("the 3rd distinct body in one turn is budget_exceeded (K2 per-turn cap)", async () => {
-    const a = await load({ request: req("deepagent.code-read", "body A"), identity: IDENTITY, contextEpoch: "e" })
-    const b = await load({ request: req("deepagent.code-edit", "body B"), identity: IDENTITY, contextEpoch: "e" })
+    const [a, b, c] = await loadTogether([
+      { request: req("deepagent.code-read", "body A"), identity: IDENTITY, contextEpoch: "e" },
+      { request: req("deepagent.code-edit", "body B"), identity: IDENTITY, contextEpoch: "e" },
+      { request: req("deepagent.shell-execute", "body C"), identity: IDENTITY, contextEpoch: "e" },
+    ])
     expect(a.state.state).toBe("loaded")
     expect(b.state.state).toBe("loaded")
-    const c = await load({ request: req("deepagent.shell-execute", "body C"), identity: IDENTITY, contextEpoch: "e" })
     expect(c.state.state).toBe("budget_exceeded")
     if (c.state.state === "budget_exceeded") expect(c.state.newThisTurn).toBeGreaterThanOrEqual(2)
   })
 
   test("a repeat of the SAME load identity in one turn is idempotent (already_loaded, no double charge)", async () => {
-    const first = await load({ request: req("deepagent.code-read", "body A"), identity: IDENTITY, contextEpoch: "e" })
-    const repeat = await load({ request: req("deepagent.code-read", "body A"), identity: IDENTITY, contextEpoch: "e" })
+    const [first, repeat] = await loadTogether([
+      { request: req("deepagent.code-read", "body A"), identity: IDENTITY, contextEpoch: "e" },
+      { request: req("deepagent.code-read", "body A"), identity: IDENTITY, contextEpoch: "e" },
+    ])
     expect(first.state.state).toBe("loaded")
     expect(repeat.state.state).toBe("already_loaded")
   })

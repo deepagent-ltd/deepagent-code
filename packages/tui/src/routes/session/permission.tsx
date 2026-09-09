@@ -121,6 +121,26 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
 
   const session = createMemo(() => sync.data.session.find((s) => s.id === props.request.sessionID))
 
+  // V2 asks (normalized in the sync store) settle through the session-scoped V2 route; the
+  // legacy route cannot see PermissionV2's pending map and 404s.
+  const reply = (input: { reply: "once" | "always" | "reject"; message?: string }) => {
+    if (sync.permissionV2(props.request.id)) {
+      return sdk.client.v2.session.permission.reply({
+        sessionID: props.request.sessionID,
+        requestID: props.request.id,
+        reply: input.reply,
+        ...(input.message ? { message: input.message } : {}),
+      })
+    }
+    return sdk.client.permission.reply({
+      reply: input.reply,
+      requestID: props.request.id,
+      directory: props.directory,
+      ...(input.message ? { message: input.message } : {}),
+      workspace: project.workspace.current(),
+    })
+  }
+
   const input = createMemo(() => {
     const tool = props.request.tool
     if (!tool) return {}
@@ -171,25 +191,14 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
           onSelect={(option) => {
             setStore("stage", "permission")
             if (option === "cancel") return
-            void sdk.client.permission.reply({
-              reply: "always",
-              requestID: props.request.id,
-              directory: props.directory,
-              workspace: project.workspace.current(),
-            })
+            void reply({ reply: "always" })
           }}
         />
       </Match>
       <Match when={store.stage === "reject"}>
         <RejectPrompt
           onConfirm={(message) => {
-            void sdk.client.permission.reply({
-              reply: "reject",
-              requestID: props.request.id,
-              directory: props.directory,
-              message: message || undefined,
-              workspace: project.workspace.current(),
-            })
+            void reply({ reply: "reject", message: message || undefined })
           }}
           onCancel={() => {
             setStore("stage", "permission")
@@ -427,20 +436,10 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
                     setStore("stage", "reject")
                     return
                   }
-                  void sdk.client.permission.reply({
-                    reply: "reject",
-                    requestID: props.request.id,
-                    directory: props.directory,
-                    workspace: project.workspace.current(),
-                  })
+                  void reply({ reply: "reject" })
                   return
                 }
-                void sdk.client.permission.reply({
-                  reply: "once",
-                  requestID: props.request.id,
-                  directory: props.directory,
-                  workspace: project.workspace.current(),
-                })
+                void reply({ reply: "once" })
               }}
             />
           )

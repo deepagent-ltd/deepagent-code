@@ -1,3 +1,5 @@
+import { AgentV2 } from "@deepagent-code/core/agent"
+import { ModelV2 } from "@deepagent-code/core/model"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import { SessionInput } from "@deepagent-code/core/session/input"
 import { Prompt } from "@deepagent-code/core/session/prompt"
@@ -16,6 +18,7 @@ import {
   UnknownError,
 } from "../errors"
 import { SessionLocationMiddleware } from "../middleware/session-location"
+import { LocationQuery, locationQueryOpenApi, LocationMiddleware } from "./location"
 
 const SessionsQueryFields = {
   workspace: WorkspaceV2.ID.pipe(Schema.optional),
@@ -85,6 +88,27 @@ export const SessionsQuery = Schema.Struct({
 }).annotate({ identifier: "SessionsQuery" })
 
 export const SessionGroup = HttpApiGroup.make("server.session")
+  .add(
+    HttpApiEndpoint.post("session.create", "/api/session", {
+      query: LocationQuery,
+      payload: Schema.Struct({
+        id: SessionV2.ID.pipe(Schema.optional),
+        agent: AgentV2.ID.pipe(Schema.optional),
+        model: ModelV2.Ref.pipe(Schema.optional),
+      }),
+      success: Schema.Struct({ data: SessionV2.Info }),
+      error: InvalidRequestError,
+    })
+      .middleware(LocationMiddleware)
+      .annotateMerge(locationQueryOpenApi)
+      .annotateMerge(
+        OpenApi.annotations({
+          identifier: "v2.session.create",
+          summary: "Create session",
+          description: "Create or adopt one Core V2 session in the requested location.",
+        }),
+      ),
+  )
   .add(
     HttpApiEndpoint.get("session.list", "/api/session", {
       query: SessionsQuery,

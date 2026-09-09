@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
 import { EffectDrizzleSqlite } from "@deepagent-code/effect-drizzle-sqlite"
 import { DatabaseMigration } from "@deepagent-code/core/database/migration"
+import { DatabaseUpgradeRun } from "@deepagent-code/core/database/upgrade-run"
 import { RecoveryBinding } from "@deepagent-code/core/database/recovery-binding"
 import { migrations } from "../src/database/migration.gen"
 import { Effect } from "effect"
@@ -27,6 +28,9 @@ const setup = Effect.gen(function* () {
   // The audit queries join only the binding columns; foreign keys stay OFF so the minimal rows
   // bypass the federation-knowledge insert guards on unrelated parent tables.
   yield* db.run(sql`PRAGMA foreign_keys = OFF`)
+  // applyOnly bypasses apply()'s prelude, so mirror it: the journal content-hash migration
+  // (20260907130000) reads database_migration_receipt, which only ensureTables creates.
+  yield* DatabaseUpgradeRun.ensureTables(db)
   yield* DatabaseMigration.applyOnly(db, migrations)
   const ph = H64("a")
   const rh = H64("b")

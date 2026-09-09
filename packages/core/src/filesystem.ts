@@ -547,7 +547,7 @@ export const layer = Layer.effect(
         Effect.orDie,
         Effect.flatMap((items) =>
           Effect.forEach(items, (item) => entry(path.join(directory.absolute, item.name), directory), {
-            concurrency: "unbounded",
+            concurrency: 32,
           }),
         ),
         Effect.map((items) =>

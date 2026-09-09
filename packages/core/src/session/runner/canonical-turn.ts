@@ -1,6 +1,6 @@
 export * as SessionRunnerCanonical from "./canonical-turn"
 
-import { and, asc, desc, eq, gt, inArray, isNull, lte } from "drizzle-orm"
+import { and, asc, desc, eq, gt, inArray, isNull, lte, sql } from "drizzle-orm"
 import { Effect, Layer, Option, Schema } from "effect"
 import { Database } from "../../database/database"
 import { ContextArtifactStore } from "../../context-federation/artifact-store"
@@ -26,6 +26,7 @@ import {
   type ProductionV2AdapterInput,
   type ProductionV2LocationIdentity,
 } from "../../context-federation/production-adapters"
+import type { RuntimeFeatureRegistry } from "../../flag/runtime-features"
 import { DeepAgentReleasedSnapshot } from "../../deepagent/released-snapshot"
 import { SelectionEnvelope, type SelectionQueryIntent } from "../../contract/selection"
 import {
@@ -159,6 +160,10 @@ export type AdmitSelectionInput = {
   readonly sources?: ProductionV2AdapterInput
   /** Process-local query authority captured by the runner alongside the source frame. */
   readonly queryAuthorization?: ContextQueryAuthorization.ControllerInterface
+  /** Runtime feature registry the W3.1 adapter gate reads; the runner captures its composition's
+   * registry at layer construction. Omitted = the process-start global (the `=false` kill-switch
+   * resolves at process start, so tests inject an explicit registry instead of flipping env). */
+  readonly runtimeFeatures?: RuntimeFeatureRegistry
   /**
    * L1 — selection query intent seam. The V2 core prompt admission carries no per-input intent
    * signal yet (the session input/Prompt shapes have none), so the runner leaves this unset and the
@@ -393,7 +398,7 @@ function buildV2Selection(
         binding: current ? ("bound" as const) : ("unavailable" as const),
         current: releasedPicker(sources),
       }
-      const adapters = productionAdaptersEnabled()
+      const adapters = productionAdaptersEnabled(input.runtimeFeatures)
         ? productionV2Adapters({
             ...sources,
             ...(sources.knowledge ? { knowledge: { stores: sources.knowledge.stores, released: releasedBinding } } : {}),
@@ -827,13 +832,18 @@ export const commitTurn = Effect.fn("SessionRunnerCanonical.commitTurn")(functio
               // replayed, §2.2, explicit resolution still required); a prepared turn never
               // dispatched, so it terminalizes as failed/owner_lease_lost_before_dispatch.
               // Mirrors V2ProviderTurn.recover / recoverIndeterminate.
-              yield* tx
+              const updatedAttempts = yield* tx
                 .update(SessionProviderAttemptTable)
                 .set(
                   inFlight
-                    ? { state: "indeterminate_after_crash", error_code: "process_recovery" }
+                    ? {
+                        state: "indeterminate_after_crash",
+                        attempt_version: sql`${SessionProviderAttemptTable.attempt_version} + 1`,
+                        error_code: "process_recovery",
+                      }
                     : {
                         state: "failed",
+                        attempt_version: sql`${SessionProviderAttemptTable.attempt_version} + 1`,
                         error_code: "owner_lease_lost_before_dispatch",
                         settled_at: stale,
                       },
@@ -844,8 +854,11 @@ export const commitTurn = Effect.fn("SessionRunnerCanonical.commitTurn")(functio
                     eq(SessionProviderAttemptTable.state, latest.state),
                   ),
                 )
-                .run()
+                .returning({ attemptId: SessionProviderAttemptTable.attempt_id })
+                .all()
                 .pipe(Effect.orDie)
+              if (updatedAttempts.length !== 1)
+                return yield* new AdmissionError({ reason: "stale_provider_attempt_cas_lost" })
               const staleReceipt =
                 latest.owner_token === null
                   ? undefined
@@ -867,6 +880,7 @@ export const commitTurn = Effect.fn("SessionRunnerCanonical.commitTurn")(functio
                       .where(
                         and(
                           eq(V2ProviderTurnReceiptTable.session_id, input.sessionID),
+                          eq(V2ProviderTurnReceiptTable.provider_attempt_id, latest.attempt_id),
                           eq(V2ProviderTurnReceiptTable.owner_token, latest.owner_token),
                           inArray(
                             V2ProviderTurnReceiptTable.state,
@@ -875,11 +889,11 @@ export const commitTurn = Effect.fn("SessionRunnerCanonical.commitTurn")(functio
                         ),
                       )
                       .returning()
-                      .get()
+                      .all()
                       .pipe(Effect.orDie)
-              yield* staleReceipt
-                ? V2ProviderTurn.writeTurnTerminalDescriptor(tx, staleReceipt, stale)
-                : Effect.void
+              if (!staleReceipt || staleReceipt.length !== 1)
+                return yield* new AdmissionError({ reason: "stale_provider_receipt_binding_conflict" })
+              yield* V2ProviderTurn.writeTurnTerminalDescriptor(tx, staleReceipt[0]!, stale)
               quarantinedLatest = true
               // opencode upstream port #1 — durable resume budget: consecutive crash
               // quarantines without a single settled attempt in between converge to a typed

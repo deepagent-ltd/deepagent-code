@@ -24,11 +24,18 @@ describe("C4-07 dead-code removal proof (legacy context-admission loader)", () =
   })
 
   test("no src file references the removed loader symbols", () => {
-    expect(src("deepagent/index.ts")).not.toMatch(/loadOnDemand|admitIndexRefs|formatPackIndexSection|ContextAdmissionGate/i)
+    expect(src("deepagent/index.ts")).not.toMatch(
+      /loadOnDemand|admitIndexRefs|formatPackIndexSection|ContextAdmissionGate/i,
+    )
   })
 
-  test("the kernel-based domain_pack_load lives on as the wired successor", () => {
-    expect(src("deepagent/domain-pack-load.ts")).toContain("loadDomainPack")
-    expect(src("deepagent/domain-pack-load.ts")).toContain("DEFAULT_MAX_ACTIVE_PACK_REFS")
+  test("the inactive domain_pack_load prototype cannot be advertised by the production layer", () => {
+    const prototype = src("deepagent/domain-pack-load.ts")
+    const production = src("system-context/capability-load-tool.ts")
+    const builtins = src("tool/builtins.ts")
+    expect(prototype).toContain("loadDomainPack")
+    expect(prototype).toContain("DEFAULT_MAX_ACTIVE_PACK_REFS")
+    expect(production.slice(production.indexOf("export const layer"))).not.toContain("[domainPackLoadName]")
+    expect(builtins).not.toContain("CapabilityLoadTool.domainPackLoadName")
   })
 })

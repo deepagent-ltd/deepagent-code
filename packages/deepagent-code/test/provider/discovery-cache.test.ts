@@ -135,6 +135,25 @@ describe("discoverModelsCached", () => {
     expect(calls).toBe(3)
   })
 
+  test("bounds authentication-failure throttles under high-cardinality endpoints", async () => {
+    let calls = 0
+    const fetch = async () => {
+      calls++
+      throw new ProviderDiscoveryError("revoked", 401)
+    }
+    const inputs = Array.from({ length: 129 }, (_, index) => baseInput(`bounded-auth-${index}`))
+
+    for (const input of inputs)
+      await expect(run((fs, flock) => discoverModelsCached(fs, flock, input, fetch))).rejects.toBeInstanceOf(
+        ProviderDiscoveryError,
+      )
+    await expect(run((fs, flock) => discoverModelsCached(fs, flock, inputs[0], fetch))).rejects.toBeInstanceOf(
+      ProviderDiscoveryError,
+    )
+
+    expect(calls).toBe(130)
+  })
+
   test("returns [] when there is no cache and the fetch fails", async () => {
     const fetch = async () => {
       throw new Error("HTTP 404")

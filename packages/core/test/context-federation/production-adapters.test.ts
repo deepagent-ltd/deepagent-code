@@ -11,11 +11,11 @@ import {
   ProductionV2Sources,
   productionV2Adapters,
   productionAdaptersEnabled,
-  CONTEXT_FEDERATION_PRODUCTION_ENV,
   type ProductionV2AdapterInput,
   type ProductionDocumentsSource,
   type ProductionReleasedBinding,
 } from "../../src/context-federation/production-adapters"
+import { createRuntimeFeatureRegistry } from "../../src/flag/runtime-features"
 import { SessionContextResolverV2, type QueryEnvelope } from "../../src/context-federation/resolver-v2"
 import { ContextFederation } from "../../src/context-federation/federation"
 import { LocationKey, ProjectScopeKey, SecurityNamespaceID, type ContextRef } from "../../src/context-federation/reference"
@@ -184,20 +184,16 @@ function docHit() {
 
 describe("W3 production adapters: real sources, never staged", () => {
   test("flag gate: production is ON by default and an explicit =false falls back", () => {
-    const previous = process.env[CONTEXT_FEDERATION_PRODUCTION_ENV]
-    try {
-      delete process.env[CONTEXT_FEDERATION_PRODUCTION_ENV]
-      expect(productionAdaptersEnabled()).toBe(true)
-      process.env[CONTEXT_FEDERATION_PRODUCTION_ENV] = "false"
-      expect(productionAdaptersEnabled()).toBe(false)
-      process.env[CONTEXT_FEDERATION_PRODUCTION_ENV] = "0"
-      expect(productionAdaptersEnabled()).toBe(false)
-      process.env[CONTEXT_FEDERATION_PRODUCTION_ENV] = "true"
-      expect(productionAdaptersEnabled()).toBe(true)
-    } finally {
-      if (previous === undefined) delete process.env[CONTEXT_FEDERATION_PRODUCTION_ENV]
-      else process.env[CONTEXT_FEDERATION_PRODUCTION_ENV] = previous
-    }
+    // `RuntimeFeatures` is an immutable process-start snapshot, so the kill-switch resolves at
+    // process start and tests exercise it through the injectable registry seam — never by
+    // mutating process.env after the snapshot (that mutation is intentionally unobservable).
+    const withEnv = (env: Readonly<Record<string, string | undefined>>) =>
+      createRuntimeFeatureRegistry(undefined, env)
+    expect(productionAdaptersEnabled()).toBe(true)
+    expect(productionAdaptersEnabled(withEnv({}))).toBe(true)
+    expect(productionAdaptersEnabled(withEnv({ DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION: "false" }))).toBe(false)
+    expect(productionAdaptersEnabled(withEnv({ DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION: "0" }))).toBe(false)
+    expect(productionAdaptersEnabled(withEnv({ DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION: "true" }))).toBe(true)
   })
 
   test("four graphs resolve ready/empty with real fixture sources (code/documents never degraded)", async () => {

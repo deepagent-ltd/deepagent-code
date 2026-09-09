@@ -37,7 +37,11 @@ import { GraphQueryStatus } from "@deepagent-code/core/context-federation/federa
 import { Sensitivity } from "@deepagent-code/core/context-federation/authorization"
 import { SessionLegacyProviderResolution } from "@/session/legacy-provider-resolution"
 import { SessionCompaction } from "@/session/compaction"
-import { File as DiffArtifactFile, Limits as DiffArtifactLimits, Manifest as DiffArtifactManifest } from "@/session/diff-artifact-schema"
+import {
+  File as DiffArtifactFile,
+  Limits as DiffArtifactLimits,
+  Manifest as DiffArtifactManifest,
+} from "@/session/diff-artifact-schema"
 
 const root = "/session"
 export const ListQuery = Schema.Struct({
@@ -102,7 +106,7 @@ export const DiffArtifactFileQuery = Schema.Struct({
 export const StatusMap = Schema.Record(Schema.String, SessionStatus.Info)
 export const UpdatePayload = Schema.Struct({
   title: Schema.optional(Schema.String),
-  metadata: Schema.optional(Session.Metadata),
+  metadata: Schema.optional(Schema.NullOr(Session.Metadata)),
   permission: Schema.optional(PermissionV1.Ruleset),
   time: Schema.optional(
     Schema.Struct({
@@ -264,14 +268,7 @@ export const ContextAttemptResult = Schema.Struct({
 })
 export const ContextGraphMetricResult = Schema.Struct({
   graph: GraphKind,
-  queries: Schema.Int,
-  candidates: Schema.Int,
   selected: Schema.Int,
-  rejected: Schema.Int,
-  redacted: Schema.Int,
-  averageLatencyMs: Schema.Finite,
-  maxLatencyMs: Schema.Finite,
-  lastLatencyMs: Schema.Finite,
   lastObservedAt: Schema.optional(Schema.Int),
   status: Schema.optional(GraphQueryStatus),
 })
@@ -282,18 +279,6 @@ export const ContextDiagnosticsResult = Schema.Struct({
   metrics: Schema.Struct({
     selections: Schema.Int,
     tokens: Schema.Int,
-    shadow: Schema.Struct({
-      comparisons: Schema.Int,
-      legacyKnowledgeRefs: Schema.Int,
-      legacyMemoryRefs: Schema.Int,
-      federated: Schema.Struct({
-        code: Schema.Int,
-        knowledge: Schema.Int,
-        memory: Schema.Int,
-        documents: Schema.Int,
-      }),
-      knowledgeMemoryDelta: Schema.Int,
-    }),
     graphs: Schema.Array(ContextGraphMetricResult),
     alerts: Schema.Array(
       Schema.Struct({
@@ -695,7 +680,13 @@ export const SessionApi = HttpApi.make("session")
           query: WorkspaceRoutingQuery,
           payload: PromptPreparePayload,
           success: described(PromptPrepareResult, "Prepared prompt draft"),
-          error: [HttpApiError.BadRequest, ConflictError, InvalidRequestError, ApiNotFoundError, ServiceUnavailableError],
+          error: [
+            HttpApiError.BadRequest,
+            ConflictError,
+            InvalidRequestError,
+            ApiNotFoundError,
+            ServiceUnavailableError,
+          ],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.prompt_prepare",
@@ -936,7 +927,8 @@ export const SessionApi = HttpApi.make("session")
           OpenApi.annotations({
             identifier: "session.continuationResolutionResolve",
             summary: "Resolve a failed compaction continuation",
-            description: "Replay only proven undispatched continuations, or abandon with explicit risk acknowledgement.",
+            description:
+              "Replay only proven undispatched continuations, or abandon with explicit risk acknowledgement.",
           }),
         ),
         HttpApiEndpoint.get("exportSnapshot", SessionPaths.exportSnapshot, {

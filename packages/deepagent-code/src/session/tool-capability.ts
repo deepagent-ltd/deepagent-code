@@ -94,7 +94,10 @@ const HOOK_PROFILE: Partial<Record<keyof Hooks, HookProfile>> = {
   "experimental.session.compacting":     { phase: "compaction", taskReachable: true,  workspaceBinding: "global",         workspaceMutation: "possible", hostEnforced: false },
   "experimental.compaction.autocontinue": { phase: "compaction", taskReachable: true,  workspaceBinding: "global",         workspaceMutation: "possible", hostEnforced: false },
   "experimental.text.complete":           { phase: "other",      taskReachable: true,  workspaceBinding: "global",         workspaceMutation: "possible", hostEnforced: false },
-  "experimental.chat.messages.transform": { phase: "provider",   taskReachable: true,  workspaceBinding: "global",         workspaceMutation: "possible", hostEnforced: false },
+  // RI-131: "experimental.chat.messages.transform" carries NO profile entry — under the V2-only
+  // profile the hook has no trigger point (legacy prompt/compaction only), so declaring it
+  // provider-phase would claim a runtime reach that does not exist (RI-113 dead-declaration
+  // pattern). A plugin registering it falls through to UNKNOWN_HOOK_PROFILE below.
   "experimental.chat.system.transform":   { phase: "provider",   taskReachable: true,  workspaceBinding: "global",         workspaceMutation: "possible", hostEnforced: false },
   "tool.definition":                      { phase: "tool",       taskReachable: true,  workspaceBinding: "child_location", workspaceMutation: "possible", hostEnforced: false },
   "tool.execute.before":                  { phase: "tool",       taskReachable: true,  workspaceBinding: "child_location", workspaceMutation: "possible", hostEnforced: false },

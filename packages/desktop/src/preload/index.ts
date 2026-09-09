@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from "electron"
 import type { ElectronAPI, WslServersEvent, BrowserState } from "./types"
 import type { UpdaterState } from "@deepagent-code/app/updater"
 const updaterCallbacks = new Set<(state: UpdaterState) => void>()
+const UPDATER_CALLBACK_LIMIT = 64
 let updaterState: UpdaterState | undefined
 let updaterSubscription: Promise<void> | undefined
 const updaterHandler = (_: unknown, state: UpdaterState) => {
@@ -55,13 +56,22 @@ const api: ElectronAPI = {
   },
   updater: {
     subscribe: async (cb) => {
+      if (!updaterCallbacks.has(cb) && updaterCallbacks.size >= UPDATER_CALLBACK_LIMIT) {
+        throw new Error(`Too many updater subscribers (limit ${UPDATER_CALLBACK_LIMIT})`)
+      }
       updaterCallbacks.add(cb)
       if (updaterState) cb(updaterState)
       if (!updaterSubscription) {
         ipcRenderer.on("updater-state", updaterHandler)
         updaterSubscription = ipcRenderer.invoke("updater-subscribe")
       }
-      await updaterSubscription
+      const subscription = updaterSubscription
+      await subscription.catch((error) => {
+        updaterCallbacks.delete(cb)
+        if (updaterSubscription === subscription) updaterSubscription = undefined
+        if (updaterCallbacks.size === 0) ipcRenderer.removeListener("updater-state", updaterHandler)
+        throw error
+      })
       return () => {
         updaterCallbacks.delete(cb)
         if (updaterCallbacks.size > 0) return

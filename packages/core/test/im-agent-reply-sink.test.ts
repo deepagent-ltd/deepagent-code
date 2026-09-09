@@ -50,7 +50,7 @@ describe("IM AgentReplySink", () => {
       broadcasts.push({ groupID, type: event.type, data: (event as any).data })
     },
     sendToUser: () => {},
-    register: (_conn: IMWebSocketConnection) => {},
+    register: (_conn: IMWebSocketConnection) => true,
     unregister: () => {},
     getConnectionCount: () => 0,
     getUserConnectionCount: () => 0,

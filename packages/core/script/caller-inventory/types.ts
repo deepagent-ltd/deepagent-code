@@ -124,10 +124,9 @@ export type EntryWithHandlers = {
  *   - portBoundTo       : the entry imports an Effect service port whose canonical production provider
  *                        (authority.ts PORTS registry) is a Layer.effect in a provider module wired by a
  *                        production composition; the consumer inherits the provider entry's verdict;
- *   - productionProfile: three-site proof that THIS packaged build force-selects the Core-V2-only
- *                        runtime profile (package.json version matches isCoreV2OnlyVersion, the
- *                        flag wires that predicate to InstallationVersion, and the production
- *                        bundler injects that version string via DEEPAGENT_CODE_VERSION).
+ *   - productionProfile: source proof that THIS build unconditionally selects the Core-V2-only
+ *                        runtime profile (`coreV2Only: Config.succeed(true)`); an env, version, or
+ *                        other runtime selector would fail the proof.
  */
 export type Requirement =
   | { readonly kind: "reach"; readonly pathSuffix: string }

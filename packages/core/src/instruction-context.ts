@@ -64,7 +64,7 @@ export const layer = Layer.effectDiscard(
                 content === undefined ? undefined : new File({ path: AbsolutePath.make(path), content }),
               ),
             ),
-        { concurrency: "unbounded" },
+        { concurrency: 8 },
       )
       if (files.some((file, index) => file === undefined && discovered.has(paths[index])))
         return SystemContext.unavailable

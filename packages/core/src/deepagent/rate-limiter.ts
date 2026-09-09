@@ -1,13 +1,13 @@
 export * as RateLimiter from "./rate-limiter"
 
-// V4.0 §E2 — the in-memory fixed-window RATE LIMITER. Mirrors the existing `class RateLimiter` in
-// deepagent-code (server/routes/instance/httpapi/handlers/im.ts): a per-key bucket that resets after a
-// fixed window. Unlike the pure policy modules this one carries a tiny amount of state (the buckets),
+// V4.0 §E2 — the in-memory fixed-window RATE LIMITER used by process-local ingress guards: a per-key
+// bucket that resets after a fixed window. Unlike the pure policy modules this one carries a bounded
+// amount of state (the buckets),
 // so it is a plain class — NOT Effect. It is still fully deterministic: pass an injectable `now` so
 // tests can cross a window boundary without a real clock.
 //
 // LAYERING: lives in `core`, imports NOTHING runtime. The wiring owns a single instance and calls
-// `check` on the hot path; a periodic `sweep` drops expired buckets to bound memory.
+// `check` on the hot path; explicit `sweep` and capacity-pressure cleanup drop expired buckets.
 //
 // §E2 defaults are LENIENT and configurable — they are exported as the constants below so callers pass
 // them in explicitly. Nothing restrictive is baked into `check`; the limit/window are always parameters.
@@ -23,6 +23,8 @@ interface Bucket {
 export class Service {
   private buckets = new Map<string, Bucket>()
 
+  constructor(private readonly maxBuckets = MAX_LIVE_BUCKETS) {}
+
   /**
    * §E2 — is another hit under `key` allowed within the current window? Returns true and records the
    * hit when under `limit`; returns false (over limit) otherwise. A new or expired bucket resets to a
@@ -32,6 +34,11 @@ export class Service {
     const bucket = this.buckets.get(key)
 
     if (!bucket || now >= bucket.resetAt) {
+      if (!bucket && this.buckets.size >= this.maxBuckets) this.sweep(now)
+      // High-cardinality hostile keys must never turn this process-local guard into an
+      // unbounded allocation. Existing keys keep their normal window semantics; a new
+      // key fails closed once every retained bucket is still live.
+      if (!bucket && this.buckets.size >= this.maxBuckets) return false
       this.buckets.set(key, { count: 1, resetAt: now + windowMs })
       return true
     }
@@ -66,6 +73,10 @@ export class Service {
     return this.buckets.size
   }
 }
+
+// Hard process-memory ceiling. Callers with a smaller trust boundary can pass a lower
+// value to Service; production must never construct an unlimited bucket table.
+export const MAX_LIVE_BUCKETS = 10_000
 
 // §E2 defaults — LENIENT ceilings, meant to be overridden per workspace/agent config. Documented as
 // defaults, not enforced minimums; the limiter takes limit/window as parameters on every call.

@@ -1,4 +1,4 @@
-import { describe, expect, test, beforeAll, afterAll } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { Context, Effect, Exit, Layer, Schema } from "effect"
 import { eq } from "drizzle-orm"
 import { mkdtempSync, rmSync } from "node:fs"
@@ -8,6 +8,7 @@ import { Database } from "@deepagent-code/core/database/database"
 import { Global } from "@deepagent-code/core/global"
 import { EventV2 } from "@deepagent-code/core/event"
 import type { EventTypeRegistration } from "@deepagent-code/core/deepagent/event-registry"
+import { createRuntimeFeatureRegistry } from "@deepagent-code/core/flag/runtime-features"
 import { EventV2Bridge } from "../../src/event-v2-bridge"
 import { V2OutboxWriter } from "../../src/event/v2-outbox-writer"
 import { DeepAgentEventOutboxTable } from "@deepagent-code/core/deepagent/event-outbox-sql"
@@ -60,30 +61,29 @@ const brokenRegistration: EventTypeRegistration = {
   allowedProducerKinds: ["user"],
 }
 
-const saved = process.env.DEEPAGENT_CODE_EVENT_V2_ADMISSION
-
-beforeAll(() => {
-  // The bridge's GlobalBus mirror runs only while the V2 admission switch is OFF (its owner is the
-  // durable V2 consumer). The outbox landing is independent of the switch — keep the mirror live so the
-  // "effect ran once" assertion counts something real.
-  process.env.DEEPAGENT_CODE_EVENT_V2_ADMISSION = "false"
-  V2OutboxWriter.register(testRegistration)
-})
-afterAll(() => {
-  // F8 — the module-level registry must be restored: `register()` mutates it for the process lifetime.
-  V2OutboxWriter.resetRegistry()
-  if (saved === undefined) delete process.env.DEEPAGENT_CODE_EVENT_V2_ADMISSION
-  else process.env.DEEPAGENT_CODE_EVENT_V2_ADMISSION = saved
+// The bridge's GlobalBus mirror runs only while the V2 admission switch is OFF (its owner is the
+// durable V2 consumer). The outbox landing is independent of the switch — keep the mirror live so
+// the "effect ran once" assertion counts something real. `RuntimeFeatures` is an immutable
+// process-start snapshot, so OFF is injected through the bridge's registry seam — flipping
+// process.env after the snapshot is intentionally unobservable.
+const admissionOff = createRuntimeFeatureRegistry(undefined, {
+  DEEPAGENT_CODE_EVENT_V2_ADMISSION: "false",
 })
 
 /** Build EventV2 + the SAME Database + the bridge over it, so the test can read the outbox from the
  * exact db the landing wrote to. */
-const runWith = <A>(body: (db: Db, bridge: EventV2Bridge.Service["Service"]) => Effect.Effect<A, unknown>): Promise<A> =>
+const runWith = <A>(
+  body: (db: Db, bridge: EventV2Bridge.Service["Service"]) => Effect.Effect<A, unknown>,
+  registry = V2OutboxWriter.EVENT_V2_OUTBOX_REGISTRY.register(testRegistration),
+): Promise<A> =>
   Effect.runPromise(
     Effect.gen(function* () {
       const database = Database.layerFromPath(":memory:")
       const ctx = yield* Layer.build(
-        Layer.provideMerge(Layer.provideMerge(EventV2Bridge.layer, EventV2.layer), database),
+        Layer.provideMerge(
+          Layer.provideMerge(EventV2Bridge.layerWithRegistry(registry, admissionOff), EventV2.layer),
+          database,
+        ),
       )
       const db = Context.get(ctx, Database.Service).db
       const bridge = Context.get(ctx, EventV2Bridge.Service)
@@ -115,11 +115,7 @@ describe("W5 outbox writer — EventV2 publish lands in deepagent_event_outbox",
         expect(rows.length).toBe(1)
         // The durable EventV2 row is there too (the commit hook ran INSIDE the publish transaction —
         // event row ⇒ outbox row, atomically).
-        const eventRow = yield* db
-          .select()
-          .from(EventTable)
-          .where(eq(EventTable.id, published.id))
-          .get()
+        const eventRow = yield* db.select().from(EventTable).where(eq(EventTable.id, published.id)).get()
         expect(eventRow?.id).toBe(published.id)
       }),
     ))
@@ -142,10 +138,14 @@ describe("W5 outbox writer — EventV2 publish lands in deepagent_event_outbox",
 
           // Re-publish the SAME event id + payload ("crash at the caller window" recovery): the commit
           // hook re-runs for the already-stored event and `land` returns `already_landed` — one row.
-          const replay = yield* bridge.publish(TestEvent, { sessionID: "ses_w5_replay", value: "v2" }, {
-            id: first.id,
-            idempotent: true,
-          })
+          const replay = yield* bridge.publish(
+            TestEvent,
+            { sessionID: "ses_w5_replay", value: "v2" },
+            {
+              id: first.id,
+              idempotent: true,
+            },
+          )
           expect(replay.id).toBe(first.id)
           // The effect (mirror/notify plane) did NOT run again — EventV2 exact retry, no re-notify.
           expect(mirrors).toBe(2)
@@ -159,11 +159,7 @@ describe("W5 outbox writer — EventV2 publish lands in deepagent_event_outbox",
             .all()
           expect(rows.length).toBe(1)
           // The durable event log has exactly one event row for the event id (no duplicate projection).
-          const eventRows = yield* db
-            .select()
-            .from(EventTable)
-            .where(eq(EventTable.id, first.id))
-            .all()
+          const eventRows = yield* db.select().from(EventTable).where(eq(EventTable.id, first.id)).all()
           expect(eventRows.length).toBe(1)
         } finally {
           GlobalBus.off("event", mirrorListener)
@@ -172,31 +168,21 @@ describe("W5 outbox writer — EventV2 publish lands in deepagent_event_outbox",
     ))
 
   test("F1 landing failure = transaction failure: no event row survives (no missing-row window)", () =>
-    runWith((db, bridge) =>
-      Effect.gen(function* () {
-        // A registration whose producer policy the envelope violates: the commit hook's `land` fails
-        // the registry validation → the whole publish transaction ROLLS BACK (fail-closed, design §8.3).
-        V2OutboxWriter.register(brokenRegistration)
-        try {
-          const outcome = yield* bridge
-            .publish(TestEvent, { sessionID: "ses_w5_fail", value: "v3" })
-            .pipe(Effect.exit)
+    runWith(
+      (db, bridge) =>
+        Effect.gen(function* () {
+          // A registration whose producer policy the envelope violates: the commit hook's `land` fails
+          // the registry validation → the whole publish transaction ROLLS BACK (fail-closed, design §8.3).
+          const outcome = yield* bridge.publish(TestEvent, { sessionID: "ses_w5_fail", value: "v3" }).pipe(Effect.exit)
           // The publish dies (the hook failure surfaces as a transaction defect).
           expect(Exit.isFailure(outcome)).toBe(true)
           // NO durable event row and NO outbox row — the landing window is closed.
-          const eventRows = yield* db
-            .select()
-            .from(EventTable)
-            .where(eq(EventTable.aggregate_id, "ses_w5_fail"))
-            .all()
+          const eventRows = yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, "ses_w5_fail")).all()
           expect(eventRows.length).toBe(0)
           const outboxRows = yield* db.select().from(DeepAgentEventOutboxTable).all()
           expect(outboxRows.length).toBe(0)
-        } finally {
-          V2OutboxWriter.resetRegistry()
-          V2OutboxWriter.register(testRegistration)
-        }
-      }),
+        }),
+      V2OutboxWriter.EVENT_V2_OUTBOX_REGISTRY.register(brokenRegistration),
     ))
 
   test("an UNREGISTERED event type publishes normally but lands NO outbox row (fail-closed registry)", () =>
@@ -293,10 +279,10 @@ describe("W5 outbox writer — EventV2 publish lands in deepagent_event_outbox",
       }),
     ))
 
-  test("F7 defaultLayer 同库: the bridge + EventV2 + Database share ONE Database (event + outbox rows read from one db)", async () => {
+  test("F7 scoped registry 同库: the bridge + EventV2 + Database share ONE Database", async () => {
     // Database.defaultLayer resolves the on-disk path from Global; isolate the test home so the real
     // user data dir is never touched (and clean it up after). This composes the SAME wiring as
-    // EventV2Bridge.defaultLayer (which uses Layer.provide — its provided layers' outputs are not part
+    // EventV2Bridge production composition (which uses Layer.provide — its provided layers' outputs are not part
     // of the built context, so the test merges the outputs to OBSERVE the single shared Database; the
     // layer objects are identical, so one Database.defaultLayer instance is memoized in both graphs).
     const home = mkdtempSync(join(tmpdir(), "dsh-eventv2-default-"))
@@ -305,7 +291,9 @@ describe("W5 outbox writer — EventV2 publish lands in deepagent_event_outbox",
     try {
       await Effect.runPromise(
         Effect.gen(function* () {
-          const graph = EventV2Bridge.layer.pipe(
+          const graph = EventV2Bridge.layerWithRegistry(
+            V2OutboxWriter.EVENT_V2_OUTBOX_REGISTRY.register(testRegistration),
+          ).pipe(
             Layer.provideMerge(EventV2.defaultLayer),
             Layer.provideMerge(Database.defaultLayer),
             Layer.provideMerge(Global.defaultLayer),
@@ -318,11 +306,7 @@ describe("W5 outbox writer — EventV2 publish lands in deepagent_event_outbox",
           // in-transaction commit hook landed into the SAME db the event row committed to.
           const landed = yield* V2OutboxWriter.forEvent(db, published.id)
           expect(landed).toBeDefined()
-          const eventRow = yield* db
-            .select()
-            .from(EventTable)
-            .where(eq(EventTable.id, published.id))
-            .get()
+          const eventRow = yield* db.select().from(EventTable).where(eq(EventTable.id, published.id)).get()
           expect(eventRow?.id).toBe(published.id)
         }).pipe(Effect.scoped),
       )

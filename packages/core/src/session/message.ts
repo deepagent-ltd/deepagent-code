@@ -43,6 +43,7 @@ export class User extends Schema.Class<User>("Session.Message.User")({
   files: Prompt.fields.files,
   agents: Prompt.fields.agents,
   references: Prompt.fields.references,
+  format: Prompt.fields.format,
   type: Schema.Literal("user"),
   time: Schema.Struct({
     created: V2Schema.DateTimeUtcFromMillis,
@@ -156,6 +157,9 @@ export class Assistant extends Schema.Class<Assistant>("Session.Message.Assistan
     start: Schema.String.pipe(Schema.optional),
     end: Schema.String.pipe(Schema.optional),
   }).pipe(Schema.optional),
+  // RI-126: captured structured-output value (StructuredCaptured event). Independent of
+  // finish: the synthetic path ends "tool-calls", the wire path "stop".
+  structured: Schema.Unknown.pipe(Schema.optional),
   finish: Schema.String.pipe(Schema.optional),
   cost: Schema.Finite.pipe(Schema.optional),
   tokens: Schema.Struct({

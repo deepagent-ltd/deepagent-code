@@ -4,14 +4,9 @@ import { Effect } from "effect"
 import { EventV2 } from "@deepagent-code/core/event"
 import type { Database } from "@deepagent-code/core/database/database"
 import { contentDigest } from "@deepagent-code/core/contract/digest"
-import {
-  decodeEventEnvelope,
-  type EventEnvelope,
-} from "@deepagent-code/core/contract/event-envelope"
-import {
-  EventOutbox,
-  type OutboxRow,
-} from "@deepagent-code/core/deepagent/event-outbox"
+import { decodeEventEnvelope, type EventEnvelope } from "@deepagent-code/core/contract/event-envelope"
+import { EventOutbox, type OutboxRow } from "@deepagent-code/core/deepagent/event-outbox"
+import { EventConsumer } from "@deepagent-code/core/deepagent/event-consumer"
 import {
   EventRegistry,
   type EventRegistry as Registry,
@@ -72,7 +67,19 @@ export const outboxIdempotencyKey = (eventId: string): string => `eventv2:${even
  * type must go through the C5/contract registration procedure (contract successor rules) — never a
  * schema edit here.
  */
-const SESSION_LIFECYCLE_FACTS = ["session.created", "session.updated", "session.deleted"] as const
+const SESSION_LIFECYCLE_FACTS = [
+  "session.created",
+  "session.updated",
+  "session.diff",
+  "session.revert",
+  "session.deleted",
+  "session.next.prompt.admitted",
+  "session.next.prompt.promoted",
+  "session.execution.started",
+  "session.execution.succeeded",
+  "session.execution.failed",
+  "session.execution.interrupted",
+] as const
 
 const factRegistration = (eventType: string): EventTypeRegistration => ({
   eventType,
@@ -95,31 +102,9 @@ export const EVENT_V2_OUTBOX_REGISTRY: Registry = EventRegistry.createEventRegis
   SESSION_LIFECYCLE_FACTS.map(factRegistration),
 )
 
-let defaultRegistry: Registry = EVENT_V2_OUTBOX_REGISTRY
-
-/**
- * Register an additional C5 event type for the outbox landing (the designed extension point: a type
- * only lands once registered — the outbox refuses arbitrary self-authorizing types). Production seeds
- * the documented defaults; wiring/tests register their own types at startup.
- */
-export function register(registration: EventTypeRegistration): void {
-  defaultRegistry = defaultRegistry.register(registration)
-}
-
-/**
- * Restore the default registry to the documented seed (`EVENT_V2_OUTBOX_REGISTRY`). Test-teardown hook:
- * `register()` mutates the module-level registry for the process lifetime, so a test suite that
- * registers its own types MUST restore in `afterAll` (F8) or a later suite sees the stale registration.
- */
-export function resetRegistry(): void {
-  defaultRegistry = EVENT_V2_OUTBOX_REGISTRY
-}
-
 /** The deterministic C5 registration lookup used by the publish surface. */
-export const registrationForEventType = (
-  eventType: string,
-  registry: Registry = defaultRegistry,
-): EventTypeRegistration | undefined => registry.lookup(eventType)
+export const registrationForEventType = (eventType: string, registry: Registry): EventTypeRegistration | undefined =>
+  registry.lookup(eventType)
 
 /**
  * PURE mapping: an EventV2 `Payload` → a frozen C5 `EventEnvelope`, under a caller-supplied
@@ -131,10 +116,7 @@ export const registrationForEventType = (
  *   - producer      — eventv2 (must match `registration.allowedProducerKinds`, see the seed).
  *   - recordedAt    — 0: the EventV2 payload carries no timestamp; keeps the digest replay-stable.
  */
-export const envelopeFor = (
-  event: EventV2.Payload,
-  registration: EventTypeRegistration,
-): EventEnvelope => {
+export const envelopeFor = (event: EventV2.Payload, registration: EventTypeRegistration): EventEnvelope => {
   const data = (event.data ?? {}) as Record<string, unknown>
   const syncAggregate = EventV2.registry.get(event.type)?.sync?.aggregate
   const aggregateID =
@@ -198,6 +180,14 @@ export interface LandInput {
  */
 export function land(db: DatabaseClient, input: LandInput): Effect.Effect<LandResult, EventRegistry.EventPublishError> {
   return Effect.gen(function* () {
+    // The envelope asserts registeredBeforeProduce=true. Make that statement durable in the SAME
+    // transaction immediately before the first outbox insert; startup registration alone has a
+    // race with early producers and cannot prove this invariant after a crash.
+    yield* EventConsumer.register(db, {
+      consumerKey: "runtime",
+      deliveryContractVersion: "event.v1",
+      now: input.now,
+    }).pipe(Effect.orDie)
     const envelope = envelopeFor(input.event, input.registration)
     const existing = yield* EventOutbox.byIdempotencyKey(db, envelope.idempotencyKey)
     if (existing) return { kind: "already_landed", row: existing }

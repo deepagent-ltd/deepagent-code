@@ -1,4 +1,6 @@
 import fs from "fs/promises"
+import { mkdtempSync, rmSync } from "node:fs"
+import os from "os"
 import path from "path"
 import { afterAll, beforeAll, describe, expect } from "bun:test"
 import { Effect, Layer, Schema } from "effect"
@@ -53,11 +55,22 @@ describe("LocationServiceMap", () => {
   // boot completes instantly without any network or file-locking. Same pattern as
   // packages/core/test/models.test.ts.
   const ORIGINAL_DISABLE_FETCH = Flag.DEEPAGENT_CODE_DISABLE_MODELS_FETCH
+  const ORIGINAL_DATABASE = Flag.DEEPAGENT_CODE_DB
+  const ORIGINAL_TEST_HOME = process.env.DEEPAGENT_CODE_TEST_HOME
+  const testHome = mkdtempSync(path.join(os.tmpdir(), "location-layer-home-"))
   beforeAll(() => {
     Flag.DEEPAGENT_CODE_DISABLE_MODELS_FETCH = true
+    Flag.DEEPAGENT_CODE_DB = ":memory:"
+    // Isolate the Global roots: the default layer otherwise resolves the real ~/.deepagent/code
+    // and dies on any real user config field the V2 fail-closed contract rejects (config.ts).
+    process.env.DEEPAGENT_CODE_TEST_HOME = testHome
   })
   afterAll(() => {
     Flag.DEEPAGENT_CODE_DISABLE_MODELS_FETCH = ORIGINAL_DISABLE_FETCH
+    Flag.DEEPAGENT_CODE_DB = ORIGINAL_DATABASE
+    if (ORIGINAL_TEST_HOME === undefined) delete process.env.DEEPAGENT_CODE_TEST_HOME
+    if (ORIGINAL_TEST_HOME !== undefined) process.env.DEEPAGENT_CODE_TEST_HOME = ORIGINAL_TEST_HOME
+    rmSync(testHome, { recursive: true, force: true })
   })
 
   it.live("isolates location state while sharing location policy with catalog", () =>
@@ -105,11 +118,12 @@ describe("LocationServiceMap", () => {
 
           const blockedState = yield* update(blocked.path)
           expect(blockedState.providers.some((provider) => provider.id === ProviderV2.ID.make("test"))).toBe(false)
-          const expectedTools = ["application_context", ...BuiltInTools.builtinToolNames].sort()
+          const expectedTools = [
+            "application_context",
+            ...[...BuiltInTools.builtinToolNames].filter((name) => name !== "code_intel" && name !== "context_query"),
+          ].sort()
           expect(blockedState.tools.map((tool) => tool.name).sort()).toEqual(expectedTools)
           expect(blockedState.researcherTools).toEqual([
-            "code_intel",
-            "context_query",
             "glob",
             "grep",
             "read",
@@ -120,8 +134,6 @@ describe("LocationServiceMap", () => {
           expect(allowedState.providers.some((provider) => provider.id === ProviderV2.ID.make("test"))).toBe(true)
           expect(allowedState.tools.map((tool) => tool.name).sort()).toEqual(expectedTools)
           expect(allowedState.researcherTools).toEqual([
-            "code_intel",
-            "context_query",
             "glob",
             "grep",
             "read",

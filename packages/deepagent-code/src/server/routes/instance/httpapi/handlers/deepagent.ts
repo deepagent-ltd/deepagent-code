@@ -2,8 +2,6 @@ import path from "node:path"
 import { createHash } from "node:crypto"
 import { sql } from "drizzle-orm"
 import * as Log from "@deepagent-code/core/util/log"
-import { Config } from "@/config/config"
-import { configureGateway, reviewRunsDir } from "@/deepagent/config"
 import { readPinnedPacks, writePinnedPacks } from "@deepagent-code/core/deepagent/pinned-packs"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
@@ -213,7 +211,7 @@ const validateShipGateMatrix = (
 
 export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagent", (handlers) =>
   Effect.gen(function* () {
-    const config = yield* Config.Service
+    const gateway = yield* AgentGateway.Runtime
     // V3.9 §C/§D services — provided by the app runtime the server executes in.
     const flags = yield* RuntimeFlags.Service
     const sessions = yield* Session.Service
@@ -257,8 +255,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
     const resolveReviewRunsDir = Effect.fn("DeepAgentHttpApi.resolveReviewRunsDir")(function* () {
       const route = yield* WorkspaceRouteContext
       void route.directory
-      const cfg = yield* config.get()
-      return reviewRunsDir(cfg)
+      return gateway.runsDir
     })
 
     const reviews = Effect.fn("DeepAgentHttpApi.reviews")(function* () {
@@ -268,22 +265,17 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       return { reviews: list }
     })
 
-    // The active workspace directory — durable knowledge stores root under the gateway baseDir, keyed
-    // by this path (docs/34 §8). configureGateway points the knowledge-source at baseDir first.
+    // The active workspace directory. Knowledge operations below execute inside the immutable V2
+    // Gateway storage runtime captured by this HTTP root.
     const workspaceDir = Effect.fn("DeepAgentHttpApi.workspaceDir")(function* () {
-      const route = yield* WorkspaceRouteContext
-      const cfg = yield* config.get()
-      configureGateway(cfg)
-      return route.directory
+      return (yield* WorkspaceRouteContext).directory
     })
 
     // The durable memory dir for the active workspace (RejectedBuffer fingerprint cache lives here).
     const workspaceMemoryDir = Effect.fn("DeepAgentHttpApi.workspaceMemoryDir")(function* () {
       const route = yield* WorkspaceRouteContext
       void route.directory
-      const cfg = yield* config.get()
-      configureGateway(cfg)
-      return path.join(path.dirname(reviewRunsDir(cfg)), "memory")
+      return path.join(gateway.baseDir, "memory")
     })
 
     const promote = Effect.fn("DeepAgentHttpApi.promote")(function* (ctx) {
@@ -330,7 +322,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
               ctx.payload.approval,
               now,
             ),
-            AgentGateway.DeepAgentKnowledgeSource.storesForWorkspace(dir),
+            gateway.withStorage(() => AgentGateway.DeepAgentKnowledgeSource.storesForWorkspace(dir)),
             {
               ...(ctx.payload.snapshotId ? { reviewRef: ctx.payload.snapshotId } : {}),
               transitionedAt: Date.parse(now),
@@ -352,7 +344,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
           const fingerprint = AgentGateway.DeepAgentPromotion.fingerprint(ctx.payload.candidate)
           const doc = AgentGateway.DeepAgentPromotion.rejectCandidate(
             ctx.payload.candidate,
-            AgentGateway.DeepAgentKnowledgeSource.storesForWorkspace(dir),
+            gateway.withStorage(() => AgentGateway.DeepAgentKnowledgeSource.storesForWorkspace(dir)),
             ctx.payload.reason,
             { type: "human", id: "legacy-knowledge-reject-route" },
           )
@@ -395,7 +387,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
         try: () => {
           // P0-1b: return ALL three states so the Review UI can also revoke an already-approved
           // entry. Sorted by id for a stable list (the UI filters/groups by approval_status).
-          const items = [...AgentGateway.DeepAgentKnowledgeSource.listAllForWorkspace(dir)]
+          const items = [...gateway.withStorage(() => AgentGateway.DeepAgentKnowledgeSource.listAllForWorkspace(dir))]
             // Skills are agent-executable procedures, not human-readable facts — the governance UI
             // only surfaces learned facts (knowledge/memory/strategy/methodology/failure_dossier).
             // (Domain-pack seed docs are already excluded upstream by knowledge-source.)
@@ -412,7 +404,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
     const knowledgeReviewSummary = Effect.fn("DeepAgentHttpApi.knowledgeReviewSummary")(function* () {
       const dir = yield* workspaceDir()
       return yield* Effect.try({
-        try: () => AgentGateway.DeepAgentKnowledgeSource.reviewSummaryForWorkspace(dir),
+        try: () => gateway.withStorage(() => AgentGateway.DeepAgentKnowledgeSource.reviewSummaryForWorkspace(dir)),
         catch: (error) =>
           new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
       })
@@ -434,19 +426,21 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       return yield* Effect.try({
         try: () => ({
           updated: knowledgeItem(
-            AgentGateway.DeepAgentKnowledgeSource.commitReviewDecisionForWorkspace(
-              dir,
-              {
-                sourceStore: payload.sourceStore,
-                id: payload.id,
-                version: payload.version,
-                hash: payload.hash,
-                candidateId: payload.candidateId,
-                fingerprint: payload.fingerprint,
-                governanceRevision: payload.expectedGovernanceRevision,
-              },
-              decision,
-              { type: "human", id: SERVER_USER_ID },
+            gateway.withStorage(() =>
+              AgentGateway.DeepAgentKnowledgeSource.commitReviewDecisionForWorkspace(
+                dir,
+                {
+                  sourceStore: payload.sourceStore,
+                  id: payload.id,
+                  version: payload.version,
+                  hash: payload.hash,
+                  candidateId: payload.candidateId,
+                  fingerprint: payload.fingerprint,
+                  governanceRevision: payload.expectedGovernanceRevision,
+                },
+                decision,
+                { type: "human", id: SERVER_USER_ID },
+              ),
             ),
           ),
         }),
@@ -492,33 +486,36 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
             document: exactDocument,
             actor,
           })
-      if (!parent || (!document && !prior)) return { ...decision, release_revocation: { state: "not_released" as const } }
-      const revocation = prior ?? (yield* AgentGateway.DeepAgentReleasedSnapshot.revoke(
-        database.db,
-        {
-          scope,
-          expectedParent: parent,
-          document: document!,
-          actor,
-        },
-        releaseDocumentAuthority(dir),
-      ).pipe(
-        Effect.mapError((error) =>
-          error instanceof AgentGateway.DeepAgentReleasedSnapshot.SnapshotConflictError ||
-          error instanceof AgentGateway.DeepAgentReleasedSnapshot.SnapshotIdentityConflictError ||
-          error instanceof AgentGateway.DeepAgentReleasedSnapshot.SnapshotDocumentError
-            ? new DeepAgentKnowledgeReviewConflictError({
-                message:
-                  error instanceof AgentGateway.DeepAgentReleasedSnapshot.SnapshotConflictError ||
+      if (!parent || (!document && !prior))
+        return { ...decision, release_revocation: { state: "not_released" as const } }
+      const revocation =
+        prior ??
+        (yield* AgentGateway.DeepAgentReleasedSnapshot.revoke(
+          database.db,
+          {
+            scope,
+            expectedParent: parent,
+            document: document!,
+            actor,
+          },
+          releaseDocumentAuthority(dir),
+        ).pipe(
+          Effect.mapError((error) =>
+            error instanceof AgentGateway.DeepAgentReleasedSnapshot.SnapshotConflictError ||
+            error instanceof AgentGateway.DeepAgentReleasedSnapshot.SnapshotIdentityConflictError ||
+            error instanceof AgentGateway.DeepAgentReleasedSnapshot.SnapshotDocumentError
+              ? new DeepAgentKnowledgeReviewConflictError({
+                  message:
+                    error instanceof AgentGateway.DeepAgentReleasedSnapshot.SnapshotConflictError ||
                     error instanceof AgentGateway.DeepAgentReleasedSnapshot.SnapshotIdentityConflictError
-                    ? "released knowledge parent changed while the rejection was committing; retry the same decision"
-                    : error.reason,
-                sourceStore: ctx.payload.sourceStore,
-                id: ctx.payload.id,
-              })
-            : new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
-        ),
-      ))
+                      ? "released knowledge parent changed while the rejection was committing; retry the same decision"
+                      : error.reason,
+                  sourceStore: ctx.payload.sourceStore,
+                  id: ctx.payload.id,
+                })
+              : new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
+          ),
+        ))
       return {
         ...decision,
         release_revocation: {
@@ -563,7 +560,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
     })
 
     const releaseDocumentAuthority = (dir: string) => {
-      const stores = AgentGateway.DeepAgentKnowledgeSource.storesForWorkspace(dir)
+      const stores = gateway.withStorage(() => AgentGateway.DeepAgentKnowledgeSource.storesForWorkspace(dir))
       const userGlobal = stores[0]?.documentStore
       const project = stores[1]?.documentStore
       if (!userGlobal || !project) throw new Error("durable release document authority is unavailable")
@@ -573,7 +570,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
     const knowledgeReleaseBaseline = Effect.fn("DeepAgentHttpApi.knowledgeReleaseBaseline")(function* (ctx) {
       const dir = yield* workspaceDir()
       return yield* Effect.gen(function* () {
-        yield* Effect.promise(AgentGateway.flushKnowledgeSeed)
+        yield* Effect.promise(gateway.ensureKnowledgeSeeded)
         const scope = yield* releasedScope(dir)
         const current = yield* AgentGateway.DeepAgentReleasedSnapshot.current(database.db, scope)
         if (current)
@@ -621,7 +618,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
     const knowledgeShipGate = Effect.fn("DeepAgentHttpApi.knowledgeShipGate")(function* (ctx) {
       const dir = yield* workspaceDir()
       return yield* Effect.gen(function* () {
-        yield* Effect.promise(AgentGateway.flushKnowledgeSeed)
+        yield* Effect.promise(gateway.ensureKnowledgeSeeded)
         const scope = yield* releasedScope(dir)
         const parent = yield* AgentGateway.DeepAgentReleasedSnapshot.current(database.db, scope)
         if (!parent) return yield* new DeepAgentPromotionError({ message: "released knowledge baseline is required" })
@@ -842,7 +839,8 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
     const envFacts = Effect.fn("DeepAgentHttpApi.envFacts")(function* () {
       const dir = yield* workspaceDir()
       return yield* Effect.try({
-        try: () => AgentGateway.DeepAgentKnowledgeSource.environmentFactAdoptionFor(dir).resolve(),
+        try: () =>
+          gateway.withStorage(() => AgentGateway.DeepAgentKnowledgeSource.environmentFactAdoptionFor(dir).resolve()),
         catch: (error) =>
           new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
       })
@@ -852,10 +850,12 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       const dir = yield* workspaceDir()
       return yield* Effect.try({
         try: () => {
-          const adoption = AgentGateway.DeepAgentKnowledgeSource.environmentFactAdoptionFor(dir)
-          if (ctx.payload.decision === "adopt") adoption.adopt(ctx.payload.factId, now())
-          else adoption.reject(ctx.payload.factId, now())
-          return { ok: true, factId: ctx.payload.factId }
+          return gateway.withStorage(() => {
+            const adoption = AgentGateway.DeepAgentKnowledgeSource.environmentFactAdoptionFor(dir)
+            if (ctx.payload.decision === "adopt") adoption.adopt(ctx.payload.factId, now())
+            else adoption.reject(ctx.payload.factId, now())
+            return { ok: true, factId: ctx.payload.factId }
+          })
         },
         catch: (error) =>
           new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
@@ -866,16 +866,18 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       const dir = yield* workspaceDir()
       return yield* Effect.try({
         try: () => {
-          const adoption = AgentGateway.DeepAgentKnowledgeSource.environmentFactAdoptionFor(dir)
-          const { updatedId } = adoption.modify({
-            factId: ctx.payload.factId,
-            description: ctx.payload.description,
-            body: ctx.payload.body,
-            ...(ctx.payload.domain !== undefined ? { domain: ctx.payload.domain } : {}),
-            mode: ctx.payload.mode,
-            now: now(),
+          return gateway.withStorage(() => {
+            const adoption = AgentGateway.DeepAgentKnowledgeSource.environmentFactAdoptionFor(dir)
+            const { updatedId } = adoption.modify({
+              factId: ctx.payload.factId,
+              description: ctx.payload.description,
+              body: ctx.payload.body,
+              ...(ctx.payload.domain !== undefined ? { domain: ctx.payload.domain } : {}),
+              mode: ctx.payload.mode,
+              now: now(),
+            })
+            return { ok: true, factId: updatedId }
           })
-          return { ok: true, factId: updatedId }
         },
         catch: (error) =>
           new DeepAgentPromotionError({ message: error instanceof Error ? error.message : String(error) }),
@@ -1099,7 +1101,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       yield* requireWiki()
       const workspacePath = yield* workspaceDir()
       const typeFilter = ctx.query.type
-      const graph = openWikiGraph({ workspacePath })
+      const graph = gateway.withStorage(() => openWikiGraph({ workspacePath }))
       const pages = graph
         .allDocs()
         .filter((doc) => (typeFilter ? doc.type === typeFilter : true))
@@ -1117,7 +1119,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
     const wikiPage = Effect.fn("DeepAgentHttpApi.wikiPage")(function* (ctx) {
       yield* requireWiki()
       const workspacePath = yield* workspaceDir()
-      const service = openWikiService({ workspacePath })
+      const service = gateway.withStorage(() => openWikiService({ workspacePath }))
       const page = yield* service
         .renderPage({ docId: ctx.query.docId, scope: ctx.query.scope })
         .pipe(Effect.mapError((e) => new DeepAgentPromotionError({ message: e.reason ?? "page not found" })))
@@ -1127,7 +1129,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
     const wikiSearch = Effect.fn("DeepAgentHttpApi.wikiSearch")(function* (ctx) {
       yield* requireWiki()
       const workspacePath = yield* workspaceDir()
-      const index = openWikiSearchIndex({ workspacePath })
+      const index = gateway.withStorage(() => openWikiSearchIndex({ workspacePath }))
       // The index is a rebuildable projection with no auto-refresh — rebuild from the graph before the
       // query, then close the sqlite handle. Both are default-safe (never fail).
       yield* index.rebuild()
@@ -1147,7 +1149,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       const workspacePath = yield* workspaceDir()
       const memoryDir = yield* workspaceMemoryDir()
       // Inject the REAL evidence-gate (same validate() promotion uses) — not the trivial default.
-      const service = openWikiService({ workspacePath, gate: buildWikiEditGate(memoryDir) })
+      const service = gateway.withStorage(() => openWikiService({ workspacePath, gate: buildWikiEditGate(memoryDir) }))
       const page = yield* service
         .editKnowledge({
           docId: ctx.payload.docId,
@@ -1165,7 +1167,7 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
     const wikiExecutionArchive = Effect.fn("DeepAgentHttpApi.wikiExecutionArchive")(function* (ctx) {
       yield* requireWiki()
       const workspacePath = yield* workspaceDir()
-      const service = openWikiService({ workspacePath, sessionID: ctx.query.sessionID })
+      const service = gateway.withStorage(() => openWikiService({ workspacePath, sessionID: ctx.query.sessionID }))
       const archive = yield* service.renderExecutionArchive({ sessionId: ctx.query.sessionID })
       return {
         sessionId: archive.sessionId,

@@ -9,6 +9,8 @@ import { DapClient } from "./client"
 import type { AdapterSpec, DapEvent, SessionState, SessionStatus } from "./types"
 
 const log = Log.create({ service: "debug.service" })
+const MAX_DEBUG_SESSIONS = 32
+const MAX_EVENT_WAITERS = 32
 
 /**
  * D1 (S1-v3.5): `DebugService` — the DAP debug-session state machine.
@@ -117,12 +119,13 @@ export namespace DebugService {
     client: DapClient.Info
     state: SessionState
     /** One-shot event waiters keyed by DAP event name. */
-    waiters: Map<string, Array<(event: DapEvent) => void>>
+    waiters: Map<string, Set<{ resolve: (event: DapEvent | undefined) => void; timer: ReturnType<typeof setTimeout> }>>
     unsubscribe: () => void
   }
 
   interface State {
     sessions: Map<string, Session>
+    starting: Set<string>
     /** Instance context captured at first use; events publish with this location. */
     instance: import("@/project/instance-context").InstanceContext
   }
@@ -135,11 +138,22 @@ export namespace DebugService {
 
       const state = yield* InstanceState.make<State>(
         Effect.fnUntraced(function* (instance) {
-          const s: State = { sessions: new Map(), instance }
+          const s: State = { sessions: new Map(), starting: new Set(), instance }
           yield* Effect.addFinalizer(() =>
             Effect.promise(async () => {
+              for (const session of s.sessions.values()) {
+                session.unsubscribe()
+                for (const waiters of session.waiters.values()) {
+                  for (const waiter of waiters) {
+                    clearTimeout(waiter.timer)
+                    waiter.resolve(undefined)
+                  }
+                }
+                session.waiters.clear()
+              }
               await Promise.all([...s.sessions.values()].map((session) => session.client.shutdown().catch(() => {})))
               s.sessions.clear()
+              s.starting.clear()
             }),
           )
           return s
@@ -155,6 +169,16 @@ export namespace DebugService {
 
       const now = () => Date.now()
 
+      const clearWaiters = (session: Session) => {
+        for (const waiters of session.waiters.values()) {
+          for (const waiter of waiters) {
+            clearTimeout(waiter.timer)
+            waiter.resolve(undefined)
+          }
+        }
+        session.waiters.clear()
+      }
+
       const transition = (session: Session, instance: State["instance"], patch: Partial<SessionState>): SessionState => {
         session.state = { ...session.state, ...patch, updatedAt: now() }
         publish(instance, events.publish(Event.Updated, { sessionId: session.state.id, status: session.state.status }))
@@ -164,9 +188,12 @@ export namespace DebugService {
       const onAdapterEvent = (session: Session, instance: State["instance"]) => (event: DapEvent) => {
         // Resolve any one-shot waiters first (start() awaits "initialized").
         const waiters = session.waiters.get(event.event)
-        if (waiters?.length) {
-          session.waiters.set(event.event, [])
-          for (const w of waiters) w(event)
+        if (waiters?.size) {
+          session.waiters.delete(event.event)
+          for (const waiter of waiters) {
+            clearTimeout(waiter.timer)
+            waiter.resolve(event)
+          }
         }
         switch (event.event) {
           case "stopped": {
@@ -208,12 +235,25 @@ export namespace DebugService {
       // ahead of the subscription. The returned promise is awaited via Effect.
       const registerWaiter = (session: Session, name: string, timeoutMs: number): Promise<DapEvent | undefined> =>
         new Promise<DapEvent | undefined>((resolve) => {
-          const list = session.waiters.get(name) ?? []
-          list.push(resolve)
-          session.waiters.set(name, list)
+          const current = session.waiters.get(name)
+          const waiters = current ?? new Set<{ resolve: typeof resolve; timer: ReturnType<typeof setTimeout> }>()
+          if (waiters.size >= MAX_EVENT_WAITERS) {
+            resolve(undefined)
+            return
+          }
+          if (!current) session.waiters.set(name, waiters)
           // Resolve undefined on timeout rather than reject — a missing
           // `initialized` is non-fatal (some adapters skip configurationDone).
-          setTimeout(() => resolve(undefined), timeoutMs)
+          const waiter = {
+            resolve,
+            timer: setTimeout(() => {
+              waiters.delete(waiter)
+              if (waiters.size === 0 && session.waiters.get(name) === waiters) session.waiters.delete(name)
+              resolve(undefined)
+            }, timeoutMs),
+          }
+          waiter.timer.unref?.()
+          waiters.add(waiter)
         })
 
       const getSession = (sessionId: string) =>
@@ -234,66 +274,78 @@ export namespace DebugService {
       const start: Interface["start"] = (input) =>
         Effect.gen(function* () {
           const s = yield* InstanceState.get(state)
-          if (s.sessions.has(input.sessionId)) {
+          if (s.sessions.has(input.sessionId) || s.starting.has(input.sessionId)) {
             return yield* Effect.fail(new Error(`debug session "${input.sessionId}" already exists`))
           }
+          if (s.sessions.size + s.starting.size >= MAX_DEBUG_SESSIONS) {
+            return yield* Effect.fail(new Error(`debug session limit exceeded (${MAX_DEBUG_SESSIONS})`))
+          }
+          s.starting.add(input.sessionId)
 
-          // R0 gate: privilege fail-closed first, then approve-once-per-session.
-          yield* base
-            .gate({
-              sessionKey: input.sessionId,
-              privileges: input.spec.privileges,
-              requestApproval: input.requestApproval ?? (() => Effect.void),
+          return yield* Effect.gen(function* () {
+            // R0 gate: privilege fail-closed first, then approve-once-per-session.
+            yield* base
+              .gate({
+                sessionKey: input.sessionId,
+                privileges: input.spec.privileges,
+                requestApproval: input.requestApproval ?? (() => Effect.void),
+              })
+              .pipe(Effect.mapError((e) => (e instanceof Error ? e : new Error(String(e)))))
+
+            const cwd = input.cwd ?? s.instance.directory
+
+            const client = yield* Effect.tryPromise({
+              try: () => DapClient.create({ spec: input.spec, cwd, env: input.env }),
+              catch: (e) => (e instanceof Error ? e : new Error(String(e))),
             })
-            .pipe(Effect.mapError((e) => (e instanceof Error ? e : new Error(String(e)))))
 
-          const cwd = input.cwd ?? s.instance.directory
+            const initial: SessionState = {
+              id: input.sessionId,
+              adapterId: input.spec.id,
+              status: "initialized",
+              breakpoints: [],
+              workdir: cwd,
+              createdAt: now(),
+              updatedAt: now(),
+            }
+            const session: Session = {
+              client,
+              state: initial,
+              waiters: new Map(),
+              unsubscribe: () => {},
+            }
+            session.unsubscribe = client.onEvent(onAdapterEvent(session, s.instance))
+            s.sessions.set(input.sessionId, session)
 
-          const client = yield* Effect.tryPromise({
-            try: () => DapClient.create({ spec: input.spec, cwd, env: input.env }),
-            catch: (e) => (e instanceof Error ? e : new Error(String(e))),
-          })
+            return yield* Effect.gen(function* () {
+              // launch/attach → wait for `initialized` event → configurationDone.
+              transition(session, s.instance, { status: "configuring" })
+              const initializedEvent = registerWaiter(session, "initialized", 20_000)
+              yield* Effect.tryPromise({
+                try: () => (input.attach ? client.attach(input.attach) : client.launch(input.launch ?? {})),
+                catch: (e) => (e instanceof Error ? e : new Error(String(e))),
+              })
+              yield* Effect.promise(() => initializedEvent)
+              if (client.capabilities.supportsConfigurationDoneRequest) {
+                yield* Effect.tryPromise({
+                  try: () => client.configurationDone(),
+                  catch: (e) => (e instanceof Error ? e : new Error(String(e))),
+                })
+              }
 
-          const initial: SessionState = {
-            id: input.sessionId,
-            adapterId: input.spec.id,
-            status: "initialized",
-            breakpoints: [],
-            workdir: cwd,
-            createdAt: now(),
-            updatedAt: now(),
-          }
-          const session: Session = {
-            client,
-            state: initial,
-            waiters: new Map(),
-            unsubscribe: () => {},
-          }
-          session.unsubscribe = client.onEvent(onAdapterEvent(session, s.instance))
-          s.sessions.set(input.sessionId, session)
-
-          // launch/attach → wait for `initialized` event → configurationDone.
-          // Per DAP: the adapter signals readiness for configuration with the
-          // `initialized` event; configurationDone unblocks it to run.
-          transition(session, s.instance, { status: "configuring" })
-          // Register the waiter BEFORE sending launch so we never miss the event.
-          const initializedEvent = registerWaiter(session, "initialized", 20_000)
-          yield* Effect.tryPromise({
-            try: () =>
-              input.attach ? client.attach(input.attach) : client.launch(input.launch ?? {}),
-            catch: (e) => (e instanceof Error ? e : new Error(String(e))),
-          })
-          // Wait for `initialized` (best-effort; undefined on timeout).
-          yield* Effect.promise(() => initializedEvent)
-          yield* Effect.tryPromise({
-            try: () => client.configurationDone(),
-            catch: (e) => (e instanceof Error ? e : new Error(String(e))),
-          }).pipe(Effect.catch(() => Effect.void))
-
-          // If a stopped event already arrived during the handshake, keep it;
-          // otherwise the program is running.
-          if (session.state.status === "configuring") transition(session, s.instance, { status: "running" })
-          return session.state
+              if (session.state.status === "configuring") transition(session, s.instance, { status: "running" })
+              return session.state
+            }).pipe(
+              Effect.onError(() =>
+                Effect.promise(async () => {
+                  session.unsubscribe()
+                  clearWaiters(session)
+                  s.sessions.delete(input.sessionId)
+                  await session.client.shutdown().catch(() => {})
+                }),
+              ),
+            )
+          }).pipe(Effect.ensuring(Effect.sync(() => s.starting.delete(input.sessionId))))
         }).pipe(
           Effect.tapCause((cause) => Effect.sync(() => log.warn("debug start failed", { cause: String(cause) }))),
         )
@@ -374,6 +426,7 @@ export namespace DebugService {
           const session = s.sessions.get(sessionId)
           if (!session) return yield* Effect.fail(new Error(`no debug session "${sessionId}"`))
           session.unsubscribe()
+          clearWaiters(session)
           yield* Effect.promise(() => session.client.shutdown().catch(() => {}))
           const final = transition(session, s.instance, { status: "terminated" })
           s.sessions.delete(sessionId)

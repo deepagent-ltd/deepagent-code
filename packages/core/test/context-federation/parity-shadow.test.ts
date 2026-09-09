@@ -1,15 +1,24 @@
-import { afterEach, describe, expect, test } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { eq } from "drizzle-orm"
 import { Effect, Layer } from "effect"
 import { Database } from "../../src/database/database"
 import { SelectionWriter } from "../../src/context-federation/selection-writer"
-import { ParityShadow, setShadowModeForTest } from "../../src/context-federation/parity-shadow"
+import { ParityShadow } from "../../src/context-federation/parity-shadow"
 import { budgetSelection } from "../../src/context-federation/selection-budget"
 import { Hash } from "../../src/util/hash"
-import { type QueryEnvelope, type QueryResultV2, type GraphStatusRecord } from "../../src/context-federation/resolver-v2"
+import {
+  type QueryEnvelope,
+  type QueryResultV2,
+  type GraphStatusRecord,
+} from "../../src/context-federation/resolver-v2"
 import { SessionActivityTable, SessionContextSelectionTable } from "../../src/context-federation/session-sql"
 import { ContextCandidate, ContextFederation } from "../../src/context-federation/federation"
-import { LocationKey, ProjectScopeKey, SecurityNamespaceID, type ContextRef } from "../../src/context-federation/reference"
+import {
+  LocationKey,
+  ProjectScopeKey,
+  SecurityNamespaceID,
+  type ContextRef,
+} from "../../src/context-federation/reference"
 import {
   LocationIdentityTable,
   ProjectScopeIdentityTable,
@@ -76,7 +85,12 @@ function envelope(overrides?: Partial<QueryEnvelope>): QueryEnvelope {
   }
 }
 
-function status(graph: GraphKind, state: GraphStatus["status"], revision: string, candidateCount: number): GraphStatusRecord {
+function status(
+  graph: GraphKind,
+  state: GraphStatus["status"],
+  revision: string,
+  candidateCount: number,
+): GraphStatusRecord {
   return {
     graph,
     status: state,
@@ -90,7 +104,10 @@ function status(graph: GraphKind, state: GraphStatus["status"], revision: string
   }
 }
 
-function result(candidates: readonly ContextCandidate[], statusesByGraph?: Record<GraphKind, GraphStatus["status"]>): QueryResultV2 {
+function result(
+  candidates: readonly ContextCandidate[],
+  statusesByGraph?: Record<GraphKind, GraphStatus["status"]>,
+): QueryResultV2 {
   const byGraph = new Map<GraphKind, ContextCandidate[]>()
   for (const candidate of candidates) {
     const list = byGraph.get(candidate.ref.graph) ?? []
@@ -108,7 +125,10 @@ function result(candidates: readonly ContextCandidate[], statusesByGraph?: Recor
     ),
     candidates: byGraph.get(graph) ?? [],
   }))
-  const graphStatuses = Object.fromEntries(results.map((entry) => [entry.graph, entry.status])) as Record<GraphKind, GraphStatusRecord>
+  const graphStatuses = Object.fromEntries(results.map((entry) => [entry.graph, entry.status])) as Record<
+    GraphKind,
+    GraphStatusRecord
+  >
   return {
     queryFingerprint: "qf-parity",
     authorizationFingerprint: "af-parity",
@@ -163,18 +183,22 @@ function snapshot(
   return { selectedRefs, graphStatuses }
 }
 
-afterEach(() => setShadowModeForTest(false))
-
 describe("ParityShadow (C3-07: recorded parity + side-effect-free shadow)", () => {
   test("parity hash is deterministic and the delta reflects a changed selection", () => {
-    const recorded = snapshot(["a"], [
-      { graph: "code", status: "ready" },
-      { graph: "documents", status: "empty" },
-    ])
-    const v2 = snapshot(["a", "b"], [
-      { graph: "code", status: "ready" },
-      { graph: "documents", status: "empty" },
-    ])
+    const recorded = snapshot(
+      ["a"],
+      [
+        { graph: "code", status: "ready" },
+        { graph: "documents", status: "empty" },
+      ],
+    )
+    const v2 = snapshot(
+      ["a", "b"],
+      [
+        { graph: "code", status: "ready" },
+        { graph: "documents", status: "empty" },
+      ],
+    )
     const first = ParityShadow.buildRecordedParity(recorded, v2, "provider_contract_replay", "input-1")
     const second = ParityShadow.buildRecordedParity(recorded, v2, "provider_contract_replay", "input-1")
     expect(second.hash).toBe(first.hash)
@@ -192,50 +216,66 @@ describe("ParityShadow (C3-07: recorded parity + side-effect-free shadow)", () =
   })
 
   test("the delta is explainable: added/removed refs + per-graph status mapping", () => {
-    const recorded = snapshot(["a", "b"], [
-      { graph: "code", status: "ready" },
-      { graph: "knowledge", status: "ready" },
-    ])
-    const v2 = snapshot(["a", "c"], [
-      { graph: "code", status: "ready" },
-      { graph: "knowledge", status: "degraded_unavailable" },
-    ])
+    const recorded = snapshot(
+      ["a", "b"],
+      [
+        { graph: "code", status: "ready" },
+        { graph: "knowledge", status: "ready" },
+      ],
+    )
+    const v2 = snapshot(
+      ["a", "c"],
+      [
+        { graph: "code", status: "ready" },
+        { graph: "knowledge", status: "degraded_unavailable" },
+      ],
+    )
     const parity = ParityShadow.buildRecordedParity(recorded, v2, "provider_contract_replay", "input-e")
     expect(parity.delta.added).toEqual(["c"])
     expect(parity.delta.removed).toEqual(["b"])
     expect(parity.delta.common).toBe(1)
-    expect(parity.graphMapping.knowledge).toMatchObject({ recorded: "ready", v2: "degraded_unavailable", changed: true })
+    expect(parity.graphMapping.knowledge).toMatchObject({
+      recorded: "ready",
+      v2: "degraded_unavailable",
+      changed: true,
+    })
     expect(parity.graphMapping.code).toMatchObject({ recorded: "ready", v2: "ready", changed: false })
     expect(parity.hash.length).toBe(64)
   })
 
   test("shadow runs the V2 resolver but never dispatches (0 transport/tool calls)", async () => {
-    setShadowModeForTest(true)
     const harness = shadowHarness()
     const out = await harness.run(
       Effect.gen(function* () {
         const svc = yield* ParityShadow.Service
         let transportCalls = 0
         let toolCalls = 0
-        return yield* svc.runShadow({
-          case: "provider_contract_replay",
-          inputFingerprint: "input-shadow",
-          recorded: snapshot([], [
-            { graph: "code", status: "empty" },
-            { graph: "documents", status: "empty" },
-            { graph: "knowledge", status: "empty" },
-            { graph: "memory", status: "empty" },
-          ]),
-          resolve: () => Effect.succeed(result([candidate({ graph: "code", entityId: "a" })])),
-          dispatch: {
-            transport: () => Effect.sync(() => {
-              transportCalls += 1
-            }),
-            tool: () => Effect.sync(() => {
-              toolCalls += 1
-            }),
-          },
-        }).pipe(Effect.map((value) => ({ value, transportCalls, toolCalls })))
+        return yield* svc
+          .runShadow({
+            case: "provider_contract_replay",
+            inputFingerprint: "input-shadow",
+            recorded: snapshot(
+              [],
+              [
+                { graph: "code", status: "empty" },
+                { graph: "documents", status: "empty" },
+                { graph: "knowledge", status: "empty" },
+                { graph: "memory", status: "empty" },
+              ],
+            ),
+            resolve: () => Effect.succeed(result([candidate({ graph: "code", entityId: "a" })])),
+            dispatch: {
+              transport: () =>
+                Effect.sync(() => {
+                  transportCalls += 1
+                }),
+              tool: () =>
+                Effect.sync(() => {
+                  toolCalls += 1
+                }),
+            },
+          })
+          .pipe(Effect.map((value) => ({ value, transportCalls, toolCalls })))
       }),
     )
     expect(out.value.mode).toBe("shadow")
@@ -244,7 +284,6 @@ describe("ParityShadow (C3-07: recorded parity + side-effect-free shadow)", () =
   })
 
   test("shadow writes NO selection rows and leaves the recorded dispatched selection unchanged", async () => {
-    setShadowModeForTest(true)
     const harness = dbShadowHarness()
     await harness.run(
       Effect.gen(function* () {
@@ -252,13 +291,24 @@ describe("ParityShadow (C3-07: recorded parity + side-effect-free shadow)", () =
         const svc = yield* ParityShadow.Service
         const env = envelope()
         const batch = budgetSelection(result([candidate({ graph: "code", entityId: "a" })]), env)
-        const sel = SelectionWriter.buildSelectionEnvelope(batch, result([candidate({ graph: "code", entityId: "a" })]), env, {
-          revision: 0,
-          triggerInputId: triggerId,
-          providerTurnSeq: 1,
-          now: 1_000,
-        })
-        expect((yield* writer.write({ envelope: sel, attempt: { attemptId: "a", providerTurnSeq: 1, requestHash: "r", providerId: "p" }, now: 1_000 })).kind).toBe("written")
+        const sel = SelectionWriter.buildSelectionEnvelope(
+          batch,
+          result([candidate({ graph: "code", entityId: "a" })]),
+          env,
+          {
+            revision: 0,
+            triggerInputId: triggerId,
+            providerTurnSeq: 1,
+            now: 1_000,
+          },
+        )
+        expect(
+          (yield* writer.write({
+            envelope: sel,
+            attempt: { attemptId: "a", providerTurnSeq: 1, requestHash: "r", providerId: "p" },
+            now: 1_000,
+          })).kind,
+        ).toBe("written")
 
         const db = (yield* Database.Service).db
         const before = yield* db
@@ -299,7 +349,7 @@ describe("ParityShadow (C3-07: recorded parity + side-effect-free shadow)", () =
 })
 
 function shadowHarness() {
-  const layer = ParityShadow.layer
+  const layer = ParityShadow.layerWith(true)
   return {
     run: <A, E>(effect: Effect.Effect<A, E, ParityShadow.Service>) =>
       Effect.runPromise(effect.pipe(Effect.provide(layer), Effect.scoped)),
@@ -309,7 +359,7 @@ function shadowHarness() {
 function dbShadowHarness() {
   const database = Database.layerFromPath(":memory:")
   const writer = SelectionWriter.layer.pipe(Layer.provide(database))
-  const parityShadow = ParityShadow.layer
+  const parityShadow = ParityShadow.layerWith(true)
   const layer = Layer.mergeAll(database, writer, parityShadow)
   return {
     run: <A, E>(effect: Effect.Effect<A, E, Database.Service | SelectionWriter.Service | ParityShadow.Service>) =>
@@ -325,7 +375,10 @@ function dbShadowHarness() {
 function seedSession() {
   return Effect.gen(function* () {
     const db = (yield* Database.Service).db
-    yield* db.insert(SecurityNamespaceTable).values({ id: ns, kind: "implicit_local", binding_hash: Hash.sha256(ns), created_at: 1_000 }).run()
+    yield* db
+      .insert(SecurityNamespaceTable)
+      .values({ id: ns, kind: "implicit_local", binding_hash: Hash.sha256(ns), created_at: 1_000 })
+      .run()
     yield* db
       .insert(ProjectScopeIdentityTable)
       .values({
@@ -348,18 +401,43 @@ function seedSession() {
         created_at: 1_000,
       })
       .run()
-    yield* db.insert(ProjectTable).values({ id: projectId, worktree: AbsolutePath.make("/tmp/parity-test"), sandboxes: [] }).run()
+    yield* db
+      .insert(ProjectTable)
+      .values({ id: projectId, worktree: AbsolutePath.make("/tmp/parity-test"), sandboxes: [] })
+      .run()
     yield* db
       .insert(SessionTable)
-      .values({ id: sessionId, project_id: projectId, slug: "parity-test", directory: "/tmp/parity-test", title: "Parity test", version: "test" })
+      .values({
+        id: sessionId,
+        project_id: projectId,
+        slug: "parity-test",
+        directory: "/tmp/parity-test",
+        title: "Parity test",
+        version: "test",
+      })
       .run()
     yield* db
       .insert(SessionInputTable)
-      .values({ id: triggerId, session_id: sessionId, prompt: new Prompt({ text: "trigger" }), delivery: "steer", admitted_seq: 0, promoted_seq: 0 })
+      .values({
+        id: triggerId,
+        session_id: sessionId,
+        prompt: new Prompt({ text: "trigger" }),
+        delivery: "steer",
+        admitted_seq: 0,
+        promoted_seq: 0,
+      })
       .run()
     yield* db
       .insert(SessionActivityTable)
-      .values({ activity_id: activityId, session_id: sessionId, ordinal: 0, trigger_input_id: triggerId, delivery: "steer", state: "active", created_at: 1_000 })
+      .values({
+        activity_id: activityId,
+        session_id: sessionId,
+        ordinal: 0,
+        trigger_input_id: triggerId,
+        delivery: "steer",
+        state: "active",
+        created_at: 1_000,
+      })
       .run()
   })
 }

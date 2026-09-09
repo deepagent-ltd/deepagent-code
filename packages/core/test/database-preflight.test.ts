@@ -3,6 +3,7 @@ import { Database as BunDatabase } from "bun:sqlite"
 import path from "path"
 import { DatabasePreflight } from "@deepagent-code/core/database/preflight"
 import type { PreflightObservations, PreflightOptions } from "@deepagent-code/core/database/preflight"
+import { contentDigest } from "@deepagent-code/core/contract/digest"
 import { tmpdir } from "./fixture/tmpdir"
 
 const baseOptions: PreflightOptions = {
@@ -40,6 +41,29 @@ const observations = (overrides: Partial<PreflightObservations> = {}): Preflight
 
 const codes = (result: { ok: false; issues: { code: string }[] } | { ok: true }): string[] =>
   result.ok ? [] : result.issues.map((issue) => issue.code)
+
+const receipt = (input: { migrationId: string; contentHash: string; result?: string }) => {
+  const identity = {
+    migrationId: input.migrationId,
+    contentHash: input.contentHash,
+    ordinal: 1,
+    runId: "run-1",
+    buildIdentity: "old-build",
+    packageVersion: "1.0.0",
+    bodyHash: "legacy-body",
+  }
+  return {
+    receipt_id: contentDigest(identity),
+    migration_id: identity.migrationId,
+    content_hash: identity.contentHash,
+    ordinal: identity.ordinal,
+    run_id: identity.runId,
+    build_identity: identity.buildIdentity,
+    package_version: identity.packageVersion,
+    body_hash: identity.bodyHash,
+    result: input.result ?? "applied",
+  }
+}
 
 describe("DatabasePreflight analysis", () => {
   test("valid DB with no pending migration passes", () => {
@@ -114,6 +138,70 @@ describe("DatabasePreflight analysis", () => {
     expect(codes(result)).toContain("migration_journal_content_mismatch")
   })
 
+  test("a pre-sealed journal hash is accepted only when an applied durable receipt matches it", () => {
+    const result = DatabasePreflight.analyzePreflight(
+      {
+        ...baseOptions,
+        knownContentHashes: { m1: "sealed-a" },
+        legacyContentIdentityBoundary: "m2",
+      },
+      observations({
+        journalRows: [{ id: "m1", time_completed: 1, content_hash: "legacy-a" }],
+        migrationReceipts: [receipt({ migrationId: "m1", contentHash: "legacy-a" })],
+      }),
+    )
+    expect(result.ok).toBe(true)
+  })
+
+  test("a receipt cannot excuse content drift after the sealed-identity boundary", () => {
+    const result = DatabasePreflight.analyzePreflight(
+      {
+        ...baseOptions,
+        knownContentHashes: { m3: "sealed-c" },
+        legacyContentIdentityBoundary: "m2",
+      },
+      observations({
+        journalRows: [{ id: "m3", time_completed: 1, content_hash: "drifted-c" }],
+        migrationReceipts: [receipt({ migrationId: "m3", contentHash: "drifted-c" })],
+      }),
+    )
+    expect(result.ok).toBe(false)
+    expect(codes(result)).toContain("migration_journal_content_mismatch")
+  })
+
+  test("a failed receipt cannot authorize a legacy journal hash", () => {
+    const result = DatabasePreflight.analyzePreflight(
+      {
+        ...baseOptions,
+        knownContentHashes: { m1: "sealed-a" },
+        legacyContentIdentityBoundary: "m2",
+      },
+      observations({
+        journalRows: [{ id: "m1", time_completed: 1, content_hash: "legacy-a" }],
+        migrationReceipts: [receipt({ migrationId: "m1", contentHash: "legacy-a", result: "verify_failed" })],
+      }),
+    )
+    expect(result.ok).toBe(false)
+    expect(codes(result)).toContain("migration_journal_content_mismatch")
+  })
+
+  test("a content-address-corrupt receipt cannot authorize a legacy journal hash", () => {
+    const corrupted = receipt({ migrationId: "m1", contentHash: "legacy-a" })
+    const result = DatabasePreflight.analyzePreflight(
+      {
+        ...baseOptions,
+        knownContentHashes: { m1: "sealed-a" },
+        legacyContentIdentityBoundary: "m2",
+      },
+      observations({
+        journalRows: [{ id: "m1", time_completed: 1, content_hash: "legacy-a" }],
+        migrationReceipts: [{ ...corrupted, receipt_id: "corrupt" }],
+      }),
+    )
+    expect(result.ok).toBe(false)
+    expect(codes(result)).toContain("migration_journal_content_mismatch")
+  })
+
   test("unfinished upgrade run is rejected as read-only recovery", () => {
     const result = DatabasePreflight.analyzePreflight(baseOptions, observations({ upgradeRuns: [{ run_id: "r1", state: "applying" }] }))
     expect(result.ok).toBe(false)
@@ -159,6 +247,18 @@ describe("DatabasePreflight analysis", () => {
 })
 
 describe("DatabasePreflight against real files", () => {
+  test("a corrupt file is classified instead of escaping from a SQLite probe", async () => {
+    await using tmp = await tmpdir()
+    const filename = path.join(tmp.path, "corrupt.db")
+    await Bun.write(filename, "not a sqlite database")
+
+    const result = await DatabasePreflight.preflight({ ...baseOptions, filename })
+
+    expect(result.ok).toBe(false)
+    expect(codes(result)).toContain("not_a_sqlite_database")
+    expect(codes(result)).toContain("db_open_failed")
+  })
+
   test("read-only preflight passes a migrated fixture DB and does not write", async () => {
     await using tmp = await tmpdir()
     const filename = path.join(tmp.path, "app.db")

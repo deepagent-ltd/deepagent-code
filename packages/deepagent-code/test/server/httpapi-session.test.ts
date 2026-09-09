@@ -4,7 +4,7 @@ import { NodeHttpServer, NodeServices } from "@effect/platform-node"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
-import { Cause, Config, Effect, Exit, Layer } from "effect"
+import { Cause, Config, Effect, Exit, Layer, Schedule } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse, HttpRouter, HttpServer } from "effect/unstable/http"
 import { layerWebSocketConstructorGlobal } from "effect/unstable/socket/Socket"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
@@ -24,6 +24,9 @@ import { Session } from "@/session/session"
 import { MessageID, PartID, SessionID, type SessionID as SessionIDType } from "../../src/session/schema"
 import { MessageV2 } from "../../src/session/message-v2"
 import { Database } from "@deepagent-code/core/database/database"
+import { Hash } from "@deepagent-code/core/util/hash"
+import { CapabilityLoadAdapter } from "@deepagent-code/core/system-context/capability-load-adapter"
+import { EventTable } from "@deepagent-code/core/event/sql"
 import {
   SessionHistoryStateTable,
   SessionInputTable,
@@ -35,6 +38,10 @@ import { SessionToolRequestReceiptTable } from "@/session/tool-request-receipt.s
 import { SessionPromptEpochTable } from "@/session/prompt-epoch.sql"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import { V2ProviderTurnReceiptTable } from "@deepagent-code/core/session/runner/v2-provider-turn.sql"
+import { builtinToolNames } from "@deepagent-code/core/tool/builtins"
+import { V2ToolEffectAdmissionTable, V2ToolEffectTable } from "@deepagent-code/core/session/runner/v2-tool-effect.sql"
+import { DeepAgentEventOutboxTable } from "@deepagent-code/core/deepagent/event-outbox-sql"
+import { DeepAgentEventConsumerDeliveryTable } from "@deepagent-code/core/deepagent/event-consumer-sql"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import * as DateTime from "effect/DateTime"
@@ -45,6 +52,9 @@ import { disposeAllInstances, provideInstanceEffect, TestInstance, tmpdirScoped 
 import { TestLLMServer } from "../lib/llm-server"
 import { testProviderConfig } from "../lib/test-provider"
 import { testEffect } from "../lib/effect"
+import { CapabilityPaths } from "../../src/server/routes/instance/httpapi/groups/capability"
+import { ContextPaths } from "../../src/server/routes/instance/httpapi/groups/context"
+import { SystemContextPaths } from "../../src/server/routes/instance/httpapi/groups/system-context"
 
 void Log.init({ print: false })
 
@@ -248,6 +258,9 @@ function requestJson<T>(path: string, init?: RequestInit) {
   return request(path, init).pipe(Effect.flatMap(json<T>))
 }
 
+// The dev V2-owner chain (mint keypair + verifier env) is armed process-wide by test/preload.ts:
+// Reference defaults cache on first access, so arming must precede every test file. See
+// test/lib/v2-owner.ts for why the keypair is a process-wide singleton.
 afterEach(async () => {
   Flag.DEEPAGENT_CODE_EXPERIMENTAL_WORKSPACES = originalWorkspaces
   await disposeAllInstances()
@@ -255,39 +268,204 @@ afterEach(async () => {
 })
 
 describe("session HttpApi", () => {
-  it.instance(
-    "executes normal V2 prompts while resume false remains admit-only",
-    () =>
-      Effect.gen(function* () {
-        const test = yield* TestInstance
-        const { db } = yield* Database.Service
-        const headers = { "x-deepagent-code-directory": test.directory }
-        const session = yield* createSession({ title: "V2 HTTP admit-only contract" })
-        const inputsBefore = (yield* db.select().from(SessionInputTable).all().pipe(Effect.orDie)).length
-        const receiptsBefore = (yield* db.select().from(V2ProviderTurnReceiptTable).all().pipe(Effect.orDie)).length
-        const toolsBefore = (yield* db.select().from(SessionToolRequestReceiptTable).all().pipe(Effect.orDie)).length
+  it.live("executes normal V2 prompts on the production Location runtime while resume false remains admit-only", () =>
+    Effect.gen(function* () {
+      const llm = yield* TestLLMServer
+      yield* llm.text("production runtime reached", { usage: { input: 1, output: 1 } })
+      const directory = yield* tmpdirScoped({ git: true, config: testProviderConfig(llm.url) })
+      const { db } = yield* Database.Service
+      const headers = { "x-deepagent-code-directory": directory }
+      const session = yield* createSession({
+        title: "V2 HTTP production execution contract",
+        model: { providerID: ProviderV2.ID.make("test"), id: ModelV2.ID.make("test-model") },
+      }).pipe(provideInstanceEffect(directory))
+      const inputsBefore = (yield* db.select().from(SessionInputTable).all().pipe(Effect.orDie)).length
+      const receiptsBefore = (yield* db.select().from(V2ProviderTurnReceiptTable).all().pipe(Effect.orDie)).length
+      const toolsBefore = (yield* db.select().from(SessionToolRequestReceiptTable).all().pipe(Effect.orDie)).length
 
-        const admitted = yield* request(`/api/session/${session.id}/prompt`, {
-          method: "POST",
-          headers: { ...headers, "content-type": "application/json" },
-          body: JSON.stringify({ id: "msg_v2_admit_only", prompt: { text: "admit only" }, resume: false }),
+      const admitted = yield* request(`/api/session/${session.id}/prompt`, {
+        method: "POST",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify({ id: "msg_v2_admit_only", prompt: { text: "admit only" }, resume: false }),
+      })
+      expect(admitted.status).toBe(200)
+      expect((yield* db.select().from(SessionInputTable).all().pipe(Effect.orDie)).length - inputsBefore).toBe(1)
+      expect((yield* db.select().from(V2ProviderTurnReceiptTable).all().pipe(Effect.orDie)).length).toBe(receiptsBefore)
+      expect((yield* db.select().from(SessionToolRequestReceiptTable).all().pipe(Effect.orDie)).length).toBe(
+        toolsBefore,
+      )
+
+      const resumed = yield* request(`/api/session/${session.id}/prompt`, {
+        method: "POST",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify({ id: "msg_v2_resume", prompt: { text: "execute normally" } }),
+      })
+      expect(resumed.status).toBe(200)
+      // Readiness before settle: the wake is advisory, so /wait can resolve in the admit→wake→active
+      // window before the drain dispatches. The mock server hit is the published signal that the
+      // provider turn actually started.
+      yield* llm.wait(1)
+      const waited = yield* request(`/api/session/${session.id}/wait`, { method: "POST", headers })
+      expect(waited.status).toBe(204)
+
+      const inputsAfter = (yield* db.select().from(SessionInputTable).all().pipe(Effect.orDie)).length
+      expect(inputsAfter - inputsBefore).toBe(2)
+      const receipt = yield* db
+        .select({ state: V2ProviderTurnReceiptTable.state, provider: V2ProviderTurnReceiptTable.provider_id })
+        .from(V2ProviderTurnReceiptTable)
+        .where(eq(V2ProviderTurnReceiptTable.session_id, session.id))
+        .get()
+        .pipe(Effect.orDie)
+      const executionEvents = yield* db
+        .select({ type: EventTable.type, data: EventTable.data })
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, session.id))
+        .all()
+        .pipe(Effect.orDie)
+      const deliveredOutbox = yield* db
+        .select({
+          eventType: DeepAgentEventOutboxTable.event_type,
+          outboxState: DeepAgentEventOutboxTable.status,
+          deliveryState: DeepAgentEventConsumerDeliveryTable.status,
         })
-        expect(admitted.status).toBe(200)
-        expect((yield* db.select().from(SessionInputTable).all().pipe(Effect.orDie)).length - inputsBefore).toBe(1)
-        expect((yield* db.select().from(V2ProviderTurnReceiptTable).all().pipe(Effect.orDie)).length).toBe(receiptsBefore)
-        expect((yield* db.select().from(SessionToolRequestReceiptTable).all().pipe(Effect.orDie)).length).toBe(toolsBefore)
+        .from(DeepAgentEventOutboxTable)
+        .leftJoin(
+          DeepAgentEventConsumerDeliveryTable,
+          eq(DeepAgentEventConsumerDeliveryTable.outbox_id, DeepAgentEventOutboxTable.outbox_id),
+        )
+        .where(eq(DeepAgentEventOutboxTable.aggregate_id, session.id))
+        .all()
+        .pipe(
+          Effect.orDie,
+          Effect.flatMap((rows) =>
+            rows.some(
+              (row) =>
+                row.eventType === "session.execution.succeeded" &&
+                row.outboxState === "published" &&
+                row.deliveryState === "resolved",
+            )
+              ? Effect.succeed(rows)
+              : Effect.fail(new Error("V2 outbox delivery has not settled")),
+          ),
+          Effect.retry({ times: 30, schedule: Schedule.spaced("100 millis") }),
+        )
+      expect({ calls: yield* llm.calls, receipt }).toEqual({
+        calls: 1,
+        receipt: { state: "settled", provider: "test" },
+      })
+      expect(executionEvents.at(-1)?.type).toBe("session.execution.succeeded.1")
+      expect(deliveredOutbox.some((row) => row.eventType === "session.execution.succeeded")).toBe(true)
+      expect(deliveredOutbox.every((row) => row.outboxState === "published" && row.deliveryState === "resolved")).toBe(
+        true,
+      )
+    }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
+    15_000,
+  )
 
-        const resumed = yield* request(`/api/session/${session.id}/prompt`, {
-          method: "POST",
-          headers: { ...headers, "content-type": "application/json" },
-          body: JSON.stringify({ id: "msg_v2_resume", prompt: { text: "execute normally" } }),
+  it.live("advertises and executes Core context tools through the production HTTP runtime", () =>
+    Effect.gen(function* () {
+      const llm = yield* TestLLMServer
+      yield* llm.tool("code_intel", { intent: "search", query: "SessionV2" })
+      yield* llm.text("context tool completed", { usage: { input: 1, output: 1 } })
+      const directory = yield* tmpdirScoped({ git: true, config: testProviderConfig(llm.url) })
+      const { db } = yield* Database.Service
+      const headers = { "x-deepagent-code-directory": directory }
+      const session = yield* createSession({
+        title: "V2 HTTP production context tool contract",
+        model: { providerID: ProviderV2.ID.make("test"), id: ModelV2.ID.make("test-model") },
+      }).pipe(provideInstanceEffect(directory))
+
+      const response = yield* request(`/api/session/${session.id}/prompt`, {
+        method: "POST",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify({ id: "msg_v2_context_tool", prompt: { text: "inspect SessionV2" } }),
+      })
+      expect(response.status).toBe(200)
+      // Same readiness discipline as the sibling execution test: wait for the provider hit before
+      // the settle call so the tool-advertisement assertions cannot observe the pre-drain window.
+      yield* llm.wait(1)
+      const waited = yield* request(`/api/session/${session.id}/wait`, { method: "POST", headers })
+      expect(waited.status).toBe(204)
+
+      const inputs = yield* llm.inputs
+      const advertised = ((inputs[0]?.tools ?? []) as Array<{ function?: { name?: string } }>).flatMap((tool) =>
+        tool.function?.name ? [tool.function.name] : [],
+      )
+      const admissions = yield* db
+        .select({ name: V2ToolEffectAdmissionTable.tool_name, kind: V2ToolEffectAdmissionTable.effect_kind })
+        .from(V2ToolEffectAdmissionTable)
+        .where(eq(V2ToolEffectAdmissionTable.session_id, session.id))
+        .all()
+        .pipe(Effect.orDie)
+      const effects = yield* db
+        .select({
+          name: V2ToolEffectTable.tool_name,
+          kind: V2ToolEffectTable.effect_kind,
+          state: V2ToolEffectTable.state,
         })
-        expect(resumed.status).toBe(200)
+        .from(V2ToolEffectTable)
+        .where(eq(V2ToolEffectTable.session_id, session.id))
+        .all()
+        .pipe(Effect.orDie)
 
-        const inputsAfter = (yield* db.select().from(SessionInputTable).all().pipe(Effect.orDie)).length
-        expect(inputsAfter - inputsBefore).toBe(2)
-      }),
-    { git: true, config: { formatter: false, lsp: false } },
+      expect(advertised).toContain("code_intel")
+      expect(advertised).toContain("context_query")
+      expect(yield* llm.calls).toBe(2)
+      expect(admissions).toEqual([{ name: "code_intel", kind: "read_only" }])
+      expect(effects).toEqual([{ name: "code_intel", kind: "read_only", state: "settled" }])
+      expect(JSON.stringify(inputs[1])).toContain("schemaVersion")
+    }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
+    15_000,
+  )
+
+  // RI-113 production request snapshot oracle: on the real production HTTP stack the EXACT
+  // shipped builtin surface (nothing more, nothing less) must reach the provider request,
+  // and the durable prepared turn must record the same set at all three lowering stages.
+  it.live("records the exact builtin tool surface in the durable production request snapshot", () =>
+    Effect.gen(function* () {
+      const llm = yield* TestLLMServer
+      yield* llm.text("snapshot recorded", { usage: { input: 1, output: 1 } })
+      const directory = yield* tmpdirScoped({ git: true, config: testProviderConfig(llm.url) })
+      const { db } = yield* Database.Service
+      const headers = { "x-deepagent-code-directory": directory }
+      const session = yield* createSession({
+        title: "V2 production request snapshot",
+        model: { providerID: ProviderV2.ID.make("test"), id: ModelV2.ID.make("test-model") },
+      }).pipe(provideInstanceEffect(directory))
+
+      const response = yield* request(`/api/session/${session.id}/prompt`, {
+        method: "POST",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify({ id: "msg_v2_snapshot", prompt: { text: "record the tool surface" } }),
+      })
+      expect(response.status).toBe(200)
+      yield* llm.wait(1)
+      const waited = yield* request(`/api/session/${session.id}/wait`, { method: "POST", headers })
+      expect(waited.status).toBe(204)
+
+      // The expected set derives from the registry authority itself (pinned to the product
+      // inventory by the RI-113 exact gate), so this test proves the wiring — declaration →
+      // Location registration → materialize → permission/model filter → provider request →
+      // durable receipt — without duplicating the tool list literal.
+      const expected = [...builtinToolNames].sort()
+      const inputs = yield* llm.inputs
+      const advertised = ((inputs[0]?.tools ?? []) as Array<{ function?: { name?: string } }>)
+        .flatMap((tool) => (tool.function?.name ? [tool.function.name] : []))
+        .sort()
+      expect(advertised).toEqual(expected)
+
+      const receipt = yield* db
+        .select({ prepared: V2ProviderTurnReceiptTable.prepared_turn })
+        .from(V2ProviderTurnReceiptTable)
+        .where(eq(V2ProviderTurnReceiptTable.session_id, session.id))
+        .get()
+        .pipe(Effect.orDie)
+      expect(receipt?.prepared?.tool_registry_ids?.slice().sort()).toEqual(expected)
+      expect(receipt?.prepared?.tool_permission_filtered_ids?.slice().sort()).toEqual(expected)
+      expect(receipt?.prepared?.tool_final_offered_ids?.slice().sort()).toEqual(expected)
+      expect(receipt?.prepared?.tool_definition_hash).toHaveLength(64)
+    }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
+    15_000,
   )
 
   it.effect("maps busy sessions to public session busy errors", () =>
@@ -454,7 +632,18 @@ describe("session HttpApi", () => {
             }),
           },
         )
-        expect(missingContinuationResolution.status).toBe(404)
+        // V2-only closure (RI-92/RI-71): the legacy continuation-resolution state machine is refused
+        // outright under the Core V2-only profile — the durable maintenance recovery command surface is
+        // the only authority — so a missing continuation can never be reached; the typed 503 is the
+        // contract (read routes above still return 200/[] and schema-invalid payloads still 400).
+        expect(missingContinuationResolution.status).toBe(503)
+        expect(yield* responseJson(missingContinuationResolution)).toEqual({
+          _tag: "ServiceUnavailableError",
+          service: "session.continuation-resolution",
+          message:
+            `Core V2-only runtime cannot apply the legacy recovery state machine for ${parent.id}; ` +
+            "use the exact durable maintenance recovery command surface",
+        })
 
         expect(
           yield* requestJson<unknown[]>(pathFor(SessionPaths.diff, { sessionID: parent.id }), { headers }),
@@ -535,6 +724,142 @@ describe("session HttpApi", () => {
         root: sessionDirectory,
       })
     }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
+    15_000,
+  )
+
+  it.instance(
+    "creates and immediately admits input to a Core V2 session",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const id = "ses_http_v2_create"
+        const headers = {
+          "content-type": "application/json",
+          "x-deepagent-code-directory": test.directory,
+        }
+        const created = yield* request("/api/session", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ id, agent: "build" }),
+        })
+        expect(created.status).toBe(200)
+        expect(yield* responseJson(created)).toMatchObject({
+          data: { id, agent: "build", location: { directory: test.directory } },
+        })
+
+        const admitted = yield* request(`/api/session/${id}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ id: "msg_http_v2_create", prompt: { text: "hello" }, resume: false }),
+        })
+        expect(admitted.status).toBe(200)
+        expect(yield* responseJson(admitted)).toMatchObject({
+          data: { id: "msg_http_v2_create", sessionID: id, prompt: { text: "hello" } },
+        })
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.live("reads capability diagnostics from durable rows in only the routed workspace", () =>
+    Effect.gen(function* () {
+      const left = yield* tmpdirScoped({ git: true, config: { formatter: false, lsp: false } })
+      const right = yield* tmpdirScoped({ git: true, config: { formatter: false, lsp: false } })
+      const create = (id: string, directory: string) =>
+        request("/api/session", {
+          method: "POST",
+          headers: { "content-type": "application/json", "x-deepagent-code-directory": directory },
+          body: JSON.stringify({ id, agent: "build" }),
+        })
+      const [leftCreate, rightCreate] = yield* Effect.all(
+        [create("ses_capability_http_left", left), create("ses_capability_http_right", right)],
+        { concurrency: "unbounded" },
+      )
+      expect(leftCreate.status).toBe(200)
+      expect(rightCreate.status).toBe(200)
+
+      const body = "Durable capability body"
+      const bodyHash = `sha256:${Hash.sha256(body)}`
+      yield* CapabilityLoadAdapter.sessionCapabilityLoad((yield* Database.Service).db, {
+        request: {
+          capabilityId: "deepagent.code-read",
+          version: "1.0.0-beta.0",
+          bodyHash,
+          runtimeHash: "runtime-http",
+          permissionHash: "permission-http",
+          bodyRef: "capability://deepagent.code-read@1.0.0-beta.0",
+          body,
+          declaredDigest: bodyHash,
+          catalogSnapshotId: "capability_catalog:http",
+          requiredPermissions: ["read"],
+          grantedPermissions: ["read"],
+          requiredRuntimeFeatures: [],
+        },
+        identity: {
+          sessionId: "ses_capability_http_left",
+          activityId: "activity-http-left",
+          turnId: "turn-http-left",
+        },
+        contextEpoch: "epoch-http-left",
+      })
+      expect(
+        yield* CapabilityLoadAdapter.recordedCapabilityLoadsForDirectory((yield* Database.Service).db, left),
+      ).toHaveLength(1)
+
+      const responses = yield* Effect.all(
+        [
+          request(CapabilityPaths.loadReceipts, { headers: { "x-deepagent-code-directory": left } }),
+          request(CapabilityPaths.loadReceipts, { headers: { "x-deepagent-code-directory": right } }),
+          request(SystemContextPaths.snapshot, { headers: { "x-deepagent-code-directory": left } }),
+          request(SystemContextPaths.snapshot, { headers: { "x-deepagent-code-directory": right } }),
+        ],
+        { concurrency: "unbounded" },
+      )
+      expect(responses.map((response) => response.status)).toEqual([200, 200, 200, 200])
+      const [leftReceipts, rightReceipts, leftSnapshot, rightSnapshot] = yield* Effect.all(
+        responses.map(json<unknown>),
+        { concurrency: "unbounded" },
+      )
+      expect(leftReceipts).toMatchObject({
+        count: 1,
+        receipts: [expect.objectContaining({ capabilityId: "deepagent.code-read", bodyHash })],
+      })
+      expect(rightReceipts).toEqual({ count: 0, receipts: [] })
+      expect(leftSnapshot).toMatchObject({
+        loadedCapabilityCount: 1,
+        loadedCapabilities: [expect.objectContaining({ capabilityId: "deepagent.code-read", bodyHash })],
+      })
+      expect(rightSnapshot).toMatchObject({ loadedCapabilityCount: 0, loadedCapabilities: [] })
+    }),
+  )
+
+  it.live("routes every context diagnostic through the owning workspace", () =>
+    Effect.gen(function* () {
+      const left = yield* tmpdirScoped({ git: true, config: { formatter: false, lsp: false } })
+      const right = yield* tmpdirScoped({ git: true, config: { formatter: false, lsp: false } })
+      const sessionID = "ses_context_http_left"
+      const created = yield* request("/api/session", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-deepagent-code-directory": left },
+        body: JSON.stringify({ id: sessionID, agent: "build" }),
+      })
+      expect(created.status).toBe(200)
+
+      const query = new URLSearchParams({ session_id: sessionID })
+      const headers = (directory: string) => ({ "x-deepagent-code-directory": directory })
+      const responses = yield* Effect.all(
+        [
+          request(`${ContextPaths.readiness}?${query}`, { headers: headers(left) }),
+          request(`${ContextPaths.eventsCursor}?${query}`, { headers: headers(left) }),
+          request(`${ContextPaths.events}?${query}`, { headers: headers(left) }),
+          request(`${ContextPaths.readiness}?${query}`, { headers: headers(right) }),
+          request(`${ContextPaths.eventsCursor}?${query}`, { headers: headers(right) }),
+          request(`${ContextPaths.events}?${query}`, { headers: headers(right) }),
+        ],
+        { concurrency: "unbounded" },
+      )
+
+      expect(responses.map((response) => response.status)).toEqual([200, 200, 200, 404, 404, 404])
+    }),
   )
 
   it.instance(

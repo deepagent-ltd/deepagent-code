@@ -3,6 +3,7 @@ import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
 import { DeepAgentLearningLifecycleTrigger } from "@deepagent-code/core/deepagent/learning-lifecycle-trigger"
 import { Deferred, Effect, Fiber, Layer } from "effect"
 import { InstanceRef } from "../../src/effect/instance-ref"
+import { InstanceState } from "../../src/effect/instance-state"
 import { registerDisposer } from "../../src/effect/instance-registry"
 import { InstanceBootstrap } from "../../src/project/bootstrap-service"
 import { InstanceStore } from "../../src/project/instance-store"
@@ -31,12 +32,39 @@ const setBootstrap = (run: Effect.Effect<void>) =>
   )
 
 const registerDisposerScoped = (disposer: (directory: string) => Promise<void>) =>
-  Effect.acquireRelease(
-    Effect.sync(() => registerDisposer(disposer)),
-    (off) => Effect.sync(off),
-  )
+  Effect.acquireRelease(registerDisposer(disposer), (off) => Effect.sync(off))
 
 describe("InstanceStore", () => {
+  it.live("releases instance state on reload and dispose", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      const store = yield* InstanceStore.Service
+      let initialized = 0
+      let finalized = 0
+      const state = yield* InstanceState.make((ctx) =>
+        Effect.acquireRelease(
+          Effect.sync(() => ({ directory: ctx.directory, generation: ++initialized })),
+          () => Effect.sync(() => finalized++),
+        ),
+      )
+      const first = yield* store.load({ directory: dir })
+      expect(yield* InstanceState.get(state).pipe(Effect.provideService(InstanceRef, first))).toEqual({
+        directory: dir,
+        generation: 1,
+      })
+
+      const second = yield* store.reload({ directory: dir })
+      expect(finalized).toBe(1)
+      expect(yield* InstanceState.get(state).pipe(Effect.provideService(InstanceRef, second))).toEqual({
+        directory: dir,
+        generation: 2,
+      })
+
+      yield* store.dispose(second)
+      expect(finalized).toBe(2)
+    }),
+  )
+
   it.live("loads instance context", () =>
     Effect.gen(function* () {
       const dir = yield* tmpdirScoped({ git: true })
@@ -159,22 +187,19 @@ describe("InstanceStore", () => {
       yield* registerDisposerScoped(async () => {
         ordering.push("disposed")
       })
-      yield* Effect.acquireRelease(
-        Effect.sync(() =>
-          DeepAgentLearningLifecycleTrigger.setRuntimeObserver({
-            observe: async (input) => {
-              ordering.push("learning")
-              boundaries.push(input)
-              return { state: "skipped", reason: "no_exact_settled_run" }
-            },
-          }),
-        ),
-        () => Effect.sync(() => DeepAgentLearningLifecycleTrigger.setRuntimeObserver(undefined)),
-      )
+      const observer: DeepAgentLearningLifecycleTrigger.RuntimeObserver = {
+        observe: async (input) => {
+          ordering.push("learning")
+          boundaries.push(input)
+          return { state: "skipped", reason: "no_exact_settled_run" }
+        },
+      }
 
       const first = yield* store.load({ directory: dir })
       yield* setBootstrap(Effect.sync(() => ordering.push("bootstrap")))
-      const second = yield* store.reload({ directory: dir })
+      const second = yield* store
+        .reload({ directory: dir })
+        .pipe(Effect.provideService(DeepAgentLearningLifecycleTrigger.CurrentRuntimeObserver, observer))
       const cached = yield* store.load({ directory: dir })
 
       expect(second).not.toBe(first)

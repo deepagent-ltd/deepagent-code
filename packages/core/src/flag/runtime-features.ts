@@ -14,6 +14,7 @@
 // catalog (the drift gate). A runtime registry that disagrees (added/missing feature) is a build/
 // start-time failure, never something a feature could silently drift past.
 
+import { Context } from "effect"
 import { DeepAgentCodeToolInventory, capabilityCatalogDigest } from "../system-context/capability-manifest"
 import { capabilityCatalog } from "../system-context/capability-catalog"
 import { flipFlagValueOn } from "../deepagent/flip-flag"
@@ -110,17 +111,23 @@ export interface RuntimeFeatureRegistry {
  */
 export const createRuntimeFeatureRegistry = (
   sourceFeatures?: Iterable<string>,
+  env: Readonly<Record<string, string | undefined>> = process.env,
 ): RuntimeFeatureRegistry => {
   const features = new Set<string>(sourceFeatures ?? canonicalFeatures())
+  const enabledFeatures = new Map(
+    [...features].map((feature) => {
+      const gate = featureEnv.get(feature)
+      return [feature, gate ? flipFlagValueOn(env[gate.env], gate.unsetDefault) : false] as const
+    }),
+  )
   return {
     all: () => [...features].sort(),
     enabled: (feature) => {
       if (!features.has(feature)) throw new UnknownRuntimeFeatureError(feature)
-      const gate = featureEnv.get(feature)
-      // A feature without a runtime gate is a build defect: report OFF (fail-closed),
-      // never a silent pass.
-      if (gate === undefined) return false
-      return flipFlagValueOn(process.env[gate.env], gate.unsetDefault)
+      // Values are an immutable startup snapshot. Tool advertisement, capability load and
+      // provider execution must not observe different authorities when process.env changes
+      // after this runtime root has been constructed.
+      return enabledFeatures.get(feature) ?? false
     },
     assertCanonical: () => {
       const expected = canonicalFeatures()
@@ -132,5 +139,20 @@ export const createRuntimeFeatureRegistry = (
   }
 }
 
-/** The canonical, manifest-derived runtime feature registry (module-level singleton). */
+/** The canonical, manifest-derived process-start snapshot. */
 export const RuntimeFeatures = createRuntimeFeatureRegistry()
+
+/**
+ * Injectable seam for the process-start snapshot. Effect layers capture this reference at
+ * construction (the default is the process global), so a host/test composition runs a whole
+ * stack against an explicit registry without mutating `process.env` mid-process — mid-process
+ * mutation is exactly what the startup snapshot forbids (see `enabled`).
+ *
+ * NOTE: the DIRECT `Context.Reference(key, { defaultValue })` form is load-bearing — the curried
+ * `Context.Reference<T>()(key, options)` form silently drops the default at runtime (Effect v4
+ * beta `Reference = Service`; the curried branch only honors `options.make`).
+ */
+export const CurrentRuntimeFeatures = Context.Reference<RuntimeFeatureRegistry>(
+  "@deepagent-code/RuntimeFeatures",
+  { defaultValue: () => RuntimeFeatures },
+)

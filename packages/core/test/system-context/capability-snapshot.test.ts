@@ -10,7 +10,7 @@ import {
 } from "@deepagent-code/core/system-context/capability-snapshot"
 import { sessionCapabilityLoad, type CapabilityLoadRequest, type CapabilityLoadTurnIdentity } from "@deepagent-code/core/system-context/capability-load-adapter"
 import { Database } from "@deepagent-code/core/database/database"
-import { recordedCapabilityLoads, resetCapabilityLoader } from "@deepagent-code/core/system-context/capability-loader"
+import { recordedCapabilityLoads, resetCapabilityLoader } from "@deepagent-code/core/system-context/capability-loader-memory"
 import { capabilityCatalog } from "@deepagent-code/core/system-context/capability-catalog"
 
 // C4-08 — bind the catalog/load snapshot into the Context Epoch / PreparedProviderTurn

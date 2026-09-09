@@ -398,7 +398,7 @@ function seedSession() {
       .run()
     yield* db
       .insert(SessionTable)
-      .values({ id: sessionId, project_id: projectId, slug: "writer-test", directory: "/tmp/writer-test", title: "Writer test", version: "test" })
+      .values({ id: sessionId, project_id: projectId, slug: "writer-test", directory: "/tmp/writer-test", title: "Writer test", version: "test", time_suspended: 102 })
       .run()
     yield* db
       .insert(SessionInputTable)

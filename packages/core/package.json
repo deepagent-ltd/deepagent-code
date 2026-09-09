@@ -8,6 +8,9 @@
   "scripts": {
     "db": "bun drizzle-kit",
     "migration": "bun run script/migration.ts",
+    "evidence:ledger": "bun run script/evidence-ledger/generate-ledger.ts",
+    "evidence:packaged-report": "bun run script/evidence-ledger/generate-packaged-report.ts",
+    "evidence:candidate": "bun run script/evidence-ledger/generate-candidate-ledger.ts",
     "baseline:context-federation": "bun run script/context-federation-baseline.ts",
     "test:llm-live:v2-provider-loop": "bun run script/live-llm/v2-provider-loop.ts",
     "test:llm-live:file-read": "bun run script/live-llm/file-tools.ts read",
@@ -21,9 +24,6 @@
     "test": "bun test",
     "test:ci": "mkdir -p .artifacts/unit && bun test --timeout 30000 --reporter=junit --reporter-outfile=.artifacts/unit/junit.xml",
     "typecheck": "tsgo --noEmit"
-  },
-  "bin": {
-    "deepagent-code": "./bin/deepagent-code"
   },
   "exports": {
     "./public": "./src/public/index.ts",

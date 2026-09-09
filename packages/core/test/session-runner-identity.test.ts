@@ -13,8 +13,7 @@ import { AbsolutePath } from "@deepagent-code/core/schema"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { Prompt } from "@deepagent-code/core/session/prompt"
 import { SessionProjector } from "@deepagent-code/core/session/projector"
-import { SessionExecution } from "@deepagent-code/core/session/execution"
-import { SessionRunCoordinator } from "@deepagent-code/core/session/run-coordinator"
+import { SessionExecutionLocal } from "@deepagent-code/core/session/execution/local"
 import * as SessionRunnerLLM from "@deepagent-code/core/session/runner/llm"
 import { SessionRunnerModel } from "@deepagent-code/core/session/runner/model"
 import { V2ProviderTurn } from "@deepagent-code/core/session/runner/v2-provider-turn"
@@ -23,11 +22,14 @@ import { PreparedProviderTurn } from "@deepagent-code/core/session/runner/prepar
 import { V2ToolEffect } from "@deepagent-code/core/session/runner/v2-tool-effect"
 import { SessionProviderOwner } from "@deepagent-code/core/context-federation/provider-owner"
 import { SessionContext } from "@deepagent-code/core/context-federation/session-context"
+import { ContextQueryAuthorization } from "@deepagent-code/core/context-federation/query-authorization"
+import { ProductionV2Sources } from "@deepagent-code/core/context-federation/production-adapters"
 import { SessionRunnerCanonical } from "@deepagent-code/core/session/runner/canonical-turn"
 import { ToolRegistry } from "@deepagent-code/core/tool/registry"
 import { SessionTable } from "@deepagent-code/core/session/sql"
 import { SessionStore } from "@deepagent-code/core/session/store"
 import { Location } from "@deepagent-code/core/location"
+import { LocationServiceMap } from "@deepagent-code/core/location-layer"
 import { SystemContextRegistry } from "@deepagent-code/core/system-context/registry"
 import { SystemContext } from "@deepagent-code/core/system-context"
 import { SkillGuidance } from "@deepagent-code/core/skill/guidance"
@@ -41,7 +43,7 @@ import { Hash } from "@deepagent-code/core/util/hash"
 import { describe, expect, beforeEach } from "bun:test"
 import { DateTime, Option } from "effect"
 import { eq } from "drizzle-orm"
-import { Effect, Layer, Stream } from "effect"
+import { Effect, Layer, LayerMap, Stream } from "effect"
 import { testEffect } from "./lib/effect"
 
 /**
@@ -174,6 +176,8 @@ const location = Location.layer({ directory: AbsolutePath.make("/project") }).pi
 const skillGuidance = Layer.mock(SkillGuidance.Service, { load: () => Effect.succeed(SystemContext.empty) })
 const config = Layer.succeed(Config.Service, Config.Service.of({ entries: () => Effect.succeed([]) }))
 const runner = SessionRunnerLLM.layer.pipe(
+  Layer.provide(ContextQueryAuthorization.defaultLayer),
+  Layer.provide(Layer.succeed(ProductionV2Sources, {})),
   Layer.provide(FSUtil.defaultLayer),
   Layer.provide(Git.defaultLayer),
   Layer.provide(
@@ -201,23 +205,21 @@ const runner = SessionRunnerLLM.layer.pipe(
   Layer.provide(agents),
   Layer.provide(skillGuidance),
   Layer.provide(config),
-  Layer.provide(catalog),
+  Layer.provide(Layer.mergeAll(catalog, AgentGateway.runtimeLayer({ enabled: false, agentMode: "high" }))),
 )
-const coordinator = SessionRunCoordinator.layer.pipe(Layer.provide(runner))
-const execution = Layer.effect(
-  SessionExecution.Service,
-  SessionRunCoordinator.Service.pipe(
-    Effect.map((coordinator) =>
-      SessionExecution.Service.of({
-        active: coordinator.active,
-        awaitIdle: coordinator.awaitIdle,
-        resume: coordinator.run,
-        wake: coordinator.wake,
-        interrupt: coordinator.interrupt,
-      }),
-    ),
+const locations = Layer.effect(
+  LocationServiceMap,
+  LayerMap.make(() => runner).pipe(
+    // This harness supplies the identity-test runner as the complete keyed Location tree.
+    // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
+    Effect.map((service) => service as unknown as LocationServiceMap["Service"]),
   ),
-).pipe(Layer.provide(coordinator))
+)
+const execution = SessionExecutionLocal.layer.pipe(
+  Layer.provide(events),
+  Layer.provide(store),
+  Layer.provide(locations),
+)
 const sessions = SessionV2.layer.pipe(
   Layer.provide(events),
   Layer.provide(database),
@@ -242,7 +244,6 @@ const it = testEffect(
     skillGuidance,
     config,
     runner,
-    coordinator,
     execution,
     sessions,
   ),

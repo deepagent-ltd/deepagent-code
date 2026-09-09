@@ -20,6 +20,7 @@ import { Session } from "@/session/session"
 import { SessionID } from "@/session/schema"
 import { LocationIndexRuntime } from "@/location-index/runtime"
 import { currentIdentity } from "@/context-federation/production-sources"
+import { InstanceState } from "@/effect/instance-state"
 import { InstanceHttpApi } from "../api"
 import { ContextApi } from "../groups/context"
 import { makeApiError } from "../typed-error"
@@ -140,13 +141,19 @@ export const contextHandlers = HttpApiBuilder.group(InstanceHttpApi, "context", 
     const session = yield* Session.Service
     const database = yield* Database.Service
 
+    const getLocalSession = Effect.fn("ContextHttpApi.getLocalSession")(function* (sessionId: string) {
+      const info = yield* session.get(SessionID.make(sessionId)).pipe(
+        Effect.mapError(() => makeApiError("resource_not_found", { resource: sessionId })),
+      )
+      if (info.directory !== (yield* InstanceState.context).directory)
+        return yield* Effect.fail(makeApiError("resource_not_found", { resource: sessionId }))
+      return info
+    })
+
     const readiness = Effect.fn("ContextHttpApi.readiness")(function* (ctx: {
       query: { session_id: string }
     }) {
-      const sessionId = SessionID.make(ctx.query.session_id)
-      const info = yield* session.get(sessionId).pipe(
-        Effect.mapError(() => makeApiError("resource_not_found", { resource: ctx.query.session_id })),
-      )
+      const info = yield* getLocalSession(ctx.query.session_id)
       // W3.8.1 + W3.9 + W3.10: the probe frame mirrors the runner. W3.9 made the seam identity
       // lazy — resolved HERE on demand (`runtime.current()` at probe time, per-request `InstanceRef`
       // from the instance-context middleware) because the production-sources layer built at app
@@ -177,9 +184,7 @@ export const contextHandlers = HttpApiBuilder.group(InstanceHttpApi, "context", 
       const sessionId = ctx.query.session_id
       // G7i security F3 — the cursor read is instance-local: the requested session must exist
       // here (typed 404 otherwise), so a foreign/cross-instance id is never silently served.
-      yield* session.get(SessionID.make(sessionId)).pipe(
-        Effect.mapError(() => makeApiError("resource_not_found", { resource: sessionId })),
-      )
+      yield* getLocalSession(sessionId)
       const authority = yield* database.db
         .select({
           seq: EventSequenceTable.seq,
@@ -199,9 +204,7 @@ export const contextHandlers = HttpApiBuilder.group(InstanceHttpApi, "context", 
     }) {
       const sessionId = ctx.query.session_id
       // G7i security F3 — same instance-local existence gate as eventsCursor.
-      yield* session.get(SessionID.make(sessionId)).pipe(
-        Effect.mapError(() => makeApiError("resource_not_found", { resource: sessionId })),
-      )
+      yield* getLocalSession(sessionId)
       const after = ctx.query.after ?? 0
       const limit = ctx.query.limit ?? ContextEventPageLimit
 

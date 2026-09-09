@@ -1,13 +1,14 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises"
 import { createHash, randomUUID } from "node:crypto"
 import path from "node:path"
-import { Cause, Effect, Layer, Stream } from "effect"
+import { Cause, Context, Effect, Layer, Stream } from "effect"
 import {
   InvalidRequestReason,
+  LLMClient,
   LLMError,
   LLMEvent,
   LLMRequest,
-  registerClientMiddleware,
+  type ClientMiddleware,
   type LLMEvent as LLMEventType,
 } from "@deepagent-code/llm"
 import { buildRunContext } from "./deepagent/run-context"
@@ -22,6 +23,8 @@ import { buildProfile as buildRunProfile } from "./deepagent/profile-builder"
 import type { ProblemProfile } from "./deepagent/domain-pack"
 import { DeepAgentDurableLearning, type Admission } from "./deepagent/durable-learning"
 import { writeFileAtomic } from "./deepagent/atomic-write"
+import { EffectFlock } from "./util/effect-flock"
+import { Flock } from "./util/flock"
 import {
   buildDeterministicResult,
   classifyDeterministicTask,
@@ -118,6 +121,22 @@ export type RuntimeSnapshot = {
   readonly providerExecutedToolPolicy: ProviderExecutedToolPolicy
   readonly knowledgeEnabled: boolean
 }
+
+export interface RuntimeInterface {
+  readonly snapshot: RuntimeSnapshot
+  readonly active: boolean
+  readonly baseDir: string
+  readonly runsDir: string
+  readonly selfLearning: SelfLearningPolicy
+  readonly durableLearning: boolean
+  readonly withStorage: <A>(operation: () => A) => A
+  readonly ensureKnowledgeSeeded: () => Promise<void>
+  readonly systemPrompt: (providerID: string, context?: PromptContext) => readonly string[]
+  readonly volatileRoundContext: (context: PromptContext, runtimeControl?: string) => string
+  readonly volatileContinuationContext: (runtimeControl?: string) => string
+}
+
+export class Runtime extends Context.Service<Runtime, RuntimeInterface>()("@deepagent-code/v2/AgentGatewayRuntime") {}
 
 type TokenUsage = {
   readonly input_tokens: number
@@ -243,7 +262,7 @@ type CurrentConfig = {
   readonly resumeFrom?: ResumeConfig
 }
 
-let current: CurrentConfig = {
+const defaultConfig = (): CurrentConfig => ({
   enabled: true,
   agentMode: parseAgentMode(env().agentMode),
   failClosed: env().failClosed !== "false",
@@ -252,9 +271,6 @@ let current: CurrentConfig = {
   allowProviderExecutedToolNames: parseAllowlist(env().allowProviderExecutedToolNames),
   killSwitch: env().killSwitch === "true" || env().killSwitch === "1",
   selfLearning: env().selfLearning === "auto" ? "auto" : "manual",
-  // W7: durable learning ships ON. `=false`/`=0`/`""` (trim+lower, the shared flip-flag table)
-  // falls back to the legacy-only learning path. THIS reader is the production default; the
-  // deepagent-code `gatewayConfig` uses the same table.
   durableLearning: flipFlagValueOn(env().durableLearning, true),
   modelRouter: {
     upstreamProviderID: env().routerProvider ?? "deepagent-upstream",
@@ -265,7 +281,9 @@ let current: CurrentConfig = {
   runsDir: path.join(resolveDeepAgentCodeHome(), "runs"),
   baseDir: resolveDeepAgentCodeHome(),
   resumeFrom: undefined,
-}
+})
+
+let current = defaultConfig()
 
 export const selfLearningPolicy = (): SelfLearningPolicy => current.selfLearning
 
@@ -287,16 +305,23 @@ export type LearningAuthority = {
   readonly enqueue: (admission: Admission) => Promise<void>
 }
 
+export type RuntimeOptions = {
+  readonly learningAuthority?: LearningAuthority
+}
+
 export const LEARNING_ADMISSION_RECEIPT_FILE = "LEARNING_ADMISSION_RECEIPT.json"
 
 let learningAuthority: LearningAuthority | undefined
 let learningRecovery: Promise<void> | undefined
 let learningRecoveryRequested = false
 
-export const setLearningAuthority = (authority: LearningAuthority | undefined): void => {
+export const setLearningAuthority = (authority: LearningAuthority | undefined): (() => void) => {
   learningAuthority = authority
   if (authority && current.durableLearning) {
     scheduleLearningAdmissionRecovery()
+  }
+  return () => {
+    if (learningAuthority === authority) learningAuthority = undefined
   }
 }
 
@@ -379,49 +404,51 @@ export const recoverLearningAdmissions = async (
     }, Promise.resolve([]))
 }
 
-// G31-3: minimal in-memory audit counters for general-mode (passthrough) turns.
-// No disk writes — available only for diagnostics / budget tracking in-process.
-type GeneralAuditEntry = { turnCount: number; totalInputTokens: number; totalOutputTokens: number }
-const generalAuditState = new Map<string, GeneralAuditEntry>()
-const seededKnowledgeBases = new Set<string>()
-const knowledgeSeedTasks = new Map<string, Promise<void>>()
 let configuredStorageBaseDir: string | null = null
+let configuredKnowledgeSeed: KnowledgeSeedRuntime | null = null
 
-const ensureKnowledgeSeeded = (baseDir: string) => {
-  if (seededKnowledgeBases.has(baseDir)) return Promise.resolve()
-  const active = knowledgeSeedTasks.get(baseDir)
-  if (active) return active
-  const task = new Promise<void>((resolve) => {
-    setTimeout(() => {
-      try {
-        DeepAgentKnowledgeSeed.seedCoreKnowledgeAt(baseDir)
-        seededKnowledgeBases.add(baseDir)
-      } catch {
-        // Keep the root unseeded so the next managed turn or configuration retries it.
-      } finally {
-        resolve()
-      }
-    }, 0)
-  }).finally(() => knowledgeSeedTasks.delete(baseDir))
-  knowledgeSeedTasks.set(baseDir, task)
-  return task
+type KnowledgeSeedRuntime = {
+  readonly baseDir: string
+  readonly ensure: () => Promise<void>
 }
 
-export const flushKnowledgeSeed = () => Promise.all([...knowledgeSeedTasks.values()]).then(() => undefined)
+type KnowledgeSeedLock = (body: () => Promise<void>, key: string, dir: string) => Promise<void>
 
-const recordGeneralAudit = (sessionID: string, inputTokens: number, outputTokens: number): void => {
-  const existing = generalAuditState.get(sessionID)
-  if (existing) {
-    existing.turnCount += 1
-    existing.totalInputTokens += inputTokens
-    existing.totalOutputTokens += outputTokens
-  } else {
-    generalAuditState.set(sessionID, { turnCount: 1, totalInputTokens: inputTokens, totalOutputTokens: outputTokens })
+const legacyKnowledgeSeedLock: KnowledgeSeedLock = (body, key, dir) => Flock.withLock(key, body, { dir })
+
+const createKnowledgeSeedRuntime = (
+  baseDir: string,
+  withLock: KnowledgeSeedLock = legacyKnowledgeSeedLock,
+): KnowledgeSeedRuntime => {
+  let seeded = false
+  let active: Promise<void> | undefined
+  const lockDir = path.join(baseDir, "state", "locks")
+  const key = `deepagent-knowledge-seed:${baseDir}`
+  return {
+    baseDir,
+    ensure: () => {
+      if (seeded) return Promise.resolve()
+      if (active) return active
+      active = withLock(
+        async () => {
+          DeepAgentKnowledgeSeed.seedCoreKnowledgeAt(baseDir)
+          seeded = true
+        },
+        key,
+        lockDir,
+      ).finally(() => {
+        active = undefined
+      })
+      return active
+    },
   }
 }
 
-/** Returns the accumulated general-mode audit counters for a session, or undefined if none recorded. */
-export const getGeneralAudit = (sessionID: string): GeneralAuditEntry | undefined => generalAuditState.get(sessionID)
+const ensureConfiguredKnowledgeSeed = () =>
+  configuredKnowledgeSeed?.ensure() ?? Promise.reject(new Error("DeepAgent knowledge root is not configured"))
+
+/** V1 compatibility waiter. Core V2 callers use Runtime.ensureKnowledgeSeeded instead. */
+export const flushKnowledgeSeed = ensureConfiguredKnowledgeSeed
 
 export const configure = (config: Config = {}) => {
   const nextRunsDir = "runsDir" in config ? config.runsDir : current.runsDir
@@ -436,26 +463,7 @@ export const configure = (config: Config = {}) => {
   // is still observed. This replaces the old path.dirname(runsDir) inference that made durable
   // knowledge/state diverge from project-memory whenever runsDir pointed outside <home>/runs.
   const baseDir = config.baseDir ?? resolveDeepAgentCodeHome()
-  const resolvedBaseDir = path.resolve(baseDir)
-  if (configuredStorageBaseDir !== resolvedBaseDir) {
-    DeepAgentSessionState.configure(path.join(resolvedBaseDir, "state"))
-    // I33-1: the structural plan lives under <baseDir>/state/goal/<sid>/graph. Root it from the SAME
-    // state directory before any plan read/write. SessionState.configure also applies this root; the
-    // explicit call documents the gateway ownership boundary.
-    DeepAgentPlanStore.configureRoot(path.join(resolvedBaseDir, "state"))
-    configuredStorageBaseDir = resolvedBaseDir
-  }
-  // configure() is identity-preserving for the same root, so request-time policy updates do not drop
-  // the live knowledge stores. It also restores the adapter if an explicit test reset it.
-  DeepAgentKnowledgeSource.configure(resolvedBaseDir)
-  // Seed each storage root once per process. Reconfiguration changes runtime policy frequently, but
-  // the built-in corpus only changes across process/app versions and must not rebuild its disk index.
-  void ensureKnowledgeSeeded(resolvedBaseDir).catch(() => undefined)
-  // docs/34 §3: domain pack registry. Built-in packs (packages/domain-packs, bundled with the app)
-  // are ALWAYS discovered automatically. A user/org pack dir can be layered on top via config.packDir
-  // or DEEPAGENT_PACK_DIR (its packs override built-ins by id). Passing undefined = built-ins only.
-  const userPackDir = config.packDir ?? process.env.DEEPAGENT_PACK_DIR
-  DeepAgentDomainPackRegistry.configureRegistry(userPackDir)
+  configureStorage(config)
   current = {
     enabled: config.enabled ?? current.enabled,
     baseDir,
@@ -480,21 +488,84 @@ export const configure = (config: Config = {}) => {
   return current
 }
 
-export const snapshot = (): RuntimeSnapshot => ({
+const configureStorage = (config: Config) => {
+  const baseDir = config.baseDir ?? resolveDeepAgentCodeHome()
+  const resolvedBaseDir = path.resolve(baseDir)
+  if (configuredStorageBaseDir !== resolvedBaseDir) {
+    DeepAgentSessionState.configure(path.join(resolvedBaseDir, "state"))
+    // I33-1: the structural plan lives under <baseDir>/state/goal/<sid>/graph. Root it from the SAME
+    // state directory before any plan read/write. SessionState.configure also applies this root; the
+    // explicit call documents the gateway ownership boundary.
+    DeepAgentPlanStore.configureRoot(path.join(resolvedBaseDir, "state"))
+    configuredStorageBaseDir = resolvedBaseDir
+    configuredKnowledgeSeed = createKnowledgeSeedRuntime(resolvedBaseDir)
+  }
+  // configure() is identity-preserving for the same root, so request-time policy updates do not drop
+  // the live knowledge stores. It also restores the adapter if an explicit test reset it.
+  DeepAgentKnowledgeSource.configure(resolvedBaseDir)
+  // Seeding is admitted by flushKnowledgeSeed or the first managed turn. Configuration itself must
+  // not start an unscoped background writer that can race a V2 runtime reading the same root.
+  // docs/34 §3: domain pack registry. Built-in packs (packages/domain-packs, bundled with the app)
+  // are ALWAYS discovered automatically. A user/org pack dir can be layered on top via config.packDir
+  // or DEEPAGENT_PACK_DIR (its packs override built-ins by id). Passing undefined = built-ins only.
+  const userPackDir = config.packDir ?? process.env.DEEPAGENT_PACK_DIR
+  DeepAgentDomainPackRegistry.configureRegistry(userPackDir)
+}
+
+type StorageRuntime = {
+  readonly baseDir: string
+  readonly runsDir: string
+  readonly withStorage: <A>(operation: () => A) => A
+  readonly ensureKnowledgeSeeded: () => Promise<void>
+  readonly learningQueue: DeepAgentBackgroundLearning.LearningQueue
+}
+
+const createStorageRuntime = (
+  config: CurrentConfig,
+  packDir?: string,
+  withSeedLock?: KnowledgeSeedLock,
+): StorageRuntime => {
+  const baseDir = path.resolve(config.baseDir ?? resolveDeepAgentCodeHome())
+  const plan = DeepAgentPlanStore.createRuntime(path.join(baseDir, "state"))
+  const session = DeepAgentPlanStore.withRuntime(plan, () =>
+    DeepAgentSessionState.createRuntime(path.join(baseDir, "state")),
+  )
+  const knowledge = DeepAgentKnowledgeSource.createRuntime(baseDir)
+  const packs = DeepAgentDomainPackRegistry.createRuntime(packDir ?? process.env.DEEPAGENT_PACK_DIR)
+  const seed = createKnowledgeSeedRuntime(baseDir, withSeedLock)
+  return {
+    baseDir,
+    runsDir: config.runsDir ?? path.join(baseDir, "runs"),
+    withStorage: (operation) =>
+      DeepAgentPlanStore.withRuntime(plan, () =>
+        DeepAgentSessionState.withRuntime(session, () =>
+          DeepAgentKnowledgeSource.withRuntime(knowledge, () =>
+            DeepAgentDomainPackRegistry.withRuntime(packs, operation),
+          ),
+        ),
+      ),
+    ensureKnowledgeSeeded: seed.ensure,
+    learningQueue: new DeepAgentBackgroundLearning.LearningQueue(),
+  }
+}
+
+const snapshotWith = (config: CurrentConfig): RuntimeSnapshot => ({
   schemaVersion: "deepagent_generic_agent_runtime.v1",
-  mode: current.killSwitch ? "blocked" : isActiveDeepAgentRuntime() ? "enabled" : "off",
-  agentMode: current.agentMode,
-  implementation: isActiveDeepAgentRuntime() ? "gateway_enforced" : "visible_skeleton",
-  agentManaged: isActiveDeepAgentRuntime(),
-  originalPathAllowed: !isActiveDeepAgentRuntime(),
-  providerExecutedToolPolicy: current.providerExecutedToolPolicy,
-  knowledgeEnabled: isActiveDeepAgentRuntime() && knowledgeEnabled(current.agentMode),
+  mode: config.killSwitch ? "blocked" : isManagedDeepAgentRuntimeWith(config) ? "enabled" : "off",
+  agentMode: config.agentMode,
+  implementation: isManagedDeepAgentRuntimeWith(config) ? "gateway_enforced" : "visible_skeleton",
+  agentManaged: isManagedDeepAgentRuntimeWith(config),
+  originalPathAllowed: !isManagedDeepAgentRuntimeWith(config),
+  providerExecutedToolPolicy: config.providerExecutedToolPolicy,
+  knowledgeEnabled: isManagedDeepAgentRuntimeWith(config) && knowledgeEnabled(config.agentMode),
 })
 
-export const routeRequest = (request: LLMRequest): LLMRequest => {
+export const snapshot = (): RuntimeSnapshot => snapshotWith(current)
+
+const routeRequestWith = (request: LLMRequest, config: CurrentConfig): LLMRequest => {
   const metadata = request.metadata ?? {}
-  const agentMode = effectiveAgentMode(metadata) ?? current.agentMode
-  if (!isManagedDeepAgentRuntimeWith({ ...current, agentMode })) return request
+  const agentMode = effectiveAgentMode(metadata, config.agentMode) ?? config.agentMode
+  if (!isManagedDeepAgentRuntimeWith({ ...config, agentMode })) return request
   const deepagent = isRecord(metadata.deepagent) ? metadata.deepagent : {}
   return LLMRequest.update(request, {
     metadata: {
@@ -502,18 +573,20 @@ export const routeRequest = (request: LLMRequest): LLMRequest => {
       deepagent: {
         ...deepagent,
         router: {
-          selected_provider_id: current.modelRouter.upstreamProviderID,
-          selected_model_id: current.modelRouter.upstreamModelID,
+          selected_provider_id: config.modelRouter.upstreamProviderID,
+          selected_model_id: config.modelRouter.upstreamModelID,
           original_provider_id: String(request.model.provider),
           original_model_id: String(request.model.id),
-          user_preference: current.modelRouter.userPreference,
-          reason: current.modelRouter.reason,
+          user_preference: config.modelRouter.userPreference,
+          reason: config.modelRouter.reason,
           routed_at: new Date().toISOString(),
         },
       },
     },
   })
 }
+
+export const routeRequest = (request: LLMRequest): LLMRequest => routeRequestWith(request, current)
 
 export const fromRequest = (request: LLMRequest): RunInput => {
   const metadata = request.metadata ?? {}
@@ -634,8 +707,11 @@ import type { RoundState as DeepAgentRoundState } from "./deepagent/round-state"
 // runtime is active (high/max). `general` (and disabled/kill-switched) returns [] so the
 // inherited deepagent-code baseline prompt is used unchanged. providerID is accepted for caller
 // signature stability but no longer gates injection.
-export const systemPrompt = (_providerID: string, context?: PromptContext) =>
-  isActiveDeepAgentRuntime() ? [context ? buildSystemPrompt(context) : bootMessage(current.agentMode)] : []
+const systemPromptWith = (config: CurrentConfig, _providerID: string, context?: PromptContext) =>
+  isManagedDeepAgentRuntimeWith(config) ? [context ? buildSystemPrompt(context) : bootMessage(config.agentMode)] : []
+
+export const systemPrompt = (providerID: string, context?: PromptContext) =>
+  systemPromptWith(current, providerID, context)
 
 // Prompt-cache split (see docs/llmrealtest-v2.md §11.2): the per-turn volatile state that must
 // NOT ride the cached system prefix. The caller appends this to the tail of the message array (after
@@ -643,10 +719,16 @@ export const systemPrompt = (_providerID: string, context?: PromptContext) =>
 // the prefix. Returns "" when there is nothing round-specific (⇒ caller skips injection). Only emitted
 // when the DeepAgent runtime is active, matching systemPrompt().
 export const volatileRoundContext = (context: PromptContext, runtimeControl?: string): string =>
-  isActiveDeepAgentRuntime() ? buildVolatileRoundContext(context, runtimeControl) : ""
+  volatileRoundContextWith(current, context, runtimeControl)
 
 export const volatileContinuationContext = (runtimeControl?: string): string =>
-  isActiveDeepAgentRuntime() ? buildVolatileContinuationContext(runtimeControl) : ""
+  volatileContinuationContextWith(current, runtimeControl)
+
+const volatileRoundContextWith = (config: CurrentConfig, context: PromptContext, runtimeControl?: string): string =>
+  isManagedDeepAgentRuntimeWith(config) ? buildVolatileRoundContext(context, runtimeControl) : ""
+
+const volatileContinuationContextWith = (config: CurrentConfig, runtimeControl?: string): string =>
+  isManagedDeepAgentRuntimeWith(config) ? buildVolatileContinuationContext(runtimeControl) : ""
 
 export const volatilePlanContext = (runtimeControl: string): string => buildVolatilePlanContext(runtimeControl)
 
@@ -671,37 +753,40 @@ const preflightWith = (input: RunInput, config: CurrentConfig): Effect.Effect<vo
 export const manageStream = <E>(
   input: RunInput,
   stream: Stream.Stream<LLMEventType, E>,
+): Stream.Stream<LLMEventType, E | LLMError> =>
+  manageStreamWith(
+    current,
+    (operation) => operation(),
+    ensureConfiguredKnowledgeSeed,
+    learningAuthority,
+    legacyLearningQueue,
+    input,
+    stream,
+  )
+
+const manageStreamWith = <E>(
+  runtimeConfig: CurrentConfig,
+  withStorage: <A>(operation: () => A) => A,
+  ensureKnowledgeSeeded: () => Promise<void>,
+  learning: LearningAuthority | undefined,
+  queue: DeepAgentBackgroundLearning.LearningQueue,
+  input: RunInput,
+  stream: Stream.Stream<LLMEventType, E>,
 ): Stream.Stream<LLMEventType, E | LLMError> => {
   // DeepAgent V3.1 is the GLOBAL runtime: activation is strength-driven, not provider-scoped.
   // It applies to every upstream provider; `providerID` only identifies the execution backend.
   // Kill switch is fail-closed for all providers (emergency stop), and must precede the
   // management gate because isManagedDeepAgentRuntimeWith is false under killSwitch and would
   // otherwise pass through untracked. Graceful disable (enabled=false) still passes through.
-  if (current.killSwitch) {
+  if (runtimeConfig.killSwitch) {
     return Stream.fail(gatewayBlocked("DeepAgent runtime kill switch is enabled"))
   }
   // general mode (and a disabled runtime) is pure passthrough with zero artifacts, which
   // protects the inherited generic-agent (deepagent-code) baseline.
-  // G31-3: even in passthrough mode, tap finish events to record a minimal audit entry
-  // (turn count + token delta) so diagnostics/budget tracking have visibility into these turns.
-  const agentMode = effectiveAgentMode(input.metadata) ?? current.agentMode
-  if (!isManagedDeepAgentRuntimeWith({ ...current, agentMode })) {
-    if (!input.sessionID) return stream
-    const sessionID = input.sessionID
-    return Stream.tap(stream, (event) =>
-      Effect.sync(() => {
-        if (LLMEvent.is.finish(event) && "usage" in event && event.usage != null) {
-          recordGeneralAudit(
-            sessionID,
-            Math.trunc(event.usage.inputTokens ?? 0),
-            Math.trunc(event.usage.outputTokens ?? 0),
-          )
-        }
-      }),
-    )
-  }
+  const agentMode = effectiveAgentMode(input.metadata, runtimeConfig.agentMode) ?? runtimeConfig.agentMode
+  if (!isManagedDeepAgentRuntimeWith({ ...runtimeConfig, agentMode })) return stream
   if (input.sessionID) {
-    const budgetStatus = DeepAgentSessionState.budgetStatus(input.sessionID)
+    const budgetStatus = withStorage(() => DeepAgentSessionState.budgetStatus(input.sessionID!))
     if (budgetStatus?.status === "exhausted" || budgetStatus?.status === "exceeded") {
       return Stream.fail(gatewayBlocked(deepAgentBudgetMessage(budgetStatus)))
     }
@@ -709,29 +794,33 @@ export const manageStream = <E>(
 
   return Stream.unwrap(
     Effect.gen(function* () {
-      const config = cloneConfig({ ...current, agentMode })
+      const config = cloneConfig({ ...runtimeConfig, agentMode })
       yield* preflightWith(input, config)
-      yield* Effect.promise(() => ensureKnowledgeSeeded(path.resolve(config.baseDir ?? resolveDeepAgentCodeHome())))
+      yield* Effect.promise(ensureKnowledgeSeeded)
       const run = yield* open(input, config)
-      ensureSessionStateForRun(run)
+      withStorage(() => ensureSessionStateForRun(run))
       let closed = false
       const closeOnce = (state: Exclude<RunCloseState, "opened" | "streaming">, failure?: unknown) =>
         Effect.promise(async () => {
           if (closed) return
           closed = true
-          await close(run, state, failure)
+          await withStorage(() => close(run, state, learning, queue, failure))
         })
       const closeTerminal = Effect.promise(async () => {
         if (closed) return
         closed = true
-        await close(
-          run,
-          run.terminalEventSeen ? "completed" : "failed",
-          run.terminalEventSeen ? undefined : "DeepAgent stream ended before terminal finish event",
+        await withStorage(() =>
+          close(
+            run,
+            run.terminalEventSeen ? "completed" : "failed",
+            learning,
+            queue,
+            run.terminalEventSeen ? undefined : "DeepAgent stream ended before terminal finish event",
+          ),
         )
       })
       return stream.pipe(
-        Stream.tap((event) => Effect.sync(() => observe(run, event))),
+        Stream.tap((event) => Effect.sync(() => withStorage(() => observe(run, event)))),
         Stream.mapEffect((event) =>
           isDeniedProviderExecutedTool(run, event)
             ? blockProviderExecutedTool(run, event).pipe(
@@ -763,7 +852,10 @@ const deepAgentBudgetMessage = (status: DeepAgentBudget.BudgetCheck) => {
     : "DeepAgent budget stopped this session."
 }
 
-const effectiveAgentMode = (metadata: Record<string, unknown> | undefined): AgentMode | undefined => {
+const effectiveAgentMode = (
+  metadata: Record<string, unknown> | undefined,
+  configuredMode: AgentMode,
+): AgentMode | undefined => {
   const deepagent = metadata && isRecord(metadata.deepagent) ? metadata.deepagent : {}
   const override = deepagent.agent_mode_override
   // Accept any valid AgentMode as a per-request override (not just "general"), so a downgraded
@@ -779,7 +871,7 @@ const effectiveAgentMode = (metadata: Record<string, unknown> | undefined): Agen
   // client escalate a request to "ultra" (autonomous macro-rounds + higher round/token budget +
   // knowledge/orchestration) regardless of the operator-configured DEEPAGENT_MODE ceiling. Clamp so
   // the override can only LOWER the effective mode, never raise it above the process-global setting.
-  return modeRank(override) <= modeRank(current.agentMode) ? override : undefined
+  return modeRank(override) <= modeRank(configuredMode) ? override : undefined
 }
 
 const isValidAgentMode = (value: unknown): value is AgentMode =>
@@ -796,15 +888,23 @@ export const runAuxiliary = <A, E, R>(
     if (config.killSwitch) return yield* Effect.fail(gatewayBlocked("DeepAgent runtime kill switch is enabled"))
     if (!isManagedDeepAgentRuntimeWith(config)) return yield* effect
     yield* preflightWith(input, config)
-    yield* Effect.promise(() => ensureKnowledgeSeeded(path.resolve(config.baseDir ?? resolveDeepAgentCodeHome())))
+    yield* Effect.promise(ensureConfiguredKnowledgeSeed)
     const run = yield* open(input, config)
     ensureSessionStateForRun(run)
     const result = yield* effect.pipe(Effect.exit)
     if (result._tag === "Success") {
-      yield* Effect.promise(() => close(run, "completed"))
+      yield* Effect.promise(() => close(run, "completed", learningAuthority, legacyLearningQueue))
       return result.value
     }
-    yield* Effect.promise(() => close(run, Cause.hasInterrupts(result.cause) ? "cancelled" : "failed", result.cause))
+    yield* Effect.promise(() =>
+      close(
+        run,
+        Cause.hasInterrupts(result.cause) ? "cancelled" : "failed",
+        learningAuthority,
+        legacyLearningQueue,
+        result.cause,
+      ),
+    )
     return yield* Effect.failCause(result.cause)
   })
 }
@@ -860,12 +960,17 @@ const open = Effect.fn("AgentGateway.open")(function* (input: RunInput, config: 
   return run
 })
 
-const close = async (run: RunRecord, state: Exclude<RunCloseState, "opened" | "streaming">, failure?: unknown) => {
+const close = async (
+  run: RunRecord,
+  state: Exclude<RunCloseState, "opened" | "streaming">,
+  authority: LearningAuthority | undefined,
+  queue: DeepAgentBackgroundLearning.LearningQueue,
+  failure?: unknown,
+) => {
   if ((state === "failed" || state === "blocked" || state === "cancelled") && !run.failureDossierRef) {
     run.failureDossierRef = await writeFailureDossier(run, failure)
   }
   const finalStatus = learningFinalStatus(run, state)
-  const authority = learningAuthority
   const artifacts = prepareArtifacts(run, state)
   const admission =
     run.config.durableLearning && finalStatus
@@ -936,11 +1041,11 @@ const close = async (run: RunRecord, state: Exclude<RunCloseState, "opened" | "s
       // onSessionComplete now only does session bookkeeping (no persist) — the old duplicate
       // ungated persist + auto-approve here was the sensitivity-bypass hole; removed.
       DeepAgentOrchestrator.onSessionComplete(sessionId)
-      await runBackgroundLearning(run, "completed")
+      await runBackgroundLearning(run, "completed", queue)
     }
   } else if (state === "failed") {
     DeepAgentSessionState.fail(sessionId)
-    await runBackgroundLearning(run, "failed")
+    await runBackgroundLearning(run, "failed", queue)
   }
 }
 
@@ -966,17 +1071,21 @@ const ensureSessionStateForRun = (run: RunRecord): DeepAgentSessionState.Session
 // The legacy path runs off-thread through a process queue. The flag-gated durable path awaits only
 // immutable artifact + job admission; extraction/review/governance remain background work. The
 // gateway currently owns session_finalization only; the other lifecycle triggers remain open work.
-const learningQueue = new DeepAgentBackgroundLearning.LearningQueue()
+const legacyLearningQueue = new DeepAgentBackgroundLearning.LearningQueue()
 
-export const enqueueLearning = (job: DeepAgentBackgroundLearning.LearningJob): void => learningQueue.enqueue(job)
+export const enqueueLearning = (job: DeepAgentBackgroundLearning.LearningJob): void => legacyLearningQueue.enqueue(job)
 
 // Test/shutdown hook: drain any queued learning jobs now and await completion.
 // drainNow() is async since H32-2 made LearningWorker.run() async (reviewer seam).
 export const flushLearning = async (): Promise<void> => {
-  await learningQueue.drainNow()
+  await legacyLearningQueue.drainNow()
 }
 
-const runBackgroundLearning = async (run: RunRecord, finalStatus: "completed" | "failed"): Promise<void> => {
+const runBackgroundLearning = async (
+  run: RunRecord,
+  finalStatus: "completed" | "failed",
+  queue: DeepAgentBackgroundLearning.LearningQueue,
+): Promise<void> => {
   if (run.config.durableLearning) return
   const sessionId = run.input.sessionID
   if (!sessionId) return
@@ -994,7 +1103,7 @@ const runBackgroundLearning = async (run: RunRecord, finalStatus: "completed" | 
   const selfLearning = run.config.selfLearning
   const runsDir = run.config.runsDir
   const policy = selfLearning === "auto" ? "auto_merge_safe_project" : "manual_review"
-  learningQueue.enqueue({
+  queue.enqueue({
     trigger: "session_finalization",
     build: () => {
       const home = new DeepAgentWorkspace.DeepAgentCodeHome(baseDir)
@@ -1045,7 +1154,7 @@ const runBackgroundLearning = async (run: RunRecord, finalStatus: "completed" | 
   // provisional environment fact, degrade that fact (mark stale) so the next project's use-gate warns.
   // Best-effort and non-blocking: any error here must never affect run finalization.
   try {
-    markStaleEnvironmentFactsFromRun(workspacePath, projectID, roundState)
+    markStaleEnvironmentFactsFromRun(run.config, workspacePath, projectID, roundState)
   } catch {
     /* environment-fact staleness is advisory; never let it break the close() path */
   }
@@ -1121,13 +1230,14 @@ const learningAdmissionFingerprintForRun = (run: RunRecord, state: RunCloseState
 // matching lives in environment-fact.ts (matchStaleFacts); this only gathers the failure text +
 // adopted endpoints and performs the durable write.
 const markStaleEnvironmentFactsFromRun = (
+  config: CurrentConfig,
   workspacePath: string,
   projectID: string,
   roundState: DeepAgentRoundState,
 ): void => {
   const failureText = collectValidationFailureText(roundState)
   if (!failureText) return
-  const baseDir = current.baseDir ?? resolveDeepAgentCodeHome()
+  const baseDir = config.baseDir ?? resolveDeepAgentCodeHome()
   const home = new DeepAgentWorkspace.DeepAgentCodeHome(baseDir)
   const project = home.ensureProject(projectID, workspacePath)
   const adoption = new DeepAgentEnvironmentFactAdoption.EnvironmentFactAdoption(baseDir, project, workspacePath)
@@ -2902,6 +3012,28 @@ const cloneConfig = (config: CurrentConfig): CurrentConfig => ({
   resumeFrom: config.resumeFrom ? { ...config.resumeFrom } : undefined,
 })
 
+const resolvedRuntimeConfig = (config: Config): CurrentConfig => {
+  const defaults = defaultConfig()
+  return cloneConfig({
+    enabled: config.enabled ?? defaults.enabled,
+    agentMode: config.agentMode ?? defaults.agentMode,
+    failClosed: config.failClosed ?? defaults.failClosed,
+    providerExecutedToolPolicy: config.providerExecutedToolPolicy ?? defaults.providerExecutedToolPolicy,
+    allowProviderExecutedTools: config.allowProviderExecutedTools ?? defaults.allowProviderExecutedTools,
+    allowProviderExecutedToolNames:
+      "allowProviderExecutedToolNames" in config
+        ? (config.allowProviderExecutedToolNames ?? [])
+        : defaults.allowProviderExecutedToolNames,
+    killSwitch: config.killSwitch ?? defaults.killSwitch,
+    selfLearning: config.selfLearning ?? defaults.selfLearning,
+    durableLearning: config.durableLearning ?? defaults.durableLearning,
+    modelRouter: { ...defaults.modelRouter, ...config.modelRouter },
+    runsDir: "runsDir" in config ? config.runsDir : defaults.runsDir,
+    baseDir: config.baseDir ?? defaults.baseDir,
+    resumeFrom: "resumeFrom" in config ? config.resumeFrom : defaults.resumeFrom,
+  })
+}
+
 const gatewayBlocked = (message: string) =>
   new LLMError({
     module: "AgentGateway",
@@ -3038,7 +3170,7 @@ const retrieveKnowledge = (run: RunRecord) => {
   // FEAT-001: GUI-pinned packs must reach retrieval. Pins persist in the workspace memory dir
   // (<baseDir>/memory/pinned-packs.json) written by the packsPin/packsUnpin handlers; the gateway
   // reads the SAME dir so the control plane and the runtime agree.
-  const pinned = pinnedPackIds()
+  const pinned = pinnedPackIds(run.config)
   return KnowledgeRetriever.retrieve({
     mode: run.agentMode,
     task,
@@ -3120,9 +3252,10 @@ const extractProblemProfile = (run: RunRecord): ProblemProfile => {
 // is <gateway baseDir>/memory (dirname(runsDir)/memory == Global.Path.agent.data/memory in
 // production). The gateway derives it from its own configured storage home — no workspacePath
 // needed, since the pin file is per-instance, mirroring the handler's workspaceMemoryDir().
-const pinnedMemoryDir = (): string => path.join(path.resolve(current.baseDir ?? resolveDeepAgentCodeHome()), "memory")
+const pinnedMemoryDir = (config: CurrentConfig): string =>
+  path.join(path.resolve(config.baseDir ?? resolveDeepAgentCodeHome()), "memory")
 
-const pinnedPackIds = (): string[] => readPinnedPacks(pinnedMemoryDir())
+const pinnedPackIds = (config: CurrentConfig): string[] => readPinnedPacks(pinnedMemoryDir(config))
 
 // FEAT-002: the SINGLE authoritative ExtendedProblemProfile producer for a run. The gateway used
 // to keep two competing truths — profileFromInput (regex-derived inside the retriever) and a
@@ -3141,7 +3274,7 @@ const profileForRun = (run: RunRecord): DeepAgentDomainPackRegistry.ExtendedProb
     agentMode: run.agentMode,
     scenarioMode: "intelligence",
     userRequest: userRequestForInput(run.input) ?? run.input.feature ?? "",
-    userOverrides: pinnedPackIds(),
+    userOverrides: pinnedPackIds(run.config),
   })
   runProfileCache.set(run, profile)
   return profile
@@ -3396,19 +3529,95 @@ const reasoningStatus = (events: readonly string[]) => {
   return "not_available"
 }
 
-export const layer = (config: Config = {}) => Layer.effectDiscard(Effect.sync(() => configure(config)))
+const clientMiddleware =
+  (
+    getConfig: () => CurrentConfig,
+    withStorage: <A>(operation: () => A) => A,
+    ensureKnowledgeSeeded: () => Promise<void>,
+    getLearningAuthority: () => LearningAuthority | undefined,
+    queue: DeepAgentBackgroundLearning.LearningQueue,
+  ): ClientMiddleware =>
+  () => ({
+    prepare: (next) => (request) => next(routeRequestWith(request, getConfig())),
+    stream: (next) => (request) => {
+      const config = getConfig()
+      const routed = routeRequestWith(request, config)
+      return manageStreamWith(
+        config,
+        withStorage,
+        ensureKnowledgeSeeded,
+        getLearningAuthority(),
+        queue,
+        fromRequest(routed),
+        next(routed),
+      )
+    },
+  })
 
-// Register the DeepAgent global-runtime middleware into the llm client seam. llm is a pure SDK
-// with an identity-passthrough default; importing this module (which core always does via
-// LLMClient layering) installs routing + stream management. This is the inversion that lets the
-// control-plane live in core without making llm -> core a dependency cycle. The middleware only
-// transforms prepare + stream; llm rebuilds generate from the wrapped stream.
-registerClientMiddleware(() => ({
-  prepare: (next) => (request) => next(routeRequest(request)),
-  stream: (next) => (request) => {
-    const routed = routeRequest(request)
-    return manageStream(fromRequest(routed), next(routed))
-  },
-}))
+/** Immutable V2 runtime. Policy is captured once by the production root and cannot be changed by
+ * legacy request-time `configure()` calls. Storage initialization remains explicit here until the
+ * state/plan/knowledge modules become scoped services under RI-90. */
+export const runtimeLayer = (config: Config = {}, options: RuntimeOptions = {}) => {
+  const captured = resolvedRuntimeConfig(config)
+  return Layer.unwrap(
+    Effect.gen(function* () {
+      const flock = yield* EffectFlock.Service
+      const storage = createStorageRuntime(captured, config.packDir, (body, key, dir) =>
+        Effect.runPromise(flock.withLock(Effect.promise(body), key, dir)),
+      )
+      yield* Effect.promise(storage.ensureKnowledgeSeeded).pipe(Effect.orDie)
+      return yield* Effect.succeed(
+        Layer.mergeAll(
+          Layer.succeed(
+            Runtime,
+            Runtime.of({
+              snapshot: snapshotWith(captured),
+              active: isManagedDeepAgentRuntimeWith(captured),
+              baseDir: storage.baseDir,
+              runsDir: storage.runsDir,
+              selfLearning: captured.selfLearning,
+              durableLearning: captured.durableLearning,
+              withStorage: storage.withStorage,
+              ensureKnowledgeSeeded: storage.ensureKnowledgeSeeded,
+              systemPrompt: (providerID, context) => systemPromptWith(captured, providerID, context),
+              volatileRoundContext: (context, runtimeControl) =>
+                volatileRoundContextWith(captured, context, runtimeControl),
+              volatileContinuationContext: (runtimeControl) =>
+                volatileContinuationContextWith(captured, runtimeControl),
+            }),
+          ),
+          Layer.succeed(
+            LLMClient.Middleware,
+            clientMiddleware(
+              () => captured,
+              storage.withStorage,
+              storage.ensureKnowledgeSeeded,
+              () => options.learningAuthority,
+              storage.learningQueue,
+            ),
+          ),
+          Layer.effectDiscard(Effect.addFinalizer(() => Effect.promise(() => storage.learningQueue.drainNow()))),
+        ),
+      )
+    }),
+  ).pipe(Layer.provide(EffectFlock.defaultLayer))
+}
+
+/** Legacy compatibility layer. It intentionally follows the mutable V1 configuration and must not
+ * be provided to a Core V2 Location tree. RI-71 removes its remaining production reachability. */
+export const layer = (config: Config = {}) =>
+  Layer.mergeAll(
+    Layer.effectDiscard(Effect.sync(() => configure(config))),
+    Layer.succeed(
+      LLMClient.Middleware,
+      clientMiddleware(
+        () => current,
+        (operation) => operation(),
+        ensureConfiguredKnowledgeSeed,
+        () => learningAuthority,
+        legacyLearningQueue,
+      ),
+    ),
+  )
 
 export * as AgentGateway from "./agent-gateway"

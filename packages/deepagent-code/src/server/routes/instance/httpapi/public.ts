@@ -317,11 +317,13 @@ function normalizeComponentNames(spec: OpenApiSpec) {
   }
 }
 
+// Component names keep pure-numeric identifier parts (event sync versions): SyncEvent
+// identifiers are version-stamped (`SyncEvent.session.updated.1`) and both versions of a type
+// must survive as distinct public components.
 function componentTypeName(name: string) {
   if (!name.includes(".")) return name
   return name
     .split(".")
-    .filter((part) => !/^\d+$/.test(part))
     .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
     .join("")
 }
@@ -348,7 +350,10 @@ function applyLegacySchemaOverrides(spec: OpenApiSpec) {
   // 在此补齐,使 SDK Config 类型可读写 per-model disabled(与运行时行为一致)。
   if (model && typeof model === "object" && model.properties && !model.properties.disabled)
     model.properties.disabled = { type: "boolean" }
-  const syncInfo = schemas.SyncEventSessionUpdated?.properties?.data?.properties?.info
+  // The legacy-shape (version 1) sync component keeps the nullable-field override legacy
+  // clients were built against; the version 2 component carries the native V2 Info shape and
+  // stays strict.
+  const syncInfo = schemas.SyncEventSessionUpdated1?.properties?.data?.properties?.info
   if (syncInfo?.properties) makePropertiesNullable(syncInfo.properties)
 }
 

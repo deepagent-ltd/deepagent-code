@@ -11,14 +11,7 @@
 import ts from "typescript"
 import { existsSync } from "node:fs"
 import { join } from "node:path"
-import {
-  declarationLine,
-  identifierLine,
-  listSourceFiles,
-  memberCalls,
-  moduleAnchorLine,
-  parseModule,
-} from "./ast"
+import { declarationLine, identifierLine, listSourceFiles, memberCalls, moduleAnchorLine, parseModule } from "./ast"
 import { rootRepoPath } from "./ast"
 import type { Entry, EntryWithHandlers, SurfaceId } from "./types"
 
@@ -151,9 +144,10 @@ function httpSurface(trees: readonly HttpExtractionTree[]): EntryWithHandlers[] 
             // share one line and bodyScopes would resolve all ops to the first handler. Anchor the
             // site to this specific .handle call's own property access instead (each call gets its
             // own line), which is what lets bodyChain verify each op's true handler body.
-            line: mod.sourceFile.getLineAndCharacterOfPosition(
-              (node.expression as ts.PropertyAccessExpression).name.getStart(),
-            ).line + 1,
+            line:
+              mod.sourceFile.getLineAndCharacterOfPosition(
+                (node.expression as ts.PropertyAccessExpression).name.getStart(),
+              ).line + 1,
             ...(bodyDecl ? { bodyDecl } : {}),
           }
           const key = `${tree.tag}\u0000${group}\u0000${op}`
@@ -330,7 +324,10 @@ function lildaxCliSurface(): EntryWithHandlers[] {
       const line = indexMod.sourceFile.getLineAndCharacterOfPosition(node.getStart()).line + 1
       // Record the FULL command path (nested property keys, e.g. service.start / workspace.list),
       // not just the leaf — so each command entry can be matched to its own lazy handler.
-      const key = stack.filter((frame) => frame.key).map((frame) => frame.key).join(".")
+      const key = stack
+        .filter((frame) => frame.key)
+        .map((frame) => frame.key)
+        .join(".")
       if (!key) return
       // NEW-P2-B: root each entry at its OWN lazily-resolved handler module (login.ts), NOT the
       // shared index.ts dispatch hub. Resolving the dynamic import target here prevents the hub's
@@ -357,7 +354,14 @@ function lildaxCliSurface(): EntryWithHandlers[] {
         const cliRoot = /\/packages\/cli\/src\//
         for (const candidate of candidates) {
           if (!cliRoot.test(candidate)) continue
-          try { if (existsSync(candidate)) { handlerRepoFile = repoFile(candidate); break } } catch { /* ignore */ }
+          try {
+            if (existsSync(candidate)) {
+              handlerRepoFile = repoFile(candidate)
+              break
+            }
+          } catch {
+            /* ignore */
+          }
         }
       }
       dynamicImports.push({ name: `lazy-handler:${key}`, repoFile: handlerRepoFile, line })
@@ -366,11 +370,13 @@ function lildaxCliSurface(): EntryWithHandlers[] {
   }
   for (const statement of indexMod.sourceFile.statements) walkBindings(statement)
 
-  return out.map((item) => {
-    const path = item.entry.id.slice("cli.lildax.".length)
-    const handler = dynamicImports.find((d) => d.name === `lazy-handler:${path}`)
-    return { ...item, handlers: handler ? [handler] : [] }
-  }).sort((a, b) => (a.entry.id < b.entry.id ? -1 : a.entry.id > b.entry.id ? 1 : 0))
+  return out
+    .map((item) => {
+      const path = item.entry.id.slice("cli.lildax.".length)
+      const handler = dynamicImports.find((d) => d.name === `lazy-handler:${path}`)
+      return { ...item, handlers: handler ? [handler] : [] }
+    })
+    .sort((a, b) => (a.entry.id < b.entry.id ? -1 : a.entry.id > b.entry.id ? 1 : 0))
 }
 
 const ACP_PROTOCOL_METHODS = [
@@ -435,62 +441,368 @@ type FixedEntry = {
 
 const FIXED_ENTRIES: readonly FixedEntry[] = [
   // Composition roots (surface 1): process composition/lifecycle assembly points.
-  { id: "composition.dacode-cli-entry", surface: "composition", kind: "process-entry", name: "dacode cli main", fileFromRoot: "packages/deepagent-code/src/index.ts", identifier: "hideBin" },
-  { id: "composition.lildax-runtime", surface: "composition", kind: "process-entry", name: "lildax runtime main", fileFromRoot: "packages/cli/src/index.ts", declare: "Handlers" },
-  { id: "composition.app-runtime-layers", surface: "composition", kind: "layer-composition", name: "app runtime layer graph", fileFromRoot: "packages/deepagent-code/src/effect/app-runtime.ts", chain: "SessionPrompt.defaultLayer" },
-  { id: "composition.server-web-handler", surface: "composition", kind: "layer-composition", name: "server web handler", fileFromRoot: "packages/server/src/routes.ts", declare: "createRoutes" },
-  { id: "composition.instance-httpapi-stack", surface: "composition", kind: "layer-composition", name: "instance http api stack", fileFromRoot: "packages/deepagent-code/src/server/routes/instance/httpapi/server.ts", identifier: "rootApiRoutes" },
-  { id: "composition.desktop-sidecar-start", surface: "composition", kind: "sidecar-lifecycle", name: "desktop sidecar start", fileFromRoot: "packages/desktop/src/main/sidecar.ts", declare: "start" },
+  {
+    id: "composition.dacode-cli-entry",
+    surface: "composition",
+    kind: "process-entry",
+    name: "dacode cli main",
+    fileFromRoot: "packages/deepagent-code/src/index.ts",
+    identifier: "hideBin",
+  },
+  {
+    id: "composition.lildax-runtime",
+    surface: "composition",
+    kind: "process-entry",
+    name: "lildax runtime main",
+    fileFromRoot: "packages/cli/src/index.ts",
+    declare: "Handlers",
+  },
+  {
+    id: "composition.app-runtime-layers",
+    surface: "composition",
+    kind: "layer-composition",
+    name: "app runtime layer graph",
+    fileFromRoot: "packages/deepagent-code/src/effect/app-runtime.ts",
+    declare: "AppLayer",
+  },
+  {
+    id: "composition.server-web-handler",
+    surface: "composition",
+    kind: "layer-composition",
+    name: "server web handler",
+    fileFromRoot: "packages/server/src/routes.ts",
+    declare: "createRoutes",
+  },
+  {
+    id: "composition.instance-httpapi-stack",
+    surface: "composition",
+    kind: "layer-composition",
+    name: "instance http api stack",
+    fileFromRoot: "packages/deepagent-code/src/server/routes/instance/httpapi/server.ts",
+    identifier: "rootApiRoutes",
+  },
+  {
+    id: "composition.desktop-sidecar-start",
+    surface: "composition",
+    kind: "sidecar-lifecycle",
+    name: "desktop sidecar start",
+    fileFromRoot: "packages/desktop/src/main/sidecar.ts",
+    declare: "start",
+  },
+  {
+    id: "composition.sdk-server-launcher",
+    surface: "composition",
+    kind: "public-sdk-launcher",
+    name: "JavaScript SDK server launcher",
+    fileFromRoot: "packages/sdk/js/src/server.ts",
+    declare: "createDeepAgentCodeServer",
+  },
+  {
+    id: "composition.slack-bot",
+    surface: "composition",
+    kind: "integration-process",
+    name: "Slack bot",
+    fileFromRoot: "packages/slack/src/index.ts",
+    declare: "deepagentCode",
+  },
+  {
+    id: "composition.share-backend",
+    surface: "composition",
+    kind: "external-backend",
+    name: "share backend",
+    fileFromRoot: "packages/function/src/server.ts",
+    declare: "server",
+  },
 
   // Desktop (surface 3): electron main & sidecar spawn face.
-  { id: "desktop.app-main", surface: "desktop", kind: "electron-main", name: "electron app main", fileFromRoot: "packages/desktop/src/main/index.ts", chain: "app.setName" },
-  { id: "desktop.spawn-local-server", surface: "desktop", kind: "sidecar-spawn", name: "spawnLocalServer", fileFromRoot: "packages/desktop/src/main/server.ts", declare: "spawnLocalServer" },
-  { id: "desktop.check-health", surface: "desktop", kind: "sidecar-spawn", name: "checkHealth", fileFromRoot: "packages/desktop/src/main/server.ts", declare: "checkHealth" },
-  { id: "desktop.sidecar-server-listen", surface: "desktop", kind: "sidecar-listen", name: "Server.listen", fileFromRoot: "packages/desktop/src/main/sidecar.ts", chain: "Server.listen" },
-  { id: "desktop.wsl-sidecar", surface: "desktop", kind: "sidecar-spawn", name: "spawnWslSidecar", fileFromRoot: "packages/desktop/src/main/wsl/sidecar.ts", declare: "spawnWslSidecar" },
+  {
+    id: "desktop.app-main",
+    surface: "desktop",
+    kind: "electron-main",
+    name: "electron app main",
+    fileFromRoot: "packages/desktop/src/main/index.ts",
+    chain: "app.setName",
+  },
+  {
+    id: "desktop.spawn-local-server",
+    surface: "desktop",
+    kind: "sidecar-spawn",
+    name: "spawnLocalServer",
+    fileFromRoot: "packages/desktop/src/main/server.ts",
+    declare: "spawnLocalServer",
+  },
+  {
+    id: "desktop.check-health",
+    surface: "desktop",
+    kind: "sidecar-spawn",
+    name: "checkHealth",
+    fileFromRoot: "packages/desktop/src/main/server.ts",
+    declare: "checkHealth",
+  },
+  {
+    id: "desktop.sidecar-server-listen",
+    surface: "desktop",
+    kind: "sidecar-listen",
+    name: "Server.listen",
+    fileFromRoot: "packages/desktop/src/main/sidecar.ts",
+    chain: "Server.listen",
+  },
+  {
+    id: "desktop.wsl-sidecar",
+    surface: "desktop",
+    kind: "sidecar-spawn",
+    name: "spawnWslSidecar",
+    fileFromRoot: "packages/desktop/src/main/wsl/sidecar.ts",
+    declare: "spawnWslSidecar",
+  },
 
   // IM (surface 6): core ingress orchestration + server-side executor face.
-  { id: "im.agent-orchestrator", surface: "im", kind: "ingress-orchestrator", name: "IM agent orchestrator", fileFromRoot: "packages/core/src/im/agent-orchestrator.ts" },
-  { id: "im.agent-executor", surface: "im", kind: "server-agent-executor", name: "ServerAgentExecutor", fileFromRoot: "packages/deepagent-code/src/im/agent-executor-server.ts", declare: "ServerAgentExecutor" },
-  { id: "im.agent-reply-sink", surface: "im", kind: "reply-sink", name: "Agent reply sink (server)", fileFromRoot: "packages/deepagent-code/src/im/agent-reply-sink-server.ts" },
-  { id: "im.agent-progress-stream", surface: "im", kind: "progress-stream", name: "Agent progress stream", fileFromRoot: "packages/deepagent-code/src/im/agent-progress-stream.ts", declare: "withAgentProgress" },
+  {
+    id: "im.agent-orchestrator",
+    surface: "im",
+    kind: "ingress-orchestrator",
+    name: "IM agent orchestrator",
+    fileFromRoot: "packages/core/src/im/agent-orchestrator.ts",
+  },
+  {
+    id: "im.agent-executor",
+    surface: "im",
+    kind: "server-agent-executor",
+    name: "ServerAgentExecutor",
+    fileFromRoot: "packages/deepagent-code/src/im/agent-executor-server.ts",
+    declare: "ServerAgentExecutor",
+  },
+  {
+    id: "im.agent-reply-sink",
+    surface: "im",
+    kind: "reply-sink",
+    name: "Agent reply sink (server)",
+    fileFromRoot: "packages/deepagent-code/src/im/agent-reply-sink-server.ts",
+  },
+  {
+    id: "im.agent-progress-stream",
+    surface: "im",
+    kind: "progress-stream",
+    name: "Agent progress stream",
+    fileFromRoot: "packages/deepagent-code/src/im/agent-progress-stream.ts",
+    declare: "withAgentProgress",
+  },
 
   // Event (surface 7): bus / router / bridge / daemon consumers.
-  { id: "event.v2-bridge", surface: "event", kind: "event-bridge", name: "EventV2Bridge", fileFromRoot: "packages/deepagent-code/src/event-v2-bridge.ts", declare: "layer" },
-  { id: "event.legacy-canonicalizer-daemon", surface: "event", kind: "event-daemon", name: "LegacyEventCanonicalizerRuntime", fileFromRoot: "packages/deepagent-code/src/legacy-event-canonicalizer-runtime.ts", declare: "makeLayer" },
-  { id: "event.deepagent-bus", surface: "event", kind: "durable-bus", name: "DeepAgentEventBus", fileFromRoot: "packages/core/src/deepagent/deepagent-event-bus.ts" },
-  { id: "event.event-router", surface: "event", kind: "router", name: "EventRouter", fileFromRoot: "packages/core/src/deepagent/event-router.ts" },
-  { id: "event.panel-convene-consumer", surface: "event", kind: "bus-consumer", name: "PanelConveneConsumer", fileFromRoot: "packages/deepagent-code/src/panel/panel-convene-consumer.ts", declare: "CONVENE_GROUP" },
-  { id: "event.goal-tick-consumer", surface: "event", kind: "bus-consumer", name: "GoalTickConsumer", fileFromRoot: "packages/deepagent-code/src/session/goal-tick-consumer.ts", declare: "TICK_GROUP" },
-  { id: "event.wiki-event-driven-archiver", surface: "event", kind: "bus-consumer", name: "EventDrivenArchiver", fileFromRoot: "packages/deepagent-code/src/wiki/event-driven-archiver.ts" },
+  {
+    id: "event.v2-bridge",
+    surface: "event",
+    kind: "event-bridge",
+    name: "EventV2Bridge",
+    fileFromRoot: "packages/deepagent-code/src/event-v2-bridge.ts",
+    declare: "layer",
+  },
+  {
+    id: "event.legacy-canonicalizer-daemon",
+    surface: "event",
+    kind: "event-daemon",
+    name: "LegacyEventCanonicalizerRuntime",
+    fileFromRoot: "packages/deepagent-code/src/legacy-event-canonicalizer-runtime.ts",
+    declare: "makeLayer",
+  },
+  {
+    id: "event.deepagent-bus",
+    surface: "event",
+    kind: "durable-bus",
+    name: "DeepAgentEventBus",
+    fileFromRoot: "packages/core/src/deepagent/deepagent-event-bus.ts",
+  },
+  {
+    id: "event.event-router",
+    surface: "event",
+    kind: "router",
+    name: "EventRouter",
+    fileFromRoot: "packages/core/src/deepagent/event-router.ts",
+  },
+  {
+    id: "event.panel-convene-consumer",
+    surface: "event",
+    kind: "bus-consumer",
+    name: "PanelConveneConsumer",
+    fileFromRoot: "packages/deepagent-code/src/panel/panel-convene-consumer.ts",
+    declare: "CONVENE_GROUP",
+  },
+  {
+    id: "event.goal-tick-consumer",
+    surface: "event",
+    kind: "bus-consumer",
+    name: "GoalTickConsumer",
+    fileFromRoot: "packages/deepagent-code/src/session/goal-tick-consumer.ts",
+    declare: "TICK_GROUP",
+  },
+  {
+    id: "event.wiki-event-driven-archiver",
+    surface: "event",
+    kind: "bus-consumer",
+    name: "EventDrivenArchiver",
+    fileFromRoot: "packages/deepagent-code/src/wiki/event-driven-archiver.ts",
+  },
 
   // Task / Goal / Panel (surface 8).
-  { id: "task.task-run-admission", surface: "task-goal-panel", kind: "child-session-registration", name: "TaskRun admission", fileFromRoot: "packages/deepagent-code/src/tool/task-run.ts", declare: "admitTaskRun" },
-  { id: "task.goal-manager", surface: "task-goal-panel", kind: "goal-daemon", name: "GoalManager service", fileFromRoot: "packages/deepagent-code/src/session/goal-manager.ts", declare: "Service" },
-  { id: "task.goal-driver", surface: "task-goal-panel", kind: "goal-daemon", name: "GoalDriver", fileFromRoot: "packages/deepagent-code/src/session/goal-driver.ts", declare: "makeGoalSteerRelay" },
-  { id: "task.goal-loop-wiring", surface: "task-goal-panel", kind: "goal-daemon", name: "GoalLoop wiring", fileFromRoot: "packages/deepagent-code/src/session/goal-loop-wiring.ts", declare: "makeGoalLoopWiring" },
-  { id: "panel.orchestrator", surface: "task-goal-panel", kind: "panel-engine", name: "PanelOrchestrator", fileFromRoot: "packages/deepagent-code/src/panel/orchestrator.ts", declare: "runPanel" },
-  { id: "panel.arbiter", surface: "task-goal-panel", kind: "panel-engine", name: "PanelArbiter", fileFromRoot: "packages/deepagent-code/src/panel/arbiter.ts" },
-  { id: "panel.consult", surface: "task-goal-panel", kind: "panel-engine", name: "consultPanel", fileFromRoot: "packages/deepagent-code/src/panel/consult.ts", declare: "consultPanel" },
-  { id: "panel.panelist-runner", surface: "task-goal-panel", kind: "panel-engine", name: "PanelistRunner", fileFromRoot: "packages/deepagent-code/src/panel/panelist-runner.ts" },
-  { id: "background.job", surface: "task-goal-panel", kind: "background-daemon", name: "BackgroundJob", fileFromRoot: "packages/deepagent-code/src/background/job.ts", identifier: "InstanceState" },
+  {
+    id: "task.task-run-admission",
+    surface: "task-goal-panel",
+    kind: "child-session-registration",
+    name: "TaskRun admission",
+    fileFromRoot: "packages/deepagent-code/src/tool/task-run.ts",
+    declare: "admitTaskRun",
+  },
+  {
+    id: "task.goal-manager",
+    surface: "task-goal-panel",
+    kind: "goal-daemon",
+    name: "GoalManager service",
+    fileFromRoot: "packages/deepagent-code/src/session/goal-manager.ts",
+    declare: "Service",
+  },
+  {
+    id: "task.goal-driver",
+    surface: "task-goal-panel",
+    kind: "goal-daemon",
+    name: "GoalDriver",
+    fileFromRoot: "packages/deepagent-code/src/session/goal-driver.ts",
+    declare: "makeGoalSteerRelay",
+  },
+  {
+    id: "task.goal-loop-wiring",
+    surface: "task-goal-panel",
+    kind: "goal-daemon",
+    name: "GoalLoop wiring",
+    fileFromRoot: "packages/deepagent-code/src/session/goal-loop-wiring.ts",
+    declare: "makeGoalLoopWiring",
+  },
+  {
+    id: "panel.orchestrator",
+    surface: "task-goal-panel",
+    kind: "panel-engine",
+    name: "PanelOrchestrator",
+    fileFromRoot: "packages/deepagent-code/src/panel/orchestrator.ts",
+    declare: "runPanel",
+  },
+  {
+    id: "panel.arbiter",
+    surface: "task-goal-panel",
+    kind: "panel-engine",
+    name: "PanelArbiter",
+    fileFromRoot: "packages/deepagent-code/src/panel/arbiter.ts",
+  },
+  {
+    id: "panel.consult",
+    surface: "task-goal-panel",
+    kind: "panel-engine",
+    name: "consultPanel",
+    fileFromRoot: "packages/deepagent-code/src/panel/consult.ts",
+    declare: "consultPanel",
+  },
+  {
+    id: "panel.panelist-runner",
+    surface: "task-goal-panel",
+    kind: "panel-engine",
+    name: "PanelistRunner",
+    fileFromRoot: "packages/deepagent-code/src/panel/panelist-runner.ts",
+  },
+  {
+    id: "background.job",
+    surface: "task-goal-panel",
+    kind: "background-daemon",
+    name: "BackgroundJob",
+    fileFromRoot: "packages/deepagent-code/src/background/job.ts",
+    identifier: "InstanceState",
+  },
 
   // Provider (surface 9).
-  { id: "provider.model-catalog-parse", surface: "provider", kind: "model-resolver", name: "ModelV2.parse", fileFromRoot: "packages/core/src/model.ts", declare: "parse" },
-  { id: "provider.provider-v2-schema", surface: "provider", kind: "provider-resolver", name: "ProviderV2", fileFromRoot: "packages/core/src/provider.ts", declare: "Info" },
-  { id: "provider.catalog-loader", surface: "provider", kind: "catalog-loader", name: "Catalog loader", fileFromRoot: "packages/core/src/catalog.ts", declare: "Service" },
-  { id: "provider.aisdk-stream-bridge", surface: "provider", kind: "stream-bridge", name: "AISDK bridge", fileFromRoot: "packages/core/src/aisdk.ts" },
-  { id: "provider.model-request-resolver", surface: "provider", kind: "model-resolver", name: "ModelRequest resolver", fileFromRoot: "packages/core/src/model-request.ts", declare: "normalizeAiSdkOptions" },
+  {
+    id: "provider.model-catalog-parse",
+    surface: "provider",
+    kind: "model-resolver",
+    name: "ModelV2.parse",
+    fileFromRoot: "packages/core/src/model.ts",
+    declare: "parse",
+  },
+  {
+    id: "provider.provider-v2-schema",
+    surface: "provider",
+    kind: "provider-resolver",
+    name: "ProviderV2",
+    fileFromRoot: "packages/core/src/provider.ts",
+    declare: "Info",
+  },
+  {
+    id: "provider.catalog-loader",
+    surface: "provider",
+    kind: "catalog-loader",
+    name: "Catalog loader",
+    fileFromRoot: "packages/core/src/catalog.ts",
+    declare: "Service",
+  },
+  {
+    id: "provider.aisdk-stream-bridge",
+    surface: "provider",
+    kind: "stream-bridge",
+    name: "AISDK bridge",
+    fileFromRoot: "packages/core/src/aisdk.ts",
+  },
+  {
+    id: "provider.model-request-resolver",
+    surface: "provider",
+    kind: "model-resolver",
+    name: "ModelRequest resolver",
+    fileFromRoot: "packages/core/src/model-request.ts",
+    declare: "normalizeAiSdkOptions",
+  },
 
   // Tool registry (surface 10).
-  { id: "tools.v2-registry", surface: "tools", kind: "registry-writer", name: "ToolRegistry register/materialize/settle", fileFromRoot: "packages/core/src/tool/registry.ts" },
-  { id: "tools.dacode-registry", surface: "tools", kind: "registry-writer", name: "dacode ToolRegistry", fileFromRoot: "packages/deepagent-code/src/tool/registry.ts" },
+  {
+    id: "tools.v2-registry",
+    surface: "tools",
+    kind: "registry-writer",
+    name: "ToolRegistry register/materialize/settle",
+    fileFromRoot: "packages/core/src/tool/registry.ts",
+  },
+  {
+    id: "tools.dacode-registry",
+    surface: "tools",
+    kind: "registry-writer",
+    name: "dacode ToolRegistry",
+    fileFromRoot: "packages/deepagent-code/src/tool/registry.ts",
+  },
 
   // Recovery (surface 11).
-  { id: "recovery.session-execution-restart", surface: "recovery", kind: "v2-recovery-service", name: "SessionRestart", fileFromRoot: "packages/core/src/session/execution/restart.ts" },
-  { id: "recovery.database-binding", surface: "recovery", kind: "recovery-classifier", name: "RecoveryBinding", fileFromRoot: "packages/core/src/database/recovery-binding.ts" },
-  { id: "recovery.task-recovery-tool", surface: "recovery", kind: "legacy-tool-entry", name: "TaskRecoveryTool", fileFromRoot: "packages/deepagent-code/src/tool/task_recovery.ts", declare: "TaskRecoveryTool" },
-  { id: "recovery.provider-owner-runtime", surface: "recovery", kind: "owner-runtime", name: "ContextFederation provider owner runtime", fileFromRoot: "packages/deepagent-code/src/context-federation/provider-owner-runtime.ts", declare: "nextOwnerToken" },
+  {
+    id: "recovery.session-execution-restart",
+    surface: "recovery",
+    kind: "v2-recovery-service",
+    name: "SessionRestart",
+    fileFromRoot: "packages/core/src/session/execution/restart.ts",
+  },
+  {
+    id: "recovery.database-binding",
+    surface: "recovery",
+    kind: "recovery-classifier",
+    name: "RecoveryBinding",
+    fileFromRoot: "packages/core/src/database/recovery-binding.ts",
+  },
+  {
+    id: "recovery.task-recovery-tool",
+    surface: "recovery",
+    kind: "legacy-tool-entry",
+    name: "TaskRecoveryTool",
+    fileFromRoot: "packages/deepagent-code/src/tool/task_recovery.ts",
+    declare: "TaskRecoveryTool",
+  },
+  {
+    id: "recovery.provider-owner-runtime",
+    surface: "recovery",
+    kind: "owner-runtime",
+    name: "ContextFederation provider owner runtime",
+    fileFromRoot: "packages/deepagent-code/src/context-federation/provider-owner-runtime.ts",
+    declare: "nextOwnerToken",
+  },
 ]
 
 /**

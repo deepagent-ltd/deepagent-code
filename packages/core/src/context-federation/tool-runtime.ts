@@ -12,6 +12,8 @@ export type Input<Request> = {
 }
 
 export interface Interface {
+  /** False when the host has no real graph/query authority; unavailable tools must not be advertised. */
+  readonly available: boolean
   readonly codeIntel: (input: Input<ContextFederationContract.CodeIntelInput>) => Effect.Effect<string>
   readonly contextQuery: (input: Input<ContextFederationContract.ContextQueryInput>) => Effect.Effect<string>
 }
@@ -20,9 +22,13 @@ export interface Interface {
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/v2/ContextToolRuntime") {}
 
 const unavailable = Service.of({
+  available: false,
   codeIntel: () => Effect.succeed(JSON.stringify({ schemaVersion: 2, error: { reason: "location_index_unavailable" } })),
   contextQuery: () => Effect.succeed(JSON.stringify({ schemaVersion: 1, error: { reason: "federated_context_unavailable" } })),
 })
+
+/** Explicit bare-Core host: graph tools are unavailable and therefore are not advertised. */
+export const unavailableLayer = Layer.succeed(Service, unavailable)
 
 /** Captures a host override into the Location tool subtree; bare Core degrades honestly. */
 export const seam = Layer.unwrap(

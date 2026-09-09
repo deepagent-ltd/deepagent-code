@@ -2,7 +2,7 @@ import { describe, expect } from "bun:test"
 import { mkdtemp, readdir, rm } from "node:fs/promises"
 import path from "node:path"
 import { tmpdir } from "node:os"
-import { Effect, Schema, Stream } from "effect"
+import { Effect, Layer, Schema, Stream } from "effect"
 import { LLM, Model } from "@deepagent-code/llm"
 import { AgentGateway } from "../../src/agent-gateway"
 import { Endpoint, LLMClient, Protocol, Route, type FramingDef } from "@deepagent-code/llm/route"
@@ -87,29 +87,106 @@ describe("DeepAgent LLMClient wrapper", () => {
     Effect.gen(function* () {
       const dir = yield* Effect.promise(() => mkdtemp(path.join(tmpdir(), "deepagent-client-")))
       try {
-        AgentGateway.configure({ enabled: true, runsDir: dir })
-        const llm = yield* LLMClient.Service
-        const request = LLM.request({
-          id: "req_deepagent",
-          model: Model.make({ id: "gpt-test", provider: "openai", route: fakeRoute }),
-          prompt: "hello",
-          metadata: {
-            "deepagent-code": {
-              callKind: "session_turn",
-              feature: "session_chat",
-              sessionID: "ses_deepagent",
-              messageID: "msg_deepagent",
-            },
-          },
-        })
-
-        const events = Array.from(yield* llm.stream(request).pipe(Stream.runCollect))
+        // The process-global registry is gone: client wrapping now requires the explicit
+        // middleware service. AgentGateway.layer is the legacy compatibility layer that keeps
+        // following the mutable configure() state (unlike the immutable V2 runtimeLayer).
+        const events = yield* Effect.gen(function* () {
+          const llm = yield* LLMClient.Service
+          return Array.from(
+            yield* llm
+              .stream(
+                LLM.request({
+                  id: "req_deepagent",
+                  model: Model.make({ id: "gpt-test", provider: "openai", route: fakeRoute }),
+                  prompt: "hello",
+                  metadata: {
+                    "deepagent-code": {
+                      callKind: "session_turn",
+                      feature: "session_chat",
+                      sessionID: "ses_deepagent",
+                      messageID: "msg_deepagent",
+                    },
+                  },
+                }),
+              )
+              .pipe(Stream.runCollect),
+          )
+        }).pipe(
+          Effect.provide(
+            Layer.fresh(LLMClient.managedLayer).pipe(
+              Layer.provide(AgentGateway.layer({ enabled: true, runsDir: dir })),
+            ),
+          ),
+        )
         expect(events.map((event) => event.type)).toEqual(["text-delta", "finish"])
         const runs = yield* Effect.promise(() => readdir(dir))
         expect(runs).toHaveLength(1)
       } finally {
         AgentGateway.configure({ enabled: false, runsDir: undefined })
         yield* Effect.promise(() => rm(dir, { recursive: true, force: true }))
+      }
+    }),
+  )
+
+  it.effect("keeps durable-learning authority inside each V2 runtime", () =>
+    Effect.gen(function* () {
+      const left = yield* Effect.promise(() => mkdtemp(path.join(tmpdir(), "deepagent-learning-left-")))
+      const right = yield* Effect.promise(() => mkdtemp(path.join(tmpdir(), "deepagent-learning-right-")))
+      const recorded: string[] = []
+      const releasePoison = AgentGateway.setLearningAuthority({
+        record: async () => {
+          throw new Error("process-global learning authority must not receive a V2 run")
+        },
+        enqueue: async () => {
+          throw new Error("process-global learning authority must not receive a V2 run")
+        },
+      })
+      try {
+        const run = (label: string, baseDir: string) =>
+          Effect.gen(function* () {
+            const llm = yield* LLMClient.Service
+            yield* llm
+              .stream(
+                LLM.request({
+                  id: `req_${label}`,
+                  model: Model.make({ id: "gpt-test", provider: "openai", route: fakeRoute }),
+                  prompt: "hello",
+                  metadata: {
+                    "deepagent-code": {
+                      callKind: "session_turn",
+                      feature: "session_chat",
+                      sessionID: `ses_${label}`,
+                      messageID: `msg_${label}`,
+                    },
+                  },
+                }),
+              )
+              .pipe(Stream.runDrain)
+          }).pipe(
+            Effect.provide(
+              Layer.fresh(LLMClient.managedLayer).pipe(
+                Layer.provide(
+                  AgentGateway.runtimeLayer(
+                    { enabled: true, agentMode: "high", baseDir, runsDir: path.join(baseDir, "runs") },
+                    {
+                      learningAuthority: {
+                        record: async (admission) => {
+                          recorded.push(`${label}:${admission.input.sessionID}`)
+                        },
+                        enqueue: async () => undefined,
+                      },
+                    },
+                  ),
+                ),
+              ),
+            ),
+          )
+
+        yield* Effect.all([run("left", left), run("right", right)], { concurrency: "unbounded" })
+        expect(recorded.toSorted()).toEqual(["left:ses_left", "right:ses_right"])
+      } finally {
+        releasePoison()
+        yield* Effect.promise(() => Promise.all([left, right].map((dir) => rm(dir, { recursive: true, force: true }))))
       }
     }),
   )

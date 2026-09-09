@@ -1,3 +1,5 @@
+import { readonlySet } from "@deepagent-code/core/util/readonly-collections"
+
 /**
  * Secret detection and file exclusion for imports.
  *
@@ -9,14 +11,14 @@
  */
 
 /** Basenames / globs that are never read from a source tree. */
-export const EXCLUDED_FILES = new Set<string>([
+export const EXCLUDED_FILES = readonlySet(new Set<string>([
   "settings.json",
   "auth.json",
   ".env",
   "credentials.json",
   "oauth-credentials.json",
   "installation_id",
-])
+]))
 
 /** Basename patterns that imply a credential / state file. */
 const EXCLUDED_PATTERNS = [

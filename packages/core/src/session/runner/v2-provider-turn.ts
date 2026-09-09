@@ -13,13 +13,15 @@ import { ContextFederationExecutionParity } from "../../context-federation/execu
 import { SessionProviderOwner } from "../../context-federation/provider-owner"
 import { SessionProviderAttempt } from "../../context-federation/provider-attempt"
 import { SessionProviderAttemptTable, SessionProviderOwnerLeaseTable } from "../../context-federation/session-sql"
-import { existsSync, readFileSync } from "node:fs"
+import { readFileSync } from "node:fs"
 import { join } from "node:path"
 import { InstallationVersion } from "../../installation/version"
 import { Global } from "../../global"
 import { SessionSchema } from "../schema"
 import { PreparedProviderTurn } from "./prepared-provider-turn"
+import { RuntimeIntegrityEvidenceContract } from "../../contract/runtime-integrity-evidence"
 import {
+  RuntimeIntegrityEvidenceArtifactTable,
   V2ProviderParityBaselineTable,
   V2ProviderParityReceiptTable,
   V2ProviderTurnReceiptTable,
@@ -92,6 +94,21 @@ export type Receipt = {
   readonly dispatchingAt?: number
   readonly firstEventAt?: number
   readonly terminalAt?: number
+  readonly integrityEvidence?: RuntimeIntegrityEvidenceContract.RuntimeIntegrityEvidence
+  readonly integrityEvidenceHash?: string
+  readonly integrityEvidenceSignature?: RuntimeIntegrityEvidenceContract.SignedRuntimeIntegrityEvidence
+}
+
+export type IntegrityEvidenceArtifact = {
+  readonly artifactID: string
+  readonly receiptID: string
+  readonly sessionID: string
+  readonly attemptID: string
+  readonly evidenceHash: string
+  readonly evidence: RuntimeIntegrityEvidenceContract.RuntimeIntegrityEvidence
+  readonly signature?: RuntimeIntegrityEvidenceContract.SignedRuntimeIntegrityEvidence
+  readonly createdAt: number
+  readonly signedAt?: number
 }
 
 // Same F-18 diagnostic-fidelity rule as AdmissionError: these cross the prompt boundary to
@@ -116,7 +133,12 @@ export class UnsafeRetryError extends Schema.TaggedErrorClass<UnsafeRetryError>(
 
 export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("V2ProviderTurn.NotFoundError", {}) {}
 
-export type Error = ConflictError | UnsafeRetryError | NotFoundError | SessionProviderAttempt.Error
+export type Error =
+  | ConflictError
+  | UnsafeRetryError
+  | NotFoundError
+  | SessionProviderAttempt.Error
+  | RuntimeIntegrityEvidenceContract.RuntimeIntegrityEvidenceError
 
 export type AdmitInput = {
   readonly sessionId: SessionSchema.ID
@@ -222,42 +244,56 @@ export function buildIdentityFromVersion(version: string): BuildIdentity {
 
 export const CurrentBuildIdentity = Context.Reference<BuildIdentity | undefined>(
   "@deepagent-code/v2/V2ProviderTurn/CurrentBuildIdentity",
-  {
-    defaultValue: () => {
-      const raw = process.env.DEEPAGENT_CODE_V2_BUILD_IDENTITY?.trim()
-      if (raw) {
-        try {
-          const parsed = JSON.parse(raw) as Partial<BuildIdentity>
-          if (
-            typeof parsed.subjectCommit === "string" &&
-            typeof parsed.subjectTree === "string" &&
-            typeof parsed.schemaDigest === "string" &&
-            typeof parsed.buildID === "string" &&
-            typeof parsed.packageDigest === "string"
-          )
-            return parsed as BuildIdentity
-        } catch {
-          // Invalid/env absent: fall through to the version-derived default below.
-        }
-      }
-      // W0.3: env unset (or unparsable) — fall back to the identity derived from the installation
-      // version so a default install can qualify the minted v2-owner-<version> authorization row.
-      return buildIdentityFromVersion(InstallationVersion)
-    },
-  },
+  { defaultValue: currentBuildIdentity },
+)
+
+/**
+ * Host-owned runtime identity resolver. Core deliberately stores a resolver rather than a
+ * precomputed value: the resolver executes in the calling Location/root context, so an embedded
+ * or maintenance root can never borrow another root's composition digest. Unwired Core test roots
+ * remain evidence-optional; the production DeepAgentCode frame provides the resolver explicitly.
+ */
+export type RuntimeIntegrityIdentityResolver = {
+  readonly resolve: (context: Context.Context<never>) => Effect.Effect<
+    RuntimeIntegrityEvidenceContract.RuntimeIdentity,
+    RuntimeIntegrityEvidenceContract.RuntimeIntegrityEvidenceError
+  >
+}
+
+export const CurrentRuntimeIntegrityIdentity = Context.Reference<RuntimeIntegrityIdentityResolver | undefined>(
+  "@deepagent-code/v2/V2ProviderTurn/CurrentRuntimeIntegrityIdentity",
+  { defaultValue: () => undefined },
 )
 
 // The owner qualification verifier checks authorization signatures against this key only. The
-// default is the pinned production issuance key; tests may provide an ephemeral public key, and
-// the dev campaign flow points the verifier at an ephemeral key via env (production never sets it).
+// default is the pinned production issuance key; tests may provide an ephemeral public key. Local
+// dev key discovery is only available through ownerReferencesLayer because it needs a root.
 export const CurrentOwnerAuthorizationPublicKey = Context.Reference<string>(
   "@deepagent-code/v2/V2ProviderTurn/CurrentOwnerAuthorizationPublicKey",
   {
     defaultValue: () =>
       process.env.DEEPAGENT_CODE_V2_OWNER_AUTHORIZATION_PUBLIC_KEY?.trim() ||
-      devVerifierPublicKey() ||
       V2OwnerAuthorization.PRODUCTION_OWNER_AUTHORIZATION_PUBLIC_KEY,
   },
+)
+
+/**
+ * Root-aware production values for owner qualification. The Reference default is deliberately
+ * path-free: a caller that does not compose this layer can only use the explicit environment key
+ * or the pinned production key, never a key discovered from another embedded runtime's home.
+ */
+export const ownerReferencesLayer = Layer.mergeAll(
+  Layer.effect(CurrentBuildIdentity, Effect.sync(currentBuildIdentity)),
+  Layer.effect(
+    CurrentOwnerAuthorizationPublicKey,
+    Effect.map(
+      Global.Service,
+      (global) =>
+        process.env.DEEPAGENT_CODE_V2_OWNER_AUTHORIZATION_PUBLIC_KEY?.trim() ||
+        devVerifierPublicKey(global.state) ||
+        V2OwnerAuthorization.PRODUCTION_OWNER_AUTHORIZATION_PUBLIC_KEY,
+    ),
+  ),
 )
 
 // §16.3 order 4 history-epoch bridge: when provided, the turn receipt records this lookup's value —
@@ -327,6 +363,29 @@ export interface Interface {
   }) => Effect.Effect<boolean, Error>
   readonly recordParity: (input: ParityInput) => Effect.Effect<boolean, Error>
   readonly parityVerified: (campaignId: string) => Effect.Effect<boolean>
+  /** Export the exact prepared-turn evidence; non-terminal or identity-incomplete attempts fail closed. */
+  readonly exportIntegrityEvidence: (input: {
+    readonly receiptId: string
+    readonly identity: RuntimeIntegrityEvidenceContract.RuntimeIdentity
+  }) => Effect.Effect<RuntimeIntegrityEvidenceContract.RuntimeIntegrityEvidence, Error | RuntimeIntegrityEvidenceContract.RuntimeIntegrityEvidenceError>
+  /** Persist the exported evidence exactly once against its terminal receipt. */
+  readonly persistIntegrityEvidence: (input: {
+    readonly receiptId: string
+    readonly identity: RuntimeIntegrityEvidenceContract.RuntimeIdentity
+  }) => Effect.Effect<RuntimeIntegrityEvidenceContract.RuntimeIntegrityEvidence, Error | RuntimeIntegrityEvidenceContract.RuntimeIntegrityEvidenceError>
+  /** Attach one externally signed envelope to an already persisted evidence bundle. */
+  readonly persistSignedIntegrityEvidence: (input: {
+    readonly receiptId: string
+    readonly signed: RuntimeIntegrityEvidenceContract.SignedRuntimeIntegrityEvidence
+    readonly publicKeyPem: string
+  }) => Effect.Effect<RuntimeIntegrityEvidenceContract.SignedRuntimeIntegrityEvidence, Error | RuntimeIntegrityEvidenceContract.RuntimeIntegrityEvidenceError>
+  /** Read an independently retained evidence artifact by its content-addressed id. */
+  readonly getIntegrityEvidenceArtifact: (artifactID: string) => Effect.Effect<IntegrityEvidenceArtifact | undefined>
+  /** Read a bounded, creation-ordered artifact page for release-ledger generation. */
+  readonly listIntegrityEvidenceArtifacts: (input?: { readonly limit?: number }) => Effect.Effect<
+    readonly IntegrityEvidenceArtifact[],
+    Error
+  >
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/v2/V2ProviderTurn") {}
@@ -371,6 +430,285 @@ export const layerWith = (options: LayerOptions = {}) =>
           .get()
           .pipe(Effect.orDie)
         return row ? fromRow(row) : undefined
+      })
+
+      /**
+       * Store evidence independently from the mutable receipt projection. The artifact id is the
+       * evidence digest, so a retry either observes the exact same bytes or gets a typed conflict;
+       * it can never overwrite an audit record belonging to another receipt.
+       */
+      const persistIntegrityEvidenceArtifact = Effect.fn("V2ProviderTurn.persistIntegrityEvidenceArtifact")(function* (input: {
+        readonly receiptId: string
+        readonly evidence: RuntimeIntegrityEvidenceContract.RuntimeIntegrityEvidence
+        readonly evidenceHash: string
+        readonly signed?: RuntimeIntegrityEvidenceContract.SignedRuntimeIntegrityEvidence
+      }) {
+        const artifactID = `rie_${input.evidenceHash}`
+        const row = yield* db
+          .transaction(
+            (tx) =>
+              Effect.gen(function* () {
+                const existing = yield* tx
+                  .select()
+                  .from(RuntimeIntegrityEvidenceArtifactTable)
+                  .where(eq(RuntimeIntegrityEvidenceArtifactTable.artifact_id, artifactID))
+                  .get()
+                if (existing) {
+                  if (
+                    existing.receipt_id !== input.receiptId ||
+                    existing.evidence_hash !== input.evidenceHash ||
+                    CanonicalJson.stringify(existing.evidence) !== CanonicalJson.stringify(input.evidence)
+                  )
+                    return yield* new ConflictError({ reason: "v2_integrity_evidence_artifact_conflict" })
+                  if (input.signed !== undefined) {
+                    if (existing.signature !== null && existing.signature !== undefined) {
+                      if (CanonicalJson.stringify(existing.signature) !== CanonicalJson.stringify(input.signed))
+                        return yield* new ConflictError({ reason: "v2_integrity_evidence_artifact_signature_conflict" })
+                    } else {
+                      const signed = yield* tx
+                        .update(RuntimeIntegrityEvidenceArtifactTable)
+                        .set({ signature: input.signed, signed_at: Date.now() })
+                        .where(
+                          and(
+                            eq(RuntimeIntegrityEvidenceArtifactTable.artifact_id, artifactID),
+                            sql`${RuntimeIntegrityEvidenceArtifactTable.signature} IS NULL`,
+                          ),
+                        )
+                        .returning()
+                        .get()
+                      if (!signed)
+                        return yield* new ConflictError({ reason: "v2_integrity_evidence_artifact_signature_cas_lost" })
+                      return signed
+                    }
+                  }
+                  return existing
+                }
+                const created = yield* tx
+                  .insert(RuntimeIntegrityEvidenceArtifactTable)
+                  .values({
+                    artifact_id: artifactID,
+                    receipt_id: input.receiptId,
+                    session_id: input.evidence.sessionID,
+                    attempt_id: input.evidence.attemptID,
+                    evidence_hash: input.evidenceHash,
+                    evidence: input.evidence,
+                    ...(input.signed === undefined ? {} : { signature: input.signed, signed_at: Date.now() }),
+                    created_at: Date.now(),
+                  })
+                  .returning()
+                  .get()
+                return created
+              }),
+            { behavior: "immediate" },
+          )
+          .pipe(preserveErrors)
+        return fromIntegrityEvidenceArtifactRow(row)
+      })
+
+      const getIntegrityEvidenceArtifact = Effect.fn("V2ProviderTurn.getIntegrityEvidenceArtifact")(function* (
+        artifactID: string,
+      ) {
+        const row = yield* db
+          .select()
+          .from(RuntimeIntegrityEvidenceArtifactTable)
+          .where(eq(RuntimeIntegrityEvidenceArtifactTable.artifact_id, artifactID))
+          .get()
+          .pipe(Effect.orDie)
+        return row ? fromIntegrityEvidenceArtifactRow(row) : undefined
+      })
+
+      const listIntegrityEvidenceArtifacts = Effect.fn("V2ProviderTurn.listIntegrityEvidenceArtifacts")(function* (
+        input: { readonly limit?: number } = {},
+      ) {
+        const limit = input.limit ?? 10_000
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10_000)
+          return yield* new ConflictError({ reason: "v2_integrity_evidence_artifact_limit_invalid" })
+        const rows = yield* db
+          .select()
+          .from(RuntimeIntegrityEvidenceArtifactTable)
+          .orderBy(sql`${RuntimeIntegrityEvidenceArtifactTable.created_at} ASC`, sql`${RuntimeIntegrityEvidenceArtifactTable.artifact_id} ASC`)
+          .limit(limit)
+          .all()
+          .pipe(Effect.orDie)
+        return rows.map(fromIntegrityEvidenceArtifactRow)
+      })
+
+      const exportIntegrityEvidence = Effect.fn("V2ProviderTurn.exportIntegrityEvidence")(function* (input: {
+        readonly receiptId: string
+        readonly identity: RuntimeIntegrityEvidenceContract.RuntimeIdentity
+      }) {
+        const receipt = yield* get(input.receiptId)
+        if (!receipt) return yield* new NotFoundError()
+        if (receipt.integrityEvidence) {
+          RuntimeIntegrityEvidenceContract.validateRuntimeIntegrityEvidence(receipt.integrityEvidence, input.identity)
+          return receipt.integrityEvidence
+        }
+        if (!receipt.preparedTurn)
+          return yield* new RuntimeIntegrityEvidenceContract.RuntimeIntegrityEvidenceError({
+            reason: "receipt_has_no_prepared_turn",
+          })
+        const terminal =
+          receipt.state === "settled"
+            ? {
+                status: "settled" as const,
+                ...(receipt.outcomeHash ? { outcomeDigest: receipt.outcomeHash } : {}),
+              }
+            : receipt.state === "failed"
+              ? {
+                  status: "failed_terminal" as const,
+                  ...(receipt.errorCode ? { reason: receipt.errorCode } : {}),
+                }
+              : receipt.state === "indeterminate_after_crash"
+                ? { status: "indeterminate_after_crash" as const, reason: receipt.errorCode }
+                : yield* new RuntimeIntegrityEvidenceContract.RuntimeIntegrityEvidenceError({
+                    reason: "receipt_is_not_terminal",
+                  })
+        return RuntimeIntegrityEvidenceContract.runtimeIntegrityEvidenceFromPreparedTurn({
+          prepared: receipt.preparedTurn,
+          identity: input.identity,
+          terminal,
+          physicalCallCount: receipt.state === "settled" || receipt.state === "failed" || receipt.state === "indeterminate_after_crash" ? 1 : 0,
+        })
+      })
+
+      const persistIntegrityEvidence = Effect.fn("V2ProviderTurn.persistIntegrityEvidence")(function* (input: {
+        readonly receiptId: string
+        readonly identity: RuntimeIntegrityEvidenceContract.RuntimeIdentity
+      }) {
+        const evidence = yield* exportIntegrityEvidence(input)
+        const evidenceHash = RuntimeIntegrityEvidenceContract.runtimeIntegrityEvidenceDigest(evidence)
+        const row = yield* db
+          .transaction(
+            (tx) =>
+              Effect.gen(function* () {
+                const current = yield* tx
+                  .select()
+                  .from(V2ProviderTurnReceiptTable)
+                  .where(eq(V2ProviderTurnReceiptTable.receipt_id, input.receiptId))
+                  .get()
+                if (!current) return yield* new NotFoundError()
+                if (!["settled", "failed", "indeterminate_after_crash"].includes(current.state))
+                  return yield* new RuntimeIntegrityEvidenceContract.RuntimeIntegrityEvidenceError({
+                    reason: "receipt_is_not_terminal",
+                  })
+                if (current.integrity_evidence_hash !== null) {
+                  if (current.integrity_evidence_hash !== evidenceHash)
+                    return yield* new ConflictError({ reason: "v2_integrity_evidence_conflict" })
+                  return current
+                }
+                const stored = yield* tx
+                  .update(V2ProviderTurnReceiptTable)
+                  .set({ integrity_evidence: evidence, integrity_evidence_hash: evidenceHash })
+                  .where(
+                    and(
+                      eq(V2ProviderTurnReceiptTable.receipt_id, input.receiptId),
+                      sql`${V2ProviderTurnReceiptTable.integrity_evidence_hash} IS NULL`,
+                      inArray(V2ProviderTurnReceiptTable.state, ["settled", "failed", "indeterminate_after_crash"]),
+                    ),
+                  )
+                  .returning()
+                  .get()
+                if (stored) return stored
+                const raced = yield* tx
+                  .select()
+                  .from(V2ProviderTurnReceiptTable)
+                  .where(eq(V2ProviderTurnReceiptTable.receipt_id, input.receiptId))
+                  .get()
+                if (!raced) return yield* new NotFoundError()
+                if (raced.integrity_evidence_hash !== evidenceHash)
+                  return yield* new ConflictError({ reason: "v2_integrity_evidence_conflict" })
+                return raced
+              }),
+            { behavior: "immediate" },
+          )
+          .pipe(preserveErrors)
+        const persisted = fromRow(row).integrityEvidence ?? evidence
+        yield* persistIntegrityEvidenceArtifact({
+          receiptId: input.receiptId,
+          evidence: persisted,
+          evidenceHash,
+        })
+        return persisted
+      })
+
+      const persistSignedIntegrityEvidence = Effect.fn("V2ProviderTurn.persistSignedIntegrityEvidence")(function* (input: {
+        readonly receiptId: string
+        readonly signed: RuntimeIntegrityEvidenceContract.SignedRuntimeIntegrityEvidence
+        readonly publicKeyPem: string
+      }) {
+        if (!RuntimeIntegrityEvidenceContract.verifySignedRuntimeIntegrityEvidence(input))
+          return yield* new RuntimeIntegrityEvidenceContract.RuntimeIntegrityEvidenceError({
+            reason: "runtime_integrity_evidence_signature_invalid",
+          })
+        yield* persistIntegrityEvidence({ receiptId: input.receiptId, identity: input.signed.evidence.identity })
+        const row = yield* db
+          .transaction(
+            (tx) =>
+              Effect.gen(function* () {
+                const current = yield* tx
+                  .select()
+                  .from(V2ProviderTurnReceiptTable)
+                  .where(eq(V2ProviderTurnReceiptTable.receipt_id, input.receiptId))
+                  .get()
+                if (!current) return yield* new NotFoundError()
+                if (current.integrity_evidence_hash !== input.signed.evidenceDigest)
+                  return yield* new ConflictError({ reason: "v2_integrity_evidence_signature_hash_mismatch" })
+                if (current.integrity_evidence_signature) {
+                  if (
+                    CanonicalJson.stringify(current.integrity_evidence_signature) !==
+                    CanonicalJson.stringify(input.signed)
+                  )
+                    return yield* new ConflictError({ reason: "v2_integrity_evidence_signature_conflict" })
+                }
+                const artifact = yield* tx
+                  .select()
+                  .from(RuntimeIntegrityEvidenceArtifactTable)
+                  .where(eq(RuntimeIntegrityEvidenceArtifactTable.artifact_id, `rie_${input.signed.evidenceDigest}`))
+                  .get()
+                if (!artifact) return yield* new ConflictError({ reason: "v2_integrity_evidence_artifact_missing" })
+                if (artifact.receipt_id !== input.receiptId)
+                  return yield* new ConflictError({ reason: "v2_integrity_evidence_artifact_receipt_conflict" })
+                if (CanonicalJson.stringify(artifact.evidence) !== CanonicalJson.stringify(input.signed.evidence))
+                  return yield* new ConflictError({ reason: "v2_integrity_evidence_artifact_content_conflict" })
+                if (artifact.signature) {
+                  if (CanonicalJson.stringify(artifact.signature) !== CanonicalJson.stringify(input.signed))
+                    return yield* new ConflictError({ reason: "v2_integrity_evidence_artifact_signature_conflict" })
+                } else {
+                  const attached = yield* tx
+                    .update(RuntimeIntegrityEvidenceArtifactTable)
+                    .set({ signature: input.signed, signed_at: Date.now() })
+                    .where(
+                      and(
+                        eq(RuntimeIntegrityEvidenceArtifactTable.artifact_id, `rie_${input.signed.evidenceDigest}`),
+                        sql`${RuntimeIntegrityEvidenceArtifactTable.signature} IS NULL`,
+                      ),
+                    )
+                    .returning()
+                    .get()
+                  if (!attached)
+                    return yield* new ConflictError({ reason: "v2_integrity_evidence_artifact_signature_cas_lost" })
+                }
+                if (current.integrity_evidence_signature) return current
+                const attachedReceipt = yield* tx
+                  .update(V2ProviderTurnReceiptTable)
+                  .set({ integrity_evidence_signature: input.signed })
+                  .where(
+                    and(
+                      eq(V2ProviderTurnReceiptTable.receipt_id, input.receiptId),
+                      eq(V2ProviderTurnReceiptTable.integrity_evidence_hash, input.signed.evidenceDigest),
+                      sql`${V2ProviderTurnReceiptTable.integrity_evidence_signature} IS NULL`,
+                    ),
+                  )
+                  .returning()
+                  .get()
+                if (!attachedReceipt)
+                  return yield* new ConflictError({ reason: "v2_integrity_evidence_signature_cas_lost" })
+                return attachedReceipt
+              }),
+            { behavior: "immediate" },
+          )
+          .pipe(preserveErrors)
+        return fromRow(row).integrityEvidenceSignature ?? input.signed
       })
 
       const admit = Effect.fn("V2ProviderTurn.admit")(function* (input: Omit<AdmitInput, "ownerToken">) {
@@ -462,7 +800,13 @@ export const layerWith = (options: LayerOptions = {}) =>
                       preparedTurnHash: input.preparedTurn.prepared_turn_hash,
                       wireRequestHash: input.preparedTurn.wire_request_hash,
                     })
-                    yield* sync({ attemptId, expectedOwnerToken: ownerToken, from: ["prepared"], to: "dispatching", now: observedAt })
+                    yield* sync({
+                      attemptId,
+                      expectedOwnerToken: ownerToken,
+                      from: ["prepared"],
+                      to: "dispatching",
+                      now: observedAt,
+                    })
                   } else if (input.state === "streaming") {
                     yield* sync({
                       attemptId,
@@ -581,6 +925,10 @@ export const layerWith = (options: LayerOptions = {}) =>
                   .select()
                   .from(V2ProviderTurnReceiptTable)
                   .leftJoin(
+                    SessionProviderAttemptTable,
+                    eq(V2ProviderTurnReceiptTable.provider_attempt_id, SessionProviderAttemptTable.attempt_id),
+                  )
+                  .leftJoin(
                     SessionProviderOwnerLeaseTable,
                     eq(V2ProviderTurnReceiptTable.owner_token, SessionProviderOwnerLeaseTable.owner_token),
                   )
@@ -598,33 +946,57 @@ export const layerWith = (options: LayerOptions = {}) =>
                   .all()
                 const recovered = yield* Effect.forEach(
                   rows,
-                  (joined) => {
-                    const row = joined.session_v2_provider_turn_receipt
-                    const terminalState = row.state === "preparing" ? "failed" : "indeterminate_after_crash"
-                    return tx
-                      .update(V2ProviderTurnReceiptTable)
-                      .set({
-                        state: terminalState,
-                        error_code:
-                          row.state === "preparing" ? "owner_lost_before_dispatch" : "owner_lost_after_dispatch",
-                        terminal_at: observedAt,
+                  (joined) =>
+                    Effect.gen(function* () {
+                      const row = joined.session_v2_provider_turn_receipt
+                      const attempt = joined.session_provider_attempt
+                      if (
+                        !attempt ||
+                        row.provider_attempt_id !== attempt.attempt_id ||
+                        row.session_id !== attempt.session_id ||
+                        row.activity_id !== attempt.activity_id ||
+                        row.provider_turn_seq !== attempt.provider_turn_seq ||
+                        row.request_input_hash !== attempt.request_hash ||
+                        row.provider_id !== attempt.provider_id ||
+                        row.owner_token !== attempt.owner_token ||
+                        row.prepared_turn_hash !== attempt.prepared_turn_hash ||
+                        row.wire_request_hash !== attempt.wire_request_hash ||
+                        (row.state === "preparing" && attempt.state !== "prepared") ||
+                        (row.state === "dispatching" && attempt.state !== "dispatching") ||
+                        (row.state === "streaming" && attempt.state !== "streaming")
+                      )
+                        return yield* new ConflictError({ reason: "v2_recovery_receipt_attempt_binding_conflict" })
+                      const terminalState = row.state === "preparing" ? "failed" : "indeterminate_after_crash"
+                      yield* SessionProviderAttempt.recoverExactInTransaction(tx, {
+                        sessionId: SessionSchema.ID.make(row.session_id),
+                        staleOwnerToken: row.owner_token,
+                        recoveryOwnerToken: ownerToken,
+                        undispatchedAttemptIds: row.state === "preparing" ? [attempt.attempt_id] : [],
+                        startedAttemptIds: row.state === "preparing" ? [] : [attempt.attempt_id],
+                        now: observedAt,
                       })
-                      .where(
-                        and(
-                          eq(V2ProviderTurnReceiptTable.receipt_id, row.receipt_id),
-                          eq(V2ProviderTurnReceiptTable.owner_token, row.owner_token),
-                          eq(V2ProviderTurnReceiptTable.state, row.state),
-                        ),
-                      )
-                      .returning({ receiptId: V2ProviderTurnReceiptTable.receipt_id })
-                      .get()
-                      .pipe(
-                        // W2 — the crash-recovered terminal carries its durable descriptor too.
-                        Effect.tap((winner) =>
-                          winner ? writeTurnTerminalDescriptor(tx, { ...row, state: terminalState }, observedAt) : Effect.void,
-                        ),
-                      )
-                  },
+                      const winner = yield* tx
+                        .update(V2ProviderTurnReceiptTable)
+                        .set({
+                          state: terminalState,
+                          error_code:
+                            row.state === "preparing" ? "owner_lost_before_dispatch" : "owner_lost_after_dispatch",
+                          terminal_at: observedAt,
+                        })
+                        .where(
+                          and(
+                            eq(V2ProviderTurnReceiptTable.receipt_id, row.receipt_id),
+                            eq(V2ProviderTurnReceiptTable.provider_attempt_id, attempt.attempt_id),
+                            eq(V2ProviderTurnReceiptTable.owner_token, row.owner_token),
+                            eq(V2ProviderTurnReceiptTable.state, row.state),
+                          ),
+                        )
+                        .returning({ receiptId: V2ProviderTurnReceiptTable.receipt_id })
+                        .get()
+                      if (!winner) return yield* new ConflictError({ reason: "v2_recovery_receipt_cas_lost" })
+                      yield* writeTurnTerminalDescriptor(tx, { ...row, state: terminalState }, observedAt)
+                      return winner
+                    }),
                   { concurrency: 1 },
                 )
                 return recovered.filter(Boolean).length
@@ -798,6 +1170,11 @@ export const layerWith = (options: LayerOptions = {}) =>
         recordParityForReceipt,
         recordParity,
         parityVerified,
+        exportIntegrityEvidence,
+        persistIntegrityEvidence,
+        persistSignedIntegrityEvidence,
+        getIntegrityEvidenceArtifact,
+        listIntegrityEvidenceArtifacts,
       })
     }),
   )
@@ -818,8 +1195,7 @@ export function prepare(input: PrepareInput, wireRequestHash: string) {
     historySourceEndMessageID: input.receipt.historySourceEndMessageId ?? null,
     contextSelectionID: input.contextSelectionID ?? null,
     contextProjectionHash: input.contextProjectionHash ?? null,
-    contextReadiness:
-      input.contextReadiness ?? (input.contextSelectionID === undefined ? "unavailable" : "ready"),
+    contextReadiness: input.contextReadiness ?? (input.contextSelectionID === undefined ? "unavailable" : "ready"),
     contextSelectedRefs: input.contextSelectedRefs ?? [],
     toolRegistryIDs: input.toolRegistryIDs ?? input.toolIDs,
     toolPermissionFilteredIDs: input.toolPermissionFilteredIDs ?? input.toolIDs,
@@ -836,15 +1212,11 @@ export function prepare(input: PrepareInput, wireRequestHash: string) {
     wireRequestHash,
     receiptID: input.receipt.receiptId,
     userMessageID: input.userMessageID,
-    ...(input.protocolAttemptIdentity === undefined
-      ? {}
-      : { protocolAttemptIdentity: input.protocolAttemptIdentity }),
+    ...(input.protocolAttemptIdentity === undefined ? {} : { protocolAttemptIdentity: input.protocolAttemptIdentity }),
     ...(input.protocolAttemptIdentityHash === undefined
       ? {}
       : { protocolAttemptIdentityHash: input.protocolAttemptIdentityHash }),
-    ...(input.capabilitySnapshot === undefined
-      ? {}
-      : { capabilitySnapshot: input.capabilitySnapshot }),
+    ...(input.capabilitySnapshot === undefined ? {} : { capabilitySnapshot: input.capabilitySnapshot }),
   })
 }
 
@@ -855,6 +1227,8 @@ export function stream<A, E, R>(input: {
   readonly stream: Stream.Stream<A, E, R>
   readonly outcomeArtifact: () => readonly unknown[]
   readonly errorCode: (error: unknown) => string
+  /** Production roots automatically persist digest-only evidence after terminal settlement. */
+  readonly integrityIdentity?: RuntimeIntegrityEvidenceContract.RuntimeIdentity
   /**
    * Proven-terminal provider failures (the provider rejected the request before any generation, e.g.
    * context-overflow) may settle as `failed`. Every other typed failure after dispatch cannot prove a
@@ -865,6 +1239,12 @@ export function stream<A, E, R>(input: {
 }) {
   let current = input.receipt
   let reachedEnd = false
+  const persistIntegrityEvidence = (receipt: Receipt) =>
+    input.integrityIdentity === undefined
+      ? Effect.void
+      : input.service
+          .persistIntegrityEvidence({ receiptId: receipt.receiptId, identity: input.integrityIdentity })
+          .pipe(Effect.asVoid, Effect.orDie)
   return input.stream.pipe(
     Stream.provideService(RequestExecutor.CurrentRetryLimit, 0),
     Stream.provideService(CurrentRequestSeal, {
@@ -897,7 +1277,7 @@ export function stream<A, E, R>(input: {
           if (reachedEnd && Exit.isSuccess(exit)) {
             return input.service
               .settle({ receipt: current, outcome: "settled", outcomeArtifact: input.outcomeArtifact() })
-              .pipe(Effect.orDie)
+              .pipe(Effect.tap(persistIntegrityEvidence), Effect.orDie)
           }
           if (Exit.isFailure(exit) && Cause.findInterrupt(exit.cause)._tag === "Failure") {
             const error = Option.getOrUndefined(Cause.findErrorOption(exit.cause))
@@ -909,16 +1289,16 @@ export function stream<A, E, R>(input: {
                   outcomeArtifact: input.outcomeArtifact(),
                   errorCode: input.errorCode(exit.cause),
                 })
-                .pipe(Effect.orDie)
+                .pipe(Effect.tap(persistIntegrityEvidence), Effect.orDie)
             }
             return input.service
               .quarantine(current, {
                 errorCode: input.errorCode(exit.cause),
                 outcomeArtifact: input.outcomeArtifact(),
               })
-              .pipe(Effect.orDie)
+              .pipe(Effect.tap(persistIntegrityEvidence), Effect.orDie)
           }
-          return input.service.quarantine(current).pipe(Effect.orDie)
+          return input.service.quarantine(current).pipe(Effect.tap(persistIntegrityEvidence), Effect.orDie)
         }),
       ),
     ),
@@ -965,6 +1345,7 @@ const terminalDescriptorCommon = (row: {
   readonly session_id: string
   readonly activity_id: string
   readonly provider_turn_seq: number
+  readonly attempt_version: number
   readonly provider_attempt_id: string | null
   readonly request_input_hash: string
   readonly owner_token: string
@@ -975,7 +1356,11 @@ const terminalDescriptorCommon = (row: {
   provenance: { origin: "recorded" as const, sourceRefs: [row.provider_attempt_id ?? row.receipt_id] },
   baseline: { verified: false },
   terminalBridge: { bridgeId: "none", bridgeType: "none" },
-  casTokens: { expectedState: row.state, expectedVersion: 0, ownerToken: row.owner_token },
+  casTokens: {
+    expectedState: row.state,
+    expectedVersion: row.attempt_version,
+    ownerToken: row.owner_token,
+  },
 })
 
 /**
@@ -989,6 +1374,7 @@ export function turnTerminalDescriptor(row: {
   readonly session_id: string
   readonly activity_id: string
   readonly provider_turn_seq: number
+  readonly attempt_version: number
   readonly provider_attempt_id: string | null
   readonly request_input_hash: string
   readonly owner_token: string
@@ -1032,18 +1418,26 @@ export function writeTurnTerminalDescriptor(
   row: typeof V2ProviderTurnReceiptTable.$inferSelect,
   observedAt: number,
 ): Effect.Effect<void, never> {
-  const descriptor = turnTerminalDescriptor(row)
-  if (!descriptor) return Effect.void
-  const contentHash = RecoveryCommandContract.recoveryDescriptorDigest(descriptor)
-  return tx
-    .run(sql`
-      INSERT OR IGNORE INTO session_provider_recovery_descriptor
-        (descriptor_id, session_id, activity_id, turn_id, kind, payload, content_hash, created_at)
-      VALUES (${`descriptor_${contentHash}`}, ${row.session_id}, ${row.activity_id},
-              ${String(row.provider_turn_seq)}, ${descriptor.descriptorKind},
-              ${JSON.stringify(descriptor)}, ${contentHash}, ${observedAt})
-    `)
-    .pipe(Effect.orDie)
+  return Effect.gen(function* () {
+    if (!row.provider_attempt_id)
+      return yield* Effect.die("terminal V2 provider receipt is missing its provider-attempt binding")
+    const attempt = yield* tx
+      .select({ attemptVersion: SessionProviderAttemptTable.attempt_version })
+      .from(SessionProviderAttemptTable)
+      .where(eq(SessionProviderAttemptTable.attempt_id, row.provider_attempt_id))
+      .get()
+    if (!attempt) return yield* Effect.die("terminal V2 provider receipt references a missing provider attempt")
+    const descriptor = turnTerminalDescriptor({ ...row, attempt_version: attempt.attemptVersion })
+    if (!descriptor) return
+    const contentHash = RecoveryCommandContract.recoveryDescriptorDigest(descriptor)
+    yield* tx.run(sql`
+        INSERT OR IGNORE INTO session_provider_recovery_descriptor
+          (descriptor_id, session_id, activity_id, turn_id, kind, payload, content_hash, created_at)
+        VALUES (${`descriptor_${contentHash}`}, ${row.session_id}, ${row.activity_id},
+                ${String(row.provider_turn_seq)}, ${descriptor.descriptorKind},
+                ${JSON.stringify(descriptor)}, ${contentHash}, ${observedAt})
+      `)
+  }).pipe(Effect.orDie)
 }
 
 export function admitInTransaction(
@@ -1132,6 +1526,9 @@ export function admitInTransaction(
       dispatching_at: null,
       first_event_at: null,
       terminal_at: null,
+      integrity_evidence: null,
+      integrity_evidence_hash: null,
+      integrity_evidence_signature: null,
     })
   }).pipe(preserveErrors)
 }
@@ -1223,10 +1620,31 @@ function fromRow(row: typeof V2ProviderTurnReceiptTable.$inferSelect): Receipt {
     ...(row.outcome_hash === null ? {} : { outcomeHash: row.outcome_hash }),
     ...(row.outcome_artifact === null ? {} : { outcomeArtifact: row.outcome_artifact }),
     ...(row.error_code === null ? {} : { errorCode: row.error_code }),
+    ...(row.integrity_evidence === null ? {} : { integrityEvidence: row.integrity_evidence }),
+    ...(row.integrity_evidence_hash === null ? {} : { integrityEvidenceHash: row.integrity_evidence_hash }),
+    ...(row.integrity_evidence_signature === null
+      ? {}
+      : { integrityEvidenceSignature: row.integrity_evidence_signature }),
     createdAt: row.created_at,
     ...(row.dispatching_at === null ? {} : { dispatchingAt: row.dispatching_at }),
     ...(row.first_event_at === null ? {} : { firstEventAt: row.first_event_at }),
     ...(row.terminal_at === null ? {} : { terminalAt: row.terminal_at }),
+  }
+}
+
+function fromIntegrityEvidenceArtifactRow(
+  row: typeof RuntimeIntegrityEvidenceArtifactTable.$inferSelect,
+): IntegrityEvidenceArtifact {
+  return {
+    artifactID: row.artifact_id,
+    receiptID: row.receipt_id,
+    sessionID: row.session_id,
+    attemptID: row.attempt_id,
+    evidenceHash: row.evidence_hash,
+    evidence: row.evidence,
+    ...(row.signature === null ? {} : { signature: row.signature }),
+    createdAt: row.created_at,
+    ...(row.signed_at === null ? {} : { signedAt: row.signed_at }),
   }
 }
 
@@ -1243,7 +1661,10 @@ function preparedTurnDifferences(
 function preserveErrors<A, E, R>(effect: Effect.Effect<A, E, R>) {
   return effect.pipe(
     Effect.catch((error) =>
-      error instanceof ConflictError || error instanceof UnsafeRetryError || error instanceof NotFoundError
+      error instanceof ConflictError ||
+      error instanceof UnsafeRetryError ||
+      error instanceof NotFoundError ||
+      error instanceof RuntimeIntegrityEvidenceContract.RuntimeIntegrityEvidenceError
         ? Effect.fail(error)
         : Effect.die(error),
     ),
@@ -1277,17 +1698,47 @@ export const DEV_VERSION_PREFIX = "0.0.0-"
 export const isDevBuildVersion = (version: string = InstallationVersion) => version.startsWith(DEV_VERSION_PREFIX)
 export const devOwnerCampaignFor = (subjectCommit: string) => `v2-owner-dev-${subjectCommit.slice(0, 12)}`
 
-let cachedDevVerifierKey: string | undefined
-const devVerifierPublicKey = (): string | undefined => {
-  if (!isDevBuildVersion()) return undefined
-  if (cachedDevVerifierKey) return cachedDevVerifierKey
+const devVerifierPublicKey = (stateDir: string): string | undefined => {
+  if (!isDevBuildVersion() && process.env.DEEPAGENT_CODE_V2_OWNER_DEV_MINT !== "1") return undefined
   try {
-    const key = readFileSync(join(Global.Path.state, "v2-owner-dev", "public.pem"), "utf8")
-    if (key.includes("BEGIN PUBLIC KEY")) cachedDevVerifierKey = key
+    const parsed: unknown = JSON.parse(readFileSync(join(stateDir, "v2-owner-dev", "keypair.json"), "utf8"))
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      "publicKeyPem" in parsed &&
+      typeof parsed.publicKeyPem === "string" &&
+      parsed.publicKeyPem.includes("BEGIN PUBLIC KEY")
+    )
+      return parsed.publicKeyPem
   } catch {
-    // absent until the mint writes it — re-read on the next access, never cache the miss
+    // Pre-keypair dev installs are read below and migrated by V2OwnerDevMint on the next boot.
   }
-  return cachedDevVerifierKey
+  try {
+    const key = readFileSync(join(stateDir, "v2-owner-dev", "public.pem"), "utf8")
+    return key.includes("BEGIN PUBLIC KEY") ? key : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function currentBuildIdentity(): BuildIdentity | undefined {
+  const raw = process.env.DEEPAGENT_CODE_V2_BUILD_IDENTITY?.trim()
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw) as Partial<BuildIdentity>
+      if (
+        typeof parsed.subjectCommit === "string" &&
+        typeof parsed.subjectTree === "string" &&
+        typeof parsed.schemaDigest === "string" &&
+        typeof parsed.buildID === "string" &&
+        typeof parsed.packageDigest === "string"
+      )
+        return parsed as BuildIdentity
+    } catch {
+      // Invalid env values fall back to the installation-derived identity.
+    }
+  }
+  return buildIdentityFromVersion(InstallationVersion)
 }
 
 // W0.5 (blocker-1): a DEFAULT install never sets DEEPAGENT_CODE_V2_OWNER_CAMPAIGN, so the runtime
@@ -1302,7 +1753,7 @@ export function defaultOwnerCampaign(): string | undefined {
   if (id) return id
   // F-15: a dev build resolves its per-build dev campaign deterministically (matches
   // V2OwnerDevMint's derivation) — the mint's row qualifies without any env wiring.
-  if (isDevBuildVersion()) {
+  if (isDevBuildVersion() || process.env.DEEPAGENT_CODE_V2_OWNER_DEV_MINT === "1") {
     const devCampaign = devOwnerCampaignFor(buildIdentityFromVersion(InstallationVersion).subjectCommit)
     return validCampaignID(devCampaign) ? devCampaign : undefined
   }

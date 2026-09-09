@@ -8,6 +8,7 @@ import * as Socket from "effect/unstable/socket/Socket"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 import { ControlPaths } from "../../src/server/routes/instance/httpapi/groups/control"
 import { InstancePaths } from "../../src/server/routes/instance/httpapi/groups/instance"
+import { ProfilePaths } from "../../src/server/routes/instance/httpapi/groups/profile"
 import { SessionPaths } from "../../src/server/routes/instance/httpapi/groups/session"
 import { Vcs } from "../../src/project/vcs"
 import {
@@ -151,6 +152,53 @@ describe("instance HttpApi", () => {
           v4FileUploadEnabled: false,
         },
       })
+    }),
+  )
+
+  it.live("isolates profile run metadata and artifacts by routed workspace", () =>
+    Effect.gen(function* () {
+      const dirA = yield* tmpdirScoped({ git: true })
+      const dirB = yield* tmpdirScoped({ git: true })
+      const create = yield* HttpClientRequest.post(ProfilePaths.run).pipe(
+        directoryHeader(dirA),
+        HttpClientRequest.bodyJson({ program: "true", profiler: "missing-test-adapter" }),
+        Effect.flatMap(HttpClient.execute),
+      )
+
+      expect(create.status).toBe(200)
+      const created = (yield* create.json) as { runId: string; status: string; error?: string }
+      const createdError = created.error ?? ""
+      expect(created.status).toBe("error")
+      expect(createdError).toContain("missing-test-adapter")
+
+      const [ownerResult, foreignResult, ownerRuns, foreignRuns, foreignHotspots] = yield* Effect.all(
+        [
+          HttpClientRequest.get(ProfilePaths.result).pipe(
+            HttpClientRequest.setUrlParam("runId", created.runId),
+            directoryHeader(dirA),
+            HttpClient.execute,
+          ),
+          HttpClientRequest.get(ProfilePaths.result).pipe(
+            HttpClientRequest.setUrlParam("runId", created.runId),
+            directoryHeader(dirB),
+            HttpClient.execute,
+          ),
+          HttpClientRequest.get(ProfilePaths.runs).pipe(directoryHeader(dirA), HttpClient.execute),
+          HttpClientRequest.get(ProfilePaths.runs).pipe(directoryHeader(dirB), HttpClient.execute),
+          HttpClientRequest.get(ProfilePaths.hotspots).pipe(
+            HttpClientRequest.setUrlParam("runId", created.runId),
+            directoryHeader(dirB),
+            HttpClient.execute,
+          ),
+        ],
+        { concurrency: "unbounded" },
+      )
+
+      expect(yield* ownerResult.json).toEqual({ status: "error", error: createdError })
+      expect(yield* foreignResult.json).toEqual({ status: "error", error: "runId not found" })
+      expect(yield* ownerRuns.json).toEqual([expect.objectContaining({ runId: created.runId, status: "error" })])
+      expect(yield* foreignRuns.json).toEqual([])
+      expect(yield* foreignHotspots.json).toEqual([])
     }),
   )
 

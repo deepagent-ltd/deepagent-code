@@ -54,84 +54,82 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/FederatedContextResolver") {}
 
-export function layer(config: { readonly adapters: readonly Adapter[]; readonly perGraphTimeoutMs: number }) {
+export function make(
+  config: { readonly adapters: readonly Adapter[]; readonly perGraphTimeoutMs: number },
+  links: ContextLinkStore.Interface,
+): Interface {
   if (!Number.isSafeInteger(config.perGraphTimeoutMs) || config.perGraphTimeoutMs <= 0)
     throw new Error("invalid timeout")
   const adapters = new Map(config.adapters.map((adapter) => [adapter.graph, adapter]))
   if (adapters.size !== config.adapters.length) throw new Error("one adapter per graph is required")
+  const query = Effect.fn("FederatedContextResolver.query")(function* (input: Input) {
+    const plan = queryPlan({ text: input.text, hasExplicitRef: Boolean(input.entityIds?.length) })
+    const queried = yield* Effect.forEach(
+      GraphOrder,
+      (graph) => {
+        const adapter = adapters.get(graph)
+        if (!adapter) return Effect.succeed({ graph, result: { candidates: [], status: status.notQueried(graph) } })
+        const query: Query = {
+          text: input.text,
+          ...(input.entityIds ? { entityIds: input.entityIds } : {}),
+          limit: Math.min(input.limit ?? 12, 100),
+          now: input.now,
+        }
+        return adapter.query(query).pipe(
+          Effect.timeout(config.perGraphTimeoutMs),
+          Effect.catch(() =>
+            Effect.succeed({
+              candidates: [],
+              status: status.partial({
+                graph,
+                state: "degraded",
+                reasonCode: "source_timeout",
+                revisions: [{ source: adapter.source, state: "degraded", reasonCode: "source_timeout" }],
+              }),
+            }),
+          ),
+          Effect.map((result) => ({ graph, result })),
+        )
+      },
+      { concurrency: 4 },
+    )
+    const initial = Object.fromEntries(queried.map((entry) => [entry.graph, entry.result.candidates])) as Partial<
+      Record<GraphKind, readonly ContextCandidate[]>
+    >
+    const preliminary = rank(initial, { weights: plan.weights, toolCall: input.toolCall, limit: input.limit })
+    const expanded = yield* expand({
+      frontier: preliminary.map((item) => item.candidate),
+      accumulated: initial,
+      depth: 2,
+      refreshPending: false,
+      input,
+      adapters,
+      links,
+      relationPaths: new Map(),
+    })
+    const statuses = queried.map((entry) =>
+      expanded.refreshGraphs.has(entry.graph) ? partialForLinkRefresh(entry.graph, entry.result) : entry.result.status,
+    )
+    return {
+      plan,
+      statuses,
+      candidates: expanded.accumulated,
+      ranked: rank(expanded.accumulated, { weights: plan.weights, toolCall: input.toolCall, limit: input.limit }),
+      relationPaths: expanded.relationPaths,
+      linkRefreshPending: expanded.refreshPending,
+    }
+  })
+
+  return Service.of({
+    query,
+    queryShadow: (input) => query(input).pipe(Effect.map((result) => ({ ...result, mode: "shadow" as const }))),
+  })
+}
+
+export function layer(config: { readonly adapters: readonly Adapter[]; readonly perGraphTimeoutMs: number }) {
   return Layer.effect(
     Service,
-    Effect.gen(function* () {
-      const links = yield* ContextLinkStore.Service
-
-      const query = Effect.fn("FederatedContextResolver.query")(function* (input: Input) {
-        const plan = queryPlan({ text: input.text, hasExplicitRef: Boolean(input.entityIds?.length) })
-        const queried = yield* Effect.forEach(
-          GraphOrder,
-          (graph) => {
-            const adapter = adapters.get(graph)
-            if (!adapter) {
-              return Effect.succeed({ graph, result: { candidates: [], status: status.notQueried(graph) } })
-            }
-            const query: Query = {
-              text: input.text,
-              ...(input.entityIds ? { entityIds: input.entityIds } : {}),
-              limit: Math.min(input.limit ?? 12, 100),
-              now: input.now,
-            }
-            return adapter.query(query).pipe(
-              Effect.timeout(config.perGraphTimeoutMs),
-              Effect.catch(() =>
-                Effect.succeed({
-                  candidates: [],
-                  status: status.partial({
-                    graph,
-                    state: "degraded",
-                    reasonCode: "source_timeout",
-                    revisions: [{ source: adapter.source, state: "degraded", reasonCode: "source_timeout" }],
-                  }),
-                }),
-              ),
-              Effect.map((result) => ({ graph, result })),
-            )
-          },
-          { concurrency: "unbounded" },
-        )
-        const initial = Object.fromEntries(queried.map((entry) => [entry.graph, entry.result.candidates])) as Partial<
-          Record<GraphKind, readonly ContextCandidate[]>
-        >
-        const preliminary = rank(initial, { weights: plan.weights, toolCall: input.toolCall, limit: input.limit })
-        const expanded = yield* expand({
-          frontier: preliminary.map((item) => item.candidate),
-          accumulated: initial,
-          depth: 2,
-          refreshPending: false,
-          input,
-          adapters,
-          links,
-          relationPaths: new Map(),
-        })
-        const statuses = queried.map((entry) =>
-          expanded.refreshGraphs.has(entry.graph)
-            ? partialForLinkRefresh(entry.graph, entry.result)
-            : entry.result.status,
-        )
-        return {
-          plan,
-          statuses,
-          candidates: expanded.accumulated,
-          ranked: rank(expanded.accumulated, { weights: plan.weights, toolCall: input.toolCall, limit: input.limit }),
-          relationPaths: expanded.relationPaths,
-          linkRefreshPending: expanded.refreshPending,
-        }
-      })
-
-      const queryShadow: Interface["queryShadow"] = (input) => query(input).pipe(
-        Effect.map((result) => ({ ...result, mode: "shadow" as const })),
-      )
-
-      return Service.of({ query, queryShadow })
-    }),
+    ContextLinkStore.Service.use((links) => Effect.sync(() => make(config, links))),
   )
 }
 
@@ -178,7 +176,7 @@ function expand(input: {
             Effect.catch(() => Effect.succeed({ links: [], refreshPending: false })),
             Effect.map((result) => ({ seed, result })),
           ),
-      { concurrency: "unbounded" },
+      { concurrency: 8 },
     )
     const refreshGraphs = new Set(input.refreshGraphs ?? [])
     neighborhoods.filter((item) => item.result.refreshPending).forEach((item) => refreshGraphs.add(item.seed.graph))
@@ -208,7 +206,7 @@ function expand(input: {
           Effect.catch(() => Effect.succeed([])),
         )
       },
-      { concurrency: "unbounded" },
+      { concurrency: 4 },
     )
     const next = materialized.flat()
     const accumulated = Object.fromEntries(

@@ -8,13 +8,20 @@
 import { builtinToolNames } from "@deepagent-code/core/tool/builtins"
 import { capabilityCatalog } from "@deepagent-code/core/system-context/capability-catalog"
 import {
+  assertInventoryCoversBuiltinTools,
   assertInventoryMatchesRegistry,
+  DeepAgentCodeToolInventory,
   findUpgradableMaintenance,
 } from "@deepagent-code/core/system-context/capability-manifest"
 
 try {
   assertInventoryMatchesRegistry(builtinToolNames, capabilityCatalog)
   console.log("capability inventory consistent: catalog entry_tools ⊆ builtin registry")
+  // RI-113: the inventory is the single machine-readable product tool surface, so it
+  // must cover the shipped registry EXACTLY — a registered tool missing from the
+  // inventory (or a listed tool never registered) fails the build.
+  assertInventoryCoversBuiltinTools(builtinToolNames, DeepAgentCodeToolInventory)
+  console.log("capability inventory exact: product tool inventory = builtin registry")
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error))
   process.exit(1)

@@ -284,19 +284,16 @@ export async function bootstrapDirectory(input: {
             )
             return warmSessions({ ids, store: input.store, setStore: input.setStore, sdk: input.sdk }).then(() =>
               batch(() => {
-                for (const sessionID of Object.keys(input.store.permission)) {
-                  if (grouped[sessionID]) continue
-                  input.setStore("permission", sessionID, [])
-                }
-                for (const [sessionID, permissions] of Object.entries(grouped)) {
-                  input.setStore(
-                    "permission",
-                    sessionID,
-                    reconcile(
-                      permissions.filter((p) => !!p?.id).sort((a, b) => cmp(a.id, b.id)),
-                      { key: "id" },
-                    ),
+                for (const sessionID of new Set([...Object.keys(input.store.permission), ...Object.keys(grouped)])) {
+                  // The legacy /permission list never includes PermissionV2 asks — keep
+                  // provenance-tracked entries instead of wiping them on every bootstrap.
+                  const kept = (input.store.permission[sessionID] ?? []).filter(
+                    (perm) => !!perm?.id && input.store.permission_v2[sessionID]?.[perm.id] === true,
                   )
+                  const merged = [...kept, ...(grouped[sessionID] ?? [])]
+                    .filter((p) => !!p?.id)
+                    .sort((a, b) => cmp(a.id, b.id))
+                  input.setStore("permission", sessionID, reconcile(merged, { key: "id" }))
                 }
               }),
             )

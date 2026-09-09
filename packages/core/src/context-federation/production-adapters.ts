@@ -14,7 +14,7 @@ import { DurableKnowledgeStore } from "../deepagent/durable-knowledge-store"
 import { DeepAgentReleasedSnapshot } from "../deepagent/released-snapshot"
 import { RepoDocument } from "../document-intelligence/repo-document"
 import type { GraphKind } from "../contract/selection"
-import { RuntimeFeatures } from "../flag/runtime-features"
+import { RuntimeFeatures, type RuntimeFeatureRegistry } from "../flag/runtime-features"
 
 // W3.1 — production V2 adapter assembly. Wraps the four `adapters-v2` factories with REAL source
 // inputs (live code query, repo-document index, durable knowledge stores, released snapshot) so the
@@ -34,9 +34,13 @@ export const CONTEXT_FEDERATION_PRODUCTION_ENV = "DEEPAGENT_CODE_CONTEXT_FEDERAT
 // gone: the feature defaults ON (production semantics per W4.6 / the W0.1 default table — the
 // W3.7 real-source wiring is in), and an explicit `=false`/`=0`/`""` kill-switch still flips both
 // consumers together because they are the same consumer now.
-/** W3.1 flag gate: production adapters are ON by default; `=false`/`=0`/`""` (trim+lower) falls
- * back to the staged adapter set (existing behavior). Read at call time so tests can flip it. */
-export const productionAdaptersEnabled = (): boolean => RuntimeFeatures.enabled("context_federation_v2")
+/** W3.1 flag gate: production adapters are ON by default; an explicit `=false`/`=0`/`""` kill-switch
+ * at process start falls back to the staged adapter set. `RuntimeFeatures` is an immutable
+ * process-start snapshot, so the gate reads the INJECTED registry (default: the process global) —
+ * tests exercise the kill-switch by passing `createRuntimeFeatureRegistry(undefined, env)`, never
+ * by mutating `process.env` after the snapshot. */
+export const productionAdaptersEnabled = (features: RuntimeFeatureRegistry = RuntimeFeatures): boolean =>
+  features.enabled("context_federation_v2")
 
 /**
  * W3.8 — real location identity (location-derived, `LocationIdentity.resolve` output shape) carried

@@ -113,6 +113,7 @@ const createPlatform = (): Platform => {
 
   const storage = (() => {
     const cache = new Map<string, AsyncStorage>()
+    const limit = 64
 
     const createStorage = (name: string) => {
       const api: AsyncStorage = {
@@ -131,9 +132,14 @@ const createPlatform = (): Platform => {
 
     return (name = "default.dat") => {
       const cached = cache.get(name)
-      if (cached) return cached
+      if (cached) {
+        cache.delete(name)
+        cache.set(name, cached)
+        return cached
+      }
       const api = createStorage(name)
       cache.set(name, api)
+      while (cache.size > limit) cache.delete(cache.keys().next().value!)
       return api
     }
   })()

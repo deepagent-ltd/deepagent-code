@@ -5,15 +5,21 @@ import { Database } from "@deepagent-code/core/database/database"
 import {
   EventArtifactChunkTable,
   EventArtifactTable,
+  EventAggregateTombstoneTable,
   EventDedupeTable,
   EventSequenceTable,
+  EventSnapshotChunkTable,
+  EventSnapshotRowTable,
   EventSyncIndexTable,
   EventSyncSequenceTable,
   EventSnapshotTable,
   EventTable,
 } from "@deepagent-code/core/event/sql"
 import { Location } from "@deepagent-code/core/location"
+import { ProjectV2 } from "@deepagent-code/core/project"
 import { AbsolutePath } from "@deepagent-code/core/schema"
+import { SessionSchema } from "@deepagent-code/core/session/schema"
+import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 import { V2Schema } from "@deepagent-code/core/v2-schema"
 import { asc, eq, sql } from "drizzle-orm"
@@ -60,18 +66,6 @@ const SyncSent = EventV2.define({
   schema: {
     messageID: Schema.String,
     text: Schema.String,
-  },
-})
-
-const LegacyMessageUpdated = EventV2.define({
-  type: "message.updated",
-  sync: {
-    version: 1,
-    aggregate: "sessionID",
-  },
-  schema: {
-    sessionID: Schema.String,
-    info: Schema.Any,
   },
 })
 
@@ -234,6 +228,38 @@ describe("EventV2", () => {
     }),
   )
 
+  it.effect("refuses exact definition collisions and exposes read-only registry views", () =>
+    Effect.sync(() => {
+      const local = EventV2.define({
+        type: "test.definition-collision.local",
+        schema: { value: Schema.String },
+      })
+      const sync = EventV2.define({
+        type: "test.definition-collision.sync",
+        sync: { version: 1, aggregate: "id" },
+        schema: { id: Schema.String, value: Schema.String },
+      })
+
+      expect(() =>
+        EventV2.define({
+          type: "test.definition-collision.local",
+          schema: { replacement: Schema.Boolean },
+        }),
+      ).toThrow("Duplicate EventV2 definition")
+      expect(() =>
+        EventV2.define({
+          type: "test.definition-collision.sync",
+          sync: { version: 1, aggregate: "id" },
+          schema: { id: Schema.String, replacement: Schema.Boolean },
+        }),
+      ).toThrow("Duplicate EventV2 synchronized definition")
+      expect(EventV2.registry.get(local.type)).toBe(local)
+      expect(EventV2.syncRegistry.get(EventV2.versionedType(sync.type, sync.sync!.version))?.data).toBe(sync.data)
+      expect("set" in EventV2.registry).toBe(false)
+      expect("clear" in EventV2.syncRegistry).toBe(false)
+    }),
+  )
+
   it.effect("publishes to typed and wildcard subscriptions", () =>
     Effect.gen(function* () {
       const events = yield* EventV2.Service
@@ -301,11 +327,9 @@ describe("EventV2", () => {
       const eventsBefore = yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, aggregateID)).all()
 
       const defect = yield* events
-        .publish(
-          SyncPayload,
-          payloadAtEncodedBytes(aggregateID, "session", EventV2.MAX_ENCODED_PAYLOAD_BYTES + 1),
-          { commit: () => Effect.sync(() => observed.push("commit")) },
-        )
+        .publish(SyncPayload, payloadAtEncodedBytes(aggregateID, "session", EventV2.MAX_ENCODED_PAYLOAD_BYTES + 1), {
+          commit: () => Effect.sync(() => observed.push("commit")),
+        })
         .pipe(Effect.catchDefect(Effect.succeed))
 
       expect(defect).toBeInstanceOf(EventV2.EncodedPayloadTooLargeError)
@@ -805,9 +829,9 @@ describe("EventV2", () => {
         }
 
         expect(
-          Array.from(
-            yield* events.aggregateEvents({ aggregateID }).pipe(Stream.take(count), Stream.runCollect),
-          ).map((event) => event.cursor),
+          Array.from(yield* events.aggregateEvents({ aggregateID }).pipe(Stream.take(count), Stream.runCollect)).map(
+            (event) => event.cursor,
+          ),
         ).toEqual(Array.from({ length: count }, (_, index) => EventV2.Cursor.make(index)))
       }),
     15_000,
@@ -826,10 +850,7 @@ describe("EventV2", () => {
         const received = Array.from(
           yield* events.aggregateEvents({ aggregateID }).pipe(Stream.take(2), Stream.runCollect),
         )
-        expect(received.map((event) => event.cursor)).toEqual([
-          EventV2.Cursor.make(0),
-          EventV2.Cursor.make(1),
-        ])
+        expect(received.map((event) => event.cursor)).toEqual([EventV2.Cursor.make(0), EventV2.Cursor.make(1)])
         expect(received.map((event) => (event.event.data as { body: string }).body.slice(-6))).toEqual([
           "xfirst",
           "second",
@@ -884,32 +905,27 @@ describe("EventV2", () => {
     15_000,
   )
 
-  it.effect(
-    "fails with a typed defect when aggregate history is removed between metadata and body reads",
-    () => {
-      let events: EventV2.Interface
-      const database = Database.layerFromPath(":memory:")
-      const eventLayer = EventV2.layerWith({
-        afterAggregateReadMetadata: (aggregateID) => events.remove(aggregateID),
-      }).pipe(Layer.provide(database))
+  it.effect("fails with a typed defect when aggregate history is removed between metadata and body reads", () => {
+    let events: EventV2.Interface
+    const database = Database.layerFromPath(":memory:")
+    const eventLayer = EventV2.layerWith({
+      afterAggregateReadMetadata: (aggregateID) => events.remove(aggregateID),
+    }).pipe(Layer.provide(database))
 
-      return Effect.gen(function* () {
-        events = yield* EventV2.Service
-        const aggregateID = EventV2.ID.create()
-        yield* events.publish(SyncMessage, { id: aggregateID, text: "removed during read" })
-        const defect = yield* events.aggregateEvents({ aggregateID }).pipe(
-          Stream.take(1),
-          Stream.runCollect,
-          Effect.catchDefect(Effect.succeed),
-        )
-        expect(defect).toBeInstanceOf(EventV2.InvalidSyncEventError)
-        expect(defect).toMatchObject({
-          _tag: "EventV2.InvalidSyncEvent",
-          type: EventV2.versionedType(SyncMessage.type, 1),
-        })
-      }).pipe(Effect.provide(Layer.mergeAll(database, eventLayer)))
-    },
-  )
+    return Effect.gen(function* () {
+      events = yield* EventV2.Service
+      const aggregateID = EventV2.ID.create()
+      yield* events.publish(SyncMessage, { id: aggregateID, text: "removed during read" })
+      const defect = yield* events
+        .aggregateEvents({ aggregateID })
+        .pipe(Stream.take(1), Stream.runCollect, Effect.catchDefect(Effect.succeed))
+      expect(defect).toBeInstanceOf(EventV2.InvalidSyncEventError)
+      expect(defect).toMatchObject({
+        _tag: "EventV2.InvalidSyncEvent",
+        type: EventV2.versionedType(SyncMessage.type, 1),
+      })
+    }).pipe(Effect.provide(Layer.mergeAll(database, eventLayer)))
+  })
 
   it.effect("omits live-only events from durable aggregate streams", () =>
     Effect.gen(function* () {
@@ -933,13 +949,15 @@ describe("EventV2", () => {
       const { db } = yield* Database.Service
       const aggregateID = EventV2.ID.create()
       yield* events.publish(SyncMessage, { id: aggregateID, text: "zero" })
-      const checkpoint = yield* events.checkpoint({
-        aggregateID,
-        throughSeq: EventV2.Cursor.make(0),
-        expectedLatest: EventV2.Cursor.make(0),
-        codec: "test.v1",
-        schemaVersion: 1,
-      }).pipe(Effect.catchDefect(Effect.succeed))
+      const checkpoint = yield* events
+        .checkpoint({
+          aggregateID,
+          throughSeq: EventV2.Cursor.make(0),
+          expectedLatest: EventV2.Cursor.make(0),
+          codec: "test.v1",
+          schemaVersion: 1,
+        })
+        .pipe(Effect.catchDefect(Effect.succeed))
       expect(checkpoint).toBeInstanceOf(EventV2.InvalidSyncEventError)
       const compact = yield* events
         .compact({ aggregateID, throughSeq: EventV2.Cursor.make(0), limit: 1 })
@@ -947,7 +965,9 @@ describe("EventV2", () => {
       expect(compact).toBeInstanceOf(EventV2.InvalidSyncEventError)
       expect(yield* events.snapshot(aggregateID)).toBeUndefined()
       expect(yield* db.select().from(EventDedupeTable).all().pipe(Effect.orDie)).toEqual([])
-      expect(yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, aggregateID)).all().pipe(Effect.orDie)).toHaveLength(1)
+      expect(
+        yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, aggregateID)).all().pipe(Effect.orDie),
+      ).toHaveLength(1)
     }),
   )
 
@@ -955,26 +975,57 @@ describe("EventV2", () => {
     Effect.gen(function* () {
       const events = yield* EventV2.Service
       const { db } = yield* Database.Service
-      const aggregateID = EventV2.ID.create()
+      const aggregateID = SessionSchema.ID.make("ses_legacy_diff_artifact")
       yield* events.publish(SyncMessage, { id: aggregateID, text: "zero" })
       const id = EventV2.ID.make("evt_legacy_message_diff_artifact")
       const patch = "x".repeat(EventV2.MAX_ENCODED_PAYLOAD_BYTES + 1)
+      // Production-shaped legacy payload: the closing exact replay re-encodes the canonical data
+      // with the real message.updated codec, so the fixture carries a full v1 user message info.
       const data = {
         sessionID: aggregateID,
-        info: { summary: { diffs: [{ file: "large.patch", patch, additions: 1, deletions: 0 }] } },
+        info: {
+          id: "msg_legacy_diff_artifact",
+          sessionID: aggregateID,
+          role: "user",
+          time: { created: 1 },
+          agent: "agent-legacy-diff",
+          model: { providerID: "provider-legacy-diff", modelID: "model-legacy-diff" },
+          summary: { diffs: [{ file: "large.patch", patch, additions: 1, deletions: 0 }] },
+        },
       }
-      const syncSeq = yield* db.update(EventSyncSequenceTable).set({ seq: sql`${EventSyncSequenceTable.seq} + 1` })
-        .where(eq(EventSyncSequenceTable.id, 1)).returning({ seq: EventSyncSequenceTable.seq }).get().pipe(Effect.orDie)
-      yield* db.insert(EventTable).values({
-        id,
-        aggregate_id: aggregateID,
-        seq: 1,
-        type: EventV2.versionedType("message.updated", 1),
-        data,
-        sync_seq: syncSeq!.seq,
-      }).run().pipe(Effect.orDie)
-      yield* db.update(EventSequenceTable).set({ seq: 1 }).where(eq(EventSequenceTable.aggregate_id, aggregateID)).run().pipe(Effect.orDie)
-      expect(yield* db.select().from(EventSyncIndexTable).where(eq(EventSyncIndexTable.event_id, id)).get().pipe(Effect.orDie)).toMatchObject({
+      const syncSeq = yield* db
+        .update(EventSyncSequenceTable)
+        .set({ seq: sql`${EventSyncSequenceTable.seq} + 1` })
+        .where(eq(EventSyncSequenceTable.id, 1))
+        .returning({ seq: EventSyncSequenceTable.seq })
+        .get()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(EventTable)
+        .values({
+          id,
+          aggregate_id: aggregateID,
+          seq: 1,
+          type: EventV2.versionedType("message.updated", 1),
+          data,
+          sync_seq: syncSeq!.seq,
+        })
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .update(EventSequenceTable)
+        .set({ seq: 1 })
+        .where(eq(EventSequenceTable.aggregate_id, aggregateID))
+        .run()
+        .pipe(Effect.orDie)
+      expect(
+        yield* db
+          .select()
+          .from(EventSyncIndexTable)
+          .where(eq(EventSyncIndexTable.event_id, id))
+          .get()
+          .pipe(Effect.orDie),
+      ).toMatchObject({
         sync_seq: syncSeq!.seq,
         aggregate_id: aggregateID,
         seq: 1,
@@ -983,16 +1034,23 @@ describe("EventV2", () => {
       const first = yield* events.canonicalizeLegacyArtifacts({ limit: 1, now: 10 })
       expect(first).toEqual({ processed: 1, next: id })
       expect(yield* events.canonicalizeLegacyArtifacts({ afterID: id, limit: 1, now: 11 })).toEqual({ processed: 0 })
-      const artifact = yield* db.select().from(EventArtifactTable).where(eq(EventArtifactTable.event_id, id)).get().pipe(Effect.orDie)
+      const artifact = yield* db
+        .select()
+        .from(EventArtifactTable)
+        .where(eq(EventArtifactTable.event_id, id))
+        .get()
+        .pipe(Effect.orDie)
       expect(artifact?.kind).toBe("legacy_message_diff")
       expect(artifact?.body_bytes).toBeGreaterThan(EventV2.MAX_ENCODED_PAYLOAD_BYTES)
       expect(artifact?.chunk_count).toBeGreaterThan(1)
-      const summary = (artifact?.canonical_data.info as {
-        summary: {
-          diffs: Array<{ patch?: string }>
-          diffArtifact: { codec: string; hash: string }
+      const summary = (
+        artifact?.canonical_data.info as {
+          summary: {
+            diffs: Array<{ patch?: string }>
+            diffArtifact: { codec: string; hash: string }
+          }
         }
-      }).summary
+      ).summary
       expect(summary.diffs[0]?.patch).toBeUndefined()
       expect(summary.diffArtifact.codec).toBe("legacy-message-diff.v2")
       expect(summary.diffArtifact.hash).toBe(artifact!.body_hash)
@@ -1023,7 +1081,7 @@ describe("EventV2", () => {
       )
       yield* events.replay({
         id,
-        type: EventV2.versionedType(LegacyMessageUpdated.type, 1),
+        type: EventV2.versionedType(SessionV1.Event.MessageUpdated.type, 1),
         seq: 1,
         aggregateID,
         data: artifact!.canonical_data,
@@ -1738,6 +1796,89 @@ describe("EventV2", () => {
       })
 
       expect(received[0]?.data).toEqual({ id: aggregateID, text: "replayed" })
+    }),
+  )
+
+  it.effect("fences deleted aggregates and removes snapshot sidecars without deleting the tombstone", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const aggregateID = SessionSchema.ID.make("ses_event_tombstone")
+      const info = SessionV1.SessionInfo.make({
+        id: aggregateID,
+        slug: "tombstone",
+        version: "test",
+        projectID: ProjectV2.ID.global,
+        directory: "/project",
+        title: "tombstone",
+        cost: 0,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        time: { created: 1, updated: 1 },
+      })
+      const deletion = yield* events.publish(SessionV1.Event.Deleted, { sessionID: aggregateID, info })
+      const retry = yield* events.publish(SessionV1.Event.Deleted, { sessionID: aggregateID, info }, {
+        id: deletion.id,
+        idempotent: true,
+      })
+      expect(retry.id).toBe(deletion.id)
+      const divergent = yield* events
+        .publish(SessionV1.Event.Deleted, {
+          sessionID: aggregateID,
+          info: SessionV1.SessionInfo.make({ ...info, title: "different" }),
+        }, { id: deletion.id, idempotent: true })
+        .pipe(Effect.catchDefect(Effect.succeed))
+      expect(divergent).toBeInstanceOf(EventV2.InvalidSyncEventError)
+      const rowHash = "a".repeat(64)
+      yield* db
+        .insert(EventSnapshotRowTable)
+        .values({
+          snapshot_id: "snapshot-tombstone",
+          aggregate_id: aggregateID,
+          row_index: 0,
+          table_name: "session",
+          row_key: aggregateID,
+          row_hash: rowHash,
+          row_bytes: 1,
+          chunk_count: 1,
+          chain_hash: "b".repeat(64),
+        })
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(EventSnapshotChunkTable)
+        .values({ row_hash: rowHash, chunk_index: 0, data: Buffer.from("x"), chunk_hash: "c".repeat(64) })
+        .run()
+        .pipe(Effect.orDie)
+
+      yield* events.remove(aggregateID)
+
+      expect(yield* events.isDeleted!(aggregateID)).toBe(true)
+      expect(
+        yield* db.select().from(EventAggregateTombstoneTable).where(eq(EventAggregateTombstoneTable.aggregate_id, aggregateID)).all(),
+      ).toHaveLength(1)
+      expect(yield* db.select().from(EventSequenceTable).where(eq(EventSequenceTable.aggregate_id, aggregateID)).all()).toEqual([])
+      expect(yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, aggregateID)).all()).toEqual([])
+      expect(yield* db.select().from(EventSyncIndexTable).where(eq(EventSyncIndexTable.aggregate_id, aggregateID)).all()).toEqual([])
+      expect(yield* db.select().from(EventSnapshotRowTable).where(eq(EventSnapshotRowTable.aggregate_id, aggregateID)).all()).toEqual([])
+      expect(yield* db.select().from(EventSnapshotChunkTable).where(eq(EventSnapshotChunkTable.row_hash, rowHash)).all()).toEqual([])
+
+      const rejected = yield* events
+        .publish(SessionV1.Event.Updated, { sessionID: aggregateID, info })
+        .pipe(Effect.catchDefect(Effect.succeed))
+      expect(rejected).toBeInstanceOf(EventV2.InvalidSyncEventError)
+      const replayRejected = yield* events
+        .replay({
+          id: EventV2.ID.create(),
+          type: EventV2.versionedType(SessionV1.Event.Updated.type, 1),
+          seq: 0,
+          aggregateID,
+          data: { sessionID: aggregateID, info },
+        })
+        .pipe(Effect.catchDefect(Effect.succeed))
+      expect(replayRejected).toBeInstanceOf(EventV2.InvalidSyncEventError)
+      expect((yield* db.select().from(EventAggregateTombstoneTable).where(eq(EventAggregateTombstoneTable.aggregate_id, aggregateID)).get())?.deletion_event_id).toBe(
+        deletion.id,
+      )
     }),
   )
 

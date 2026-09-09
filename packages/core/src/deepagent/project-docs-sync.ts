@@ -139,6 +139,9 @@ const revisionHeader = (revision: string) => `> revision: ${revision}`
 
 const logMarker = (sessionID: string) => `<!-- session: ${sessionID} -->`
 
+// Canonical predicate (session/schema.ts); re-exported so docs-sync callers keep one import site.
+export const isLearningReviewerSession = SessionSchema.isLearningReviewerSession
+
 const goalOrPlaceholder = (goal: GoalDocInfo | undefined, intent: "design" | "plan") => {
   if (goal === undefined) {
     return [
@@ -450,7 +453,7 @@ export const afterSessionNow = Effect.fn("ProjectDocsSync.afterSessionNow")(func
 }) {
   const sync = Effect.fn("ProjectDocsSync.afterSessionNow.syncSessionData")(function* () {
     const session = yield* input.store.get(input.sessionID)
-    if (!session || session.parentID !== undefined) return
+    if (!session || session.parentID !== undefined || isLearningReviewerSession(session.id)) return
     if (!input.enabled) return
     const writeRoot = yield* resolveWriteRoot(session.location.directory, input.root, input.fs)
     if (writeRoot === undefined) {

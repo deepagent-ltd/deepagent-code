@@ -260,7 +260,7 @@ describe("Config", () => {
               fs.writeFile(
                 configFile,
                 `{
-                  "username": "{env:DEEPAGENT_CODE_CONFIG_TEST_USER}",
+                  "default_agent": "{env:DEEPAGENT_CODE_CONFIG_TEST_USER}",
                   "provider": {
                     "custom": {
                       "npm": "@ai-sdk/openai-compatible",
@@ -287,7 +287,7 @@ describe("Config", () => {
 
               expect(document?.type).toBe("document")
               if (document?.type !== "document") throw new Error("Expected project config document")
-              expect(document.info.username).toBe("reference-user")
+              expect(document.info.default_agent).toBe("reference-user")
               expect(document.info.providers?.custom?.api?.settings).toEqual({ apiKey: "file-secret" })
               expect(yield* Effect.promise(() => fs.readFile(configFile, "utf8"))).toContain("{file:provider.key}")
             }).pipe(Effect.provide(testLayer(tmp.path)))
@@ -314,10 +314,6 @@ describe("Config", () => {
                 shell: "/bin/bash",
                 model: "anthropic/claude",
                 default_agent: "reviewer",
-                autoupdate: "notify",
-                share: "disabled",
-                enterprise: { url: "https://share.example.com" },
-                username: "test-user",
                 permissions: [
                   { action: "bash", resource: "*", effect: "ask" },
                   { action: "bash", resource: "git status", effect: "allow" },
@@ -340,36 +336,11 @@ describe("Config", () => {
                     permissions: [{ action: "edit", resource: "*", effect: "deny" }],
                   },
                 },
-                snapshots: false,
                 watcher: { ignore: ["node_modules/**", "dist/**", ".git"] },
-                formatter: {
-                  prettier: { disabled: true },
-                  custom: { command: ["custom-fmt", "$FILE"], extensions: [".foo"] },
-                },
-                lsp: { typescript: { disabled: true }, custom: { command: ["custom-lsp"], extensions: [".foo"] } },
                 attachments: {
                   image: { auto_resize: false, max_width: 1200, max_height: 900, max_base64_bytes: 1048576 },
                 },
                 tool_output: { max_lines: 1000, max_bytes: 32768 },
-                mcp: {
-                  timeout: 5000,
-                  servers: {
-                    local: {
-                      type: "local",
-                      command: ["node", "./mcp/server.js"],
-                      environment: { API_KEY: "secret" },
-                      disabled: false,
-                      timeout: 10000,
-                    },
-                    remote: {
-                      type: "remote",
-                      url: "https://mcp.example.com/mcp",
-                      headers: { Authorization: "Bearer token" },
-                      oauth: { client_id: "client", scope: "read write", callback_port: 19876 },
-                      disabled: true,
-                    },
-                  },
-                },
                 compaction: {
                   auto: true,
                   prune: false,
@@ -377,16 +348,6 @@ describe("Config", () => {
                   buffer: 10000,
                 },
                 skills: ["./skills", "~/shared-skills", "https://example.com/.well-known/skills/"],
-                instructions: ["CONTRIBUTING.md", ".cursor/rules/*.md", "https://example.com/shared-rules.md"],
-                references: {
-                  local: { path: "../library" },
-                  sdk: { repository: "github.com/example/sdk", branch: "main" },
-                  shorthand: "github.com/example/docs",
-                },
-                plugins: [
-                  "deepagent-code-helicone-session",
-                  { package: "@my-org/audit-plugin", options: { endpoint: "https://audit.example.com" } },
-                ],
               }),
             ),
           )
@@ -399,10 +360,6 @@ describe("Config", () => {
             expect(documents[0]?.info.shell).toBe("/bin/bash")
             expect(documents[0]?.info.model).toBe("anthropic/claude")
             expect(documents[0]?.info.default_agent).toBe("reviewer")
-            expect(documents[0]?.info.autoupdate).toBe("notify")
-            expect(documents[0]?.info.share).toBe("disabled")
-            expect(documents[0]?.info.enterprise).toEqual({ url: "https://share.example.com" })
-            expect(documents[0]?.info.username).toBe("test-user")
             expect(documents[0]?.info.permissions).toEqual([
               { action: "bash", resource: "*", effect: "ask" },
               { action: "bash", resource: "git status", effect: "allow" },
@@ -422,39 +379,11 @@ describe("Config", () => {
             expect(reviewer?.steps).toBe(12)
             expect(reviewer?.disabled).toBe(false)
             expect(reviewer?.permissions).toEqual([{ action: "edit", resource: "*", effect: "deny" }])
-            expect(documents[0]?.info.snapshots).toBe(false)
             expect(documents[0]?.info.watcher).toEqual({ ignore: ["node_modules/**", "dist/**", ".git"] })
-            expect(documents[0]?.info.formatter).toEqual({
-              prettier: { disabled: true },
-              custom: { command: ["custom-fmt", "$FILE"], extensions: [".foo"] },
-            })
-            expect(documents[0]?.info.lsp).toEqual({
-              typescript: { disabled: true },
-              custom: { command: ["custom-lsp"], extensions: [".foo"] },
-            })
             expect(documents[0]?.info.attachments).toEqual({
               image: { auto_resize: false, max_width: 1200, max_height: 900, max_base64_bytes: 1048576 },
             })
             expect(documents[0]?.info.tool_output).toEqual({ max_lines: 1000, max_bytes: 32768 })
-            expect(documents[0]?.info.mcp).toEqual({
-              timeout: 5000,
-              servers: {
-                local: {
-                  type: "local",
-                  command: ["node", "./mcp/server.js"],
-                  environment: { API_KEY: "secret" },
-                  disabled: false,
-                  timeout: 10000,
-                },
-                remote: {
-                  type: "remote",
-                  url: "https://mcp.example.com/mcp",
-                  headers: { Authorization: "Bearer token" },
-                  oauth: { client_id: "client", scope: "read write", callback_port: 19876 },
-                  disabled: true,
-                },
-              },
-            })
             expect(documents[0]?.info.compaction).toEqual({
               auto: true,
               prune: false,
@@ -465,20 +394,6 @@ describe("Config", () => {
               "./skills",
               "~/shared-skills",
               "https://example.com/.well-known/skills/",
-            ])
-            expect(documents[0]?.info.instructions).toEqual([
-              "CONTRIBUTING.md",
-              ".cursor/rules/*.md",
-              "https://example.com/shared-rules.md",
-            ])
-            expect(documents[0]?.info.references).toEqual({
-              local: { path: "../library" },
-              sdk: { repository: "github.com/example/sdk", branch: "main" },
-              shorthand: "github.com/example/docs",
-            })
-            expect(documents[0]?.info.plugins).toEqual([
-              "deepagent-code-helicone-session",
-              { package: "@my-org/audit-plugin", options: { endpoint: "https://audit.example.com" } },
             ])
           }).pipe(Effect.provide(testLayer(tmp.path)))
         }),
@@ -499,8 +414,6 @@ describe("Config", () => {
               JSON.stringify({
                 shell: "/bin/zsh",
                 default_agent: "reviewer",
-                snapshot: false,
-                autoshare: true,
                 permission: {
                   bash: "ask",
                   edit: { "*.md": "allow", "*": "deny" },
@@ -514,12 +427,7 @@ describe("Config", () => {
                     permission: { read: "allow" },
                   },
                 },
-                plugin: [
-                  "deepagent-code-helicone-session",
-                  ["@my-org/audit-plugin", { endpoint: "https://audit.example.com" }],
-                ],
                 skills: { paths: ["./skills"], urls: ["https://example.com/.well-known/skills/"] },
-                reference: { docs: { path: "../docs" } },
                 attachment: { image: { auto_resize: false, max_width: 1200 } },
                 provider: {
                   custom: {
@@ -555,15 +463,6 @@ describe("Config", () => {
                   },
                 },
                 compaction: { auto: true, tail_turns: 3, preserve_recent_tokens: 2000, reserved: 10000 },
-                experimental: { mcp_timeout: 5000 },
-                mcp: {
-                  local: { type: "local", command: ["node", "server.js"], enabled: false },
-                  remote: {
-                    type: "remote",
-                    url: "https://mcp.example.com",
-                    oauth: { clientId: "client", callbackPort: 19876 },
-                  },
-                },
               }),
             ),
           )
@@ -576,8 +475,6 @@ describe("Config", () => {
             expect(documents[0]?.info).toBeInstanceOf(Config.Info)
             expect(documents[0]?.info.shell).toBe("/bin/zsh")
             expect(documents[0]?.info.default_agent).toBe("reviewer")
-            expect(documents[0]?.info.snapshots).toBe(false)
-            expect(documents[0]?.info.share).toBe("auto")
             expect(documents[0]?.info.permissions).toEqual([
               { action: "bash", resource: "*", effect: "ask" },
               { action: "edit", resource: "*.md", effect: "allow" },
@@ -590,12 +487,7 @@ describe("Config", () => {
               request: { body: { temperature: 0.2 } },
               permissions: [{ action: "read", resource: "*", effect: "allow" }],
             })
-            expect(documents[0]?.info.plugins).toEqual([
-              "deepagent-code-helicone-session",
-              { package: "@my-org/audit-plugin", options: { endpoint: "https://audit.example.com" } },
-            ])
             expect(documents[0]?.info.skills).toEqual(["./skills", "https://example.com/.well-known/skills/"])
-            expect(documents[0]?.info.references).toEqual({ docs: { path: "../docs" } })
             expect(documents[0]?.info.attachments).toEqual({ image: { auto_resize: false, max_width: 1200 } })
             expect(documents[0]?.info.providers?.custom).toMatchObject({
               request: { body: { apiKey: "secret" } },
@@ -635,17 +527,6 @@ describe("Config", () => {
               prune: undefined,
               keep: { tokens: 2000 },
               buffer: 10000,
-            })
-            expect(documents[0]?.info.mcp).toMatchObject({
-              timeout: 5000,
-              servers: {
-                local: { type: "local", command: ["node", "server.js"], disabled: true },
-                remote: {
-                  type: "remote",
-                  url: "https://mcp.example.com",
-                  oauth: { client_id: "client", callback_port: 19876 },
-                },
-              },
             })
           }).pipe(Effect.provide(testLayer(tmp.path)))
         }),
@@ -701,6 +582,134 @@ describe("Config", () => {
             expect(Cause.pretty(exit.cause)).toContain("Invalid config in")
             expect(Cause.pretty(exit.cause)).toContain("defualt_agent")
           }
+        }),
+      ),
+    ),
+  )
+
+  it.live("rejects parsed-only fields that have no active Core V2 consumer", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            fs.writeFile(
+              path.join(tmp.path, "deepagent-code.json"),
+              JSON.stringify({
+                autoupdate: false,
+                share: "disabled",
+                enterprise: { url: "https://share.example.com" },
+                username: "name",
+                snapshots: false,
+                formatter: false,
+                lsp: false,
+                mcp: { servers: {} },
+                instructions: ["CONTRIBUTING.md"],
+                references: { docs: { path: "../docs" } },
+                plugins: ["example-plugin"],
+                learning: { project_copy: false },
+              }),
+            ),
+          )
+          const exit = yield* Effect.acquireUseRelease(
+            Effect.sync(() => {
+              const previous = process.env.DEEPAGENT_CODE_EXPERIMENTAL_REFERENCES
+              process.env.DEEPAGENT_CODE_EXPERIMENTAL_REFERENCES = "false"
+              return previous
+            }),
+            () =>
+              Config.Service.use((config) => config.entries()).pipe(
+                Effect.provide(testLayer(tmp.path)),
+                Effect.exit,
+              ),
+            (previous) =>
+              Effect.sync(() => {
+                if (previous === undefined) delete process.env.DEEPAGENT_CODE_EXPERIMENTAL_REFERENCES
+                else process.env.DEEPAGENT_CODE_EXPERIMENTAL_REFERENCES = previous
+              }),
+          )
+
+          expect(Exit.isFailure(exit)).toBe(true)
+          if (Exit.isFailure(exit)) {
+            const error = Cause.pretty(exit.cause)
+            expect(error).toContain("Unsupported Core V2 config")
+            for (const field of [
+              "autoupdate",
+              "share",
+              "enterprise",
+              "username",
+              "snapshots",
+              "mcp",
+              "instructions",
+              "references",
+              "plugins",
+              "learning.project_copy",
+            ]) {
+              expect(error).toContain(field)
+            }
+          }
+        }),
+      ),
+    ),
+  )
+
+  it.live("accepts explicitly disabled formatter and LSP compatibility fields", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            fs.writeFile(
+              path.join(tmp.path, "deepagent-code.json"),
+              JSON.stringify({ formatter: false, lsp: false }),
+            ),
+          )
+          const entries = yield* Config.Service.use((config) => config.entries()).pipe(
+            Effect.provide(testLayer(tmp.path)),
+          )
+
+          expect(entries.filter((entry) => entry.type === "document")).toHaveLength(1)
+        }),
+      ),
+    ),
+  )
+
+  it.live("accepts references only when their Core V2 runtime is enabled", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            fs.writeFile(
+              path.join(tmp.path, "deepagent-code.json"),
+              JSON.stringify({ references: { docs: { path: "../docs" } } }),
+            ),
+          )
+          const references = yield* Effect.acquireUseRelease(
+            Effect.sync(() => {
+              const previous = process.env.DEEPAGENT_CODE_EXPERIMENTAL_REFERENCES
+              process.env.DEEPAGENT_CODE_EXPERIMENTAL_REFERENCES = "true"
+              return previous
+            }),
+            () =>
+              Config.Service.use((config) => config.entries()).pipe(
+                Effect.provide(testLayer(tmp.path)),
+                Effect.map((entries) => Config.latest(entries, "references")),
+              ),
+            (previous) =>
+              Effect.sync(() => {
+                if (previous === undefined) delete process.env.DEEPAGENT_CODE_EXPERIMENTAL_REFERENCES
+                else process.env.DEEPAGENT_CODE_EXPERIMENTAL_REFERENCES = previous
+              }),
+          )
+
+          expect(references).toEqual({ docs: { path: "../docs" } })
         }),
       ),
     ),

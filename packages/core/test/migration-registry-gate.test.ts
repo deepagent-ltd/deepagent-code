@@ -37,7 +37,19 @@ import { migrations } from "../src/database/migration.gen"
 // registry (event admission no longer refuses with a coarse static reason but
 // persists the per-admission refusal reason), so the ordered registry digest
 // moved again. Explicit re-pin of the W5.1 trigger.
-const PINNED_DIGEST = "9f7eca030d024292631e310f3376cd1a5c4335cfcdddf4e145227ef4aeeae440"
+// Successor pin (2026-09-08, runtime-integrity remediation): four migrations
+// joined the registry — 20260906190036_capability_load_catalog_identity
+// (capability-load catalog identity unique index), 20260907020000_session_interrupt_barrier
+// (RI-115 durable interrupt barrier), 20260907120000_provider_attempt_version
+// (RI-53 attempt_version + execution_claim_token), 20260907130000_migration_journal_content_hash
+// (journal content-hash column). `migration --check` green and fresh-apply/re-apply
+// oracle green; explicit re-pin of the release candidate.
+// Successor pin (2026-09-09, RI-16/RI-24): session-delete tombstones, retention index,
+// runtime-integrity evidence, and signature persistence migrations joined the registry; the
+// journal content-hash migration also gained a missing-receipt guard for old disk fixtures.
+// Successor pin (2026-09-09, RI-24 artifact wave): the independent content-addressed runtime
+// integrity evidence artifact table and its immutable signature-attachment trigger joined.
+const PINNED_DIGEST = "1d4656b3af09a126de73118e68b52c2e2de7542c06752c892d7fc44e18b0437b"
 
 const digest = (entries: readonly { readonly id: string; readonly hash: string }[]) =>
   createHash("sha256").update(JSON.stringify(entries)).digest("hex")

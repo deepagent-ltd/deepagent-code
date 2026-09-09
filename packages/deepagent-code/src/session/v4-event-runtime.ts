@@ -642,16 +642,16 @@ export const consumerRegistrationLayer = Layer.effectDiscard(
     const disabled = runtimeConsumerGroups.filter((group) => !group.enabled(flags))
 
     yield* Effect.forEach(enabled, (group) => bus.registerConsumerGroup(group.id, group.typeFilter), {
-      concurrency: "unbounded",
+      concurrency: 16,
       discard: true,
     })
     yield* Effect.forEach(disabled, (group) => bus.unregisterConsumerGroup(group.id), {
-      concurrency: "unbounded",
+      concurrency: 16,
       discard: true,
     })
     yield* Effect.addFinalizer(() =>
       Effect.forEach(enabled, (group) => bus.unregisterConsumerGroup(group.id), {
-        concurrency: "unbounded",
+        concurrency: 16,
         discard: true,
       }),
     )
@@ -1077,11 +1077,12 @@ export const spoolDrainPass = (input: {
   readonly db: Database.Interface["db"]
   readonly v2Session?: SessionV2.Interface
   readonly now?: () => number
+  readonly runtimeFeatures?: EventAdmission.RuntimeFeatureRegistry
 }): Effect.Effect<void> =>
   Effect.gen(function* () {
     const at = input.now?.() ?? Date.now()
     const v2Session = input.v2Session
-    if (!v2Session || !EventAdmission.isEventV2AdmissionEnabled()) return
+    if (!v2Session || !EventAdmission.isEventV2AdmissionEnabled(input.runtimeFeatures)) return
     const claimed = yield* EventSpool.claimDue(input.db, {
       claimantId: "v4-spool-drain",
       now: at,
@@ -1101,6 +1102,7 @@ export const spoolDrainPass = (input: {
         messageID: anchor,
         adapter: makeSessionV2Adapter(v2Session, spoolLocationFor, workspaceId),
         now: at,
+        ...(input.runtimeFeatures ? { runtimeFeatures: input.runtimeFeatures } : {}),
       }).pipe(Effect.exit)
       // An INTERRUPTION is not a failure: re-raise it and leave the claimed row for lease revival.
       if (outcome._tag === "Failure" && Cause.hasInterrupts(outcome.cause)) {

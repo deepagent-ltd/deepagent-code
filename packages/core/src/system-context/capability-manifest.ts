@@ -206,7 +206,17 @@ export interface CapabilityInventory {
   readonly permissionActions: ReadonlySet<string>
 }
 
-/** Product tool inventory: the shipped Location-scoped built-in tools plus context-federation tools. */
+/**
+ * Product tool inventory: exactly the shipped Location-scoped built-in tool set
+ * (`BuiltInTools.builtinToolNames` — the potential set `locationLayer` registers).
+ * The two graph tools (`code_intel`, `context_query`) are additionally gated at
+ * runtime by the `context_query_tools_v2` flag and `ContextToolRuntime` availability,
+ * so a host without the graph runtime offers the remaining 14; they stay in the
+ * inventory because the inventory names what the product ships, not what one host
+ * enables. A build gate (`assertInventoryCoversBuiltinTools` in the test suite and
+ * `script/assert-capability-inventory.ts`) pins this set to the registry exactly,
+ * so a tool added to the layer without inventory coverage (or vice versa) fails.
+ */
 export const DeepAgentCodeToolInventory: CapabilityInventory = {
   toolNames: new Set([
     "read",
@@ -220,6 +230,9 @@ export const DeepAgentCodeToolInventory: CapabilityInventory = {
     "webfetch",
     "question",
     "skill",
+    "plan",
+    "capability_search",
+    "capability_load",
     "context_query",
     "code_intel",
   ]),
@@ -243,6 +256,7 @@ export const DeepAgentCodeToolInventory: CapabilityInventory = {
     "webfetch",
     "question",
     "skill",
+    "plan",
     "context.read",
     "code_intel",
     "context_query",
@@ -251,6 +265,9 @@ export const DeepAgentCodeToolInventory: CapabilityInventory = {
     // catalog the coherence gate validates manifests against — a manifest (or the
     // runtime-authorized search grant set derived from this inventory) can now name it.
     "capability.read",
+    // `capability_search` declares no static action: its authorization is derived per call
+    // from the agent/session rulesets (`CapabilityRuntimeSearch.permissionAuthorization`),
+    // so there is no catalog action to list here.
   ]),
 }
 
@@ -339,6 +356,37 @@ export function assertInventoryMatchesRegistry(
   }
   const missing = [...advertised].filter((tool) => !registered.has(tool)).sort()
   if (missing.length > 0) throw new CatalogRegistryMismatchError({ missing })
+}
+
+/** Typed violation: the product inventory and the shipped built-in registry drifted apart. */
+export class InventoryRegistryDriftError extends Schema.TaggedErrorClass<InventoryRegistryDriftError>()(
+  "CapabilityManifest.InventoryRegistryDriftError",
+  {
+    missingFromRegistry: Schema.Array(Schema.String),
+    missingFromInventory: Schema.Array(Schema.String),
+  },
+) {}
+
+/**
+ * RI-113 exact gate (design §1.2 single capability surface): the product inventory's
+ * tool set must EQUAL the shipped built-in registry. The subset gate
+ * (`assertInventoryMatchesRegistry`) only stops a catalog from advertising an absent
+ * tool — it cannot see a registered tool the inventory forgot, which the coherence
+ * gate would later reject as "unknown entry tool" when a manifest tries to name it
+ * (the two sources of truth having drifted). The symmetric difference must be empty.
+ * The caller supplies `BuiltInTools.builtinToolNames` so this module keeps no
+ * dependency on the tool registry (which transitively imports this module).
+ */
+export function assertInventoryCoversBuiltinTools(
+  registeredTools: ReadonlyArray<string> | ReadonlySet<string>,
+  inventory: CapabilityInventory,
+): void {
+  const registered = registeredTools instanceof Set ? registeredTools : new Set(registeredTools)
+  const missingFromRegistry = [...inventory.toolNames].filter((tool) => !registered.has(tool)).sort()
+  const missingFromInventory = [...registered].filter((tool) => !inventory.toolNames.has(tool)).sort()
+  if (missingFromRegistry.length > 0 || missingFromInventory.length > 0) {
+    throw new InventoryRegistryDriftError({ missingFromRegistry, missingFromInventory })
+  }
 }
 
 /**

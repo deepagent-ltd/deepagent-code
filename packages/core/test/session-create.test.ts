@@ -1,12 +1,14 @@
 import { describe, expect } from "bun:test"
 import path from "path"
-import { Effect, Layer, Stream } from "effect"
+import { Effect, Layer, LayerMap, Scope, Stream } from "effect"
 import { AgentV2 } from "@deepagent-code/core/agent"
 import { asc, eq } from "drizzle-orm"
 import { Database } from "@deepagent-code/core/database/database"
 import { EventV2 } from "@deepagent-code/core/event"
 import { EventSequenceTable, EventTable } from "@deepagent-code/core/event/sql"
 import { Location } from "@deepagent-code/core/location"
+import { LocationServiceMap } from "@deepagent-code/core/location-layer"
+import { PluginBoot } from "@deepagent-code/core/plugin/boot"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { ProjectV2 } from "@deepagent-code/core/project"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
@@ -46,6 +48,62 @@ const sessions = SessionV2.layer.pipe(
 )
 const it = testEffect(
   Layer.mergeAll(database, events, projects, projector, store, SessionExecution.noopLayer, sessions),
+)
+// RI-04 harness: a Location-keyed tree carrying the REAL AgentV2 roster plus a PluginBoot stub whose
+// wait() performs the agent registration (production registers agents from a forkScoped boot fiber).
+// Validation that awaits boot observes the post-boot roster; a check that skipped the wait would see
+// an empty roster and falsely reject "auto"/"build" — so the legal-agent tests below double as the
+// startup-race oracle. Only scalar fields are set so repeated wait() calls stay idempotent.
+const rosterTree = Layer.mergeAll(
+  AgentV2.layer,
+  Layer.effect(
+    PluginBoot.Service,
+    Effect.gen(function* () {
+      const agents = yield* AgentV2.Service
+      // AgentV2.update registers a replayable transform slot in the CURRENT Scope (closing it would
+      // revert the registration). The tree is built once and shared across this file's tests, so the
+      // slot needs a root scope that outlives any single test's scoped provide.
+      const scope = yield* Scope.make()
+      return PluginBoot.Service.of({
+        wait: () =>
+          agents
+            .update((editor) => {
+              editor.update(AgentV2.ID.make("auto"), (item) => {
+                item.mode = "primary"
+              })
+              editor.update(AgentV2.ID.make("plan"), (item) => {
+                item.mode = "primary"
+              })
+              editor.update(AgentV2.ID.make("explore"), (item) => {
+                item.mode = "subagent"
+              })
+              editor.update(AgentV2.ID.make("compaction"), (item) => {
+                item.hidden = true
+              })
+            })
+            .pipe(Effect.provideService(Scope.Scope, scope)),
+      })
+    }),
+  ).pipe(Layer.provide(AgentV2.layer)),
+)
+const rosterLocations = Layer.effect(
+  LocationServiceMap,
+  LayerMap.make(() => rosterTree).pipe(
+    // This harness supplies its roster tree as the complete keyed Location tree.
+    // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
+    Effect.map((service) => service as unknown as LocationServiceMap["Service"]),
+  ),
+)
+const rosterSessions = SessionV2.layer.pipe(
+  Layer.provide(events),
+  Layer.provide(database),
+  Layer.provide(store),
+  Layer.provide(projects),
+  Layer.provide(SessionExecution.noopLayer),
+  Layer.provide(rosterLocations),
+)
+const rosterIt = testEffect(
+  Layer.mergeAll(database, events, projects, projector, store, SessionExecution.noopLayer, rosterSessions),
 )
 const location = Location.Ref.make({ directory: AbsolutePath.make("/project") })
 const id = SessionV2.ID.create()
@@ -89,6 +147,19 @@ describe("SessionV2.create", () => {
 
       expect(second.id).not.toBe(first.id)
       expect(yield* session.list()).toHaveLength(2)
+    }),
+  )
+
+  it.effect("hides learning reviewer sessions unless internal sessions are requested", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const visible = yield* session.create({ location })
+      const internal = yield* session.create({ id: SessionV2.ID.make("ses_learning_review_testhide"), location })
+
+      expect((yield* session.list()).map((item) => item.id)).toEqual([visible.id])
+      expect(new Set((yield* session.list({ includeInternal: true })).map((item) => item.id))).toEqual(
+        new Set([visible.id, internal.id]),
+      )
     }),
   )
 
@@ -773,6 +844,112 @@ describe("SessionV2.create", () => {
             Effect.map((error) => error._tag),
           ),
       ).toBe("Session.NotFoundError")
+    }),
+  )
+})
+
+
+describe("SessionV2 agent admission validation (RI-04)", () => {
+  rosterIt.effect("create typed-fails an unknown agent before projecting the Session", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const sessionID = SessionV2.ID.create()
+
+      const error = yield* session
+        .create({ id: sessionID, location, agent: AgentV2.ID.make("missing-agent") })
+        .pipe(Effect.flip)
+
+      expect(error).toMatchObject({ _tag: "AgentV2.NotFoundError", id: "missing-agent" })
+      expect(yield* session.get(sessionID).pipe(Effect.flip)).toMatchObject({ _tag: "Session.NotFoundError" })
+    }),
+  )
+
+  rosterIt.effect("create rejects a subagent-mode agent as not selectable", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const sessionID = SessionV2.ID.create()
+
+      const error = yield* session
+        .create({ id: sessionID, location, agent: AgentV2.ID.make("explore") })
+        .pipe(Effect.flip)
+
+      expect(error).toMatchObject({ _tag: "Session.AgentNotSelectableError", id: "explore" })
+      expect(yield* session.get(sessionID).pipe(Effect.flip)).toMatchObject({ _tag: "Session.NotFoundError" })
+    }),
+  )
+
+  rosterIt.effect("create rejects a hidden internal agent as not selectable", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const sessionID = SessionV2.ID.create()
+
+      const error = yield* session
+        .create({ id: sessionID, location, agent: AgentV2.ID.make("compaction") })
+        .pipe(Effect.flip)
+
+      expect(error).toMatchObject({ _tag: "Session.AgentNotSelectableError", id: "compaction" })
+      expect(yield* session.get(sessionID).pipe(Effect.flip)).toMatchObject({ _tag: "Session.NotFoundError" })
+    }),
+  )
+
+  // Startup-race oracle: the roster is empty until the PluginBoot wait completes registration, so
+  // this admission only succeeds because the check awaits boot before resolving.
+  rosterIt.effect("create admits a selectable agent registered during boot", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+
+      const created = yield* session.create({ location, agent: AgentV2.ID.make("auto") })
+
+      expect(created.agent).toBe(AgentV2.ID.make("auto"))
+      expect(yield* session.get(created.id)).toMatchObject({ agent: "auto" })
+    }),
+  )
+
+  rosterIt.effect("create resolves the legacy build alias through the roster", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+
+      const created = yield* session.create({ location, agent: AgentV2.ID.make("build") })
+
+      expect(created.agent).toBe(AgentV2.ID.make("build"))
+    }),
+  )
+
+  rosterIt.effect("switchAgent typed-fails an unknown agent without publishing the switch", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const created = yield* session.create({ location })
+
+      const error = yield* session.switchAgent({ sessionID: created.id, agent: "missing-agent" }).pipe(Effect.flip)
+
+      expect(error).toMatchObject({ _tag: "AgentV2.NotFoundError", id: "missing-agent" })
+      expect((yield* session.get(created.id)).agent).toBeUndefined()
+      expect(yield* session.context(created.id)).toEqual([])
+    }),
+  )
+
+  rosterIt.effect("switchAgent rejects a non-selectable agent without publishing the switch", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const created = yield* session.create({ location, agent: AgentV2.ID.make("auto") })
+
+      const error = yield* session.switchAgent({ sessionID: created.id, agent: "explore" }).pipe(Effect.flip)
+
+      expect(error).toMatchObject({ _tag: "Session.AgentNotSelectableError", id: "explore" })
+      expect((yield* session.get(created.id)).agent).toBe(AgentV2.ID.make("auto"))
+      expect(yield* session.context(created.id)).toEqual([])
+    }),
+  )
+
+  rosterIt.effect("switchAgent admits a selectable agent and projects the switch durably", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const created = yield* session.create({ location })
+
+      yield* session.switchAgent({ sessionID: created.id, agent: "plan" })
+
+      expect((yield* session.get(created.id)).agent).toBe(AgentV2.ID.make("plan"))
+      expect(yield* session.context(created.id)).toMatchObject([{ type: "agent-switched", agent: "plan" }])
     }),
   )
 })

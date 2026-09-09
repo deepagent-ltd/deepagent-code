@@ -168,10 +168,18 @@ export const CurrentGrantedPermissions = Context.Reference<ReadonlySet<string> |
   { defaultValue: () => undefined },
 )
 
-export function authorizedCatalog(grantedPermissions?: ReadonlySet<string>): ReadonlyArray<CapabilityManifest> {
-  if (grantedPermissions === undefined) return capabilityCatalog
+export const CurrentAvailableToolNames = Context.Reference<ReadonlySet<string> | undefined>(
+  "@deepagent-code/v2/CapabilityCatalog/CurrentAvailableToolNames",
+  { defaultValue: () => undefined },
+)
+
+export function authorizedCatalog(
+  grantedPermissions?: ReadonlySet<string>,
+  availableToolNames?: ReadonlySet<string>,
+): ReadonlyArray<CapabilityManifest> {
   return capabilityCatalog.filter((manifest) =>
-    manifest.required_permissions.every((permission) => grantedPermissions.has(permission)),
+    (grantedPermissions === undefined || manifest.required_permissions.every((permission) => grantedPermissions.has(permission))) &&
+    (availableToolNames === undefined || manifest.entry_tools.every((tool) => availableToolNames.has(tool))),
   )
 }
 
@@ -220,7 +228,9 @@ export const capabilityCatalogSource = SystemContext.make({
   key: SystemContext.Key.make("deepagent/capability-catalog"),
   codec: Schema.toCodecJson(Schema.String),
   load: Effect.gen(function* () {
-    const text = renderCapabilityCatalog(authorizedCatalog(yield* CurrentGrantedPermissions))
+    const text = renderCapabilityCatalog(
+      authorizedCatalog(yield* CurrentGrantedPermissions, yield* CurrentAvailableToolNames),
+    )
     assertCapabilityCatalogWithinBudget(text)
     return text
   }),

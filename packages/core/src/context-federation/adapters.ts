@@ -102,7 +102,7 @@ export function documents(sources: readonly Adapter[]): Adapter {
     query: (input) =>
       Effect.all(
         sources.map((source) => source.query(input)),
-        { concurrency: "unbounded" },
+        { concurrency: 8 },
       ).pipe(
         Effect.map((results) => {
           if (results.length === 0) return { candidates: [], status: status.notQueried("documents") }

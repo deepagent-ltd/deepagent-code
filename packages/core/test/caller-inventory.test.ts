@@ -37,7 +37,9 @@ describe("C0-01 caller inventory gate", () => {
     // Universe is frozen at 379 (NEW-P2-A removed the 8 spurious bare-nested lildax entries);
     // W10 added the `docs` leaf command (cli.dacode.docs) -> 397.
     // W2-3 added the deepagent queue read endpoint (http.instance.deepagent.queuedInputs) -> 398.
-    expect(inventory.entries.length).toBe(398)
+    // RI-95 added the public SDK launcher, Slack, share backend, and native V2 create surface -> 402.
+    // 2026-09-08 step 5c 重钉:遗留清仓波的入口面收缩(402→401,随 runtime-state-inventory 重钉)。
+    expect(inventory.entries.length).toBe(401)
     const lildax = inventory.entries
       .filter((entry) => entry.entry.surface === "cli-lildax")
       .map((entry) => entry.entry.id)

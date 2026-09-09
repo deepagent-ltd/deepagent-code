@@ -330,4 +330,24 @@ describe("PermissionV2", () => {
       expect(yield* saved.list()).toEqual([])
     }),
   )
+
+  it.effect("fails with typed overload at the pending ceiling and reuses replied capacity", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const service = yield* PermissionV2.Service
+      for (let index = 0; index < PermissionV2.MAX_PENDING_REQUESTS; index++)
+        yield* service.ask(assertion({ id: PermissionV2.ID.create(`per_capacity_${index}`) }))
+
+      expect(
+        yield* service
+          .ask(assertion({ id: PermissionV2.ID.create("per_capacity_overflow") }))
+          .pipe(Effect.flip),
+      ).toEqual(new PermissionV2.CapacityError({ limit: PermissionV2.MAX_PENDING_REQUESTS }))
+
+      yield* service.reply({ requestID: PermissionV2.ID.create("per_capacity_0"), reply: "once" })
+      expect(
+        yield* service.ask(assertion({ id: PermissionV2.ID.create("per_capacity_reused") })),
+      ).toMatchObject({ effect: "ask" })
+    }),
+  )
 })

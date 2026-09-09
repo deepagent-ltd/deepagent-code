@@ -5,7 +5,7 @@ import type { SecurityNamespaceID } from "@deepagent-code/core/context-federatio
 import { ContextTokenCodec } from "@deepagent-code/core/context-federation/token-codec"
 import { Database } from "@deepagent-code/core/database/database"
 import { Global } from "@deepagent-code/core/global"
-import { Context, Effect, Layer, Schema } from "effect"
+import { Effect, Layer, Schema, Semaphore } from "effect"
 import { randomBytes } from "node:crypto"
 import { chmod, mkdir, open, readFile } from "node:fs/promises"
 import path from "node:path"
@@ -25,39 +25,47 @@ export function layer(config: {
       const codec = yield* ContextTokenCodec.Service
       const key = yield* Effect.tryPromise(() => load(config.filename)).pipe(Effect.orDie)
       const stores = new Map<SecurityNamespaceID, ContextArtifactStore.Interface>()
+      const storeBuild = Semaphore.makeUnsafe(1)
 
-      const store = Effect.fn("ContextArtifact.namespace")((securityNamespaceId: SecurityNamespaceID) => Effect.scoped(Effect.gen(function* () {
-        const existing = stores.get(securityNamespaceId)
-        if (existing) return existing
-        const built = yield* Layer.build(
-          ContextArtifactStore.layer({
-            securityNamespaceId,
-            policy: config.policy,
-            keyId: key.keyId,
-            encryptionKey: decodeSecret(key.secret),
-            tokenCodec: codec,
-            limits: config.limits,
-          }).pipe(Layer.provide(Layer.succeed(Database.Service, database))),
-        )
-        const created = Context.get(built, ContextArtifactStore.Service)
-        stores.set(securityNamespaceId, created)
-        return created
-      })))
+      const store = Effect.fn("ContextArtifact.namespace")((securityNamespaceId: SecurityNamespaceID) =>
+        storeBuild.withPermits(1)(
+          Effect.sync(() => {
+            const existing = stores.get(securityNamespaceId)
+            if (existing) return existing
+            const created = ContextArtifactStore.make(
+              {
+                securityNamespaceId,
+                policy: config.policy,
+                keyId: key.keyId,
+                encryptionKey: decodeSecret(key.secret),
+                tokenCodec: codec,
+                limits: config.limits,
+              },
+              database,
+            )
+            if (stores.size >= 256) stores.delete(stores.keys().next().value!)
+            stores.set(securityNamespaceId, created)
+            return created
+          }),
+        ),
+      )
 
       return ContextArtifactStore.Service.of({
         policy: config.policy,
         write: (input) => store(input.securityNamespaceId).pipe(Effect.flatMap((service) => service.write(input))),
-        read: (input) => codec.openArtifact(input.ref, input.now).pipe(
-          Effect.flatMap((binding) => store(binding.securityNamespaceId)),
-          Effect.flatMap((service) => service.read(input)),
-        ),
-        sweep: (now) => Effect.forEach([...stores.values()], (service) => service.sweep(now)).pipe(
-          Effect.map((counts) => counts.reduce((total, count) => total + count, 0)),
-        ),
-        sweepOrphans: (olderThan) => Effect.forEach(
-          [...stores.values()],
-          (service) => service.sweepOrphans(olderThan),
-        ).pipe(Effect.map((counts) => counts.reduce((total, count) => total + count, 0))),
+        read: (input) =>
+          codec.openArtifact(input.ref, input.now).pipe(
+            Effect.flatMap((binding) => store(binding.securityNamespaceId)),
+            Effect.flatMap((service) => service.read(input)),
+          ),
+        sweep: (now) =>
+          Effect.forEach([...stores.values()], (service) => service.sweep(now)).pipe(
+            Effect.map((counts) => counts.reduce((total, count) => total + count, 0)),
+          ),
+        sweepOrphans: (olderThan) =>
+          Effect.forEach([...stores.values()], (service) => service.sweepOrphans(olderThan)).pipe(
+            Effect.map((counts) => counts.reduce((total, count) => total + count, 0)),
+          ),
       })
     }),
   )
@@ -77,7 +85,10 @@ export const defaultLayer = layer({
 
 async function load(filename: string) {
   await mkdir(path.dirname(filename), { recursive: true, mode: 0o700 })
-  const generated = { keyId: `artifact_${randomBytes(8).toString("hex")}`, secret: randomBytes(32).toString("base64url") }
+  const generated = {
+    keyId: `artifact_${randomBytes(8).toString("hex")}`,
+    secret: randomBytes(32).toString("base64url"),
+  }
   const handle = await open(filename, "wx", 0o600).catch((error: unknown) => {
     if (record(error) && error.code === "EEXIST") return undefined
     throw error

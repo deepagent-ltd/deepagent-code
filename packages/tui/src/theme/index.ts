@@ -164,6 +164,8 @@ export const DEFAULT_THEMES: Record<string, ThemeJson> = {
 }
 
 const pluginThemes: Record<string, ThemeJson> = {}
+export const PLUGIN_THEME_LIMIT = 256
+export const CUSTOM_THEME_LIMIT = 256
 let customThemes: Record<string, ThemeJson> = {}
 let systemTheme: ThemeJson | undefined
 const listeners = new Set<(themes: Record<string, ThemeJson>) => void>()
@@ -203,7 +205,7 @@ export function subscribeThemes(listener: (themes: Record<string, ThemeJson>) =>
 }
 
 export function setCustomThemes(themes: Record<string, ThemeJson>) {
-  customThemes = themes
+  customThemes = Object.fromEntries(Object.entries(themes).slice(0, CUSTOM_THEME_LIMIT))
   syncThemes()
 }
 
@@ -221,6 +223,7 @@ export function addTheme(name: string, theme: unknown) {
   if (!name) return false
   if (!isTheme(theme)) return false
   if (hasTheme(name)) return false
+  if (Object.keys(pluginThemes).length >= PLUGIN_THEME_LIMIT) return false
   pluginThemes[name] = theme
   syncThemes()
   return true
@@ -232,6 +235,7 @@ export function upsertTheme(name: string, theme: unknown) {
   if (customThemes[name] !== undefined) {
     customThemes[name] = theme
   } else {
+    if (pluginThemes[name] === undefined && Object.keys(pluginThemes).length >= PLUGIN_THEME_LIMIT) return false
     pluginThemes[name] = theme
   }
   syncThemes()

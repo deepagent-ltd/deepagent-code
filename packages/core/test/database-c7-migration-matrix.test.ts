@@ -339,10 +339,7 @@ describe("C7-02 · era classification matrix (deterministic oracle)", () => {
   })
 
   test("incident eras bootstrap to blocked_schema over a real file, and the writable layer refuses admission", async () => {
-    // content-mismatch is excluded here: the production bootstrap preflight (database.ts
-    // preflightOptionsFor) does NOT wire knownContentHashes, so a content-hash divergence is not
-    // caught at boot (documented residual below; the C1A-15 oracle flags it when hashes are wired).
-    const hardBlockedAtBoot = eras.filter((era) => !era.migratable && era.blockedCode !== "migration_journal_content_mismatch")
+    const hardBlockedAtBoot = eras.filter((era) => !era.migratable)
     expect(hardBlockedAtBoot.length).toBeGreaterThan(0)
     for (const spec of hardBlockedAtBoot) {
       await using tmp = await tmpdir()
@@ -365,10 +362,7 @@ describe("C7-02 · era classification matrix (deterministic oracle)", () => {
     }
   }, 120_000)
 
-  test("content-mismatch over a real file: the C1A-15 oracle blocks it, but the production boot path does not (residual)", async () => {
-    // The install-time oracle (knownContentHashes wired) flags a content-hash divergence as a hard
-    // blocker — this is what the classification matrix proves. The PRODUCTION bootstrap (database.ts
-    // preflightOptionsFor) omits knownContentHashes, so the same divergence is NOT detected at boot.
+  test("content-mismatch over a real file is blocked by the production preflight", async () => {
     const spec = eras.find((era) => era.name === "incident-content-mismatch")!
     const { label, result } = classifyEra(spec)
     expect(label).toBe("blocked_schema")
@@ -380,10 +374,8 @@ describe("C7-02 · era classification matrix (deterministic oracle)", () => {
     const file = path.join(tmp.path, "hash.db")
     await spec.seed!(file)
     const boot = await Database.bootstrap(file)
-    // Honest current behavior: the production boot path admits this DB (no content-hash gate).
-    // This is a documented residual/GAP for the mission's "content-mismatch ⇒ blocked_schema" gate,
-    // not a fixture limitation — it requires wiring knownContentHashes into the production preflight.
-    expect(boot.mode).toBe("ready")
+    expect(boot.mode).toBe("blocked_schema")
+    expect(boot.diagnostics.stableCode).toBe("migration_journal_content_mismatch")
   }, 60_000)
 })
 

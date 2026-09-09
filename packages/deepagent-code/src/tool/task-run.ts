@@ -1088,8 +1088,8 @@ function structuredCompletionReason(transport: StructuredOutputReceipt["transpor
 
 // Shared compensation-receipt recorder (§16.3 order 2): every terminal settlement path records the
 // durable outcome inside its own settlement transaction. Terminal-only; the raw `error` state folds
-// into `failed` while staying pinned inside the outcome hash. Unwired compositions stay
-// receipt-less.
+// into `failed` while staying pinned inside the outcome hash. This is a required write, never an
+// optional host seam: terminal Task state without its compensation receipt is not a valid V2 state.
 export function recordTerminalReceiptInTransaction(
   tx: Parameters<typeof V2TaskRunReceipt.recordInTransaction>[0],
   input: {
@@ -1107,26 +1107,22 @@ export function recordTerminalReceiptInTransaction(
     readonly now: number
   },
 ) {
-  return Effect.gen(function* () {
-    const recorder = yield* V2TaskRunReceipt.CurrentTaskRunTerminalRecorder
-    if (!recorder) return
-    yield* recorder(tx, {
-      sessionId: input.run.parentSessionID,
-      runId: input.run.runID,
-      childSessionId: input.run.childSessionID,
-      generation: input.run.generation,
-      state: input.state === "error" ? "failed" : input.state,
+  return V2TaskRunReceipt.recordInTransaction(tx, {
+    sessionId: input.run.parentSessionID,
+    runId: input.run.runID,
+    childSessionId: input.run.childSessionID,
+    generation: input.run.generation,
+    state: input.state === "error" ? "failed" : input.state,
+    reason: input.reason,
+    outcomeHash: requestHash({
+      state: input.state,
       reason: input.reason,
-      outcomeHash: requestHash({
-        state: input.state,
-        reason: input.reason,
-        output: input.output ?? null,
-        error: input.error ?? null,
-      }),
-      ownerToken: input.ownerToken,
-      now: input.now,
-    })
-  })
+      output: input.output ?? null,
+      error: input.error ?? null,
+    }),
+    ownerToken: input.ownerToken,
+    now: input.now,
+  }).pipe(Effect.asVoid)
 }
 
 export function settleTaskRun(input: {

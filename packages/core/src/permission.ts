@@ -99,7 +99,13 @@ export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Per
   requestID: ID,
 }) {}
 
-export type Error = DeniedError | RejectedError | CorrectedError
+export const MAX_PENDING_REQUESTS = 512
+
+export class CapacityError extends Schema.TaggedErrorClass<CapacityError>()("PermissionV2.CapacityError", {
+  limit: Schema.Number,
+}) {}
+
+export type Error = DeniedError | RejectedError | CorrectedError | CapacityError
 
 export function evaluate(action: string, resource: string, ...rulesets: Ruleset[]): Rule {
   return (
@@ -125,7 +131,7 @@ export function isActionWhollyDenied(action: string, ...rulesets: Ruleset[]): bo
 }
 
 export interface Interface {
-  readonly ask: (input: AssertInput) => EffectRuntime.Effect<AskResult, SessionNotFound.Error>
+  readonly ask: (input: AssertInput) => EffectRuntime.Effect<AskResult, SessionNotFound.Error | CapacityError>
   readonly assert: (input: AssertInput) => EffectRuntime.Effect<void, Error | SessionNotFound.Error>
   readonly reply: (input: ReplyInput) => EffectRuntime.Effect<void, NotFoundError>
   readonly get: (id: ID) => EffectRuntime.Effect<Request | undefined>
@@ -224,6 +230,7 @@ export const layer = Layer.effect(
       EffectRuntime.uninterruptible(
         EffectRuntime.gen(function* () {
           const deferred = yield* Deferred.make<void, RejectedError | CorrectedError>()
+          if (pending.size >= MAX_PENDING_REQUESTS) return yield* new CapacityError({ limit: MAX_PENDING_REQUESTS })
           const item = { request, agent, deferred }
           if (pending.has(request.id)) return yield* EffectRuntime.die(`Duplicate pending permission ID: ${request.id}`)
           pending.set(request.id, item)

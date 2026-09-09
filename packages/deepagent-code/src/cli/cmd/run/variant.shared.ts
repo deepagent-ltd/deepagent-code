@@ -27,6 +27,7 @@ type VariantService = {
 type VariantRuntime = {
   resolveSavedVariant(model: RunInput["model"]): Promise<string | undefined>
   saveVariant(model: RunInput["model"], variant: string | undefined): Promise<void>
+  dispose(): Promise<void>
 }
 
 class Service extends Context.Service<Service, VariantService>()("@deepagent-code/RunVariant") {}
@@ -196,15 +197,16 @@ function createLayer(fs = FSUtil.defaultLayer) {
 }
 
 /** @internal Exported for testing. */
-export function createVariantRuntime(fs = FSUtil.defaultLayer): VariantRuntime {
-  const runtime = makeRuntime(Service, createLayer(fs))
+export function createVariantRuntime(fs = FSUtil.defaultLayer, name?: string): VariantRuntime {
+  const runtime = makeRuntime(Service, createLayer(fs), name)
   return {
     resolveSavedVariant: (model) => runtime.runPromise((svc) => svc.resolveSavedVariant(model)).catch(() => undefined),
     saveVariant: (model, variant) => runtime.runPromise((svc) => svc.saveVariant(model, variant)).catch(() => {}),
+    dispose: runtime.dispose,
   }
 }
 
-const runtime = createVariantRuntime()
+const runtime = createVariantRuntime(FSUtil.defaultLayer, "cli.run.variant")
 
 export async function resolveSavedVariant(model: RunInput["model"]): Promise<string | undefined> {
   return runtime.resolveSavedVariant(model)

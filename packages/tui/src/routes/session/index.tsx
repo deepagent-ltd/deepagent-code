@@ -237,13 +237,21 @@ export function Session() {
   // GUI parity: session-scoped auto-accept. The persisted map keys accept either a bare sessionID
   // or `session/child` pairs — while auto-accepting, new permission.asked events are answered
   // with a single-use "once" reply (never persisted as a rule), mirroring the GUI permission
-  // auto-respond semantics.
+  // auto-respond semantics. V2 asks settle through the session-scoped V2 route.
   const autoAccept = () => kv.get("permission_auto_accept", {}) as Record<string, boolean>
   const isAutoAccepting = () => autoAccept()[route.sessionID] === true
   createEffect(() => {
     if (!isAutoAccepting()) return
     const request = permissions()[0]
     if (!request) return
+    if (sync.permissionV2(request.id)) {
+      void sdk.client.v2.session.permission.reply({
+        sessionID: request.sessionID,
+        requestID: request.id,
+        reply: "once",
+      })
+      return
+    }
     void sdk.client.permission.reply({
       reply: "once",
       requestID: request.id,

@@ -4,11 +4,13 @@ import {
   CapabilityBodyHashMismatchError,
   capabilityLoaderIdentity,
   capabilityLoaderIdentityFrom,
+  type CapabilityLoadGrounds,
+} from "@deepagent-code/core/system-context/capability-loader"
+import {
   loadCapabilityBody,
   recordedCapabilityLoads,
   resetCapabilityLoader,
-  type CapabilityLoadGrounds,
-} from "@deepagent-code/core/system-context/capability-loader"
+} from "@deepagent-code/core/system-context/capability-loader-memory"
 
 // C4-04 — durable capability loader kernel: byte-stable identity, exact-retry
 // receipt, fail-closed hash verification, and the typed tagged union.

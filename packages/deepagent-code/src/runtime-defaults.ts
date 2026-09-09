@@ -4,10 +4,9 @@
 // defaults and the default values are queryable in exactly one module.
 //
 // REPO-WIDE SEMANTICS: one flag table lives in `@deepagent-code/core/deepagent/flip-flag`
-// (`flipFlagValueOn`). Every boolean below ships ON by default in production entries
-// (`unsetDefault = true`); the core gates read the SAME table with `unsetDefault = false`
-// (isolated contexts keep the C7-05 legacy default). For every DEFINED value both sides agree
-// exactly: trim + lowercase, `""` / `"false"` / `"0"` → OFF, any other value → ON.
+// (`flipFlagValueOn`). Every boolean below and its Core gate ships ON by default
+// (`unsetDefault = true`). For every DEFINED value both sides agree exactly: trim + lowercase,
+// `""` / `"false"` / `"0"` → OFF, any other value → ON.
 // `applyRuntimeDefaults` is strictly set-if-unset: an explicit value — including `=false`/`=0` —
 // is never overwritten, so a kill-switch set by the operator survives.
 

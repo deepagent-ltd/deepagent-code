@@ -36,7 +36,7 @@ export default Runtime.handler(
     })
     const state = yield* serverMode.login(url, email, password)
     process.stdout.write(
-      `Logged in to ${state.gatewayUrl} as ${email}.${state.workspaceId ? "" : " Run `dacode workspace list` to pick a workspace."}` +
+      `Logged in to ${state.gatewayUrl} as ${email}.${state.workspaceId ? "" : " Run `lildax workspace list` to pick a workspace."}` +
         EOL,
     )
   }),

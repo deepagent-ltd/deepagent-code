@@ -90,15 +90,37 @@ function startLocalWebUI(input: { serverHost: string; serverPort: number; appHos
   return child
 }
 
-function cleanupChild(child: ChildProcess) {
-  const stop = () => {
-    if (child.killed) return
+function waitForShutdown(child?: ChildProcess) {
+  return Effect.callback<void>((resume) => {
+    const stop = () => resume(Effect.void)
+    process.once("SIGINT", stop)
+    process.once("SIGTERM", stop)
+    process.once("SIGHUP", stop)
+    child?.once("exit", stop)
+    return Effect.sync(() => {
+      process.off("SIGINT", stop)
+      process.off("SIGTERM", stop)
+      process.off("SIGHUP", stop)
+      child?.off("exit", stop)
+    })
+  })
+}
+
+function stopChild(child: ChildProcess) {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve()
+  return new Promise<void>((resolve) => {
+    const done = () => {
+      clearTimeout(timer)
+      child.off("exit", done)
+      resolve()
+    }
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL")
+      done()
+    }, 2_000)
+    child.once("exit", done)
     child.kill("SIGTERM")
-  }
-  process.once("exit", stop)
-  process.once("SIGINT", stop)
-  process.once("SIGTERM", stop)
-  process.once("SIGHUP", stop)
+  })
 }
 
 export const WebCommand = effectCmd({
@@ -108,6 +130,8 @@ export const WebCommand = effectCmd({
   // Server loads instances per-request via x-deepagent-code-directory header — no
   // ambient project InstanceContext needed at startup.
   instance: false,
+  // Same single-database-owner contract as `serve` (see effectCmd's `standalone`).
+  standalone: true,
   handler: Effect.fn("Cli.web")(function* (args) {
     const { Server } = yield* Effect.promise(() => import("../../server/server"))
     const baseOpts = yield* resolveNetworkOptions(args)
@@ -135,57 +159,68 @@ export const WebCommand = effectCmd({
             ...baseOpts,
             cors: [...baseOpts.cors, `http://127.0.0.1:${appPort}`, `http://localhost:${appPort}`],
           }
-    const server = yield* Effect.promise(() => Server.listen(opts))
-    UI.empty()
-    UI.println(UI.logo("  "))
-    UI.empty()
+    return yield* Effect.acquireUseRelease(
+      Effect.promise(() => Server.listen(opts)),
+      (server) =>
+        Effect.gen(function* () {
+          UI.empty()
+          UI.println(UI.logo("  "))
+          UI.empty()
 
-    if (appPort !== undefined) {
-      const serverHost = connectHost(server.hostname)
-      const child = startLocalWebUI({ serverHost, serverPort: server.port, appHost, appPort })
-      cleanupChild(child)
-      const appUrl = `http://${appHost}:${appPort}`
-      yield* Effect.promise(() => waitForPort(appHost, appPort))
-      UI.println(UI.Style.TEXT_INFO_BOLD + "  Backend:          ", UI.Style.TEXT_NORMAL, server.url.toString())
-      UI.println(UI.Style.TEXT_INFO_BOLD + "  Web interface:    ", UI.Style.TEXT_NORMAL, appUrl)
-      open(appUrl).catch(() => {})
-      yield* Effect.never
-      return
-    }
+          if (appPort !== undefined) {
+            return yield* Effect.acquireUseRelease(
+              Effect.sync(() =>
+                startLocalWebUI({
+                  serverHost: connectHost(server.hostname),
+                  serverPort: server.port,
+                  appHost,
+                  appPort,
+                }),
+              ),
+              (child) =>
+                Effect.gen(function* () {
+                  const appUrl = `http://${appHost}:${appPort}`
+                  yield* Effect.promise(() => waitForPort(appHost, appPort))
+                  UI.println(
+                    UI.Style.TEXT_INFO_BOLD + "  Backend:          ",
+                    UI.Style.TEXT_NORMAL,
+                    server.url.toString(),
+                  )
+                  UI.println(UI.Style.TEXT_INFO_BOLD + "  Web interface:    ", UI.Style.TEXT_NORMAL, appUrl)
+                  open(appUrl).catch(() => {})
+                  return yield* waitForShutdown(child)
+                }),
+              (child) => Effect.promise(() => stopChild(child)),
+            )
+          }
 
-    if (opts.hostname === "0.0.0.0") {
-      // Show localhost for local access
-      const localhostUrl = `http://localhost:${server.port}`
-      UI.println(UI.Style.TEXT_INFO_BOLD + "  Local access:      ", UI.Style.TEXT_NORMAL, localhostUrl)
+          if (opts.hostname === "0.0.0.0") {
+            const localhostUrl = `http://localhost:${server.port}`
+            UI.println(UI.Style.TEXT_INFO_BOLD + "  Local access:      ", UI.Style.TEXT_NORMAL, localhostUrl)
+            getNetworkIPs().forEach((ip) =>
+              UI.println(
+                UI.Style.TEXT_INFO_BOLD + "  Network access:    ",
+                UI.Style.TEXT_NORMAL,
+                `http://${ip}:${server.port}`,
+              ),
+            )
+            if (opts.mdns) {
+              UI.println(
+                UI.Style.TEXT_INFO_BOLD + "  mDNS:              ",
+                UI.Style.TEXT_NORMAL,
+                `${opts.mdnsDomain}:${server.port}`,
+              )
+            }
+            open(localhostUrl).catch(() => {})
+            return yield* waitForShutdown()
+          }
 
-      // Show network IPs for remote access
-      const networkIPs = getNetworkIPs()
-      if (networkIPs.length > 0) {
-        for (const ip of networkIPs) {
-          UI.println(
-            UI.Style.TEXT_INFO_BOLD + "  Network access:    ",
-            UI.Style.TEXT_NORMAL,
-            `http://${ip}:${server.port}`,
-          )
-        }
-      }
-
-      if (opts.mdns) {
-        UI.println(
-          UI.Style.TEXT_INFO_BOLD + "  mDNS:              ",
-          UI.Style.TEXT_NORMAL,
-          `${opts.mdnsDomain}:${server.port}`,
-        )
-      }
-
-      // Open localhost in browser
-      open(localhostUrl).catch(() => {})
-    } else {
-      const displayUrl = server.url.toString()
-      UI.println(UI.Style.TEXT_INFO_BOLD + "  Web interface:    ", UI.Style.TEXT_NORMAL, displayUrl)
-      open(displayUrl).catch(() => {})
-    }
-
-    yield* Effect.never
+          const displayUrl = server.url.toString()
+          UI.println(UI.Style.TEXT_INFO_BOLD + "  Web interface:    ", UI.Style.TEXT_NORMAL, displayUrl)
+          open(displayUrl).catch(() => {})
+          return yield* waitForShutdown()
+        }),
+      (server) => Effect.promise(() => server.stop(true)),
+    )
   }),
 })

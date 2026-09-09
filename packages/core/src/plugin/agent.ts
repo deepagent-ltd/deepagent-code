@@ -101,6 +101,20 @@ Rules:
 - If the conversation ends with an unanswered question to the user, preserve that exact question
 - If the conversation ends with an imperative statement or request to the user (e.g. "Now please run the command and paste the console output"), always include that exact request in the summary`
 
+// Mirrors the V1 app asset packages/deepagent-code/src/agent/prompt/goal-worker.txt. The V2 runner
+// resolves agents from this registry only, so the Goal Loop worker must exist here; the two copies
+// stay in sync by convention (V1 legacy path vs V2 runtime), same as PROMPT_COMPACTION/TITLE/SUMMARY.
+const PROMPT_GOAL_WORKER = `You are a Goal Loop worker (V3.9 §D). You execute ONE step of a long-running, supervised goal per turn and report progress by maintaining your goal's plan.
+
+Your operating contract:
+- You work against a single goal whose completion is judged by an OBJECTIVE Grader (tests pass / no diagnostics / reviewer clean / panel approves / plan complete). You do NOT decide when the goal is done — the Grader does. Your job is to make the active plan step genuinely progress toward those criteria.
+- Your turn starts with the goal's current plan already loaded (goal, steps, active step). Execute the active step using your normal tools. When a step is genuinely complete, update the plan: mark it \`done\`, set the next step \`active\` — your plan edits are written back to the goal's plan, which is exactly what the Grader reads. If you are stuck, mark the step \`blocked\` with a short note explaining why — never mark a step \`done\` to satisfy the gate.
+- You may ONLY update your OWN goal's plan step status. You cannot change the goal or its completion criteria, and you cannot touch another goal's plan. This is enforced by permission and session scope.
+- Stay within your tool permissions. Do not attempt to elevate privileges, bypass approvals, or run destructive operations without the normal gates. The loop that drives you enforces hard limits (max ticks / tokens / wallclock) and will stop and escalate to a human on no-progress, over-limit, or critical failure — so be honest about blockers rather than thrashing.
+- Attach evidence to completed steps where you can (the command you ran, the test that passed). Ground every "done" in a verifiable fact.
+
+Be focused and incremental: one meaningful step of real progress per turn, reported through the plan, is exactly what the loop needs.`
+
 export const Plugin = PluginV2.define({
   id: PluginV2.ID.make("agent"),
   effect: Effect.gen(function* () {
@@ -197,6 +211,42 @@ export const Plugin = PluginV2.define({
               { action: "read", resource: "*", effect: "allow" },
               { action: "code_intel", resource: "*", effect: "allow" },
               { action: "context_query", resource: "*", effect: "allow" },
+            ],
+            readonlyExternalDirectory,
+          ),
+        )
+      })
+
+      // V3.9 §D/§E Goal Loop worker. Mirrors the V1 registry entry
+      // (packages/deepagent-code/src/agent/agent.ts "goal-worker"): a working ruleset (read + edit +
+      // bash) with `plan: allow` so the worker can maintain its OWN goal's plan step status, and
+      // `task: deny` against recursive fan-out. Hidden so it is never a directly selectable agent —
+      // the Goal Loop controller drives it by name. Session-scoped `run:<sessionId>` plan-store
+      // isolation bounds the plan grant to the worker's own goal.
+      editor.update(AgentV2.ID.make("goal-worker"), (item) => {
+        item.description =
+          "Goal Loop worker (V3.9 §D). A long-running, supervised worker that executes ONE plan step per tick against an objectively-graded goal and maintains its own goal's plan (step status). Read + edit capable; delegates nothing (task denied). Used by the Goal Loop controller, not invoked directly for one-off tasks."
+        item.system = PROMPT_GOAL_WORKER
+        item.mode = "subagent"
+        item.hidden = true
+        item.permissions.push(
+          ...PermissionV2.merge(
+            defaults,
+            [
+              { action: "*", resource: "*", effect: "deny" },
+              { action: "read", resource: "*", effect: "allow" },
+              { action: "grep", resource: "*", effect: "allow" },
+              { action: "glob", resource: "*", effect: "allow" },
+              { action: "list", resource: "*", effect: "allow" },
+              { action: "edit", resource: "*", effect: "allow" },
+              { action: "write", resource: "*", effect: "allow" },
+              { action: "patch", resource: "*", effect: "allow" },
+              { action: "bash", resource: "*", effect: "allow" },
+              { action: "webfetch", resource: "*", effect: "allow" },
+              { action: "code_intel", resource: "*", effect: "allow" },
+              { action: "context_query", resource: "*", effect: "allow" },
+              { action: "plan", resource: "*", effect: "allow" },
+              { action: "task", resource: "*", effect: "deny" },
             ],
             readonlyExternalDirectory,
           ),

@@ -100,221 +100,220 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/ContextArtifactStore") {}
 
-export function layer(config: {
+export type Config = {
   readonly securityNamespaceId: SecurityNamespaceID
   readonly policy: "required" | "best_effort"
   readonly keyId: string
   readonly encryptionKey: Uint8Array
   readonly tokenCodec: Codec
   readonly limits: Limits
-}) {
+}
+
+export function make(config: Config, database: Database.Interface): Interface {
   if (config.encryptionKey.byteLength !== 32) throw new EncryptionError()
   if (!config.keyId.trim() || !validLimits(config.limits)) throw new BindingError()
-  return Layer.effect(
-    Service,
-    Effect.gen(function* () {
-      const db = (yield* Database.Service).db
+  const db = database.db
 
-      const writeRaw = Effect.fn("ContextArtifact.write")(function* (input: {
-        readonly securityNamespaceId: SecurityNamespaceID
-        readonly sessionId: string
-        readonly selectionId: string
-        readonly authorizationFingerprint: string
-        readonly artifact: AuditArtifact
-        readonly now?: number
-      }) {
-        if (input.securityNamespaceId !== config.securityNamespaceId) return yield* new BindingError()
-        const artifact = yield* Effect.try({
-          try: () => Schema.decodeUnknownSync(AuditArtifact, { onExcessProperty: "error" })(input.artifact),
-          catch: () => new BindingError(),
-        })
-        if (
-          artifact.selectionId !== input.selectionId ||
-          artifact.authorizationFingerprint !== input.authorizationFingerprint
-        ) {
-          return yield* new BindingError()
-        }
-        const plaintext = Buffer.from(canonicalArtifact(artifact))
-        if (plaintext.byteLength > config.limits.maxItemBytes) {
-          return yield* new QuotaExceededError({ scope: "item" })
-        }
-        const now = input.now ?? Date.now()
-        const contentHash = Hash.sha256(plaintext)
-        const artifactId = `artifact_${Hash.sha256(
-          JSON.stringify({
-            securityNamespaceId: input.securityNamespaceId,
-            sessionId: input.sessionId,
-            selectionId: input.selectionId,
-            contentHash,
-          }),
-        )}`
-        const existing = yield* db
-          .select()
-          .from(ContextArtifactTable)
-          .where(eq(ContextArtifactTable.artifact_id, artifactId))
-          .get()
-          .pipe(Effect.orDie)
-        if (existing?.deleted_at !== null && existing?.deleted_at !== undefined) return yield* new ExpiredError()
-        if (existing && existing.expires_at <= now) return yield* new ExpiredError()
-        const expiresAt = now + config.limits.retentionMs
-        const artifactRef =
-          existing?.artifact_ref ??
-          config.tokenCodec.sealArtifact(
-            {
-              securityNamespaceId: input.securityNamespaceId,
-              sessionId: input.sessionId,
-              selectionId: input.selectionId,
-              artifactId,
-            },
-            { issuedAt: now, expiresAt: now + config.limits.tokenLifetimeMs },
-          )
-        if (!existing) {
-          const totals = yield* db
-            .select({
-              global: sql<number>`coalesce(sum(${ContextArtifactTable.original_size}), 0)`,
-              session: sql<number>`coalesce(sum(case when ${ContextArtifactTable.security_namespace_id} = ${input.securityNamespaceId} and ${ContextArtifactTable.session_id} = ${input.sessionId} then ${ContextArtifactTable.original_size} else 0 end), 0)`,
-            })
-            .from(ContextArtifactTable)
-            .where(and(isNull(ContextArtifactTable.deleted_at), gt(ContextArtifactTable.expires_at, now)))
-            .get()
-            .pipe(Effect.orDie)
-          if ((totals?.session ?? 0) + plaintext.byteLength > config.limits.maxSessionBytes) {
-            return yield* new QuotaExceededError({ scope: "session" })
-          }
-          if ((totals?.global ?? 0) + plaintext.byteLength > config.limits.maxGlobalBytes) {
-            return yield* new QuotaExceededError({ scope: "global" })
-          }
-          const encrypted = yield* encrypt({
-            key: config.encryptionKey,
-            plaintext,
-            aad: artifactAAD({ ...input, artifactId, contentHash }),
-          })
-          yield* db
-            .insert(ContextArtifactTable)
-            .values({
-              artifact_id: artifactId,
-              security_namespace_id: input.securityNamespaceId,
-              session_id: input.sessionId,
-              selection_id: input.selectionId,
-              artifact_ref: artifactRef,
-              schema_version: SchemaVersion,
-              content_hash: contentHash,
-              authorization_fingerprint: input.authorizationFingerprint,
-              encryption_key_id: config.keyId,
-              iv: encrypted.iv,
-              ciphertext: encrypted.ciphertext,
-              auth_tag: encrypted.authTag,
-              original_size: plaintext.byteLength,
-              created_at: now,
-              expires_at: expiresAt,
-            })
-            .run()
-            .pipe(Effect.orDie)
-        }
-        return {
+  const writeRaw = Effect.fn("ContextArtifact.write")(function* (input: {
+    readonly securityNamespaceId: SecurityNamespaceID
+    readonly sessionId: string
+    readonly selectionId: string
+    readonly authorizationFingerprint: string
+    readonly artifact: AuditArtifact
+    readonly now?: number
+  }) {
+    if (input.securityNamespaceId !== config.securityNamespaceId) return yield* new BindingError()
+    const artifact = yield* Effect.try({
+      try: () => Schema.decodeUnknownSync(AuditArtifact, { onExcessProperty: "error" })(input.artifact),
+      catch: () => new BindingError(),
+    })
+    if (
+      artifact.selectionId !== input.selectionId ||
+      artifact.authorizationFingerprint !== input.authorizationFingerprint
+    ) {
+      return yield* new BindingError()
+    }
+    const plaintext = Buffer.from(canonicalArtifact(artifact))
+    if (plaintext.byteLength > config.limits.maxItemBytes) {
+      return yield* new QuotaExceededError({ scope: "item" })
+    }
+    const now = input.now ?? Date.now()
+    const contentHash = Hash.sha256(plaintext)
+    const artifactId = `artifact_${Hash.sha256(
+      JSON.stringify({
+        securityNamespaceId: input.securityNamespaceId,
+        sessionId: input.sessionId,
+        selectionId: input.selectionId,
+        contentHash,
+      }),
+    )}`
+    const existing = yield* db
+      .select()
+      .from(ContextArtifactTable)
+      .where(eq(ContextArtifactTable.artifact_id, artifactId))
+      .get()
+      .pipe(Effect.orDie)
+    if (existing?.deleted_at !== null && existing?.deleted_at !== undefined) return yield* new ExpiredError()
+    if (existing && existing.expires_at <= now) return yield* new ExpiredError()
+    const expiresAt = now + config.limits.retentionMs
+    const artifactRef =
+      existing?.artifact_ref ??
+      config.tokenCodec.sealArtifact(
+        {
+          securityNamespaceId: input.securityNamespaceId,
+          sessionId: input.sessionId,
+          selectionId: input.selectionId,
           artifactId,
-          ref: artifactRef,
-          contentHash,
-          expiresAt: existing?.expires_at ?? expiresAt,
-        }
-      })
-      const write = (input: Parameters<Interface["write"]>[0]) => writeRaw(input).pipe(preserveErrors)
-
-      const readRaw = Effect.fn("ContextArtifact.read")(function* (input: {
-        readonly ref: string
-        readonly principal: Principal
-        readonly egress: EgressPolicy
-        readonly now?: number
-      }) {
-        const now = input.now ?? Date.now()
-        const binding = yield* config.tokenCodec.openArtifact(input.ref, now)
-        if (binding.securityNamespaceId !== config.securityNamespaceId) return yield* new BindingError()
-        const row = yield* db
-          .select()
-          .from(ContextArtifactTable)
-          .where(eq(ContextArtifactTable.artifact_id, binding.artifactId))
-          .get()
-          .pipe(Effect.orDie)
-        if (!row) return yield* new NotFoundError()
-        if (
-          row.security_namespace_id !== binding.securityNamespaceId ||
-          row.session_id !== binding.sessionId ||
-          row.selection_id !== binding.selectionId
-        ) {
-          return yield* new BindingError()
-        }
-        if (row.deleted_at !== null || row.expires_at <= now) {
-          return {
-            status: "expired" as const,
-            contentHash: row.content_hash,
-            reason: row.delete_reason ?? "retention_expired",
-          }
-        }
-        if (
-          input.principal.securityNamespaceId !== binding.securityNamespaceId ||
-          !input.principal.sessionIds.includes(binding.sessionId)
-        ) {
-          return { status: "redacted" as const, contentHash: row.content_hash }
-        }
-        if (!row.iv || !row.ciphertext || !row.auth_tag || row.encryption_key_id !== config.keyId) {
-          return yield* new EncryptionError()
-        }
-        const plaintext = yield* decrypt({
-          key: config.encryptionKey,
-          iv: row.iv,
-          ciphertext: row.ciphertext,
-          authTag: row.auth_tag,
-          aad: artifactAAD({
-            securityNamespaceId: SecurityNamespaceID.make(row.security_namespace_id),
-            sessionId: row.session_id,
-            selectionId: row.selection_id,
-            authorizationFingerprint: row.authorization_fingerprint,
-            artifactId: row.artifact_id,
-            contentHash: row.content_hash,
-          }),
+        },
+        { issuedAt: now, expiresAt: now + config.limits.tokenLifetimeMs },
+      )
+    if (!existing) {
+      const totals = yield* db
+        .select({
+          global: sql<number>`coalesce(sum(${ContextArtifactTable.original_size}), 0)`,
+          session: sql<number>`coalesce(sum(case when ${ContextArtifactTable.security_namespace_id} = ${input.securityNamespaceId} and ${ContextArtifactTable.session_id} = ${input.sessionId} then ${ContextArtifactTable.original_size} else 0 end), 0)`,
         })
-        const artifact = yield* Effect.try({
-          try: () => Schema.decodeUnknownSync(AuditArtifact, { onExcessProperty: "error" })(JSON.parse(plaintext)),
-          catch: () => new EncryptionError(),
+        .from(ContextArtifactTable)
+        .where(and(isNull(ContextArtifactTable.deleted_at), gt(ContextArtifactTable.expires_at, now)))
+        .get()
+        .pipe(Effect.orDie)
+      if ((totals?.session ?? 0) + plaintext.byteLength > config.limits.maxSessionBytes) {
+        return yield* new QuotaExceededError({ scope: "session" })
+      }
+      if ((totals?.global ?? 0) + plaintext.byteLength > config.limits.maxGlobalBytes) {
+        return yield* new QuotaExceededError({ scope: "global" })
+      }
+      const encrypted = yield* encrypt({
+        key: config.encryptionKey,
+        plaintext,
+        aad: artifactAAD({ ...input, artifactId, contentHash }),
+      })
+      yield* db
+        .insert(ContextArtifactTable)
+        .values({
+          artifact_id: artifactId,
+          security_namespace_id: input.securityNamespaceId,
+          session_id: input.sessionId,
+          selection_id: input.selectionId,
+          artifact_ref: artifactRef,
+          schema_version: SchemaVersion,
+          content_hash: contentHash,
+          authorization_fingerprint: input.authorizationFingerprint,
+          encryption_key_id: config.keyId,
+          iv: encrypted.iv,
+          ciphertext: encrypted.ciphertext,
+          auth_tag: encrypted.authTag,
+          original_size: plaintext.byteLength,
+          created_at: now,
+          expires_at: expiresAt,
         })
-        if (
-          artifact.selected.some(
-            (selected) =>
-              !ContextAuthorization.authorize({
-                ref: selected.ref,
-                principal: input.principal,
-                egress: input.egress,
-                sensitivity: selected.sensitivity,
-              }).allowed,
-          )
-        ) {
-          return { status: "redacted" as const, contentHash: row.content_hash }
-        }
-        return { status: "available" as const, artifact, contentHash: row.content_hash }
-      })
-      const read = (input: Parameters<Interface["read"]>[0]) => readRaw(input).pipe(preserveErrors)
+        .run()
+        .pipe(Effect.orDie)
+    }
+    return {
+      artifactId,
+      ref: artifactRef,
+      contentHash,
+      expiresAt: existing?.expires_at ?? expiresAt,
+    }
+  })
+  const write = (input: Parameters<Interface["write"]>[0]) => writeRaw(input).pipe(preserveErrors)
 
-      const sweep = Effect.fn("ContextArtifact.sweep")(function* (now = Date.now()) {
-        const rows = yield* db
-          .update(ContextArtifactTable)
-          .set({ iv: null, ciphertext: null, auth_tag: null, deleted_at: now, delete_reason: "retention_expired" })
-          .where(
-            and(
-              eq(ContextArtifactTable.security_namespace_id, config.securityNamespaceId),
-              isNull(ContextArtifactTable.deleted_at),
-              lte(ContextArtifactTable.expires_at, now),
-            ),
-          )
-          .returning({ artifact_id: ContextArtifactTable.artifact_id })
-          .all()
-          .pipe(Effect.orDie)
-        return rows.length
-      })
+  const readRaw = Effect.fn("ContextArtifact.read")(function* (input: {
+    readonly ref: string
+    readonly principal: Principal
+    readonly egress: EgressPolicy
+    readonly now?: number
+  }) {
+    const now = input.now ?? Date.now()
+    const binding = yield* config.tokenCodec.openArtifact(input.ref, now)
+    if (binding.securityNamespaceId !== config.securityNamespaceId) return yield* new BindingError()
+    const row = yield* db
+      .select()
+      .from(ContextArtifactTable)
+      .where(eq(ContextArtifactTable.artifact_id, binding.artifactId))
+      .get()
+      .pipe(Effect.orDie)
+    if (!row) return yield* new NotFoundError()
+    if (
+      row.security_namespace_id !== binding.securityNamespaceId ||
+      row.session_id !== binding.sessionId ||
+      row.selection_id !== binding.selectionId
+    ) {
+      return yield* new BindingError()
+    }
+    if (row.deleted_at !== null || row.expires_at <= now) {
+      return {
+        status: "expired" as const,
+        contentHash: row.content_hash,
+        reason: row.delete_reason ?? "retention_expired",
+      }
+    }
+    if (
+      input.principal.securityNamespaceId !== binding.securityNamespaceId ||
+      !input.principal.sessionIds.includes(binding.sessionId)
+    ) {
+      return { status: "redacted" as const, contentHash: row.content_hash }
+    }
+    if (!row.iv || !row.ciphertext || !row.auth_tag || row.encryption_key_id !== config.keyId) {
+      return yield* new EncryptionError()
+    }
+    const plaintext = yield* decrypt({
+      key: config.encryptionKey,
+      iv: row.iv,
+      ciphertext: row.ciphertext,
+      authTag: row.auth_tag,
+      aad: artifactAAD({
+        securityNamespaceId: SecurityNamespaceID.make(row.security_namespace_id),
+        sessionId: row.session_id,
+        selectionId: row.selection_id,
+        authorizationFingerprint: row.authorization_fingerprint,
+        artifactId: row.artifact_id,
+        contentHash: row.content_hash,
+      }),
+    })
+    const artifact = yield* Effect.try({
+      try: () => Schema.decodeUnknownSync(AuditArtifact, { onExcessProperty: "error" })(JSON.parse(plaintext)),
+      catch: () => new EncryptionError(),
+    })
+    if (
+      artifact.selected.some(
+        (selected) =>
+          !ContextAuthorization.authorize({
+            ref: selected.ref,
+            principal: input.principal,
+            egress: input.egress,
+            sensitivity: selected.sensitivity,
+          }).allowed,
+      )
+    ) {
+      return { status: "redacted" as const, contentHash: row.content_hash }
+    }
+    return { status: "available" as const, artifact, contentHash: row.content_hash }
+  })
+  const read = (input: Parameters<Interface["read"]>[0]) => readRaw(input).pipe(preserveErrors)
 
-      const sweepOrphans = Effect.fn("ContextArtifact.sweepOrphans")(function* (olderThan: number) {
-        const rows = yield* db
-          .all<{ artifact_id: string }>(
-            sql`
+  const sweep = Effect.fn("ContextArtifact.sweep")(function* (now = Date.now()) {
+    const rows = yield* db
+      .update(ContextArtifactTable)
+      .set({ iv: null, ciphertext: null, auth_tag: null, deleted_at: now, delete_reason: "retention_expired" })
+      .where(
+        and(
+          eq(ContextArtifactTable.security_namespace_id, config.securityNamespaceId),
+          isNull(ContextArtifactTable.deleted_at),
+          lte(ContextArtifactTable.expires_at, now),
+        ),
+      )
+      .returning({ artifact_id: ContextArtifactTable.artifact_id })
+      .all()
+      .pipe(Effect.orDie)
+    return rows.length
+  })
+
+  const sweepOrphans = Effect.fn("ContextArtifact.sweepOrphans")(function* (olderThan: number) {
+    const rows = yield* db
+      .all<{ artifact_id: string }>(
+        sql`
             SELECT artifact_id FROM context_artifact a
             WHERE a.security_namespace_id = ${config.securityNamespaceId}
               AND a.deleted_at IS NULL
@@ -324,12 +323,12 @@ export function layer(config: {
                 WHERE s.selection_id = a.selection_id AND s.artifact_ref = a.artifact_ref
               )
           `,
-          )
-          .pipe(Effect.orDie)
-        if (rows.length === 0) return 0
-        yield* db
-          .run(
-            sql`
+      )
+      .pipe(Effect.orDie)
+    if (rows.length === 0) return 0
+    yield* db
+      .run(
+        sql`
             UPDATE context_artifact
             SET iv = NULL, ciphertext = NULL, auth_tag = NULL,
                 deleted_at = ${olderThan}, delete_reason = 'orphaned_selection'
@@ -338,13 +337,18 @@ export function layer(config: {
               sql`, `,
             )})
           `,
-          )
-          .pipe(Effect.orDie)
-        return rows.length
-      })
+      )
+      .pipe(Effect.orDie)
+    return rows.length
+  })
 
-      return Service.of({ policy: config.policy, write, read, sweep, sweepOrphans })
-    }),
+  return Service.of({ policy: config.policy, write, read, sweep, sweepOrphans })
+}
+
+export function layer(config: Config) {
+  return Layer.effect(
+    Service,
+    Database.Service.use((database) => Effect.sync(() => make(config, database))),
   )
 }
 

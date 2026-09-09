@@ -191,40 +191,16 @@ export interface CapabilityLoadGrounds {
   readonly turnId?: string
 }
 
-// --- deterministic in-module receipt store (C1A boundary: DB persistence is later) ---
-// A stored entry is only ever a LOADED body — the store is the exact-retry body cache
-// (design §7.5). Denied/superseded/missing_body/budget_exceeded never record. The body is
-// retained alongside the receipt so an exact retry (`existing`) returns the body too: the
-// per-session idempotence is a no-op for the kernel, not a no-body result for the caller.
-const receiptStore = new Map<string, { readonly receipt: CapabilityLoadReceipt; readonly body: string }>()
-
-/** Clear the in-module receipt store + per-turn budget (test isolation / fresh environment). */
-export function resetCapabilityLoader(): void {
-  receiptStore.clear()
-  turnBudgets.clear()
-}
-
-/** Snapshot of the currently-recorded receipts (test/observability only). */
-export function recordedCapabilityLoads(): ReadonlyArray<CapabilityLoadReceipt> {
-  return [...receiptStore.values()].map((entry) => entry.receipt)
-}
-
 /**
- * Load a capability body through the kernel (design §7.4). Exact retry of an
- * identical identity returns the recorded `existing` receipt (no duplicate). A new
- * identity is validated: permission-denied short-circuits, supersession rejects,
- * an absent body or absent declared digest is `missing_body`, a body whose sha256
- * does not equal the declared digest is a typed `capability_body_hash_mismatch`
- * (fail-closed — the drifting body is never loaded), and an over-budget body is
- * `budget_exceeded`. On success a deterministic receipt is recorded.
+ * Pure body validation used by durable adapters. It performs the same fail-closed checks and builds
+ * a deterministic receipt, but never reads or mutates process-local retry state. Production
+ * persistence and exact-retry identity are decided exclusively by the durable adapter transaction.
  */
-export function loadCapabilityBody(
+export function evaluateCapabilityBody(
   identity: string,
   input: CapabilityLoadInput,
   grounds: CapabilityLoadGrounds,
 ): CapabilityLoadResult {
-  const existing = receiptStore.get(identity)
-  if (existing) return { state: "existing", receipt: existing.receipt, body: existing.body }
 
   if (grounds.deniedReason !== undefined) return { state: "denied", reasonCode: grounds.deniedReason }
 
@@ -273,145 +249,5 @@ export function loadCapabilityBody(
     ...(grounds.sessionId ? { sessionId: grounds.sessionId } : {}),
     ...(grounds.turnId ? { turnId: grounds.turnId } : {}),
   }
-  receiptStore.set(identity, { receipt, body })
   return { state: "available", body, tokenCount, byteCount, receipt }
-}
-
-// --- per-turn budget accounting (design §7.3 / §13; C4-05) ---------------------
-const L2_SINGLE_MAX_TOKENS = CapabilityBudget.l2SingleMaxTokens
-const L2_TURN_MAX_NEW = CapabilityBudget.l2PerTurnMaxNew
-const L2_TURN_MAX_NEW_TOKENS = CapabilityBudget.l2PerTurnMaxNewTokens
-
-/** Mutable per-turn budget state (module-level; reset by `resetCapabilityLoader`). */
-const turnBudgets = new Map<string, { newLoads: number; newTokens: number; charged: Set<string> }>()
-
-/** Snapshot of the per-turn budget state for a (session, turn) identity. */
-export function turnBudgetView(sessionIdentity: string, turnIdentity: string): { newLoads: number; newTokens: number } {
-  const state = turnBudgets.get(`${sessionIdentity}::${turnIdentity}`)
-  if (!state) return { newLoads: 0, newTokens: 0 }
-  return { newLoads: state.newLoads, newTokens: state.newTokens }
-}
-
-/**
- * Record a body load against a session+turn budget (design §7.5 idempotent
- * accounting). The exact same load identity within the same turn is a no-op — a
- * retry never double-charges. A load that would exceed either the per-turn new
- * body count or the per-turn new token ceiling throws the typed
- * `capability_turn_budget_exceeded` (the caller must not proceed).
- */
-export function recordCapabilityTurnLoad(
-  sessionIdentity: string,
-  turnIdentity: string,
-  loadIdentity: string,
-  tokenCount: number,
-): void {
-  const key = `${sessionIdentity}::${turnIdentity}`
-  let state = turnBudgets.get(key)
-  if (!state) {
-    state = { newLoads: 0, newTokens: 0, charged: new Set<string>() }
-    turnBudgets.set(key, state)
-  }
-  if (state.charged.has(loadIdentity)) return
-  const nextNewLoads = state.newLoads + 1
-  const nextNewTokens = state.newTokens + tokenCount
-  if (nextNewLoads > L2_TURN_MAX_NEW || nextNewTokens > L2_TURN_MAX_NEW_TOKENS) {
-    throw new CapabilityTurnBudgetExceededError({
-      level: "L2",
-      newLoads: nextNewLoads,
-      limitNew: L2_TURN_MAX_NEW,
-      newTokens: nextNewTokens,
-      limitTokens: L2_TURN_MAX_NEW_TOKENS,
-    })
-  }
-  state.newLoads = nextNewLoads
-  state.newTokens = nextNewTokens
-  state.charged.add(loadIdentity)
-}
-
-/**
- * The L2 single-body + per-turn gate (C4-05, the DISABLED `capability_load` entry).
- * Enforces the frozen L2 budget over a real character-based estimate, then charges
- * the per-turn counter idempotently. An over-budget L2 body or an over-limit turn
- * throws a typed error and never returns a loadable body.
- */
-export function capabilityLoad(args: {
-  readonly capabilityId: string
-  readonly version: string
-  readonly bodyHash: string
-  readonly runtimeHash: string
-  readonly permissionHash: string
-  readonly bodyRef: string
-  readonly sessionIdentity: string
-  readonly turnIdentity: string
-  readonly body: string | undefined
-  readonly declaredDigest: string | undefined
-  readonly supersedingRef?: string
-  readonly deniedReason?: CapabilityLoadDeniedReason
-}): CapabilityLoadResult {
-  const identity = capabilityLoaderIdentity(
-    args.sessionIdentity,
-    args.capabilityId,
-    args.version,
-    args.bodyHash,
-    args.runtimeHash,
-    args.permissionHash,
-  )
-
-  // Fail-closed on the L2 single-body ceiling before touching the turn budget.
-  const tokenCount = args.body === undefined ? 0 : Token.estimate(args.body)
-  if (tokenCount > L2_SINGLE_MAX_TOKENS) {
-    throw new CapabilityL2BudgetExceededError({
-      level: "L2",
-      limitTokens: L2_SINGLE_MAX_TOKENS,
-      requestedTokens: tokenCount,
-    })
-  }
-
-  // Pre-admission turn-budget check (idempotent): a retry of an already-charged
-  // load identity is allowed without charging again, but a NEW load that would
-  // exceed the per-turn ceiling is rejected BEFORE the kernel records a receipt,
-  // so a rejected load never leaves a spurious `existing` receipt behind.
-  const key = `${args.sessionIdentity}::${args.turnIdentity}`
-  const current = turnBudgets.get(key) ?? { newLoads: 0, newTokens: 0, charged: new Set<string>() }
-  if (!current.charged.has(identity)) {
-    const nextNewLoads = current.newLoads + 1
-    const nextNewTokens = current.newTokens + tokenCount
-    if (nextNewLoads > L2_TURN_MAX_NEW || nextNewTokens > L2_TURN_MAX_NEW_TOKENS) {
-      throw new CapabilityTurnBudgetExceededError({
-        level: "L2",
-        newLoads: nextNewLoads,
-        limitNew: L2_TURN_MAX_NEW,
-        newTokens: nextNewTokens,
-        limitTokens: L2_TURN_MAX_NEW_TOKENS,
-      })
-    }
-  }
-
-  const result = loadCapabilityBody(identity, { body: args.body, declaredDigest: args.declaredDigest }, {
-    bodyRef: args.bodyRef,
-    capabilityId: args.capabilityId,
-    version: args.version,
-    runtimeHash: args.runtimeHash,
-    permissionHash: args.permissionHash,
-    supersedingRef: args.supersedingRef,
-    deniedReason: args.deniedReason,
-    sessionId: args.sessionIdentity,
-    turnId: args.turnIdentity,
-  })
-
-  if (result.state === "budget_exceeded") {
-    throw new CapabilityL2BudgetExceededError({
-      level: result.level,
-      limitTokens: result.limitTokens,
-      requestedTokens: result.requestedTokens,
-    })
-  }
-
-  // Charge only an actually-loaded body; an exact retry (`existing`) is idempotent
-  // (the same turn + same load identity is already charged, so it is a no-op).
-  if (result.state === "available") {
-    recordCapabilityTurnLoad(args.sessionIdentity, args.turnIdentity, identity, tokenCount)
-  }
-
-  return result
 }

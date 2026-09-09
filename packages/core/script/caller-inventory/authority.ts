@@ -12,8 +12,12 @@ export const AUTHORITY = {
   LEGACY_PROMPT: "packages/deepagent-code/src/session/prompt.ts",
   /** Core legacy SessionPrompt service definition (the authoritative legacy prompt module). */
   LEGACY_PROMPT_CORE: "packages/core/src/session/prompt.ts",
-  /** Core Session service — the low-level legacy session authority used by the old server path. */
-  LEGACY_SESSION_CORE: "packages/core/src/session.ts",
+  /** Historical Core V1 Session schema/decoder. It is never the current Session authority. */
+  LEGACY_SESSION_CORE: "packages/core/src/v1/session.ts",
+  /** Current Core V2 Session authority. */
+  V2_SESSION_CORE: "packages/core/src/session.ts",
+  /** Canonical open Core V2 Session runtime composition. */
+  V2_SESSION_RUNTIME: "packages/core/src/session/runtime.ts",
   /** Legacy GlobalBus event channel (deepagent-code). */
   LEGACY_GLOBAL_BUS: "packages/deepagent-code/src/bus/global.ts",
   /** Core DeepAgent goal loop — the legacy goal authority. */

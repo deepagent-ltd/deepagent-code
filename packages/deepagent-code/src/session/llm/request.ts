@@ -23,7 +23,6 @@ import { DeepAgentWorkspace } from "@/deepagent/workspace-context"
 import { ToolProvenance } from "@/tool/provenance"
 import { ToolInternal } from "@/tool/internal"
 import { SessionReminders } from "../reminders"
-import { ContextFederationObservability } from "@/context-federation/observability"
 import { GlobalBus } from "@/bus/global"
 import { Global } from "@deepagent-code/core/global"
 import type { DocumentRef, Selection } from "@deepagent-code/core/deepagent/released-snapshot"
@@ -809,13 +808,6 @@ const buildDeepAgentPromptContext = Effect.fn("LLMRequestPrep.buildDeepAgentProm
     .map((item) => item.trim())
     .filter((item) => Boolean(item) && !/^You are deepagent-code/i.test(item) && !/interactive CLI tool/i.test(item))
   const context = AgentGateway.DeepAgentOrchestrator.buildPromptContext(orchestratorInput)
-  if (input.federatedShadow) {
-    ContextFederationObservability.observeShadowComparison({
-      legacyKnowledgeRefs: context.knowledge?.knowledgeRefs?.length ?? 0,
-      legacyMemoryRefs: context.knowledge?.memoryRefs.length ?? 0,
-      federated: input.federatedShadow,
-    })
-  }
   return {
     context: {
       ...context,

@@ -1483,27 +1483,24 @@ export default function Page() {
 
       setFollowup("failed", input.sessionID, undefined)
 
-      const controller = new AbortController()
-      const promise = sendFollowupDraft({
-        client: sdk.client,
-        sync,
-        serverSync,
-        draft: item,
-        intentID: item.id,
-        intentSource: "followup",
-        optimisticBusy: item.sessionDirectory === sdk.directory,
-        confirmPromptDraft,
-        promptPrepareSignal: controller.signal,
-      })
-      followupSubmissions.register({ ...input, controller, promise })
-      const ok = await promise
+      const ok = await followupSubmissions
+        .run(input, (signal) =>
+          sendFollowupDraft({
+            client: sdk.client,
+            sync,
+            serverSync,
+            draft: item,
+            intentID: item.id,
+            intentSource: "followup",
+            optimisticBusy: item.sessionDirectory === sdk.directory,
+            confirmPromptDraft,
+            promptPrepareSignal: signal,
+          }),
+        )
         .catch((err) => {
           setFollowup("failed", input.sessionID, input.id)
           fail(err)
           return false
-        })
-        .finally(() => {
-          followupSubmissions.clear(input.sessionID, input.id)
         })
       if (!ok) return
 

@@ -4,7 +4,7 @@ import path from "node:path"
 import { existsSync } from "node:fs"
 import { readFile, readdir, realpath } from "node:fs/promises"
 import { and, asc, eq } from "drizzle-orm"
-import { Effect, Schema } from "effect"
+import { Context, Effect, Schema } from "effect"
 import { Database } from "../database/database"
 import { CanonicalJson } from "../util/canonical-json"
 import { Hash } from "../util/hash"
@@ -62,16 +62,18 @@ export class IdentityConflictError extends Schema.TaggedErrorClass<IdentityConfl
   { trigger: Schema.String, sessionId: Schema.String, runId: Schema.String },
 ) {}
 
-let runtimeObserver: RuntimeObserver | undefined
-
-export const setRuntimeObserver = (observer: RuntimeObserver | undefined) => {
-  runtimeObserver = observer
-}
+export const CurrentRuntimeObserver = Context.Reference<RuntimeObserver | undefined>(
+  "@deepagent-code/v2/DeepAgentLearningLifecycleTrigger/CurrentRuntimeObserver",
+  { defaultValue: () => undefined },
+)
 
 // FEAT-004: an UNREGISTERED observer is its own skip reason — the trigger never searched for a source
 // run at all (distinct from observe() finding no matching settled run).
-export const notify = (input: ObserveInput): Promise<Outcome> =>
-  runtimeObserver?.observe(input) ?? Promise.resolve({ state: "skipped", reason: "no_observer_registered" })
+export const notify = Effect.fn("DeepAgentLearningLifecycleTrigger.notify")(function* (input: ObserveInput) {
+  const observer = yield* CurrentRuntimeObserver
+  if (!observer) return { state: "skipped", reason: "no_observer_registered" } as const
+  return yield* Effect.promise(() => observer.observe(input))
+})
 
 export const observe = Effect.fn("DeepAgentLearningLifecycleTrigger.observe")(function* (
   db: DatabaseClient,

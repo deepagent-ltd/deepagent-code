@@ -13,6 +13,7 @@ import { EventAdmission } from "@deepagent-code/core/deepagent/event-admission"
 import { EventAdmissionWiring } from "@deepagent-code/core/deepagent/event-admission-wiring"
 import type { AgentDescriptor } from "@deepagent-code/core/im/mention-parser"
 import type { EventDispatcher } from "../../src/session/event-dispatcher"
+import { createRuntimeFeatureRegistry, type RuntimeFeatureRegistry } from "@deepagent-code/core/flag/runtime-features"
 
 // C5-04 — the flag-gated V2 admission dispatch branch in the Multi-Agent Runtime. Design §8.7 (event
 // turns through SessionV2/SessionExecution, never the legacy path) + §8.4 (bounded V2 admission).
@@ -21,6 +22,9 @@ import type { EventDispatcher } from "../../src/session/event-dispatcher"
 
 let clock = 0
 const now = () => clock
+const admissionOff = createRuntimeFeatureRegistry(undefined, {
+  [EventAdmission.EVENT_V2_ADMISSION_ENV]: "false",
+})
 
 let runnerRan: string[] = []
 const resetRunner = () => {
@@ -64,7 +68,10 @@ const agent = (id: string, caps: string[], autonomy?: AgentDescriptor["autonomy"
   ...(autonomy ? { autonomy } : {}),
 })
 
-const makeRuntime = (eventV2Admission?: MultiAgentRuntime.EventV2AdmissionBridge) => {
+const makeRuntime = (
+  eventV2Admission?: MultiAgentRuntime.EventV2AdmissionBridge,
+  runtimeFeatures?: RuntimeFeatureRegistry,
+) => {
   const database = Database.layerFromPath(":memory:")
   const core = Layer.mergeAll(
     DeepAgentEventBus.layerWith({ now }),
@@ -74,7 +81,12 @@ const makeRuntime = (eventV2Admission?: MultiAgentRuntime.EventV2AdmissionBridge
   const runtime = Layer.unwrap(
     Effect.gen(function* () {
       const execution = yield* AgentExecution.Service
-      return MultiAgentRuntime.layerWith({ runner: fakeRunner, execution, ...(eventV2Admission ? { eventV2Admission } : {}) })
+      return MultiAgentRuntime.layerWith({
+        runner: fakeRunner,
+        execution,
+        ...(eventV2Admission ? { eventV2Admission } : {}),
+        ...(runtimeFeatures ? { runtimeFeatures } : {}),
+      })
     }),
   ).pipe(Layer.provide(core), Layer.provide(fakeAgentList))
   return Layer.mergeAll(runtime, core)
@@ -84,10 +96,11 @@ const makeRuntime = (eventV2Admission?: MultiAgentRuntime.EventV2AdmissionBridge
 function withRuntime<A>(
   eventV2Admission: MultiAgentRuntime.EventV2AdmissionBridge | undefined,
   body: (runtime: MultiAgentRuntime.Interface) => Effect.Effect<A, unknown>,
+  runtimeFeatures?: RuntimeFeatureRegistry,
 ): Promise<A> {
   return Effect.runPromise(
     Effect.gen(function* () {
-      const ctx = yield* Layer.build(makeRuntime(eventV2Admission))
+      const ctx = yield* Layer.build(makeRuntime(eventV2Admission, runtimeFeatures))
       const runtime = Context.get(ctx, MultiAgentRuntime.Service)
       return yield* body(runtime)
     }).pipe(Effect.scoped),
@@ -159,16 +172,11 @@ describe("C5-04 MultiAgentRuntime V2 admission dispatch branch", () => {
   })
 
   test("flag OFF + seam present: the V2 bridge is NEVER called; V4 stays authoritative", async () => {
-    process.env[EventAdmission.EVENT_V2_ADMISSION_ENV] = "false"
-    try {
-      setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
-      resetRunner()
-      const calls: Array<Record<string, unknown>> = []
-      await withRuntime(fakeBridge(calls), (runtime) => runtime.dispatch(request()))
-      expect(calls.length).toBe(0) // bridge not consulted
-      expect(runnerRan.length).toBeGreaterThan(0) // V4 coordination ran (default OFF path untouched)
-    } finally {
-      process.env[EventAdmission.EVENT_V2_ADMISSION_ENV] = "true"
-    }
+    setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
+    resetRunner()
+    const calls: Array<Record<string, unknown>> = []
+    await withRuntime(fakeBridge(calls), (runtime) => runtime.dispatch(request()), admissionOff)
+    expect(calls.length).toBe(0) // bridge not consulted
+    expect(runnerRan.length).toBeGreaterThan(0) // V4 coordination ran (default OFF path untouched)
   })
 })

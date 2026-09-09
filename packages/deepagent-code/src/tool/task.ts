@@ -2548,7 +2548,7 @@ export const TaskTool = Tool.define(
                 background.cancel(b.nextSession.id).pipe(Effect.ignore),
                 ops.cancel(b.nextSession.id).pipe(Effect.ignore),
               ],
-              { concurrency: "unbounded", discard: true },
+              { concurrency: 16, discard: true },
             )
             const onAbort = () => runCancel.fork(cancel)
             const outcome = yield* Effect.acquireUseRelease(
@@ -3163,7 +3163,7 @@ export const TaskTool = Tool.define(
       const runCancel = yield* EffectBridge.make()
       const cancel = Effect.all(
         [background.cancel(nextSession.id).pipe(Effect.ignore), ops.cancel(nextSession.id).pipe(Effect.ignore)],
-        { concurrency: "unbounded", discard: true },
+        { concurrency: 16, discard: true },
       )
 
       function onAbort() {

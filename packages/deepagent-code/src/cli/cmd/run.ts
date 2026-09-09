@@ -18,7 +18,7 @@ import path from "path"
 import { pathToFileURL } from "url"
 import { Effect } from "effect"
 import { UI } from "../ui"
-import { effectCmd } from "../effect-cmd"
+import { CliError, effectCmd } from "../effect-cmd"
 import { EOL } from "os"
 import { Filesystem } from "@/util/filesystem"
 import { createOpencodeClient, type OpencodeClient, type ToolPart } from "@deepagent-code/sdk"
@@ -278,8 +278,7 @@ export const RunCommand = effectCmd({
       const rawMessage = [...args.message, ...(args["--"] || [])].join(" ")
       const thinking = args.interactive ? (args.thinking ?? true) : (args.thinking ?? false)
       const die = (message: string): never => {
-        UI.error(message)
-        process.exit(1)
+        throw new CliError({ message, exitCode: 1 })
       }
       const dieInteractive = (error: unknown): never => {
         if (error instanceof Error && error.message === INTERACTIVE_INPUT_ERROR) {
@@ -374,8 +373,7 @@ export const RunCommand = effectCmd({
           process.chdir(path.isAbsolute(args.dir) ? args.dir : path.join(root, args.dir))
           return process.cwd()
         } catch {
-          UI.error("Failed to change directory to " + args.dir)
-          process.exit(1)
+          return die("Failed to change directory to " + args.dir)
         }
       })()
       const attachHeaders = args.attach
@@ -396,8 +394,7 @@ export const RunCommand = effectCmd({
         for (const filePath of list) {
           const resolvedPath = path.resolve(args.attach ? root : (directory ?? root), filePath)
           if (!(await Filesystem.exists(resolvedPath))) {
-            UI.error(`File not found: ${filePath}`)
-            process.exit(1)
+            return die(`File not found: ${filePath}`)
           }
 
           const mime = (await Filesystem.isDir(resolvedPath)) ? "application/x-directory" : "text/plain"
@@ -417,13 +414,11 @@ export const RunCommand = effectCmd({
       const forkIntentID = `fork_${Identifier.ascending()}`
 
       if (message.trim().length === 0 && !args.command && !args.interactive && !args.goal) {
-        UI.error("You must provide a message or a command")
-        process.exit(1)
+        return die("You must provide a message or a command")
       }
 
       if (args.fork && !args.continue && !args.session) {
-        UI.error("--fork requires --continue or --session")
-        process.exit(1)
+        return die("--fork requires --continue or --session")
       }
 
       const rules: PermissionV1.Ruleset = args.interactive
@@ -461,8 +456,7 @@ export const RunCommand = effectCmd({
             .catch(() => undefined)
 
           if (!current?.data) {
-            UI.error("Session not found")
-            process.exit(1)
+            return die("Session not found")
           }
 
           if (args.fork) {
@@ -594,8 +588,7 @@ export const RunCommand = effectCmd({
           return next
         }
 
-        UI.error("Failed to resolve remote directory")
-        process.exit(1)
+        return die("Failed to resolve remote directory")
       }
 
       async function localAgent() {
@@ -676,8 +669,7 @@ export const RunCommand = effectCmd({
       async function execute(sdk: OpencodeClient) {
         const sess = await session(sdk)
         if (!sess?.id) {
-          UI.error("Session not found")
-          process.exit(1)
+          return die("Session not found")
         }
         const sessionID = sess.id
         const background = createBackgroundSessions()
@@ -970,6 +962,31 @@ export const RunCommand = effectCmd({
               }
             }
 
+            // V2-only profile: core PermissionV2 asks arrive as permission.v2.asked with the V2
+            // vocabulary (action/resources). Normalize to the legacy request shape (ACP does the
+            // same) and reply through the V2 session route — legacy /permission/:id/reply only
+            // settles app-level Permission requests and cannot see PermissionV2's pending map.
+            if (event.type === "permission.v2.asked") {
+              const asked = event.properties
+              if (!(await sessions.contains(asked.sessionID))) continue
+
+              const reply = permissionReplyFor(permissionMode, asked.action)
+              await client.v2.session.permission.reply({
+                sessionID: asked.sessionID,
+                requestID: asked.id,
+                reply,
+              })
+              const request = { ...asked, permission: asked.action, patterns: asked.resources }
+              if (!emit("permission", { request, reply }) && reply === "reject") {
+                UI.println(
+                  UI.Style.TEXT_WARNING_BOLD + "!",
+                  UI.Style.TEXT_NORMAL +
+                    `permission requested: ${asked.action} (${asked.resources.join(", ")}); auto-rejecting` +
+                    (permissionMode === "read-only" ? " (read-only mode)" : ""),
+                )
+              }
+            }
+
             if (event.type === "question.asked") {
               const question = event.properties
               if (!(await sessions.contains(question.sessionID))) continue
@@ -1007,76 +1024,114 @@ export const RunCommand = effectCmd({
             return String(e)
           })
 
-          if (args.command) {
-            const result = await client.session.command({
-              sessionID,
-              agent,
-              model: args.model,
-              command: args.command,
-              arguments: message,
-              variant: args.variant,
+          // RI-110: DEEPAGENT_CODE_RUN_TIMEOUT_MS bounds the whole non-interactive wait. Without a
+          // bound, a wedged provider turn (e.g. a stream that never finishes) leaves every await
+          // below pending forever and the handler never returns — the process then misses main()'s
+          // exit path entirely and has to be SIGKILLed from the outside. On expiry the handler
+          // errors through the normal return path so the runtime unwinds and the process exits on
+          // its own. Unset means unbounded: long agentic runs keep their current behavior.
+          class RunTimedOut extends Error {}
+          const runDeadline = (() => {
+            const ms = Number(process.env.DEEPAGENT_CODE_RUN_TIMEOUT_MS)
+            if (!Number.isFinite(ms) || ms <= 0) return { race: <T>(promise: Promise<T>): Promise<T> => promise }
+            const expired = new Promise<never>((_, reject) => {
+              const timer = setTimeout(
+                () => reject(new RunTimedOut(`Timed out after ${ms}ms waiting for the run to settle`)),
+                ms,
+              )
+              // The timer must not keep the event loop alive after a successful run — main() can
+              // only reach its exit path once the loop drains.
+              timer.unref?.()
             })
+            return { race: <T>(promise: Promise<T>): Promise<T> => Promise.race([promise, expired]) }
+          })()
+
+          try {
+            if (args.command) {
+              const result = await runDeadline.race(
+                client.session.command({
+                  sessionID,
+                  agent,
+                  model: args.model,
+                  command: args.command,
+                  arguments: message,
+                  variant: args.variant,
+                }),
+              )
+              if (result.error) {
+                if (!emit("error", { error: result.error })) UI.error(formatRunError(result.error))
+                process.exitCode = 1
+                return
+              }
+              if (await runDeadline.race(loopTask)) process.exitCode = 1
+              return
+            }
+
+            if (args.goal) {
+              const objective = initialInput?.trim()
+              const result = await runDeadline
+                .race(
+                  client.deepagent.goal.start({
+                    sessionID,
+                    ...(objective ? { objective } : {}),
+                  }),
+                )
+                .catch((error) => ({ data: undefined, error }))
+              if (result.error || !result.data) {
+                const error = result.error ?? "Goal start returned no data"
+                if (!emit("error", { error })) UI.error(formatRunError(error))
+                process.exitCode = 1
+                releaseGoalStart()
+                await events.stream.return?.(undefined).catch(() => undefined)
+                await runDeadline.race(loopTask).catch((error: unknown) => {
+                  if (!(error instanceof RunTimedOut)) throw error
+                  return String(error)
+                })
+                return
+              }
+              emit("goal_start", { goal: result.data })
+              releaseGoalStart()
+              if (await runDeadline.race(loopTask)) process.exitCode = 1
+              return
+            }
+
+            const model = pick(args.model)
+            const result = await runDeadline.race(
+              client.session.prompt({
+                sessionID,
+                agent,
+                model,
+                variant: args.variant,
+                parts: [...files, { type: "text", text: message }],
+              }),
+            )
             if (result.error) {
               if (!emit("error", { error: result.error })) UI.error(formatRunError(result.error))
               process.exitCode = 1
               return
             }
-            if (await loopTask) process.exitCode = 1
-            return
-          }
-
-          if (args.goal) {
-            const objective = initialInput?.trim()
-            const result = await client.deepagent.goal
-              .start({
-                sessionID,
-                ...(objective ? { objective } : {}),
-              })
-              .catch((error) => ({ data: undefined, error }))
-            if (result.error || !result.data) {
-              const error = result.error ?? "Goal start returned no data"
-              if (!emit("error", { error })) UI.error(formatRunError(error))
+            if (result.data?.info.error) {
+              if (!emit("error", { error: result.data.info.error })) UI.error(formatRunError(result.data.info.error))
               process.exitCode = 1
-              releaseGoalStart()
-              await events.stream.return?.(undefined).catch(() => undefined)
-              await loopTask
-              return
             }
-            emit("goal_start", { goal: result.data })
-            releaseGoalStart()
-            if (await loopTask) process.exitCode = 1
+            if (result.data?.info.finish === "unknown") {
+              const incomplete = "Model stream ended without a successful finish reason"
+              if (!emit("error", { error: incomplete })) UI.error(incomplete)
+              process.exitCode = 1
+            }
+            if (await runDeadline.race(loopTask)) process.exitCode = 1
+            const responseError = await persistedAssistantError(client)
+            if (responseError) {
+              if (!emit("error", { error: responseError })) UI.error(formatRunError(responseError))
+              process.exitCode = 1
+            }
+            return
+          } catch (error) {
+            if (!(error instanceof RunTimedOut)) throw error
+            if (!emit("error", { error: error.message })) UI.error(error.message)
+            process.exitCode = 1
             return
           }
-
-          const model = pick(args.model)
-          const result = await client.session.prompt({
-            sessionID,
-            agent,
-            model,
-            variant: args.variant,
-            parts: [...files, { type: "text", text: message }],
-          })
-          if (result.error) {
-            if (!emit("error", { error: result.error })) UI.error(formatRunError(result.error))
-            process.exitCode = 1
-            return
-          }
-          if (result.data?.info.error) {
-            if (!emit("error", { error: result.data.info.error })) UI.error(formatRunError(result.data.info.error))
-            process.exitCode = 1
-          }
-          if (result.data?.info.finish === "unknown") {
-            const incomplete = "Model stream ended without a successful finish reason"
-            if (!emit("error", { error: incomplete })) UI.error(incomplete)
-            process.exitCode = 1
-          }
-          if (await loopTask) process.exitCode = 1
-          const responseError = await persistedAssistantError(client)
-          if (responseError) {
-            if (!emit("error", { error: responseError })) UI.error(formatRunError(responseError))
-            process.exitCode = 1
-          }
-          return
         }
 
         const model = pick(args.model)

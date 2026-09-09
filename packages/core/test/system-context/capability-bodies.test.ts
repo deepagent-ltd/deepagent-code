@@ -12,7 +12,7 @@ import {
 } from "@deepagent-code/core/system-context/capability-bodies"
 import { sessionCapabilityLoad, type CapabilityLoadTurnIdentity } from "@deepagent-code/core/system-context/capability-load-adapter"
 import { Database } from "@deepagent-code/core/database/database"
-import { resetCapabilityLoader } from "@deepagent-code/core/system-context/capability-loader"
+import { resetCapabilityLoader } from "@deepagent-code/core/system-context/capability-loader-memory"
 import { capabilityCatalog, capabilityCatalogSnapshotId } from "@deepagent-code/core/system-context/capability-catalog"
 
 // C4-09 — author the first batch of capability bodies, hash-bound, within the L2

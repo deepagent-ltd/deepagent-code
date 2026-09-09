@@ -3,6 +3,7 @@ import type { Message, Part } from "@deepagent-code/sdk"
 
 const pendingForkIntents = new Map<string, string>()
 const pendingForkRequests = new Map<string, Promise<ForkSessionResult>>()
+export const FORK_STATE_LIMIT = 256
 
 type ForkSessionResult = { sessionID: string } | { error: unknown }
 
@@ -12,7 +13,16 @@ export function isDefaultTitle(title: string) {
 
 export function acquireForkIntent(key: string) {
   const current = pendingForkIntents.get(key)
-  if (current) return current
+  if (current) {
+    pendingForkIntents.delete(key)
+    pendingForkIntents.set(key, current)
+    return current
+  }
+  if (pendingForkIntents.size >= FORK_STATE_LIMIT) {
+    const stale = pendingForkIntents.keys().find((candidate) => !pendingForkRequests.has(candidate))
+    if (!stale) throw new Error(`Too many active fork requests (limit ${FORK_STATE_LIMIT})`)
+    pendingForkIntents.delete(stale)
+  }
   const intentID = `fork_${Identifier.ascending()}`
   pendingForkIntents.set(key, intentID)
   return intentID
@@ -29,6 +39,10 @@ export function requestSessionFork(input: {
 }) {
   const current = pendingForkRequests.get(input.key)
   if (current) return current
+
+  if (pendingForkRequests.size >= FORK_STATE_LIMIT) {
+    return Promise.resolve({ error: new Error(`Too many active fork requests (limit ${FORK_STATE_LIMIT})`) })
+  }
 
   const intentID = acquireForkIntent(input.key)
   const pending = Promise.resolve()

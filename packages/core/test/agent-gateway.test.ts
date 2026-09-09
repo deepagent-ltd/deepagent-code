@@ -44,6 +44,117 @@ const readOnlyRunDir = async (dir: string) => {
 const readJson = async (dir: string, name: string) => JSON.parse(await readFile(path.join(dir, name), "utf8"))
 
 describe("AgentGateway", () => {
+  test("V2 runtime snapshots stay isolated from legacy configure order", async () => {
+    const read = Effect.gen(function* () {
+      const runtime = yield* AgentGateway.Runtime
+      return {
+        active: runtime.active,
+        mode: runtime.snapshot.agentMode,
+        prompt: runtime.systemPrompt("openai").join("\n"),
+      }
+    })
+    const high = await Effect.runPromise(
+      read.pipe(Effect.provide(AgentGateway.runtimeLayer({ enabled: true, agentMode: "high" }))),
+    )
+    AgentGateway.configure({ enabled: false, agentMode: "general" })
+    const general = await Effect.runPromise(
+      read.pipe(Effect.provide(AgentGateway.runtimeLayer({ enabled: true, agentMode: "general" }))),
+    )
+    AgentGateway.configure({ enabled: true, agentMode: "ultra" })
+
+    expect(high).toMatchObject({ active: true, mode: "high" })
+    expect(high.prompt).toContain("DeepAgent")
+    expect(general).toEqual({ active: false, mode: "general", prompt: "" })
+    AgentGateway.configure({ enabled: false, agentMode: "high" })
+  })
+
+  test("V2 storage runtimes isolate the same Session ID across roots", async () => {
+    const leftRoot = await tempRunsDir()
+    const rightRoot = await tempRunsDir()
+    try {
+      const make = (baseDir: string, agentMode: "high" | "max") =>
+        Effect.runPromise(
+          AgentGateway.Runtime.pipe(Effect.provide(AgentGateway.runtimeLayer({ enabled: true, agentMode, baseDir }))),
+        )
+      const left = await make(leftRoot, "high")
+      const right = await make(rightRoot, "max")
+      const sessionID = "ses_same_identity"
+
+      left.withStorage(() => AgentGateway.DeepAgentSessionState.getOrCreate(sessionID, "high"))
+      right.withStorage(() => AgentGateway.DeepAgentSessionState.getOrCreate(sessionID, "max"))
+      left.withStorage(() => AgentGateway.DeepAgentSessionState.setPanelArmed(sessionID, true))
+      AgentGateway.configure({ enabled: false, agentMode: "general", baseDir: rightRoot })
+
+      expect(left.withStorage(() => AgentGateway.DeepAgentSessionState.get(sessionID)?.mode)).toBe("high")
+      expect(right.withStorage(() => AgentGateway.DeepAgentSessionState.get(sessionID)?.mode)).toBe("max")
+      expect(left.withStorage(() => AgentGateway.DeepAgentSessionState.panelArmedChoice(sessionID))).toBe(true)
+      expect(right.withStorage(() => AgentGateway.DeepAgentSessionState.panelArmedChoice(sessionID))).toBeNull()
+      expect(
+        left.withStorage(() => AgentGateway.DeepAgentPlanStore.planStoreRoot(sessionID)).startsWith(leftRoot),
+      ).toBe(true)
+      expect(
+        right.withStorage(() => AgentGateway.DeepAgentPlanStore.planStoreRoot(sessionID)).startsWith(rightRoot),
+      ).toBe(true)
+      expect(left.withStorage(() => AgentGateway.DeepAgentKnowledgeSource.isConfiguredFor(leftRoot))).toBe(true)
+      expect(right.withStorage(() => AgentGateway.DeepAgentKnowledgeSource.isConfiguredFor(rightRoot))).toBe(true)
+      expect(existsSync(path.join(leftRoot, "state", "sessions.json"))).toBe(true)
+      expect(existsSync(path.join(rightRoot, "state", "sessions.json"))).toBe(true)
+    } finally {
+      // Restore the durable-learning DEFAULT (ON). Leaving `durableLearning: false` here pollutes
+      // the shared legacy config singleton and breaks W7's "default ON" assertion later in the file.
+      AgentGateway.configure({ enabled: false, agentMode: "high", durableLearning: true })
+      await Promise.all([
+        rm(leftRoot, { recursive: true, force: true }),
+        rm(rightRoot, { recursive: true, force: true }),
+      ])
+    }
+  })
+
+  test("V2 storage seeding starts only when its Layer is built and stays root-owned", async () => {
+    const root = await tempRunsDir()
+    try {
+      const layer = AgentGateway.runtimeLayer({ enabled: true, agentMode: "high", baseDir: root })
+      expect(existsSync(path.join(root, "public", "knowledge"))).toBe(false)
+      const runtime = await Effect.runPromise(AgentGateway.Runtime.pipe(Effect.provide(layer)))
+      expect(existsSync(path.join(root, "public", "knowledge"))).toBe(true)
+      expect(runtime.withStorage(() => AgentGateway.DeepAgentKnowledgeSource.isConfiguredFor(root))).toBe(true)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test("V2 runtime owns and finalizes one non-durable learning queue per Layer root", async () => {
+    const leftRoot = await tempRunsDir()
+    const rightRoot = await tempRunsDir()
+    const prototype = AgentGateway.DeepAgentBackgroundLearning.LearningQueue.prototype
+    const originalDrainNow = prototype.drainNow
+    const finalized = new Set<AgentGateway.DeepAgentBackgroundLearning.LearningQueue>()
+    prototype.drainNow = async function () {
+      finalized.add(this)
+      await originalDrainNow.call(this)
+    }
+    try {
+      for (const baseDir of [leftRoot, rightRoot]) {
+        await Effect.runPromise(
+          AgentGateway.Runtime.pipe(
+            Effect.asVoid,
+            Effect.provide(
+              AgentGateway.runtimeLayer({ enabled: true, agentMode: "high", baseDir, durableLearning: false }),
+            ),
+          ),
+        )
+      }
+
+      expect(finalized.size).toBe(2)
+    } finally {
+      prototype.drainNow = originalDrainNow
+      await Promise.all([
+        rm(leftRoot, { recursive: true, force: true }),
+        rm(rightRoot, { recursive: true, force: true }),
+      ])
+    }
+  })
+
   test("W7: durable learning flag and storage root follow configure() (default ON)", async () => {
     const root = await tempRunsDir()
     try {
