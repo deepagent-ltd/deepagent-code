@@ -56,10 +56,19 @@ describe("RI-113 V1→V2 tool surface guard", () => {
     }
   })
 
+  test("RI-26 W2 explicit migrations are present on the V2 surface", () => {
+    // The delegation tool (549a1a218), the read-only git leaf, and the chunked-patch transaction
+    // tool (129f45b80) are explicitly migrated; their V1 modules remain for legacy profiles.
+    for (const name of ["task", "git_read", "apply_patch_chunk"]) {
+      expect(builtinToolNames.has(name)).toBe(true)
+      expect(DeepAgentCodeToolInventory.toolNames.has(name)).toBe(true)
+    }
+  })
+
   test("V1-only capabilities stay absent from the V2 surface until an explicit migration", () => {
     const deferred = [
-      // task orchestration family (V1 task tools; V2 replacement is not wired)
-      "task",
+      // V1 durable task-run management family (V2 task is one-shot/resume keyed by session id;
+      // the durable task_runs store + recovery surface has no V2 counterpart yet)
       "task_status",
       "task_read",
       "task_close",
@@ -67,8 +76,6 @@ describe("RI-113 V1→V2 tool surface guard", () => {
       // V1 workflow helpers with no V2 consumer
       "pr_finalize",
       "dismiss_validation",
-      "patch_chunk",
-      "git_read",
       "spectool",
       // V1 flag-gated diagnostics (default OFF in V1, no V2 surface)
       "profile",

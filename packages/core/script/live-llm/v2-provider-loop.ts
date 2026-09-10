@@ -105,6 +105,7 @@ const { ProjectV2 } = await import("../../src/project")
 const { ProviderV2 } = await import("../../src/provider")
 const { AbsolutePath } = await import("../../src/schema")
 const { SessionV2 } = await import("../../src/session")
+const { Delegation } = await import("../../src/tool/delegation")
 const { SessionEvent } = await import("../../src/session/event")
 const { V2ProviderTurnReceiptTable } = await import("../../src/session/runner/v2-provider-turn.sql")
 const sessionExecutionLocal = await import("../../src/session/execution/local")
@@ -151,6 +152,7 @@ const execution = sessionExecutionLocal.layer.pipe(
   Layer.provide(store),
   Layer.provide(events),
   Layer.provide(locations),
+  Layer.provide(Delegation.delegationSlotLayer),
 )
 const sessions = SessionV2.layer.pipe(
   Layer.provide(events),

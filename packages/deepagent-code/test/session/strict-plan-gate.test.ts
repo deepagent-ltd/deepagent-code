@@ -61,6 +61,7 @@ const makeHarness = (
   const registry = Layer.succeed(
     ToolRegistry.Service,
     ToolRegistry.Service.of({
+      custom: () => Effect.succeed([]),
       ids: () => Effect.succeed([toolId]),
       all: () => Effect.succeed([]),
       named: () => Effect.die("unused"),

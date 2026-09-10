@@ -26,6 +26,10 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { RuntimeIntegrityIdentity } from "@/effect/runtime-integrity-identity"
 import { LSP } from "@/lsp/lsp"
 import { MCP } from "@/mcp"
+import { V2McpBridge } from "@/session/v2-mcp-bridge"
+import { V2PluginToolsBridge } from "@/session/v2-plugin-tools-bridge"
+import { ApplicationTools } from "@deepagent-code/core/tool/application-tools"
+import { InstanceRegistry } from "@/effect/instance-registry"
 import { Permission } from "@/permission"
 import { Installation } from "@/installation"
 import { InstanceLayer } from "@/project/instance-layer"
@@ -392,6 +396,18 @@ export function createRoutes(corsOptions?: CorsOptions, runtimeFlagsLayer = Runt
       LLM.defaultLayer,
       Installation.defaultLayer,
       MCP.defaultLayer,
+      // RI-26 W3: the same MCP→ApplicationTools bridge as the app root, so the embedded server's
+      // Location trees (built through this graph's memoized ApplicationTools) expose MCP tools.
+      V2McpBridge.layer.pipe(
+        Layer.provide(ApplicationTools.layer),
+        Layer.provide(InstanceRegistry.layer),
+        Layer.provideMerge(MCP.defaultLayer),
+      ),
+      V2PluginToolsBridge.layer.pipe(
+        Layer.provide(ApplicationTools.layer),
+        Layer.provide(InstanceRegistry.layer),
+        Layer.provideMerge(ToolRegistry.productionLayer),
+      ),
       ModelsDev.defaultLayer,
       Permission.defaultLayer,
       Plugin.defaultLayer,

@@ -23,24 +23,18 @@ export const Color = Schema.Union([
 
 /**
  * Canonical agent definition for the CORE runtime (core's embedded public API +
- * the core session stack / `AgentV2.Service`). This is DELIBERATELY a separate
- * entity from the deepagent-code `Agent.Info`
- * (`packages/deepagent-code/src/agent/agent.ts`), which is the canonical
- * definition for the CLI/server production runtime. The two overlap in intent
- * but differ in shape and validation:
- *   - id: here a branded `AgentV2.ID`; there a plain `name: string`.
- *   - permissions: here `PermissionSchema.Ruleset`; there `permission:
- *     PermissionV1.Ruleset` (different permission systems).
- *   - This type has NO V3.8.1 §C.3 registry metadata (triggers / capabilities /
- *     autonomy / context_sources / approval_required / limits); `Agent.Info`
- *     carries all of it.
- *   - `Agent.Info` additionally has options / variant / native / prompt /
- *     topP / temperature, which do not exist here.
- * There is intentionally NO converter between the two `Info` types, and none is
- * needed: each is projected independently onto the shared IM `AgentDescriptor`
- * (this one via `AgentListProviderImpl` in `im/agent-list-provider.ts`; the
- * deepagent-code one via `ServerAgentListProvider`). Changing one `Info` does
- * NOT require changing the other — keep them separate on purpose.
+ * the core session stack / `AgentV2.Service`). The deepagent-code `Agent.Info`
+ * (`packages/deepagent-code/src/agent/agent.ts`) remains the V1 wire shape for
+ * legacy profiles and the /agent HTTP egress; the two `Info` types differ in
+ * shape and validation (branded `AgentV2.ID` vs plain name; PermissionV2 vs
+ * PermissionV1 rulesets; no V3.8.1 registry metadata here).
+ *
+ * RI-26 ruling (2026-09-10, option B): under the V2-only profile the Core
+ * roster is the SINGLE selectable authority — the builtin set mirrors the V1
+ * names (including loop/design/reviewer/senior-reviewer; see plugin/agent.ts)
+ * and the app's /agent list and prompt validation read THIS registry. The V1
+ * registry survives only to serve legacy (non-V2-only) profiles; do not add a
+ * new selectable agent to V1 without porting it here.
  */
 export class Info extends Schema.Class<Info>("AgentV2.Info")({
   id: ID,

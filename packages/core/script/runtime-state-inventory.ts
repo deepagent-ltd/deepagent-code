@@ -294,12 +294,81 @@ function rootIdentifier(expression: Expression): string | undefined {
 
 const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
   // ===========================================================================
+  // RI-26 W3/W4 (2026-09-10): tool-factory and bridge adjudications.
+  // ===========================================================================
+  // Per-tool-object definition caches (one Map per frozen tool value, keyed by registration name,
+  // 1-2 entries max, dies with the tool object): memoization only, never authority.
+  "packages/core/src/tool/tool.ts:make@62:66.definitions": {
+    owner: "Tool.make-invocation",
+    keyScope: "per-tool-object",
+    bound: "tool-object-lifetime",
+    finalizer: "gc-with-tool-object",
+    durability: "memoization-only",
+    reachability: "instance-scoped",
+    verdict: "safe_scoped",
+  },
+  "packages/core/src/tool/tool.ts:makeDynamic@138:140.definitions": {
+    owner: "Tool.makeDynamic-invocation",
+    keyScope: "per-tool-object",
+    bound: "tool-object-lifetime",
+    finalizer: "gc-with-tool-object",
+    durability: "memoization-only",
+    reachability: "instance-scoped",
+    verdict: "safe_scoped",
+  },
+  // ===========================================================================
+  // RI-26 W2 (2026-09-10): Core tool-port adjudications.
+  // ===========================================================================
+  // apply_patch_chunk transaction map: per-layer-instance, session-keyed, count-bounded (8 per
+  // session), TTL-swept (30 min) on every call; commit/abort delete explicitly. Coordination-only
+  // staging of not-yet-applied patch text — the durable authority stays in the apply pipeline.
+  "packages/core/src/tool/apply-patch-chunk.ts:closure@52:61.transactions": {
+    owner: "ApplyPatchChunkTool.layer-instance",
+    keyScope: "per-session",
+    bound: "8-transactions-per-session-plus-30min-ttl-sweep",
+    finalizer: "commit-or-abort-delete-plus-ttl-sweep-on-call",
+    durability: "coordination-only",
+    reachability: "instance-scoped",
+    verdict: "safe_scoped",
+  },
+  // Shared module TextEncoder: an immutable encoding utility (stateless per spec); never mutated.
+  "packages/core/src/tool/apply-patch-chunk.ts:encoder": {
+    owner: "source-module",
+    keyScope: "source-symbol",
+    bound: "source-bounded",
+    finalizer: "not-applicable",
+    durability: "non-authority",
+    reachability: "package-static",
+    verdict: "safe_static",
+  },
+  // ===========================================================================
   // RI-94 W3 (2026-09-10): per-family adjudications. Each entry names the real lifecycle owner
   // and finalizer verified in current source; none of these is durable authority.
   // ===========================================================================
   // ===========================================================================
   // RI-94 W4 (2026-09-10): per-family adjudications for the long tail.
   // ===========================================================================
+  // Lazy OpenAPI /doc response (deepagent-code routes): computed once on first request, reused
+  // read-only thereafter; process-static memoization, no authority.
+  "packages/deepagent-code/src/server/routes/instance/httpapi/server.ts:docResponse": {
+    owner: "source-module",
+    keyScope: "source-symbol",
+    bound: "source-bounded",
+    finalizer: "not-applicable",
+    durability: "memoization-only",
+    reachability: "package-static",
+    verdict: "safe_static",
+  },
+  // zodMetadataRegistry traversal cycle-guard: a WeakSet scoped to one invocation's walk.
+  "packages/deepagent-code/src/tool/registry.ts:zodMetadataRegistry@652:654.seen": {
+    owner: "invocation-scope",
+    keyScope: "single-call",
+    bound: "call-stack",
+    finalizer: "return",
+    durability: "ephemeral-runtime",
+    reachability: "instance-scoped",
+    verdict: "safe_scoped",
+  },
   // Plugin OAuth singletons (xai/digitalocean/codex): one ephemeral localhost OAuth callback
   // server per process; oauthStart memoizes the in-flight start promise (cleared in finally);
   // pendingOAuth holds the single pending authorization exchanged once on callback. All are

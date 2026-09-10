@@ -49,7 +49,9 @@ import { migrations } from "../src/database/migration.gen"
 // journal content-hash migration also gained a missing-receipt guard for old disk fixtures.
 // Successor pin (2026-09-09, RI-24 artifact wave): the independent content-addressed runtime
 // integrity evidence artifact table and its immutable signature-attachment trigger joined.
-const PINNED_DIGEST = "1d4656b3af09a126de73118e68b52c2e2de7542c06752c892d7fc44e18b0437b"
+// Successor pin (2026-09-10, RI-18): the durable session_v2_compaction_request migration joined
+// the registry (native manual compaction); `migration --check` green at re-pin time.
+const PINNED_DIGEST = "6669422703efcafae8e8c0b98c9876e0ac3f99f4746ac677adeaace6701b4dd4"
 
 const digest = (entries: readonly { readonly id: string; readonly hash: string }[]) =>
   createHash("sha256").update(JSON.stringify(entries)).digest("hex")

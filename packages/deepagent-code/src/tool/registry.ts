@@ -112,6 +112,8 @@ type State = {
 export interface Interface {
   readonly ids: () => Effect.Effect<string[]>
   readonly all: () => Effect.Effect<Tool.Def[]>
+  /** Plugin + config-glob custom tools only (no builtins) — the V2 bridge surface. */
+  readonly custom: () => Effect.Effect<Tool.Def[]>
   readonly named: () => Effect.Effect<{ task: TaskDef; read: ReadDef }>
   readonly tools: (model: {
     providerID: ProviderV2.ID
@@ -448,6 +450,11 @@ const layerWithFacades: Layer.Layer<
       return (yield* all()).map((tool) => tool.id)
     })
 
+    const custom: Interface["custom"] = Effect.fn("ToolRegistry.custom")(function* () {
+      const s = yield* InstanceState.get(state)
+      return [...s.custom] as Tool.Def[]
+    })
+
     const describeTask = Effect.fn("ToolRegistry.describeTask")(function* (agent: Agent.Info) {
       const items = (yield* agents.list()).filter((item) => item.mode !== "primary")
       const filtered = items.filter(
@@ -533,7 +540,7 @@ const layerWithFacades: Layer.Layer<
       return { task: s.task, read: s.read }
     })
 
-    return Service.of({ ids, all, named, tools })
+    return Service.of({ ids, all, custom, named, tools })
   }),
 )
 

@@ -27,6 +27,7 @@ import { ContextQueryAuthorization } from "@deepagent-code/core/context-federati
 import { ProductionV2Sources } from "@deepagent-code/core/context-federation/production-adapters"
 import { SessionExecution } from "@deepagent-code/core/session/execution"
 import { SessionExecutionLocal } from "@deepagent-code/core/session/execution/local"
+import { Delegation } from "@deepagent-code/core/tool/delegation"
 import * as SessionRunnerLLM from "@deepagent-code/core/session/runner/llm"
 import { SessionRunnerModel } from "@deepagent-code/core/session/runner/model"
 import { SessionProviderOwner } from "@deepagent-code/core/context-federation/provider-owner"
@@ -245,6 +246,7 @@ const execution = SessionExecutionLocal.layer.pipe(
   Layer.provide(events),
   Layer.provide(store),
   Layer.provide(locations),
+  Layer.provide(Delegation.delegationSlotLayer),
 )
 const sessions = SessionV2.layer.pipe(
   Layer.provide(events),

@@ -470,10 +470,14 @@ export const layer = Layer.effect(
     // startup-race guess, and an agent registered late during boot still admits. A composition
     // without a LocationServiceMap (unit tests, noop execution) skips the check — the runner's
     // per-turn AgentV2.NotFoundError stays the last defense there. The selectable rule mirrors
-    // AgentV2's own default-selection rule (not subagent, not hidden).
-    const requireSelectableAgent = Effect.fn("V2Session.requireSelectableAgent")(function* (
+    // AgentV2's own default-selection rule (not subagent, not hidden). Delegated children
+    // (`parentID` set — the Core `task` tool's subagent spawns) intentionally bypass ONLY the
+    // selectable half: subagent-mode/hidden agents are the point of delegation, but an unknown id
+    // still fails at admission.
+    const requireAdmissionAgent = Effect.fn("V2Session.requireAdmissionAgent")(function* (
       location: Location.Ref,
       agent: AgentV2.ID,
+      selectable: boolean,
     ) {
       if (Option.isNone(locations)) return
       const services = yield* Effect.all({
@@ -484,7 +488,8 @@ export const layer = Layer.effect(
       if (Option.isSome(services.boot)) yield* services.boot.value.wait()
       const resolved = yield* services.agents.value.resolve(agent)
       if (resolved === undefined) return yield* new AgentV2.NotFoundError({ id: agent })
-      if (resolved.mode === "subagent" || resolved.hidden) return yield* new AgentNotSelectableError({ id: agent })
+      if (selectable && (resolved.mode === "subagent" || resolved.hidden))
+        return yield* new AgentNotSelectableError({ id: agent })
     })
 
     const decode = (row: typeof SessionMessageTable.$inferSelect) =>
@@ -590,8 +595,11 @@ export const layer = Layer.effect(
         const recorded = yield* store.get(sessionID)
         if (recorded) return recorded
         // RI-04 — validate the requested agent against the Location roster BEFORE projecting the
-        // created Session. Adopted/existing Sessions return above without re-validation.
-        if (input.agent !== undefined) yield* requireSelectableAgent(input.location, input.agent)
+        // created Session. Adopted/existing Sessions return above without re-validation. Root
+        // creates require a selectable agent; delegated children (parentID set, e.g. the Core
+        // `task` tool) may name subagent-mode/hidden agents but not unknown ones.
+        if (input.agent !== undefined)
+          yield* requireAdmissionAgent(input.location, input.agent, input.parentID === undefined)
         const project = yield* projects.resolve(input.location.directory)
         yield* db
           .insert(ProjectTable)
@@ -814,7 +822,7 @@ export const layer = Layer.effect(
       // would reject later. The event owns the transition; admission owns the refusal.
       switchAgent: Effect.fn("V2Session.switchAgent")(function* (input) {
         const session = yield* result.get(input.sessionID)
-        yield* requireSelectableAgent(session.location, AgentV2.ID.make(input.agent))
+        yield* requireAdmissionAgent(session.location, AgentV2.ID.make(input.agent), true)
         yield* events.publish(SessionEvent.AgentSwitched, {
           sessionID: input.sessionID,
           messageID: SessionMessage.ID.create(),

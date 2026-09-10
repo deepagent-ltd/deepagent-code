@@ -71,6 +71,10 @@ import { LocationIndexRuntime } from "@/location-index/runtime"
 import { RecoveryExecutor } from "@/server/recovery-executor"
 import { V2RunnerFrame } from "@/session/v2-runner-frame"
 import { V2OutboxRuntime } from "@/event/v2-outbox-runtime"
+import { V2McpBridge } from "@/session/v2-mcp-bridge"
+import { V2PluginToolsBridge } from "@/session/v2-plugin-tools-bridge"
+import { InstanceRegistry } from "@/effect/instance-registry"
+import { ApplicationTools } from "@deepagent-code/core/tool/application-tools"
 
 const v2StartupRecovery = Layer.effectDiscard(
   Effect.gen(function* () {
@@ -148,6 +152,20 @@ const baseAppLayer = Layer.mergeAll(
   Installation.defaultLayer,
   ShareNext.defaultLayer,
   SessionShare.defaultLayer,
+  // RI-26 W3/W4: register the connected MCP server tools and the V1 custom/plugin tool surface
+  // into the Core ApplicationTools seam so V2 session tool materialization includes them. The
+  // ApplicationTools layer constant is the same one the LocationServiceMap dependencies build,
+  // so one shared memoMap yields ONE instance for bridges and Location trees.
+  V2McpBridge.layer.pipe(
+    Layer.provide(ApplicationTools.layer),
+    Layer.provide(InstanceRegistry.layer),
+    Layer.provideMerge(MCP.defaultLayer),
+  ),
+  V2PluginToolsBridge.layer.pipe(
+    Layer.provide(ApplicationTools.layer),
+    Layer.provide(InstanceRegistry.layer),
+    Layer.provideMerge(ToolRegistry.productionLayer),
+  ),
 ).pipe(
   // These authorities must be providers of the merged production graph, not siblings whose
   // outputs cannot satisfy V2 outbox/session inputs.

@@ -118,16 +118,22 @@ describe("AgentV2", () => {
       expect(agents.map((item) => String(item.id)).sort()).toEqual([
         "auto",
         "compaction",
+        "design",
         "explore",
         "general",
         "goal-worker",
+        "loop",
         "plan",
         "researcher",
+        "reviewer",
+        "senior-reviewer",
         "summary",
         "title",
       ])
       // goal-worker is the sanctioned exception: the Goal Loop worker (V3.9 §D) carries out plan
       // steps, which requires a working ruleset — bash runs the step's validation commands.
+      // senior-reviewer (RI-26 port) may apply ordinary file fixes but still gets bash only via the
+      // wildcard default, never a literal bash grant.
       for (const item of agents.filter((item) => item.id !== AgentV2.ID.make("goal-worker"))) {
         expect(item.permissions.some((rule) => rule.action === "bash" && rule.effect !== "deny")).toBe(false)
       }

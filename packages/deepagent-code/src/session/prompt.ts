@@ -110,6 +110,7 @@ import { LegacyExecutionUnavailable, guardLegacyExecution, refuseLegacyExecution
 import { recordTurnEvidence } from "./v2-turn-evidence"
 import { archiveSessionOnCompletion } from "@/wiki/session-archive"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { V2AgentRoster } from "@/session/v2-agent-roster"
 import { Database } from "@deepagent-code/core/database/database"
 import { LocationIdentity } from "@deepagent-code/core/context-federation/identity"
 import { DeepAgentReleasedSnapshot } from "@deepagent-code/core/deepagent/released-snapshot"
@@ -3015,21 +3016,55 @@ export const layer = Layer.effect(
       yield* ensureV2Session(input.sessionID)
       const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
       const agentName = input.agent ?? session.agent ?? "build"
-      // RI-136: admission fails fast on an unknown agent (legacy createUserMessage parity) — the V2
-      // mirror must never display a name the execution side could not resolve.
-      const resolvedAgent = Option.getOrUndefined(yield* agents.get(agentName).pipe(Effect.option))
-      if (!resolvedAgent) {
-        const available = (yield* agents.list()).filter((item) => !item.hidden).map((item) => item.name)
+      // RI-136 + RI-26 read-model convergence: the EXECUTION authority decides. The V1 registry can
+      // know names the Location roster cannot run, and a mirror validated against the wrong roster
+      // displays a mode the provider turn never used (the pre-convergence loop/design seam).
+      // Subagent-mode agents stay admissible here — the task/goal subagent drives prompt their child
+      // sessions through this same path; the interactive selectable rule lives at create/switchAgent
+      // (RI-04). A composition without a LocationServiceMap (bare legacy test graphs) has no V2
+      // execution placement either and keeps the V1 read model.
+      const v2SessionID = SessionV2.ID.make(input.sessionID)
+      const roster = yield* V2AgentRoster.agentsFor({
+        directory: AbsolutePath.make(session.directory),
+        ...(session.workspaceID ? { workspaceID: session.workspaceID } : {}),
+      })
+      const resolvedV2 = roster ? V2AgentRoster.resolveIn(roster, agentName) : undefined
+      const resolvedV1 = roster
+        ? undefined
+        : Option.getOrUndefined(yield* agents.get(agentName).pipe(Effect.option))
+      if (!resolvedV2 && !resolvedV1) {
+        const available = roster
+          ? V2AgentRoster.selectableNames(roster)
+          : (yield* agents.list()).filter((item) => !item.hidden).map((item) => item.name)
         const hint = available.length ? ` Available agents: ${available.join(", ")}` : ""
         throw new NamedError.Unknown({ message: `Agent not found: "${agentName}".${hint}` })
       }
-      const agentMode = resolvedAgent.mode ?? agentName
+      const agentMode = resolvedV2?.mode ?? resolvedV1?.mode ?? agentName
+      // Propagate the selection into the V2 session so the runner resolves what the caller chose.
+      // AgentSwitched owns the transition; only selectable primaries/all switch — subagent drives
+      // run on child sessions whose agent was fixed at creation, and switchAgent would refuse them.
+      if (resolvedV2) {
+        const v2Current = yield* coreV2Session.get(v2SessionID).pipe(Effect.option)
+        if (
+          Option.isSome(v2Current) &&
+          String(v2Current.value.agent ?? "") !== String(resolvedV2.id) &&
+          resolvedV2.mode !== "subagent" &&
+          !resolvedV2.hidden
+        )
+          yield* coreV2Session
+            .switchAgent({ sessionID: v2SessionID, agent: String(resolvedV2.id) })
+            .pipe(Effect.orDie)
+      }
       // P2-6 (rN): this model identity is used ONLY for the V1 mirror row (display fidelity); the
       // drain's model resolution happens in the core runner from the V2 session store. The final
       // "test/test" fallback is a last-resort mirror label, never an execution input.
+      const resolvedModel = resolvedV2?.model
+        ? { providerID: resolvedV2.model.providerID, modelID: resolvedV2.model.id }
+        : (resolvedV1?.model ?? undefined)
+      const resolvedVariant = resolvedV2?.model?.variant ?? resolvedV1?.variant ?? undefined
       const model = input.model ??
         (session.model ? { providerID: session.model.providerID, modelID: session.model.id } : undefined) ??
-        resolvedAgent.model ??
+        resolvedModel ??
         Option.getOrUndefined(yield* provider.defaultModel().pipe(Effect.option)) ?? {
           providerID: ProviderV2.ID.make("test"),
           modelID: ModelV2.ID.make("test"),
@@ -3038,21 +3073,20 @@ export const layer = Layer.effect(
       // input.variant always wins; the agent's configured variant applies only when the resolved
       // model is the agent's own model and that model declares the variant.
       const sameAgentModel =
-        resolvedAgent.model !== undefined &&
-        model.providerID === resolvedAgent.model.providerID &&
-        model.modelID === resolvedAgent.model.modelID
+        resolvedModel !== undefined &&
+        model.providerID === resolvedModel.providerID &&
+        model.modelID === resolvedModel.modelID
       const fullModel =
-        input.variant === undefined && resolvedAgent.variant !== undefined && sameAgentModel
+        input.variant === undefined && resolvedVariant !== undefined && sameAgentModel
           ? yield* provider
               .getModel(model.providerID, model.modelID)
               .pipe(Effect.catchIf(Provider.ModelNotFoundError.isInstance, () => Effect.succeed(undefined)))
           : undefined
       const variant =
         input.variant ??
-        (resolvedAgent.variant !== undefined && fullModel?.variants?.[resolvedAgent.variant] !== undefined
-          ? resolvedAgent.variant
+        (resolvedVariant !== undefined && fullModel?.variants?.[resolvedVariant] !== undefined
+          ? resolvedVariant
           : undefined)
-      const v2SessionID = SessionV2.ID.make(input.sessionID)
       // The requested prompt model is a V2 execution input, not a mirror label: persist it onto
       // the V2 session BEFORE admission so the drain's catalog resolution sees the caller's choice.
       // An unknown model must keep failing (regression #27371) instead of silently falling back to

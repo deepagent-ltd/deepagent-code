@@ -6,6 +6,7 @@ import { EventV2 } from "../event"
 import { LocationServiceMap } from "../location-layer"
 import { ProjectV2 } from "../project"
 import { SessionV2 } from "../session"
+import { Delegation } from "../tool/delegation"
 import { SessionExecutionLocal } from "./execution/local"
 import { SessionRestart } from "./execution/restart"
 import { SessionProjector } from "./projector"
@@ -23,6 +24,9 @@ export const layer = Layer.unwrap(
     const events = yield* EventV2.Service
     const locations = yield* LocationServiceMap
     const projects = yield* ProjectV2.Service
+    // The per-root delegation holder rides the execution layer so drain fibers can reach the root
+    // SessionV2 service from Location-scoped settles (see tool/delegation.ts).
+    const delegation = yield* Delegation.DelegationSlot
     const databaseLayer = Layer.succeed(Database.Service, database)
     const eventLayer = Layer.succeed(EventV2.Service, events)
     const locationLayer = Layer.succeed(LocationServiceMap, locations)
@@ -36,6 +40,7 @@ export const layer = Layer.unwrap(
       Layer.provide(storeLayer),
       Layer.provide(eventLayer),
       Layer.provide(locationLayer),
+      Layer.provide(Layer.succeed(Delegation.DelegationSlot, delegation)),
     )
     const restartLayer = SessionRestart.layer.pipe(
       Layer.provide(executionLayer),

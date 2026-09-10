@@ -165,6 +165,7 @@ const readOnlyActions = new Set([
   "read",
   "glob",
   "grep",
+  "git_read",
   "webfetch",
   "websearch",
   "skill",

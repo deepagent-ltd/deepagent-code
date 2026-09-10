@@ -15,6 +15,7 @@ import { LocationMutation } from "../location-mutation"
 import { PermissionV2 } from "../permission"
 import { makeLocationNode } from "../effect/app-node"
 import { ToolRegistry } from "./registry"
+import { EditReplace } from "./edit-replace"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 
@@ -54,17 +55,6 @@ const decodeUtf8 = (content: Uint8Array) => {
   return { bom, content, text: new TextDecoder().decode(bom ? content.slice(3) : content) }
 }
 
-const countOccurrences = (content: string, search: string) => {
-  if (search === "") return content.length + 1
-  let count = 0
-  let offset = 0
-  while ((offset = content.indexOf(search, offset)) !== -1) {
-    count++
-    offset += search.length
-  }
-  return count
-}
-
 const previewLines = (value: string, prefix: "+" | "-") => {
   const lines = normalizeLineEndings(value).split("\n")
   const shown = lines.slice(0, 6).map((line) => `${prefix}${line.length > 240 ? `${line.slice(0, 240)}...` : line}`)
@@ -83,7 +73,8 @@ export const toModelOutput = (output: Output, oldString: string, newString: stri
   ].join("\n")
 
 /** Deferred V2 edit behavior and UX integrations remain visible at the model-facing seam. */
-// TODO: Port V1 fuzzy correction strategies only after exact-edit behavior is established: line-trimmed matching, block-anchor fallback, indentation correction, and similarity-threshold review.
+// RI-26 W2: the V1 fuzzy correction ladder (edit-replace.ts) is now the matching path; the exact
+// strategy remains FIRST in the ladder, so previously-exact edits behave identically.
 // TODO: Add formatter integration after V2 formatter runtime exists.
 // TODO: Publish watcher/file-edit events after V2 watcher integration exists.
 // TODO: Add snapshots / undo after design exists.
@@ -164,25 +155,30 @@ export const layer = Layer.effectDiscard(
                 const ending = detectLineEnding(source.text)
                 const oldString = convertToLineEnding(input.oldString, ending)
                 const newString = convertToLineEnding(input.newString, ending)
-                const replacements = countOccurrences(source.text, oldString)
-                if (replacements === 0) {
+                // RI-26 W2 fuzzy parity: the V1 correction-strategy ladder (exact → line-trimmed →
+                // block-anchor similarity → whitespace/indentation/escape normalization → context
+                // anchors). A fuzzy span only applies when it resolves to a unique occurrence (or
+                // replaceAll), and the disproportionate-match guard refuses loose anchors that
+                // swallow far more than oldString names.
+                const outcome = EditReplace.replace(source.text, oldString, newString, input.replaceAll === true)
+                if (!outcome.ok) {
+                  if (outcome.reason === "not_found")
+                    return yield* new ToolFailure({
+                      message:
+                        "Could not find oldString in the file. It must match exactly, including whitespace and indentation.",
+                    })
+                  if (outcome.reason === "disproportionate_match")
+                    return yield* new ToolFailure({
+                      message:
+                        "Refusing replacement because the matched span is much larger than oldString. Re-read the file and provide the full exact oldString for the intended replacement.",
+                    })
                   return yield* new ToolFailure({
                     message:
-                      "Could not find oldString in the file. It must match exactly, including whitespace and indentation.",
-                  })
-                }
-                if (replacements > 1 && input.replaceAll !== true) {
-                  return yield* new ToolFailure({
-                    message:
-                      "Found multiple exact matches for oldString. Provide more surrounding context or set replaceAll to true.",
+                      "Found multiple matches for oldString. Provide more surrounding context or set replaceAll to true.",
                   })
                 }
 
-                const replaced =
-                  input.replaceAll === true
-                    ? source.text.replaceAll(oldString, newString)
-                    : source.text.replace(oldString, newString)
-                const next = splitBom(replaced)
+                const next = splitBom(outcome.text)
                 const result = yield* unableToEdit(
                   files.writeIfUnchanged({
                     target,
@@ -190,7 +186,7 @@ export const layer = Layer.effectDiscard(
                     content: joinBom(next.text, source.bom || next.bom),
                   }),
                 )
-                return { ...result, replacements } satisfies Output
+                return { ...result, replacements: outcome.replacements } satisfies Output
               })
             },
           }),

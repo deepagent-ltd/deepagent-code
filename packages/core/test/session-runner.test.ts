@@ -30,6 +30,7 @@ import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { QuestionV2 } from "@deepagent-code/core/question"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { SessionV2 } from "@deepagent-code/core/session"
+import { TaskTool } from "@deepagent-code/core/tool/task"
 import { ContextSnapshotDecodeError } from "@deepagent-code/core/session/error"
 import { SessionEvent } from "@deepagent-code/core/session/event"
 import { SessionInput } from "@deepagent-code/core/session/input"
@@ -526,6 +527,7 @@ const executionFor = (runnerLayer: ReturnType<typeof runnerStack>) =>
   SessionExecutionLocal.layer.pipe(
     Layer.provide(events),
     Layer.provide(store),
+    Layer.provide(TaskTool.delegationSlotLayer),
     Layer.provide(locationsFor(runnerLayer)),
   )
 const sessionsFor = (runnerLayer: ReturnType<typeof runnerStack>) =>
@@ -574,6 +576,7 @@ const containedExecution = SessionExecutionLocal.layer.pipe(
   Layer.provide(events),
   Layer.provide(store),
   Layer.provide(containedLocations),
+  Layer.provide(TaskTool.delegationSlotLayer),
 )
 const containedSessions = SessionV2.layer.pipe(
   Layer.provide(events),
@@ -601,7 +604,18 @@ const it = testEffect(
     location,
     skillGuidance,
     config,
-    Layer.mergeAll(runner, locations, execution, sessions),
+    Layer.mergeAll(
+      runner,
+      locations,
+      execution,
+      sessions,
+      TaskTool.layer.pipe(Layer.provide(registry), Layer.provide(agents)),
+      // Same memoized slot the fake map trees carry: capture the live SessionV2 service once.
+      TaskTool.captureDelegationServiceLayer.pipe(
+        Layer.provide(TaskTool.delegationSlotLayer),
+        Layer.provide(sessions),
+      ),
+    ),
   ),
 )
 const contained = testEffect(
@@ -1404,7 +1418,7 @@ describe("SessionRunnerLLM", () => {
 
       expect(requests).toHaveLength(1)
       expect(requests[0]?.model).toBe(model)
-      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["echo", "defect"])
+      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["echo", "defect", "task"])
       expect(requests[0]?.messages.map((message) => ({ role: message.role, content: message.content }))).toEqual([
         { role: "user", content: [{ type: "text", text: "First" }] },
         { role: "user", content: [{ type: "text", text: "Second" }] },
@@ -1614,7 +1628,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(1)
-      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["defect"])
+      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["defect", "task"])
       const receipt = yield* (yield* Database.Service).db
         .select()
         .from(V2ProviderTurnReceiptTable)
@@ -1622,9 +1636,9 @@ describe("SessionRunnerLLM", () => {
         .get()
         .pipe(Effect.orDie)
       expect(receipt?.prepared_turn).toMatchObject({
-        tool_registry_ids: ["defect", "echo"],
-        tool_permission_filtered_ids: ["defect"],
-        tool_final_offered_ids: ["defect"],
+        tool_registry_ids: ["defect", "echo", "task"],
+        tool_permission_filtered_ids: ["defect", "task"],
+        tool_final_offered_ids: ["defect", "task"],
         context_readiness: "fallback",
         context_selected_refs: [],
       })
@@ -1663,8 +1677,8 @@ describe("SessionRunnerLLM", () => {
         .get()
         .pipe(Effect.orDie)
       expect(receipt?.prepared_turn).toMatchObject({
-        tool_registry_ids: ["defect", "echo"],
-        tool_permission_filtered_ids: ["defect", "echo"],
+        tool_registry_ids: ["defect", "echo", "task"],
+        tool_permission_filtered_ids: ["defect", "echo", "task"],
         tool_final_offered_ids: [],
         tool_capability: "unsupported",
         tool_lowering_outcome: "omitted_no_support",
@@ -2915,7 +2929,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(1)
-      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["echo", "defect"])
+      expect(requests[0]?.tools.map((tool) => tool.name)).toEqual(["echo", "defect", "task"])
       expect(yield* session.context(sessionID)).toMatchObject([
         { type: "user", text: "Use tools" },
         {
@@ -5016,6 +5030,96 @@ describe("SessionRunnerLLM", () => {
       expect(context[0]).toMatchObject({ type: "user", text: "Serial tool loop past the default ceiling" })
       expect(context.filter((m) => m.type === "assistant" && m.content?.[0]?.type === "tool")).toHaveLength(29)
       expect(context.at(-1)).toMatchObject({ type: "assistant", finish: "stop" })
+    }),
+  )
+
+  // RI-26 convergence W2: the Core `task` tool delegates to a child session (real drain, real
+  // subagent turn) and the parent receives the child's final text as the tool result.
+  it.effect("task delegates to a child session and returns the subagent result", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const agentsSvc = yield* AgentV2.Service
+      yield* agentsSvc.update((editor) => {
+        editor.update(AgentV2.defaultID, (agent) => {
+          agent.mode = "primary"
+        })
+        editor.update(AgentV2.ID.make("general"), (agent) => {
+          agent.mode = "subagent"
+        })
+        editor.default(AgentV2.defaultID)
+      })
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "delegate research" }), resume: false })
+
+      requests.length = 0
+      const sealed = (label: string, events: readonly LLMEvent[]) =>
+        Stream.unwrap(
+          Effect.gen(function* () {
+            const seal = yield* V2ProviderTurn.CurrentRequestSeal
+            if (!seal) return yield* Effect.die(`Seal missing for ${label}`)
+            yield* seal
+              .seal({
+                wireHash: Hash.sha256(`${label}-wire`),
+                bodyHash: Hash.sha256(`${label}-body`),
+                bodyLength: 12,
+                contentType: "application/json",
+              })
+              .pipe(Effect.orDie)
+            return Stream.fromIterable(events)
+          }),
+        )
+      responseStreams = [
+        sealed("task-parent-tool", [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.toolCall({
+            id: "call-task-1",
+            name: "task",
+            input: {
+              description: "research subagent",
+              prompt: "Research and report the answer to 40+2.",
+              subagent_type: "general",
+            },
+          }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ]),
+        sealed("task-child", [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.textStart({ id: "task-child-text" }),
+          LLMEvent.textDelta({ id: "task-child-text", text: "research complete: 42" }),
+          LLMEvent.textEnd({ id: "task-child-text" }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ]),
+        sealed("task-parent-final", [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.textStart({ id: "task-parent-text" }),
+          LLMEvent.textDelta({ id: "task-parent-text", text: "delegation done" }),
+          LLMEvent.textEnd({ id: "task-parent-text" }),
+          LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+          LLMEvent.finish({ reason: "stop" }),
+        ]),
+      ]
+      yield* session.resume(sessionID)
+      // Parent consumed 3 provider turns: tool-call, (child ran its own), final.
+      expect(requests).toHaveLength(3)
+      const context = yield* session.context(sessionID)
+      expect(context.at(-1)).toMatchObject({ type: "assistant", finish: "stop" })
+      // The parent's transcript carries the delegation result from the child's turn.
+      expect(JSON.stringify(context)).toContain("research complete: 42")
+      // Exactly one child session exists: direct child of the parent, running agent general.
+      const { db } = yield* Database.Service
+      const children = yield* db
+        .select()
+        .from(SessionTable)
+        .where(eq(SessionTable.parent_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
+      expect(children).toHaveLength(1)
+      expect(children[0]?.agent).toBe("general")
+      const childContext = yield* session.context(children[0]!.id as SessionV2.ID)
+      expect(childContext[0]).toMatchObject({ type: "user", text: "Research and report the answer to 40+2." })
+      expect(childContext.at(-1)).toMatchObject({ type: "assistant", finish: "stop" })
     }),
   )
 
