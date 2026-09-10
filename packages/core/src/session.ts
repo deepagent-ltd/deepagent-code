@@ -946,4 +946,7 @@ export const runtimeLayer = layer.pipe(
 )
 
 /** Standalone production default. Hosts with application Location services must use runtimeLayer. */
-export const liveLayer = runtimeLayer.pipe(Layer.provide(LocationServiceMap.layer))
+// Layer.suspend defers the LocationServiceMap access to build time: session.ts ↔ location-layer
+// form a module cycle (location-layer → tool builtins → tool/task → session), and a top-level
+// access here can hit the TDZ depending on the entrypoint's import order.
+export const liveLayer = Layer.suspend(() => runtimeLayer.pipe(Layer.provide(LocationServiceMap.layer)))
