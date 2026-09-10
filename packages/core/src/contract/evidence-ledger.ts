@@ -134,9 +134,12 @@ export function assertLedgerReleaseGo(
       blockers.push(`evidence_bundle_artifacts_duplicate:${evidenceHash}`)
     const artifacts = new Map(options.artifacts.map((artifact) => [artifact.evidenceHash, artifact]))
     for (const evidenceHash of ledger.evidenceBundleDigests) {
+      // 2026-09-10 ruling: package/release signing is descoped for the open-source model (anyone
+      // may fork, modify, and rebuild, so a signed "official" artifact proves nothing about the
+      // package). Release integrity is the unsigned digest chain plus distribution-channel trust;
+      // signature status stays informational for callers that verify with an optional public key.
       const artifact = artifacts.get(evidenceHash)
       if (artifact === undefined) blockers.push(`evidence_bundle_artifact_missing:${evidenceHash}`)
-      else if (!artifact.signed) blockers.push(`evidence_bundle_artifact_unsigned:${evidenceHash}`)
     }
   }
   try {

@@ -125,11 +125,13 @@ describe("RI-51 authoritative evidence ledger", () => {
       evidenceBundleDigests: [H("bundle")],
     })
     expect(() => assertLedgerReleaseGo(ledger)).not.toThrow()
+    // 2026-09-10 ruling: release signing descoped — unsigned evidence is GO-eligible; presence
+    // and uniqueness are what the gate enforces, signature status is informational.
     expect(() =>
       assertLedgerReleaseGo(ledger, {
         artifacts: [{ evidenceHash: H("bundle"), signed: false }],
       }),
-    ).toThrow(EvidenceLedgerReleaseGateError)
+    ).not.toThrow()
     expect(() =>
       assertLedgerReleaseGo(ledger, {
         artifacts: [{ evidenceHash: H("bundle"), signed: true }],
