@@ -356,7 +356,7 @@ describe("production runtime integrity", () => {
       "packages/slack/package.json",
     ])
 
-    const inventory = buildInventory()
+    const inventory = await buildInventory()
     const inventoryFiles = new Set(inventory.entries.map((entry) => entry.entry.repoFile))
     expect(inventoryFiles.has("packages/cli/src/index.ts")).toBeTrue()
     expect(inventoryFiles.has("packages/deepagent-code/src/index.ts")).toBeTrue()

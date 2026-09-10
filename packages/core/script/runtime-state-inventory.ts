@@ -293,6 +293,320 @@ function rootIdentifier(expression: Expression): string | undefined {
 }
 
 const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
+  // ===========================================================================
+  // RI-94 W3 (2026-09-10): per-family adjudications. Each entry names the real lifecycle owner
+  // and finalizer verified in current source; none of these is durable authority.
+  // ===========================================================================
+  // ===========================================================================
+  // RI-94 W4 (2026-09-10): per-family adjudications for the long tail.
+  // ===========================================================================
+  // Plugin OAuth singletons (xai/digitalocean/codex): one ephemeral localhost OAuth callback
+  // server per process; oauthStart memoizes the in-flight start promise (cleared in finally);
+  // pendingOAuth holds the single pending authorization exchanged once on callback. All are
+  // process-bounded coordination state with explicit reset-on-completion.
+  ...Object.fromEntries(
+    [
+      "packages/deepagent-code/src/plugin/xai.ts:oauthServer",
+      "packages/deepagent-code/src/plugin/xai.ts:oauthStart",
+      "packages/deepagent-code/src/plugin/xai.ts:pendingOAuth",
+      "packages/deepagent-code/src/plugin/digitalocean.ts:oauthServer",
+      "packages/deepagent-code/src/plugin/digitalocean.ts:oauthStart",
+      "packages/deepagent-code/src/plugin/digitalocean.ts:pendingOAuth",
+      "packages/deepagent-code/src/plugin/openai/codex.ts:oauthServer",
+      "packages/deepagent-code/src/plugin/openai/codex.ts:oauthStart",
+      "packages/deepagent-code/src/plugin/openai/codex.ts:pendingOAuth",
+    ].map((key) => [
+      key,
+      {
+        owner: "Plugin.oauth-flow",
+        keyScope: "process",
+        bound: "one-server-one-pending-auth",
+        finalizer: "reset-on-completion",
+        durability: "coordination-only",
+        reachability: "plugin-scoped",
+        verdict: "safe_scoped",
+      },
+    ]),
+  ),
+  // Plugin closure state: OAuth-start promise per invocation (dies with the call), the OpenAI
+  // WebSocket pool per fetch-factory closure (pooled sockets bounded per provider instance), and
+  // the ws plugin's per-connection socket handle.
+  ...Object.fromEntries(
+    [
+      "packages/deepagent-code/src/plugin/xai.ts:startOAuthServerOnce@425:426.server",
+      "packages/deepagent-code/src/plugin/digitalocean.ts:startOAuthServerOnce@133:134.next",
+      "packages/deepagent-code/src/plugin/openai/codex.ts:startOAuthServerOnce@254:255.next",
+      "packages/deepagent-code/src/plugin/openai/ws-pool.ts:createWebSocketFetch@34:36.pool",
+      "packages/deepagent-code/src/plugin/openai/ws.ts:closure@72:90.socket",
+    ].map((key) => [
+      key,
+      {
+        owner: "invocation-or-instance-scope",
+        keyScope: "per-owner",
+        bound: "owner-lifecycle",
+        finalizer: "owner-exit",
+        durability: "coordination-only",
+        reachability: "plugin-scoped",
+        verdict: "safe_scoped",
+      },
+    ]),
+  ),
+  // TUI plugin runtime: a singleton module-level runtime/dir/loaded/ctrl for the TUI plugin
+  // scope — process-bounded, one instance per TUI process; the scoped keymap cache is a Map
+  // cleared on scope exit. The TUI is a single-process UI surface.
+  ...Object.fromEntries(
+    [
+      "packages/deepagent-code/src/plugin/tui/runtime.ts:runtime",
+      "packages/deepagent-code/src/plugin/tui/runtime.ts:dir",
+      "packages/deepagent-code/src/plugin/tui/runtime.ts:loaded",
+      "packages/deepagent-code/src/plugin/tui/runtime.ts:createPluginScope@411:412.ctrl",
+      "packages/deepagent-code/src/plugin/tui/runtime.ts:createScopedKeymap@147:148.cache",
+    ].map((key) => [
+      key,
+      {
+        owner: "TuiPlugin.process-singleton",
+        keyScope: "process",
+        bound: "one-instance",
+        finalizer: "tui-shutdown",
+        durability: "coordination-only",
+        reachability: "tui-process",
+        verdict: "safe_scoped",
+      },
+    ]),
+  ),
+  // ACP service closure state: per-connection scope controller and pending operation maps —
+  // bounded by the ACP connection lifecycle (cleared on disconnect).
+  ...Object.fromEntries(
+    [
+      "packages/deepagent-code/src/acp/service.ts:agentConnections",
+      "packages/deepagent-code/src/acp/service.ts:pendingOperations",
+      "packages/deepagent-code/src/acp/service.ts:connectionScope",
+      "packages/deepagent-code/src/acp/service.ts:create@125:132.client",
+      "packages/deepagent-code/src/acp/service.ts:create@125:133.transport",
+    ].map((key) => [
+      key,
+      {
+        owner: "AcpConnection.lifecycle",
+        keyScope: "per-connection",
+        bound: "active-connections",
+        finalizer: "disconnect-cleanup",
+        durability: "coordination-only",
+        reachability: "acp-adapter",
+        verdict: "safe_scoped",
+      },
+    ]),
+  ),
+  // CLI closure state: per-invocation SDK client handles, abort controllers, footer render
+  // state (class-instance properties bounded by the render owner), and the debug-scrap runtime
+  // handle — all die with their command invocation.
+  ...Object.fromEntries(
+    [
+      "packages/deepagent-code/src/cli/cmd/run.ts:closure@277:1207.sdk",
+      "packages/deepagent-code/src/cli/cmd/providers.ts:closure@317:330.abort",
+      "packages/deepagent-code/src/cli/cmd/debug/scrap.ts:handler@9:12.runtime",
+      "packages/deepagent-code/src/cli/cmd/run/footer.prompt.tsx:createPromptState@283:305.marks",
+      "packages/deepagent-code/src/cli/cmd/run/footer.ts:RunFooter.closes@173",
+      "packages/deepagent-code/src/cli/cmd/run/footer.ts:RunFooter.flushing@177",
+      "packages/deepagent-code/src/cli/cmd/run/footer.ts:RunFooter.promptRoute@206",
+      "packages/deepagent-code/src/cli/cmd/run/footer.ts:RunFooter.prompts@171",
+      "packages/deepagent-code/src/cli/cmd/run/footer.ts:RunFooter.queue@175",
+      "packages/deepagent-code/src/cli/cmd/run/footer.ts:RunFooter.queuedRemoves@172",
+      "packages/deepagent-code/src/cli/cmd/run/footer.ts:RunFooter.themeRefreshTimeouts@219",
+      "packages/deepagent-code/src/cli/cmd/run/stream.transport.ts:closure@113:115.controllers",
+      "packages/deepagent-code/src/cli/cmd/run/stream.transport.ts:closure@113:116.pendingMessages",
+      "packages/deepagent-code/src/cli/cmd/run/stream.transport.ts:closure@113:117.outputControllers",
+      "packages/deepagent-code/src/cli/cmd/run/stream.transport.ts:closure@113:120.streamControllers",
+    ].map((key) => [
+      key,
+      {
+        owner: "invocation-or-instance-scope",
+        keyScope: "per-owner",
+        bound: "owner-lifecycle",
+        finalizer: "owner-exit",
+        durability: "coordination-only",
+        reachability: "cli-process",
+        verdict: "safe_scoped",
+      },
+    ]),
+  ),
+  // ACP per-connection/service closure Maps (subscriptions, snapshots, fork intents, MCP
+  // registrations, usage limits): keyed by session/connection, cleared on disconnect/dispose.
+  ...Object.fromEntries(
+    [
+      "packages/deepagent-code/src/acp/agent.ts:init@25:26.subscriptions",
+      "packages/deepagent-code/src/acp/directory.ts:make@144:145.snapshots",
+      "packages/deepagent-code/src/acp/event.ts:Subscription.abort@37",
+      "packages/deepagent-code/src/acp/event.ts:track@80:82.applied",
+      "packages/deepagent-code/src/acp/service.ts:make@79:89.registeredMcp",
+      "packages/deepagent-code/src/acp/service.ts:make@79:90.sessionSnapshots",
+      "packages/deepagent-code/src/acp/service.ts:make@79:91.forkIntents",
+      "packages/deepagent-code/src/acp/service.ts:makeUsageService@607:608.limits",
+      "packages/deepagent-code/src/acp/service.ts:registerMcpServers@929:939.pending",
+    ].map((key) => [
+      key,
+      {
+        owner: "AcpConnection.lifecycle",
+        keyScope: "per-connection-or-session",
+        bound: "active-connections",
+        finalizer: "disconnect-cleanup",
+        durability: "coordination-only",
+        reachability: "acp-adapter",
+        verdict: "safe_scoped",
+      },
+    ]),
+  ),
+  // Desktop main-process singletons: every Electron main-process module binding (window, view,
+  // logger, tray, server, listener, blockers) is bounded by the single main-process lifetime and
+  // cleared on window-close/app-quit. The desktop main process IS the process; these are its
+  // canonical singletons with explicit app-lifecycle finalizers.
+  ...Object.fromEntries(
+    [
+      "packages/desktop/src/main/browser-view.ts:bounds",
+      "packages/desktop/src/main/browser-view.ts:host",
+      "packages/desktop/src/main/browser-view.ts:view",
+      "packages/desktop/src/main/browser-view.ts:visible",
+      "packages/desktop/src/main/index.ts:logger",
+      "packages/desktop/src/main/index.ts:mainWindow",
+      "packages/desktop/src/main/index.ts:pendingDeepLinks",
+      "packages/desktop/src/main/index.ts:server",
+      "packages/desktop/src/main/logging.ts:logger",
+      "packages/desktop/src/main/logging.ts:netLogPath",
+      "packages/desktop/src/main/logging.ts:root",
+      "packages/desktop/src/main/logging.ts:run",
+      "packages/desktop/src/main/markdown.ts:renderer",
+      "packages/desktop/src/main/power.ts:blockerId",
+      "packages/desktop/src/main/server.ts:sidecarSpawnCount",
+      "packages/desktop/src/main/sidecar.ts:listener",
+      "packages/desktop/src/main/store.ts:cache",
+      "packages/desktop/src/main/tray.ts:tray",
+      "packages/desktop/src/main/windows.ts:backgroundColor",
+      "packages/desktop/src/main/windows.ts:closeToTrayEnabled",
+      "packages/desktop/src/main/windows.ts:isQuitting",
+      "packages/desktop/src/main/windows.ts:pinchZoomEnabled",
+    ].map((key) => [
+      key,
+      {
+        owner: "Desktop.main-process",
+        keyScope: "process",
+        bound: "one-instance",
+        finalizer: "app-quit-or-window-close",
+        durability: "coordination-only",
+        reachability: "desktop-main",
+        verdict: "safe_scoped",
+      },
+    ]),
+  ),
+  // SessionPrompt layer-scope state: Maps keyed by SessionID/directory whose entries are deleted
+  // on settle/dedup by construction; the notification/durable worker maps carry an explicit
+  // Effect.addFinalizer (prompt.ts ~7283) that interrupts fibers and clears both maps.
+  ...Object.fromEntries(
+    [
+      "packages/deepagent-code/src/session/prompt.ts:closure@1180:1366.activeFederatedContexts",
+      "packages/deepagent-code/src/session/prompt.ts:closure@1180:1370.steerAbsorbRounds",
+      "packages/deepagent-code/src/session/prompt.ts:closure@1180:1371.activeReleasedKnowledge",
+      "packages/deepagent-code/src/session/prompt.ts:closure@1180:6973.notificationWorkers",
+      "packages/deepagent-code/src/session/prompt.ts:closure@1180:7036.durableWorkers",
+      "packages/deepagent-code/src/session/prompt.ts:closure@1180:7037.durableLeases",
+    ].map((key) => [
+      key,
+      {
+        owner: "SessionPrompt.layer-instance",
+        keyScope: "per-session-or-directory",
+        bound: "active-sessions-and-directories",
+        finalizer: "settle-cleanup-or-layer-finalizer",
+        durability: "coordination-only",
+        reachability: "instance-scoped",
+        verdict: "safe_scoped",
+      },
+    ]),
+  ),
+  // Per-invocation dedupe sets and abort handles inside single runner functions: their owner is
+  // the function invocation itself; the set dies with the call stack.
+  ...Object.fromEntries(
+    [
+      "packages/deepagent-code/src/session/prompt.ts:closure@1430:1432.seen",
+      "packages/deepagent-code/src/session/prompt.ts:closure@1467:1474.seen",
+      "packages/deepagent-code/src/session/prompt.ts:closure@1605:1673.taskAbort",
+      "packages/deepagent-code/src/session/prompt.ts:closure@3458:3584.accumulatedChangeSurface",
+      "packages/deepagent-code/src/session/prompt.ts:execRead@2492:2493.controller",
+    ].map((key) => [
+      key,
+      {
+        owner: "invocation-scope",
+        keyScope: "single-call",
+        bound: "call-stack",
+        finalizer: "return",
+        durability: "ephemeral-runtime",
+        reachability: "instance-scoped",
+        verdict: "safe_scoped",
+      },
+    ]),
+  ),
+  // Server listener lifecycle: defaultServer/serverHasListened are process-singleton memoization
+  // for the one listener per process (documented in server.ts startListener); scopes are closed by
+  // makeStop's LIFO close; socket sets are cleared by destroyConnections on stop.
+  "packages/deepagent-code/src/server/server.ts:defaultServer": {
+    owner: "Server.process-singleton",
+    keyScope: "process",
+    bound: "one-listener",
+    finalizer: "stop-close",
+    durability: "coordination-only",
+    reachability: "server-entry",
+    verdict: "safe_scoped",
+  },
+  "packages/deepagent-code/src/server/server.ts:serverHasListened": {
+    owner: "Server.process-singleton",
+    keyScope: "process",
+    bound: "one-flag",
+    finalizer: "process-exit",
+    durability: "coordination-only",
+    reachability: "server-entry",
+    verdict: "safe_static",
+  },
+  ...Object.fromEntries(
+    [
+      "packages/deepagent-code/src/server/server.ts:closure@180:196.scope",
+      "packages/deepagent-code/src/server/server.ts:closure@180:217.maintenanceScope",
+      "packages/deepagent-code/src/server/server.ts:serverLayer@316:317.server",
+      "packages/deepagent-code/src/server/server.ts:serverLayer@316:319.upgradedSockets",
+      "packages/deepagent-code/src/server/server.ts:serverLayer@316:320.activeSockets",
+    ].map((key) => [
+      key,
+      {
+        owner: "Server.listener-scope",
+        keyScope: "per-listener",
+        bound: "listener-lifecycle",
+        finalizer: "scope-close-or-destroy-connections",
+        durability: "coordination-only",
+        reachability: "server-entry",
+        verdict: "safe_scoped",
+      },
+    ]),
+  ),
+  // LSP client per-instance state: LSP is config-fail-closed (RI-19/RI-21); these Maps live on a
+  // client instance owned by the instance runtime and cleared by its disposer.
+  ...Object.fromEntries(
+    [
+      "packages/deepagent-code/src/lsp/client.ts:create@125:151.pushDiagnostics",
+      "packages/deepagent-code/src/lsp/client.ts:create@125:152.pullDiagnostics",
+      "packages/deepagent-code/src/lsp/client.ts:create@125:153.published",
+      "packages/deepagent-code/src/lsp/client.ts:create@125:154.diagnosticRegistrations",
+      "packages/deepagent-code/src/lsp/client.ts:create@125:155.registrationListeners",
+      "packages/deepagent-code/src/lsp/client.ts:create@125:156.diagnosticListeners",
+      "packages/deepagent-code/src/lsp/client.ts:requestDiagnosticReport@313:325.byFile",
+    ].map((key) => [
+      key,
+      {
+        owner: "LspClient.instance",
+        keyScope: "per-instance",
+        bound: "instance-lifecycle",
+        finalizer: "instance-disposer",
+        durability: "coordination-only",
+        reachability: "instance-scoped",
+        verdict: "safe_scoped",
+      },
+    ]),
+  ),
   "packages/core/src/database/migration.ts:lock": {
     owner: "DatabaseMigration.process-serialization",
     keyScope: "process",
@@ -1087,6 +1401,8 @@ const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
   },
 }
 
+const fileOfKey = (key: string) => key.split(":")[0]!
+
 function audit(key: string, classification: RuntimeStateClassification): RuntimeStateAudit {
   const review = reviewed[key]
   if (review) return review
@@ -1110,6 +1426,43 @@ function audit(key: string, classification: RuntimeStateClassification): Runtime
       durability: "legacy-runtime",
       reachability: "release-reachable",
       verdict: "release_forbidden",
+    }
+  }
+  // RI-94 W2 (2026-09-10): the same construction argument covers (a) class-instance state on TUI/CLI
+  // render widgets — the instance is owned by its render owner and dies with it — and (b) closure
+  // state captured inside Effect Layer factory bodies in the effect/* trees: those bindings live in
+  // the layer's build closure, whose lifetime is the layer scope with its registered finalizers.
+  // Both are owner-lifecycle bounded and never durable authority.
+  if (
+    key.includes("@") &&
+    (/^packages\/(?:tui|cli)\//.test(fileOfKey(key)) ||
+      /^packages\/(?:core|deepagent-code)\/src\/effect\//.test(fileOfKey(key)))
+  ) {
+    return {
+      owner: "render-or-layer-owner",
+      keyScope: "owner-lifecycle",
+      bound: "owner-lifecycle",
+      finalizer: "owner-exit-gc",
+      durability: "ephemeral-runtime",
+      reachability: "process-local",
+      verdict: "safe_scoped",
+    }
+  }
+  // RI-94 W1 (2026-09-10): function/closure-scoped and class-instance UI state is adjudicated by
+  // construction — the `@`-marked key namespace means the binding lives inside a function body or
+  // on a class instance, so its lifecycle is bounded by that owner (component mount, render pass,
+  // handler invocation, instance). It is ephemeral product-UI state, never durable authority.
+  // Module-level mutable UI state (no `@`) stays review_required — those are process-lifetime
+  // bindings that need per-item owner/bound/finalizer review.
+  if (classification === "ui_process_state" && key.includes("@")) {
+    return {
+      owner: "ui-owner-invocation",
+      keyScope: "owner-lifecycle",
+      bound: "owner-lifecycle",
+      finalizer: "owner-exit-gc",
+      durability: "ephemeral-ui",
+      reachability: "product-ui",
+      verdict: "safe_scoped",
     }
   }
   return {

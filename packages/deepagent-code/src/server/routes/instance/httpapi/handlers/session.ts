@@ -14,6 +14,8 @@ import { MessageV2 } from "@/session/message-v2"
 import { SessionPrompt } from "@/session/prompt"
 import { SessionPromptIntent } from "@/session/prompt-intent"
 import { LegacyExecutionUnavailable, guardLegacyExecution } from "@/session/legacy-execution-zero"
+import { AbsolutePath } from "@deepagent-code/core/schema"
+import { AgentV2 } from "@deepagent-code/core/agent"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { SessionRuntimeStatus } from "@deepagent-code/core/session/runtime-status"
 import { SessionMutationEpoch } from "@/session/mutation-epoch"
@@ -294,6 +296,34 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     })
 
     const create = Effect.fn("SessionHttpApi.create")(function* (ctx: { payload?: Session.CreateInput }) {
+      // RI-16/RI-25: under the V2-only profile session create is Core-native (session.created.2
+      // authority; the V1 wire shape below is egress only — the bridge derives client events and
+      // the shared session row carries the response).
+      if (flags.coreV2Only) {
+        const instanceCtx = yield* InstanceState.context
+        const workspaceID = yield* InstanceState.workspaceID
+        const created = yield* coreV2Session.create({
+          ...(ctx.payload?.parentID ? { parentID: SessionV2.ID.make(ctx.payload.parentID) } : {}),
+          ...(ctx.payload?.title ? { title: ctx.payload.title } : {}),
+          ...(ctx.payload?.metadata ? { metadata: ctx.payload.metadata } : {}),
+          ...(ctx.payload?.agent ? { agent: AgentV2.ID.make(ctx.payload.agent) } : {}),
+          ...(ctx.payload?.model
+            ? { model: { id: ctx.payload.model.id, providerID: ctx.payload.model.providerID } }
+            : {}),
+          permissions: SessionV2.permissionsFromLegacy(ctx.payload?.permission),
+          location: { directory: AbsolutePath.make(instanceCtx.directory), ...(workspaceID ? { workspaceID } : {}) },
+        }).pipe(
+          // RI-04 admission validation surfaces as a typed 400 like the public V2 endpoint.
+          Effect.catchTags({
+            "AgentV2.NotFoundError": (error) =>
+              Effect.fail(new HttpApiError.BadRequest({})),
+            "Session.AgentNotSelectableError": (error) =>
+              Effect.fail(new HttpApiError.BadRequest({})),
+          }),
+        )
+        // Read-back cannot miss a session Core just projected; a miss is a defect, not a 404.
+        return yield* session.get(SessionID.make(created.id)).pipe(Effect.orDie)
+      }
       return yield* shareSvc.create(ctx.payload)
     })
 

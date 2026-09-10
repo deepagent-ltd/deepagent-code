@@ -151,8 +151,8 @@ function digestEvidenceFiles(inventory: Inventory, bridgeSites: readonly Selecti
  * An inventory may be supplied to avoid re-running the AST extraction; by default the gate
  * builds the frozen production caller inventory itself.
  */
-export function currentTreeCounts(inventory: Inventory = buildInventory()): LegacyZeroCounters {
-  return computeCounters(inventory)
+export async function currentTreeCounts(inventory?: Inventory): Promise<LegacyZeroCounters> {
+  return computeCounters(inventory ?? (await buildInventory()))
 }
 
 /**
@@ -164,7 +164,8 @@ export function currentTreeCounts(inventory: Inventory = buildInventory()): Lega
  * gate passes. Pass a bridgeSites override (e.g. [] in a fixture test) to decouple the counter
  * check from the live source scan.
  */
-export function mustBeZero(inventory: Inventory = buildInventory(), bridgeSites: readonly SelectionBridgeSite[] = selectionBridgeSites()): string {
+export async function mustBeZero(inventory?: Inventory, bridgeSites: readonly SelectionBridgeSite[] = selectionBridgeSites()): Promise<string> {
+  inventory ??= await buildInventory()
   const counters = computeCounters(inventory)
   const bridgeUsages = countSelectionBridgeUsages(bridgeSites)
   const violations = violationsFor(inventory)
@@ -194,7 +195,8 @@ export function mustBeZero(inventory: Inventory = buildInventory(), bridgeSites:
  * redOracle(): print the counts and return the byte-stable snapshot. The print is a single
  * ordered block so re-running the oracle on the same tree produces identical output.
  */
-export function redOracle(inventory: Inventory = buildInventory()): LegacyZeroSnapshot {
+export async function redOracle(inventory?: Inventory): Promise<LegacyZeroSnapshot> {
+  inventory ??= await buildInventory()
   const snapshot = buildSnapshot(inventory)
   const c = snapshot.counters
   console.log("C0-08 legacy-zero inventory gate (red oracle)")

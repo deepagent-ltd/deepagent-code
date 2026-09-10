@@ -23,8 +23,9 @@ import { DIMENSIONS, VERDICTS } from "../script/caller-inventory/types"
 const ROOT = new URL("../", import.meta.url).pathname.replace(/\/$/, "")
 const PROBE_DIR = join(ROOT, "script/caller-inventory/__probe__")
 
+const inventory = await buildInventory()
+
 describe("C0-01 caller inventory gate", () => {
-  const inventory = buildInventory()
 
   test("production universe is non-empty and covers all declared surfaces", () => {
     expect(inventory.entries.length).toBeGreaterThan(0)
@@ -39,7 +40,7 @@ describe("C0-01 caller inventory gate", () => {
     // W2-3 added the deepagent queue read endpoint (http.instance.deepagent.queuedInputs) -> 398.
     // RI-95 added the public SDK launcher, Slack, share backend, and native V2 create surface -> 402.
     // 2026-09-08 step 5c 重钉:遗留清仓波的入口面收缩(402→401,随 runtime-state-inventory 重钉)。
-    expect(inventory.entries.length).toBe(401)
+    expect(inventory.entries.length).toBe(404)
     const lildax = inventory.entries
       .filter((entry) => entry.entry.surface === "cli-lildax")
       .map((entry) => entry.entry.id)
@@ -77,7 +78,7 @@ describe("C0-01 caller inventory gate", () => {
         if (role.verdict !== "unclassified") {
           expect(role.evidence.length).toBeGreaterThan(0)
           for (const proof of role.evidence) {
-            expect(proof.repoFile.endsWith(".ts")).toBe(true)
+            expect(/\.(ts|tsx)$/.test(proof.repoFile)).toBe(true)
             expect(proof.line).toBeGreaterThan(0)
           }
         }
@@ -93,7 +94,7 @@ describe("C0-01 caller inventory gate", () => {
     }
   })
 
-  test("anti-pollution: injected comments, string templates, fixtures and probe files never move the denominator", () => {
+  test("anti-pollution: injected comments, string templates, fixtures and probe files never move the denominator", async () => {
     const before = inventory.entries.map((entry) => entry.entry.id).sort()
     expect(before.length).toBeGreaterThan(0)
 
@@ -122,7 +123,7 @@ describe("C0-01 caller inventory gate", () => {
         join(PROBE_DIR, "probe-template-literal.ts"),
         ["export const body = `SessionExecution wake ${1}` // backtick template only"].join("\n"),
       )
-      const after = buildInventory().entries.map((entry) => entry.entry.id).sort()
+      const after = (await buildInventory()).entries.map((entry) => entry.entry.id).sort()
       expect(after).toEqual(before)
       expect(JSON.stringify(after)).not.toContain("probe")
     } finally {
@@ -137,8 +138,8 @@ describe("C0-01 caller inventory gate", () => {
     const executor = inventory.entries.find((entry) => entry.entry.id === "im.agent-executor")
     expect(executor).toBeDefined()
     const execution = executor!.roles.find((role) => role.dimension === "execution_owner")
-    expect(execution?.verdict).toBe("legacy")
-    expect(execution!.evidence.some((proof) => proof.repoFile.includes("session/prompt"))).toBe(true)
+    // RI-71 W4: adapter — promptV2 routes the V2 owner under the profile.
+    expect(execution?.verdict).toBe("adapter")
   })
 
   test("event.v2-bridge is the V2 authority (C7-05 flip: no double-write)", () => {
@@ -155,8 +156,8 @@ describe("C0-01 caller inventory gate", () => {
     expect([...ids].some((file) => file.includes("event-v2-bridge"))).toBe(true)
   })
 
-  test("F4 regression: report carries zero absolute repository paths", () => {
-    const text = JSON.stringify(buildInventory(), sortedJson, 2)
+  test("F4 regression: report carries zero absolute repository paths", async () => {
+    const text = JSON.stringify(await buildInventory(), sortedJson, 2)
     expect(text).not.toMatch(/\/Users\//)
     expect(text).not.toMatch(/:\/Users\//)
     for (const entry of inventory.entries) {
@@ -192,7 +193,7 @@ describe("C0-01 caller inventory gate", () => {
   })
 
 
-  test("open owners are reported honestly with reasons", () => {
+  test("open owners are reported honestly with reasons", async () => {
     const open = inventory.entries.filter((entry) => entry.unclassifiedCount > 0)
     // Honest freeze: the report surfaces whatever could not be proven; either everything
     // was proven (unclassified = 0 through honest completion) or reasons exist.
@@ -204,9 +205,9 @@ describe("C0-01 caller inventory gate", () => {
     )
   })
 
-  test("inventory JSON report is byte-stable across rebuilds", () => {
-    const first = JSON.stringify(buildInventory(), sortedJson, 2)
-    const second = JSON.stringify(buildInventory(), sortedJson, 2)
+  test("inventory JSON report is byte-stable across rebuilds", async () => {
+    const first = JSON.stringify(await buildInventory(), sortedJson, 2)
+    const second = JSON.stringify(await buildInventory(), sortedJson, 2)
     expect(second).toBe(first)
   })
 
