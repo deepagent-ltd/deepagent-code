@@ -526,6 +526,25 @@ jobs:
           git config --global user.name "deepagent-code"
           ssh-keyscan -H aur.archlinux.org >> ~/.ssh/known_hosts || true
 
+      # RI-51 authoritative ledger release gate: regenerate the candidate ledger from THIS tree
+      # (caller inventory, source manifest, runtime-state inventory) and stop every upload on
+      # NO-GO. Gate statuses are explicit evidence (release-evidence inputs); without them all
+      # gates are pending and the release is refused — fail-closed by construction.
+      - name: RI-51 authoritative ledger release gate
+        if: needs.version.outputs.release
+        run: |
+          mkdir -p /tmp/authoritative-ledger
+          (cd packages/core && bun run script/evidence-ledger/release-gate.ts --out /tmp/authoritative-ledger/ledger.json)
+
+      - name: Upload authoritative ledger release asset
+        if: needs.version.outputs.release && !cancelled()
+        env:
+          GH_TOKEN: ${{ steps.committer.outputs.token }}
+        run: |
+          if [ -f /tmp/authoritative-ledger/ledger.json ]; then
+            gh release upload "v${{ needs.version.outputs.version }}" /tmp/authoritative-ledger/ledger.json --clobber --repo "${{ needs.version.outputs.repo }}" || echo "::warning::ledger asset upload skipped"
+          fi
+
       - name: Upload desktop release assets
         if: needs.version.outputs.release
         env:

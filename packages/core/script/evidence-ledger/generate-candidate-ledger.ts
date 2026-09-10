@@ -44,7 +44,9 @@ async function run(script: string, scriptArgs: readonly string[]) {
 const repository = path.resolve(import.meta.dir, "../../../..")
 const manifestPath = required("--manifest")
 const evidenceDir = required("--evidence-dir")
-const publicKeyPath = required("--public-key")
+// 2026-09-10 ruling: release signing descoped — the public key is OPTIONAL verification
+// (when provided, signatures are checked and failures reject); unsigned runs stay eligible.
+const publicKeyPath = option("--public-key")
 const outputPath = option("--out")
 const temporary = await mkdtemp(path.join(os.tmpdir(), "deepagent-evidence-ledger-"))
 
@@ -111,8 +113,7 @@ try {
     runtimePath,
     "--evidence-dir",
     evidenceDir,
-    "--public-key",
-    publicKeyPath,
+    ...(publicKeyPath ? ["--public-key", publicKeyPath] : []),
     ...(packagedDirectory ? ["--packaged-report", packagedPath] : []),
     ...(outputPath ? ["--out", outputPath] : []),
   ]

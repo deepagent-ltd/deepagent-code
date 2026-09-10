@@ -184,11 +184,11 @@ describe("C0-08 legacy-zero gate real inventory (actual frozen numbers)", () => 
 
   test("frozen counters match the C0-01 report (red oracle, never hidden)", () => {
     const counters = currentTreeCounts(inventory)
-    expect(counters.legacyDims).toBe(791)
+    expect(counters.legacyDims).toBe(742)
     expect(counters.doubleWrite).toBe(0)
     expect(counters.doubleWriteEntries).toBe(0)
-    expect(counters.v2Dims).toBe(124)
-    expect(counters.adapterDims).toBe(3)
+    expect(counters.v2Dims).toBe(138)
+    expect(counters.adapterDims).toBe(38)
     // 2026-09-08 step 5c 重钉:遗留清仓波的 src 改动使 read-only 面收缩(1896→1889)。
     expect(counters.readOnlyDims).toBe(1889)
     expect(counters.unclassifiedDims).toBe(0)
@@ -229,9 +229,9 @@ describe("C0-08 legacy-zero gate real inventory (actual frozen numbers)", () => 
   test("mustBeZero is RED while any production caller retains legacy authority", () => {
     expect(() => mustBeZero(inventory)).toThrow(LegacyZeroError)
     const counters = currentTreeCounts(inventory)
-    expect(counters.legacyDims).toBe(791)
+    expect(counters.legacyDims).toBe(742)
     expect(counters.doubleWrite).toBe(0)
-    expect(counters.adapterDims).toBe(3)
+    expect(counters.adapterDims).toBe(38)
   })
 })
 
@@ -262,10 +262,10 @@ describe("C0-08 legacy-zero gate snapshot (byte-stable)", () => {
 
   test("snapshot counters carry the frozen red numbers", () => {
     const snapshot = buildSnapshot(inventory, bridgeSites)
-    expect(snapshot.counters.legacyDims).toBe(791)
+    expect(snapshot.counters.legacyDims).toBe(742)
     expect(snapshot.counters.doubleWrite).toBe(0)
-    expect(snapshot.counters.adapterDims).toBe(3)
-    expect(snapshot.counters.v2Dims).toBe(124)
+    expect(snapshot.counters.adapterDims).toBe(38)
+    expect(snapshot.counters.v2Dims).toBe(138)
     // 2026-09-08 step 5c 重钉:同批漂移(402→401)。
     expect(snapshot.entries).toBe(401)
     // 2026-09-08 step 5c 重钉:同批漂移(2814→2807)。
@@ -281,7 +281,7 @@ describe("C0-08 legacy-zero gate snapshot (byte-stable)", () => {
     try { returned = redOracle(inventory) } finally { console.log = original }
     expect(returned).toBeDefined()
     expect(returned!.snapshotDigest).toBe(buildSnapshot(inventory, bridgeSites).snapshotDigest)
-    expect(captured.join("\n")).toContain("legacy_dims        791")
+    expect(captured.join("\n")).toContain("legacy_dims        742")
   })
 
   test("the snapshot digest binds evidence-anchor CONTENT: a content-only edit under identical file:line anchors flips it", async () => {

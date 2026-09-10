@@ -293,6 +293,58 @@ export const RULE_PACKS: readonly RulePack[] = [
   },
 
   // ===========================================================================
+  // ===========================================================================
+  // RI-71 W1 (2026-09-10): V2-backed reclassifications under the production core-v2-only
+  // profile. coreV2Only is a machine-verified hardcoded invariant (productionProfile), so the
+  // runtime authority for these entries is Core V2 — proven by positive AST facts, not intent.
+  // ===========================================================================
+  // summarize is a DIRECT V2 command since RI-18 native manual compaction: the handler calls
+  // SessionV2.compact (durable request chain, V2 events, V2 receipts).
+  {
+    match: (id) => id === "http.instance.session.summarize",
+    rules: v2All7([
+      { kind: "productionProfile" },
+      body("coreV2Session.compact"),
+      LEGACY_PROMPT,
+      V2_SESSION_CORE,
+      V2_EXEC_LOCAL,
+    ]),
+  },
+  // abort targets the V2 execution owner under the core-v2-only profile: promptSvc.cancel
+  // routes coreV2Session.interrupt (process-local V2 interrupt) and never touches the legacy
+  // run-state cancel branch.
+  {
+    match: (id) => id === "http.instance.session.abort",
+    rules: v2All7([
+      { kind: "productionProfile" },
+      body("promptSvc.cancel"),
+      call("coreV2Session.interrupt", LEGACY_PROMPT_PATH),
+      V2_SESSION_CORE,
+      V2_EXEC_LOCAL,
+    ]),
+  },
+  // The promptOrSteer family is the app wire-protocol adapter over V2 authority: under the
+  // core-v2-only profile every prompt routes promptV2 (SessionV2 admission + coreV2Session
+  // resume through the V2 runner) and legacy execution for V2 sessions is refused by
+  // LEGACY-EXECUTION-ZERO. adapter, not v2: the app layer still translates the wire shape.
+  {
+    match: (id) =>
+      id.startsWith("http.instance.session.") &&
+      ["prompt", "promptAsync", "promptPrepare", "promptPrepareStream", "promptSuggestion"].includes(
+        id.slice("http.instance.session.".length),
+      ),
+    rules: all7(adapter([
+      { kind: "productionProfile" },
+      body("promptSvc"),
+      LEGACY_PROMPT,
+      V2_SESSION_CORE,
+      V2_EXEC_LOCAL,
+      call("coreV2Session.prompt", LEGACY_PROMPT_PATH),
+      call("coreV2Session.resume", LEGACY_PROMPT_PATH),
+    ])),
+  },
+
+  // ===========================================================================
   // HTTP — session-execution operations driving the legacy SessionPrompt turn
   // ===========================================================================
   {
