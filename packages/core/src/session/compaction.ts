@@ -143,6 +143,8 @@ type Input = {
   readonly historyPromptEpoch: number
   readonly ownerMode: "shadow_v2" | "v2"
   readonly admission: SelectionAdmission
+  /** RI-18: manual compaction is forced (no token threshold) and reports reason "manual". */
+  readonly reason?: "auto" | "manual"
 }
 
 const estimate = (value: unknown) => Token.estimate(JSON.stringify(value))
@@ -201,6 +203,29 @@ const settings = (documents: readonly Config.Entry[]) => {
     }),
     { auto: true, buffer: DEFAULT_BUFFER, tokens: DEFAULT_KEEP_TOKENS },
   )
+}
+
+/**
+ * RI-18 manual selection: summarize everything BEFORE the last user exchange and retain the last
+ * exchange (its user message and everything after). A single-exchange history has nothing to
+ * summarize — the caller settles the request as a no-op.
+ */
+const selectForManual = (entries: readonly Entry[]): { readonly head: string; readonly recent: string } | undefined => {
+  const conversation = entries.filter((entry) => entry.message.type !== "compaction")
+  let lastUser = -1
+  for (let index = conversation.length - 1; index >= 0; index--) {
+    if (conversation[index]!.message.type === "user") {
+      lastUser = index
+      break
+    }
+  }
+  if (lastUser <= 0) return undefined
+  const serializeAll = (slice: readonly Entry[]) =>
+    slice
+      .map((entry) => serialize(entry.message))
+      .filter(Boolean)
+      .join("\n\n")
+  return { head: serializeAll(conversation.slice(0, lastUser)), recent: serializeAll(conversation.slice(lastUser)) }
 }
 
 const select = (
@@ -341,7 +366,7 @@ export const make = (dependencies: Dependencies) => {
     const context = modelInputLimit(input.model)
     if (context === undefined || context <= 0) return false
     const output = input.request.generation?.maxTokens ?? input.model.route.defaults.limits?.output ?? 0
-    const selected = select(input.entries, config.tokens)
+    const selected = input.reason === "manual" ? selectForManual(input.entries) : select(input.entries, config.tokens)
     const previousSummary = input.entries.find((entry) => entry.message.type === "compaction")?.message
     if (!selected || (selected.head.length === 0 && previousSummary?.type !== "compaction")) return false
     const summaryPrompt = buildPrompt({
@@ -355,7 +380,7 @@ export const make = (dependencies: Dependencies) => {
       sessionID: input.sessionID,
       messageID,
       timestamp: yield* DateTime.now,
-      reason: "auto",
+      reason: input.reason ?? "auto",
     })
 
     const remote = dependencies.remoteCompaction
@@ -397,11 +422,11 @@ export const make = (dependencies: Dependencies) => {
             sessionID: input.sessionID,
             messageID,
             timestamp: yield* DateTime.now,
-            reason: "auto",
+            reason: input.reason ?? "auto",
             text: remoteResult.summary,
             recent: selected.recent,
           })
-          return true
+          return { receiptID: null }
         }
         log.warn("remote compaction returned an empty summary, entering compact recovery", {
           sessionID: input.sessionID,
@@ -441,6 +466,7 @@ export const make = (dependencies: Dependencies) => {
     const summaryEvents: LLMEvent[] = []
     const chunks: string[] = []
     let failed = false
+    let summaryReceiptID: string | undefined
     // The summary provider request is a physical dispatch: it must own the same durable receipt
     // contract (admit -> wire seal -> settle/quarantine) as every other provider turn so a crash or
     // stream failure cannot bypass the recovery classifier. Receipt-seam refusals before dispatch
@@ -467,6 +493,7 @@ export const make = (dependencies: Dependencies) => {
           ownerToken: dependencies.providerTurns.ownerToken,
         })
       ).receipt
+      summaryReceiptID = summaryReceipt.receiptId
       return yield* V2ProviderTurn.stream({
         service: dependencies.providerTurns,
         receipt: summaryReceipt,
@@ -542,11 +569,11 @@ export const make = (dependencies: Dependencies) => {
       sessionID: input.sessionID,
       messageID,
       timestamp: yield* DateTime.now,
-      reason: "auto",
+      reason: input.reason ?? "auto",
       text: summary,
       recent: selected.recent,
     })
-    return true
+    return { receiptID: summaryReceiptID ?? null }
   })
   const compactIfNeeded = Effect.fn("SessionCompaction.compactIfNeeded")(function* (input: Input) {
     if (!config.auto) return false

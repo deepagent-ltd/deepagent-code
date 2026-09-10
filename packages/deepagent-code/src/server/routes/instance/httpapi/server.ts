@@ -23,6 +23,7 @@ import * as Observability from "@deepagent-code/core/effect/observability"
 import { Ripgrep } from "@deepagent-code/core/filesystem/ripgrep"
 import { Format } from "@/format"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { RuntimeIntegrityIdentity } from "@/effect/runtime-integrity-identity"
 import { LSP } from "@/lsp/lsp"
 import { MCP } from "@/mcp"
 import { Permission } from "@/permission"
@@ -366,6 +367,9 @@ export function createRoutes(corsOptions?: CorsOptions, runtimeFlagsLayer = Runt
     // §A4/§C — start the V4 event-runtime daemons with the server (inert unless V4 flags are on). Draws
     // the session stack + RuntimeFlags from the provide stack below.
     ...([v4EventRuntimeLayer, v2StartupRecovery, V2OutboxRuntime.layer] as const),
+    // RI-24: snapshot the root context for the per-root runtime-integrity identity slot; the
+    // identity derives detached on first drain use (RuntimeIntegrityIdentity.slotResolver).
+    RuntimeIntegrityIdentity.captureRootContextLayer,
   ).pipe(
     Layer.provide([
       errorLayer,

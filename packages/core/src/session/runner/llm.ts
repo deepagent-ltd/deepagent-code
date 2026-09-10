@@ -32,6 +32,7 @@ import { ToolRegistry } from "../../tool/registry"
 import { ToolOutputStore } from "../../tool-output-store"
 import { SessionContextEpoch } from "../context-epoch"
 import { SessionCompaction } from "../compaction"
+import { CompactionRequest } from "../compaction-request"
 import { SessionContext } from "../../context-federation/session-context"
 import { ContextQueryAuthorization } from "../../context-federation/query-authorization"
 import { SessionEvent } from "../event"
@@ -1488,6 +1489,121 @@ export const layer = Layer.effect(
       )
     })
 
+    // RI-18 native manual compaction: drain-only work driven by a durable request row. The summary
+    // provider turn (one physical dispatch, full receipt contract) runs inside SessionCompaction;
+    // this attempt owns admission, the request lifecycle, and the activity settle.
+    const runManualCompaction = Effect.fn("SessionRunner.runManualCompaction")(function* (
+      request: CompactionRequest.Request,
+    ) {
+      const parityCampaign = (yield* V2ProviderTurn.CurrentCampaign) ?? V2ProviderTurn.campaignFromEnv()
+      const ownerCampaign = (yield* V2ProviderTurn.CurrentOwnerCampaign) ?? V2ProviderTurn.ownerCampaignFromEnv()
+      if (!(yield* ownerAuthorization.authorize(db, ownerCampaign)))
+        return yield* new V2ProviderTurn.ConflictError({ reason: "v2_owner_campaign_not_verified" })
+      // Another drain already picked the request up (dispatched): the coordinator serializes
+      // same-session drains, but a restarted process could observe a stale dispatched row — leave
+      // it to recovery instead of dispatching a second summary.
+      if (request.status !== "pending") return false
+      const session = yield* getSession(request.session_id as SessionSchema.ID)
+      if (session.location.directory !== location.directory || session.location.workspaceID !== location.workspaceID)
+        return yield* Effect.interrupt
+      const agent = yield* agents.select(session.agent)
+      const { model, info: modelInfo, provider: modelProvider } = yield* models.resolveRef(
+        session,
+        ProviderV2.ID.make(request.provider_id),
+        ModelV2.ID.make(request.model_id),
+      )
+      const modelProtocolSelection = modelInfo ? resolveModelProtocol(modelInfo, modelProvider) : undefined
+      const system = yield* SessionContextEpoch.prepare(
+        db,
+        events,
+        loadSystemContext(agent, session, modelInfo?.capabilities.tools),
+        session.id,
+        session.location,
+        agent.id,
+      )
+      const entries = yield* SessionHistory.entriesForRunner(db, session.id, system.baselineSeq)
+      const context = entries.map((entry) => entry.message)
+      const currentUserMessageID = context.findLast((message) => message.type === "user")?.id
+      const latestReceipt = currentUserMessageID
+        ? undefined
+        : yield* db
+            .select({ userMessageID: V2ProviderTurnReceiptTable.user_message_id, state: V2ProviderTurnReceiptTable.state })
+            .from(V2ProviderTurnReceiptTable)
+            .where(eq(V2ProviderTurnReceiptTable.session_id, session.id))
+            .orderBy(desc(V2ProviderTurnReceiptTable.request_ordinal))
+            .get()
+            .pipe(Effect.orDie)
+      if (
+        latestReceipt &&
+        ["preparing", "dispatching", "streaming", "indeterminate_after_crash"].includes(latestReceipt.state)
+      )
+        return yield* new V2ProviderTurn.UnsafeRetryError({ state: latestReceipt.state })
+      const receiptUserMessageID = currentUserMessageID ?? latestReceipt?.userMessageID
+      if (!receiptUserMessageID) {
+        yield* CompactionRequest.settle(db, request.request_id, { status: "failed", outcome: "no_durable_identity" })
+        return false
+      }
+      const historyPromptEpoch =
+        (historyEpochLookup
+          ? yield* historyEpochLookup(session.id).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+          : undefined) ?? system.revision
+      const selectionAdmission = yield* SessionRunnerCanonical.admitSelection({
+        db,
+        contexts,
+        sessionID: session.id,
+        agent: agent.id,
+        location: session.location,
+        promotedInputIds: [],
+        fallbackUserInputId: receiptUserMessageID,
+        system: { baseline: system.baseline, revision: system.revision, baselineSeq: system.baselineSeq },
+        historyEndMessageId: context.at(-1)?.id,
+        ...(modelProtocolSelection?.protocol
+          ? {
+              model: {
+                id: model.id,
+                providerID: model.provider,
+                protocol: modelProtocolSelection.protocol,
+                contextWindow: modelInfo?.limit.context ?? 0,
+                structuredOutput: modelInfo?.api.protocolCapabilities?.structuredOutput ?? false,
+              },
+            }
+          : {}),
+        sources: selectionSources,
+        queryAuthorization,
+        runtimeFeatures,
+      })
+      // An interrupted or failed attempt must terminalize its activity AND its request — a stale
+      // `dispatched` row would block every later compaction on the session.
+      yield* Effect.addFinalizer((exit) =>
+        (Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)
+          ? Effect.all([
+              contexts.settleActivity({ activityId: selectionAdmission.activityId, state: "interrupted" }),
+              CompactionRequest.settle(db, request.request_id, { status: "recovery_required", outcome: "interrupted" }),
+            ]).pipe(Effect.ignore)
+          : Effect.void
+        ).pipe(Effect.ensuring(queryAuthorization.remove(session.id).pipe(Effect.ignore))),
+      )
+      yield* CompactionRequest.markDispatched(db, request.request_id)
+      const compacted = yield* compaction.compactAfterOverflow({
+        sessionID: session.id,
+        entries,
+        model,
+        request: LLM.request({ model, messages: [] }),
+        userMessageID: receiptUserMessageID,
+        historyPromptEpoch,
+        ownerMode: parityCampaign ? "shadow_v2" : "v2",
+        admission: selectionAdmission,
+        reason: "manual",
+      })
+      yield* CompactionRequest.settle(db, request.request_id, {
+        status: "settled",
+        outcome: compacted === false ? "nothing_to_compact" : "compacted",
+        ...(compacted === false || compacted.receiptID === null ? {} : { summaryReceiptID: compacted.receiptID }),
+      })
+      yield* contexts.settleActivity({ activityId: selectionAdmission.activityId, state: "settled" }).pipe(Effect.ignore)
+      return compacted !== false
+    })
+
     const run = Effect.fn("SessionRunner.run")(function* (input: {
       readonly sessionID: SessionSchema.ID
       readonly force?: boolean
@@ -1497,7 +1613,11 @@ export const layer = Layer.effect(
       // W1.1 — a goal_steer admission wakes the drain but is NOT a chat activity: it opens a
       // DRAIN-ONLY turn (no provider dispatch) that delivers the guidance to the active goal.
       const hasGoalSteer = !hasSteer && !hasQueue && (yield* SessionInput.hasPending(db, input.sessionID, "goal_steer"))
-      if (input.force !== true && !hasSteer && !hasQueue && !hasGoalSteer) return
+      // RI-18: a pending manual compaction request drives its own drain — the summary provider
+      // turn runs inside SessionCompaction with the full receipt contract.
+      const hasManualCompaction =
+        !hasSteer && !hasQueue && !hasGoalSteer && (yield* CompactionRequest.pendingForSession(db, input.sessionID)) !== undefined
+      if (input.force !== true && !hasSteer && !hasQueue && !hasGoalSteer && !hasManualCompaction) return
       const parityCampaign = (yield* V2ProviderTurn.CurrentCampaign) ?? V2ProviderTurn.campaignFromEnv()
       const ownerCampaign = (yield* V2ProviderTurn.CurrentOwnerCampaign) ?? V2ProviderTurn.ownerCampaignFromEnv()
       if (!(yield* ownerAuthorization.authorize(db, ownerCampaign)))
@@ -1516,11 +1636,21 @@ export const layer = Layer.effect(
           : hasGoalSteer
             ? "goal_steer"
             : undefined
-      let openActivity = input.force === true || hasSteer || hasQueue || hasGoalSteer
+      let openActivity = input.force === true || hasSteer || hasQueue || hasGoalSteer || hasManualCompaction
       // W7: the settle hook references the PRIMARY activity of this drain chain (the trigger input),
       // so a multi-activity drain admits one learning run anchored on the prompt that opened it.
       let settledActivityId: string | undefined
       while (openActivity) {
+        // RI-18: a pending manual compaction request is drain-only work — it runs its own summary
+        // turn (one provider dispatch inside SessionCompaction) and never promotes chat inputs.
+        const manualRequest = yield* CompactionRequest.pendingForSession(db, input.sessionID)
+        if (manualRequest === undefined) yield* CompactionRequest.settleOrphaned(db, input.sessionID)
+        if (manualRequest !== undefined) {
+          yield* runManualCompaction(manualRequest).pipe(Effect.scoped)
+          openActivity = yield* SessionInput.hasPending(db, input.sessionID, "queue")
+          promotion = openActivity ? "queue" : undefined
+          continue
+        }
         let needsContinuation = true
         let step = 1
         let activityId: string | undefined

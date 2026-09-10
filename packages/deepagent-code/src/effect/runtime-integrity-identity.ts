@@ -1,6 +1,6 @@
 export * as RuntimeIntegrityIdentity from "./runtime-integrity-identity"
 
-import { Context, Effect } from "effect"
+import { Context, Effect, Layer } from "effect"
 import { EventV2 } from "@deepagent-code/core/event"
 import { RuntimeIntegrityEvidenceContract } from "@deepagent-code/core/contract/runtime-integrity-evidence"
 import { ContractDigest } from "@deepagent-code/core/contract/digest"
@@ -13,7 +13,7 @@ import { SessionRuntimeStatus } from "@deepagent-code/core/session/runtime-statu
 import { SessionStore } from "@deepagent-code/core/session/store"
 import { LocationServiceMap } from "@deepagent-code/core/location-layer"
 import { Database } from "@deepagent-code/core/database/database"
-import { ToolRegistry } from "@deepagent-code/core/tool/registry"
+import { ToolRegistry } from "@/tool/registry"
 import { InstanceStore } from "@/project/instance-store"
 import { CompositionDigest } from "./composition-digest"
 
@@ -71,15 +71,86 @@ export const current = Effect.gen(function* () {
   })
 })
 
-/** Adapt the root-context-dependent resolver to Core's context-preserving seam. */
+/**
+ * Adapt the root-context-dependent derivation to callers whose fiber context IS the full root
+ * graph (AppRuntime direct calls, root-context tests). Production drain fibers must NOT use this:
+ * Location-scoped fibers structurally cannot see the five V2 owner services (RI-34 keyed-tree
+ * rule), so the frame provides the slot-backed resolver below instead.
+ */
 export const resolver: V2ProviderTurn.RuntimeIntegrityIdentityResolver = {
   resolve: (context) =>
-    // The resolver is called from a live runner fiber whose context includes the complete root
-    // graph. The opaque Core seam intentionally erases that graph's concrete service union; keep
-    // the cast at this one adapter boundary rather than leaking DeepAgentCode dependencies into
-    // Core's runner types.
+    // The opaque Core seam intentionally erases the graph's concrete service union; keep the cast
+    // at this one adapter boundary rather than leaking DeepAgentCode dependencies into Core's
+    // runner types.
     (current.pipe(Effect.provideContext(context as Context.Context<RuntimeIdentityContext>)) as unknown) as Effect.Effect<
       RuntimeIntegrityEvidenceContract.RuntimeIdentity,
       RuntimeIntegrityEvidenceContract.RuntimeIntegrityEvidenceError
     >,
 }
+
+/** Per-root holder: the root context captured at graph build plus the derived identity. */
+export interface RootIdentitySlotService {
+  identity?: RuntimeIntegrityEvidenceContract.RuntimeIdentity
+  context?: Context.Context<never>
+  derivation?: Promise<RuntimeIntegrityEvidenceContract.RuntimeIdentity>
+}
+export class RootIdentitySlot extends Context.Service<RootIdentitySlot, RootIdentitySlotService>()(
+  "deepagent-code/RuntimeIntegrityIdentityRootSlot",
+) {}
+
+/**
+ * One holder per root build: layer memoization scopes the built service instance to the root's
+ * memoMap, so two roots never share a slot. The Location map's host captures the slot object when
+ * the map builds; the route graph stores the root context in it; drain fibers of any provenance
+ * read the derived identity without needing owner services in their own context.
+ */
+export const rootIdentitySlotLayer = Layer.effect(RootIdentitySlot, Effect.sync(() => ({})))
+
+/**
+ * Capture the root's service context at route-graph build. No service builds are forced and no
+ * derivation runs here — the context snapshot is side-effect free, and the identity derives on
+ * first drain use (detached) so graph construction never waits on instance-scoped work.
+ */
+export const captureRootContextLayer = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const slot = yield* RootIdentitySlot
+    slot.context = yield* Effect.context<never>()
+  }),
+)
+
+const startDerivation = (slot: RootIdentitySlotService) => {
+  if (slot.derivation !== undefined || slot.identity !== undefined || slot.context === undefined) return
+  const derived = current.pipe(
+    Effect.provideContext(slot.context as Context.Context<RuntimeIdentityContext>),
+  ) as unknown as Effect.Effect<
+    RuntimeIntegrityEvidenceContract.RuntimeIdentity,
+    RuntimeIntegrityEvidenceContract.RuntimeIntegrityEvidenceError
+  >
+  // Detached on purpose: the derivation runs `CompositionDigest.current`, which boots the
+  // canonical process-cwd instance; running that on a drain fiber would execute instance-scoped
+  // work under the session flow's fiber, so it runs on its own runtime instead.
+  slot.derivation = Effect.runPromise(derived)
+}
+
+/**
+ * Slot-backed resolver for the production runner frame. Root-captured and context-independent:
+ * drain fibers await the identity derived (once per root, deterministically) from the captured
+ * root context. Before the route graph captured a context the resolver fails typed rather than
+ * fabricating an identity.
+ */
+export const slotResolver = (slot: RootIdentitySlotService): V2ProviderTurn.RuntimeIntegrityIdentityResolver => ({
+  resolve: () =>
+    Effect.suspend(() => {
+      if (slot.identity !== undefined) return Effect.succeed(slot.identity)
+      if (slot.context === undefined)
+        return Effect.fail(
+          new RuntimeIntegrityEvidenceContract.RuntimeIntegrityEvidenceError({
+            reason: "runtime_identity_not_captured",
+          }),
+        )
+      startDerivation(slot)
+      return Effect.promise(() => slot.derivation!).pipe(
+        Effect.map((identity) => (slot.identity = identity)),
+      )
+    }),
+})

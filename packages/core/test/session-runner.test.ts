@@ -20,6 +20,7 @@ import { Git } from "@deepagent-code/core/git"
 import * as OpenAIChat from "@deepagent-code/llm/protocols/openai-chat"
 import * as OpenAIResponses from "@deepagent-code/llm/protocols/openai-responses"
 import { Database } from "@deepagent-code/core/database/database"
+import { CompactionRequestTable } from "../src/session/compaction-request.sql"
 import { EventV2 } from "@deepagent-code/core/event"
 import { Hash } from "@deepagent-code/core/util/hash"
 import { PermissionV2 } from "@deepagent-code/core/permission"
@@ -5715,13 +5716,62 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("RI-18 native manual compaction settles the durable request chain", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const execution = yield* SessionExecution.Service
+      const { db } = yield* Database.Service
+      responses = [
+        fragmentFixture("text", "first-reply", ["reply one"]).completeEvents,
+        fragmentFixture("text", "second-reply", ["reply two"]).completeEvents,
+      ]
+      yield* session.prompt({ id: SessionMessage.ID.create(), sessionID, prompt: new Prompt({ text: "first exchange about apples" }) })
+      yield* execution.awaitIdle(sessionID)
+      yield* session.prompt({ id: SessionMessage.ID.create(), sessionID, prompt: new Prompt({ text: "second exchange" }) })
+      yield* execution.awaitIdle(sessionID)
+      requests.length = 0
+      responses = [fragmentFixture("text", "manual-summary", ["Summary of the first exchange"]).completeEvents]
+      currentModel = compactModel
+
+      yield* session.compact({ sessionID, model: { providerID: ProviderV2.ID.make(compactModel.provider), modelID: ModelV2.ID.make(compactModel.id) } })
+      currentModel = model
+
+      const request = yield* db
+        .select()
+        .from(CompactionRequestTable)
+        .where(eq(CompactionRequestTable.session_id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
+      expect(request).toMatchObject({ status: "settled", outcome: "compacted" })
+      expect(request?.summary_receipt_id).toBeTruthy()
+      // The manual summary turn is one tool-less provider request carrying the compacted head.
+      expect(requests).toHaveLength(1)
+      expect(requests[0]?.tools ?? []).toHaveLength(0)
+      expect(JSON.stringify(requests[0]?.messages)).toContain("first exchange about apples")
+
+      // The compacted head is bounded out of the next turn's request.
+      requests.length = 0
+      responses = [fragmentFixture("text", "post-reply", ["reply three"]).completeEvents]
+      yield* session.prompt({ id: SessionMessage.ID.create(), sessionID, prompt: new Prompt({ text: "after compaction" }) })
+      yield* execution.awaitIdle(sessionID)
+      const serialized = JSON.stringify(requests.at(-1)?.messages)
+      expect(serialized).not.toContain("first exchange about apples")
+      expect(serialized).toContain("after compaction")
+    }),
+  )
+
   it.effect("refuses compact/shell/skill with a typed reason instead of a silent no-op", () =>
     Effect.gen(function* () {
       yield* setup
       const session = yield* SessionV2.Service
       const compactErr = yield* session.compact({ sessionID }).pipe(Effect.flip)
       expect(compactErr).toMatchObject({ operation: "compact" })
-      expect((compactErr as SessionV2.OperationUnavailableError).reason).toContain("manual compaction is not wired")
+      // RI-18 native: compaction is implemented; refusing without an explicit summary model is
+      // the remaining typed guard (never a defaulted or fabricated identity).
+      expect((compactErr as SessionV2.OperationUnavailableError).reason).toContain(
+        "manual compaction requires an explicit summary model identity",
+      )
       expect(compactErr).not.toBe(undefined)
       const shellErr = yield* session.shell({ sessionID, command: "ls" }).pipe(Effect.flip)
       expect(shellErr).toMatchObject({ operation: "shell" })
