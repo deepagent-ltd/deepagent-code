@@ -90,12 +90,19 @@ export interface ResolvedModel {
 
 export interface Interface {
   readonly resolve: (session: SessionSchema.Info) => Effect.Effect<ResolvedModel, Error>
+  /** RI-18: resolve an EXPLICIT provider/model pair (manual compaction fixes its summary model). */
+  readonly resolveRef: (
+    session: SessionSchema.Info,
+    providerID: ProviderV2.ID,
+    modelID: ModelV2.ID,
+  ) => Effect.Effect<ResolvedModel, Error>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/v2/SessionRunnerModel") {}
 
 /** Test or embedding seam for supplying a model resolver directly. */
-export const layerWith = (resolve: Interface["resolve"]) => Layer.succeed(Service, Service.of({ resolve }))
+export const layerWith = (resolve: Interface["resolve"]) =>
+  Layer.succeed(Service, Service.of({ resolve, resolveRef: (session) => resolve(session) }))
 
 const apiKey = (model: ModelV2.Info, provider?: ProviderV2.Info) => {
   const value = model.request.body.apiKey ?? model.api.settings?.apiKey
@@ -225,6 +232,13 @@ export const locationLayer = Layer.effect(
           ? yield* catalog.model.get(session.model.providerID, session.model.id)
           : (Option.getOrUndefined((yield* catalog.model.default()).pipe(Option.filter(supported))) ??
             (yield* catalog.model.available()).find(supported))
+        if (!selected) return yield* new ModelNotSelectedError({ sessionID: session.id })
+        const provider = yield* catalog.provider.get(selected.providerID)
+        return { model: yield* resolve(session, selected, provider), info: selected, provider }
+      }),
+      resolveRef: Effect.fn("SessionRunnerModel.resolveRef")(function* (session, providerID, modelID) {
+        yield* boot.wait()
+        const selected = yield* catalog.model.get(providerID, modelID)
         if (!selected) return yield* new ModelNotSelectedError({ sessionID: session.id })
         const provider = yield* catalog.provider.get(selected.providerID)
         return { model: yield* resolve(session, selected, provider), info: selected, provider }

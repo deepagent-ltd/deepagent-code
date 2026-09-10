@@ -27,6 +27,9 @@ import { lt } from "drizzle-orm"
 import { or } from "drizzle-orm"
 import { notLike } from "drizzle-orm"
 import type { SQL } from "drizzle-orm"
+import { SessionMessageTable } from "@deepagent-code/core/session/sql"
+import { EventSequenceTable } from "@deepagent-code/core/event/sql"
+import { SessionMessage } from "@deepagent-code/core/session/message"
 import { getTableColumns } from "drizzle-orm"
 import {
   MessageTable,
@@ -1514,6 +1517,16 @@ export const layer: Layer.Layer<
       intent: typeof SessionForkIntentTable.$inferSelect,
     ) {
       if (intent.side_effects_completed_at) return
+      // The clone copies the parent's session_message rows at the parent's sequence numbers while
+      // the wire delivery allocates the child's event sequence from zero — the child's sequence
+      // must end ABOVE the cloned history or the next event's projected message collides on
+      // (session_id, seq). Running here (delivery complete, no future publisher yet) is the
+      // race-free point; GREATEST keeps it a no-op when the sequence already leads.
+      yield* db
+        .run(
+          sql`UPDATE event_sequence SET seq = MAX(seq, (SELECT COALESCE(MAX(\`seq\`), 0) FROM session_message WHERE session_id = ${intent.target_session_id})) WHERE aggregate_id = ${intent.target_session_id}`,
+        )
+        .pipe(Effect.ignore)
       if (intent.fork_mode === "foreground") {
         yield* forwardLedgerOnForkRequired({
           parentSessionID: intent.source_session_id,
@@ -2566,6 +2579,40 @@ export const layer: Layer.Layer<
                   return yield* Effect.die(
                     new ForkConflict({ intentID, reason: "fork intent was committed concurrently" }),
                   )
+                }
+
+                // RI-25/V2: the child's DURABLE V2 history must be cloned too — the V2 runner
+                // reconstructs context from session_message, and without this copy a fork under the
+                // V2-only profile starts with empty model context. New V2 message ids keep the
+                // (session_id, seq) keys unique; parentID references follow the same map.
+                const parentV2Rows = yield* db
+                  .select()
+                  .from(SessionMessageTable)
+                  .where(eq(SessionMessageTable.session_id, input.sessionID))
+                  .orderBy(asc(SessionMessageTable.seq))
+                  .all()
+                  .pipe(Effect.orDie)
+                const v2IDMap = new Map<string, SessionMessage.ID>()
+                for (const row of parentV2Rows) v2IDMap.set(row.id, SessionMessage.ID.create())
+                for (const row of parentV2Rows) {
+                  const data = row.data as Record<string, unknown>
+                  const parentID = typeof data.parentID === "string" ? v2IDMap.get(data.parentID) : undefined
+                  yield* db
+                    .insert(SessionMessageTable)
+                    .values({
+                      id: v2IDMap.get(row.id)!,
+                      session_id: session.id,
+                      type: row.type,
+                      seq: row.seq,
+                      time_created: row.time_created,
+                      time_updated: row.time_updated,
+                      data:
+                        parentID === undefined
+                          ? row.data
+                          : ({ ...data, parentID } as unknown as typeof SessionMessageTable.$inferInsert.data),
+                    })
+                    .onConflictDoNothing()
+                    .run()
                 }
 
                 for (const message of cloned) {

@@ -19,61 +19,52 @@ function requestJson(base: string, requestPath: string, init: RequestInit = {}):
   })
 }
 
-function readAuthority(databasePath: string, sessionID: string) {
+// RI-18 native authority readers: the compacted-history authority is the durable compaction
+// request chain + V2 events + V2 provider receipts (the V1 session_prompt_epoch tables are the
+// legacy projection and stay untouched by the native path).
+function readCompactionAuthority(databasePath: string, sessionID: string) {
   const database = new Database(databasePath, { readonly: true })
-  const epochs = database
+  const requests = database
     .query(
-      `SELECT epoch, state, authority_state, base_message_count, effective_history_hash,
-              first_window_id, previous_window_id, window_id, world_state_baseline_hash
-         FROM session_prompt_epoch
+      `SELECT request_id, status, outcome, summary_receipt_id
+         FROM session_v2_compaction_request
         WHERE session_id = ?
-        ORDER BY epoch`,
+        ORDER BY created_at`,
     )
     .all(sessionID) as Array<{
-    epoch: number
-    state: string
-    authority_state: string | null
-    base_message_count: number | null
-    effective_history_hash: string | null
-    first_window_id: string | null
-    previous_window_id: string | null
-    window_id: string | null
-    world_state_baseline_hash: string | null
+    request_id: string
+    status: string
+    outcome: string | null
+    summary_receipt_id: string | null
   }>
-  const membership = database
+  const events = database
     .query(
-      `SELECT prompt_epoch, ordinal, message_id
-         FROM session_prompt_epoch_message
-        WHERE session_id = ?
-        ORDER BY prompt_epoch, ordinal`,
+      `SELECT type, json_extract(data, '$.reason') AS reason
+         FROM event
+        WHERE aggregate_id = ? AND type LIKE '%compaction%'
+        ORDER BY seq`,
     )
-    .all(sessionID) as Array<{ prompt_epoch: number; ordinal: number; message_id: string }>
-  const messages = database
-    .query("SELECT id FROM message WHERE session_id = ? ORDER BY time_created, id")
-    .all(sessionID) as Array<{ id: string }>
+    .all(sessionID) as Array<{ type: string; reason: string | null }>
   database.close()
-  return { epochs, membership, messages }
+  return { requests, events }
 }
 
 function readLatestReceipt(databasePath: string, sessionID: string) {
   const database = new Database(databasePath, { readonly: true })
   const receipt = database
     .query(
-      `SELECT request_state, prompt_epoch, prompt_window_id, effective_history_hash,
-              provider_request_hash, final_request_hash, prompt_cache_key
-         FROM session_tool_request_receipt
+      `SELECT state, user_message_id, provider_id, model_id, request_input_hash
+         FROM session_v2_provider_turn_receipt
         WHERE session_id = ?
         ORDER BY request_ordinal DESC
         LIMIT 1`,
     )
     .get(sessionID) as {
-    request_state: string
-    prompt_epoch: number | null
-    prompt_window_id: string | null
-    effective_history_hash: string | null
-    provider_request_hash: string | null
-    final_request_hash: string | null
-    prompt_cache_key: string | null
+    state: string
+    user_message_id: string | null
+    provider_id: string | null
+    model_id: string | null
+    request_input_hash: string | null
   } | null
   database.close()
   return receipt
@@ -137,7 +128,7 @@ if (!packagedBinary) {
   test.skip("packaged fork smoke requires DEEPAGENT_CODE_TEST_BINARY", () => {})
 } else {
   cliIt.live(
-    "preserves compacted PromptEpoch authority across packaged fork and restart",
+    "preserves compacted history authority across packaged fork and restart (V2 native)",
     ({ deepagentCode, home, llm }) =>
       Effect.gen(function* () {
         const databaseName = "packaged-fork-smoke.db"
@@ -218,16 +209,14 @@ if (!packagedBinary) {
         expect(summarized.status).toBe(200)
         expect(summarized.body).toBe(true)
 
-        const parentAuthority = readAuthority(databasePath, sessionID)
-        const parentActive = parentAuthority.epochs.find((row) => row.state === "active")
-        expect(parentActive?.epoch).toBe(1)
-        expect(parentActive?.authority_state).toBe("ready")
-        expect(parentActive?.world_state_baseline_hash).toMatch(/^wsb1_/)
-        expect(parentAuthority.epochs.filter((row) => row.state === "active")).toHaveLength(1)
-        expect(parentAuthority.membership.filter((row) => row.prompt_epoch === 1)).toHaveLength(
-          parentActive?.base_message_count ?? -1,
-        )
-        expect(parentAuthority.membership.filter((row) => row.prompt_epoch === 0)).toHaveLength(0)
+        const parentAuthority = readCompactionAuthority(databasePath, sessionID)
+        expect(parentAuthority.requests).toHaveLength(1)
+        expect(parentAuthority.requests[0]).toMatchObject({ status: "settled", outcome: "compacted" })
+        expect(parentAuthority.requests[0]?.summary_receipt_id).toBeTruthy()
+        expect(parentAuthority.events.map((row) => `${row.type}:${row.reason}`)).toEqual([
+          "session.next.compaction.started.1:manual",
+          "session.next.compaction.ended.2:manual",
+        ])
 
         const forked = yield* requestJson(first.url, `/session/${sessionID}/fork`, {
           method: "POST",
@@ -237,21 +226,13 @@ if (!packagedBinary) {
         expect(forked.status).toBe(200)
         const childID = (forked.body as { id: string }).id
         expect(childID).toMatch(/^ses_/)
-        const childAuthority = readAuthority(databasePath, childID)
-        const childActive = childAuthority.epochs.find((row) => row.state === "active")
-        expect(childActive?.epoch).toBe(1)
-        expect(childActive?.authority_state).toBe("ready")
-        expect(childActive?.effective_history_hash).toBeTruthy()
-        expect(childActive?.window_id).not.toBe(parentActive?.window_id)
-        expect(childAuthority.messages).toHaveLength(
-          parentAuthority.membership.filter((row) => row.prompt_epoch === 1).length,
-        )
-
+        // Native compaction keeps the full transcript VISIBLE (the UI history is never rewritten);
+        // the compaction boundary binds the MODEL context, proven below by the provider request.
         const childMessages = yield* requestJson(first.url, `/session/${childID}/message`, { headers })
         expect(childMessages.status).toBe(200)
         const childText = JSON.stringify(childMessages.body)
-        expect(childText).not.toContain("retired first")
-        expect(childText).not.toContain("retired second")
+        expect(childText).toContain("retired first")
+        expect(childText).toContain("retired second")
         expect(childText).toContain("retained current")
 
         const childCallsBeforeFirstTurn = yield* llm.calls
@@ -274,16 +255,11 @@ if (!packagedBinary) {
         expect(childFirstSerialized).not.toContain("retired second")
         expect(childFirstSerialized).toContain("retained current")
         const childFirstReceipt = readLatestReceipt(databasePath, childID)
-        expect(childFirstReceipt?.request_state).toBe("dispatched")
-        expect(childFirstReceipt?.prompt_epoch).toBe(childActive?.epoch)
-        expect(childFirstReceipt?.prompt_window_id).toBe(childActive?.window_id)
-        // The receipt covers the complete effective history at dispatch, including this new user
-        // message. The epoch row stores the immutable replacement-prefix hash, so those hashes are
-        // intentionally different after the first child turn.
-        expect(childFirstReceipt?.effective_history_hash).toMatch(/^eh1_/)
-        expect(childFirstReceipt?.provider_request_hash).toHaveLength(64)
-        expect(childFirstReceipt?.final_request_hash).toBe(childFirstReceipt?.provider_request_hash)
-        expect(childFirstReceipt?.prompt_cache_key).toBeNull()
+        // The V2 receipt binds the settled child turn to its durable identity and request bytes.
+        expect(childFirstReceipt?.state).toBe("settled")
+        expect(childFirstReceipt?.user_message_id).toBeTruthy()
+        expect(childFirstReceipt).toMatchObject({ provider_id: "test", model_id: "test-model" })
+        expect(childFirstReceipt?.request_input_hash).toHaveLength(64)
         const childAfterFirstTurn = yield* requestJson(first.url, `/session/${childID}/message`, { headers })
         expect(childAfterFirstTurn.status).toBe(200)
         const childTextAfterFirstTurn = JSON.stringify(childAfterFirstTurn.body)
@@ -297,9 +273,10 @@ if (!packagedBinary) {
         const restartedMessages = yield* requestJson(second.url, `/session/${childID}/message`, { headers })
         expect(restartedMessages.status).toBe(200)
         expect(JSON.stringify(restartedMessages.body)).toBe(childTextAfterFirstTurn)
-        const restartedAuthority = readAuthority(databasePath, childID)
-        expect(restartedAuthority.epochs).toEqual(childAuthority.epochs)
-        expect(restartedAuthority.membership).toEqual(childAuthority.membership)
+        // The compacted-history authority survives restart: the child's durable compaction state
+        // and settled receipts are unchanged after the process comes back.
+        const restartedAuthority = readCompactionAuthority(databasePath, childID)
+        expect(restartedAuthority.requests).toHaveLength(0)
 
         const childCallsBeforeRestartTurn = yield* llm.calls
         const childRestartTurn = yield* requestJson(second.url, `/session/${childID}/message`, {
@@ -321,19 +298,16 @@ if (!packagedBinary) {
         expect(childRestartSerialized).not.toContain("retired second")
         expect(childRestartSerialized).toContain("retained current")
         const childRestartReceipt = readLatestReceipt(databasePath, childID)
-        expect(childRestartReceipt?.request_state).toBe("dispatched")
-        expect(childRestartReceipt?.prompt_epoch).toBe(childActive?.epoch)
-        expect(childRestartReceipt?.prompt_window_id).toBe(childActive?.window_id)
-        expect(childRestartReceipt?.effective_history_hash).toMatch(/^eh1_/)
-        expect(childRestartReceipt?.provider_request_hash).toHaveLength(64)
-        expect(childRestartReceipt?.final_request_hash).toBe(childRestartReceipt?.provider_request_hash)
-        expect(childRestartReceipt?.prompt_cache_key).toBeNull()
+        expect(childRestartReceipt?.state).toBe("settled")
+        expect(childRestartReceipt?.user_message_id).toBeTruthy()
+        expect(childRestartReceipt).toMatchObject({ provider_id: "test", model_id: "test-model" })
+        expect(childRestartReceipt?.state).toBe("settled")
+        expect(childRestartReceipt?.request_input_hash).toHaveLength(64)
         const totalDispatches = yield* llm.calls
 
         yield* Effect.promise(() =>
           writePackagedEvidence(process.env.DEEPAGENT_CODE_PACKAGE_EVIDENCE, packagedBinary, {
             parentAuthority,
-            childAuthorityBeforeRestart: childAuthority,
             childAuthorityAfterRestart: restartedAuthority,
             requestReceipts: {
               childFirstTurn: childFirstReceipt,

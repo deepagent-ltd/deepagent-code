@@ -442,8 +442,11 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       // machine below) after awaiting an idle session. Legacy profiles keep the direct path.
       if (flags.coreV2Only) {
         const currentSession = yield* requireSession(ctx.params.sessionID)
-        yield* coreV2Session
-          .compact({ sessionID: SessionV2.ID.make(ctx.params.sessionID) })
+        yield* coreV2Session.compact({
+          sessionID: SessionV2.ID.make(ctx.params.sessionID),
+          model: { providerID: ctx.payload.providerID, modelID: ctx.payload.modelID },
+          auto: ctx.payload.auto ?? false,
+        })
           .pipe(
             Effect.mapError(
               (error) =>

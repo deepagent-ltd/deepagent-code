@@ -2,7 +2,7 @@ export * as SessionV2 from "./session"
 export * from "./session/schema"
 
 import { Cause, DateTime, Effect, Exit, Layer, Option, Schema, Context, Stream } from "effect"
-import { and, asc, desc, eq, gt, inArray, like, lt, notLike, or, type SQL } from "drizzle-orm"
+import { and, asc, count, desc, eq, gt, inArray, like, lt, max, notLike, or, type SQL } from "drizzle-orm"
 import { ProjectV2 } from "./project"
 import { WorkspaceV2 } from "./workspace"
 import { ModelV2 } from "./model"
@@ -14,6 +14,7 @@ import { EventV2 } from "./event"
 import { Database } from "./database/database"
 import { SessionProjector } from "./session/projector"
 import { MessageTable, PartTable, SessionMessageTable, SessionTable } from "./session/sql"
+import { CompactionRequest } from "./session/compaction-request"
 import { SessionSchema } from "./session/schema"
 import { AbsolutePath, PositiveInt, RelativePath } from "./schema"
 import { AgentV2 } from "./agent"
@@ -97,6 +98,9 @@ export function permissionsFromLegacy(ruleset?: PermissionV1.Ruleset): Permissio
 type CompactInput = {
   sessionID: SessionSchema.ID
   prompt?: Prompt
+  model?: { readonly providerID: ProviderV2.ID; readonly modelID: ModelV2.ID }
+  agent?: AgentV2.ID
+  auto?: boolean
 }
 
 type LegacyMessageWithParts = {
@@ -120,10 +124,6 @@ export type ShellExchange = {
 export const CurrentManualShell = Context.Reference<
   ((input: ShellExchange) => Effect.Effect<void, unknown>) | undefined
 >("@deepagent-code/v2/SessionV2/CurrentManualShell", { defaultValue: () => undefined })
-
-export const CurrentManualCompaction = Context.Reference<
-  ((sessionID: SessionSchema.ID) => Effect.Effect<void, unknown>) | undefined
->("@deepagent-code/v2/SessionV2/CurrentManualCompaction", { defaultValue: () => undefined })
 
 export type NotFoundError = SessionNotFound.Error
 
@@ -432,6 +432,9 @@ export interface Interface {
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/v2/Session") {}
+
+/** RI-18: bounded await for a manual compaction request's terminal state. */
+const MANUAL_COMPACTION_DEADLINE_MS = 10 * 60_000
 
 export const layer = Layer.effect(
   Service,
@@ -831,44 +834,50 @@ export const layer = Layer.effect(
           permissions: input.permissions,
         })
       }),
-      // §16.3 order 4 package E + W0-1: overflow-triggered compaction and its continuation loop
-      // run natively in the V2 runner. MANUAL compaction is host-injected through the
-      // CurrentManualCompaction seam (the deepagent-code composition owns the summary model
-      // resolution and the legacy continuation/soft-landing semantics); an unwired composition
-      // keeps the typed refusal — fail-closed for callers, honest API surface, concrete reason.
+      // RI-18 native manual compaction: admit a durable request (fixing the summary model and the
+      // history fence), wake the drain — the summary provider turn runs inside SessionCompaction
+      // with the full receipt contract — and await the request's terminal state. Interruptions and
+      // crashes leave recovery_required for the maintenance surface; a settled no-op means the
+      // history had nothing worth compacting.
       compact: Effect.fn("V2Session.compact")(function* (input) {
         yield* result.get(input.sessionID)
-        const manual = yield* CurrentManualCompaction
-        if (!manual)
+        // The summary model identity is EXPLICIT — a caller that cannot name the model gets a
+        // typed refusal, never a fabricated or defaulted identity.
+        if (input.model === undefined)
           return yield* new OperationUnavailableError({
             operation: "compact",
-            reason:
-              "manual compaction is not wired in this composition (provide CurrentManualCompaction); overflow compaction runs automatically",
+            reason: "manual compaction requires an explicit summary model identity (provider/model)",
           })
-        const idle: Effect.Effect<void, OperationUnavailableError> = execution
-          .awaitIdle(input.sessionID)
-          .pipe(
-            Effect.mapError(
-              (error) =>
-                new OperationUnavailableError({
-                  operation: "compact",
-                  reason: `session is not idle: ${String(error)}`,
-                }),
-            ),
-          ) as Effect.Effect<void, OperationUnavailableError>
-        yield* idle
-        // The host seam's error channel is `unknown` by design (compositions vary); this boundary
-        // is the single place it joins the typed Interface channel — mirror the shape the typed
-        // refusal used (a plain Error carrying the host's reason).
-        const exit = yield* manual(input.sessionID).pipe(Effect.exit)
-        if (Exit.isFailure(exit)) {
-          const cause = exit.cause
-          const failure = Cause.squash(cause)
+        const fence = yield* db
+          .select({ total: count(), lastID: max(SessionMessageTable.id) })
+          .from(SessionMessageTable)
+          .where(eq(SessionMessageTable.session_id, input.sessionID))
+          .get()
+          .pipe(Effect.orDie)
+        if (fence === undefined || fence.lastID === null)
           return yield* new OperationUnavailableError({
             operation: "compact",
-            reason: failure instanceof Error ? failure.message : String(failure),
+            reason: "manual compaction requires a non-empty session history",
           })
-        }
+        const request = yield* CompactionRequest.admit(db, {
+          sessionID: input.sessionID,
+          providerID: input.model.providerID,
+          modelID: input.model.modelID,
+          fenceMessageCount: fence.total,
+          fenceLastMessageID: fence.lastID,
+        })
+        yield* execution.wake(input.sessionID).pipe(Effect.ignore)
+        const terminal = yield* CompactionRequest.awaitTerminal(db, request.request_id, MANUAL_COMPACTION_DEADLINE_MS)
+        if (terminal === undefined)
+          return yield* new OperationUnavailableError({
+            operation: "compact",
+            reason: "manual compaction did not settle within its budget",
+          })
+        if (terminal.status === "settled") return
+        return yield* new OperationUnavailableError({
+          operation: "compact",
+          reason: terminal.outcome ?? terminal.status,
+        })
       }),
       // W1.2 — wait is REAL: it maps to SessionExecution.awaitIdle — the process-local ownership
       // chain resolves once the Session is idle (a no-op when nothing is running). With the no-op

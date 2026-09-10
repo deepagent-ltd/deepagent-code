@@ -144,6 +144,10 @@ const runnerFrameHost = Layer.effect(
     const historyEpochLookup = yield* V2ProviderTurn.CurrentHistoryEpochLookup
     const permissionGrantLookup = yield* V2ToolEffect.CurrentPermissionGrantLookup
     const remoteCompaction = yield* SessionCompaction.CurrentRemoteCompaction
+    // RI-24: Location-scoped drain fibers cannot see the root owner services, so the identity
+    // resolver they receive reads the per-root slot filled from the route graph's context (see
+    // RuntimeIntegrityIdentity.captureRootContextLayer); the resolver stays context-independent.
+    const identitySlot = yield* RuntimeIntegrityIdentity.RootIdentitySlot
     const dependencies = Layer.mergeAll(
       Layer.succeed(InstanceStore.Service, store),
       Layer.succeed(LocationIndexRuntime.Service, runtime),
@@ -160,9 +164,7 @@ const runnerFrameHost = Layer.effect(
           Layer.succeed(V2ProviderTurn.CurrentCampaign, parityCampaign),
           Layer.succeed(V2ProviderTurn.CurrentOwnerCampaign, ownerCampaign),
           Layer.succeed(V2ProviderTurn.CurrentBuildIdentity, buildIdentity),
-          Layer.succeed(V2ProviderTurn.CurrentRuntimeIntegrityIdentity, {
-            resolve: RuntimeIntegrityIdentity.resolver.resolve,
-          }),
+          Layer.succeed(V2ProviderTurn.CurrentRuntimeIntegrityIdentity, RuntimeIntegrityIdentity.slotResolver(identitySlot)),
           Layer.succeed(V2ProviderTurn.CurrentOwnerAuthorizationPublicKey, ownerAuthorizationPublicKey),
           Layer.succeed(V2ProviderTurn.CurrentHistoryEpochLookup, historyEpochLookup),
           Layer.succeed(V2ToolEffect.CurrentPermissionGrantLookup, permissionGrantLookup),
@@ -172,7 +174,12 @@ const runnerFrameHost = Layer.effect(
   }),
 )
 
-export const runnerFrameHostLayer = runnerFrameHost.pipe(Layer.provide(V2OwnerDevMint.defaultLayer))
+export const runnerFrameHostLayer = runnerFrameHost.pipe(
+  Layer.provide(V2OwnerDevMint.defaultLayer),
+  // Same layer object as sessionRuntimeLayer's mergeAll entry: one memoMap = one shared slot
+  // instance per root, so the host hands drain fibers the very slot the route graph fills.
+  Layer.provide(RuntimeIntegrityIdentity.rootIdentitySlotLayer),
+)
 
 /**
  * RI-36/RI-39/RI-44 — this frame's composition identity, provided into every root that composes
@@ -271,6 +278,7 @@ export const sessionRuntimeLayer = Layer.mergeAll(
   coreSessionRuntime,
   runnerFrameLocationMapLayer,
   Layer.succeed(CompositionDigest.FrameIdentity, frameIdentity),
+  RuntimeIntegrityIdentity.rootIdentitySlotLayer,
 ).pipe(
   Layer.provide(EventV2Bridge.defaultLayer),
 )
