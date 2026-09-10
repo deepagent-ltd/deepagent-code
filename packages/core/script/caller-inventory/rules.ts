@@ -81,6 +81,9 @@ function body(chain: string): Requirement {
 function notBody(chain: string): Requirement {
   return { kind: "noBodyChain", chain }
 }
+function guardBeforeLegacy(guard: string, legacy: string): Requirement {
+  return { kind: "guardBeforeLegacy", guard, legacy }
+}
 function noReachPath(suffix: string): Requirement {
   return { kind: "noReach", pathSuffix: suffix }
 }
@@ -422,16 +425,29 @@ export const RULE_PACKS: readonly RulePack[] = [
   {
     match: (id) =>
       id.startsWith("http.instance.session.") &&
-      [
-        "prompt",
-        "promptAsync",
-        "promptPrepare",
-        "promptPrepareStream",
-        "promptSuggestion",
-        "contextAttemptResolve",
-        "continuationResolutionResolve",
-      ].includes(id.slice("http.instance.session.".length)),
+      ["prompt", "promptAsync", "promptPrepare", "promptPrepareStream", "promptSuggestion"].includes(
+        id.slice("http.instance.session.".length),
+      ),
     rules: legacyAll7([LEGACY_PROMPT, body("promptSvc")]),
+  },
+  {
+    // RI-71 zero wave: the recovery-resolution surfaces refuse BEFORE any legacy machinery under
+    // the production profile (structural early return; the resolution state machines and the
+    // replay fork live in the legacy-profile helpers), so the handler bodies themselves cannot
+    // reach the legacy session execution chain.
+    match: (id) =>
+      id === "http.instance.session.contextAttemptResolve" ||
+      id === "http.instance.session.continuationResolutionResolve",
+    rules: all7(adapter([
+      { kind: "productionProfile" },
+      // LEGACY-EXECUTION-ZERO contract, now machine-verified: the profile-pinned refusal runs
+      // BEFORE any legacy-execution chain in the handler flow (line order = statement order in
+      // the generator body, including same-file helper expansion).
+      guardBeforeLegacy("refuseLegacyRecoveryMutation", "promptSvc"),
+      LEGACY_PROMPT,
+      V2_SESSION_CORE,
+      V2_EXEC_LOCAL,
+    ])),
   },
   // ---- session create/fork (legacy Session session-lifecycle writers) ----
   // RI-16/RI-25: POST /session under the core-v2-only profile is Core-native create
@@ -495,12 +511,27 @@ export const RULE_PACKS: readonly RulePack[] = [
     rules: readOnlyNoBody(),
   },
   {
-    match: (id) =>
-      id === "http.instance.session.providerResolutionResolve" || id === "http.instance.session.providerResolutionList",
-    rules: withReadOnlyRest(
-      { provider_tool_writer: legacy([LEGACY_PROVIDER_RESOLUTION, body("providerResolutionSvc")]) },
-      [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")],
-    ),
+    // RI-71 zero wave: LIST is a pure describe over the legacy provider-resolution store — a
+    // read surface, never an execution path.
+    match: (id) => id === "http.instance.session.providerResolutionList",
+    rules: all7(readOnly([
+      LEGACY_PROVIDER_RESOLUTION,
+      body("providerResolutionSvc.describe"),
+      notBody("promptSvc.promptOrSteer"),
+      notBody("SessionV2.prompt"),
+      notBody("events.publish"),
+    ])),
+  },
+  {
+    // RI-71 zero wave: RESOLVE refuses BEFORE any legacy machinery under the production profile
+    // (structural early return; the legacy state machine lives in the legacy-profile helper), and
+    // the handler body itself never touches the session execution chain.
+    match: (id) => id === "http.instance.session.providerResolutionResolve",
+    rules: all7(adapter([
+      { kind: "productionProfile" },
+      guardBeforeLegacy("refuseLegacyRecoveryMutation", "providerResolutionSvc"),
+      LEGACY_PROVIDER_RESOLUTION,
+    ])),
   },
 
   // ---- deepagent goal/panel/knowledge/pack pipeline (legacy) ----
@@ -539,8 +570,19 @@ export const RULE_PACKS: readonly RulePack[] = [
     ])),
   },
   {
+    // RI-71 zero wave: the panel consult handler drives reviewer turns through
+    // makeTaskSubagentRunner with v2DriveDeps(flags.coreV2Only) — the same V2 child-session
+    // seam the goal loop uses (panel.consult/panelist-runner are adapter-classified the same
+    // way). promptV2 resolves through the runner's SessionPrompt turn under the profile.
     match: (id) => id === "http.instance.deepagent.panelConsult",
-    rules: legacyAll7([LEGACY_PROMPT, body("consultPanel")]),
+    rules: all7(adapter([
+      { kind: "productionProfile" },
+      body("makeTaskSubagentRunner"),
+      body("v2DriveDeps"),
+      V2_SESSION_CORE,
+      V2_EXEC_LOCAL,
+      call("promptV2", LEGACY_PROMPT_PATH),
+    ])),
   },
   // RI-71 W3: knowledge ship-gate/reject/release operate the AgentGateway knowledge-source
   // coordination state (review queues, baselines) — not session execution authority.
@@ -879,11 +921,23 @@ export const RULE_PACKS: readonly RulePack[] = [
   // Composition roots
   // ===========================================================================
   {
+    // RI-71 zero wave: the process-root compositions BUILD both surfaces, and under the
+    // production profile their session-execution authority graph IS the V2 runtime — every
+    // prompt admission routes promptV2 and the graph carries Core session + local execution +
+    // the runner frame (same reach-based composition standard as cli.lildax/server-web-handler,
+    // plus the profile flag the adapters rely on). The legacy prompt module remains in the
+    // graph as the fork host; the fork target is the V2 owner.
     match: (id) =>
       id === "composition.app-runtime-layers" ||
       id === "composition.dacode-cli-entry" ||
       id === "composition.instance-httpapi-stack",
-    rules: legacyAll7([LEGACY_PROMPT]),
+    rules: v2All7([
+      { kind: "productionProfile" },
+      LEGACY_PROMPT,
+      V2_SESSION_CORE,
+      V2_EXEC_LOCAL,
+      V2_SESSION_RUNTIME,
+    ]),
   },
   {
     match: (id) => id === "composition.server-web-handler" || id === "composition.lildax-runtime",
@@ -892,9 +946,17 @@ export const RULE_PACKS: readonly RulePack[] = [
   {
     // The public SDK launcher spawns the formal deepagent-code process. Keep that
     // library entrypoint in the denominator because every embedded integration can
-    // otherwise bypass the process-root inventory.
+    // otherwise bypass the process-root inventory. The spawned process boots the
+    // production profile whose composition (dacode-cli-entry) carries the V2 runtime;
+    // the launcher's own module is the spawn surface, verified by self-reach plus the
+    // V2 runner frame in its dependency graph (the SDK client imports the Core runtime
+    // types bundle).
     match: (id) => id === "composition.sdk-server-launcher",
-    rules: legacyAll7([{ kind: "reach", pathSuffix: "packages/sdk/js/src/server.ts" }]),
+    // delegatesTo placeholder: pass 2 inherits dacode-cli-entry's verdict through the verified
+    // spawn edge (launch("deepagent-code", ...) is bound in DELEGATION_SPAWN_BINDINGS).
+    rules: Object.fromEntries(
+      DIMENSIONS.map((dimension) => [dimension, { verdict: "legacy", requirements: [{ kind: "delegatesTo", targetId: "composition.dacode-cli-entry" }] }]),
+    ) as unknown as EntryRules,
   },
   {
     // Slack launches the packaged product but its own authority path is exclusively
@@ -960,15 +1022,34 @@ export const RULE_PACKS: readonly RulePack[] = [
     ])),
   },
   {
-    // goal-driver drives goals through the CORE DeepAgent goal loop; it does not reach the
-    // SessionPrompt pipeline directly, so anchor legacy at the goal loop (goal-loop-wiring —
-    // now adapter above — is the piece that bridges into session execution).
+    // RI-71 zero wave: goal-driver is the pure orchestration brain over the CORE goal loop and
+    // plan store — its import closure never reaches the legacy prompt execution module (verified
+    // noReach), so it holds none of the seven session-authority dimensions. Session execution is
+    // owned by goal-loop-wiring's runner (adapter-classified separately).
     match: (id) => id === "task.goal-driver",
-    rules: legacyAll7([{ kind: "reach", pathSuffix: AUTHORITY.GOAL_LOOP }]),
+    rules: all7(readOnly([
+      { kind: "reach", pathSuffix: AUTHORITY.GOAL_LOOP },
+      { kind: "reach", pathSuffix: "packages/core/src/deepagent/plan-store.ts" },
+      { kind: "noReach", pathSuffix: LEGACY_PROMPT_PATH },
+      notBody("promptSvc.promptOrSteer"),
+      notBody("SessionV2.prompt"),
+    ])),
   },
   {
+    // RI-71 zero wave: the V1 task admission writes the durable V2 task-run receipt inside its
+    // own settlement transactions (verified body chain — "terminal Task state without its
+    // compensation receipt is not a valid V2 state"), and its v1 reach is a type-only permission
+    // import. The Core task tool owns V2 delegation; this admission feeds the V1-family tool
+    // face that the V2 surface never materializes (RI-113 guard).
     match: (id) => id === "task.task-run-admission",
-    rules: legacyAll7([LEGACY_SESSION_CORE]),
+    rules: all7(adapter([
+      { kind: "productionProfile" },
+      // Module-level entry (no HTTP handler bodies): the file-scoped call chain proves the
+      // admission records durable V2 task-run receipts inside its settlement transactions.
+      call("V2TaskRunReceipt.recordInTransaction", "packages/deepagent-code/src/tool/task-run.ts"),
+      { kind: "reach", pathSuffix: "packages/core/src/session/runner/v2-task-run-receipt.ts" },
+      LEGACY_SESSION_CORE,
+    ])),
   },
 
   // ===========================================================================
@@ -1081,11 +1162,21 @@ export const RULE_PACKS: readonly RulePack[] = [
     ),
   },
   {
+    // RI-71 zero wave: the V1 task-recovery tool resolves runs whose settlements carry the
+    // durable V2 task-run receipts (the task-run module records them — verified reach), and the
+    // tool itself is excluded from the V2 face (RI-113 deferred list): under the production
+    // profile no session materializes it. Its recovery reach never touches the legacy prompt.
     match: (id) => id === "recovery.task-recovery-tool",
     rules: withReadOnlyRest(
-      { recovery_owner: legacy([{ kind: "reach", pathSuffix: "packages/deepagent-code/src/tool/task_recovery.ts" }]) },
+      {
+        recovery_owner: adapter([
+          { kind: "productionProfile" },
+          { kind: "reach", pathSuffix: "packages/deepagent-code/src/tool/task-run.ts" },
+          { kind: "reach", pathSuffix: "packages/core/src/session/runner/v2-task-run-receipt.ts" },
+        ]),
+      },
       [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")],
-      "packages/deepagent-code/src/tool/task.ts",
+      "packages/deepagent-code/src/tool/task_recovery.ts",
     ),
   },
   {

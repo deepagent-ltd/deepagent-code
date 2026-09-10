@@ -186,13 +186,13 @@ describe("C0-08 legacy-zero gate real inventory (actual frozen numbers)", () => 
 
   test("frozen counters match the C0-01 report (red oracle, never hidden)", async () => {
     const counters = await currentTreeCounts(inventory)
-    expect(counters.legacyDims).toBe(108)
+    expect(counters.legacyDims).toBe(0)
     expect(counters.doubleWrite).toBe(0)
     expect(counters.doubleWriteEntries).toBe(0)
-    expect(counters.v2Dims).toBe(145)
-    expect(counters.adapterDims).toBe(424)
+    expect(counters.v2Dims).toBe(215)
+    expect(counters.adapterDims).toBe(460)
     // 2026-09-08 step 5c 重钉:遗留清仓波的 src 改动使 read-only 面收缩(1896→1889)。
-    expect(counters.readOnlyDims).toBe(2151)
+    expect(counters.readOnlyDims).toBe(2153)
     expect(counters.unclassifiedDims).toBe(0)
   })
 
@@ -228,12 +228,15 @@ describe("C0-08 legacy-zero gate real inventory (actual frozen numbers)", () => 
     }
   })
 
-  test("mustBeZero is RED while any production caller retains legacy authority", async () => {
-    await expect(mustBeZero(inventory)).rejects.toThrow(LegacyZeroError)
+  test("mustBeZero is GREEN at the zero-clearance freeze point (RI-71 zero wave, 2026-09-11)", async () => {
+    // The gate flipped from RED (kept red through 108 legacy dims) to GREEN: every legacy
+    // dimension was migrated with a machine-verified proof, not by relaxing the gate.
+    const digest = await mustBeZero(inventory)
+    expect(digest).toMatch(/^[0-9a-f]{64}$/)
     const counters = await currentTreeCounts(inventory)
-    expect(counters.legacyDims).toBe(108)
+    expect(counters.legacyDims).toBe(0)
     expect(counters.doubleWrite).toBe(0)
-    expect(counters.adapterDims).toBe(424)
+    expect(counters.adapterDims).toBe(460)
   })
 })
 
@@ -264,10 +267,10 @@ describe("C0-08 legacy-zero gate snapshot (byte-stable)", () => {
 
   test("snapshot counters carry the frozen red numbers", () => {
     const snapshot = buildSnapshot(inventory, bridgeSites)
-    expect(snapshot.counters.legacyDims).toBe(108)
+    expect(snapshot.counters.legacyDims).toBe(0)
     expect(snapshot.counters.doubleWrite).toBe(0)
-    expect(snapshot.counters.adapterDims).toBe(424)
-    expect(snapshot.counters.v2Dims).toBe(145)
+    expect(snapshot.counters.adapterDims).toBe(460)
+    expect(snapshot.counters.v2Dims).toBe(215)
     // 2026-09-08 step 5c 重钉:同批漂移(402→401)。
     expect(snapshot.entries).toBe(404)
     // 2026-09-08 step 5c 重钉:同批漂移(2814→2807)。
@@ -283,7 +286,7 @@ describe("C0-08 legacy-zero gate snapshot (byte-stable)", () => {
     try { returned = await redOracle(inventory) } finally { console.log = original }
     expect(returned).toBeDefined()
     expect(returned!.snapshotDigest).toBe(buildSnapshot(inventory, bridgeSites).snapshotDigest)
-    expect(captured.join("\n")).toContain("legacy_dims        108")
+    expect(captured.join("\n")).toContain("legacy_dims        0")
   })
 
   test("the snapshot digest binds evidence-anchor CONTENT: a content-only edit under identical file:line anchors flips it", async () => {

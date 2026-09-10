@@ -134,15 +134,6 @@ const RULES: ReadonlyArray<{ readonly match: (id: string) => boolean; readonly r
     },
   },
   {
-    match: (id) => id === "recovery.task-recovery-tool",
-    rules: {
-      recovery_owner: {
-        verdict: "legacy",
-        requirements: [{ kind: "reach", pathSuffix: "packages/deepagent-code/src/tool/task_recovery.ts" }],
-      },
-    },
-  },
-  {
     match: (id) => id === "recovery.provider-owner-runtime",
     rules: {
       recovery_owner: {
