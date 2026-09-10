@@ -848,15 +848,27 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
         .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
     })
 
+    // RI-71 zero wave: under the production profile the surface refuses BEFORE any legacy
+    // resolution machinery — the refusal is a structural early return, and the legacy state
+    // machine lives in the legacy-profile helper below so the handler body itself cannot reach
+    // the legacy execution chain.
     const contextAttemptResolve = Effect.fn("SessionHttpApi.contextAttemptResolve")(function* (ctx: {
       params: { sessionID: SessionID; attemptID: string }
       payload: typeof ContextAttemptResolvePayload.Type
     }) {
-      const current = yield* requireSession(ctx.params.sessionID)
-      // This adapter creates a provider-attempt successor without the Core V2 receipt/Session-claim
-      // transaction. It remains available only to historical legacy profiles; V2 uses the exact
-      // durable maintenance recovery command authority.
+      yield* requireSession(ctx.params.sessionID)
       yield* refuseLegacyRecoveryMutation(ctx.params.sessionID, "session.context-attempt-resolution")
+      return yield* legacyContextAttemptResolve(ctx)
+    })
+
+    // Legacy-profile path only (unreachable under coreV2Only — see the refusal above): creates a
+    // provider-attempt successor without the Core V2 receipt/Session-claim transaction. V2 uses
+    // the exact durable maintenance recovery command authority.
+    const legacyContextAttemptResolve = Effect.fn("SessionHttpApi.legacyContextAttemptResolve")(function* (ctx: {
+      params: { sessionID: SessionID; attemptID: string }
+      payload: typeof ContextAttemptResolvePayload.Type
+    }) {
+      const current = yield* requireSession(ctx.params.sessionID)
       const resolved = yield* contextDiagnosticsSvc
         .resolveAttempt({
           session: current,
@@ -907,6 +919,15 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     }) {
       yield* requireSession(ctx.params.sessionID)
       yield* refuseLegacyRecoveryMutation(ctx.params.sessionID, "session.provider-resolution")
+      return yield* legacyProviderResolutionResolve(ctx)
+    })
+
+    // Legacy-profile path only (unreachable under coreV2Only — see the refusal above): applies
+    // the legacy provider-resolution state machine.
+    const legacyProviderResolutionResolve = Effect.fn("SessionHttpApi.legacyProviderResolutionResolve")(function* (ctx: {
+      params: { sessionID: SessionID }
+      payload: typeof ProviderResolutionPayload.Type
+    }) {
       const actor = yield* getWorkspaceContext()
       return yield* providerResolutionSvc
         .resolve({ ...ctx.payload, sessionID: ctx.params.sessionID, actorID: actor.userID })
@@ -932,6 +953,17 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     }) {
       yield* requireSession(ctx.params.sessionID)
       yield* refuseLegacyRecoveryMutation(ctx.params.sessionID, "session.continuation-resolution")
+      return yield* legacyContinuationResolutionResolve(ctx)
+    })
+
+    // Legacy-profile path only (unreachable under coreV2Only — see the refusal above): resolves
+    // explicit compaction continuations and replays through the legacy loop.
+    const legacyContinuationResolutionResolve = Effect.fn(
+      "SessionHttpApi.legacyContinuationResolutionResolve",
+    )(function* (ctx: {
+      params: { sessionID: SessionID }
+      payload: typeof ContinuationResolutionPayload.Type
+    }) {
       const actor = yield* getWorkspaceContext()
       const result = yield* compactSvc
         .resolveContinuation({ ...ctx.payload, sessionID: ctx.params.sessionID, actorID: actor.userID })

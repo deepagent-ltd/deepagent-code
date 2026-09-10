@@ -111,6 +111,9 @@ await Bun.write(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
 
 const evidenceDir = path.join(path.dirname(out), "release-evidence")
 await Bun.$`mkdir -p ${evidenceDir}`
+// Packaged-run evidence artifacts (RI-24 runtime-integrity evidence JSON) land in the evidence
+// dir so the authoritative ledger cross-checks every run digest against a present artifact.
+for (const evidenceFile of list("--evidence")) await Bun.$`cp ${path.resolve(evidenceFile)} ${evidenceDir}/`
 
 const child = Bun.spawnSync(
   [
@@ -122,8 +125,15 @@ const child = Bun.spawnSync(
     evidenceDir,
     "--out",
     out,
+    // The candidate ledger spawns with cwd=repository; resolve relative inputs here so the
+    // packaged-dir/runs paths keep meaning regardless of where the gate was invoked from.
     ...list("--package-dir").length > 0
-      ? ["--packaged-dir", list("--package-dir")[0]!, "--runs", "[]"]
+      ? [
+          "--packaged-dir",
+          path.resolve(list("--package-dir")[0]!),
+          "--runs",
+          path.resolve(option("--runs") ?? "[]"),
+        ]
       : [],
   ],
   { cwd: repository, stdout: "inherit", stderr: "inherit", env: { ...process.env } },

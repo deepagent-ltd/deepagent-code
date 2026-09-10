@@ -141,6 +141,19 @@ export type Requirement =
   | { readonly kind: "portBoundTo"; readonly portModule: string }
   | { readonly kind: "bodyLogsOnly" }
   | { readonly kind: "productionProfile" }
+  | {
+      /**
+       * Guard-before-legacy ordering inside this entry's handler-body scope (including bounded
+       * same-file callee expansion): the guard chain's EARLIEST occurrence must precede the legacy
+       * chain's EARLIEST occurrence in the same file. Generator bodies execute statements in
+       * source order, so line order proves statement order for sequential yields. Use with
+       * productionProfile to encode the LEGACY-EXECUTION-ZERO contract: the profile-pinned refusal
+       * runs before any legacy-execution chain becomes reachable in the flow.
+       */
+      readonly kind: "guardBeforeLegacy"
+      readonly guard: string
+      readonly legacy: string
+    }
 
 /** A declared, machine-checked ownership claim for one entry. */
 export type Declaration = {

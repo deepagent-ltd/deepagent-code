@@ -474,7 +474,21 @@ function delegationSpawnHit(entryFile: string, extraRoots: readonly string[], ta
           found = { marker: `delegates:${targetId}`, file, line: sf.getLineAndCharacterOfPosition(node.getStart()).line + 1 }
           return
         }
-        if (callee && ["fork", "spawn", "exec", "execFile", "execSync", "forkFile", "forkChild"].includes(callee)) {
+        // A spawn call through the cross-spawn default import (e.g. `launch(...)` where
+        // `launch` is imported from "cross-spawn") is a genuine process spawn: resolve the callee
+        // identifier to its import specifier and accept the known spawn library. Only default
+        // imports of cross-spawn qualify — arbitrary local helpers named `launch` do not.
+        const calleeIsCrossSpawn = () => {
+          if (!callee) return false
+          for (const statement of sf.statements) {
+            if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue
+            if (statement.moduleSpecifier.text !== "cross-spawn") continue
+            const clause = statement.importClause
+            if (clause?.name?.text === callee) return true
+          }
+          return false
+        }
+        if (callee && (["fork", "spawn", "exec", "execFile", "execSync", "forkFile", "forkChild"].includes(callee) || calleeIsCrossSpawn())) {
           const first = node.arguments[0]
           if (first) {
             const fragments = stringFragments(first)
@@ -729,6 +743,21 @@ export function verifyRequirements(
       return {
         requirement,
         hit: present === undefined ? { marker: `absent:${requirement.chain}`, file: entryFile, line: 1 } : undefined,
+      }
+    }
+    if (requirement.kind === "guardBeforeLegacy") {
+      const guard = tailMatchHit(scopeChains.chains, requirement.guard)
+      const legacy = tailMatchHit(scopeChains.chains, requirement.legacy)
+      const ordered =
+        guard !== undefined &&
+        legacy !== undefined &&
+        guard.repoFile === legacy.repoFile &&
+        guard.line < legacy.line
+      return {
+        requirement,
+        hit: ordered
+          ? { marker: `guard-before:${requirement.guard}>${requirement.legacy}`, file: `${rootRepoPath()}/${guard.repoFile}`, line: guard.line }
+          : undefined,
       }
     }
     if (requirement.kind === "productionProfile") {
