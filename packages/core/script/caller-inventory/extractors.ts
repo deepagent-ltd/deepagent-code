@@ -10,8 +10,8 @@
  */
 import ts from "typescript"
 import { existsSync } from "node:fs"
-import { join } from "node:path"
-import { declarationLine, identifierLine, listSourceFiles, memberCalls, moduleAnchorLine, parseModule } from "./ast"
+import { dirname, join, resolve as resolvePath } from "node:path"
+import { declarationLine, identifierLine, listSourceFiles, memberCalls, moduleAnchorLine, parseModule, declarationNodes } from "./ast"
 import { rootRepoPath } from "./ast"
 import type { Entry, EntryWithHandlers, SurfaceId } from "./types"
 
@@ -189,29 +189,61 @@ function httpSurface(trees: readonly HttpExtractionTree[]): EntryWithHandlers[] 
 }
 
 /** yargs `.command(XCommand)` registrations in the dacode composition root. */
-function dacodeCliSurface(): EntryWithHandlers[] {
+/** Resolve a `.command(Xxx)` registration to the command object's own module and declaration
+ * line, so body proofs read the real run body. Falls back to same-file when the identifier is
+ * declared locally (or the import cannot be resolved — those entries keep file-level reach only). */
+async function commandHandlerSite(
+  indexTs: string,
+  identifier: string,
+  registrationLine: number,
+): Promise<readonly { name: string; repoFile: string; line: number; commandObject: string }[]> {
+  const mod = parseModule(indexTs)
+  const binding = mod.imports.get(identifier)
+  const baseDir = dirname(indexTs)
+  if (binding) {
+    for (const suffix of ["", ".ts", ".tsx", "/index.ts"]) {
+      const candidate = resolvePath(`${baseDir}/${binding.specifier}${suffix}`)
+      if (!candidate.endsWith(".ts") && !candidate.endsWith(".tsx")) continue
+      if (!existsSync(candidate)) continue
+      const target = parseModule(candidate)
+      for (const decl of declarationNodes(target, identifier)) {
+        const line = target.sourceFile.getLineAndCharacterOfPosition(decl.getStart()).line + 1
+        return [
+          { name: identifier, repoFile: repoFile(candidate), line, commandObject: identifier },
+        ]
+      }
+    }
+    return []
+  }
+  return [{ name: identifier, repoFile: repoFile(indexTs), line: registrationLine, commandObject: identifier }]
+}
+
+async function dacodeCliSurface(): Promise<EntryWithHandlers[]> {
   const indexTs = join(ROOT(), "packages/deepagent-code/src/index.ts")
   const mod = parseModule(indexTs)
-  const commands = memberCalls(mod, ["command"]).flatMap((site) => {
+  const registrations: { identifier: string; line: number }[] = []
+  memberCalls(mod, ["command"]).forEach((site) => {
     const argument = site.args[0]
     const match = /^\s*([A-Za-z_$][\w$]*)\s*$/.exec(argument ?? "")
-    if (!match) return []
-    const identifier = match[1]
-    const line = mod.sourceFile.getLineAndCharacterOfPosition(site.node.getStart()).line + 1
-    return [
-      {
-        entry: {
-          id: `cli.dacode.${kebab(identifier.replace(/Command$/, ""))}`,
-          surface: "cli-deepagent-code" as SurfaceId,
-          kind: "yargs-command",
-          name: identifier,
-          repoFile: repoFile(indexTs),
-          line,
-        },
-        handlers: [],
-      },
-    ]
+    if (!match) return
+    registrations.push({
+      identifier: match[1]!,
+      line: mod.sourceFile.getLineAndCharacterOfPosition(site.node.getStart()).line + 1,
+    })
   })
+  const commands = await Promise.all(
+    registrations.map(async ({ identifier, line }) => ({
+      entry: {
+        id: `cli.dacode.${kebab(identifier.replace(/Command$/, ""))}`,
+        surface: "cli-deepagent-code" as SurfaceId,
+        kind: "yargs-command",
+        name: identifier,
+        repoFile: repoFile(indexTs),
+        line,
+      },
+      handlers: await commandHandlerSite(indexTs, identifier, line),
+    })),
+  )
   return commands.sort((a, b) => (a.entry.id < b.entry.id ? -1 : a.entry.id > b.entry.id ? 1 : 0))
 }
 
@@ -547,6 +579,32 @@ const FIXED_ENTRIES: readonly FixedEntry[] = [
     fileFromRoot: "packages/desktop/src/main/sidecar.ts",
     chain: "Server.listen",
   },
+  // RI-95 W1 (2026-09-10): browser client, remote gateway client, and CI/deploy roots join the
+  // denominator — the universe may not depend on remembered server-side roots alone.
+  {
+    id: "browser.app-entry",
+    surface: "composition",
+    kind: "browser-entry",
+    name: "app browser entry",
+    fileFromRoot: "packages/app/src/entry.tsx",
+    identifier: "render",
+  },
+  {
+    id: "browser.remote-gateway-client",
+    surface: "composition",
+    kind: "remote-client",
+    name: "remote gateway client",
+    fileFromRoot: "packages/app/src/context/gateway.tsx",
+    identifier: "useGateway",
+  },
+  {
+    id: "ci.publish-workflow",
+    surface: "composition",
+    kind: "ci-release-root",
+    name: "publish workflow release gate",
+    fileFromRoot: "packages/core/script/evidence-ledger/release-gate.ts",
+    identifier: "makeAuthoritativeManifest",
+  },
   {
     id: "desktop.wsl-sidecar",
     surface: "desktop",
@@ -871,7 +929,7 @@ function fixedSurface(): EntryWithHandlers[] {
   return out.sort((a, b) => (a.entry.id < b.entry.id ? -1 : a.entry.id > b.entry.id ? 1 : 0))
 }
 
-export function extractAllEntries(): { entries: EntryWithHandlers[]; missingAnchors: string[] } {
+export async function extractAllEntries(): Promise<{ entries: EntryWithHandlers[]; missingAnchors: string[] }> {
   const produced = [
     ...httpSurface([
       {
@@ -885,7 +943,7 @@ export function extractAllEntries(): { entries: EntryWithHandlers[]; missingAnch
         tag: "instance",
       },
     ]),
-    ...dacodeCliSurface(),
+    ...(await dacodeCliSurface()),
     ...lildaxCliSurface(),
     ...acpSurface(),
     ...fixedSurface(),

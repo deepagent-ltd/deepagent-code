@@ -199,8 +199,79 @@ function handleCallAtLine(mod: ReturnType<typeof parseModule>, line: number): ts
   return found
 }
 
+/** Object literal behind a command declaration: a plain literal or a factory call's argument. */
+function commandObjectLiteral(node: ts.Node): ts.ObjectLiteralExpression | undefined {
+  if (ts.isObjectLiteralExpression(node)) return node
+  if (
+    ts.isCallExpression(node) &&
+    ts.isIdentifier(node.expression) &&
+    node.arguments.length > 0 &&
+    ts.isObjectLiteralExpression(node.arguments[0])
+  )
+    return node.arguments[0]
+  return undefined
+}
+
+/**
+ * Resolve the handler member of a same-file command declaration. Supports both plain object
+ * literals (`{ run: ... }`) and the `effectCmd({ handler: ... })` factory shape used by the CLI.
+ */
+function commandObjectRunBodies(
+  mod: ReturnType<typeof parseModule>,
+  identifier: string,
+): readonly ts.Node[] {
+  const out: ts.Node[] = []
+  // declarationNodes yields the variable INITIALIZER (or function/class declaration) directly.
+  for (const node of declarationNodes(mod, identifier)) {
+    const object = commandObjectLiteral(node)
+    if (!object) continue
+    for (const property of object.properties) {
+      if (
+        ts.isPropertyAssignment(property) &&
+        ts.isIdentifier(property.name) &&
+        (property.name.text === "run" || property.name.text === "handler" || property.name.text === "action")
+      )
+        out.push(property.initializer)
+      // Composite commands delegate to subcommands via builder: yargs.command(SubCmd) — the
+      // subcommand registrations inside the builder carry the real handlers.
+      if (
+        ts.isPropertyAssignment(property) &&
+        ts.isIdentifier(property.name) &&
+        property.name.text === "builder" &&
+        ts.isArrowFunction(property.initializer)
+      ) {
+        const collect = (node: ts.Node): void => {
+          if (
+            ts.isCallExpression(node) &&
+            ts.isPropertyAccessExpression(node.expression) &&
+            node.expression.name.text === "command" &&
+            node.arguments.length > 0 &&
+            ts.isIdentifier(node.arguments[0])
+          ) {
+            for (const sub of declarationNodes(mod, node.arguments[0].text)) {
+              const subObject = commandObjectLiteral(sub)
+              if (!subObject) continue
+              for (const subProperty of subObject.properties) {
+                if (
+                  ts.isPropertyAssignment(subProperty) &&
+                  ts.isIdentifier(subProperty.name) &&
+                  (subProperty.name.text === "handler" || subProperty.name.text === "run" || subProperty.name.text === "action")
+                )
+                  out.push(subProperty.initializer)
+              }
+            }
+          }
+          ts.forEachChild(node, collect)
+        }
+        collect(property.initializer)
+      }
+    }
+  }
+  return out
+}
+
 export function bodyScopes(sites: readonly HandlerSite[]): BodyScope {
-  const usable = sites.filter((site) => site.group !== undefined)
+  const usable = sites.filter((site) => site.group !== undefined || site.commandObject !== undefined)
   const key = usable.map((site) => `${site.repoFile}:${site.line}:${site.bodyDecl ?? ""}`).join("\u0001")
   const cached = bodyScopeCache.get(key)
   if (cached) return cached
@@ -224,6 +295,12 @@ export function bodyScopes(sites: readonly HandlerSite[]): BodyScope {
       }
     }
     for (const site of sitesInFile.sort((a, b) => a.line - b.line)) {
+      if (site.commandObject !== undefined) {
+        // Yargs-style registration: `.command(XxxCommand)` — the run body is the `run` member of
+        // the same-file command object literal. Resolved here so CLI entries earn body proofs.
+        for (const node of commandObjectRunBodies(mod, site.commandObject)) enqueue(node)
+        continue
+      }
       const call = handleCallAtLine(mod, site.line)
       if (!call) continue
       const target = call.arguments[1]

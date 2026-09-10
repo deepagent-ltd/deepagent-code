@@ -89,6 +89,8 @@ export type HandlerSite = {
   readonly bodyDecl?: string
   /** HTTP group name parsed from the enclosing HttpApiGroup.make/HttpApiBuilder.group chain. */
   readonly group?: string
+  /** Yargs command object identifier for `.command(XxxCommand)` registrations. */
+  readonly commandObject?: string
 }
 
 export type EntryWithHandlers = {

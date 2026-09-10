@@ -81,6 +81,9 @@ export type ListInput = typeof ListInput.Type
 
 type CreateInput = {
   id?: SessionSchema.ID
+  parentID?: SessionSchema.ID
+  title?: string
+  metadata?: SessionSchema.Metadata
   agent?: AgentV2.ID
   model?: ModelV2.Ref
   permissions?: PermissionV2.Ruleset
@@ -600,8 +603,10 @@ export const layer = Layer.effect(
         const subpath = path.relative(project.directory, input.location.directory).replaceAll("\\", "/")
         const info = SessionSchema.Info.make({
           id: sessionID,
+          parentID: input.parentID,
           projectID: project.id,
-          title: `New session - ${new Date(now).toISOString()}`,
+          title: input.title ?? `New session - ${new Date(now).toISOString()}`,
+          metadata: input.metadata,
           agent: input.agent,
           permissions: input.permissions ?? [],
           model: input.model,

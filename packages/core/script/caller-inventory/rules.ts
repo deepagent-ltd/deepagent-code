@@ -157,6 +157,18 @@ const EVENT_CONSUMER_READONLY: readonly Requirement[] = [
   // guarded a non-writer and was unsound by construction; the writer noReach guards above remain.
 ]
 
+/** Chains a CLI command body uses when it writes sessions or drives interactions through the
+ * SDK client — each verified against the real command bodies. */
+const CLI_SESSION_WRITE_PROBES: readonly string[] = [
+  "client.session.prompt",
+  "client.session.command",
+  "client.deepagent.goal.start",
+  "client.permission.reply",
+  "client.question.reply",
+  "client.question.reject",
+  "client.v2.session.permission.reply",
+]
+
 const LEGACY_READONLY_REST: readonly Requirement[] = [
   notBody("promptSvc.promptOrSteer"),
   notBody("SessionV2.prompt"),
@@ -294,6 +306,49 @@ export const RULE_PACKS: readonly RulePack[] = [
 
   // ===========================================================================
   // ===========================================================================
+  // RI-95 W1 (2026-09-10): browser client, remote gateway client, and the CI release root.
+  // The browser entry and the remote gateway client are pure consumers — they render and call
+  // HTTP; every authority dimension is read_only, proven by the SDK/fetch client module in
+  // their closure plus absence of every authority writer. The CI release root runs the
+  // authoritative ledger generator; it reads the tree and inventories and writes release
+  // evidence, never session authority.
+  {
+    match: (id) => id === "browser.app-entry",
+    rules: all7(readOnly([
+      // The `@/` alias is only resolvable inside the deepagent-code package, so the positive read
+      // fact is the entry's own resolved relative import: the server connection helper.
+      { kind: "reach", pathSuffix: "packages/app/src/utils/server.ts" },
+      { kind: "noReach", pathSuffix: AUTHORITY.LEGACY_PROMPT },
+      { kind: "noReach", pathSuffix: AUTHORITY.V2_EXECUTION_LOCAL },
+      { kind: "noReach", pathSuffix: AUTHORITY.V2_TOOL_REGISTRY },
+      { kind: "noReach", pathSuffix: AUTHORITY.PROJECTOR },
+      notBody("events.publish"),
+    ])),
+  },
+  {
+    match: (id) => id === "browser.remote-gateway-client",
+    rules: all7(readOnly([
+      { kind: "reach", pathSuffix: "packages/app/src/utils/gateway-client.ts" },
+      { kind: "noReach", pathSuffix: AUTHORITY.LEGACY_PROMPT },
+      { kind: "noReach", pathSuffix: AUTHORITY.V2_EXECUTION_LOCAL },
+      { kind: "noReach", pathSuffix: AUTHORITY.V2_TOOL_REGISTRY },
+      { kind: "noReach", pathSuffix: AUTHORITY.PROJECTOR },
+      notBody("events.publish"),
+    ])),
+  },
+  {
+    match: (id) => id === "ci.publish-workflow",
+    rules: all7(readOnly([
+      { kind: "reach", pathSuffix: "packages/core/src/contract/evidence-manifest.ts" },
+      { kind: "reach", pathSuffix: "packages/core/src/system-context/capability-catalog.ts" },
+      { kind: "noReach", pathSuffix: AUTHORITY.LEGACY_PROMPT },
+      { kind: "noReach", pathSuffix: AUTHORITY.V2_EXECUTION_LOCAL },
+      { kind: "noReach", pathSuffix: AUTHORITY.V2_TOOL_REGISTRY },
+      { kind: "noReach", pathSuffix: AUTHORITY.PROJECTOR },
+    ])),
+  },
+
+  // ===========================================================================
   // RI-71 W1 (2026-09-10): V2-backed reclassifications under the production core-v2-only
   // profile. coreV2Only is a machine-verified hardcoded invariant (productionProfile), so the
   // runtime authority for these entries is Core V2 — proven by positive AST facts, not intent.
@@ -310,6 +365,10 @@ export const RULE_PACKS: readonly RulePack[] = [
       V2_EXEC_LOCAL,
     ]),
   },
+  // W0-4 legacy recovery surfaces stay legacy ON PURPOSE (attempted reclassification reverted):
+  // contextAttemptResolve still contains a promptSvc.loop replay branch after the profile refusal,
+  // and the requirements language cannot prove statement ordering. The refusal guard makes them
+  // unavailable at runtime, but the legacy reachability itself is RI-54's deletion work.
   // abort targets the V2 execution owner under the core-v2-only profile: promptSvc.cancel
   // routes coreV2Session.interrupt (process-local V2 interrupt) and never touches the legacy
   // run-state cancel branch.
@@ -350,30 +409,56 @@ export const RULE_PACKS: readonly RulePack[] = [
   {
     match: (id) =>
       id.startsWith("http.instance.session.") &&
+      ["command", "shell", "init"].includes(id.slice("http.instance.session.".length)),
+    rules: all7(adapter([
+      { kind: "productionProfile" },
+      body("promptSvc"),
+      LEGACY_PROMPT,
+      V2_SESSION_CORE,
+      V2_EXEC_LOCAL,
+      call("coreV2Session.prompt", LEGACY_PROMPT_PATH),
+    ])),
+  },
+  {
+    match: (id) =>
+      id.startsWith("http.instance.session.") &&
       [
         "prompt",
         "promptAsync",
         "promptPrepare",
         "promptPrepareStream",
         "promptSuggestion",
-        "command",
-        "shell",
-        "abort",
-        "summarize",
-        "init",
         "contextAttemptResolve",
         "continuationResolutionResolve",
       ].includes(id.slice("http.instance.session.".length)),
     rules: legacyAll7([LEGACY_PROMPT, body("promptSvc")]),
   },
   // ---- session create/fork (legacy Session session-lifecycle writers) ----
+  // RI-16/RI-25: POST /session under the core-v2-only profile is Core-native create
+  // (session.created.2 authority; the handler reads the V1 wire shape back as pure egress).
   {
     match: (id) => id === "http.instance.session.create",
-    rules: legacyAll7([LEGACY_PROMPT, body("Session.CreateInput")]),
+    rules: v2All7([
+      { kind: "productionProfile" },
+      body("coreV2Session.create"),
+      { kind: "reach", pathSuffix: AUTHORITY.V2_SESSION_CORE },
+      { kind: "reach", pathSuffix: AUTHORITY.PROJECTOR },
+    ]),
   },
+  // RI-71 W3: fork is the V2-history-preserving clone — the dac fork machinery copies
+  // session_message rows (fresh V2 ids + parentID remap) and fast-forwards the child's event
+  // sequence (completeForkSideEffects). adapter: fork-lifecycle translation over the shared V2
+  // history authority.
   {
     match: (id) => id === "http.instance.session.fork",
-    rules: legacyAll7([LEGACY_PROMPT, body("session.fork")]),
+    rules: all7(adapter([
+      body("session.fork"),
+      V2_SESSION_CORE,
+      { kind: "callChain", chain: "SessionMessageTable" },
+      notBody("promptSvc.promptOrSteer"),
+      notBody("promptSvc.loop"),
+      notBody("SessionV2.prompt"),
+    ])),
   },
   {
     match: (id) =>
@@ -419,41 +504,85 @@ export const RULE_PACKS: readonly RulePack[] = [
   },
 
   // ---- deepagent goal/panel/knowledge/pack pipeline (legacy) ----
+  // RI-71 W3: the goal-lifecycle endpoints control GoalManager, which since RI-39 captures
+  // SessionV2 explicitly and drives goal turns through the V2 owner under the production profile.
+  // adapter: goal-lifecycle control translated to the V2-driving goal manager; the goal loop's
+  // execution authority is Core V2.
   {
     match: (id) =>
       id.startsWith("http.instance.deepagent.") &&
       ["goalEditPlan", "goalPause", "goalResume", "goalStart", "goalStop"].includes(
         id.slice("http.instance.deepagent.".length),
       ),
-    rules: legacyAll7([LEGACY_PROMPT, body("experimentalGoalLoop")]),
+    rules: all7(adapter([
+      { kind: "productionProfile" },
+      body("experimentalGoalLoop"),
+      GOAL_MANAGER,
+      V2_SESSION_CORE,
+      notBody("promptSvc.promptOrSteer"),
+      notBody("SessionV2.prompt"),
+      notBody("ToolRegistry.register"),
+    ])),
   },
+  // RI-71 W3: panel arm/status is AgentGateway session-state control (debate depth, armed
+  // choice) — UI-process state behind the gateway's DeepAgent session-state store, never session
+  // authority. The gateway store is a legacy release-graph global (RI-94 tracks it), but the HTTP
+  // handler body only calls its panel accessors.
   {
     match: (id) => id === "http.instance.deepagent.panelArm" || id === "http.instance.deepagent.panelStatus",
-    rules: legacyAll7([LEGACY_PROMPT, body("AgentGateway.DeepAgentSessionState")]),
+    rules: all7(adapter([
+      body("AgentGateway.DeepAgentSessionState"),
+      notBody("promptSvc.promptOrSteer"),
+      notBody("SessionV2.prompt"),
+      notBody("ToolRegistry.register"),
+      notBody("events.publish"),
+    ])),
   },
   {
     match: (id) => id === "http.instance.deepagent.panelConsult",
     rules: legacyAll7([LEGACY_PROMPT, body("consultPanel")]),
   },
+  // RI-71 W3: knowledge ship-gate/reject/release operate the AgentGateway knowledge-source
+  // coordination state (review queues, baselines) — not session execution authority.
   {
     match: (id) =>
       id.startsWith("http.instance.deepagent.") &&
       ["knowledgeRejectIds", "knowledgeReleaseBaseline", "knowledgeShipGate"].includes(
         id.slice("http.instance.deepagent.".length),
       ),
-    rules: legacyAll7([LEGACY_PROMPT, body("AgentGateway.DeepAgentKnowledgeSource")]),
+    rules: all7(adapter([
+      body("AgentGateway.DeepAgentKnowledgeSource"),
+      notBody("promptSvc.promptOrSteer"),
+      notBody("SessionV2.prompt"),
+      notBody("ToolRegistry.register"),
+      notBody("events.publish"),
+    ])),
   },
+  // RI-71 W3: domain-pack registry reads and pin/unpin are registry-state operations (the
+  // domain-pack prototype is unreachable in production per RI-07); bus.publish here is the
+  // pack-change notification, not session authority.
   {
     match: (id) =>
       id.startsWith("http.instance.deepagent.") &&
       ["packsActive", "packsAll"].includes(id.slice("http.instance.deepagent.".length)),
-    rules: legacyAll7([LEGACY_PROMPT, body("AgentGateway.DeepAgentDomainPackRegistry")]),
+    rules: all7(readOnly([
+      body("AgentGateway.DeepAgentDomainPackRegistry"),
+      notBody("promptSvc.promptOrSteer"),
+      notBody("SessionV2.prompt"),
+      notBody("events.publish"),
+      notBody("bus.publish"),
+    ])),
   },
   {
     match: (id) =>
       id.startsWith("http.instance.deepagent.") &&
       ["packsPin", "packsUnpin"].includes(id.slice("http.instance.deepagent.".length)),
-    rules: legacyAll7([LEGACY_PROMPT, body("bus.publish")]),
+    rules: all7(adapter([
+      body("bus.publish"),
+      notBody("promptSvc.promptOrSteer"),
+      notBody("SessionV2.prompt"),
+      notBody("ToolRegistry.register"),
+    ])),
   },
   {
     match: (id) =>
@@ -481,9 +610,17 @@ export const RULE_PACKS: readonly RulePack[] = [
   },
 
   // ---- global ----
+  // RI-71 W3: global capabilities introspects the expert-panel experiment surface (a config/
+  // feature gate reader); it never writes session authority.
   {
     match: (id) => id === "http.instance.global.capabilities",
-    rules: legacyAll7([LEGACY_PROMPT, body("experimentalExpertPanel")]),
+    rules: all7(readOnly([
+      body("experimentalExpertPanel"),
+      notBody("promptSvc.promptOrSteer"),
+      notBody("SessionV2.prompt"),
+      notBody("events.publish"),
+      notBody("ToolRegistry.register"),
+    ])),
   },
   {
     match: (id) => id === "http.instance.global.event",
@@ -498,6 +635,24 @@ export const RULE_PACKS: readonly RulePack[] = [
   },
 
   // ---- im ----
+  // RI-71 W4: IM agents execute through ServerAgentExecutor → SessionPrompt.prompt →
+  // promptV2 (the V2 owner) under the production profile. adapter: IM protocol translation
+  // over the same V2-routed prompt path the HTTP prompt family uses.
+  {
+    match: (id) =>
+      id === "im.agent-executor" ||
+      id === "im.agent-orchestrator" ||
+      id === "im.agent-progress-stream" ||
+      id === "im.agent-reply-sink" ||
+      id === "http.instance.im.createMessage",
+    rules: all7(adapter([
+      { kind: "productionProfile" },
+      { kind: "reach", pathSuffix: "packages/deepagent-code/src/session/prompt.ts" },
+      V2_SESSION_CORE,
+      V2_EXEC_LOCAL,
+      call("promptV2", LEGACY_PROMPT_PATH),
+    ])),
+  },
   {
     match: (id) => id === "http.instance.im.createMessage",
     rules: withReadOnlyRest(
@@ -515,9 +670,21 @@ export const RULE_PACKS: readonly RulePack[] = [
   },
 
   // ---- tui ----
+  // RI-71 W3 (2026-09-10): the TUI group is the terminal-UI control plane — every handler
+  // publishes TuiEvent V2 definitions (tui.prompt/command/toast/select) through the EventV2
+  // bridge or reads the session for validation; none writes session authority. The bridge's
+  // prompt.ts reach is the shared service, not this group's body. adapter: UI-signal translation.
   {
     match: (id) => id.startsWith("http.instance.tui."),
-    rules: legacyAll7([LEGACY_PROMPT, body("events.publish")]),
+    rules: all7(adapter([
+      body("events.publish"),
+      { kind: "reach", pathSuffix: "packages/deepagent-code/src/server/tui-event.ts" },
+      notBody("promptSvc.promptOrSteer"),
+      notBody("promptSvc.loop"),
+      notBody("SessionV2.prompt"),
+      notBody("ToolRegistry.register"),
+      notBody("SessionExecution.wake"),
+    ])),
   },
   {
     match: (id) =>
@@ -528,8 +695,18 @@ export const RULE_PACKS: readonly RulePack[] = [
 
   // ---- webhook ----
   {
+    // RI-71 W3: webhook ingress is external-event translation into the DeepAgent event bus
+    // (bounded, idempotency-keyed, §E2 ceiling) — the agents that react to those events own the
+    // session authority downstream; the webhook handlers never touch it.
     match: (id) => id.startsWith("http.instance.webhook."),
-    rules: legacyAll7([LEGACY_PROMPT, body("eventBus.tryPublish")]),
+    rules: all7(adapter([
+      body("eventBus.tryPublish"),
+      notBody("promptSvc.promptOrSteer"),
+      notBody("promptSvc.loop"),
+      notBody("SessionV2.prompt"),
+      notBody("ToolRegistry.register"),
+      notBody("SessionExecution.wake"),
+    ])),
   },
 
   // ---- sync (EventV2 projection writers) ----
@@ -572,9 +749,12 @@ export const RULE_PACKS: readonly RulePack[] = [
   },
 
   // ---- event subscribe ----
+  // RI-71 W3: the instance event subscribe endpoint is the same consumer-only stream shape as
+  // its server-plane twin above (events.all subscription, no writes) — the server twin was
+  // already read_only; the instance twin gets the same positive-subscribe proof.
   {
     match: (id) => id === "http.instance.event.subscribe",
-    rules: legacyAll7([LEGACY_PROMPT]),
+    rules: all7(readOnly([body("events.listen"), notBody("events.publish"), notBody("promptSvc.promptOrSteer")])),
   },
   {
     match: (id) => id === "http.server.server.event.event.subscribe",
@@ -645,17 +825,54 @@ export const RULE_PACKS: readonly RulePack[] = [
   // ===========================================================================
   // ACP protocol handlers (drive the legacy SessionPrompt session pipeline)
   // ===========================================================================
+  // RI-71 W3: ACP is a wire-protocol adapter over the SDK client — every session operation
+  // goes through input.sdk.session.* which lands on the HTTP server entries (adapter/v2 under
+  // the profile). The ACP handlers never own session authority directly.
   {
     match: (id) => id.startsWith("acp."),
-    rules: legacyAll7([LEGACY_PROMPT]),
+    rules: all7(adapter([
+      { kind: "productionProfile" },
+      { kind: "callChain", chain: "sdk.session" },
+      notBody("promptSvc.promptOrSteer"),
+      notBody("promptSvc.loop"),
+      notBody("SessionV2.prompt"),
+      notBody("ToolRegistry.register"),
+    ])),
   },
 
   // ===========================================================================
   // dacode CLI (legacy composition entry; every command runs under the legacy CLI layer)
   // ===========================================================================
+  // RI-71 W2 (2026-09-10): CLI commands are thin protocol clients. Under the production
+  // core-v2-only profile every session write a CLI command makes lands on the server entries
+  // (now adapter/v2 classified) through the SDK client; the command body itself never owns
+  // authority. Ordered packs: session-writing commands prove a client write and are adapter;
+  // the rest prove absence of every write probe and are read_only. Commands that prove neither
+  // honestly demote to unclassified (the safety net).
+  // First-match-wins per dimension: the WRITE commands are matched by exact id with positive
+  // write proofs (verified against their resolved handler bodies); every other command proves
+  // ABSENCE of all write probes plus the prompt/publish bodies and is read_only.
+  {
+    match: (id) => id === "cli.dacode.run",
+    rules: all7(adapter([
+      { kind: "productionProfile" },
+      body("client.session"),
+    ])),
+  },
+  // tui-thread drives the low-level SDK client (client.call/on/close) rather than client.session.
+  {
+    match: (id) => id === "cli.dacode.tui-thread",
+    rules: all7(adapter([{ kind: "productionProfile" }, body("client.call")])),
+  },
   {
     match: (id) => id.startsWith("cli.dacode."),
-    rules: legacyAll7([LEGACY_PROMPT]),
+    rules: all7(readOnly([
+      { kind: "reach", pathSuffix: "packages/deepagent-code/src/index.ts" },
+      ...CLI_SESSION_WRITE_PROBES.map((chain) => notBody(chain)),
+      notBody("promptSvc.promptOrSteer"),
+      notBody("promptSvc.loop"),
+      notBody("events.publish"),
+    ])),
   },
 
   // ===========================================================================
@@ -716,24 +933,42 @@ export const RULE_PACKS: readonly RulePack[] = [
   // is not statically bound to them at this freeze point. They are not readers, so classifying them
   // read_only by absence would be dishonest (F5); they are intentionally left UNCLASSIFIED here.
 
+  // RI-71 W4: the goal pipeline and expert panel drive child sessions through the
+  // SubagentTurnRunner/PanelTurnRunner seams whose production implementations call
+  // SessionPrompt.prompt → promptV2 (the V2 owner) under the profile. background.job is the
+  // instance-scoped CoreBackgroundJob registry wrapper — coordination state only.
   {
     match: (id) =>
       id === "task.goal-manager" ||
       id === "task.goal-loop-wiring" ||
-      id === "background.job" ||
       id === "panel.consult" ||
       id === "panel.panelist-runner",
-    rules: legacyAll7([LEGACY_PROMPT]),
+    rules: all7(adapter([
+      { kind: "productionProfile" },
+      V2_SESSION_CORE,
+      V2_EXEC_LOCAL,
+      call("promptV2", LEGACY_PROMPT_PATH),
+    ])),
+  },
+  {
+    match: (id) => id === "background.job",
+    rules: all7(readOnly([
+      { kind: "reach", pathSuffix: "packages/core/src/background-job.ts" },
+      notBody("promptSvc.promptOrSteer"),
+      notBody("SessionV2.prompt"),
+      notBody("events.publish"),
+    ])),
+  },
+  {
+    // goal-driver drives goals through the CORE DeepAgent goal loop; it does not reach the
+    // SessionPrompt pipeline directly, so anchor legacy at the goal loop (goal-loop-wiring —
+    // now adapter above — is the piece that bridges into session execution).
+    match: (id) => id === "task.goal-driver",
+    rules: legacyAll7([{ kind: "reach", pathSuffix: AUTHORITY.GOAL_LOOP }]),
   },
   {
     match: (id) => id === "task.task-run-admission",
     rules: legacyAll7([LEGACY_SESSION_CORE]),
-  },
-  {
-    // goal-driver drives goals through the CORE DeepAgent goal loop (a legacy goal authority);
-    // it does not reach the SessionPrompt pipeline directly, so anchor legacy at the goal loop.
-    match: (id) => id === "task.goal-driver",
-    rules: legacyAll7([{ kind: "reach", pathSuffix: AUTHORITY.GOAL_LOOP }]),
   },
 
   // ===========================================================================
@@ -802,10 +1037,13 @@ export const RULE_PACKS: readonly RulePack[] = [
   // ===========================================================================
   // Tools & Provider & Recovery planes (single authoritative dimension; rest read_only)
   // ===========================================================================
+  // RI-71 W4: the dac tool registry captures SessionV2 and the V2 owner-qualification state;
+  // it materializes tools per Location through the V2 frame (W1.x evidence). Its reach to
+  // prompt.ts is through the shared graph, not a legacy registration path.
   {
     match: (id) => id === "tools.dacode-registry",
     rules: withReadOnlyRest(
-      { provider_tool_writer: legacy([LEGACY_PROMPT]) },
+      { provider_tool_writer: adapter([{ kind: "productionProfile" }, V2_SESSION_CORE, V2_TOOL_REGISTRY]) },
       [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")],
       "packages/core/src/tool/registry.ts",
     ),

@@ -38,19 +38,13 @@ const RULES: ReadonlyArray<{ readonly match: (id: string) => boolean; readonly r
       },
     },
   },
-  // Known legacy-only production path: IM server-side agents execute strictly through
-  // the legacy SessionPrompt service (its own source documents this contract).
+  // RI-71 W4: the IM server-side agent executor routes through SessionPrompt.prompt →
+  // promptV2 (the V2 owner) under the production profile — the per-dimension legacy pin is
+  // retired; the rule pack in rules.ts classifies the whole family as adapter with
+  // productionProfile + promptV2 call proofs.
   {
     match: (id) => id === "im.agent-executor",
-    rules: {
-      execution_owner: {
-        verdict: "legacy",
-        requirements: [
-          { kind: "reach", pathSuffix: PROMPT_PATH_SUFFIX },
-          { kind: "callChain", chain: "promptOrSteer", fileSuffix: PROMPT_PATH_SUFFIX },
-        ],
-      },
-    },
+    rules: {},
   },
   // The V2 tool registry is the policy-filtered registration/materialization writer.
   {

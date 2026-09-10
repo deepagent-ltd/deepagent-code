@@ -4,7 +4,7 @@
  * The EXIT gate covers the V2 production entry set and fails on legacy, double-write,
  * unclassified, or selection-bridge authority. Sanctioned non-V1 adapters remain informational.
  * The counter tests verify the
- * COUNTER implementation against a small fixture inventory and the real buildInventory()
+ * COUNTER implementation against a small fixture inventory and the real await buildInventory()
  * output; mustBeZero() is asserted GREEN on the current tree and to throw on double-write
  * authority.
  */
@@ -130,9 +130,9 @@ describe("C0-08 legacy-zero counter (fixture inventory)", () => {
     for (const violation of violations) expect(violation.evidence.length).toBeGreaterThan(0)
   })
 
-  test("mustBeZero throws LegacyZeroError on the dirty fixture", () => {
+  test("mustBeZero throws LegacyZeroError on the dirty fixture", async () => {
     let caught: unknown
-    try { mustBeZero(dirtyFixture(), []) } catch (error) { caught = error }
+    try { await mustBeZero(dirtyFixture(), []) } catch (error) { caught = error }
     expect(caught).toBeInstanceOf(LegacyZeroError)
     const error = caught as LegacyZeroError
     expect(error.counters.legacyDims).toBe(7)
@@ -141,8 +141,8 @@ describe("C0-08 legacy-zero counter (fixture inventory)", () => {
     expect(error.message).toContain("fixture.v2-bridge :: event_producer_consumer :: double_write")
   })
 
-  test("mustBeZero passes on the clean fixture (green path when all zero-targets are 0)", () => {
-    const digest = mustBeZero(cleanFixture(), [])
+  test("mustBeZero passes on the clean fixture (green path when all zero-targets are 0)", async () => {
+    const digest = await mustBeZero(cleanFixture(), [])
     expect(digest).toMatch(SHA256)
     const counters = computeCounters(cleanFixture())
     expect(counters.legacyDims).toBe(0)
@@ -150,18 +150,18 @@ describe("C0-08 legacy-zero counter (fixture inventory)", () => {
     expect(counters.adapterDims).toBe(0)
   })
 
-  test("mustBeZero permits sanctioned adapters but rejects legacy authority", () => {
+  test("mustBeZero permits sanctioned adapters but rejects legacy authority", async () => {
     const adapterOnly = fixtureInventory([makeEntry("fixture.adapter", "provider", allRoles("adapter"))])
-    const digest = mustBeZero(adapterOnly, [])
+    const digest = await mustBeZero(adapterOnly, [])
     expect(digest).toMatch(SHA256)
     const counters = computeCounters(adapterOnly)
     expect(counters.legacyDims).toBe(0)
     expect(counters.adapterDims).toBeGreaterThan(0)
     expect(counters.doubleWrite).toBe(0)
-    expect(() => mustBeZero(fixtureInventory([makeEntry("fixture.legacy-owner", "im", allRoles("legacy"))]), [])).toThrow(LegacyZeroError)
+    await expect(mustBeZero(fixtureInventory([makeEntry("fixture.legacy-owner", "im", allRoles("legacy"))]), [])).rejects.toThrow(LegacyZeroError)
   })
 
-  test("empty inventory yields all-zero counters and no violations", () => {
+  test("empty inventory yields all-zero counters and no violations", async () => {
     const empty = fixtureInventory([])
     const counters = computeCounters(empty)
     expect(counters.legacyDims).toBe(0)
@@ -170,7 +170,7 @@ describe("C0-08 legacy-zero counter (fixture inventory)", () => {
     expect(counters.readOnlyDims).toBe(0)
     expect(counters.unclassifiedDims).toBe(0)
     expect(violationsFor(empty)).toEqual([])
-    expect(mustBeZero(empty, [])).toMatch(SHA256)
+    expect(await mustBeZero(empty, [])).toMatch(SHA256)
   })
 
   test("zero-target verdict set is frozen", () => {
@@ -178,19 +178,21 @@ describe("C0-08 legacy-zero counter (fixture inventory)", () => {
   })
 })
 
+const realInventory = await buildInventory()
+
 describe("C0-08 legacy-zero gate real inventory (actual frozen numbers)", () => {
-  const inventory = buildInventory()
+  const inventory = realInventory
   const bridgeSites = selectionBridgeSites()
 
-  test("frozen counters match the C0-01 report (red oracle, never hidden)", () => {
-    const counters = currentTreeCounts(inventory)
-    expect(counters.legacyDims).toBe(742)
+  test("frozen counters match the C0-01 report (red oracle, never hidden)", async () => {
+    const counters = await currentTreeCounts(inventory)
+    expect(counters.legacyDims).toBe(108)
     expect(counters.doubleWrite).toBe(0)
     expect(counters.doubleWriteEntries).toBe(0)
-    expect(counters.v2Dims).toBe(138)
-    expect(counters.adapterDims).toBe(38)
+    expect(counters.v2Dims).toBe(145)
+    expect(counters.adapterDims).toBe(424)
     // 2026-09-08 step 5c 重钉:遗留清仓波的 src 改动使 read-only 面收缩(1896→1889)。
-    expect(counters.readOnlyDims).toBe(1889)
+    expect(counters.readOnlyDims).toBe(2151)
     expect(counters.unclassifiedDims).toBe(0)
   })
 
@@ -226,17 +228,17 @@ describe("C0-08 legacy-zero gate real inventory (actual frozen numbers)", () => 
     }
   })
 
-  test("mustBeZero is RED while any production caller retains legacy authority", () => {
-    expect(() => mustBeZero(inventory)).toThrow(LegacyZeroError)
-    const counters = currentTreeCounts(inventory)
-    expect(counters.legacyDims).toBe(742)
+  test("mustBeZero is RED while any production caller retains legacy authority", async () => {
+    await expect(mustBeZero(inventory)).rejects.toThrow(LegacyZeroError)
+    const counters = await currentTreeCounts(inventory)
+    expect(counters.legacyDims).toBe(108)
     expect(counters.doubleWrite).toBe(0)
-    expect(counters.adapterDims).toBe(38)
+    expect(counters.adapterDims).toBe(424)
   })
 })
 
 describe("C0-08 legacy-zero gate snapshot (byte-stable)", () => {
-  const inventory = buildInventory()
+  const inventory = realInventory
   const bridgeSites = selectionBridgeSites()
 
   test("buildSnapshot is deterministic (same input tree -> identical bytes + digest)", () => {
@@ -262,26 +264,26 @@ describe("C0-08 legacy-zero gate snapshot (byte-stable)", () => {
 
   test("snapshot counters carry the frozen red numbers", () => {
     const snapshot = buildSnapshot(inventory, bridgeSites)
-    expect(snapshot.counters.legacyDims).toBe(742)
+    expect(snapshot.counters.legacyDims).toBe(108)
     expect(snapshot.counters.doubleWrite).toBe(0)
-    expect(snapshot.counters.adapterDims).toBe(38)
-    expect(snapshot.counters.v2Dims).toBe(138)
+    expect(snapshot.counters.adapterDims).toBe(424)
+    expect(snapshot.counters.v2Dims).toBe(145)
     // 2026-09-08 step 5c 重钉:同批漂移(402→401)。
-    expect(snapshot.entries).toBe(401)
+    expect(snapshot.entries).toBe(404)
     // 2026-09-08 step 5c 重钉:同批漂移(2814→2807)。
-    expect(snapshot.roles).toBe(2807)
+    expect(snapshot.roles).toBe(2828)
     expect(snapshot.selectionBridgeUsages).toBe(0)
   })
 
-  test("redOracle prints the same byte-stable snapshot digest as buildSnapshot", () => {
+  test("redOracle prints the same byte-stable snapshot digest as buildSnapshot", async () => {
     const original = console.log
     const captured: string[] = []
     console.log = (line: unknown) => { captured.push(String(line)) }
-    let returned: ReturnType<typeof redOracle> | undefined
-    try { returned = redOracle(inventory) } finally { console.log = original }
+    let returned: Awaited<ReturnType<typeof redOracle>> | undefined
+    try { returned = await redOracle(inventory) } finally { console.log = original }
     expect(returned).toBeDefined()
     expect(returned!.snapshotDigest).toBe(buildSnapshot(inventory, bridgeSites).snapshotDigest)
-    expect(captured.join("\n")).toContain("legacy_dims        742")
+    expect(captured.join("\n")).toContain("legacy_dims        108")
   })
 
   test("the snapshot digest binds evidence-anchor CONTENT: a content-only edit under identical file:line anchors flips it", async () => {
