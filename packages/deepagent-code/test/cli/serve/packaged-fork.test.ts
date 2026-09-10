@@ -290,7 +290,12 @@ if (!packagedBinary) {
         })
         expect(childRestartTurn.status).toBe(200)
         yield* llm.wait(childCallsBeforeRestartTurn + 1)
-        const childRestartHit = (yield* llm.hits).at(-1)
+        // The settled child turn can trigger a durable-learning reviewer dispatch (its own
+        // provider call) after the continuation lands — pick the continuation hit by its user
+        // marker instead of position.
+        const childRestartHit = (yield* llm.hits).findLast((hit) =>
+          JSON.stringify(providerMessages(hit?.body)).includes("packaged child restart provider turn"),
+        )
         expect(childRestartHit).toBeDefined()
         const childRestartMessages = providerMessages(childRestartHit?.body)
         const childRestartSerialized = JSON.stringify(childRestartMessages)
