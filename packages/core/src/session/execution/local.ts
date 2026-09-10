@@ -10,6 +10,7 @@ import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
 import { SessionExecution } from "../execution"
 import { logFailure } from "../logging"
+import { Delegation } from "../../tool/delegation"
 
 /** Current-process routing for implicit-local Locations. Future remote placement belongs here. */
 export const layer = Layer.effect(
@@ -18,6 +19,10 @@ export const layer = Layer.effect(
     const store = yield* SessionStore.Service
     const locations = yield* LocationServiceMap
     const events = yield* EventV2.Service
+    // Drain fibers are forked from this layer's captured context and structurally cannot see the
+    // process root; carrying the per-root delegation holder lets the Core `task` tool reach the
+    // root SessionV2 service from inside a Location-scoped settle (see tool/delegation.ts).
+    const delegation = yield* Delegation.DelegationSlot
     const ownedClaims = new Map<SessionSchema.ID, number>()
     const reportLifecycle = (sessionID: SessionSchema.ID, effect: Effect.Effect<void>) =>
       effect.pipe(
@@ -81,6 +86,7 @@ export const layer = Layer.effect(
         if (!session) return yield* Effect.die(`Session not found: ${sessionID}`)
         return yield* SessionRunner.Service.use((runner) => runner.run({ sessionID, force: mode === "run" })).pipe(
           Effect.provide(locations.get(session.location)),
+          Effect.provideService(Delegation.DelegationSlot, delegation),
         )
       }),
       onFailure: (sessionID, cause) => logFailure("Failed to drain Session", sessionID, cause),
@@ -145,6 +151,10 @@ export const layer = Layer.effect(
   }),
 )
 
-export const defaultLayer = layer.pipe(Layer.provide(SessionStore.defaultLayer), Layer.provide(EventV2.defaultLayer))
+export const defaultLayer = layer.pipe(
+  Layer.provide(SessionStore.defaultLayer),
+  Layer.provide(EventV2.defaultLayer),
+  Layer.provide(Delegation.delegationSlotLayer),
+)
 
 export const liveLayer = Layer.suspend(() => defaultLayer.pipe(Layer.provide(LocationServiceMap.layer)))

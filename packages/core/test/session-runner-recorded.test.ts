@@ -16,6 +16,7 @@ import { AbsolutePath } from "@deepagent-code/core/schema"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { Prompt } from "@deepagent-code/core/session/prompt"
 import { SessionProjector } from "@deepagent-code/core/session/projector"
+import { Delegation } from "../src/tool/delegation"
 import { SessionExecutionLocal } from "@deepagent-code/core/session/execution/local"
 import * as SessionRunnerLLM from "@deepagent-code/core/session/runner/llm"
 import { SessionRunnerModel } from "@deepagent-code/core/session/runner/model"
@@ -153,6 +154,7 @@ const execution = SessionExecutionLocal.layer.pipe(
   Layer.provide(events),
   Layer.provide(store),
   Layer.provide(locations),
+  Layer.provide(Delegation.delegationSlotLayer),
 )
 const sessions = SessionV2.layer.pipe(
   Layer.provide(events),

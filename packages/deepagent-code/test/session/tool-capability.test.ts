@@ -9,6 +9,16 @@ import { testEffect } from "../lib/effect"
 const registry = Layer.succeed(
   ToolRegistry.Service,
   ToolRegistry.Service.of({
+    custom: () =>
+      Effect.succeed([
+        {
+          id: "custom_writer",
+          description: "",
+          parameters: Schema.Struct({}),
+          provenance: { source: "custom" },
+          execute: () => Effect.succeed(undefined),
+        },
+      ]) as never,
     ids: () => Effect.succeed(["custom_writer"]),
     all: () =>
       Effect.succeed([

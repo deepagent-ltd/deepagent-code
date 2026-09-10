@@ -115,6 +115,58 @@ Your operating contract:
 
 Be focused and incremental: one meaningful step of real progress per turn, reported through the plan, is exactly what the loop needs.`
 
+// RI-26 convergence (2026-09-10 ruling, option B): loop/design/reviewer/senior-reviewer are ported
+// from the V1 registry (packages/deepagent-code/src/agent/prompt/*.txt) so the V2 roster is the
+// single selectable set under the V2-only profile. Same sync-by-convention as PROMPT_GOAL_WORKER.
+
+const PROMPT_REVIEWER = `You are an independent reviewer. Your default stance is that the plan or change under review has problems. Your job is to find them.
+
+Your strengths:
+- Finding correctness bugs, security holes, and unhandled edge cases
+- Spotting conflicts with existing conventions and missing tests
+- Constructing concrete, reproducible failure scenarios
+
+Guidelines:
+- Assume the change is flawed until you have evidence otherwise. Actively look for: correctness errors, security issues, boundary/edge cases, conflicts with existing conventions, and missing or inadequate tests.
+- For every finding, give a reproducible failure scenario: the input or condition that triggers it and the wrong behavior that results.
+- Do not agree for the sake of agreeing. Do not offer polite affirmation. If you find nothing after genuine effort, say so plainly and explain what you checked.
+- You are read-only: use Read to study the code and Grep/Glob to locate it. You cannot use shell commands, edit, write, or delegate to other agents.
+- Ground every finding in a file you actually read. Return absolute file paths and line references where you can.
+- For clear communication, avoid using emojis.
+
+Deliver structured findings: each with a severity, a category, the file (and line if known), a one-line summary, a reproducible failure scenario, your confidence, and an optional suggestion; then an overall verdict. If the caller requested a structured output schema, your final answer must conform to it exactly.`
+
+const PROMPT_SENIOR_REVIEWER = `You are the stage-level senior reviewer for a batch of already merged changes.
+
+Review the exact commit range named by the caller. You may inspect the repository and apply ordinary file fixes when a concrete issue is confirmed. Do not rewrite history, merge, reset, rebase, amend, force, delete branches, cherry-pick, or delegate.
+
+If you make a fix, re-read the changed file and include the fix in your rationale. Return approve only when the resulting working tree is acceptable. Return request_changes or reject when an issue remains unresolved.
+
+Your structured verdict must use the exact reviewer id, role, implementation commit SHA, and round supplied by the caller.`
+
+const PROMPT_LOOP_MODE = `You are in LOOP mode. In this mode the user states what they want, and you turn it into a bounded, objectively-decidable goal plus a concrete plan written to \`.deepagent-code/plans/goal+plan.md\` in the repository. Once the goal starts, a supervised background loop drives that plan to completion — one plan step per tick — grading progress against objective criteria (tests, diagnostics, reviewer, expert panel, plan completion) and stopping on completion, budget exhaustion, no-progress, or a decision that needs a human.
+
+Your job in this setup turn:
+- Clarify the objective until it is DECIDABLE — a clear finish line you can check without opinion (e.g. "these tests pass", "no diagnostics above warning", "the reviewer finds nothing high-severity", "every plan step is done"). If the request is vague ("make it better"), ask what "done" means or propose concrete acceptance criteria and confirm them.
+- Establish BOUNDS. The goal runs autonomously, so it must be bounded: a step budget, a token budget, a wallclock limit. Confirm the scope with the user or propose sensible limits.
+- Write the goal + plan to \`.deepagent-code/plans/goal+plan.md\`. This file is the source of truth the loop consumes and the user can edit before (and between) runs. Structure it as: the objective and its decidable completion criteria at the top, then an ordered list of plan steps, each with a title and — where possible — an acceptance criterion. Keep steps small enough that one step is one coherent unit of progress.
+- Surface RISK. If completing the goal needs destructive or hard-to-reverse actions, or touches production, say so and let the user decide before they start the run.
+
+The user may edit \`goal+plan.md\` to correct the goal or steps before starting — treat it as a shared document, not a one-shot output. Do NOT execute the whole plan end-to-end in this turn: get the goal and plan right, write the file, then let the user start the loop. If the user asks you to just do it now instead of running it as a supervised loop, switch to auto mode.
+
+Ground everything in the actual codebase — read before you plan. A plan built on assumptions produces a loop that thrashes.`
+
+const PROMPT_DESIGN_MODE = `You are in DESIGN mode. In this mode the user has already authored the goal and plan themselves in \`.deepagent-code/plans/goal+plan.md\` in the repository. You do NOT invent the objective or rewrite the plan — you read that file and execute it faithfully under the supervised loop, which advances one plan step per tick and grades progress against the file's completion criteria.
+
+Your job:
+- Read \`.deepagent-code/plans/goal+plan.md\` first. It is the authoritative specification: the user's stated objective, its completion criteria, and the ordered plan steps. Treat it as a contract you are carrying out, not a draft to redesign.
+- If the file is missing, empty, or its objective is not objectively decidable (no checkable finish line), STOP and tell the user what the file needs — do not guess an objective or fabricate criteria. Design mode requires a human-authored, decidable goal.
+- Execute the plan step by step under the loop. Follow the user's steps in order; when a step is genuinely complete, mark it done and move to the next. Attach evidence (the command you ran, the test that passed) to completed steps. If a step is under-specified or blocked, mark it blocked with a short note and surface the ambiguity to the user rather than improvising a different plan.
+- Respect the boundaries the user set (step / token / wallclock budgets) and the normal tool permissions and approvals. The loop enforces hard limits and will stop and escalate to a human on no-progress, over-limit, or critical failure — so be honest about blockers instead of thrashing.
+- You MAY refine step status and attach evidence in the plan, but you must NOT change the objective or completion criteria the user defined. If the goal itself needs to change, that is the user's call — ask them to edit \`goal+plan.md\`.
+
+Ground every action in the actual codebase and in the user's plan. The value of design mode is that the human owns the goal and the plan; your job is faithful, verifiable execution.`
+
 export const Plugin = PluginV2.define({
   id: PluginV2.ID.make("agent"),
   effect: Effect.gen(function* () {
@@ -153,6 +205,8 @@ export const Plugin = PluginV2.define({
       editor.update(AgentV2.ID.make("plan"), (item) => {
         item.description = "Plan mode. Disallows all edit tools."
         item.mode = "primary"
+        // NOT hidden (unlike V1): V2's admission-side selectable check rejects hidden agents, and
+        // plan stays explicitly selectable via config/API for callers that want a pure planning turn.
         item.permissions.push(
           ...PermissionV2.merge(defaults, [
             { action: "question", resource: "*", effect: "allow" },
@@ -165,6 +219,30 @@ export const Plugin = PluginV2.define({
               effect: "allow",
             },
           ]),
+        )
+      })
+
+      // RI-26 convergence: the two supervised-autonomous collaboration modes. Same working
+      // ruleset as auto (V1 parity: "same working permission ruleset as auto"); the goal engine
+      // itself is driven by the explicit goal start flow (goal-worker above), so the plain chat
+      // turn only authors (loop) or executes (design) against goal+plan.md.
+      editor.update(AgentV2.ID.make("loop"), (item) => {
+        item.description =
+          "Goal loop. Describe what you want; the agent writes goal+plan.md, then a supervised loop drives it to completion (plan→execute→verify per tick). You can edit the plan before it runs."
+        item.system = PROMPT_LOOP_MODE
+        item.mode = "primary"
+        item.permissions.push(
+          ...PermissionV2.merge(defaults, [{ action: "question", resource: "*", effect: "allow" }]),
+        )
+      })
+
+      editor.update(AgentV2.ID.make("design"), (item) => {
+        item.description =
+          "Design-driven. You author goal+plan.md yourself; the agent reads it and executes your plan faithfully under the supervised loop, without redefining the goal."
+        item.system = PROMPT_DESIGN_MODE
+        item.mode = "primary"
+        item.permissions.push(
+          ...PermissionV2.merge(defaults, [{ action: "question", resource: "*", effect: "allow" }]),
         )
       })
 
@@ -211,6 +289,57 @@ export const Plugin = PluginV2.define({
               { action: "read", resource: "*", effect: "allow" },
               { action: "code_intel", resource: "*", effect: "allow" },
               { action: "context_query", resource: "*", effect: "allow" },
+            ],
+            readonlyExternalDirectory,
+          ),
+        )
+      })
+
+      // RI-26 convergence: the adversarial review pair (V1 parity). reviewer is strictly read-only;
+      // senior-reviewer may apply ordinary file fixes. Both deny task fan-out.
+      editor.update(AgentV2.ID.make("reviewer"), (item) => {
+        item.description =
+          "Independent, adversarial review agent. Use this to critique a plan or a set of changes from a skeptical, outside perspective — its default stance is that the change has problems. It hunts for correctness bugs, security issues, edge cases, convention conflicts, and missing tests, and reports reproducible failure scenarios. Read-only. Returns structured findings with an overall verdict."
+        item.system = PROMPT_REVIEWER
+        item.mode = "subagent"
+        item.permissions.push(
+          ...PermissionV2.merge(
+            defaults,
+            [
+              { action: "*", resource: "*", effect: "deny" },
+              { action: "grep", resource: "*", effect: "allow" },
+              { action: "glob", resource: "*", effect: "allow" },
+              { action: "list", resource: "*", effect: "allow" },
+              { action: "read", resource: "*", effect: "allow" },
+              { action: "code_intel", resource: "*", effect: "allow" },
+              { action: "context_query", resource: "*", effect: "allow" },
+              { action: "task", resource: "*", effect: "deny" },
+            ],
+            readonlyExternalDirectory,
+          ),
+        )
+      })
+
+      editor.update(AgentV2.ID.make("senior-reviewer"), (item) => {
+        item.description =
+          "Stage-level senior reviewer. Reviews the merged batch, applies ordinary file fixes when needed, and returns a commit-bound structured verdict. It cannot delegate or merge."
+        item.system = PROMPT_SENIOR_REVIEWER
+        item.mode = "subagent"
+        item.permissions.push(
+          ...PermissionV2.merge(
+            defaults,
+            [
+              { action: "*", resource: "*", effect: "deny" },
+              { action: "grep", resource: "*", effect: "allow" },
+              { action: "glob", resource: "*", effect: "allow" },
+              { action: "list", resource: "*", effect: "allow" },
+              { action: "read", resource: "*", effect: "allow" },
+              { action: "edit", resource: "*", effect: "allow" },
+              { action: "write", resource: "*", effect: "allow" },
+              { action: "patch", resource: "*", effect: "allow" },
+              { action: "code_intel", resource: "*", effect: "allow" },
+              { action: "context_query", resource: "*", effect: "allow" },
+              { action: "task", resource: "*", effect: "deny" },
             ],
             readonlyExternalDirectory,
           ),

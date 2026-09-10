@@ -92,6 +92,7 @@
         "@sentry/vite-plugin": "catalog:",
         "@tailwindcss/vite": "catalog:",
         "@tsconfig/bun": "1.0.9",
+        "@types/bun": "catalog:",
         "@types/luxon": "catalog:",
         "@types/node": "catalog:",
         "@typescript/native-preview": "catalog:",
@@ -169,6 +170,7 @@
         "@parcel/watcher": "2.5.1",
         "@silvia-odwyer/photon-node": "0.3.4",
         "ai-gateway-provider": "3.1.2",
+        "ajv": "8.20.0",
         "bun-pty": "0.4.8",
         "cross-spawn": "catalog:",
         "drizzle-orm": "catalog:",
@@ -3029,7 +3031,7 @@
 
     "get-tsconfig": ["get-tsconfig@4.14.0", "", { "dependencies": { "resolve-pkg-maps": "^1.0.0" } }, "sha512-yTb+8DXzDREzgvYmh6s9vHsSVCHeC0G3PI5bEXNBHtmshPnO+S5O7qgLEOn0I5QvMy6kpZN8K1NKGyilLb93wA=="],
 
-    "ghostty-web": ["ghostty-web@github:anomalyco/ghostty-web#83c0a07", {}, "anomalyco-ghostty-web-83c0a07", "sha512-Lf2v1agHkVUpMpHBWWuCZrhOEmcwwin5/Hboc9rZwQ7/CKkIh5rU1r1CvfLlhkMoFv+ed8z52RZ8hkzGZZj3MQ=="],
+    "ghostty-web": ["ghostty-web@github:anomalyco/ghostty-web#6e24d04", {}, "anomalyco-ghostty-web-6e24d04", "sha512-svnTv7Djx1QbZHr2H2Fxqp/LqkMwZB19x7ln4IOSYxlCs2wN1fTC3QRrknxtuPxDznfjV7eVBGps+Foa2v2YnQ=="],
 
     "giget": ["giget@3.3.0", "", { "bin": { "giget": "dist/cli.mjs" } }, "sha512-gzi2D96p+AMfDcmJHGDj3KJ9NRiwvlFAU5yfa3ROwWZmFUjX4P43x3BcyRaOMMLto1vUo7C+86+MFhYTl6Ryiw=="],
 

@@ -11,6 +11,7 @@ import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { SessionEvent } from "@deepagent-code/core/session/event"
 import { SessionExecution } from "@deepagent-code/core/session/execution"
+import { Delegation } from "../src/tool/delegation"
 import { SessionExecutionLocal } from "@deepagent-code/core/session/execution/local"
 import {
   SessionRestart,
@@ -712,6 +713,7 @@ function buildExecution(scope: Scope.Closeable, run: SessionRunner.Interface["ru
         Layer.provide(Layer.succeed(EventV2.Service, events)),
         Layer.provide(Layer.succeed(SessionStore.Service, store)),
         Layer.provide(locations),
+        Layer.provide(Delegation.delegationSlotLayer),
       ),
       scope,
     )

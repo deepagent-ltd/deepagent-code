@@ -156,6 +156,7 @@ export async function runV2LiveCases(input: {
     const { SessionProjector } = await import("../../src/session/projector")
     const { SessionStore } = await import("../../src/session/store")
     const { ApplicationTools } = await import("../../src/tool/application-tools")
+    const { Delegation } = await import("../../src/tool/delegation")
     const { Effect, Layer } = await import("effect")
     const { eq } = await import("drizzle-orm")
 
@@ -167,6 +168,7 @@ export async function runV2LiveCases(input: {
       Layer.provide(store),
       Layer.provide(events),
       Layer.provide(locations),
+      Layer.provide(Delegation.delegationSlotLayer),
     )
     const sessions = SessionV2.layer.pipe(
       Layer.provide(events),

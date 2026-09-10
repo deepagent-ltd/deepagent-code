@@ -11,6 +11,7 @@ import {
 import { SessionRuntime } from "@deepagent-code/core/session/runtime"
 import { SessionRunner } from "@deepagent-code/core/session/runner"
 import { SessionCompaction } from "@deepagent-code/core/session/compaction"
+import { TaskTool } from "@deepagent-code/core/tool/task"
 import { V2ProviderTurn } from "@deepagent-code/core/session/runner/v2-provider-turn"
 import { V2OwnerDevMint } from "@deepagent-code/core/session/runner/v2-owner-dev-mint"
 import { V2ToolEffect } from "@deepagent-code/core/session/runner/v2-tool-effect"
@@ -271,6 +272,7 @@ const coreSessionRuntime = SessionRuntime.layer.pipe(
   Layer.provide(eventLayer),
   Layer.provide(runnerFrameLocationMapLayer),
   Layer.provide(ProjectV2.defaultLayer),
+  Layer.provide(TaskTool.delegationSlotLayer),
 )
 
 /** One application V2 runtime: one DB, event bridge, execution owner, restart owner, and Location map. */
@@ -279,6 +281,12 @@ export const sessionRuntimeLayer = Layer.mergeAll(
   runnerFrameLocationMapLayer,
   Layer.succeed(CompositionDigest.FrameIdentity, frameIdentity),
   RuntimeIntegrityIdentity.rootIdentitySlotLayer,
+  // Same memoized slot instance the execution layer carries; same memoized SessionV2 build as
+  // coreSessionRuntime — the capture wires holder to service once per root.
+  TaskTool.captureDelegationServiceLayer.pipe(
+    Layer.provide(TaskTool.delegationSlotLayer),
+    Layer.provide(coreSessionRuntime),
+  ),
 ).pipe(
   Layer.provide(EventV2Bridge.defaultLayer),
 )
