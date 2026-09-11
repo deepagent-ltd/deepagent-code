@@ -2,7 +2,7 @@ export * as V2ProviderTurn from "./v2-provider-turn"
 
 import { RequestExecutor } from "@deepagent-code/llm/route"
 import { and, eq, inArray, max, or, sql } from "drizzle-orm"
-import { Cause, Context, Duration, Effect, Exit, Layer, Option, Ref, Schedule, Schema, Stream } from "effect"
+import { Cause, Context, Duration, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect"
 import { Database } from "../../database/database"
 import { CanonicalJson } from "../../util/canonical-json"
 import { Hash } from "../../util/hash"
@@ -323,7 +323,11 @@ export type BaselineInput = {
 }
 
 export interface Interface {
-  readonly ownerToken: string
+  /**
+   * Current process owner lease token. A stalled heartbeat rotates the owner to a successor
+   * generation, so every consumer MUST read this at use time and never capture it once.
+   */
+  readonly currentOwnerToken: () => Effect.Effect<string>
   readonly admit: (input: Omit<AdmitInput, "ownerToken">) => Effect.Effect<Receipt, Error>
   readonly seal: (
     receipt: Receipt,
@@ -401,20 +405,24 @@ export const layerWith = (options: LayerOptions = {}) =>
     Effect.gen(function* () {
       const db = (yield* Database.Service).db
       const owners = yield* SessionProviderOwner.Service
-      const ownerToken = options.ownerToken ?? `v2:${crypto.randomUUID()}`
-      const leaseMs = options.leaseMs ?? SessionProviderOwner.LeaseMs
-      yield* owners.register({ ownerToken, leaseMs }).pipe(Effect.orDie)
+      // Mutable process-level owner identity. A token captured once at layer build can be fenced by
+      // lease expiry — a heartbeat gap past LeaseMs (stalled event loop, long DB wait) — while the
+      // process keeps running. Treating that as terminal latched `healthy` false forever and bricked
+      // every later turn. Instead the heartbeat rotates to a successor generation and terminalizes
+      // the fenced generation's in-flight receipts, mirroring ContextFederationProviderOwnerRuntime
+      // (the twin maintenance loop in deepagent-code, which already recovers this way).
+      const ownerBase = options.ownerToken ?? `v2:${crypto.randomUUID()}`
+      const leaseMs = options.leaseMs ?? envOwnerLeaseMs()
+      const owner = yield* Ref.make<{ readonly token: string; readonly generation: number }>({
+        token: ownerBase,
+        generation: 0,
+      })
+      yield* owners.register({ ownerToken: ownerBase, leaseMs }).pipe(Effect.orDie)
       const healthy = yield* Ref.make(true)
-      yield* owners.heartbeat({ ownerToken, leaseMs }).pipe(
-        Effect.catch((error) =>
-          error.reason === "provider_owner_lease_not_live"
-            ? Ref.set(healthy, false)
-            : Effect.logError("v2 provider owner heartbeat failed", { error }),
-        ),
-        Effect.repeat(Schedule.spaced(Duration.millis(Math.max(1, Math.floor(leaseMs / 3))))),
-        Effect.forkScoped,
+      const currentOwnerToken = () => Ref.get(owner).pipe(Effect.map((state) => state.token))
+      yield* Effect.addFinalizer(() =>
+        currentOwnerToken().pipe(Effect.flatMap((token) => owners.release({ ownerToken: token })), Effect.ignore),
       )
-      yield* Effect.addFinalizer(() => owners.release({ ownerToken }).pipe(Effect.ignore))
 
       const requireHealthy = Effect.filterOrFail(
         Ref.get(healthy),
@@ -713,6 +721,7 @@ export const layerWith = (options: LayerOptions = {}) =>
 
       const admit = Effect.fn("V2ProviderTurn.admit")(function* (input: Omit<AdmitInput, "ownerToken">) {
         yield* requireHealthy
+        const ownerToken = yield* currentOwnerToken()
         return yield* db
           .transaction((tx) => admitInTransaction(tx, input, ownerToken), { behavior: "immediate" })
           .pipe(preserveErrors)
@@ -730,6 +739,11 @@ export const layerWith = (options: LayerOptions = {}) =>
       }) =>
         Effect.gen(function* () {
           yield* requireHealthy
+          // A receipt's lifecycle belongs to the generation that admitted it. Resolve the owner from
+          // the receipt itself, not the process-current token: after a rotation the old generation's
+          // in-flight receipt must be terminalized by `recover` (not silently transitioned by the new
+          // generation), and the lease-liveness check below then fails closed on the fenced token.
+          const ownerToken = input.receipt.ownerToken
           return yield* db.transaction(
             (tx) =>
               Effect.gen(function* () {
@@ -916,6 +930,7 @@ export const layerWith = (options: LayerOptions = {}) =>
 
       const recover = Effect.fn("V2ProviderTurn.recover")(function* () {
         yield* requireHealthy
+        const ownerToken = yield* currentOwnerToken()
         return yield* db
           .transaction(
             (tx) =>
@@ -1007,6 +1022,40 @@ export const layerWith = (options: LayerOptions = {}) =>
       })
 
       yield* recover().pipe(Effect.orDie)
+
+      // Heartbeat maintenance. A heartbeat gap past the lease (stalled event loop, long DB wait)
+      // fences the current token; that is correct fencing of an unknown-outcome owner, NOT a reason
+      // to brick the process. Rotate to a successor generation, terminalize the fenced generation's
+      // in-flight receipts through the same `recover` path, and keep serving. `healthy` never latches
+      // false here — only an unrecoverable maintenance defect would stop the loop.
+      yield* Effect.gen(function* () {
+        while (yield* Ref.get(healthy)) {
+          const beat = yield* owners.heartbeat({ ownerToken: (yield* Ref.get(owner)).token, leaseMs }).pipe(Effect.exit)
+          if (Exit.isFailure(beat)) {
+            const error = Option.getOrUndefined(Cause.findErrorOption(beat.cause))
+            if (
+              error instanceof SessionProviderOwner.ConflictError &&
+              error.reason === "provider_owner_lease_not_live"
+            ) {
+              const generation = (yield* Ref.get(owner)).generation + 1
+              const token = `${ownerBase}:gen-${generation}:${crypto.randomUUID()}`
+              const registered = yield* owners
+                .register({ ownerToken: token, leaseMs, successor: true })
+                .pipe(Effect.exit)
+              if (Exit.isSuccess(registered)) {
+                yield* Ref.set(owner, { token, generation })
+                yield* Effect.logInfo(`v2 provider owner generation rotated: generation=${generation}`)
+                yield* recover().pipe(Effect.ignore)
+              } else
+                yield* Effect.logError(`v2 provider owner rotation failed: ${Cause.pretty(registered.cause)}`)
+            } else yield* Effect.logError(`v2 provider owner heartbeat failed; retrying: ${Cause.pretty(beat.cause)}`)
+          }
+          yield* Effect.sleep(Duration.millis(Math.max(1, Math.floor(leaseMs / 3))))
+        }
+      }).pipe(
+        Effect.catchCause((cause) => Effect.logError(`v2 provider owner maintenance failed: ${Cause.pretty(cause)}`)),
+        Effect.forkScoped,
+      )
 
       const recordBaselinePrepared = Effect.fn("V2ProviderTurn.recordBaselinePrepared")(function* (
         input: BaselineInput,
@@ -1155,7 +1204,7 @@ export const layerWith = (options: LayerOptions = {}) =>
       })
 
       return Service.of({
-        ownerToken,
+        currentOwnerToken,
         admit,
         seal,
         markStreaming,
@@ -1180,6 +1229,16 @@ export const layerWith = (options: LayerOptions = {}) =>
   )
 
 export const layer = layerWith()
+
+// Owner-lease length override. The 30s default bounds crash-takeover latency, but it also fences a
+// LIVE process whenever the event loop stalls longer than the lease — measured on slow-fs hosts
+// (Docker Desktop) where the synchronous FULL commit path accumulates multi-minute loop starvation
+// during long provider turns. Deployment harnesses on such hosts raise the lease via this env; the
+// default and the crash-takeover contract are unchanged.
+export const envOwnerLeaseMs = (): number => {
+  const raw = Number(process.env["DEEPAGENT_CODE_V2_OWNER_LEASE_MS"])
+  return Number.isSafeInteger(raw) && raw >= 1_000 && raw <= 600_000 ? raw : SessionProviderOwner.LeaseMs
+}
 
 export function prepare(input: PrepareInput, wireRequestHash: string) {
   return PreparedProviderTurn.prepare({

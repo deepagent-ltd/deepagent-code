@@ -173,7 +173,7 @@ it.effect("creates attempt and receipt in one recoverable boundary and binds the
       sessionID,
       admission,
       receipt: receiptInput,
-      ownerToken: providerTurns.ownerToken,
+      ownerToken: yield* providerTurns.currentOwnerToken(),
     })
     expect(first.attempt.state).toBe("prepared")
     expect(first.receipt.state).toBe("preparing")
@@ -188,7 +188,7 @@ it.effect("creates attempt and receipt in one recoverable boundary and binds the
       sessionID,
       admission,
       receipt: receiptInput,
-      ownerToken: providerTurns.ownerToken,
+      ownerToken: yield* providerTurns.currentOwnerToken(),
     })
     expect(retry.attempt.attemptId).toBe(first.attempt.attemptId)
     expect(retry.receipt.receiptId).toBe(first.receipt.receiptId)
@@ -232,7 +232,7 @@ it.effect("commitTurn past the selection TTL revalidates a matching selection in
         protocol: "openai-chat",
         ownerMode: "v2" as const,
       },
-      ownerToken: providerTurns.ownerToken,
+      ownerToken: yield* providerTurns.currentOwnerToken(),
       now: late,
     })
     expect(expired.attempt.state).toBe("prepared")
@@ -257,7 +257,7 @@ it.effect("commitTurn past the selection TTL revalidates a matching selection in
         protocol: "openai-chat",
         ownerMode: "v2" as const,
       },
-      ownerToken: providerTurns.ownerToken,
+      ownerToken: yield* providerTurns.currentOwnerToken(),
       now: late + 1,
     }).pipe(Effect.flip)
     expect(String((refused as { readonly reason?: string }).reason ?? refused)).toContain(
@@ -452,9 +452,9 @@ it.effect("blocks a streaming attempt while its owner lease is live, with the re
         protocol: "openai-chat",
         ownerMode: "v2" as const,
       },
-      ownerToken: providerTurns.ownerToken,
+      ownerToken: yield* providerTurns.currentOwnerToken(),
     })
-    yield* forceInFlight(committed.attempt.attemptId, providerTurns.ownerToken)
+    yield* forceInFlight(committed.attempt.attemptId, yield* providerTurns.currentOwnerToken())
     const blocked = yield* SessionRunnerCanonical.commitTurn({
       db,
       contexts: yield* SessionContext.Service,
@@ -471,7 +471,7 @@ it.effect("blocks a streaming attempt while its owner lease is live, with the re
         protocol: "openai-chat",
         ownerMode: "v2" as const,
       },
-      ownerToken: providerTurns.ownerToken,
+      ownerToken: yield* providerTurns.currentOwnerToken(),
     }).pipe(Effect.flip)
     // F-18 diagnostic fidelity: the reason reaches the message, not just the schema field.
     expect(blocked).toBeInstanceOf(SessionRunnerCanonical.AdmissionError)
@@ -537,7 +537,7 @@ it.effect("refuses a dead-owner attempt when its receipt was not advanced to the
         protocol: "openai-chat",
         ownerMode: "v2" as const,
       },
-      ownerToken: providerTurns.ownerToken,
+      ownerToken: yield* providerTurns.currentOwnerToken(),
     }).pipe(Effect.flip)
     expect(blocked).toBeInstanceOf(SessionRunnerCanonical.AdmissionError)
     expect((blocked as SessionRunnerCanonical.AdmissionError).reason).toBe("stale_provider_receipt_binding_conflict")
@@ -611,7 +611,7 @@ it.effect("quarantines a dead-owner prepared attempt (pre-dispatch crash) and op
         protocol: "openai-chat",
         ownerMode: "v2" as const,
       },
-      ownerToken: providerTurns.ownerToken,
+      ownerToken: yield* providerTurns.currentOwnerToken(),
     })
     expect(fresh.attempt.attemptId).not.toBe(crashed.attempt.attemptId)
     expect(fresh.attempt.providerTurnSeq).toBe(crashed.attempt.providerTurnSeq + 1)

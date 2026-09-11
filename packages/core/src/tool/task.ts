@@ -2,8 +2,8 @@ export * as TaskTool from "./task"
 
 import { ToolFailure } from "@deepagent-code/llm"
 import Ajv from "ajv"
-import { Option } from "effect"
-import { Context, Effect, Layer, Schema } from "effect"
+import { Cause, Effect, Exit, Option } from "effect"
+import { Context, Layer, Schema } from "effect"
 import { AgentV2 } from "../agent"
 import { SessionSchema, SessionV2 } from "../session"
 import { SessionMessage } from "../session/message"
@@ -125,6 +125,13 @@ const lastAssistantText = (messages: readonly SessionMessage.Message[]) =>
     .filter((part): part is SessionMessage.AssistantText => part.type === "text")
     .at(-1)?.text ?? ""
 
+// A failed child drain surfaces as a typed RunError (step budget, model error...); its message is
+// populated (R3) so the parent sees why the subagent stopped.
+const drainMessage = (error: unknown) => {
+  const message = error instanceof Error && error.message.trim() ? error.message : String(error)
+  return message.slice(0, 300)
+}
+
 export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const tools = yield* Tools.Service
@@ -195,10 +202,18 @@ export const layer = Layer.effectDiscard(
                     yield* sessions
                       .prompt({ sessionID: childID, prompt: new Prompt({ text }), resume: false })
                       .pipe(Effect.orDie)
-                    yield* sessions.resume(childID).pipe(Effect.orDie)
-                    return lastAssistantText(
-                      yield* sessions.messages({ sessionID: childID, order: "asc" }).pipe(Effect.orDie),
-                    )
+                    // A typed drain failure (step budget exhausted, model error) is the CHILD's
+                    // outcome, not a process fault: it degrades into the task result with the
+                    // partial transcript so the parent can continue or resume via task_id.
+                    // Effect.orDie here killed the whole CLI when a subagent hit its budget.
+                    const drain = yield* sessions.resume(childID).pipe(Effect.exit)
+                    const transcript = yield* sessions
+                      .messages({ sessionID: childID, order: "asc" })
+                      .pipe(Effect.orDie)
+                    const research = lastAssistantText(transcript)
+                    if (Exit.isSuccess(drain)) return research
+                    const cause = Option.getOrUndefined(Cause.findErrorOption(drain.cause))
+                    return `${research}\n\n[task ended before completion: ${drainMessage(cause)} — resume with task_id "${childID}" to continue.]`
                   }).pipe(
                     // An interrupted parent turn must not leave the child draining unsupervised; an
                     // idle child interrupt is a no-op per the V2 contract.
