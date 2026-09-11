@@ -137,10 +137,10 @@ import {
 
 const MAX_STEPS = 25
 // Die-defect messages from the filesystem layer that are path-argument validation, not defects:
-// the model passed a path/reference the location cannot contain. These settle as tool error
-// results (V1 parity) instead of killing the drain.
+// the model passed a path/reference the location cannot contain, or paged past the end of a file.
+// These settle as tool error results (V1 parity) instead of killing the drain.
 const TOOL_PATH_DEFECT =
-  /^(Absolute path escapes the location|Path escapes the location|Path escapes managed tool output|Absolute paths cannot use a project reference|Absolute path is not managed tool output|Path is not a file or directory|Path is not a file|Path is not a directory|Unknown project reference|Path does not exist|Cannot read binary file: |Media exceeds \d+ byte ingestion limit: )/
+  /^(Absolute path escapes the location|Path escapes the location|Path escapes managed tool output|Absolute paths cannot use a project reference|Absolute path is not managed tool output|Path is not a file or directory|Path is not a file|Path is not a directory|Unknown project reference|Path does not exist|Offset \d+ is out of range|Cannot read binary file: |Media exceeds \d+ byte ingestion limit: )/
 
 const MAX_STEPS_PROMPT = `CRITICAL - MAXIMUM STEPS REACHED
 
@@ -833,7 +833,7 @@ export const layer = Layer.effect(
           protocol: model.route.protocol,
           ownerMode: parityCampaign ? "shadow_v2" : "v2",
         },
-        ownerToken: providerTurns.ownerToken,
+        ownerToken: yield* providerTurns.currentOwnerToken(),
       })).receipt
       // R4 — pricing belongs to the Location catalog and is an explicit runner dependency. A
       // missing catalog model keeps cost 0 rather than guessing, but a composition can no longer
@@ -889,7 +889,7 @@ export const layer = Layer.effect(
             toolCallId: input.call.id,
             toolName: input.call.name,
             effectKind: toolMaterialization.effectKind(input.call.name),
-            ownerToken: providerTurns.ownerToken,
+            ownerToken: providerReceipt.ownerToken,
             now: Date.now(),
           })
           .pipe(Effect.orDie)
@@ -944,7 +944,7 @@ export const layer = Layer.effect(
               outcomeHash: Hash.sha256(CanonicalJson.stringify(result)),
               ...(errorCode === undefined ? {} : { errorCode }),
               ...grantEvidence,
-              ownerToken: providerTurns.ownerToken,
+              ownerToken: providerReceipt.ownerToken,
               now: Date.now(),
             }),
           ),

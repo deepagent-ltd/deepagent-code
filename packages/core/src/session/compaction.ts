@@ -490,7 +490,7 @@ export const make = (dependencies: Dependencies) => {
             protocol: input.model.route.protocol,
             ownerMode: input.ownerMode,
           },
-          ownerToken: dependencies.providerTurns.ownerToken,
+          ownerToken: yield* dependencies.providerTurns.currentOwnerToken(),
         })
       ).receipt
       summaryReceiptID = summaryReceipt.receiptId

@@ -158,7 +158,7 @@ const seedIndeterminateTurn = (suffix: string, seq = 1) =>
         protocol: "openai-chat",
         ownerMode: "v2",
       },
-      ownerToken: turnsService.ownerToken,
+      ownerToken: yield* turnsService.currentOwnerToken(),
     })
     const receipt = committed.receipt
     const prepared = V2ProviderTurn.prepare(
@@ -214,7 +214,7 @@ const resolveAbandoned = (attemptId: string) =>
     const attemptsService = yield* SessionProviderAttempt.Service
     const ownersService = yield* SessionProviderOwner.Service
     // Resolution is a recovery command: the crashed owner must be stale and a recovery owner live.
-    yield* ownersService.release({ ownerToken: (yield* V2ProviderTurn.Service).ownerToken })
+    yield* ownersService.release({ ownerToken: (yield* (yield* V2ProviderTurn.Service).currentOwnerToken()) })
     yield* ownersService.register({ ownerToken: recoveryOwnerToken, leaseMs: 600_000 })
     return yield* attemptsService.resolve({
       attemptId,
