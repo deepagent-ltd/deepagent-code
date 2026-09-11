@@ -602,7 +602,9 @@ describe("Config", () => {
                 share: "disabled",
                 enterprise: { url: "https://share.example.com" },
                 username: "name",
-                snapshots: false,
+                // Truthy on purpose: an ACTIVE snapshots value stays rejected; `false` is the
+                // explicitly-disabled compatibility value (see the disabled-fields test below).
+                snapshots: true,
                 formatter: false,
                 lsp: false,
                 mcp: { servers: {} },
@@ -665,7 +667,7 @@ describe("Config", () => {
           yield* Effect.promise(() =>
             fs.writeFile(
               path.join(tmp.path, "deepagent-code.json"),
-              JSON.stringify({ formatter: false, lsp: false }),
+              JSON.stringify({ formatter: false, lsp: false, snapshot: false, snapshots: false }),
             ),
           )
           const entries = yield* Config.Service.use((config) => config.entries()).pipe(

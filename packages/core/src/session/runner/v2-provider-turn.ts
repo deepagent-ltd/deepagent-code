@@ -266,7 +266,7 @@ export const CurrentRuntimeIntegrityIdentity = Context.Reference<RuntimeIntegrit
 )
 
 // The owner qualification verifier checks authorization signatures against this key only. The
-// default is the pinned production issuance key; tests may provide an ephemeral public key. Local
+// default is the per-release pinned issuance key (build-time define); tests may provide an ephemeral public key. Local
 // dev key discovery is only available through ownerReferencesLayer because it needs a root.
 export const CurrentOwnerAuthorizationPublicKey = Context.Reference<string>(
   "@deepagent-code/v2/V2ProviderTurn/CurrentOwnerAuthorizationPublicKey",

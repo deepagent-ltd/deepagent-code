@@ -100,7 +100,12 @@ const serve = Bun.spawn([binary, "serve", "--port", "0"], {
     DEEPAGENT_CODE_DISABLE_AUTOUPDATE: "1",
     DEEPAGENT_CODE_DISABLE_MODELS_FETCH: "1",
     DEEPAGENT_CODE_AUTH: "{}",
-    DEEPAGENT_CODE_V2_OWNER_DEV_MINT: "1",
+    // Production-path qualification: when the caller provides a shipped owner-authorization.json
+    // (DEEPAGENT_CODE_OWNER_AUTHORIZATION), do NOT bootstrap the dev mint — the runtime must
+    // qualify through the shipped row + the build-pinned issuance key (V2OwnerSeed).
+    ...(process.env.DEEPAGENT_CODE_OWNER_AUTHORIZATION
+      ? { DEEPAGENT_CODE_OWNER_AUTHORIZATION: process.env.DEEPAGENT_CODE_OWNER_AUTHORIZATION }
+      : { DEEPAGENT_CODE_V2_OWNER_DEV_MINT: "1" }),
     DEEPAGENT_CODE_DB: db,
   },
   stdout: "pipe",

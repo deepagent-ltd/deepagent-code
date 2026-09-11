@@ -162,9 +162,13 @@ export const layer = Layer.effect(
         )
       }
 
+      // Disabled-compatibility fields are stripped in BOTH branches: an explicitly-disabled
+      // value (formatter/lsp/snapshot/snapshots = false) is accepted regardless of which
+      // generation's shape the file uses.
+      const stripped = withoutDisabledCompatibilityFields(input)
       const info = yield* (v1
-        ? decodeV1Info(input).pipe(Effect.map(ConfigMigrateV1.migrate), Effect.flatMap(decodeInfo))
-        : decodeInfo(withoutDisabledCompatibilityFields(input))
+        ? decodeV1Info(stripped).pipe(Effect.map(ConfigMigrateV1.migrate), Effect.flatMap(decodeInfo))
+        : decodeInfo(stripped)
       ).pipe(
         Effect.mapError((error) => new Error(`Invalid config in ${filepath}: ${error.message}`)),
         Effect.orDie,
@@ -276,7 +280,9 @@ function unsupportedRuntimeFields(input: unknown, v1: boolean) {
 }
 
 function isDisabledCompatibilityField(key: string, value: unknown) {
-  return (key === "formatter" || key === "lsp") && value === false
+  // `false` is the explicit disabled-compat value (live harness configs and product defaults
+  // write it); any other value keeps the unsupported-field refusal.
+  return (key === "formatter" || key === "lsp" || key === "snapshot" || key === "snapshots") && value === false
 }
 
 function withoutDisabledCompatibilityFields(input: unknown) {
