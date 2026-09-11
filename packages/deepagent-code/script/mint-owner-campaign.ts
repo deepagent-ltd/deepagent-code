@@ -5,6 +5,8 @@
 // verifier checks — so the signed payload, encoding, and field names can never drift.
 //
 // Usage (from packages/deepagent-code):
+//   DEEPAGENT_CODE_RELEASE=<version> bun script/mint-owner-campaign.ts --ephemeral \
+//     [--campaign <id>] [--build-identity <version>] [--db <path>] [--export <path>]
 //   DEEPAGENT_CODE_OWNER_SIGNING_KEY=<private-key-pem-or-file> \
 //     bun script/mint-owner-campaign.ts [--build-identity <version-or-git-describe>] \
 //     [--campaign <id>] [--db <path>] [--export <path>] [--renew]
@@ -49,6 +51,10 @@ import { V2ProviderTurn } from "@deepagent-code/core/session/runner/v2-provider-
 
 const DAY_MS = 24 * 60 * 60 * 1_000
 const DEFAULT_VALIDITY_DAYS = 90
+// Release authorization (user ruling 2026-09-11): shipped authorizations NEVER expire — the
+// owner chain proves operation-record integrity, it must not force updates. The storage guard
+// requires valid_from < expires_at, so "permanent" is the far-future window below.
+const PERMANENT_VALIDITY_MS = 100 * 365.25 * DAY_MS
 
 const args = process.argv.slice(2)
 const valueAfter = (flag: string) => {
@@ -252,8 +258,13 @@ const campaignId = valueAfter("--campaign") ?? `v2-owner-${buildIdentity}`
 const dbPath = valueAfter("--db") ?? join(os.homedir(), ".deepagent", "code", "deepagent-code-local.db")
 const exportPath = valueAfter("--export")
 const isDev = hasFlag("--dev")
+const isEphemeral = hasFlag("--ephemeral")
 const isRevoke = hasFlag("--revoke")
 const isRenew = hasFlag("--renew")
+if (isEphemeral && (isDev || isRenew || isRevoke)) {
+  console.error("[mint-owner-campaign] --ephemeral is the release mode; it cannot combine with --dev/--renew/--revoke")
+  process.exit(1)
+}
 const identity = V2ProviderTurn.buildIdentityFromVersion(buildIdentity)
 
 if (isRevoke) {
@@ -331,15 +342,24 @@ if (isRevoke) {
 // ── Mint / renew (insert, no-op, identity-mismatch, or signed renewal) ─────────────────────────
 let privateKeyPem: string | undefined
 let ephemeralKey = false
-try {
-  privateKeyPem = loadSigningKey()
-} catch (error) {
-  console.error(`[mint-owner-campaign] fail-closed: ${(error as Error).message}`)
-  process.exit(1)
+// --ephemeral (release mode, 2026-09-11 ruling): generate a ONE-TIME Ed25519 pair in-process,
+// sign the authorization row, export the public half for build pinning, and let the private key
+// die with this process. No secret is ever held across releases.
+if (isEphemeral) {
+  const pair = V2OwnerAuthorization.generateAuthorizationKeyPair()
+  privateKeyPem = pair.privateKeyPem
+  ephemeralKey = true
+} else {
+  try {
+    privateKeyPem = loadSigningKey()
+  } catch (error) {
+    console.error(`[mint-owner-campaign] fail-closed: ${(error as Error).message}`)
+    process.exit(1)
+  }
 }
 if (!privateKeyPem && !isDev) {
   console.error(
-    "[mint-owner-campaign] fail-closed: release minting requires DEEPAGENT_CODE_OWNER_SIGNING_KEY (the campaign issuer's Ed25519 private key, PEM or path to a PEM file). Use --dev only for local verification runs.",
+    "[mint-owner-campaign] fail-closed: release minting requires either --ephemeral (per-release keypair, recommended) or DEEPAGENT_CODE_OWNER_SIGNING_KEY (legacy held key). Use --dev only for local verification runs.",
   )
   process.exit(1)
 }
@@ -547,14 +567,20 @@ const signable = {
   campaignID: campaignId,
   ...identity,
   validFrom: now - 1_000,
-  expiresAt: now + DEFAULT_VALIDITY_DAYS * DAY_MS,
+  // Ephemeral (release) authorizations are permanent; the 90-day window applies only to legacy
+  // held-key campaign lifecycle (renewal), which ephemeral mode replaces.
+  expiresAt: now + (isEphemeral ? PERMANENT_VALIDITY_MS : DEFAULT_VALIDITY_DAYS * DAY_MS),
 }
 const signed = signWith(signable)
 const publicKeyPem = derivePublicKeyPem(privateKeyPem)
 
-if (!isDev && publicKeyPem.trim() !== V2OwnerAuthorization.PRODUCTION_OWNER_AUTHORIZATION_PUBLIC_KEY.trim()) {
+if (isEphemeral) {
   console.error(
-    "[mint-owner-campaign] WARN: the signing key's public half does NOT match the pinned production issuance key (PRODUCTION_OWNER_AUTHORIZATION_PUBLIC_KEY) — a default install will fail owner verification until the runtime pins this key in a reviewed commit",
+    "[mint-owner-campaign] ephemeral release mint: pin the printed public_key_pem into THIS build (DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY define). The private key dies with this process.",
+  )
+} else if (!isDev && publicKeyPem.trim() !== V2OwnerAuthorization.RELEASE_OWNER_AUTHORIZATION_PUBLIC_KEY.trim()) {
+  console.error(
+    "[mint-owner-campaign] WARN: held-key mint whose public half matches no build pin — a default install will fail owner verification",
   )
 }
 
@@ -583,7 +609,7 @@ const exported = await writeExport(exportPath, inserted, buildIdentity)
 db.close()
 
 console.error(
-  `[mint-owner-campaign] minted ${campaignId} (${signable.authorizationID}) for build identity ${buildIdentity} in ${dbPath}; valid ${DEFAULT_VALIDITY_DAYS} days`,
+  `[mint-owner-campaign] minted ${campaignId} (${signable.authorizationID}) for build identity ${buildIdentity} in ${dbPath}; valid ${isEphemeral ? "permanently (no-expiry release authorization)" : `${DEFAULT_VALIDITY_DAYS} days`}`,
 )
 console.log(
   JSON.stringify({
@@ -598,7 +624,7 @@ console.log(
     authorization_digest: signed.authorizationDigest,
     db: dbPath,
     ...(exported ? { export_path: exported } : {}),
-    ...(isDev ? { public_key_pem: publicKeyPem } : {}),
+    ...((isDev || isEphemeral) ? { public_key_pem: publicKeyPem } : {}),
   }),
 )
 

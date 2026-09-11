@@ -66,14 +66,38 @@ const gateResults = (() => {
 })()
 
 const gates = (["G0", "G1", "G2", "G3", "G4", "G5", "G6", "G7", "G8"] as const).map((gate) => {
-  const status = gateResults[gate]
-  return typeof status === "string" && ["pending", "passed", "failed", "stale", "blocked"].includes(status)
-    ? { gate, status: status as "pending" | "passed" | "failed" | "stale" | "blocked", refs: [] }
-    : { gate, status: "pending" as const, refs: [] }
+  const entry = gateResults[gate]
+  // Flat status string, or { status, refs[] } — the contract refuses a passed gate without
+  // evidence refs, so the richer shape is how a passing chain cites its artifacts.
+  if (typeof entry === "string")
+    return ["pending", "passed", "failed", "stale", "blocked"].includes(entry)
+      ? { gate, status: entry as "pending" | "passed" | "failed" | "stale" | "blocked", refs: [] }
+      : { gate, status: "pending" as const, refs: [] }
+  if (entry && typeof entry === "object" && "status" in entry && "refs" in entry) {
+    const status = (entry as { status: string }).status
+    const refs = (entry as { refs: unknown }).refs
+    if (["pending", "passed", "failed", "stale", "blocked"].includes(status) && Array.isArray(refs))
+      return {
+        gate,
+        status: status as "pending" | "passed" | "failed" | "stale" | "blocked",
+        refs: refs.filter((ref): ref is string => typeof ref === "string"),
+      }
+  }
+  return { gate, status: "pending" as const, refs: [] }
 })
 
+// Candidate identity: when packaged evidence is present, the candidate IS the packaged build —
+// the minted owner-authorization's buildID-derived candidateID (`candidate:<buildID>`) so the
+// ledger's evidence cross-check binds (every run's evidence artifact carries the same identity).
+// Without packaging, the tree-commit identity stands.
+const packagedCandidate = await (async () => {
+  const evidenceFile = option("--evidence") ? list("--evidence")[0]! : undefined
+  if (!evidenceFile) return undefined
+  const parsed = (await Bun.file(path.resolve(evidenceFile)).json()) as { identity?: { candidateID?: string } }
+  return parsed.identity?.candidateID
+})()
 const manifest = makeAuthoritativeManifest({
-  candidateId: `release-${commit.slice(0, 12)}-${new Date().toISOString().slice(0, 10)}`,
+  candidateId: packagedCandidate ?? `release-${commit.slice(0, 12)}-${new Date().toISOString().slice(0, 10)}`,
   commit,
   tree,
   packageDigests: Object.fromEntries(

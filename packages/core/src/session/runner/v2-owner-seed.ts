@@ -114,8 +114,8 @@ export function seedOwnerAuthorization(
         detail: "authorization_digest does not match the signed payload",
       } as const
     }
-    // The shipped runtime verifies against the pinned production key; the explicit override exists
-    // so a dev-minted JSON (ephemeral issuance pair) can be seeded locally.
+    // The shipped runtime verifies against the per-release pinned key (build-time define); the
+    // explicit override exists so a dev-minted JSON (ephemeral issuance pair) can be seeded locally.
     const publicKeyPem =
       options.publicKeyPem ?? env.DEEPAGENT_CODE_V2_OWNER_AUTHORIZATION_PUBLIC_KEY?.trim() ?? V2OwnerAuthorization.PRODUCTION_OWNER_AUTHORIZATION_PUBLIC_KEY
     if (!(yield* V2OwnerAuthorization.verifyAuthorization(publicKeyPem, row.fields))) {
