@@ -408,11 +408,27 @@ const DEGENERATION_K = 3 // consecutive samples required
 class DegenerationDetector {
   private totalChars = 0
   private windowText = ""
+  // Deltas arrive token-by-token; keeping the sliding window up to date must not cost O(window)
+  // per delta (that was thousands of 4k-char string copies per reasoning stream and dominated the
+  // event loop — see PERF_DEBUG hot frames). Accumulate chunks cheaply and fold them into the
+  // window only when a sample actually runs.
+  private readonly pending: string[] = []
+  private pendingChars = 0
   private charsSinceLastSample = 0
   private prevNgramSet: Set<string> | undefined
   private consecutiveHits = 0
 
   constructor(private readonly mode: string) {}
+
+  /** Fold accumulated deltas into the bounded sliding window (O(window), never O(stream)). */
+  private foldWindow() {
+    if (this.pending.length === 0) return
+    const combined = this.windowText + this.pending.join("")
+    this.pending.length = 0
+    this.pendingChars = 0
+    this.windowText =
+      combined.length > DEGENERATION_WINDOW_SIZE ? combined.slice(combined.length - DEGENERATION_WINDOW_SIZE) : combined
+  }
 
   private computeNgrams(text: string): Map<string, number> {
     const counts = new Map<string, number>()
@@ -442,22 +458,39 @@ class DegenerationDetector {
   }
 
   /** Feed a reasoning delta; returns the chars and ratio if degeneration is confirmed. */
+  feedCalls = 0
+  feedSampleChars = 0
   feed(delta: string): { triggered: boolean; chars?: number; ratio?: number } {
     if (this.mode === "off") return { triggered: false }
+    if (process.env["DEEPAGENT_CODE_PERF_DEBUG"] === "1") {
+      this.feedCalls++
+      this.feedSampleChars += delta.length
+      if (this.feedCalls % 5_000 === 0)
+        console.error(
+          `[perf] feed calls=${this.feedCalls} deltaChars=${this.feedSampleChars} windowLen=${this.windowText.length} pending=${this.pending.length}`,
+        )
+    }
 
     this.totalChars += delta.length
     this.charsSinceLastSample += delta.length
+    this.pending.push(delta)
+    this.pendingChars += delta.length
 
-    // Maintain sliding window: keep only the last WINDOW_SIZE chars
-    const combined = this.windowText + delta
-    this.windowText =
-      combined.length > DEGENERATION_WINDOW_SIZE ? combined.slice(combined.length - DEGENERATION_WINDOW_SIZE) : combined
-
-    if (this.totalChars < DEGENERATION_ENABLE_THRESHOLD) return { triggered: false }
-    if (this.charsSinceLastSample < DEGENERATION_SAMPLE_INTERVAL) return { triggered: false }
+    // Fold into the sliding window whenever the gate opens OR the accumulation would otherwise
+    // grow without bound. The bound matters: a stream whose deltas trickle below the sample gate
+    // would otherwise let `pending` grow to the whole stream and pay one enormous join later.
+    // Fold only when the window is actually consumed (a sample runs) or the accumulation reaches
+    // one full window. Folding on every small delta is the same per-delta O(window) cost the
+    // incremental rewrite was meant to remove.
+    const dueForSample =
+      this.totalChars >= DEGENERATION_ENABLE_THRESHOLD && this.charsSinceLastSample >= DEGENERATION_SAMPLE_INTERVAL
+    if (!dueForSample) {
+      if (this.pendingChars >= DEGENERATION_WINDOW_SIZE) this.foldWindow()
+      return { triggered: false }
+    }
 
     this.charsSinceLastSample = 0
-
+    this.foldWindow()
     const ngrams = this.computeNgrams(this.windowText)
     const ratio = this.repetitionRatio(ngrams)
     const currentSet = new Set(ngrams.keys())

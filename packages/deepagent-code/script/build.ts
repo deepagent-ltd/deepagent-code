@@ -197,7 +197,7 @@ for (const item of targets) {
     plugins: [plugin],
     external: ["node-gyp"],
     format: "esm",
-    minify: true,
+    minify: process.env.DEEPAGENT_BUILD_NO_MINIFY === "1" ? false : true,
     sourcemap: sourcemapsFlag ? "linked" : "none",
     splitting: true,
     compile: {

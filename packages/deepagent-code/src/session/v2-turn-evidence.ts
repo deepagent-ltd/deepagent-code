@@ -33,9 +33,13 @@ export const recordTurnEvidence = Effect.fn("recordTurnEvidence")(function* (inp
   readonly snapshot?: Snapshot.Interface
   readonly baseline?: string
 }) {
+  const perfDebug = process.env["DEEPAGENT_CODE_PERF_DEBUG"] === "1"
+  const evidenceT0 = Date.now()
   const messages = yield* input.session
     .messages({ sessionID: input.sessionID, order: "asc" })
     .pipe(Effect.catchCause(() => Effect.succeed([] as readonly SessionMessage.Message[])))
+  if (perfDebug)
+    console.error(`[perf] recordTurnEvidence read ${Date.now() - evidenceT0}ms for ${messages.length} messages`)
   const parent = yield* input.sessions.get(input.parentSessionID).pipe(Effect.orDie)
   // Single ascending pass: each assistant pairs with the most recent user before it (the same anchor
   // SessionRevert resolves); without a preceding user (degenerate shape) it falls back to the
