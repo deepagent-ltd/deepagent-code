@@ -136,11 +136,12 @@ import {
  */
 
 const MAX_STEPS = 25
-// Die-defect messages from the filesystem layer that are path-argument validation, not defects:
-// the model passed a path/reference the location cannot contain, or paged past the end of a file.
-// These settle as tool error results (V1 parity) instead of killing the drain.
+// Die-defect messages from the filesystem and edit layers that are tool-argument validation, not
+// defects: the model passed a path/reference the location cannot contain, paged past the end of a
+// file, or an edit whose old text does not match. These settle as tool error results (V1 parity)
+// instead of killing the drain.
 const TOOL_PATH_DEFECT =
-  /^(Absolute path escapes the location|Path escapes the location|Path escapes managed tool output|Absolute paths cannot use a project reference|Absolute path is not managed tool output|Path is not a file or directory|Path is not a file|Path is not a directory|Unknown project reference|Path does not exist|Offset \d+ is out of range|Cannot read binary file: |Media exceeds \d+ byte ingestion limit: )/
+  /^(Absolute path escapes the location|Path escapes the location|Path escapes managed tool output|Absolute paths cannot use a project reference|Absolute path is not managed tool output|Path is not a file or directory|Path is not a file|Path is not a directory|Unknown project reference|Path does not exist|Offset \d+ is out of range|Failed to find expected lines in |No changes to apply: |oldString cannot be empty when editing an existing file|filePath is required|File .* not found|Path is a directory, not a file: |Cannot read binary file: |Media exceeds \d+ byte ingestion limit: )/
 
 const MAX_STEPS_PROMPT = `CRITICAL - MAXIMUM STEPS REACHED
 

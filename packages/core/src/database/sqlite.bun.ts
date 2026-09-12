@@ -14,6 +14,7 @@ import type { Connection } from "effect/unstable/sql/SqlConnection"
 import { classifySqliteError, SqlError } from "effect/unstable/sql/SqlError"
 import * as Statement from "effect/unstable/sql/Statement"
 import { Sqlite } from "./sqlite"
+import { layer as workerLayer } from "./sqlite.worker"
 
 const ATTR_DB_SYSTEM_NAME = "db.system.name"
 
@@ -176,6 +177,12 @@ const drizzleLayer = Layer.effect(
 )
 
 export const layer = (config: Config) => {
+  // Opt-in worker backend: the synchronous backend couples SQLite fsync latency directly to the
+  // event loop — on slow filesystems (synchronous=FULL) long provider turns starve every timer on
+  // the loop for minutes (measured: 185s heartbeat gap). DEEPAGENT_CODE_DB_WORKER=1 selects the
+  // worker-backed client; it is not yet the default while the drain-fiber scheduling interaction
+  // with async statements is being validated.
+  if (process.env["DEEPAGENT_CODE_DB_WORKER"] === "1") return workerLayer(config)
   const native = nativeLayer(config)
   return Layer.merge(native, Layer.merge(sqliteLayer(config), drizzleLayer).pipe(Layer.provide(native))).pipe(
     Layer.provide(Reactivity.layer),
