@@ -180,9 +180,29 @@ export const layerWithRuntimeFeatures = (runtimeFeatures: RuntimeFeatureRegistry
     )
 
     yield* drain
+    // Per-EVENT drain fanout: every published event forked a full drain, and a single streaming
+    // turn emits thousands of events — each drain re-scans the outbox and re-reads every delivery
+    // (measured: 48k outbox selects / 27k transactions in one run). Drain is idempotent and only
+    // needs to eventually observe pending work, so coalesce triggers with a short debounce: a burst
+    // of events yields ONE drain shortly after it settles, and the 1s poll below stays the backstop.
     const fork = yield* FiberSet.makeRuntime<never, void, never>()
+    let drainScheduled = false
     const unsubscribe = yield* events.listen(() =>
-      Effect.sync(() => fork(drain.pipe(Effect.catchCause((cause) => Effect.logError("V2 outbox drain failed", cause))))),
+      Effect.sync(() => {
+        if (drainScheduled) return
+        drainScheduled = true
+        fork(
+          Effect.sleep("150 millis").pipe(
+            Effect.andThen(
+              Effect.sync(() => {
+                drainScheduled = false
+              }),
+            ),
+            Effect.andThen(drain),
+            Effect.catchCause((cause) => Effect.logError("V2 outbox drain failed", cause)),
+          ),
+        )
+      }),
     )
     yield* Effect.addFinalizer(() => unsubscribe)
     yield* Effect.forkScoped(

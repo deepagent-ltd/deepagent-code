@@ -1176,6 +1176,9 @@ export const layer: Layer.Layer<
       if (!row) return yield* new NotFoundError({ message: `Message not found: ${input.messageID}` })
     })
 
+    // Deltas repeat thousands of times per part; ownership is immutable after creation.
+    const partOwnershipVerified = new Set<string>()
+
     const requirePartOwnership = Effect.fn("Session.requirePartOwnership")(function* (input: {
       sessionID: SessionID
       messageID: MessageID
@@ -3537,7 +3540,15 @@ export const layer: Layer.Layer<
       field: string
       delta: string
     }) {
-      yield* requirePartOwnership(input).pipe(Effect.orDie)
+      // A streamed part emits thousands of deltas; re-validating ownership per delta is a
+      // synchronous SQLite select each time (measured: dominant `prepare`/`values` hot frames and
+      // multi-second event-loop stalls). The part's owning turn is immutable once created, so the
+      // check is memoized per part for this process; the delta publish itself needs no re-read.
+      const key = `${input.sessionID}:${input.messageID}:${input.partID}`
+      if (!partOwnershipVerified.has(key)) {
+        yield* requirePartOwnership(input).pipe(Effect.orDie)
+        partOwnershipVerified.add(key)
+      }
       yield* events.publish(MessageV2.Event.PartDelta, input)
     })
 

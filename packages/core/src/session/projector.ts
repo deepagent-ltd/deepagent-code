@@ -323,6 +323,26 @@ function insertMessage(db: DatabaseService, event: SessionEvent.Event, message: 
 // session_wire_projection fingerprint cursor (durable, unlike the F-17 drain-local map it
 // replaces) skips byte-identical re-derivations across replay/overlap windows.
 
+// Per-session memo for the egress' per-event constants: the first wire parent, the session
+// directory row and V2 ownership are identity lookups that do not change while a session streams,
+// yet each was a synchronous SELECT on every delta (measured: 75k each in one run, the top
+// remaining reader load). Values only change by a new session id; bounded map.
+const wireSessionMemo = new Map<
+  string,
+  { parent: { id: string } | null; directory: { directory: string; path: string } | null; v2Owned?: boolean }
+>()
+const WIRE_SESSION_MEMO_MAX = 2_000
+const wireSessionEntry = (sessionID: SessionSchema.ID) => {
+  const key = String(sessionID)
+  let entry = wireSessionMemo.get(key)
+  if (!entry) {
+    if (wireSessionMemo.size >= WIRE_SESSION_MEMO_MAX) wireSessionMemo.clear()
+    entry = { parent: null, directory: null }
+    wireSessionMemo.set(key, entry)
+  }
+  return entry
+}
+
 const loadMessageRow = (db: DatabaseService, sessionID: SessionSchema.ID, messageID: SessionMessage.ID) =>
   db
     .select()
@@ -373,6 +393,15 @@ const recordWireFingerprint = (
 
 // Publish a wire entity when its content fingerprint advanced. Set-then-publish ordering (the
 // cursor row lands before the event) keeps concurrent folds race-free, mirroring F-19.
+// In-process fast path for the durable fingerprint cursor. A streaming turn re-enters this egress
+// once per delta; each entry used to cost a synchronous SELECT plus a one-statement transaction
+// (measured: 24k transactions and 46k cursor selects in a single run, the dominant writer load).
+// The durable row is still written on every CHANGE (cross-process/replay dedup unchanged) — only
+// the redundant read and the no-op write are skipped when this process already recorded the same
+// fingerprint. Bounded so a long-lived server cannot grow it without limit.
+const wireCursorMemo = new Map<string, string>()
+const WIRE_CURSOR_MEMO_MAX = 10_000
+
 function publishWireOnce(
   db: DatabaseService,
   events: EventV2.Interface,
@@ -383,23 +412,43 @@ function publishWireOnce(
   publish: () => Effect.Effect<void, unknown>,
 ) {
   return Effect.gen(function* () {
-    const cursor = yield* wireFingerprintCursor(db, sessionID, entity, entityID)
-    if (cursor?.fingerprint === fingerprint) return
+    const key = `${sessionID}:${entity}:${entityID}`
+    if (wireCursorMemo.get(key) === fingerprint) return
+    // Unknown in-process state: fall back to the durable cursor exactly as before.
+    if (!wireCursorMemo.has(key)) {
+      const cursor = yield* wireFingerprintCursor(db, sessionID, entity, entityID)
+      if (cursor?.fingerprint === fingerprint) {
+        if (wireCursorMemo.size < WIRE_CURSOR_MEMO_MAX) wireCursorMemo.set(key, fingerprint)
+        return
+      }
+    }
     yield* recordWireFingerprint(db, sessionID, entity, entityID, fingerprint)
+    if (wireCursorMemo.size >= WIRE_CURSOR_MEMO_MAX) wireCursorMemo.clear()
+    wireCursorMemo.set(key, fingerprint)
     yield* publish().pipe(Effect.orDie)
   })
 }
 
 // The V1 wire parent linkage needs the first user message of the session; the F-17 mirror used
 // the same resolution (sessions.findMessage(role === "user")).
-const firstWireParent = (db: DatabaseService, sessionID: SessionSchema.ID) =>
-  db
+const firstWireParent = (db: DatabaseService, sessionID: SessionSchema.ID) => {
+  const entry = wireSessionEntry(sessionID)
+  if (entry.parent !== null) return Effect.succeed(entry.parent)
+  return db
     .select({ id: SessionMessageTable.id })
     .from(SessionMessageTable)
     .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.type, "user")))
     .orderBy(asc(SessionMessageTable.seq))
     .get()
-    .pipe(Effect.orDie)
+    .pipe(
+      Effect.orDie,
+      Effect.tap((row) =>
+        Effect.sync(() => {
+          wireSessionEntry(sessionID).parent = (row as { id: string } | undefined) ?? null
+        }),
+      ),
+    )
+}
 
 function legacyUserRow(input: {
   readonly sessionID: SessionSchema.ID
