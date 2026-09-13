@@ -281,6 +281,53 @@ export const setPlan = (sessionId: string, plan: PlanDoc): void => {
   )
 }
 
+/**
+ * G1 implicit plan: the plan gate registers a single-step plan so a low-risk first edit does not
+ * cost a "call the plan tool" provider round. The plan carries runner provenance
+ * (runtime_plan_gate) and the same audit trail as a model-written plan — the DocumentStore CAS, the
+ * hot-latch bind, and a step the model can advance or replan through the normal `plan` tool.
+ * Idempotent: a session that already has ANY plan (model-written or implicit) is left untouched,
+ * and a registration race (concurrent plan-tool write) fails closed by refusing to overwrite.
+ */
+export const registerImplicitPlan = (
+  sessionId: string,
+  input: { readonly title: string; readonly agentMode: AgentMode },
+): { readonly plan_id: string; readonly version: number } | null => {
+  if (getPlan(sessionId) != null || PlanStore.planDocRef(sessionId) != null) return null
+  const stepId = `step_${randomUUID()}`
+  const plan = {
+    plan_id: `plan_${randomUUID()}`,
+    session_id: sessionId,
+    goal: input.title,
+    assumptions: [],
+    steps: [
+      {
+        step_id: stepId,
+        title: input.title,
+        status: "active" as const,
+        acceptance: null,
+        assigned_agent: null,
+        note: "runtime-registered implicit plan (plan gate G1); advance or replan via the plan tool",
+      },
+    ],
+    active_step_id: stepId,
+    created_at: new Date().toISOString(),
+  }
+  try {
+    const committed = PlanStore.compareAndCommitPlan({
+      sessionId,
+      expected: null,
+      candidate: plan,
+      origin: "runtime_plan_gate",
+    })
+    bindPlan(sessionId, committed.plan, null, true)
+    return { plan_id: committed.plan.plan_id, version: committed.version }
+  } catch {
+    // A concurrent model plan-write wins; the gate keeps its normal behavior next call.
+    return null
+  }
+}
+
 /** Bind a plan that has already passed PlanStore admission to the hot session latch. */
 export const bindPlan = (
   sessionId: string,

@@ -82,7 +82,28 @@ const decide = function (
         AgentGateway.DeepAgentSessionState.getOrCreate(sessionID, agentMode)
       let graceReminder: string | undefined
       // W2：无计划的 run 的首个变更被拦一次（可复制最小计划模板；单步计划 = trivial 出口）。
+      // G1 隐式 plan：低风险首变更（单点 edit/write，且非 stale、非子会话）由 runtime 直接登记一个
+      // 单步 plan 并放行 —— 简单任务不再为“先调 plan 工具”多付一个 provider round。plan store 的
+      // 版本、审计事件与模型写的 plan 完全一致（origin=runtime_plan_gate，runner 溯源）；模型仍可
+      // 通过 plan 工具推进/replan。高风险（bash 变更、stale、多工具并发首改）保持原阻断路径。
       if (flags.strictPlanGate && !lightweight && plan == null && !planStale && isMutating && subagentHasPlanEscape) {
+        const lowRiskFirstEdit =
+          (input.toolName === "edit" || input.toolName === "write") && latch != null && latch.consecutive_blocks === 0
+        if (lowRiskFirstEdit) {
+          const registered = AgentGateway.DeepAgentSessionState.registerImplicitPlan(sessionID, {
+            title: implicitPlanTitle(input),
+            agentMode,
+          })
+          if (registered != null) {
+            mechanismBeacon.recordEngagement("strict_plan_gate", `implicit-plan=${input.toolName}`)
+            const pass: Directive = {
+              kind: "pass",
+              reminder:
+                "Plan gate registered a one-step runtime plan for this edit. Continue; call the `plan` tool if the work grows beyond it.",
+            }
+            return pass
+          }
+        }
         if (latch != null && AgentGateway.DeepAgentPlanController.shouldGraceRelease(latch)) {
           graceReminder = `Plan gate released this call after ${latch.consecutive_blocks} blocks. Call the \`plan\` tool now (one step is fine) — the next mutating call blocks again.`
         } else {
@@ -146,6 +167,17 @@ export const defaultLayer = layer.pipe(
   Layer.provide(RuntimeFlags.defaultLayer),
   Layer.provide(AgentGateway.runtimeLayer()),
 )
+
+// The implicit plan's single step title: derived from the gated edit's target path (write) or file
+// path (edit). The title is descriptive only — the plan's semantics come from the gate's decision
+// that this is a low-risk first edit; a malformed/absent path falls back to the tool name.
+const implicitPlanTitle = (input: { readonly toolName: string; readonly args: unknown }): string => {
+  const args = (typeof input.args === "object" && input.args !== null ? input.args : {}) as Record<string, unknown>
+  const target = args.filePath ?? args.path ?? args.file
+  return typeof target === "string" && target.trim().length > 0
+    ? `Apply ${input.toolName} to ${target.trim().slice(0, 80)}`
+    : `First ${input.toolName} (runtime-registered)`
+}
 
 // exported for tests
 export const decideForTest = decide

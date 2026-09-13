@@ -216,7 +216,13 @@ const STATUS_ALIASES: Record<string, PlanStepStatus> = {
 }
 
 export type PlanWriteOperation = "create" | "advance" | "replan"
-export type PlanWriteOrigin = "model_tool" | "human_goal_edit" | "runtime_goal_bridge" | "legacy_migration"
+export type PlanWriteOrigin =
+  | "model_tool"
+  | "human_goal_edit"
+  | "runtime_goal_bridge"
+  | "legacy_migration"
+  /** G1: the plan gate auto-registered a low-risk single-step plan so a trivial first edit does not cost a provider round. */
+  | "runtime_plan_gate"
 export type PlanWriteStatus = PlanStepStatus | keyof typeof STATUS_ALIASES
 
 export type PlanWriteInput = {
