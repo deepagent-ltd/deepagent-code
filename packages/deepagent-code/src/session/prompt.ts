@@ -149,6 +149,7 @@ import { V2ProviderTurn } from "@deepagent-code/core/session/runner/v2-provider-
 import { SessionRunnerCanonical } from "@deepagent-code/core/session/runner/canonical-turn"
 import { V2ProviderTurnReceiptTable } from "@deepagent-code/core/session/runner/v2-provider-turn.sql"
 import { SessionV2 } from "@deepagent-code/core/session"
+import * as mechanismBeacon from "@deepagent-code/core/deepagent/mechanism-beacon"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { AgentV2 } from "@deepagent-code/core/agent"
 import { ProviderV2 } from "@deepagent-code/core/provider"
@@ -6534,6 +6535,7 @@ export const layer = Layer.effect(
       const v2OwnerSelected = flags.coreV2Only
         ? yield* V2ProviderTurn.ownerQualified(database.db, ownerCampaignNow)
         : federationRollout.enabled.coreV2ExecutionOwner
+      mechanismBeacon.recordEngagement("v2_execution_owner", `owner=${v2OwnerSelected ? "v2" : "blocked"}`)
       yield* elog.info("v2 owner fork", {
         sessionID: input.sessionID,
         owner: v2OwnerSelected ? "v2" : flags.coreV2Only ? "blocked_v2_only" : "legacy",

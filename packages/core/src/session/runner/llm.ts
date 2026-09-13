@@ -12,7 +12,7 @@ import {
 } from "@deepagent-code/llm"
 import { AgentGateway } from "../../agent-gateway"
 import { desc, eq } from "drizzle-orm"
-import { Cause, DateTime, Effect, Exit, FiberSet, Layer, Option, Schema, Semaphore, Stream } from "effect"
+import { Cause, DateTime, Duration, Effect, Exit, FiberSet, Layer, Option, Schema, Semaphore, Stream } from "effect"
 import { AgentV2 } from "../../agent"
 import { Config } from "../../config"
 import { Database } from "../../database/database"
@@ -136,6 +136,15 @@ import {
  */
 
 const MAX_STEPS = 25
+// The durable provider stream seals one physical request, so it disables the executor's own retry
+// budget (`RequestExecutor.CurrentRetryLimit = 0`) rather than silently multiplying sealed sends.
+// Without a runner-level replacement, a provider that REJECTS a request before generation — HTTP
+// 429/5xx, or a transport failure proven to predate dispatch — ended the whole drain and the run.
+// Those are known rejections, not the unknown-outcome state RI-11 fences, so re-open them as a
+// bounded fresh attempt (the same-owner indeterminate quarantine admits the next receipt ordinal).
+const MAX_PROVIDER_ATTEMPT_RETRIES = 3
+const PROVIDER_RETRY_BASE_DELAY_MS = 1_000
+const PROVIDER_RETRY_MAX_DELAY_MS = 10_000
 // Die-defect messages from the filesystem and edit layers that are tool-argument validation, not
 // defects: the model passed a path/reference the location cannot contain, paged past the end of a
 // file, or an edit whose old text does not match. These settle as tool error results (V1 parity)
@@ -419,6 +428,16 @@ export const layer = Layer.effect(
       | { readonly _tag: "RebuildPreparedTurn"; readonly promotion?: SessionInput.Delivery; readonly step?: number }
       // Overflow compaction completed; rebuild once through the path without overflow recovery.
       | { readonly _tag: "ContinueAfterOverflowCompaction"; readonly step: number }
+      // A known-before-generation failure — a provider rejection, or a lease-fenced attempt whose
+      // owner never reached the provider — re-dispatches as a fresh attempt within a bounded budget
+      // instead of ending the run.
+      | {
+          readonly _tag: "RetryAttempt"
+          readonly step: number
+          readonly retry: number
+          readonly cause: "provider_rejection" | "owner_fenced"
+          readonly retryAfterMs?: number | undefined
+        }
     class TurnTransitionError extends Error {
       constructor(readonly transition: TurnTransition) {
         super()
@@ -432,6 +451,12 @@ export const layer = Layer.effect(
         _tag: "ContinueAfterOverflowCompaction",
         step,
       })
+    const retryAttempt = (
+      step: number,
+      retry: number,
+      cause: "provider_rejection" | "owner_fenced",
+      retryAfterMs?: number,
+    ) => new TurnTransitionError({ _tag: "RetryAttempt", step, retry, cause, retryAfterMs })
     const retryAgentMismatch = (promotion: SessionInput.Delivery | undefined, step?: number) =>
       Effect.catchDefect((defect) =>
         defect instanceof SessionContextEpoch.AgentMismatch
@@ -503,6 +528,7 @@ export const layer = Layer.effect(
       promotion: SessionInput.Delivery | undefined,
       step: number,
       recoverOverflow?: typeof compaction.compactAfterOverflow,
+      providerRetry = 0,
     ) {
       const parityCampaign = (yield* V2ProviderTurn.CurrentCampaign) ?? V2ProviderTurn.campaignFromEnv()
       const ownerCampaign = (yield* V2ProviderTurn.CurrentOwnerCampaign) ?? V2ProviderTurn.ownerCampaignFromEnv()
@@ -1301,6 +1327,20 @@ export const layer = Layer.effect(
           )
             return yield* Effect.die(continueAfterOverflowCompaction(currentStep))
           const llmFailure = failure instanceof LLMError ? failure : undefined
+          // The executor's own retryable contract is the proof that re-sending is safe: 429/5xx are
+          // definite provider rejections (no generation), and a transport failure counts only when
+          // it predates dispatch. Anything user-visible already published would duplicate output,
+          // and every other failure keeps the terminal path (an unknown post-dispatch outcome stays
+          // quarantined for recovery rather than being silently replayed).
+          if (
+            llmFailure !== undefined &&
+            llmFailure.retryable &&
+            !publisher.hasAssistantStarted() &&
+            providerRetry < MAX_PROVIDER_ATTEMPT_RETRIES
+          )
+            return yield* Effect.die(
+              retryAttempt(currentStep, providerRetry, "provider_rejection", llmFailure.retryAfterMs),
+            )
           // A transport failure after dispatch has an unknown provider outcome even when no local
           // assistant event was observed. The receipt is already quarantined indeterminate by the
           // provider-turn boundary; never hide that uncertainty by opening a fresh physical attempt.
@@ -1453,6 +1493,7 @@ export const layer = Layer.effect(
       sessionID: SessionSchema.ID,
       promotion: SessionInput.Delivery | undefined,
       step: number,
+      providerRetry?: number,
     ) => Effect.Effect<
       { readonly needsContinuation: boolean; readonly step: number; readonly activityId?: string },
       RunError
@@ -1465,6 +1506,10 @@ export const layer = Layer.effect(
             if (!(defect instanceof TurnTransitionError)) return yield* Effect.die(defect)
             if (defect.transition._tag === "ContinueAfterOverflowCompaction")
               return yield* Effect.die("Post-compaction provider attempt cannot recover another overflow")
+            // A retryable failure after a compaction-recovering attempt still retries through the
+            // plain path (fresh attempt, shared budget) rather than leaking the transition defect.
+            if (defect.transition._tag === "RetryAttempt")
+              return yield* runTurn(sessionID, promotion, defect.transition.step, defect.transition.retry + 1)
             yield* Effect.yieldNow
             return yield* runAfterOverflowCompaction(
               sessionID,
@@ -1476,15 +1521,50 @@ export const layer = Layer.effect(
       )
     })
 
-    const runTurn: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, step) {
-      return yield* runTurnAttempt(sessionID, promotion, step, compaction.compactAfterOverflow).pipe(
+    const runTurn: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, step, providerRetry = 0) {
+      return yield* runTurnAttempt(
+        sessionID,
+        promotion,
+        step,
+        compaction.compactAfterOverflow,
+        providerRetry,
+      ).pipe(
+        // A lease-fenced attempt is a rotation artefact: the fenced owner stalled past its lease, so
+        // the successor generation owns the session now. Re-open a fresh attempt instead of ending
+        // the run — the admission guard admits it only when the fenced attempt provably never
+        // reached the provider, so an unknown post-dispatch outcome still stops for recovery.
+        Effect.catch((error) =>
+          error instanceof V2ProviderTurn.ConflictError &&
+          error.reason === "v2_provider_owner_lease_not_live" &&
+          providerRetry < MAX_PROVIDER_ATTEMPT_RETRIES
+            ? Effect.die(retryAttempt(step, providerRetry, "owner_fenced"))
+            : Effect.fail(error),
+        ),
         Effect.catchDefect(
           Effect.fnUntraced(function* (defect) {
             if (!(defect instanceof TurnTransitionError)) return yield* Effect.die(defect)
+            if (defect.transition._tag === "RetryAttempt") {
+              const delay = Math.min(
+                defect.transition.retryAfterMs ?? PROVIDER_RETRY_BASE_DELAY_MS * 2 ** defect.transition.retry,
+                PROVIDER_RETRY_MAX_DELAY_MS,
+              )
+              yield* Effect.logWarning(
+                defect.transition.cause === "owner_fenced"
+                  ? "provider owner lease fenced this attempt before dispatch; retrying on a fresh attempt"
+                  : "provider rejected the attempt before generating; retrying",
+                {
+                  retry: defect.transition.retry + 1,
+                  maxRetries: MAX_PROVIDER_ATTEMPT_RETRIES,
+                  delayMs: delay,
+                },
+              )
+              yield* Effect.sleep(Duration.millis(delay))
+              return yield* runTurn(sessionID, promotion, defect.transition.step, defect.transition.retry + 1)
+            }
             yield* Effect.yieldNow
             if (defect.transition._tag === "ContinueAfterOverflowCompaction")
               return yield* runAfterOverflowCompaction(sessionID, undefined, defect.transition.step)
-            return yield* runTurn(sessionID, defect.transition.promotion, defect.transition.step ?? step)
+            return yield* runTurn(sessionID, defect.transition.promotion, defect.transition.step ?? step, providerRetry)
           }),
         ),
       )

@@ -46,11 +46,18 @@ import { ensureProcessMetadata } from "@deepagent-code/core/util/deepagent-code-
 import { isRecord } from "@/util/record"
 import { applyRuntimeDefaults, RUNTIME_DEFAULTS_SNAPSHOT_ENV, runtimeDefaultsEnvSnapshot } from "./runtime-defaults"
 import { ProcessLifecycle } from "./effect/process-lifecycle"
+import * as mechanismBeacon from "@deepagent-code/core/deepagent/mechanism-beacon"
 
 // Normalize the environment inherited by subprocesses and compatibility readers. Core V2 feature
 // registries capture their own immutable value at construction; their canonical unset defaults are
 // identical to this table, so static ESM evaluation order cannot change feature authority.
 applyRuntimeDefaults()
+
+// Mechanism beacon: emit the resolved on/off state of every ablable mechanism once, before any
+// turn runs, plus an engagement summary at exit. This is the ablation-correctness ledger — it
+// distinguishes "flag set" from "mechanism actually ran" for every arm of the matrix.
+mechanismBeacon.emitStartupBeacon()
+process.once("exit", () => mechanismBeacon.emitSummaryBeacon())
 
 if (process.env[RUNTIME_DEFAULTS_SNAPSHOT_ENV] === "1") {
   // Test-only backdoor (W0.1 verification case 4): print the canonical defaults vector and exit

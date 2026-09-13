@@ -1,7 +1,7 @@
 import { describe, expect } from "bun:test"
 import { generateKeyPairSync } from "node:crypto"
 import { eq, sql } from "drizzle-orm"
-import { Layer, Effect, Stream } from "effect"
+import { Layer, Effect, Stream, Cause } from "effect"
 import { Database } from "../src/database/database"
 import { SessionProviderAttempt } from "../src/context-federation/provider-attempt"
 import { SessionProviderOwner } from "../src/context-federation/provider-owner"
@@ -289,6 +289,55 @@ describe("V2 provider turn authority", () => {
       expect(retried.receiptId).not.toBe(receipt.receiptId)
       expect(retried.state).toBe("preparing")
       expect(yield* service.get(receipt.receiptId)).toMatchObject({ state: "indeterminate_after_crash" })
+    }),
+  )
+
+  it.live("re-opens a fresh attempt after a pre-dispatch owner loss", () =>
+    // A lease gap fences the owner generation. When the fenced attempt provably never reached the
+    // provider (recover() terminalizes it as `owner_lost_before_dispatch` under a live successor
+    // lease) the successor generation may open a fresh attempt; an unknown post-dispatch outcome
+    // keeps the typed refusal (RI-11).
+    Effect.gen(function* () {
+      yield* seed()
+      const generation = (ownerToken: string) =>
+        V2ProviderTurn.layerWith({ ownerToken, leaseMs: 600_000 }).pipe(
+          Layer.provide(owners),
+          Layer.provide(database),
+        )
+      // Generation A admits an attempt; its layer scope then releases the lease.
+      const fenced = yield* Effect.gen(function* () {
+        const a = yield* V2ProviderTurn.Service
+        return yield* admit(a, "msg-owner-lost-before-dispatch")
+      }).pipe(Effect.provide(generation("v2:owner-generation-a")))
+
+      // A successor generation builds: the layer's startup recovery terminalizes the fenced
+      // generation's in-flight receipt, and admission then opens a fresh attempt for the same input.
+      const retried = yield* Effect.gen(function* () {
+        const b = yield* V2ProviderTurn.Service
+        expect(yield* b.get(fenced.receiptId)).toMatchObject({
+          state: "failed",
+          errorCode: "owner_lost_before_dispatch",
+        })
+        return yield* admit(b, "msg-owner-lost-before-dispatch")
+      }).pipe(Effect.provide(generation("v2:owner-generation-b")))
+
+      expect(retried.receiptId).not.toBe(fenced.receiptId)
+      expect(retried.state).toBe("preparing")
+    }),
+  )
+
+  it.live("keeps the typed refusal for a non-recoverable terminal receipt", () =>
+    Effect.gen(function* () {
+      yield* seed()
+      const service = yield* V2ProviderTurn.Service
+      const receipt = yield* admit(service, "msg-non-retryable-terminal")
+      yield* service.abandon(receipt, "provider_unavailable")
+
+      // Only the pre-dispatch owner-loss code is re-openable; every other terminal state is refused.
+      const refused = yield* admit(service, "msg-non-retryable-terminal").pipe(Effect.exit)
+      expect(refused._tag).toBe("Failure")
+      if (refused._tag === "Failure")
+        expect(Cause.squash(refused.cause)).toMatchObject({ _tag: "V2ProviderTurn.UnsafeRetryError" })
     }),
   )
 

@@ -1524,8 +1524,16 @@ export function admitInTransaction(
         // owner: the bounded runner retry (and an explicit forced continuation) opens a FRESH
         // receipt at the next ordinal instead of failing the retry — §2.2 keeps the quarantined row
         // itself untouched (never replayed; explicit resolution still owns its terminal outcome).
-        // Foreign owners and every other terminal state keep the typed refusal.
-        if (existing.state !== "indeterminate_after_crash" || existing.owner_token !== ownerToken)
+        //
+        // A PRE-dispatch owner-loss recovery is the same situation one generation later: the fenced
+        // owner never reached the provider (no generation, no billing), so the legitimate successor
+        // may open a fresh attempt. A post-dispatch owner loss keeps the typed refusal — its outcome
+        // is unknown, and RI-11 forbids an automatic re-send.
+        const sameOwnerQuarantine =
+          existing.state === "indeterminate_after_crash" && existing.owner_token === ownerToken
+        const recoverableOwnerLoss =
+          existing.state === "failed" && existing.error_code === "owner_lost_before_dispatch"
+        if (!sameOwnerQuarantine && !recoverableOwnerLoss)
           return yield* new UnsafeRetryError({ state: existing.state })
       } else if (
         existing.provider_id !== input.providerId ||

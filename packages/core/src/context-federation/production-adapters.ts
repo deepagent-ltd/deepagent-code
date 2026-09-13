@@ -15,6 +15,7 @@ import { DeepAgentReleasedSnapshot } from "../deepagent/released-snapshot"
 import { RepoDocument } from "../document-intelligence/repo-document"
 import type { GraphKind } from "../contract/selection"
 import { RuntimeFeatures, type RuntimeFeatureRegistry } from "../flag/runtime-features"
+import * as mechanismBeacon from "../deepagent/mechanism-beacon"
 
 // W3.1 — production V2 adapter assembly. Wraps the four `adapters-v2` factories with REAL source
 // inputs (live code query, repo-document index, durable knowledge stores, released snapshot) so the
@@ -39,8 +40,13 @@ export const CONTEXT_FEDERATION_PRODUCTION_ENV = "DEEPAGENT_CODE_CONTEXT_FEDERAT
  * process-start snapshot, so the gate reads the INJECTED registry (default: the process global) —
  * tests exercise the kill-switch by passing `createRuntimeFeatureRegistry(undefined, env)`, never
  * by mutating `process.env` after the snapshot. */
-export const productionAdaptersEnabled = (features: RuntimeFeatureRegistry = RuntimeFeatures): boolean =>
-  features.enabled("context_federation_v2")
+export const productionAdaptersEnabled = (features: RuntimeFeatureRegistry = RuntimeFeatures): boolean => {
+  const enabled = features.enabled("context_federation_v2")
+  // Beacon at the SINGLE reader: proves whether federation gated the turn (not merely that the env
+  // var was set). Logging is bounded inside recordEngagement.
+  mechanismBeacon.recordEngagement("context_federation", `enabled=${enabled}`)
+  return enabled
+}
 
 /**
  * W3.8 — real location identity (location-derived, `LocationIdentity.resolve` output shape) carried

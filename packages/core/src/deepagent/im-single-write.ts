@@ -2,6 +2,7 @@ export * as ImSingleWrite from "./im-single-write"
 
 import { eq } from "drizzle-orm"
 import { Effect } from "effect"
+import * as mechanismBeacon from "./mechanism-beacon"
 import type { Database } from "../database/database"
 import type { EventWorkEnvelope } from "../contract/event-envelope"
 import { EventAdmission, type SessionWorkAdapter } from "./event-admission"
@@ -137,8 +138,10 @@ export type ImSingleWriteResult =
 export function admit(db: DatabaseClient, input: ImSingleWriteAdmitInput): Effect.Effect<ImSingleWriteResult, ImSingleWriteError> {
   return Effect.gen(function* () {
     if (!isEventV2ImSingleWriteEnabled(input.runtimeFeatures)) {
+      mechanismBeacon.recordEngagement("im_single_write", "refused=disabled")
       return yield* fail("im_single_write_unavailable", input.imMessageId, "IM single-write is OFF; the legacy double-write path stays authoritative")
     }
+    mechanismBeacon.recordEngagement("im_single_write", `msg=${input.imMessageId}`)
     if (!input.envelope || typeof input.envelope.eventRef !== "string" || input.envelope.eventRef.length === 0) {
       return yield* fail("invalid_envelope", input.imMessageId, "the IM envelope is missing its event identity")
     }
