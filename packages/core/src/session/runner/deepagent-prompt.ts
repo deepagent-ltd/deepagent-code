@@ -4,6 +4,7 @@ import { Effect } from "effect"
 import { AgentGateway } from "../../agent-gateway"
 import { Git } from "../../git"
 import { AbsolutePath } from "../../schema"
+import { ModelPromptProfile } from "../../deepagent/model-prompt-profile"
 import type { SessionMessage } from "../message"
 import { BuiltInTools } from "../../tool/builtins"
 
@@ -12,6 +13,7 @@ export type Input = {
   readonly sessionID: string
   readonly userMessageID: string
   readonly providerID: string
+  readonly modelID: string
   readonly directory: string
   readonly messages: readonly SessionMessage.Message[]
   readonly tools: readonly ToolDefinition[]
@@ -72,12 +74,26 @@ export const buildDeepAgentPrompt = Effect.fn("SessionRunner.buildDeepAgentPromp
       )
     }),
   ).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+  const profile = ModelPromptProfile.profileFor(input.providerID, input.modelID)
+  // G3 model profile channel 2 (event-triggered): validation_failed fires ONLY when the round
+  // context carries a failed validation — the short repair directive rides the volatile tail,
+  // never the cached prefix.
+  const validationFailed =
+    context.previousResults?.validationOutput != null &&
+    !context.previousResults.lastCandidate?.status.includes("passed")
+  const eventPrompt =
+    validationFailed && !continuation ? ModelPromptProfile.eventPrompt(profile, "validation_failed") : undefined
+  const roundContext = continuation
+    ? input.runtime.volatileContinuationContext(plan)
+    : input.runtime.volatileRoundContext(context, plan)
   return {
     context,
-    stableSystemParts: input.runtime.systemPrompt(input.providerID, context),
-    volatileRoundContext: continuation
-      ? input.runtime.volatileContinuationContext(plan)
-      : input.runtime.volatileRoundContext(context, plan),
+    // Channel 1 (stable short constraint): provider+model keyed ⇒ session-constant ⇒ cache-safe.
+    stableSystemParts: [
+      ...input.runtime.systemPrompt(input.providerID, context),
+      ...(profile.stableConstraint.trim().length > 0 ? [profile.stableConstraint] : []),
+    ],
+    volatileRoundContext: eventPrompt ? `${roundContext}\n${eventPrompt}` : roundContext,
   }
 })
 

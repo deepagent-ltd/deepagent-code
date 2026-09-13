@@ -53,6 +53,8 @@ import { V2ToolEffect } from "./v2-tool-effect"
 import { createLLMEventPublisher } from "./publish-llm-event"
 import { normalizeAttachments } from "./attachments"
 import { toLLMMessages } from "./to-llm-message"
+import { SessionHistoryProjection } from "./session-history-projection"
+import { ModelPromptProfile } from "../../deepagent/model-prompt-profile"
 import { SessionRunnerCanonical } from "./canonical-turn"
 import { productionAdaptersEnabled, ProductionV2Sources } from "../../context-federation/production-adapters"
 import { CurrentRuntimeFeatures } from "../../flag/runtime-features"
@@ -676,6 +678,7 @@ export const layer = Layer.effect(
             sessionID: session.id,
             userMessageID: receiptUserMessageID,
             providerID: model.provider,
+            modelID: model.id,
             directory: location.directory,
             messages: context,
             tools: toolDefinitions,
@@ -701,13 +704,16 @@ export const layer = Layer.effect(
         [system.baseline],
       )
       const volatileSystemParts: string[] = []
+      // G3 history projection — durable rows lower to the model-facing view with graded
+      // tool-output budgets. Errors and the resent tail survive verbatim (pure function of
+      // content ⇒ byte-stable projection ⇒ prompt cache holds). Disabled or no-op projection
+      // returns the same array reference.
+      const projectedContext = SessionHistoryProjection.projectForModel(context)
+      const historyRequestMessages = yield* normalizeAttachments(projectedContext, modelInfo?.capabilities.input).pipe(
+        Effect.provideService(FSUtil.Service, fs),
+      )
       const requestMessages = [
-        ...toLLMMessages(
-          yield* normalizeAttachments(context, modelInfo?.capabilities.input).pipe(
-            Effect.provideService(FSUtil.Service, fs),
-          ),
-          model,
-        ),
+        ...toLLMMessages(historyRequestMessages, model),
         ...(deepagentPrompt?.volatileRoundContext
           ? [Message.user(deepagentPrompt.volatileRoundContext)]
           : governedPlanContext
@@ -715,9 +721,24 @@ export const layer = Layer.effect(
             : []),
         ...(stepLimitReached ? [Message.assistant(MAX_STEPS_PROMPT)] : []),
       ]
+      // G3 model profile channel 3 (runtime params): clamp the activation policy's suggested
+      // reasoning effort by the profile cap (e.g. deepseek — over-thinking simple repair turns).
+      // Never sent as prompt text; lowers onto the provider option the SDK already knows. Only
+      // models with declared reasoning capability receive it (non-reasoning models reject the
+      // parameter, and provider-merged user config still wins over this runtime default).
+      const modelProfile = ModelPromptProfile.profileFor(model.provider, model.id)
+      turnObservability.recordModelProfile(ModelPromptProfile.profileKeyFor(model.provider, model.id), sessionID)
+      const reasoningEffort = modelInfo?.api.protocolCapabilities?.reasoningItems
+        ? ModelPromptProfile.clampReasoningEffort(
+            deepagentPrompt?.context.activation.suggestedReasoningEffort ?? "medium",
+            modelProfile.params.maxReasoningEffort,
+          )
+        : undefined
       let request = LLM.request({
         model,
-        providerOptions: { openai: { promptCacheKey } },
+        providerOptions: {
+          openai: { promptCacheKey, ...(reasoningEffort ? { reasoningEffort } : {}) },
+        },
         system: stableSystemParts.map(SystemPart.make),
         messages: requestMessages,
         tools: toolDefinitions,
@@ -1054,6 +1075,7 @@ export const layer = Layer.effect(
             turnObservability.recordGateConsult(
               gate.kind === "block",
               gate.kind === "pass" && gate.reminder !== undefined,
+              input.sessionID,
             )
             if (gate.kind === "block") {
               // A gated call settles as a typed error RESULT carrying the correction template —
@@ -1196,17 +1218,19 @@ export const layer = Layer.effect(
         prepare: (wireRequestHash) => {
           // G0: record the Gamma prompt-composition breakdown at the one place every dispatched
           // turn passes through. Char-estimated (no LLM call), bounded logging, zero behavior change.
+          // REVIEW FIX (double counting): the control message is measured ONCE, as controlMessage —
+          // historyMessages below is the durable-history lowering WITHOUT the appended control tail,
+          // and volatileSystemParts excludes it too (it rides the message array, not the system).
+          const controlMessage = deepagentPrompt?.volatileRoundContext ?? governedPlanContext
           turnObservability.recordPrepared(
             providerReceipt.providerTurnSeq,
             turnObservability.preparedParts({
               stableSystemParts,
-              volatileSystemParts: PreparedProviderTurn.mergeSystemParts(
-                [deepagentPrompt?.volatileRoundContext ?? governedPlanContext],
-                volatileSystemParts,
-              ),
-              historyMessages: requestMessages,
-              controlMessage: deepagentPrompt?.volatileRoundContext ?? governedPlanContext,
+              volatileSystemParts,
+              historyMessages: toLLMMessages(historyRequestMessages, model),
+              controlMessage,
             }),
+            sessionID,
           )
           return V2ProviderTurn.prepare(
             {
@@ -1347,7 +1371,7 @@ export const layer = Layer.effect(
               }),
             ))
           ) {
-            turnObservability.recordCompaction()
+            turnObservability.recordCompaction(sessionID)
             return yield* Effect.die(continueAfterOverflowCompaction(currentStep))
           }
           const llmFailure = failure instanceof LLMError ? failure : undefined
@@ -1519,18 +1543,28 @@ export const layer = Layer.effect(
               : reason === "tool-calls"
                 ? "tool-calls"
                 : "other"
-          turnObservability.recordTurn({
-            seq: providerReceipt.providerTurnSeq,
-            finish,
-            toolCalls: providerEvents.filter((event) => event.type === "tool-call").length,
-            usage: {
-              input: stepFinish?.usage?.nonCachedInputTokens ?? 0,
-              output: stepFinish?.usage?.visibleOutputTokens ?? 0,
-              reasoning: stepFinish?.usage?.reasoningTokens ?? 0,
-              cacheRead: stepFinish?.usage?.cacheReadInputTokens ?? 0,
-              cacheWrite: stepFinish?.usage?.cacheWriteInputTokens ?? 0,
+          turnObservability.recordTurn(
+            {
+              seq: providerReceipt.providerTurnSeq,
+              finish,
+              toolCalls: providerEvents.filter((event) => event.type === "tool-call").length,
+              usage: {
+                input: stepFinish?.usage?.nonCachedInputTokens ?? 0,
+                output: stepFinish?.usage?.visibleOutputTokens ?? 0,
+                reasoning: stepFinish?.usage?.reasoningTokens ?? 0,
+                cacheRead: stepFinish?.usage?.cacheReadInputTokens ?? 0,
+                cacheWrite: stepFinish?.usage?.cacheWriteInputTokens ?? 0,
+              },
             },
-          })
+            sessionID,
+          )
+          // G3: fold this turn's history-projection deltas into the drain rollup, then rearm
+          // the counters for the next turn's assembly.
+          const projection = SessionHistoryProjection.projectionSummary()
+          if (projection.truncated > 0 || projection.savedChars > 0) {
+            turnObservability.recordProjection(projection.truncated, projection.savedChars, sessionID)
+            SessionHistoryProjection.projectionStats.reset()
+          }
           return {
             needsContinuation: !publisher.hasProviderError() && needsContinuation,
             step: currentStep,
@@ -1609,7 +1643,7 @@ export const layer = Layer.effect(
                 },
               )
               yield* Effect.sleep(Duration.millis(delay))
-              turnObservability.recordRetry()
+              turnObservability.recordRetry(sessionID)
               return yield* runTurn(sessionID, promotion, defect.transition.step, defect.transition.retry + 1)
             }
             yield* Effect.yieldNow
@@ -1739,7 +1773,17 @@ export const layer = Layer.effect(
     const run: typeof runDrain = (input) =>
       // G0: one rollup per drain chain. Effect.ensuring covers every exit — settled, failed, and
       // interrupted alike — so the report script always finds a summary for the drain it replays.
-      runDrain(input).pipe(Effect.ensuring(Effect.sync(() => turnObservability.emitTurnSummary())))
+      // REVIEW FIX: the summary is emitted for THIS drain's session (state is session-scoped), and
+      // pendingParts is cleared even when a turn early-returned without a provider receipt
+      // (structured-output capture, plan terminal, soft-landing) so nothing leaks across drains.
+      runDrain(input).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            turnObservability.emitTurnSummary(input.sessionID)
+            turnObservability.clearPendingParts(input.sessionID)
+          }),
+        ),
+      )
 
     const runDrain = Effect.fn("SessionRunner.run")(function* (input: {
       readonly sessionID: SessionSchema.ID

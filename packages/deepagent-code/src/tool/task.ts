@@ -1402,6 +1402,31 @@ export const TaskTool = Tool.define(
         ? yield* sessions.get(SessionID.make(params.task_id)).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
         : undefined
       const parent = yield* sessions.get(ctx.sessionID)
+      // G3 (gamma plan 阶段四) — runtime fan-out gate. A FRESH researcher/reviewer spawn on a
+      // session the runtime classified as simple (complexity 0) is rejected before admission:
+      // the model was told (one-line notice) not to orchestrate, and this is the enforcement
+      // half. Resume (task_id) always passes — it continues existing work, not new fan-out.
+      // Other subagent types pass: the gate targets orchestration noise, not delegation itself.
+      if (
+        session === undefined &&
+        (params.subagent_type === "researcher" || params.subagent_type === "reviewer")
+      ) {
+        const parentState = AgentGateway.DeepAgentSessionState.get(ctx.sessionID)
+        if (parentState != null) {
+          const signals = CoreOrchestration.estimateSignalsFromText({ userRequest: parentState.userRequest })
+          const complexity = CoreOrchestration.estimateComplexity(signals)
+          if (complexity === 0) {
+            return yield* Effect.fail(
+              new Error(
+                "Orchestration gate: the runtime classified this session's task as simple " +
+                  "(single-scope, mechanical, or quick). Do not fan out researcher/reviewer subagents; " +
+                  "complete the task yourself. If the task genuinely requires multi-module analysis or " +
+                  "review, state that explicitly to the user first.",
+              ),
+            )
+          }
+        }
+      }
       const parentAgent = yield* agent
         .get(parent.agent ?? ctx.agent)
         .pipe(Effect.catchCause(() => Effect.succeed(undefined)))
