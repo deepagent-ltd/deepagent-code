@@ -6,6 +6,7 @@ import { writeFileAtomic } from "./atomic-write"
 import * as PlanStore from "./plan-store"
 import { DocumentStore, documentRevision } from "./document-store"
 import type { AgentMode } from "./mode"
+import type { OrchestrationTier } from "./orchestration"
 import {
   createInitialRoundState,
   advanceRound,
@@ -119,6 +120,11 @@ export type SessionRunState = {
   // and read by the session prompt loop to attribute each tool-request receipt's
   // context_active_pack_set_snapshot_id. Null when no gateway run locked a snapshot for the session.
   packSnapshotId: string | null
+  // G3 (review fix): the FIRST orchestration complexity estimate for this session, frozen at first
+  // computation. The stable system prompt's orchestration section derives from it; recomputing from
+  // the latest user request each turn would drift the cached prefix on steer/continue (prompt-cache
+  // contract violation). Null until the first decision.
+  frozenComplexity: OrchestrationTier | null
 }
 
 // V3.9 §D: session-state pointer to a running goal. The GoalLoop's GoalStatus (persisted in the
@@ -201,6 +207,7 @@ export const getOrCreate = (sessionId: string, mode: AgentMode): SessionRunState
     lastAdmissionUserMessageId: undefined,
     lastPlanGateNudgeFingerprint: null,
     packSnapshotId: null,
+    frozenComplexity: null,
   }
   activeRuntime().sessions.set(sessionId, state)
   saveToDisk()
@@ -712,6 +719,8 @@ function normalizeState(state: SessionRunState): SessionRunState {
     mutationsSinceReport: state.mutationsSinceReport ?? 0,
     validationPassedSinceReport: state.validationPassedSinceReport ?? false,
     knowledgeSnapshotId: state.knowledgeSnapshotId ?? null,
+    // Backfill: sessions persisted before the G3 review fix have no frozenComplexity on disk.
+    frozenComplexity: state.frozenComplexity ?? null,
     // Backfill/migration: sessions persisted before v4.0.4 have no suppressedValidations field;
     // sessions persisted between v4.0.4 and this change carry the OLD `suppressedFingerprints:
     // string[]` format. Migrate both cases into the new SuppressedValidation[] shape.

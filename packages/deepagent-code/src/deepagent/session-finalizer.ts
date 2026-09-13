@@ -10,7 +10,11 @@ import { DEFAULT_WORKER_IDENTITY } from "@/agent/collaboration-identity"
  * despite complete work. Delivery (save/commit) is a runtime responsibility, not model discipline.
  *
  * Contract (mirrors agent-worktree's fail-safe posture — never lose work, never fake success):
- *   - Detects uncommitted changes in the session's working directory at drain settle.
+ *   - ONLY the paths this session's own tool calls touched are committed (review finding: the
+ *     first version ran `git add -A` on the PROJECT ROOT, silently absorbing the user's unrelated
+ *     uncommitted work and other tasks' files into a runtime commit). The caller passes the
+ *     write/edit targets extracted from the session's durable history; bash side effects are NOT
+ *     attributable and are deliberately left uncommitted.
  *   - A recovery commit is made ONLY when the session's own validation state does not prove a
  *     failure (no recorded validation results, or the last set all passed). A failing validation
  *     leaves the tree uncommitted — the work is the diagnostic evidence for the next round.
@@ -23,7 +27,7 @@ import { DEFAULT_WORKER_IDENTITY } from "@/agent/collaboration-identity"
  */
 
 export type FinalizeOutcome =
-  | { readonly kind: "committed"; readonly commit: string; readonly files: number }
+  | { readonly kind: "committed"; readonly commit: string; files: number }
   | { readonly kind: "no_changes" }
   | { readonly kind: "validation_failed"; readonly files: number }
   | { readonly kind: "skipped"; readonly reason: string }
@@ -61,15 +65,19 @@ const git = async (args: readonly string[], cwd: string): Promise<{ code: number
  * Commit a session's uncompleted work when the runtime can prove it is safe to deliver.
  * `validationPassed`: the session's recorded validation state — `true` only when results exist and
  * all passed; `null` when none were recorded (trivial tasks — deliver on the model's completion).
+ * `touchedPaths`: the session's own write/edit targets (workspace-relative or absolute). Only
+ * these paths are ever staged; an empty list skips delivery rather than committing nothing.
  */
 export const finalizeSessionWork = async (input: {
   readonly directory: string
   readonly validationPassed: boolean | null
+  readonly touchedPaths: readonly string[]
 }): Promise<FinalizeOutcome> => {
+  if (input.touchedPaths.length === 0) return { kind: "skipped", reason: "no_attributable_paths" }
   const toplevel = await git(["rev-parse", "--show-toplevel"], input.directory)
   if (!toplevel || toplevel.code !== 0) return { kind: "skipped", reason: "not_a_git_repo" }
 
-  const status = await git(["status", "--porcelain"], input.directory)
+  const status = await git(["status", "--porcelain", ...input.touchedPaths], input.directory)
   if (!status || status.code !== 0) return { kind: "skipped", reason: "git_status_unreadable" }
   const changedFiles = status.stdout
     .split("\n")
@@ -80,7 +88,8 @@ export const finalizeSessionWork = async (input: {
   if (input.validationPassed === false)
     return { kind: "validation_failed", files: changedFiles.length }
 
-  const staged = await git(["add", "-A"], input.directory)
+  // Stage EXACTLY the attributable paths — never the whole tree.
+  const staged = await git(["add", "--", ...input.touchedPaths], input.directory)
   if (!staged || staged.code !== 0) return { kind: "skipped", reason: "git_add_failed" }
   const committed = await git(
     [

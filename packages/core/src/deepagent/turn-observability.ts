@@ -13,6 +13,12 @@
  * (history / stable system / volatile control / tool results). Estimation is chars/4 (never an
  * LLM call); the summary carries the provider's own usage so the report script can publish the
  * estimate-vs-usage gap instead of hiding it.
+ *
+ * REVIEW FIX (isolation): all mutable state is SESSION-scoped. The first version kept one
+ * process-global turn list / pending map / behavior counters, so concurrent sessions shared
+ * `providerTurnSeq` keys — one session's prompt breakdown could attach to another session's
+ * report and summaries accumulated across drains. Every recorder now takes the sessionID; the
+ * legacy no-session overloads (tests, beacons) use a shared "_" slot.
  */
 
 const charsPerToken = 4
@@ -49,11 +55,65 @@ const jsonChars = (value: unknown): number => {
   return chars
 }
 
+type Behavior = {
+  empty_steps: number
+  gate_consults: number
+  gate_blocks: number
+  gate_releases: number
+  compactions: number
+  retries: number
+  projection_truncated: number
+  projection_saved_chars: number
+}
+
+type SessionRecord = {
+  turns: TurnReport[]
+  behavior: Behavior
+  preparedLogged: number
+  modelProfileKey: string | null
+  /** Parts recorded at prepare, keyed by provider turn seq; consumed by the matching turn report. */
+  pendingParts: Map<number, PreparedParts>
+}
+
+const sessions = new Map<string, SessionRecord>()
+// Bounded: settled sessions are dropped (emitTurnSummary clears them), so the map cannot grow
+// with a long-lived server beyond the concurrent-session count.
+const recordFor = (sessionID?: string): SessionRecord => {
+  const key = sessionID ?? "_"
+  let record = sessions.get(key)
+  if (record === undefined) {
+    record = {
+      turns: [],
+      behavior: {
+        empty_steps: 0,
+        gate_consults: 0,
+        gate_blocks: 0,
+        gate_releases: 0,
+        compactions: 0,
+        retries: 0,
+        projection_truncated: 0,
+        projection_saved_chars: 0,
+      },
+      preparedLogged: 0,
+      modelProfileKey: null,
+      pendingParts: new Map(),
+    }
+    sessions.set(key, record)
+  }
+  return record
+}
+
 /**
  * Split one prepared turn's request into the Gamma breakdown. `historyMessages` is the exact array
- * handed to `LLM.request` (already attachment-normalized), `controlMessage` the single volatile
- * control user message the DeepAgent layer appends after history. Tool results are separated out
- * because tool-output projection (阶段五) needs their baseline measured independently.
+ * handed to `LLM.request` (already attachment-normalized, WITHOUT the control message — pass it
+ * separately as `controlMessage`), `stableSystemParts`/`volatileSystemParts` the request's system
+ * blocks. Tool results are separated out because tool-output projection (阶段五) needs their
+ * baseline measured independently.
+ *
+ * REVIEW FIX (double counting): the control message used to be counted three ways — once inside
+ * `historyMessages` (it is appended to the request messages), once as volatileSystemParts, once as
+ * `controlMessage`. Callers now pass the history array WITHOUT the control tail and the volatile
+ * system parts WITHOUT it; this function is the single place the control message is measured.
  */
 export function preparedParts(input: {
   readonly stableSystemParts: readonly string[]
@@ -111,53 +171,66 @@ export type TurnReport = {
   readonly parts?: PreparedParts
 }
 
-const turns: TurnReport[] = []
-const behavior = {
-  empty_steps: 0,
-  gate_consults: 0,
-  gate_blocks: 0,
-  gate_releases: 0,
-  compactions: 0,
-  retries: 0,
-}
-let preparedLogged = 0
-/** Parts recorded at prepare, keyed by provider turn seq; consumed by the matching turn report. */
-const pendingParts = new Map<number, PreparedParts>()
-
 const emit = (line: string) => process.stderr.write(line + "\n")
 
-export const recordPrepared = (seq: number, parts: PreparedParts): void => {
-  pendingParts.set(seq, parts)
-  if (preparedLogged < 3) {
-    preparedLogged++
+export const recordPrepared = (seq: number, parts: PreparedParts, sessionID?: string): void => {
+  const record = recordFor(sessionID)
+  record.pendingParts.set(seq, parts)
+  if (record.preparedLogged < 3) {
+    record.preparedLogged++
     emit(`[turn] prepared seq=${seq} parts=${JSON.stringify(parts)}`)
   }
 }
 
-export const recordTurn = (report: TurnReport): void => {
-  const parts = pendingParts.get(report.seq)
-  pendingParts.delete(report.seq)
-  turns.push(parts === undefined ? report : { ...report, parts })
-  if (report.finish !== "error" && report.toolCalls === 0) behavior.empty_steps++
+export const recordTurn = (report: TurnReport, sessionID?: string): void => {
+  const record = recordFor(sessionID)
+  const parts = record.pendingParts.get(report.seq)
+  record.pendingParts.delete(report.seq)
+  record.turns.push(parts === undefined ? report : { ...report, parts })
+  if (report.finish !== "error" && report.toolCalls === 0) record.behavior.empty_steps++
 }
 
-export const recordGateConsult = (blocked: boolean, released = false): void => {
+export const recordGateConsult = (blocked: boolean, released = false, sessionID?: string): void => {
+  const behavior = recordFor(sessionID).behavior
   behavior.gate_consults++
   if (blocked) behavior.gate_blocks++
   if (released) behavior.gate_releases++
 }
 
-export const recordCompaction = (): void => {
-  behavior.compactions++
+export const recordCompaction = (sessionID?: string): void => {
+  recordFor(sessionID).behavior.compactions++
 }
 
-export const recordRetry = (): void => {
-  behavior.retries++
+export const recordRetry = (sessionID?: string): void => {
+  recordFor(sessionID).behavior.retries++
+}
+
+/** G3 history projection — cumulative counters pulled from the projection module at rollup. */
+export const recordProjection = (truncated: number, savedChars: number, sessionID?: string): void => {
+  const behavior = recordFor(sessionID).behavior
+  behavior.projection_truncated += truncated
+  behavior.projection_saved_chars += savedChars
+}
+
+/** G3 model profile — the resolved profile key rides every rollup (plan: observable, never hidden). */
+export const recordModelProfile = (key: string, sessionID?: string): void => {
+  recordFor(sessionID).modelProfileKey = key
+}
+
+/**
+ * REVIEW FIX (leak): every exit path of a drain must clear its pending parts, not only the ones
+ * that reach recordTurn. The runner calls this from the drain's Effect.ensuring alongside the
+ * summary emission; anything still pending there belongs to an early-returned turn
+ * (structured-output capture, plan terminal, soft-landing) that never got a provider receipt.
+ */
+export const clearPendingParts = (sessionID?: string): void => {
+  recordFor(sessionID).pendingParts.clear()
 }
 
 /** Drain-end rollup: per-component token sums, per-turn usage sums, and the behavior counters. */
-export const turnSummary = () => {
-  const partsSums = turns.reduce(
+export const turnSummary = (sessionID?: string) => {
+  const record = recordFor(sessionID)
+  const partsSums = record.turns.reduce(
     (acc, turn) => {
       const parts = turn.parts
       if (!parts) return acc
@@ -171,7 +244,7 @@ export const turnSummary = () => {
     },
     { stable_system: 0, volatile_system: 0, control_message: 0, history: 0, tool_results: 0, total_estimated: 0 },
   )
-  const usageSums = turns.reduce(
+  const usageSums = record.turns.reduce(
     (acc, turn) => {
       acc.input += turn.usage.input
       acc.output += turn.usage.output
@@ -182,23 +255,31 @@ export const turnSummary = () => {
     },
     { input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 },
   )
-  const finishCounts = turns.reduce<Record<string, number>>((acc, turn) => {
+  const finishCounts = record.turns.reduce<Record<string, number>>((acc, turn) => {
     acc[turn.finish] = (acc[turn.finish] ?? 0) + 1
     return acc
   }, {})
   return {
-    turns: turns.length,
-    behavior,
+    turns: record.turns.length,
+    behavior: record.behavior,
     finish: finishCounts,
     parts: partsSums,
     usage: usageSums,
+    ...(record.modelProfileKey ? { profile: record.modelProfileKey } : {}),
   }
 }
 
-export const emitTurnSummary = (): void => {
-  if (turns.length === 0) return
-  emit(`[turn] summary ${JSON.stringify(turnSummary())}`)
+export const emitTurnSummary = (sessionID?: string): void => {
+  const record = recordFor(sessionID)
+  if (record.turns.length === 0) {
+    sessions.delete(sessionID ?? "_")
+    return
+  }
+  emit(`[turn] summary ${JSON.stringify(turnSummary(sessionID))}`)
+  // The rollup is CUMULATIVE per drain chain but a NEW drain of the same session must not
+  // double-count: reset after emission and free the slot (long-lived process bound).
+  sessions.delete(sessionID ?? "_")
 }
 
 /** Test accessor. */
-export const recordedTurns = (): readonly TurnReport[] => turns
+export const recordedTurns = (sessionID?: string): readonly TurnReport[] => recordFor(sessionID).turns

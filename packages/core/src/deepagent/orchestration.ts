@@ -270,14 +270,20 @@ export const decideFanout = (input: {
  * OFF and the section only tells the agent to fan out on explicit user request; at higher tiers it
  * gives the full fan-out judgment. Returns `null` when there is nothing worth injecting.
  */
-// PROMPT-CACHE NOTE: this returns the STABLE, generic orchestration guidance only — it is a pure
-// function of `mode`, so it stays byte-identical across a session and can live in the cached system
+// PROMPT-CACHE NOTE: this returns the STABLE, generic orchestration guidance only — it is a
+// pure function of `mode`, so it stays byte-identical across a session and can live in the cached system
 // prefix. The per-turn fan-out VERDICT (concrete researcher/reviewer counts derived from this turn's
 // task complexity) is deliberately NOT rendered here anymore; it changes turn-to-turn and would bust
 // the prefix. The DeepAgent path renders that verdict via prompt-policy.ts `buildVolatileRoundContext`
 // and appends it after the cache breakpoint. The non-DeepAgent path (session/system.ts) may still
 // pass no decision and get just this stable guidance.
-export const buildOrchestrationSection = (mode: AgentMode): string | null => {
+//
+// G3 (gamma plan 阶段四): `complexity` is the runtime's estimate for THIS session's request. When the
+// runtime already knows the task is simple (complexity 0), the full researcher/reviewer tutorial is
+// withheld — a one-line notice replaces it — so simple tasks stop carrying orchestration teaching they
+// will never act on. The estimate is derived from the session's user request (stable within a
+// session), so the section stays byte-stable for the cached prefix.
+export const buildOrchestrationSection = (mode: AgentMode, complexity?: OrchestrationTier): string | null => {
   const tier = tierForMode(mode)
   const votes = reviewerVotesForMode(mode)
   const header = "# 多-Agent 编排 (multi-agent orchestration)"
@@ -289,6 +295,16 @@ export const buildOrchestrationSection = (mode: AgentMode): string | null => {
       "",
       "默认不自动编排。只有当用户明确要求「深入 / 多角度 / review / 彻底」时，才用 `task` 工具扇出 researcher/reviewer 子 agent；否则本体直接完成。",
       "简单任务（单文件、机制清楚、纯机械改动）永远本体做。",
+    ].join("\n")
+  }
+
+  if (complexity === 0) {
+    // G3: runtime-classified simple task — keep only the capability notice. The full fan-out
+    // workflow would be dead weight the model never executes on a single-file task.
+    return [
+      header,
+      "",
+      "系统判定当前任务为简单任务：本体直接完成，不要扇出 researcher/reviewer。仅当任务实质变为跨模块/多方案对比/安全敏感时才重新考虑编排。",
     ].join("\n")
   }
 

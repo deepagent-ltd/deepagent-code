@@ -9,7 +9,8 @@ import { DeepAgentLearningLifecycleTrigger } from "@deepagent-code/core/deepagen
 import { createInitialRoundState } from "@deepagent-code/core/deepagent/round-state"
 import { writeFileAtomic } from "@deepagent-code/core/deepagent/atomic-write"
 import { Global } from "@deepagent-code/core/global"
-import { SessionTable } from "@deepagent-code/core/session/sql"
+import { SessionTable, SessionMessageTable } from "@deepagent-code/core/session/sql"
+import { SessionSchema } from "@deepagent-code/core/session/schema"
 import { SessionRunner } from "@deepagent-code/core/session/runner"
 import { V2ProviderTurnReceiptTable } from "@deepagent-code/core/session/runner/v2-provider-turn.sql"
 import { finalizeSessionWork } from "./session-finalizer"
@@ -192,6 +193,8 @@ export function onSessionSettled(
       // runtime responsibility now. Runs before the learning gate so EVERY settled activity
       // finalizes (learning off must not turn delivery off). Best-effort posture: a finalizer
       // failure logs and never fails the settle; the tree is left untouched on any failure.
+      // Review fix: only the paths THIS session's own write/edit calls touched are committed —
+      // `git add -A` on the project root would absorb the user's unrelated uncommitted work.
       yield* Effect.promise(async () => {
         const workspace = input.workspacePath
         const validation = withStorage(() => {
@@ -199,7 +202,8 @@ export function onSessionSettled(
           if (!state || state.lastValidationResults.length === 0) return null
           return state.lastValidationResults.every((result) => result.passed)
         })
-        const outcome = await finalizeSessionWork({ directory: workspace, validationPassed: validation })
+        const touchedPaths = sessionTouchedPaths(database, input.sessionID)
+        const outcome = await finalizeSessionWork({ directory: workspace, validationPassed: validation, touchedPaths })
         if (outcome.kind === "committed")
           return { finalized: true, detail: `committed ${outcome.files} file(s) at ${outcome.commit}` }
         if (outcome.kind === "validation_failed")
@@ -348,3 +352,39 @@ export const onSessionSettledSeamLayer = Layer.effectContext(
     return Context.make(SessionRunner.CurrentOnSessionSettled, onSessionSettled(database))
   }),
 )
+
+// G2 review fix — the file-attribution source for the session finalizer. Walks the session's
+// durable assistant messages and collects the targets of MUTATING file tools (write/edit family).
+// Bash side effects are NOT attributable to a path and are deliberately excluded: the finalizer
+// would rather under-commit (work stays in the tree, recoverable) than absorb files the session
+// cannot prove it owns. Destructive/odd shapes are skipped, not guessed.
+const FILE_MUTATION_TOOLS = new Set(["write", "edit", "edit-fuzzy", "apply-patch", "apply-patch-chunk"])
+
+function sessionTouchedPaths(database: Database.Interface, sessionID: SessionSchema.ID): readonly string[] {
+  const rows: ReadonlyArray<{ data: unknown }> = Effect.runSync(
+    database.db
+      .select({ data: SessionMessageTable.data })
+      .from(SessionMessageTable)
+      .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.type, "assistant")))
+      .all(),
+  )
+  const paths = new Set<string>()
+  for (const row of rows) {
+    const data = row.data as { content?: Array<unknown> } | null
+    if (!data || !Array.isArray(data.content)) continue
+    for (const part of data.content) {
+      if (part === null || typeof part !== "object") continue
+      const tool = part as { type?: string; name?: string; state?: { input?: unknown } }
+      if (tool.type !== "tool" || !tool.name || !FILE_MUTATION_TOOLS.has(tool.name)) continue
+      const input = tool.state?.input
+      if (input === null || typeof input !== "object") continue
+      for (const value of Object.values(input as Record<string, unknown>)) {
+        // The mutation tools' target arg is `path` (single string); other string fields of the
+        // same call (content/edits) never look like a path with a separator, but stay strict:
+        // only accept values that are strings containing a path separator or a dot.
+        if (typeof value === "string" && /[/.]/.test(value)) paths.add(value)
+      }
+    }
+  }
+  return [...paths]
+}

@@ -130,6 +130,10 @@ export const buildPromptContext = (input: OrchestratorInput): PromptContext => {
   // §5b: compute the concrete per-turn fan-out verdict from this turn's request text so the
   // DeepAgent-active prompt (the primary user path) surfaces task-specific numbers, not just the
   // generic guidance. Deterministic pure function; ADVISORY only (the §5a semaphore is the hard cap).
+  // G3 review fix: the complexity that feeds the STABLE system prefix is FROZEN at first
+  // computation (state.frozenComplexity) — recomputing from the latest user request would drift
+  // the cached prefix on steer/continue (prompt-cache contract violation). The volatile per-turn
+  // verdict below still tracks the live request.
   const fanoutDecision = state.userRequest && input.tools.availableTools.some((tool) => tool.name === "task")
     ? decideFanout({
         mode: state.mode,
@@ -137,6 +141,10 @@ export const buildPromptContext = (input: OrchestratorInput): PromptContext => {
         caps: input.orchestrationCaps,
       })
     : undefined
+  if (fanoutDecision !== undefined && state.frozenComplexity === null) {
+    SessionState.update(input.sessionId, { frozenComplexity: fanoutDecision.complexity })
+  }
+  const stableComplexity = state.frozenComplexity ?? fanoutDecision?.complexity
 
   // V3.8 App-A C3: cross-session handoff injection. Gated at the SAME door as knowledge
   // (shouldLoadBridge: mode !== general/disabled). Load the project bridge from the project-scoped
@@ -165,6 +173,7 @@ export const buildPromptContext = (input: OrchestratorInput): PromptContext => {
   return {
     mode: state.mode,
     round: roundState.round,
+    sessionID: input.sessionId,
     activation,
     roundState,
     environment: input.environment,
@@ -182,6 +191,7 @@ export const buildPromptContext = (input: OrchestratorInput): PromptContext => {
     previousResults,
     userInstructions: null,
     ...(fanoutDecision ? { fanoutDecision } : {}),
+    ...(stableComplexity !== undefined ? { stableComplexity } : {}),
     ...(bridge ? { bridge } : {}),
   }
 }
