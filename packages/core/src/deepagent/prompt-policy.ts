@@ -173,6 +173,11 @@ export const buildSystemPrompt = (ctx: PromptContext): string => {
 // Volatile per-turn state that must NOT enter the cached base system prompt. Rendered into a single
 // `<deepagent-round-context>` block that the caller appends after durable history. The stable system
 // prompt establishes this tag as trusted runtime control. Only buildSystemPrompt must stay stable.
+// G1: the stage whose full guidance was last rendered into a volatile round context. Process-local,
+// mirrors the per-session runner: the teaching prose is repeated only when the stage actually
+// changes. (Continuation contexts never carry the guidance block, so they do not touch this.)
+let lastRenderedStage: ActivationDecision["stage"] | null = null
+
 export const buildVolatileRoundContext = (ctx: PromptContext, runtimeControl?: string): string => {
   const sections: string[] = []
 
@@ -189,7 +194,13 @@ export const buildVolatileRoundContext = (ctx: PromptContext, runtimeControl?: s
 
   // Activation guidance: the stage-specific how-to-work prose. Stage advances across rounds, so this
   // is round-derived and must not sit in the cached prefix.
-  if (ctx.activation.guidance.trim()) {
+  // G1: the full stage prose (Architect/Editor/Judge etc.) teaches HOW to work in a stage — teaching
+  // it again on every round of the SAME stage is repetition the model does not need. Render the full
+  // guidance only when the stage CHANGES (or on round 1); later rounds in the same stage get the
+  // one-line stage marker that already sits in the round context above. Codex's update-plan pattern
+  // (drop the teaching when the tool context already carries it) is the precedent.
+  if (ctx.activation.guidance.trim() && (ctx.round === 1 || lastRenderedStage !== ctx.activation.stage)) {
+    lastRenderedStage = ctx.activation.stage
     sections.push(activationSection(ctx.activation))
   }
 

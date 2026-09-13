@@ -12,6 +12,7 @@ import { Global } from "@deepagent-code/core/global"
 import { SessionTable } from "@deepagent-code/core/session/sql"
 import { SessionRunner } from "@deepagent-code/core/session/runner"
 import { V2ProviderTurnReceiptTable } from "@deepagent-code/core/session/runner/v2-provider-turn.sql"
+import { finalizeSessionWork } from "./session-finalizer"
 import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
 import { Hash } from "@deepagent-code/core/util/hash"
 import { Cause, Context, Duration, Effect, Layer, Schedule, Scope } from "effect"
@@ -184,6 +185,31 @@ export function onSessionSettled(
       }).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("completion worklog write failed", { cause }).pipe(Effect.asVoid),
+        ),
+      )
+      // G2 unified finalizer: deliver the session's uncommitted work. The abs failure mode —
+      // implementation finished, model never committed, verifier graded an empty diff — is a
+      // runtime responsibility now. Runs before the learning gate so EVERY settled activity
+      // finalizes (learning off must not turn delivery off). Best-effort posture: a finalizer
+      // failure logs and never fails the settle; the tree is left untouched on any failure.
+      yield* Effect.promise(async () => {
+        const workspace = input.workspacePath
+        const validation = withStorage(() => {
+          const state = AgentGateway.DeepAgentSessionState.get(input.sessionID)
+          if (!state || state.lastValidationResults.length === 0) return null
+          return state.lastValidationResults.every((result) => result.passed)
+        })
+        const outcome = await finalizeSessionWork({ directory: workspace, validationPassed: validation })
+        if (outcome.kind === "committed")
+          return { finalized: true, detail: `committed ${outcome.files} file(s) at ${outcome.commit}` }
+        if (outcome.kind === "validation_failed")
+          return { finalized: false, detail: `withheld: last validation failed (${outcome.files} changed)` }
+        if (outcome.kind === "no_changes") return { finalized: false, detail: "no changes to deliver" }
+        return { finalized: false, detail: `skipped: ${outcome.reason}` }
+      }).pipe(
+        Effect.flatMap((result) => Effect.logInfo(`session finalizer: ${result.detail}`)),
+        Effect.catchCause((cause) =>
+          Effect.logWarning("session finalizer failed", { cause }).pipe(Effect.asVoid),
         ),
       )
       if (!(runtime?.durableLearning ?? AgentGateway.durableLearningEnabled())) return

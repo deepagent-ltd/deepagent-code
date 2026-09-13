@@ -67,6 +67,7 @@ import { CapabilitySnapshot } from "../../system-context/capability-snapshot"
 import { capabilityLoadFactOf, recordedCapabilityLoadsForSession } from "../../system-context/capability-load-adapter"
 import { ProjectDocsSync } from "../../deepagent/project-docs-sync"
 import { flipFlagValueOn } from "../../deepagent/flip-flag"
+import * as turnObservability from "../../deepagent/turn-observability"
 import { FSUtil } from "../../fs-util"
 import { Git } from "../../git"
 import {
@@ -1048,6 +1049,12 @@ export const layer = Layer.effect(
               toolName: input.call.name,
               args: input.call.input,
             })
+            // G0: consult/block/release counters ride the same gate decision (the reminder text is
+            // the release signal — a block never carries one).
+            turnObservability.recordGateConsult(
+              gate.kind === "block",
+              gate.kind === "pass" && gate.reminder !== undefined,
+            )
             if (gate.kind === "block") {
               // A gated call settles as a typed error RESULT carrying the correction template —
               // the model sees the block text as the tool's outcome, exactly like the V1 wrapper's
@@ -1186,8 +1193,22 @@ export const layer = Layer.effect(
       const providerStream = V2ProviderTurn.stream({
         service: providerTurns,
         receipt: providerReceipt,
-        prepare: (wireRequestHash) =>
-          V2ProviderTurn.prepare(
+        prepare: (wireRequestHash) => {
+          // G0: record the Gamma prompt-composition breakdown at the one place every dispatched
+          // turn passes through. Char-estimated (no LLM call), bounded logging, zero behavior change.
+          turnObservability.recordPrepared(
+            providerReceipt.providerTurnSeq,
+            turnObservability.preparedParts({
+              stableSystemParts,
+              volatileSystemParts: PreparedProviderTurn.mergeSystemParts(
+                [deepagentPrompt?.volatileRoundContext ?? governedPlanContext],
+                volatileSystemParts,
+              ),
+              historyMessages: requestMessages,
+              controlMessage: deepagentPrompt?.volatileRoundContext ?? governedPlanContext,
+            }),
+          )
+          return V2ProviderTurn.prepare(
             {
               receipt: providerReceipt,
               stableSystemParts,
@@ -1231,7 +1252,8 @@ export const layer = Layer.effect(
               capabilitySnapshot: CapabilitySnapshot.capabilitySnapshotRefFor(sessionLoadFacts),
             },
             wireRequestHash,
-          ),
+          )
+        },
         stream: llm.stream(request).pipe(Stream.tap((event) => Effect.sync(() => providerEvents.push(event)))),
         outcomeArtifact: () => providerEvents,
         errorCode: (error) => `provider_stream_failed:${Hash.sha256(String(error)).slice(0, 16)}`,
@@ -1324,8 +1346,10 @@ export const layer = Layer.effect(
                 admission: selectionAdmission,
               }),
             ))
-          )
+          ) {
+            turnObservability.recordCompaction()
             return yield* Effect.die(continueAfterOverflowCompaction(currentStep))
+          }
           const llmFailure = failure instanceof LLMError ? failure : undefined
           // The executor's own retryable contract is the proof that re-sending is safe: 429/5xx are
           // definite provider rejections (no generation), and a transport failure counts only when
@@ -1481,6 +1505,32 @@ export const layer = Layer.effect(
           }
           if (parityCampaign && providerReceipt)
             yield* providerTurns.recordParityForReceipt({ campaign: parityCampaign, receipt: providerReceipt })
+          // G0: settle the turn report from the provider's own events — usage and finish from the
+          // step-finish, tool calls counted from the emitted tool-call events. Same data the
+          // publisher persisted; recording it here keeps observability in one place per turn.
+          const stepFinish = providerEvents.findLast((event): event is Extract<LLMEvent, { type: "step-finish" }> =>
+            event.type === "step-finish",
+          )
+          const reason = stepFinish?.reason
+          const finish: "stop" | "tool-calls" | "error" | "other" = publisher.hasProviderError()
+            ? "error"
+            : reason === "stop"
+              ? "stop"
+              : reason === "tool-calls"
+                ? "tool-calls"
+                : "other"
+          turnObservability.recordTurn({
+            seq: providerReceipt.providerTurnSeq,
+            finish,
+            toolCalls: providerEvents.filter((event) => event.type === "tool-call").length,
+            usage: {
+              input: stepFinish?.usage?.nonCachedInputTokens ?? 0,
+              output: stepFinish?.usage?.visibleOutputTokens ?? 0,
+              reasoning: stepFinish?.usage?.reasoningTokens ?? 0,
+              cacheRead: stepFinish?.usage?.cacheReadInputTokens ?? 0,
+              cacheWrite: stepFinish?.usage?.cacheWriteInputTokens ?? 0,
+            },
+          })
           return {
             needsContinuation: !publisher.hasProviderError() && needsContinuation,
             step: currentStep,
@@ -1559,6 +1609,7 @@ export const layer = Layer.effect(
                 },
               )
               yield* Effect.sleep(Duration.millis(delay))
+              turnObservability.recordRetry()
               return yield* runTurn(sessionID, promotion, defect.transition.step, defect.transition.retry + 1)
             }
             yield* Effect.yieldNow
@@ -1685,7 +1736,12 @@ export const layer = Layer.effect(
       return compacted !== false
     })
 
-    const run = Effect.fn("SessionRunner.run")(function* (input: {
+    const run: typeof runDrain = (input) =>
+      // G0: one rollup per drain chain. Effect.ensuring covers every exit — settled, failed, and
+      // interrupted alike — so the report script always finds a summary for the drain it replays.
+      runDrain(input).pipe(Effect.ensuring(Effect.sync(() => turnObservability.emitTurnSummary())))
+
+    const runDrain = Effect.fn("SessionRunner.run")(function* (input: {
       readonly sessionID: SessionSchema.ID
       readonly force?: boolean
     }) {
