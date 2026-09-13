@@ -5,6 +5,7 @@ import { existsSync } from "node:fs"
 import { readFile, realpath } from "node:fs/promises"
 import { eq } from "drizzle-orm"
 import { Cause, Effect, Option, Schema } from "effect"
+import * as mechanismBeacon from "./mechanism-beacon"
 import { Database } from "../database/database"
 import { SessionSchema } from "../session/schema"
 import { SessionTable } from "../session/sql"
@@ -400,6 +401,7 @@ export const admit = Effect.fn("DeepAgentDurableLearning.admit")(function* (
   admission: Admission,
   input: { readonly authorityRoot: string },
 ) {
+  mechanismBeacon.recordEngagement("learning", `workspace=${admission.workspacePath}`)
   const intent = yield* record(db, admission)
   return yield* reconcileIntent(db, intent.intent, path.resolve(input.authorityRoot))
 })

@@ -34,7 +34,15 @@ type RunMetrics = {
   errorToolCalls: number
   promptTokens: number
   completionTokens: number
+  cachedTokens: number
+  costUsd: number
   wallclockMs: number | null
+  /** Reasoning trace volume — the driver of per-delta costs (see the stall postmortem). */
+  reasoningChars: number
+  assistantTextChars: number
+  /** Ablation-correctness evidence parsed from the `[beacon]` lines in the agent transcript. */
+  beaconStartup: Record<string, string> | null
+  beaconEngagements: Record<string, number>
 }
 
 const EDIT_TOOLS = new Set(["edit", "write", "apply", "applypatch", "apply_patch"])
@@ -60,6 +68,15 @@ async function extractTrial(jobsDir: string, job: string, trialDir: string): Pro
   }
   const steps = trajectory.steps ?? []
   const agentSteps = steps.filter((step) => step.source === "agent")
+
+  // Captured agent transcript (the pier tee target): carries the `[beacon]` evidence lines.
+  let agentLog: string[] = []
+  for (const candidate of ["deepagent.txt", "mini-swe-agent.txt"]) {
+    try {
+      agentLog = (await readFile(path.join(trialDir, "agent", candidate), "utf8")).split("\n")
+      if (agentLog.length > 0) break
+    } catch {}
+  }
 
   const toolHistogram: Record<string, number> = {}
   let investigation = 0
@@ -102,6 +119,37 @@ async function extractTrial(jobsDir: string, job: string, trialDir: string): Pro
 
   const first = agentSteps[0]?.metrics?.start_epoch_ms
   const last = agentSteps.at(-1)?.metrics?.end_epoch_ms ?? agentSteps.at(-1)?.metrics?.start_epoch_ms
+  // Reasoning/text volume: the per-delta hot paths scale with these (postmortem §IV).
+  let reasoningChars = 0
+  let assistantTextChars = 0
+  for (const step of steps) {
+    for (const part of step.message?.content ?? []) {
+      if (part?.type === "reasoning" && typeof part.text === "string") reasoningChars += part.text.length
+      if (part?.type === "text" && typeof part.text === "string") assistantTextChars += part.text.length
+    }
+  }
+  // Mechanism beacons: the ablation-correctness ledger parsed from the captured transcript.
+  const beaconStartup: Record<string, string> | null = (() => {
+    const line = agentLog?.find((l) => l.startsWith("[beacon] startup "))
+    if (!line) return null
+    try {
+      return JSON.parse(line.slice("[beacon] startup ".length)) as Record<string, string>
+    } catch {
+      return null
+    }
+  })()
+  const beaconEngagements: Record<string, number> = {}
+  for (const line of agentLog ?? []) {
+    if (line.startsWith("[beacon] summary ")) {
+      try {
+        const parsed = JSON.parse(line.slice("[beacon] summary ".length)) as Record<string, { count: number }>
+        for (const [id, value] of Object.entries(parsed)) beaconEngagements[id] = value.count
+      } catch {}
+      continue
+    }
+    const m = line.match(/^\[beacon\] engage mechanism=(\S+)/)
+    if (m) beaconEngagements[m[1]] = (beaconEngagements[m[1]] ?? 0) + 1
+  }
   return {
     job,
     trial: path.basename(trialDir),
@@ -117,7 +165,13 @@ async function extractTrial(jobsDir: string, job: string, trialDir: string): Pro
     errorToolCalls: errors,
     promptTokens: trajectory.final_metrics?.total_prompt_tokens ?? 0,
     completionTokens: trajectory.final_metrics?.total_completion_tokens ?? 0,
+    cachedTokens: trajectory.final_metrics?.total_cached_tokens ?? 0,
+    costUsd: trajectory.final_metrics?.total_cost ?? 0,
     wallclockMs: typeof first === "number" && typeof last === "number" ? last - first : null,
+    reasoningChars,
+    assistantTextChars,
+    beaconStartup,
+    beaconEngagements,
   }
 }
 

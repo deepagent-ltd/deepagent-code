@@ -2,6 +2,7 @@ export * as EventAdmission from "./event-admission"
 
 import { eq, sql } from "drizzle-orm"
 import { Cause, Effect } from "effect"
+import * as mechanismBeacon from "./mechanism-beacon"
 import type { Database } from "../database/database"
 import {
   decodeEventWorkEnvelope,
@@ -343,12 +344,14 @@ export function admit(db: DatabaseClient, input: AdmitInput): Effect.Effect<Admi
         ...(input.messageID != null ? { messageID: input.messageID } : {}),
         now: input.now,
       })
+      mechanismBeacon.recordEngagement("event_admission", "refused=disabled")
       return yield* refuse(
         "admission_disabled",
         input.envelope.eventRef,
         `event V2 admission is disabled (${EVENT_V2_ADMISSION_ENV} is not "true"); the legacy event turn path serves (design §8.7 default-off discipline)`,
       )
     }
+    mechanismBeacon.recordEngagement("event_admission", `event=${input.envelope.eventRef}`)
 
     // W5 F3 — an envelope that does not round-trip the frozen contract (or is §8.8 noise) is a strategic
     // refusal: the refusal is recorded as a `refused` receipt (best-effort) BEFORE the adapter is ever

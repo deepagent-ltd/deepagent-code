@@ -11,6 +11,7 @@ import { Context, Effect, Layer } from "effect"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { SessionRunner } from "@deepagent-code/core/session/runner"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import * as mechanismBeacon from "@deepagent-code/core/deepagent/mechanism-beacon"
 
 const planHook = new AgentGateway.DeepAgentHooks.HookPolicy().on(
   "before_tool_use",
@@ -27,6 +28,9 @@ const decide = function (
   return Effect.sync(() =>
     runtime.withStorage(() => {
       const sessionID = input.sessionID
+      // Beacon: the plan gate is consulted on every tool settlement. Recording the consult (and,
+      // below, any actual block) proves the mechanism reached the task — "flag on" alone does not.
+      mechanismBeacon.recordEngagement("strict_plan_gate", `tool=${input.toolName}`)
       const latch = AgentGateway.DeepAgentSessionState.planLatch(sessionID)
       const planStale = latch?.latch === "stale" && !AgentGateway.DeepAgentPlanController.shouldEscapeToHuman(latch)
       // V2 sessions never seed DeepAgentSessionState (the V1 ensureSessionStateForRun does that) —
@@ -83,6 +87,7 @@ const decide = function (
           graceReminder = `Plan gate released this call after ${latch.consecutive_blocks} blocks. Call the \`plan\` tool now (one step is fine) — the next mutating call blocks again.`
         } else {
           AgentGateway.DeepAgentSessionState.recordPlanGateBlock(sessionID)
+          mechanismBeacon.recordEngagement("strict_plan_gate", `blocked=${input.toolName}`)
           const block: Directive = {
             kind: "block",
             output:

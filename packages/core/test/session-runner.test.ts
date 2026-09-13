@@ -8,6 +8,7 @@ import {
   LLMEvent,
   Model,
   TransportReason,
+  ProviderInternalReason,
   InvalidRequestReason,
   NoRouteReason,
   type LLMClientShape,
@@ -4008,6 +4009,133 @@ describe("SessionRunnerLLM", () => {
         { type: "assistant", finish: "error", error: { type: "unknown", message: "Provider unavailable" } },
       ])
     }),
+  )
+
+  // The retry backoff is real time, so these two run on the live clock with an explicit budget.
+  it.live("retries a pre-generation provider rejection on a fresh attempt instead of ending the run", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const { db } = yield* Database.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Provider briefly unavailable" }), resume: false })
+
+      const sealThen = (wire: string, then: Stream.Stream<LLMEvent, LLMError>) =>
+        Stream.unwrap(
+          Effect.gen(function* () {
+            const seal = yield* V2ProviderTurn.CurrentRequestSeal
+            if (!seal) return yield* Effect.die("Retry-attempt request seal is missing")
+            yield* seal
+              .seal({
+                wireHash: Hash.sha256(wire),
+                bodyHash: Hash.sha256(`${wire}-body`),
+                bodyLength: 4,
+                contentType: "application/json",
+              })
+              .pipe(Effect.orDie)
+            return then
+          }),
+        )
+
+      requests.length = 0
+      // Attempt 1: the provider rejects the request before generating (HTTP 503). Attempt 2: normal
+      // completion. Only the first rejection is retryable, so the run must recover on the second.
+      responseStreams = [
+        sealThen(
+          "pre-generation-rejection",
+          Stream.fail(
+            new LLMError({
+              module: "test",
+              method: "stream",
+              reason: new ProviderInternalReason({ message: "Provider request failed with HTTP 503", status: 503 }),
+            }),
+          ),
+        ),
+        sealedResponse(fragmentFixture("text", "retry-succeeded", ["Recovered"]).completeEvents, "retry-succeeded"),
+      ]
+
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(2)
+      const receipts = yield* db
+        .select({ state: V2ProviderTurnReceiptTable.state, errorCode: V2ProviderTurnReceiptTable.error_code })
+        .from(V2ProviderTurnReceiptTable)
+        .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID))
+        .orderBy(asc(V2ProviderTurnReceiptTable.request_ordinal))
+        .all()
+        .pipe(Effect.orDie)
+      // The rejected attempt stays quarantined as indeterminate evidence; the retry opens a new
+      // ordinal and settles. The quarantined row is never replayed.
+      expect(receipts).toHaveLength(2)
+      expect(receipts[0]).toMatchObject({
+        state: "indeterminate_after_crash",
+        errorCode: expect.stringMatching(/^provider_stream_failed:/),
+      })
+      expect(receipts[1]).toMatchObject({ state: "settled", errorCode: null })
+      expect(yield* session.context(sessionID)).toMatchObject([
+        { type: "user", text: "Provider briefly unavailable" },
+        { type: "assistant", finish: "stop" },
+      ])
+    }),
+    20_000,
+  )
+
+  // The retry backoff is real time, so these two run on the live clock with an explicit budget.
+  it.live("gives up after the bounded provider rejection retry budget is spent", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const { db } = yield* Database.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Provider permanently rejecting" }), resume: false })
+
+      const rejection = () =>
+        new LLMError({
+          module: "test",
+          method: "stream",
+          reason: new ProviderInternalReason({ message: "Provider request failed with HTTP 503", status: 503 }),
+        })
+      // A dispatched 503 is a sealed request: the receipt quarantines indeterminate (the state a
+      // retry is allowed to re-open), exactly as it does in production. One sealed failing stream
+      // per attempt, with the initial dispatch plus the full retry budget.
+      const sealedRejection = (wire: string) =>
+        Stream.unwrap(
+          Effect.gen(function* () {
+            const seal = yield* V2ProviderTurn.CurrentRequestSeal
+            if (!seal) return yield* Effect.die("Rejection request seal is missing")
+            yield* seal
+              .seal({
+                wireHash: Hash.sha256(wire),
+                bodyHash: Hash.sha256(`${wire}-body`),
+                bodyLength: 4,
+                contentType: "application/json",
+              })
+              .pipe(Effect.orDie)
+            return Stream.fail(rejection())
+          }),
+        )
+      requests.length = 0
+      // Every attempt is rejected before generation. The runner retries a bounded number of times and
+      // then surfaces the failure instead of looping forever.
+      responseStreams = [
+        sealedRejection("reject-1"),
+        sealedRejection("reject-2"),
+        sealedRejection("reject-3"),
+        sealedRejection("reject-4"),
+      ]
+
+      const exit = yield* session.resume(sessionID).pipe(Effect.exit)
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(requests.length).toBe(4)
+      const receipts = yield* db
+        .select({ state: V2ProviderTurnReceiptTable.state })
+        .from(V2ProviderTurnReceiptTable)
+        .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID))
+        .orderBy(asc(V2ProviderTurnReceiptTable.request_ordinal))
+        .all()
+        .pipe(Effect.orDie)
+      expect(receipts).toHaveLength(4)
+      expect(receipts.every((row) => row.state === "indeterminate_after_crash")).toBe(true)
+    }),
+    20_000,
   )
 
   it.effect("refuses provider continuation while a tool admission has no terminal evidence", () =>
