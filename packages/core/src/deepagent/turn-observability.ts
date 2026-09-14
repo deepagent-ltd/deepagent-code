@@ -35,6 +35,35 @@ type PreparedParts = {
   readonly total_estimated: number
   readonly history_messages: number
   readonly tool_result_parts: number
+  /**
+   * What the per-turn request is actually MADE OF, in tokens. The four headline buckets are too
+   * coarse to choose a lever from: `history` alone mixes the assistant's own narration, the tool
+   * CALL echoes (whose arguments can carry a whole patch) and the user/control turns, and the
+   * constant per-turn floor (system prefix + tool definitions, re-sent every turn) is invisible
+   * entirely. Measured on the round-9 run: the average turn carried ~98k tokens, of which the
+   * stable prefix is only ~1.4k and the order of magnitude lives in accumulated history — this
+   * breakdown is what turns that observation into a lever decision.
+   */
+  readonly composition: {
+    /** System prefix that never changes across the session (identity, policy, baseline). */
+    readonly stable_system: number
+    /** Serialized tool definitions — a CONSTANT re-sent on every provider turn. */
+    readonly tool_definitions: number
+    /** Per-turn volatile system parts (evidence, policy deltas). */
+    readonly volatile_system: number
+    /** The round/plan control message for this turn. */
+    readonly control_message: number
+    /** Assistant narration in durable history. */
+    readonly history_assistant_text: number
+    /** Tool CALL echoes in durable history (name + serialized arguments). */
+    readonly history_tool_calls: number
+    /** Tool RESULTS in durable history (same content as `tool_results`, kept for one-step reading). */
+    readonly history_tool_results: number
+    /** User / steering messages in durable history. */
+    readonly history_user: number
+    /** Any other history content (system updates, synthetic context, unknown part kinds). */
+    readonly history_other: number
+  }
 }
 
 const JSON_LENGTH_CACHE = new WeakMap<object, number>()
@@ -150,13 +179,22 @@ export function preparedParts(input: {
   readonly volatileSystemParts: readonly string[]
   readonly historyMessages: readonly unknown[]
   readonly controlMessage: string | undefined
+  /** Serialized tool definitions handed to the provider — a per-turn CONSTANT when present. */
+  readonly toolDefinitions?: readonly unknown[]
 }): PreparedParts {
   const stableSystem = estimateTokens(input.stableSystemParts.reduce((a, p) => a + p.length, 0))
   const volatileSystem = estimateTokens(input.volatileSystemParts.reduce((a, p) => a + p.length, 0))
   const controlMessage = estimateTokens(input.controlMessage?.length ?? 0)
+  const toolDefinitions = estimateTokens(
+    (input.toolDefinitions ?? []).reduce<number>((total, tool) => total + jsonChars(tool), 0),
+  )
   let history = 0
   let toolResults = 0
   let toolResultParts = 0
+  let assistantText = 0
+  let toolCalls = 0
+  let userText = 0
+  let otherText = 0
   for (const message of input.historyMessages) {
     const record = message as { readonly role?: unknown; readonly content?: unknown }
     const content = record?.content
@@ -164,14 +202,29 @@ export function preparedParts(input: {
       let historyChars = jsonChars(record?.role)
       for (const part of content) {
         const type = (part as { readonly type?: unknown })?.type
+        const chars = jsonChars(part)
         if (type === "tool-result") {
-          toolResults += estimateTokens(jsonChars(part))
+          toolResults += estimateTokens(chars)
           toolResultParts++
-        } else historyChars += jsonChars(part)
+        } else if (type === "tool-call") {
+          toolCalls += estimateTokens(chars)
+          historyChars += chars
+        } else if (type === "text") {
+          if (record?.role === "user") userText += estimateTokens(chars)
+          else assistantText += estimateTokens(chars)
+          historyChars += chars
+        } else {
+          otherText += estimateTokens(chars)
+          historyChars += chars
+        }
       }
       history += estimateTokens(historyChars)
     } else {
-      history += estimateTokens(jsonChars(message))
+      const chars = jsonChars(message)
+      history += estimateTokens(chars)
+      if (record?.role === "user") userText += estimateTokens(chars)
+      else if (record?.role === "assistant") assistantText += estimateTokens(chars)
+      else otherText += estimateTokens(chars)
     }
   }
   return {
@@ -183,6 +236,17 @@ export function preparedParts(input: {
     total_estimated: stableSystem + volatileSystem + controlMessage + history + toolResults,
     history_messages: input.historyMessages.length,
     tool_result_parts: toolResultParts,
+    composition: {
+      stable_system: stableSystem,
+      tool_definitions: toolDefinitions,
+      volatile_system: volatileSystem,
+      control_message: controlMessage,
+      history_assistant_text: assistantText,
+      history_tool_calls: toolCalls,
+      history_tool_results: toolResults,
+      history_user: userText,
+      history_other: otherText,
+    },
   }
 }
 
@@ -354,6 +418,9 @@ export const turnSummary = (sessionID?: string) => {
       total: sample.parts.total_estimated,
       history: sample.parts.history,
       tool_results: sample.parts.tool_results,
+      // Composition per sample: the growth curve alone says the context got big; this says WHAT
+      // got big (the constant schema floor vs narration vs tool echoes vs accumulated results).
+      composition: sample.parts.composition,
     })),
     ...(record.modelProfileKey ? { profile: record.modelProfileKey } : {}),
   }

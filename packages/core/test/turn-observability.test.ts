@@ -84,6 +84,48 @@ describe("turn observability", () => {
     expect(typeof summary.replay_ratio).toBe("number")
   })
 
+  test("breaks the per-turn request into composition buckets, tool schema included", () => {
+    const parts = turnObservability.preparedParts({
+      stableSystemParts: ["s".repeat(400)],
+      volatileSystemParts: ["v".repeat(40)],
+      controlMessage: "c".repeat(40),
+      historyMessages: [
+        { role: "user", content: [{ type: "text", text: "u".repeat(80) }] },
+        { role: "assistant", content: [{ type: "text", text: "n".repeat(120) }] },
+        { role: "assistant", content: [{ type: "tool-call", id: "1", name: "apply_patch", input: "p".repeat(200) }] },
+        {
+          role: "tool",
+          content: [
+            { type: "tool-result", id: "1", name: "apply_patch", result: { type: "text", value: "r".repeat(400) } },
+          ],
+        },
+      ],
+      // The schema the provider re-receives on every turn.
+      toolDefinitions: [{ name: "read", inputSchema: "t".repeat(800) }],
+    })
+    const c = parts.composition
+    expect(c.stable_system).toBe(parts.stable_system)
+    expect(c.volatile_system).toBe(parts.volatile_system)
+    expect(c.control_message).toBe(parts.control_message)
+    expect(c.tool_definitions).toBeGreaterThan(200)
+    // The tool CALL echo (its arguments carry the patch) is separated from narration and results.
+    expect(c.history_tool_calls).toBeGreaterThan(c.history_assistant_text)
+    expect(c.history_tool_results).toBe(parts.tool_results)
+    expect(c.history_user).toBeGreaterThan(0)
+    // The buckets account for the whole measured request.
+    const summed =
+      c.stable_system +
+      c.tool_definitions +
+      c.volatile_system +
+      c.control_message +
+      c.history_assistant_text +
+      c.history_tool_calls +
+      c.history_tool_results +
+      c.history_user +
+      c.history_other
+    expect(summed).toBeGreaterThanOrEqual(parts.total_estimated)
+  })
+
   test("counts identical repeats and re-reads of an already-read path", () => {
     turnObservability.recordToolCall("read", "src/a.ts", "ses_repeat")
     turnObservability.recordToolCall("read", "src/a.ts", "ses_repeat")

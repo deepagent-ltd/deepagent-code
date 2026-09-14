@@ -199,6 +199,83 @@ describe("session history projection", () => {
 // while 79-88% of the tool-result weight sat in results older than the last 5-12 calls. The
 // contract that makes it safe: it may only ever REMOVE bytes the model already saw, the durable
 // history keeps every byte, and the resent tail is never touched.
+// Reasoning replay. The durable history keeps the model's reasoning blocks (audit truth), but
+// re-sending them on every later turn was measured at 41% of a 167k-token request on the abs C2 run
+// (68,079 tokens of `other`, which is the reasoning text). The reference agents do not replay them
+// (Claude Code strips thinking blocks from the request; Codex tracks encrypted content only). The
+// current turn's chain is the one thing the model cannot re-derive, so it alone is kept.
+describe("session history projection — reasoning replay", () => {
+  const withReasoning = (keep: string | undefined, run: () => void) => {
+    const previous = process.env["DEEPAGENT_CODE_HISTORY_PROJECTION_REASONING"]
+    if (keep === undefined) delete process.env["DEEPAGENT_CODE_HISTORY_PROJECTION_REASONING"]
+    else process.env["DEEPAGENT_CODE_HISTORY_PROJECTION_REASONING"] = keep
+    try {
+      run()
+    } finally {
+      if (previous === undefined) delete process.env["DEEPAGENT_CODE_HISTORY_PROJECTION_REASONING"]
+      else process.env["DEEPAGENT_CODE_HISTORY_PROJECTION_REASONING"] = previous
+    }
+  }
+
+  const withReasoningText = (text: string, index: number): SessionMessage.Message =>
+    SessionMessage.Assistant.make({
+      type: "assistant",
+      id: `msg_reasoning_${index}` as SessionMessage.ID,
+      agent: "build",
+      model,
+      finish: "tool-calls",
+      time: { created: DateTime.makeUnsafe(1) },
+      content: [
+        SessionMessage.AssistantReasoning.make({
+          type: "reasoning",
+          id: `rsn_${index}`,
+          text,
+        }),
+        SessionMessage.AssistantText.make({
+          type: "text",
+          id: `txt_${index}`,
+          text: `note ${index}`,
+        }),
+      ],
+    })
+
+  const reasoningCount = (messages: readonly SessionMessage.Message[]) =>
+    messages
+      .filter((m) => m.type === "assistant")
+      .reduce((n, m) => n + (m as SessionMessage.Assistant).content.filter((p) => p.type === "reasoning").length, 0)
+
+  test("older turns lose their reasoning, the newest keeps it", () => {
+    withReasoning(undefined, () => {
+      const rows = [
+        withReasoningText("R".repeat(2000), 1),
+        withReasoningText("R".repeat(2000), 2),
+        withReasoningText("R".repeat(2000), 3),
+      ]
+      const result = SessionHistoryProjection.projectForModel(rows)
+      expect(reasoningCount(result.messages)).toBe(1)
+      expect(result.truncated).toBe(2)
+      expect(result.savedChars).toBe(4000)
+    })
+  })
+
+  test("the durable input is untouched (audit keeps every byte)", () => {
+    withReasoning(undefined, () => {
+      const rows = [withReasoningText("R".repeat(2000), 1), withReasoningText("R".repeat(2000), 2)]
+      SessionHistoryProjection.projectForModel(rows)
+      expect(reasoningCount(rows)).toBe(2)
+    })
+  })
+
+  test("=all restores full replay for A/B measurement", () => {
+    withReasoning("all", () => {
+      const rows = [withReasoningText("R".repeat(2000), 1), withReasoningText("R".repeat(2000), 2)]
+      const result = SessionHistoryProjection.projectForModel(rows)
+      expect(reasoningCount(result.messages)).toBe(2)
+      expect(result.savedChars).toBe(0)
+    })
+  })
+})
+
 describe("session history projection — clear window (G-C)", () => {
   const withWindow = (size: number, run: () => void) => {
     const previous = process.env["DEEPAGENT_CODE_HISTORY_PROJECTION_CLEAR_AFTER"]
