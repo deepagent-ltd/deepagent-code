@@ -18,7 +18,7 @@ import { EventTable } from "@deepagent-code/core/event/sql"
 import { durableType } from "@deepagent-code/core/event/define"
 import { SessionEvent } from "@deepagent-code/core/session/event"
 import { V2ToolEffectTable } from "@deepagent-code/core/session/runner/v2-tool-effect.sql"
-import { finalizeSessionWork } from "./session-finalizer"
+import { finalizerGitState, finalizeSessionWork } from "./session-finalizer"
 import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
 import { Hash } from "@deepagent-code/core/util/hash"
 import { Cause, Context, Duration, Effect, Layer, Schedule, Scope } from "effect"
@@ -33,6 +33,64 @@ const pollInterval = Duration.seconds(1)
 // mutating calls). Resolve the version from the definitions so a bump cannot reintroduce the drift.
 const TOOL_CALLED_TYPE = durableType(SessionEvent.Tool.Called)
 const TOOL_SUCCESS_TYPE = durableType(SessionEvent.Tool.Success)
+
+// G-E: the git state an activity STARTED from, so the delivery verdict can tell "nothing to
+// deliver" from "the work is not on this branch". Bounded by MAX_ACTIVITY_START_GIT entries and
+// cleared for an activity as soon as its receipt is produced — the same posture as the turn
+// observability session map, so a long-lived server cannot grow it without bound.
+const MAX_ACTIVITY_START_GIT = 64
+type ActivityStartGit = {
+  readonly branch: string | null
+  readonly head: string | null
+  readonly refs: Readonly<Record<string, string>>
+}
+
+const activityStartGit = new Map<string, ActivityStartGit>()
+
+const rememberActivityStart = (activityId: string, state: ActivityStartGit) => {
+  if (!activityStartGit.has(activityId) && activityStartGit.size >= MAX_ACTIVITY_START_GIT)
+    activityStartGit.delete(activityStartGit.keys().next().value!)
+  activityStartGit.set(activityId, state)
+}
+
+/**
+ * Translate the finalizer outcome into the durable delivery receipt. The verdict vocabulary keeps
+ * "the runtime delivered this" separate from "there was nothing here", and separate again from
+ * "there was something here but it is not on this branch" — the round-7 lie that lost the work.
+ */
+export function deliveryReceipt(
+  activityId: string,
+  git: { readonly branch: string | null; readonly head: string | null },
+  touchedPaths: number,
+  outcome: Awaited<ReturnType<typeof finalizeSessionWork>>,
+): SessionRunner.DeliveryReceipt {
+  const base = {
+    touchedPaths,
+    unattributable: 0,
+    ...(git.branch === null ? {} : { branch: git.branch }),
+    ...(git.head === null ? {} : { headAfter: git.head }),
+  }
+  switch (outcome.kind) {
+    case "committed":
+      return { ...base, verdict: "committed", commit: outcome.commit }
+    case "no_changes":
+      return { ...base, verdict: "no_changes" }
+    case "no_changes_on_this_branch":
+      return {
+        ...base,
+        verdict: "no_changes_on_this_branch",
+        recoveryRef: outcome.recoveryRef,
+        ...(outcome.branch === undefined ? {} : { branch: outcome.branch }),
+        ...(outcome.headBefore === undefined ? {} : { headBefore: outcome.headBefore }),
+      }
+    case "validation_failed":
+      return { ...base, verdict: "withheld_validation_failed" }
+    case "unverified":
+      return { ...base, verdict: "withheld_unverified" }
+    default:
+      return { ...base, verdict: "skipped", reason: outcome.reason }
+  }
+}
 
 type ReviewerFactory = (workspacePath: string) => DeepAgentDurableLearning.ReviewerPort | undefined
 
@@ -165,8 +223,12 @@ export const lifecycleObserverLayer = Layer.effect(
 
 export function onSessionSettled(
   database: Database.Interface,
-): (input: SessionRunner.OnSessionSettledInput, runtime?: AgentGateway.RuntimeInterface) => Effect.Effect<void> {
-  return (input, runtime) => {
+): (
+  input: SessionRunner.OnSessionSettledInput,
+  runtime?: AgentGateway.RuntimeInterface,
+  report?: (receipt: SessionRunner.DeliveryReceipt) => void,
+) => Effect.Effect<void> {
+  return (input, runtime, report) => {
     const withStorage = runtime?.withStorage ?? (<A>(operation: () => A) => operation())
     return Effect.gen(function* () {
       if (input.activityId === undefined) return
@@ -212,6 +274,13 @@ export function onSessionSettled(
       yield* Effect.promise(async () => {
         const workspace = input.workspacePath
         if (input.activityId === undefined) return { finalized: false, detail: "skipped: no activity" }
+        // G-E: the git facts the delivery verdict must carry. `branchBefore`/`headBefore` are
+        // captured at the FIRST settle attempt for this activity (a retry keeps the original), so a
+        // side-branch commit made during the activity is visible as a branch/HEAD divergence rather
+        // than masquerading as "nothing to deliver".
+        const gitState = await finalizerGitState(workspace)
+        const before = activityStartGit.get(input.activityId) ?? gitState
+        rememberActivityStart(input.activityId, before)
         // Review round 5: harvest THIS activity's validation evidence from the durable event log
         // and record it WITH the activity binding BEFORE reading it back — under the V2 owner
         // branch the V1 request-prep harvester never runs (prompt.ts returns from the v2Drain
@@ -232,7 +301,16 @@ export function onSessionSettled(
           return results.every((result) => result.passed) ? ("validated" as const) : ("validation_failed" as const)
         })
         const touchedPaths = activityTouchedPaths(database, input.sessionID, input.activityId)
-        const outcome = await finalizeSessionWork({ directory: workspace, validation, touchedPaths })
+        const outcome = await finalizeSessionWork({
+          directory: workspace,
+          validation,
+          touchedPaths,
+          headBefore: before.head,
+          branchBefore: before.branch,
+          refsBefore: before.refs,
+        })
+        report?.(deliveryReceipt(input.activityId, before, touchedPaths.length, outcome))
+        activityStartGit.delete(input.activityId)
         if (outcome.kind === "committed")
           return { finalized: true, detail: `committed ${outcome.files} file(s) at ${outcome.commit}` }
         if (outcome.kind === "validation_failed")
@@ -243,6 +321,13 @@ export function onSessionSettled(
             detail: `withheld: no validation evidence for this activity (${outcome.files} changed)`,
           }
         if (outcome.kind === "no_changes") return { finalized: false, detail: "no changes to deliver" }
+        if (outcome.kind === "no_changes_on_this_branch")
+          return {
+            finalized: false,
+            detail:
+              `no changes on this branch: attributable paths are clean but the branch moved ` +
+              `(${outcome.recoveryRef}) — work may exist off this delivery surface`,
+          }
         return { finalized: false, detail: `skipped: ${outcome.reason}` }
       }).pipe(
         Effect.flatMap((result) => Effect.logInfo(`session finalizer: ${result.detail}`)),

@@ -3,6 +3,7 @@ import { Effect, Exit, Layer } from "effect"
 import { Config } from "@deepagent-code/core/config"
 import { ConfigAttachments } from "@deepagent-code/core/config/attachments"
 import { FileSystem } from "@deepagent-code/core/filesystem"
+import { FSUtil } from "@deepagent-code/core/fs-util"
 import { Image } from "@deepagent-code/core/image"
 import { PermissionV2 } from "@deepagent-code/core/permission"
 import { SessionV2 } from "@deepagent-code/core/session"
@@ -87,17 +88,20 @@ const read = ReadTool.layer.pipe(
   Layer.provide(permission),
   Layer.provide(config),
   Layer.provide(image),
+  // The read leaf records the observed file version through the shared fs service.
+  Layer.provide(FSUtil.defaultLayer),
 )
-const it = testEffect(Layer.mergeAll(registry, filesystem, permission, config, image, read))
+const it = testEffect(Layer.mergeAll(registry, filesystem, permission, config, image, FSUtil.defaultLayer, read))
 const unavailableRead = ReadTool.layer.pipe(
   Layer.provide(registry),
   Layer.provide(filesystem),
   Layer.provide(permission),
   Layer.provide(config),
   Layer.provide(unavailableImage),
+  Layer.provide(FSUtil.defaultLayer),
 )
 const itWithoutResizer = testEffect(
-  Layer.mergeAll(registry, filesystem, permission, config, unavailableImage, unavailableRead),
+  Layer.mergeAll(registry, filesystem, permission, config, unavailableImage, FSUtil.defaultLayer, unavailableRead),
 )
 const sessionID = SessionV2.ID.make("ses_read_tool_test")
 

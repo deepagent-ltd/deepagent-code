@@ -17,6 +17,9 @@ import { SessionProviderOwner } from "@deepagent-code/core/context-federation/pr
 import { SessionContext } from "@deepagent-code/core/context-federation/session-context"
 import { Database } from "@deepagent-code/core/database/database"
 import { EventV2 } from "@deepagent-code/core/event"
+import { durableType } from "@deepagent-code/core/event/define"
+import { EventTable } from "@deepagent-code/core/event/sql"
+import { SessionEvent } from "@deepagent-code/core/session/event"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { Git } from "@deepagent-code/core/git"
 import { Location } from "@deepagent-code/core/location"
@@ -490,6 +493,22 @@ describe("G2 finalizer delivery over a REAL V2 session", () => {
       const validation = harvestActivityValidation({ db } as never, sessionID, activityId, root)
       expect(validation.map((result) => [result.command, result.passed])).toEqual([["go test ./...", true]])
       expect(AgentGateway.DeepAgentSessionState.get(sessionID)?.lastValidationActivityId).toBe(activityId)
+
+      // G-E: the verdict is a durable, replayable fact — not a stderr line that dies with the run.
+      const receipts = yield* db
+        .select({ data: EventTable.data })
+        .from(EventTable)
+        .where(eq(EventTable.type, durableType(SessionEvent.Delivery.Recorded)))
+        .all()
+        .pipe(Effect.orDie)
+      expect(receipts).toHaveLength(1)
+      expect(receipts[0]!.data).toMatchObject({
+        activityID: activityId,
+        verdict: "committed",
+        touchedPaths: 1,
+        unattributable: 0,
+      })
+      expect(typeof (receipts[0]!.data as { commit?: unknown }).commit).toBe("string")
 
       // And the actual delivery: the runtime committed the file the model only wrote.
       const committed = spawnSync("git", ["log", "--format=%s", "-1"], { cwd: root, encoding: "utf8" })

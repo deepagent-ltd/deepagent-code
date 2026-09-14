@@ -129,6 +129,34 @@ export type SessionRunState = {
   // the latest user request each turn would drift the cached prefix on steer/continue (prompt-cache
   // contract violation). Null until the first decision.
   frozenComplexity: OrchestrationTier | null
+  // Capability mode: the last resolution RECORDED for this session (mode + the authority that
+  // produced it). Durable so the runner publishes a `session.capability.mode.recorded` fact only
+  // when the resolution actually changes, and so a resumed session keeps the mode it was working
+  // under instead of silently recomputing a different one from a new request.
+  capabilityMode: CapabilityModeResolution | null
+  // File-observation ledger: for every file this session has READ or MUTATED, the canonical path ->
+  // the version observed then. It exists for the ONE write hazard the read path cannot cover: a
+  // blind overwrite (or an overwrite based on a stale read) of a file the session never saw, or saw
+  // before someone else changed it. Producers: the `read` tool and the mutating leaves. Consumer:
+  // the `write` leaf's staleness check. Bounded by MAX_OBSERVED_FILES (oldest evicted first).
+  observedFiles: Record<string, ObservedFileVersion>
+}
+
+/**
+ * What the session knew about a file at observation time. `mtimeMs` + `size` is the cheap content
+ * proxy (the same pair the reference Claude Code gate keys on), not a hash: a false "unchanged" on
+ * same-size same-mtime content is a filesystem-resolution question, and a false "stale" costs one
+ * re-read — the asymmetry favours the cheap check.
+ */
+export type ObservedFileVersion = {
+  readonly mtimeMs: number
+  readonly size: number
+}
+
+/** The recorded capability-mode decision (see deepagent/capability-mode.ts). */
+export type CapabilityModeResolution = {
+  readonly mode: "quick" | "standard" | "deep"
+  readonly source: "explicit" | "estimated" | "promoted"
 }
 
 // V3.9 §D: session-state pointer to a running goal. The GoalLoop's GoalStatus (persisted in the
@@ -213,6 +241,8 @@ export const getOrCreate = (sessionId: string, mode: AgentMode): SessionRunState
     lastPlanGateNudgeFingerprint: null,
     packSnapshotId: null,
     frozenComplexity: null,
+    capabilityMode: null,
+    observedFiles: {},
   }
   activeRuntime().sessions.set(sessionId, state)
   saveToDisk()
@@ -734,6 +764,10 @@ function normalizeState(state: SessionRunState): SessionRunState {
     knowledgeSnapshotId: state.knowledgeSnapshotId ?? null,
     // Backfill: sessions persisted before the G3 review fix have no frozenComplexity on disk.
     frozenComplexity: state.frozenComplexity ?? null,
+    // Backfill: sessions persisted before the capability-mode ledger existed.
+    capabilityMode: state.capabilityMode ?? null,
+    // Backfill: sessions persisted before the file-observation ledger existed.
+    observedFiles: state.observedFiles ?? {},
     // Backfill: same for the round-3 validation-activity binding.
     lastValidationActivityId: state.lastValidationActivityId ?? null,
     // Backfill/migration: sessions persisted before v4.0.4 have no suppressedValidations field;
@@ -867,4 +901,35 @@ const writeLegacyPlanMigrationDiagnostic = (
     tags: ["bug-010", "plan-migration", "quarantined"],
   })
   store.setStatus(doc.id, "quarantined", documentRevision(doc))
+}
+
+/** How many file observations a session keeps before the oldest are evicted. */
+const MAX_OBSERVED_FILES = 256
+
+/**
+ * Record that this session OBSERVED a file at a version (read, or a mutation it performed).
+ * Absent session state is not an error: a tool call outside a DeepAgent session simply cannot arm
+ * the write guard for that session.
+ */
+export const observeFile = (sessionId: string, path: string, version: ObservedFileVersion): void => {
+  const state = activeRuntime().sessions.get(sessionId)
+  if (!state) return
+  const observed = state.observedFiles ?? {}
+  const keys = Object.keys(observed)
+  if (!(path in observed) && keys.length >= MAX_OBSERVED_FILES) {
+    // Oldest-first eviction keeps the ledger bounded without a timestamp per entry: insertion order
+    // is the age order, and the write guard only needs the RECENT observations.
+    const oldest = keys[0]
+    if (oldest !== undefined) delete observed[oldest]
+  }
+  observed[path] = version
+  state.observedFiles = observed
+  activeRuntime().sessions.set(sessionId, state)
+  saveToDisk()
+}
+
+/** The version this session observed for `path`, or undefined when it never observed the file. */
+export const observedFile = (sessionId: string, path: string): ObservedFileVersion | undefined => {
+  const state = activeRuntime().sessions.get(sessionId)
+  return state?.observedFiles?.[path]
 }

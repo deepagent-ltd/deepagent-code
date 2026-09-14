@@ -57,4 +57,66 @@ describe("turn observability", () => {
     const last = turnObservability.recordedTurns().at(-1)
     expect(last?.parts).toBe(parts)
   })
+
+  // The ablation question is "where did the tokens go on THIS run?", and the previous sampling rule
+  // (first three prepares only) answered it with a three-point curve for a 179-turn run.
+  test("keeps a bounded context trajectory across a long run", () => {
+    for (let seq = 1; seq <= 120; seq++) {
+      turnObservability.recordPrepared(
+        seq,
+        turnObservability.preparedParts({
+          stableSystemParts: ["s".repeat(40)],
+          volatileSystemParts: [],
+          controlMessage: undefined,
+          historyMessages: [{ role: "user", content: "h".repeat(4 * seq) }],
+        }),
+      )
+      turnObservability.recordTurn({ seq, finish: "tool-calls", toolCalls: 1, usage })
+    }
+    const summary = turnObservability.turnSummary()
+    const trajectory = summary.context_trajectory
+    // Head samples + stride samples, bounded well below the turn count.
+    expect(trajectory.length).toBeGreaterThan(6)
+    expect(trajectory.length).toBeLessThan(120)
+    // The curve must actually GROW: that is the fact the old sampling hid.
+    expect(trajectory.at(-1)!.total).toBeGreaterThan(trajectory[0]!.total)
+    // Replay ratio: billed input over the final context (quadratic blow-up indicator).
+    expect(typeof summary.replay_ratio).toBe("number")
+  })
+
+  test("counts identical repeats and re-reads of an already-read path", () => {
+    turnObservability.recordToolCall("read", "src/a.ts", "ses_repeat")
+    turnObservability.recordToolCall("read", "src/a.ts", "ses_repeat")
+    turnObservability.recordToolCall("read", "src/b.ts", "ses_repeat")
+    turnObservability.recordToolCall("bash", "go test ./...", "ses_repeat")
+    turnObservability.recordToolCall("bash", "go test ./...", "ses_repeat")
+    const behavior = turnObservability.turnSummary("ses_repeat").behavior
+    expect(behavior.repeated_read_calls).toBe(1)
+    expect(behavior.distinct_read_paths).toBe(2)
+    expect(behavior.repeat_tool_calls).toBe(2)
+  })
+
+  // G-B: the paging loop the traces showed (one file read 7-8 times through different windows) is
+  // not an identical repeat, so an identical-call guard alone would never fire for it.
+  test("nudges re-reads of the same path and identical repeats, never the first call", () => {
+    const id = "ses_nudge"
+    expect(turnObservability.recordToolCall("read", "evaluator/evaluator.go", id)).toBeUndefined()
+    expect(turnObservability.recordToolCall("read", "evaluator/evaluator.go", id)).toBeUndefined()
+    // Identical args hit the identical-call ladder first (3)...
+    expect(turnObservability.recordToolCall("read", "evaluator/evaluator.go", id)).toContain("made 3 times")
+    // ...and the read ladder (4) catches the paging loop that identical-args never would.
+    const readNudge = turnObservability.recordToolCall("read", "evaluator/evaluator.go", id)
+    expect(readNudge).toContain("has been read 4 times")
+    expect(readNudge).toContain("evaluator/evaluator.go")
+    // Identical arguments earn the identical-call ladder (3/5/8), not the read ladder.
+    expect(turnObservability.recordToolCall("bash", "go test ./...", id)).toBeUndefined()
+    expect(turnObservability.recordToolCall("bash", "go test ./...", id)).toBeUndefined()
+    const identical = turnObservability.recordToolCall("bash", "go test ./...", id)
+    expect(identical).toContain("made 3 times")
+    // The identical ladder keeps escalating on the same call (5, then 8) — a nudge at each
+    // threshold, not at every turn.
+    expect(turnObservability.recordToolCall("read", "evaluator/evaluator.go", id)).toContain("made 5 times")
+    // A different path, and a first read of it, earn nothing: paging forward is not punished.
+    expect(turnObservability.recordToolCall("read", "parser/parser.go", id)).toBeUndefined()
+  })
 })

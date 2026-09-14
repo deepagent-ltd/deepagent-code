@@ -1,8 +1,10 @@
 export * as ReadTool from "./read"
 
 import { ToolFailure } from "@deepagent-code/llm"
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Layer, Option, Schema } from "effect"
+import * as SessionState from "../deepagent/session-state"
 import { FileSystem } from "../filesystem"
+import { FSUtil } from "../fs-util"
 import { Image } from "../image"
 import { PermissionV2 } from "../permission"
 import { recoverReadDefect } from "./read-failure"
@@ -29,6 +31,7 @@ export const layer = Layer.effectDiscard(
     const filesystem = yield* FileSystem.Service
     const image = yield* Image.Service
     const permission = yield* PermissionV2.Service
+    const fs = yield* FSUtil.Service
 
     yield* tools
       .register({
@@ -78,6 +81,22 @@ export const layer = Layer.effectDiscard(
               }
               if (content.type === "binary")
                 return yield* Effect.fail(new FileSystem.BinaryFileError(resolved.resource))
+              // Observing a file is what arms the write leaf's freshness precondition: after a read,
+              // a later write to the same path is legitimate until the file changes underneath us.
+              // The read result carries content, not a version, so the version comes from a stat of
+              // the same canonical path (a failed stat simply arms nothing — the guard then asks for
+              // an explicit overwrite rather than allowing a blind replace).
+              const version = yield* fs.stat(resolved.resource).pipe(Effect.orElseSucceed(() => undefined))
+              if (version !== undefined)
+                yield* Effect.sync(() => {
+                  SessionState.observeFile(context.sessionID, resolved.resource, {
+                    mtimeMs: version.mtime.pipe(
+                      Option.map((date) => date.getTime()),
+                      Option.getOrElse(() => 0),
+                    ),
+                    size: Number(version.size),
+                  })
+                })
               return content
             }).pipe(
               Effect.mapError((error) => {

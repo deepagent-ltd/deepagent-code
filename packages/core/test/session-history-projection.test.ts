@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { DateTime } from "effect"
 import { SessionHistoryProjection } from "../src/session/runner/session-history-projection"
 import { SessionMessage } from "../src/session/message"
@@ -12,6 +12,16 @@ import { ProviderV2 } from "../src/provider"
 //
 // Review round 2: projectForModel returns { messages, truncated, savedChars } — the stats are
 // per-call (no module-global counters), so every assertion below reads the SAME result object.
+
+// This suite pins the per-result CAP contract (excerpt, error budget, resent tail). The CLEAR
+// window is a separate behaviour with its own suite; pinning it off here keeps every assertion
+// below about one mechanism.
+beforeAll(() => {
+  process.env["DEEPAGENT_CODE_HISTORY_PROJECTION_CLEAR_AFTER"] = "0"
+})
+afterAll(() => {
+  delete process.env["DEEPAGENT_CODE_HISTORY_PROJECTION_CLEAR_AFTER"]
+})
 
 const model = { providerID: ProviderV2.ID.make("p"), id: ModelV2.ID.make("m") } as const
 
@@ -62,17 +72,13 @@ const toolTextOf = (message: SessionMessage.Message) => {
   return first?.type === "text" ? first.text : ""
 }
 
-describe("session history projection", () => {
-  // The default resent-tail window is 4 settled results; a message only qualifies for
-  // projection when it sits BEYOND that window. Every truncation test pads with 4 newer
-  // settled results so the target is genuinely historical.
-  const pad = (): SessionMessage.Message[] => [
-    assistantWithTool("bash", "a"),
-    assistantWithTool("bash", "b"),
-    assistantWithTool("bash", "c"),
-    assistantWithTool("bash", "d"),
-  ]
+// The default resent-tail window is 4 settled results; a message only qualifies for projection
+// when it sits BEYOND that window. Every truncation test pads with newer settled results so the
+// target is genuinely historical.
+const pad = (count = 4, name = "bash"): SessionMessage.Message[] =>
+  Array.from({ length: count }, (_, index) => assistantWithTool(name, String.fromCharCode(97 + index)))
 
+describe("session history projection", () => {
   test("disabled returns the same reference with zero stats", () => {
     const messages = [assistantWithTool("bash", longText(200_000))]
     process.env["DEEPAGENT_CODE_HISTORY_PROJECTION"] = "false"
@@ -185,5 +191,68 @@ describe("session history projection", () => {
     // No replacement chars from splitting surrogate pairs mid-unit.
     expect(projectedText).not.toContain("\uFFFD")
     expect(projectedText).toContain("汉")
+  })
+})
+
+// G-C — the CLEAR window: the cheap, LLM-free half of compaction. Sized from the offline replay of
+// the real abs traces, where the per-result caps never fired (largest read 26.5k chars < 40k cap)
+// while 79-88% of the tool-result weight sat in results older than the last 5-12 calls. The
+// contract that makes it safe: it may only ever REMOVE bytes the model already saw, the durable
+// history keeps every byte, and the resent tail is never touched.
+describe("session history projection — clear window (G-C)", () => {
+  const withWindow = (size: number, run: () => void) => {
+    const previous = process.env["DEEPAGENT_CODE_HISTORY_PROJECTION_CLEAR_AFTER"]
+    process.env["DEEPAGENT_CODE_HISTORY_PROJECTION_CLEAR_AFTER"] = String(size)
+    try {
+      run()
+    } finally {
+      if (previous === undefined) delete process.env["DEEPAGENT_CODE_HISTORY_PROJECTION_CLEAR_AFTER"]
+      else process.env["DEEPAGENT_CODE_HISTORY_PROJECTION_CLEAR_AFTER"] = previous
+    }
+  }
+
+  test("elides results older than the window and keeps the newest verbatim", () => {
+    // window 6 over 6 results: the last four are the resent tail, the two oldest are elided.
+    withWindow(6, () => {
+      const rows = Array.from({ length: 6 }, () => assistantWithTool("read", longText(400)))
+      const result = SessionHistoryProjection.projectForModel(rows)
+      const texts = result.messages.map((m) => toolTextOf(m))
+      expect(texts.slice(2)).toEqual(rows.slice(2).map((m) => toolTextOf(m)))
+      expect(texts[0]).toContain("elided")
+      expect(texts[0]).toContain("read")
+      expect(texts[1]).toContain("elided")
+      expect(result.truncated).toBe(2)
+      expect(result.savedChars).toBeGreaterThan(500)
+    })
+  })
+
+  test("never clears an error result: it is the repair evidence", () => {
+    withWindow(1, () => {
+      const rows = [
+        assistantWithTool("bash", longText(4_000), "error"),
+        assistantWithTool("read", longText(4_000)),
+        assistantWithTool("read", longText(4_000)),
+      ]
+      const texts = SessionHistoryProjection.projectForModel(rows).messages.map((m) => toolTextOf(m))
+      expect(texts[0]).toHaveLength(4_000)
+    })
+  })
+
+  test("leaves a result alone when the stub would not be smaller", () => {
+    withWindow(1, () => {
+      const tiny = "ok"
+      const rows = [assistantWithTool("read", tiny), assistantWithTool("read", longText(500))]
+      const texts = SessionHistoryProjection.projectForModel(rows).messages.map((m) => toolTextOf(m))
+      expect(texts[0]).toBe(tiny)
+    })
+  })
+
+  test("an elided row stays byte-stable as newer turns arrive (cache prefix holds)", () => {
+    withWindow(2, () => {
+      const early = [assistantWithTool("read", longText(400)), assistantWithTool("read", longText(400))]
+      const first = JSON.stringify(SessionHistoryProjection.projectForModel([...early, ...pad(2)]).messages.slice(0, 2))
+      const later = JSON.stringify(SessionHistoryProjection.projectForModel([...early, ...pad(4)]).messages.slice(0, 2))
+      expect(later).toBe(first)
+    })
   })
 })

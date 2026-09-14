@@ -281,6 +281,78 @@ export namespace Execution {
   export type Interrupted = typeof Interrupted.Type
 }
 
+/**
+ * G2/G-E — the durable delivery receipt. The finalizer's verdict used to exist only as a stderr
+ * line, so "why was this work not delivered, and where is it now?" could not be answered after the
+ * fact. Round-7 proved the cost: the model committed to a side branch, the runtime saw a clean
+ * worktree, logged `no changes to deliver`, and nothing recorded that deliverable work existed but
+ * was not on the graded branch. The receipt makes the delivery decision a replayable fact:
+ * the verdict, the branch and HEAD either side of the activity, the attributable paths, and the
+ * reference to recover work the runtime did NOT deliver.
+ */
+export namespace Delivery {
+  export const Recorded = EventV2.define({
+    type: "session.delivery.recorded",
+    ...options,
+    schema: {
+      ...Base,
+      activityID: Schema.String,
+      verdict: Schema.Literals([
+        "committed",
+        "no_changes",
+        "no_changes_on_this_branch",
+        "withheld_unverified",
+        "withheld_validation_failed",
+        "skipped",
+      ]),
+      branch: Schema.String.pipe(Schema.optional),
+      headBefore: Schema.String.pipe(Schema.optional),
+      headAfter: Schema.String.pipe(Schema.optional),
+      touchedPaths: Schema.Number,
+      /** Files whose changes could not be attributed to this activity (e.g. bash side effects). */
+      unattributable: Schema.Number,
+      commit: Schema.String.pipe(Schema.optional),
+      /** Branch/commit a caller can use to recover work this receipt did not deliver. */
+      recoveryRef: Schema.String.pipe(Schema.optional),
+      reason: Schema.String.pipe(Schema.optional),
+    },
+  })
+  export type Recorded = typeof Recorded.Type
+}
+
+/**
+ * Capability mode — how much runtime machinery this session is worth. Recorded as a durable fact
+ * because it is a DECISION, and an undecidable decision cannot be tuned: today the only consumer of
+ * the complexity engine is the fan-out gate, so "how much machinery" is implicit and invisible.
+ *
+ * `source` separates the two authorities the design keeps apart: the explicit tier the user or
+ * deployment configured (`explicit`), and the experimental estimate/promotion (`estimated`,
+ * `promoted`). Every resolution is recorded even while auto-detection is off, so the estimate's
+ * accuracy can be measured from real sessions before anything acts on it.
+ */
+export namespace CapabilityMode {
+  export const Recorded = EventV2.define({
+    type: "session.capability.mode.recorded",
+    ...options,
+    schema: {
+      ...Base,
+      mode: Schema.Literals(["quick", "standard", "deep"]),
+      source: Schema.Literals(["explicit", "estimated", "promoted"]),
+      /** The configured tier's mode, recorded even when it did not win. */
+      explicitMode: Schema.Literals(["quick", "standard", "deep"]),
+      /** What the runtime's own estimate would have chosen. */
+      estimatedMode: Schema.Literals(["quick", "standard", "deep"]),
+      /** 0..3, straight from the orchestration complexity engine. */
+      complexity: Schema.Number,
+      /** Promotion signal names (`files_mutated>=4`, …); empty when nothing promoted. */
+      reasons: Schema.Array(Schema.String),
+      /** Whether the experimental auto-detection switch was on for this resolution. */
+      autoDetect: Schema.Boolean,
+    },
+  })
+  export type Recorded = typeof Recorded.Type
+}
+
 export const ContextUpdated = EventV2.define({
   type: "session.next.context.updated",
   ...options,

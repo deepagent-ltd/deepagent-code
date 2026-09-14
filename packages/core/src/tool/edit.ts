@@ -8,7 +8,8 @@
 export * as EditTool from "./edit"
 
 import { ToolFailure, toolText } from "@deepagent-code/llm"
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Layer, Option, Schema } from "effect"
+import * as SessionState from "../deepagent/session-state"
 import { FileMutation } from "../file-mutation"
 import { FSUtil } from "../fs-util"
 import { LocationMutation } from "../location-mutation"
@@ -186,6 +187,19 @@ export const layer = Layer.effectDiscard(
                     content: joinBom(next.text, source.bom || next.bom),
                   }),
                 )
+                // A successful mutation is an observation of the version it produced, so the write
+                // leaf's freshness precondition sees this session as up to date on the file.
+                const after = yield* fs.stat(target.canonical).pipe(Effect.orElseSucceed(() => undefined))
+                if (after !== undefined)
+                  yield* Effect.sync(() => {
+                    SessionState.observeFile(context.sessionID, target.canonical, {
+                      mtimeMs: after.mtime.pipe(
+                        Option.map((date) => date.getTime()),
+                        Option.getOrElse(() => 0),
+                      ),
+                      size: Number(after.size),
+                    })
+                  })
                 return { ...result, replacements: outcome.replacements } satisfies Output
               })
             },

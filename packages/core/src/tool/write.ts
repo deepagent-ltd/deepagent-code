@@ -8,11 +8,13 @@
 export * as WriteTool from "./write"
 
 import { ToolFailure, toolText } from "@deepagent-code/llm"
-import { Effect, Layer, Schema } from "effect"
+import { Effect, Layer, Option, Schema } from "effect"
+import { FSUtil } from "../fs-util"
 import { FileLock } from "../file-lock"
 import { FileMutation } from "../file-mutation"
 import { LocationMutation } from "../location-mutation"
 import { PermissionV2 } from "../permission"
+import * as SessionState from "../deepagent/session-state"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 
@@ -25,6 +27,10 @@ export const Input = Schema.Struct({
       "File path to write. Relative paths resolve within the active Location. Absolute paths inside that Location are accepted; external absolute paths require external_directory approval. Named project references are read-oriented and are not accepted.",
   }),
   content: Schema.String.annotate({ description: "Content to write to the file" }),
+  overwrite: Schema.Boolean.pipe(Schema.optional).annotate({
+    description:
+      "Required to overwrite a file that already exists but that you have NOT read in this session. Without it, an unread existing file is refused rather than silently replaced.",
+  }),
 })
 
 export const Output = Schema.Struct({
@@ -51,6 +57,9 @@ export const layer = Layer.effectDiscard(
     const files = yield* FileMutation.Service
     const permission = yield* PermissionV2.Service
     const fileLock = yield* FileLock.Service
+    // The freshness precondition needs the on-disk version; FSUtil is the shared Location fs service
+    // the other mutating leaves already acquire.
+    const fs = yield* FSUtil.Service
 
     yield* tools
       .register({
@@ -89,11 +98,68 @@ export const layer = Layer.effectDiscard(
                 const lock = fileLock.status(target.canonical)
                 if (lock?.kind === "human") {
                   return yield* Effect.fail(
-                    new ToolFailure({ message: `File ${input.path} is locked by a human editor. Wait for them to finish or ask them to save.` }),
+                    new ToolFailure({
+                      message: `File ${input.path} is locked by a human editor. Wait for them to finish or ask them to save.`,
+                    }),
                   )
                 }
-                return yield* files.writeTextPreservingBom({ target, content: input.content })
-              }).pipe(Effect.mapError(() => new ToolFailure({ message: `Unable to write ${input.path}` }))),
+                // Freshness precondition. `edit` has one for free — its `oldString` must match the
+                // bytes on disk — but `write` replaces content wholesale, so without this an agent
+                // can silently clobber a file it never read (or read before someone else changed
+                // it). This mirrors the two halves the reference implementations kept: Claude Code
+                // requires a prior read for an existing path and re-checks the mtime before
+                // committing, and deepseek-harness turns every write into a compare-and-swap against
+                // the observed version. The failure comes back as an ordinary tool error whose text
+                // states the recovery step; nothing is retried for the model (the same posture as
+                // the references, where recovery is model-driven off the error result).
+                const current = yield* fs.stat(target.canonical).pipe(Effect.orElseSucceed(() => undefined))
+                if (current !== undefined) {
+                  const observed = SessionState.observedFile(context.sessionID, target.canonical)
+                  const now = {
+                    mtimeMs: current.mtime.pipe(
+                      Option.map((date) => date.getTime()),
+                      Option.getOrElse(() => 0),
+                    ),
+                    size: Number(current.size),
+                  }
+                  if (observed === undefined) {
+                    if (input.overwrite !== true)
+                      return yield* Effect.fail(
+                        new ToolFailure({
+                          message: `File ${input.path} already exists and has not been read in this session. Read it first, or pass overwrite: true if replacing it is intended.`,
+                        }),
+                      )
+                  } else if (now.mtimeMs !== observed.mtimeMs || now.size !== observed.size) {
+                    return yield* Effect.fail(
+                      new ToolFailure({
+                        message: `File ${input.path} was modified since it was read (by you, the user, or a linter). Read it again before attempting to write it.`,
+                      }),
+                    )
+                  }
+                }
+                const written = yield* files.writeTextPreservingBom({ target, content: input.content })
+                // The write is itself an observation: the session now knows this exact version, so a
+                // second write without an intervening re-read is legitimate. Stat AFTER the write so
+                // the recorded version is the one on disk, not an assumption about it.
+                const after = yield* fs.stat(target.canonical).pipe(Effect.orElseSucceed(() => undefined))
+                if (after !== undefined)
+                  yield* Effect.sync(() => {
+                    SessionState.observeFile(context.sessionID, target.canonical, {
+                      mtimeMs: after.mtime.pipe(
+                        Option.map((date) => date.getTime()),
+                        Option.getOrElse(() => 0),
+                      ),
+                      size: Number(after.size),
+                    })
+                  })
+                return written
+              }).pipe(
+                // Preserve the freshness precondition's own message (it names the recovery step);
+                // everything else keeps the generic shape, exactly like the edit leaf.
+                Effect.mapError((error) =>
+                  error instanceof ToolFailure ? error : new ToolFailure({ message: `Unable to write ${input.path}` }),
+                ),
+              ),
           }),
           "edit",
         ),

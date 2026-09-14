@@ -46,7 +46,14 @@ import { GoalLoop } from "../../deepagent/goal-loop"
 import { getActiveGoal } from "../../deepagent/session-state"
 import { DocumentStore } from "../../deepagent/document-store"
 import { planStoreRoot } from "../../deepagent/plan-store"
-import { type RunError, Service, StepLimitExceededError, CurrentOnSessionSettled, CurrentToolSettleGate } from "./index"
+import {
+  type DeliveryReceipt,
+  type RunError,
+  Service,
+  StepLimitExceededError,
+  CurrentOnSessionSettled,
+  CurrentToolSettleGate,
+} from "./index"
 import { SessionRunnerModel } from "./model"
 import { PreparedProviderTurn } from "./prepared-provider-turn"
 import { buildDeepAgentPrompt, buildGovernedPlanContext } from "./deepagent-prompt"
@@ -680,6 +687,53 @@ export const layer = Layer.effect(
       const validationCommands = AgentGateway.DeepAgentValidation.inferValidationCommands(
         AgentGateway.DeepAgentValidation.detectValidationSignals(location.directory),
       )
+      // Capability mode: resolve how much runtime machinery this session is worth and record the
+      // DECISION. Observation only — the explicit tier is the authority unless the experimental
+      // auto-detection flag is on, and nothing consumes the resolved tier yet; the point of this
+      // step is that the estimate becomes measurable before anything acts on it.
+      const capabilityRecord = yield* Effect.sync(() => {
+        const state = AgentGateway.DeepAgentSessionState.get(session.id)
+        if (state === null || state === undefined) return undefined
+        const capability = AgentGateway.DeepAgentCapabilityMode
+        const autoDetect = capability.autoDetectEnabled()
+        const resolution = capability.resolveMode({
+          explicitMode: capability.capabilityModeForAgentMode(state.mode),
+          complexity: state.frozenComplexity ?? 0,
+          autoDetect,
+          // Signals the runner already maintains: mutations since the last report (the state's
+          // own counter), failed validations on record, and consecutive plan-gate blocks.
+          promotion: capability.promoteFor({
+            filesMutated: state.mutationsSinceReport ?? 0,
+            validationFailures: state.lastValidationResults.filter((result) => !result.passed).length,
+            gateBlocks: state.planLatch?.consecutive_blocks ?? 0,
+          }),
+        })
+        const recorded = state.capabilityMode
+        if (recorded != null && recorded.mode === resolution.mode && recorded.source === resolution.source)
+          return undefined
+        AgentGateway.DeepAgentSessionState.update(session.id, {
+          capabilityMode: { mode: resolution.mode, source: resolution.source },
+        })
+        return {
+          resolution,
+          autoDetect,
+          explicitMode: capability.capabilityModeForAgentMode(state.mode),
+        }
+      })
+      if (capabilityRecord !== undefined)
+        yield* events
+          .publish(SessionEvent.CapabilityMode.Recorded, {
+            sessionID: session.id,
+            timestamp: yield* DateTime.now,
+            mode: capabilityRecord.resolution.mode,
+            source: capabilityRecord.resolution.source,
+            explicitMode: capabilityRecord.explicitMode,
+            estimatedMode: capabilityRecord.resolution.estimatedMode,
+            complexity: capabilityRecord.resolution.complexity,
+            reasons: [...capabilityRecord.resolution.reasons],
+            autoDetect: capabilityRecord.autoDetect,
+          })
+          .pipe(Effect.ignore)
       const deepagentPrompt = gateway.active
         ? yield* buildDeepAgentPrompt({
             runtime: gateway,
@@ -1077,9 +1131,42 @@ export const layer = Layer.effect(
           },
         }
       }
+      // Append text to a settled tool result without disturbing its structured content: the model
+      // reads the same result it asked for, with the reminder at the end.
+      const appendResultTail = (
+        settlement: Effect.Success<ReturnType<ToolRegistry.Materialization["settle"]>>,
+        suffix: string,
+      ) => {
+        const withValue =
+          settlement.result.type === "text" && typeof settlement.result.value === "string"
+            ? { ...settlement, result: { ...settlement.result, value: settlement.result.value + suffix } }
+            : settlement
+        if (!("output" in withValue) || withValue.output === undefined) return withValue
+        const lastText = withValue.output.content.findLastIndex((item) => item.type === "text")
+        if (lastText === -1) return withValue
+        return {
+          ...withValue,
+          output: {
+            ...withValue.output,
+            content: withValue.output.content.map((item, index) =>
+              index === lastText && item.type === "text" ? { ...item, text: item.text + suffix } : item,
+            ),
+          },
+        }
+      }
       const settleTool: ToolRegistry.Materialization["settle"] = (input) =>
         Effect.gen(function* () {
           yield* admitToolEffect(input)
+          // G-A/G-B: per-drain tool ledger. Identical repeats and re-reads of an already-read path
+          // are the two facts the ablation traces could only be explained by grepping the transcript;
+          // crossing a threshold yields an ADVISORY nudge appended to this call's result (the
+          // reference harness posture: the result the model asked for always comes back unchanged,
+          // the nudge rides at its tail and never vetoes the call).
+          const repeatNudge = turnObservability.recordToolCall(
+            input.call.name,
+            CanonicalJson.stringify(input.call.input ?? null),
+            input.sessionID,
+          )
           // W2-V2: the plan gate runs BEFORE the tool executes — a block returns a synthetic
           // settled result carrying the correction template (mirroring the V1 wrapper's soft
           // tool-result block), a grace-release pass prepends the reminder to the real output.
@@ -1156,6 +1243,12 @@ export const layer = Layer.effect(
                 : Effect.die(defect),
             ),
             Effect.map((settlement) => observePlanSettlement(input.call, settlement)),
+            // G-B: the advisory repeat nudge rides the RESULT TAIL, so the content the model asked
+            // for is unchanged and the reminder is visible in the same place the reference harness
+            // puts it. Appended after the plan observer so a plan suffix keeps its own position.
+            Effect.map((settlement) =>
+              repeatNudge === undefined ? settlement : appendResultTail(settlement, repeatNudge),
+            ),
           )
         })
       let overflowFailure: ProviderErrorEvent | undefined
@@ -1920,7 +2013,11 @@ export const layer = Layer.effect(
         })
       // W7: settle-triggered learning. Best-effort and non-blocking for the turn: a hook failure
       // must never fail a settled drain (same posture as the docs sync tail).
-      if (onSessionSettled !== undefined)
+      if (onSessionSettled !== undefined) {
+        // G-E: the hook runs the finalizer, so it owns the verdict; core owns the durable record.
+        // The callback is synchronous by contract (the hook runs inside an async promise body, not
+        // an Effect), and a receipt is published only for a settled activity.
+        let receipt: DeliveryReceipt | undefined
         yield* onSessionSettled(
           {
             sessionID: input.sessionID,
@@ -1928,7 +2025,20 @@ export const layer = Layer.effect(
             ...(settledActivityId === undefined ? {} : { activityId: settledActivityId }),
           },
           gateway,
+          (value) => {
+            receipt = value
+          },
         ).pipe(Effect.ignore)
+        if (receipt !== undefined && settledActivityId !== undefined)
+          yield* events
+            .publish(SessionEvent.Delivery.Recorded, {
+              sessionID: input.sessionID,
+              timestamp: yield* DateTime.now,
+              activityID: settledActivityId,
+              ...receipt,
+            })
+            .pipe(Effect.ignore)
+      }
     })
 
     return Service.of({

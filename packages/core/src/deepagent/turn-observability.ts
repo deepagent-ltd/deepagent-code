@@ -64,16 +64,41 @@ type Behavior = {
   retries: number
   projection_truncated: number
   projection_saved_chars: number
+  /** Tool results whose IDENTICAL (tool, canonical args) was already produced this drain. */
+  repeat_tool_calls: number
+  /** Reads of a path already read this drain, whatever the page window (the paging loop). */
+  repeated_read_calls: number
+  /** Distinct paths read at least once this drain. */
+  distinct_read_paths: number
+}
+
+/** Per-drain tool-call identity, for the repeat/re-read counters. Session-scoped like everything else. */
+type ToolLedger = {
+  /** Identity key (tool + canonical args) → how many times this drain has seen it. */
+  readonly calls: Map<string, number>
+  readonly readPaths: Map<string, number>
 }
 
 type SessionRecord = {
   turns: TurnReport[]
   behavior: Behavior
   preparedLogged: number
+  /**
+   * Prepared-turn trace: the first PREPARED_HEAD_SAMPLES turns verbatim, then one sample every
+   * PREPARED_STRIDE turns, capped at PREPARED_MAX_SAMPLES. The earlier `preparedLogged < 3` rule
+   * emitted only the first three turns, so a 179-turn run showed a 3-point "growth curve" and the
+   * README-level question ("where did the tokens go on this run?") was unanswerable from the log.
+   */
+  preparedTrace: Array<{ readonly seq: number; readonly parts: PreparedParts }>
   modelProfileKey: string | null
   /** Parts recorded at prepare, keyed by provider turn seq; consumed by the matching turn report. */
   pendingParts: Map<number, PreparedParts>
+  ledger: ToolLedger
 }
+
+const PREPARED_HEAD_SAMPLES = 3
+const PREPARED_STRIDE = 10
+const PREPARED_MAX_SAMPLES = 24
 
 const sessions = new Map<string, SessionRecord>()
 // Bounded: settled sessions are dropped (emitTurnSummary clears them), so the map cannot grow
@@ -93,10 +118,15 @@ const recordFor = (sessionID?: string): SessionRecord => {
         retries: 0,
         projection_truncated: 0,
         projection_saved_chars: 0,
+        repeat_tool_calls: 0,
+        repeated_read_calls: 0,
+        distinct_read_paths: 0,
       },
       preparedLogged: 0,
+      preparedTrace: [],
       modelProfileKey: null,
       pendingParts: new Map(),
+      ledger: { calls: new Map(), readPaths: new Map() },
     }
     sessions.set(key, record)
   }
@@ -176,11 +206,55 @@ const emit = (line: string) => process.stderr.write(line + "\n")
 export const recordPrepared = (seq: number, parts: PreparedParts, sessionID?: string): void => {
   const record = recordFor(sessionID)
   record.pendingParts.set(seq, parts)
-  if (record.preparedLogged < 3) {
-    record.preparedLogged++
-    emit(`[turn] prepared seq=${seq} parts=${JSON.stringify(parts)}`)
-  }
+  // Head samples verbatim, then a stride sample: a full trajectory at bounded cost, so the growth
+  // curve of a long run is readable from the log instead of inferred from two endpoints.
+  const sampled =
+    record.preparedLogged < PREPARED_HEAD_SAMPLES ||
+    (seq % PREPARED_STRIDE === 0 && record.preparedTrace.length < PREPARED_MAX_SAMPLES)
+  if (!sampled) return
+  record.preparedLogged++
+  record.preparedTrace.push({ seq, parts })
+  emit(`[turn] prepared seq=${seq} parts=${JSON.stringify(parts)}`)
 }
+
+/**
+ * Per-drain tool-call ledger. Two distinct facts the ablation traces showed we cannot see today:
+ * an IDENTICAL call repeated (the loop that never makes progress), and a READ of a path already read
+ * (the paging loop: 66–79% of reads, 80–95% of read characters in the round-6/8 traces).
+ */
+export const recordToolCall = (tool: string, argsKey: string, sessionID?: string): string | undefined => {
+  const ledger = recordFor(sessionID).ledger
+  const identity = `${tool}\u0000${argsKey}`
+  const seen = ledger.calls.get(identity) ?? 0
+  ledger.calls.set(identity, seen + 1)
+  const count = seen + 1
+  if (seen > 0) recordFor(sessionID).behavior.repeat_tool_calls++
+  if (tool !== "read") {
+    return IDENTICAL_CALL_THRESHOLDS.has(count) ? identicalCallNudge(tool, count) : undefined
+  }
+  const reads = ledger.readPaths.get(argsKey) ?? 0
+  ledger.readPaths.set(argsKey, reads + 1)
+  if (reads > 0) recordFor(sessionID).behavior.repeated_read_calls++
+  recordFor(sessionID).behavior.distinct_read_paths = ledger.readPaths.size
+  if (IDENTICAL_CALL_THRESHOLDS.has(count)) return identicalCallNudge(tool, count)
+  return REPEATED_READ_THRESHOLDS.has(reads + 1) ? repeatedReadNudge(argsKey, reads + 1) : undefined
+}
+
+/** Identical `(tool, args)` repeats that earn a nudge — the reference harness's escalation ladder. */
+const IDENTICAL_CALL_THRESHOLDS = new Set([3, 5, 8])
+
+/** Reads of the same path (any page window) that earn a nudge: the paging loop, not a repeat. */
+const REPEATED_READ_THRESHOLDS = new Set([4, 8])
+
+const identicalCallNudge = (tool: string, count: number): string =>
+  `\n\n[repeat guard] This exact ${tool} call has now been made ${count} times. If it did not answer ` +
+  `the question, change the arguments or the approach instead of repeating it; if it did, use what ` +
+  `you already have.`
+
+const repeatedReadNudge = (path: string, count: number): string =>
+  `\n\n[repeat guard] ${path} has been read ${count} times in this session. The earlier results are ` +
+  `still in the conversation — reuse them, or read a specific range you have not seen yet, instead ` +
+  `of re-reading.`
 
 export const recordTurn = (report: TurnReport, sessionID?: string): void => {
   const record = recordFor(sessionID)
@@ -259,12 +333,28 @@ export const turnSummary = (sessionID?: string) => {
     acc[turn.finish] = (acc[turn.finish] ?? 0) + 1
     return acc
   }, {})
+  // The two headline ratios the token question is actually asked in: how much of the billed input
+  // is REPLAY of context already sent (quadratic in turns), and how much of the prompt is tool
+  // results carried forward. Both are derived, not estimated from a grep of the transcript.
+  const lastContext = record.preparedTrace.at(-1)?.parts.total_estimated ?? 0
+  const billedInput = usageSums.input + usageSums.cacheRead
+  const replayRatio = lastContext > 0 ? Number((billedInput / lastContext).toFixed(2)) : null
+  const toolResultShare =
+    partsSums.total_estimated > 0 ? Number((partsSums.tool_results / partsSums.total_estimated).toFixed(3)) : 0
   return {
     turns: record.turns.length,
     behavior: record.behavior,
     finish: finishCounts,
     parts: partsSums,
     usage: usageSums,
+    ...(replayRatio === null ? {} : { replay_ratio: replayRatio }),
+    tool_result_share: toolResultShare,
+    context_trajectory: record.preparedTrace.map((sample) => ({
+      seq: sample.seq,
+      total: sample.parts.total_estimated,
+      history: sample.parts.history,
+      tool_results: sample.parts.tool_results,
+    })),
     ...(record.modelProfileKey ? { profile: record.modelProfileKey } : {}),
   }
 }
