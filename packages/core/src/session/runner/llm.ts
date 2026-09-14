@@ -13,6 +13,7 @@ import {
 import { AgentGateway } from "../../agent-gateway"
 import { desc, eq } from "drizzle-orm"
 import { Cause, DateTime, Duration, Effect, Exit, FiberSet, Layer, Option, Schema, Semaphore, Stream } from "effect"
+import path from "node:path"
 import { AgentV2 } from "../../agent"
 import { Config } from "../../config"
 import { Database } from "../../database/database"
@@ -673,6 +674,12 @@ export const layer = Layer.effect(
       ]
       const stepLimitReached = agent.info?.steps !== undefined && currentStep >= agent.info.steps
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
+      // V1 parity (workspace-context.ts): validation commands are inferred from the same workspace
+      // signals — package scripts, package manager, AGENTS.md, TS/Python/Go markers. Passing only the
+      // Go marker starved every other language of its commands on the V2 path.
+      const validationCommands = AgentGateway.DeepAgentValidation.inferValidationCommands(
+        AgentGateway.DeepAgentValidation.detectValidationSignals(location.directory),
+      )
       const deepagentPrompt = gateway.active
         ? yield* buildDeepAgentPrompt({
             runtime: gateway,
@@ -683,6 +690,7 @@ export const layer = Layer.effect(
             directory: location.directory,
             messages: context,
             tools: toolDefinitions,
+            validationCommands,
             ...(gitService === undefined ? {} : { git: gitService }),
           })
         : undefined
@@ -1043,8 +1051,7 @@ export const layer = Layer.effect(
           attempt_ordinal: ordinal,
           ...(code === undefined ? {} : { error_code: code }),
         })
-        if (ordinal >= PLAN_PROTOCOL_MAX_ATTEMPTS)
-          planProtocolTerminal = { ordinal, code: code ?? outcome }
+        if (ordinal >= PLAN_PROTOCOL_MAX_ATTEMPTS) planProtocolTerminal = { ordinal, code: code ?? outcome }
         // §7.5 contract: the model sees which attempt this was (first error is correctable,
         // second terminates) — append the ordinal to the result text exactly like the legacy
         // processor's "[Plan attempt N of 2]" suffix.
@@ -1363,7 +1370,10 @@ export const layer = Layer.effect(
 
       return yield* Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
-          const stream = yield* restore(settledProviderStream).pipe(Effect.exit, Effect.map(classifyProviderStreamAbort))
+          const stream = yield* restore(settledProviderStream).pipe(
+            Effect.exit,
+            Effect.map(classifyProviderStreamAbort),
+          )
           const failure =
             stream._tag === "Failure" ? Option.getOrUndefined(Cause.findErrorOption(stream.cause)) : undefined
           if (
@@ -1509,7 +1519,12 @@ export const layer = Layer.effect(
           // final assistant TEXT carries the JSON value. Parse and capture it; an invalid body
           // ends the turn with a typed error (legacy retried with a correction reminder up to
           // format.retryCount — that retry loop is a documented residual gap in V2).
-          if (wireStructuredOutput && stream._tag === "Success" && !publisher.hasProviderError() && !needsContinuation) {
+          if (
+            wireStructuredOutput &&
+            stream._tag === "Success" &&
+            !publisher.hasProviderError() &&
+            !needsContinuation
+          ) {
             const wireText = providerEvents
               .flatMap((event) => (event.type === "text-delta" ? [event.text] : []))
               .join("")
@@ -1533,7 +1548,10 @@ export const layer = Layer.effect(
                   sessionID: session.id,
                   timestamp: yield* DateTime.now,
                   assistantMessageID: yield* publisher.startAssistant(),
-                  error: { type: "unknown", message: "StructuredOutputError: wire structured output is not valid JSON." },
+                  error: {
+                    type: "unknown",
+                    message: "StructuredOutputError: wire structured output is not valid JSON.",
+                  },
                 }),
               )
               return { needsContinuation: false, step: currentStep, activityId: selectionAdmission.activityId }
@@ -1544,8 +1562,8 @@ export const layer = Layer.effect(
           // G0: settle the turn report from the provider's own events — usage and finish from the
           // step-finish, tool calls counted from the emitted tool-call events. Same data the
           // publisher persisted; recording it here keeps observability in one place per turn.
-          const stepFinish = providerEvents.findLast((event): event is Extract<LLMEvent, { type: "step-finish" }> =>
-            event.type === "step-finish",
+          const stepFinish = providerEvents.findLast(
+            (event): event is Extract<LLMEvent, { type: "step-finish" }> => event.type === "step-finish",
           )
           const reason = stepFinish?.reason
           const finish: "stop" | "tool-calls" | "error" | "other" = publisher.hasProviderError()
@@ -1617,13 +1635,7 @@ export const layer = Layer.effect(
     })
 
     const runTurn: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, step, providerRetry = 0) {
-      return yield* runTurnAttempt(
-        sessionID,
-        promotion,
-        step,
-        compaction.compactAfterOverflow,
-        providerRetry,
-      ).pipe(
+      return yield* runTurnAttempt(sessionID, promotion, step, compaction.compactAfterOverflow, providerRetry).pipe(
         // A lease-fenced attempt is a rotation artefact: the fenced owner stalled past its lease, so
         // the successor generation owns the session now. Re-open a fresh attempt instead of ending
         // the run — the admission guard admits it only when the fenced attempt provably never
@@ -1684,11 +1696,11 @@ export const layer = Layer.effect(
       if (session.location.directory !== location.directory || session.location.workspaceID !== location.workspaceID)
         return yield* Effect.interrupt
       const agent = yield* agents.select(session.agent)
-      const { model, info: modelInfo, provider: modelProvider } = yield* models.resolveRef(
-        session,
-        ProviderV2.ID.make(request.provider_id),
-        ModelV2.ID.make(request.model_id),
-      )
+      const {
+        model,
+        info: modelInfo,
+        provider: modelProvider,
+      } = yield* models.resolveRef(session, ProviderV2.ID.make(request.provider_id), ModelV2.ID.make(request.model_id))
       const modelProtocolSelection = modelInfo ? resolveModelProtocol(modelInfo, modelProvider) : undefined
       const system = yield* SessionContextEpoch.prepare(
         db,
@@ -1704,7 +1716,10 @@ export const layer = Layer.effect(
       const latestReceipt = currentUserMessageID
         ? undefined
         : yield* db
-            .select({ userMessageID: V2ProviderTurnReceiptTable.user_message_id, state: V2ProviderTurnReceiptTable.state })
+            .select({
+              userMessageID: V2ProviderTurnReceiptTable.user_message_id,
+              state: V2ProviderTurnReceiptTable.state,
+            })
             .from(V2ProviderTurnReceiptTable)
             .where(eq(V2ProviderTurnReceiptTable.session_id, session.id))
             .orderBy(desc(V2ProviderTurnReceiptTable.request_ordinal))
@@ -1777,7 +1792,9 @@ export const layer = Layer.effect(
         outcome: compacted === false ? "nothing_to_compact" : "compacted",
         ...(compacted === false || compacted.receiptID === null ? {} : { summaryReceiptID: compacted.receiptID }),
       })
-      yield* contexts.settleActivity({ activityId: selectionAdmission.activityId, state: "settled" }).pipe(Effect.ignore)
+      yield* contexts
+        .settleActivity({ activityId: selectionAdmission.activityId, state: "settled" })
+        .pipe(Effect.ignore)
       return compacted !== false
     })
 
@@ -1809,7 +1826,10 @@ export const layer = Layer.effect(
       // RI-18: a pending manual compaction request drives its own drain — the summary provider
       // turn runs inside SessionCompaction with the full receipt contract.
       const hasManualCompaction =
-        !hasSteer && !hasQueue && !hasGoalSteer && (yield* CompactionRequest.pendingForSession(db, input.sessionID)) !== undefined
+        !hasSteer &&
+        !hasQueue &&
+        !hasGoalSteer &&
+        (yield* CompactionRequest.pendingForSession(db, input.sessionID)) !== undefined
       if (input.force !== true && !hasSteer && !hasQueue && !hasGoalSteer && !hasManualCompaction) return
       const parityCampaign = (yield* V2ProviderTurn.CurrentCampaign) ?? V2ProviderTurn.campaignFromEnv()
       const ownerCampaign = (yield* V2ProviderTurn.CurrentOwnerCampaign) ?? V2ProviderTurn.ownerCampaignFromEnv()

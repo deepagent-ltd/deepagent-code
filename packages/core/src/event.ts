@@ -33,6 +33,7 @@ import {
   Cursor,
   ID,
   define,
+  durableType,
   registry,
   syncRegistry,
   versionedType,
@@ -41,7 +42,7 @@ import {
   type SyncDefinition,
 } from "./event/define"
 
-export { Cursor, ID, define, registry, syncRegistry, versionedType }
+export { Cursor, ID, define, durableType, registry, syncRegistry, versionedType }
 export type { Definition, Payload, SyncDefinition } from "./event/define"
 
 

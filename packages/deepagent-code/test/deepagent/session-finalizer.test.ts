@@ -79,6 +79,22 @@ describe("session finalizer", () => {
     expect(gitAt(dir, "status --porcelain").trim()).toContain("user-notes.md")
   })
 
+  test("NEVER consumes an unrelated file already staged before finalization", async () => {
+    const dir = makeRepo()
+    writeFileSync(path.join(dir, "session-file.ts"), "export {}")
+    writeFileSync(path.join(dir, "user-notes.md"), "the user's staged draft")
+    gitAt(dir, "add -- user-notes.md")
+    const outcome = await finalizeSessionWork({
+      directory: dir,
+      validation: "validated",
+      touchedPaths: ["session-file.ts"],
+    })
+    expect(outcome.kind).toBe("committed")
+    expect(gitAt(dir, "diff --name-only HEAD~1 HEAD").trim()).toBe("session-file.ts")
+    // The caller's staged draft survives the runtime commit for the caller to finish later.
+    expect(gitAt(dir, "status --porcelain").trim()).toContain("user-notes.md")
+  })
+
   test("no attributable paths skips delivery instead of committing blindly", async () => {
     const dir = makeRepo()
     writeFileSync(path.join(dir, "anything.txt"), "x")

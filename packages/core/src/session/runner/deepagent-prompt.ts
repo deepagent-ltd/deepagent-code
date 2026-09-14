@@ -17,6 +17,7 @@ export type Input = {
   readonly directory: string
   readonly messages: readonly SessionMessage.Message[]
   readonly tools: readonly ToolDefinition[]
+  readonly validationCommands?: readonly string[]
   readonly git?: Git.Interface
 }
 
@@ -56,6 +57,8 @@ export const buildDeepAgentPrompt = Effect.fn("SessionRunner.buildDeepAgentPromp
     )
   const context = input.runtime.withStorage(() => {
     AgentGateway.DeepAgentOrchestrator.initSession(orchestratorInput)
+    if (input.validationCommands?.length)
+      AgentGateway.DeepAgentOrchestrator.setValidationCommands(input.sessionID, [...input.validationCommands])
     if (latestUser?.id === input.userMessageID) {
       const observation = AgentGateway.DeepAgentSessionState.observeUserAdmission(input.sessionID, input.userMessageID)
       if (observation === "new") AgentGateway.DeepAgentSessionState.markPlanStale(input.sessionID, "user_appended")

@@ -110,10 +110,16 @@ export const finalizeSessionWork = async (input: {
       "-c",
       `user.email=${DEFAULT_WORKER_IDENTITY.email}`,
       "commit",
+      // Keep any index entries that predated this activity out of the runtime commit. `git add`
+      // only adds the attributable paths, but a plain commit would still consume unrelated
+      // entries already staged by the user or another process.
+      "--only",
       "--no-gpg-sign",
       "--no-verify",
       "-m",
       "runtime finalizer: deliver session work (auto-preserved)",
+      "--",
+      ...input.touchedPaths,
     ],
     input.directory,
   )

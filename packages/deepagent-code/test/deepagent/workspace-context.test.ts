@@ -51,4 +51,14 @@ describe("DeepAgentWorkspace", () => {
     expect(result.gitBranch).toBe("audit-branch")
     expect(result.gitRoot).toBe(await fs.realpath(root))
   })
+
+  test("detects Go modules and exposes their validation command", async () => {
+    const root = await workspace("workspace-context-go")
+    await fs.writeFile(path.join(root, "go.mod"), "module example.test/project\n\ngo 1.24\n")
+
+    const result = await DeepAgentWorkspace.detect(root)
+
+    expect(result.hasGo).toBe(true)
+    expect(result.validationCommands).toContain("go test ./...")
+  })
 })

@@ -14,11 +14,19 @@ import { SessionProviderOwnerLeaseTable } from "@deepagent-code/core/context-fed
 import { activityTouchedPaths, harvestActivityValidation } from "@/deepagent/learning-runtime"
 import { finalizeSessionWork } from "@/deepagent/session-finalizer"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
+import { durableType } from "@deepagent-code/core/event/define"
+import { SessionEvent } from "@deepagent-code/core/session/event"
 import { mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { execSync } from "node:child_process"
 import path from "node:path"
 import { testEffect } from "../lib/effect"
+
+// Seeds must write the type the DURABLE log actually stores (version-suffixed). Hardcoding the bare
+// definition name here is what let these tests stay green while production's harvest matched zero
+// rows; resolving from the definition keeps the fixture honest if the version ever moves.
+const TOOL_CALLED_TYPE = durableType(SessionEvent.Tool.Called)
+const TOOL_SUCCESS_TYPE = durableType(SessionEvent.Tool.Success)
 
 // Review round 3: integration test over the REAL table shapes the V2 runner writes —
 // receipt (activity binding) → tool_effect (settled call) → tool.success events (structured
@@ -181,7 +189,7 @@ const insertToolSuccess = Effect.fn("test.insertToolSuccess")(function* (
       aggregate_id: sessionID,
       seq: Math.floor(Math.random() * 1_000_000),
       sync_seq: ++eventSeqCounter,
-      type: "session.next.tool.success",
+      type: TOOL_SUCCESS_TYPE,
       data: {
         sessionID,
         assistantMessageID: `msg_${callId}`,
@@ -269,7 +277,7 @@ describe("activityTouchedPaths (real tables)", () => {
           aggregate_id: sessionID,
           seq: 9_000_001,
           sync_seq: ++eventSeqCounter,
-          type: "session.next.tool.success",
+          type: TOOL_SUCCESS_TYPE,
           data: {
             sessionID,
             assistantMessageID: "msg_call_C1",
@@ -311,7 +319,7 @@ describe("harvestActivityValidation + three-state verdict", () => {
           aggregate_id: sessionID,
           seq: 8_000_001,
           sync_seq: ++eventSeqCounter,
-          type: "session.next.tool.called",
+          type: TOOL_CALLED_TYPE,
           data: { sessionID, assistantMessageID: "msg_v", callID: "call_V1", tool: "bash", input: { command: "bun run test" }, provider: { executed: false } },
         })
         .run()
@@ -323,7 +331,7 @@ describe("harvestActivityValidation + three-state verdict", () => {
           aggregate_id: sessionID,
           seq: 8_000_002,
           sync_seq: ++eventSeqCounter,
-          type: "session.next.tool.success",
+          type: TOOL_SUCCESS_TYPE,
           data: { sessionID, assistantMessageID: "msg_v", callID: "call_V1", structured: { command: "bun run test", exitCode: 0, output: "ok", truncated: false }, content: [] },
         })
         .run()
@@ -334,6 +342,84 @@ describe("harvestActivityValidation + three-state verdict", () => {
       expect(state?.lastValidationResults.length).toBe(1)
       expect(state?.lastValidationResults[0]?.passed).toBe(true)
       expect(state?.lastValidationActivityId).toBe("act_V")
+    }),
+  )
+
+  it.effect("harvests go test evidence for a Go workspace", () =>
+    Effect.gen(function* () {
+      const goRoot = mkdtempSync(path.join(tmpdir(), "deepagent-harvest-go-"))
+      writeFileSync(path.join(goRoot, "go.mod"), "module example.test/project\n\ngo 1.24\n")
+      const { db } = yield* Database.Service
+      yield* seedBase
+      yield* insertReceipt(db, "rcpt_GO", "act_GO", 1)
+      yield* insertEffect(db, "fx_GO1", "rcpt_GO", "call_GO1", "bash", "settled")
+      yield* db
+        .insert(EventTable)
+        .values({
+          id: "evt_go_called" as never,
+          aggregate_id: sessionID,
+          seq: 8_050_001,
+          sync_seq: ++eventSeqCounter,
+          type: TOOL_CALLED_TYPE,
+          data: { sessionID, assistantMessageID: "msg_go", callID: "call_GO1", tool: "bash", input: { command: "go test ./..." }, provider: { executed: false } },
+        })
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(EventTable)
+        .values({
+          id: "evt_go_success" as never,
+          aggregate_id: sessionID,
+          seq: 8_050_002,
+          sync_seq: ++eventSeqCounter,
+          type: TOOL_SUCCESS_TYPE,
+          data: { sessionID, assistantMessageID: "msg_go", callID: "call_GO1", structured: { command: "go test ./...", exitCode: 0, output: "ok", truncated: false }, content: [] },
+        })
+        .run()
+        .pipe(Effect.orDie)
+
+      harvestActivityValidation({ db } as never, sessionID, "act_GO", goRoot)
+      const state = AgentGateway.DeepAgentSessionState.get(sessionID)
+      expect(state?.lastValidationResults[0]?.command).toBe("go test ./...")
+      expect(state?.lastValidationResults[0]?.passed).toBe(true)
+      expect(state?.lastValidationActivityId).toBe("act_GO")
+    }),
+  )
+
+  it.effect("does not treat a Go subpackage test as whole-module validation", () =>
+    Effect.gen(function* () {
+      const goRoot = mkdtempSync(path.join(tmpdir(), "deepagent-harvest-go-subpackage-"))
+      writeFileSync(path.join(goRoot, "go.mod"), "module example.test/project\n\ngo 1.24\n")
+      const { db } = yield* Database.Service
+      yield* seedBase
+      yield* insertReceipt(db, "rcpt_GOSUB", "act_GOSUB", 1)
+      yield* insertEffect(db, "fx_GOSUB1", "rcpt_GOSUB", "call_GOSUB1", "bash", "settled")
+      yield* db
+        .insert(EventTable)
+        .values({
+          id: "evt_go_sub_called" as never,
+          aggregate_id: sessionID,
+          seq: 8_060_001,
+          sync_seq: ++eventSeqCounter,
+          type: TOOL_CALLED_TYPE,
+          data: { sessionID, assistantMessageID: "msg_go_sub", callID: "call_GOSUB1", tool: "bash", input: { command: "go test ./pkg/..." }, provider: { executed: false } },
+        })
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(EventTable)
+        .values({
+          id: "evt_go_sub_success" as never,
+          aggregate_id: sessionID,
+          seq: 8_060_002,
+          sync_seq: ++eventSeqCounter,
+          type: TOOL_SUCCESS_TYPE,
+          data: { sessionID, assistantMessageID: "msg_go_sub", callID: "call_GOSUB1", structured: { command: "go test ./pkg/...", exitCode: 0, output: "ok", truncated: false }, content: [] },
+        })
+        .run()
+        .pipe(Effect.orDie)
+
+      expect(harvestActivityValidation({ db } as never, sessionID, "act_GOSUB", goRoot)).toEqual([])
     }),
   )
 
@@ -352,7 +438,7 @@ describe("harvestActivityValidation + three-state verdict", () => {
           aggregate_id: sessionID,
           seq: 8_100_001,
           sync_seq: ++eventSeqCounter,
-          type: "session.next.tool.called",
+          type: TOOL_CALLED_TYPE,
           data: { sessionID, assistantMessageID: "msg_o", callID: "call_O1", tool: "bash", input: { command: "bun run test" }, provider: { executed: false } },
         })
         .run()
@@ -364,7 +450,7 @@ describe("harvestActivityValidation + three-state verdict", () => {
           aggregate_id: sessionID,
           seq: 8_100_002,
           sync_seq: ++eventSeqCounter,
-          type: "session.next.tool.success",
+          type: TOOL_SUCCESS_TYPE,
           data: { sessionID, assistantMessageID: "msg_o", callID: "call_O1", structured: { command: "bun run test", exitCode: 0, output: "ok", truncated: false }, content: [] },
         })
         .run()
@@ -381,7 +467,7 @@ describe("harvestActivityValidation + three-state verdict", () => {
           aggregate_id: sessionID,
           seq: 8_100_003,
           sync_seq: ++eventSeqCounter,
-          type: "session.next.tool.success",
+          type: TOOL_SUCCESS_TYPE,
           data: { sessionID, assistantMessageID: "msg_n", callID: "call_N1", structured: { operation: "write", target: "feature.go", resource: "feature.go", existed: false }, content: [] },
         })
         .run()
