@@ -28,7 +28,7 @@ import DESCRIPTION from "./plan.txt"
 const PlanStep = Schema.Struct({
   step_id: Schema.optional(Schema.String).annotate({
     description:
-      "Stable id; required for advance, copy it only for a retained replan step, and omit it for create or a new replan step. Create rejects supplied IDs; replan rejects unknown supplied IDs",
+      "Stable id; required for advance, copied for a retained replan step, omitted for create or a new step",
   }),
   title: Schema.optional(Schema.String).annotate({
     description: "What this step does; required for create/replan and ignored for advance",
@@ -36,11 +36,11 @@ const PlanStep = Schema.Struct({
   status: Schema.String.annotate({ description: "pending | active | done | cancelled | blocked" }),
   acceptance: Schema.optional(Schema.String).annotate({
     description:
-      "Acceptance criterion for create/replan; when retaining a replan step, omit to copy the authoritative value shown in the correction",
+      "Acceptance criterion; omit when retaining a replan step",
   }),
   assigned_agent: Schema.optional(Schema.String).annotate({
     description:
-      "Subagent type for create/replan; when retaining a replan step, omit to copy the authoritative value shown in the correction",
+      "Subagent type; omit when retaining a replan step",
   }),
   note: Schema.optional(Schema.String).annotate({
     description: "Short note; REQUIRED when status is 'blocked' — say why you are stuck",
@@ -53,13 +53,13 @@ export const Parameters = Schema.Struct({
   }),
   expected_plan_id: Schema.optional(Schema.NullOr(Schema.String)).annotate({
     description:
-      "Use null (or omit) for create; for advance/replan copy expected_plan_id exactly from the latest <plan-status> or plan result",
+      "Null for create; for advance/replan copy it exactly from the latest <plan-status> or plan result",
   }),
   expected_version: Schema.optional(
     Schema.NullOr(Schema.Union([NonNegativeInt, Schema.NumberFromString])),
   ).annotate({
     description:
-      "Use null (or omit) for create; for advance/replan copy expected_version exactly from the latest <plan-status> or plan result",
+      "Null for create; for advance/replan copy it exactly from the latest <plan-status> or plan result",
   }),
   replan_reason: Schema.optional(Schema.String).annotate({
     description: "Required for replan; omit for create/advance",
@@ -69,14 +69,14 @@ export const Parameters = Schema.Struct({
   }),
   steps: Schema.mutable(Schema.Array(PlanStep)).annotate({
     description:
-      "Ordered plan steps for create/replan; for advance copy existing step_id values from <plan-status> and send status/note updates",
+      "Ordered steps for create/replan; for advance copy step_ids and send status/note updates",
   }),
   assumptions: Schema.optional(Schema.mutable(Schema.Array(Schema.String))).annotate({
     description: "Facts for create; for replan omit to retain the authoritative list, or send [] to clear it",
   }),
   active_step_id: Schema.optional(Schema.NullOr(Schema.String)).annotate({
     description:
-      "For create/replan, omit this field because supplying it is rejected; mark at most one step active and the server derives its ID. For advance, copy a visible step_id, omit to retain it, or use null to clear it",
+      "Omit for create/replan (the server derives it from status); for advance copy a visible step_id, omit to retain, or null to clear",
   }),
 })
 

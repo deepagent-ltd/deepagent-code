@@ -87,8 +87,18 @@ const decide = function (
       // 版本、审计事件与模型写的 plan 完全一致（origin=runtime_plan_gate，runner 溯源）；模型仍可
       // 通过 plan 工具推进/replan。高风险（bash 变更、stale、多工具并发首改）保持原阻断路径。
       if (flags.strictPlanGate && !lightweight && plan == null && !planStale && isMutating && subagentHasPlanEscape) {
+        // `apply_patch` and `apply_patch_chunk` are the SAME low-risk class as edit/write: both are
+        // single-target, content-matched file mutations with no shell authority. Excluding them made
+        // the implicit-plan fast path dead for the way models actually edit (round-10: the run's
+        // mutations were `apply_patch_chunk`/`apply_patch`, so every first edit took the BLOCK path
+        // and cost an extra provider turn — 40 of 160 gate consults were blocks).
         const lowRiskFirstEdit =
-          (input.toolName === "edit" || input.toolName === "write") && latch != null && latch.consecutive_blocks === 0
+          (input.toolName === "edit" ||
+            input.toolName === "write" ||
+            input.toolName === "apply_patch" ||
+            input.toolName === "apply_patch_chunk") &&
+          latch != null &&
+          latch.consecutive_blocks === 0
         if (lowRiskFirstEdit) {
           const registered = AgentGateway.DeepAgentSessionState.registerImplicitPlan(sessionID, {
             title: implicitPlanTitle(input),
@@ -105,7 +115,19 @@ const decide = function (
           }
         }
         if (latch != null && AgentGateway.DeepAgentPlanController.shouldGraceRelease(latch)) {
-          graceReminder = `Plan gate released this call after ${latch.consecutive_blocks} blocks. Call the \`plan\` tool now (one step is fine) — the next mutating call blocks again.`
+          // The grace release used to be a BARE pass: the latch kept its block count, the pass reset it,
+          // and the next mutations blocked twice more. Measured on the wazero run: 93 blocks / 46
+          // releases over 199 provider turns — a 2-turn tax that repeated for the whole run because the
+          // block never once produced a plan. A release is therefore a DECISION, not a pardon: the
+          // runtime registers the one-step implicit plan (the same audit artifact the low-risk fast path
+          // writes) and the session proceeds. The block tax is paid at most once per session.
+          const registered = AgentGateway.DeepAgentSessionState.registerImplicitPlan(sessionID, {
+            title: implicitPlanTitle(input),
+            agentMode,
+          })
+          graceReminder = registered
+            ? `Plan gate released this call after ${latch.consecutive_blocks} blocks and registered a one-step runtime plan; the block will not repeat. Call the \`plan\` tool if the work grows beyond it.`
+            : `Plan gate released this call after ${latch.consecutive_blocks} blocks. Call the \`plan\` tool now (one step is fine) — the next mutating call blocks again.`
         } else {
           AgentGateway.DeepAgentSessionState.recordPlanGateBlock(sessionID)
           mechanismBeacon.recordEngagement("strict_plan_gate", `blocked=${input.toolName}`)
@@ -132,9 +154,15 @@ const decide = function (
         subagentHasPlanEscape
       if (gateDecision.decision === "block" || strictBlock) {
         if (strictBlock && latch != null && AgentGateway.DeepAgentPlanController.shouldGraceRelease(latch)) {
+          // Same repeated-tax bug as the no-plan branch, and the same fix: a release clears the stale
+          // latch instead of leaving it armed to re-block two calls later. The latch is re-armed by its
+          // real triggers (a new user message, a failing validation), so clearing it here cannot hide a
+          // genuine desync — it only stops the gate from billing turns for a warning the model has
+          // already been shown.
+          AgentGateway.DeepAgentSessionState.clearPlanStale(sessionID)
           graceReminder =
             `The plan is stale (${latch.stale_reason}) and the plan gate already blocked ${latch.consecutive_blocks} consecutive mutating calls without a plan update. ` +
-            "This call was released ONCE: call the `plan` tool now to update the plan (or replan) — otherwise the next mutating call will be blocked again."
+            "This call was released and the staleness warning cleared — update the plan via the `plan` tool when it is next convenient; it will not block again for this reason."
         } else {
           AgentGateway.DeepAgentSessionState.recordPlanGateBlock(sessionID)
           const output =
