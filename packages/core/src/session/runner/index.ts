@@ -25,11 +25,41 @@ export type OnSessionSettledInput = {
   readonly activityId?: string
 }
 
+/**
+ * G-E — what the settle hook observed about delivery. The hook knows the verdict (it runs the
+ * finalizer); the RUNNER owns event publication, so the hook hands the receipt back through this
+ * callback and core records it as a replayable `session.delivery.recorded` fact. A callback rather
+ * than a mutable ref because the hook runs outside the runner's Effect context and cannot publish
+ * events itself.
+ */
+export type DeliveryReceipt = {
+  readonly verdict:
+    | "committed"
+    | "no_changes"
+    | "no_changes_on_this_branch"
+    | "withheld_unverified"
+    | "withheld_validation_failed"
+    | "skipped"
+  readonly branch?: string
+  readonly headBefore?: string
+  readonly headAfter?: string
+  readonly touchedPaths: number
+  readonly unattributable: number
+  readonly commit?: string
+  readonly recoveryRef?: string
+  readonly reason?: string
+}
+
 /** W7 — host-injectable hook invoked once after a drain chain settles, beside the W10 project-docs
  * tail. Unwired (`undefined` default) = no-op; the deepagent-code composition injects the
  * durable-learning admission implementation. */
 export const CurrentOnSessionSettled = Context.Reference<
-  ((input: OnSessionSettledInput, runtime: RuntimeInterface) => Effect.Effect<void>) | undefined
+  | ((
+      input: OnSessionSettledInput,
+      runtime: RuntimeInterface,
+      report?: (receipt: DeliveryReceipt) => void,
+    ) => Effect.Effect<void>)
+  | undefined
 >("@deepagent-code/v2/SessionRunner/OnSessionSettled", { defaultValue: () => undefined })
 
 // W2-V2 seam: the plan gate (understand→plan→execute discipline) lives in the deepagent-code

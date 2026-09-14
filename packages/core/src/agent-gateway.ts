@@ -639,6 +639,7 @@ import {
   type PromptContext,
 } from "./deepagent/prompt-policy"
 import * as DeepAgentOrchestrator from "./deepagent/orchestrator"
+import * as DeepAgentCapabilityMode from "./deepagent/capability-mode"
 import * as DeepAgentSessionState from "./deepagent/session-state"
 import * as DeepAgentPlanController from "./deepagent/plan-controller"
 import * as DeepAgentPlanStore from "./deepagent/plan-store"
@@ -670,6 +671,7 @@ import type { RunSummary } from "./deepagent/run-graph"
 
 export {
   DeepAgentOrchestrator,
+  DeepAgentCapabilityMode,
   DeepAgentSessionState,
   DeepAgentPlanController,
   DeepAgentPlanStore,

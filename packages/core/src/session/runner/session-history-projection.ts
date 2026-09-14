@@ -62,6 +62,23 @@ const parseNonNegativeInt = (raw: string | undefined, fallback: number) => {
 export const resentTailResults = () =>
   parseNonNegativeInt(process.env["DEEPAGENT_CODE_HISTORY_PROJECTION_TAIL"], RESENT_TAIL_RESULTS_DEFAULT)
 
+/**
+ * CLEAR window (G-C) — how many of the most recent settled tool results survive the elision pass at
+ * all; everything older is replaced by a stub (subject to the RESENT tail, which always stays
+ * verbatim and therefore sets the effective floor). This is the cheap, LLM-free half of compaction (Claude Code
+ * micro-compact / deepseek-harness tool-result-pruner): it costs one pass and no summarizer call,
+ * and the durable history keeps every byte, so an elided result is recoverable by re-reading.
+ *
+ * Sized from the offline replay of the real abs traces (deep-agent-ab/replay): on this workload the
+ * shipped per-result caps NEVER fire (largest single result 26.5k chars vs a 40k cap — the reason
+ * `projection_truncated` sat at 0 for whole runs), while clearing everything older than the last
+ * 5–12 results removes 79–88% of the tool-result weight that is otherwise re-sent every turn.
+ * `0` disables the clear (the previous behaviour).
+ */
+const CLEAR_OLDER_THAN_DEFAULT = 8
+export const clearedAfterResults = () =>
+  parseNonNegativeInt(process.env["DEEPAGENT_CODE_HISTORY_PROJECTION_CLEAR_AFTER"], CLEAR_OLDER_THAN_DEFAULT)
+
 const toolOutputCaps = (): Record<string, number> => {
   const raw = process.env["DEEPAGENT_CODE_HISTORY_PROJECTION_CAPS"]
   if (raw === undefined || raw.trim() === "") return { ...TOOL_OUTPUT_CAPS_DEFAULT }
@@ -137,6 +154,37 @@ const projectedToolResult = (
   })
 }
 
+/**
+ * Replace an aged-out tool result with a stub. Errors are NEVER cleared: they are the repair
+ * evidence the next turn may depend on, and they are already bounded by their 4× budget. A result
+ * is only replaced when the stub is strictly smaller — a small result costs nothing to keep, and
+ * keeping it leaves the cached prefix untouched.
+ */
+const clearedToolResult = (
+  tool: SessionMessage.AssistantTool,
+  stats: { truncated: number; savedChars: number },
+): SessionMessage.AssistantTool => {
+  if (tool.state.status !== "completed") return tool
+  if (tool.state.content.length === 0) return tool
+  const original = tool.state.content.reduce(
+    (total, item) => (item.type === "text" ? total + item.text.length : total),
+    0,
+  )
+  const stub =
+    `[earlier ${tool.name} result elided to keep the context small — ${original} chars; ` +
+    `re-read the target if you need it again]`
+  if (stub.length >= original) return tool
+  stats.truncated += 1
+  stats.savedChars += original - stub.length
+  return SessionMessage.AssistantTool.make({
+    ...tool,
+    state: SessionMessage.ToolStateCompleted.make({
+      ...tool.state,
+      content: [ToolOutput.text({ type: "text", text: stub })],
+    }),
+  })
+}
+
 export type ProjectionResult = {
   /** The projected (or unchanged) message list. */
   readonly messages: readonly SessionMessage.Message[]
@@ -153,35 +201,49 @@ export type ProjectionResult = {
  * content scan of already-small results). The caller owns the returned stats — nothing
  * accumulates across calls or leaks across sessions.
  */
-export const projectForModel = (
-  messages: readonly SessionMessage.Message[],
-): ProjectionResult => {
+export const projectForModel = (messages: readonly SessionMessage.Message[]): ProjectionResult => {
   if (!projectionEnabled()) return { messages, truncated: 0, savedChars: 0 }
   const caps = toolOutputCaps()
   const tail = resentTailResults()
+  const clearAfter = clearedAfterResults()
   const stats = { truncated: 0, savedChars: 0 }
   // Index (from the end) of settled tool results that stay verbatim. The RESENT window is
   // over tool results globally, not per-message, so `tail=4` protects the last 4 results
-  // wherever they sit.
+  // wherever they sit. The CLEAR window is the same walk continued outward: everything past it is
+  // elided to a stub (the tool name plus what was there), which is what actually stops a 133-turn
+  // run from re-sending every early read on every later turn.
+  // The RESENT tail and the CLEAR window are independent budgets: the tail is the minimum number of
+  // recent results that stay verbatim, the window is how many recent results survive the elision
+  // pass at all. `clearAfter < tail` would make the window a no-op (the tail protects more than the
+  // window keeps), so the effective horizon is the larger of the two.
+  const horizon = Math.max(tail, clearAfter)
   const settled: Array<{ message: number; part: number }> = []
-  for (let m = messages.length - 1; m >= 0 && settled.length < tail; m--) {
+  for (let m = messages.length - 1; m >= 0 && settled.length < horizon; m--) {
     const message = messages[m]
     if (message?.type !== "assistant") continue
-    for (let p = message.content.length - 1; p >= 0 && settled.length < tail; p--) {
+    for (let p = message.content.length - 1; p >= 0 && settled.length < horizon; p--) {
       const part = message.content[p]
       if (part?.type === "tool" && (part.state.status === "completed" || part.state.status === "error"))
         settled.push({ message: m, part: p })
     }
   }
-  const resent = new Set(settled.map((spot) => `${spot.message}:${spot.part}`))
+  const resent = new Set(settled.slice(0, tail).map((spot) => `${spot.message}:${spot.part}`))
+  // Everything past the tail but inside the window: elided unless the stub would not be smaller.
+  const clearable = new Set(clearAfter === 0 ? [] : settled.slice(tail).map((spot) => `${spot.message}:${spot.part}`))
   const projected = messages.map((message, m) => {
     if (message.type !== "assistant") return message
     let changed = false
     const content = message.content.map((part, p) => {
       if (part.type !== "tool") return part
       if (part.state.status !== "completed" && part.state.status !== "error") return part
-      if (resent.has(`${m}:${p}`)) return part
+      const key = `${m}:${p}`
       const cap = caps[part.name]
+      if (clearable.has(key)) {
+        const cleared = clearedToolResult(part, stats)
+        if (cleared !== part) changed = true
+        return cleared
+      }
+      if (resent.has(key)) return part
       if (cap === undefined || cap === 0) return part
       // Errors carry the repair evidence, so they get a GENEROUS 4× budget — but no longer
       // unbounded (review finding): a pathological crash log must not blow the context window.

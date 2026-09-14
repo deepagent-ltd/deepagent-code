@@ -1,14 +1,6 @@
 export * as SessionCompaction from "./compaction"
 
-import {
-  LLM,
-  LLMError,
-  LLMEvent,
-  Message,
-  LLMRequest,
-  isContextOverflowFailure,
-  type Model,
-} from "@deepagent-code/llm"
+import { LLM, LLMError, LLMEvent, Message, LLMRequest, isContextOverflowFailure, type Model } from "@deepagent-code/llm"
 import { Context, DateTime, Effect, Schema, Stream } from "effect"
 import type { Config } from "../config"
 import type { SessionContext } from "../context-federation/session-context"
@@ -26,8 +18,26 @@ import { V2ProviderTurn } from "./runner/v2-provider-turn"
 import { Log } from "../util/log"
 import { Token } from "../util/token"
 
-const DEFAULT_BUFFER = 20_000
+// Compaction budgets. Measured from the ablation runs: the previous absolute 20k buffer put the
+// trigger at ~92% of the window, which a 133-turn session never reached (compactions: 0 for the
+// whole run) — so nothing ever relieved the replay. The reference agents all trigger earlier and
+// scale the buffer with the window: Codex at `window*9/10`, deepseek-harness at `window*0.8`,
+// Claude Code at `effective − buffer` with the buffer TIERED by window size (13k/30k/50k). This
+// adopts the proportional form with a floor, which is the same shape for small windows and does not
+// hand a 1M-window model a 200k buffer.
+const DEFAULT_BUFFER_RATIO = 0.18
+/** Floor so a tiny window cannot make the trigger fire immediately. */
+const MIN_BUFFER_TOKENS = 2_000
 const DEFAULT_KEEP_TOKENS = 8_000
+/**
+ * Retention is a WINDOW-PROPORTIONAL budget with a ceiling. Evidence: only deepseek-harness scales
+ * retention (16% of window, which is 160k on a 1M window); Codex keeps a flat 20k/64k of user
+ * messages and Claude Code keeps nothing after a full compact, both regardless of window. A flat
+ * 8k would under-serve a 1M-window model, and 16% would over-serve it — so scale, but clamp.
+ */
+const DEFAULT_KEEP_RATIO = 0.05
+const MIN_KEEP_TOKENS = 8_000
+const MAX_KEEP_TOKENS = 32_000
 // UPD-005: single source of truth for the compaction-side tool-output truncation budget.
 // deepagent-code/src/session/compaction.ts imports this constant (it used to keep a duplicate
 // 2_000 copy); keep the two call sites in sync by editing ONLY this definition.
@@ -111,7 +121,9 @@ type Entry = {
 type Settings = {
   readonly auto: boolean
   readonly buffer: number
+  readonly bufferRatio: number
   readonly tokens: number
+  readonly keepRatio: number | undefined
 }
 
 type Dependencies = {
@@ -124,9 +136,7 @@ type Dependencies = {
   readonly contexts: SessionContext.Interface
   // §16.3 order 5 F3: resolved once at layer scope (like the other order-4 seams); undefined keeps
   // the local summary dispatch byte-for-byte.
-  readonly remoteCompaction?: (
-    input: RemoteCompactionRequest,
-  ) => Effect.Effect<RemoteCompactionResult, unknown>
+  readonly remoteCompaction?: (input: RemoteCompactionRequest) => Effect.Effect<RemoteCompactionResult, unknown>
   readonly config: readonly Config.Entry[]
 }
 
@@ -150,6 +160,18 @@ type Input = {
 const estimate = (value: unknown) => Token.estimate(JSON.stringify(value))
 
 export const inputBudget = (context: number, buffer: number) => Math.max(0, context - buffer)
+
+/** Headroom below the trigger: an explicit absolute `buffer` wins, else the proportional default
+ * with a floor. Exported for the trigger tests. */
+export const resolvedBuffer = (context: number, settings: { buffer: number; bufferRatio: number }): number =>
+  settings.buffer > 0 ? settings.buffer : Math.max(MIN_BUFFER_TOKENS, Math.floor(context * settings.bufferRatio))
+
+/** Verbatim retention after a compaction: an explicit `keep.tokens` wins, else the proportional
+ * default clamped to a sane band. */
+export const resolvedKeepTokens = (context: number, settings: { tokens: number; keepRatio?: number }): number => {
+  if (settings.keepRatio === undefined) return settings.tokens
+  return Math.min(MAX_KEEP_TOKENS, Math.max(MIN_KEEP_TOKENS, Math.floor(context * settings.keepRatio)))
+}
 
 const modelInputLimit = (model: Model) => model.route.defaults.limits?.input ?? model.route.defaults.limits?.context
 
@@ -199,9 +221,17 @@ const settings = (documents: readonly Config.Entry[]) => {
     (result, current) => ({
       auto: current.auto ?? result.auto,
       buffer: current.buffer ?? result.buffer,
+      bufferRatio: current.buffer_ratio ?? result.bufferRatio,
       tokens: current.keep?.tokens ?? result.tokens,
+      keepRatio: current.keep_ratio ?? result.keepRatio,
     }),
-    { auto: true, buffer: DEFAULT_BUFFER, tokens: DEFAULT_KEEP_TOKENS },
+    {
+      auto: true,
+      buffer: 0,
+      bufferRatio: DEFAULT_BUFFER_RATIO,
+      tokens: DEFAULT_KEEP_TOKENS,
+      keepRatio: undefined,
+    },
   )
 }
 
@@ -366,7 +396,10 @@ export const make = (dependencies: Dependencies) => {
     const context = modelInputLimit(input.model)
     if (context === undefined || context <= 0) return false
     const output = input.request.generation?.maxTokens ?? input.model.route.defaults.limits?.output ?? 0
-    const selected = input.reason === "manual" ? selectForManual(input.entries) : select(input.entries, config.tokens)
+    const selected =
+      input.reason === "manual"
+        ? selectForManual(input.entries)
+        : select(input.entries, resolvedKeepTokens(modelInputLimit(input.model) ?? 0, config))
     const previousSummary = input.entries.find((entry) => entry.message.type === "compaction")?.message
     if (!selected || (selected.head.length === 0 && previousSummary?.type !== "compaction")) return false
     const summaryPrompt = buildPrompt({
@@ -474,25 +507,23 @@ export const make = (dependencies: Dependencies) => {
     // summary request never ran; skip compaction instead of failing the surrounding turn.
     const summarized = yield* Effect.gen(function* () {
       // Same recoverable boundary as the surrounding turn: canonical attempt + receipt, bound.
-      const summaryReceipt = (
-        yield* SessionRunnerCanonical.commitTurn({
-          db: dependencies.db,
-          contexts: dependencies.contexts,
-          sessionID: input.sessionID,
-          admission: input.admission,
-          receipt: {
-            sessionId: input.sessionID,
-            userMessageId: input.userMessageID,
-            historyPromptEpoch: input.historyPromptEpoch,
-            requestInputHash: summaryRequestInputHash,
-            providerId: input.model.provider,
-            modelId: input.model.id,
-            protocol: input.model.route.protocol,
-            ownerMode: input.ownerMode,
-          },
-          ownerToken: yield* dependencies.providerTurns.currentOwnerToken(),
-        })
-      ).receipt
+      const summaryReceipt = (yield* SessionRunnerCanonical.commitTurn({
+        db: dependencies.db,
+        contexts: dependencies.contexts,
+        sessionID: input.sessionID,
+        admission: input.admission,
+        receipt: {
+          sessionId: input.sessionID,
+          userMessageId: input.userMessageID,
+          historyPromptEpoch: input.historyPromptEpoch,
+          requestInputHash: summaryRequestInputHash,
+          providerId: input.model.provider,
+          modelId: input.model.id,
+          protocol: input.model.route.protocol,
+          ownerMode: input.ownerMode,
+        },
+        ownerToken: yield* dependencies.providerTurns.currentOwnerToken(),
+      })).receipt
       summaryReceiptID = summaryReceipt.receiptId
       return yield* V2ProviderTurn.stream({
         service: dependencies.providerTurns,
@@ -581,7 +612,7 @@ export const make = (dependencies: Dependencies) => {
     if (context === undefined || context <= 0) return false
     if (
       estimate({ system: input.request.system, messages: input.request.messages, tools: input.request.tools }) <=
-      inputBudget(context, config.buffer)
+      inputBudget(context, resolvedBuffer(context, config))
     )
       return false
     return yield* compactAfterOverflow(input)
