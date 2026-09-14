@@ -108,6 +108,7 @@ const excerpt = (text: string, cap: number) => {
 const projectedToolResult = (
   tool: SessionMessage.AssistantTool,
   cap: number,
+  stats: { truncated: number; savedChars: number },
 ): SessionMessage.AssistantTool => {
   if (tool.state.status !== "completed" && tool.state.status !== "error") return tool
   // Structured-only results (content []) lower to json — leave untouched. The error state's
@@ -117,8 +118,8 @@ const projectedToolResult = (
     if (item.type !== "text") return item
     const projected = excerpt(item.text, cap)
     if (projected === item.text) return item
-    projectionStats.truncated += 1
-    projectionStats.savedChars += item.text.length - projected.length
+    stats.truncated += 1
+    stats.savedChars += item.text.length - projected.length
     // Rebuild through the schema constructor: the tagged-union class instance must stay a
     // real ToolTextContent (spread would downgrade it to a plain object and break downstream
     // Schema guards in to-llm-message).
@@ -136,34 +137,29 @@ const projectedToolResult = (
   })
 }
 
-// Process-local observation counters (G0 parity: read by turn-observability rollups).
-export const projectionStats = {
-  truncated: 0,
-  savedChars: 0,
-  reset() {
-    this.truncated = 0
-    this.savedChars = 0
-  },
+export type ProjectionResult = {
+  /** The projected (or unchanged) message list. */
+  readonly messages: readonly SessionMessage.Message[]
+  /** THIS call's own stats — no module-level mutable state (review fix: a global counter let
+   * concurrent sessions settle each other's truncation counts). */
+  readonly truncated: number
+  readonly savedChars: number
 }
-
-const settledToolParts = (message: SessionMessage.Message): SessionMessage.AssistantTool[] =>
-  message.type === "assistant"
-    ? message.content.filter(
-        (part): part is SessionMessage.AssistantTool =>
-          part.type === "tool" && (part.state.status === "completed" || part.state.status === "error"),
-      )
-    : []
 
 /**
  * Project durable V2 session history into the model-facing history. Pure with respect to
  * message content; returns the input reference unchanged when projection is disabled, no
  * assistant message qualifies, or nothing exceeds a cap (the common cheap case — a full
- * content scan of already-small results).
+ * content scan of already-small results). The caller owns the returned stats — nothing
+ * accumulates across calls or leaks across sessions.
  */
-export const projectForModel = (messages: readonly SessionMessage.Message[]): readonly SessionMessage.Message[] => {
-  if (!projectionEnabled()) return messages
+export const projectForModel = (
+  messages: readonly SessionMessage.Message[],
+): ProjectionResult => {
+  if (!projectionEnabled()) return { messages, truncated: 0, savedChars: 0 }
   const caps = toolOutputCaps()
   const tail = resentTailResults()
+  const stats = { truncated: 0, savedChars: 0 }
   // Index (from the end) of settled tool results that stay verbatim. The RESENT window is
   // over tool results globally, not per-message, so `tail=4` protects the last 4 results
   // wherever they sit.
@@ -178,7 +174,7 @@ export const projectForModel = (messages: readonly SessionMessage.Message[]): re
     }
   }
   const resent = new Set(settled.map((spot) => `${spot.message}:${spot.part}`))
-  return messages.map((message, m) => {
+  const projected = messages.map((message, m) => {
     if (message.type !== "assistant") return message
     let changed = false
     const content = message.content.map((part, p) => {
@@ -189,14 +185,12 @@ export const projectForModel = (messages: readonly SessionMessage.Message[]): re
       if (cap === undefined || cap === 0) return part
       // Errors carry the repair evidence, so they get a GENEROUS 4× budget — but no longer
       // unbounded (review finding): a pathological crash log must not blow the context window.
-      const projected = projectedToolResult(part, part.state.status === "error" ? cap * 4 : cap)
-      if (projected !== part) changed = true
-      return projected
+      const projectedPart = projectedToolResult(part, part.state.status === "error" ? cap * 4 : cap, stats)
+      if (projectedPart !== part) changed = true
+      return projectedPart
     })
     if (!changed) return message
     return SessionMessage.Assistant.make({ ...message, content })
   })
+  return { messages: projected, truncated: stats.truncated, savedChars: stats.savedChars }
 }
-
-// Re-exported for llm.ts assembly-time stats; zero overhead when nothing truncated.
-export const projectionSummary = () => ({ truncated: projectionStats.truncated, savedChars: projectionStats.savedChars })

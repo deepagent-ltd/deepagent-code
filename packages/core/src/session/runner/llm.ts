@@ -55,6 +55,7 @@ import { normalizeAttachments } from "./attachments"
 import { toLLMMessages } from "./to-llm-message"
 import { SessionHistoryProjection } from "./session-history-projection"
 import { ModelPromptProfile } from "../../deepagent/model-prompt-profile"
+import { forgetSessionStageMarker } from "../../deepagent/prompt-policy"
 import { SessionRunnerCanonical } from "./canonical-turn"
 import { productionAdaptersEnabled, ProductionV2Sources } from "../../context-federation/production-adapters"
 import { CurrentRuntimeFeatures } from "../../flag/runtime-features"
@@ -706,12 +707,14 @@ export const layer = Layer.effect(
       const volatileSystemParts: string[] = []
       // G3 history projection — durable rows lower to the model-facing view with graded
       // tool-output budgets. Errors and the resent tail survive verbatim (pure function of
-      // content ⇒ byte-stable projection ⇒ prompt cache holds). Disabled or no-op projection
-      // returns the same array reference.
-      const projectedContext = SessionHistoryProjection.projectForModel(context)
-      const historyRequestMessages = yield* normalizeAttachments(projectedContext, modelInfo?.capabilities.input).pipe(
-        Effect.provideService(FSUtil.Service, fs),
-      )
+      // content ⇒ byte-stable projection ⇒ prompt cache holds). The result carries THIS
+      // call's truncation stats (no module-global counters — concurrent sessions cannot
+      // settle each other's numbers); the per-turn fold into observability happens below.
+      const projection = SessionHistoryProjection.projectForModel(context)
+      const historyRequestMessages = yield* normalizeAttachments(
+        projection.messages,
+        modelInfo?.capabilities.input,
+      ).pipe(Effect.provideService(FSUtil.Service, fs))
       const requestMessages = [
         ...toLLMMessages(historyRequestMessages, model),
         ...(deepagentPrompt?.volatileRoundContext
@@ -723,17 +726,26 @@ export const layer = Layer.effect(
       ]
       // G3 model profile channel 3 (runtime params): clamp the activation policy's suggested
       // reasoning effort by the profile cap (e.g. deepseek — over-thinking simple repair turns).
-      // Never sent as prompt text; lowers onto the provider option the SDK already knows. Only
-      // models with declared reasoning capability receive it (non-reasoning models reject the
-      // parameter, and provider-merged user config still wins over this runtime default).
+      // Never sent as prompt text; lowers onto the provider option the wire protocols know.
+      // Route-verified (review round 2): the `openai` options namespace is read ONLY by the
+      // openai-chat / openai-responses lowerings (the Anthropic protocol reads its own namespace
+      // and ignores this one), and the OpenAI wire set rejects "max" — so the option is gated on
+      // an openai-family protocol AND the clamp never yields "max". The `reasoningItems`
+      // capability gates models that declared reasoning support; user/provider config merged
+      // later still wins over this runtime default.
       const modelProfile = ModelPromptProfile.profileFor(model.provider, model.id)
       turnObservability.recordModelProfile(ModelPromptProfile.profileKeyFor(model.provider, model.id), sessionID)
-      const reasoningEffort = modelInfo?.api.protocolCapabilities?.reasoningItems
-        ? ModelPromptProfile.clampReasoningEffort(
-            deepagentPrompt?.context.activation.suggestedReasoningEffort ?? "medium",
-            modelProfile.params.maxReasoningEffort,
-          )
-        : undefined
+      const openaiFamilyProtocol =
+        modelProtocol === "openai.responses" ||
+        modelProtocol === "openai-compatible.responses" ||
+        modelProtocol === "openai-compatible.chat"
+      const reasoningEffort =
+        openaiFamilyProtocol && modelInfo?.api.protocolCapabilities?.reasoningItems
+          ? ModelPromptProfile.clampReasoningEffort(
+              deepagentPrompt?.context.activation.suggestedReasoningEffort ?? "medium",
+              modelProfile.params.maxReasoningEffort,
+            )
+          : undefined
       let request = LLM.request({
         model,
         providerOptions: {
@@ -1558,12 +1570,11 @@ export const layer = Layer.effect(
             },
             sessionID,
           )
-          // G3: fold this turn's history-projection deltas into the drain rollup, then rearm
-          // the counters for the next turn's assembly.
-          const projection = SessionHistoryProjection.projectionSummary()
+          // G3: fold THIS turn's history-projection stats (captured at assembly above) into
+          // the session's drain rollup. The stats travel through the closure — no global
+          // counter to reset or cross-session settle.
           if (projection.truncated > 0 || projection.savedChars > 0) {
             turnObservability.recordProjection(projection.truncated, projection.savedChars, sessionID)
-            SessionHistoryProjection.projectionStats.reset()
           }
           return {
             needsContinuation: !publisher.hasProviderError() && needsContinuation,
@@ -1781,6 +1792,7 @@ export const layer = Layer.effect(
           Effect.sync(() => {
             turnObservability.emitTurnSummary(input.sessionID)
             turnObservability.clearPendingParts(input.sessionID)
+            forgetSessionStageMarker(input.sessionID)
           }),
         ),
       )

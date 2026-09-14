@@ -426,10 +426,25 @@ describe("DeepAgent request prep", () => {
   // RI-07: the DeepAgent path gates the section on a materialized `task` tool (prompt-policy.ts) —
   // guidance that names a tool must never ship when the tool itself is absent, so the fixture
   // provides one.
+  // G3: a runtime-classified SIMPLE request ("hello" — no fan-out signals) freezes complexity 0,
+  // so the one-line no-orchestration notice replaces the full tutorial in the cached prefix.
   test("injects the orchestration section on the DeepAgent path (high mode)", async () => {
     AgentGateway.configure({ enabled: true, agentMode: "high" })
     const prepared = await prepare("deepseek", "deepseek-v4-flash", "ses_orch_deepagent_high", {
       tools: { task: {} },
+    })
+    expect(prepared.system[0]).toContain("多-Agent 编排")
+    expect(prepared.system[0]).toContain("简单任务")
+    AgentGateway.configure({ enabled: false, agentMode: "high" })
+  })
+
+  test("a complex request keeps the full fan-out tutorial (frozen complexity > 0)", async () => {
+    AgentGateway.configure({ enabled: true, agentMode: "high" })
+    const prepared = await prepare("deepseek", "deepseek-v4-flash", "ses_orch_deepagent_complex", {
+      tools: { task: {} },
+      messages: [
+        { role: "user", content: "Refactor the auth migration across subsystems — review thoroughly, multiple approaches" },
+      ],
     })
     expect(prepared.system[0]).toContain("多-Agent 编排")
     expect(prepared.system[0]).toContain("扇出判据")

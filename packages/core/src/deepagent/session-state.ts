@@ -63,6 +63,10 @@ export type SessionRunState = {
   validationCommands: string[]
   lastValidationResults: ValidationResult[]
   lastValidationOutput: string | null
+  // G2 review fix (round 3): the activity whose provider turns produced lastValidationResults.
+  // The finalizer compares against the settling activity — stale evidence from an older
+  // activity no longer authorizes delivery. Null = unattributed (legacy callers).
+  lastValidationActivityId: string | null
   knowledgeSynthesis: KnowledgeSynthesis | null
   knowledgeSnapshotId: string | null
   userRequest: string | null
@@ -190,6 +194,7 @@ export const getOrCreate = (sessionId: string, mode: AgentMode): SessionRunState
     validationCommands: [],
     lastValidationResults: [],
     lastValidationOutput: null,
+    lastValidationActivityId: null,
     knowledgeSynthesis: null,
     knowledgeSnapshotId: null,
     userRequest: null,
@@ -246,11 +251,19 @@ export const recordDiagnosis = (sessionId: string, diagnosis: DiagnosisRef): voi
   saveToDisk()
 }
 
-export const recordValidation = (sessionId: string, results: ValidationResult[], output: string): void => {
+export const recordValidation = (
+  sessionId: string,
+  results: ValidationResult[],
+  output: string,
+  activityId?: string,
+): void => {
   const state = activeRuntime().sessions.get(sessionId)
   if (!state) return
   state.lastValidationResults = results
   state.lastValidationOutput = output
+  // G2 review fix (round 3): bind the evidence to the activity that produced it — the finalizer
+  // must not let an OLD activity's all-pass authorize a NEW activity's unvalidated edits.
+  state.lastValidationActivityId = activityId ?? null
   // U1: a failing validation is a runtime fact that the current plan no longer matches reality —
   // flip the latch from truth, not from the model's self-report.
   if (results.some((r) => !r.passed)) {
@@ -721,6 +734,8 @@ function normalizeState(state: SessionRunState): SessionRunState {
     knowledgeSnapshotId: state.knowledgeSnapshotId ?? null,
     // Backfill: sessions persisted before the G3 review fix have no frozenComplexity on disk.
     frozenComplexity: state.frozenComplexity ?? null,
+    // Backfill: same for the round-3 validation-activity binding.
+    lastValidationActivityId: state.lastValidationActivityId ?? null,
     // Backfill/migration: sessions persisted before v4.0.4 have no suppressedValidations field;
     // sessions persisted between v4.0.4 and this change carry the OLD `suppressedFingerprints:
     // string[]` format. Migrate both cases into the new SuppressedValidation[] shape.

@@ -198,6 +198,15 @@ export const buildSystemPrompt = (ctx: PromptContext, modelConstraint?: string):
 // marker only needs to survive WITHIN one drain process, and the key is stable across turns.
 const lastRenderedStageBySession = new Map<string, ActivationDecision["stage"]>()
 
+/**
+ * REVIEW FIX (leak): drop a session's stage-dedup slot when its drain settles. Without this
+ * the Map grew once per session for the life of the process. Exported for the runner's
+ * drain-exit path; safe to call for unknown sessions.
+ */
+export const forgetSessionStageMarker = (sessionID?: string): void => {
+  if (sessionID !== undefined) lastRenderedStageBySession.delete(sessionID)
+}
+
 export const buildVolatileRoundContext = (ctx: PromptContext, runtimeControl?: string): string => {
   const sections: string[] = []
 

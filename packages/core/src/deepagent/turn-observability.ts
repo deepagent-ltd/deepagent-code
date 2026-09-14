@@ -219,12 +219,12 @@ export const recordModelProfile = (key: string, sessionID?: string): void => {
 
 /**
  * REVIEW FIX (leak): every exit path of a drain must clear its pending parts, not only the ones
- * that reach recordTurn. The runner calls this from the drain's Effect.ensuring alongside the
- * summary emission; anything still pending there belongs to an early-returned turn
- * (structured-output capture, plan terminal, soft-landing) that never got a provider receipt.
+ * that reach recordTurn. Idempotent and allocation-free when the slot is already gone (e.g.
+ * right after emitTurnSummary deleted it) — a plain recordFor() here would RE-CREATE an empty
+ * slot and leak one entry per drain in a long-lived process.
  */
 export const clearPendingParts = (sessionID?: string): void => {
-  recordFor(sessionID).pendingParts.clear()
+  sessions.get(sessionID ?? "_")?.pendingParts.clear()
 }
 
 /** Drain-end rollup: per-component token sums, per-turn usage sums, and the behavior counters. */

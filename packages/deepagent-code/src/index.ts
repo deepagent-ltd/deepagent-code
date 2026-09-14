@@ -53,11 +53,10 @@ import * as mechanismBeacon from "@deepagent-code/core/deepagent/mechanism-beaco
 // identical to this table, so static ESM evaluation order cannot change feature authority.
 applyRuntimeDefaults()
 
-// Mechanism beacon: emit the resolved on/off state of every ablable mechanism once, before any
-// turn runs, plus an engagement summary at exit. This is the ablation-correctness ledger — it
-// distinguishes "flag set" from "mechanism actually ran" for every arm of the matrix.
-mechanismBeacon.emitStartupBeacon()
-process.once("exit", () => mechanismBeacon.emitSummaryBeacon())
+// Info-printing invocations (--help/--version/completion) run no mechanism, so the ablation
+// ledger has nothing to record — and yargs writes --help to stderr, where beacon lines would
+// corrupt both the user's terminal and the CLI help-text snapshots.
+const infoInvocation = process.argv.some((arg) => arg === "--help" || arg === "-h" || arg === "--version")
 
 if (process.env[RUNTIME_DEFAULTS_SNAPSHOT_ENV] === "1") {
   // Test-only backdoor (W0.1 verification case 4): print the canonical defaults vector and exit
@@ -66,6 +65,14 @@ if (process.env[RUNTIME_DEFAULTS_SNAPSHOT_ENV] === "1") {
   // shells, packaging, or service managers.
   console.log(JSON.stringify(runtimeDefaultsEnvSnapshot(process.env)))
   process.exit(0)
+}
+
+// Mechanism beacon: emit the resolved on/off state of every ablable mechanism once, before any
+// turn runs, plus an engagement summary at exit. This is the ablation-correctness ledger — it
+// distinguishes "flag set" from "mechanism actually ran" for every arm of the matrix.
+if (!infoInvocation) {
+  mechanismBeacon.emitStartupBeacon()
+  process.once("exit", () => mechanismBeacon.emitSummaryBeacon())
 }
 
 const processMetadata = ensureProcessMetadata("main")
