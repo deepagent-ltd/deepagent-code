@@ -10,6 +10,7 @@ export type WorkspaceInfo = {
   validationPlan: ValidationCommand[]
   hasTypeScript: boolean
   hasPython: boolean
+  hasGo: boolean
   packageJson: { scripts?: Record<string, string>; packageManager?: string } | null
   agentsMdContent: string | null
   gitBranch: string | null
@@ -67,6 +68,7 @@ async function detectImpl(cwd: string): Promise<WorkspaceInfo> {
     validationPlan: [],
     hasTypeScript: false,
     hasPython: false,
+    hasGo: false,
     packageJson: null,
     agentsMdContent: null,
     gitBranch: null,
@@ -86,11 +88,12 @@ async function detectImpl(cwd: string): Promise<WorkspaceInfo> {
       exists(path.join(cwd, file)),
     ),
   ).then((results) => results.some(Boolean))
+  info.hasGo = await exists(path.join(cwd, "go.mod"))
   info.agentsMdContent = await readFileSafe(path.join(cwd, "AGENTS.md"))
   const git = await gitInfo(cwd)
   info.gitBranch = git.branch
   info.gitRoot = git.root
-  info.validationPlan = inferCommands(cwd, info)
+  info.validationPlan = inferCommands(info)
   info.validationCommands = info.validationPlan.map((command) => command.display)
 
   return info
@@ -126,24 +129,21 @@ async function exists(filePath: string): Promise<boolean> {
   }
 }
 
-function inferCommands(cwd: string, info: WorkspaceInfo): ValidationCommand[] {
+function inferCommands(info: WorkspaceInfo): ValidationCommand[] {
   // P2-7 / P1-3: single source of validation-command inference lives in core's validation.ts
   // (includes test/build/python + the AGENTS.md extractor). This bun-based workspace passes the
   // "bun run" runner so emitted commands use the workspace package manager. The validation
   // executor runs them through the host's accepted shell (PowerShell/cmd on Windows, POSIX elsewhere).
-  const packageManager = info.packageJson?.packageManager?.split("@")[0]
-  const runner =
-    packageManager === "bun" || packageManager === "pnpm" || packageManager === "npm"
-      ? `${packageManager} run`
-      : packageManager === "yarn"
-        ? "yarn"
-        : "bun run"
-  return AgentGateway.DeepAgentValidation.inferValidationPlan({
-    cwd,
-    packageJson: info.packageJson ?? undefined,
-    agentsMd: info.agentsMdContent ?? undefined,
-    hasTypeScript: info.hasTypeScript,
-    hasPython: info.hasPython,
-    runner,
-  })
+  return AgentGateway.DeepAgentValidation.inferValidationPlan(
+    AgentGateway.DeepAgentValidation.withPackageScriptRunner(
+      {
+        packageJson: info.packageJson ?? undefined,
+        agentsMd: info.agentsMdContent ?? undefined,
+        hasTypeScript: info.hasTypeScript,
+        hasPython: info.hasPython,
+        hasGo: info.hasGo,
+      },
+      "bun run",
+    ),
+  )
 }

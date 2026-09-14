@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from "node:fs"
+import { join } from "node:path"
 import type { ValidationFailureKind, ValidationResult } from "./round-state"
 
 export type ValidationCommandSource = "package_script" | "builtin" | "agents_md" | "user"
@@ -34,18 +36,48 @@ export type ValidationConfig = {
   readonly timeout_ms?: number
 }
 
-export const inferValidationPlan = (context: {
-  readonly cwd: string
-  readonly packageJson?: { scripts?: Record<string, string> }
+// The workspace facts validation inference depends on. Every producer (V1 workspace detection, the
+// V2 runner's prepare path, the finalizer's validation harvest) reads the same files and passes the
+// same record here, so no producer can drift into a different command set for one workspace.
+export type WorkspaceValidationSignals = {
+  readonly packageJson?: { scripts?: Record<string, string>; packageManager?: string }
   readonly agentsMd?: string
   readonly hasTypeScript: boolean
   readonly hasPython: boolean
-  // The package-script runner for this workspace (e.g. "npm run", "bun run"). Defaults to npm.
-  // P2-7: single inference impl; the deepagent-code production path passes "bun run".
-  readonly runner?: string
-}): ValidationCommand[] => {
+  /** Go module marker; used by the runtime finalizer for Go workspaces such as abs. */
+  readonly hasGo?: boolean
+}
+
+// Workspace markers that make a directory a Python project — one list, so a project detected by one
+// path (V1 prompt) is never missed by another (finalizer validation harvest).
+export const PYTHON_WORKSPACE_MARKERS = ["pyproject.toml", "requirements.txt", "setup.py", "setup.cfg", "Pipfile"]
+
+// The package-script runner for a workspace, derived from its declared package manager so inferred
+// scripts actually run (a pnpm workspace must not be validated with `npm run`). Detection is
+// advisory, so an unknown or absent declaration falls back to the caller's default.
+export const packageScriptRunner = (packageJson: { packageManager?: string } | undefined, fallback: string): string => {
+  const packageManager = packageJson?.packageManager?.split("@")[0]
+  if (packageManager === "bun" || packageManager === "pnpm" || packageManager === "npm") return `${packageManager} run`
+  if (packageManager === "yarn") return "yarn"
+  return fallback
+}
+
+// The runner is not a workspace fact to probe — it is derived from the package manifest. Callers
+// that already hold the signals (and their own default) merge it in here, so the derived value is
+// computed one way everywhere.
+export const withPackageScriptRunner = <Signals extends { packageJson?: { packageManager?: string } }>(
+  signals: Signals,
+  fallback: string,
+): Signals & { readonly runner: string } => ({
+  ...signals,
+  runner: packageScriptRunner(signals.packageJson, fallback),
+})
+
+export const inferValidationPlan = (
+  context: WorkspaceValidationSignals & { readonly runner?: string },
+): ValidationCommand[] => {
   const commands: ValidationCommand[] = []
-  const run = context.runner ?? "npm run"
+  const run = context.runner ?? packageScriptRunner(context.packageJson, "bun run")
   const runner = run.trim().split(/\s+/).filter(Boolean)
   const runnerBin = runner[0] ?? "npm"
   const packageScript = (name: string): ValidationCommand => ({
@@ -109,6 +141,17 @@ export const inferValidationPlan = (context: {
     })
   }
 
+  if (context.hasGo) {
+    commands.push({
+      id: "builtin:go-test",
+      source: "builtin",
+      transport: "argv",
+      executable: "go",
+      args: ["test", "./..."],
+      display: "go test ./...",
+    })
+  }
+
   if (context.agentsMd) {
     const inferredFromAgents = extractCommandsFromAgentsMd(context.agentsMd)
     for (const cmd of inferredFromAgents)
@@ -124,6 +167,49 @@ export const inferValidationPlan = (context: {
 
   return commands
 }
+
+// The workspace probe the V2 runner uses on its prepare path. It is deliberately SYNCHRONOUS:
+// prepare runs inside the drain fiber, and every `yield*` to the async fs service is a scheduler
+// yield point between "prompt admitted" and "provider dispatched". That widening window is not free
+// — session tests that assert dispatch right after `prompt` resolve find the drain still parked, and
+// the runtime pays an extra scheduling hop on every provider turn for seven tiny local reads.
+// Sync local reads keep the probe off the fiber's yield path; the reads are the same files the V1
+// detector and the finalizer's harvest read synchronously.
+export const detectValidationSignals = (
+  directory: string,
+): WorkspaceValidationSignals & { readonly runner: string } => {
+  const packageJson = readJsonIfExists(join(directory, "package.json"))
+  return withPackageScriptRunner(
+    {
+      packageJson,
+      agentsMd: readTextIfExists(join(directory, "AGENTS.md")),
+      hasTypeScript: existsSync(join(directory, "tsconfig.json")) || packageJson?.scripts?.typecheck !== undefined,
+      hasPython: PYTHON_WORKSPACE_MARKERS.some((file) => existsSync(join(directory, file))),
+      hasGo: existsSync(join(directory, "go.mod")),
+    },
+    "bun run",
+  )
+}
+
+const readTextIfExists = (file: string): string | undefined => {
+  try {
+    return readFileSync(file, "utf8")
+  } catch {
+    return undefined
+  }
+}
+
+const readJsonIfExists = (file: string): PackageJson | undefined => {
+  const text = readTextIfExists(file)
+  if (text === undefined) return undefined
+  try {
+    return JSON.parse(text) as PackageJson
+  } catch {
+    return undefined
+  }
+}
+
+type PackageJson = { scripts?: Record<string, string>; packageManager?: string }
 
 export const inferValidationCommands = (context: Parameters<typeof inferValidationPlan>[0]): string[] =>
   inferValidationPlan(context).map((command) => command.display)

@@ -56,7 +56,9 @@ applyRuntimeDefaults()
 // Info-printing invocations (--help/--version/completion) run no mechanism, so the ablation
 // ledger has nothing to record — and yargs writes --help to stderr, where beacon lines would
 // corrupt both the user's terminal and the CLI help-text snapshots.
-const infoInvocation = process.argv.some((arg) => arg === "--help" || arg === "-h" || arg === "--version")
+const infoInvocation = process.argv.some(
+  (arg) => arg === "--help" || arg === "-h" || arg === "--version" || arg === "-v" || arg === "completion",
+)
 
 if (process.env[RUNTIME_DEFAULTS_SNAPSHOT_ENV] === "1") {
   // Test-only backdoor (W0.1 verification case 4): print the canonical defaults vector and exit

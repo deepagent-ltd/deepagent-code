@@ -69,6 +69,16 @@ export function versionedType(type: string, version: number) {
   return `${type}.${version}`
 }
 
+/**
+ * The `EventTable.type` a definition is persisted under: synchronized definitions store the
+ * version-suffixed name (`session.next.tool.success.1`) while the definition's own `type` stays
+ * bare. Every query against the durable log must use this, never the bare name — filtering by the
+ * bare name matches zero rows and silently degrades attribution to "no evidence".
+ */
+export function durableType(definition: { readonly type: string; readonly sync?: { readonly version: number } }) {
+  return definition.sync === undefined ? definition.type : versionedType(definition.type, definition.sync.version)
+}
+
 export const MAX_EVENT_DEFINITIONS = 1024
 
 const definitionsByType = new Map<string, Definition>()

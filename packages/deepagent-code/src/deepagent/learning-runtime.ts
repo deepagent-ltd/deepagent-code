@@ -15,6 +15,8 @@ import { SessionSchema } from "@deepagent-code/core/session/schema"
 import { SessionRunner } from "@deepagent-code/core/session/runner"
 import { V2ProviderTurnReceiptTable } from "@deepagent-code/core/session/runner/v2-provider-turn.sql"
 import { EventTable } from "@deepagent-code/core/event/sql"
+import { durableType } from "@deepagent-code/core/event/define"
+import { SessionEvent } from "@deepagent-code/core/session/event"
 import { V2ToolEffectTable } from "@deepagent-code/core/session/runner/v2-tool-effect.sql"
 import { finalizeSessionWork } from "./session-finalizer"
 import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
@@ -22,6 +24,15 @@ import { Hash } from "@deepagent-code/core/util/hash"
 import { Cause, Context, Duration, Effect, Layer, Schedule, Scope } from "effect"
 
 const pollInterval = Duration.seconds(1)
+
+// Durable log types for the two tool events this module joins against. `EventTable.type` stores the
+// SYNCHRONIZED (version-suffixed) name — `session.next.tool.success.1` — while the definition's bare
+// `type` is the local/projection name. Filtering the log by the bare name matches zero rows, which
+// silently degraded both the activity attribution and the validation harvest to "no evidence"
+// (production symptom: `session finalizer: skipped: no_attributable_paths` after 22 successful
+// mutating calls). Resolve the version from the definitions so a bump cannot reintroduce the drift.
+const TOOL_CALLED_TYPE = durableType(SessionEvent.Tool.Called)
+const TOOL_SUCCESS_TYPE = durableType(SessionEvent.Tool.Success)
 
 type ReviewerFactory = (workspacePath: string) => DeepAgentDurableLearning.ReviewerPort | undefined
 
@@ -211,14 +222,14 @@ export function onSessionSettled(
         // and the read run INSIDE withStorage so they address the same SessionState runtime the
         // gateway configured (a bare module call would hit the defaultRuntime instead).
         const validation = withStorage(() => {
-          harvestActivityValidation(database, input.sessionID, input.activityId!, workspace)
+          const results = harvestActivityValidation(database, input.sessionID, input.activityId!, workspace)
           const state = AgentGateway.DeepAgentSessionState.get(input.sessionID)
-          if (!state || state.lastValidationResults.length === 0) return "unverified" as const
+          if (!state || results.length === 0) return "unverified" as const
           // Only evidence attributed to THIS activity authorizes delivery; anything else
           // (none, an older activity's, or unattributed legacy state) withholds. Withholding
           // defers delivery — the tree keeps the work; it never loses it.
           if (state.lastValidationActivityId !== input.activityId) return "unverified" as const
-          return state.lastValidationResults.every((result) => result.passed) ? ("validated" as const) : ("validation_failed" as const)
+          return results.every((result) => result.passed) ? ("validated" as const) : ("validation_failed" as const)
         })
         const touchedPaths = activityTouchedPaths(database, input.sessionID, input.activityId)
         const outcome = await finalizeSessionWork({ directory: workspace, validation, touchedPaths })
@@ -227,14 +238,15 @@ export function onSessionSettled(
         if (outcome.kind === "validation_failed")
           return { finalized: false, detail: `withheld: last validation failed (${outcome.files} changed)` }
         if (outcome.kind === "unverified")
-          return { finalized: false, detail: `withheld: no validation evidence for this activity (${outcome.files} changed)` }
+          return {
+            finalized: false,
+            detail: `withheld: no validation evidence for this activity (${outcome.files} changed)`,
+          }
         if (outcome.kind === "no_changes") return { finalized: false, detail: "no changes to deliver" }
         return { finalized: false, detail: `skipped: ${outcome.reason}` }
       }).pipe(
         Effect.flatMap((result) => Effect.logInfo(`session finalizer: ${result.detail}`)),
-        Effect.catchCause((cause) =>
-          Effect.logWarning("session finalizer failed", { cause }).pipe(Effect.asVoid),
-        ),
+        Effect.catchCause((cause) => Effect.logWarning("session finalizer failed", { cause }).pipe(Effect.asVoid)),
       )
       if (!(runtime?.durableLearning ?? AgentGateway.durableLearningEnabled())) return
       const session = yield* database.db
@@ -405,13 +417,25 @@ export function harvestActivityValidation(
   sessionID: SessionSchema.ID,
   activityId: string,
   workspace: string,
-): void {
-  // Same workspace signals the V1 detector uses (workspace-context.ts): package.json scripts,
-  // tsconfig, python markers. Sync fs probes — the settle path must not depend on the async
+): readonly AgentGateway.ValidationResult[] {
+  // Same workspace signals the V1 detector and the V2 runner use (workspace-context.ts,
+  // detectValidationSignals): package.json scripts + declared package manager, tsconfig, python
+  // markers, go.mod, AGENTS.md. Sync fs probes — the settle path must not depend on the async
   // detect cache being warm. An empty inference records nothing (finalizer withholds — safe).
-  const readJsonIfExists = (file: string): { scripts?: Record<string, string> } | undefined => {
+  const readTextIfExists = (file: string): string | undefined => {
     try {
-      return JSON.parse(readFileSync(file, "utf8")) as { scripts?: Record<string, string> }
+      return readFileSync(file, "utf8")
+    } catch {
+      return undefined
+    }
+  }
+  const readJsonIfExists = (
+    file: string,
+  ): { scripts?: Record<string, string>; packageManager?: string } | undefined => {
+    const text = readTextIfExists(file)
+    if (text === undefined) return undefined
+    try {
+      return JSON.parse(text) as { scripts?: Record<string, string>; packageManager?: string }
     } catch {
       return undefined
     }
@@ -419,71 +443,80 @@ export function harvestActivityValidation(
   const packageJson = readJsonIfExists(path.join(workspace, "package.json"))
   const hasTypeScript =
     existsSync(path.join(workspace, "tsconfig.json")) || packageJson?.scripts?.typecheck !== undefined
-  const hasPython = ["pyproject.toml", "requirements.txt", "setup.py"].some((file) =>
+  const hasPython = AgentGateway.DeepAgentValidation.PYTHON_WORKSPACE_MARKERS.some((file) =>
     existsSync(path.join(workspace, file)),
   )
-  const commands = AgentGateway.DeepAgentValidation.inferValidationCommands({
-    cwd: workspace,
-    packageJson,
-    hasTypeScript,
-    hasPython,
-    runner: "bun run",
-  })
-  if (commands.length === 0) return
+  const hasGo = existsSync(path.join(workspace, "go.mod"))
+  const commands = AgentGateway.DeepAgentValidation.inferValidationCommands(
+    AgentGateway.DeepAgentValidation.withPackageScriptRunner(
+      {
+        packageJson,
+        agentsMd: readTextIfExists(path.join(workspace, "AGENTS.md")),
+        hasTypeScript,
+        hasPython,
+        hasGo,
+      },
+      "bun run",
+    ),
+  )
+  if (commands.length === 0) return []
   // bash tool calls of THIS activity (inputs from tool.called, outcomes from tool.success)
   const effects: ReadonlyArray<{ toolCallId: string; toolName: string }> = Effect.runSync(
     database.db
       .select({ toolCallId: V2ToolEffectTable.tool_call_id, toolName: V2ToolEffectTable.tool_name })
       .from(V2ToolEffectTable)
-      .innerJoin(
-        V2ProviderTurnReceiptTable,
-        eq(V2ToolEffectTable.receipt_id, V2ProviderTurnReceiptTable.receipt_id),
-      )
+      .innerJoin(V2ProviderTurnReceiptTable, eq(V2ToolEffectTable.receipt_id, V2ProviderTurnReceiptTable.receipt_id))
       .where(
         and(
           eq(V2ToolEffectTable.session_id, sessionID),
           eq(V2ProviderTurnReceiptTable.activity_id, activityId),
           eq(V2ToolEffectTable.state, "settled"),
-          eq(V2ToolEffectTable.tool_name, "bash"),
         ),
       )
       .all(),
   )
-  if (effects.length === 0) return
-  const callIds = new Set(effects.map((row) => row.toolCallId))
+  if (effects.length === 0) return []
+  const bashCallIds = new Set(effects.filter((row) => row.toolName === "bash").map((row) => row.toolCallId))
+  if (bashCallIds.size === 0) return []
+  const mutatingCallIds = new Set(
+    effects.filter((row) => FILE_MUTATING_TOOLS.has(row.toolName)).map((row) => row.toolCallId),
+  )
   const calledInputs = new Map<string, string>()
-  const successOutputs = new Map<string, { exitCode?: unknown; output?: unknown }>()
+  const successOutputs = new Map<string, { exitCode?: unknown; output?: unknown; seq: number }>()
+  let lastMutationSeq = -1
   for (const row of Effect.runSync(
     database.db
-      .select({ type: EventTable.type, data: EventTable.data })
+      .select({ seq: EventTable.seq, type: EventTable.type, data: EventTable.data })
       .from(EventTable)
       .where(
-        and(
-          eq(EventTable.aggregate_id, sessionID),
-          inArray(EventTable.type, ["session.next.tool.called", "session.next.tool.success"]),
-        ),
+        and(eq(EventTable.aggregate_id, sessionID), inArray(EventTable.type, [TOOL_CALLED_TYPE, TOOL_SUCCESS_TYPE])),
       )
       .all(),
   )) {
     const callID = (row.data as { callID?: unknown } | null)?.callID
-    if (typeof callID !== "string" || !callIds.has(callID)) continue
-    if (row.type === "session.next.tool.called") {
+    if (typeof callID !== "string") continue
+    if (row.type === TOOL_CALLED_TYPE && mutatingCallIds.has(callID))
+      lastMutationSeq = Math.max(lastMutationSeq, row.seq)
+    if (row.type === TOOL_SUCCESS_TYPE && mutatingCallIds.has(callID))
+      lastMutationSeq = Math.max(lastMutationSeq, row.seq)
+    if (!bashCallIds.has(callID)) continue
+    if (row.type === TOOL_CALLED_TYPE) {
       const input = (row.data as { input?: unknown } | null)?.input
       const command = (input as { command?: unknown } | null)?.command
       if (typeof command === "string") calledInputs.set(callID, command)
     } else {
       const structured = (row.data as { structured?: unknown } | null)?.structured
       if (structured !== null && typeof structured === "object")
-        successOutputs.set(callID, structured as { exitCode?: unknown; output?: unknown })
+        successOutputs.set(callID, { ...(structured as { exitCode?: unknown; output?: unknown }), seq: row.seq })
     }
   }
   const results: AgentGateway.ValidationResult[] = []
   for (const [callId, command] of calledInputs) {
-    // Same matching rule as the V1 classifier: the executed command must CONTAIN an inferred
-    // validation command (the model prefixes runners / wraps with cd).
-    if (!commands.some((candidate) => command.includes(candidate))) continue
+    if (!matchesValidationCommand(command, commands)) continue
     const outcome = successOutputs.get(callId)
     if (outcome === undefined) continue
+    // Validation before the activity's final mutation cannot authorize the final workspace state.
+    if (outcome.seq <= lastMutationSeq) continue
     const exit = typeof outcome.exitCode === "number" ? outcome.exitCode : undefined
     if (exit === undefined) continue // no authoritative signal — says nothing (never guess)
     const textOutput = typeof outcome.output === "string" ? outcome.output : ""
@@ -496,25 +529,51 @@ export function harvestActivityValidation(
       duration_ms: 0,
     })
   }
-  if (results.length === 0) return
+  if (results.length === 0) return []
   const output = results.map((r) => `${r.command}: ${r.passed ? "PASS" : "FAIL"}`).join("\n")
   // SessionState resolves through AsyncLocalStorage with a default-runtime fallback, so a plain
   // synchronous call from the settle path reaches the same store the drain fibers use.
   AgentGateway.DeepAgentSessionState.getOrCreate(sessionID, "high")
   AgentGateway.DeepAgentSessionState.recordValidation(sessionID, results, output, activityId)
+  return results
+}
+
+function matchesValidationCommand(command: string, candidates: readonly string[]) {
+  // Only `&&` composition preserves a failing validation status. Pipes, `;`, backgrounding,
+  // command substitution, and `||` can turn a failed test into shell exit 0, so such evidence
+  // cannot authorize a commit.
+  if (command.includes("||") || command.includes("$(") || command.includes("`")) return false
+  if (/[|;\n\r]/.test(command) || command.replaceAll("&&", "").includes("&")) return false
+  return command.split("&&").some((part) => {
+    const segment = part.trim()
+    if (candidates.includes("go test ./...") && /^go\s+test\s+\.\/\.\.(?:\s|$)/.test(segment)) return true
+    return candidates.some(
+      (candidate) =>
+        segment === candidate || segment.startsWith(`${candidate} `) || segment.startsWith(`${candidate}>`),
+    )
+  })
 }
 
 const FILE_MUTATING_TOOLS = new Set(["write", "edit", "apply_patch", "apply_patch_chunk"])
 
 // Exported for the real-DB integration test (receipt/event/tool_effect tables seeded with the
 // production column shapes, exactly as the V2 runner writes them).
-export function activityTouchedPaths(database: Database.Interface, sessionID: SessionSchema.ID, activityId: string): readonly string[] {
+export function activityTouchedPaths(
+  database: Database.Interface,
+  sessionID: SessionSchema.ID,
+  activityId: string,
+): readonly string[] {
   // receipt ids of this activity
   const receiptRows: ReadonlyArray<{ receiptId: string }> = Effect.runSync(
     database.db
       .select({ receiptId: V2ProviderTurnReceiptTable.receipt_id })
       .from(V2ProviderTurnReceiptTable)
-      .where(and(eq(V2ProviderTurnReceiptTable.session_id, sessionID), eq(V2ProviderTurnReceiptTable.activity_id, activityId)))
+      .where(
+        and(
+          eq(V2ProviderTurnReceiptTable.session_id, sessionID),
+          eq(V2ProviderTurnReceiptTable.activity_id, activityId),
+        ),
+      )
       .all(),
   )
   if (receiptRows.length === 0) return []
@@ -544,7 +603,7 @@ export function activityTouchedPaths(database: Database.Interface, sessionID: Se
       database.db
         .select({ data: EventTable.data })
         .from(EventTable)
-        .where(and(eq(EventTable.aggregate_id, sessionID), eq(EventTable.type, "session.next.tool.success")))
+        .where(and(eq(EventTable.aggregate_id, sessionID), eq(EventTable.type, TOOL_SUCCESS_TYPE)))
         .all(),
     )
   const paths = new Set<string>()
@@ -564,7 +623,11 @@ export function activityTouchedPaths(database: Database.Interface, sessionID: Se
     }
   }
   if (unattributedMutatingCalls > 0) {
-    Effect.runSync(Effect.logWarning("finalizer attribution: mutating calls with only archive outputPaths", { count: unattributedMutatingCalls }))
+    Effect.runSync(
+      Effect.logWarning("finalizer attribution: mutating calls with only archive outputPaths", {
+        count: unattributedMutatingCalls,
+      }),
+    )
   }
   return [...paths]
 }
