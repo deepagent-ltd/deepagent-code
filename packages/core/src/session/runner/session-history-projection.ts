@@ -79,6 +79,30 @@ const CLEAR_OLDER_THAN_DEFAULT = 8
 export const clearedAfterResults = () =>
   parseNonNegativeInt(process.env["DEEPAGENT_CODE_HISTORY_PROJECTION_CLEAR_AFTER"], CLEAR_OLDER_THAN_DEFAULT)
 
+/**
+ * REASONING replay (measured, round-10). The durable history keeps the model's reasoning blocks
+ * verbatim, and that is CORRECT for audit: they are part of what the model produced. Re-sending them
+ * on every later turn is not. Measured on the abs C2 run: `history_other` (which is the reasoning
+ * text — the transcript carries no reasoning events, and a shape-for-shape reproduction puts
+ * `other:assistant_text` at 22.5:1 against the run's 42.7:1) reached **68,079 tokens of a
+ * 166,985-token request — 41%**, i.e. ~45% of the billed input was the model re-reading its own
+ * earlier thoughts.
+ *
+ * The reference agents do not replay them: Claude Code strips `thinking`/`redacted_thinking` blocks
+ * from the request (`stripSignatureBlocks`, messages.ts:5522) and Codex tracks only encrypted
+ * reasoning content. The only reasoning the model cannot re-derive is the CURRENT turn's — it is the
+ * chain that produced the tool calls the next request continues — so exactly one assistant message
+ * keeps its reasoning and every older one loses it.
+ *
+ * `DEEPAGENT_CODE_HISTORY_PROJECTION_REASONING=all` restores full replay for A/B measurement.
+ */
+const REASONING_KEEP_DEFAULT = 1
+export const reasoningMessagesKept = (): number => {
+  const raw = process.env["DEEPAGENT_CODE_HISTORY_PROJECTION_REASONING"]
+  if (raw !== undefined && raw.trim().toLowerCase() === "all") return Number.MAX_SAFE_INTEGER
+  return parseNonNegativeInt(raw, REASONING_KEEP_DEFAULT)
+}
+
 const toolOutputCaps = (): Record<string, number> => {
   const raw = process.env["DEEPAGENT_CODE_HISTORY_PROJECTION_CAPS"]
   if (raw === undefined || raw.trim() === "") return { ...TOOL_OUTPUT_CAPS_DEFAULT }
@@ -230,27 +254,60 @@ export const projectForModel = (messages: readonly SessionMessage.Message[]): Pr
   const resent = new Set(settled.slice(0, tail).map((spot) => `${spot.message}:${spot.part}`))
   // Everything past the tail but inside the window: elided unless the stub would not be smaller.
   const clearable = new Set(clearAfter === 0 ? [] : settled.slice(tail).map((spot) => `${spot.message}:${spot.part}`))
+  // Which assistant messages keep their reasoning. Walk from the newest: the first `keep` messages
+  // that CARRY reasoning are protected, everything older loses it.
+  const keepReasoning = reasoningMessagesKept()
+  const reasoningKept = new Set<number>()
+  for (let m = messages.length - 1; m >= 0 && reasoningKept.size < keepReasoning; m--) {
+    const message = messages[m]
+    if (message?.type !== "assistant") continue
+    if (message.content.some((part) => part.type === "reasoning")) reasoningKept.add(m)
+  }
   const projected = messages.map((message, m) => {
     if (message.type !== "assistant") return message
     let changed = false
-    const content = message.content.map((part, p) => {
-      if (part.type !== "tool") return part
-      if (part.state.status !== "completed" && part.state.status !== "error") return part
+    const content: Array<SessionMessage.AssistantContent> = []
+    for (const [p, part] of message.content.entries()) {
+      // Drop replayed reasoning from older turns. The model cannot re-derive the CURRENT turn's
+      // chain (it produced the tool calls this request continues), so that one is kept; an earlier
+      // chain is a repetition of thinking the model already acted on, and it was 41% of the request
+      // in the measured run. Dropping a part is not truncation: nothing is paraphrased, and the
+      // durable history keeps every byte for audit.
+      if (part.type === "reasoning") {
+        if (reasoningKept.has(m)) content.push(part)
+        else {
+          stats.truncated += 1
+          stats.savedChars += part.text.length
+          changed = true
+        }
+        continue
+      }
+      if (part.type !== "tool") {
+        content.push(part)
+        continue
+      }
+      if (part.state.status !== "completed" && part.state.status !== "error") {
+        content.push(part)
+        continue
+      }
       const key = `${m}:${p}`
       const cap = caps[part.name]
       if (clearable.has(key)) {
         const cleared = clearedToolResult(part, stats)
         if (cleared !== part) changed = true
-        return cleared
+        content.push(cleared)
+        continue
       }
-      if (resent.has(key)) return part
-      if (cap === undefined || cap === 0) return part
+      if (resent.has(key) || cap === undefined || cap === 0) {
+        content.push(part)
+        continue
+      }
       // Errors carry the repair evidence, so they get a GENEROUS 4× budget — but no longer
       // unbounded (review finding): a pathological crash log must not blow the context window.
       const projectedPart = projectedToolResult(part, part.state.status === "error" ? cap * 4 : cap, stats)
       if (projectedPart !== part) changed = true
-      return projectedPart
-    })
+      content.push(projectedPart)
+    }
     if (!changed) return message
     return SessionMessage.Assistant.make({ ...message, content })
   })

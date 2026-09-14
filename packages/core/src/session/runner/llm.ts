@@ -1341,6 +1341,9 @@ export const layer = Layer.effect(
               volatileSystemParts,
               historyMessages: toLLMMessages(historyRequestMessages, model),
               controlMessage,
+              // The tool definitions are re-sent on every provider turn; measuring them is the only
+              // way to see how much of the per-turn floor is schema rather than conversation.
+              toolDefinitions,
             }),
             sessionID,
           )
