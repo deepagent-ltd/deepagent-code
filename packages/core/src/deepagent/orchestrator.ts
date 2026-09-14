@@ -130,10 +130,11 @@ export const buildPromptContext = (input: OrchestratorInput): PromptContext => {
   // §5b: compute the concrete per-turn fan-out verdict from this turn's request text so the
   // DeepAgent-active prompt (the primary user path) surfaces task-specific numbers, not just the
   // generic guidance. Deterministic pure function; ADVISORY only (the §5a semaphore is the hard cap).
-  // G3 review fix: the complexity that feeds the STABLE system prefix is FROZEN at first
-  // computation (state.frozenComplexity) — recomputing from the latest user request would drift
-  // the cached prefix on steer/continue (prompt-cache contract violation). The volatile per-turn
-  // verdict below still tracks the live request.
+  // G3 review fix (round 2): the freeze happens at the FIRST request the session ever sees —
+  // regardless of whether the `task` tool is materialized yet (round-1 permission/materialization
+  // timing must not open a window where the stable section appears mid-session and busts the
+  // cached prefix). No task tool ⇒ the session classifies as "no orchestration" (0) and stays so;
+  // a later round with the tool present reads the SAME frozen value for the stable section.
   const fanoutDecision = state.userRequest && input.tools.availableTools.some((tool) => tool.name === "task")
     ? decideFanout({
         mode: state.mode,
@@ -141,8 +142,11 @@ export const buildPromptContext = (input: OrchestratorInput): PromptContext => {
         caps: input.orchestrationCaps,
       })
     : undefined
-  if (fanoutDecision !== undefined && state.frozenComplexity === null) {
-    SessionState.update(input.sessionId, { frozenComplexity: fanoutDecision.complexity })
+  if (state.frozenComplexity === null && state.userRequest !== null) {
+    SessionState.update(input.sessionId, {
+      frozenComplexity: fanoutDecision !== undefined ? fanoutDecision.complexity : 0,
+    })
+    state.frozenComplexity = fanoutDecision !== undefined ? fanoutDecision.complexity : 0
   }
   const stableComplexity = state.frozenComplexity ?? fanoutDecision?.complexity
 

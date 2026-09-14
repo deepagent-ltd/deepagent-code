@@ -15,9 +15,10 @@ import { DEFAULT_WORKER_IDENTITY } from "@/agent/collaboration-identity"
  *     uncommitted work and other tasks' files into a runtime commit). The caller passes the
  *     write/edit targets extracted from the session's durable history; bash side effects are NOT
  *     attributable and are deliberately left uncommitted.
- *   - A recovery commit is made ONLY when the session's own validation state does not prove a
- *     failure (no recorded validation results, or the last set all passed). A failing validation
- *     leaves the tree uncommitted — the work is the diagnostic evidence for the next round.
+ *   - A recovery commit is made ONLY on the EXPLICIT "validated" verdict — all-pass evidence
+ *     attributed to THIS activity (review round 5: three-state input; "validation_failed" and
+ *     "unverified" both withhold, the tree keeps the work as diagnostic evidence / for the next
+ *     round).
  *   - The commit identity is the runtime worker (never the model's or the user's), --no-verify so
  *     a repo hook cannot lose the work, --no-gpg-sign.
  *   - Any failure (no repo, git error, timeout) leaves the tree EXACTLY as it was and reports the
@@ -30,6 +31,7 @@ export type FinalizeOutcome =
   | { readonly kind: "committed"; readonly commit: string; files: number }
   | { readonly kind: "no_changes" }
   | { readonly kind: "validation_failed"; readonly files: number }
+  | { readonly kind: "unverified"; readonly files: number }
   | { readonly kind: "skipped"; readonly reason: string }
 
 const GIT_TIMEOUT_MS = 60_000
@@ -63,14 +65,21 @@ const git = async (args: readonly string[], cwd: string): Promise<{ code: number
 
 /**
  * Commit a session's uncompleted work when the runtime can prove it is safe to deliver.
- * `validationPassed`: the session's recorded validation state — `true` only when results exist and
- * all passed; `null` when none were recorded (trivial tasks — deliver on the model's completion).
- * `touchedPaths`: the session's own write/edit targets (workspace-relative or absolute). Only
- * these paths are ever staged; an empty list skips delivery rather than committing nothing.
+ * `validation` is an EXPLICIT three-state verdict (review round 5 — the boolean|null contract
+ * made `null` mean both "no validation but allowed" and "evidence not trustworthy" at once, so
+ * the fail-closed intent never actually held):
+ *   - "validated"          → all-pass evidence attributed to THIS activity: commit.
+ *   - "validation_failed"  → this activity's validation failed: withhold (diagnostic evidence).
+ *   - "unverified"         → no evidence, or evidence not attributable to this activity:
+ *                            withhold. The tree keeps the work — delivery defers, never loses.
+ * `touchedPaths`: the session's own write/edit targets. Only these paths are ever staged; an
+ * empty list skips delivery rather than committing nothing.
  */
+export type FinalizerValidation = "validated" | "validation_failed" | "unverified"
+
 export const finalizeSessionWork = async (input: {
   readonly directory: string
-  readonly validationPassed: boolean | null
+  readonly validation: FinalizerValidation
   readonly touchedPaths: readonly string[]
 }): Promise<FinalizeOutcome> => {
   if (input.touchedPaths.length === 0) return { kind: "skipped", reason: "no_attributable_paths" }
@@ -85,8 +94,11 @@ export const finalizeSessionWork = async (input: {
     .filter((line) => line.length > 0)
   if (changedFiles.length === 0) return { kind: "no_changes" }
 
-  if (input.validationPassed === false)
-    return { kind: "validation_failed", files: changedFiles.length }
+  if (input.validation !== "validated")
+    return {
+      kind: input.validation === "validation_failed" ? "validation_failed" : "unverified",
+      files: changedFiles.length,
+    }
 
   // Stage EXACTLY the attributable paths — never the whole tree.
   const staged = await git(["add", "--", ...input.touchedPaths], input.directory)

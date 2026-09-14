@@ -1,7 +1,8 @@
 export * as DurableLearningRuntime from "./learning-runtime"
 
 import path from "node:path"
-import { and, count, desc, eq, isNull, ne, notInArray, or } from "drizzle-orm"
+import { existsSync, readFileSync } from "node:fs"
+import { and, count, desc, eq, inArray, isNull, ne, notInArray, or } from "drizzle-orm"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { Database } from "@deepagent-code/core/database/database"
 import { DeepAgentDurableLearning } from "@deepagent-code/core/deepagent/durable-learning"
@@ -9,10 +10,12 @@ import { DeepAgentLearningLifecycleTrigger } from "@deepagent-code/core/deepagen
 import { createInitialRoundState } from "@deepagent-code/core/deepagent/round-state"
 import { writeFileAtomic } from "@deepagent-code/core/deepagent/atomic-write"
 import { Global } from "@deepagent-code/core/global"
-import { SessionTable, SessionMessageTable } from "@deepagent-code/core/session/sql"
+import { SessionTable } from "@deepagent-code/core/session/sql"
 import { SessionSchema } from "@deepagent-code/core/session/schema"
 import { SessionRunner } from "@deepagent-code/core/session/runner"
 import { V2ProviderTurnReceiptTable } from "@deepagent-code/core/session/runner/v2-provider-turn.sql"
+import { EventTable } from "@deepagent-code/core/event/sql"
+import { V2ToolEffectTable } from "@deepagent-code/core/session/runner/v2-tool-effect.sql"
 import { finalizeSessionWork } from "./session-finalizer"
 import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
 import { Hash } from "@deepagent-code/core/util/hash"
@@ -197,17 +200,34 @@ export function onSessionSettled(
       // `git add -A` on the project root would absorb the user's unrelated uncommitted work.
       yield* Effect.promise(async () => {
         const workspace = input.workspacePath
+        if (input.activityId === undefined) return { finalized: false, detail: "skipped: no activity" }
+        // Review round 5: harvest THIS activity's validation evidence from the durable event log
+        // and record it WITH the activity binding BEFORE reading it back — under the V2 owner
+        // branch the V1 request-prep harvester never runs (prompt.ts returns from the v2Drain
+        // before the legacy loop), so without this the evidence is always empty and the verdict
+        // collapses to "unverified" forever. The classifier mirrors the V1 authority order: the
+        // bash exit trailer is definitive; structured exitCode (from the core bash tool) is the
+        // same fact; no signal means the command says nothing about validation. Both the record
+        // and the read run INSIDE withStorage so they address the same SessionState runtime the
+        // gateway configured (a bare module call would hit the defaultRuntime instead).
         const validation = withStorage(() => {
+          harvestActivityValidation(database, input.sessionID, input.activityId!, workspace)
           const state = AgentGateway.DeepAgentSessionState.get(input.sessionID)
-          if (!state || state.lastValidationResults.length === 0) return null
-          return state.lastValidationResults.every((result) => result.passed)
+          if (!state || state.lastValidationResults.length === 0) return "unverified" as const
+          // Only evidence attributed to THIS activity authorizes delivery; anything else
+          // (none, an older activity's, or unattributed legacy state) withholds. Withholding
+          // defers delivery — the tree keeps the work; it never loses it.
+          if (state.lastValidationActivityId !== input.activityId) return "unverified" as const
+          return state.lastValidationResults.every((result) => result.passed) ? ("validated" as const) : ("validation_failed" as const)
         })
-        const touchedPaths = sessionTouchedPaths(database, input.sessionID)
-        const outcome = await finalizeSessionWork({ directory: workspace, validationPassed: validation, touchedPaths })
+        const touchedPaths = activityTouchedPaths(database, input.sessionID, input.activityId)
+        const outcome = await finalizeSessionWork({ directory: workspace, validation, touchedPaths })
         if (outcome.kind === "committed")
           return { finalized: true, detail: `committed ${outcome.files} file(s) at ${outcome.commit}` }
         if (outcome.kind === "validation_failed")
           return { finalized: false, detail: `withheld: last validation failed (${outcome.files} changed)` }
+        if (outcome.kind === "unverified")
+          return { finalized: false, detail: `withheld: no validation evidence for this activity (${outcome.files} changed)` }
         if (outcome.kind === "no_changes") return { finalized: false, detail: "no changes to deliver" }
         return { finalized: false, detail: `skipped: ${outcome.reason}` }
       }).pipe(
@@ -353,38 +373,221 @@ export const onSessionSettledSeamLayer = Layer.effectContext(
   }),
 )
 
-// G2 review fix — the file-attribution source for the session finalizer. Walks the session's
-// durable assistant messages and collects the targets of MUTATING file tools (write/edit family).
-// Bash side effects are NOT attributable to a path and are deliberately excluded: the finalizer
-// would rather under-commit (work stays in the tree, recoverable) than absorb files the session
-// cannot prove it owns. Destructive/odd shapes are skipped, not guessed.
-const FILE_MUTATION_TOOLS = new Set(["write", "edit", "edit-fuzzy", "apply-patch", "apply-patch-chunk"])
-
-function sessionTouchedPaths(database: Database.Interface, sessionID: SessionSchema.ID): readonly string[] {
-  const rows: ReadonlyArray<{ data: unknown }> = Effect.runSync(
-    database.db
-      .select({ data: SessionMessageTable.data })
-      .from(SessionMessageTable)
-      .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.type, "assistant")))
-      .all(),
-  )
-  const paths = new Set<string>()
-  for (const row of rows) {
-    const data = row.data as { content?: Array<unknown> } | null
-    if (!data || !Array.isArray(data.content)) continue
-    for (const part of data.content) {
-      if (part === null || typeof part !== "object") continue
-      const tool = part as { type?: string; name?: string; state?: { input?: unknown } }
-      if (tool.type !== "tool" || !tool.name || !FILE_MUTATION_TOOLS.has(tool.name)) continue
-      const input = tool.state?.input
-      if (input === null || typeof input !== "object") continue
-      for (const value of Object.values(input as Record<string, unknown>)) {
-        // The mutation tools' target arg is `path` (single string); other string fields of the
-        // same call (content/edits) never look like a path with a separator, but stay strict:
-        // only accept values that are strings containing a path separator or a dot.
-        if (typeof value === "string" && /[/.]/.test(value)) paths.add(value)
-      }
+// G2 review fix (round 3) — the file-attribution source for the session finalizer.
+//
+// The durable JOIN chain (no sequence arithmetic — reviewer's blocking finding: message seq and
+// event seq are DISJOINT sequence spaces, and history_source_end_message_id marks a turn's START
+// boundary, so the previous (floorSeq, endSeq] window over event.seq could only ever produce an
+// empty set):
+//
+//   session_v2_tool_effect (receipt_id + tool_call_id + tool_name, written at settlement for
+//     every tool call the activity's provider turns made)
+//     → session_v2_provider_turn_receipt (activity_id) — restricts to THIS activity
+//   session.next.tool.success events (data.callID = effect.tool_call_id) → the tool's STRUCTURED
+//     OUTPUT, whose `resource`/`applied[].resource` fields carry the RESOLVED canonical path of
+//     every file the call changed — more reliable than the model-supplied input path, and the
+//     ONLY source for apply_patch_chunk commits (whose commit call carries no patchText at all:
+//   the assembled patch lives in the transaction map, not the event).
+//
+// Only SUCCESSFUL effects attribute files — a failed tool call changed nothing durable. Bash
+// stays excluded (no resource); malformed shapes contribute nothing (never guess).
+// Review round 5 — the V2 validation harvester. Under the V2 owner branch the V1 request-prep
+// harvester never runs (prompt.ts returns from the v2Drain before the legacy loop), so nothing
+// ever wrote lastValidationResults for a V2 session and the finalizer's verdict was permanently
+// "unverified". This harvests THIS activity's bash evidence from the same durable join the
+// attribution uses (tool_effect → receipt.activity_id → events by callID), classifies it with
+// the V1 authority order (the exit trailer is definitive; the core bash tool's structured
+// exitCode is the same fact; no signal says nothing), and records it WITH the activity binding.
+// Fail-safe: any doubt (no commands inferable, no matching calls, unreadable rows) records
+// nothing — the finalizer then withholds, which defers delivery without losing work.
+export function harvestActivityValidation(
+  database: Database.Interface,
+  sessionID: SessionSchema.ID,
+  activityId: string,
+  workspace: string,
+): void {
+  // Same workspace signals the V1 detector uses (workspace-context.ts): package.json scripts,
+  // tsconfig, python markers. Sync fs probes — the settle path must not depend on the async
+  // detect cache being warm. An empty inference records nothing (finalizer withholds — safe).
+  const readJsonIfExists = (file: string): { scripts?: Record<string, string> } | undefined => {
+    try {
+      return JSON.parse(readFileSync(file, "utf8")) as { scripts?: Record<string, string> }
+    } catch {
+      return undefined
     }
   }
+  const packageJson = readJsonIfExists(path.join(workspace, "package.json"))
+  const hasTypeScript =
+    existsSync(path.join(workspace, "tsconfig.json")) || packageJson?.scripts?.typecheck !== undefined
+  const hasPython = ["pyproject.toml", "requirements.txt", "setup.py"].some((file) =>
+    existsSync(path.join(workspace, file)),
+  )
+  const commands = AgentGateway.DeepAgentValidation.inferValidationCommands({
+    cwd: workspace,
+    packageJson,
+    hasTypeScript,
+    hasPython,
+    runner: "bun run",
+  })
+  if (commands.length === 0) return
+  // bash tool calls of THIS activity (inputs from tool.called, outcomes from tool.success)
+  const effects: ReadonlyArray<{ toolCallId: string; toolName: string }> = Effect.runSync(
+    database.db
+      .select({ toolCallId: V2ToolEffectTable.tool_call_id, toolName: V2ToolEffectTable.tool_name })
+      .from(V2ToolEffectTable)
+      .innerJoin(
+        V2ProviderTurnReceiptTable,
+        eq(V2ToolEffectTable.receipt_id, V2ProviderTurnReceiptTable.receipt_id),
+      )
+      .where(
+        and(
+          eq(V2ToolEffectTable.session_id, sessionID),
+          eq(V2ProviderTurnReceiptTable.activity_id, activityId),
+          eq(V2ToolEffectTable.state, "settled"),
+          eq(V2ToolEffectTable.tool_name, "bash"),
+        ),
+      )
+      .all(),
+  )
+  if (effects.length === 0) return
+  const callIds = new Set(effects.map((row) => row.toolCallId))
+  const calledInputs = new Map<string, string>()
+  const successOutputs = new Map<string, { exitCode?: unknown; output?: unknown }>()
+  for (const row of Effect.runSync(
+    database.db
+      .select({ type: EventTable.type, data: EventTable.data })
+      .from(EventTable)
+      .where(
+        and(
+          eq(EventTable.aggregate_id, sessionID),
+          inArray(EventTable.type, ["session.next.tool.called", "session.next.tool.success"]),
+        ),
+      )
+      .all(),
+  )) {
+    const callID = (row.data as { callID?: unknown } | null)?.callID
+    if (typeof callID !== "string" || !callIds.has(callID)) continue
+    if (row.type === "session.next.tool.called") {
+      const input = (row.data as { input?: unknown } | null)?.input
+      const command = (input as { command?: unknown } | null)?.command
+      if (typeof command === "string") calledInputs.set(callID, command)
+    } else {
+      const structured = (row.data as { structured?: unknown } | null)?.structured
+      if (structured !== null && typeof structured === "object")
+        successOutputs.set(callID, structured as { exitCode?: unknown; output?: unknown })
+    }
+  }
+  const results: AgentGateway.ValidationResult[] = []
+  for (const [callId, command] of calledInputs) {
+    // Same matching rule as the V1 classifier: the executed command must CONTAIN an inferred
+    // validation command (the model prefixes runners / wraps with cd).
+    if (!commands.some((candidate) => command.includes(candidate))) continue
+    const outcome = successOutputs.get(callId)
+    if (outcome === undefined) continue
+    const exit = typeof outcome.exitCode === "number" ? outcome.exitCode : undefined
+    if (exit === undefined) continue // no authoritative signal — says nothing (never guess)
+    const textOutput = typeof outcome.output === "string" ? outcome.output : ""
+    results.push({
+      command,
+      passed: exit === 0,
+      kind: "command_exit",
+      exit_code: exit,
+      output: textOutput,
+      duration_ms: 0,
+    })
+  }
+  if (results.length === 0) return
+  const output = results.map((r) => `${r.command}: ${r.passed ? "PASS" : "FAIL"}`).join("\n")
+  // SessionState resolves through AsyncLocalStorage with a default-runtime fallback, so a plain
+  // synchronous call from the settle path reaches the same store the drain fibers use.
+  AgentGateway.DeepAgentSessionState.getOrCreate(sessionID, "high")
+  AgentGateway.DeepAgentSessionState.recordValidation(sessionID, results, output, activityId)
+}
+
+const FILE_MUTATING_TOOLS = new Set(["write", "edit", "apply_patch", "apply_patch_chunk"])
+
+// Exported for the real-DB integration test (receipt/event/tool_effect tables seeded with the
+// production column shapes, exactly as the V2 runner writes them).
+export function activityTouchedPaths(database: Database.Interface, sessionID: SessionSchema.ID, activityId: string): readonly string[] {
+  // receipt ids of this activity
+  const receiptRows: ReadonlyArray<{ receiptId: string }> = Effect.runSync(
+    database.db
+      .select({ receiptId: V2ProviderTurnReceiptTable.receipt_id })
+      .from(V2ProviderTurnReceiptTable)
+      .where(and(eq(V2ProviderTurnReceiptTable.session_id, sessionID), eq(V2ProviderTurnReceiptTable.activity_id, activityId)))
+      .all(),
+  )
+  if (receiptRows.length === 0) return []
+  // every tool effect settled under those receipts, with its exact tool name
+  const effectRows: ReadonlyArray<{ toolCallId: string; toolName: string }> = Effect.runSync(
+    database.db
+      .select({ toolCallId: V2ToolEffectTable.tool_call_id, toolName: V2ToolEffectTable.tool_name })
+      .from(V2ToolEffectTable)
+      .where(
+        and(
+          eq(V2ToolEffectTable.session_id, sessionID),
+          inArray(
+            V2ToolEffectTable.receipt_id,
+            receiptRows.map((row) => row.receiptId),
+          ),
+          eq(V2ToolEffectTable.state, "settled"),
+        ),
+      )
+      .all(),
+  )
+  const mutating = effectRows.filter((row) => FILE_MUTATING_TOOLS.has(row.toolName))
+  if (mutating.length === 0) return []
+  const callIds = new Set(mutating.map((row) => row.toolCallId))
+  // successful tool outputs from the durable event log, keyed by callID
+  const successRows: ReadonlyArray<{ data: { callID?: unknown; structured?: unknown; outputPaths?: unknown } }> =
+    Effect.runSync(
+      database.db
+        .select({ data: EventTable.data })
+        .from(EventTable)
+        .where(and(eq(EventTable.aggregate_id, sessionID), eq(EventTable.type, "session.next.tool.success")))
+        .all(),
+    )
+  const paths = new Set<string>()
+  let unattributedMutatingCalls = 0
+  for (const row of successRows) {
+    if (typeof row.data?.callID !== "string" || !callIds.has(row.data.callID)) continue
+    const fromStructured = toolSuccessResources(row.data.structured)
+    for (const path of fromStructured) paths.add(path)
+    if (fromStructured.length === 0) {
+      // outputPaths (review round 4) is the event-schema field the runner always writes on
+      // success — but its PRODUCER is the tool-output overflow store: the paths point at
+      // internal archive files (`.deepagent` data dir), never at workspace files the tool
+      // mutated. Committing them would pollute the tree, so they are FILTERED — but their
+      // presence on a mutating call with no structured resource is an anomaly worth surfacing.
+      const outputPaths = Array.isArray(row.data.outputPaths) ? row.data.outputPaths.length : 0
+      if (outputPaths > 0) unattributedMutatingCalls++
+    }
+  }
+  if (unattributedMutatingCalls > 0) {
+    Effect.runSync(Effect.logWarning("finalizer attribution: mutating calls with only archive outputPaths", { count: unattributedMutatingCalls }))
+  }
   return [...paths]
+}
+
+/**
+ * Extract the changed-file paths from a mutating tool's STRUCTURED SUCCESS output:
+ *   write/edit         → output.resource (the mutation-resolved canonical path)
+ *   apply_patch(_chunk)→ output.applied[].resource (one per applied hunk; commit carries the
+ *                        assembled result even though its own input has no patchText)
+ * Reads ONLY schema-declared fields; anything else contributes nothing. Exported for tests.
+ */
+export function toolSuccessResources(structured: unknown): readonly string[] {
+  if (structured === null || typeof structured !== "object") return []
+  const record = structured as Record<string, unknown>
+  const resource = record.resource
+  if (typeof resource === "string" && resource.trim().length > 0) return [resource]
+  const applied = record.applied
+  if (!Array.isArray(applied)) return []
+  const resources: string[] = []
+  for (const item of applied) {
+    if (item === null || typeof item !== "object") continue
+    const r = (item as Record<string, unknown>).resource
+    if (typeof r === "string" && r.trim().length > 0) resources.push(r)
+  }
+  return resources
 }

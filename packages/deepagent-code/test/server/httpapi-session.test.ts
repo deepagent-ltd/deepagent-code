@@ -1100,10 +1100,15 @@ describe("session HttpApi", () => {
         const wait = yield* request(`/api/session/${session.id}/wait`, { method: "POST", headers })
         expect(wait.status).toBe(204)
 
+        // Admit-only (resume:false): this case pins the ROUTING contract — the Core V2 prompt
+        // service must persist the durable session_input row with the steered delivery. Scheduling
+        // a real drain here would be incidental (nothing below asserts its outcome), and with no
+        // provider configured the drain exhausts its bounded rejection retries in the background
+        // while the test tears the instance down, racing scope close into a spurious timeout.
         const prompt = yield* request(`/api/session/${session.id}/prompt`, {
           method: "POST",
           headers: { ...headers, "content-type": "application/json" },
-          body: JSON.stringify({ id: "msg_execution_unavailable", prompt: { text: "hello" } }),
+          body: JSON.stringify({ id: "msg_execution_unavailable", prompt: { text: "hello" }, resume: false }),
         })
         expect(prompt.status).toBe(200)
         expect(yield* responseJson(prompt)).toMatchObject({
@@ -1129,6 +1134,9 @@ describe("session HttpApi", () => {
         })
       }),
     { git: true, config: { formatter: false, lsp: false } },
+    // Boots a real server instance over a git repo; runs 3-4s under load — the default
+    // 5s timeout flakes under parallel suite load.
+    30_000,
   )
 
   it.instance(

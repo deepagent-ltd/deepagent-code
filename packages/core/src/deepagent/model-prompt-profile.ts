@@ -65,8 +65,13 @@ const EFFORT_ORDER = ["low", "medium", "high", "max"] as const
 export const clampReasoningEffort = (
   effort: "low" | "medium" | "high" | "max",
   cap: "low" | "medium" | "high" | "max" | undefined,
-): "low" | "medium" | "high" | "max" =>
-  cap === undefined ? effort : EFFORT_ORDER[Math.min(EFFORT_ORDER.indexOf(effort), EFFORT_ORDER.indexOf(cap))]
+): "low" | "medium" | "high" | "max" => {
+  const clamped =
+    cap === undefined ? effort : EFFORT_ORDER[Math.min(EFFORT_ORDER.indexOf(effort), EFFORT_ORDER.indexOf(cap))]
+  // The OpenAI wire effort set has no "max" (openai-options.ts OpenAIReasoningEfforts filters it
+  // out and the chat lowering REJECTS it) — clamp one step down rather than failing the request.
+  return clamped === "max" ? "high" : clamped
+}
 
 const overridesFromEnv = (): Record<string, ModelPromptProfile> => {
   const raw = process.env["DEEPAGENT_CODE_MODEL_PROFILES"]

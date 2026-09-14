@@ -24,11 +24,12 @@ describe("model prompt profile", () => {
     expect(profileKeyFor("deepseek", "deepseek-chat")).toBe("deepseek/deepseek-chat")
   })
 
-  test("clampReasoningEffort caps without raising", () => {
+  test("clampReasoningEffort caps without raising, and never yields max (OpenAI wire set)", () => {
     expect(clampReasoningEffort("max", "medium")).toBe("medium")
     expect(clampReasoningEffort("low", "medium")).toBe("low")
     expect(clampReasoningEffort("high", undefined)).toBe("high")
-    expect(clampReasoningEffort("max", undefined)).toBe("max")
+    // "max" is not in the OpenAI wire effort set — clamp one step down instead of failing.
+    expect(clampReasoningEffort("max", undefined)).toBe("high")
   })
 
   test("event channel: validation_failed prompt resolves for every profile", () => {
