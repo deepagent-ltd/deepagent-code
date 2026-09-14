@@ -143,6 +143,12 @@ const MUTATING_TOOLS = new Set([
   "write",
   "patch",
   "apply_patch",
+  // The V2 chunked patch transaction. It was absent here while `BuiltInTools.locationLayer` registers
+  // it, so `isMutatingTool("apply_patch_chunk")` fell through to the final `return false`: the tool
+  // that models actually use for large file changes was classified READ-ONLY and skipped the plan
+  // gate entirely (no block, and equally no implicit-plan audit record). The V1-era name in this set
+  // is `patch`, not the V2 pair.
+  "apply_patch_chunk",
   "multiedit",
   // FEAT-011 T5: the unified activity facade's MUTATING entry points — activity_start spawns a
   // supervised background activity (task/goal/panel) and activity_control pause/resume/stop/steers

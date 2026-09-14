@@ -34,7 +34,7 @@ const gate = () => {
 const mutating = { sessionID, toolName: "write", args: { file_path: "/app/a.go", content: "x" } }
 
 describe("V2 plan gate on unseeded sessions", () => {
-  test("blocks, then releases once after the consecutive-block limit, then registers an implicit plan", async () => {
+  test("blocks once, then releases by registering an implicit plan (no repeating block tax)", async () => {
     const { decisions, plan } = await Effect.runPromise(
       Effect.gen(function* () {
         const decide = yield* SessionRunner.CurrentToolSettleGate
@@ -52,15 +52,17 @@ describe("V2 plan gate on unseeded sessions", () => {
     expect(limit).toBe(2)
     // first `limit` calls: held with the compact plan template
     for (const decision of decisions.slice(0, limit)) expect(decision.kind).toBe("block")
-    // the next one: released ONCE with the strong reminder
+    // The release IS the resolution: it registers the one-step implicit plan instead of handing back a
+    // bare pass. The wazero run measured what the bare pass cost — the counter was reset by the pass,
+    // so "block, block, pass" repeated for the whole run (93 blocks / 46 releases over 199 turns,
+    // i.e. ~2 provider turns per cycle) and the block never once produced a plan.
     const released = decisions[limit]
     expect(released?.kind).toBe("pass")
-    expect(released?.kind === "pass" && released.reminder).toContain("Plan gate released")
-    // G1: after the release reset, the next low-risk edit gets a runtime-registered implicit plan
-    // instead of re-entering the block loop — the session must make forward progress.
-    const implicit = decisions[limit + 1]
-    expect(implicit?.kind).toBe("pass")
-    expect(implicit?.kind === "pass" && implicit.reminder).toContain("runtime plan")
+    expect(released?.kind === "pass" && released.reminder).toContain("registered a one-step runtime plan")
+    // …and because the plan now exists, later mutations do not re-enter the block loop at all.
+    const after = decisions[limit + 1]
+    expect(after?.kind).toBe("pass")
+    expect(after?.kind === "pass" && after.reminder).toBeUndefined()
     expect(plan).not.toBeNull()
     expect(plan?.steps).toHaveLength(1)
     expect(plan?.steps[0]?.status).toBe("active")
@@ -109,15 +111,19 @@ describe("V2 plan gate on unseeded sessions", () => {
         const decide = yield* SessionRunner.CurrentToolSettleGate
         if (!decide) return yield* Effect.die("tool settle gate is not wired")
         const out = []
-        for (let i = 0; i <= AgentGateway.DeepAgentPlanController.DEFAULT_GRACE_BLOCK_LIMIT; i++)
+        // One past the release: the extra call proves the latch really was cleared.
+        for (let i = 0; i <= AgentGateway.DeepAgentPlanController.DEFAULT_GRACE_BLOCK_LIMIT + 1; i++)
           out.push(yield* decide({ ...mutating, sessionID: staleSessionID }))
         return out
       }).pipe(Effect.provide(gate()), Effect.scoped),
     )
 
     expect(AgentGateway.DeepAgentPlanController.DEFAULT_GRACE_BLOCK_LIMIT).toBe(2)
-    expect(decisions.map((decision) => decision.kind)).toEqual(["block", "block", "pass"])
-    expect(decisions[2].kind === "pass" && decisions[2].reminder).toContain("released ONCE")
+    expect(decisions.map((decision) => decision.kind)).toEqual(["block", "block", "pass", "pass"])
+    expect(decisions[2].kind).toBe("pass")
+    expect(decisions[2].kind === "pass" && decisions[2].reminder).toContain("staleness warning cleared")
+    // And the latch is genuinely cleared: a later mutation in the same session is not re-blocked.
+    expect(decisions[3]?.kind).toBe("pass")
   })
 
   test("G1: a seeded session's low-risk first edit passes with an implicit plan, no block round", async () => {
@@ -145,6 +151,34 @@ describe("V2 plan gate on unseeded sessions", () => {
     expect(plan?.steps[0]?.status).toBe("active")
     expect(plan?.goal).toContain("parser.go")
   })
+
+  // The round-10 run showed why this matters: its mutations were `apply_patch`/`apply_patch_chunk`,
+  // so an implicit-plan fast path that only recognised edit/write was dead in practice and every
+  // first edit paid a block round (40 of 160 gate consults were blocks). Patch tools are the same
+  // low-risk class — single target, content-matched, no shell authority.
+  test.each(["apply_patch", "apply_patch_chunk"])(
+    "G1: a low-risk first %s also registers an implicit plan instead of blocking",
+    async (toolName) => {
+      const patchSession = `ses_v2_gate_implicit_${toolName}`
+      const { decision, plan } = await Effect.runPromise(
+        Effect.gen(function* () {
+          const runtime = yield* AgentGateway.Runtime
+          runtime.withStorage(() => AgentGateway.DeepAgentSessionState.getOrCreate(patchSession, "high"))
+          const decide = yield* SessionRunner.CurrentToolSettleGate
+          if (!decide) return yield* Effect.die("tool settle gate is not wired")
+          const decision = yield* decide({
+            sessionID: patchSession,
+            toolName,
+            args: { patchText: "*** Begin Patch\n*** Update File: /app/parser/parser.go\n*** End Patch" },
+          })
+          const plan = runtime.withStorage(() => AgentGateway.DeepAgentSessionState.getPlan(patchSession))
+          return { decision, plan }
+        }).pipe(Effect.provide(gate()), Effect.scoped),
+      )
+      expect(decision.kind).toBe("pass")
+      expect(plan?.steps).toHaveLength(1)
+    },
+  )
 
   test("G1: a mutating bash command still takes the block path (no implicit plan for shells)", async () => {
     const bashSession = "ses_v2_gate_implicit_bash"
