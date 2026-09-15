@@ -12,6 +12,7 @@ import { CanonicalJson } from "../../src/util/canonical-json"
 import { Hash } from "../../src/util/hash"
 import type { LearningCandidate } from "../../src/deepagent/learning"
 import type { TaskContext, ToolContext } from "../../src/deepagent/prompt-policy"
+import { tmpRoot } from "../fixture/tmpdir"
 
 let dir: string
 let rejected: RejectedBuffer
@@ -30,7 +31,7 @@ const cand = (over: Partial<LearningCandidate> = {}): LearningCandidate => ({
 })
 
 beforeEach(() => {
-  dir = mkdtempSync(path.join(tmpdir(), "deepagent-promo-"))
+  dir = mkdtempSync(tmpRoot())
   rejected = new RejectedBuffer(dir)
 })
 afterEach(() => rmSync(dir, { recursive: true, force: true }))

@@ -5,6 +5,7 @@ import path from "node:path"
 import { HookPolicy, MAX_HOOK_HANDLERS_PER_EVENT, stopHookGate, patchSizeGuard } from "../../src/deepagent/hooks"
 import { DocumentStore } from "../../src/deepagent/document-store"
 import { explainCandidate } from "../../src/deepagent/reviewer"
+import { tmpRoot } from "../fixture/tmpdir"
 
 describe("V3 hooks", () => {
   test("stop hook blocks without validation", () => {
@@ -30,7 +31,7 @@ describe("V3 reviewer projection", () => {
   let root: string
   let store: DocumentStore
   beforeEach(() => {
-    root = mkdtempSync(path.join(tmpdir(), "deepagent-rev-"))
+    root = mkdtempSync(tmpRoot())
     store = new DocumentStore(root)
   })
   afterEach(() => rmSync(root, { recursive: true, force: true }))

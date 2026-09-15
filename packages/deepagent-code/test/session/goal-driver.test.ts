@@ -25,6 +25,7 @@ import {
   noopPorts,
   type GoalDriverPorts,
 } from "../../src/session/goal-driver"
+import { tmpRoot } from "../fixture/fixture"
 
 /**
  * V3.9 §D — the Goal Driver. Verifies the production seam that goal-loop.ts + goal-loop-wiring.ts left
@@ -38,7 +39,7 @@ let store: DocumentStore
 const SESSION = "drv-session-1"
 
 beforeEach(() => {
-  root = mkdtempSync(path.join(tmpdir(), "goal-driver-"))
+  root = mkdtempSync(tmpRoot())
   store = new DocumentStore(root)
 })
 afterEach(() => {

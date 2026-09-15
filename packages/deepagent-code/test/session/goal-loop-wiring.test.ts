@@ -35,6 +35,7 @@ import type { SessionPrompt } from "../../src/session/prompt"
 import { SessionID } from "../../src/session/schema"
 import { PLAN_WRITE_OWN_GOAL } from "../../src/agent/subagent-permissions"
 import { createPlanDoc, planScope, type PlanDoc, type PlanStep } from "@deepagent-code/core/deepagent/plan-controller"
+import { tmpRoot, tmpRootShared } from "../fixture/fixture"
 
 /**
  * V3.9 §D wiring unit tests. Every leaf (LSP diagnostics, validation runner, subagent turn) is
@@ -1237,7 +1238,7 @@ describe("V3.9 §E F3 wiring — plan bridge (worker plan edits reach the goal p
   // configured root (plan-store). Configure a fresh state dir per case so the child session's
   // getPlan/setPlan (used by seedChildPlan/mirrorChildPlan) has a plan-store root.
   beforeEach(() => {
-    AgentGateway.DeepAgentSessionState.configure(mkdtempSync(path.join(tmpdir(), "deepagent-f3-state-")))
+    AgentGateway.DeepAgentSessionState.configure(mkdtempSync(tmpRoot()))
   })
   const step = (id: string, status: PlanStep["status"]): PlanStep => ({
     step_id: id,
@@ -1261,7 +1262,7 @@ describe("V3.9 §E F3 wiring — plan bridge (worker plan edits reach the goal p
     }).id
   }
   const freshStore = () => {
-    const root = mkdtempSync(path.join(tmpdir(), "deepagent-f3-"))
+    const root = mkdtempSync(tmpRootShared())
     roots.push(root)
     return new DocumentStore(root)
   }
@@ -1442,9 +1443,7 @@ describe("resolveV2SubagentDrive (LEGACY-EXECUTION-ZERO)", () => {
     // RI-122: runtime-flags.ts hardcodes `coreV2Only: Config.succeed(true)`; "profile OFF" is no
     // longer representable, so `experimentalV2SubagentDrive: false` with no profile override must
     // STILL resolve the V2 seam — the legacy executor is not selectable.
-    const { v2Session } = await Effect.runPromise(
-      resolveDrive({ experimentalV2SubagentDrive: false }),
-    )
+    const { v2Session } = await Effect.runPromise(resolveDrive({ experimentalV2SubagentDrive: false }))
     expect(v2Session).toBe(stubSessionV2)
   })
 

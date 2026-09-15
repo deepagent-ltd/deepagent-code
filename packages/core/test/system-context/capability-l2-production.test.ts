@@ -50,6 +50,7 @@ import {
   type CapabilityManifest,
 } from "@deepagent-code/core/system-context/capability-manifest"
 import { capabilityBodyFor } from "@deepagent-code/core/system-context/capability-bodies"
+import { tmpRoot } from "../fixture/tmpdir"
 
 // W4 — Capability L2 production acceptance: session-scoped loads + durable
 // session_capability_load writes/read-back (snapshot restoration closure), the
@@ -321,7 +322,7 @@ describe("durable receipt: write table → NEW store instance (new DB connection
   let dir: string
   let file: string
   beforeEach(() => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), "w4-l2-capability-"))
+    dir = fs.mkdtempSync(tmpRoot())
     file = path.join(dir, "capability-l2.db")
   })
   afterEach(() => fs.rmSync(dir, { recursive: true, force: true }))

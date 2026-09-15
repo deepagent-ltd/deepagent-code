@@ -21,11 +21,12 @@ import { SessionSchema } from "../../src/session/schema"
 import { SessionTable } from "../../src/session/sql"
 import { CanonicalJson } from "../../src/util/canonical-json"
 import { Hash } from "../../src/util/hash"
+import { tmpRoot } from "../fixture/tmpdir"
 
 let root: string
 
 beforeEach(() => {
-  root = mkdtempSync(path.join(tmpdir(), "deepagent-learning-lifecycle-"))
+  root = mkdtempSync(tmpRoot())
 })
 
 afterEach(async () => {

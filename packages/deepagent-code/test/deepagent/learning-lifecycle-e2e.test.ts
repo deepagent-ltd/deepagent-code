@@ -46,6 +46,7 @@ import { SessionSchema } from "@deepagent-code/core/session/schema"
 import { SessionTable } from "@deepagent-code/core/session/sql"
 import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
 import { Hash } from "@deepagent-code/core/util/hash"
+import { tmpRoot } from "../fixture/fixture"
 
 const SESSION_ID = "ses_lifecycle_e2e"
 const RUN_A_ID = "run-lifecycle-e2e-a"
@@ -55,7 +56,7 @@ const OBSERVED_PROJECT_ID = "project-observed-lifecycle-e2e"
 let root: string
 
 beforeEach(() => {
-  root = mkdtempSync(path.join(tmpdir(), "deepagent-learning-lifecycle-e2e-"))
+  root = mkdtempSync(tmpRoot())
 })
 
 afterEach(() => {

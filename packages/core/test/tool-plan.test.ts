@@ -11,6 +11,7 @@ import { ToolOutputStore } from "../src/tool-output-store"
 import { ToolRegistry } from "../src/tool/registry"
 import { ApplicationTools } from "../src/tool/application-tools"
 import { testEffect } from "./lib/effect"
+import { tmpRoot } from "./fixture/tmpdir"
 
 // The V2 plan-gate deadlock repair: the strict gate blocks mutating tools until the model
 // commits a plan, and the block copy tells the model to call the `plan` tool — which never
@@ -22,7 +23,7 @@ let stateDir: string
 const sid = "ses_v2_plan_tool_deadlock_repair"
 
 beforeEach(() => {
-  stateDir = mkdtempSync(path.join(tmpdir(), "deepagent-plantool-"))
+  stateDir = mkdtempSync(tmpRoot())
   SessionState.configure(stateDir)
 })
 afterEach(() => {
@@ -56,7 +57,8 @@ describe("PlanWriteTool (V2 builtin plan)", () => {
       const service = yield* ToolRegistry.Service
       const materialized = yield* service.materialize()
       expect(materialized.definitions.map((definition) => definition.name)).toContain("plan")
-    }))
+    }),
+  )
 
   it.effect("create commits the authority doc and arms the gate-visible plan", () =>
     Effect.gen(function* () {

@@ -9,6 +9,7 @@ import {
   userGlobalStoreFor,
 } from "@deepagent-code/core/deepagent/knowledge-source"
 import { stageAndReviewMemories } from "../../src/import/writer/memory"
+import { tmpRoot, tmpRootShared } from "../fixture/fixture"
 
 const roots: string[] = []
 
@@ -19,7 +20,7 @@ afterEach(() => {
 
 describe("knowledge import cache", () => {
   test("writes through the configured store without invalidating it", () => {
-    const base = mkdtempSync(path.join(tmpdir(), "deepagent-knowledge-import-cache-"))
+    const base = mkdtempSync(tmpRootShared())
     roots.push(base)
     configure(base)
     const store = userGlobalStoreFor()
@@ -41,7 +42,7 @@ describe("knowledge import cache", () => {
   })
 
   test("makes imported project candidates visible in the live review summary", () => {
-    const base = mkdtempSync(path.join(tmpdir(), "deepagent-knowledge-import-cache-"))
+    const base = mkdtempSync(tmpRootShared())
     const workspace = path.join(base, "workspace")
     roots.push(base)
     configure(base)

@@ -3,6 +3,7 @@ import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import * as SessionState from "../../src/deepagent/session-state"
+import { tmpRoot } from "../fixture/tmpdir"
 
 // V3.9 §C/§D: the per-session Expert Panel arming flag and the active-goal pointer. These are the
 // server/UI seams for the panel toggle and the goal status bar. Verifies default-off, explicit toggle,
@@ -10,7 +11,7 @@ import * as SessionState from "../../src/deepagent/session-state"
 
 describe("session-state panel arming (§C)", () => {
   beforeEach(() => {
-    SessionState.configure(mkdtempSync(path.join(tmpdir(), "panel-arm-")))
+    SessionState.configure(mkdtempSync(tmpRoot()))
   })
 
   test("a new session has no explicit choice → follows the global default", () => {
@@ -42,7 +43,7 @@ describe("session-state panel arming (§C)", () => {
 
 describe("session-state panel debate depth (V4.0 three-state control)", () => {
   beforeEach(() => {
-    SessionState.configure(mkdtempSync(path.join(tmpdir(), "panel-rounds-")))
+    SessionState.configure(mkdtempSync(tmpRoot()))
   })
 
   test("defaults to single when never chosen; setPanelRounds persists the choice", () => {
@@ -70,7 +71,7 @@ describe("session-state panel debate depth (V4.0 three-state control)", () => {
 
 describe("session-state active-goal pointer (§D)", () => {
   beforeEach(() => {
-    SessionState.configure(mkdtempSync(path.join(tmpdir(), "goal-ptr-")))
+    SessionState.configure(mkdtempSync(tmpRoot()))
   })
 
   test("a new session has no active goal", () => {

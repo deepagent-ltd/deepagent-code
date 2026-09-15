@@ -4,10 +4,15 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { Effect } from "effect"
 import { parseSummaryToEntries, carryOverToBridge, contextStoreRoot } from "../../src/session/context-ledger"
-import { DeepAgentContext, DeepAgentDocumentStore, DeepAgentDurableKnowledgeStore } from "@deepagent-code/core/deepagent/index"
+import {
+  DeepAgentContext,
+  DeepAgentDocumentStore,
+  DeepAgentDurableKnowledgeStore,
+} from "@deepagent-code/core/deepagent/index"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { Global } from "@deepagent-code/core/global"
 import type { SessionID } from "../../src/session/schema"
+import { tmpRoot, tmpRootShared } from "../fixture/fixture"
 
 // V3.8 Appendix-A Stage 1 seam — the pure "structured diff from prose" parser that mirrors a
 // compaction summary into typed Session Ledger entries. Tolerant: unknown sections skipped, never
@@ -87,7 +92,7 @@ describe("carryOverToBridge (Stage 3 write side)", () => {
 
   test("projects the session ledger's active carried entries into the project bridge doc", async () => {
     const prevHome = process.env.DEEPAGENT_CODE_HOME
-    const home = mkdtempSync(path.join(tmpdir(), "deepagent-bridge-write-"))
+    const home = mkdtempSync(tmpRootShared())
     process.env.DEEPAGENT_CODE_HOME = home
     // Establish a known knowledge-source base (== Global.Path.agent.data for this env) so the write
     // path (projectStoreFor when configured) and the disk read-back below agree, hermetically —
@@ -138,7 +143,7 @@ describe("carryOverToBridge (Stage 3 write side)", () => {
   // be invisible in-process. Proves same-process write-then-read coherence via the cache.
   test("write is visible through the cached projectStoreFor instance the orchestrator reads (no stale cache)", async () => {
     const prevHome = process.env.DEEPAGENT_CODE_HOME
-    const home = mkdtempSync(path.join(tmpdir(), "deepagent-bridge-cache-"))
+    const home = mkdtempSync(tmpRootShared())
     process.env.DEEPAGENT_CODE_HOME = home
     AgentGateway.DeepAgentKnowledgeSource.configure(Global.Path.agent.data)
     try {
@@ -171,7 +176,7 @@ describe("carryOverToBridge (Stage 3 write side)", () => {
 
   test("empty ledger degrades to a no-op (returns 0, never throws)", async () => {
     const prevHome = process.env.DEEPAGENT_CODE_HOME
-    const home = mkdtempSync(path.join(tmpdir(), "deepagent-bridge-empty-"))
+    const home = mkdtempSync(tmpRootShared())
     process.env.DEEPAGENT_CODE_HOME = home
     try {
       const count = await Effect.runPromise(

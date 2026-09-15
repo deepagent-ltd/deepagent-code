@@ -3,10 +3,11 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { gatewayConfig, reviewRunsDir } from "../../src/deepagent/config"
+import { tmpRoot, tmpRootShared } from "../fixture/fixture"
 
 describe("DeepAgent Code config", () => {
   test("uses the isolated canonical root and enables runtime by default", () => {
-    const home = mkdtempSync(path.join(tmpdir(), "deepagent-code-config-"))
+    const home = mkdtempSync(tmpRootShared())
     const previous = process.env.DEEPAGENT_CODE_HOME
     const previousRuns = process.env.DEEPAGENT_RUNS_DIR
     try {
@@ -24,7 +25,7 @@ describe("DeepAgent Code config", () => {
   })
 
   test("ignores runsDir overrides outside the canonical root", () => {
-    const home = mkdtempSync(path.join(tmpdir(), "deepagent-code-config-"))
+    const home = mkdtempSync(tmpRootShared())
     const previous = process.env.DEEPAGENT_CODE_HOME
     const previousRuns = process.env.DEEPAGENT_RUNS_DIR
     try {
@@ -43,7 +44,7 @@ describe("DeepAgent Code config", () => {
   })
 
   test("aligns review runs with the runtime store by default", () => {
-    const home = mkdtempSync(path.join(tmpdir(), "deepagent-code-config-"))
+    const home = mkdtempSync(tmpRootShared())
     const previousHome = process.env.DEEPAGENT_CODE_HOME
     const previousRuns = process.env.DEEPAGENT_RUNS_DIR
     try {
@@ -72,9 +73,9 @@ describe("DeepAgent Code config", () => {
       process.env.DEEPAGENT_DURABLE_LEARNING = "true"
       expect(gatewayConfig().durableLearning).toBe(true)
       // explicit option wins over the env fallback
-      expect(
-        gatewayConfig({ provider: { deepagent: { options: { durableLearning: false } } } }).durableLearning,
-      ).toBe(false)
+      expect(gatewayConfig({ provider: { deepagent: { options: { durableLearning: false } } } }).durableLearning).toBe(
+        false,
+      )
     } finally {
       if (previous === undefined) delete process.env.DEEPAGENT_DURABLE_LEARNING
       else process.env.DEEPAGENT_DURABLE_LEARNING = previous

@@ -16,6 +16,7 @@ import type { Agent } from "@/agent/agent"
 import type { Provider } from "@/provider/provider"
 import type { Session } from "@/session/session"
 import type { TaskPromptOps } from "@/tool/task"
+import { tmpRoot } from "../fixture/fixture"
 
 // W6-1 / P3-1 behavior tests for the strict plan-gate escalation in session/tools.ts (evaluatePlanGate):
 // drives the REAL SessionTools.resolve chokepoint with a minimal harness (one registry tool, all other
@@ -153,7 +154,7 @@ const makeHarness = (
 
 describe("W6 strictPlanGate escalation (session/tools.ts)", () => {
   beforeEach(() => {
-    AgentGateway.DeepAgentSessionState.configure(mkdtempSync(path.join(tmpdir(), "strict-gate-")))
+    AgentGateway.DeepAgentSessionState.configure(mkdtempSync(tmpRoot()))
   })
 
   // F-20 contract: a plan-gate block is a typed LLM.ToolFailure REJECTION (the UI part renders
@@ -308,9 +309,7 @@ describe("W6 strictPlanGate escalation (session/tools.ts)", () => {
 
   test("subagent session without plan-write → stale is warn-only, NOT blocked (P1-1c)", async () => {
     let executed = 0
-    const tools = await Effect.runPromise(
-      makeHarness("edit", {}, () => executed++, session({ parentID: sessionID })),
-    )
+    const tools = await Effect.runPromise(makeHarness("edit", {}, () => executed++, session({ parentID: sessionID })))
     AgentGateway.DeepAgentSessionState.getOrCreate(String(sessionID), "high")
     AgentGateway.DeepAgentSessionState.markPlanStale(String(sessionID), "user_appended")
 
@@ -343,13 +342,12 @@ describe("W6 strictPlanGate escalation (session/tools.ts)", () => {
     // path uses), so this subagent CAN repair its plan and the strict block stays active.
     let executed = 0
     const tools = await Effect.runPromise(
-      makeHarness(
-        "edit",
-        {},
-        () => executed++,
-        session({ parentID: sessionID, permission: [] }),
-        { name: "custom", mode: "primary", permission: [{ permission: "plan", pattern: "*", action: "allow" }], options: {} } as unknown as Agent.Info,
-      ),
+      makeHarness("edit", {}, () => executed++, session({ parentID: sessionID, permission: [] }), {
+        name: "custom",
+        mode: "primary",
+        permission: [{ permission: "plan", pattern: "*", action: "allow" }],
+        options: {},
+      } as unknown as Agent.Info),
     )
     AgentGateway.DeepAgentSessionState.getOrCreate(String(sessionID), "high")
     AgentGateway.DeepAgentSessionState.markPlanStale(String(sessionID), "user_appended")

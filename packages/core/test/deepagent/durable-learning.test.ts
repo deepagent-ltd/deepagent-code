@@ -26,11 +26,12 @@ import { SessionTable } from "../../src/session/sql"
 import { CanonicalJson } from "../../src/util/canonical-json"
 import { Hash } from "../../src/util/hash"
 import { DeepAgentCodeHome } from "../../src/deepagent/workspace"
+import { tmpRoot, tmpRootShared } from "../fixture/tmpdir"
 
 let root: string
 
 beforeEach(() => {
-  root = mkdtempSync(path.join(tmpdir(), "deepagent-durable-learning-"))
+  root = mkdtempSync(tmpRoot())
 })
 
 afterEach(() => rmSync(root, { recursive: true, force: true }))
@@ -839,7 +840,7 @@ describe("durable learning production pipeline", () => {
   })
 
   test("rejects an artifact path that escapes its authority root through a symlink", async () => {
-    const outside = mkdtempSync(path.join(tmpdir(), "deepagent-learning-outside-"))
+    const outside = mkdtempSync(tmpRootShared())
     try {
       await run(
         Effect.gen(function* () {
@@ -1020,7 +1021,7 @@ describe("durable learning production pipeline", () => {
   })
 
   test("rejects a terminal artifact outside the authority root before reading or writing artifacts", async () => {
-    const outside = mkdtempSync(path.join(tmpdir(), "deepagent-learning-terminal-outside-"))
+    const outside = mkdtempSync(tmpRootShared())
     try {
       await run(
         Effect.gen(function* () {

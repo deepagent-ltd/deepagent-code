@@ -53,7 +53,7 @@ import { Format } from "../../src/format"
 import { Reference } from "../../src/reference/reference"
 import { RepositoryCache } from "../../src/reference/repository-cache"
 import { testEffect, pollWithTimeout } from "../lib/effect"
-import { TestInstance, testInstanceStoreLayer } from "../fixture/fixture"
+import { TestInstance, testInstanceStoreLayer, tmpRoot } from "../fixture/fixture"
 import { TestLLMServer } from "../lib/llm-server"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@deepagent-code/core/provider"
@@ -99,7 +99,7 @@ void Log.init({ print: false })
 // §S1.2 promptOrSteer routes on the DeepAgent active-goal pointer, which lives in the in-memory
 // session-state map. Point it at a throwaway dir so getOrCreate/setActiveGoal work in-process (no real
 // $HOME writes) and each test seeds its own session pointer.
-AgentGateway.DeepAgentSessionState.configure(mkdtempSync(path.join(tmpdir(), "steer-state-")))
+AgentGateway.DeepAgentSessionState.configure(mkdtempSync(tmpRoot()))
 
 const ref = {
   providerID: ProviderV2.ID.make("test"),
@@ -1015,7 +1015,8 @@ on.instance(
       const messages = yield* sessions.messages({ sessionID: chat.id })
       const persisted = messages.filter(
         (message) =>
-          message.info.role === "user" && message.parts.some((part) => part.type === "text" && part.text === "STEERED-ASYNC"),
+          message.info.role === "user" &&
+          message.parts.some((part) => part.type === "text" && part.text === "STEERED-ASYNC"),
       )
       expect(persisted).toHaveLength(1)
     }),

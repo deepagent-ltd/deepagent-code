@@ -9,6 +9,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import { tmpRoot, tmpRootShared } from "./fixture/fixture"
 
 const scriptRel = "packages/deepagent-code/script/audit-branding.ts"
 const scriptSrc = path.resolve(import.meta.dir, "../script/audit-branding.ts")
@@ -20,7 +21,7 @@ afterEach(() => {
 })
 
 function runAudit(files: Record<string, string>): number {
-  const dir = mkdtempSync(path.join(tmpdir(), "audit-branding-"))
+  const dir = mkdtempSync(tmpRootShared())
   tempDirs.push(dir)
   const git = (args: string[]) => Bun.spawnSync(["git", "-C", dir, ...args])
   git(["init", "-q"])
@@ -54,9 +55,7 @@ describe("audit-branding gate", () => {
   })
 
   test("passes when identifiers in template expressions are the only occurrence", () => {
-    expect(
-      runAudit({ "packages/core/src/app.ts": 'export const t = `${fn("}")+lessweb}`\n' }),
-    ).toBe(0)
+    expect(runAudit({ "packages/core/src/app.ts": 'export const t = `${fn("}")+lessweb}`\n' })).toBe(0)
   })
 
   test("passes when a brand word is only a bare identifier", () => {
@@ -90,8 +89,7 @@ describe("audit-branding gate", () => {
   test("passes on documented SDK compatibility export names in web docs", () => {
     expect(
       runAudit({
-        "packages/web/src/content/docs/sdk.mdx":
-          'import { createOpencode } from "@deepagent-code/sdk"\n',
+        "packages/web/src/content/docs/sdk.mdx": 'import { createOpencode } from "@deepagent-code/sdk"\n',
       }),
     ).toBe(0)
   })

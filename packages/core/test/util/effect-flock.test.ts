@@ -9,6 +9,7 @@ import { FSUtil } from "@deepagent-code/core/fs-util"
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import { Global } from "@deepagent-code/core/global"
 import { Hash } from "@deepagent-code/core/util/hash"
+import { tmpRootAsync } from "../fixture/tmpdir"
 
 function lock(dir: string, key: string) {
   return path.join(dir, Hash.fast(key) + ".lock")
@@ -116,7 +117,7 @@ describe("util.effect-flock", () => {
     "acquire and release via scoped Effect",
     Effect.gen(function* () {
       const flock = yield* EffectFlock.Service
-      const tmp = yield* Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "eflock-test-")))
+      const tmp = yield* Effect.promise(() => tmpRootAsync())
       const dir = path.join(tmp, "locks")
       const lockDir = lock(dir, "eflock:acquire")
 
@@ -131,7 +132,7 @@ describe("util.effect-flock", () => {
     "withLock data-first",
     Effect.gen(function* () {
       const flock = yield* EffectFlock.Service
-      const tmp = yield* Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "eflock-test-")))
+      const tmp = yield* Effect.promise(() => tmpRootAsync())
       const dir = path.join(tmp, "locks")
 
       let hit = false
@@ -151,7 +152,7 @@ describe("util.effect-flock", () => {
     "withLock pipeable",
     Effect.gen(function* () {
       const flock = yield* EffectFlock.Service
-      const tmp = yield* Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "eflock-test-")))
+      const tmp = yield* Effect.promise(() => tmpRootAsync())
       const dir = path.join(tmp, "locks")
 
       let hit = false
@@ -167,7 +168,7 @@ describe("util.effect-flock", () => {
     "writes owner metadata",
     Effect.gen(function* () {
       const flock = yield* EffectFlock.Service
-      const tmp = yield* Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "eflock-test-")))
+      const tmp = yield* Effect.promise(() => tmpRootAsync())
       const dir = path.join(tmp, "locks")
       const key = "eflock:meta"
       const file = path.join(lock(dir, key), "meta.json")
@@ -192,7 +193,7 @@ describe("util.effect-flock", () => {
     "breaks stale lock dirs",
     Effect.gen(function* () {
       const flock = yield* EffectFlock.Service
-      const tmp = yield* Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "eflock-test-")))
+      const tmp = yield* Effect.promise(() => tmpRootAsync())
       const dir = path.join(tmp, "locks")
       const key = "eflock:stale"
       const lockDir = lock(dir, key)
@@ -220,7 +221,7 @@ describe("util.effect-flock", () => {
     "recovers from stale breaker",
     Effect.gen(function* () {
       const flock = yield* EffectFlock.Service
-      const tmp = yield* Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "eflock-test-")))
+      const tmp = yield* Effect.promise(() => tmpRootAsync())
       const dir = path.join(tmp, "locks")
       const key = "eflock:stale-breaker"
       const lockDir = lock(dir, key)
@@ -252,7 +253,7 @@ describe("util.effect-flock", () => {
     "detects compromise when lock dir removed",
     Effect.gen(function* () {
       const flock = yield* EffectFlock.Service
-      const tmp = yield* Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "eflock-test-")))
+      const tmp = yield* Effect.promise(() => tmpRootAsync())
       const dir = path.join(tmp, "locks")
       const key = "eflock:compromised"
       const lockDir = lock(dir, key)
@@ -275,7 +276,7 @@ describe("util.effect-flock", () => {
     "detects token mismatch",
     Effect.gen(function* () {
       const flock = yield* EffectFlock.Service
-      const tmp = yield* Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "eflock-test-")))
+      const tmp = yield* Effect.promise(() => tmpRootAsync())
       const dir = path.join(tmp, "locks")
       const key = "eflock:token"
       const lockDir = lock(dir, key)
@@ -305,7 +306,7 @@ describe("util.effect-flock", () => {
     Effect.gen(function* () {
       if (process.platform === "win32") return
       const flock = yield* EffectFlock.Service
-      const tmp = yield* Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "eflock-test-")))
+      const tmp = yield* Effect.promise(() => tmpRootAsync())
       const dir = path.join(tmp, "locks")
 
       yield* Effect.promise(async () => {
@@ -324,7 +325,7 @@ describe("util.effect-flock", () => {
     "enforces mutual exclusion under process contention",
     () =>
       Effect.promise(async () => {
-        const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "eflock-stress-"))
+        const tmp = await tmpRootAsync()
         const dir = path.join(tmp, "locks")
         const done = path.join(tmp, "done.log")
         const active = path.join(tmp, "active")
@@ -354,7 +355,7 @@ describe("util.effect-flock", () => {
     "recovers after a crashed lock owner",
     () =>
       Effect.promise(async () => {
-        const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "eflock-crash-"))
+        const tmp = await tmpRootAsync()
         const dir = path.join(tmp, "locks")
         const ready = path.join(tmp, "ready")
 
@@ -388,7 +389,7 @@ describe("util.effect-flock", () => {
     "interrupted acquire against a killed holder disposes well before STALE_MS",
     Effect.gen(function* () {
       const flock = yield* EffectFlock.Service
-      const tmp = yield* Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "eflock-interrupt-")))
+      const tmp = yield* Effect.promise(() => tmpRootAsync())
       const dir = path.join(tmp, "locks")
       const ready = path.join(tmp, "ready")
       const key = "eflock:interrupt"

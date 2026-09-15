@@ -119,7 +119,7 @@ import { Search } from "@deepagent-code/core/filesystem/search"
 import { Format } from "../../src/format"
 import { Reference } from "../../src/reference/reference"
 import { RepositoryCache } from "../../src/reference/repository-cache"
-import { TestInstance, testInstanceStoreLayer, tmpdirScoped } from "../fixture/fixture"
+import { TestInstance, testInstanceStoreLayer, tmpdirScoped, tmpRoot } from "../fixture/fixture"
 import { InstanceStore } from "@/project/instance-store"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { LLMClient, RequestExecutor, WebSocketExecutor } from "@deepagent-code/llm/route"
@@ -154,7 +154,7 @@ void Log.init({ print: false })
 // W16 (O-W0-4): the goal-active predicate in promptOrSteer reads the DeepAgent in-memory session-state
 // pointer (session-state map). Point it at a throwaway dir so getOrCreate/setActiveGoal work in-process
 // (no real $HOME writes); unseeded sessions read as no-goal (getActiveGoal → null).
-AgentGateway.DeepAgentSessionState.configure(mkdtempSync(path.join(tmpdir(), "prompt-state-")))
+AgentGateway.DeepAgentSessionState.configure(mkdtempSync(tmpRoot()))
 
 const summary = Layer.succeed(
   SessionSummary.Service,
@@ -215,22 +215,22 @@ const mcpStub = (tools: Record<string, Tool> = {}) =>
       status: () => Effect.succeed({}),
       clients: () => Effect.succeed({}),
       tools: () => Effect.succeed(tools),
-    prompts: () => Effect.succeed({}),
-    resources: () => Effect.succeed({}),
-    add: () => Effect.succeed({ status: { status: "disabled" as const } }),
-    connect: () => Effect.void,
-    disconnect: () => Effect.void,
-    getPrompt: () => Effect.succeed(undefined),
-    readResource: () => Effect.succeed(undefined),
-    startAuth: () => Effect.die("unexpected MCP auth in prompt-effect tests"),
-    authenticate: () => Effect.die("unexpected MCP auth in prompt-effect tests"),
-    finishAuth: () => Effect.die("unexpected MCP auth in prompt-effect tests"),
-    removeAuth: () => Effect.void,
-    supportsOAuth: () => Effect.succeed(false),
-    hasStoredTokens: () => Effect.succeed(false),
-    getAuthStatus: () => Effect.succeed("not_authenticated" as const),
-    catalog: () => Effect.succeed([]),
-    enableCatalogEntry: () => Effect.succeed({ status: {}, name: "x", config: { type: "local", command: [] } }),
+      prompts: () => Effect.succeed({}),
+      resources: () => Effect.succeed({}),
+      add: () => Effect.succeed({ status: { status: "disabled" as const } }),
+      connect: () => Effect.void,
+      disconnect: () => Effect.void,
+      getPrompt: () => Effect.succeed(undefined),
+      readResource: () => Effect.succeed(undefined),
+      startAuth: () => Effect.die("unexpected MCP auth in prompt-effect tests"),
+      authenticate: () => Effect.die("unexpected MCP auth in prompt-effect tests"),
+      finishAuth: () => Effect.die("unexpected MCP auth in prompt-effect tests"),
+      removeAuth: () => Effect.void,
+      supportsOAuth: () => Effect.succeed(false),
+      hasStoredTokens: () => Effect.succeed(false),
+      getAuthStatus: () => Effect.succeed("not_authenticated" as const),
+      catalog: () => Effect.succeed([]),
+      enableCatalogEntry: () => Effect.succeed({ status: {}, name: "x", config: { type: "local", command: [] } }),
     }),
   )
 const mcp = mcpStub()
@@ -1177,7 +1177,6 @@ const mintR0Authorization = (db: Database.Interface["db"]): Effect.Effect<void, 
       .run()
   })
 
-
 // RI-126 裁决（保留 skip 的缺口记录）：durable structured finalizer 的 durableControlPlane
 // 变体需要 V2 的 finalizer 传输/尝试证据面（durable dispatcher + structured_finalizer_*
 // 收据字段），本次 format 通道移植（admission + runner 合成/wire 路径 + StructuredCaptured）
@@ -1567,9 +1566,7 @@ v2RealLocations.instance(
         ).toBeTrue()
       }
       const rejected = (yield* sessions.messages({ sessionID: chat.id })).flatMap((message) =>
-        message.parts.filter(
-          (part): part is SessionV1.ToolPart => part.type === "tool" && part.tool === "question",
-        ),
+        message.parts.filter((part): part is SessionV1.ToolPart => part.type === "tool" && part.tool === "question"),
       )
       expect(rejected).toHaveLength(1)
       expect(rejected[0]?.state.status).toBe("error")
@@ -2757,9 +2754,7 @@ v2Real.instance("loop retries truncated tool input with the bounded patch transa
           {
             id: "chatcmpl-test",
             object: "chat.completion.chunk",
-            choices: [
-              { delta: { tool_calls: [{ index: 0, function: { arguments: "{\"patch\":\"*** Begin Patch" } }] } },
-            ],
+            choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '{"patch":"*** Begin Patch' } }] } }],
           },
           { id: "chatcmpl-test", object: "chat.completion.chunk", choices: [{ delta: {}, finish_reason: "length" }] },
         ],
@@ -3345,125 +3340,129 @@ v2Real.instance("concurrent loop callers get same result", () =>
   }),
 )
 
-v2Real.instance("concurrent loop callers all receive same error result", () =>
-  Effect.gen(function* () {
-    const { llm } = yield* useServerConfig(providerCfg)
-    const prompt = yield* SessionPrompt.Service
-    const sessions = yield* Session.Service
-    const { db } = yield* Database.Service
-    yield* mintR0Authorization(db)
-    const chat = yield* sessions.create({ title: "Pinned" })
-    yield* provideR0OwnerRefs(
-      prompt.prompt({
-        sessionID: chat.id,
-        agent: "build",
-        noReply: true,
-        parts: [{ type: "text", text: "hello" }],
-      }),
-    )
+v2Real.instance(
+  "concurrent loop callers all receive same error result",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+      yield* mintR0Authorization(db)
+      const chat = yield* sessions.create({ title: "Pinned" })
+      yield* provideR0OwnerRefs(
+        prompt.prompt({
+          sessionID: chat.id,
+          agent: "build",
+          noReply: true,
+          parts: [{ type: "text", text: "hello" }],
+        }),
+      )
 
-    yield* llm.fail("boom")
+      yield* llm.fail("boom")
 
-    // V2-only: a provider stream failure produces no assistant message, so the joined drain
-    // surfaces the SAME typed refusal to every concurrent loop caller (one provider dispatch).
-    const [ea, eb] = yield* Effect.all(
-      [
-        provideR0OwnerRefs(prompt.loop({ sessionID: chat.id })).pipe(Effect.exit),
-        provideR0OwnerRefs(prompt.loop({ sessionID: chat.id })).pipe(Effect.exit),
-      ],
-      { concurrency: "unbounded" },
-    )
-    expect(Exit.isFailure(ea)).toBe(true)
-    expect(Exit.isFailure(eb)).toBe(true)
-    if (Exit.isFailure(ea) && Exit.isFailure(eb)) {
-      expect(Cause.squash(ea.cause)).toBeInstanceOf(LegacyExecutionUnavailable)
-      expect(Cause.squash(eb.cause)).toBeInstanceOf(LegacyExecutionUnavailable)
-      expect(Cause.squash(eb.cause)).toEqual(Cause.squash(ea.cause))
-    }
-    expect(yield* llm.calls).toBe(1)
-    expect(yield* db.select().from(SessionLegacyActivityTable).all().pipe(Effect.orDie)).toHaveLength(0)
-    expect(yield* db.select().from(SessionLegacyActivityRunTable).all().pipe(Effect.orDie)).toHaveLength(0)
-  }),
+      // V2-only: a provider stream failure produces no assistant message, so the joined drain
+      // surfaces the SAME typed refusal to every concurrent loop caller (one provider dispatch).
+      const [ea, eb] = yield* Effect.all(
+        [
+          provideR0OwnerRefs(prompt.loop({ sessionID: chat.id })).pipe(Effect.exit),
+          provideR0OwnerRefs(prompt.loop({ sessionID: chat.id })).pipe(Effect.exit),
+        ],
+        { concurrency: "unbounded" },
+      )
+      expect(Exit.isFailure(ea)).toBe(true)
+      expect(Exit.isFailure(eb)).toBe(true)
+      if (Exit.isFailure(ea) && Exit.isFailure(eb)) {
+        expect(Cause.squash(ea.cause)).toBeInstanceOf(LegacyExecutionUnavailable)
+        expect(Cause.squash(eb.cause)).toBeInstanceOf(LegacyExecutionUnavailable)
+        expect(Cause.squash(eb.cause)).toEqual(Cause.squash(ea.cause))
+      }
+      expect(yield* llm.calls).toBe(1)
+      expect(yield* db.select().from(SessionLegacyActivityTable).all().pipe(Effect.orDie)).toHaveLength(0)
+      expect(yield* db.select().from(SessionLegacyActivityRunTable).all().pipe(Effect.orDie)).toHaveLength(0)
+    }),
   15_000,
 )
 
-v2Real.instance("prompt submitted during an active run is included in the next LLM input", () =>
-  Effect.gen(function* () {
-    const { llm } = yield* useServerConfig(providerCfg)
-    const gate = yield* Deferred.make<void>()
-    const prompt = yield* SessionPrompt.Service
-    const sessions = yield* Session.Service
-    const { db } = yield* Database.Service
-    yield* mintR0Authorization(db)
-    const chat = yield* sessions.create({
-      title: "Pinned",
-      permission: [{ permission: "*", pattern: "*", action: "allow" }],
-    })
+v2Real.instance(
+  "prompt submitted during an active run is included in the next LLM input",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const gate = yield* Deferred.make<void>()
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+      yield* mintR0Authorization(db)
+      const chat = yield* sessions.create({
+        title: "Pinned",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
 
-    yield* llm.hold("first", deferredAsPromise(gate))
-    yield* llm.text("second")
+      yield* llm.hold("first", deferredAsPromise(gate))
+      yield* llm.text("second")
 
-    const a = yield* provideR0OwnerRefs(
-      prompt.prompt({
-        sessionID: chat.id,
-        agent: "build",
-        model: ref,
-        parts: [{ type: "text", text: "first" }],
-      }),
-    ).pipe(Effect.forkChild)
-    // The first provider turn is in flight once the mock server holds the request.
-    yield* llm.wait(1)
+      const a = yield* provideR0OwnerRefs(
+        prompt.prompt({
+          sessionID: chat.id,
+          agent: "build",
+          model: ref,
+          parts: [{ type: "text", text: "first" }],
+        }),
+      ).pipe(Effect.forkChild)
+      // The first provider turn is in flight once the mock server holds the request.
+      yield* llm.wait(1)
 
-    // Mid-run admission (admit-only): the V2 contract steers it into the active activity at the
-    // next provider-turn boundary; no legacy steer row is written.
-    const steered = yield* provideR0OwnerRefs(
-      prompt.prompt({
-        sessionID: chat.id,
-        agent: "build",
-        model: ref,
-        noReply: true,
-        parts: [{ type: "text", text: "second" }],
-      }),
-    )
-    expect(steered.info.role).toBe("user")
+      // Mid-run admission (admit-only): the V2 contract steers it into the active activity at the
+      // next provider-turn boundary; no legacy steer row is written.
+      const steered = yield* provideR0OwnerRefs(
+        prompt.prompt({
+          sessionID: chat.id,
+          agent: "build",
+          model: ref,
+          noReply: true,
+          parts: [{ type: "text", text: "second" }],
+        }),
+      )
+      expect(steered.info.role).toBe("user")
 
-    yield* Deferred.succeed(gate, void 0)
+      yield* Deferred.succeed(gate, void 0)
 
-    const ea = yield* Fiber.await(a)
-    expect(Exit.isSuccess(ea)).toBe(true)
-    expect(yield* llm.calls).toBe(2)
+      const ea = yield* Fiber.await(a)
+      expect(Exit.isSuccess(ea)).toBe(true)
+      expect(yield* llm.calls).toBe(2)
 
-    const msgs = yield* sessions.messages({ sessionID: chat.id })
-    const assistants = msgs.filter((msg) => msg.info.role === "assistant")
-    expect(assistants).toHaveLength(2)
-    const last = assistants.at(-1)
-    if (!last || last.info.role !== "assistant") throw new Error("expected second assistant")
-    expect(last.info.parentID).toBe(steered.info.id)
-    expect(last.parts.some((part) => part.type === "text" && part.text === "second")).toBe(true)
+      const msgs = yield* sessions.messages({ sessionID: chat.id })
+      const assistants = msgs.filter((msg) => msg.info.role === "assistant")
+      expect(assistants).toHaveLength(2)
+      const last = assistants.at(-1)
+      if (!last || last.info.role !== "assistant") throw new Error("expected second assistant")
+      expect(last.info.parentID).toBe(steered.info.id)
+      expect(last.parts.some((part) => part.type === "text" && part.text === "second")).toBe(true)
 
-    const inputs = yield* llm.inputs
-    expect(inputs).toHaveLength(2)
-    const steeredInput = JSON.stringify(inputs.at(-1)?.messages)
-    expect(steeredInput).toContain("second")
-    expect(steeredInput).not.toContain("The user sent the following message:")
+      const inputs = yield* llm.inputs
+      expect(inputs).toHaveLength(2)
+      const steeredInput = JSON.stringify(inputs.at(-1)?.messages)
+      expect(steeredInput).toContain("second")
+      expect(steeredInput).not.toContain("The user sent the following message:")
 
-    // V2-only: the legacy steer buffer and activity tables stay at zero.
-    expect(yield* db.select().from(SessionSteerTable).all().pipe(Effect.orDie)).toHaveLength(0)
-    expect(yield* db.select().from(SessionLegacyActivityTable).all().pipe(Effect.orDie)).toHaveLength(0)
-    expect(yield* db.select().from(SessionLegacyActivityRunTable).all().pipe(Effect.orDie)).toHaveLength(0)
+      // V2-only: the legacy steer buffer and activity tables stay at zero.
+      expect(yield* db.select().from(SessionSteerTable).all().pipe(Effect.orDie)).toHaveLength(0)
+      expect(yield* db.select().from(SessionLegacyActivityTable).all().pipe(Effect.orDie)).toHaveLength(0)
+      expect(yield* db.select().from(SessionLegacyActivityRunTable).all().pipe(Effect.orDie)).toHaveLength(0)
 
-    yield* llm.text("third")
-    const next = yield* provideR0OwnerRefs(
-      prompt.prompt({
-        sessionID: chat.id,
-        agent: "build",
-        model: ref,
-        parts: [{ type: "text", text: "third" }],
-      }),
-    )
-    expect(next.parts.some((part) => part.type === "text" && part.text === "third")).toBe(true)
-    expect(yield* llm.calls).toBe(3)
-  }),
+      yield* llm.text("third")
+      const next = yield* provideR0OwnerRefs(
+        prompt.prompt({
+          sessionID: chat.id,
+          agent: "build",
+          model: ref,
+          parts: [{ type: "text", text: "third" }],
+        }),
+      )
+      expect(next.parts.some((part) => part.type === "text" && part.text === "third")).toBe(true)
+      expect(yield* llm.calls).toBe(3)
+    }),
   // 3 个串行 provider turn + gate；--max-concurrency 4 满载下实测 ~19s，15s 余量不足。
   30_000,
 )
@@ -3755,7 +3754,6 @@ v2Real.instance(
   { git: true },
   15_000,
 )
-
 ;(process.platform !== "win32" ? v2Real.instance : v2Real.instance.skip)(
   "command ! expansion uses configured shell over env shell",
   () =>
@@ -3980,7 +3978,6 @@ v2Real.instance(
   { git: true, config: cfg },
   30_000,
 )
-
 ;(process.platform !== "win32" ? v2Real.instance : v2Real.instance.skip)(
   "shell rejects when another shell is already running",
   () =>
@@ -3991,9 +3988,7 @@ v2Real.instance(
         // Shell-mode exclusion is the projection-layer runner mutex (W0-2), retained under the
         // V2-only profile. The first shell is short-lived so the test does not need to cancel it
         // (cancel would stop it via the RI-128 shell-lane bridge).
-        const a = yield* prompt
-          .shell({ sessionID: chat.id, agent: "build", command: "sleep 2" })
-          .pipe(Effect.forkChild)
+        const a = yield* prompt.shell({ sessionID: chat.id, agent: "build", command: "sleep 2" }).pipe(Effect.forkChild)
         yield* waitForBusy(chat.id)
 
         const exit = yield* prompt.shell({ sessionID: chat.id, agent: "build", command: "echo hi" }).pipe(Effect.exit)
@@ -4469,11 +4464,7 @@ v2Real.instance(
       expect(yield* llm.calls).toBe(1)
 
       yield* prompt.cancel(session.id)
-      const exit = yield* awaitWithTimeout(
-        Fiber.await(running),
-        "timed out joining canceled durable run",
-        "5 seconds",
-      )
+      const exit = yield* awaitWithTimeout(Fiber.await(running), "timed out joining canceled durable run", "5 seconds")
       // V2-only: cancel interrupts the process-local ownership chain; the joined prompt caller exits
       // with a failure, and no legacy activity/run/steer/intent rows exist to terminalize. The unwind
       // surfaces as a pure interrupt outside the provider stream, or as the stream's AbortError
@@ -4482,8 +4473,7 @@ v2Real.instance(
       if (Exit.isFailure(exit)) {
         const squashed = Cause.squash(exit.cause)
         expect(
-          Cause.hasInterruptsOnly(exit.cause) ||
-            (squashed instanceof DOMException && squashed.name === "AbortError"),
+          Cause.hasInterruptsOnly(exit.cause) || (squashed instanceof DOMException && squashed.name === "AbortError"),
         ).toBe(true)
       }
       expect((yield* status.get(session.id)).type).toBe("idle")
@@ -5176,7 +5166,6 @@ if (process.env.DEEPAGENT_CODE_REAL_STACK_CHILD === "1") {
     60_000,
   )
 }
-
 
 v2Qualified.instance(
   "1.4.8.r0: qualified V2 owner executes the interactive prompt via admission + drain + mirror",

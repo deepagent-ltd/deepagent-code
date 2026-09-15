@@ -500,25 +500,31 @@ describe("instance HttpApi", () => {
     }),
   )
 
-  it.live("maps an oversized raw VCS patch to the typed 503 response", () =>
-    Effect.gen(function* () {
-      const dir = yield* tmpdirScoped({ git: true })
-      const fs = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
-      yield* fs.writeFileString(path.join(dir, "oversized.txt"), "x".repeat(Vcs.RawDiffLimits.patchBytes + 1))
+  it.live(
+    "maps an oversized raw VCS patch to the typed 503 response",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* tmpdirScoped({ git: true })
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        yield* fs.writeFileString(path.join(dir, "oversized.txt"), "x".repeat(Vcs.RawDiffLimits.patchBytes + 1))
 
-      const response = yield* HttpClientRequest.get(InstancePaths.vcsDiffRaw).pipe(
-        directoryHeader(dir),
-        HttpClient.execute,
-      )
+        const response = yield* HttpClientRequest.get(InstancePaths.vcsDiffRaw).pipe(
+          directoryHeader(dir),
+          HttpClient.execute,
+        )
 
-      expect(response.status).toBe(503)
-      expect(yield* response.json).toMatchObject({
-        name: "VcsRawDiffError",
-        data: {
-          reason: "untracked-output",
-        },
-      })
-    }),
+        expect(response.status).toBe(503)
+        expect(yield* response.json).toMatchObject({
+          name: "VcsRawDiffError",
+          data: {
+            reason: "untracked-output",
+          },
+        })
+      }),
+    // The default budget is enough alone (1.2s) and was not enough under a full-suite run, where
+    // this file's HTTP tests contend with four other suites for two CPUs and exceeded 30s once.
+    // Racy only by TIMING: the assertion is a typed 503, not a deadline.
+    120_000,
   )
 })

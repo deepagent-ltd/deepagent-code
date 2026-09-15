@@ -4,13 +4,14 @@ import os from "node:os"
 import path from "node:path"
 import { Effect, Layer } from "effect"
 import { PRQueue } from "../../src/agent/pr-queue"
+import { tmpRootAsync } from "../fixture/fixture"
 
 let home: string
 const previousHome = process.env.DEEPAGENT_CODE_HOME
 const previousTestHome = process.env.DEEPAGENT_CODE_TEST_HOME
 
 beforeEach(async () => {
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "deepagent-pr-queue-test-"))
+  home = await tmpRootAsync()
   process.env.DEEPAGENT_CODE_TEST_HOME = home
   process.env.DEEPAGENT_CODE_HOME = home
 })

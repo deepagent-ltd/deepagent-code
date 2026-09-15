@@ -11,6 +11,7 @@ import { writePinnedPacks } from "../src/deepagent/pinned-packs"
 import { DeepAgentDurableLearning } from "../src/deepagent/durable-learning"
 import * as OpenAIChat from "@deepagent-code/llm/protocols/openai-chat"
 import { releasedUserGlobalSelection } from "./deepagent/released-selection-fixture"
+import { tmpRootAsync, tmpRootSharedAsync } from "./fixture/tmpdir"
 
 const deepagentRunInput = {
   callKind: "session_turn" as const,
@@ -33,7 +34,7 @@ const defaultProviderRunInput = {
   modelID: "gpt-test",
 }
 
-const tempRunsDir = () => mkdtemp(path.join(tmpdir(), "deepagent-runs-"))
+const tempRunsDir = () => tmpRootSharedAsync()
 
 const readOnlyRunDir = async (dir: string) => {
   const runs = await readdir(dir)
@@ -1287,7 +1288,7 @@ describe("AgentGateway pinned domain packs (FEAT-001)", () => {
   }
 
   test("a pinned pack appears in active_pack_set and its refs are force-selected", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "deepagent-pin-"))
+    const root = await tmpRootSharedAsync()
     try {
       writePinnedPacks(path.join(root, "memory"), ["code.gpu-kernel"])
       const workPackage = await runMaxTurn(root)
@@ -1301,7 +1302,7 @@ describe("AgentGateway pinned domain packs (FEAT-001)", () => {
   })
 
   test("without pins the pack stays inactive (unpinned behavior unchanged)", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "deepagent-nopin-"))
+    const root = await tmpRootSharedAsync()
     try {
       const workPackage = await runMaxTurn(root)
       expect(workPackage.active_pack_set).not.toContain("code.gpu-kernel")
@@ -1314,7 +1315,7 @@ describe("AgentGateway pinned domain packs (FEAT-001)", () => {
   })
 
   test("a corrupt pinned-packs.json degrades to no pins and still completes the run", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "deepagent-corrupt-pin-"))
+    const root = await tmpRootSharedAsync()
     try {
       await mkdir(path.join(root, "memory"), { recursive: true })
       await writeFile(path.join(root, "memory", "pinned-packs.json"), "{not json")
@@ -1357,7 +1358,7 @@ describe("AgentGateway unified pack activation authority (FEAT-002)", () => {
   }
 
   test("a deterministic query run records code.query in active_pack_set and flips read-only", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "deepagent-feat002-query-"))
+    const root = await tmpRootSharedAsync()
     try {
       const workPackage = await runMaxTurn(root, "请查一下数据库里有多少条用户记录")
       expect(workPackage.active_pack_set).toContain("code.query")
@@ -1372,7 +1373,7 @@ describe("AgentGateway unified pack activation authority (FEAT-002)", () => {
   })
 
   test("a mutation run keeps code.query out of active_pack_set and tools writable", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "deepagent-feat002-mutation-"))
+    const root = await tmpRootSharedAsync()
     try {
       const workPackage = await runMaxTurn(root, "请修复登录逻辑并更新依赖")
       expect(workPackage.active_pack_set).not.toContain("code.query")
