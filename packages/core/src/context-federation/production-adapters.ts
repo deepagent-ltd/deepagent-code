@@ -4,9 +4,20 @@ import { Cause, Context, Effect, Layer, Option } from "effect"
 import { type CodeQuery } from "../code-intelligence/query"
 import { ContextAuthorization } from "./authorization"
 import { ContextFederation } from "./federation"
-import { LocationKey, ProjectScopeKey, SecurityNamespaceID, canonicalProjectionRevision, type ContextRef } from "./reference"
+import {
+  LocationKey,
+  ProjectScopeKey,
+  SecurityNamespaceID,
+  canonicalProjectionRevision,
+  type ContextRef,
+} from "./reference"
 import { type ProjectionSnapshotRevision } from "./reference"
-import { AdapterVersion, code as codeFactory, knowledge as knowledgeFactory, memory as memoryFactory } from "./adapters-v2"
+import {
+  AdapterVersion,
+  code as codeFactory,
+  knowledge as knowledgeFactory,
+  memory as memoryFactory,
+} from "./adapters-v2"
 import { type V2Adapter, type V2AdapterInput, type V2AdapterResult } from "./adapters-v2"
 import { type Scope as LegacyScope } from "./adapters"
 import { type DocumentStore } from "../deepagent/document-store"
@@ -42,9 +53,11 @@ export const CONTEXT_FEDERATION_PRODUCTION_ENV = "DEEPAGENT_CODE_CONTEXT_FEDERAT
  * by mutating `process.env` after the snapshot. */
 export const productionAdaptersEnabled = (features: RuntimeFeatureRegistry = RuntimeFeatures): boolean => {
   const enabled = features.enabled("context_federation_v2")
-  // Beacon at the SINGLE reader: proves whether federation gated the turn (not merely that the env
-  // var was set). Logging is bounded inside recordEngagement.
-  mechanismBeacon.recordEngagement("context_federation", `enabled=${enabled}`)
+  // The boolean this returns is a GATE, so a counter here measures how often the gate was READ, not
+  // how often federation acted: with the flag OFF the reader still runs, and C3 (OFF) logged MORE
+  // reads than C2 (ON) — 75 vs 41. Record only the case where federation is actually ON, so the
+  // number means "turns federation governed". Logging is bounded inside recordEngagement.
+  if (enabled) mechanismBeacon.recordEngagement("context_federation", "enabled=true")
   return enabled
 }
 
@@ -74,7 +87,10 @@ export type ProductionDocumentsSource = {
   readonly search: (input: {
     readonly query: string
     readonly limit: number
-  }) => Effect.Effect<{ readonly revision?: ProjectionSnapshotRevision; readonly hits: readonly RepoDocument.SearchHit[] }, unknown>
+  }) => Effect.Effect<
+    { readonly revision?: ProjectionSnapshotRevision; readonly hits: readonly RepoDocument.SearchHit[] },
+    unknown
+  >
   readonly mutationEpoch?: () => Effect.Effect<number, unknown>
 }
 
@@ -87,7 +103,9 @@ export type ProductionDocumentsSource = {
 export type ProductionReleasedBinding = {
   readonly snapshotId: string
   readonly binding: "bound" | "unavailable"
-  readonly current: (scope: DeepAgentReleasedSnapshot.Scope) => Effect.Effect<DeepAgentReleasedSnapshot.Selection | undefined, unknown>
+  readonly current: (
+    scope: DeepAgentReleasedSnapshot.Scope,
+  ) => Effect.Effect<DeepAgentReleasedSnapshot.Selection | undefined, unknown>
 }
 
 /**
@@ -175,10 +193,7 @@ function documentsAdapter(documents: ProductionDocumentsSource | undefined): V2A
   }
 }
 
-function resolveDocuments(
-  documents: ProductionDocumentsSource,
-  query: V2AdapterInput,
-): Effect.Effect<V2AdapterResult> {
+function resolveDocuments(documents: ProductionDocumentsSource, query: V2AdapterInput): Effect.Effect<V2AdapterResult> {
   return Effect.gen(function* () {
     const epoch = documents.mutationEpoch
       ? yield* documents.mutationEpoch().pipe(Effect.catch(() => Effect.succeed(0)))
@@ -195,9 +210,7 @@ function resolveDocuments(
         unavailableReasonCode: "source_error" as const,
       })
     }
-    const revision = searched.revision
-      ? canonicalProjectionRevision(searched.revision)
-      : `documents:index:${epoch}`
+    const revision = searched.revision ? canonicalProjectionRevision(searched.revision) : `documents:index:${epoch}`
     const candidates = searched.hits.flatMap((hit) => toDocumentsCandidate(hit, query, revision))
     return {
       candidates,
@@ -364,7 +377,10 @@ function memoryAdapter(knowledge: ProductionV2AdapterInput["knowledge"]): V2Adap
     resolve: (query) =>
       Effect.gen(function* () {
         const selection = knowledge.released
-          ? yield* knowledge.released.current(releasedScope(query)).pipe(releasedPickerDefectGuard).pipe(Effect.catch(() => Effect.succeed(undefined)))
+          ? yield* knowledge.released
+              .current(releasedScope(query))
+              .pipe(releasedPickerDefectGuard)
+              .pipe(Effect.catch(() => Effect.succeed(undefined)))
           : undefined
         return yield* memoryFactory({
           stores: storesOf(knowledge.stores),

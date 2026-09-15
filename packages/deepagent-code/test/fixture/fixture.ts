@@ -120,25 +120,6 @@ export async function tmpdir<T>(options?: TmpDirOptions<T>) {
   return result
 }
 
-/**
- * Synchronous scratch directory reclaimed when the importing test file finishes.
- *
- * Several suites build their own root with `mkdtempSync(path.join(tmpdir(), "..."))` (or the raw
- * `os.tmpdir()` form) because they need the path before an `await`, and that call has no disposal
- * hook — the directories are never reclaimed. Route those call sites through this helper (the old
- * call becomes `mkdtempSync(tmpRoot())`). Reclamation is tied to PROCESS EXIT rather than an
- * `afterAll` hook: a scratch root can be created in `beforeAll` or at module scope, so a per-file
- * hook that fires when the last test finishes deletes directories that are still in use.
- */
-export function tmpRoot(): string {
-  return mkdtempSync(path.join(scratchRoot(), "t-"))
-}
-
-/** Async twin of {@link tmpRoot} for call sites that already `await`. */
-export async function tmpRootAsync(): Promise<string> {
-  return fs.realpath(await fs.mkdtemp(path.join(scratchRoot(), "t-")))
-}
-
 // Which lifetime a scratch directory needs depends on WHEN it is created: inside a test the file's
 // `afterAll` can reclaim it; in `beforeAll` or at module scope it is still in use when the last test
 // ends, so deleting it there removes a live fixture. Shared roots are reclaimed by the next run's
