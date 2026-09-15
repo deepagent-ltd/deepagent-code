@@ -14,6 +14,7 @@ import * as Orchestrator from "../../src/deepagent/orchestrator"
 import * as PromptPolicy from "../../src/deepagent/prompt-policy"
 import * as SessionState from "../../src/deepagent/session-state"
 import { projectIdForWorkspace } from "../../src/deepagent/durable-knowledge-store"
+import { tmpRoot } from "../fixture/tmpdir"
 
 // V3.8 Appendix-A (Phase 7 附-A) — context-management substrate. These tests lock the audit-critical
 // invariants of the LIVE members: the session Ledger, the Conversation Log, the Project Bridge, and the
@@ -24,7 +25,7 @@ import { projectIdForWorkspace } from "../../src/deepagent/durable-knowledge-sto
 let base: string
 
 beforeEach(() => {
-  base = mkdtempSync(path.join(tmpdir(), "deepagent-context-"))
+  base = mkdtempSync(tmpRoot())
 })
 afterEach(() => {
   rmSync(base, { recursive: true, force: true })
@@ -71,7 +72,16 @@ describe("session ledger (C2)", () => {
   test("persist + load round-trips through the run-scoped ledger DocType", () => {
     const store = runStore()
     let l = Ledger.emptyLedger("sess", 10)
-    l = Ledger.applyUpdate(l, { append: [{ kind: "goal", text: "G", id: "g1" }, { kind: "decision", text: "D", id: "d1" }] }, 11)
+    l = Ledger.applyUpdate(
+      l,
+      {
+        append: [
+          { kind: "goal", text: "G", id: "g1" },
+          { kind: "decision", text: "D", id: "d1" },
+        ],
+      },
+      11,
+    )
     Ledger.persistLedger(store, l)
     const loaded = Ledger.loadLedger(store, "sess")
     expect(loaded.entries.map((e) => e.id).sort()).toEqual(["d1", "g1"])
@@ -79,11 +89,17 @@ describe("session ledger (C2)", () => {
 
   test("recallCandidates excludes anchor kinds + superseded", () => {
     let l = Ledger.emptyLedger("s", 1)
-    l = Ledger.applyUpdate(l, { append: [
-      { kind: "goal", text: "goal", id: "g" },
-      { kind: "decision", text: "keep", id: "d1" },
-      { kind: "decision", text: "drop", id: "d2" },
-    ] }, 2)
+    l = Ledger.applyUpdate(
+      l,
+      {
+        append: [
+          { kind: "goal", text: "goal", id: "g" },
+          { kind: "decision", text: "keep", id: "d1" },
+          { kind: "decision", text: "drop", id: "d2" },
+        ],
+      },
+      2,
+    )
     l = Ledger.applyUpdate(l, { markSuperseded: ["d2"] }, 3)
     const ids = Ledger.recallCandidates(l).map((e) => e.id)
     expect(ids).toContain("d1")
@@ -168,10 +184,16 @@ describe("project bridge (C3) — DocType 'bridge', not knowledge", () => {
   test("carryOver projects active carried entries into a project-scoped bridge doc + renders handoff", () => {
     const store = runStore()
     let l = Ledger.emptyLedger("sessX", 1)
-    l = Ledger.applyUpdate(l, { append: [
-      { kind: "goal", text: "ship v2", id: "g1" },
-      { kind: "done", text: "finished setup", id: "dn1" }, // NOT carried
-    ] }, 2)
+    l = Ledger.applyUpdate(
+      l,
+      {
+        append: [
+          { kind: "goal", text: "ship v2", id: "g1" },
+          { kind: "done", text: "finished setup", id: "dn1" }, // NOT carried
+        ],
+      },
+      2,
+    )
     l = Ledger.applyUpdate(l, { next: { text: "write the migration" } }, 3)
     const bridge = Bridge.carryOver(store, "projP", l, 100)
     const kinds = bridge.entries.map((e) => e.kind)
@@ -212,8 +234,15 @@ describe("project bridge (C3) — DocType 'bridge', not knowledge", () => {
       sessionId,
       mode: "high",
       environment: {
-        os: "test", shell: "sh", cwd: workspacePath, homedir: base, gitBranch: null,
-        gitRoot: null, isGitRepo: false, date: "2026-07-07", platform: "test",
+        os: "test",
+        shell: "sh",
+        cwd: workspacePath,
+        homedir: base,
+        gitBranch: null,
+        gitRoot: null,
+        isGitRepo: false,
+        date: "2026-07-07",
+        platform: "test",
       },
       tools: { availableTools: [], mcpServers: [], totalToolCount: 0 },
       userRequest: "continue the work",
@@ -234,8 +263,15 @@ describe("project bridge (C3) — DocType 'bridge', not knowledge", () => {
       sessionId: genSession,
       mode: "general",
       environment: {
-        os: "test", shell: "sh", cwd: workspacePath, homedir: base, gitBranch: null,
-        gitRoot: null, isGitRepo: false, date: "2026-07-07", platform: "test",
+        os: "test",
+        shell: "sh",
+        cwd: workspacePath,
+        homedir: base,
+        gitBranch: null,
+        gitRoot: null,
+        isGitRepo: false,
+        date: "2026-07-07",
+        platform: "test",
       },
       tools: { availableTools: [], mcpServers: [], totalToolCount: 0 },
       userRequest: "continue",

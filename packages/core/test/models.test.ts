@@ -11,6 +11,7 @@ import { it } from "./lib/effect"
 import { readFile, rm, writeFile, utimes, mkdir, mkdtemp } from "fs/promises"
 import path from "path"
 import os from "os"
+import { tmpRootAsync } from "./fixture/tmpdir"
 
 // test/preload.ts pins DEEPAGENT_CODE_MODELS_PATH to a fixture so other tests can
 // resolve providers without network. These tests need to drive the on-disk
@@ -257,7 +258,7 @@ describe("ModelsDev Service", () => {
 
   it.live("uses the injected cache and lock roots for independent embedded runtimes", () =>
     Effect.acquireUseRelease(
-      Effect.promise(() => mkdtemp(path.join(os.tmpdir(), "deepagent-models-roots-"))),
+      Effect.promise(() => tmpRootAsync()),
       (testRoot) =>
         Effect.gen(function* () {
           const stateA = yield* Ref.make({ ...initialState, body: JSON.stringify(fixture) })

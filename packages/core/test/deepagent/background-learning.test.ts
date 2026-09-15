@@ -8,12 +8,13 @@ import { LearningWorker, SkillCurator } from "../../src/deepagent/background-lea
 import { createInitialRoundState } from "../../src/deepagent/round-state"
 import { RejectedBuffer, fingerprint } from "../../src/deepagent/promotion"
 import * as Learning from "../../src/deepagent/learning"
+import { tmpRoot } from "../fixture/tmpdir"
 
 let root: string
 let home: DeepAgentCodeHome
 
 beforeEach(() => {
-  root = mkdtempSync(path.join(tmpdir(), "deepagent-code-learning-"))
+  root = mkdtempSync(tmpRoot())
   home = new DeepAgentCodeHome(root)
 })
 

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { execSync } from "node:child_process"
 import { finalizeSessionWork, finalizerGitState } from "@/deepagent/session-finalizer"
+import { tmpRoot, tmpRootShared } from "../fixture/fixture"
 
 // G2 unified finalizer regression: the abs failure mode ("implemented but never committed → the
 // verifier graded an empty diff") must be impossible — but ONLY the EXPLICIT "validated" verdict
@@ -12,7 +13,7 @@ import { finalizeSessionWork, finalizerGitState } from "@/deepagent/session-fina
 // work (delivery defers, never loses); only the session's own touched paths are ever staged.
 
 const makeRepo = (): string => {
-  const dir = mkdtempSync(path.join(tmpdir(), "deepagent-finalizer-"))
+  const dir = mkdtempSync(tmpRootShared())
   const git = (args: string) => execSync(`git ${args}`, { cwd: dir, stdio: "pipe" }).toString()
   git("init -q -b main 2>/dev/null || git init -q")
   git("-c user.name=t -c user.email=t@t commit --no-gpg-sign --allow-empty -m base -q")
@@ -174,7 +175,7 @@ describe("session finalizer", () => {
   })
 
   test("skips (without touching anything) outside a git repo", async () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "deepagent-finalizer-nogit-"))
+    const dir = mkdtempSync(tmpRootShared())
     writeFileSync(path.join(dir, "loose.txt"), "x")
     const outcome = await finalizeSessionWork({
       directory: dir,

@@ -8,6 +8,7 @@ import { AgentGateway } from "../../src/agent-gateway"
 import { Endpoint, LLMClient, Protocol, Route, type FramingDef } from "@deepagent-code/llm/route"
 import { testEffect } from "../lib/effect"
 import { dynamicResponse } from "../lib/llm-http"
+import { tmpRootAsync, tmpRootSharedAsync } from "../fixture/tmpdir"
 
 type FakeBody = {
   readonly body: string
@@ -85,7 +86,7 @@ const it = testEffect(echoLayer)
 describe("DeepAgent LLMClient wrapper", () => {
   it.effect("wraps all provider requests through the global runtime", () =>
     Effect.gen(function* () {
-      const dir = yield* Effect.promise(() => mkdtemp(path.join(tmpdir(), "deepagent-client-")))
+      const dir = yield* Effect.promise(() => tmpRootSharedAsync())
       try {
         // The process-global registry is gone: client wrapping now requires the explicit
         // middleware service. AgentGateway.layer is the legacy compatibility layer that keeps
@@ -130,8 +131,8 @@ describe("DeepAgent LLMClient wrapper", () => {
 
   it.effect("keeps durable-learning authority inside each V2 runtime", () =>
     Effect.gen(function* () {
-      const left = yield* Effect.promise(() => mkdtemp(path.join(tmpdir(), "deepagent-learning-left-")))
-      const right = yield* Effect.promise(() => mkdtemp(path.join(tmpdir(), "deepagent-learning-right-")))
+      const left = yield* Effect.promise(() => tmpRootSharedAsync())
+      const right = yield* Effect.promise(() => tmpRootSharedAsync())
       const recorded: string[] = []
       const releasePoison = AgentGateway.setLearningAuthority({
         record: async () => {

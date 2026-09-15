@@ -26,6 +26,7 @@ import {
 } from "../../src/session/goal-driver"
 import { buildStepExecutor, renderStepPrompt, type SubagentTurnRunner } from "../../src/session/goal-loop-wiring"
 import { isTerminalGoalPhase } from "../../src/session/goal-manager"
+import { tmpRoot } from "../fixture/fixture"
 
 /**
  * V4.1 §S1.3 — GOAL-TICK STEERING. A long-running goal absorbs a user steering message BETWEEN ticks:
@@ -45,7 +46,7 @@ const GOAL_SESSION = "goal-session-1"
 const CHILD_SESSION = "child-session-1"
 
 beforeEach(() => {
-  root = mkdtempSync(path.join(tmpdir(), "goal-steer-"))
+  root = mkdtempSync(tmpRoot())
   store = new DocumentStore(root)
 })
 afterEach(() => rmSync(root, { recursive: true, force: true }))
@@ -186,7 +187,9 @@ describe("§S1.3 renderStepPrompt — mid-run steering threads into the step pro
 
 // Read the goal's durable run_context state (the core loop's own persistence) — lets a test assert what
 // the CORE channel still holds pending vs what a delivered tick drained.
-const goalState = (handle: GoalHandle): { readonly pendingSteers: ReadonlyArray<{ id: string; text: string }> } | null => {
+const goalState = (
+  handle: GoalHandle,
+): { readonly pendingSteers: ReadonlyArray<{ id: string; text: string }> } | null => {
   const doc = store
     .list({ type: "run_context", scope: planScope(handle.sessionId) })
     .map((ref) => store.get(ref.id))

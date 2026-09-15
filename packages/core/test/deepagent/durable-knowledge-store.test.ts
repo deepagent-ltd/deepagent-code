@@ -15,12 +15,13 @@ import {
   openUserGlobalStore,
   projectIdForWorkspace,
 } from "../../src/deepagent/durable-knowledge-store"
+import { tmpRoot } from "../fixture/tmpdir"
 
 let root: string
 let store: DurableKnowledgeStore
 
 beforeEach(() => {
-  root = mkdtempSync(path.join(tmpdir(), "deepagent-dks-"))
+  root = mkdtempSync(tmpRoot())
   store = new DurableKnowledgeStore(root)
 })
 afterEach(() => rmSync(root, { recursive: true, force: true }))

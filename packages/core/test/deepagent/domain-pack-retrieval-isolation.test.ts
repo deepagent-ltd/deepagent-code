@@ -10,11 +10,12 @@ import type { ActivateOptions } from "../../src/deepagent/domain-pack"
 import type { TaskContext, ToolContext } from "../../src/deepagent/prompt-policy"
 import type { Selection } from "../../src/deepagent/released-snapshot"
 import { releasedUserGlobalSelection } from "./released-selection-fixture"
+import { tmpRoot, tmpRootShared } from "../fixture/tmpdir"
 
 const tools: ToolContext = { availableTools: [], mcpServers: [], totalToolCount: 0 }
 
 const withSeededKnowledge = (fn: (releasedSelection: Selection) => void) => {
-  const dir = mkdtempSync(path.join(tmpdir(), "deepagent-retrieval-isolation-"))
+  const dir = mkdtempSync(tmpRootShared())
   try {
     knowledgeSource.configure(dir)
     seedCoreKnowledge(openUserGlobalStore(dir))

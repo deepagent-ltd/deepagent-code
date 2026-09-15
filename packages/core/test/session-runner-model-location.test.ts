@@ -16,7 +16,7 @@ import { ProviderV2 } from "@deepagent-code/core/provider"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { SessionRunnerModel } from "@deepagent-code/core/session/runner/model"
-import { tmpdir } from "./fixture/tmpdir"
+import { tmpRoot, tmpdir, tmpRootShared } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 import { Auth } from "../src/auth"
 import { EventV2 } from "../src/event"
@@ -58,7 +58,7 @@ const it = testEffect(
 const ORIGINAL_DISABLE_FETCH = Flag.DEEPAGENT_CODE_DISABLE_MODELS_FETCH
 const ORIGINAL_DATABASE = Flag.DEEPAGENT_CODE_DB
 const ORIGINAL_TEST_HOME = process.env.DEEPAGENT_CODE_TEST_HOME
-const testHome = mkdtempSync(path.join(os.tmpdir(), "runner-model-location-home-"))
+const testHome = mkdtempSync(tmpRootShared())
 beforeAll(() => {
   Flag.DEEPAGENT_CODE_DISABLE_MODELS_FETCH = true
   Flag.DEEPAGENT_CODE_DB = ":memory:"
@@ -153,10 +153,7 @@ describe("SessionRunnerModel production Location vertical", () => {
               ])
               // No session model: the config `model` scalar selects the default.
               return yield* SessionRunnerModel.Service.use((service) => service.resolve(session(tmp.path)))
-            }).pipe(
-              Effect.scoped,
-              Effect.provide(LocationServiceMap.get({ directory: AbsolutePath.make(tmp.path) })),
-            )
+            }).pipe(Effect.scoped, Effect.provide(LocationServiceMap.get({ directory: AbsolutePath.make(tmp.path) })))
 
             expect(resolved.info?.providerID).toBe(ProviderV2.ID.make("acme"))
             expect(resolved.info?.id).toBe(ModelV2.ID.make("acme-chat-large"))
@@ -280,10 +277,7 @@ describe("SessionRunnerModel production Location vertical", () => {
                   }),
                 ),
               ).pipe(Effect.flip)
-            }).pipe(
-              Effect.scoped,
-              Effect.provide(LocationServiceMap.get({ directory: AbsolutePath.make(tmp.path) })),
-            )
+            }).pipe(Effect.scoped, Effect.provide(LocationServiceMap.get({ directory: AbsolutePath.make(tmp.path) })))
 
             // An unknown source with no explicit protocol is a typed error end-to-end —
             // never a silent fallback to a guessed Chat route or a V1 resolver.

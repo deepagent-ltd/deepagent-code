@@ -9,11 +9,12 @@ import {
   releaseDurableExecutorReservation,
   reserveDurableExecutor,
 } from "@/session/durable-executor-lock"
+import { tmpRoot, tmpRootShared } from "../fixture/fixture"
 
 const roots: string[] = []
 
 function temporaryRoot() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "deepagent-durable-lock-"))
+  const root = fs.mkdtempSync(tmpRootShared())
   roots.push(root)
   return root
 }

@@ -7,6 +7,7 @@ import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { SessionRunner } from "@deepagent-code/core/session/runner"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { V2PlanGate } from "@/session/v2-plan-gate"
+import { tmpRoot } from "../fixture/fixture"
 
 // The V2 plan gate must work on sessions that never seeded DeepAgentSessionState (the V2 path
 // never runs the V1 ensureSessionStateForRun): the latch seeds on the first block so the
@@ -25,7 +26,7 @@ const retrievalHeadedMutations = [
 const flags = RuntimeFlags.layer({ strictPlanGate: true })
 const gate = () => {
   const gateway = AgentGateway.runtimeLayer({
-    baseDir: mkdtempSync(path.join(os.tmpdir(), "deepagent-v2-plan-gate-")),
+    baseDir: mkdtempSync(tmpRoot()),
     durableLearning: false,
   })
   return V2PlanGate.layer.pipe(Layer.provide(flags), Layer.provide(gateway), Layer.merge(gateway))

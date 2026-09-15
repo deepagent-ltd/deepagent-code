@@ -21,6 +21,7 @@ import { tmpdir } from "node:os"
 import { execSync } from "node:child_process"
 import path from "node:path"
 import { testEffect } from "../lib/effect"
+import { tmpRoot, tmpRootShared } from "../fixture/fixture"
 
 // Seeds must write the type the DURABLE log actually stores (version-suffixed). Hardcoding the bare
 // definition name here is what let these tests stay green while production's harvest matched zero
@@ -207,7 +208,12 @@ describe("activityTouchedPaths (real tables)", () => {
     Effect.gen(function* () {
       yield* seedBase
       const { db } = yield* Database.Service
-      yield* db.insert(EventSequenceTable).values({ aggregate_id: sessionID, seq: 0 }).onConflictDoNothing().run().pipe(Effect.orDie)
+      yield* db
+        .insert(EventSequenceTable)
+        .values({ aggregate_id: sessionID, seq: 0 })
+        .onConflictDoNothing()
+        .run()
+        .pipe(Effect.orDie)
       // Activity A (old): writes shared.go. Activity B (new): writes feature.go via write and
       // a chunked patch commit; shared.go's author is A alone. A FAILED edit in B attributes
       // nothing (failed calls changed nothing durable).
@@ -245,7 +251,12 @@ describe("activityTouchedPaths (real tables)", () => {
     Effect.gen(function* () {
       yield* seedBase
       const { db } = yield* Database.Service
-      yield* db.insert(EventSequenceTable).values({ aggregate_id: sessionID, seq: 0 }).onConflictDoNothing().run().pipe(Effect.orDie)
+      yield* db
+        .insert(EventSequenceTable)
+        .values({ aggregate_id: sessionID, seq: 0 })
+        .onConflictDoNothing()
+        .run()
+        .pipe(Effect.orDie)
       yield* insertReceipt(db, "rcpt_A", "act_A", 1)
       yield* insertEffect(db, "fx_A1", "rcpt_A", "call_A1", "write", "settled")
       yield* insertToolSuccess(db, "call_A1", { resource: "x.go" })
@@ -261,7 +272,12 @@ describe("activityTouchedPaths (real tables)", () => {
     Effect.gen(function* () {
       yield* seedBase
       const { db } = yield* Database.Service
-      yield* db.insert(EventSequenceTable).values({ aggregate_id: sessionID, seq: 0 }).onConflictDoNothing().run().pipe(Effect.orDie)
+      yield* db
+        .insert(EventSequenceTable)
+        .values({ aggregate_id: sessionID, seq: 0 })
+        .onConflictDoNothing()
+        .run()
+        .pipe(Effect.orDie)
       yield* insertReceipt(db, "rcpt_C", "act_C", 7)
       yield* insertEffect(db, "fx_C1", "rcpt_C", "call_C1", "write", "settled")
       yield* db
@@ -299,7 +315,7 @@ describe("activityTouchedPaths (real tables)", () => {
 // "bun run test" inferable; a bash tool.called + tool.success pair with structured exitCode
 // exercises the harvest; SessionState carries the activity binding the finalizer checks.
 describe("harvestActivityValidation + three-state verdict", () => {
-  const wsRoot = mkdtempSync(path.join(tmpdir(), "deepagent-harvest-ws-"))
+  const wsRoot = mkdtempSync(tmpRootShared())
   const writeWorkspace = () => {
     writeFileSync(path.join(wsRoot, "package.json"), JSON.stringify({ scripts: { test: "echo ok" } }))
   }
@@ -320,7 +336,14 @@ describe("harvestActivityValidation + three-state verdict", () => {
           seq: 8_000_001,
           sync_seq: ++eventSeqCounter,
           type: TOOL_CALLED_TYPE,
-          data: { sessionID, assistantMessageID: "msg_v", callID: "call_V1", tool: "bash", input: { command: "bun run test" }, provider: { executed: false } },
+          data: {
+            sessionID,
+            assistantMessageID: "msg_v",
+            callID: "call_V1",
+            tool: "bash",
+            input: { command: "bun run test" },
+            provider: { executed: false },
+          },
         })
         .run()
         .pipe(Effect.orDie)
@@ -332,7 +355,13 @@ describe("harvestActivityValidation + three-state verdict", () => {
           seq: 8_000_002,
           sync_seq: ++eventSeqCounter,
           type: TOOL_SUCCESS_TYPE,
-          data: { sessionID, assistantMessageID: "msg_v", callID: "call_V1", structured: { command: "bun run test", exitCode: 0, output: "ok", truncated: false }, content: [] },
+          data: {
+            sessionID,
+            assistantMessageID: "msg_v",
+            callID: "call_V1",
+            structured: { command: "bun run test", exitCode: 0, output: "ok", truncated: false },
+            content: [],
+          },
         })
         .run()
         .pipe(Effect.orDie)
@@ -347,7 +376,7 @@ describe("harvestActivityValidation + three-state verdict", () => {
 
   it.effect("harvests go test evidence for a Go workspace", () =>
     Effect.gen(function* () {
-      const goRoot = mkdtempSync(path.join(tmpdir(), "deepagent-harvest-go-"))
+      const goRoot = mkdtempSync(tmpRootShared())
       writeFileSync(path.join(goRoot, "go.mod"), "module example.test/project\n\ngo 1.24\n")
       const { db } = yield* Database.Service
       yield* seedBase
@@ -361,7 +390,14 @@ describe("harvestActivityValidation + three-state verdict", () => {
           seq: 8_050_001,
           sync_seq: ++eventSeqCounter,
           type: TOOL_CALLED_TYPE,
-          data: { sessionID, assistantMessageID: "msg_go", callID: "call_GO1", tool: "bash", input: { command: "go test ./..." }, provider: { executed: false } },
+          data: {
+            sessionID,
+            assistantMessageID: "msg_go",
+            callID: "call_GO1",
+            tool: "bash",
+            input: { command: "go test ./..." },
+            provider: { executed: false },
+          },
         })
         .run()
         .pipe(Effect.orDie)
@@ -373,7 +409,13 @@ describe("harvestActivityValidation + three-state verdict", () => {
           seq: 8_050_002,
           sync_seq: ++eventSeqCounter,
           type: TOOL_SUCCESS_TYPE,
-          data: { sessionID, assistantMessageID: "msg_go", callID: "call_GO1", structured: { command: "go test ./...", exitCode: 0, output: "ok", truncated: false }, content: [] },
+          data: {
+            sessionID,
+            assistantMessageID: "msg_go",
+            callID: "call_GO1",
+            structured: { command: "go test ./...", exitCode: 0, output: "ok", truncated: false },
+            content: [],
+          },
         })
         .run()
         .pipe(Effect.orDie)
@@ -388,7 +430,7 @@ describe("harvestActivityValidation + three-state verdict", () => {
 
   it.effect("does not treat a Go subpackage test as whole-module validation", () =>
     Effect.gen(function* () {
-      const goRoot = mkdtempSync(path.join(tmpdir(), "deepagent-harvest-go-subpackage-"))
+      const goRoot = mkdtempSync(tmpRootShared())
       writeFileSync(path.join(goRoot, "go.mod"), "module example.test/project\n\ngo 1.24\n")
       const { db } = yield* Database.Service
       yield* seedBase
@@ -402,7 +444,14 @@ describe("harvestActivityValidation + three-state verdict", () => {
           seq: 8_060_001,
           sync_seq: ++eventSeqCounter,
           type: TOOL_CALLED_TYPE,
-          data: { sessionID, assistantMessageID: "msg_go_sub", callID: "call_GOSUB1", tool: "bash", input: { command: "go test ./pkg/..." }, provider: { executed: false } },
+          data: {
+            sessionID,
+            assistantMessageID: "msg_go_sub",
+            callID: "call_GOSUB1",
+            tool: "bash",
+            input: { command: "go test ./pkg/..." },
+            provider: { executed: false },
+          },
         })
         .run()
         .pipe(Effect.orDie)
@@ -414,7 +463,13 @@ describe("harvestActivityValidation + three-state verdict", () => {
           seq: 8_060_002,
           sync_seq: ++eventSeqCounter,
           type: TOOL_SUCCESS_TYPE,
-          data: { sessionID, assistantMessageID: "msg_go_sub", callID: "call_GOSUB1", structured: { command: "go test ./pkg/...", exitCode: 0, output: "ok", truncated: false }, content: [] },
+          data: {
+            sessionID,
+            assistantMessageID: "msg_go_sub",
+            callID: "call_GOSUB1",
+            structured: { command: "go test ./pkg/...", exitCode: 0, output: "ok", truncated: false },
+            content: [],
+          },
         })
         .run()
         .pipe(Effect.orDie)
@@ -439,7 +494,14 @@ describe("harvestActivityValidation + three-state verdict", () => {
           seq: 8_100_001,
           sync_seq: ++eventSeqCounter,
           type: TOOL_CALLED_TYPE,
-          data: { sessionID, assistantMessageID: "msg_o", callID: "call_O1", tool: "bash", input: { command: "bun run test" }, provider: { executed: false } },
+          data: {
+            sessionID,
+            assistantMessageID: "msg_o",
+            callID: "call_O1",
+            tool: "bash",
+            input: { command: "bun run test" },
+            provider: { executed: false },
+          },
         })
         .run()
         .pipe(Effect.orDie)
@@ -451,7 +513,13 @@ describe("harvestActivityValidation + three-state verdict", () => {
           seq: 8_100_002,
           sync_seq: ++eventSeqCounter,
           type: TOOL_SUCCESS_TYPE,
-          data: { sessionID, assistantMessageID: "msg_o", callID: "call_O1", structured: { command: "bun run test", exitCode: 0, output: "ok", truncated: false }, content: [] },
+          data: {
+            sessionID,
+            assistantMessageID: "msg_o",
+            callID: "call_O1",
+            structured: { command: "bun run test", exitCode: 0, output: "ok", truncated: false },
+            content: [],
+          },
         })
         .run()
         .pipe(Effect.orDie)
@@ -468,7 +536,13 @@ describe("harvestActivityValidation + three-state verdict", () => {
           seq: 8_100_003,
           sync_seq: ++eventSeqCounter,
           type: TOOL_SUCCESS_TYPE,
-          data: { sessionID, assistantMessageID: "msg_n", callID: "call_N1", structured: { operation: "write", target: "feature.go", resource: "feature.go", existed: false }, content: [] },
+          data: {
+            sessionID,
+            assistantMessageID: "msg_n",
+            callID: "call_N1",
+            structured: { operation: "write", target: "feature.go", resource: "feature.go", existed: false },
+            content: [],
+          },
         })
         .run()
         .pipe(Effect.orDie)
@@ -486,14 +560,20 @@ describe("harvestActivityValidation + three-state verdict", () => {
               : "validation_failed"
       expect(verdict).toBe("unverified")
       // And the finalizer with that verdict produces NO commit on a real repo.
-      const repo = mkdtempSync(path.join(tmpdir(), "deepagent-verdict-repo-"))
-      execSync('git init -q -b main', { cwd: repo })
-      execSync('git -c user.name=t -c user.email=t@t commit --no-gpg-sign --allow-empty -m base -q', { cwd: repo })
+      const repo = mkdtempSync(tmpRootShared())
+      execSync("git init -q -b main", { cwd: repo })
+      execSync("git -c user.name=t -c user.email=t@t commit --no-gpg-sign --allow-empty -m base -q", { cwd: repo })
       writeFileSync(path.join(repo, "feature.go"), "package x")
-      const outcome = yield* Effect.promise(() => finalizeSessionWork({ directory: repo, validation: "unverified", touchedPaths: activityTouchedPaths({ db } as never, sessionID, "act_NEW") }))
+      const outcome = yield* Effect.promise(() =>
+        finalizeSessionWork({
+          directory: repo,
+          validation: "unverified",
+          touchedPaths: activityTouchedPaths({ db } as never, sessionID, "act_NEW"),
+        }),
+      )
       expect(outcome.kind).toBe("unverified")
-      expect(execSync('git log --oneline', { cwd: repo, stdio: "pipe" }).toString().trim().split("\n")).toHaveLength(1)
-      expect(execSync('git status --porcelain', { cwd: repo, stdio: "pipe" }).toString().trim()).not.toBe("")
+      expect(execSync("git log --oneline", { cwd: repo, stdio: "pipe" }).toString().trim().split("\n")).toHaveLength(1)
+      expect(execSync("git status --porcelain", { cwd: repo, stdio: "pipe" }).toString().trim()).not.toBe("")
     }),
   )
 })

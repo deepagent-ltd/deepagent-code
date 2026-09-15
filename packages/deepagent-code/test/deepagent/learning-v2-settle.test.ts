@@ -55,13 +55,14 @@ import { Effect, Layer, LayerMap, Option, Schema, Stream } from "effect"
 import { eq, sql } from "drizzle-orm"
 import { testEffect } from "../lib/effect"
 import { onSessionSettled, onSessionSettledSeamLayer } from "@/deepagent/learning-runtime"
+import { tmpRoot, tmpRootShared } from "../fixture/fixture"
 
 // W7 — V2 session settle → durable learning admission (by flag). The runner composition mirrors the
 // core SessionRunner harness (real V2 turn pipeline, fake provider) plus the REAL `onSessionSettled`
 // hook injected through the same `SessionRunner.CurrentOnSessionSettled` seam the production
 // compositions provide. Asserts the full outbox → admitted-job path in both flag postures.
 
-const root = mkdtempSync(path.join(tmpdir(), "deepagent-w7-learning-v2-"))
+const root = mkdtempSync(tmpRootShared())
 // Every test gets a fresh runtime build. Keep its deliberately-faulted provider receipts isolated
 // so an indeterminate-state assertion cannot poison the next test's startup inventory.
 const database = Database.layerFromPath(":memory:")

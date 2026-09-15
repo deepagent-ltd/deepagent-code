@@ -52,11 +52,12 @@ import type { Session } from "../../src/session/session"
 import { LiveContextQueryAuthorization } from "../../src/context-federation/query-authorization"
 import { SessionFederatedContext } from "../../src/context-federation/session-context-runtime"
 import { LocationIndexRuntime } from "../../src/location-index/runtime"
+import { tmpRoot } from "../fixture/fixture"
 
 let root: string
 
 beforeEach(() => {
-  root = mkdtempSync(path.join(tmpdir(), "deepagent-learning-release-run-ab-"))
+  root = mkdtempSync(tmpRoot())
 })
 
 afterEach(() => rmSync(root, { recursive: true, force: true }))

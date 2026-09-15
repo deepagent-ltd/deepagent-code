@@ -3,14 +3,19 @@ import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import { SettingsStore } from "@/settings/store"
+import { tmpRootAsync } from "../fixture/fixture"
 
-// SettingsStore resolves its file under Global.Path.data, which honors DEEPAGENT_CODE_HOME. Point it
-// at a throwaway dir so we never touch the real ~/.deepagent/code.
+// SettingsStore resolves its file under Global.Path.data. BOTH variables are required to point it at
+// a throwaway dir: `resolveDataPath` (global-path.ts) honours DEEPAGENT_CODE_HOME only alongside the
+// explicit DEEPAGENT_CODE_TEST_HOME boundary. Setting DEEPAGENT_CODE_HOME alone left the path at the
+// real ~/.deepagent/code — the opposite of the isolation this fixture claims.
 let home: string
 const prevHome = process.env.DEEPAGENT_CODE_HOME
+const prevTestHome = process.env.DEEPAGENT_CODE_TEST_HOME
 
 beforeEach(async () => {
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "deepagent-settings-test-"))
+  home = await tmpRootAsync()
+  process.env.DEEPAGENT_CODE_TEST_HOME = home
   process.env.DEEPAGENT_CODE_HOME = home
   SettingsStore.invalidate()
 })
@@ -18,6 +23,8 @@ beforeEach(async () => {
 afterEach(async () => {
   if (prevHome === undefined) delete process.env.DEEPAGENT_CODE_HOME
   else process.env.DEEPAGENT_CODE_HOME = prevHome
+  if (prevTestHome === undefined) delete process.env.DEEPAGENT_CODE_TEST_HOME
+  else process.env.DEEPAGENT_CODE_TEST_HOME = prevTestHome
   SettingsStore.invalidate()
   await fs.rm(home, { recursive: true, force: true }).catch(() => {})
 })

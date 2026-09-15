@@ -12,6 +12,7 @@ import {
   type PlanDoc,
   type PlanStep,
 } from "../../src/deepagent/plan-controller"
+import { tmpRoot, tmpRootShared } from "../fixture/tmpdir"
 
 // I33-1 (deepagentcore-v4.0.3): the DocumentStore `type:"plan"` doc is the SINGLE structural authority
 // for a session's plan. session-state.setPlan/getPlan delegate to plan-store; the goal path writes the
@@ -30,7 +31,7 @@ const step = (id: string, status: PlanStep["status"] = "pending"): PlanStep => (
 const plan = (sid: string, steps: PlanStep[]): PlanDoc => createPlanDoc(sid, `goal ${sid}`, steps)
 
 beforeEach(() => {
-  stateDir = mkdtempSync(path.join(tmpdir(), "deepagent-planstore-"))
+  stateDir = mkdtempSync(tmpRoot())
   SessionState.configure(stateDir) // also configures plan-store root (I33-1 coupling)
 })
 afterEach(() => {
@@ -74,11 +75,21 @@ describe("I33-1 plan-store single authority", () => {
   test("compareAndCommitPlan enforces a logical version precondition", () => {
     const sid = "s_cas"
     const first = plan(sid, [step("step_1")])
-    const created = PlanStore.compareAndCommitPlan({ sessionId: sid, expected: null, candidate: first, origin: "model_tool" })
+    const created = PlanStore.compareAndCommitPlan({
+      sessionId: sid,
+      expected: null,
+      candidate: first,
+      origin: "model_tool",
+    })
     expect(created.version).toBe(1)
     const expected = { plan_id: first.plan_id, doc_id: created.doc_id, version: created.version }
     const second = { ...first, steps: [{ ...first.steps[0], status: "done" as const }] }
-    const committed = PlanStore.compareAndCommitPlan({ sessionId: sid, expected, candidate: second, origin: "model_tool" })
+    const committed = PlanStore.compareAndCommitPlan({
+      sessionId: sid,
+      expected,
+      candidate: second,
+      origin: "model_tool",
+    })
     expect(committed.version).toBe(2)
     expect(() =>
       PlanStore.compareAndCommitPlan({
@@ -232,7 +243,13 @@ describe("I33-1 plan-store single authority", () => {
         sessionId: "s6",
         mode: "high",
         completedAt: null,
-        planLatch: { plan_id: legacyPlan.plan_id, latch: "fresh", stale_reason: null, replan_count: 0, consecutive_blocks: 0 },
+        planLatch: {
+          plan_id: legacyPlan.plan_id,
+          latch: "fresh",
+          stale_reason: null,
+          replan_count: 0,
+          consecutive_blocks: 0,
+        },
         plan: legacyPlan, // the legacy inline body
       },
     }
@@ -258,7 +275,13 @@ describe("I33-1 plan-store single authority", () => {
         sessionId: "s7",
         mode: "high",
         completedAt: null,
-        planLatch: { plan_id: legacyOlder.plan_id, latch: "fresh", stale_reason: null, replan_count: 0, consecutive_blocks: 0 },
+        planLatch: {
+          plan_id: legacyOlder.plan_id,
+          latch: "fresh",
+          stale_reason: null,
+          replan_count: 0,
+          consecutive_blocks: 0,
+        },
         plan: legacyOlder,
       },
     }
@@ -298,18 +321,20 @@ describe("I33-1 plan-store single authority", () => {
       status: "quarantined",
     })
     expect(diagnostics).toHaveLength(1)
-    expect(JSON.parse(DocumentStore.shared(PlanStore.planStoreRoot("s8")).get(diagnostics[0]!.id)!.body)).toMatchObject({
-      kind: "legacy_plan_migration",
-      session_id: "s8",
-      plan_id: malformed.plan_id,
-      code: "empty_steps",
-    })
+    expect(JSON.parse(DocumentStore.shared(PlanStore.planStoreRoot("s8")).get(diagnostics[0]!.id)!.body)).toMatchObject(
+      {
+        kind: "legacy_plan_migration",
+        session_id: "s8",
+        plan_id: malformed.plan_id,
+        code: "empty_steps",
+      },
+    )
   })
 })
 
 describe("W4 run document set (requirements/design/worklog)", () => {
   test("writeSpecDoc stores typed run docs beside the plan; re-write bumps version; list sees them", () => {
-    const stateDir = mkdtempSync(path.join(tmpdir(), "spec-store-"))
+    const stateDir = mkdtempSync(tmpRootShared())
     PlanStore.configureRoot(stateDir)
     DocumentStore.__resetSharedRegistryForTests()
 

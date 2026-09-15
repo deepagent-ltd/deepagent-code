@@ -22,13 +22,13 @@ import { Storage } from "@/storage/storage"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { BackgroundJob } from "@/background/job"
 import { EventV2Bridge } from "@/event-v2-bridge"
-import { testInstanceStoreLayer } from "../fixture/fixture"
+import { testInstanceStoreLayer, tmpRoot, tmpRootShared } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
 const roots: string[] = []
 
 function temporaryRoot() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "deepagent-takeover-drill-"))
+  const root = fs.mkdtempSync(tmpRootShared())
   roots.push(root)
   return root
 }
@@ -303,7 +303,12 @@ describe("RISK-004 drill: fork delivery claim lease", () => {
       const setPublishing = (leaseExpiresAt: number) =>
         db
           .update(SessionForkIntentTable)
-          .set({ state: "publishing", delivery_owner: staleOwner, lease_expires_at: leaseExpiresAt, time_updated: Date.now() })
+          .set({
+            state: "publishing",
+            delivery_owner: staleOwner,
+            lease_expires_at: leaseExpiresAt,
+            time_updated: Date.now(),
+          })
           .where(eq(SessionForkIntentTable.intent_id, intentID))
           .run()
           .pipe(Effect.orDie)

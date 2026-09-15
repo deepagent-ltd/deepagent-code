@@ -41,7 +41,7 @@ import { EventV2 } from "@deepagent-code/core/event"
 import { ProjectV2 } from "@deepagent-code/core/project"
 import * as Log from "@deepagent-code/core/util/log"
 import { Hash } from "@deepagent-code/core/util/hash"
-import { disposeAllInstances, provideTmpdirServer, testInstanceStoreLayer } from "../fixture/fixture"
+import { disposeAllInstances, provideTmpdirServer, testInstanceStoreLayer, tmpRoot } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { TestLLMServer } from "../lib/llm-server"
 
@@ -105,7 +105,7 @@ void Log.init({ print: false })
 // session-state/plan-store through the process-global default runtime; without a configured
 // root setPlan throws "plan-store: no runtime state dir". Point it at a throwaway dir so the
 // seed works in-process (same pattern as prompt.test.ts).
-AgentGateway.DeepAgentSessionState.configure(mkdtempSync(path.join(tmpdir(), "snapshot-race-state-")))
+AgentGateway.DeepAgentSessionState.configure(mkdtempSync(tmpRoot()))
 
 // r0 armed-owner template (mirrors prompt.test.ts): the V2-only profile gates prompt execution on
 // a verified owner authorization, so the test mints a signed active row and arms the three owner

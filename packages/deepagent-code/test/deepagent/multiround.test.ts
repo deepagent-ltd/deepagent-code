@@ -10,7 +10,7 @@ import { runValidationCommands } from "../../src/deepagent/validation-exec"
 import { Snapshot } from "../../src/snapshot"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { testEffect } from "../lib/effect"
-import { testInstanceStoreLayer, TestInstance } from "../fixture/fixture"
+import { testInstanceStoreLayer, TestInstance, tmpRoot, tmpRootShared } from "../fixture/fixture"
 
 const Orchestrator = AgentGateway.DeepAgentOrchestrator
 const env = {
@@ -28,7 +28,7 @@ const tools = { availableTools: [], mcpServers: [], totalToolCount: 0 }
 const live = testEffect(Layer.mergeAll(Snapshot.defaultLayer, FSUtil.defaultLayer, testInstanceStoreLayer))
 
 beforeAll(() => {
-  AgentGateway.DeepAgentKnowledgeSource.configure(mkdtempSync(path.join(tmpdir(), "mr-mem-")))
+  AgentGateway.DeepAgentKnowledgeSource.configure(mkdtempSync(tmpRootShared()))
 })
 
 // Pin the global gateway config (agentMode + an isolated runsDir/state dir) so diagnosis
@@ -36,7 +36,7 @@ beforeAll(() => {
 // deepagent test file ran configure() before this one. The gateway config — including the
 // SessionState directory — is a process-global singleton; without re-pinning here, a prior file's
 // configure({runsDir}) repoints the session store and changes this test's diagnosis rollback round.
-const mrRunsDir = mkdtempSync(path.join(tmpdir(), "mr-runs-"))
+const mrRunsDir = mkdtempSync(tmpRootShared())
 beforeEach(() => {
   AgentGateway.configure({ agentMode: "max", runsDir: path.join(mrRunsDir, "runs") })
 })

@@ -65,6 +65,7 @@ import {
   harvestActivityValidation,
   onSessionSettledSeamLayer,
 } from "@/deepagent/learning-runtime"
+import { tmpRoot, tmpRootShared } from "../fixture/fixture"
 
 // Real-path finalizer delivery. Every existing assertion about the G2 delivery chain feeds
 // `activityTouchedPaths` / `toolSuccessResources` hand-seeded rows, so nothing proved that the
@@ -75,7 +76,7 @@ import {
 // receipts, real effect admission/settlement, real event log, real settle hook) and asserts the
 // runtime delivered the work.
 
-const root = mkdtempSync(path.join(tmpdir(), "deepagent-finalizer-v2-"))
+const root = mkdtempSync(tmpRootShared())
 // A real git workspace with a baseline commit: the finalizer's commit is observable evidence.
 spawnSync("git", ["init", "-q", "-b", "main"], { cwd: root })
 spawnSync(

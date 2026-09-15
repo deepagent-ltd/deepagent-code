@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { detectValidationSignals, inferValidationCommands, packageScriptRunner } from "../../src/deepagent/validation"
+import { tmpRoot, tmpRootShared } from "../fixture/tmpdir"
 
 describe("validation command inference", () => {
   test("recognizes Go modules used by Go coding tasks", () => {
@@ -30,7 +31,7 @@ describe("detectValidationSignals", () => {
   // The detector is synchronous on purpose (see its doc comment): the runner's prepare path must not
   // gain scheduler yield points between prompt admission and provider dispatch.
   test("reads the same workspace signals the V1 detector uses", () => {
-    const directory = mkdtempSync(path.join(tmpdir(), "validation-signals-"))
+    const directory = mkdtempSync(tmpRootShared())
     writeFileSync(
       path.join(directory, "package.json"),
       JSON.stringify({
@@ -58,7 +59,7 @@ describe("detectValidationSignals", () => {
   })
 
   test("reports absent markers as absent", () => {
-    const directory = mkdtempSync(path.join(tmpdir(), "validation-signals-empty-"))
+    const directory = mkdtempSync(tmpRootShared())
     expect(detectValidationSignals(directory)).toEqual({
       packageJson: undefined,
       agentsMd: undefined,
@@ -70,7 +71,7 @@ describe("detectValidationSignals", () => {
   })
 
   test("survives a malformed package.json", () => {
-    const directory = mkdtempSync(path.join(tmpdir(), "validation-signals-bad-"))
+    const directory = mkdtempSync(tmpRootShared())
     writeFileSync(path.join(directory, "package.json"), "{ not json")
     const signals = detectValidationSignals(directory)
     expect(signals.packageJson).toBeUndefined()
