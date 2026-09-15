@@ -901,9 +901,6 @@ export const layer = Layer.effect(
           result.share = "auto"
         }
 
-        if (Flag.DEEPAGENT_CODE_DISABLE_AUTOCOMPACT) {
-          result.compaction = { ...result.compaction, auto: false }
-        }
         if (Flag.DEEPAGENT_CODE_DISABLE_PRUNE) {
           result.compaction = { ...result.compaction, prune: false }
         }

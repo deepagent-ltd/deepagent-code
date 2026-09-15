@@ -213,7 +213,8 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // next-step intent into the durable plan doc BEFORE lossy summarization. Pure-additive, strictly safer
   // default (loses less on compaction), no autonomous side effects → SHIPS ON (mirrors v4Steering posture).
   // With `=false`, overflowStatus() collapses to the pre-V4.0.1 single-threshold ok/hard behavior (逐字节
-  // equivalent). Also respects DEEPAGENT_CODE_DISABLE_AUTOCOMPACT (no compaction → no soft-landing).
+  // equivalent). Compaction itself follows the user's `compaction.auto` config; the env escape
+  // hatch that used to force it off was removed so the mechanism ships on.
   softLandingCompaction: stableOn("DEEPAGENT_CODE_SOFT_LANDING_COMPACTION"),
   // V4.0.1 P0b: OUTPUT soft-landing — when a response is cut off at the output-token ceiling
   // (finish === "length") with no pending tool call, instead of ending the turn (the pre-V4.0.1 behavior),

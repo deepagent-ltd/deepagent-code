@@ -28,9 +28,10 @@ const decide = function (
   return Effect.sync(() =>
     runtime.withStorage(() => {
       const sessionID = input.sessionID
-      // Beacon: the plan gate is consulted on every tool settlement. Recording the consult (and,
-      // below, any actual block) proves the mechanism reached the task — "flag on" alone does not.
-      mechanismBeacon.recordEngagement("strict_plan_gate", `tool=${input.toolName}`)
+      // Beacon: this function is called on EVERY tool settlement, with the gate ON or OFF, so a
+      // counter here measures reachability of the call site rather than the mechanism — measured as
+      // C3 (gate OFF) logging MORE consults than C2 (gate ON): 101 vs 67. The mechanism is recorded
+      // only where it DECIDES: an implicit-plan registration (3 sites) or a block (2 sites).
       const latch = AgentGateway.DeepAgentSessionState.planLatch(sessionID)
       const planStale = latch?.latch === "stale" && !AgentGateway.DeepAgentPlanController.shouldEscapeToHuman(latch)
       // V2 sessions never seed DeepAgentSessionState (the V1 ensureSessionStateForRun does that) —
@@ -128,6 +129,10 @@ const decide = function (
           graceReminder = registered
             ? `Plan gate released this call after ${latch.consecutive_blocks} blocks and registered a one-step runtime plan; the block will not repeat. Call the \`plan\` tool if the work grows beyond it.`
             : `Plan gate released this call after ${latch.consecutive_blocks} blocks. Call the \`plan\` tool now (one step is fine) — the next mutating call blocks again.`
+          mechanismBeacon.recordEngagement(
+            "strict_plan_gate",
+            registered ? `grace-release+implicit-plan=${input.toolName}` : `grace-release=${input.toolName}`,
+          )
         } else {
           AgentGateway.DeepAgentSessionState.recordPlanGateBlock(sessionID)
           mechanismBeacon.recordEngagement("strict_plan_gate", `blocked=${input.toolName}`)
@@ -160,11 +165,13 @@ const decide = function (
           // genuine desync — it only stops the gate from billing turns for a warning the model has
           // already been shown.
           AgentGateway.DeepAgentSessionState.clearPlanStale(sessionID)
+          mechanismBeacon.recordEngagement("strict_plan_gate", `grace-release-stale=${input.toolName}`)
           graceReminder =
             `The plan is stale (${latch.stale_reason}) and the plan gate already blocked ${latch.consecutive_blocks} consecutive mutating calls without a plan update. ` +
             "This call was released and the staleness warning cleared — update the plan via the `plan` tool when it is next convenient; it will not block again for this reason."
         } else {
           AgentGateway.DeepAgentSessionState.recordPlanGateBlock(sessionID)
+          mechanismBeacon.recordEngagement("strict_plan_gate", `blocked-stale=${input.toolName}`)
           const output =
             latch?.stale_reason != null
               ? `The plan is stale (${latch.stale_reason}). This action is blocked until the plan is re-synced: call the \`plan\` tool to update your plan (or replan), then retry this edit.`

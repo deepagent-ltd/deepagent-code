@@ -229,20 +229,26 @@ export const OFFICIAL_VENDORED_CATALOG: Record<string, Provider> = Schema.decode
         attachment: true,
         family: "google",
       }),
+      // The DeepSeek window + output are MEASURED against the endpoint, not guessed. They were
+      // vendored as 128_000 / 16_000, which is not a conservative bound the provider enforces — it is
+      // simply wrong, and the window propagated into the auto-compaction trigger
+      // (`window - window*0.18`): 104,960 instead of ~860,000, i.e. 10% of the real window. The
+      // provider states both limits directly:
+      //   "This model's maximum context length is 1048576 tokens"   (a ~320,000-token request succeeds)
+      //   "the valid range of max_tokens is [1, 393216]"
+      // Every ablation run recorded so far peaks between 56k and 193k prompt tokens (5-18% of the
+      // window), so auto-compaction never had a reason to fire there — which is the intended
+      // behaviour for a mechanism that costs a summarization call and drops history.
       "deepseek-v4-flash": vendoredModel("deepseek-v4-flash", "DeepSeek V4 Flash", {
-        context: 128_000,
+        context: 1_048_576,
+        output: 393_216,
         reasoning: true,
         family: "deepseek",
       }),
       "deepseek-v4-pro": vendoredModel("deepseek-v4-pro", "DeepSeek V4 Pro", {
-        context: 128_000,
+        context: 1_048_576,
+        output: 393_216,
         reasoning: true,
-        family: "deepseek",
-      }),
-      "deepseek-v4-flash-vision-exp": vendoredModel("deepseek-v4-flash-vision-exp", "DeepSeek V4 Vision", {
-        context: 128_000,
-        reasoning: true,
-        attachment: true,
         family: "deepseek",
       }),
       "qwen3.8-flash": vendoredModel("qwen3.8-flash", "Qwen 3.8 Flash", { context: 128_000, family: "qwen" }),
@@ -283,7 +289,6 @@ export const DEEPAGENT_MODEL_PROTOCOL: Record<string, "openai-compatible.respons
   "openai/gpt-5.6-luna": "openai-compatible.responses",
   "deepseek-v4-flash": "openai-compatible.responses",
   "deepseek-v4-pro": "openai-compatible.responses",
-  "deepseek-v4-flash-vision-exp": "openai-compatible.responses",
 }
 
 const mergeVendored = (loaded: Record<string, Provider>) => ({ ...OFFICIAL_VENDORED_CATALOG, ...loaded })
@@ -430,9 +435,7 @@ export const defaultLayer = layer.pipe(
   Layer.provide(FSUtil.defaultLayer),
   Layer.provide(EventV2.defaultLayer),
   Layer.provide(Global.layer),
-  Layer.provide(
-    EffectFlock.layer.pipe(Layer.provide(FSUtil.defaultLayer), Layer.provide(Global.layer)),
-  ),
+  Layer.provide(EffectFlock.layer.pipe(Layer.provide(FSUtil.defaultLayer), Layer.provide(Global.layer))),
 )
 
 export * as ModelsDev from "./models-dev"

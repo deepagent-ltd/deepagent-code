@@ -51,12 +51,6 @@ export const MECHANISMS: readonly MechanismSpec[] = [
     site: "core/system-context plan gate decide + app V2PlanGate",
   },
   {
-    id: "autocompact",
-    env: "DEEPAGENT_CODE_DISABLE_AUTOCOMPACT",
-    unsetDefault: false,
-    site: "app session/compaction trigger (DISABLE flag: ON means autocompact DISABLED)",
-  },
-  {
     id: "event_admission",
     env: "DEEPAGENT_CODE_EVENT_V2_ADMISSION",
     unsetDefault: true,
@@ -93,16 +87,12 @@ export type MechanismState = {
   readonly site: string
 }
 
-/**
- * Resolve every mechanism. `autocompact` is inverted by construction (its env is a DISABLE
- * switch), so its `enabled` value is reported as the MECHANISM being on.
- */
+/** Resolve every mechanism. */
 export function mechanismStates(env: Readonly<Record<string, string | undefined>> = process.env): MechanismState[] {
   return MECHANISMS.map((spec) => {
     const raw = env[spec.env]
     const defined = raw !== undefined && raw !== ""
-    const flag = flipFlagValueOn(raw, spec.unsetDefault)
-    const enabled = spec.id === "autocompact" ? !flag : flag
+    const enabled = flipFlagValueOn(raw, spec.unsetDefault)
     return { id: spec.id, env: spec.env, raw, enabled, source: defined ? "env" : "default", site: spec.site }
   })
 }

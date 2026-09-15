@@ -31,12 +31,17 @@ describe("ablation battery tasks", () => {
   })
 
   test("mechanism env keys match the ablation-plan §2.2 switch table", () => {
-    expect(mechanismEnvKeys.federation).toEqual({ key: "DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION", offValue: "false" })
+    expect(mechanismEnvKeys.federation).toEqual({
+      key: "DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION",
+      offValue: "false",
+    })
     expect(mechanismEnvKeys.learning).toEqual({ key: "DEEPAGENT_DURABLE_LEARNING", offValue: "false" })
     expect(mechanismEnvKeys.plangate).toEqual({ key: "DEEPAGENT_CODE_STRICT_PLAN_GATE", offValue: "false" })
-    expect(mechanismEnvKeys.autocompact).toEqual({ key: "DEEPAGENT_CODE_DISABLE_AUTOCOMPACT", offValue: "true" })
     expect(mechanismEnvKeys["event-admission"]).toEqual({ key: "DEEPAGENT_CODE_EVENT_V2_ADMISSION", offValue: "false" })
-    expect(mechanismEnvKeys["im-single-write"]).toEqual({ key: "DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE", offValue: "false" })
+    expect(mechanismEnvKeys["im-single-write"]).toEqual({
+      key: "DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE",
+      offValue: "false",
+    })
     expect(mechanismEnvKeys["v2-owner"]).toEqual({ key: "DEEPAGENT_CODE_CORE_V2_EXECUTION_OWNER", offValue: "false" })
   })
 
