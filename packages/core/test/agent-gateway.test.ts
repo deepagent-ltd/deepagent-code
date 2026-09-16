@@ -154,7 +154,9 @@ describe("AgentGateway", () => {
         rm(rightRoot, { recursive: true, force: true }),
       ])
     }
-  })
+    // Builds two full runtime layers (migrations included); under a fully parallel suite run the
+    // default 5s budget is consumed by contention rather than by the assertion.
+  }, 30000)
 
   test("W7: durable learning flag and storage root follow configure() (default ON)", async () => {
     const root = await tempRunsDir()

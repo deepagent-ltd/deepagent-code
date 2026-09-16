@@ -2541,18 +2541,18 @@ v2Real.instance("loop continues when finish is tool-calls", () =>
 // PlanProtocolTracker 语义：success 归零、invalid/conflict/no_progress 累加、第二次终止），第 N 次
 // 失败在工具结果文本与 wire metadata 标注 [Plan attempt N of 2]，第二次连错时 publish Step.Failed
 // （V2 投影为 UnknownError，message 含 PlanProtocolViolation + code）并以 finish "error" 结束 turn。
-v2Real.instance("BUG-010 original malformed plan payload stops before a third Provider dispatch", () =>
+v2Real.instance("BUG-010 malformed plan payload stops before a third Provider dispatch", () =>
   assertPlanProtocolProviderBudget({
     payload: {
       goal: "complete the benchmark and compress collectives to 3.3ms",
-      steps: [{ step_id: "s1", title: "ayContext", status: "active" }],
-      active_step_id: "s1",
+      steps: [{ title: "", status: "active" }],
     },
-    // F-10/F-11: the omission-shaped envelope now ADMITS (GLM sends goal+steps legally) and the
-    // historical garbage defense fires at the SEMANTIC boundary instead — the supplied step_id on
-    // an inferred create is unsafe_step_identity, rejected WITH a correction payload rather than
-    // the dead schema path. The budget protection is unchanged.
-    errorCode: "unsafe_step_identity",
+    // The guard under test is the BUDGET, not the specific rejection: the same malformed payload
+    // twice must end the turn before a third provider dispatch. The payload above is rejected on its
+    // CONTENT (a step with no title). It used to be rejected for carrying a model-chosen `step_id`,
+    // but ids are server-owned now — a supplied id is dropped, so that shape is admitted and would
+    // no longer exercise this protection at all.
+    errorCode: "empty_title",
   }),
 )
 
@@ -2565,10 +2565,11 @@ v2Real.instance("BUG-010 forward-compatible malformed plan stops before a third 
       expected_plan_id: null,
       expected_version: null,
       goal: "complete the benchmark and compress collectives to 3.3ms",
-      steps: [{ step_id: "s1", title: "", status: "active" }],
-      active_step_id: "s1",
+      steps: [{ title: "", status: "active" }],
     },
-    errorCode: "unsafe_step_identity",
+    // Same guard as above through the explicit-create envelope; `step_id`/`active_step_id` are gone
+    // because both are ignored now, so the rejection has to come from content.
+    errorCode: "empty_title",
   }),
 )
 

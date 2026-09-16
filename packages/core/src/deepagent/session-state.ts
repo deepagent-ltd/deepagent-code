@@ -557,6 +557,24 @@ export const suppressFingerprint = (sessionId: string, fingerprint: string): voi
 export const unsuppressFingerprint = (sessionId: string, fingerprint: string): void =>
   unsuppressValidation(sessionId, fingerprint)
 
+/**
+ * Did the latest validation run pass?
+ *
+ * The predicate `stepCanComplete` is written against, so the plan tool can refuse a step that claims
+ * an acceptance criterion it has not met. It reports only what the runtime OBSERVED: `false` when no
+ * validation has run at all, which is the honest answer — "nothing failed" is not "it passed".
+ *
+ * Activity binding matters here for the same reason it does at delivery: an older activity's passing
+ * validation must not authorize a newer activity's unvalidated work, so a caller that knows its
+ * activity passes `activityId` and gets `false` unless the evidence belongs to it.
+ */
+export const lastValidationPassed = (sessionId: string, activityId?: string): boolean => {
+  const state = activeRuntime().sessions.get(sessionId)
+  if (!state || state.lastValidationResults.length === 0) return false
+  if (activityId !== undefined && state.lastValidationActivityId !== activityId) return false
+  return state.lastValidationResults.every((result) => result.passed)
+}
+
 // U10 / P2-E: a compact summary of the latest validation run, used as step evidence when a step
 // moves to `done`. Null when nothing has been validated yet.
 export const lastValidationSummary = (sessionId: string): string | null => {

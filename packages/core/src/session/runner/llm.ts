@@ -249,11 +249,20 @@ const planErrorCodeOf = (structured: unknown) => {
   return typeof code === "string" ? code : undefined
 }
 
-// Consecutive plan protocol violations at the tail of the CURRENT activity: walk history
-// backwards counting violation-outcome plan parts; a committed plan (success) or the user
-// message that opened the activity ends the run. Non-plan calls neither increment nor reset
-// the count, and a plan part without a settled outcome (pending/running) is skipped — both
-// legacy tracker semantics.
+// Consecutive plan PROTOCOL violations at the tail of the CURRENT activity: walk history backwards
+// counting violation-outcome plan parts; a committed plan (success) or the user message that opened
+// the activity ends the run. Non-plan calls neither increment nor reset the count, and a plan part
+// without a settled outcome (pending/running) is skipped — both legacy tracker semantics.
+//
+// Only the protocol's own verdicts (`invalid` / `conflict` / `no_progress`) spend this budget. A
+// plain TOOL error does not, and that distinction decides whether the run survives: the plan tool
+// returns `unsafe_step_identity` with the instruction "correct the plan payload and retry once", so
+// a corrected retry is the EXPECTED next move. Counting the failed attempt as a violation meant one
+// transient tool error plus any single rejection burned the entire 2-attempt budget and terminated
+// the drain — measured on the full-roster sweep, where four tasks died after 1-35 steps with
+// `PlanProtocolViolation ... budget exhausted` while the model was still correcting its payload.
+// A tool error is reported to the model like any other failing tool; the step ceiling and the
+// protocol budget both still bound a model that cannot produce an acceptable plan at all.
 const countPlanProtocolViolations = (messages: readonly SessionMessage.Message[]) => {
   let count = 0
   for (let index = messages.length - 1; index >= 0; index--) {
@@ -264,10 +273,6 @@ const countPlanProtocolViolations = (messages: readonly SessionMessage.Message[]
     for (let partIndex = message.content.length - 1; partIndex >= 0; partIndex--) {
       const part = message.content[partIndex]
       if (part?.type !== "tool" || part.name !== "plan") continue
-      if (part.state.status === "error") {
-        count++
-        continue
-      }
       if (part.state.status !== "completed") continue
       const outcome = planProtocolOutcomeOf(part.state.structured)
       if (outcome === undefined || outcome === "success") {
@@ -345,6 +350,20 @@ export const layer = Layer.effect(
     // W7: host-injectable settle hook (durable-learning admission in the deepagent-code
     // composition); unwired = no-op.
     const onSessionSettled = yield* CurrentOnSessionSettled
+    // Plan-protocol budget state for the WHOLE activity. It cannot live in `runTurnAttempt`: that
+    // runs once per provider turn, so a per-turn variable forgets the previous rejection and an
+    // identical payload re-sent in a later turn looks brand new. Measured in the harness: the second
+    // identical rejection logged `prev=none`.
+    let planRejectionStreak = 0
+    let planLastRejectedIdentity: string | undefined
+    let planStreakActivityId: string | undefined
+    /** A NEW activity starts a new rejection loop; the per-turn count is re-seeded from its history. */
+    const resetPlanRejectionStreakForActivity = (activityId: string | undefined) => {
+      if (activityId === planStreakActivityId) return
+      planStreakActivityId = activityId
+      planRejectionStreak = 0
+      planLastRejectedIdentity = undefined
+    }
     const toolSettleGate = yield* CurrentToolSettleGate
     // Runtime feature authority: captured once at layer construction (default: the process-start
     // global), so every forked drain fiber reads the SAME registry and tests inject an explicit
@@ -1082,24 +1101,43 @@ export const layer = Layer.effect(
       // this turn's budget (legacy restorePlanProtocolFailures parity); in-turn plan
       // settlements keep counting from there, and the second consecutive violation arms turn
       // termination below.
+      // BUG-010/RI-127: the violation count is seeded from durable history so a restart resumes the
+      // budget; `planRejectionStreak` then carries it across turns within this activity, because a
+      // rejection the model CORRECTS must not accumulate (the tool's own message promises one
+      // correction). Only a payload re-sent unchanged proves the retry produced nothing new.
+      // A new user turn opens a new activity, and the identity streak must NOT survive it: otherwise
+      // a payload the model was rejected for before the user spoke again would terminate on its first
+      // rejection. The count itself is already bounded by activity (`countPlanProtocolViolations`
+      // stops at the user message that opened it); this keeps the identity half in step with it.
+      resetPlanRejectionStreakForActivity(selectionAdmission.activityId)
       let planConsecutiveViolations = countPlanProtocolViolations(context)
       let planProtocolTerminal: { readonly ordinal: number; readonly code: string } | undefined
       const planResultMetadata = new Map<string, Record<string, unknown>>()
       const observePlanSettlement = (
-        call: { readonly id: string; readonly name: string },
+        call: { readonly id: string; readonly name: string; readonly input?: unknown },
         settlement: Effect.Success<ReturnType<ToolRegistry.Materialization["settle"]>>,
       ): Effect.Success<ReturnType<ToolRegistry.Materialization["settle"]>> => {
         if (call.name !== "plan") return settlement
         const failed = settlement.result.type === "error"
         const structured = "output" in settlement ? settlement.output?.structured : undefined
-        const outcome = failed ? ("invalid" as const) : planProtocolOutcomeOf(structured)
+        // A failed settlement is a TOOL error, not a protocol verdict: it is returned to the model to
+        // correct (the plan tool's own rejections say so), so it neither spends the protocol budget
+        // nor arms termination. Only a completed plan write that the protocol itself rejected
+        // (invalid/conflict/no_progress) counts.
+        const outcome = failed ? undefined : planProtocolOutcomeOf(structured)
         if (outcome === undefined || outcome === "success") {
           planConsecutiveViolations = 0
+          planRejectionStreak = 0
+          planLastRejectedIdentity = undefined
           return settlement
         }
-        planConsecutiveViolations += 1
+        const identity = Hash.sha256(CanonicalJson.stringify(call.input ?? null))
+        const repeated = planLastRejectedIdentity === identity
+        planLastRejectedIdentity = identity
+        planRejectionStreak = repeated ? planRejectionStreak + 1 : 1
+        planConsecutiveViolations = planRejectionStreak
         const ordinal = planConsecutiveViolations
-        const code = failed ? undefined : planErrorCodeOf(structured)
+        const code = planErrorCodeOf(structured)
         planResultMetadata.set(call.id, {
           protocol: outcome,
           attempt_ordinal: ordinal,

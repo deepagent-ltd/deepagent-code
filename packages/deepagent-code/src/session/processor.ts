@@ -364,10 +364,19 @@ export class PlanProtocolTracker {
   private readonly pending = new Set<string>()
   private readonly settled = new Set<string>()
   private consecutiveViolations: number
+  /**
+   * Identity of the payload that produced the last violation. V2 learned this the hard way: the plan
+   * tool's own rejections say "correct the plan payload and retry once", so a model that CHANGES its
+   * payload is doing what it was told, while one that resends the same bytes is looping. Counting
+   * both alike terminated activities whose model was still correcting (measured on the full-roster
+   * sweep; the same tasks pass once the streak is payload-aware). Kept here so V1 and V2 agree.
+   */
+  private lastViolationIdentity: string | undefined
 
   constructor(consecutiveViolations = 0) {
     this.consecutiveViolations = Math.max(0, Math.floor(consecutiveViolations))
   }
+
 
   start(callID: string, toolName: string): void {
     if (toolName === "plan") this.pending.add(callID)
@@ -376,19 +385,31 @@ export class PlanProtocolTracker {
   preview(callID: string, outcome: PlanProtocolOutcome): { consecutive: number; terminal: boolean } | undefined {
     if (!this.pending.has(callID) || this.settled.has(callID)) return undefined
     if (outcome === "success" || outcome === "progress") return { consecutive: 0, terminal: false }
-    const consecutive = this.consecutiveViolations + 1
-    return { consecutive, terminal: consecutive >= 2 }
+    // A preview cannot know the payload identity yet, so it must not claim the second strike: the
+    // terminal decision belongs to `settle`, which sees the arguments.
+    return { consecutive: this.consecutiveViolations + 1, terminal: false }
   }
 
-  settle(callID: string, outcome: PlanProtocolOutcome): { consecutive: number; terminal: boolean } | undefined {
+  settle(
+    callID: string,
+    outcome: PlanProtocolOutcome,
+    payload?: unknown,
+  ): { consecutive: number; terminal: boolean } | undefined {
     if (!this.pending.has(callID) || this.settled.has(callID)) return undefined
     this.pending.delete(callID)
     this.settled.add(callID)
     if (outcome === "success" || outcome === "progress") {
       this.consecutiveViolations = 0
+      this.lastViolationIdentity = undefined
       return { consecutive: 0, terminal: false }
     }
-    this.consecutiveViolations += 1
+    // An orphan failure (schema/transport error that arrives before the durable tool-call part, so
+    // there are no arguments to hash) is still the SAME failure repeating: two of them are the loop
+    // the budget stops, not a model correcting itself. Only a real payload change resets the streak.
+    const identity = payload === undefined ? undefined : Hash.sha256(JSON.stringify(payload))
+    const repeated = identity === this.lastViolationIdentity
+    this.lastViolationIdentity = identity
+    this.consecutiveViolations = repeated ? this.consecutiveViolations + 1 : 1
     return { consecutive: this.consecutiveViolations, terminal: this.consecutiveViolations >= 2 }
   }
 }
@@ -710,8 +731,9 @@ export const layer = Layer.effect(
         toolName: string,
         outcome: PlanProtocolOutcome,
         code?: string,
+        payload?: unknown,
       ) => {
-        const result = ctx.planTracker?.settle(planTrackerCallID(toolCallID), outcome)
+        const result = ctx.planTracker?.settle(planTrackerCallID(toolCallID), outcome, payload)
         if (!result?.terminal) return Effect.void
         return Effect.fail(
           new SessionV1.PlanProtocolViolationError({
@@ -1033,7 +1055,10 @@ export const layer = Layer.effect(
             : undefined,
         )
         if (protocol) {
-          yield* settlePlanProtocol(toolCallID, match.part.tool, protocol.outcome, protocol.code)
+          // The call's ARGUMENTS are the identity: two rejections of different payloads mean the model
+          // is correcting itself, which must not accumulate toward termination.
+          const payload = match.part.state.status === "running" ? match.part.state.input : undefined
+          yield* settlePlanProtocol(toolCallID, match.part.tool, protocol.outcome, protocol.code, payload)
         }
         if (input.noProgressLimit && noProgress && noProgress.count >= input.noProgressLimit) {
           slog.warn("subagent.loop.detected", {
