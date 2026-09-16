@@ -421,21 +421,24 @@ const qualityRegression = (previous: PlanDoc, candidate: PlanDoc): boolean => {
   const candidateChars = planTextSize(candidate)
   const previousAcceptanceSteps = previousUnresolved.filter((step) => normalizedText(step.acceptance) !== "")
   const candidateAcceptanceSteps = candidateUnresolved.filter((step) => normalizedText(step.acceptance) !== "")
-  const candidateById = new Map(candidateUnresolved.map((step) => [step.step_id, step] as const))
-  const preservesAcceptanceIdentity = previousAcceptanceSteps.some((step) => {
-    const next = candidateById.get(step.step_id)
-    return next != null && hasSameIdentity(step, next)
-  })
+  // Content, not id: see the note on the "wholly new work" rule below — ids are re-minted on replan,
+  // so resolving the candidate by id reported a regression for plans that merely reworded a step.
+  const preservesAcceptanceIdentity = previousAcceptanceSteps.some((prior) =>
+    candidateUnresolved.some((step) => hasSameIdentity(prior, step)),
+  )
 
   if (previous.steps.length >= 2 && candidate.steps.length <= Math.floor(previous.steps.length / 2)) {
     if (candidateChars * 2 < previousChars) return true
   }
   if (previousAcceptanceSteps.length >= 2 && candidateAcceptanceSteps.length === 0 && !preservesAcceptanceIdentity)
     return true
-  if (
-    previousUnresolved.length >= 2 &&
-    candidateUnresolved.every((step) => !previous.steps.some((prior) => prior.step_id === step.step_id))
-  ) {
+  // "Wholly new work" is decided by CONTENT, not by id: step ids are server-owned and are re-minted
+  // on replan, so an id-equality test reported a quality regression for every legitimate structural
+  // revision that reworded its steps — and that branch is the one that issues a `challenge_id` the
+  // MODEL cannot use (only the human/HTTP path can confirm it), so the run could not recover.
+  // A candidate step counts as previously-known when title + acceptance match a previous step: the
+  // same identity pair that governs evidence carry-forward.
+  if (previousUnresolved.length >= 2 && candidateUnresolved.every((step) => !previousUnresolved.some((prior) => hasSameIdentity(prior, step)))) {
     if (candidate.steps.reduce((total, step) => total + [...normalizedText(step.title)].length, 0) < 16) return true
   }
   return false
@@ -516,14 +519,19 @@ export const buildPlanFromWriteInput = (
 
   const priorById = new Map((previous?.steps ?? []).map((step) => [step.step_id, step] as const))
   if (input.operation === "advance" && previous != null) {
+    // Structure only: `advance` patches STATUSES, so the step list must still be the same list —
+    // same length, same ids, same position. Both the tool layer and this check agree on that.
+    //
+    // The GOAL is deliberately NOT part of this guard any more. A long-horizon task legitimately
+    // narrows or reframes its objective, and freezing it here meant a one-word goal change had to go
+    // through `replan` (with its own rejection surface) or fail as `unsafe_step_identity` — a code
+    // that named identity for a goal edit. Assumptions are editable for the same reason: they are
+    // facts the agent learned while working, not identity.
     const previousIds = previous.steps.map((step) => step.step_id)
     const suppliedIds = input.steps.map((step) => normalizedText(step.step_id))
-    const suppliedAssumptions = (input.assumptions ?? previous.assumptions).map((value) => value.trim())
     if (
       suppliedIds.length !== previousIds.length ||
-      suppliedIds.some((stepID, index) => stepID === "" || stepID !== previousIds[index]) ||
-      normalizedText(input.goal) !== normalizedText(previous.goal) ||
-      JSON.stringify(suppliedAssumptions) !== JSON.stringify(previous.assumptions.map((value) => value.trim()))
+      suppliedIds.some((stepID, index) => stepID === "" || stepID !== previousIds[index])
     ) {
       throw new PlanValidationError(
         "unsafe_step_identity",
@@ -723,7 +731,21 @@ export type CompletionReport = {
   readonly blocked: readonly string[] // U10: step titles blocked, each with its note if present
   readonly outstanding: readonly string[] // step titles still pending/active
   readonly evidence: readonly string[]
-  readonly complete: boolean // true only when nothing outstanding
+  /**
+   * Done steps that DECLARED an acceptance criterion but carry no runtime evidence. They are
+   * `done` by the model's word alone, so a report that hides them lets the model's claim stand in
+   * for proof. This is the field that keeps `validated` and `unverified` distinguishable.
+   */
+  readonly unverified: readonly string[]
+  /**
+   * True only when nothing is outstanding AND every accepting step carries evidence.
+   *
+   * This used to mean just "nothing is outstanding", i.e. entirely the model's own status report —
+   * the one claim most worth proving was the one taken on trust (`stepCanComplete` was written for
+   * this and had no production caller). A step that declared acceptance but was never validated now
+   * keeps the report incomplete, so the U9 finalize gate refuses to let the claim through.
+   */
+  readonly complete: boolean
 }
 
 export const buildCompletionReport = (plan: PlanDoc): CompletionReport => {
@@ -737,6 +759,19 @@ export const buildCompletionReport = (plan: PlanDoc): CompletionReport => {
     .map((s) => (s.note && s.note.trim() !== "" ? `${s.title} (${s.note.trim()})` : s.title))
   const outstanding = plan.steps.filter((s) => s.status === "pending" || s.status === "active").map((s) => s.title)
   const evidence = plan.steps.flatMap((s) => s.evidence ?? [])
+  // `stepCanComplete(step, validationPassed)` in report form: a step that declared an acceptance
+  // criterion is complete only WITH proof. The runtime attaches that proof (`attachEvidenceToNewlyDone`
+  // writes the validation summary), so an empty evidence list on an accepting step means the model
+  // marked it done without any validation running.
+  const unverified = plan.steps
+    .filter(
+      (s) =>
+        s.status === "done" &&
+        s.acceptance != null &&
+        s.acceptance.trim() !== "" &&
+        (s.evidence == null || s.evidence.length === 0),
+    )
+    .map((s) => s.title)
   return {
     plan_id: plan.plan_id,
     goal: plan.goal,
@@ -745,7 +780,8 @@ export const buildCompletionReport = (plan: PlanDoc): CompletionReport => {
     blocked,
     outstanding,
     evidence,
-    complete: outstanding.length === 0,
+    unverified,
+    complete: outstanding.length === 0 && unverified.length === 0,
   }
 }
 

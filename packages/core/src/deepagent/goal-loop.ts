@@ -249,6 +249,10 @@ const evaluateOne = (
         // than trusting report.complete, so a blocked plan surfaces a gap instead of a silent "done".
         if (hasBlockedSteps(plan))
           return `plan_complete: blocked steps need a human [${report.blocked.join(", ")}]`
+        // A step that declared acceptance but carries no runtime evidence is `done` on the model's word
+        // alone. Naming it here is what stops "the model said so" from closing the goal.
+        if (report.unverified.length > 0)
+          return `plan_complete: steps marked done without validation [${report.unverified.join(", ")}]`
         return report.complete
           ? null
           : `plan_complete: outstanding steps [${report.outstanding.join(", ")}]`

@@ -26,21 +26,21 @@ import { Tools } from "./tools"
 import DESCRIPTION from "./plan.txt"
 
 const PlanStep = Schema.Struct({
+  // Accepted but IGNORED: step ids are server-owned anchors for runtime evidence, never something
+  // the model must carry. Kept in the schema so an older client (or a model echoing the field) is not
+  // a hard failure; the tool drops whatever arrives and recovers identity from title + acceptance.
   step_id: Schema.optional(Schema.String).annotate({
-    description:
-      "Stable id; required for advance, copied for a retained replan step, omitted for create or a new step",
+    description: "Ignored — the server tracks step identity; never send this",
   }),
   title: Schema.optional(Schema.String).annotate({
     description: "What this step does; required for create/replan and ignored for advance",
   }),
   status: Schema.String.annotate({ description: "pending | active | done | cancelled | blocked" }),
   acceptance: Schema.optional(Schema.String).annotate({
-    description:
-      "Acceptance criterion; omit when retaining a replan step",
+    description: "Acceptance criterion; omit when retaining a replan step",
   }),
   assigned_agent: Schema.optional(Schema.String).annotate({
-    description:
-      "Subagent type; omit when retaining a replan step",
+    description: "Subagent type; omit when retaining a replan step",
   }),
   note: Schema.optional(Schema.String).annotate({
     description: "Short note; REQUIRED when status is 'blocked' — say why you are stuck",
@@ -52,14 +52,10 @@ export const Parameters = Schema.Struct({
     description: "create a plan, advance an existing plan, or replan with a reason; omit for the default create",
   }),
   expected_plan_id: Schema.optional(Schema.NullOr(Schema.String)).annotate({
-    description:
-      "Null for create; for advance/replan copy it exactly from the latest <plan-status> or plan result",
+    description: "Null for create; for advance/replan copy it exactly from the latest <plan-status> or plan result",
   }),
-  expected_version: Schema.optional(
-    Schema.NullOr(Schema.Union([NonNegativeInt, Schema.NumberFromString])),
-  ).annotate({
-    description:
-      "Null for create; for advance/replan copy it exactly from the latest <plan-status> or plan result",
+  expected_version: Schema.optional(Schema.NullOr(Schema.Union([NonNegativeInt, Schema.NumberFromString]))).annotate({
+    description: "Null for create; for advance/replan copy it exactly from the latest <plan-status> or plan result",
   }),
   replan_reason: Schema.optional(Schema.String).annotate({
     description: "Required for replan; omit for create/advance",
@@ -68,15 +64,13 @@ export const Parameters = Schema.Struct({
     description: "One sentence: what 'done' means for this task; required for create/replan",
   }),
   steps: Schema.mutable(Schema.Array(PlanStep)).annotate({
-    description:
-      "Ordered steps for create/replan; for advance copy step_ids and send status/note updates",
+    description: "Ordered steps for create/replan; for advance copy step_ids and send status/note updates",
   }),
   assumptions: Schema.optional(Schema.mutable(Schema.Array(Schema.String))).annotate({
     description: "Facts for create; for replan omit to retain the authoritative list, or send [] to clear it",
   }),
   active_step_id: Schema.optional(Schema.NullOr(Schema.String)).annotate({
-    description:
-      "Omit for create/replan (the server derives it from status); for advance copy a visible step_id, omit to retain, or null to clear",
+    description: "Ignored — the server derives the active step from the statuses you send",
   }),
 })
 
@@ -108,7 +102,8 @@ export const layer = Layer.effectDiscard(
                 const sid = context.sessionID
                 const previous = store.getPlanDoc(sid)
                 const ref = store.planDocRef(sid)
-                const expectedRef = previous && ref ? { plan_id: previous.plan_id, doc_id: ref.id, version: ref.version } : null
+                const expectedRef =
+                  previous && ref ? { plan_id: previous.plan_id, doc_id: ref.id, version: ref.version } : null
                 const attempt = yield* Effect.try({
                   try: () => {
                     const built = controller.buildPlanFromWriteInput(
@@ -168,7 +163,13 @@ export const layer = Layer.effectDiscard(
                         : ""
                     return {
                       output:
-                        ("The plan was not committed (" + error.code + ")." + offendingText + terminalHint + " Correct the plan payload and retry once." + renderModelPlanCorrection(params, error.code, previous, ref)),
+                        "The plan was not committed (" +
+                        error.code +
+                        ")." +
+                        offendingText +
+                        terminalHint +
+                        " Correct the plan payload and retry once." +
+                        renderModelPlanCorrection(params, error.code, previous, ref),
                       plan_protocol: "invalid" as const,
                       plan_error_code: error.code,
                     }
@@ -190,7 +191,9 @@ export const layer = Layer.effectDiscard(
                   .map((s) => `"${s.title}" is done but its acceptance ("${s.acceptance}") has no recorded validation`)
                 const summary =
                   (changeLines.length > 0 ? `\n\nChanges: ${changeLines.join("; ")}` : "") +
-                  (acceptanceWarnings.length > 0 ? `\n\n⚠ ${acceptanceWarnings.join("; ")}. Verify before finalizing.` : "")
+                  (acceptanceWarnings.length > 0
+                    ? `\n\n⚠ ${acceptanceWarnings.join("; ")}. Verify before finalizing.`
+                    : "")
                 return {
                   output: renderModelPlanSuccess(plan, version, summary, changed),
                   plan_protocol: changed ? ("success" as const) : ("no_progress" as const),
@@ -240,11 +243,7 @@ const normalizeModelPlanWrite = (
         ? null
         : expectedVersionNumber,
     active_step_id:
-      params.active_step_id === undefined
-        ? undefined
-        : params.active_step_id === "null"
-          ? null
-          : params.active_step_id,
+      params.active_step_id === undefined ? undefined : params.active_step_id === "null" ? null : params.active_step_id,
   }
   // Stale writers are concurrency conflicts even when a concurrent replan also changed step IDs.
   // Check the shared core precondition before interpreting the patch against current authority.
@@ -258,18 +257,12 @@ const normalizeModelPlanWrite = (
   }
 
   if (normalized.operation === "create") {
-    const suppliedIDs = params.steps.map((step) => step.step_id?.trim()).filter((stepID) => stepID !== undefined)
-    // A null pointer ("null" string or real null) is absent intent, not an invented ID —
-    // GLM sends it while echoing the schema; only a real string pointer is unsafe on create.
-    if (suppliedIDs.length > 0 || normalized.active_step_id != null) {
-      throw new controller.PlanValidationError("unsafe_step_identity", [
-        ...new Set([...suppliedIDs, ...(typeof params.active_step_id === "string" ? [params.active_step_id] : [])]),
-      ])
-    }
+    // Server-owned identity: ids the model sends are dropped, not rejected (plan.txt tells it never
+    // to send one; a client that still does must not fail the whole submission over bookkeeping).
     return {
       ...base,
       assumptions: params.assumptions,
-      steps: params.steps.map((step) => ({ ...step, title: step.title ?? "" })),
+      steps: params.steps.map((step) => ({ ...step, step_id: undefined, title: step.title ?? "" })),
     }
   }
 
@@ -278,20 +271,20 @@ const normalizeModelPlanWrite = (
   }
 
   if (normalized.operation === "advance") {
-    const suppliedIDs = params.steps.map((step) => step.step_id?.trim() ?? "")
-    if (suppliedIDs.some((stepID) => stepID === "")) {
-      throw new controller.PlanValidationError("unsafe_step_identity", [], previous.plan_id)
+    // Step ids are server-owned; the model is never required to send one (see plan.txt). A supplied
+    // id is honoured when it names a previous step, and otherwise the step is matched by the content
+    // the model authored — title + acceptance, the pair that defines step identity and therefore
+    // decides whether runtime evidence carries forward. An unmatched step simply is not an update:
+    // `advance` patches statuses and cannot invent steps.
+    const byID = new Map(previous.steps.map((step) => [step.step_id, step] as const))
+    const byContent = planStepIdentityIndex(previous.steps)
+    const updates = new Map<string, (typeof params.steps)[number]>()
+    for (const step of params.steps) {
+      const supplied = step.step_id?.trim() ?? ""
+      const prior = supplied === "" ? matchPlanStepByIdentity(byContent, step) : byID.get(supplied)
+      if (prior === undefined) continue
+      updates.set(prior.step_id, step)
     }
-    const duplicateIDs = suppliedIDs.filter((stepID, index) => suppliedIDs.indexOf(stepID) !== index)
-    if (duplicateIDs.length > 0) {
-      throw new controller.PlanValidationError("duplicate_step_id", [...new Set(duplicateIDs)], previous.plan_id)
-    }
-    const knownIDs = new Set(previous.steps.map((step) => step.step_id))
-    const unknownIDs = suppliedIDs.filter((stepID) => !knownIDs.has(stepID))
-    if (unknownIDs.length > 0) {
-      throw new controller.PlanValidationError("unsafe_step_identity", unknownIDs, previous.plan_id)
-    }
-    const updates = new Map(params.steps.map((step, index) => [suppliedIDs[index], step] as const))
     const built = previous.steps.map((step) => {
       const update = updates.get(step.step_id)
       return {
@@ -321,32 +314,25 @@ const normalizeModelPlanWrite = (
     }
   }
 
-  const suppliedIDs = params.steps.map((step) => step.step_id?.trim() ?? "")
-  const duplicateIDs = suppliedIDs.filter((stepID, index) => suppliedIDs.indexOf(stepID) !== index)
-  const duplicateKnownIDs = duplicateIDs.filter(Boolean)
-  if (duplicateKnownIDs.length > 0) {
-    throw new controller.PlanValidationError("duplicate_step_id", [...new Set(duplicateKnownIDs)], previous.plan_id)
-  }
-  const knownIDs = new Set(previous.steps.map((step) => step.step_id))
-  const unknownIDs = suppliedIDs.filter((stepID) => stepID !== "" && !knownIDs.has(stepID))
-  if (unknownIDs.length > 0) {
-    throw new controller.PlanValidationError("unsafe_step_identity", unknownIDs, previous.plan_id)
-  }
-  if (params.active_step_id !== undefined) {
-    throw new controller.PlanValidationError(
-      "unsafe_step_identity",
-      typeof params.active_step_id === "string" ? [params.active_step_id] : [],
-      previous.plan_id,
-    )
-  }
+  // Replan recovers identity per step the same way `advance` does: an echoed id that names a
+  // previous step wins, otherwise the step is matched by title + acceptance. An unmatched step is
+  // NEW (its id is dropped and the controller mints one) — rejecting it ended whole sessions.
+  const replanByID = new Map(previous.steps.map((step) => [step.step_id, step] as const))
+  const replanByContent = planStepIdentityIndex(previous.steps)
+  const claimed = new Set<string>()
   return {
     ...base,
     assumptions: params.assumptions === undefined ? [...previous.assumptions] : params.assumptions,
     steps: params.steps.map((update) => {
-      const stepID = update.step_id?.trim() ?? ""
-      const prior = stepID === "" ? undefined : previous.steps.find((step) => step.step_id === stepID)
+      const supplied = update.step_id?.trim() ?? ""
+      const echoed = supplied === "" ? undefined : replanByID.get(supplied)
+      const prior =
+        echoed !== undefined && !claimed.has(echoed.step_id)
+          ? echoed
+          : matchPlanStepByIdentity(replanByContent, update, claimed)
+      if (prior !== undefined) claimed.add(prior.step_id)
       return {
-        step_id: stepID === "" ? undefined : stepID,
+        step_id: prior?.step_id,
         title: update.title ?? prior?.title ?? "",
         status: update.status,
         acceptance: update.acceptance ?? prior?.acceptance ?? null,
@@ -355,6 +341,37 @@ const normalizeModelPlanWrite = (
       }
     }),
   }
+}
+
+/**
+ * Index plan steps by the content pair that defines step identity (title + acceptance). A key maps
+ * to every step carrying it so an ambiguous match can be refused rather than guessed: a wrong match
+ * would carry another step's runtime evidence onto this one.
+ */
+const planStepIdentityIndex = (steps: readonly controller.PlanStep[]) => {
+  const index = new Map<string, controller.PlanStep[]>()
+  for (const step of steps) {
+    const key = planStepIdentityKey(step.title, step.acceptance)
+    const bucket = index.get(key)
+    if (bucket === undefined) index.set(key, [step])
+    else bucket.push(step)
+  }
+  return index
+}
+
+const planStepIdentityKey = (title: string | null | undefined, acceptance: string | null | undefined) =>
+  `${(title ?? "").trim()}\u0000${(acceptance ?? "").trim()}`
+
+const matchPlanStepByIdentity = (
+  index: ReadonlyMap<string, readonly controller.PlanStep[]>,
+  update: { readonly title?: string | undefined; readonly acceptance?: string | undefined },
+  claimed: ReadonlySet<string> = new Set(),
+): controller.PlanStep | undefined => {
+  if (update.title === undefined) return undefined
+  const bucket = index.get(planStepIdentityKey(update.title, update.acceptance))
+  if (bucket === undefined) return undefined
+  const open = bucket.filter((step) => !claimed.has(step.step_id))
+  return open.length === 1 ? open[0] : undefined
 }
 
 const renderModelPlanCorrection = (
@@ -453,4 +470,3 @@ const modelAdvanceParameters = (plan: controller.PlanDoc, version: number) => ({
     ...(step.note != null ? { note: step.note } : {}),
   })),
 })
-

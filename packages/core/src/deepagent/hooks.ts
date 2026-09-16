@@ -51,12 +51,19 @@ export const stopHookGate = (): HookHandler => (e) => {
   // U9: high+ runs that HAVE a plan must produce a completion_report (all steps resolved) before
   // finalizing. If the run never created a plan (planExists=false), the hard report requirement does
   // not apply — we don't retroactively demand a report from a run that worked without one.
-  if (e.payload["hardGate"] === true && e.payload["planExists"] === true && e.payload["hasCompletionReport"] !== true)
+  if (e.payload["hardGate"] === true && e.payload["planExists"] === true && e.payload["hasCompletionReport"] !== true) {
+    // Name the reason, because the two are fixed differently: outstanding work needs the plan
+    // advanced, while a step marked done with no validation needs the work actually verified (or the
+    // step cancelled). A generic message left the model guessing which.
+    const unverified = Array.isArray(e.payload["unverifiedSteps"]) ? (e.payload["unverifiedSteps"] as string[]) : []
     return {
       decision: "block",
       blockReason:
-        "high-strength runs require a completion report before finalizing; resolve or cancel outstanding plan steps first",
+        unverified.length > 0
+          ? `plan steps are marked done without validation [${unverified.join(", ")}]: run the task's validation so the runtime can record proof, or cancel the step if it is genuinely not needed`
+          : "high-strength runs require a completion report before finalizing; resolve or cancel outstanding plan steps first",
     }
+  }
   return e.payload["requiredValidationsRun"] === true
     ? { decision: "allow" }
     : { decision: "block", blockReason: "required validations were not run; run them before finalizing" }
