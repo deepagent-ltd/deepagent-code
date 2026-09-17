@@ -27,7 +27,7 @@ type LiveLLMProviderProfile = {
 const providerProfiles: Record<LiveLLMProviderID, LiveLLMProviderProfile> = {
   deepseek: {
     baseURL: "https://api.deepseek.com",
-    modelID: "deepseek-v4-flash",
+    modelID: "deepseek-flash",
     label: "DeepSeek",
   },
   kimi: {

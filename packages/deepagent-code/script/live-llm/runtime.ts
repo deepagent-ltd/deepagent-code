@@ -88,7 +88,7 @@ export function parseLegacyLiveRuntimeConfig(
 
   return {
     providerID: "deepseek",
-    modelID: env.DEEPAGENT_CODE_LIVE_LLM_MODEL?.trim() || "deepseek-v4-flash",
+    modelID: env.DEEPAGENT_CODE_LIVE_LLM_MODEL?.trim() || "deepseek-flash",
     modelRevision: env.DEEPAGENT_CODE_LIVE_LLM_REVISION?.trim() || undefined,
     baseURL,
     timeoutMs,

@@ -155,6 +155,32 @@ const MAX_STEPS = 25
 // Those are known rejections, not the unknown-outcome state RI-11 fences, so re-open them as a
 // bounded fresh attempt (the same-owner indeterminate quarantine admits the next receipt ordinal).
 const MAX_PROVIDER_ATTEMPT_RETRIES = 3
+// A lease-fenced attempt is a DIFFERENT budget from a provider rejection. The admission guard admits
+// a fenced retry only when the fenced attempt provably never reached the provider, so re-opening it
+// is safe by construction — while a provider rejection is a real re-send that must stay tightly
+// bounded. Sharing one counter made the two add up: measured on Docker Desktop, where the
+// synchronous full-commit path stalls the event loop for minutes, a single long turn rotated the
+// owner generation six times, exhausted the shared budget of 3, and ended the session — the agent
+// exited 1 and the task scored nothing. Raising the lease alone does not fix it: the lease bounds one
+// stall, this budget bounds how many times the host may stall the loop in one turn.
+const MAX_OWNER_FENCED_RETRIES = 8
+
+/**
+ * Which budget the NEXT attempt spends. Kept pure and exported so the invariant that broke in
+ * production is testable without a live lease: a fenced attempt must not consume the
+ * provider-rejection budget, because the two bound different things (how many times the host may
+ * stall the event loop vs. how many times the provider may reject), and a shared counter made them
+ * add up until a slow host ran out of budget it never used.
+ */
+export const nextAttemptBudgets = (input: {
+  readonly cause: "provider_rejection" | "owner_fenced"
+  readonly retry: number
+  readonly providerRetry: number
+  readonly ownerFencedRetries: number
+}): { readonly providerRetry: number; readonly ownerFencedRetries: number } =>
+  input.cause === "owner_fenced"
+    ? { providerRetry: input.providerRetry, ownerFencedRetries: input.ownerFencedRetries + 1 }
+    : { providerRetry: input.retry + 1, ownerFencedRetries: input.ownerFencedRetries }
 const PROVIDER_RETRY_BASE_DELAY_MS = 1_000
 const PROVIDER_RETRY_MAX_DELAY_MS = 10_000
 // Die-defect messages from the filesystem and edit layers that are tool-argument validation, not
@@ -468,6 +494,8 @@ export const layer = Layer.effect(
           readonly retry: number
           readonly cause: "provider_rejection" | "owner_fenced"
           readonly retryAfterMs?: number | undefined
+          /** Fences spent so far; a separate budget from `retry` (MAX_OWNER_FENCED_RETRIES). */
+          readonly ownerFencedRetries?: number | undefined
         }
     class TurnTransitionError extends Error {
       constructor(readonly transition: TurnTransition) {
@@ -487,7 +515,8 @@ export const layer = Layer.effect(
       retry: number,
       cause: "provider_rejection" | "owner_fenced",
       retryAfterMs?: number,
-    ) => new TurnTransitionError({ _tag: "RetryAttempt", step, retry, cause, retryAfterMs })
+      ownerFencedRetries = 0,
+    ) => new TurnTransitionError({ _tag: "RetryAttempt", step, retry, cause, retryAfterMs, ownerFencedRetries })
     const retryAgentMismatch = (promotion: SessionInput.Delivery | undefined, step?: number) =>
       Effect.catchDefect((defect) =>
         defect instanceof SessionContextEpoch.AgentMismatch
@@ -810,10 +839,8 @@ export const layer = Layer.effect(
       // Never sent as prompt text; lowers onto the provider option the wire protocols know.
       // Route-verified (review round 2): the `openai` options namespace is read ONLY by the
       // openai-chat / openai-responses lowerings (the Anthropic protocol reads its own namespace
-      // and ignores this one), and the OpenAI wire set rejects "max" — so the option is gated on
-      // an openai-family protocol AND the clamp never yields "max". The `reasoningItems`
-      // capability gates models that declared reasoning support; user/provider config merged
-      // later still wins over this runtime default.
+      // and ignores this one). The `reasoningItems` capability gates models that declared reasoning
+      // support; user/provider config merged later still wins over this runtime default.
       const modelProfile = ModelPromptProfile.profileFor(model.provider, model.id)
       turnObservability.recordModelProfile(ModelPromptProfile.profileKeyFor(model.provider, model.id), sessionID)
       const openaiFamilyProtocol =
@@ -1741,6 +1768,7 @@ export const layer = Layer.effect(
       promotion: SessionInput.Delivery | undefined,
       step: number,
       providerRetry?: number,
+      ownerFencedRetries?: number,
     ) => Effect.Effect<
       { readonly needsContinuation: boolean; readonly step: number; readonly activityId?: string },
       RunError
@@ -1768,7 +1796,13 @@ export const layer = Layer.effect(
       )
     })
 
-    const runTurn: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, step, providerRetry = 0) {
+    const runTurn: RunTurn = Effect.fnUntraced(function* (
+      sessionID,
+      promotion,
+      step,
+      providerRetry = 0,
+      ownerFencedRetries = 0,
+    ) {
       return yield* runTurnAttempt(sessionID, promotion, step, compaction.compactAfterOverflow, providerRetry).pipe(
         // A lease-fenced attempt is a rotation artefact: the fenced owner stalled past its lease, so
         // the successor generation owns the session now. Re-open a fresh attempt instead of ending
@@ -1777,8 +1811,8 @@ export const layer = Layer.effect(
         Effect.catch((error) =>
           error instanceof V2ProviderTurn.ConflictError &&
           error.reason === "v2_provider_owner_lease_not_live" &&
-          providerRetry < MAX_PROVIDER_ATTEMPT_RETRIES
-            ? Effect.die(retryAttempt(step, providerRetry, "owner_fenced"))
+          ownerFencedRetries < MAX_OWNER_FENCED_RETRIES
+            ? Effect.die(retryAttempt(step, providerRetry, "owner_fenced", undefined, ownerFencedRetries))
             : Effect.fail(error),
         ),
         Effect.catchDefect(
@@ -1801,12 +1835,30 @@ export const layer = Layer.effect(
               )
               yield* Effect.sleep(Duration.millis(delay))
               turnObservability.recordRetry(sessionID)
-              return yield* runTurn(sessionID, promotion, defect.transition.step, defect.transition.retry + 1)
+              const budgets = nextAttemptBudgets({
+                cause: defect.transition.cause,
+                retry: defect.transition.retry,
+                providerRetry,
+                ownerFencedRetries: defect.transition.ownerFencedRetries ?? ownerFencedRetries,
+              })
+              return yield* runTurn(
+                sessionID,
+                promotion,
+                defect.transition.step,
+                budgets.providerRetry,
+                budgets.ownerFencedRetries,
+              )
             }
             yield* Effect.yieldNow
             if (defect.transition._tag === "ContinueAfterOverflowCompaction")
               return yield* runAfterOverflowCompaction(sessionID, undefined, defect.transition.step)
-            return yield* runTurn(sessionID, defect.transition.promotion, defect.transition.step ?? step, providerRetry)
+            return yield* runTurn(
+              sessionID,
+              defect.transition.promotion,
+              defect.transition.step ?? step,
+              providerRetry,
+              ownerFencedRetries,
+            )
           }),
         ),
       )
