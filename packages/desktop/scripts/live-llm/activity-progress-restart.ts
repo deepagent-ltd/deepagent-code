@@ -23,8 +23,8 @@ import {
 
 const suite = "activity-progress-restart"
 const config = await loadLiveConfig()
-if (config.modelID !== "deepseek-v4-flash") {
-  throw new Error("Activity progress restart test requires DeepSeek deepseek-v4-flash")
+if (config.modelID !== "deepseek-flash") {
+  throw new Error("Activity progress restart test requires DeepSeek deepseek-flash")
 }
 const preflightResult = await preflight(config)
 const startedAt = Date.now()

@@ -41,7 +41,7 @@ import { ModelV2 } from "@deepagent-code/core/model"
 import { ModelProtocol } from "@deepagent-code/core/model-protocol"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { Hash } from "@deepagent-code/core/util/hash"
-import { describe, expect, beforeEach } from "bun:test"
+import { describe, expect, beforeEach, test } from "bun:test"
 import { DateTime, Option } from "effect"
 import { eq } from "drizzle-orm"
 import { Effect, Layer, LayerMap, Stream } from "effect"
@@ -392,4 +392,44 @@ describe("SessionRunner identity binding (C2-04/B2 residual)", () => {
       expect(sent).toContain("stored-attempt")
     }),
   )
+})
+
+// A fenced attempt and a provider rejection bound DIFFERENT things — how many times the host may
+// stall the event loop past the owner lease, vs. how many times the provider may reject — so they
+// must not share one counter. Measured on Docker Desktop: a single long turn rotated the owner
+// generation six times, spent a shared budget of 3, and ended the session; the agent exited 1 and
+// the task scored nothing. Raising the lease only bounds ONE stall; this budget bounds how many
+// stalls a turn may survive.
+test("a fenced attempt spends the fence budget, never the provider-rejection budget", () => {
+  const fenced = SessionRunnerLLM.nextAttemptBudgets({
+    cause: "owner_fenced",
+    retry: 2,
+    providerRetry: 0,
+    ownerFencedRetries: 0,
+  })
+  expect(fenced.providerRetry).toBe(0)
+  expect(fenced.ownerFencedRetries).toBe(1)
+
+  const rejected = SessionRunnerLLM.nextAttemptBudgets({
+    cause: "provider_rejection",
+    retry: 2,
+    providerRetry: 2,
+    ownerFencedRetries: 4,
+  })
+  expect(rejected.providerRetry).toBe(3)
+  expect(rejected.ownerFencedRetries).toBe(4)
+
+  // The fence budget advances monotonically across repeated stalls in one turn, so a host that
+  // never recovers still terminates instead of retrying forever.
+  const fence = Array.from({ length: 8 }).reduce<number>(
+    (spent) =>
+      SessionRunnerLLM.nextAttemptBudgets({
+        cause: "owner_fenced",
+        retry: 0,
+        providerRetry: 0,
+        ownerFencedRetries: spent,
+      }).ownerFencedRetries,
+    0,
+  )
+  expect(fence).toBe(8)
 })

@@ -51,12 +51,16 @@ const PROFILES: Readonly<Record<string, ModelPromptProfile>> = {
   "deepseek/deepseek-chat": {
     stableConstraint: "完成代码修改后立即运行验证命令，再继续其它工作。",
     eventPrompts: { validation_failed: VALIDATION_FAILED_DEFAULT },
-    params: { maxReasoningEffort: "medium" },
+    params: {},
   },
   "deepseek/deepseek-flash": {
     stableConstraint: "完成代码修改后立即运行验证命令，再继续其它工作。",
     eventPrompts: { validation_failed: VALIDATION_FAILED_DEFAULT },
-    params: { maxReasoningEffort: "medium" },
+    // No reasoning-effort cap (user ruling 2026-09-17: this model runs at max thinking). The cap
+    // used to be "medium" while the activation policy asks for high/max on repair and replan — the
+    // stages where thinking matters most — so the profile was silently truncating exactly the turns
+    // it should not have touched. The wire vocabulary now carries "max", so nothing downgrades it.
+    params: {},
   },
 }
 
@@ -65,13 +69,8 @@ const EFFORT_ORDER = ["low", "medium", "high", "max"] as const
 export const clampReasoningEffort = (
   effort: "low" | "medium" | "high" | "max",
   cap: "low" | "medium" | "high" | "max" | undefined,
-): "low" | "medium" | "high" | "max" => {
-  const clamped =
-    cap === undefined ? effort : EFFORT_ORDER[Math.min(EFFORT_ORDER.indexOf(effort), EFFORT_ORDER.indexOf(cap))]
-  // The OpenAI wire effort set has no "max" (openai-options.ts OpenAIReasoningEfforts filters it
-  // out and the chat lowering REJECTS it) — clamp one step down rather than failing the request.
-  return clamped === "max" ? "high" : clamped
-}
+): "low" | "medium" | "high" | "max" =>
+  cap === undefined ? effort : EFFORT_ORDER[Math.min(EFFORT_ORDER.indexOf(effort), EFFORT_ORDER.indexOf(cap))]
 
 const overridesFromEnv = (): Record<string, ModelPromptProfile> => {
   const raw = process.env["DEEPAGENT_CODE_MODEL_PROFILES"]

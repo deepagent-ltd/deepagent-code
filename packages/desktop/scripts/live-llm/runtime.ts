@@ -150,7 +150,7 @@ export async function loadLiveConfig() {
   }
   return {
     baseURL,
-    modelID: process.env.DEEPAGENT_CODE_LIVE_LLM_MODEL?.trim() || "deepseek-v4-flash",
+    modelID: process.env.DEEPAGENT_CODE_LIVE_LLM_MODEL?.trim() || "deepseek-flash",
     modelRevision: process.env.DEEPAGENT_CODE_LIVE_LLM_REVISION?.trim() || undefined,
     apiKey,
     apiKeyFile,

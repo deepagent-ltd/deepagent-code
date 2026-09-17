@@ -17,19 +17,23 @@ describe("model prompt profile", () => {
     expect(profileKeyFor("unknown", "model-x")).toBe("default")
   })
 
-  test("deepseek profiles carry the validate-immediately constraint and a medium effort cap", () => {
+  test("deepseek profiles carry the validate-immediately constraint and no effort cap", () => {
     const profile = profileFor("deepseek", "deepseek-chat")
     expect(profile.stableConstraint).toContain("验证")
-    expect(profile.params.maxReasoningEffort).toBe("medium")
+    // The cap used to be "medium" while the activation policy asks for high/max on repair and
+    // replan — so it truncated exactly the turns that needed the most thinking.
+    expect(profile.params.maxReasoningEffort).toBeUndefined()
     expect(profileKeyFor("deepseek", "deepseek-chat")).toBe("deepseek/deepseek-chat")
   })
 
-  test("clampReasoningEffort caps without raising, and never yields max (OpenAI wire set)", () => {
+  test("clampReasoningEffort caps without raising, and passes max through when uncapped", () => {
     expect(clampReasoningEffort("max", "medium")).toBe("medium")
     expect(clampReasoningEffort("low", "medium")).toBe("low")
     expect(clampReasoningEffort("high", undefined)).toBe("high")
-    // "max" is not in the OpenAI wire effort set — clamp one step down instead of failing.
-    expect(clampReasoningEffort("max", undefined)).toBe("high")
+    // "max" is a value the OpenAI-SHAPED protocols can now carry (measured: the DeepSeek endpoint
+    // answers it with 200). It used to be clamped down to "high" here, which silently downgraded
+    // every uncapped max request before it was built.
+    expect(clampReasoningEffort("max", undefined)).toBe("max")
   })
 
   test("event channel: validation_failed prompt resolves for every profile", () => {

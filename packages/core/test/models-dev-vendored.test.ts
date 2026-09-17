@@ -35,7 +35,7 @@ test("vendored catalog exposes the documented model set", () => {
   expect(ids).toContain("anthropic/claude-haiku-4.5")
   expect(ids).toContain("x-ai/grok-4.6")
   expect(ids).toContain("google/gemini-3.7-flash")
-  expect(ids).toContain("deepseek-v4-flash")
+  expect(ids).toContain("deepseek-flash")
   expect(ids).toContain("deepseek-v4-pro")
   expect(ids).toContain("qwen3.8-flash")
   expect(ids).toContain("qwen3.8-max")
@@ -53,7 +53,7 @@ test("GPT and DeepSeek families default to the Responses wire protocol", () => {
     expect(DEEPAGENT_MODEL_PROTOCOL[id]).toBe("openai-compatible.responses")
     expect(OFFICIAL_VENDORED_CATALOG["deepagent"]?.models[id]).toBeDefined()
   }
-  for (const id of ["deepseek-v4-flash", "deepseek-v4-pro"]) {
+  for (const id of ["deepseek-flash", "deepseek-v4-pro"]) {
     expect(DEEPAGENT_MODEL_PROTOCOL[id]).toBe("openai-compatible.responses")
     expect(OFFICIAL_VENDORED_CATALOG["deepagent"]?.models[id]).toBeDefined()
   }
@@ -83,7 +83,7 @@ test("claude models route through the anthropic protocol against /v1", () => {
 // limit. These values are the upstream models.dev ones; changing them changes when compaction runs.
 test("vendored DeepSeek limits are the ones the provider enforces", () => {
   const models = OFFICIAL_VENDORED_CATALOG["deepagent"]?.models ?? {}
-  for (const id of ["deepseek-v4-flash", "deepseek-v4-pro"]) {
+  for (const id of ["deepseek-flash", "deepseek-v4-pro"]) {
     expect(models[id]?.limit?.context).toBe(1_048_576)
     expect(models[id]?.limit?.output).toBe(393_216)
   }
@@ -95,7 +95,7 @@ test("vendored DeepSeek limits are the ones the provider enforces", () => {
 // dropping history for no reason. This pins the trigger to the shipped window so a wrong vendored
 // value fails here instead of silently changing when compaction runs.
 test("auto-compaction triggers near the window limit, not at 10% of it", () => {
-  const window = OFFICIAL_VENDORED_CATALOG["deepagent"]?.models["deepseek-v4-flash"]?.limit?.context
+  const window = OFFICIAL_VENDORED_CATALOG["deepagent"]?.models["deepseek-flash"]?.limit?.context
   expect(window).toBe(1_048_576)
   const trigger = inputBudget(window!, resolvedBuffer(window!, { buffer: 20_000, bufferRatio: 0.18 }))
   expect(trigger).toBeGreaterThan(0.8 * window!)

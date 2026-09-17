@@ -239,7 +239,10 @@ export const OFFICIAL_VENDORED_CATALOG: Record<string, Provider> = Schema.decode
       // Every ablation run recorded so far peaks between 56k and 193k prompt tokens (5-18% of the
       // window), so auto-compaction never had a reason to fire there — which is the intended
       // behaviour for a mechanism that costs a summarization call and drops history.
-      "deepseek-v4-flash": vendoredModel("deepseek-v4-flash", "DeepSeek V4 Flash", {
+      // The endpoint's id is `deepseek-flash` — NOT `deepseek-v4-flash`, which the catalog used to
+      // carry. A vendored id the provider does not serve resolves to no limits (and, on the API
+      // side, to a 400), so the id here is the API's, verbatim.
+      "deepseek-flash": vendoredModel("deepseek-flash", "DeepSeek Flash", {
         context: 1_048_576,
         output: 393_216,
         reasoning: true,
@@ -287,7 +290,7 @@ export const DEEPAGENT_MODEL_PROTOCOL: Record<string, "openai-compatible.respons
   "openai/gpt-5.6-sol": "openai-compatible.responses",
   "openai/gpt-5.6-terra": "openai-compatible.responses",
   "openai/gpt-5.6-luna": "openai-compatible.responses",
-  "deepseek-v4-flash": "openai-compatible.responses",
+  "deepseek-flash": "openai-compatible.responses",
   "deepseek-v4-pro": "openai-compatible.responses",
 }
 
