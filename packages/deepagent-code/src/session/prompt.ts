@@ -114,8 +114,6 @@ import { V2AgentRoster } from "@/session/v2-agent-roster"
 import { Database } from "@deepagent-code/core/database/database"
 import { LocationIdentity } from "@deepagent-code/core/context-federation/identity"
 import { DeepAgentReleasedSnapshot } from "@deepagent-code/core/deepagent/released-snapshot"
-import { DeepAgentDurableLearning } from "@deepagent-code/core/deepagent/durable-learning"
-import { registerLearningReviewerFactory } from "@/deepagent/learning-runtime"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { SessionToolRequestReceiptTable } from "./tool-request-receipt.sql"
 import { SessionToolCapability, type ToolCapabilitySnapshot } from "./tool-capability"
@@ -1030,122 +1028,6 @@ export interface Interface {
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/SessionPrompt") {}
-
-const learningReviewerOutputSchema: Record<string, unknown> = {
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    verdict: { type: "string", enum: ["approve", "reject", "manual_review"] },
-    selected_candidate_ids: { type: "array", items: { type: "string" } },
-  },
-  required: ["verdict", "selected_candidate_ids"],
-}
-
-export function createLearningReviewerPort(input: {
-  readonly sessions: Session.Interface
-  readonly agents: Agent.Interface
-  readonly provider: Provider.Interface
-  readonly prompt: Interface
-  readonly instances: InstanceStore.Interface
-}) {
-  return {
-    identity: (request: { readonly attemptId: string; readonly jobId: string; readonly workspacePath: string }) =>
-      input.instances.provide(
-        { directory: request.workspacePath },
-        Effect.gen(function* () {
-          const agent = yield* input.agents.get("reviewer")
-          const model = yield* input.provider.defaultModel()
-          return {
-            reviewSessionId: SessionID.descending(`ses_learning_review_${Hash.sha256(request.attemptId).slice(0, 24)}`),
-            providerId: model.providerID,
-            modelId: model.modelID,
-            policyHash: Hash.sha256(
-              stableJson({
-                agent: agent.name,
-                permission: agent.permission,
-                model: { providerID: model.providerID, modelID: model.modelID },
-              }),
-            ),
-          }
-        }),
-      ),
-    execute: (request: {
-      readonly attemptId: string
-      readonly reviewSessionId: string
-      readonly workspacePath: string
-      readonly providerId: string
-      readonly modelId: string
-      readonly policyHash: string
-      readonly requestRef: string
-      readonly request: string
-    }) =>
-      input.instances.provide(
-        { directory: request.workspacePath },
-        Effect.gen(function* () {
-          const agent = yield* input.agents.get("reviewer")
-          const model = {
-            providerID: ProviderV2.ID.make(request.providerId),
-            modelID: ModelV2.ID.make(request.modelId),
-          }
-          const policyHash = Hash.sha256(stableJson({ agent: agent.name, permission: agent.permission, model }))
-          if (policyHash !== request.policyHash) {
-            return yield* Effect.fail(new Error("isolated reviewer policy no longer matches its prepared receipt"))
-          }
-          const reviewSessionID = SessionID.make(request.reviewSessionId)
-          const session = yield* input.sessions.get(reviewSessionID).pipe(
-            Effect.catchTag("NotFoundError", () =>
-              input.sessions.create({
-                id: reviewSessionID,
-                title: `Durable learning review ${request.attemptId}`,
-                agent: agent.name,
-                model: { id: ModelV2.ID.make(request.modelId), providerID: ProviderV2.ID.make(request.providerId) },
-                permission: agent.permission,
-                directory: request.workspacePath,
-                metadata: { deepagent: { learning_reviewer_attempt_id: request.attemptId } },
-              }),
-            ),
-          )
-          if (
-            session.id !== request.reviewSessionId ||
-            session.directory !== request.workspacePath ||
-            session.metadata?.deepagent?.learning_reviewer_attempt_id !== request.attemptId ||
-            session.model?.providerID !== request.providerId ||
-            session.model.id !== request.modelId
-          ) {
-            return yield* Effect.fail(new Error("isolated reviewer session binding is missing"))
-          }
-          const output = yield* input.prompt.prompt({
-            messageID: MessageID.ascending(),
-            sessionID: session.id,
-            model,
-            agent: agent.name,
-            format: new SessionV1.OutputFormatJsonSchema({
-              type: "json_schema",
-              schema: learningReviewerOutputSchema,
-              retryCount: 0,
-            }),
-            metadata: { deepagent: { learning_reviewer_attempt_id: request.attemptId } },
-            tools: {},
-            parts: yield* input.prompt.resolvePromptParts(request.request),
-          })
-          const structured = output.info.role === "assistant" ? output.info.structured : undefined
-          const parsed = Schema.decodeUnknownOption(
-            Schema.Struct({
-              verdict: Schema.Literals(["approve", "reject", "manual_review"]),
-              selected_candidate_ids: Schema.Array(Schema.String),
-            }),
-          )(structured)
-          if (Option.isNone(parsed)) {
-            return yield* Effect.fail(new Error("isolated reviewer returned invalid structured output"))
-          }
-          return {
-            verdict: parsed.value.verdict,
-            selectedCandidateIds: parsed.value.selected_candidate_ids,
-          }
-        }),
-      ),
-  } satisfies DeepAgentDurableLearning.ReviewerPort
-}
 
 export type PromptAdmissionReceipt = {
   readonly messageID: MessageID
@@ -6404,16 +6286,15 @@ export const layer = Layer.effect(
           model: { providerID: model.providerID, modelID: model.modelID },
         }).pipe(Effect.ignoreCause({ log: "Warn", message: "v2 interactive turn evidence unavailable" }))
         yield* evidence
-        yield* loop({ sessionID: input.sessionID, drainFirst: true })
-          .pipe(
-            Effect.ensuring(evidence),
-            Effect.matchCauseEffect({
-              onFailure: (cause) =>
-                Effect.sync(() => process.stderr.write(`[drain-v2] FAILED ${Cause.pretty(cause)}\n`)),
-              onSuccess: () => Effect.sync(() => process.stderr.write("[drain-v2] DONE\n")),
-            }),
-          )
-          .pipe(Effect.forkIn(scope, { startImmediately: true }))
+        yield* loop({ sessionID: input.sessionID, drainFirst: true }).pipe(
+          Effect.ensuring(evidence),
+          Effect.catchCause((cause) =>
+            Effect.sync(() =>
+              log.error("v2 interactive drain failed", { sessionID: input.sessionID, cause: Cause.pretty(cause) }),
+            ),
+          ),
+          Effect.forkIn(scope, { startImmediately: true }),
+        )
         return { messageID: MessageID.make(admitted.id), delivery: admitted.delivery }
       }
       const messageID = input.messageID ?? MessageID.ascending()
@@ -7345,9 +7226,6 @@ export const layer = Layer.effect(
       refineIntelligenceDraft,
       latestSuggestion,
     })
-    yield* registerLearningReviewerFactory(() =>
-      createLearningReviewerPort({ sessions, agents, provider, prompt: service, instances }),
-    )
     return service
   }),
 )

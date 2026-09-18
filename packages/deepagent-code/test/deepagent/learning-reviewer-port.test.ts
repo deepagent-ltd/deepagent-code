@@ -1,136 +1,168 @@
 import { expect, test } from "bun:test"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { ProviderV2 } from "@deepagent-code/core/provider"
-import { SessionV1 } from "@deepagent-code/core/v1/session"
-import { Effect, Exit } from "effect"
-import { Agent } from "@/agent/agent"
-import { InstanceStore } from "@/project/instance-store"
-import { Provider } from "@/provider/provider"
-import { Session } from "@/session/session"
-import { createLearningReviewerPort, SessionPrompt } from "@/session/prompt"
-import { SessionID } from "@/session/schema"
-import { NotFoundError } from "@/storage/storage"
+import { LLMEvent, type LLMRequest } from "@deepagent-code/llm"
+import type { LLMClientShape } from "@deepagent-code/llm/route"
+import { Effect, Exit, Stream } from "effect"
+import type { Auth } from "@/auth"
+import { createLearningReviewerPort } from "@/deepagent/learning-reviewer-runner"
+import type { Provider } from "@/provider/provider"
 
-test("isolated reviewer creates its session only after durable identity preparation", async () => {
-  const workspacePath = "/workspace/learning-reviewer"
-  const state: {
-    session?: Session.Info
-    createCalls: number
-    promptCalls: number
-    promptInput?: Parameters<SessionPrompt.Interface["prompt"]>[0]
-  } = {
-    createCalls: 0,
-    promptCalls: 0,
-  }
-  const reviewer: Agent.Info = {
-    name: "reviewer",
-    mode: "subagent",
-    permission: [],
-    options: {},
-  }
+const model: Provider.Model = {
+  id: ModelV2.ID.make("gpt-reviewer"),
+  providerID: ProviderV2.ID.make("openai"),
+  api: {
+    id: "gpt-reviewer",
+    url: "https://api.openai.com/v1",
+    npm: "@ai-sdk/openai",
+  },
+  name: "Reviewer",
+  capabilities: {
+    temperature: true,
+    reasoning: true,
+    attachment: false,
+    toolcall: true,
+    input: { text: true, audio: false, image: false, video: false, pdf: false },
+    output: { text: true, audio: false, image: false, video: false, pdf: false },
+    interleaved: false,
+  },
+  cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+  limit: { context: 128_000, input: 128_000, output: 32_000 },
+  status: "active",
+  options: {},
+  headers: {},
+  release_date: "2026-01-01",
+}
+
+const providerInfo: Provider.Info = {
+  id: model.providerID,
+  name: "OpenAI",
+  source: "config",
+  env: ["OPENAI_API_KEY"],
+  options: { apiKey: "test-key" },
+  models: { [model.id]: model },
+}
+
+test("reviewer uses one frozen native request without Session, workspace, tools, history, or knowledge", async () => {
+  const state: { requests: LLMRequest[]; modelLookups: number } = { requests: [], modelLookups: 0 }
+  const llmClient = {
+    prepare: () => Effect.die("reviewer does not prepare outside the stream dispatch"),
+    stream: (request: LLMRequest) => {
+      state.requests.push(request)
+      return Stream.make(
+        LLMEvent.textDelta({
+          id: "review-output",
+          text: '{"verdict":"approve","selected_candidate_ids":["candidate-1"]}',
+        }),
+        LLMEvent.finish({ reason: "stop" }),
+      )
+    },
+    generate: () => Effect.die("reviewer uses the native stream transport"),
+  } as LLMClientShape
+  const provider = {
+    defaultModel: () => Effect.succeed({ providerID: model.providerID, modelID: model.id }),
+    getProvider: () => Effect.succeed(providerInfo),
+    getModel: () =>
+      Effect.sync(() => {
+        state.modelLookups += 1
+        return model
+      }),
+  } as unknown as Provider.Interface
   const port = createLearningReviewerPort({
-    agents: {
-      get: () => Effect.succeed(reviewer),
-    } as unknown as Agent.Interface,
-    provider: {
-      defaultModel: () =>
-        Effect.succeed({
-          providerID: ProviderV2.ID.make("test-provider"),
-          modelID: ModelV2.ID.make("test-model"),
-        }),
-    } as unknown as Provider.Interface,
-    sessions: {
-      get: (id: SessionID) =>
-        state.session?.id === id
-          ? Effect.succeed(state.session)
-          : Effect.fail(new NotFoundError({ message: `Session not found: ${id}` })),
-      create: (input?: Parameters<Session.Interface["create"]>[0]) =>
-        Effect.sync(() => {
-          state.createCalls += 1
-          state.session = {
-            id: input?.id!,
-            slug: "learning-reviewer",
-            projectID: "project-learning-reviewer",
-            directory: input?.directory!,
-            title: input?.title!,
-            version: "test",
-            agent: input?.agent,
-            model: input?.model,
-            metadata: input?.metadata,
-            permission: input?.permission,
-            time: { created: 1, updated: 1 },
-          } as Session.Info
-          return state.session
-        }),
-    } as unknown as Session.Interface,
-    prompt: {
-      resolvePromptParts: (request: string) => Effect.succeed([{ type: "text", text: request }]),
-      prompt: (promptInput: Parameters<SessionPrompt.Interface["prompt"]>[0]) =>
-        Effect.sync(() => {
-          state.promptCalls += 1
-          state.promptInput = promptInput
-          return {
-            info: {
-              role: "assistant",
-              structured: { verdict: "approve", selected_candidate_ids: ["candidate-1"] },
-            },
-            parts: [],
-          } as unknown as SessionV1.WithParts
-        }),
-    } as unknown as SessionPrompt.Interface,
-    instances: {
-      provide: <A, E, R>(_input: InstanceStore.LoadInput, effect: Effect.Effect<A, E, R>) => effect,
-    } as unknown as InstanceStore.Interface,
+    auth: { get: () => Effect.succeed(undefined) } as unknown as Auth.Interface,
+    provider,
+    llmClient,
   })
+  const request =
+    '{"schema_version":"deepagent-code.learning_review_request.v1","candidates":[{"candidate_id":"candidate-1"}]}'
 
-  const identity = await Effect.runPromise(port.identity({ attemptId: "review:job-1", jobId: "job-1", workspacePath }))
-  expect(state.createCalls).toBe(0)
-  expect(state.promptCalls).toBe(0)
+  const identity = await Effect.runPromise(
+    port.identity({ attemptId: "review:job-1", jobId: "job-1", workspacePath: "/workspace/private" }),
+  )
+  expect(identity.reviewSessionId).toStartWith("learning-review-run:")
+  expect(state.requests).toHaveLength(0)
+  expect(state.modelLookups).toBe(0)
 
   const rejected = await Effect.runPromise(
     port
       .execute({
         attemptId: "review:job-1",
         reviewSessionId: identity.reviewSessionId,
-        workspacePath,
+        workspacePath: "/workspace/private",
         providerId: identity.providerId,
         modelId: identity.modelId,
         policyHash: "0".repeat(64),
         requestRef: "artifact:request",
-        request: "Review candidate-1",
+        request,
       })
       .pipe(Effect.exit),
   )
   expect(Exit.isFailure(rejected)).toBe(true)
-  expect(state.createCalls).toBe(0)
-  expect(state.promptCalls).toBe(0)
+  expect(state.requests).toHaveLength(0)
+  expect(state.modelLookups).toBe(0)
 
   const result = await Effect.runPromise(
     port.execute({
       attemptId: "review:job-1",
       reviewSessionId: identity.reviewSessionId,
-      workspacePath,
+      workspacePath: "/workspace/private",
       providerId: identity.providerId,
       modelId: identity.modelId,
       policyHash: identity.policyHash,
       requestRef: "artifact:request",
-      request: "Review candidate-1",
+      request,
     }),
   )
   expect(result).toEqual({ verdict: "approve", selectedCandidateIds: ["candidate-1"] })
-  expect(state.createCalls).toBe(1)
-  expect(state.promptCalls).toBe(1)
-  expect(state.promptInput).toMatchObject({
-    sessionID: identity.reviewSessionId,
-    agent: "reviewer",
-    tools: {},
-    metadata: { deepagent: { learning_reviewer_attempt_id: "review:job-1" } },
+  expect(state.modelLookups).toBe(1)
+  expect(state.requests).toHaveLength(1)
+  expect(state.requests[0].system).toEqual([])
+  expect(state.requests[0].messages).toEqual([
+    { role: "user", content: [{ type: "text", text: request }], id: undefined, metadata: undefined, native: undefined },
+  ])
+  expect(state.requests[0].tools).toEqual([])
+  expect(state.requests[0].generation?.temperature).toBe(0)
+  expect(state.requests[0].metadata).toBeUndefined()
+  expect(state.requests[0].responseFormat).toMatchObject({ type: "json", name: "learning_reviewer_response" })
+  expect(JSON.stringify(state.requests[0])).not.toContain("/workspace/private")
+})
+
+test("reviewer rejects a mismatched durable run identity before model dispatch", async () => {
+  let calls = 0
+  const port = createLearningReviewerPort({
+    auth: { get: () => Effect.succeed(undefined) } as unknown as Auth.Interface,
+    provider: {
+      defaultModel: () => Effect.succeed({ providerID: model.providerID, modelID: model.id }),
+      getProvider: () => Effect.succeed(providerInfo),
+      getModel: () =>
+        Effect.sync(() => {
+          calls += 1
+          return model
+        }),
+    } as unknown as Provider.Interface,
+    llmClient: {
+      prepare: () => Effect.die("unexpected prepare"),
+      stream: () => Stream.die("unexpected dispatch"),
+      generate: () => Effect.die("unexpected generate"),
+    } as LLMClientShape,
   })
-  expect(state.session).toMatchObject({
-    id: identity.reviewSessionId,
-    directory: workspacePath,
-    agent: "reviewer",
-    model: { providerID: identity.providerId, id: identity.modelId },
-    metadata: { deepagent: { learning_reviewer_attempt_id: "review:job-1" } },
-  })
+  const identity = await Effect.runPromise(
+    port.identity({ attemptId: "review:job-2", jobId: "job-2", workspacePath: "/workspace/private" }),
+  )
+  const outcome = await Effect.runPromise(
+    port
+      .execute({
+        attemptId: "review:job-2",
+        reviewSessionId: "learning-review-run:tampered",
+        workspacePath: "/workspace/private",
+        providerId: identity.providerId,
+        modelId: identity.modelId,
+        policyHash: identity.policyHash,
+        requestRef: "artifact:request",
+        request: "{}",
+      })
+      .pipe(Effect.exit),
+  )
+  expect(Exit.isFailure(outcome)).toBe(true)
+  expect(calls).toBe(0)
 })

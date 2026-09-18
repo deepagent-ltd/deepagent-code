@@ -65,6 +65,7 @@ import { BackgroundJob } from "@/background/job"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { DurableLearningRuntime } from "@/deepagent/learning-runtime"
+import { LearningReviewerRunner } from "@/deepagent/learning-reviewer-runner"
 import { LegacyEventCanonicalizerRuntime } from "@/legacy-event-canonicalizer-runtime"
 import { productionSourcesLayer } from "@/context-federation/production-sources"
 import { LocationIndexRuntime } from "@/location-index/runtime"
@@ -123,6 +124,7 @@ const baseAppLayer = Layer.mergeAll(
   RuntimeFlags.defaultLayer,
   V2OutboxRuntime.layer,
   SessionProjection.defaultLayer,
+  LearningReviewerRunner.defaultLayer,
   DurableLearningRuntime.layer,
   // RISK-003 ④: durable schedule for the legacy event canonicalizer (flag-gated, default OFF).
   LegacyEventCanonicalizerRuntime.defaultLayer,

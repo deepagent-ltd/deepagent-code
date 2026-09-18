@@ -50,6 +50,7 @@ import { LLM } from "@/session/llm"
 import { SessionPrompt } from "@/session/prompt"
 import { PromptEpoch } from "@/session/prompt-epoch"
 import { DurableLearningRuntime } from "@/deepagent/learning-runtime"
+import { LearningReviewerRunner } from "@/deepagent/learning-reviewer-runner"
 import { DevCampaignMint, devCampaignMint } from "@/effect/dev-campaign-mint"
 import { GoalManager } from "@/session/goal-manager"
 import { SessionRevert } from "@/session/revert"
@@ -442,6 +443,7 @@ export function createRoutes(corsOptions?: CorsOptions, runtimeFlagsLayer = Runt
       Snapshot.defaultLayer,
       EventV2Bridge.defaultLayer,
       SessionProjection.defaultLayer,
+      LearningReviewerRunner.defaultLayer,
       DurableLearningRuntime.layer.pipe(Layer.provide(Database.defaultLayer)),
       EventV2.defaultLayer,
       Skill.defaultLayer,

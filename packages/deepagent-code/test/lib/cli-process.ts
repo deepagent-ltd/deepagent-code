@@ -135,6 +135,12 @@ export type ServeHandle = {
   readonly url: string
   readonly hostname: string
   readonly port: number
+  // Real OS process identity and stop/resume controls for packaged fault-injection tests. The
+  // scope finalizer resumes a paused process before terminating it, so a failed assertion cannot
+  // strand a SIGSTOP'ed child or hang test teardown.
+  readonly pid: number
+  readonly pause: () => void
+  readonly resume: () => void
   // Sends SIGTERM by default; pass "SIGKILL" for a kill-9 crash (no finalizers run in
   // the child — the crash-recovery oracle's trigger). The scope finalizer always uses
   // SIGTERM, so tests rarely need to invoke this directly — useful for tests that
@@ -301,10 +307,21 @@ export function withCliFixture<A, E>(
           }),
         ),
         (p) =>
-          Effect.promise(() => {
-            p.kill()
-            return p.exited
-          }).pipe(Effect.ignore),
+          Effect.try({
+            try: () => process.kill(p.pid, "SIGCONT"),
+            catch: (cause) => cause,
+          }).pipe(
+            // SIGCONT is harmless for a running child and keeps teardown from hanging when a test
+            // fails while the fault-injection target is stopped. ESRCH only means it already exited.
+            Effect.ignore,
+            Effect.andThen(
+              Effect.promise(() => {
+                p.kill()
+                return p.exited
+              }),
+            ),
+            Effect.ignore,
+          ),
       )
 
       // Tail buffer so timeout failures can include stderr context. The fork
@@ -347,6 +364,13 @@ export function withCliFixture<A, E>(
         url: match.url,
         hostname: match.hostname,
         port: match.port,
+        pid: proc.pid,
+        pause: () => {
+          process.kill(proc.pid, "SIGSTOP")
+        },
+        resume: () => {
+          process.kill(proc.pid, "SIGCONT")
+        },
         kill: (signal?: "SIGTERM" | "SIGKILL") => {
           proc.kill(signal)
         },

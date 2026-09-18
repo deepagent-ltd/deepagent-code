@@ -134,8 +134,8 @@ export const registerLearningReviewerFactory = Effect.fn("DurableLearningRuntime
   },
 )
 
-// Release safety switch: model-backed learning review stays opt-in until the reviewer has a
-// dedicated non-learning runner. Facts, extraction, and fail-closed governance remain enabled.
+// Release safety switch: model-backed learning review stays opt-in while the dedicated non-learning
+// runner completes live-provider qualification. Facts, extraction, and fail-closed governance remain enabled.
 export const learningReviewerProviderEnabled = (
   value: string | undefined = process.env.DEEPAGENT_DURABLE_LEARNING_REVIEWER,
 ) => value === "true"
