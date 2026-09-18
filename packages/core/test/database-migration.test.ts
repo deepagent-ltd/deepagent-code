@@ -19,6 +19,8 @@ import timeSuspendedMigration from "@deepagent-code/core/database/migration/2026
 import taskRunDeliveryMigration from "@deepagent-code/core/database/migration/20260724134000_task_run_delivery"
 import subagentControlPlaneMigration from "@deepagent-code/core/database/migration/20260803000001_subagent_control_plane_l1"
 import taskAdmissionRepairMigration from "@deepagent-code/core/database/migration/20260805000000_repair_task_admission"
+import taskRunExecutionRuntimeMigration from "@deepagent-code/core/database/migration/20260918101443_v2_task_run_execution_runtime"
+import taskRunV1RecoveryMigration from "@deepagent-code/core/database/migration/20260918143000_task_run_v1_recovery_required"
 import { ProjectV2 } from "@deepagent-code/core/project"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { AbsolutePath } from "@deepagent-code/core/schema"
@@ -4958,6 +4960,60 @@ describe("DatabaseMigration", () => {
         expect(
           yield* db.get(sql`SELECT created_at FROM session_provider_recovery_descriptor WHERE descriptor_id = 'desc-immutable'`),
         ).toEqual({ created_at: 1 })
+      }),
+    )
+  })
+
+  test("flips only non-terminal v1 task runs to recovery_required when the v1 chain is removed", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`CREATE TABLE session (id TEXT PRIMARY KEY)`)
+        yield* db.run(sql`INSERT INTO session (id) VALUES ('ses_parent')`)
+        yield* DatabaseMigration.applyOnly(db, [taskRunDeliveryMigration, subagentControlPlaneMigration, taskRunExecutionRuntimeMigration])
+        const insert = (runID: string, state: string, runtime: string) =>
+          db.run(sql`
+            INSERT INTO task_run (
+              run_id, root_run_id, request_hash, parent_session_id, parent_message_id,
+              tool_call_id, child_session_id, generation, delivery_mode, phase, state,
+              attempts, time_created, time_updated, execution_runtime
+            ) VALUES (
+              ${runID}, ${runID}, 'request', 'ses_parent', 'msg_parent',
+              'call', ${"ses_child_" + runID}, 1, 'foreground', 'research', ${state},
+              1, 100, 200, ${runtime}
+            )
+          `)
+        yield* insert("run_v1_running", "running", "v1")
+        yield* insert("run_v1_admitted", "admitted", "v1")
+        yield* insert("run_v1_completed", "completed", "v1")
+        yield* insert("run_v1_failed", "failed", "v1")
+        yield* insert("run_v1_already_recovery", "recovery_required", "v1")
+        yield* insert("run_v2_running", "running", "v2")
+
+        yield* DatabaseMigration.applyOnly(db, [taskRunV1RecoveryMigration])
+
+        const row = (runID: string) =>
+          db.get(sql`SELECT state, control_state, reason FROM task_run WHERE run_id = ${runID}`)
+        expect(yield* row("run_v1_running")).toEqual({
+          state: "recovery_required",
+          control_state: "closed",
+          reason: "v1 execution chain removed",
+        })
+        expect(yield* row("run_v1_admitted")).toEqual({
+          state: "recovery_required",
+          control_state: "closed",
+          reason: "v1 execution chain removed",
+        })
+        // Terminal v1 rows stay immutable history; already-recovery rows keep their prior reason.
+        expect(yield* row("run_v1_completed")).toEqual({ state: "completed", control_state: "open", reason: null })
+        expect(yield* row("run_v1_failed")).toEqual({ state: "failed", control_state: "open", reason: null })
+        expect(yield* row("run_v1_already_recovery")).toEqual({
+          state: "recovery_required",
+          control_state: "open",
+          reason: null,
+        })
+        // The Core V2 authority owns v2 rows exclusively; the migration never touches them.
+        expect(yield* row("run_v2_running")).toEqual({ state: "running", control_state: "open", reason: null })
       }),
     )
   })

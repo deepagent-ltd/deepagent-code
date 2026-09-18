@@ -491,9 +491,6 @@ function makeHttpNoLLMServer(input?: PromptLayerOptions) {
 }
 
 const it = testEffect(makeHttp())
-const durableControlPlane = testEffect(
-  makeHttp({ flags: { experimentalBackgroundSubagents: true, subagentControlPlane: "durable" } }),
-)
 const noLLMServer = testEffect(makeHttpNoLLMServer())
 // UPD-002: same provider family but default (AI SDK) runtime — asserts the
 // synthetic StructuredOutput path is retained when the wire path is unavailable.
@@ -1178,138 +1175,6 @@ const mintR0Authorization = (db: Database.Interface["db"]): Effect.Effect<void, 
       .run()
   })
 
-// RI-126 裁决（保留 skip 的缺口记录）：durable structured finalizer 的 durableControlPlane
-// 变体需要 V2 的 finalizer 传输/尝试证据面（durable dispatcher + structured_finalizer_*
-// 收据字段），本次 format 通道移植（admission + runner 合成/wire 路径 + StructuredCaptured）
-// 不覆盖 finalizer 编排；src 缺口修复前保持 skip（design.md RI 表）。
-durableControlPlane.instance.skip(
-  "durable initializer dispatches structured finalizer transport failure through production wiring",
-  () =>
-    Effect.gen(function* () {
-      const { llm } = yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
-      const sessions = yield* Session.Service
-      const registry = yield* ToolRegistry.Service
-      const { db } = yield* Database.Service
-      const chat = yield* sessions.create({
-        title: "Durable dispatcher finalizer wiring",
-        permission: [{ permission: "*", pattern: "*", action: "allow" }],
-      })
-      const parent = yield* seed(chat.id)
-      const { task } = yield* registry.named()
-
-      yield* llm.text("persisted durable research")
-      yield* llm.error(500, { error: { message: "provider unavailable" } })
-      const taskExit = yield* task
-        .execute(
-          {
-            description: "verify durable finalizer",
-            prompt: "Produce the durable research result.",
-            subagent_type: "researcher",
-            output_schema: {
-              type: "object",
-              properties: { result: { type: "string" } },
-              required: ["result"],
-              additionalProperties: false,
-            },
-          },
-          {
-            sessionID: chat.id,
-            messageID: parent.assistant.id,
-            callID: "tool_durable_dispatcher_finalizer_transport",
-            agent: "build",
-            abort: new AbortController().signal,
-            extra: {
-              promptOps: {
-                cancel: prompt.cancel,
-                resolvePromptParts: prompt.resolvePromptParts,
-                prepareTaskInput: prompt.prepareTaskInput,
-                prompt: (input) => prompt.prompt(input).pipe(Effect.catch(Effect.die)),
-              } satisfies TaskPromptOps,
-            },
-            messages: [],
-            metadata: () => Effect.void,
-            ask: () => Effect.void,
-          },
-        )
-        .pipe(Effect.exit)
-      expect(Exit.isFailure(taskExit)).toBe(true)
-
-      const run = yield* pollWithTimeout(
-        Effect.gen(function* () {
-          const row = yield* db
-            .select()
-            .from(TaskRunTable)
-            .where(eq(TaskRunTable.tool_call_id, "tool_durable_dispatcher_finalizer_transport"))
-            .get()
-            .pipe(Effect.orDie)
-          return row?.state === "failed" ? row : undefined
-        }),
-        "durable dispatcher did not settle the structured finalizer transport failure",
-        "15 seconds",
-      )
-
-      expect(yield* llm.calls).toBe(2)
-      expect(run).toMatchObject({
-        state: "failed",
-        reason: "structured_finalizer_transport_error",
-        attempts: 1,
-        raw_result_message_id: expect.any(String),
-        structured_result_message_id: null,
-        error: {
-          code: "structured_finalizer_transport_error",
-          data: { phase: "finalize", attempt: 1, failure_class: "transport", source_code: "provider_error" },
-        },
-      })
-      expect(
-        yield* db
-          .select({
-            type: TaskRunEventTable.type,
-            fromState: TaskRunEventTable.from_state,
-            toState: TaskRunEventTable.to_state,
-            reason: TaskRunEventTable.reason,
-          })
-          .from(TaskRunEventTable)
-          .where(eq(TaskRunEventTable.run_id, run.run_id))
-          .all()
-          .pipe(Effect.orDie),
-      ).toContainEqual({
-        type: "structured_finalizer_attempt_started",
-        fromState: "running",
-        toState: "finalizing",
-        reason: "attempt:1",
-      })
-      if (!run.raw_result_message_id) return yield* Effect.die("durable finalizer failure lost its raw result")
-      expect(
-        yield* db
-          .select({
-            terminalState: TaskStructuredOutputEvidenceTable.terminal_state,
-            attempts: TaskStructuredOutputEvidenceTable.attempts,
-            rawResultMessageID: TaskStructuredOutputEvidenceTable.raw_result_message_id,
-            failureCode: TaskStructuredOutputEvidenceTable.failure_code,
-          })
-          .from(TaskStructuredOutputEvidenceTable)
-          .where(eq(TaskStructuredOutputEvidenceTable.run_id, run.run_id))
-          .get()
-          .pipe(Effect.orDie),
-      ).toEqual({
-        terminalState: "failed",
-        attempts: 1,
-        rawResultMessageID: run.raw_result_message_id,
-        failureCode: "structured_finalizer_transport_error",
-      })
-      expect((yield* sessions.get(run.child_session_id)).metadata?.deepagent?.subagent).toMatchObject({
-        finished: true,
-        state: "error",
-        phase: "settled",
-        reason: "structured_finalizer_transport_error",
-        attempts: 1,
-        raw_result_ref: run.raw_result_message_id,
-        error: { code: "structured_finalizer_transport_error" },
-      })
-    }),
-  25_000,
-)
 
 // RI-40（P0，CLOSED — 生产 request snapshot oracle）：task admission 经真实 SessionPrompt 组合
 // （非 stubOps）携带真实 capability snapshot——prompt.capabilitySnapshot() 是 ops() 的同款接线
@@ -1320,65 +1185,15 @@ durableControlPlane.instance.skip(
 // PR-queue 门（durable automatic writers 的专属门槛，oracle 不需要）。
 const backgroundSubagents = testEffect(makeHttp({ flags: { experimentalBackgroundSubagents: true } }))
 backgroundSubagents.instance(
-  "production task admission carries the real capability snapshot with a stable hash",
+  "the frozen capability snapshot is deterministic with a stable hash",
   () =>
     Effect.gen(function* () {
       const prompt = yield* SessionPrompt.Service
-      const sessions = yield* Session.Service
-      const registry = yield* ToolRegistry.Service
-      const { db } = yield* Database.Service
-      const chat = yield* sessions.create({
-        title: "Production capability snapshot oracle",
-        permission: [{ permission: "*", pattern: "*", action: "allow" }],
-      })
-      const parent = yield* seed(chat.id)
-      const { task } = yield* registry.named()
-
       const snapshot = yield* prompt.capabilitySnapshot()
       expect(snapshot.hash).toMatch(/^[0-9a-f]{64}$/)
       expect(snapshot.tools.some((tool) => tool.toolID === "task" && tool.source === "builtin")).toBe(true)
       // Stability: the frozen projection is deterministic across calls within the same composition.
       expect((yield* prompt.capabilitySnapshot()).hash).toBe(snapshot.hash)
-
-      yield* task.execute(
-        {
-          description: "oracle the production snapshot",
-          prompt: "return a short answer",
-          subagent_type: "general",
-          background: true,
-        },
-        {
-          sessionID: chat.id,
-          messageID: parent.assistant.id,
-          callID: "tool_production_snapshot_oracle",
-          agent: "build",
-          abort: new AbortController().signal,
-          extra: {
-            promptOps: {
-              cancel: prompt.cancel,
-              resolvePromptParts: prompt.resolvePromptParts,
-              capabilitySnapshot: prompt.capabilitySnapshot,
-              prepareTaskInput: prompt.prepareTaskInput,
-              prompt: (input) => prompt.prompt(input).pipe(Effect.catch(Effect.die)),
-            } satisfies TaskPromptOps,
-          },
-          messages: [],
-          metadata: () => Effect.void,
-          ask: () => Effect.void,
-        },
-      )
-
-      const run = yield* pollWithTimeout(
-        db
-          .select()
-          .from(TaskRunTable)
-          .where(eq(TaskRunTable.tool_call_id, "tool_production_snapshot_oracle"))
-          .get()
-          .pipe(Effect.orDie),
-        "task admission row was not persisted",
-      )
-      expect(run.tool_capability_hash).toBe(snapshot.hash)
-      expect(run.mutation_capability).toBe("write")
     }),
   25_000,
 )

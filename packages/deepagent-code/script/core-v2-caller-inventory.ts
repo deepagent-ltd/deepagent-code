@@ -91,8 +91,6 @@ export function classifyCaller(path: string): CallerCategory {
   )
     return "orchestration"
   if (
-    path === "packages/deepagent-code/src/session/task-executor.ts" ||
-    path === "packages/deepagent-code/src/session/task-input.ts" ||
     path === "packages/deepagent-code/src/tool/task.ts" ||
     path === "packages/deepagent-code/src/session/goal-manager.ts" ||
     path === "packages/deepagent-code/src/session/goal-loop-wiring.ts" ||

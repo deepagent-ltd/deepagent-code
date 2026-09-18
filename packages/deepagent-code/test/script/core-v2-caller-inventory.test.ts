@@ -12,11 +12,13 @@ const repository = resolve(import.meta.dir, "../../../..")
 // Pinned completion evidence (§8 of the migration plan): the legacy orchestration denominator is
 // fully classified and its canonical hash is fixed. Any new legacy call surface must be added to
 // the classifier through a reviewed change, which moves this hash deliberately.
-// v2f-i IM residual sweep re-pin (2026-09-18): the durable-only slices removed the remaining code
-// references to SessionPrompt from the task-*/goal-*/facade-activity child-execution callers and
-// core's im orchestrator (admission_control) — the denominator is 8 files (verified against both
-// the pre- and post-sweep trees: identical entries + hash; the stale 14-entry pin predated those
-// deletions). prompt.ts remains the single orchestration authority surface.
+// v2f-i + v2f-h2 re-pin (2026-09-18): the durable-only wave removed the remaining code references
+// to SessionPrompt from the task-*/goal-*/facade-activity child-execution callers and core's im
+// orchestrator (v2f-i), then deleted the legacy task executor/input/dispatcher/delivery modules
+// and moved the task tool onto the Core V2 TaskRunAuthority (v2f-h2). Both sweeps independently
+// converged on this 8-file denominator and hash. prompt.ts remains the single orchestration
+// authority surface. Any new legacy call surface must be added to the classifier through a
+// reviewed change, which moves this hash deliberately.
 const PINNED_COUNTS = {
   admission_control: 4,
   orchestration: 1,
@@ -37,7 +39,7 @@ describe("Core V2 caller inventory classification", () => {
     expect(classifyCaller("packages/deepagent-code/src/cli/cmd/github.handler.ts")).toBe("admission_control")
     expect(classifyCaller("packages/deepagent-code/src/session/prompt.ts")).toBe("orchestration")
     expect(classifyCaller("packages/deepagent-code/src/session/steer.ts")).toBe("orchestration")
-    expect(classifyCaller("packages/deepagent-code/src/session/task-executor.ts")).toBe("child_execution")
+    expect(classifyCaller("packages/deepagent-code/src/tool/task.ts")).toBe("child_execution")
     expect(classifyCaller("packages/deepagent-code/src/session/goal-manager.ts")).toBe("child_execution")
     expect(classifyCaller("packages/core/src/deepagent/goal-loop.ts")).toBe("child_execution")
     expect(classifyCaller("packages/deepagent-code/src/session/compaction.ts")).toBe("recovery_compaction_context")

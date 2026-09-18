@@ -6,7 +6,6 @@ import { Effect } from "effect"
 import type { SessionPrompt } from "@/session/prompt"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import {
-  runDurableStructuredFinalizer,
   runSubagentPrompt,
   type StructuredOutputReceipt,
   type SubagentPromptInput,
@@ -87,70 +86,6 @@ function ops(prompt: TaskPromptOps["prompt"]): TaskPromptOps {
 }
 
 describe("task structured finalizer", () => {
-  test("durable production finalizer uses the frozen run contract and returns its exact receipt", async () => {
-    const calls: SessionPrompt.PromptInput[] = []
-    const result = await Effect.runPromise(
-      runDurableStructuredFinalizer({
-        ops: ops((prompt) =>
-          Effect.sync(() => {
-            calls.push(prompt)
-            return response(prompt, { structured: { result: "frozen" } })
-          }),
-        ),
-        run: {
-          runID: "run_durable_finalizer",
-          childSessionID: sessionID,
-          executionSpec: {
-            prompt: { text: "frozen research prompt" },
-            agent: "reviewer",
-            model: { providerID: "frozen-provider", modelID: "frozen-model", variant: "precise" },
-            tools: { read: true, edit: false },
-            structuredOutput: {
-              schema,
-              allowTextFallback: true,
-              receiptVersion: 1,
-              maxAttempts: 2,
-            },
-          },
-        },
-        research: response(
-          {
-            sessionID,
-            agent: "researcher",
-            model,
-            parts: [],
-          },
-          { text: "durable research" },
-        ),
-        contract: {
-          schema,
-          allowTextFallback: true,
-          receiptVersion: 1,
-          maxAttempts: 2,
-        },
-        onFinalizing: () => Effect.void,
-      }),
-    )
-
-    expect(result).toMatchObject({
-      output: '{"result":"frozen"}',
-      structuredResultMessageID: expect.any(String),
-      receipt: { attempt: 1, transport: "structured" },
-    })
-    expect(calls).toHaveLength(1)
-    expect(calls[0]).toMatchObject({
-      sessionID,
-      agent: "reviewer",
-      model: { providerID: "frozen-provider", modelID: "frozen-model" },
-      variant: "precise",
-      format: { type: "json_schema", schema },
-    })
-    expect(calls[0]?.metadata?.deepagent?.structured_finalizer).toMatchObject({
-      attempt: 1,
-      source_message_id: expect.any(String),
-    })
-  })
-
   test("direct structured output records a first-attempt structured receipt", async () => {
     const calls: SessionPrompt.PromptInput[] = []
     let receipt: StructuredOutputReceipt | undefined

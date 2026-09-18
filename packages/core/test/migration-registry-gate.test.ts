@@ -51,7 +51,10 @@ import { migrations } from "../src/database/migration.gen"
 // integrity evidence artifact table and its immutable signature-attachment trigger joined.
 // Successor pin (2026-09-10, RI-18): the durable session_v2_compaction_request migration joined
 // the registry (native manual compaction); `migration --check` green at re-pin time.
-const PINNED_DIGEST = "6669422703efcafae8e8c0b98c9876e0ac3f99f4746ac677adeaace6701b4dd4"
+// Successor pin (2026-09-18, durable-only wave): four migrations joined — v2 task_run
+// execution_runtime discriminator, im_reply_outbox, command_side_effect_receipt, and the
+// one-time task_run v1 recovery_required sweep; `migration --check` green at re-pin time.
+const PINNED_DIGEST = "c73d61bf337abac2c77d014d926a4ae690fcc13bc8a9dcfe6ca4347f3de2a57d"
 
 const digest = (entries: readonly { readonly id: string; readonly hash: string }[]) =>
   createHash("sha256").update(JSON.stringify(entries)).digest("hex")

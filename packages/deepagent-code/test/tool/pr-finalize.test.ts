@@ -1,6 +1,6 @@
 import { afterEach, describe, expect } from "bun:test"
 import path from "node:path"
-import { Deferred, Effect, Exit, Layer } from "effect"
+import { Effect, Exit, Layer } from "effect"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { Database } from "@deepagent-code/core/database/database"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
@@ -16,12 +16,13 @@ import { Git } from "@/git"
 import { Session } from "@/session/session"
 import { SessionProjector } from "@deepagent-code/core/session/projector"
 import { createAgentWorktree } from "@/session/agent-worktree"
+import { submitAutomaticWorktree } from "@/session/task-pr-submission"
 import { SessionRunState } from "@/session/run-state"
 import { SessionStatus } from "@/session/status"
 import type { SessionPrompt } from "@/session/prompt"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { PRFinalizeTool } from "@/tool/pr_finalize"
-import { TaskTool, type TaskPromptOps } from "@/tool/task"
+import type { TaskPromptOps } from "@/tool/task"
 import { ToolRegistry } from "@/tool/registry"
 import { Truncate } from "@/tool/truncate"
 import { Worktree } from "@/worktree"
@@ -142,31 +143,56 @@ describe("tool.pr_finalize", () => {
         const queue = yield* PRQueue.Service
         const worktree = yield* Worktree.Service
         const { chat, assistant } = yield* seed()
-        const bothStarted = yield* Deferred.make<void>()
         const reviewAssignments = new Map<
           string,
           { readonly sha: string; readonly reviewerID: string; readonly round: number; readonly role: string }
         >()
         const reviewerSessions = new Set<string>()
         const seniorSessions = new Set<string>()
-        let workersStarted = 0
         let failFirstSeniorTurn = true
+
+        // The task tool's automatic-worktree submission path is gone with the V2 authority
+        // cutover; PRs are seeded directly through the durable submission helper (#29 owns the
+        // PR-tooling migration onto the authority). The finalize choreography is unchanged.
+        const seedPR = (file: string, prID: string) =>
+          Effect.gen(function* () {
+            yield* ensureSessionBranch({ git, directory, sessionID: chat.id })
+            const worker = yield* sessions.create({
+              title: `implement ${file}`,
+              parentID: chat.id,
+              agent: "general",
+            })
+            const info = yield* worktree.createReady({ name: `agent-general-${worker.id}` })
+            yield* Effect.promise(() => Bun.write(path.join(info.directory, file), `${file}\n`))
+            const submitted = yield* submitAutomaticWorktree({
+              git,
+              queue,
+              info,
+              parentDirectory: directory,
+              parentSessionID: chat.id,
+              workerSessionID: worker.id,
+              reviewerSessionID: SessionID.make(`ses_pr_reviewer_${assistant.id}`),
+              batchID: assistant.id,
+              prID,
+              description: `implement ${file}`,
+              prompt: `write ${file}`,
+            })
+            if (!submitted) return yield* Effect.die("worker submission produced no PR")
+            return { workerID: worker.id, directory: info.directory, ...submitted }
+          })
+        const taskResults = yield* Effect.all(
+          [
+            seedPR("worker-a.txt", `pr:${chat.id}:tool_worker_a`),
+            seedPR("worker-b.txt", `pr:${chat.id}:tool_worker_b`),
+          ],
+          { concurrency: "unbounded" },
+        )
 
         const promptOps: TaskPromptOps = {
           cancel: () => Effect.void,
           resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
           prompt: (input) =>
             Effect.gen(function* () {
-              if (input.agent === "general") {
-                const file = promptText(input).includes("worker-a.txt") ? "worker-a.txt" : "worker-b.txt"
-                const child = yield* sessions.get(input.sessionID)
-                yield* Effect.promise(() => Bun.write(path.join(child.directory, file), `${file}\n`))
-                workersStarted += 1
-                if (workersStarted === 2) yield* Deferred.succeed(bothStarted, undefined)
-                yield* Deferred.await(bothStarted)
-                return reply(input, `implemented ${file}`)
-              }
-
               const incoming = reviewAssignment(input)
               if (incoming) {
                 if (incoming.role === "reviewer") {
@@ -212,29 +238,11 @@ describe("tool.pr_finalize", () => {
             }),
         }
 
-        const task = yield* TaskTool
-        const taskDef = yield* task.init()
-        const execute = (file: string, callID: string) =>
-          taskDef.execute(
-            { description: `implement ${file}`, prompt: `write ${file}`, subagent_type: "general" },
-            {
-              sessionID: chat.id,
-              messageID: assistant.id,
-              callID,
-              agent: "build",
-              abort: new AbortController().signal,
-              extra: { promptOps },
-              messages: [],
-              metadata: () => Effect.void,
-              ask: () => Effect.void,
-            },
-          )
-        const taskResults = yield* Effect.all(
-          [execute("worker-a.txt", "tool_worker_a"), execute("worker-b.txt", "tool_worker_b")],
-          { concurrency: "unbounded" },
-        )
-
-        expect(taskResults.every((result) => result.output.includes('state="awaiting_review"'))).toBe(true)
+        expect(taskResults.map((result) => result.id)).toEqual([
+          `pr:${chat.id}:tool_worker_a`,
+          `pr:${chat.id}:tool_worker_b`,
+        ])
+        expect((yield* queue.list()).filter((entry) => entry.status === "awaiting_review")).toHaveLength(2)
         expect(yield* Effect.promise(() => Bun.file(path.join(directory, "worker-a.txt")).exists())).toBe(false)
         expect(yield* Effect.promise(() => Bun.file(path.join(directory, "worker-b.txt")).exists())).toBe(false)
         expect((yield* queue.list()).filter((entry) => entry.parentID === chat.id)).toHaveLength(2)
@@ -322,6 +330,7 @@ describe("tool.pr_finalize", () => {
       Effect.gen(function* () {
         const directory = (yield* TestInstance).directory
         const sessions = yield* Session.Service
+        const git = yield* Git.Service
         const queue = yield* PRQueue.Service
         const worktree = yield* Worktree.Service
         const { chat, assistant } = yield* seed()
@@ -331,22 +340,12 @@ describe("tool.pr_finalize", () => {
         >()
         const reviewerSessions = new Set<string>()
         const seniorSessions = new Set<string>()
-        const workerDirectories = new Set<string>()
 
         const promptOps: TaskPromptOps = {
           cancel: () => Effect.void,
           resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
           prompt: (input) =>
             Effect.gen(function* () {
-              if (input.agent === "general") {
-                const child = yield* sessions.get(input.sessionID)
-                workerDirectories.add(child.directory)
-                const revised = promptText(input).includes("revise")
-                yield* Effect.promise(() =>
-                  Bun.write(path.join(child.directory, "revision.txt"), revised ? "fixed\n" : "buggy\n"),
-                )
-                return reply(input, revised ? "fixed revision" : "initial revision")
-              }
               const incoming = reviewAssignment(input)
               if (incoming) {
                 if (incoming.role === "reviewer") {
@@ -396,35 +395,67 @@ describe("tool.pr_finalize", () => {
           metadata: () => Effect.void,
           ask: () => Effect.void,
         })
-        const task = yield* TaskTool
-        const taskDef = yield* task.init()
-        const initial = yield* taskDef.execute(
-          { description: "implement revision", prompt: "write initial revision", subagent_type: "general" },
-          context("tool_revision_initial"),
-        )
-        const prID = String(initial.metadata.prId)
+        // Direct PR seeding (see the two-worker test): the initial worker submission.
+        const initialInfo = { name: "agent-general-revision", directory: "" }
+        const prID = `pr:${chat.id}:tool_revision_initial`
+        const initial = yield* Effect.gen(function* () {
+          yield* ensureSessionBranch({ git, directory, sessionID: chat.id })
+          const worker = yield* sessions.create({
+            title: "implement revision",
+            parentID: chat.id,
+            agent: "general",
+          })
+          const info = yield* worktree.createReady({ name: `agent-general-${worker.id}` })
+          initialInfo.directory = info.directory
+          yield* Effect.promise(() => Bun.write(path.join(info.directory, "revision.txt"), "buggy\n"))
+          const submitted = yield* submitAutomaticWorktree({
+            git,
+            queue,
+            info,
+            parentDirectory: directory,
+            parentSessionID: chat.id,
+            workerSessionID: worker.id,
+            reviewerSessionID: SessionID.make(`ses_pr_reviewer_${assistant.id}`),
+            batchID: assistant.id,
+            prID,
+            description: "implement revision",
+            prompt: "write initial revision",
+          })
+          if (!submitted) return yield* Effect.die("worker submission produced no PR")
+          return { workerID: worker.id, id: submitted.id }
+        })
         const finalize = yield* PRFinalizeTool
         const finalizeDef = yield* finalize.init()
         const firstReview = yield* finalizeDef.execute({}, context("tool_review_initial"))
 
         expect(firstReview.output).toContain('"status":"changes_requested"')
         expect(firstReview.output).toContain('"summary":"Known bad value"')
-        expect(firstReview.output).toContain(String(initial.metadata.sessionId))
+        expect(firstReview.output).toContain(String(initial.workerID))
         expect(yield* queue.get(prID)).toMatchObject({ status: "changes_requested", redoCount: 1 })
         expect(seniorSessions.size).toBe(0)
         expect(yield* Effect.promise(() => Bun.file(path.join(directory, "revision.txt")).exists())).toBe(false)
 
-        const revised = yield* taskDef.execute(
-          {
+        // The worker revises in its preserved worktree and resubmits the SAME PR.
+        const revised = yield* Effect.gen(function* () {
+          yield* Effect.promise(() => Bun.write(path.join(initialInfo.directory, "revision.txt"), "fixed\n"))
+          const submitted = yield* submitAutomaticWorktree({
+            git,
+            queue,
+            info: { name: "agent-general-revision", directory: initialInfo.directory },
+            parentDirectory: directory,
+            parentSessionID: chat.id,
+            workerSessionID: initial.workerID,
+            reviewerSessionID: SessionID.make(`ses_pr_reviewer_${assistant.id}`),
+            batchID: assistant.id,
+            prID,
             description: "revise implementation",
             prompt: "revise revision.txt",
-            subagent_type: "general",
-            task_id: String(initial.metadata.sessionId),
-          },
-          context("tool_revision_fix"),
-        )
-        expect(revised.metadata.prId).toBe(prID)
-        expect(workerDirectories.size).toBe(1)
+          })
+          if (!submitted) return yield* Effect.die("worker revision produced no PR")
+          return submitted
+        })
+        expect(revised.id).toBe(prID)
+        expect((yield* queue.get(prID))?.workerHead).toBe(revised.workerCommit)
         expect(yield* queue.get(prID)).toMatchObject({ status: "awaiting_review", redoCount: 1 })
 
         const secondReview = yield* finalizeDef.execute({}, context("tool_review_revised"))
@@ -486,7 +517,7 @@ describe("tool.pr_finalize", () => {
             cleanupRequired: true,
             metadata: {
               origin: "v4-event-runtime",
-              batchID: "v4-revision-batch",
+              batchID: MessageID.ascending(),
               eventID: "dae_v4_revision",
               taskID: "v4-revision-task",
               prompt: "replace the buggy value in v4-revision.txt with fixed",
@@ -504,13 +535,6 @@ describe("tool.pr_finalize", () => {
           resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
           prompt: (input) =>
             Effect.gen(function* () {
-              if (input.agent === "general") {
-                const child = yield* sessions.get(input.sessionID)
-                expect(child.id).toBe(worker.id)
-                expect(child.directory).toBe(authorWorktree.directory)
-                yield* Effect.promise(() => Bun.write(path.join(child.directory, "v4-revision.txt"), "fixed\n"))
-                return reply(input, "fixed V4 revision")
-              }
               const incoming = reviewAssignment(input)
               if (incoming) {
                 assignments.set(input.sessionID, incoming)
@@ -555,18 +579,26 @@ describe("tool.pr_finalize", () => {
         expect(first.output).toContain('"status":"changes_requested"')
         expect(yield* queue.get(prID)).toMatchObject({ status: "changes_requested", redoCount: 1 })
 
-        const task = yield* TaskTool
-        const taskDef = yield* task.init()
-        const revision = yield* taskDef.execute(
-          {
+        // The V4 author revises in its managed worktree and resubmits the SAME PR.
+        const revision = yield* Effect.gen(function* () {
+          yield* Effect.promise(() => Bun.write(path.join(authorWorktree.directory, "v4-revision.txt"), "fixed\n"))
+          const submitted = yield* submitAutomaticWorktree({
+            git,
+            queue,
+            info: { name: "v4-review-revision", directory: authorWorktree.directory },
+            parentDirectory: directory,
+            parentSessionID: chat.id,
+            workerSessionID: worker.id,
+            reviewerSessionID: reviewerID,
+            batchID: MessageID.ascending(),
+            prID,
             description: "revise V4 implementation",
             prompt: "replace the buggy value in v4-revision.txt with fixed",
-            subagent_type: "general",
-            task_id: worker.id,
-          },
-          context("tool_v4_revision"),
-        )
-        expect(revision.metadata.prId).toBe(prID)
+          })
+          if (!submitted) return yield* Effect.die("V4 revision produced no PR")
+          return submitted
+        })
+        expect(revision.id).toBe(prID)
         expect(yield* queue.get(prID)).toMatchObject({ status: "awaiting_review", redoCount: 1 })
 
         const second = yield* finalizeDef.execute({ pr_ids: [prID] }, context("tool_v4_review_revised"))
@@ -585,6 +617,7 @@ describe("tool.pr_finalize", () => {
       Effect.gen(function* () {
         const directory = (yield* TestInstance).directory
         const sessions = yield* Session.Service
+        const git = yield* Git.Service
         const queue = yield* PRQueue.Service
         const worktree = yield* Worktree.Service
         const { chat, assistant } = yield* seed()
@@ -597,11 +630,6 @@ describe("tool.pr_finalize", () => {
           resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
           prompt: (input) =>
             Effect.gen(function* () {
-              if (input.agent === "general") {
-                const child = yield* sessions.get(input.sessionID)
-                yield* Effect.promise(() => Bun.write(path.join(child.directory, "rejected.txt"), "unsafe\n"))
-                return reply(input, "implemented unsafe change")
-              }
               const incoming = reviewAssignment(input)
               if (incoming) {
                 expect(promptText(input)).toContain("<task_contract>")
@@ -639,13 +667,32 @@ describe("tool.pr_finalize", () => {
           metadata: () => Effect.void,
           ask: () => Effect.void,
         })
-        const task = yield* TaskTool
-        const taskDef = yield* task.init()
-        const submitted = yield* taskDef.execute(
-          { description: "implement rejected change", prompt: "write rejected.txt", subagent_type: "general" },
-          context("tool_rejected_worker"),
-        )
-        const prID = String(submitted.metadata.prId)
+        const prID = `pr:${chat.id}:tool_rejected_worker`
+        const submitted = yield* Effect.gen(function* () {
+          yield* ensureSessionBranch({ git, directory, sessionID: chat.id })
+          const worker = yield* sessions.create({
+            title: "implement rejected change",
+            parentID: chat.id,
+            agent: "general",
+          })
+          const info = yield* worktree.createReady({ name: `agent-general-${worker.id}` })
+          yield* Effect.promise(() => Bun.write(path.join(info.directory, "rejected.txt"), "unsafe\n"))
+          const pr = yield* submitAutomaticWorktree({
+            git,
+            queue,
+            info,
+            parentDirectory: directory,
+            parentSessionID: chat.id,
+            workerSessionID: worker.id,
+            reviewerSessionID: SessionID.make(`ses_pr_reviewer_${assistant.id}`),
+            batchID: assistant.id,
+            prID,
+            description: "implement rejected change",
+            prompt: "write rejected.txt",
+          })
+          if (!pr) return yield* Effect.die("worker submission produced no PR")
+          return pr
+        })
         const finalize = yield* PRFinalizeTool
         const finalized = yield* (yield* finalize.init()).execute({}, context("tool_rejected_review"))
 

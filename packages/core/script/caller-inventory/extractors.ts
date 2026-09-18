@@ -702,12 +702,12 @@ const FIXED_ENTRIES: readonly FixedEntry[] = [
 
   // Task / Goal / Panel (surface 8).
   {
-    id: "task.task-run-admission",
+    id: "task.task-tool",
     surface: "task-goal-panel",
     kind: "child-session-registration",
-    name: "TaskRun admission",
-    fileFromRoot: "packages/deepagent-code/src/tool/task-run.ts",
-    declare: "admitTaskRun",
+    name: "TaskTool (V2 authority submit)",
+    fileFromRoot: "packages/deepagent-code/src/tool/task.ts",
+    chain: "TaskRunAuthority.submit",
   },
   {
     id: "task.goal-manager",

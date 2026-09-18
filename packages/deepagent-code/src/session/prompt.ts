@@ -81,7 +81,6 @@ import {
   Layer,
   Option,
   Ref,
-  Schedule,
   Schema,
   Scope,
   Types,
@@ -89,15 +88,7 @@ import {
 import * as EffectLogger from "@deepagent-code/core/effect/logger"
 import { KeyedMutex } from "@deepagent-code/core/effect/keyed-mutex"
 import { InstanceState } from "@/effect/instance-state"
-import {
-  projectDurableSettledRun,
-  projectRecoveredSubagentRun,
-  repairDurableSettledRunProjections,
-  runDurableStructuredFinalizer,
-  runSubagentPrompt,
-  TaskTool,
-  type TaskPromptOps,
-} from "@/tool/task"
+import { TaskTool, type TaskPromptOps } from "@/tool/task"
 import { validateStructuredOutput } from "@/tool/task-structured-output"
 import { SessionRunState } from "./run-state"
 import { SessionSteer } from "./steer"
@@ -167,7 +158,6 @@ import {
   SessionHistoryStateTable,
   SessionTable,
   SessionToolRequestResolutionTable,
-  TaskRunTable,
 } from "@deepagent-code/core/session/sql"
 import { SessionPromptEpochTable } from "./prompt-epoch.sql"
 import { referencePromptMetadata, referenceTextPart } from "./prompt/reference"
@@ -176,25 +166,10 @@ import { SessionTools } from "./tools"
 import { LLMEvent } from "@deepagent-code/llm"
 import { ConversationLogWriter } from "./conversation-log-writer"
 import { ToolSemanticFingerprint } from "@/tool/semantic-fingerprint"
-import { deliverTaskNotifications, recoverExpiredTaskRuns, classifyOnStartup, orderedShutdown } from "@/tool/task-run"
-// L10: durable control plane daemons
-import { TaskDispatcher } from "@/session/task-dispatcher"
-import { LegacySubagentExecutor } from "@/session/task-executor"
-import { TaskDelivery } from "@/session/task-delivery"
-import { submitAutomaticWorktree } from "@/session/task-pr-submission"
-import { Git } from "@/git"
-import { PRQueue } from "@/agent/pr-queue"
-import { registerDisposer, registerInitializer } from "@/effect/instance-registry"
+import { registerInitializer } from "@/effect/instance-registry"
 import { EventRouteRef, InstanceRef } from "@/effect/instance-ref"
 import { InstanceStore } from "@/project/instance-store"
 import type { InstanceContext } from "@/project/instance-context"
-import {
-  acquireDurableExecutorLease,
-  releaseDurableExecutorLease,
-  releaseDurableExecutorReservation,
-  reserveDurableExecutor,
-  type DurableExecutorLease,
-} from "./durable-executor-lock"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -1100,8 +1075,6 @@ export const layer = Layer.effect(
     const events = yield* EventV2Bridge.Service
     const flags = yield* RuntimeFlags.Service
     const coreV2Session = yield* SessionV2.Service
-    const git = Option.getOrUndefined(yield* Effect.serviceOption(Git.Service))
-    const queue = Option.getOrUndefined(yield* Effect.serviceOption(PRQueue.Service))
     const federation = Option.getOrUndefined(yield* Effect.serviceOption(SessionFederatedContext.Service))
     const federationReadiness = Option.getOrUndefined(yield* Effect.serviceOption(ContextFederationReadiness.Service))
     const parityCampaign = yield* V2ProviderTurn.CurrentCampaign
@@ -6938,327 +6911,13 @@ export const layer = Layer.effect(
       return result
     })
 
-    const notificationWorkers = new Map<string, Fiber.Fiber<void, never>>()
-    const startNotificationWorker = yield* registerInitializer((ctx) =>
-      Effect.runPromise(
-        Effect.gen(function* () {
-          // In durable mode, TaskDelivery.startDeliveryLoop is the authority for delivery.
-          // Running the legacy notification worker alongside creates a dual lifecycle writer (design §4.1).
-          if (flags.subagentControlPlane === "durable") return
-          if (notificationWorkers.has(ctx.directory)) return
-          const owner = `task-notification:${process.pid}:${randomUUID()}`
-          const pump = recoverExpiredTaskRuns({ directory: ctx.directory }).pipe(
-            Effect.tap((runs) =>
-              Effect.forEach(
-                runs,
-                (run) => projectRecoveredSubagentRun(sessions, run).pipe(Effect.provideService(InstanceRef, ctx)),
-                { discard: true },
-              ),
-            ),
-            Effect.flatMap(() =>
-              deliverTaskNotifications({
-                owner,
-                directory: ctx.directory,
-                limit: 1,
-                deliver: (item) =>
-                  prompt({
-                    messageID: item.messageID,
-                    sessionID: item.parentSessionID,
-                    agent: item.payload.agent,
-                    variant: item.payload.variant,
-                    metadata: {
-                      deepagent: {
-                        task_notification: { run_id: item.runID, outbox_id: item.id },
-                      },
-                    },
-                    parts: [{ type: "text", synthetic: true, text: item.payload.text }],
-                  }).pipe(Effect.provideService(InstanceRef, ctx), Effect.asVoid),
-              }),
-            ),
-            Effect.provideService(Database.Service, database),
-            Effect.catchCause((cause) =>
-              Effect.sync(() =>
-                log.error("task notification pump failed", { directory: ctx.directory, cause: Cause.pretty(cause) }),
-              ).pipe(Effect.as([])),
-            ),
-          )
-          const worker = yield* pump.pipe(
-            Effect.repeat(Schedule.spaced(Duration.seconds(2))),
-            Effect.asVoid,
-            Effect.forkIn(scope),
-          )
-          notificationWorkers.set(ctx.directory, worker)
-        }),
-      ),
-    )
-    const stopNotificationWorker = yield* registerDisposer((directory) => {
-      const worker = notificationWorkers.get(directory)
-      if (!worker) return Promise.resolve()
-      notificationWorkers.delete(directory)
-      return Effect.runPromise(Fiber.interrupt(worker).pipe(Effect.asVoid))
-    })
-
-    // Durable dispatcher and delivery share the topology-lock lifetime. Delivery receives the local
-    // runLoop closure, so TaskDelivery stays independent of SessionPrompt.Service and cannot form a
-    // circular layer dependency.
-    const durableWorkers = new Map<string, ReadonlyArray<Fiber.Fiber<void, never>>>()
-    const durableLeases = new Map<string, DurableExecutorLease>()
-    const unregisterDurableInitializer = yield* registerInitializer((ctx) => {
-      // Reserve synchronously: multiple Service instances are registered globally and may otherwise
-      // race through asynchronous startup in the same process.
-      if (flags.subagentControlPlane !== "durable") return Promise.resolve()
-      if (durableWorkers.has(ctx.directory)) return Promise.resolve()
-      if (!reserveDurableExecutor(ctx.directory)) return Promise.resolve()
-
-      return Effect.runPromise(
-        Effect.gen(function* () {
-          // A-2 (P0-4): only start daemon in "durable" mode — shadow mode must NOT run daemon
-          const lease = yield* Effect.sync(() =>
-            acquireDurableExecutorLease({
-              directory: ctx.directory,
-              mode: flags.subagentControlPlane,
-            }),
-          )
-          if (!lease) {
-            yield* Effect.logWarning(
-              "durable-cp: failed to acquire executor lock, another process owns it — fail-closed",
-              {
-                directory: ctx.directory,
-                ourPid: process.pid,
-              },
-            )
-            return // A-2: fail-closed
-          }
-          durableLeases.set(ctx.directory, lease)
-
-          const ownerToken = `durable-cp:${process.pid}:${randomUUID()}`
-
-          // Classify lost runs on startup (safe requeue or recovery_required)
-          yield* classifyOnStartup({ directory: ctx.directory }).pipe(
-            Effect.provideService(Database.Service, database),
-            Effect.catchCause((cause) =>
-              Effect.sync(() =>
-                log.error("durable-cp: classifyOnStartup failed", {
-                  directory: ctx.directory,
-                  cause: Cause.pretty(cause),
-                }),
-              ),
-            ),
-          )
-          yield* repairDurableSettledRunProjections(sessions, { directory: ctx.directory }).pipe(
-            Effect.provideService(Database.Service, database),
-            Effect.catchCause((cause) =>
-              Effect.sync(() =>
-                log.error("durable-cp: settled metadata repair failed", {
-                  directory: ctx.directory,
-                  cause: Cause.pretty(cause),
-                }),
-              ),
-            ),
-          )
-
-          // Dispatcher daemon: claims queued runs and drives them through LegacySubagentExecutor.
-          // The loopFn is injected via closure (loop + InstanceRef provided via ctx), avoiding the
-          // circular SessionPrompt.Service dependency while preserving full CAS state management,
-          // lease renewal, interrupt check, and background outbox creation.
-          const dispatchFiber = yield* TaskDispatcher.startDispatchLoop({
-            ownerToken,
-            directory: ctx.directory,
-            intervalMs: 500,
-            onClaimed: (claim) =>
-              LegacySubagentExecutor.runFromClaim({
-                claim,
-                ownerToken,
-                loopFn: (sessionID) => loop({ sessionID }).pipe(Effect.provideService(InstanceRef, ctx)),
-                finalizeFn: ({ run, research, contract, onFinalizing, onPrepared }) =>
-                  Effect.gen(function* () {
-                    return yield* runDurableStructuredFinalizer({
-                      ops: yield* ops(),
-                      run,
-                      research,
-                      contract,
-                      onFinalizing,
-                      onPrepared,
-                    })
-                  }).pipe(Effect.provideService(InstanceRef, ctx)),
-                ...(git && queue
-                  ? {
-                      submitWorktree: (info) =>
-                        Effect.gen(function* () {
-                          const row = yield* database.db
-                            .select({
-                              parentMessageID: TaskRunTable.parent_message_id,
-                              toolCallID: TaskRunTable.tool_call_id,
-                              executionSpec: TaskRunTable.execution_spec,
-                            })
-                            .from(TaskRunTable)
-                            .where(eq(TaskRunTable.run_id, claim.runID))
-                            .get()
-                            .pipe(Effect.orDie)
-                          if (!row) return yield* Effect.die(`Task run ${claim.runID} disappeared before PR submission`)
-                          const prompt =
-                            typeof row.executionSpec?.prompt === "object" &&
-                            row.executionSpec.prompt !== null &&
-                            "text" in row.executionSpec.prompt &&
-                            typeof row.executionSpec.prompt.text === "string"
-                              ? row.executionSpec.prompt.text
-                              : ""
-                          const description =
-                            typeof row.executionSpec?.description === "string"
-                              ? row.executionSpec.description
-                              : `task ${claim.childSessionID}`
-                          return yield* submitAutomaticWorktree({
-                            git,
-                            queue,
-                            info,
-                            parentDirectory: ctx.directory,
-                            parentSessionID: claim.parentSessionID,
-                            workerSessionID: SessionID.make(claim.childSessionID),
-                            reviewerSessionID: SessionID.make(`ses_pr_reviewer_${row.parentMessageID}`),
-                            batchID: MessageID.make(row.parentMessageID),
-                            prID: `pr:${claim.parentSessionID}:${row.toolCallID}`,
-                            description,
-                            prompt,
-                          })
-                        }),
-                    }
-                  : {}),
-              }).pipe(
-                // P1-11: project durable terminal state into session metadata so
-                // task-status polling terminates without the legacy in-process path.
-                Effect.ensuring(
-                  projectDurableSettledRun(sessions, SessionID.make(claim.childSessionID as string)).pipe(
-                    Effect.provideService(Database.Service, database),
-                    Effect.ignore,
-                  ),
-                ),
-                Effect.provideService(Database.Service, database),
-                Effect.ignore,
-              ),
-          }).pipe(
-            Effect.provideService(Database.Service, database),
-            Effect.catchCause((cause) =>
-              Effect.logError("durable-cp: dispatch loop crashed", { cause: Cause.pretty(cause) }),
-            ),
-            Effect.asVoid,
-            Effect.forkIn(scope),
-          )
-
-          const deliveryOwner = `${ownerToken}:delivery`
-          const deliveryFiber = yield* TaskDelivery.startDeliveryLoop({
-            ownerToken: deliveryOwner,
-            directory: ctx.directory,
-            intervalMs: 500,
-            deliver: (item) =>
-              Effect.gen(function* () {
-                const delivered = yield* Ref.make(false)
-                yield* state
-                  .startShell(
-                    item.parentSessionID,
-                    lastAssistant(item.parentSessionID),
-                    TaskDelivery.deliverOne({
-                      item,
-                      ownerToken: deliveryOwner,
-                      driveParentLoop: () => {
-                        const ownedRun: { value?: SessionPromptIntent.RunIdentity } = {}
-                        return runLoop(item.parentSessionID, false, undefined, (run) => {
-                          ownedRun.value = run
-                        }).pipe(
-                          Effect.provideService(InstanceRef, ctx),
-                          Effect.onInterrupt(() => {
-                            const run = ownedRun.value
-                            if (!run) return Effect.void
-                            return SessionPromptIntent.finalizeCancellationBeforeProgress(run).pipe(
-                              Effect.provideService(Database.Service, database),
-                              Effect.flatMap((result) =>
-                                result ? publishActivityProjection(result.invalidation) : Effect.void,
-                              ),
-                            )
-                          }),
-                        )
-                      },
-                    }).pipe(
-                      Effect.provideService(Database.Service, database),
-                      Effect.tap((result) => Ref.set(delivered, result)),
-                      Effect.flatMap(() => lastAssistant(item.parentSessionID)),
-                    ),
-                  )
-                  .pipe(
-                    Effect.catchTag("SessionBusyError", () =>
-                      TaskDelivery.releaseOutboxClaim({
-                        item,
-                        ownerToken: deliveryOwner,
-                      }).pipe(Effect.asVoid),
-                    ),
-                  )
-                return yield* Ref.get(delivered)
-              }),
-          }).pipe(
-            Effect.provideService(Database.Service, database),
-            Effect.catchCause((cause) =>
-              Effect.logError("durable-cp: delivery loop crashed", { cause: Cause.pretty(cause) }),
-            ),
-            Effect.asVoid,
-            Effect.forkIn(scope),
-          )
-
-          durableWorkers.set(ctx.directory, [dispatchFiber, deliveryFiber])
-          log.info("durable-cp: dispatcher and delivery started", {
-            directory: ctx.directory,
-            mode: flags.subagentControlPlane,
-          })
-        }).pipe(
-          Effect.provideService(Database.Service, database),
-          Effect.provideService(Scope.Scope, scope),
-          Effect.provideService(InstanceRef, ctx),
-        ),
-      )
-        .catch((error) => {
-          const lease = durableLeases.get(ctx.directory)
-          durableLeases.delete(ctx.directory)
-          if (lease) releaseDurableExecutorLease(lease)
-          throw error
-        })
-        .finally(() => {
-          if (!durableWorkers.has(ctx.directory) && !durableLeases.has(ctx.directory)) {
-            releaseDurableExecutorReservation(ctx.directory)
-          }
-        })
-    })
-    const disposeDurableWorkers = (directory: string) => {
-      const fibers = durableWorkers.get(directory)
-      const lease = durableLeases.get(directory)
-      // Another registered Service may own the process reservation. A non-owner must not release it.
-      if (!fibers && !lease) return Promise.resolve()
-      durableWorkers.delete(directory)
-      durableLeases.delete(directory)
-      return Effect.runPromise(
-        orderedShutdown({ directory }).pipe(
-          Effect.provideService(Database.Service, database),
-          Effect.catchCause(() => Effect.void),
-          Effect.flatMap(() => Effect.forEach(fibers ?? [], Fiber.interrupt, { discard: true })),
-          Effect.ensuring(
-            Effect.sync(() => {
-              if (lease) releaseDurableExecutorLease(lease)
-              else releaseDurableExecutorReservation(directory)
-            }),
-          ),
-          Effect.asVoid,
-        ),
-      )
-    }
-    const unregisterDurableDisposer = yield* registerDisposer(disposeDurableWorkers)
+    // Durable task execution is owned by the Core V2 TaskRunDispatcher + TaskOutbox runtime,
+    // mounted process-globally next to this layer (app-runtime / httpapi server compose
+    // TaskRunDispatcher.runtimeLayer). SessionPrompt no longer forks per-directory notification,
+    // dispatch, or delivery daemons — there is exactly ONE background drain owner per process.
     yield* Effect.addFinalizer(() =>
       Effect.gen(function* () {
-        startNotificationWorker()
-        stopNotificationWorker()
-        yield* Effect.forEach(notificationWorkers.values(), Fiber.interrupt, { discard: true })
-        notificationWorkers.clear()
-        unregisterDurableInitializer()
-        unregisterDurableDisposer()
         unregisterCompactionRecovery()
-        const directories = new Set([...durableWorkers.keys(), ...durableLeases.keys()])
-        yield* Effect.promise(() => Promise.all([...directories].map(disposeDurableWorkers)))
       }),
     )
 
@@ -7324,8 +6983,6 @@ export const productionLayer = Layer.suspend(() =>
         EventV2Bridge.defaultLayer,
         Question.defaultLayer,
         SessionSteer.defaultLayer,
-        Git.defaultLayer,
-        PRQueue.layer.pipe(Layer.orDie),
       ),
     ),
   ),
