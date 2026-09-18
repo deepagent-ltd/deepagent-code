@@ -138,8 +138,11 @@ describe("C0-01 caller inventory gate", () => {
     const executor = inventory.entries.find((entry) => entry.entry.id === "im.agent-executor")
     expect(executor).toBeDefined()
     const execution = executor!.roles.find((role) => role.dimension === "execution_owner")
-    // RI-71 W4: adapter — promptV2 routes the V2 owner under the profile.
-    expect(execution?.verdict).toBe("adapter")
+    // v2f-d IM durable-only migration: ServerAgentExecutor is deleted; the module keeps only
+    // ServerAgentListProviderLive (mention-list resolution). It holds no execution authority, so
+    // every dimension is read_only — decisively non-v2, by verified reader facts.
+    expect(execution?.verdict).toBe("read_only")
+    expect(executor!.roles.every((role) => role.verdict === "read_only")).toBe(true)
   })
 
   test("event.v2-bridge is the V2 authority (C7-05 flip: no double-write)", () => {
@@ -310,8 +313,11 @@ describe("C0-01 caller inventory gate", () => {
         }
       }
     }
-    // Each provider entry is a legacy IM authority (single canonical provider, no conflicting port provider).
-    expect([...provided]).toEqual(["im.agent-executor"])
+    // v2f-d IM durable-only migration: both IM Effect service ports are unwired — no production
+    // layer provides AgentExecutorService (agent-executor-server.ts now provides only the
+    // AgentListProvider mention resolver) and the AgentReplySinkService provider module is
+    // deleted. No portBound consumer edges remain; the set of port-provided entries is empty.
+    expect([...provided]).toEqual([])
   })
 
   test("NEW-P6 call-path / bodyLogsOnly / external-receiver soundness", () => {

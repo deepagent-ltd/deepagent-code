@@ -76,6 +76,7 @@ import { SessionSummary } from "../../src/session/summary"
 import { Instruction } from "../../src/session/instruction"
 import { SessionProcessor } from "../../src/session/processor"
 import { recoverProviderReceiptsOnStartup, SessionPrompt } from "../../src/session/prompt"
+import { CommandEffectReceipt } from "../../src/session/command-effect-receipt"
 import { SessionRevert } from "../../src/session/revert"
 import { SessionRunState } from "../../src/session/run-state"
 import { SessionSteer } from "../../src/session/steer"
@@ -5457,6 +5458,361 @@ v2Qualified.instance(
       expect(r0V2PromptDeliveries).toEqual([undefined])
       expect(result.kind).toBe("turn")
       AgentGateway.DeepAgentSessionState.setActiveGoal(chat.id, null)
+    }),
+  30_000,
+)
+
+// ===== P0-4: receipted command side effects (!-shell blocks + command.execute.before) =====
+//
+// The receipt protocol under test: every write-class side effect of command() commits a
+// command_side_effect_receipt intent row BEFORE executing (status pending), executes, then
+// settles (settled_ok | settled_error). A crash between intent and settle leaves the pending
+// row as a queryable UNKNOWN outcome; a retry quarantines it fail-closed (typed
+// CommandEffectReceipt.UnknownOutcome, no re-execution) and only an explicit force starts a
+// new attempt. Duplicate deliveries reuse the settled outcome without re-executing.
+
+type CrashEnv = { point?: string; root?: string; marker?: string }
+
+const withCommandEffectCrashPoint = <A, E, R>(
+  input: { readonly directory: string; readonly marker: string; readonly point: string },
+  fx: () => Effect.Effect<A, E, R>,
+) =>
+  Effect.acquireUseRelease(
+    Effect.sync<CrashEnv>(() => {
+      const previous = {
+        point: process.env.DEEPAGENT_CODE_TEST_COMMAND_EFFECT_CRASH_POINT,
+        root: process.env.DEEPAGENT_CODE_TEST_ROOT,
+        marker: process.env.DEEPAGENT_CODE_TEST_COMMAND_EFFECT_CRASH_MARKER,
+      }
+      process.env.DEEPAGENT_CODE_TEST_COMMAND_EFFECT_CRASH_POINT = input.point
+      process.env.DEEPAGENT_CODE_TEST_ROOT = input.directory
+      process.env.DEEPAGENT_CODE_TEST_COMMAND_EFFECT_CRASH_MARKER = input.marker
+      return previous
+    }),
+    () => fx(),
+    (previous) =>
+      Effect.sync(() => {
+        if (previous.point === undefined) delete process.env.DEEPAGENT_CODE_TEST_COMMAND_EFFECT_CRASH_POINT
+        else process.env.DEEPAGENT_CODE_TEST_COMMAND_EFFECT_CRASH_POINT = previous.point
+        if (previous.root === undefined) delete process.env.DEEPAGENT_CODE_TEST_ROOT
+        else process.env.DEEPAGENT_CODE_TEST_ROOT = previous.root
+        if (previous.marker === undefined) delete process.env.DEEPAGENT_CODE_TEST_COMMAND_EFFECT_CRASH_MARKER
+        else process.env.DEEPAGENT_CODE_TEST_COMMAND_EFFECT_CRASH_MARKER = previous.marker
+      }),
+  )
+
+const readCountFile = (file: string) =>
+  Effect.promise(async () => ((await Bun.file(file).exists()) ? await Bun.file(file).text() : ""))
+
+// Drive command() through the real V2 stack with a config-defined command whose `!`-shell
+// block appends to a counter file, so execution count is observable on disk.
+const bootReceiptSession = (template: (dir: string) => string) =>
+  Effect.gen(function* () {
+    const { directory } = yield* TestInstance
+    const { llm } = yield* useServerConfig((url) => ({
+      ...providerCfg(url),
+      command: { receipt: { template: template(directory) } },
+    }))
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const { db } = yield* Database.Service
+    yield* mintR0Authorization(db)
+    const chat = yield* sessions.create({ title: "command effect receipt" })
+    return { directory, llm, prompt, db, chat }
+  })
+
+const shellBlockKey = (chat: { id: string }, payload: string) =>
+  CommandEffectReceipt.operationKey({
+    sessionID: chat.id,
+    command: "receipt",
+    arguments: "",
+    kind: "shell",
+    payload,
+  })
+
+;(process.platform !== "win32" ? v2Real.instance : v2Real.instance.skip)(
+  "P0-4: !-shell block commits its receipt intent BEFORE the OS process runs; crash before execute quarantines",
+  () =>
+    withSh(() =>
+      Effect.gen(function* () {
+        const { directory, llm, prompt, db, chat } = yield* bootReceiptSession((dir) => {
+          const count = path.join(dir, "count-intent.txt")
+          return `Count: !\`printf side-effect >> ${count}; printf ran\``
+        })
+        const payload = `printf side-effect >> ${path.join(directory, "count-intent.txt")}; printf ran`
+        const marker = path.join(directory, "crash-after-intent.json")
+
+        yield* withCommandEffectCrashPoint(
+          { directory, marker, point: "after_intent_insert" },
+          () =>
+            Effect.gen(function* () {
+              const running = yield* provideR0OwnerRefs(
+                prompt.command({ sessionID: chat.id, command: "receipt", arguments: "" }),
+              ).pipe(Effect.forkChild)
+              yield* pollWithTimeout(
+                Effect.promise(() => Bun.file(marker).exists().then((exists) => (exists ? true : undefined))),
+                "command never reached the after-intent crash point",
+                "10 seconds",
+              )
+              // The ordering oracle: the durable intent row EXISTS while the OS effect has
+              // NOT run yet — intent-first, not execute-first.
+              const row = yield* CommandEffectReceipt.latestRow(db, shellBlockKey(chat, payload))
+              expect(row?.status).toBe("pending")
+              expect(row?.attempt).toBe(1)
+              expect(yield* readCountFile(path.join(directory, "count-intent.txt"))).toBe("")
+              yield* Fiber.interrupt(running)
+            }),
+        )
+
+        // The crashed attempt left an unsettled intent: the retry must refuse re-execution
+        // fail-closed (typed) and record the quarantine, not spawn the shell again.
+        const refused = yield* provideR0OwnerRefs(
+          prompt.command({ sessionID: chat.id, command: "receipt", arguments: "" }),
+        ).pipe(Effect.exit)
+        expect(Exit.isFailure(refused)).toBe(true)
+        if (Exit.isFailure(refused)) {
+          const error = Cause.squash(refused.cause)
+          expect(error).toBeInstanceOf(CommandEffectReceipt.UnknownOutcome)
+          if (error instanceof CommandEffectReceipt.UnknownOutcome) {
+            expect(error.detail).toContain("force")
+            expect(error.attempt).toBe(1)
+          }
+        }
+        expect(yield* readCountFile(path.join(directory, "count-intent.txt"))).toBe("")
+        expect((yield* CommandEffectReceipt.latestRow(db, shellBlockKey(chat, payload)))?.status).toBe("unknown")
+
+        // Explicit force starts a new attempt: executes once, settles, and the command
+        // completes end-to-end with the substituted output.
+        yield* llm.text("done")
+        yield* provideR0OwnerRefs(
+          prompt.command({ sessionID: chat.id, command: "receipt", arguments: "", force: true }),
+        )
+        expect(yield* readCountFile(path.join(directory, "count-intent.txt"))).toBe("side-effect")
+        const forced = yield* CommandEffectReceipt.latestRow(db, shellBlockKey(chat, payload))
+        expect(forced?.attempt).toBe(2)
+        expect(forced?.status).toBe("settled_ok")
+        expect(forced?.output).toBe("ran")
+        expect(forced?.exit_code).toBe(0)
+        const inputs = yield* llm.inputs
+        expect(JSON.stringify(inputs.at(-1)?.messages)).toContain("ran")
+      }),
+    ),
+  30_000,
+)
+
+;(process.platform !== "win32" ? v2Real.instance : v2Real.instance.skip)(
+  "P0-4: crash between execute and settle leaves UNKNOWN; retry refuses, force re-runs and settles",
+  () =>
+    withSh(() =>
+      Effect.gen(function* () {
+        const { directory, llm, prompt, db, chat } = yield* bootReceiptSession((dir) => {
+          const count = path.join(dir, "count-settle.txt")
+          return `Count: !\`printf side-effect >> ${count}; printf ran\``
+        })
+        const payload = `printf side-effect >> ${path.join(directory, "count-settle.txt")}; printf ran`
+        const marker = path.join(directory, "crash-before-settle.json")
+
+        yield* withCommandEffectCrashPoint(
+          { directory, marker, point: "after_execute_before_settle" },
+          () =>
+            Effect.gen(function* () {
+              const running = yield* provideR0OwnerRefs(
+                prompt.command({ sessionID: chat.id, command: "receipt", arguments: "" }),
+              ).pipe(Effect.forkChild)
+              yield* pollWithTimeout(
+                Effect.promise(() => Bun.file(marker).exists().then((exists) => (exists ? true : undefined))),
+                "command never reached the before-settle crash point",
+                "10 seconds",
+              )
+              // The OS effect RAN (definite observable), but the settle never committed: the
+              // durable outcome is unknown and the row must still be pending.
+              expect(yield* readCountFile(path.join(directory, "count-settle.txt"))).toBe("side-effect")
+              const row = yield* CommandEffectReceipt.latestRow(db, shellBlockKey(chat, payload))
+              expect(row?.status).toBe("pending")
+              yield* Fiber.interrupt(running)
+            }),
+        )
+
+        // Retry sees the unsettled attempt and refuses — no second side-effect line.
+        const refused = yield* provideR0OwnerRefs(
+          prompt.command({ sessionID: chat.id, command: "receipt", arguments: "" }),
+        ).pipe(Effect.exit)
+        expect(Exit.isFailure(refused)).toBe(true)
+        if (Exit.isFailure(refused)) {
+          expect(Cause.squash(refused.cause)).toBeInstanceOf(CommandEffectReceipt.UnknownOutcome)
+        }
+        expect(yield* readCountFile(path.join(directory, "count-settle.txt"))).toBe("side-effect")
+
+        // Force re-runs under a new attempt and settles exactly once.
+        yield* llm.text("done")
+        yield* provideR0OwnerRefs(
+          prompt.command({ sessionID: chat.id, command: "receipt", arguments: "", force: true }),
+        )
+        expect(yield* readCountFile(path.join(directory, "count-settle.txt"))).toBe("side-effectside-effect")
+        const forced = yield* CommandEffectReceipt.latestRow(db, shellBlockKey(chat, payload))
+        expect(forced?.attempt).toBe(2)
+        expect(forced?.status).toBe("settled_ok")
+        expect(forced?.output).toBe("ran")
+      }),
+    ),
+  30_000,
+)
+
+;(process.platform !== "win32" ? v2Real.instance : v2Real.instance.skip)(
+  "P0-4: completed !-shell block settles exactly once; duplicate delivery reuses the outcome",
+  () =>
+    withSh(() =>
+      Effect.gen(function* () {
+        const { directory, llm, prompt, db, chat } = yield* bootReceiptSession((dir) => {
+          const count = path.join(dir, "count-once.txt")
+          return `Count: !\`printf side-effect >> ${count}; printf ran\``
+        })
+        const payload = `printf side-effect >> ${path.join(directory, "count-once.txt")}; printf ran`
+
+        yield* llm.text("first")
+        yield* provideR0OwnerRefs(prompt.command({ sessionID: chat.id, command: "receipt", arguments: "" }))
+        expect(yield* readCountFile(path.join(directory, "count-once.txt"))).toBe("side-effect")
+        const first = yield* CommandEffectReceipt.latestRow(db, shellBlockKey(chat, payload))
+        expect(first?.status).toBe("settled_ok")
+        expect(first?.attempt).toBe(1)
+        expect(first?.output).toBe("ran")
+
+        // Duplicate delivery of the same command: the settled outcome is REUSED — the shell
+        // does not run again and the receipt is not re-settled or re-attempted.
+        yield* llm.text("second")
+        yield* provideR0OwnerRefs(prompt.command({ sessionID: chat.id, command: "receipt", arguments: "" }))
+        expect(yield* readCountFile(path.join(directory, "count-once.txt"))).toBe("side-effect")
+        const second = yield* CommandEffectReceipt.latestRow(db, shellBlockKey(chat, payload))
+        expect(second?.attempt).toBe(1)
+        expect(second?.status).toBe("settled_ok")
+        expect(second?.time_settled).toBe(first?.time_settled)
+        const rows = yield* db
+          .select()
+          .from(CommandEffectReceipt.CommandSideEffectReceiptTable)
+          .where(eq(CommandEffectReceipt.CommandSideEffectReceiptTable.session_id, chat.id))
+          .all()
+          .pipe(Effect.orDie)
+        // Exactly one shell attempt; the command.execute.before hook has its own receipt.
+        expect(rows.filter((row) => row.kind === "shell")).toHaveLength(1)
+        expect(rows.filter((row) => row.kind === "plugin_hook" && row.status === "settled_ok")).toHaveLength(1)
+        const inputs = yield* llm.inputs
+        expect(JSON.stringify(inputs.at(-1)?.messages)).toContain("ran")
+      }),
+    ),
+  30_000,
+)
+
+// Plugin-hook receipts: the command.execute.before trigger goes through the same receipt
+// guard. Recording plugin layer over the same real V2 stack as v2Real.
+const commandEffectHookCalls: Array<{ name: string; command: string }> = []
+const commandEffectHookTrigger: Plugin.Interface["trigger"] = (name, input, output) =>
+  Effect.sync(() => {
+    if (name === "command.execute.before")
+      commandEffectHookCalls.push({ name, command: (input as { command: string }).command })
+    return output
+  })
+const commandEffectPlugin = Plugin.Service.of({
+  trigger: commandEffectHookTrigger,
+  list: () => Effect.succeed([]),
+  init: () => Effect.void,
+})
+const v2RealPlugin = testEffect(
+  makeHttp({
+    flags: { coreV2Only: true, coreV2ExecutionOwner: true },
+    sessionV2: realV2Layer,
+    sessionV2ForTools: realV2Layer,
+    plugin: commandEffectPlugin,
+  }).pipe(
+    Layer.provide(Layer.succeed(CurrentOwnerCampaign, r0Campaign)),
+    Layer.provide(Layer.succeed(CurrentBuildIdentity, r0Identity)),
+    Layer.provide(Layer.succeed(CurrentOwnerAuthorizationPublicKey, r0Issuance.publicKeyPem)),
+  ),
+)
+
+;(process.platform !== "win32" ? v2RealPlugin.instance : v2RealPlugin.instance.skip)(
+  "P0-4: command.execute.before plugin trigger is receipted; settled hooks are not re-triggered",
+  () =>
+    Effect.gen(function* () {
+      const { llm, prompt, db, chat } = yield* bootReceiptSession(() => "Plain hook probe")
+      const hookKey = CommandEffectReceipt.operationKey({
+        sessionID: chat.id,
+        command: "receipt",
+        arguments: "",
+        kind: "plugin_hook",
+        payload: "command.execute.before",
+      })
+      commandEffectHookCalls.length = 0
+
+      yield* llm.text("first")
+      yield* provideR0OwnerRefs(prompt.command({ sessionID: chat.id, command: "receipt", arguments: "" }))
+      expect(commandEffectHookCalls).toHaveLength(1)
+      const first = yield* CommandEffectReceipt.latestRow(db, hookKey)
+      expect(first?.status).toBe("settled_ok")
+      expect(first?.kind).toBe("plugin_hook")
+      expect(first?.attempt).toBe(1)
+
+      // Duplicate delivery reuses the settled hook receipt: no re-trigger.
+      yield* llm.text("second")
+      yield* provideR0OwnerRefs(prompt.command({ sessionID: chat.id, command: "receipt", arguments: "" }))
+      expect(commandEffectHookCalls).toHaveLength(1)
+      expect(((yield* CommandEffectReceipt.latestRow(db, hookKey))?.attempt) ?? 0).toBe(1)
+    }),
+  30_000,
+)
+
+;(process.platform !== "win32" ? v2RealPlugin.instance : v2RealPlugin.instance.skip)(
+  "P0-4: quarantined plugin hook receipt refuses re-trigger; force re-runs the hook",
+  () =>
+    Effect.gen(function* () {
+      const { directory, llm, prompt, db, chat } = yield* bootReceiptSession(() => "Plain hook probe")
+      const hookKey = CommandEffectReceipt.operationKey({
+        sessionID: chat.id,
+        command: "receipt",
+        arguments: "",
+        kind: "plugin_hook",
+        payload: "command.execute.before",
+      })
+      const marker = path.join(directory, "crash-hook-after-intent.json")
+      commandEffectHookCalls.length = 0
+
+      yield* withCommandEffectCrashPoint(
+        { directory, marker, point: "after_intent_insert" },
+        () =>
+          Effect.gen(function* () {
+            const running = yield* provideR0OwnerRefs(
+              prompt.command({ sessionID: chat.id, command: "receipt", arguments: "" }),
+            ).pipe(Effect.forkChild)
+            yield* pollWithTimeout(
+              Effect.promise(() => Bun.file(marker).exists().then((exists) => (exists ? true : undefined))),
+              "command never reached the hook after-intent crash point",
+              "10 seconds",
+            )
+            const row = yield* CommandEffectReceipt.latestRow(db, hookKey)
+            expect(row?.kind).toBe("plugin_hook")
+            expect(row?.status).toBe("pending")
+            expect(commandEffectHookCalls).toHaveLength(0)
+            yield* Fiber.interrupt(running)
+          }),
+        )
+
+      const refused = yield* provideR0OwnerRefs(
+        prompt.command({ sessionID: chat.id, command: "receipt", arguments: "" }),
+      ).pipe(Effect.exit)
+      expect(Exit.isFailure(refused)).toBe(true)
+      if (Exit.isFailure(refused)) {
+        expect(Cause.squash(refused.cause)).toBeInstanceOf(CommandEffectReceipt.UnknownOutcome)
+      }
+      expect(commandEffectHookCalls).toHaveLength(0)
+      expect((yield* CommandEffectReceipt.latestRow(db, hookKey))?.status).toBe("unknown")
+
+      yield* llm.text("done")
+      yield* provideR0OwnerRefs(
+        prompt.command({ sessionID: chat.id, command: "receipt", arguments: "", force: true }),
+      )
+      expect(commandEffectHookCalls).toHaveLength(1)
+      const forced = yield* CommandEffectReceipt.latestRow(db, hookKey)
+      expect(forced?.attempt).toBe(2)
+      expect(forced?.status).toBe("settled_ok")
     }),
   30_000,
 )

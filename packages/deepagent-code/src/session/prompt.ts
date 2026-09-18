@@ -102,6 +102,7 @@ import { validateStructuredOutput } from "@/tool/task-structured-output"
 import { SessionRunState } from "./run-state"
 import { SessionSteer } from "./steer"
 import { SessionPromptIntent } from "./prompt-intent"
+import { CommandEffectReceipt } from "./command-effect-receipt"
 import { SessionActivityOwner } from "./activity-owner"
 import { pause as pauseAtActivityCrashPoint } from "./activity-crash-test"
 import { writeGovernanceAudit } from "./goal-governance-audit"
@@ -1002,7 +1003,11 @@ export interface Interface {
     input: CommandInput,
   ) => Effect.Effect<
     SessionV1.WithParts,
-    Image.Error | SessionPromptIntent.Error | Session.BusyError | LegacyExecutionUnavailable
+    | Image.Error
+    | SessionPromptIntent.Error
+    | Session.BusyError
+    | LegacyExecutionUnavailable
+    | CommandEffectReceipt.Error
   >
   readonly resolvePromptParts: (template: string) => Effect.Effect<PromptInput["parts"]>
   readonly refineIntelligenceDraft: (input: {
@@ -6811,13 +6816,37 @@ export const layer = Layer.effect(
       if (shellMatches.length > 0) {
         const cfg = yield* config.get()
         const sh = Shell.preferred(cfg.shell)
-        const results = yield* Effect.promise(() =>
-          Promise.all(
-            shellMatches.map(async ([, cmd]) => (await Process.text([cmd], { shell: sh, nothrow: true })).text),
-          ),
+        // P0-4: `!`-shell blocks are write-class OS side effects that run BEFORE the durable
+        // prompt admission (the admission needs the interpolated prompt text). Each block now
+        // commits its own command_side_effect_receipt intent row FIRST and settles the outcome
+        // after; a crash between the two leaves a queryable UNKNOWN the next delivery quarantines
+        // instead of blindly re-executing. Duplicate deliveries reuse the settled output.
+        const results = yield* Effect.forEach(
+          shellMatches,
+          ([, cmd]) =>
+            CommandEffectReceipt.run({
+              db: database.db,
+              operationKey: CommandEffectReceipt.operationKey({
+                sessionID: input.sessionID,
+                command: input.command,
+                arguments: input.arguments,
+                kind: "shell",
+                payload: cmd,
+              }),
+              sessionID: input.sessionID,
+              kind: "shell",
+              payload: cmd,
+              force: input.force === true,
+              execute: () =>
+                Effect.promise(async () => {
+                  const text = await Process.text([cmd], { shell: sh, nothrow: true })
+                  return { output: text.text, exitCode: text.code }
+                }),
+            }),
+          { concurrency: "unbounded" },
         )
         let index = 0
-        template = template.replace(bashRegex, () => results[index++])
+        template = template.replace(bashRegex, () => results[index++]?.output ?? "")
       }
       template = template.trim()
 
@@ -6864,11 +6893,33 @@ export const layer = Layer.effect(
           : yield* currentModel(input.sessionID)
         : taskModel
 
-      yield* plugin.trigger(
-        "command.execute.before",
-        { command: input.command, sessionID: input.sessionID, arguments: input.arguments },
-        { parts },
-      )
+      // P0-4: the command.execute.before plugin trigger is a write-class side effect that
+      // shapes the admitted parts BEFORE the durable prompt admission, so it runs under the
+      // same receipt guard as the `!`-shell blocks: intent row first, trigger, settle. A
+      // duplicate delivery reuses the settled outcome without re-triggering; an unsettled
+      // prior attempt quarantines fail-closed.
+      yield* CommandEffectReceipt.run({
+        db: database.db,
+        operationKey: CommandEffectReceipt.operationKey({
+          sessionID: input.sessionID,
+          command: input.command,
+          arguments: input.arguments,
+          kind: "plugin_hook",
+          payload: "command.execute.before",
+        }),
+        sessionID: input.sessionID,
+        kind: "plugin_hook",
+        payload: "command.execute.before",
+        force: input.force === true,
+        execute: () =>
+          plugin
+            .trigger(
+              "command.execute.before",
+              { command: input.command, sessionID: input.sessionID, arguments: input.arguments },
+              { parts },
+            )
+            .pipe(Effect.as({ output: null })),
+      })
 
       const result = yield* prompt({
         sessionID: input.sessionID,
@@ -7367,6 +7418,10 @@ export const CommandInput = Schema.Struct({
   arguments: Schema.String,
   command: Schema.String,
   variant: Schema.optional(Schema.String),
+  // P0-4: explicit re-run for receipted side effects. A duplicate delivery of the same
+  // command reuses the settled shell/plugin outcome; force starts the next receipt
+  // attempt (and re-runs quarantined UNKNOWN effects) instead of failing closed.
+  force: Schema.optional(Schema.Boolean),
   // Inlined (no identifier annotation) to keep the original SDK output — the
   // PromptInput call site below references FilePartInput by ref via the
   // Schema export in message-v2.ts.

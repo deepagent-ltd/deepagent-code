@@ -570,18 +570,19 @@ export const RULE_PACKS: readonly RulePack[] = [
     ])),
   },
   {
-    // RI-71 zero wave: the panel consult handler drives reviewer turns through
-    // makeTaskSubagentRunner with v2DriveDeps(flags.coreV2Only) — the same V2 child-session
-    // seam the goal loop uses (panel.consult/panelist-runner are adapter-classified the same
-    // way). promptV2 resolves through the runner's SessionPrompt turn under the profile.
+    // v2f-c goal/panel V2-only subagent lifecycle: the panel consult handler drives reviewer
+    // turns through makeTaskSubagentRunner with the captured SessionV2.Service (v2Session) — the
+    // runner is V2-native (its SessionPrompt fallback is deleted) and drives SessionV2 directly,
+    // so there is no legacy prompt hop to pin anymore. adapter: the handler still adapts the
+    // panel wire protocol onto the V2 child-session runner seam (panel.consult/panelist-runner
+    // are adapter-classified the same way).
     match: (id) => id === "http.instance.deepagent.panelConsult",
     rules: all7(adapter([
       { kind: "productionProfile" },
       body("makeTaskSubagentRunner"),
-      body("v2DriveDeps"),
+      body("v2Session"),
       V2_SESSION_CORE,
       V2_EXEC_LOCAL,
-      call("promptV2", LEGACY_PROMPT_PATH),
     ])),
   },
   // RI-71 W3: knowledge ship-gate/reject/release operate the AgentGateway knowledge-source
@@ -677,34 +678,116 @@ export const RULE_PACKS: readonly RulePack[] = [
   },
 
   // ---- im ----
-  // RI-71 W4: IM agents execute through ServerAgentExecutor → SessionPrompt.prompt →
-  // promptV2 (the V2 owner) under the production profile. adapter: IM protocol translation
-  // over the same V2-routed prompt path the HTTP prompt family uses.
-  {
-    match: (id) =>
-      id === "im.agent-executor" ||
-      id === "im.agent-orchestrator" ||
-      id === "im.agent-progress-stream" ||
-      id === "im.agent-reply-sink" ||
-      id === "http.instance.im.createMessage",
-    rules: all7(adapter([
-      { kind: "productionProfile" },
-      { kind: "reach", pathSuffix: "packages/deepagent-code/src/session/prompt.ts" },
-      V2_SESSION_CORE,
-      V2_EXEC_LOCAL,
-      call("promptV2", LEGACY_PROMPT_PATH),
-    ])),
-  },
+  // v2f-d IM durable-only migration: ServerAgentExecutor (fresh V1 session per turn through
+  // SessionPrompt.promptOrSteer) is deleted. createMessage now performs exactly ONE durable
+  // SessionV2 admission per @mention in-request (IMAgentExecution.admitMention on the
+  // SessionV2.Service captured by the handler group); the terminal reply returns through the
+  // im_reply_outbox daemon, never a fire-and-forget publish. adapter: IM wire-protocol
+  // translation over the durable V2 admission — the same adapter family the HTTP prompt
+  // handlers form (the app layer still translates the wire shape).
   {
     match: (id) => id === "http.instance.im.createMessage",
+    rules: all7(adapter([
+      { kind: "productionProfile" },
+      body("IMAgentExecution.admitMention"),
+      { kind: "reach", pathSuffix: "packages/deepagent-code/src/im/im-agent-execution.ts" },
+      V2_SESSION_CORE,
+      V2_EXEC_LOCAL,
+    ])),
+  },
+  // v2f-d: the durable ADMISSION half of the IM migration (src/im/im-agent-execution.ts). One
+  // SessionV2 admission per mention with deterministic ids — the session id derived from
+  // (group, agent) so reuse ADOPTS the stable conversation session, the prompt message id from
+  // (message, agent) so a duplicate delivery reconciles as an exact retry — admitted as the
+  // durable session_input row itself; execution is decoupled (advisory wake under the runner).
+  // v2 on admission/execution: verified SessionV2.prompt admission chain plus the core session
+  // and local-execution authorities in the closure, and NO legacy prompt hop in the module's
+  // import closure (noReach). The remaining dimensions are read_only with the module's own
+  // admission surface as the genuine read fact.
+  {
+    match: (id) => id === "im.agent-execution",
     rules: withReadOnlyRest(
       {
-        admission_owner: legacy([LEGACY_PROMPT, body("eventBus.tryPublish")]),
-        execution_owner: legacy([LEGACY_PROMPT, body("eventBus.tryPublish")]),
-        event_producer_consumer: legacy([V2_EVENT_BUS, body("eventBus.tryPublish")]),
+        admission_owner: v2([
+          { kind: "reach", pathSuffix: "packages/deepagent-code/src/im/im-agent-execution.ts" },
+          { kind: "reach", pathSuffix: AUTHORITY.V2_SESSION_INPUT },
+          call("SessionV2.ID.make", "packages/deepagent-code/src/im/im-agent-execution.ts"),
+          call("SessionMessage.ID.make", "packages/deepagent-code/src/im/im-agent-execution.ts"),
+          call("v2Session.prompt", "packages/deepagent-code/src/im/im-agent-execution.ts"),
+          noReachPath(AUTHORITY.LEGACY_PROMPT),
+        ]),
+        execution_owner: v2([
+          { kind: "reach", pathSuffix: "packages/deepagent-code/src/im/im-agent-execution.ts" },
+          V2_SESSION_CORE,
+          V2_EXEC_LOCAL,
+          call("v2Session.prompt", "packages/deepagent-code/src/im/im-agent-execution.ts"),
+          noReachPath(AUTHORITY.LEGACY_PROMPT),
+        ]),
       },
-      [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt")],
+      [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")],
+      "packages/deepagent-code/src/im/im-agent-execution.ts",
     ),
+  },
+  // v2f-d: the durable REPLY half (src/im/im-reply-outbox.ts). The terminal assistant reply of a
+  // settled IM session is collected into the im_reply_outbox table (idempotent on
+  // (session, reply)) and delivered at-least-once: claim (lease + attempts CAS) → deliver
+  // (IMRepository.createMessage + broadcast) → settle (delivered | pending+backoff | dead at the
+  // cap — never vanished). A post-commit EventV2 listener drains on settle and a periodic
+  // reconcile covers downtime; nothing rides a droppable fire-and-forget channel. v2 on the
+  // event dimension (EventV2 consumer through the bridge's listen surface); delivery/storage is
+  // not one of the seven session-authority dimensions, so the rest is read_only with the
+  // outbox's own module as the genuine read fact.
+  {
+    match: (id) => id === "im.reply-outbox",
+    rules: withReadOnlyRest(
+      {
+        event_producer_consumer: v2([
+          { kind: "reach", pathSuffix: "packages/deepagent-code/src/im/im-reply-outbox.ts" },
+          EVENT_V2_BRIDGE,
+          call("SessionV2.Service", "packages/deepagent-code/src/im/im-reply-outbox.ts"),
+          call("events.listen", "packages/deepagent-code/src/im/im-reply-outbox.ts"),
+          call("claimDueReply", "packages/deepagent-code/src/im/im-reply-outbox.ts"),
+          call("markDelivered", "packages/deepagent-code/src/im/im-reply-outbox.ts"),
+          call("db.insert", "packages/deepagent-code/src/im/im-reply-outbox.ts"),
+        ]),
+      },
+      [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")],
+      "packages/deepagent-code/src/im/im-reply-outbox.ts",
+    ),
+  },
+  // v2f-d: agent-executor-server.ts keeps only ServerAgentListProviderLive — mention-list
+  // resolution against the routed instance's Agent.Service roster (plus the built-in autonomous
+  // descriptors). The class holds no prompt-execution authority anymore (ServerAgentExecutor is
+  // deleted), so the entry is read_only: its own provider module plus the core list-provider
+  // contract are the genuine read facts.
+  {
+    match: (id) => id === "im.agent-executor",
+    rules: all7(readOnly([
+      { kind: "reach", pathSuffix: "packages/deepagent-code/src/im/agent-executor-server.ts" },
+      { kind: "reach", pathSuffix: "packages/core/src/im/agent-list-provider.ts" },
+      notBody("promptSvc.promptOrSteer"),
+      notBody("SessionV2.prompt"),
+      notBody("events.publish"),
+    ])),
+  },
+  // v2f-d: im.agent-orchestrator is production-DEAD — no production composition provides
+  // AgentExecutorService anymore, so nothing wires executeAgentMentions (unit tests only); the
+  // production IM flow admits durable SessionV2 work directly from the handler. Its authority
+  // was the DI-injected executor port; with the port unwired the module holds no statically
+  // bound authority writer, and its import closure provably reaches none of the authority
+  // writers (noReach). read_only with its own module as the read fact — never a guessed legacy
+  // and never a fake v2.
+  {
+    match: (id) => id === "im.agent-orchestrator",
+    rules: all7(readOnly([
+      { kind: "reach", pathSuffix: "packages/core/src/im/agent-orchestrator.ts" },
+      noReachPath(AUTHORITY.LEGACY_PROMPT),
+      noReachPath(AUTHORITY.V2_EXECUTION_LOCAL),
+      noReachPath(AUTHORITY.V2_TOOL_REGISTRY),
+      noReachPath(AUTHORITY.EVENT_V2_BRIDGE),
+      noReachPath(AUTHORITY.PROJECTOR),
+      noReachPath(AUTHORITY.V2_EVENT_BUS),
+    ])),
   },
   {
     match: (id) => id.startsWith("http.instance.im."),
@@ -990,15 +1073,17 @@ export const RULE_PACKS: readonly RulePack[] = [
     match: (id) => id.startsWith("cli.lildax."),
     rules: v2All7([{ kind: "reach", pathSuffix: "packages/server/src/routes.ts" }, V2_SESSION_RUNTIME]),
   },
-  // Panel / IM orchestration components (panel.orchestrator/arbiter, im.agent-orchestrator,
-  // im.agent-reply-sink) resolve their authority through dynamic dispatch / DI to a receiver that
-  // is not statically bound to them at this freeze point. They are not readers, so classifying them
-  // read_only by absence would be dishonest (F5); they are intentionally left UNCLASSIFIED here.
+  // Panel orchestration components (panel.orchestrator/arbiter) resolve their authority through
+  // an injected runPanelist seam and are read_only with the panel schema as their genuine reader
+  // (delegation.ts). im.agent-orchestrator is production-dead since v2f-d and read_only by
+  // verified writer absence (im pack above).
 
-  // RI-71 W4: the goal pipeline and expert panel drive child sessions through the
-  // SubagentTurnRunner/PanelTurnRunner seams whose production implementations call
-  // SessionPrompt.prompt → promptV2 (the V2 owner) under the profile. background.job is the
-  // instance-scoped CoreBackgroundJob registry wrapper — coordination state only.
+  // v2f-c goal/panel V2-only subagent lifecycle: the goal pipeline and expert panel drive child
+  // sessions through makeTaskSubagentRunner — now the V2-native child-session runner (SessionV2
+  // captured explicitly; the SessionPrompt fallback is deleted) — under the production profile.
+  // adapter: goal/panel orchestration translated onto the V2 child-session authority.
+  // background.job is the instance-scoped CoreBackgroundJob registry wrapper — coordination
+  // state only.
   {
     match: (id) =>
       id === "task.goal-manager" ||
@@ -1009,7 +1094,7 @@ export const RULE_PACKS: readonly RulePack[] = [
       { kind: "productionProfile" },
       V2_SESSION_CORE,
       V2_EXEC_LOCAL,
-      call("promptV2", LEGACY_PROMPT_PATH),
+      call("makeTaskSubagentRunner", "packages/deepagent-code/src/session/goal-loop-wiring.ts"),
     ])),
   },
   {
@@ -1053,16 +1138,11 @@ export const RULE_PACKS: readonly RulePack[] = [
   },
 
   // ===========================================================================
-  // IM server-side pipeline (legacy SessionPrompt)
+  // IM server-side pipeline: the legacy SessionPrompt pack is GONE (v2f-d durable-only
+  // migration). ServerAgentExecutor / agent-reply-sink-server / agent-progress-stream are
+  // deleted; every surviving IM entry is classified in the im pack above (durable V2
+  // admission, durable reply outbox, mention-list provider read, dead orchestrator read).
   // ===========================================================================
-  {
-    match: (id) =>
-      id === "im.agent-executor" ||
-      id === "im.agent-progress-stream" ||
-      id === "im.agent-orchestrator" ||
-      id === "im.agent-reply-sink",
-    rules: legacyAll7([LEGACY_PROMPT]),
-  },
 
   // ===========================================================================
   // Event plane (durable V2 bus / router / consumers / bridge)
