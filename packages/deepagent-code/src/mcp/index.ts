@@ -1,4 +1,4 @@
-import { dynamicTool, type Tool, jsonSchema, type JSONSchema7 } from "ai"
+import { dynamicTool, type Tool, type ToolExecutionOptions, jsonSchema, type JSONSchema7 } from "ai"
 import { ConfigV1 } from "@deepagent-code/core/v1/config/config"
 import { serviceUse } from "@deepagent-code/core/effect/service-use"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
@@ -173,7 +173,9 @@ function convertMcpTool(mcpTool: MCPToolDef, client: MCPClient, timeout?: number
   return dynamicTool({
     description: mcpTool.description ?? "",
     inputSchema: jsonSchema(schema),
-    execute: async (args: unknown) => {
+    // Forward the caller's abortSignal into the MCP request so cancelling the tool call (V2
+    // settle-fiber interruption, or the V1 stream's abortSignal) cancels the remote call.
+    execute: async (args: unknown, options: ToolExecutionOptions) => {
       return client.callTool(
         {
           name: mcpTool.name,
@@ -183,6 +185,7 @@ function convertMcpTool(mcpTool: MCPToolDef, client: MCPClient, timeout?: number
         {
           resetTimeoutOnProgress: true,
           timeout,
+          ...(options.abortSignal ? { signal: options.abortSignal } : {}),
         },
       )
     },
