@@ -76,6 +76,7 @@ import { V2McpBridge } from "@/session/v2-mcp-bridge"
 import { V2PluginToolsBridge } from "@/session/v2-plugin-tools-bridge"
 import { InstanceRegistry } from "@/effect/instance-registry"
 import { ApplicationTools } from "@deepagent-code/core/tool/application-tools"
+import { TaskRunDispatcher } from "@deepagent-code/core/session/task-run-dispatcher"
 
 const v2StartupRecovery = Layer.effectDiscard(
   Effect.gen(function* () {
@@ -168,6 +169,12 @@ const baseAppLayer = Layer.mergeAll(
     Layer.provide(InstanceRegistry.layer),
     Layer.provideMerge(ToolRegistry.productionLayer),
   ),
+  // The ONE process-global background task runtime: the auto-started Core V2 run dispatcher
+  // (claims + drains durable background task runs through the authority executor) plus the
+  // notification outbox delivery loop. Requirements (Database, SessionV2) come from the
+  // provideMerge'd Database/sessionRuntimeLayer below — the same single V2 session runtime the
+  // task tool and facade submit through.
+  TaskRunDispatcher.runtimeLayer(),
 ).pipe(
   // These authorities must be providers of the merged production graph, not siblings whose
   // outputs cannot satisfy V2 outbox/session inputs.

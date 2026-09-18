@@ -1104,19 +1104,17 @@ export const RULE_PACKS: readonly RulePack[] = [
     ])),
   },
   {
-    // RI-71 zero wave: the V1 task admission writes the durable V2 task-run receipt inside its
-    // own settlement transactions (verified body chain — "terminal Task state without its
-    // compensation receipt is not a valid V2 state"), and its v1 reach is a type-only permission
-    // import. The Core task tool owns V2 delegation; this admission feeds the V1-family tool
-    // face that the V2 surface never materializes (RI-113 guard).
-    match: (id) => id === "task.task-run-admission",
+    // v2f-h2 cutover: the V1-registry TaskTool is a thin entry over the Core V2 TaskRunAuthority —
+    // fresh launches submit through TaskRunAuthority.submit and foreground joins execute through
+    // TaskRunAuthority.execute (verified body markers), and the module reaches the Core authority
+    // + dispatcher runtime. The legacy app admission/claim/settle chain is deleted; the
+    // promptOps seam that remains serves PR finalize (#29 owns its migration).
+    match: (id) => id === "task.task-tool",
     rules: all7(adapter([
       { kind: "productionProfile" },
-      // Module-level entry (no HTTP handler bodies): the file-scoped call chain proves the
-      // admission records durable V2 task-run receipts inside its settlement transactions.
-      call("V2TaskRunReceipt.recordInTransaction", "packages/deepagent-code/src/tool/task-run.ts"),
-      { kind: "reach", pathSuffix: "packages/core/src/session/runner/v2-task-run-receipt.ts" },
-      LEGACY_SESSION_CORE,
+      call("TaskRunAuthority.submit", "packages/deepagent-code/src/tool/task.ts"),
+      call("TaskRunAuthority.execute", "packages/deepagent-code/src/tool/task.ts"),
+      { kind: "reach", pathSuffix: "packages/core/src/session/task-run.ts" },
     ])),
   },
 

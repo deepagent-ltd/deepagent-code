@@ -135,49 +135,10 @@ const fakeBackground = {
     }),
 } as unknown as BackgroundJob.Interface
 
-const fakeTaskChildren = new Map<SessionID, { id: SessionID; directory: string; permission: []; metadata: {} }>()
-const fakeTaskSessions = {
-  get: (id: SessionID) =>
-    Effect.succeed(
-      id === parentSessionID
-        ? ({ id, directory: "/project", permission: [], metadata: {} } as any)
-        : fakeTaskChildren.get(id),
-    ),
-  create: (input: { id: SessionID }) =>
-    Effect.gen(function* () {
-      const { db } = yield* Database.Service
-      yield* db
-        .insert(SessionTable)
-        .values({
-          id: input.id,
-          project_id: ProjectV2.ID.global,
-          slug: `facade-${input.id}`,
-          directory: "/project",
-          title: "facade child",
-          version: "test",
-        })
-        .run()
-        .pipe(Effect.orDie)
-      const child = { id: input.id, directory: "/project", permission: [] as [], metadata: {} }
-      fakeTaskChildren.set(input.id, child)
-      return child as any
-    }),
-  // Fail after child creation. The facade must already have bound owner_session_id, and the
-  // admission compensation path must still close the TaskRun.
-  setMetadata: () => Effect.die("simulated metadata projection failure"),
-} as unknown as Session.Interface
-
-const fakeTaskAgents = {
-  get: () => Effect.succeed({ name: "explore", permission: [], mode: "subagent", options: {} } as any),
-} as unknown as Agent.Interface
-
-const fakeTaskProvider = {
-  defaultModel: () => Effect.succeed({ providerID: "test-provider", modelID: "test-model" } as any),
-} as unknown as Provider.Interface
-
-// ── layer variants ─────────────────────────────────────────────────────────────────────────────
-
 const it = testEffect(facadeLayer.pipe(Layer.provideMerge(Layer.mergeAll(database, RuntimeFlags.layer({})))))
+const itNoEvents = testEffect(
+  facadeLayer.pipe(Layer.provideMerge(Layer.mergeAll(database, RuntimeFlags.layer({})))),
+)
 const itGoal = testEffect(
   facadeLayer.pipe(
     Layer.provideMerge(Layer.mergeAll(database, RuntimeFlags.layer({}), Layer.succeed(GoalManager.Service, fakeGoals))),
@@ -197,24 +158,6 @@ const itPanelBound = testEffect(
         database,
         RuntimeFlags.layer({ subagentOutputMaxChars: 32 }),
         Layer.succeed(BackgroundJob.Service, fakeBackground),
-      ),
-    ),
-  ),
-)
-const itDurable = testEffect(
-  facadeLayer.pipe(
-    Layer.provideMerge(Layer.mergeAll(database, RuntimeFlags.layer({ subagentControlPlane: "durable" }))),
-  ),
-)
-const itDurableTask = testEffect(
-  facadeLayer.pipe(
-    Layer.provideMerge(
-      Layer.mergeAll(
-        database,
-        RuntimeFlags.layer({ subagentControlPlane: "durable" }),
-        Layer.succeed(Session.Service, fakeTaskSessions),
-        Layer.succeed(Agent.Service, fakeTaskAgents),
-        Layer.succeed(Provider.Service, fakeTaskProvider),
       ),
     ),
   ),
@@ -411,19 +354,7 @@ describe("facade-activity.runner honesty (no fabricated runners)", () => {
     }),
   )
 
-  it.instance("task start refuses unless the durable control plane is enabled", () =>
-    Effect.gen(function* () {
-      yield* setup
-      const facade = yield* FacadeActivity.Service
-      const error = yield* facade
-        .start({ sessionID: parentSessionID, subkind: "task", objective: "x" })
-        .pipe(Effect.flip)
-      expect(error).toBeInstanceOf(FacadeActivityRunnerUnavailable)
-      expect((error as FacadeActivityRunnerUnavailable).reason).toContain("durable")
-    }),
-  )
-
-  itDurable.instance("task start under durable still refuses without session/agent/provider services", () =>
+  itNoEvents.instance("task start refuses without the EventV2 authority", () =>
     Effect.gen(function* () {
       yield* setup
       const facade = yield* FacadeActivity.Service
@@ -520,38 +451,6 @@ describe("facade-activity recovery", () => {
       expect(retry).toBeInstanceOf(FacadeActivityRunnerUnavailable)
       const rows = yield* facade.status({ sessionID: parentSessionID, subkind: "goal" })
       expect(rows.some((row) => row.activityID !== activityID)).toBe(true)
-    }),
-  )
-})
-
-describe("facade-activity task compensation", () => {
-  itDurableTask.instance("child delegation failure settles the admitted run instead of leaving it admitted", () =>
-    Effect.gen(function* () {
-      fakeTaskChildren.clear()
-      yield* setup
-      const facade = yield* FacadeActivity.Service
-      const error = yield* facade
-        .start({
-          sessionID: parentSessionID,
-          subkind: "task",
-          objective: "compensate this task",
-          spawnToolCallID: "call_facade_compensation",
-        })
-        .pipe(Effect.flip)
-      expect(error).toBeInstanceOf(FacadeActivityRunnerUnavailable)
-      const { db } = yield* Database.Service
-      const run = yield* db
-        .select()
-        .from(TaskRunTable)
-        .where(eq(TaskRunTable.tool_call_id, "call_facade_compensation"))
-        .get()
-        .pipe(Effect.orDie)
-      expect(run?.state).toBe("failed")
-      expect(run?.control_state).toBe("closed")
-      expect(run?.reason).toBe("facade_task_delegation_failed_after_admission")
-      const row = yield* latestRow(parentSessionID, "task")
-      expect(row?.owner_session_id).toBe(run?.child_session_id)
-      expect(row?.state).toBe("recovery_required")
     }),
   )
 })

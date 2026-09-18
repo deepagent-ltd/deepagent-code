@@ -157,6 +157,7 @@ import { systemContextHandlers } from "./handlers/system-context"
 import { contextHandlers } from "./handlers/context"
 import { productionSourcesLayer } from "@/context-federation/production-sources"
 import { V2RunnerFrame } from "@/session/v2-runner-frame"
+import { TaskRunDispatcher } from "@deepagent-code/core/session/task-run-dispatcher"
 import { V2OutboxRuntime } from "@/event/v2-outbox-runtime"
 import { V2OwnerSeed } from "@deepagent-code/core/session/runner/v2-owner-seed"
 import { V2OwnerDevMint } from "@deepagent-code/core/session/runner/v2-owner-dev-mint"
@@ -368,6 +369,11 @@ export function createRoutes(corsOptions?: CorsOptions, runtimeFlagsLayer = Runt
     // §A4/§C — start the V4 event-runtime daemons with the server (inert unless V4 flags are on). Draws
     // the session stack + RuntimeFlags from the provide stack below.
     ...([v4EventRuntimeLayer, v2StartupRecovery, V2OutboxRuntime.layer] as const),
+    // The ONE process-global background task runtime: the auto-started Core V2 run dispatcher
+    // (durable background task runs claimed + drained through the authority executor) plus the
+    // notification outbox delivery loop. Database comes from the provide stack below; SessionV2
+    // from the V2RunnerFrame.sessionRuntimeLayer provided into this graph.
+    TaskRunDispatcher.runtimeLayer(),
     // RI-24: snapshot the root context for the per-root runtime-integrity identity slot; the
     // identity derives detached on first drain use (RuntimeIntegrityIdentity.slotResolver).
     RuntimeIntegrityIdentity.captureRootContextLayer,

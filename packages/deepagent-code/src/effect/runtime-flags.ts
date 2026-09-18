@@ -66,28 +66,6 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // Attempt wall limit. Expiry interrupts the same child and preserves partial work for explicit
   // recovery. It never starts a replacement child or replays provider/tool work automatically.
   subagentTimeoutMs: positiveIntegerWithDefault("DEEPAGENT_CODE_SUBAGENT_TIMEOUT_MS", DEFAULT_SUBAGENT_TIMEOUT_MS),
-  // Subagent control plane rollout gate (L0 design, subagent-control-plane-design.zh-CN.md §13.3).
-  //
-  //  "legacy"  — keep the current SessionPrompt execution path without automatic takeover.
-  //  "shadow"  — RESERVED for future use. Legacy lifecycle authority remains; durable coordinator
-  //              records non-authoritative comparison artifacts only. Currently routes identically
-  //              to "legacy". DO NOT use in production until §4 cutover protocol is implemented.
-  //  "durable" — all lifecycle owned by the durable TaskCoordinator (L4+); takeover permanently
-  //              removed; SessionPrompt driven through LegacySubagentExecutor.
-  //              REQUIRES: L1 migration applied, L3 provisioner wired, start/settle fences complete.
-  //
-  // Unknown values fail closed to "legacy". Once set to "durable" it MUST NOT be rolled back to
-  // re-enable takeover (design §13.4). Mode is per-SQLite/Location — mixing modes across processes
-  // sharing the same database is prohibited (design §4.4).
-  subagentControlPlane: Config.string("DEEPAGENT_CODE_SUBAGENT_CONTROL_PLANE").pipe(
-    Config.withDefault("legacy"),
-    Config.map((value): "legacy" | "shadow" | "durable" => {
-      if (value === "legacy" || value === "shadow" || value === "durable") return value
-      throw new Error(
-        `Invalid DEEPAGENT_CODE_SUBAGENT_CONTROL_PLANE="${value}". Must be one of: legacy, shadow, durable. Refusing to start with unknown mode.`,
-      )
-    }),
-  ),
   // Parent injection is bounded by default. The complete result remains durable in the child Session
   // and the truncated envelope carries the task_read recovery pointer.
   subagentOutputMaxChars: positiveIntegerWithDefault(
