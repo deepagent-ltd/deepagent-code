@@ -596,7 +596,12 @@ describe("V4EventRuntime makeEventPanelPort daemon-context (§M / P2.7 regressio
     get: () => viaInstanceState({ id: SessionID.make("ses_panel_root"), permission: [], agent: undefined }),
   } as unknown as Session.Interface
 
-  const fakePrompt = {} as unknown as SessionPrompt.Interface
+  // V2-only deps: the runner REQUIRES the V2 authority, but agents.get returns undefined ⇒ every
+  // panelist turn fails soft before any V2 call — a die-if-touched stub proves exactly that.
+  const fakeV2Session = {
+    prompt: () => Effect.die("v2 stub must not be reached (panelist absent)"),
+    messages: () => Effect.die("v2 stub must not be reached (panelist absent)"),
+  } as unknown as SessionV2.Interface
 
   const fakeStore = {
     // load establishes the ctx the port then provides via withContext. Does NOT read InstanceRef (it
@@ -610,9 +615,9 @@ describe("V4EventRuntime makeEventPanelPort daemon-context (§M / P2.7 regressio
   const port = V4EventRuntime.makeEventPanelPort({
     sessions: fakeSessions,
     agents: fakeAgents,
-    sessionPrompt: fakePrompt,
     instanceStore: fakeStore,
     defaultModel,
+    v2Session: fakeV2Session,
   })
 
   const event: DeepAgentEvent.Event = {
@@ -641,9 +646,9 @@ describe("V4EventRuntime makeEventPanelPort daemon-context (§M / P2.7 regressio
   )
 })
 
-// §16.3 order 3 — caller wiring regression lock: when the panel port receives the V2 drive seam,
-// panelist turns run as V2 admissions (research + bounded finalizer attempts) and NEVER touch the
-// legacy prompt orchestration. The finalizer replies are deliberately non-JSON so the seam degrades
+// §16.3 order 3 — caller wiring regression lock: the panel port is V2-only, so panelist turns run as
+// V2 admissions (research + bounded finalizer attempts) with no legacy path to fall back to. The
+// finalizer replies are deliberately non-JSON so the seam degrades
 // (structured = undefined) and the Arbiter fail-closes to needs_human — the assertion target is the
 // drive path itself, not the verdict content.
 describe("V4EventRuntime makeEventPanelPort V2 drive wiring (§16.3 order 3)", () => {
@@ -656,7 +661,6 @@ describe("V4EventRuntime makeEventPanelPort V2 drive wiring (§16.3 order 3)", (
     options: {},
   }
 
-  const legacyPrompts: unknown[] = []
   const v2Prompts: string[] = []
   const history: Array<Record<string, unknown>> = []
   const replies = ["research ok", "no json here", "still no json"]
@@ -680,15 +684,6 @@ describe("V4EventRuntime makeEventPanelPort V2 drive wiring (§16.3 order 3)", (
     defaultAgent: () => Effect.succeed("reviewer"),
     get: () => Effect.succeed(panelist),
   } as unknown as Agent.Interface
-
-  const fakePrompt = {
-    resolvePromptParts: (template: string) => Effect.succeed([{ type: "text", text: template }]),
-    cancel: () => Effect.void,
-    prompt: (promptInput: unknown) => {
-      legacyPrompts.push(promptInput)
-      return Effect.succeed({ info: { role: "assistant" }, parts: [] })
-    },
-  } as unknown as SessionPrompt.Interface
 
   const fakeV2Session = {
     prompt: (admission: { readonly prompt: { readonly text: string } }) => {
@@ -717,7 +712,6 @@ describe("V4EventRuntime makeEventPanelPort V2 drive wiring (§16.3 order 3)", (
   const port = V4EventRuntime.makeEventPanelPort({
     sessions: fakeSessions,
     agents: fakeAgents,
-    sessionPrompt: fakePrompt,
     instanceStore: fakeStore,
     defaultModel: () =>
       Effect.succeed({ providerID: ProviderV2.ID.make("test"), modelID: ModelV2.ID.make("test") }),
@@ -744,7 +738,6 @@ describe("V4EventRuntime makeEventPanelPort V2 drive wiring (§16.3 order 3)", (
       // Research + two bounded finalizer attempts per panelist turn, all durable V2 admissions.
       expect(v2Prompts.length).toBeGreaterThanOrEqual(3)
       expect(v2Prompts.some((text) => text.includes("<research_result>"))).toBe(true)
-      expect(legacyPrompts).toEqual([])
     }),
   )
 })
@@ -763,7 +756,6 @@ describe("V4EventRuntime makeEventPanelPort V2 structured success propagation (�
     options: {},
   }
 
-  const legacyPrompts: unknown[] = []
   const v2Prompts: string[] = []
   // Panelists run CONCURRENTLY, each in its own child session — the fake V2 store is keyed by
   // sessionID so per-session frontier reads never interleave across panelists.
@@ -792,15 +784,6 @@ describe("V4EventRuntime makeEventPanelPort V2 structured success propagation (�
     defaultAgent: () => Effect.succeed("reviewer"),
     get: () => Effect.succeed(panelist),
   } as unknown as Agent.Interface
-
-  const fakePrompt = {
-    resolvePromptParts: (template: string) => Effect.succeed([{ type: "text", text: template }]),
-    cancel: () => Effect.void,
-    prompt: (promptInput: unknown) => {
-      legacyPrompts.push(promptInput)
-      return Effect.succeed({ info: { role: "assistant" }, parts: [] })
-    },
-  } as unknown as SessionPrompt.Interface
 
   const fakeV2Session = {
     prompt: (admission: { readonly sessionID: string; readonly prompt: { readonly text: string } }) => {
@@ -836,7 +819,6 @@ describe("V4EventRuntime makeEventPanelPort V2 structured success propagation (�
   const port = V4EventRuntime.makeEventPanelPort({
     sessions: fakeSessions,
     agents: fakeAgents,
-    sessionPrompt: fakePrompt,
     instanceStore: fakeStore,
     defaultModel: () =>
       Effect.succeed({ providerID: ProviderV2.ID.make("test"), modelID: ModelV2.ID.make("test") }),
@@ -867,7 +849,6 @@ describe("V4EventRuntime makeEventPanelPort V2 structured success propagation (�
       // round anywhere (attempt-2 prompts would start with the "Return exactly one JSON value" text).
       expect(finalizerCount).toBe(researchCount)
       expect(v2Prompts.some((text) => text.startsWith("Return exactly one JSON value"))).toBe(false)
-      expect(legacyPrompts).toEqual([])
     }),
   )
 })

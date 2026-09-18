@@ -42,7 +42,7 @@ import { EventDrivenArchiver, ARCHIVE_GROUP } from "@/wiki/event-driven-archiver
 import { PanelConveneConsumer, CONVENE_GROUP } from "@/panel/panel-convene-consumer"
 import { consultPanel } from "@/panel/consult"
 import type { PanelTurnRunner } from "@/panel/panelist-runner"
-import { GoalLoopWiring, makeTaskSubagentRunner, v2DriveDeps } from "./goal-loop-wiring"
+import { makeTaskSubagentRunner } from "./goal-loop-wiring"
 // §B2/§E4 (P2.8) — proactive push stack.
 import { AgentPush } from "./agent-push"
 import { DigestBuilder } from "./digest-builder"
@@ -409,13 +409,11 @@ export const makeEventPanelPort =
   (deps: {
     readonly sessions: Session.Interface
     readonly agents: Agent.Interface
-    readonly sessionPrompt: SessionPrompt.Interface
     readonly instanceStore: InstanceStore.Interface
     readonly defaultModel: () => Effect.Effect<{ providerID: ProviderV2.ID; modelID: ModelV2.ID }>
-    /** §16.3 order 3: optional V2 drive seam, resolved by the wiring layer (flag + composition gated). */
-    readonly v2Session?: SessionV2.Interface
+    /** The durable V2 session authority driving every panelist subagent turn (V2-only). */
+    readonly v2Session: SessionV2.Interface
     readonly snapshot?: Snapshot.Interface
-    readonly v2Only?: boolean
   }): PanelConveneConsumer.PanelConvenePort =>
   (input) =>
     Effect.gen(function* () {
@@ -463,12 +461,12 @@ export const makeEventPanelPort =
       const baseRunner = makeTaskSubagentRunner({
         sessions: deps.sessions,
         agents: deps.agents,
-        sessionPrompt: deps.sessionPrompt,
         parentSessionID: root.id,
         model: { providerID: model.providerID, modelID: model.modelID },
         allowPlanWriteCapability: false,
         purpose: "panel",
-        ...v2DriveDeps(deps.v2Session, deps.snapshot, deps.v2Only),
+        v2Session: deps.v2Session,
+        ...(deps.snapshot ? { snapshot: deps.snapshot } : {}),
       })
       const runTurn: PanelTurnRunner = (turnInput) =>
         withContext(
@@ -923,7 +921,7 @@ export const archiverLayer = Layer.unwrap(
 // §M — the Expert Panel AUTO-CONVENE consumer. Subscribes the shared bus, runs the pure §M policy on
 // each event, and — on "convene" — drives the EXISTING V3.9 panel engine via makeEventPanelPort (which
 // establishes daemon-fiber instance context, creates a root session, and runs consultPanel). Draws the
-// session stack (Session/Agent/SessionPrompt/InstanceStore/Provider) — the SAME set makeEventTurnRunner
+// session stack (Session/Agent/InstanceStore/Provider) — the SAME set makeEventTurnRunner
 // uses in runtimeLayer — plus DeepAgentEventBus + ApprovalQueue + RuntimeFlags from the outer graph.
 //
 // FLAG COUPLING: runLoop = v4PanelAutoConvene. Default OFF ⇒ runLoop false ⇒ NO subscription ⇒ the
@@ -935,22 +933,18 @@ const panelConsumerLayer = Layer.unwrap(
     const flags = yield* RuntimeFlags.Service
     const sessions = yield* Session.Service
     const agents = yield* Agent.Service
-    const sessionPrompt = yield* SessionPrompt.Service
     const provider = yield* Provider.Service
     const instanceStore = yield* InstanceStore.Service
-    // LEGACY-EXECUTION-ZERO: V2 subagent drive resolution (forced under the V2-only profile).
-    const { v2Session, snapshot: v2Snapshot } = yield* GoalLoopWiring.resolveV2SubagentDrive({
-      v2Session: yield* SessionV2.Service,
-      snapshot: yield* Snapshot.Service,
-    })
+    // LEGACY-EXECUTION-ZERO: the V2 session authority + snapshot drive every panelist turn.
+    const v2Session = yield* SessionV2.Service
+    const snapshot = yield* Snapshot.Service
     const convene = makeEventPanelPort({
       sessions,
       agents,
-      sessionPrompt,
       instanceStore,
       defaultModel: () => provider.defaultModel().pipe(Effect.orDie),
-      ...v2DriveDeps(v2Session, v2Snapshot, flags.coreV2Only),
-      v2Only: flags.coreV2Only,
+      v2Session,
+      snapshot,
     })
     return PanelConveneConsumer.layerWith({ convene, runLoop: flags.v4PanelAutoConvene })
   }),
@@ -973,7 +967,6 @@ const goalTickConsumerLayer = Layer.unwrap(
     const flags = yield* RuntimeFlags.Service
     const sessions = yield* Session.Service
     const agents = yield* Agent.Service
-    const sessionPrompt = yield* SessionPrompt.Service
     const revert = yield* SessionRevert.Service
     const steerBuffer = yield* SessionSteer.Service
     const provider = yield* Provider.Service
@@ -982,15 +975,12 @@ const goalTickConsumerLayer = Layer.unwrap(
     const events = yield* EventV2Bridge.Service
     const eventBus = yield* DeepAgentEventBus.Service
     const approvalQueue = yield* ApprovalQueue.Service
-    // LEGACY-EXECUTION-ZERO: V2 subagent drive resolution for cold tick reconstruction.
-    const { v2Session, snapshot: v2Snapshot } = yield* GoalLoopWiring.resolveV2SubagentDrive({
-      v2Session: yield* SessionV2.Service,
-      snapshot: yield* Snapshot.Service,
-    })
+    // LEGACY-EXECUTION-ZERO: the V2 session authority + snapshot drive cold tick reconstruction.
+    const v2Session = yield* SessionV2.Service
+    const snapshot = yield* Snapshot.Service
     const runTick = GoalTickPort.makeGoalTickPort({
       sessions,
       agents,
-      sessionPrompt,
       revert,
       steerBuffer,
       provider,
@@ -1001,7 +991,8 @@ const goalTickConsumerLayer = Layer.unwrap(
       approvalQueue,
       flags,
       goalStoreRoot,
-      ...v2DriveDeps(v2Session, v2Snapshot, flags.coreV2Only),
+      v2Session,
+      snapshot,
     })
     return GoalTickConsumer.layerWith({
       runTick,
