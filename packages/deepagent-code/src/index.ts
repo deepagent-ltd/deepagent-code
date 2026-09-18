@@ -151,15 +151,12 @@ const cli = yargs(args)
     }
     process.env.DEEPAGENT_CODE = "1"
     process.env.DEEPAGENT_CODE_PID = String(process.pid)
-    // C7-05/W0.1: the V2 event-admission + IM single-write authority defaults live in
-    // src/runtime-defaults.ts (applied at the top of this module — the switches stay explicit-env
-    // so isolated test/daemon contexts keep their own behavior; `=false`/`=0` restores the legacy
-    // authorities). The IM single-write suppression is only safe together with the V2 event-driven
-    // IM path (im.message.created → admission → dispatchV2); without it @mention work would be
-    // dropped. DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM is NOT part of RuntimeDefaults (runtime-flags
-    // gates it per the V4 §H3 default-off discipline), so the CLI keeps its explicit pairing
-    // default here.
-    process.env.DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM ??= "true"
+    // C7-05/W0.1: the V2 event-admission defaults live in src/runtime-defaults.ts (applied at the top
+    // of this module). The former DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM pairing default is removed with
+    // the V2 IM durable-only migration: @mentions are admitted directly as durable SessionV2 work by
+    // the IM handler (src/im/im-agent-execution.ts) and replies return through the im_reply_outbox
+    // daemon — there is no bus-mediated IM path left to pair with, and the flag stays at its §H3
+    // default-off in runtime-flags.ts.
 
     Log.Default.info(scriptName, {
       version: InstallationVersion,

@@ -270,8 +270,11 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // on with `=true`; the `RuntimeFlags.layer({...})` test helper can also force any flag on
   // programmatically (tests opt into the behavior they exercise).
   //
-  // §A/§B: route inbound IM messages through the DeepAgent Event Bus (im.message.created → Router →
-  // Scheduler) alongside the legacy path (double-write). Enable with DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM=true.
+  // §A/§B (V2 IM durable-only residual): the former bus-mediated IM path (im.message.created → Router
+  // → Scheduler double-write) no longer exists — mentions are admitted by the IM handler as durable
+  // SessionV2 work (src/im/im-agent-execution.ts) and no component publishes im.* events. The flag is
+  // retained only because the generic flag API surface and shared session-runtime tests still read it;
+  // it gates nothing and stays default-off.
   v4EventDrivenIm: bool("DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM"),
   // §A4: allow the agent to PUSH proactively (monitor/schedule/ci-driven outbound), through the §B2
   // policy gate (rate-limit, quiet-hours, group-membership, workspace-push-permission). PROMOTED ON
