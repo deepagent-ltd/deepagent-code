@@ -5,10 +5,13 @@ import Ajv from "ajv"
 import { Cause, Effect, Exit, Option } from "effect"
 import { Context, Layer, Schema } from "effect"
 import { AgentV2 } from "../agent"
+import { Database } from "../database/database"
+import { EventV2 } from "../event"
 import { PermissionV2 } from "../permission"
 import { SessionSchema, SessionV2 } from "../session"
 import { SessionMessage } from "../session/message"
 import { Prompt } from "../session/prompt"
+import { TaskRunAuthority } from "../session/task-run"
 import { Delegation } from "./delegation"
 import {
   DEFAULT_SUBAGENT_TIMEOUT_MS,
@@ -223,22 +226,12 @@ export const layer = Layer.effectDiscard(
                         `Cannot resume task "${params.task_id}": its agent type is "${target.value.agent}" but this call requests "${params.subagent_type}".`,
                       )
                   }
-                  const childID =
-                    params.task_id !== undefined
-                      ? SessionSchema.ID.make(params.task_id)
-                      : (yield* sessions
-                          .create({
-                            parentID: context.sessionID,
-                            agent: resolved.id,
-                            title: `task: ${params.description}`,
-                            location: parent.location,
-                            permissions: inheritedTaskPermissions(parentAgent?.permissions ?? [], parent.permissions),
-                          })
-                          .pipe(Effect.orDie)).id
                   const deadline = Date.now() + DEFAULT_SUBAGENT_TIMEOUT_MS
                   let timedOut = false
 
-                  const drive = (text: string) =>
+                  // Follow-up turns (resume-by-task_id first turns, structured-output finalizer
+                  // prompts) stay with the tool layer: admit-only prompt + explicit awaited drain.
+                  const drive = (childID: SessionSchema.ID, text: string) =>
                     Effect.gen(function* () {
                       if (Date.now() >= deadline) {
                         timedOut = true
@@ -275,7 +268,67 @@ export const layer = Layer.effectDiscard(
                       Effect.onInterrupt(() => sessions.interrupt(childID).pipe(Effect.ignore)),
                     )
 
-                  const research = yield* drive(params.prompt)
+                  // Fresh launches are durable TaskRun submissions: the ONE ledger transaction
+                  // (task_run + task_admission + task_run_event) precedes every external side
+                  // effect, the child session identity is deterministic (crash between ledger and
+                  // create converges by adoption), and the single first input lands atomically
+                  // with the run's input_state pending→ready CAS. The executor only claims and
+                  // resumes the child; it NEVER admits another first prompt.
+                  const durableLaunch = Effect.gen(function* () {
+                    const database = Option.getOrUndefined(yield* Effect.serviceOption(Database.Service))
+                    const events = Option.getOrUndefined(yield* Effect.serviceOption(EventV2.Service))
+                    if (!database || !events)
+                      return yield* toolFailure(
+                        `task is unavailable: durable authority services missing from the runner context (database: ${database ? "ok" : "missing"}, events: ${events ? "ok" : "missing"})`,
+                      )
+                    const admitted = yield* TaskRunAuthority.submit(database.db, events, sessions, {
+                      parentSessionID: context.sessionID,
+                      parentMessageID: context.assistantMessageID,
+                      toolCallID: context.toolCallID,
+                      deliveryMode: "foreground",
+                      prompt: new Prompt({ text: params.prompt }),
+                      agent: resolved.id,
+                      ...(outputSchema === undefined ? {} : { outputSchema }),
+                      child: {
+                        title: `task: ${params.description}`,
+                        location: parent.location,
+                        permissions: inheritedTaskPermissions(parentAgent?.permissions ?? [], parent.permissions),
+                      },
+                    }).pipe(
+                      Effect.mapError((error) =>
+                        toolFailure(
+                          error._tag === "TaskRunAuthority.AdmissionConflict"
+                            ? "Cannot launch task: this tool call was already admitted with a different request."
+                            : `Cannot launch task: ${error._tag}`,
+                        ),
+                      ),
+                    )
+                    const result = yield* TaskRunAuthority.execute({
+                      db: database.db,
+                      run: admitted.run,
+                      sessions,
+                      timeoutMs: Math.max(1, deadline - Date.now()),
+                    }).pipe(Effect.mapError(() =>
+                      toolFailure(
+                        `Task ${admitted.run.childSessionID} lost its durable execution lease; it can be resumed by task_id.`,
+                      ),
+                    ))
+                    if (result.outcome === "timeout") timedOut = true
+                    return {
+                      childID: admitted.run.childSessionID,
+                      text:
+                        result.outcome === "completed"
+                          ? result.research
+                          : `${result.research}\n\n[task ended before completion: ${result.outcome === "timeout" ? `timed out after ${DEFAULT_SUBAGENT_TIMEOUT_MS}ms` : result.failureMessage} — resume with task_id "${admitted.run.childSessionID}" to continue.]`,
+                    }
+                  })
+                  const resumeLaunch = Effect.gen(function* () {
+                    const childID = SessionSchema.ID.make(params.task_id!)
+                    return { childID, text: yield* drive(childID, params.prompt) }
+                  })
+                  const launch = yield* (params.task_id === undefined ? durableLaunch : resumeLaunch)
+                  const childID = launch.childID
+                  const research = launch.text
                   if (!outputSchema) return { task_id: childID, text: research }
                   // `prompt` is a durable admission. Once the shared deadline wins, never enqueue
                   // one or two doomed 1ms finalizer prompts into the child inbox.
@@ -300,7 +353,7 @@ export const layer = Layer.effectDiscard(
                       boundedRaw,
                       "</research_result>",
                     ].join("\n")
-                    const candidate = extractStructuredText(yield* drive(finalizerText))
+                    const candidate = extractStructuredText(yield* drive(childID, finalizerText))
                     if (timedOut) {
                       correction = "Subagent timed out while finalizing structured output."
                       break
