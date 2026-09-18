@@ -205,7 +205,6 @@ describe("RuntimeFlags", () => {
     Effect.gen(function* () {
       const flags = yield* readFlags.pipe(Effect.provide(fromConfig({})))
       // Still operator opt-in (default OFF): experimental or risky features not yet broadly tested.
-      expect(flags.v4EventDrivenIm).toBe(false)
       expect(flags.v4ThreadEnabled).toBe(false)
       expect(flags.v4FileUploadEnabled).toBe(false)
       // Promoted ON (stableOn): daemon audit GO, broadly deployed.
@@ -232,7 +231,6 @@ describe("RuntimeFlags", () => {
       // capability by capability. Uses v4ThreadEnabled, which remains OFF-by-default.
       const flags = yield* readFlags.pipe(Effect.provide(fromConfig({ DEEPAGENT_CODE_V4_THREAD_ENABLED: "true" })))
       expect(flags.v4ThreadEnabled).toBe(true)
-      expect(flags.v4EventDrivenIm).toBe(false)
       expect(flags.v4FileUploadEnabled).toBe(false)
       // stableOn flags are unaffected by the override — they remain ON
       expect(flags.v4AgentPushEnabled).toBe(true)
@@ -240,12 +238,13 @@ describe("RuntimeFlags", () => {
     }),
   )
 
-  it.effect("§H1: all six V4.0 flags can be turned ON together via env (full-stack opt-in)", () =>
+  it.effect("§H1: all five V4.0 flags can be turned ON together via env (full-stack opt-in)", () =>
     Effect.gen(function* () {
+      // v4EventDrivenIm was removed with the V2 IM durable-only migration (no bus-mediated IM path
+      // remains to gate); the surviving V4.0 flags remain independent full-stack opt-ins.
       const flags = yield* readFlags.pipe(
         Effect.provide(
           fromConfig({
-            DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM: "true",
             DEEPAGENT_CODE_V4_AGENT_PUSH_ENABLED: "true",
             DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME: "true",
             DEEPAGENT_CODE_V4_THREAD_ENABLED: "true",
@@ -254,7 +253,6 @@ describe("RuntimeFlags", () => {
           }),
         ),
       )
-      expect(flags.v4EventDrivenIm).toBe(true)
       expect(flags.v4AgentPushEnabled).toBe(true)
       expect(flags.v4MultiAgentRuntime).toBe(true)
       expect(flags.v4ThreadEnabled).toBe(true)

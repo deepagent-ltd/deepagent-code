@@ -155,8 +155,8 @@ const cli = yargs(args)
     // of this module). The former DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM pairing default is removed with
     // the V2 IM durable-only migration: @mentions are admitted directly as durable SessionV2 work by
     // the IM handler (src/im/im-agent-execution.ts) and replies return through the im_reply_outbox
-    // daemon — there is no bus-mediated IM path left to pair with, and the flag stays at its §H3
-    // default-off in runtime-flags.ts.
+    // daemon — there is no bus-mediated IM path left to pair with, and the v4EventDrivenIm flag itself
+    // is deleted from runtime-flags.ts.
 
     Log.Default.info(scriptName, {
       version: InstallationVersion,

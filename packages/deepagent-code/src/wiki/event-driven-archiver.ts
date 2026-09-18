@@ -16,9 +16,10 @@ import * as Log from "@deepagent-code/core/util/log"
 // workers, replayable, observable). It ADDS NO archival mechanics — it reuses the exact V3.9
 // `archiveSessionOnCompletion` projection (no new source of truth, §B.1).
 //
-// Gated by v4EventDrivenIm upstream? No — archival is a §L capability independent of IM; the wiring
-// only starts this consumer when the event-driven path is desired. It is idempotent and best-effort
-// (archiveSessionOnCompletion never throws), so double-delivery just re-projects the same archive.
+// Gated by a dedicated IM flag upstream? No — archival is a §L capability independent of IM; the
+// wiring only starts this consumer when the event-driven path is desired (v4EventDrivenArchive ||
+// v4MultiAgentRuntime). It is idempotent and best-effort (archiveSessionOnCompletion never throws),
+// so double-delivery just re-projects the same archive.
 //
 // FEAT-006 SELF-LOOP GUARD (verified in tests): the archiver's archive writes now publish
 // wiki.page.changed, but this consumer keys ONLY on ARCHIVE_TRIGGER_TYPES (session.completed /

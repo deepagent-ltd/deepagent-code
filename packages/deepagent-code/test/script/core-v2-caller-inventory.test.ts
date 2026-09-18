@@ -12,16 +12,21 @@ const repository = resolve(import.meta.dir, "../../../..")
 // Pinned completion evidence (§8 of the migration plan): the legacy orchestration denominator is
 // fully classified and its canonical hash is fixed. Any new legacy call surface must be added to
 // the classifier through a reviewed change, which moves this hash deliberately.
+// v2f-i IM residual sweep re-pin (2026-09-18): the durable-only slices removed the remaining code
+// references to SessionPrompt from the task-*/goal-*/facade-activity child-execution callers and
+// core's im orchestrator (admission_control) — the denominator is 8 files (verified against both
+// the pre- and post-sweep trees: identical entries + hash; the stale 14-entry pin predated those
+// deletions). prompt.ts remains the single orchestration authority surface.
 const PINNED_COUNTS = {
-  admission_control: 6,
+  admission_control: 4,
   orchestration: 1,
-  child_execution: 5,
+  child_execution: 1,
   recovery_compaction_context: 0,
   projection_permission: 1,
   composition_compat: 1,
   unclassified: 0,
 } as const
-const PINNED_RESULT_SHA256 = "cee86cb006cd7b4cc93b559cee634819fe2b6cd3cd3ef5ca81fa99ee67687f52"
+const PINNED_RESULT_SHA256 = "a3388bbef123ed97e953bf2e4dcbb85110a25e70f3f2670daf2e59ecf8670285"
 
 describe("Core V2 caller inventory classification", () => {
   test("classifies every §8 category by explicit path rules", () => {
@@ -86,7 +91,7 @@ describe("Core V2 caller inventory gate", () => {
     const inventory = scanCallerInventory(repository)
     expect(inventory.query_id).toBe(CALLER_INVENTORY_QUERY_ID)
     expect(inventory.query_version).toBe(CALLER_INVENTORY_QUERY_VERSION)
-    expect(inventory.entries.length).toBe(14)
+    expect(inventory.entries.length).toBe(8)
     expect(inventory.unclassified).toBe(0)
     expect(inventory.counts).toEqual(PINNED_COUNTS)
   })

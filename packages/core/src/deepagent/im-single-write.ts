@@ -14,13 +14,15 @@ import { ImSingleWriteTable, type ImSingleWriteStatus } from "./im-single-write-
 // @mention path — the event path and the legacy path can BOTH become the authority for the same IM
 // input, which the contract encodes as `im_double_write_attempted`).
 //
-// AUTHORITATIVE PRODUCTION PATH (AUTH-P2-1 close): the live IM single-write regime is wired at the
-// httpapi `im.ts` handler boundary — the `DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE` flag gate
-// `shouldExecuteLegacyAgentMentions` skips the legacy synchronous @mention path, while the durable
-// V2 admission + execution happens through `EventV2Bridge` (event-v2-bridge.ts) on `im.message.created`
-// events (/v4EventDrivenIm). THIS module's `admit`/`forImMessage` surface predates that wiring and has
-// NO production caller anymore; it is kept as the frozen §B1 contract surface (unit-tested) and is
-// DEPRECATED — do not wire new paths through it.
+// AUTHORITATIVE PRODUCTION PATH (V2 IM durable-only migration): the live IM single-write regime is
+// the httpapi `im.ts` handler itself — each @mention is admitted synchronously as exactly ONE durable
+// SessionV2 input (`IMAgentExecution.admitMention`, deepagent-code src/im/im-agent-execution.ts); the
+// terminal reply returns through the durable im_reply_outbox daemon. Nothing publishes
+// `im.message.created` anymore (the bus-mediated path and the v4EventDrivenIm flag are deleted), so
+// the double-write the §B1 contract encodes is structurally closed. THIS module's
+// `admit`/`forImMessage` surface predates that wiring and has NO production caller anymore; it is
+// kept as the frozen §B1 contract surface (unit-tested) and is DEPRECATED — do not wire new paths
+// through it.
 //
 // This module is the single-write consolidation boundary. When the module-local switch is ON, an IM
 // input produces exactly ONE durable IM input receipt and binds it to ONE execution owner through the

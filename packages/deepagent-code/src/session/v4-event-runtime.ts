@@ -583,7 +583,6 @@ type GoalTickFlags = Pick<RuntimeFlags.Info, "v4MultiAgentRuntime" | "v4GoalTick
 type V4DaemonFlags = Pick<
   RuntimeFlags.Info,
   | "v4MultiAgentRuntime"
-  | "v4EventDrivenIm"
   | "v4PanelAutoConvene"
   | "v4AgentPushEnabled"
   | "v4EventDrivenArchive"
@@ -595,7 +594,6 @@ export const goalTickConsumerEnabled = (flags: GoalTickFlags): boolean =>
 
 export const anyV4DaemonEnabled = (flags: V4DaemonFlags): boolean =>
   flags.v4MultiAgentRuntime ||
-  flags.v4EventDrivenIm ||
   flags.v4PanelAutoConvene ||
   flags.v4AgentPushEnabled ||
   flags.v4EventDrivenArchive ||
@@ -748,8 +746,9 @@ const retentionLayer = Layer.unwrap(
 // in-memory map that grows one entry per workspace that publishes; without a periodic prune it retains
 // a bucket for every workspace forever (a slow leak). This scoped fiber calls sweepPublishLimiter on a
 // cadence to drop windows that have already elapsed. Same flag coupling as the retention sweeper: the
-// limiter is only populated by V4 publishers (im.message.created / goal.*), so with all V4 flags off
-// nothing publishes → no buckets → nothing to prune, and this daemon stays inert. A failure in one pass
+// limiter is only populated by V4 publishers (goal.* / session.completed / scheduler-fired events), so
+// with all V4 flags off nothing publishes → no buckets → nothing to prune, and this daemon stays inert.
+// A failure in one pass
 // is logged and swallowed so the loop never dies. Provides no service (Layer.effectDiscard) — it exists
 // purely for its scoped daemon fiber, so it merges cleanly alongside the other daemon layers.
 const LIMITER_SWEEP_INTERVAL_MS = 60_000

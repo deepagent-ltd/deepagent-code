@@ -81,8 +81,8 @@ export interface RouteInput {
   // registry projection, ALREADY permission-filtered by the caller (only agents allowed to see this
   // workspace/project/event). The router matches on `triggers` within this set.
   readonly agents: ReadonlyArray<AgentDescriptor>
-  // resolved feature-flag gate for this event's path (e.g. v4EventDrivenIm for im.*). A disabled flag
-  // drops the event fail-closed — the legacy synchronous path stays authoritative.
+  // resolved feature-flag gate for this event's path (e.g. v4AgentPushEnabled for agent.push.*). A
+  // disabled flag drops the event fail-closed — nothing else becomes authoritative.
   readonly flagEnabled: boolean
   // current depth of the dispatch queue and its capacity (回压). Omit `maxQueueDepth` for no limit.
   readonly queueDepth?: number

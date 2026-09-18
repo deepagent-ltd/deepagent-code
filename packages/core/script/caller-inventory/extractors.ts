@@ -618,13 +618,8 @@ const FIXED_ENTRIES: readonly FixedEntry[] = [
   // v2f-d IM durable-only migration: the legacy executor/reply-sink/progress-stream server modules
   // (fresh V1 session per turn through SessionPrompt.promptOrSteer) are DELETED; @mentions are
   // admitted as durable SessionV2 work and the terminal reply returns through im_reply_outbox.
-  {
-    id: "im.agent-orchestrator",
-    surface: "im",
-    kind: "ingress-orchestrator",
-    name: "IM agent orchestrator",
-    fileFromRoot: "packages/core/src/im/agent-orchestrator.ts",
-  },
+  // v2f-i residual sweep: core's agent-orchestrator.ts (production-dead since v2f-d — unit tests
+  // only) is deleted too, so it no longer has an inventory entry.
   {
     id: "im.agent-execution",
     surface: "im",

@@ -88,15 +88,21 @@ export const observeOnlyDispatchPort: DispatchPort = {
 // ---------------------------------------------------------------------------
 // W0.4 — @mention 路由修复与默认统一 (design v2.0-design.md W0.4).
 //
-// The IM @mention flow (CLI event-V2 admission ON) publishes `im.message.created` onto the bus; the
-// router previously matched agents by their `triggers[].event` against that type and — since no agent
-// declares an IM trigger by default — terminal-dropped the mention with `no_match`: no execution, no
-// receipt, a silent loss for the user. The fix routes mentions by NAME (the @mentioned agent is the
+// The IM @mention flow (CLI event-V2 admission ON) used to publish `im.message.created` onto the bus;
+// the router previously matched agents by their `triggers[].event` against that type and — since no
+// agent declares an IM trigger by default — terminal-dropped the mention with `no_match`: no execution,
+// no receipt, a silent loss for the user. The fix routes mentions by NAME (the @mentioned agent is the
 // authorization target, mirroring the legacy agent-orchestrator resolution) and only dispatches when
 // the mentioned agent declares the mention trigger (default `["mention"]` — see
 // `Agent.declaresMentionTrigger`). Anything else writes a durable `agent_no_trigger_mention` receipt
 // into the initiating conversation and logs `mention_no_trigger_receipt` — the `no_match` silent-drop
 // path is never taken for a mention event.
+//
+// V2 IM durable-only migration: NO production component publishes `im.message.created` anymore —
+// mention admission is synchronous durable SessionV2 work in the IM handler
+// (src/im/im-agent-execution.ts). The dispatcher-side mention branch below is dormant bus-side
+// machinery (kept for the registry-declared type); `resolveMentioned` and `defaultMentionReceiptPort`
+// are LIVE — the IM handler uses them for its synchronous admission + receipt path.
 // ---------------------------------------------------------------------------
 
 /** W0.4 — the durable mention-routing receipt message type (IM message `metadata.type` discriminant). */
@@ -159,8 +165,8 @@ const receiptAlreadyWritten = (repo: IMRepositoryInterface, input: MentionReceip
   })
 
 /** W0.4 — the default receipt port: writes the receipt as a durable IM message into the initiating group
- * via IMRepository (metadata.type = `agent_no_trigger_mention`), exactly like the legacy executor's
- * `agent_run` reply messages. In isolated contexts (no IM repository / no group on the event) it falls
+ * via IMRepository (metadata.type = `agent_no_trigger_mention`), shaped like an ordinary agent reply
+ * message. In isolated contexts (no IM repository / no group on the event) it falls
  * back to the `mention_no_trigger_receipt` log line — never a silent no-op. */
 export const defaultMentionReceiptPort: MentionReceiptPort = {
   receipt: (input) =>
@@ -191,10 +197,9 @@ export const defaultMentionReceiptPort: MentionReceiptPort = {
           ...(input.messageID != null ? { messageID: input.messageID } : {}),
         },
       })
-      // P3 — the receipt is a real IM message, so broadcast it exactly like the legacy executor's reply
-      // broadcast (agent-orchestrator.ts broadcastAgentResult) — the body text reaches live clients, not
-      // just the DB. Best-effort: the broadcast call is synchronous and never fails; a missing broadcaster
-      // service (isolated contexts) keeps the durable write.
+      // P3 — the receipt is a real IM message, so broadcast it like any agent reply — the body text
+      // reaches live clients, not just the DB. Best-effort: the broadcast call is synchronous and never
+      // fails; a missing broadcaster service (isolated contexts) keeps the durable write.
       const broadcaster = Option.getOrUndefined(yield* Effect.serviceOption(IMBroadcasterService))
       broadcaster?.broadcast(input.groupID, {
         type: "message_created",
@@ -225,9 +230,9 @@ export const mentionNamesFor = (event: DeepAgentEvent.Event): string[] => {
 }
 
 /** W0.4 — one mentioned entry: the name, the registered agent it resolved to (undefined = unknown
- * mention), and whether it is dispatchable (visible agent + declares the mention trigger). Name
- * resolution mirrors the legacy agent-orchestrator: visible agents always win over same-name hidden
- * builtins (the built-ins reuse "auto"/"general" names for matchable-but-hidden trigger routers). */
+ * mention), and whether it is dispatchable (visible agent + declares the mention trigger). Visible
+ * agents always win over same-name hidden builtins (the built-ins reuse "auto"/"general" names for
+ * matchable-but-hidden trigger routers). */
 export interface MentionedAgent {
   readonly name: string
   readonly agent: AgentDescriptor | undefined
@@ -255,11 +260,14 @@ export const resolveMentioned = (
 }
 
 // Map an event type to the feature flag that gates its dispatch path (fail-closed: flag OFF ⇒ dropped).
-//   im.*            → v4EventDrivenIm     (route IM messages through the bus vs the legacy sync path)
 //   agent.push.*    → v4AgentPushEnabled  (proactive agent-initiated push)
-//   everything else → v4MultiAgentRuntime (git/ci/pr/monitor/schedule are the multi-agent domain)
+//   everything else → v4MultiAgentRuntime (git/ci/pr/monitor/schedule — and im.*: the dedicated
+//                     v4EventDrivenIm flag was removed with the V2 IM durable-only migration. No
+//                     production component publishes im.* anymore (mention admission is synchronous
+//                     durable SessionV2 work in the IM handler), but the registry still declares
+//                     im.message.created and this dispatcher's mention branch remains as the bus-side
+//                     machinery — so im.* rides the SAME master switch as every other routed type.)
 export const flagForEventType = (flags: RuntimeFlags.Info, eventType: string): boolean => {
-  if (eventType.startsWith("im.")) return flags.v4EventDrivenIm
   if (eventType.startsWith("agent.push")) return flags.v4AgentPushEnabled
   return flags.v4MultiAgentRuntime
 }
@@ -563,13 +571,12 @@ export const layerWith = (options?: LayerOptions) =>
             // P1/P2 (design W0.4 note 4) — the mention branch is gated on `isEventV2AdmissionEnabled()`,
             // the SAME predicate the dispatch port uses (multi-agent-runtime.ts dispatch —
             // dispatchV2 vs coordinate). v4 ON ∧ admission ON ⇒ this dispatcher owns the mention (dispatch
-            // or receipt) while the legacy synchronous executor in the IM handler is skipped — the
-            // double-execution regression (P1) is closed from both sides. v4 ON ∧ admission OFF ⇒ the
-            // explicit fall-back-to-legacy matrix: this mention branch is skipped, the event keeps the
-            // pre-W0.4 pure-router path (the legacy executor in the IM handler runs instead — the
-            // admission OFF combo is "legacy path authoritative", NOT a silent loss; no receipt is
-            // written, which is the documented explicit-disabled semantic). With the event path off the
-            // flag_disabled fail-closed drop stays authoritative.
+            // or receipt). v4 ON ∧ admission OFF ⇒ the explicit fall-back matrix: this mention branch is
+            // skipped, the event keeps the pre-W0.4 pure-router path (no receipt is written, which is the
+            // documented explicit-disabled semantic). With the event path off the flag_disabled
+            // fail-closed drop stays authoritative. (V2 IM durable-only migration: no producer publishes
+            // im.* anymore — the IM handler admits mentions synchronously as durable SessionV2 work, so
+            // this branch is the dormant bus-side half and cannot double-execute with it.)
             const mentions = mentionNamesFor(event)
             if (mentions.length > 0 && isEventV2AdmissionEnabled(options?.runtimeFeatures)) {
               return yield* handleMention(event, agents, mentions)

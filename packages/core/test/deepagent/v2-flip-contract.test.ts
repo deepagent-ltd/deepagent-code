@@ -60,12 +60,13 @@ describe("C7-05 flip contract (production-entry ON + explicit kill-switch)", () 
       fileURLToPath(new URL("../../../deepagent-code/src/runtime-defaults.ts", import.meta.url)),
       "utf8",
     )
-    // W0.1: both production entrypoints apply the single runtime-defaults source; the CI entry
-    // must still ship the IM single-write suppression together with the V2 event-driven IM path
-    // (otherwise @mention work is silently dropped — the G7i authority review P1).
+    // W0.1: both production entrypoints apply the single runtime-defaults source. The former
+    // DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM pairing default is gone with the V2 IM durable-only
+    // migration: @mentions are admitted synchronously as durable SessionV2 work by the IM
+    // handler (no bus-mediated IM path to pair with), and the v4EventDrivenIm flag itself is
+    // deleted — @mention work can no longer be silently dropped via a missing pairing.
     expect(entry).toContain("applyRuntimeDefaults(")
     expect(node).toContain("applyRuntimeDefaults(")
-    expect(entry).toContain('process.env.DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM ??= "true"')
     // both authorities' env constants are covered by the default-ON runtime defaults
     expect(defaults).toContain('= "DEEPAGENT_CODE_EVENT_V2_ADMISSION"')
     expect(defaults).toContain('= "DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE"')
