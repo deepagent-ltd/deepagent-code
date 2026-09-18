@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs"
 import path from "node:path"
-import type { LearningCandidate } from "./learning"
+import type { LearningCandidate, LearningEvidenceSnapshot } from "./learning"
 import * as Learning from "./learning"
 import type { AgentMode } from "./mode"
 import type { RoundState } from "./round-state"
@@ -29,6 +29,7 @@ export type LearningWorkerInput = {
   readonly finalStatus: "completed" | "failed"
   readonly trigger: LearningTrigger
   readonly policy?: LearningPolicy
+  readonly evidence?: LearningEvidenceSnapshot
   // H32-2: Optional reviewer injected by the caller (e.g. runBackgroundLearning in agent-gateway.ts).
   // The reviewer receives only the extracted candidates — no session history, no run context, no tool
   // state — ensuring it evaluates each candidate in isolation (no hidden evaluator context leaking in).
@@ -134,6 +135,7 @@ export class LearningWorker {
       roundState: input.roundState,
       totalRounds: input.totalRounds,
       finalStatus: input.finalStatus,
+      evidence: input.evidence,
     })
     // H32-2: if a reviewer is injected, pass ONLY the extracted candidates — no session state, no
     // history, no run context. The reviewer may filter or annotate; we proceed on its output.

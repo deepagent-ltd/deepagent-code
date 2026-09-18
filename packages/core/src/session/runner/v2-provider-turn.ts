@@ -2,7 +2,7 @@ export * as V2ProviderTurn from "./v2-provider-turn"
 
 import { RequestExecutor } from "@deepagent-code/llm/route"
 import { and, eq, inArray, max, or, sql } from "drizzle-orm"
-import { Cause, Context, Duration, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect"
+import { Cause, Context, Duration, Effect, Exit, Layer, Option, Ref, Schema, Semaphore, Stream } from "effect"
 import { Database } from "../../database/database"
 import { CanonicalJson } from "../../util/canonical-json"
 import { Hash } from "../../util/hash"
@@ -352,6 +352,12 @@ export interface Interface {
     receipt: Receipt,
     input?: { readonly errorCode?: string; readonly outcomeArtifact?: readonly unknown[] },
   ) => Effect.Effect<Receipt, Error>
+  /**
+   * Adopt a receipt whose process-local owner generation was fenced while provider work was in
+   * flight. This never replays provider work: a started attempt becomes indeterminate under the
+   * successor generation and an undispatched attempt becomes failed/retryable.
+   */
+  readonly recoverFenced: (receipt: Receipt) => Effect.Effect<Receipt, Error>
   readonly recover: () => Effect.Effect<number, Error>
   readonly get: (receiptId: string) => Effect.Effect<Receipt | undefined>
   readonly recordBaselinePrepared: (input: BaselineInput) => Effect.Effect<void, Error>
@@ -417,6 +423,7 @@ export const layerWith = (options: LayerOptions = {}) =>
         token: ownerBase,
         generation: 0,
       })
+      const ownerRotation = yield* Semaphore.make(1)
       yield* owners.register({ ownerToken: ownerBase, leaseMs }).pipe(Effect.orDie)
       const healthy = yield* Ref.make(true)
       const currentOwnerToken = () => Ref.get(owner).pipe(Effect.map((state) => state.token))
@@ -428,6 +435,24 @@ export const layerWith = (options: LayerOptions = {}) =>
         Ref.get(healthy),
         (value) => value,
         () => new ConflictError({ reason: "v2_provider_owner_not_healthy" }),
+      )
+
+      const rotateFencedOwner = Effect.fn("V2ProviderTurn.rotateFencedOwner")((fencedToken: string) =>
+        Semaphore.withPermits(ownerRotation, 1)(
+          Effect.gen(function* () {
+            const current = yield* Ref.get(owner)
+            if (current.token !== fencedToken) return { ...current, rotated: false as const }
+            const generation = current.generation + 1
+            const token = `${ownerBase}:gen-${generation}:${crypto.randomUUID()}`
+            yield* owners.register({ ownerToken: token, leaseMs, successor: true }).pipe(
+              Effect.catch((error) =>
+                Effect.fail(new ConflictError({ reason: `v2_provider_owner_rotation_failed:${error.reason}` })),
+              ),
+            )
+            yield* Ref.set(owner, { token, generation })
+            return { token, generation, rotated: true as const }
+          }),
+        ),
       )
 
       const get = Effect.fn("V2ProviderTurn.get")(function* (receiptId: string) {
@@ -1018,7 +1043,22 @@ export const layerWith = (options: LayerOptions = {}) =>
               }),
             { behavior: "immediate" },
           )
-          .pipe(Effect.orDie)
+          .pipe(preserveErrors)
+      })
+
+      const recoverFenced = Effect.fn("V2ProviderTurn.recoverFenced")(function* (receipt: Receipt) {
+        const stored = yield* get(receipt.receiptId)
+        if (!stored) return yield* new NotFoundError()
+        if (["settled", "failed", "indeterminate_after_crash"].includes(stored.state)) return stored
+        if (stored.ownerToken !== receipt.ownerToken)
+          return yield* new ConflictError({ reason: "v2_fenced_recovery_receipt_owner_mismatch" })
+        yield* rotateFencedOwner(receipt.ownerToken)
+        yield* recover()
+        const recovered = yield* get(receipt.receiptId)
+        if (!recovered) return yield* new NotFoundError()
+        if (!["failed", "indeterminate_after_crash"].includes(recovered.state))
+          return yield* new ConflictError({ reason: "v2_fenced_recovery_not_terminal" })
+        return recovered
       })
 
       yield* recover().pipe(Effect.orDie)
@@ -1037,17 +1077,16 @@ export const layerWith = (options: LayerOptions = {}) =>
               error instanceof SessionProviderOwner.ConflictError &&
               error.reason === "provider_owner_lease_not_live"
             ) {
-              const generation = (yield* Ref.get(owner)).generation + 1
-              const token = `${ownerBase}:gen-${generation}:${crypto.randomUUID()}`
-              const registered = yield* owners
-                .register({ ownerToken: token, leaseMs, successor: true })
-                .pipe(Effect.exit)
-              if (Exit.isSuccess(registered)) {
-                yield* Ref.set(owner, { token, generation })
-                yield* Effect.logInfo(`v2 provider owner generation rotated: generation=${generation}`)
+              const fencedToken = (yield* Ref.get(owner)).token
+              const rotated = yield* rotateFencedOwner(fencedToken).pipe(Effect.exit)
+              if (Exit.isSuccess(rotated)) {
+                if (rotated.value.rotated)
+                  yield* Effect.logInfo(
+                    `v2 provider owner generation rotated: generation=${rotated.value.generation}`,
+                  )
                 yield* recover().pipe(Effect.ignore)
               } else
-                yield* Effect.logError(`v2 provider owner rotation failed: ${Cause.pretty(registered.cause)}`)
+                yield* Effect.logError(`v2 provider owner rotation failed: ${Cause.pretty(rotated.cause)}`)
             } else yield* Effect.logError(`v2 provider owner heartbeat failed; retrying: ${Cause.pretty(beat.cause)}`)
           }
           yield* Effect.sleep(Duration.millis(Math.max(1, Math.floor(leaseMs / 3))))
@@ -1212,6 +1251,7 @@ export const layerWith = (options: LayerOptions = {}) =>
         abandon,
         bindAttempt,
         quarantine,
+        recoverFenced,
         recover,
         get,
         recordBaselinePrepared,
@@ -1304,6 +1344,32 @@ export function stream<A, E, R>(input: {
       : input.service
           .persistIntegrityEvidence({ receiptId: receipt.receiptId, identity: input.integrityIdentity })
           .pipe(Effect.asVoid, Effect.orDie)
+  const recoverOwnerFence = (error: Error) => {
+    if (!(error instanceof ConflictError) || error.reason !== "v2_provider_owner_lease_not_live")
+      return Effect.die(error)
+    return input.service.recoverFenced(current).pipe(
+      Effect.tap((receipt) =>
+        Effect.sync(() => {
+          current = receipt
+        }),
+      ),
+      Effect.tap((receipt) =>
+        Effect.logWarning("provider owner was fenced after dispatch; successor quarantined the receipt", {
+          receiptId: receipt.receiptId,
+          state: receipt.state,
+        }),
+      ),
+      Effect.asVoid,
+      Effect.catchCause((cause) =>
+        Effect.logError("provider owner fenced-recovery failed", {
+          receiptId: current.receiptId,
+          cause: Cause.pretty(cause),
+        }).pipe(Effect.andThen(Effect.failCause(cause)), Effect.orDie),
+      ),
+    )
+  }
+  const finalizeTransition = (effect: Effect.Effect<Receipt, Error>) =>
+    effect.pipe(Effect.tap(persistIntegrityEvidence), Effect.asVoid, Effect.catch(recoverOwnerFence))
   return input.stream.pipe(
     Stream.provideService(RequestExecutor.CurrentRetryLimit, 0),
     Stream.provideService(CurrentRequestSeal, {
@@ -1316,7 +1382,10 @@ export function stream<A, E, R>(input: {
     }),
     Stream.tap(() =>
       current.state === "dispatching"
-        ? input.service.markStreaming(current).pipe(Effect.tap((receipt) => Effect.sync(() => (current = receipt))))
+        ? input.service.markStreaming(current).pipe(
+            Effect.tap((receipt) => Effect.sync(() => (current = receipt))),
+            Effect.catch(recoverOwnerFence),
+          )
         : Effect.void,
     ),
     Stream.concat(
@@ -1330,34 +1399,38 @@ export function stream<A, E, R>(input: {
       Effect.uninterruptible(
         Effect.suspend(() => {
           if (current.state === "preparing") {
-            return input.service.abandon(current, "wire_seal_failed_before_dispatch").pipe(Effect.orDie)
+            return finalizeTransition(input.service.abandon(current, "wire_seal_failed_before_dispatch"))
           }
           if (current.state !== "dispatching" && current.state !== "streaming") return Effect.void
           if (reachedEnd && Exit.isSuccess(exit)) {
-            return input.service
-              .settle({ receipt: current, outcome: "settled", outcomeArtifact: input.outcomeArtifact() })
-              .pipe(Effect.tap(persistIntegrityEvidence), Effect.orDie)
+            return finalizeTransition(
+              input.service.settle({
+                receipt: current,
+                outcome: "settled",
+                outcomeArtifact: input.outcomeArtifact(),
+              }),
+            )
           }
           if (Exit.isFailure(exit) && Cause.findInterrupt(exit.cause)._tag === "Failure") {
             const error = Option.getOrUndefined(Cause.findErrorOption(exit.cause))
             if (input.terminalProviderFailure !== undefined && input.terminalProviderFailure(error)) {
-              return input.service
-                .settle({
+              return finalizeTransition(
+                input.service.settle({
                   receipt: current,
                   outcome: "failed",
                   outcomeArtifact: input.outcomeArtifact(),
                   errorCode: input.errorCode(exit.cause),
-                })
-                .pipe(Effect.tap(persistIntegrityEvidence), Effect.orDie)
+                }),
+              )
             }
-            return input.service
-              .quarantine(current, {
+            return finalizeTransition(
+              input.service.quarantine(current, {
                 errorCode: input.errorCode(exit.cause),
                 outcomeArtifact: input.outcomeArtifact(),
-              })
-              .pipe(Effect.tap(persistIntegrityEvidence), Effect.orDie)
+              }),
+            )
           }
-          return input.service.quarantine(current).pipe(Effect.tap(persistIntegrityEvidence), Effect.orDie)
+          return finalizeTransition(input.service.quarantine(current))
         }),
       ),
     ),

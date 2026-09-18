@@ -1,6 +1,5 @@
 import { describe, expect } from "bun:test"
 import { mkdtempSync } from "node:fs"
-import { tmpdir } from "node:os"
 import path from "node:path"
 import { LLMClient, LLMEvent, Model, type LLMClientShape, type LLMRequest } from "@deepagent-code/llm"
 import * as OpenAIChat from "@deepagent-code/llm/protocols/openai-chat"
@@ -55,7 +54,7 @@ import { Effect, Layer, LayerMap, Option, Schema, Stream } from "effect"
 import { eq, sql } from "drizzle-orm"
 import { testEffect } from "../lib/effect"
 import { onSessionSettled, onSessionSettledSeamLayer } from "@/deepagent/learning-runtime"
-import { tmpRoot, tmpRootShared } from "../fixture/fixture"
+import { tmpRootShared } from "../fixture/fixture"
 
 // W7 — V2 session settle → durable learning admission (by flag). The runner composition mirrors the
 // core SessionRunner harness (real V2 turn pipeline, fake provider) plus the REAL `onSessionSettled`
@@ -304,6 +303,51 @@ const configureGateway = (durableLearning: boolean) =>
     )
   })
 
+const seedAuthoritativeCompletion = Effect.sync(() => {
+  const plan = {
+    plan_id: "plan-w7-authoritative-completion",
+    session_id: sessionID,
+    goal: "finish and verify the W7 task",
+    assumptions: [],
+    steps: [
+      {
+        step_id: "step-w7-complete",
+        title: "finish and verify",
+        status: "done" as const,
+        acceptance: "the focused test passes",
+        evidence: ["bun test test/deepagent/learning-v2-settle.test.ts: passed"],
+      },
+    ],
+    active_step_id: null,
+    created_at: "2026-09-18T00:00:00.000Z",
+  }
+  AgentGateway.DeepAgentSessionState.getOrCreate(sessionID, "high")
+  const planRef = AgentGateway.DeepAgentPlanStore.setPlanDoc(sessionID, plan)
+  const goalId = "goal-w7-authoritative-completion"
+  AgentGateway.DeepAgentSessionState.setActiveGoal(sessionID, {
+    goalId,
+    planDocId: planRef.id,
+    phase: "done",
+    startedAt: "2026-09-18T00:00:00.000Z",
+  })
+  AgentGateway.DeepAgentDocumentStore.DocumentStore.shared(
+    AgentGateway.DeepAgentPlanStore.planStoreRoot(sessionID),
+  ).upsert({
+    type: "decision",
+    scope: AgentGateway.DeepAgentPlanStore.planScope(sessionID),
+    description: `goal ${goalId} completion report`,
+    idSlug: `goal-completion-${goalId}`,
+    body: JSON.stringify({
+      goalId,
+      planDocId: planRef.id,
+      criteriaMet: true,
+      plan: AgentGateway.DeepAgentPlanController.buildCompletionReport(plan),
+    }),
+    provenance: { source: "runner", run_ref: AgentGateway.DeepAgentPlanStore.planScope(sessionID) },
+    extensions: { goal_id: goalId, outcome: "done", report_kind: "completion" },
+  })
+})
+
 const clearLearningTables = Effect.gen(function* () {
   const { db } = yield* Database.Service
   yield* db.delete(LearningAdmissionOutboxTable).run().pipe(Effect.orDie)
@@ -328,7 +372,7 @@ const settleOnce = Effect.gen(function* () {
 })
 
 describe("W7 V2 session settle → durable learning admission", () => {
-  it.effect("admits one session_finalization learning run per settled activity when durableLearning is ON", () =>
+  it.effect("does not treat an ordinary settled activity as completed learning", () =>
     Effect.gen(function* () {
       yield* clearLearningTables
       yield* configureGateway(true)
@@ -340,25 +384,8 @@ describe("W7 V2 session settle → durable learning admission", () => {
         .where(eq(LearningAdmissionOutboxTable.session_id, sessionID))
         .all()
         .pipe(Effect.orDie)
-      expect(outbox).toHaveLength(1)
-      expect(outbox[0]).toMatchObject({ trigger: "session_finalization", state: "admitted" })
-      // W15 (P2): the real settled activity admits with finalStatus completed + its dispatched
-      // round count (the receipt state gate reads the actual terminal, not a hardcoded value).
-      const intent = JSON.parse(outbox[0]!.payload_json) as { final_status: string; total_rounds: number }
-      expect(intent.final_status).toBe("completed")
-      expect(intent.total_rounds).toBe(1)
-      const job = yield* db
-        .select()
-        .from(LearningJobTable)
-        .where(eq(LearningJobTable.session_id, sessionID))
-        .get()
-        .pipe(Effect.orDie)
-      expect(job).toMatchObject({
-        session_id: sessionID,
-        trigger: "session_finalization",
-        policy: "manual_review",
-        run_id: expect.stringMatching(/^v2_/),
-      })
+      expect(outbox).toHaveLength(0)
+      expect(yield* db.select().from(LearningJobTable).all().pipe(Effect.orDie)).toHaveLength(0)
     }),
   )
 
@@ -583,10 +610,42 @@ describe("W15 onSessionSettled reads the V2 receipt terminal state (P2)", () => 
     }),
   )
 
-  it.effect("a settled activity admits with finalStatus completed and non-rebuild/non-isolation rounds", () =>
+  it.effect("a learning reviewer session cannot recursively admit another learning job", () =>
     Effect.gen(function* () {
       yield* clearLearningTables
       yield* configureGateway(true)
+      yield* seedReceipt({
+        activityId: "activity_w15_learning_reviewer",
+        state: "settled",
+        requestOrdinal: 150,
+      })
+      const { db } = yield* Database.Service
+      yield* db
+        .update(SessionTable)
+        .set({
+          agent: "reviewer",
+          metadata: { deepagent: { learning_reviewer_attempt_id: "review:source-job" } },
+        })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
+
+      yield* onSessionSettled(yield* Database.Service)({
+        sessionID,
+        workspacePath: root,
+        activityId: "activity_w15_learning_reviewer",
+      })
+
+      expect(yield* db.select().from(LearningAdmissionOutboxTable).all().pipe(Effect.orDie)).toHaveLength(0)
+      expect(yield* db.select().from(LearningJobTable).all().pipe(Effect.orDie)).toHaveLength(0)
+    }),
+  )
+
+  it.effect("admits one learning source per authoritative Goal completion", () =>
+    Effect.gen(function* () {
+      yield* clearLearningTables
+      yield* configureGateway(true)
+      yield* seedAuthoritativeCompletion
       // One real settled round + one pre-dispatch rebuild artifact (same chain, later ordinal)
       // + one shadow-parity probe row: totalRounds must count exactly 1.
       yield* seedReceipt({ activityId: "activity_w15_settled", state: "settled", requestOrdinal: 201 })
@@ -621,6 +680,23 @@ describe("W15 onSessionSettled reads the V2 receipt terminal state (P2)", () => 
       const intent = JSON.parse(outbox[0]!.payload_json) as { final_status: string; total_rounds: number }
       expect(intent.final_status).toBe("completed")
       expect(intent.total_rounds).toBe(1)
+
+      // The completed Goal pointer/report remain visible after admission. A later ordinary settled
+      // activity must not turn that stale completion authority into a second learning source.
+      yield* seedReceipt({ activityId: "activity_w15_after_goal", state: "settled", requestOrdinal: 204 })
+      yield* onSessionSettled(yield* Database.Service)({
+        sessionID,
+        workspacePath: root,
+        activityId: "activity_w15_after_goal",
+      })
+      expect(
+        yield* db
+          .select()
+          .from(LearningAdmissionOutboxTable)
+          .where(eq(LearningAdmissionOutboxTable.session_id, sessionID))
+          .all()
+          .pipe(Effect.orDie),
+      ).toHaveLength(1)
     }),
   )
 })

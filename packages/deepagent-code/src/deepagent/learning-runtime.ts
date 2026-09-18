@@ -1,13 +1,15 @@
 export * as DurableLearningRuntime from "./learning-runtime"
 
 import path from "node:path"
-import { existsSync, readFileSync } from "node:fs"
+import { existsSync, readFileSync, realpathSync } from "node:fs"
 import { and, count, desc, eq, inArray, isNull, ne, notInArray, or } from "drizzle-orm"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { Database } from "@deepagent-code/core/database/database"
 import { DeepAgentDurableLearning } from "@deepagent-code/core/deepagent/durable-learning"
 import { DeepAgentLearningLifecycleTrigger } from "@deepagent-code/core/deepagent/learning-lifecycle-trigger"
-import { createInitialRoundState } from "@deepagent-code/core/deepagent/round-state"
+import { LearningAdmissionOutboxTable } from "@deepagent-code/core/deepagent/learning-admission-outbox.sql"
+import { createInitialRoundState, type ValidationResult } from "@deepagent-code/core/deepagent/round-state"
+import type { LearningEvidenceSnapshot } from "@deepagent-code/core/deepagent/learning"
 import { writeFileAtomic } from "@deepagent-code/core/deepagent/atomic-write"
 import { Global } from "@deepagent-code/core/global"
 import { SessionTable } from "@deepagent-code/core/session/sql"
@@ -84,9 +86,9 @@ export function deliveryReceipt(
         ...(outcome.headBefore === undefined ? {} : { headBefore: outcome.headBefore }),
       }
     case "validation_failed":
-      return { ...base, verdict: "withheld_validation_failed" }
+      return { ...base, verdict: "withheld_validation_failed", recoveryRef: outcome.recoveryRef }
     case "unverified":
-      return { ...base, verdict: "withheld_unverified" }
+      return { ...base, verdict: "withheld_unverified", recoveryRef: outcome.recoveryRef }
     default:
       return { ...base, verdict: "skipped", reason: outcome.reason }
   }
@@ -132,6 +134,80 @@ export const registerLearningReviewerFactory = Effect.fn("DurableLearningRuntime
   },
 )
 
+// Release safety switch: model-backed learning review stays opt-in until the reviewer has a
+// dedicated non-learning runner. Facts, extraction, and fail-closed governance remain enabled.
+export const learningReviewerProviderEnabled = (
+  value: string | undefined = process.env.DEEPAGENT_DURABLE_LEARNING_REVIEWER,
+) => value === "true"
+
+type LearningSession = {
+  readonly id: SessionSchema.ID
+  readonly parentId: SessionSchema.ID | null
+  readonly agent: string | null
+  readonly metadata: Record<string, unknown> | null
+}
+
+/** Only root user sessions may produce learning admissions. Defense-in-depth markers cover
+ * deterministic reviewer IDs and rows created before that ID convention was introduced. */
+export function isLearningEligibleSession(session: LearningSession) {
+  if (session.parentId !== null) return false
+  if (SessionSchema.isLearningReviewerSession(session.id) || session.agent === "reviewer") return false
+  if (!session.metadata || typeof session.metadata.deepagent !== "object" || session.metadata.deepagent === null)
+    return true
+  const metadata = session.metadata.deepagent as Record<string, unknown>
+  if ("learning_reviewer_attempt_id" in metadata || "v4_event" in metadata) return false
+  return true
+}
+
+export function isCompletedLearningBoundary(input: {
+  readonly plan: ReturnType<typeof AgentGateway.DeepAgentPlanStore.getPlanDoc>
+  readonly planDocId: string | null
+  readonly activeGoal: ReturnType<typeof AgentGateway.DeepAgentSessionState.getActiveGoal>
+  readonly completionReports: ReadonlyArray<{
+    readonly type: string
+    readonly scope: string
+    readonly provenance: { readonly source: string }
+    readonly extensions?: Readonly<Record<string, unknown>>
+  }>
+}) {
+  const plan = input.plan
+  const activeGoal = input.activeGoal
+  if (!plan || !input.planDocId || activeGoal?.phase !== "done") return false
+  if (activeGoal.planDocId !== input.planDocId) return false
+  if (!AgentGateway.DeepAgentPlanController.buildCompletionReport(plan).complete) return false
+  return input.completionReports.some(
+    (report) =>
+      report.type === "decision" &&
+      report.scope === AgentGateway.DeepAgentPlanStore.planScope(plan.session_id) &&
+      report.provenance.source === "runner" &&
+      report.extensions?.report_kind === "completion" &&
+      report.extensions.outcome === "done" &&
+      report.extensions.goal_id === activeGoal.goalId,
+  )
+}
+
+export function isLearningDeliveryVerdict(receipt: SessionRunner.DeliveryReceipt) {
+  return receipt.verdict !== "withheld_validation_failed" && receipt.verdict !== "withheld_unverified"
+}
+
+const authoritativeCompletion = (sessionID: string) => {
+  const plan = AgentGateway.DeepAgentPlanStore.getPlanDoc(sessionID)
+  const planRef = AgentGateway.DeepAgentPlanStore.planDocRef(sessionID)
+  const activeGoal = AgentGateway.DeepAgentSessionState.getActiveGoal(sessionID)
+  if (!plan || !planRef || activeGoal?.phase !== "done") return null
+  const store = AgentGateway.DeepAgentDocumentStore.DocumentStore.shared(
+    AgentGateway.DeepAgentPlanStore.planStoreRoot(sessionID),
+  )
+  const completionReports = store
+    .list({ type: "decision", scope: AgentGateway.DeepAgentPlanStore.planScope(sessionID) })
+    .flatMap((ref) => {
+      const report = store.get(ref.id)
+      return report ? [report] : []
+    })
+  if (!isCompletedLearningBoundary({ plan, planDocId: planRef.id, activeGoal, completionReports })) return null
+  return { goalId: activeGoal.goalId }
+}
+
 export const learningAuthority = (database: Database.Interface): AgentGateway.LearningAuthority => ({
   record: (admission) => Effect.runPromise(DeepAgentDurableLearning.record(database.db, admission).pipe(Effect.asVoid)),
   enqueue: (admission) =>
@@ -151,7 +227,9 @@ export const layer = Layer.effectDiscard(
       DeepAgentDurableLearning.drain(database.db, {
         owner,
         authorityRoot: Global.Path.agent.data,
-        reviewerForWorkspace: reviewers?.reviewerForWorkspace,
+        ...(learningReviewerProviderEnabled() && reviewers
+          ? { reviewerForWorkspace: reviewers.reviewerForWorkspace }
+          : {}),
       }),
     ).pipe(
       Effect.catchCause((cause) =>
@@ -166,13 +244,9 @@ export const layer = Layer.effectDiscard(
       }),
     )
 
-    yield* DeepAgentLearningLifecycleTrigger.recover(database.db, { authorityRoot: Global.Path.agent.data }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logError("durable learning lifecycle recovery failed", { cause: Cause.pretty(cause) }).pipe(
-          Effect.as([]),
-        ),
-      ),
-    )
+    // Legacy idle/pause/project-switch receipts intentionally stay quarantined. Their identity
+    // included the signal name, so replaying them would relearn an already-submitted completed
+    // source. A future long-stopped generation migration must reconcile them explicitly.
     yield* tick
     yield* tick.pipe(Effect.repeat(Schedule.spaced(pollInterval)), Effect.forkScoped)
   }),
@@ -198,10 +272,11 @@ export const lifecycleObserverLayer = Layer.effect(
 
 // ---------------------------------------------------------------------------
 // W7 — settle-triggered durable learning (the SessionRunner `onSessionSettled` hook).
-// A drained V2 activity is admitted as a `session_finalization` learning run: the same
-// outbox → reconcile → job pipeline the legacy gateway close path drives, with:
+// A drained V2 activity that carries an authoritative completed Goal is admitted as a
+// `session_finalization` learning run: the same outbox → reconcile → job pipeline the legacy
+// gateway close path drives, with:
 //   - trigger   = session_finalization
-//   - runID     = `v2_<activityId>` (one run per durable V2 activity)
+//   - runID     = `v2_goal_<goal hash>` (one learning source per authoritative Goal completion)
 //   - totalRounds = non-rebuild / non-isolation provider-turn receipts observed for the
 //     activity (W15: `owner_mode='v2'` rows only, minus pre-dispatch rebuild abandons)
 //   - roundState = initial round state (V2 has no V1 diagnoses; extraction sees the
@@ -232,6 +307,7 @@ export function onSessionSettled(
     const withStorage = runtime?.withStorage ?? (<A>(operation: () => A) => operation())
     return Effect.gen(function* () {
       if (input.activityId === undefined) return
+      const activityId = input.activityId
       // W4 (gap audit B3): the completion worklog — RUNNER facts only (plan terminal state),
       // written at settle into the run document set next to the plan. Model self-reports never
       // enter it (V3.3 completion-report contract). Independent of the learning flag: this is
@@ -271,16 +347,15 @@ export function onSessionSettled(
       // failure logs and never fails the settle; the tree is left untouched on any failure.
       // Review fix: only the paths THIS session's own write/edit calls touched are committed —
       // `git add -A` on the project root would absorb the user's unrelated uncommitted work.
-      yield* Effect.promise(async () => {
+      const finalization = yield* Effect.promise(async () => {
         const workspace = input.workspacePath
-        if (input.activityId === undefined) return { finalized: false, detail: "skipped: no activity" }
         // G-E: the git facts the delivery verdict must carry. `branchBefore`/`headBefore` are
         // captured at the FIRST settle attempt for this activity (a retry keeps the original), so a
         // side-branch commit made during the activity is visible as a branch/HEAD divergence rather
         // than masquerading as "nothing to deliver".
         const gitState = await finalizerGitState(workspace)
-        const before = activityStartGit.get(input.activityId) ?? gitState
-        rememberActivityStart(input.activityId, before)
+        const before = activityStartGit.get(activityId) ?? gitState
+        rememberActivityStart(activityId, before)
         // Review round 5: harvest THIS activity's validation evidence from the durable event log
         // and record it WITH the activity binding BEFORE reading it back — under the V2 owner
         // branch the V1 request-prep harvester never runs (prompt.ts returns from the v2Drain
@@ -291,16 +366,16 @@ export function onSessionSettled(
         // and the read run INSIDE withStorage so they address the same SessionState runtime the
         // gateway configured (a bare module call would hit the defaultRuntime instead).
         const validation = withStorage(() => {
-          const results = harvestActivityValidation(database, input.sessionID, input.activityId!, workspace)
+          const results = harvestActivityValidation(database, input.sessionID, activityId, workspace)
           const state = AgentGateway.DeepAgentSessionState.get(input.sessionID)
           if (!state || results.length === 0) return "unverified" as const
           // Only evidence attributed to THIS activity authorizes delivery; anything else
           // (none, an older activity's, or unattributed legacy state) withholds. Withholding
           // defers delivery — the tree keeps the work; it never loses it.
-          if (state.lastValidationActivityId !== input.activityId) return "unverified" as const
+          if (state.lastValidationActivityId !== activityId) return "unverified" as const
           return results.every((result) => result.passed) ? ("validated" as const) : ("validation_failed" as const)
         })
-        const touchedPaths = activityTouchedPaths(database, input.sessionID, input.activityId)
+        const touchedPaths = activityTouchedPaths(database, input.sessionID, activityId)
         const outcome = await finalizeSessionWork({
           directory: workspace,
           validation,
@@ -309,42 +384,80 @@ export function onSessionSettled(
           branchBefore: before.branch,
           refsBefore: before.refs,
         })
-        report?.(deliveryReceipt(input.activityId, before, touchedPaths.length, outcome))
-        activityStartGit.delete(input.activityId)
+        const receipt = deliveryReceipt(activityId, before, touchedPaths.length, outcome)
+        report?.(receipt)
+        activityStartGit.delete(activityId)
         if (outcome.kind === "committed")
-          return { finalized: true, detail: `committed ${outcome.files} file(s) at ${outcome.commit}` }
+          return { receipt, detail: `committed ${outcome.files} file(s) at ${outcome.commit}` }
         if (outcome.kind === "validation_failed")
-          return { finalized: false, detail: `withheld: last validation failed (${outcome.files} changed)` }
+          return {
+            receipt,
+            detail: `withheld: last validation failed (${outcome.files} changed); recovery: ` + outcome.recoveryRef,
+          }
         if (outcome.kind === "unverified")
           return {
-            finalized: false,
-            detail: `withheld: no validation evidence for this activity (${outcome.files} changed)`,
+            receipt,
+            detail:
+              `withheld: no validation evidence for this activity (${outcome.files} changed); recovery: ` +
+              outcome.recoveryRef,
           }
-        if (outcome.kind === "no_changes") return { finalized: false, detail: "no changes to deliver" }
+        if (outcome.kind === "no_changes") return { receipt, detail: "no changes to deliver" }
         if (outcome.kind === "no_changes_on_this_branch")
           return {
-            finalized: false,
+            receipt,
             detail:
               `no changes on this branch: attributable paths are clean but the branch moved ` +
               `(${outcome.recoveryRef}) — work may exist off this delivery surface`,
           }
-        return { finalized: false, detail: `skipped: ${outcome.reason}` }
+        return { receipt, detail: `skipped: ${outcome.reason}` }
       }).pipe(
-        Effect.flatMap((result) => Effect.logInfo(`session finalizer: ${result.detail}`)),
-        Effect.catchCause((cause) => Effect.logWarning("session finalizer failed", { cause }).pipe(Effect.asVoid)),
+        Effect.tap((result) => Effect.logInfo(`session finalizer: ${result.detail}`)),
+        Effect.catchCause((cause) => Effect.logWarning("session finalizer failed", { cause }).pipe(Effect.as(null))),
       )
       if (!(runtime?.durableLearning ?? AgentGateway.durableLearningEnabled())) return
+      // Delivery failures that explicitly prove this activity failed validation or has no
+      // attributable validation evidence are diagnostic facts, not successful learning sources.
+      // A finalizer defect is likewise fail-closed: without a receipt the runtime cannot prove this
+      // activity reached an admissible delivery boundary.
+      if (!finalization || !isLearningDeliveryVerdict(finalization.receipt)) return
+      // Provider/activity settlement is a transport boundary, not task completion. Admit only when
+      // the durable Goal authority says `done`, its runner-authored completion report exists, and the
+      // current structural plan is complete with its declared acceptance evidence.
+      const completion = withStorage(() => authoritativeCompletion(input.sessionID))
+      if (!completion) return
       const session = yield* database.db
-        .select({ projectId: SessionTable.project_id, directory: SessionTable.directory })
+        .select({
+          id: SessionTable.id,
+          projectId: SessionTable.project_id,
+          directory: SessionTable.directory,
+          parentId: SessionTable.parent_id,
+          agent: SessionTable.agent,
+          metadata: SessionTable.metadata,
+        })
         .from(SessionTable)
         .where(eq(SessionTable.id, input.sessionID))
         .get()
         .pipe(Effect.orDie)
-      if (!session) return
+      if (!session || !isLearningEligibleSession(session)) return
       const config = runtime ?? AgentGateway.learningAuthorityConfig()
       const baseDir = config.baseDir
       const runsDir = config.runsDir
-      const runID = `v2_${input.activityId}`
+      // One authoritative Goal completion is one learning source. A later activity in the same
+      // conversation must not re-learn the already-completed Goal merely because its durable
+      // completion report remains visible in the session graph.
+      const runID = `v2_goal_${Hash.sha256(`${input.sessionID}:${completion.goalId}`).slice(0, 24)}`
+      const existingAdmission = yield* database.db
+        .select({ intentId: LearningAdmissionOutboxTable.intent_id })
+        .from(LearningAdmissionOutboxTable)
+        .where(
+          and(
+            eq(LearningAdmissionOutboxTable.session_id, input.sessionID),
+            eq(LearningAdmissionOutboxTable.run_id, runID),
+          ),
+        )
+        .get()
+        .pipe(Effect.orDie)
+      if (existingAdmission) return
       const mode = runtime?.snapshot.agentMode ?? AgentGateway.snapshot().agentMode
       const roundState = createInitialRoundState(mode)
       // W15 (P2) — non-rebuilt / non-isolation rounds only. The row set distinguishes both:
@@ -402,6 +515,18 @@ export function onSessionSettled(
         .get()
         .pipe(Effect.orDie)
       if (latestTurn?.state !== "settled") return
+      const evidence = withStorage(() => {
+        const plan = AgentGateway.DeepAgentPlanStore.getPlanDoc(input.sessionID)
+        const state = AgentGateway.DeepAgentSessionState.get(input.sessionID)
+        return learningEvidenceSnapshot({
+          activityId,
+          workspacePath: input.workspacePath,
+          planGoal: plan?.goal ?? null,
+          documents: AgentGateway.DeepAgentPlanStore.listSpecDocs(input.sessionID),
+          changedPaths: activityTouchedPaths(database, input.sessionID, activityId),
+          validations: state?.lastValidationActivityId === activityId ? state.lastValidationResults : [],
+        })
+      })
       const terminalPath = path.join(runsDir, runID, "DEEPAGENT_RUN_STATE.json")
       const admission: DeepAgentDurableLearning.Admission = {
         baseDir,
@@ -426,6 +551,7 @@ export function onSessionSettled(
             (runtime?.selfLearning ?? AgentGateway.selfLearningPolicy()) === "auto"
               ? "auto_merge_safe_project"
               : "manual_review",
+          evidence,
         },
       }
       const fingerprint = DeepAgentDurableLearning.admissionFingerprint(admission)
@@ -457,6 +583,61 @@ export function onSessionSettled(
         Effect.logWarning("V2 settle learning admission failed", { cause: Cause.pretty(cause) }),
       ),
     )
+  }
+}
+
+export function learningEvidenceSnapshot(input: {
+  readonly activityId: string
+  readonly workspacePath: string
+  readonly planGoal: string | null
+  readonly documents: ReadonlyArray<{ kind: string; id: string; version: number }>
+  readonly changedPaths: readonly string[]
+  readonly validations: readonly ValidationResult[]
+}): LearningEvidenceSnapshot {
+  const resolvedWorkspace = path.resolve(input.workspacePath)
+  const workspace = existsSync(resolvedWorkspace) ? realpathSync(resolvedWorkspace) : resolvedWorkspace
+  const changedPaths = [
+    ...new Set(
+      input.changedPaths.flatMap((item) => {
+        const absolute = path.resolve(workspace, item)
+        const relative = path.relative(workspace, absolute)
+        if (relative === "" || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))
+          return []
+        return [relative.split(path.sep).join("/")]
+      }),
+    ),
+  ]
+    .toSorted()
+    .slice(0, 256)
+  const validations = input.validations
+    .map((validation) => ({
+      command_hash: Hash.sha256(validation.command),
+      passed: validation.passed,
+      kind: validation.kind,
+      exit_code: validation.exit_code,
+    }))
+    .toSorted((a, b) =>
+      `${a.command_hash}:${a.exit_code}:${a.passed}`.localeCompare(`${b.command_hash}:${b.exit_code}:${b.passed}`),
+    )
+    .slice(0, 64)
+  return {
+    schema_version: "deepagent-code.learning_evidence.v1",
+    activity_id: input.activityId,
+    plan_goal: input.planGoal?.replace(/\s+/g, " ").trim().slice(0, 512) || null,
+    document_refs: [
+      ...new Set(
+        input.documents
+          // The settle-time completion worklog increments on an exact settle retry. Requirements
+          // and design are the stable knowledge sources; validation and changed-path facts below
+          // carry the completion evidence without making retry identity drift.
+          .filter((document) => document.kind === "requirements" || document.kind === "design")
+          .map((document) => `${document.kind}:${document.id}@v${document.version}`),
+      ),
+    ]
+      .toSorted()
+      .slice(0, 128),
+    changed_paths: changedPaths,
+    validations,
   }
 }
 
@@ -629,14 +810,14 @@ function matchesValidationCommand(command: string, candidates: readonly string[]
   // cannot authorize a commit.
   if (command.includes("||") || command.includes("$(") || command.includes("`")) return false
   if (/[|;\n\r]/.test(command) || command.replaceAll("&&", "").includes("&")) return false
-  return command.split("&&").some((part) => {
-    const segment = part.trim()
-    if (candidates.includes("go test ./...") && /^go\s+test\s+\.\/\.\.(?:\s|$)/.test(segment)) return true
-    return candidates.some(
-      (candidate) =>
-        segment === candidate || segment.startsWith(`${candidate} `) || segment.startsWith(`${candidate}>`),
-    )
-  })
+  // The validation must be the final segment. Earlier `&&` segments may prepare the workspace,
+  // but accepting `validation && mutation` would certify a state that the validation never saw.
+  const segment = command.split("&&").at(-1)?.trim()
+  if (!segment) return false
+  if (candidates.includes("go test ./...") && /^go\s+test\s+\.\/\.\.(?:\s|$)/.test(segment)) return true
+  return candidates.some(
+    (candidate) => segment === candidate || segment.startsWith(`${candidate} `) || segment.startsWith(`${candidate}>`),
+  )
 }
 
 const FILE_MUTATING_TOOLS = new Set(["write", "edit", "apply_patch", "apply_patch_chunk"])

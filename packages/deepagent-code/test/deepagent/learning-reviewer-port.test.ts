@@ -17,6 +17,7 @@ test("isolated reviewer creates its session only after durable identity preparat
     session?: Session.Info
     createCalls: number
     promptCalls: number
+    promptInput?: Parameters<SessionPrompt.Interface["prompt"]>[0]
   } = {
     createCalls: 0,
     promptCalls: 0,
@@ -64,9 +65,10 @@ test("isolated reviewer creates its session only after durable identity preparat
     } as unknown as Session.Interface,
     prompt: {
       resolvePromptParts: (request: string) => Effect.succeed([{ type: "text", text: request }]),
-      prompt: () =>
+      prompt: (promptInput: Parameters<SessionPrompt.Interface["prompt"]>[0]) =>
         Effect.sync(() => {
           state.promptCalls += 1
+          state.promptInput = promptInput
           return {
             info: {
               role: "assistant",
@@ -118,6 +120,12 @@ test("isolated reviewer creates its session only after durable identity preparat
   expect(result).toEqual({ verdict: "approve", selectedCandidateIds: ["candidate-1"] })
   expect(state.createCalls).toBe(1)
   expect(state.promptCalls).toBe(1)
+  expect(state.promptInput).toMatchObject({
+    sessionID: identity.reviewSessionId,
+    agent: "reviewer",
+    tools: {},
+    metadata: { deepagent: { learning_reviewer_attempt_id: "review:job-1" } },
+  })
   expect(state.session).toMatchObject({
     id: identity.reviewSessionId,
     directory: workspacePath,

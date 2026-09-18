@@ -28,6 +28,66 @@ const workerFor = (projectID = "projA") => {
 }
 
 describe("V3.1 LearningWorker and SkillCurator", () => {
+  test("extracts grounded completion memory only from attributed changes and passing validation evidence", () => {
+    const base = {
+      runId: "run-evidence",
+      mode: "high" as const,
+      roundState: createInitialRoundState("high"),
+      totalRounds: 1,
+      finalStatus: "completed" as const,
+      evidence: {
+        schema_version: "deepagent-code.learning_evidence.v1" as const,
+        activity_id: "activity-1",
+        plan_goal: "Fix durable completion learning",
+        document_refs: ["requirements:doc-1@v2"],
+        changed_paths: ["packages/core/src/deepagent/learning.ts"],
+        validations: [
+          {
+            command_hash: "a".repeat(64),
+            passed: true,
+            kind: "command_exit",
+            exit_code: 0,
+          },
+        ],
+      },
+    }
+
+    expect(Learning.extract(base)).toMatchObject({
+      promotion_decision: "needs_review",
+      candidates: [
+        {
+          candidate_id: "memory:run-evidence:validated-completion",
+          summary:
+            'Validated completion of "Fix durable completion learning": 1 attributed file(s) changed and 1 activity-bound check(s) passed.',
+          evidence_refs: [
+            "activity:activity-1",
+            "requirements:doc-1@v2",
+            "path:packages/core/src/deepagent/learning.ts",
+            `validation:${"a".repeat(64)}:exit=0`,
+          ],
+          confidence: 0.85,
+        },
+      ],
+    })
+
+    expect(
+      Learning.extract({
+        ...base,
+        evidence: {
+          ...base.evidence,
+          validations: [{ ...base.evidence.validations[0]!, passed: false, exit_code: 1 }],
+        },
+      }),
+    ).toMatchObject({
+      candidates: [],
+      promotion_decision: "rejected",
+      rejection_reasons: [
+        "Completed run contains failing activity-bound validation evidence.",
+        "No actionable learning candidates identified from this run.",
+      ],
+    })
+  })
+
   test("auto-merges safe project memory without blocking the task thread", async () => {
     const { projectID, store, worker } = workerFor()
     const result = await worker.run({

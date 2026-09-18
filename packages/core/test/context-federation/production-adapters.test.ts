@@ -267,12 +267,10 @@ describe("W3 production adapters: real sources, never staged", () => {
     expect(result.candidates).toHaveLength(0)
   })
 
-  test("W7 memory reads active durable memory docs directly (no released snapshot needed)", async () => {
-    // memoryAdapter connects the SAME DurableKnowledgeStore(s) as knowledge — status=active memory
-    // docs serve from the direct store read, while a `memory`-typed doc never surfaces as knowledge
-    // and vice versa (adapter-level type/status gates).
-    const { projectStore } = knowledgeFixtureRoots()
-    projectStore.seedActive({
+  test("Run B reads memory only after its exact revision is released", async () => {
+    const userGlobalStore = new DurableKnowledgeStore(path.join(tmpdirPath, "run-b-memory-user"))
+    const projectStore = new DurableKnowledgeStore(path.join(tmpdirPath, "run-b-memory-project"))
+    const memory = projectStore.seedActive({
       type: "memory",
       description: "learned fact",
       body: "the memory body",
@@ -285,17 +283,48 @@ describe("W3 production adapters: real sources, never staged", () => {
       confidence: { evidence_strength: "strong", support_count: 1 },
       provenance: { source: "runner", evidence_refs: [] },
     })
-    const adapters = productionV2Adapters({ knowledge: { stores: [projectStore] } })
-    const result = await Effect.runPromise(
-      SessionContextResolverV2.resolveGraphs(envelope({ query: "learned fact" }), adapters, 100),
+    const unreleased = await Effect.runPromise(
+      SessionContextResolverV2.resolveGraphs(
+        envelope({ query: "learned fact" }),
+        productionV2Adapters({ knowledge: { stores: [userGlobalStore, projectStore] } }),
+        100,
+      ),
     )
-    expect(result.graphStatuses.memory.status).toBe("ready")
-    expect(result.graphStatuses.memory.candidateCount).toBe(1)
-    expect(result.graphStatuses.memory.revision).toBe("memory:0")
-    expect(result.graphStatuses.memory.rejectedCount).toBe(0)
-    // The memory graph walks the DurableKnowledgeStore directly — no released selection required,
-    // so knowledge (released-gated) stays an empty domain in the same resolution.
-    expect(result.graphStatuses.knowledge.status).toBe("empty")
+    expect(unreleased.graphStatuses.memory.status).toBe("empty")
+    expect(unreleased.graphStatuses.memory.candidateCount).toBe(0)
+    expect(unreleased.candidates).toHaveLength(0)
+
+    const ref = DeepAgentReleasedSnapshot.documentRef(memory, "project")
+    const selection: DeepAgentReleasedSnapshot.Selection = {
+      securityNamespaceId: ns,
+      projectScopeKey: proj,
+      legacyProjectId: "legacy-project",
+      snapshotId: "snap-released-memory",
+      parentSnapshotId: null,
+      generation: 1,
+      membershipHash: DeepAgentReleasedSnapshot.exactRefsFingerprint([ref]),
+      manifestHash: "e".repeat(64),
+      documents: [ref],
+    }
+    const released = await Effect.runPromise(
+      SessionContextResolverV2.resolveGraphs(
+        envelope({ query: "learned fact" }),
+        productionV2Adapters({
+          knowledge: {
+            stores: [userGlobalStore, projectStore],
+            released: {
+              snapshotId: selection.snapshotId,
+              binding: "bound",
+              current: () => Effect.succeed(selection),
+            },
+          },
+        }),
+        100,
+      ),
+    )
+    expect(released.graphStatuses.memory.status).toBe("ready")
+    expect(released.graphStatuses.memory.candidateCount).toBe(1)
+    expect(released.candidates.map((candidate) => candidate.ref.entityId)).toContain(memory.id)
   })
 
   test("W7 status gate: non-active durable docs never serve (knowledge)", async () => {

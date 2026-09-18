@@ -1,16 +1,16 @@
 import { describe, expect, test } from "bun:test"
-import { mkdtempSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { execSync } from "node:child_process"
+import { execFileSync, execSync } from "node:child_process"
 import { finalizeSessionWork, finalizerGitState } from "@/deepagent/session-finalizer"
 import { tmpRoot, tmpRootShared } from "../fixture/fixture"
 
 // G2 unified finalizer regression: the abs failure mode ("implemented but never committed → the
 // verifier graded an empty diff") must be impossible — but ONLY the EXPLICIT "validated" verdict
 // ever commits (review round 5: the boolean|null contract let "unverified" ride the null branch
-// and commit anyway). "validation_failed" and "unverified" both withhold; the tree keeps the
-// work (delivery defers, never loses); only the session's own touched paths are ever staged.
+// and commit anyway). "validation_failed" and "unverified" both withhold promotion while exporting
+// an attributable patch ref; only the session's own touched paths are ever staged or preserved.
 
 const makeRepo = (): string => {
   const dir = mkdtempSync(tmpRootShared())
@@ -21,6 +21,7 @@ const makeRepo = (): string => {
 }
 
 const gitAt = (dir: string, args: string) => execSync(`git ${args}`, { cwd: dir, stdio: "pipe" }).toString()
+const patchAt = (dir: string, ref: string) => execFileSync("git", ["show", ref], { cwd: dir }).toString()
 
 describe("session finalizer", () => {
   test("validated: commits the session's touched work with the runtime identity", async () => {
@@ -48,6 +49,13 @@ describe("session finalizer", () => {
       touchedPaths: ["feature.go"],
     })
     expect(outcome.kind).toBe("unverified")
+    if (outcome.kind !== "unverified") return
+    expect(outcome.recoveryRef.startsWith("refs/deepagent-code/recovery/patch-")).toBe(true)
+    const patch = patchAt(dir, outcome.recoveryRef)
+    expect(patch).toContain("+++ b/feature.go")
+    const replay = makeRepo()
+    execFileSync("git", ["apply", "--binary", "-"], { cwd: replay, input: patch })
+    expect(readFileSync(path.join(replay, "feature.go"), "utf8")).toBe("package x")
     // No commit happened; the work stays in the tree.
     expect(gitAt(dir, "log --oneline").trim().split("\n")).toHaveLength(1)
     expect(gitAt(dir, "status --porcelain").trim()).not.toBe("")
@@ -62,6 +70,8 @@ describe("session finalizer", () => {
       touchedPaths: ["feature.go"],
     })
     expect(outcome.kind).toBe("validation_failed")
+    if (outcome.kind !== "validation_failed") return
+    expect(patchAt(dir, outcome.recoveryRef)).toContain("+++ b/feature.go")
     expect(gitAt(dir, "log --oneline").trim().split("\n")).toHaveLength(1)
     expect(gitAt(dir, "status --porcelain").trim()).not.toBe("")
   })
@@ -78,6 +88,46 @@ describe("session finalizer", () => {
     expect(outcome.kind).toBe("committed")
     expect(gitAt(dir, "diff --name-only HEAD~1 HEAD").trim()).toBe("session-file.ts")
     expect(gitAt(dir, "status --porcelain").trim()).toContain("user-notes.md")
+  })
+
+  test("unverified patch contains only attributable paths and treats pathspec magic literally", async () => {
+    const dir = makeRepo()
+    writeFileSync(path.join(dir, "feature[1].ts"), "export const attributable = true")
+    writeFileSync(path.join(dir, "feature1.ts"), "export const unrelated = true")
+    const outcome = await finalizeSessionWork({
+      directory: dir,
+      validation: "unverified",
+      touchedPaths: ["feature[1].ts"],
+    })
+    expect(outcome.kind).toBe("unverified")
+    if (outcome.kind !== "unverified") return
+    const patch = patchAt(dir, outcome.recoveryRef)
+    expect(patch).toContain("feature[1].ts")
+    expect(patch).not.toContain("feature1.ts")
+    expect(patch).not.toContain("unrelated")
+    expect(gitAt(dir, "diff --cached --name-only").trim()).toBe("")
+  })
+
+  test("unverified patch preserves an explicitly touched ignored file without staging it", async () => {
+    const dir = makeRepo()
+    writeFileSync(path.join(dir, ".gitignore"), "generated/\n")
+    gitAt(dir, "add .gitignore")
+    gitAt(dir, '-c user.name=t -c user.email=t@t commit --no-gpg-sign -m "ignore generated" -q')
+    writeFileSync(path.join(dir, "generated.txt"), "not ignored")
+    mkdirSync(path.join(dir, "generated"))
+    writeFileSync(path.join(dir, "generated", "result.bin"), "salvage me", { flag: "w" })
+    const outcome = await finalizeSessionWork({
+      directory: dir,
+      validation: "unverified",
+      touchedPaths: ["generated/result.bin"],
+    })
+    expect(outcome.kind).toBe("unverified")
+    if (outcome.kind !== "unverified") return
+    const patch = patchAt(dir, outcome.recoveryRef)
+    expect(patch).toContain("generated/result.bin")
+    expect(patch).toContain("salvage me")
+    expect(patch).not.toContain("generated.txt")
+    expect(gitAt(dir, "diff --cached --name-only").trim()).toBe("")
   })
 
   test("NEVER consumes an unrelated file already staged before finalization", async () => {

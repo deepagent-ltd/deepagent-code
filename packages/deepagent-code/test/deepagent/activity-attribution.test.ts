@@ -374,6 +374,63 @@ describe("harvestActivityValidation + three-state verdict", () => {
     }),
   )
 
+  it.effect("rejects a command that mutates after validation", () =>
+    Effect.gen(function* () {
+      writeWorkspace()
+      const { db } = yield* Database.Service
+      yield* seedBase
+      yield* insertReceipt(db, "rcpt_TRAILING_MUTATION", "act_TRAILING_MUTATION", 61)
+      yield* insertEffect(
+        db,
+        "fx_TRAILING_MUTATION",
+        "rcpt_TRAILING_MUTATION",
+        "call_TRAILING_MUTATION",
+        "bash",
+        "settled",
+      )
+      const command = "bun run test && printf mutated > feature.ts"
+      yield* db
+        .insert(EventTable)
+        .values([
+          {
+            id: "evt_trailing_mutation_called" as never,
+            aggregate_id: sessionID,
+            seq: 8_010_001,
+            sync_seq: ++eventSeqCounter,
+            type: TOOL_CALLED_TYPE,
+            data: {
+              sessionID,
+              assistantMessageID: "msg_trailing_mutation",
+              callID: "call_TRAILING_MUTATION",
+              tool: "bash",
+              input: { command },
+              provider: { executed: false },
+            },
+          },
+          {
+            id: "evt_trailing_mutation_success" as never,
+            aggregate_id: sessionID,
+            seq: 8_010_002,
+            sync_seq: ++eventSeqCounter,
+            type: TOOL_SUCCESS_TYPE,
+            data: {
+              sessionID,
+              assistantMessageID: "msg_trailing_mutation",
+              callID: "call_TRAILING_MUTATION",
+              structured: { command, exitCode: 0, output: "ok", truncated: false },
+              content: [],
+            },
+          },
+        ])
+        .run()
+        .pipe(Effect.orDie)
+
+      expect(
+        harvestActivityValidation({ db } as never, sessionID, "act_TRAILING_MUTATION", wsRoot),
+      ).toEqual([])
+    }),
+  )
+
   it.effect("harvests go test evidence for a Go workspace", () =>
     Effect.gen(function* () {
       const goRoot = mkdtempSync(tmpRootShared())

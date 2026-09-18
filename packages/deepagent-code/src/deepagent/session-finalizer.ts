@@ -1,4 +1,6 @@
 import { buffer } from "node:stream/consumers"
+import { realpathSync } from "node:fs"
+import path from "node:path"
 import { Process } from "@/util/process"
 import { DEFAULT_WORKER_IDENTITY } from "@/agent/collaboration-identity"
 
@@ -16,13 +18,14 @@ import { DEFAULT_WORKER_IDENTITY } from "@/agent/collaboration-identity"
  *     write/edit targets extracted from the session's durable history; bash side effects are NOT
  *     attributable and are deliberately left uncommitted.
  *   - A recovery commit is made ONLY on the EXPLICIT "validated" verdict — all-pass evidence
- *     attributed to THIS activity (review round 5: three-state input; "validation_failed" and
- *     "unverified" both withhold, the tree keeps the work as diagnostic evidence / for the next
- *     round).
+ *     attributed to THIS activity (review round 5: three-state input). `validation_failed` and
+ *     `unverified` never commit, but they still preserve an attributable binary patch behind a
+ *     namespaced Git blob ref. Validation decides promotion; it must not decide whether work is
+ *     recoverable.
  *   - The commit identity is the runtime worker (never the model's or the user's), --no-verify so
  *     a repo hook cannot lose the work, --no-gpg-sign.
- *   - Any failure (no repo, git error, timeout) leaves the tree EXACTLY as it was and reports the
- *     reason; the finalizer never deletes, resets, or force-anything.
+ *   - Any failure (no repo, git error, timeout) leaves the worktree and index EXACTLY as they were
+ *     and reports the reason; the finalizer never deletes, resets, or force-anything.
  *   - An empty diff is NOT a success: it reports `no_changes` so callers can distinguish
  *     "delivered" from "nothing to deliver".
  */
@@ -44,15 +47,29 @@ export type FinalizeOutcome =
       headAfter?: string
       recoveryRef: string
     }
-  | { readonly kind: "validation_failed"; readonly files: number }
-  | { readonly kind: "unverified"; readonly files: number }
+  | { readonly kind: "validation_failed"; readonly files: number; readonly recoveryRef: string }
+  | { readonly kind: "unverified"; readonly files: number; readonly recoveryRef: string }
   | { readonly kind: "skipped"; readonly reason: string }
 
 const GIT_TIMEOUT_MS = 60_000
 
-const git = async (args: readonly string[], cwd: string): Promise<{ code: number; stdout: string } | null> => {
+const git = async (
+  args: readonly string[],
+  cwd: string,
+  stdin?: string,
+): Promise<{ code: number; stdout: string } | null> => {
   try {
-    const proc = Process.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe", env: { ...process.env } })
+    const proc = Process.spawn(["git", ...args], {
+      cwd,
+      stdin: stdin === undefined ? "ignore" : "pipe",
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env },
+    })
+    if (stdin !== undefined) {
+      if (!proc.stdin) return null
+      proc.stdin.end(stdin)
+    }
     const stdout = proc.stdout
     if (!stdout) return null
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -90,6 +107,80 @@ const git = async (args: readonly string[], cwd: string): Promise<{ code: number
  * empty list skips delivery rather than committing nothing.
  */
 export type FinalizerValidation = "validated" | "validation_failed" | "unverified"
+
+const literalPathspec = (path: string) => `:(top,literal)${path}`
+
+/**
+ * Keep only paths lexically inside this repository and express them relative to its root. Tool
+ * outputs may name approved external files; those are deliberately outside this Git delivery
+ * surface. Literal pathspecs are important here: a touched filename containing `*`, `?`, or `[]`
+ * must never make an unrelated file attributable by pattern expansion.
+ */
+const attributablePaths = (directory: string, root: string, touchedPaths: readonly string[]) => {
+  const logicalDirectory = path.resolve(directory)
+  const canonicalDirectory = realpathSync(directory)
+  return [
+    ...new Set(
+      touchedPaths.map((item) => {
+        if (!path.isAbsolute(item)) return path.resolve(canonicalDirectory, item)
+        try {
+          return realpathSync(item)
+        } catch {
+          try {
+            return path.join(realpathSync(path.dirname(item)), path.basename(item))
+          } catch {}
+        }
+        const relative = path.relative(logicalDirectory, item)
+        if (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+          return path.resolve(canonicalDirectory, relative)
+        return item
+      }),
+    ),
+  ].flatMap((absolute) => {
+    const relative = path.relative(root, absolute)
+    if (relative === "" || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))
+      return []
+    return [relative.split(path.sep).join("/")]
+  })
+}
+
+const splitNulls = (value: string) => value.split("\0").filter(Boolean)
+
+/**
+ * Produce a replayable patch for exactly the attributable paths. `git diff HEAD` covers tracked,
+ * staged, deleted, and binary changes; per-file `--no-index` diffs add new files (including ignored
+ * files that an explicit mutating tool touched). The resulting blob is anchored by a namespaced
+ * ref so normal object pruning cannot discard it. This changes neither HEAD, the index, nor the
+ * worktree and therefore is safe for failed or unverified work.
+ */
+const preserveAttributablePatch = async (directory: string, touchedPaths: readonly string[]) => {
+  const pathspecs = touchedPaths.map(literalPathspec)
+  const tracked = await git(
+    ["diff", "--binary", "--full-index", "--no-ext-diff", "HEAD", "--", ...pathspecs],
+    directory,
+  )
+  if (!tracked || tracked.code !== 0) return null
+  const untracked = await git(["ls-files", "--others", "--exclude-standard", "-z", "--", ...pathspecs], directory)
+  const ignored = await git(
+    ["ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", ...pathspecs],
+    directory,
+  )
+  if (!untracked || untracked.code !== 0 || !ignored || ignored.code !== 0) return null
+  const additions = await Promise.all(
+    [...new Set([...splitNulls(untracked.stdout), ...splitNulls(ignored.stdout)])].map((path) =>
+      git(["diff", "--binary", "--full-index", "--no-ext-diff", "--no-index", "--", "/dev/null", path], directory),
+    ),
+  )
+  if (additions.some((result) => !result || ![0, 1].includes(result.code))) return null
+  const patch = [tracked.stdout, ...additions.map((result) => result!.stdout)].filter(Boolean).join("")
+  if (patch.length === 0) return null
+  const blob = await git(["hash-object", "-w", "--stdin"], directory, patch)
+  if (!blob || blob.code !== 0 || !/^[0-9a-f]{40,64}$/.test(blob.stdout.trim())) return null
+  const recoveryRef = `refs/deepagent-code/recovery/patch-${blob.stdout.trim()}`
+  const anchored = await git(["update-ref", recoveryRef, blob.stdout.trim()], directory)
+  if (!anchored || anchored.code !== 0) return null
+  return recoveryRef
+}
 
 /** The git facts a delivery verdict must carry, so the outcome is auditable after the fact. */
 export type FinalizerGitState = {
@@ -158,7 +249,7 @@ const tipCarriesPaths = async (
   directory: string,
 ): Promise<boolean> => {
   if (head === null) return false
-  const diff = await git(["diff", "--name-only", head, tip, "--", ...touchedPaths], directory)
+  const diff = await git(["diff", "--name-only", head, tip, "--", ...touchedPaths.map(literalPathspec)], directory)
   if (!diff || diff.code !== 0) return false
   const named = new Set(
     diff.stdout
@@ -184,13 +275,17 @@ export const finalizeSessionWork = async (input: {
   if (input.touchedPaths.length === 0) return { kind: "skipped", reason: "no_attributable_paths", ...state }
   const toplevel = await git(["rev-parse", "--show-toplevel"], input.directory)
   if (!toplevel || toplevel.code !== 0) return { kind: "skipped", reason: "not_a_git_repo", ...state }
+  const root = toplevel.stdout.trim()
+  const touchedPaths = attributablePaths(input.directory, root, input.touchedPaths)
+  if (touchedPaths.length === 0) return { kind: "skipped", reason: "no_attributable_paths", ...state }
+  const pathspecs = touchedPaths.map(literalPathspec)
 
-  const status = await git(["status", "--porcelain", ...input.touchedPaths], input.directory)
+  const status = await git(
+    ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching", "--", ...pathspecs],
+    root,
+  )
   if (!status || status.code !== 0) return { kind: "skipped", reason: "git_status_unreadable", ...state }
-  const changedFiles = status.stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
+  const changedFiles = status.stdout.split("\0").filter((line) => line.length > 0)
   if (changedFiles.length === 0) {
     // A clean attributable set is NOT proof there was nothing to deliver: the model may have
     // committed the work itself — possibly to a branch that is not checked out. Round-7 did exactly
@@ -198,9 +293,9 @@ export const finalizeSessionWork = async (input: {
     // leaving this surface clean while the work sat one ref away, and the runtime reported
     // "no changes to deliver". Any branch tip that advanced during the activity AND now carries the
     // attributable paths is a recovery reference, never a silent nothing.
-    const advanced = await advancedBranches(input.refsBefore ?? current.refs, current, input.directory)
+    const advanced = await advancedBranches(input.refsBefore ?? current.refs, current, root)
     for (const candidate of advanced)
-      if (await tipCarriesPaths(candidate.branch, candidate.tip, current.head, input.touchedPaths, input.directory))
+      if (await tipCarriesPaths(candidate.branch, candidate.tip, current.head, touchedPaths, root))
         return {
           kind: "no_changes_on_this_branch",
           files: 0,
@@ -212,15 +307,19 @@ export const finalizeSessionWork = async (input: {
     return { kind: "no_changes", ...state }
   }
 
-  if (input.validation !== "validated")
+  if (input.validation !== "validated") {
+    const recoveryRef = await preserveAttributablePatch(root, touchedPaths)
+    if (recoveryRef === null) return { kind: "skipped", reason: "patch_preservation_failed", ...state }
     return {
       kind: input.validation === "validation_failed" ? "validation_failed" : "unverified",
       files: changedFiles.length,
+      recoveryRef,
       ...state,
     }
+  }
 
   // Stage EXACTLY the attributable paths — never the whole tree.
-  const staged = await git(["add", "--", ...input.touchedPaths], input.directory)
+  const staged = await git(["add", "--", ...pathspecs], root)
   if (!staged || staged.code !== 0) return { kind: "skipped", reason: "git_add_failed" }
   const committed = await git(
     [
@@ -238,12 +337,12 @@ export const finalizeSessionWork = async (input: {
       "-m",
       "runtime finalizer: deliver session work (auto-preserved)",
       "--",
-      ...input.touchedPaths,
+      ...pathspecs,
     ],
-    input.directory,
+    root,
   )
   if (!committed || committed.code !== 0) return { kind: "skipped", reason: "git_commit_failed", ...state }
-  const head = await git(["rev-parse", "HEAD"], input.directory)
+  const head = await git(["rev-parse", "HEAD"], root)
   if (!head || head.code !== 0) return { kind: "skipped", reason: "git_head_unreadable", ...state }
   return { kind: "committed", commit: head.stdout.trim(), files: changedFiles.length }
 }
