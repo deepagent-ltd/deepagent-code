@@ -63,6 +63,41 @@ function readInputRow(databasePath: string, messageID: string) {
   return row
 }
 
+function readLatestProviderReceipt(databasePath: string, sessionID: string) {
+  const database = new Database(databasePath, { readonly: true })
+  const row = database
+    .query(
+      `SELECT owner_token, state, error_code, terminal_at
+       FROM session_v2_provider_turn_receipt
+       WHERE session_id = ?
+       ORDER BY request_ordinal DESC
+       LIMIT 1`,
+    )
+    .get(sessionID) as {
+    owner_token: string
+    state: string
+    error_code: string | null
+    terminal_at: number | null
+  } | null
+  database.close()
+  return row
+}
+
+function readLatestLiveProviderOwnerToken(databasePath: string) {
+  const database = new Database(databasePath, { readonly: true })
+  const row = database
+    .query(
+      `SELECT owner_token
+       FROM session_provider_owner_lease
+       WHERE released_at IS NULL
+       ORDER BY registered_at DESC
+       LIMIT 1`,
+    )
+    .get() as { owner_token: string } | null
+  database.close()
+  return row?.owner_token
+}
+
 const kill9 = (server: ServeHandle) =>
   Effect.gen(function* () {
     server.kill("SIGKILL")
@@ -306,4 +341,78 @@ cliIt.live(
     }),
   { timeout: 120_000 },
 )
+
+  if (process.platform !== "win32")
+    cliIt.live(
+      "SIGSTOP past the owner lease: successor quarantines once and late provider completion cannot fake success",
+      ({ deepagentCode, llm, home }) =>
+        Effect.gen(function* () {
+          const { databasePath, serverOptions, headers } = yield* kill9Setup(home, "stall-owner-rotation.db")
+          const heldProvider = Promise.withResolvers<void>()
+
+          // The server sends the response head, then holds the tail. This proves a physical dispatch
+          // reached the provider before SIGSTOP while leaving the turn live long enough for the owner
+          // lease to expire deterministically.
+          yield* llm.hold("late provider completion", heldProvider.promise)
+          const server = yield* deepagentCode.serve({
+            ...serverOptions,
+            env: { ...serverOptions.env, DEEPAGENT_CODE_V2_OWNER_LEASE_MS: "1000" },
+          })
+          expect(server.pid).toBeGreaterThan(0)
+          const sessionID = yield* createSession(server.url, headers)
+          yield* promptAsync(server.url, headers, sessionID, "stall the live provider owner")
+          yield* llm.wait(1)
+          yield* pollWithTimeout(
+            Effect.sync(() => {
+              const receipt = readLatestProviderReceipt(databasePath, sessionID)
+              return receipt?.state === "dispatching" || receipt?.state === "streaming" ? receipt : undefined
+            }),
+            "provider receipt did not reach a dispatched state before SIGSTOP",
+            "10 seconds",
+          )
+
+          server.pause()
+          yield* Effect.sleep("2500 millis")
+          expect(yield* llm.calls).toBe(1)
+          server.resume()
+
+          const recovered = yield* pollWithTimeout(
+            Effect.sync(() => {
+              const receipt = readLatestProviderReceipt(databasePath, sessionID)
+              return receipt?.state === "indeterminate_after_crash" ? receipt : undefined
+            }),
+            "stalled provider receipt did not reach its conservative terminal state",
+            "15 seconds",
+          )
+          expect(recovered).toMatchObject({
+            state: "indeterminate_after_crash",
+            error_code: "owner_lost_after_dispatch",
+          })
+          expect(recovered.terminal_at).toEqual(expect.any(Number))
+          expect(readLatestLiveProviderOwnerToken(databasePath)).not.toBe(recovered.owner_token)
+          expect(readLatestLiveProviderOwnerToken(databasePath)).toContain(":gen-1:")
+          expect(yield* llm.calls).toBe(1)
+
+          // Let the already-dispatched provider request finish. The old stream may unwind locally,
+          // but it must neither dispatch again nor rewrite the successor's conservative receipt into
+          // a false durable success.
+          yield* Effect.sync(() => heldProvider.resolve())
+          yield* pollWithTimeout(
+            Effect.map(requestJson(server.url, "/session/status", { headers }), (status) => {
+              if (status.status !== 200) return
+              return Object.prototype.hasOwnProperty.call(status.body, sessionID) ? undefined : true
+            }),
+            "provider stream did not finish after the held response was released",
+            "15 seconds",
+          )
+          expect(yield* llm.calls).toBe(1)
+          expect(readLatestProviderReceipt(databasePath, sessionID)).toMatchObject({
+            state: "indeterminate_after_crash",
+            error_code: "owner_lost_after_dispatch",
+          })
+          server.kill()
+          expect(yield* Effect.promise(() => server.exited)).toEqual(expect.any(Number))
+        }),
+      { timeout: 120_000 },
+    )
 }
