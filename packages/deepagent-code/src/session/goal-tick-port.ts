@@ -21,7 +21,6 @@ import type { InstanceStore } from "@/project/instance-store"
 import type { EventV2 } from "@deepagent-code/core/event"
 import type { Session } from "./session"
 import type { Agent } from "../agent/agent"
-import type { SessionPrompt } from "./prompt"
 import type { SessionRevert } from "./revert"
 import type { SessionSteer } from "./steer"
 import type { Provider } from "../provider/provider"
@@ -33,7 +32,7 @@ import {
   GoalLoopWiring,
   liveDiagnostics,
   liveRollback,
-  makeTaskSubagentRunner, v2DriveDeps,
+  makeTaskSubagentRunner,
   type PanelQuestionInput,
 } from "./goal-loop-wiring"
 import { makeGoalStatusPublisher } from "./goal-status-publisher"
@@ -49,7 +48,7 @@ import type { GoalTickConsumer } from "./goal-tick-consumer"
 //
 // COLD-FIBER DISCIPLINE (mirrors makeEventTurnRunner / makeEventPanelPort): the GoalTickConsumer's
 // subscription runs on a background daemon fiber that carries NO ambient InstanceRef. EVERY
-// InstanceState-touching call (agents.get / sessions.get|create / sessionPrompt.* / provider.defaultModel /
+// InstanceState-touching call (agents.get / sessions.get|create / provider.defaultModel /
 // SessionRevert / LSP) reads InstanceRef and `Effect.die`s without it. So we load the instance context for
 // the goal session's directory ONCE and wrap every such call in `withContext`. A die would pierce the
 // consumer's catchCause and nack forever; wrapping keeps the tick honest.
@@ -64,7 +63,6 @@ const log = Log.create({ service: "goal-tick-port" })
 export type GoalTickPortDeps = {
   readonly sessions: Session.Interface
   readonly agents: Agent.Interface
-  readonly sessionPrompt: SessionPrompt.Interface
   readonly revert: SessionRevert.Interface
   readonly steerBuffer: SessionSteer.Interface
   readonly provider: Provider.Interface
@@ -76,8 +74,8 @@ export type GoalTickPortDeps = {
   readonly flags: RuntimeFlags.Info
   /** The canonical store-root resolver (goal-manager.goalStoreRoot) — the SAME path the warm driver uses. */
   readonly goalStoreRoot: (sessionID: string) => string
-  /** §16.3 order 3: optional V2 drive seam, resolved by the wiring layer (flag + composition gated). */
-  readonly v2Session?: SessionV2.Interface
+  /** The durable V2 session authority driving every goal-worker subagent turn (V2-only). */
+  readonly v2Session: SessionV2.Interface
   readonly snapshot?: Snapshot.Interface
 }
 
@@ -173,12 +171,12 @@ export const makeGoalTickPort =
       const baseRunner = makeTaskSubagentRunner({
         sessions: deps.sessions,
         agents: deps.agents,
-        sessionPrompt: deps.sessionPrompt,
         parentSessionID: SessionID.make(sessionID),
         model,
         allowPlanWriteCapability: true,
         purpose: "goal-loop",
-        ...v2DriveDeps(deps.v2Session, deps.snapshot, deps.flags.coreV2Only),
+        v2Session: deps.v2Session,
+        ...(deps.snapshot ? { snapshot: deps.snapshot } : {}),
       })
       const runTurn: typeof baseRunner = (input) => withContext(baseRunner(input))
 

@@ -307,6 +307,7 @@ export async function runLegacyLiveCases(input: {
       | undefined
     const program = Effect.gen(function* () {
       const prompts = yield* SessionPrompt.Service
+      const v2Session = yield* SessionV2.Service
       const database = yield* Database.Service
       const runState = yield* SessionRunState.Service
       const steers = yield* SessionSteer.Service
@@ -952,7 +953,7 @@ export async function runLegacyLiveCases(input: {
             const runTurn = makeTaskSubagentRunner({
               sessions,
               agents,
-              sessionPrompt: prompts,
+              v2Session,
               parentSessionID: session.id,
               model,
               purpose: "panel",
@@ -1529,24 +1530,32 @@ export async function runLegacyLiveCases(input: {
       }).pipe(
         Effect.scoped,
         Effect.provide(
-          Layer.mergeAll(
-            SessionPrompt.defaultLayer,
-            Agent.defaultLayer,
-            SessionRunState.defaultLayer,
-            SessionSteer.defaultLayer,
-            SessionCompaction.defaultLayer,
-            SessionRevert.defaultLayer,
-            Session.defaultLayer,
-            Permission.defaultLayer,
-            Question.defaultLayer,
-            EventV2Bridge.defaultLayer,
-            Worktree.appLayer,
-            Git.defaultLayer,
-            EffectFlock.defaultLayer,
-            PRQueue.layer.pipe(Layer.orDie),
-            CrossSpawnSpawner.defaultLayer,
-            Database.defaultLayer,
-          ).pipe(Layer.provideMerge(testInstanceStoreLayer)),
+          // LEGACY-EXECUTION-ZERO: one SHARED SessionV2 runtime — the subagent runner requires the
+          // V2 authority, and SessionPrompt.productionLayer consumes the same instance (defaultLayer
+          // would build a second, disjoint V2 runtime inside its own scope).
+          SessionPrompt.productionLayer.pipe(
+            Layer.provideMerge(
+              Layer.mergeAll(
+                SessionV2.liveLayer,
+                Agent.defaultLayer,
+                SessionRunState.defaultLayer,
+                SessionSteer.defaultLayer,
+                SessionCompaction.defaultLayer,
+                SessionRevert.defaultLayer,
+                Session.defaultLayer,
+                Permission.defaultLayer,
+                Question.defaultLayer,
+                EventV2Bridge.defaultLayer,
+                Worktree.appLayer,
+                Git.defaultLayer,
+                EffectFlock.defaultLayer,
+                PRQueue.layer.pipe(Layer.orDie),
+                CrossSpawnSpawner.defaultLayer,
+                Database.defaultLayer,
+              ),
+            ),
+            Layer.provideMerge(testInstanceStoreLayer),
+          ),
         ),
         Effect.timeout(
           Math.min(config.timeoutMs, input.timeoutMs ?? config.timeoutMs) * Math.max(1, input.cases.length),

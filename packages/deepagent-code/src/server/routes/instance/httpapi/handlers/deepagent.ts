@@ -29,12 +29,11 @@ import { Snapshot } from "@/snapshot"
 import { SettingsStore } from "@/settings/store"
 import { Session } from "@/session/session"
 import { Agent } from "@/agent/agent"
-import { SessionPrompt } from "@/session/prompt"
 import { Provider } from "@/provider/provider"
 import { GoalManager } from "@/session/goal-manager"
 import { SessionID } from "@/session/schema"
 import { consultPanel } from "@/panel/consult"
-import { GoalLoopWiring, makeTaskSubagentRunner, v2DriveDeps } from "@/session/goal-loop-wiring"
+import { makeTaskSubagentRunner } from "@/session/goal-loop-wiring"
 import { openWikiGraph, openWikiService, openWikiSearchIndex, buildWikiEditGate } from "@/wiki/session-archive"
 import { WIKI_EDITABLE_TYPES, type WikiPage } from "@/wiki/wiki-service"
 import type { PanelTurnRunner } from "@/panel/panelist-runner"
@@ -216,13 +215,10 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
     const flags = yield* RuntimeFlags.Service
     const sessions = yield* Session.Service
     const agents = yield* Agent.Service
-    const sessionPrompt = yield* SessionPrompt.Service
     const provider = yield* Provider.Service
-    // LEGACY-EXECUTION-ZERO: V2 subagent drive resolution for the HTTP panel route.
-    const { v2Session, snapshot: v2Snapshot } = yield* GoalLoopWiring.resolveV2SubagentDrive({
-      v2Session: yield* SessionV2.Service,
-      snapshot: yield* Snapshot.Service,
-    })
+    // LEGACY-EXECUTION-ZERO: the V2 session authority + snapshot drive every panel subagent turn.
+    const v2Session = yield* SessionV2.Service
+    const v2Snapshot = yield* Snapshot.Service
     const goals = yield* GoalManager.Service
     const database = yield* Database.Service
     const locationIdentity = yield* LocationIdentity.Service
@@ -239,10 +235,10 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
         const runTurn = makeTaskSubagentRunner({
           sessions,
           agents,
-          sessionPrompt,
           parentSessionID: SessionID.make(sessionID),
           model: { providerID: model.providerID, modelID: model.modelID },
-          ...v2DriveDeps(v2Session, v2Snapshot, flags.coreV2Only),
+          v2Session,
+          snapshot: v2Snapshot,
         })
         return (turnInput) =>
           runTurn({

@@ -41,7 +41,6 @@ import { GoalManager } from "@/session/goal-manager"
 import { GoalLoopWiring } from "@/session/goal-loop-wiring"
 import { LegacyTaskInput } from "@/session/task-input"
 import { Snapshot } from "@/snapshot"
-import { SessionPrompt } from "@/session/prompt"
 import { SessionSteer } from "@/session/steer"
 import { SessionActivityOwner } from "@/session/activity-owner"
 import { Session } from "@/session/session"
@@ -218,7 +217,7 @@ const STATUS_LIMIT_CEILING = 20
 
 /**
  * The dispatcher construction effect. Core V2 execution dependencies are explicit; every legacy
- * runner dependency (GoalManager, SessionPrompt, BackgroundJob, SessionSteer, Session/Agent/
+ * runner dependency (GoalManager, BackgroundJob, SessionSteer, Session/Agent/
  * Provider) is resolved via serviceOption so the registry can build the facade inline from
  * whatever the surrounding graph provides. Optional legacy services only control which facade
  * subkinds are advertised; the V2 owner itself may never disappear behind serviceOption.
@@ -236,12 +235,10 @@ export const build: Effect.Effect<
   const background = Option.getOrUndefined(yield* Effect.serviceOption(BackgroundJob.Service))
   const sessions = Option.getOrUndefined(yield* Effect.serviceOption(Session.Service))
   const agents = Option.getOrUndefined(yield* Effect.serviceOption(Agent.Service))
-  const sessionPrompt = Option.getOrUndefined(yield* Effect.serviceOption(SessionPrompt.Service))
   const provider = Option.getOrUndefined(yield* Effect.serviceOption(Provider.Service))
-  const { v2Session, snapshot: v2Snapshot } = yield* GoalLoopWiring.resolveV2SubagentDrive({
-    v2Session: yield* SessionV2.Service,
-    snapshot: yield* Snapshot.Service,
-  })
+  // LEGACY-EXECUTION-ZERO: the V2 session authority + snapshot drive every panel subagent turn.
+  const v2Session = yield* SessionV2.Service
+  const v2Snapshot = yield* Snapshot.Service
 
   // ── facade base-table IO ──────────────────────────────────────────────────────────────────
 
@@ -726,11 +723,11 @@ export const build: Effect.Effect<
 
   const startPanel = (row: FacadeRow, input: FacadeStartInput): Effect.Effect<Record<string, string>, FacadeError> =>
     Effect.gen(function* () {
-      if (!background || !sessions || !agents || !sessionPrompt || !provider)
+      if (!background || !sessions || !agents || !provider)
         return yield* Effect.fail(
           new FacadeActivityRunnerUnavailable({
             subkind: "panel",
-            reason: "panel runner dependencies (session/agent/prompt/provider/background-job) unavailable",
+            reason: "panel runner dependencies (session/agent/provider/background-job) unavailable",
           }),
         )
       const model = yield* provider
@@ -746,11 +743,11 @@ export const build: Effect.Effect<
       const runTurn = GoalLoopWiring.makeTaskSubagentRunner({
         sessions,
         agents,
-        sessionPrompt,
         parentSessionID: SessionID.make(row.parent_session_id),
         model: { providerID: model.providerID, modelID: model.modelID },
         purpose: "panel",
-        ...GoalLoopWiring.v2DriveDeps(v2Session, v2Snapshot, flags.coreV2Only),
+        v2Session,
+        snapshot: v2Snapshot,
       })
       const panelTurnRunner = (turnInput: Parameters<typeof runTurn>[0]) =>
         runTurn(turnInput).pipe(Effect.map((r) => ({ structured: r.structured })))
