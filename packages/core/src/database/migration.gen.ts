@@ -188,6 +188,7 @@ const modules = await Promise.all([
     import("./migration/20260910012502_v2_compaction_request"),
     import("./migration/20260918101443_v2_task_run_execution_runtime"),
     import("./migration/20260918120000_im_reply_outbox"),
+    import("./migration/20260918130000_command_side_effect_receipt"),
 ])
 
 const bodyHashes = [
@@ -376,8 +377,9 @@ const bodyHashes = [
   "dc41caa8b469d5fb123fc9e29361d0adcc336a30dfc4a96da4a214e05997b521",
   "0c68206adce39711ee5ce7744badc21d03723c79f20aa1537e05be90bc16a05f",
   "ee4108acdec23fd714ab920ebe406f3bc5b0376ea58e475273e014a2a84d9552",
-  "ea9a2f3a93c67074592fb34518dd82f13d269b59d502c27a87b331a86a80873c",
+  "c9473ae2b1d266561902b867d440669b33afe7be338085ce3acb86b1125a2aec",
   "5e703ee4251a2bbb95fcbd9c81ec9461f217f12c8d002488313999e33571616f",
+  "fbe030db47ad167a1f822e61d4dffb667c0b0964e2a58d69bf2fbf594a5843e3",
 ]
 
 export const migrations = modules.map((module, index) => ({

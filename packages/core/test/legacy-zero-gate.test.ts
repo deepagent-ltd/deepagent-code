@@ -189,10 +189,13 @@ describe("C0-08 legacy-zero gate real inventory (actual frozen numbers)", () => 
     expect(counters.legacyDims).toBe(0)
     expect(counters.doubleWrite).toBe(0)
     expect(counters.doubleWriteEntries).toBe(0)
-    expect(counters.v2Dims).toBe(215)
-    expect(counters.adapterDims).toBe(460)
-    // 2026-09-08 step 5c 重钉:遗留清仓波的 src 改动使 read-only 面收缩(1896→1889)。
-    expect(counters.readOnlyDims).toBe(2153)
+    // v2f-d IM durable-only migration re-pin (2026-09-18): +3 v2 (im.agent-execution
+    // admission/execution, im.reply-outbox event), -28 adapter (the deleted executor/reply-sink/
+    // progress-stream faces became read_only mention resolution / dead orchestrator; createMessage
+    // and the goal/panel pack keep adapter with V2-native markers), read-only 2153→2178.
+    expect(counters.v2Dims).toBe(218)
+    expect(counters.adapterDims).toBe(432)
+    expect(counters.readOnlyDims).toBe(2178)
     expect(counters.unclassifiedDims).toBe(0)
   })
 
@@ -236,7 +239,7 @@ describe("C0-08 legacy-zero gate real inventory (actual frozen numbers)", () => 
     const counters = await currentTreeCounts(inventory)
     expect(counters.legacyDims).toBe(0)
     expect(counters.doubleWrite).toBe(0)
-    expect(counters.adapterDims).toBe(460)
+    expect(counters.adapterDims).toBe(432)
   })
 })
 
@@ -269,9 +272,10 @@ describe("C0-08 legacy-zero gate snapshot (byte-stable)", () => {
     const snapshot = buildSnapshot(inventory, bridgeSites)
     expect(snapshot.counters.legacyDims).toBe(0)
     expect(snapshot.counters.doubleWrite).toBe(0)
-    expect(snapshot.counters.adapterDims).toBe(460)
-    expect(snapshot.counters.v2Dims).toBe(215)
-    // 2026-09-08 step 5c 重钉:同批漂移(402→401)。
+    expect(snapshot.counters.adapterDims).toBe(432)
+    expect(snapshot.counters.v2Dims).toBe(218)
+    // 2026-09-08 step 5c 重钉:同批漂移(402→401)。v2f-d (2026-09-18): entries net-zero
+    // (deleted reply-sink/progress-stream faces replaced by durable admission + reply outbox).
     expect(snapshot.entries).toBe(404)
     // 2026-09-08 step 5c 重钉:同批漂移(2814→2807)。
     expect(snapshot.roles).toBe(2828)

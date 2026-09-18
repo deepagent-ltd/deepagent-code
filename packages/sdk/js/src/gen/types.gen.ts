@@ -25,6 +25,8 @@ export type Event =
   | EventSessionExecutionSucceeded
   | EventSessionExecutionFailed
   | EventSessionExecutionInterrupted
+  | EventSessionDeliveryRecorded
+  | EventSessionCapabilityModeRecorded
   | EventSessionNextContextUpdated
   | EventSessionNextSynthetic
   | EventSessionNextStructuredCaptured
@@ -1035,6 +1037,45 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "session.delivery.recorded"
+        properties: {
+          timestamp: number
+          sessionID: string
+          activityID: string
+          verdict:
+            | "committed"
+            | "no_changes"
+            | "no_changes_on_this_branch"
+            | "withheld_unverified"
+            | "withheld_validation_failed"
+            | "skipped"
+          branch?: string
+          headBefore?: string
+          headAfter?: string
+          touchedPaths: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          unattributable: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          commit?: string
+          recoveryRef?: string
+          reason?: string
+        }
+      }
+    | {
+        id: string
+        type: "session.capability.mode.recorded"
+        properties: {
+          timestamp: number
+          sessionID: string
+          mode: "quick" | "standard" | "deep"
+          source: "explicit" | "estimated" | "promoted"
+          explicitMode: "quick" | "standard" | "deep"
+          estimatedMode: "quick" | "standard" | "deep"
+          complexity: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          reasons: Array<string>
+          autoDetect: boolean
+        }
+      }
+    | {
+        id: string
         type: "session.next.context.updated"
         properties: {
           timestamp: number
@@ -1932,6 +1973,8 @@ export type GlobalEvent = {
     | SyncEventSessionExecutionSucceeded1
     | SyncEventSessionExecutionFailed1
     | SyncEventSessionExecutionInterrupted1
+    | SyncEventSessionDeliveryRecorded1
+    | SyncEventSessionCapabilityModeRecorded1
     | SyncEventSessionNextContextUpdated1
     | SyncEventSessionNextSynthetic1
     | SyncEventSessionNextStructuredCaptured1
@@ -5865,6 +5908,59 @@ export type SyncEventSessionExecutionInterrupted1 = {
   }
 }
 
+export type SyncEventSessionDeliveryRecorded1 = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.delivery.recorded.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      activityID: string
+      verdict:
+        | "committed"
+        | "no_changes"
+        | "no_changes_on_this_branch"
+        | "withheld_unverified"
+        | "withheld_validation_failed"
+        | "skipped"
+      branch?: string
+      headBefore?: string
+      headAfter?: string
+      touchedPaths: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      unattributable: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      commit?: string
+      recoveryRef?: string
+      reason?: string
+    }
+  }
+}
+
+export type SyncEventSessionCapabilityModeRecorded1 = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.capability.mode.recorded.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      mode: "quick" | "standard" | "deep"
+      source: "explicit" | "estimated" | "promoted"
+      explicitMode: "quick" | "standard" | "deep"
+      estimatedMode: "quick" | "standard" | "deep"
+      complexity: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      reasons: Array<string>
+      autoDetect: boolean
+    }
+  }
+}
+
 export type SyncEventSessionNextContextUpdated1 = {
   type: "sync"
   id: string
@@ -7227,6 +7323,47 @@ export type EventSessionExecutionInterrupted = {
     timestamp: number
     sessionID: string
     reason: "user" | "shutdown" | "superseded"
+  }
+}
+
+export type EventSessionDeliveryRecorded = {
+  id: string
+  type: "session.delivery.recorded"
+  properties: {
+    timestamp: number
+    sessionID: string
+    activityID: string
+    verdict:
+      | "committed"
+      | "no_changes"
+      | "no_changes_on_this_branch"
+      | "withheld_unverified"
+      | "withheld_validation_failed"
+      | "skipped"
+    branch?: string
+    headBefore?: string
+    headAfter?: string
+    touchedPaths: number | "NaN" | "Infinity" | "-Infinity"
+    unattributable: number | "NaN" | "Infinity" | "-Infinity"
+    commit?: string
+    recoveryRef?: string
+    reason?: string
+  }
+}
+
+export type EventSessionCapabilityModeRecorded = {
+  id: string
+  type: "session.capability.mode.recorded"
+  properties: {
+    timestamp: number
+    sessionID: string
+    mode: "quick" | "standard" | "deep"
+    source: "explicit" | "estimated" | "promoted"
+    explicitMode: "quick" | "standard" | "deep"
+    estimatedMode: "quick" | "standard" | "deep"
+    complexity: number | "NaN" | "Infinity" | "-Infinity"
+    reasons: Array<string>
+    autoDetect: boolean
   }
 }
 
@@ -16635,6 +16772,7 @@ export type SessionCommandData = {
     arguments: string
     command: string
     variant?: string
+    force?: boolean
     parts?: Array<{
       id?: string
       type: "file"

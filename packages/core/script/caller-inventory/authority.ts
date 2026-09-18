@@ -48,7 +48,7 @@ export const AUTHORITY = {
   LEGACY_CANONICALIZER: "packages/deepagent-code/src/legacy-event-canonicalizer-runtime.ts",
   /** Panel orchestrator / legacy panel pipeline. */
   PANEL_ORCHESTRATOR: "packages/deepagent-code/src/panel/orchestrator.ts",
-  /** IM server-side agent executor. */
+  /** IM server-side mention-list provider module (post v2f-d: no agent execution authority). */
   IM_AGENT_EXECUTOR: "packages/deepagent-code/src/im/agent-executor-server.ts",
   /** Core session_input admission schema. */
   V2_SESSION_INPUT: "packages/core/src/session/input.ts",
@@ -98,13 +98,8 @@ export const DELEGATION_SPAWN_BINDINGS: Readonly<Record<string, string>> = {
 export const DELEGATION_REFERENCE_MODULE: Readonly<Record<string, string>> = {
   // lildax CLI commands drive the daemon through the Daemon service, which manages the daemon runtime.
   "packages/cli/src/services/daemon.ts": "composition.lildax-runtime",
-  // IM orchestration runs under the legacy AgentExecutor service provided by the server composition.
-  "packages/deepagent-code/src/session/legacy-execution-zero.ts": "im.agent-executor",
   "packages/desktop/src/main/server.ts": "desktop.spawn-local-server",
   "packages/desktop/src/main/wsl/runtime.ts": "composition.dacode-cli-entry",
-  "packages/deepagent-code/src/im/agent-reply-sink-server.ts": "im.agent-executor",
-  "packages/deepagent-code/src/panel/orchestrator.ts": "im.agent-executor",
-  "packages/deepagent-code/src/panel/arbiter.ts": "im.agent-executor",
 }
 /**
  * Effect service-layer port bindings (DI resolution, static code). Each port module's service
@@ -114,18 +109,11 @@ export const DELEGATION_REFERENCE_MODULE: Readonly<Record<string, string>> = {
  * whose repoFile is providerModule and whose verdict the consumer inherits (portBound).
  */
 export const PORTS: Readonly<Record<string, { service: string; providerModule: string; providerEntryId: string; compositionModule: string }>> = {
-  "packages/core/src/im/agent-executor.ts": {
-    service: "AgentExecutorService",
-    providerModule: "packages/deepagent-code/src/im/agent-executor-server.ts",
-    providerEntryId: "im.agent-executor",
-    compositionModule: "packages/deepagent-code/src/server/routes/instance/httpapi/server.ts",
-  },
-  "packages/core/src/im/agent-reply-sink.ts": {
-    service: "AgentReplySinkService",
-    providerModule: "packages/deepagent-code/src/im/agent-reply-sink-server.ts",
-    providerEntryId: "im.agent-executor",
-    compositionModule: "packages/deepagent-code/src/server/routes/instance/httpapi/server.ts",
-  },
+  // v2f-d IM durable-only migration: both IM Effect service ports are unwired. No production
+  // provider constructs AgentExecutorService anymore (agent-executor-server.ts now provides only
+  // the AgentListProvider mention resolver), and the AgentReplySinkService provider module
+  // (agent-reply-sink-server.ts) is deleted. @mentions admit durable SessionV2 work directly
+  // (src/im/im-agent-execution.ts), so no portBound consumer edges remain.
 }
 /**
  * Client/service INVOCATION call-site bindings: a member-call chain the entry's handler BODY

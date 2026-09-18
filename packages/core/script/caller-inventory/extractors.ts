@@ -614,7 +614,10 @@ const FIXED_ENTRIES: readonly FixedEntry[] = [
     declare: "spawnWslSidecar",
   },
 
-  // IM (surface 6): core ingress orchestration + server-side executor face.
+  // IM (surface 6): durable V2 admission + reply-outbox daemon + the mention-list provider face.
+  // v2f-d IM durable-only migration: the legacy executor/reply-sink/progress-stream server modules
+  // (fresh V1 session per turn through SessionPrompt.promptOrSteer) are DELETED; @mentions are
+  // admitted as durable SessionV2 work and the terminal reply returns through im_reply_outbox.
   {
     id: "im.agent-orchestrator",
     surface: "im",
@@ -623,27 +626,28 @@ const FIXED_ENTRIES: readonly FixedEntry[] = [
     fileFromRoot: "packages/core/src/im/agent-orchestrator.ts",
   },
   {
+    id: "im.agent-execution",
+    surface: "im",
+    kind: "durable-agent-admission",
+    name: "IM mention durable admission",
+    fileFromRoot: "packages/deepagent-code/src/im/im-agent-execution.ts",
+    declare: "admitMention",
+  },
+  {
+    id: "im.reply-outbox",
+    surface: "im",
+    kind: "durable-reply-outbox",
+    name: "IM reply outbox daemon",
+    fileFromRoot: "packages/deepagent-code/src/im/im-reply-outbox.ts",
+    declare: "drainPass",
+  },
+  {
     id: "im.agent-executor",
     surface: "im",
-    kind: "server-agent-executor",
-    name: "ServerAgentExecutor",
+    kind: "server-agent-list-provider",
+    name: "ServerAgentListProviderLive",
     fileFromRoot: "packages/deepagent-code/src/im/agent-executor-server.ts",
-    declare: "ServerAgentExecutor",
-  },
-  {
-    id: "im.agent-reply-sink",
-    surface: "im",
-    kind: "reply-sink",
-    name: "Agent reply sink (server)",
-    fileFromRoot: "packages/deepagent-code/src/im/agent-reply-sink-server.ts",
-  },
-  {
-    id: "im.agent-progress-stream",
-    surface: "im",
-    kind: "progress-stream",
-    name: "Agent progress stream",
-    fileFromRoot: "packages/deepagent-code/src/im/agent-progress-stream.ts",
-    declare: "withAgentProgress",
+    declare: "ServerAgentListProviderLive",
   },
 
   // Event (surface 7): bus / router / bridge / daemon consumers.
