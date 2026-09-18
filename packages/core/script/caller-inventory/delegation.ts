@@ -88,9 +88,9 @@ export const DELEGATION_RULE_PACKS: readonly RulePack[] = [
     rules: readOnlyWith([{ kind: "bodyLogsOnly" }, ...NOT_WRITE]),
   },
   // ---- v2f-d IM durable-only migration: the IM DI port bindings are gone. No production layer
-  // provides AgentExecutorService/AgentReplySinkService anymore, so neither im.agent-orchestrator
-  // nor the deleted reply-sink entry can inherit a port provider verdict; they are re-classified
-  // in rules.ts against their actual (dead / removed) production role. ----
+  // provides AgentExecutorService/AgentReplySinkService anymore, so no IM entry can inherit a
+  // port provider verdict. (v2f-i residual sweep: the production-dead im.agent-orchestrator
+  // module and its inventory entry are deleted outright.) ----
   // ---- Panel orchestration: the panelist runner (runPanelist) and verdict engine (arbitrate) run
   // within the legacy agent/panel pipeline — proven by the real call-path (bound client invocation).
   {

@@ -113,7 +113,6 @@ describe("V4EventRuntime durable consumer-group lifecycle", () => {
 
   const fullRuntimeFlagsOff = {
     v4MultiAgentRuntime: false,
-    v4EventDrivenIm: false,
     v4PanelAutoConvene: false,
     v4EventDrivenArchive: false,
     v4AgentPushEnabled: false,

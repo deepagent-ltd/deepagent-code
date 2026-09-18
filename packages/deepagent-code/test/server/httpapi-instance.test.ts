@@ -144,8 +144,8 @@ describe("instance HttpApi", () => {
           // §H3 / V4.1 — the event-driven capability flags are advertised; most stay default OFF (operator
           // opt-in per the staged rollout), while v4MultiAgentRuntime is PROMOTED ON (the §N event-driven
           // goal-tick chain is the live driver; daemon audit GO). This test builds RuntimeFlags from empty
-          // env, so the capability endpoint reports the production defaults.
-          v4EventDrivenIm: false,
+          // env, so the capability endpoint reports the production defaults. (v4EventDrivenIm was removed
+          // with the V2 IM durable-only migration — no such field on the wire anymore.)
           v4AgentPushEnabled: true,
           v4MultiAgentRuntime: true,
           v4ThreadEnabled: false,

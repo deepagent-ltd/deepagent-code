@@ -193,9 +193,11 @@ describe("C0-08 legacy-zero gate real inventory (actual frozen numbers)", () => 
     // admission/execution, im.reply-outbox event), -28 adapter (the deleted executor/reply-sink/
     // progress-stream faces became read_only mention resolution / dead orchestrator; createMessage
     // and the goal/panel pack keep adapter with V2-native markers), read-only 2153→2178.
+    // v2f-i residual sweep (2026-09-18): the production-dead core agent-orchestrator module is
+    // deleted, removing its read_only-on-all-7 entry — read-only 2178→2171.
     expect(counters.v2Dims).toBe(218)
     expect(counters.adapterDims).toBe(432)
-    expect(counters.readOnlyDims).toBe(2178)
+    expect(counters.readOnlyDims).toBe(2171)
     expect(counters.unclassifiedDims).toBe(0)
   })
 
@@ -276,9 +278,10 @@ describe("C0-08 legacy-zero gate snapshot (byte-stable)", () => {
     expect(snapshot.counters.v2Dims).toBe(218)
     // 2026-09-08 step 5c 重钉:同批漂移(402→401)。v2f-d (2026-09-18): entries net-zero
     // (deleted reply-sink/progress-stream faces replaced by durable admission + reply outbox).
-    expect(snapshot.entries).toBe(404)
+    // v2f-i (2026-09-18): the dead core agent-orchestrator entry is deleted (404→403, roles −7).
+    expect(snapshot.entries).toBe(403)
     // 2026-09-08 step 5c 重钉:同批漂移(2814→2807)。
-    expect(snapshot.roles).toBe(2828)
+    expect(snapshot.roles).toBe(2821)
     expect(snapshot.selectionBridgeUsages).toBe(0)
   })
 

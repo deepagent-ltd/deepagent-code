@@ -86,7 +86,6 @@ const agentListLayer = (agents: AgentDescriptor[]) =>
   })
 
 const flagsLayer = RuntimeFlags.layer({
-  v4EventDrivenIm: true,
   v4AgentPushEnabled: true,
   v4MultiAgentRuntime: true,
 })

@@ -42,6 +42,9 @@ describe("AgentExecutor fail-fast default layer", () => {
       ),
     )
     expect(message).toBe(AGENT_EXECUTOR_NOT_IMPLEMENTED)
-    expect(message).toContain("ServerAgentExecutorLive")
+    // v2f-i: the message truthfully states that the V2 IM durable-only path admits mentions
+    // directly through SessionV2 and never binds this port (the former ServerAgentExecutorLive
+    // reference was deleted with the migration).
+    expect(message).toContain("V2 IM durable-only path")
   })
 })

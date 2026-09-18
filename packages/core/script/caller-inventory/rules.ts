@@ -770,25 +770,9 @@ export const RULE_PACKS: readonly RulePack[] = [
       notBody("events.publish"),
     ])),
   },
-  // v2f-d: im.agent-orchestrator is production-DEAD — no production composition provides
-  // AgentExecutorService anymore, so nothing wires executeAgentMentions (unit tests only); the
-  // production IM flow admits durable SessionV2 work directly from the handler. Its authority
-  // was the DI-injected executor port; with the port unwired the module holds no statically
-  // bound authority writer, and its import closure provably reaches none of the authority
-  // writers (noReach). read_only with its own module as the read fact — never a guessed legacy
-  // and never a fake v2.
-  {
-    match: (id) => id === "im.agent-orchestrator",
-    rules: all7(readOnly([
-      { kind: "reach", pathSuffix: "packages/core/src/im/agent-orchestrator.ts" },
-      noReachPath(AUTHORITY.LEGACY_PROMPT),
-      noReachPath(AUTHORITY.V2_EXECUTION_LOCAL),
-      noReachPath(AUTHORITY.V2_TOOL_REGISTRY),
-      noReachPath(AUTHORITY.EVENT_V2_BRIDGE),
-      noReachPath(AUTHORITY.PROJECTOR),
-      noReachPath(AUTHORITY.V2_EVENT_BUS),
-    ])),
-  },
+  // v2f-i residual sweep: the im.agent-orchestrator entry is REMOVED — the module
+  // (packages/core/src/im/agent-orchestrator.ts, production-dead since v2f-d with no composition
+  // providing AgentExecutorService) is deleted, so there is no production caller left to classify.
   {
     match: (id) => id.startsWith("http.instance.im."),
     rules: readOnlyNoBody(),
@@ -1075,8 +1059,7 @@ export const RULE_PACKS: readonly RulePack[] = [
   },
   // Panel orchestration components (panel.orchestrator/arbiter) resolve their authority through
   // an injected runPanelist seam and are read_only with the panel schema as their genuine reader
-  // (delegation.ts). im.agent-orchestrator is production-dead since v2f-d and read_only by
-  // verified writer absence (im pack above).
+  // (delegation.ts).
 
   // v2f-c goal/panel V2-only subagent lifecycle: the goal pipeline and expert panel drive child
   // sessions through makeTaskSubagentRunner — now the V2-native child-session runner (SessionV2
@@ -1141,7 +1124,8 @@ export const RULE_PACKS: readonly RulePack[] = [
   // IM server-side pipeline: the legacy SessionPrompt pack is GONE (v2f-d durable-only
   // migration). ServerAgentExecutor / agent-reply-sink-server / agent-progress-stream are
   // deleted; every surviving IM entry is classified in the im pack above (durable V2
-  // admission, durable reply outbox, mention-list provider read, dead orchestrator read).
+  // admission, durable reply outbox, mention-list provider read). The production-dead core
+  // agent-orchestrator module and its entry are deleted outright (v2f-i residual sweep).
   // ===========================================================================
 
   // ===========================================================================

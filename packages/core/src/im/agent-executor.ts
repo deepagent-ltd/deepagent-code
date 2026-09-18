@@ -89,9 +89,9 @@ export interface AgentExecutor {
     /**
      * OPTIONAL live-progress sink. When provided, an executor that supports
      * streaming reports throttled batches of the turn's in-flight
-     * reasoning/tool/text parts. The orchestrator wires this to broadcast on the
-     * IM WebSocket (and mirror to the reply sink). Best-effort: the callback
-     * never fails, and an executor that doesn't stream simply ignores it.
+     * reasoning/tool/text parts (the deleted legacy orchestrator broadcast these
+     * on the IM WebSocket). Best-effort: the callback never fails, and an
+     * executor that doesn't stream simply ignores it.
      */
     onProgress?: (parts: ReadonlyArray<AgentProgressPart>) => Effect.Effect<void, never, never>
   }): Effect.Effect<AgentExecutionResult, Error, never>
@@ -106,21 +106,25 @@ export class AgentExecutorService extends Context.Service<AgentExecutorService, 
  * real live implementation wired in.
  */
 export const AGENT_EXECUTOR_NOT_IMPLEMENTED =
-  "AgentExecutor has no live implementation — inject the SessionPrompt adapter (ServerAgentExecutorLive)"
+  "AgentExecutor has no live implementation — the V2 IM durable-only path admits mentions directly as durable SessionV2 work (deepagent-code src/im/im-agent-execution.ts) and never binds this port"
 
 /**
  * Explicit fail-fast default layer for the {@link AgentExecutorService} port.
  *
- * core declares the `AgentExecutor` port but ships NO real live implementation —
- * the single canonical one is `ServerAgentExecutorLive` (SessionPrompt-driven) in
- * `packages/deepagent-code/src/im/agent-executor-server.ts`. Without this layer, an
- * un-injected service surfaces as an opaque "missing dependency" runtime failure.
+ * core declares the `AgentExecutor` port but has NO live implementation: the former
+ * `ServerAgentExecutorLive` (SessionPrompt-driven, in deepagent-code's
+ * `src/im/agent-executor-server.ts`) and its only orchestrator consumer
+ * (`agent-orchestrator.ts`) were deleted by the V2 IM durable-only migration —
+ * @mentions are now admitted synchronously as durable SessionV2 work by the IM
+ * handler. Without this layer, an un-injected service surfaces as an opaque
+ * "missing dependency" runtime failure.
  *
  * This layer satisfies the dependency at resolution time but fails fast at
  * execute-time — through the port's existing typed `Error` channel — with a clear,
  * actionable message. It keeps the port contract (interface + execute signature)
- * unchanged and lets the orchestrator's normal error handling report it as a
- * structured failure instead of dying with an obscure dependency error.
+ * unchanged so a structured failure is reported instead of an obscure dependency
+ * error. (The LIVE parts of this module today are the `AgentContext` schema and
+ * `AgentContextBuilderService`, consumed by `context-builder.ts`.)
  */
 export const AgentExecutorFailFastLive = Layer.succeed(
   AgentExecutorService,
@@ -135,8 +139,9 @@ export const AgentExecutorFailFastLive = Layer.succeed(
 export const DEFAULT_AGENT_TIMEOUT_MS = 60000
 
 /**
- * Agent execution timeout, overridable via `IM_AGENT_TIMEOUT_MS`. Single source
- * of truth for both the orchestrator and any executor implementation.
+ * Agent execution timeout, overridable via `IM_AGENT_TIMEOUT_MS`. Kept as the
+ * shared constant for any executor implementation (the legacy orchestrator that
+ * consumed it is deleted).
  */
 export const getAgentTimeout = (): number => {
   const env = process.env.IM_AGENT_TIMEOUT_MS

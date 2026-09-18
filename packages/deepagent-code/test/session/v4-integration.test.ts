@@ -70,7 +70,6 @@ const runner: SubagentTurnRunner = (input) =>
 const makeLayer = (flags?: Partial<RuntimeFlags.Info>) => {
   const database = Database.layerFromPath(":memory:")
   const flagsLayer = RuntimeFlags.layer({
-    v4EventDrivenIm: true,
     v4AgentPushEnabled: true,
     v4MultiAgentRuntime: true,
     ...flags,
@@ -354,7 +353,6 @@ describe("V4.1 durable handoff end-to-end", () => {
 describe("V4.0 §H2 rollback safety — every flag OFF disables the feature", () => {
   const offLayer = (() => {
     const { core, flagsLayer, runtime, database } = makeLayer({
-      v4EventDrivenIm: false,
       v4MultiAgentRuntime: false,
     })
     const dispatcherLayer = Layer.unwrap(

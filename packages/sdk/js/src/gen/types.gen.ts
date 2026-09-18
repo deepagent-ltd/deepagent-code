@@ -8584,7 +8584,6 @@ export type GlobalCapabilitiesResponses = {
       expertPanel: boolean
       goalLoop: boolean
       wiki: boolean
-      v4EventDrivenIm?: boolean
       v4AgentPushEnabled?: boolean
       v4MultiAgentRuntime?: boolean
       v4ThreadEnabled?: boolean
