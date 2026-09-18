@@ -553,6 +553,13 @@ export const TaskRunTable = sqliteTable(
     run_id: text().primaryKey(),
     root_run_id: text(),
     request_hash: text().notNull(),
+    /**
+     * Which execution authority owns this row: historical rows stay `'v1'` (the legacy app-layer
+     * TaskDispatcher) while every row written by the Core V2 `TaskRunAuthority` carries `'v2'`.
+     * Claim/recovery paths filter on `'v2'` so the native dispatcher can never pick up old V1
+     * work, and V1 callers keep ignoring V2 rows.
+     */
+    execution_runtime: text().$type<"v1" | "v2">().notNull().default("v1"),
     parent_session_id: text()
       .$type<SessionSchema.ID>()
       .notNull()

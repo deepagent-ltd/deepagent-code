@@ -65,6 +65,14 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
     readonly sessionID: SessionSchema.ID
     readonly prompt: Prompt
     readonly delivery: Delivery
+    /**
+     * In-transaction hook committed atomically with the PromptLifecycle.Admitted event and its
+     * `session_input` projection (same contract as `EventV2.publish`'s `{ commit }` option): the
+     * hook must be an idempotent write or CAS, and a failure rolls back BOTH the event and the
+     * projected row. Not replayed from the serialized event log, so a hook that repairs state must
+     * converge on its own.
+     */
+    readonly commit?: (seq: number, event: EventV2.Payload) => Effect.Effect<void, unknown>
   },
 ) {
   const existing = yield* find(db, input.id)
@@ -77,7 +85,7 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
       timestamp,
       prompt: input.prompt,
       delivery: input.delivery,
-    })
+    }, input.commit === undefined ? undefined : { commit: input.commit })
     .pipe(
       Effect.flatMap((event) =>
         event.seq === undefined

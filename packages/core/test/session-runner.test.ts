@@ -544,7 +544,11 @@ const sessionsFor = (runnerLayer: ReturnType<typeof runnerStack>) =>
     Layer.provide(Project.defaultLayer),
     Layer.provide(executionFor(runnerLayer)),
   )
-const runner = runnerStack()
+// The production root carries Database.Service INTO the Location runner trees (app-runtime pipes
+// Layer.provideMerge(Database.defaultLayer)), which is how the Core `task` tool's durable TaskRun
+// authority reaches the ledger from inside a Location-scoped settle fiber. The harness must
+// mirror that topology: the runner tree exposes Database.Service.
+const runner = runnerStack().pipe(Layer.provideMerge(database))
 const locations = locationsFor(runner)
 const execution = executionFor(runner)
 const sessions = sessionsFor(runner)
