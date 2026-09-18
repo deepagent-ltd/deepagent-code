@@ -78,9 +78,8 @@ import { PRQueue } from "@/agent/pr-queue"
 import { Workspace } from "@/control-plane/workspace"
 import { IMRepository, IMRepositoryLive } from "@deepagent-code/core/im/repository"
 import { IMBroadcasterLive } from "@deepagent-code/core/im/broadcaster"
-import { AgentContextBuilderLive } from "@deepagent-code/core/im/context-builder"
-import { ServerAgentExecutorLive, ServerAgentListProviderLive } from "@/im/agent-executor-server"
-import { ServerAgentReplySinkLive } from "@/im/agent-reply-sink-server"
+import { ServerAgentListProviderLive } from "@/im/agent-executor-server"
+import { IMReplyOutbox } from "@/im/im-reply-outbox"
 import { CorsConfig, isAllowedCorsOrigin, type CorsOptions } from "@/server/cors"
 import { serveUIEffect } from "@/server/shared/ui"
 import { ServerAuth } from "@/server/auth"
@@ -210,21 +209,18 @@ const oversightServicesLayer = Layer.mergeAll(
   // shared instance runtime graph below (Session.defaultLayer / SessionRevert.defaultLayer).
   RollbackAudit.layer,
 ).pipe(Layer.provide(Database.defaultLayer))
-// IM agent execution is driven by the deepagent-code session stack (Session +
-// SessionPrompt), NOT core SessionV2 (which binds a no-op execution layer and
-// never runs an agent). ServerAgentExecutorLive / ServerAgentListProviderLive
-// require Session/SessionPrompt/Agent, which are provided by the instance
-// runtime graph at the bottom of createRoutes — so these are declared here
-// WITHOUT their session deps and resolved against that shared graph.
+// V2 IM durable-only: @mentions are admitted by the IM handler directly as durable SessionV2
+// work (src/im/im-agent-execution.ts) on the SHARED V2 runtime graph (V2RunnerFrame.sessionRuntimeLayer —
+// the real SessionExecutionLocal owner, not the noop-execution standalone default). The terminal
+// assistant reply returns through the im_reply_outbox daemon (IMReplyOutbox.layer), which draws
+// Database/SessionV2/EventV2Bridge from the shared graph and IMRepository/broadcaster from here.
+// ServerAgentListProviderLive still requires Agent/InstanceStore from the shared instance graph,
+// so it stays declared here WITHOUT those deps and resolved against that graph.
 const imRuntimeLayer = Layer.mergeAll(
   imRepositoryLayer,
   IMBroadcasterLive,
-  ServerAgentExecutorLive,
   ServerAgentListProviderLive,
-  // Server Edition: reports agent outcomes back to the gateway hub. No-op when
-  // GATEWAY_CALLBACK_URL is unset (standalone/desktop), so behavior is unchanged.
-  ServerAgentReplySinkLive,
-  AgentContextBuilderLive.pipe(Layer.provide(imRepositoryLayer)),
+  IMReplyOutbox.layer.pipe(Layer.provide(imRepositoryLayer), Layer.provide(IMBroadcasterLive)),
 )
 // V4.0 §A4/§C — the PRODUCTION event-runtime daemons (EventDispatcher router + tick + retry pump,
 // MultiAgentRuntime DispatchPort, RetentionSweeper). Without this the V4 daemons never start and
@@ -315,8 +311,8 @@ const instanceRoutes = instanceApiRoutes.pipe(
   Layer.provide([httpApiAuthLayer, workspaceRoutingLive, instanceContextLayer, schemaErrorLayer]),
   Layer.provide(imRuntimeLayer),
   Layer.provide(oversightServicesLayer),
-  // §B1 — the IM handler double-writes im.message.created onto the bus (flag-gated). Provide the bus
-  // service to the instance route graph.
+  // The DeepAgent Event Bus stays provided to the instance route graph for the remaining bus
+  // consumers (oversight/event surfaces); the V2 IM path no longer publishes im.message.created.
   Layer.provide(DeepAgentEventBus.defaultLayer),
   // §E1 — the workspace trusted-sources config handler reads/writes WorkspaceConfig (GET+PUT
   // /workspace/:workspaceID/config/trusted-sources). Provide the default layer (Database-backed) here so
