@@ -825,8 +825,8 @@ export const layer = Layer.effect(
         projection.messages,
         modelInfo?.capabilities.input,
       ).pipe(Effect.provideService(FSUtil.Service, fs))
-      const requestMessages = [
-        ...toLLMMessages(historyRequestMessages, model),
+      const historyMessages = toLLMMessages(historyRequestMessages, model)
+      const controlMessages = [
         ...(deepagentPrompt?.volatileRoundContext
           ? [Message.user(deepagentPrompt.volatileRoundContext)]
           : governedPlanContext
@@ -834,6 +834,7 @@ export const layer = Layer.effect(
             : []),
         ...(stepLimitReached ? [Message.assistant(MAX_STEPS_PROMPT)] : []),
       ]
+      const requestMessages = [...historyMessages, ...controlMessages]
       // G3 model profile channel 3 (runtime params): clamp the activation policy's suggested
       // reasoning effort by the profile cap (e.g. deepseek — over-thinking simple repair turns).
       // Never sent as prompt text; lowers onto the provider option the wire protocols know.
@@ -917,10 +918,10 @@ export const layer = Layer.effect(
           : Effect.void
         ).pipe(Effect.ensuring(queryAuthorization.remove(session.id).pipe(Effect.ignore))),
       )
-      // W3.6 — after the selection is admitted, the selection graph evidence (refs + brief
-      // revision/summary) is appended to the VOLATILE system tail (`deepagentSystem` + the request
-      // system). `system.baseline` is never touched, so the cache prefix stays stable; the evidence
-      // sits after the cache breakpoint and is also recorded in the prepared turn's volatile parts.
+      // W3.6 — after the selection is admitted, selection evidence and other per-turn operator
+      // instructions are kept out of the initial system prefix. They become chronological system
+      // updates after projected history and before the round-control message. This preserves the
+      // stable prefix for implicit OpenAI-compatible caches while retaining operator authority.
       // Gated by the W3 production flag: an explicit `=false` keeps the pre-W3 request byte-identical
       // (staged adapters + no evidence tail).
       const selectionEvidence = productionAdaptersEnabled(runtimeFeatures)
@@ -928,7 +929,6 @@ export const layer = Layer.effect(
         : undefined
       if (selectionEvidence !== undefined) {
         volatileSystemParts.push(selectionEvidence)
-        request = LLM.updateRequest(request, { system: [...request.system, SystemPart.make(selectionEvidence)] })
       }
       // RI-126: the structured-output contract rides the volatile runtime tail (legacy
       // buildStructuredOutputRuntimeTail parity) — wire mode references the provider-enforced
@@ -938,8 +938,11 @@ export const layer = Layer.effect(
           ? STRUCTURED_OUTPUT_WIRE_TAIL
           : structuredOutputSystemPrompt(jsonSchemaFormat.schema)
         volatileSystemParts.push(structuredTail)
-        request = LLM.updateRequest(request, { system: [...request.system, SystemPart.make(structuredTail)] })
       }
+      if (volatileSystemParts.length > 0)
+        request = LLM.updateRequest(request, {
+          messages: [...historyMessages, ...volatileSystemParts.map(Message.system), ...controlMessages],
+        })
       // §16.3 order 4: the receipt's history-window identity comes from the optional epoch bridge;
       // unwired compositions (or a lookup fault) keep the ContextEpoch revision exactly as before.
       // Identity stability: the read happens BEFORE compactIfNeeded and is replayed in the same
@@ -1774,8 +1777,28 @@ export const layer = Layer.effect(
       RunError
     >
 
-    const runAfterOverflowCompaction: RunTurn = Effect.fnUntraced(function* (sessionID, promotion, step) {
+    const runAfterOverflowCompaction: RunTurn = Effect.fnUntraced(function* (
+      sessionID,
+      promotion,
+      step,
+      providerRetry = 0,
+      ownerFencedRetries = 0,
+    ) {
       return yield* runTurnAttempt(sessionID, promotion, step).pipe(
+        // RequestSeal is intentionally a no-error callback at the HTTP boundary, so a durable
+        // pre-dispatch refusal arrives as a defect. Restore the one known typed domain error here;
+        // post-dispatch fencing is reconciled inside V2ProviderTurn.stream and never reaches this
+        // retry path.
+        Effect.catchDefect((defect) =>
+          defect instanceof V2ProviderTurn.ConflictError ? Effect.fail(defect) : Effect.die(defect),
+        ),
+        Effect.catch((error) =>
+          error instanceof V2ProviderTurn.ConflictError &&
+          error.reason === "v2_provider_owner_lease_not_live" &&
+          ownerFencedRetries < MAX_OWNER_FENCED_RETRIES
+            ? Effect.die(retryAttempt(step, providerRetry, "owner_fenced", undefined, ownerFencedRetries))
+            : Effect.fail(error),
+        ),
         Effect.catchDefect(
           Effect.fnUntraced(function* (defect) {
             if (!(defect instanceof TurnTransitionError)) return yield* Effect.die(defect)
@@ -1783,8 +1806,21 @@ export const layer = Layer.effect(
               return yield* Effect.die("Post-compaction provider attempt cannot recover another overflow")
             // A retryable failure after a compaction-recovering attempt still retries through the
             // plain path (fresh attempt, shared budget) rather than leaking the transition defect.
-            if (defect.transition._tag === "RetryAttempt")
-              return yield* runTurn(sessionID, promotion, defect.transition.step, defect.transition.retry + 1)
+            if (defect.transition._tag === "RetryAttempt") {
+              const budgets = nextAttemptBudgets({
+                cause: defect.transition.cause,
+                retry: defect.transition.retry,
+                providerRetry,
+                ownerFencedRetries: defect.transition.ownerFencedRetries ?? ownerFencedRetries,
+              })
+              return yield* runTurn(
+                sessionID,
+                promotion,
+                defect.transition.step,
+                budgets.providerRetry,
+                budgets.ownerFencedRetries,
+              )
+            }
             yield* Effect.yieldNow
             return yield* runAfterOverflowCompaction(
               sessionID,
@@ -1804,6 +1840,11 @@ export const layer = Layer.effect(
       ownerFencedRetries = 0,
     ) {
       return yield* runTurnAttempt(sessionID, promotion, step, compaction.compactAfterOverflow, providerRetry).pipe(
+        // See the post-compaction path above. Only RequestSeal can still defect with this typed
+        // pre-dispatch conflict; stream/settlement owner loss is successor-reconciled in place.
+        Effect.catchDefect((defect) =>
+          defect instanceof V2ProviderTurn.ConflictError ? Effect.fail(defect) : Effect.die(defect),
+        ),
         // A lease-fenced attempt is a rotation artefact: the fenced owner stalled past its lease, so
         // the successor generation owns the session now. Re-open a fresh attempt instead of ending
         // the run — the admission guard admits it only when the fenced attempt provably never

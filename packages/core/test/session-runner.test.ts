@@ -129,8 +129,8 @@ import { testEffect } from "./lib/effect"
 import { tmpRoot, tmpRootShared } from "./fixture/tmpdir"
 
 const database = Database.layerFromPath(":memory:")
-// W3.6: the runner appends the selection graph evidence to the volatile system tail. The harness has
-// no production graph sources wired, so the four graphs resolve under the W3 production default as:
+// W3.6: the runner appends selection evidence as a chronological system update after projected
+// history. The harness has no production graph sources wired, so the four graphs resolve as:
 const selectionEvidence = [
   "Context selection (this turn):",
   "- code: degraded_unavailable [rev code:unavailable] (0 refs)",
@@ -138,7 +138,7 @@ const selectionEvidence = [
   "- knowledge: empty [rev released:no-store] (0 refs)",
   "- memory: empty [rev memory:no-store] (0 refs)",
 ].join("\n")
-const withSelection = (parts: string[]) => [...parts, selectionEvidence]
+const withSelection = (parts: string[]) => parts
 let currentSelectionIdentity: ProductionV2LocationIdentity | undefined
 const selectionSources: ProductionV2AdapterInput = {
   get identity() {
@@ -217,11 +217,15 @@ const responsesRecoveryModel = Model.make({
   route: OpenAIResponses.route.with({ limits: { context: 20_000, output: 1_000 } }),
 })
 const authorizations: Tool.Context[] = []
+const permissionAssertions: PermissionV2.AssertInput[] = []
 const executions: string[] = []
 const permission = Layer.succeed(
   PermissionV2.Service,
   PermissionV2.Service.of({
-    assert: () => Effect.die("unused"),
+    assert: (input) =>
+      Effect.sync(() => {
+        permissionAssertions.push(input)
+      }),
     ask: () => Effect.die("unused"),
     reply: () => Effect.die("unused"),
     get: () => Effect.die("unused"),
@@ -611,7 +615,7 @@ const it = testEffect(
       locations,
       execution,
       sessions,
-      TaskTool.layer.pipe(Layer.provide(registry), Layer.provide(agents)),
+      TaskTool.layer.pipe(Layer.provide(registry), Layer.provide(agents), Layer.provide(permission)),
       // Same memoized slot the fake map trees carry: capture the live SessionV2 service once.
       TaskTool.captureDelegationServiceLayer.pipe(Layer.provide(TaskTool.delegationSlotLayer), Layer.provide(sessions)),
     ),
@@ -1421,6 +1425,7 @@ describe("SessionRunnerLLM", () => {
       expect(requests[0]?.messages.map((message) => ({ role: message.role, content: message.content }))).toEqual([
         { role: "user", content: [{ type: "text", text: "First" }] },
         { role: "user", content: [{ type: "text", text: "Second" }] },
+        { role: "system", content: [{ type: "text", text: selectionEvidence }] },
       ])
       expect(yield* session.messages({ sessionID })).toHaveLength(2)
     }),
@@ -1455,7 +1460,7 @@ describe("SessionRunnerLLM", () => {
       yield* (yield* SessionExecution.Service).awaitIdle(sessionID)
 
       expect(requests).toHaveLength(1)
-      expect(requests[0]?.messages.map((message) => message.role)).toEqual(["user"])
+      expect(requests[0]?.messages.map((message) => message.role)).toEqual(["user", "system"])
     }),
   )
 
@@ -1567,8 +1572,8 @@ describe("SessionRunnerLLM", () => {
         withSelection(["Initial context"]),
         withSelection(["Initial context"]),
       ])
-      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "user", "system"])
-      expect(requests[1]?.messages.at(-1)?.content).toEqual([{ type: "text", text: "Changed context" }])
+      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "user", "system", "system"])
+      expect(requests[1]?.messages.at(-2)?.content).toEqual([{ type: "text", text: "Changed context" }])
       expect(yield* session.messages({ sessionID })).toHaveLength(3)
       const { db } = yield* Database.Service
       expect(
@@ -1762,14 +1767,15 @@ describe("SessionRunnerLLM", () => {
       response = fragmentFixture("text", "text-false-flag", ["Done"]).completeEvents
       yield* session.resume(sessionID)
 
-      // The pre-W3 wire shape: no "Context selection (this turn):" tail. The default-ON twin is
-      // asserted by every other runner test (`withSelection`), so this negative proves the
+      // The pre-W3 wire shape: no "Context selection (this turn):" update. The default-ON twin is
+      // asserted by the request-history tests above, so this negative proves the
       // byte-invariance of the explicit kill-switch — the staged adapters + no evidence tail.
       // The whole composition runs against an explicit `=false` registry (the `staged` stack):
       // the kill-switch resolves at process start, so mid-process env mutation is not the seam.
       const system = requests.at(-1)?.system.map((part) => part.text) ?? []
       expect(system.join("\n")).not.toContain("Context selection (this turn):")
       expect(system).toEqual(["Initial context"])
+      expect(JSON.stringify(requests.at(-1)?.messages)).not.toContain("Context selection (this turn):")
       // Selection row still carries explicit four-graph statuses (staged source_disabled), never
       // v2-none — the =false fallback stays a REAL selection.
       const { db } = yield* Database.Service
@@ -2329,8 +2335,8 @@ describe("SessionRunnerLLM", () => {
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Second" }), resume: false })
       yield* session.resume(sessionID)
 
-      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "user", "system"])
-      expect(requests[1]?.messages.at(-1)?.content).toEqual([
+      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "user", "system", "system"])
+      expect(requests[1]?.messages.at(-2)?.content).toEqual([
         { type: "text", text: "System context source removed: test/context" },
       ])
       expect(yield* session.messages({ sessionID })).toHaveLength(3)
@@ -2365,8 +2371,8 @@ describe("SessionRunnerLLM", () => {
         withSelection(["Initial context"]),
         withSelection(["Replacement context"]),
       ])
-      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "user", "system"])
-      expect(requests[2]?.messages.map((message) => message.role)).toEqual(["user", "user", "user"])
+      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "user", "system", "system"])
+      expect(requests[2]?.messages.map((message) => message.role)).toEqual(["user", "user", "user", "system"])
       expect((yield* session.context(sessionID)).map((message) => message.type)).toEqual([
         "user",
         "user",
@@ -3052,7 +3058,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(2)
-      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "assistant", "tool"])
+      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "assistant", "tool", "system"])
       expect(authorizations).toMatchObject([{ sessionID, toolCallID: "call-echo" }])
       expect(executions).toEqual(["hello"])
       expect(yield* session.context(sessionID)).toMatchObject([
@@ -3129,7 +3135,7 @@ describe("SessionRunnerLLM", () => {
       expect(JSON.stringify(requests[0])).not.toContain(body.split("\n")[1]!)
       expect(toolResult).toMatchObject({ type: "text" })
       if (toolResult?.type === "text") expect(String(toolResult.value)).toContain(body)
-      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "assistant", "tool"])
+      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "assistant", "tool", "system"])
     }),
   )
 
@@ -3267,7 +3273,7 @@ describe("SessionRunnerLLM", () => {
       response = []
       yield* session.resume(sessionID)
 
-      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "assistant", "user"])
+      expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "assistant", "user", "system"])
       expect(requests[1]?.messages[1]?.content).toMatchObject([
         {
           type: "tool-call",
@@ -4020,7 +4026,7 @@ describe("SessionRunnerLLM", () => {
 
   // The retry backoff is real time, so these two run on the live clock with an explicit budget.
   it.live(
-    "retries a pre-generation provider rejection on a fresh attempt instead of ending the run",
+    "retries a pre-dispatch DNS failure on a fresh attempt instead of ending the run",
     () =>
       Effect.gen(function* () {
         yield* setup
@@ -4028,7 +4034,7 @@ describe("SessionRunnerLLM", () => {
         const { db } = yield* Database.Service
         yield* session.prompt({
           sessionID,
-          prompt: new Prompt({ text: "Provider briefly unavailable" }),
+          prompt: new Prompt({ text: "DNS briefly unavailable" }),
           resume: false,
         })
 
@@ -4050,16 +4056,20 @@ describe("SessionRunnerLLM", () => {
           )
 
         requests.length = 0
-        // Attempt 1: the provider rejects the request before generating (HTTP 503). Attempt 2: normal
-        // completion. Only the first rejection is retryable, so the run must recover on the second.
+        // Attempt 1: DNS resolution proves the request never reached the provider. Attempt 2: normal
+        // completion. A pre-dispatch transport failure is safe to retry on a fresh sealed attempt.
         responseStreams = [
           sealThen(
-            "pre-generation-rejection",
+            "pre-dispatch-dns-failure",
             Stream.fail(
               new LLMError({
                 module: "test",
                 method: "stream",
-                reason: new ProviderInternalReason({ message: "Provider request failed with HTTP 503", status: 503 }),
+                reason: new TransportReason({
+                  message: "getaddrinfo EAI_AGAIN api.example.test",
+                  kind: "TransportError",
+                  phase: "pre-dispatch",
+                }),
               }),
             ),
           ),
@@ -4085,7 +4095,7 @@ describe("SessionRunnerLLM", () => {
         })
         expect(receipts[1]).toMatchObject({ state: "settled", errorCode: null })
         expect(yield* session.context(sessionID)).toMatchObject([
-          { type: "user", text: "Provider briefly unavailable" },
+          { type: "user", text: "DNS briefly unavailable" },
           { type: "assistant", finish: "stop" },
         ])
       }),
@@ -4372,7 +4382,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(1)
-      expect(requests[0]?.messages.map((message) => message.role)).toEqual(["user", "assistant", "tool"])
+      expect(requests[0]?.messages.map((message) => message.role)).toEqual(["user", "assistant", "tool", "system"])
       expect(yield* session.context(sessionID)).toMatchObject([
         { type: "user", text: "Recover interrupted tool" },
         {
@@ -4436,7 +4446,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(1)
-      expect(requests[0]?.messages.map((message) => message.role)).toEqual(["user", "assistant"])
+      expect(requests[0]?.messages.map((message) => message.role)).toEqual(["user", "assistant", "system"])
       expect(requests[0]?.messages[1]?.content).toMatchObject([
         {
           type: "tool-call",
@@ -4480,7 +4490,7 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(1)
-      expect(requests[0]?.messages.map((message) => message.role)).toEqual(["user", "assistant", "tool"])
+      expect(requests[0]?.messages.map((message) => message.role)).toEqual(["user", "assistant", "tool", "system"])
       expect(yield* session.context(sessionID)).toMatchObject([
         { type: "user", text: "Recover interrupted tool input" },
         { type: "assistant", content: [{ type: "tool", id: "call-pending-interrupted", state: { status: "error" } }] },
@@ -5116,7 +5126,7 @@ describe("SessionRunnerLLM", () => {
       expect(receipts[1]?.prepared_turn).toMatchObject({
         tool_choice: "none",
         tool_final_offered_ids: expect.arrayContaining(["echo"]),
-        history_message_count: requests[1]?.messages.length,
+        history_message_count: (requests[1]?.messages.length ?? 1) - 1,
       })
     }),
   )
@@ -5190,15 +5200,18 @@ describe("SessionRunnerLLM", () => {
       yield* agentsSvc.update((editor) => {
         editor.update(AgentV2.defaultID, (agent) => {
           agent.mode = "primary"
+          agent.permissions.push({ action: "edit", resource: "*", effect: "ask" })
         })
         editor.update(AgentV2.ID.make("general"), (agent) => {
           agent.mode = "subagent"
+          agent.permissions.push({ action: "*", resource: "*", effect: "deny" })
         })
         editor.default(AgentV2.defaultID)
       })
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "delegate research" }), resume: false })
 
       requests.length = 0
+      permissionAssertions.length = 0
       const sealed = (label: string, events: readonly LLMEvent[]) =>
         Stream.unwrap(
           Effect.gen(function* () {
@@ -5264,6 +5277,16 @@ describe("SessionRunnerLLM", () => {
         .pipe(Effect.orDie)
       expect(children).toHaveLength(1)
       expect(children[0]?.agent).toBe("general")
+      expect(children[0]?.permission).toEqual([{ action: "edit", resource: "*", effect: "deny" }])
+      expect(permissionAssertions).toMatchObject([
+        {
+          action: "task",
+          resources: ["general"],
+          sessionID,
+          agent: AgentV2.defaultID,
+          source: { type: "tool", callID: "call-task-1" },
+        },
+      ])
       const childContext = yield* session.context(children[0]!.id as SessionV2.ID)
       expect(childContext[0]).toMatchObject({ type: "user", text: "Research and report the answer to 40+2." })
       expect(childContext.at(-1)).toMatchObject({ type: "assistant", finish: "stop" })

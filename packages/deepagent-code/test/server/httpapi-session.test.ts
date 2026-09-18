@@ -268,6 +268,64 @@ afterEach(async () => {
 })
 
 describe("session HttpApi", () => {
+  it.live("blocks compatibility history mutations while a Core V2 drain is active", () =>
+    Effect.gen(function* () {
+      const llm = yield* TestLLMServer
+      const gate = Promise.withResolvers<void>()
+      yield* llm.hold("held V2 response", gate.promise)
+      const directory = yield* tmpdirScoped({ git: true, config: testProviderConfig(llm.url) })
+      const headers = { "x-deepagent-code-directory": directory, "content-type": "application/json" }
+      const session = yield* createSession({
+        title: "V2 mutation exclusion",
+        model: { providerID: ProviderV2.ID.make("test"), id: ModelV2.ID.make("test-model") },
+      }).pipe(provideInstanceEffect(directory))
+      const seeded = yield* createTextMessage(session.id, "must survive the active drain")
+
+      const admitted = yield* request(`/api/session/${session.id}/prompt`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ id: "msg_v2_mutation_exclusion", prompt: { text: "stay active" } }),
+      })
+      expect(admitted.status).toBe(200)
+      yield* llm.wait(1)
+
+      const revert = yield* request(pathFor(SessionPaths.revert, { sessionID: session.id }), {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ messageID: seeded.info.id }),
+      })
+      const deleted = yield* request(
+        pathFor(SessionPaths.deleteMessage, { sessionID: session.id, messageID: seeded.info.id }),
+        { method: "DELETE", headers },
+      )
+      const shell = yield* request(pathFor(SessionPaths.shell, { sessionID: session.id }), {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ agent: "build", command: "true" }),
+      })
+
+      expect(revert.status).toBe(409)
+      expect(yield* responseJson(revert)).toMatchObject({ _tag: "SessionBusyError", sessionID: session.id })
+      expect(deleted.status).toBe(409)
+      expect(yield* responseJson(deleted)).toMatchObject({ _tag: "SessionBusyError", sessionID: session.id })
+      expect(shell.status).toBe(409)
+      expect(yield* responseJson(shell)).toMatchObject({ _tag: "SessionBusyError", sessionID: session.id })
+      expect(
+        yield* Session.Service.use((service) =>
+          service.getMessage({
+            sessionID: session.id,
+            messageID: seeded.info.id,
+          }),
+        ),
+      ).toBeDefined()
+
+      gate.resolve()
+      const waited = yield* request(`/api/session/${session.id}/wait`, { method: "POST", headers })
+      expect(waited.status).toBe(204)
+    }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
+    15_000,
+  )
+
   it.live("executes normal V2 prompts on the production Location runtime while resume false remains admit-only", () =>
     Effect.gen(function* () {
       const llm = yield* TestLLMServer

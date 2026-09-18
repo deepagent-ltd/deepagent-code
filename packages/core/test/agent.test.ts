@@ -154,6 +154,11 @@ describe("AgentV2", () => {
         expect(PermissionV2.evaluate(action, "*", goalWorker?.permissions ?? []).effect).toBe("allow")
       }
       expect(PermissionV2.evaluate("task", "*", goalWorker?.permissions ?? []).effect).toBe("deny")
+
+      const build = yield* agent.get(AgentV2.defaultID)
+      expect(build?.system).toContain("maps each requirement to concrete code or validation evidence")
+      expect(build?.system).toContain("plan status alone is not proof")
+      expect(build?.system).toContain("reserve the remaining work for validation")
     }),
   )
 

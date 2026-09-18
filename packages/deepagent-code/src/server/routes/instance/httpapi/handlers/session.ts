@@ -156,6 +156,17 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       )
     })
 
+    // Core V2 drains do not occupy the compatibility SessionRunState lane. History mutations must
+    // therefore consult both authorities or a revert/delete can race a live provider/tool turn.
+    // Treat recovery_required as non-mutable too: its durable claim must be resolved before any
+    // compatibility projection is rewritten.
+    const assertSessionLaneAvailable = Effect.fn("SessionHttpApi.assertSessionLaneAvailable")(function* (
+      sessionID: SessionID,
+    ) {
+      if ((yield* runtimeStatus.list).has(sessionID)) return yield* new Session.BusyError({ sessionID })
+      yield* runState.assertNotBusy(sessionID)
+    })
+
     const requireSession = Effect.fn("SessionHttpApi.requireSession")(function* (sessionID: SessionID) {
       return yield* SessionError.mapStorageNotFound(session.get(sessionID))
     })
@@ -756,6 +767,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof ShellPayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
+      yield* SessionError.mapBusy(assertSessionLaneAvailable(ctx.params.sessionID))
       return yield* promptSvc
         .shell({ ...ctx.payload, sessionID: ctx.params.sessionID })
         .pipe(
@@ -775,11 +787,13 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof RevertPayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
+      yield* SessionError.mapBusy(assertSessionLaneAvailable(ctx.params.sessionID))
       return yield* SessionError.mapRevert(revertSvc.revert({ sessionID: ctx.params.sessionID, ...ctx.payload }))
     })
 
     const unrevert = Effect.fn("SessionHttpApi.unrevert")(function* (ctx: { params: { sessionID: SessionID } }) {
       yield* requireSession(ctx.params.sessionID)
+      yield* SessionError.mapBusy(assertSessionLaneAvailable(ctx.params.sessionID))
       return yield* SessionError.mapBusy(revertSvc.unrevert({ sessionID: ctx.params.sessionID }))
     })
 
@@ -805,7 +819,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID; messageID: MessageID }
     }) {
       yield* requireSession(ctx.params.sessionID)
-      yield* SessionError.mapBusy(runState.assertNotBusy(ctx.params.sessionID))
+      yield* SessionError.mapBusy(assertSessionLaneAvailable(ctx.params.sessionID))
       const messages = yield* SessionError.mapStorageNotFound(session.messages({ sessionID: ctx.params.sessionID }))
       if (!messages.some((message) => message.info.id === ctx.params.messageID))
         return yield* notFound(`Message not found: ${ctx.params.messageID}`)

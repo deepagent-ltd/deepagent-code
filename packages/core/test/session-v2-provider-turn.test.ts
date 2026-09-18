@@ -84,6 +84,46 @@ describe("V2 provider turn authority", () => {
     }),
   )
 
+  it.live("quarantines through a successor when the owner is fenced after dispatch", () =>
+    Effect.gen(function* () {
+      yield* seed()
+      const service = yield* V2ProviderTurn.Service
+      const owners = yield* SessionProviderOwner.Service
+      const receipt = yield* admit(service, "msg-owner-fenced-after-dispatch")
+      const physicalDispatches: string[] = []
+      const output = yield* V2ProviderTurn.stream({
+        service,
+        receipt,
+        prepare: (wireHash) => prepared(receipt, wireHash),
+        stream: Stream.unwrap(
+          V2ProviderTurn.CurrentRequestSeal.pipe(
+            Effect.flatMap((seal) =>
+              seal!.seal({
+                wireHash: Hash.sha256("wire-owner-fenced-after-dispatch"),
+                bodyHash: "a".repeat(64),
+                bodyLength: 1,
+                contentType: "application/json",
+              }),
+            ),
+            Effect.tap(() => owners.release({ ownerToken: receipt.ownerToken })),
+            Effect.tap(() => Effect.sync(() => physicalDispatches.push("dispatched"))),
+            Effect.as(Stream.fromIterable(["done"])),
+          ),
+        ),
+        outcomeArtifact: () => ["done"],
+        errorCode: () => "provider_failed",
+      }).pipe(Stream.runCollect)
+
+      expect([...output]).toEqual(["done"])
+      expect(physicalDispatches).toEqual(["dispatched"])
+      expect(yield* service.get(receipt.receiptId)).toMatchObject({
+        state: "indeterminate_after_crash",
+        errorCode: "owner_lost_after_dispatch",
+      })
+      expect(yield* service.currentOwnerToken()).not.toBe(receipt.ownerToken)
+    }),
+  )
+
   it.live("automatically persists integrity evidence when the production identity is supplied", () =>
     Effect.gen(function* () {
       yield* seed()

@@ -201,11 +201,27 @@ export function memory(input: {
   readonly revision: string
   readonly observedMutationEpoch: number
 }): V2Adapter {
-  const adapter = ContextAdapters.memory({
-    stores: input.stores,
-    scope: input.scope,
-    releasedSelection: input.releasedSelection!,
-  })
+  const adapter = input.releasedSelection
+    ? ContextAdapters.memory({
+        stores: input.stores,
+        scope: input.scope,
+        releasedSelection: input.releasedSelection,
+      })
+    : undefined
+  if (!adapter) {
+    return {
+      graph: "memory",
+      source: "durable_memory",
+      adapterVersion: AdapterVersion.memory,
+      resolve: () =>
+        Effect.succeed({
+          candidates: [],
+          revision: input.revision,
+          observedMutationEpoch: input.observedMutationEpoch,
+          available: true,
+        }),
+    }
+  }
   return wrapLegacy({
     adapter,
     adapterVersion: AdapterVersion.memory,

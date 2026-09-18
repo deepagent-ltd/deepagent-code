@@ -5,10 +5,20 @@ import Ajv from "ajv"
 import { Cause, Effect, Exit, Option } from "effect"
 import { Context, Layer, Schema } from "effect"
 import { AgentV2 } from "../agent"
+import { PermissionV2 } from "../permission"
 import { SessionSchema, SessionV2 } from "../session"
 import { SessionMessage } from "../session/message"
 import { Prompt } from "../session/prompt"
 import { Delegation } from "./delegation"
+import {
+  DEFAULT_SUBAGENT_TIMEOUT_MS,
+  MAX_SUBAGENT_FANOUT,
+  admitTaskCall,
+  inheritedTaskPermissions,
+  resolveOutputSchema,
+  taskLaunchRestriction,
+  withTaskConcurrency,
+} from "./task-policy"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 import DESCRIPTION from "./task.txt"
@@ -45,9 +55,9 @@ const Input = Schema.Struct({
   subagent_type: Schema.String.annotate({
     description: "The agent type to launch (e.g. general, explore, researcher, reviewer).",
   }),
-  output_schema: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)).annotate({
+  output_schema: Schema.optional(Schema.Union([Schema.String, Schema.Record(Schema.String, Schema.Unknown)])).annotate({
     description:
-      "Optional JSON schema the agent's final answer must satisfy. When given, the result is returned as strict JSON validated against this schema.",
+      "Optional named schema (ReviewResult or ResearchResult) or raw JSON schema. reviewer/researcher receive their named default automatically.",
   }),
   task_id: Schema.optional(Schema.String).annotate({
     description:
@@ -136,6 +146,7 @@ export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const tools = yield* Tools.Service
     const agents = yield* AgentV2.Service
+    const permission = yield* PermissionV2.Service
 
     yield* tools
       .register({
@@ -145,113 +156,168 @@ export const layer = Layer.effectDiscard(
             input: Input,
             output: Output,
             execute: (params, context) =>
-              Effect.gen(function* () {
-                // Root service access flows through the delegation slot (see DelegationSlot):
-                // Location-scoped settle fibers cannot see the process-root SessionV2 service.
-                const slot = Option.getOrUndefined(yield* Effect.serviceOption(DelegationSlot))
-                const sessions = slot?.service
-                if (!sessions)
-                  return yield* toolFailure(
-                    "task is unavailable: the root composition did not capture the V2 session service for delegation",
-                  )
-                const resolved = yield* agents.resolve(params.subagent_type)
-                if (resolved === undefined)
-                  return yield* toolFailure(`Unknown agent type: ${params.subagent_type} is not a valid agent type`)
-                const parent = yield* sessions.get(context.sessionID).pipe(Effect.orDie)
-                const callerDepth = yield* sessionDepth(sessions, context.sessionID)
-                if (callerDepth >= MAX_SUBAGENT_DEPTH)
-                  return yield* toolFailure(
-                    `Cannot launch task: subagent depth ${callerDepth} is at the hard limit (MAX_SUBAGENT_DEPTH=${MAX_SUBAGENT_DEPTH}).`,
-                  )
+              withTaskConcurrency(
+                String(context.sessionID),
+                Effect.gen(function* () {
+                  yield* permission
+                    .assert({
+                      action: name,
+                      resources: [params.subagent_type],
+                      save: [params.subagent_type],
+                      sessionID: context.sessionID,
+                      agent: context.agent,
+                      source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
+                    })
+                    .pipe(
+                      Effect.mapError(() =>
+                        toolFailure(`Permission denied: task cannot launch agent type "${params.subagent_type}".`),
+                      ),
+                    )
+                  if (!admitTaskCall(context.sessionID, context.assistantMessageID, context.toolCallID))
+                    return yield* toolFailure(
+                      `Cannot launch task: one assistant message may start at most ${MAX_SUBAGENT_FANOUT} subagents. Split additional work into a later round.`,
+                    )
+                  // Root service access flows through the delegation slot (see DelegationSlot):
+                  // Location-scoped settle fibers cannot see the process-root SessionV2 service.
+                  const slot = Option.getOrUndefined(yield* Effect.serviceOption(DelegationSlot))
+                  const sessions = slot?.service
+                  if (!sessions)
+                    return yield* toolFailure(
+                      "task is unavailable: the root composition did not capture the V2 session service for delegation",
+                    )
+                  const resolved = yield* agents.resolve(params.subagent_type)
+                  if (resolved === undefined)
+                    return yield* toolFailure(`Unknown agent type: ${params.subagent_type} is not a valid agent type`)
+                  const restriction = taskLaunchRestriction(resolved)
+                  if (restriction === "hidden")
+                    return yield* toolFailure(`Cannot launch hidden agent type: ${params.subagent_type}.`)
+                  if (restriction === "primary")
+                    return yield* toolFailure(`Cannot launch primary agent type: ${params.subagent_type}.`)
+                  if (restriction === "shared_workspace_write")
+                    return yield* toolFailure(
+                      `Cannot launch write-capable agent type "${params.subagent_type}" in Core V2: task worktree isolation is not available yet. Use a read-only subagent or run the work in the primary session.`,
+                    )
+                  const outputSchema = resolveOutputSchema(params.output_schema, params.subagent_type)
+                  if (typeof params.output_schema === "string" && outputSchema === undefined)
+                    return yield* toolFailure(`Unknown output schema: ${params.output_schema}.`)
+                  const parent = yield* sessions.get(context.sessionID).pipe(Effect.orDie)
+                  const parentAgent = yield* agents.resolve(parent.agent ?? context.agent)
+                  const callerDepth = yield* sessionDepth(sessions, context.sessionID)
+                  if (callerDepth >= MAX_SUBAGENT_DEPTH)
+                    return yield* toolFailure(
+                      `Cannot launch task: subagent depth ${callerDepth} is at the hard limit (MAX_SUBAGENT_DEPTH=${MAX_SUBAGENT_DEPTH}).`,
+                    )
 
-                // Resume contract (V1 parity): only a DIRECT child of this session with the same
-                // agent type may be continued by task_id.
-                if (params.task_id !== undefined) {
-                  const target = yield* sessions.get(SessionSchema.ID.make(params.task_id)).pipe(Effect.option)
-                  if (Option.isNone(target))
-                    return yield* toolFailure(`Cannot resume task "${params.task_id}": unknown session.`)
-                  if (String(target.value.parentID ?? "") !== String(context.sessionID))
-                    return yield* toolFailure(
-                      `Cannot resume task "${params.task_id}": it is not a direct child of the current session.`,
-                    )
-                  if (target.value.agent !== undefined && String(target.value.agent) !== params.subagent_type)
-                    return yield* toolFailure(
-                      `Cannot resume task "${params.task_id}": its agent type is "${target.value.agent}" but this call requests "${params.subagent_type}".`,
-                    )
-                }
-                const childID =
-                  params.task_id !== undefined
-                    ? SessionSchema.ID.make(params.task_id)
-                    : (
-                        yield* sessions
+                  // Resume contract (V1 parity): only a DIRECT child of this session with the same
+                  // agent type may be continued by task_id.
+                  if (params.task_id !== undefined) {
+                    const target = yield* sessions.get(SessionSchema.ID.make(params.task_id)).pipe(Effect.option)
+                    if (Option.isNone(target))
+                      return yield* toolFailure(`Cannot resume task "${params.task_id}": unknown session.`)
+                    if (String(target.value.parentID ?? "") !== String(context.sessionID))
+                      return yield* toolFailure(
+                        `Cannot resume task "${params.task_id}": it is not a direct child of the current session.`,
+                      )
+                    if (target.value.agent !== undefined && String(target.value.agent) !== params.subagent_type)
+                      return yield* toolFailure(
+                        `Cannot resume task "${params.task_id}": its agent type is "${target.value.agent}" but this call requests "${params.subagent_type}".`,
+                      )
+                  }
+                  const childID =
+                    params.task_id !== undefined
+                      ? SessionSchema.ID.make(params.task_id)
+                      : (yield* sessions
                           .create({
                             parentID: context.sessionID,
                             agent: resolved.id,
                             title: `task: ${params.description}`,
                             location: parent.location,
-                            permissions: resolved.permissions,
+                            permissions: inheritedTaskPermissions(parentAgent?.permissions ?? [], parent.permissions),
                           })
-                          .pipe(Effect.orDie)
-                      ).id
+                          .pipe(Effect.orDie)).id
+                  const deadline = Date.now() + DEFAULT_SUBAGENT_TIMEOUT_MS
+                  let timedOut = false
 
-                const drive = (text: string) =>
-                  Effect.gen(function* () {
-                    // P1-1 contract: admit-only, then an EXPLICIT awaited drain. An advisory wake
-                    // (resume: true) races `wait` — the forked drain may not have started when
-                    // awaitIdle observes the still-idle child, silently returning an empty result.
-                    yield* sessions
-                      .prompt({ sessionID: childID, prompt: new Prompt({ text }), resume: false })
-                      .pipe(Effect.orDie)
-                    // A typed drain failure (step budget exhausted, model error) is the CHILD's
-                    // outcome, not a process fault: it degrades into the task result with the
-                    // partial transcript so the parent can continue or resume via task_id.
-                    // Effect.orDie here killed the whole CLI when a subagent hit its budget.
-                    const drain = yield* sessions.resume(childID).pipe(Effect.exit)
-                    const transcript = yield* sessions
-                      .messages({ sessionID: childID, order: "asc" })
-                      .pipe(Effect.orDie)
-                    const research = lastAssistantText(transcript)
-                    if (Exit.isSuccess(drain)) return research
-                    const cause = Option.getOrUndefined(Cause.findErrorOption(drain.cause))
-                    return `${research}\n\n[task ended before completion: ${drainMessage(cause)} — resume with task_id "${childID}" to continue.]`
-                  }).pipe(
-                    // An interrupted parent turn must not leave the child draining unsupervised; an
-                    // idle child interrupt is a no-op per the V2 contract.
-                    Effect.onInterrupt(() => sessions.interrupt(childID).pipe(Effect.ignore)),
-                  )
+                  const drive = (text: string) =>
+                    Effect.gen(function* () {
+                      if (Date.now() >= deadline) {
+                        timedOut = true
+                        return `[task ended before completion: timed out after ${DEFAULT_SUBAGENT_TIMEOUT_MS}ms — resume with task_id "${childID}" to continue.]`
+                      }
+                      // P1-1 contract: admit-only, then an EXPLICIT awaited drain. An advisory wake
+                      // (resume: true) races `wait` — the forked drain may not have started when
+                      // awaitIdle observes the still-idle child, silently returning an empty result.
+                      yield* sessions
+                        .prompt({ sessionID: childID, prompt: new Prompt({ text }), resume: false })
+                        .pipe(Effect.orDie)
+                      // A typed drain failure (step budget exhausted, model error) is the CHILD's
+                      // outcome, not a process fault: it degrades into the task result with the
+                      // partial transcript so the parent can continue or resume via task_id.
+                      // Effect.orDie here killed the whole CLI when a subagent hit its budget.
+                      const drain = yield* sessions
+                        .resume(childID)
+                        .pipe(Effect.exit, Effect.timeoutOption(Math.max(1, deadline - Date.now())))
+                      const transcript = yield* sessions
+                        .messages({ sessionID: childID, order: "asc" })
+                        .pipe(Effect.orDie)
+                      const research = lastAssistantText(transcript)
+                      if (Option.isNone(drain)) {
+                        timedOut = true
+                        yield* sessions.interrupt(childID).pipe(Effect.ignore)
+                        return `${research}\n\n[task ended before completion: timed out after ${DEFAULT_SUBAGENT_TIMEOUT_MS}ms — resume with task_id "${childID}" to continue.]`
+                      }
+                      if (Exit.isSuccess(drain.value)) return research
+                      const cause = Option.getOrUndefined(Cause.findErrorOption(drain.value.cause))
+                      return `${research}\n\n[task ended before completion: ${drainMessage(cause)} — resume with task_id "${childID}" to continue.]`
+                    }).pipe(
+                      // An interrupted parent turn must not leave the child draining unsupervised; an
+                      // idle child interrupt is a no-op per the V2 contract.
+                      Effect.onInterrupt(() => sessions.interrupt(childID).pipe(Effect.ignore)),
+                    )
 
-                const research = yield* drive(params.prompt)
-                if (!params.output_schema) return { task_id: childID, text: research }
+                  const research = yield* drive(params.prompt)
+                  if (!outputSchema) return { task_id: childID, text: research }
+                  // `prompt` is a durable admission. Once the shared deadline wins, never enqueue
+                  // one or two doomed 1ms finalizer prompts into the child inbox.
+                  if (timedOut)
+                    return yield* toolFailure(
+                      `Subagent timed out before it could satisfy the output schema. Task id ${childID} holds the partial turns.`,
+                    )
 
-                // Structured contract (V1 finalizer parity): the schema rides the prompt text — V2
-                // has no provider-side format — with one bounded correction attempt.
-                const boundedRaw = research.slice(0, 24_000)
-                let correction: string | undefined
-                for (const attempt of [1, 2] as const) {
-                  const finalizerText = [
-                    attempt === 1
-                      ? "Convert the persisted research result below into the requested StructuredOutput schema."
-                      : "Return exactly one JSON value matching the output schema below. Do not use Markdown or explanatory prose.",
-                    "Do not continue research and do not add facts that are absent from the result.",
-                    ...(correction ? [`Previous validation error: ${correction}`] : []),
-                    `<output_schema>${JSON.stringify(params.output_schema)}</output_schema>`,
-                    "<research_result>",
-                    boundedRaw,
-                    "</research_result>",
-                  ].join("\n")
-                  const candidate = extractStructuredText(yield* drive(finalizerText))
-                  if (candidate === undefined) {
-                    correction = "Model did not return a JSON value."
-                    continue
+                  // Structured contract (V1 finalizer parity): the schema rides the prompt text — V2
+                  // has no provider-side format — with one bounded correction attempt.
+                  const boundedRaw = research.slice(0, 24_000)
+                  let correction: string | undefined
+                  for (const attempt of [1, 2] as const) {
+                    const finalizerText = [
+                      attempt === 1
+                        ? "Convert the persisted research result below into the requested StructuredOutput schema."
+                        : "Return exactly one JSON value matching the output schema below. Do not use Markdown or explanatory prose.",
+                      "Do not continue research and do not add facts that are absent from the result.",
+                      ...(correction ? [`Previous validation error: ${correction}`] : []),
+                      `<output_schema>${JSON.stringify(outputSchema)}</output_schema>`,
+                      "<research_result>",
+                      boundedRaw,
+                      "</research_result>",
+                    ].join("\n")
+                    const candidate = extractStructuredText(yield* drive(finalizerText))
+                    if (timedOut) {
+                      correction = "Subagent timed out while finalizing structured output."
+                      break
+                    }
+                    if (candidate === undefined) {
+                      correction = "Model did not return a JSON value."
+                      continue
+                    }
+                    const error = validateStructuredOutput(outputSchema, candidate)
+                    if (!error) return { task_id: childID, text: JSON.stringify(candidate) }
+                    correction = error.slice(0, 1_000)
                   }
-                  const error = validateStructuredOutput(params.output_schema, candidate)
-                  if (!error) return { task_id: childID, text: JSON.stringify(candidate) }
-                  correction = error.slice(0, 1_000)
-                }
-                return yield* toolFailure(
-                  `Subagent completed but its final answer never validated against the output schema${correction ? `: ${correction}` : ""}. Task id ${childID} holds the raw turns.`,
-                )
-              }),
+                  return yield* toolFailure(
+                    `Subagent completed but its final answer never validated against the output schema${correction ? `: ${correction}` : ""}. Task id ${childID} holds the raw turns.`,
+                  )
+                }),
+              ),
           }),
           name,
         ),

@@ -1,6 +1,5 @@
 import { describe, expect } from "bun:test"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
-import { DeepAgentLearningLifecycleTrigger } from "@deepagent-code/core/deepagent/learning-lifecycle-trigger"
 import { Deferred, Effect, Fiber, Layer } from "effect"
 import { InstanceRef } from "../../src/effect/instance-ref"
 import { InstanceState } from "../../src/effect/instance-state"
@@ -182,30 +181,19 @@ describe("InstanceStore", () => {
     Effect.gen(function* () {
       const dir = yield* tmpdirScoped({ git: true })
       const store = yield* InstanceStore.Service
-      const boundaries: DeepAgentLearningLifecycleTrigger.ObserveInput[] = []
       const ordering: string[] = []
       yield* registerDisposerScoped(async () => {
         ordering.push("disposed")
       })
-      const observer: DeepAgentLearningLifecycleTrigger.RuntimeObserver = {
-        observe: async (input) => {
-          ordering.push("learning")
-          boundaries.push(input)
-          return { state: "skipped", reason: "no_exact_settled_run" }
-        },
-      }
 
       const first = yield* store.load({ directory: dir })
       yield* setBootstrap(Effect.sync(() => ordering.push("bootstrap")))
-      const second = yield* store
-        .reload({ directory: dir })
-        .pipe(Effect.provideService(DeepAgentLearningLifecycleTrigger.CurrentRuntimeObserver, observer))
+      const second = yield* store.reload({ directory: dir })
       const cached = yield* store.load({ directory: dir })
 
       expect(second).not.toBe(first)
       expect(cached).toBe(second)
-      expect(boundaries).toEqual([{ trigger: "project_switch", boundaryKey: `project-switch:${dir}`, directory: dir }])
-      expect(ordering).toEqual(["disposed", "learning", "bootstrap"])
+      expect(ordering).toEqual(["disposed", "bootstrap"])
     }),
   )
 

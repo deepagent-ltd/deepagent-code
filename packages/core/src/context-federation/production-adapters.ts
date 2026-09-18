@@ -286,8 +286,8 @@ function toDocumentsCandidate(
 //     (`bindingFor` on `durable:project:<pid>`) keeps other workspaces from reading project-shared
 //     docs — both were landed with W3.8; the W7 additions are the DEFAULT-ON flags (settle hook +
 //     Bridge write) and their coverage in production-adapters.test.ts;
-//   - released knowledge requires a bound snapshot (drift semantics unchanged, W3.3); memory is the
-//     direct-store read and needs no released snapshot.
+//   - released knowledge and memory both require exact refs from a released snapshot. A newly
+//     learned active document remains invisible to later runs until the release gate publishes it.
 
 function knowledgeAdapter(knowledge: ProductionV2AdapterInput["knowledge"]): V2Adapter {
   if (knowledge === undefined || knowledge.stores.length === 0) {

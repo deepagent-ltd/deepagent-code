@@ -8,7 +8,6 @@ import { Context, Deferred, Duration, Effect, Exit, Layer, Scope } from "effect"
 import { assertSafeInstanceRoot, isFilesystemRoot, type InstanceContext } from "./instance-context"
 import { InstanceBootstrap } from "./bootstrap-service"
 import * as Project from "./project"
-import { DeepAgentLearningLifecycleTrigger } from "@deepagent-code/core/deepagent/learning-lifecycle-trigger"
 
 export interface LoadInput {
   directory: string
@@ -113,11 +112,6 @@ export const layer: Layer.Layer<
     const disposeContext = Effect.fn("InstanceStore.disposeContext")(function* (ctx: InstanceContext) {
       yield* Effect.logInfo("disposing instance").pipe(Effect.annotateLogs("directory", ctx.directory))
       yield* registry.dispose(ctx.directory).pipe(Effect.ensuring(disposeInstanceState(ctx)))
-      yield* DeepAgentLearningLifecycleTrigger.notify({
-        trigger: "project_switch",
-        boundaryKey: `project-switch:${ctx.directory}`,
-        directory: ctx.directory,
-      }).pipe(Effect.ignore)
       yield* emitDisposed({ directory: ctx.directory, project: ctx.project.id })
     })
 
@@ -159,11 +153,6 @@ export const layer: Layer.Layer<
             if (previous) {
               const previousContext = yield* Deferred.await(previous.deferred)
               yield* registry.dispose(directory).pipe(Effect.ensuring(disposeInstanceState(previousContext)))
-              yield* DeepAgentLearningLifecycleTrigger.notify({
-                trigger: "project_switch",
-                boundaryKey: `project-switch:${directory}`,
-                directory,
-              }).pipe(Effect.ignore)
               yield* emitDisposed({ directory, project: input.project?.id })
             }
             yield* completeLoad(directory, input, entry)

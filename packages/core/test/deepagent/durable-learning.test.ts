@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { count, eq, sql } from "drizzle-orm"
@@ -37,6 +37,53 @@ beforeEach(() => {
 afterEach(() => rmSync(root, { recursive: true, force: true }))
 
 describe("durable learning production pipeline", () => {
+  test("binds deterministic activity evidence through admission, extraction, and governance", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = (yield* Database.Service).db
+        const original = admission("run-evidence")
+        const input = bindAdmission({
+          ...original,
+          input: {
+            ...original.input,
+            evidence: {
+              schema_version: "deepagent-code.learning_evidence.v1",
+              activity_id: "activity-evidence",
+              plan_goal: "Ground learning in durable facts",
+              document_refs: ["requirements:doc-1@v1", "worklog:doc-2@v1"],
+              changed_paths: ["packages/core/src/deepagent/learning.ts"],
+              validations: [
+                {
+                  command_hash: Hash.sha256("bun test test/deepagent/background-learning.test.ts"),
+                  passed: true,
+                  kind: "command_exit",
+                  exit_code: 0,
+                },
+              ],
+            },
+          },
+        })
+
+        const admitted = yield* DeepAgentDurableLearning.admit(db, input, { authorityRoot: root })
+        const candidateInput = JSON.parse(
+          readFileSync((JSON.parse(admitted.job.candidateInputRef) as { path: string }).path, "utf8"),
+        ) as { evidence?: { activity_id?: string } }
+        expect(candidateInput.evidence?.activity_id).toBe("activity-evidence")
+
+        const completed = yield* DeepAgentDurableLearning.drain(db, {
+          owner: "worker-evidence",
+          authorityRoot: root,
+        })
+        expect(completed).toHaveLength(1)
+        const store = new DurableKnowledgeStore(path.join(root, "project", knowledgeProjectID(), "knowledge"))
+        const active = store.documentStore.get(store.listByStatus("active")[0]!.id)
+        expect(active?.description).toContain("Validated completion of")
+        expect(active?.provenance.evidence_refs).toContain("activity:activity-evidence")
+        expect(active?.provenance.evidence_refs).toContain("path:packages/core/src/deepagent/learning.ts")
+      }),
+    )
+  })
+
   test("persists one exact finalization admission and executes all durable phases", async () => {
     await run(
       Effect.gen(function* () {
@@ -259,6 +306,60 @@ describe("durable learning production pipeline", () => {
     )
   })
 
+  test("completes an empty extraction without preparing or dispatching a reviewer", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = (yield* Database.Service).db
+        const input = admission("run-empty-extraction", "max")
+        const admitted = yield* DeepAgentDurableLearning.admit(
+          db,
+          bindAdmission({
+            ...input,
+            input: {
+              ...input.input,
+              roundState: createInitialRoundState("max"),
+              totalRounds: 2,
+            },
+          }),
+          { authorityRoot: root },
+        )
+        const reviewerCalls: string[] = []
+        const completed = yield* DeepAgentDurableLearning.drain(db, {
+          owner: "worker-empty-extraction",
+          authorityRoot: root,
+          reviewer: {
+            identity: () =>
+              Effect.sync(() => reviewerCalls.push("identity")).pipe(
+                Effect.as({
+                  reviewSessionId: "ses-review-empty",
+                  providerId: "provider-review",
+                  modelId: "model-review",
+                  policyHash: "a".repeat(64),
+                }),
+              ),
+            execute: () =>
+              Effect.sync(() => reviewerCalls.push("execute")).pipe(
+                Effect.as({ verdict: "approve" as const, selectedCandidateIds: [] }),
+              ),
+          },
+        })
+
+        expect(completed).toHaveLength(1)
+        expect(completed[0]).toMatchObject({
+          jobId: admitted.job.jobId,
+          state: "completed",
+          reviewJobId: `review-not-required:${admitted.job.jobId}`,
+        })
+        expect(reviewerCalls).toEqual([])
+        expect(yield* DeepAgentLearningReviewerAttempt.getByJob(db, admitted.job.jobId)).toBeUndefined()
+        const result = JSON.parse(
+          yield* Effect.promise(() => Bun.file((JSON.parse(completed[0]!.resultRef!) as { path: string }).path).text()),
+        ) as { candidate_count: number }
+        expect(result.candidate_count).toBe(0)
+      }),
+    )
+  })
+
   test("binds a fresh isolated reviewer receipt to the exact candidate subset consumed by governance", async () => {
     await run(
       Effect.gen(function* () {
@@ -475,6 +576,65 @@ describe("durable learning production pipeline", () => {
         expect(yield* DeepAgentLearningReviewerAttempt.getByJob(db, admitted.job.jobId)).toMatchObject({
           state: "settled",
           owner: "reviewer-owner-takeover",
+        })
+      }),
+    )
+  })
+
+  test("quarantines an expired prepared reviewer when provider dispatch is disabled", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = (yield* Database.Service).db
+        const admitted = yield* DeepAgentDurableLearning.admit(db, admission("run-reviewer-disabled"), {
+          authorityRoot: root,
+        })
+        yield* db.run(sql`
+          CREATE TRIGGER learning_reviewer_disabled_crash
+          BEFORE UPDATE OF state ON learning_reviewer_attempt
+          WHEN NEW.state = 'dispatching'
+          BEGIN SELECT RAISE(ABORT, 'simulated crash before disabled reviewer dispatch'); END
+        `)
+        const providerCalls: string[] = []
+        expect(
+          yield* DeepAgentDurableLearning.drain(db, {
+            owner: "reviewer-owner-before-disable",
+            authorityRoot: root,
+            leaseMs: 10_000,
+            reviewer: {
+              identity: ({ attemptId }) =>
+                Effect.succeed({
+                  reviewSessionId: `ses-review:${attemptId}`,
+                  providerId: "provider-review",
+                  modelId: "model-review",
+                  policyHash: "a".repeat(64),
+                }),
+              execute: ({ attemptId }) =>
+                Effect.sync(() => providerCalls.push(attemptId)).pipe(
+                  Effect.as({ verdict: "approve" as const, selectedCandidateIds: [] }),
+                ),
+            },
+          }).pipe(Effect.exit),
+        ).toMatchObject({ _tag: "Failure" })
+        yield* db.run("DROP TRIGGER learning_reviewer_disabled_crash")
+        yield* db.run(sql`
+          UPDATE learning_job
+          SET lease_expires_at = 1, version = version + 1, updated_at = updated_at + 1
+          WHERE job_id = ${admitted.job.jobId}
+        `)
+
+        expect(
+          yield* DeepAgentDurableLearning.drain(db, {
+            owner: "worker-reviewer-disabled",
+            authorityRoot: root,
+          }),
+        ).toEqual([])
+        expect(providerCalls).toEqual([])
+        expect(yield* DeepAgentLearningJob.get(db, admitted.job.jobId)).toMatchObject({
+          state: "recovery_required",
+          errorCode: "artifact_reconciliation_mismatch",
+        })
+        expect(yield* DeepAgentLearningReviewerAttempt.getByJob(db, admitted.job.jobId)).toMatchObject({
+          state: "prepared",
         })
       }),
     )

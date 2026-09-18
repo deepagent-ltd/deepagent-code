@@ -104,6 +104,11 @@ describe("SessionExecution lifecycle", () => {
     expect(SessionExecution.terminal(interrupted, "user")).toEqual({ type: "interrupted", reason: "user" })
   })
 
+  test("does not classify interruption mixed with a defect as a user stop", () => {
+    const exit = Effect.runSyncExit(Effect.interrupt.pipe(Effect.ensuring(Effect.die(new Error("cleanup failed")))))
+    expect(SessionExecution.terminal(exit, "user")).toMatchObject({ type: "failed" })
+  })
+
   it.effect("claims and releases execution without changing user-visible update time", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
