@@ -19,16 +19,21 @@ const repository = resolve(import.meta.dir, "../../../..")
 // converged on this 8-file denominator and hash. prompt.ts remains the single orchestration
 // authority surface. Any new legacy call surface must be added to the classifier through a
 // reviewed change, which moves this hash deliberately.
+// v2w-j5 re-pin (2026-09-19): the V1 assembly is torn out of the AppRuntime root graph
+// (app-runtime.ts drops the SessionPrompt import + productionLayer listing; zero root-level
+// consumers), so the denominator shrinks to the httpapi session-ingress surface (groups/handlers/
+// server — the F-slice command/shell receipts + V2-resume bridge that still require the monolith)
+// plus prompt.ts itself as the single orchestration surface (8→4 files).
 const PINNED_COUNTS = {
-  admission_control: 4,
+  admission_control: 3,
   orchestration: 1,
-  child_execution: 1,
+  child_execution: 0,
   recovery_compaction_context: 0,
-  projection_permission: 1,
-  composition_compat: 1,
+  projection_permission: 0,
+  composition_compat: 0,
   unclassified: 0,
 } as const
-const PINNED_RESULT_SHA256 = "a3388bbef123ed97e953bf2e4dcbb85110a25e70f3f2670daf2e59ecf8670285"
+const PINNED_RESULT_SHA256 = "ac35a1b6e373f9ab9ee20d9478c37e57f4631f499d6b7f5f65ae5bb05ab10eeb"
 
 describe("Core V2 caller inventory classification", () => {
   test("classifies every §8 category by explicit path rules", () => {
@@ -93,7 +98,7 @@ describe("Core V2 caller inventory gate", () => {
     const inventory = scanCallerInventory(repository)
     expect(inventory.query_id).toBe(CALLER_INVENTORY_QUERY_ID)
     expect(inventory.query_version).toBe(CALLER_INVENTORY_QUERY_VERSION)
-    expect(inventory.entries.length).toBe(8)
+    expect(inventory.entries.length).toBe(4)
     expect(inventory.unclassified).toBe(0)
     expect(inventory.counts).toEqual(PINNED_COUNTS)
   })

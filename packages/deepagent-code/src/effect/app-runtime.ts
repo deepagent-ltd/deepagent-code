@@ -31,14 +31,7 @@ import { Question } from "@/question"
 import { Permission } from "@/permission"
 import { Todo } from "@/session/todo"
 import { Session } from "@/session/session"
-import { SessionStatus } from "@/session/status"
-import { SessionRunState } from "@/session/run-state"
-import { SessionProcessor } from "@/session/processor"
-import { SessionCompaction } from "@/session/compaction"
-import { SessionRevert } from "@/session/revert"
-import { SessionSummary } from "@/session/summary"
 import { SessionProjection } from "@/session/session-projector"
-import { SessionPrompt } from "@/session/prompt"
 import { GoalManager } from "@/session/goal-manager"
 import { Instruction } from "@/session/instruction"
 import { LLM } from "@/session/llm"
@@ -120,7 +113,6 @@ const baseAppLayer = Layer.mergeAll(
   Permission.defaultLayer,
   Todo.defaultLayer,
   Session.defaultLayer,
-  SessionStatus.defaultLayer,
   BackgroundJob.defaultLayer,
   RuntimeFlags.defaultLayer,
   V2OutboxRuntime.layer,
@@ -129,12 +121,19 @@ const baseAppLayer = Layer.mergeAll(
   DurableLearningRuntime.layer,
   // RISK-003 ④: durable schedule for the legacy event canonicalizer (flag-gated, default OFF).
   LegacyEventCanonicalizerRuntime.defaultLayer,
-  SessionRunState.defaultLayer,
-  SessionProcessor.defaultLayer,
-  SessionCompaction.defaultLayer,
-  SessionRevert.defaultLayer,
-  SessionSummary.defaultLayer,
-  SessionPrompt.productionLayer,
+  // v2w-j5 V1 assembly teardown: the legacy turn-assembly layers are REMOVED from this root
+  // (SessionStatus/SessionRunState/SessionProcessor/SessionCompaction/SessionRevert/
+  // SessionSummary defaults + the prompt production layer). Census proofs (production src): the
+  // ONLY consumer of SessionPrompt.Service is the httpapi session handler group, which runs on
+  // the routes graph (server.ts composes the prompt production layer there itself);
+  // SessionProcessor/SessionStatus/SessionSummary were consumed only by the prompt layer (which
+  // self-provides them) and the routes-graph handlers; SessionRunState by revert.ts's build (kept
+  // on the routes graph) + the prompt layer; SessionRevert by routes-graph handlers + the
+  // self-provided GoalManager production chain. Every layer-build side effect in the prompt layer
+  // is !coreV2Only-gated (coreV2Only is Config.succeed(true)), so a CLI-process root building
+  // without them is behavior-neutral. The embedded server keeps ONE shared instance per memoMap
+  // through the routes graph's own listing. The lock test test/effect/app-runtime-v1-assembly-lock
+  // freezes both the type-level absence and the source-level absence of the layer constants.
   v2StartupRecovery,
   LocationIndexRuntime.defaultLayer,
   GoalManager.productionLayer,

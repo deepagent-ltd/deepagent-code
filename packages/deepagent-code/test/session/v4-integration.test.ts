@@ -18,13 +18,18 @@ import type { AgentDescriptor } from "@deepagent-code/core/im/mention-parser"
 import { RuntimeFlags } from "../../src/effect/runtime-flags"
 import { AgentHandoffConsumer } from "../../src/session/agent-handoff-consumer"
 import { HandoffAdmission } from "@deepagent-code/core/deepagent/handoff-admission"
+import { EventAdmission } from "@deepagent-code/core/deepagent/event-admission"
+import type { EventAdmissionWiring } from "@deepagent-code/core/deepagent/event-admission-wiring"
+import { createRuntimeFeatureRegistry } from "@deepagent-code/core/flag/runtime-features"
 import { pollWithTimeout, testEffect } from "../lib/effect"
 
 // V4.0 §I — END-TO-END integration. Wires the real chain across all waves over one in-memory DB:
-//   publish(event) → EventDispatcher.handle (§A4 flag+registry+route) → MultiAgentRuntime.dispatch
-//   (§C partition→gate→arbitrate→run) → §C4 coordination events on the bus → Observability.trace/metrics
-//   (§F) assembles the spine. Proves the pieces compose, not just pass in isolation (§J: event source →
-//   specialized agents → coordination → observable trace).
+//   publish(event) → EventDispatcher.handle (§A4 flag+registry+route) → MultiAgentRuntime.dispatch —
+//   v2w-j4 durable-only: the DURABLE V2 ADMISSION lane (recorded by a fake bridge) — and, separately,
+//   the §C coordination library `coordinate` (partition→gate→arbitrate→run with an injected runner) →
+//   §C4 coordination events on the bus → Observability.trace/metrics (§F) assembles the spine. Proves
+//   the pieces compose, not just pass in isolation (§J: event source → specialized agents →
+//   coordination → observable trace).
 
 let clock = 0
 const now = () => clock
@@ -48,15 +53,14 @@ const registry = Layer.succeed(AgentListProviderService, {
   findByCapability: () => Effect.succeed([]),
 })
 
-// a fake turn runner records which agents ran (no real SessionPrompt in the test). `runnerOk` toggles
-// the leaf outcome so the failure→nack→retry propagation can be exercised end-to-end.
+// a fake turn runner records which agents ran (no real SessionPrompt in the test) — the §C
+// coordination-library seam that `runtime.coordinate` drives directly below.
 let ran: string[] = []
-let runnerOk = true
 const runner: SubagentTurnRunner = (input) =>
   Effect.sync(() => {
     ran.push(input.agentType)
     return {
-      ok: runnerOk,
+      ok: true,
       structured: undefined,
       text: "fixed",
       tokensUsed: 100,
@@ -67,7 +71,20 @@ const runner: SubagentTurnRunner = (input) =>
     }
   })
 
+// v2w-j4 durable-only — dispatch is V2-admission-ONLY (the legacy coordinate-through-runner fallback
+// is deleted), so the dispatch lane's seam is a recording fake `eventV2Admission` bridge:
+//   `admitted`   every (request, scope) the runtime handed the bridge (asserts the derived scope);
+//   `admissionOk` toggles the admission outcome so refusal → nack → pending-retry → recovery can be
+//                exercised on the dispatch lane. Runner-level failure propagation is §C-library
+//                coverage (multi-agent-runtime.test.ts) and is not duplicated here.
+let admissionOk = true
+type AdmittedCall = {
+  readonly request: EventDispatcher.DispatchRequest
+  readonly scope: EventAdmissionWiring.AdmissionScope
+}
+
 const makeLayer = (flags?: Partial<RuntimeFlags.Info>) => {
+  const admitted: AdmittedCall[] = []
   const database = Database.layerFromPath(":memory:")
   const flagsLayer = RuntimeFlags.layer({
     v4AgentPushEnabled: true,
@@ -82,19 +99,38 @@ const makeLayer = (flags?: Partial<RuntimeFlags.Info>) => {
     AgentExecution.layerWith({ now }),
     HandoffAdmission.layerWith({ now }),
   ).pipe(Layer.provideMerge(database))
-  // MultiAgentRuntime is the REAL DispatchPort the dispatcher hands routed events to.
+  // MultiAgentRuntime is the REAL DispatchPort the dispatcher hands routed events to. The explicit
+  // admission-ON runtimeFeatures snapshot mirrors the production default (v4-event-runtime wires the
+  // bridge and relies on the process-start registry — see its makeV2AdmissionBridge construction
+  // site); passing the registry here keeps the lane deterministically ON against env drift.
   const runtime = Layer.unwrap(
     Effect.gen(function* () {
       const execution = yield* AgentExecution.Service
-      return MultiAgentRuntime.layerWith({ runner, execution, now })
+      return MultiAgentRuntime.layerWith({
+        runner,
+        execution,
+        now,
+        runtimeFeatures: createRuntimeFeatureRegistry(undefined, {
+          [EventAdmission.EVENT_V2_ADMISSION_ENV]: "true",
+        }),
+        eventV2Admission: {
+          securityNamespaceFor: () => Effect.succeed("ns_e2e"),
+          admit: ({ request, scope }) =>
+            Effect.gen(function* () {
+              admitted.push({ request, scope })
+              if (!admissionOk) return yield* Effect.fail(new Error("admission refused (admissionOk=false)"))
+            }),
+        },
+      })
     }),
   ).pipe(Layer.provide(core), Layer.provide(registry))
-  return { core, flagsLayer, runtime, database }
+  return { core, flagsLayer, runtime, database, admitted }
 }
 
+const fullDeps = makeLayer()
 // build a dispatcher layer whose DispatchPort is the live MultiAgentRuntime.
 const fullLayer = (() => {
-  const { core, flagsLayer, runtime, database } = makeLayer()
+  const { core, flagsLayer, runtime, database } = fullDeps
   const dispatcherLayer = Layer.unwrap(
     Effect.gen(function* () {
       const rt = yield* MultiAgentRuntime.Service
@@ -119,31 +155,66 @@ const ciEvent = (over?: Partial<DeepAgentEvent.PublishInput>): DeepAgentEvent.Pu
 })
 
 describe("V4.0 end-to-end (§I/§J)", () => {
-  it.effect("event → dispatch → multi-agent coordinate → coordination events → observable trace", () =>
+  it.effect("event → dispatcher routes → durable V2 admission with the derived scope", () =>
     Effect.gen(function* () {
       ran = []
+      admissionOk = true
+      fullDeps.admitted.length = 0
       setNow(1_000)
       const bus = yield* DeepAgentEventBus.Service
       const dispatcher = yield* EventDispatcher.Service
-      const obs = yield* Observability.Service
 
       // 1. an event source publishes (ci.failure with a correlationID that seeds the trace spine).
       const event = yield* bus.publish(ciEvent({ idempotencyKey: "e2e-1", correlationID: "trace-1" }))
 
-      // 2. the dispatcher routes it → MultiAgentRuntime coordinates the partition.
+      // 2. the dispatcher routes it → the runtime's dispatch lane admits it as durable V2 work
+      //    (v2w-j4: dispatch is V2-admission-only — the legacy coordinate fallback is deleted).
       const decision = yield* dispatcher.handle(event)
       expect(decision.type).toBe("dispatch")
 
-      // 3. the specialized agent ran both subtasks (code_edit → test_run).
+      // 3. the admission bridge received exactly the routed request under the DERIVED scope: the
+      //    deterministic parent session for the event, the workspace/project/principal derived from
+      //    the event, and authorizedTrigger (the router returned `dispatch` for it).
+      expect(fullDeps.admitted.length).toBe(1)
+      const admitted = fullDeps.admitted[0]!
+      expect(admitted.request.event.id).toBe(event.id)
+      expect(admitted.request.priority).toBe(event.priority)
+      expect(admitted.request.targets.map((t) => t.id)).toEqual(["CodeFixAgent"])
+      expect(admitted.scope.workspaceId).toBe("wrk_1")
+      expect(admitted.scope.securityNamespaceId).toBe("ns_e2e")
+      expect(admitted.scope.projectScopeKey).toBe("wrk_1") // no projectID ⇒ the workspace keys the scope
+      expect(admitted.scope.principal).toBe(EventDispatcher.SYSTEM_PRINCIPAL)
+      expect(admitted.scope.sessionID).toBe(MultiAgentRuntime.parentSessionIDFor(event.id))
+      expect(admitted.scope.authorizedTrigger).toBe(true)
+      // dispatch no longer coordinates — the §C turn runner never ran on this lane.
+      expect(ran).toEqual([])
+    }),
+  )
+
+  it.effect("§C coordinate drives the coordination events and the observable trace", () =>
+    Effect.gen(function* () {
+      ran = []
+      setNow(1_000)
+      const bus = yield* DeepAgentEventBus.Service
+      const multiAgent = yield* MultiAgentRuntime.Service
+      const obs = yield* Observability.Service
+
+      // the §C coordination library, driven directly with the injected runner (its documented
+      // deterministic-test seam): partition → gate → arbitrate → run → emit.
+      const event = yield* bus.publish(ciEvent({ idempotencyKey: "e2e-1", correlationID: "trace-1" }))
+      const summary = yield* multiAgent.coordinate(event)
+      expect(summary.hasUnfinished).toBe(false)
+
+      // the specialized agent ran both subtasks (code_edit → test_run).
       expect(ran).toEqual(["CodeFixAgent", "CodeFixAgent"])
 
-      // 4. §C4 coordination events landed on the bus (started + completed per subtask).
+      // §C4 coordination events landed on the bus (started + completed per subtask).
       const started = yield* bus.recentByType({ type: "agent.task.started", windowMs: Number.MAX_SAFE_INTEGER, now: 1_000 })
       const completed = yield* bus.recentByType({ type: "agent.task.completed", windowMs: Number.MAX_SAFE_INTEGER, now: 1_000 })
       expect(started.length).toBe(2)
       expect(completed.length).toBe(2)
 
-      // 5. §F observability: the trace spine chains the triggering event → its coordination events
+      // §F observability: the trace spine chains the triggering event → its coordination events
       //    (they set correlationID = event.correlationID), and metrics show 100% success.
       const trace = yield* obs.trace({ workspaceID: "wrk_1", correlationID: "trace-1" })
       expect(trace.some((n) => n.type === "ci.failure")).toBe(true)
@@ -159,10 +230,11 @@ describe("V4.0 end-to-end (§I/§J)", () => {
     }),
   )
 
-  it.effect("§I failure propagation: a failing agent turn → dispatch fails → bus nacks → pending retry", () =>
+  it.effect("§I failure propagation: an admission refusal → dispatch fails → bus nacks → pending retry", () =>
     Effect.gen(function* () {
       ran = []
-      runnerOk = false // the leaf turn fails
+      admissionOk = false // the admission lane refuses the dispatch
+      fullDeps.admitted.length = 0
       setNow(1_000)
       const bus = yield* DeepAgentEventBus.Service
       const dispatcher = yield* EventDispatcher.Service
@@ -172,31 +244,32 @@ describe("V4.0 end-to-end (§I/§J)", () => {
         .pipe(Stream.take(1), Stream.runCollect, Effect.forkScoped)
       yield* Effect.yieldNow
       const event = yield* bus.publish(ciEvent({ idempotencyKey: "fail-1" }))
-      // the dispatcher routed + coordinated, but the runner failed → hasUnfinished → dispatch fails →
-      // the dispatcher nacks. handle() itself does not throw (it catches + nacks).
+      // the dispatcher routed, but the admission refused → dispatch fails → the dispatcher nacks.
+      // handle() itself does not throw (it catches + nacks).
       yield* dispatcher.handle(event)
       // the delivery is now pending-with-backoff (nacked), recoverable by the retry pump — NOT acked away.
       const due = yield* bus.dueRetries(Number.MAX_SAFE_INTEGER)
       expect(due.map((d) => d.eventID)).toContain(event.id)
       expect(due.find((d) => d.eventID === event.id)?.attempts).toBe(1)
-      const ranAfterFail = ran.length
-      expect(ranAfterFail).toBeGreaterThan(0) // the subtasks DID run (and failed)
+      // the §C runner never ran on the dispatch lane (runner-level failure propagation is §C-library
+      // coverage in multi-agent-runtime.test.ts — not duplicated here).
+      expect(ran).toEqual([])
 
-      // NOW the runner recovers and the retry pump re-drives the event. The failed subtask must ACTUALLY
-      // RE-RUN — the started-before-run guard must not short-circuit it as "already done" (the §D HIGH
-      // fix: the idempotency guard checks agent.task.completed, not started).
-      runnerOk = true
+      // NOW the admission lane recovers and the retry pump re-drives the event: the re-admission
+      // succeeds → the dispatcher acks → the delivery completes and is no longer pending.
+      admissionOk = true
       const redriven = yield* dispatcher.pumpRetries(Number.MAX_SAFE_INTEGER)
       expect(redriven).toBeGreaterThan(0)
-      expect(ran.length).toBeGreaterThan(ranAfterFail) // re-ran on retry, not skipped
-      // the event is now fully handled → no longer pending.
+      expect(fullDeps.admitted.map((call) => call.request.event.id)).toEqual([event.id, event.id])
       expect((yield* bus.dueRetries(Number.MAX_SAFE_INTEGER)).map((d) => d.eventID)).not.toContain(event.id)
     }),
   )
 
-  it.effect("§A4 scheduler → dispatcher tick → event published → routed end-to-end", () =>
+  it.effect("§A4 scheduler → dispatcher tick → event published → routed → admitted end-to-end", () =>
     Effect.gen(function* () {
       ran = []
+      admissionOk = true
+      fullDeps.admitted.length = 0
       setNow(0)
       const scheduler = yield* Scheduler.Service
       const dispatcher = yield* EventDispatcher.Service
@@ -213,9 +286,11 @@ describe("V4.0 end-to-end (§I/§J)", () => {
       expect(fired).toBe(1)
       const recent = yield* bus.recentByType({ type: "ci.failure", windowMs: Number.MAX_SAFE_INTEGER, now: 5_000 })
       expect(recent.length).toBe(1)
-      // route the scheduler-published event through the runtime.
+      // route the scheduler-published event through the runtime's durable admission lane.
       yield* dispatcher.handle(recent[0])
-      expect(ran).toEqual(["CodeFixAgent", "CodeFixAgent"])
+      expect(fullDeps.admitted.map((call) => call.request.event.id)).toEqual([recent[0].id])
+      expect(fullDeps.admitted[0]!.scope.workspaceId).toBe("wrk_1")
+      expect(ran).toEqual([]) // dispatch admits; it no longer coordinates
     }),
   )
 })
@@ -295,13 +370,11 @@ describe("V4.1 durable handoff end-to-end", () => {
     Layer.provide(securityLayer),
     Layer.provide(flagsLayer),
   )
-  const dispatcher = Layer.unwrap(
-    Effect.gen(function* () {
-      const multiAgent = yield* MultiAgentRuntime.Service
-      return EventDispatcher.layerWith({ dispatchPort: { dispatch: multiAgent.dispatch }, runLoops: false, now })
-    }),
-  ).pipe(Layer.provide(runtime), Layer.provide(core), Layer.provide(agentLayer), Layer.provide(flagsLayer))
-  const handoffLayer = Layer.mergeAll(core, runtime, consumer, dispatcher, flagsLayer)
+  // v2w-j4 durable-only: dispatch is V2-admission-only and never reaches §C, so the durable handoff
+  // flow is driven through the coordination library directly — `coordinate` with the injected runner
+  // is its documented deterministic-test seam, and the consumer (a bus + AgentExecution +
+  // HandoffAdmission composition, no runner seam of its own) stays fully real.
+  const handoffLayer = Layer.mergeAll(core, runtime, consumer, flagsLayer)
   const it = testEffect(handoffLayer)
 
   it.live("failure transfers continuation to the target agent and retry completes the original delivery", () =>
@@ -310,14 +383,18 @@ describe("V4.1 durable handoff end-to-end", () => {
       failed = false
       handoffRuns.length = 0
       const bus = yield* DeepAgentEventBus.Service
-      const eventDispatcher = yield* EventDispatcher.Service
+      const multiAgent = yield* MultiAgentRuntime.Service
       const execution = yield* AgentExecution.Service
-      yield* bus
-        .subscribe({ group: EventDispatcher.DISPATCH_GROUP })
-        .pipe(Stream.take(1), Stream.runCollect, Effect.forkScoped)
-      yield* Effect.yieldNow
       const event = yield* bus.publish(ciEvent({ idempotencyKey: "handoff-e2e" }))
-      yield* eventDispatcher.handle(event)
+      // let the consumer's live subscribe stream finish attaching to the bus pub/sub before the
+      // coordination emits the handoff event: a publish racing an unfinished subscribe is missed on
+      // the live channel (the durable delivery row then waits for the 30s retry pump, past the poll
+      // window). The pre-v2w-j4 test paid the same yield after its dispatcher-subscription fork.
+      yield* Effect.yieldNow
+      // the first pass: agent_a's turn fails mid-flight → prepareHandoff defers the subtask durably
+      // (hasUnfinished is the §C signal that used to make dispatch nack → pending retry).
+      const first = yield* multiAgent.coordinate(event)
+      expect(first.hasUnfinished).toBe(true)
 
       const firstTask = TaskPartitioner.partition(event, { stableIDPrefix: event.id }).subtasks[0]?.id
       if (!firstTask) return yield* Effect.die("ci.failure partition did not produce its fix task")
@@ -330,14 +407,14 @@ describe("V4.1 durable handoff end-to-end", () => {
       expect(transferred.assignedAgentID).toBe("agent_b")
       expect(transferred.continuationRef).toBe("agent/partial")
 
-      expect(yield* eventDispatcher.pumpRetries(Number.MAX_SAFE_INTEGER)).toBeGreaterThan(0)
+      // the retry re-drives the coordination: agent_b picks up from agent_a's partial continuation and
+      // the event settles (hasUnfinished false is the §C signal that used to make dispatch ack).
+      const retried = yield* multiAgent.coordinate(event)
+      expect(retried.hasUnfinished).toBe(false)
       expect(handoffRuns.slice(0, 2)).toEqual([
         { agent: "agent_a" },
         { agent: "agent_b", baseRef: "agent/partial" },
       ])
-      expect((yield* bus.dueRetries(Number.MAX_SAFE_INTEGER)).map((delivery) => delivery.eventID)).not.toContain(
-        event.id,
-      )
       expect(
         yield* execution.tokensUsed({
           workspaceID: event.workspaceID,
