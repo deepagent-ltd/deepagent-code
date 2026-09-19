@@ -5,13 +5,15 @@ import { basename } from "path"
 import { Cause, Effect } from "effect"
 import { Agent } from "../../../agent/agent"
 import { Provider } from "@/provider/provider"
+import { RuntimeFlags } from "@/effect/runtime-flags"
+import { guardLegacyExecution, LegacyExecutionUnavailable } from "@/session/legacy-execution-zero"
 import { Session } from "@/session/session"
 import type { MessageV2 } from "../../../session/message-v2"
 import { MessageID, PartID } from "../../../session/schema"
 import { ToolRegistry } from "@/tool/registry"
 import { Permission } from "../../../permission"
 import { iife } from "../../../util/iife"
-import { fail } from "../../effect-cmd"
+import { CliError, fail } from "../../effect-cmd"
 import { InstanceRef } from "@/effect/instance-ref"
 import type { InstanceContext } from "@/project/instance-context"
 
@@ -50,6 +52,23 @@ const run = Effect.fn("Cli.debug.agent.body")(function* (
       process.stderr.write(`Tool ${toolID} is disabled for agent ${agentName}` + EOL)
       return yield* fail("", 1)
     }
+    // v2w-j5 LEGACY-EXECUTION-ZERO disarm: direct V1 tool execution bypasses the Core settle
+    // path (no durable V2 task-run receipt, no permission grant lookup, no Tool events) and
+    // mints a synthetic V1 session + assistant message to host it. The Core ApplicationTools
+    // seam only carries MCP + plugin custom tools, so arbitrary V1 built-ins cannot be routed
+    // through it — the census-supported disposition is the profile refusal: under the V2-only
+    // profile this command refuses with the typed LegacyExecutionUnavailable error pointing at
+    // the V2 path instead of executing. The listing branch (no --tool) stays read-only.
+    const flags = yield* RuntimeFlags.Service
+    yield* guardLegacyExecution(flags, {}).pipe(
+      Effect.mapError(
+        (error: LegacyExecutionUnavailable) =>
+          new CliError({
+            message: `direct tool execution is closed under the V2-only profile (${error.reason}): run the tool inside a V2 session (deepagent-code run) instead`,
+            exitCode: 1,
+          }),
+      ),
+    )
     const params = parseToolParams(args.params)
     const toolCtx = yield* createToolContext(agent, ctx)
     const result = yield* tool.execute(params, toolCtx)

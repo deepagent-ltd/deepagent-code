@@ -1790,6 +1790,300 @@ const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
     reachability: "v2-llm-stream",
     verdict: "safe_scoped",
   },
+  // ===========================================================================
+  // RI-94 WAVE-3 J6 ADJUDICATION (2026-09-19). Two groups: (a) re-pins of families already
+  // adjudicated in the 2026-09-11 zero waves whose keys shifted in the wave-3 root-graph merge
+  // (facts re-asserted against current source); (b) first-time adjudications of the observability,
+  // admission, and memoization families. Every row's owner/bound/finalizer was verified at the
+  // cited lines; none of this state is durable authority.
+  // ===========================================================================
+  // mechanism-beacon (core): stderr-only ablation instrumentation. counts/details are keyed by the
+  // fixed mechanism-id literals at the recordEngagement call sites (6 ids: event_admission,
+  // learning, im_single_write, context_federation, v2_execution_owner, strict_plan_gate);
+  // engagedLogged is hard-capped at MAX_ENGAGE_LOGS=5 (mechanism-beacon.ts:102,121-124). Read only
+  // by emitSummaryBeacon (stderr JSON line) and a test accessor.
+  ...Object.fromEntries(
+    ([
+      ["packages/core/src/deepagent/mechanism-beacon.ts:counts", ["MechanismBeacon.observability", "mechanism-id", "fixed-source-call-site-ids", "process-exit", "stderr-beacon-counter-only", "non-authority", "safe_bounded"]],
+      ["packages/core/src/deepagent/mechanism-beacon.ts:details", ["MechanismBeacon.observability", "mechanism-id", "one-detail-string-per-fixed-id", "process-exit", "stderr-beacon-summary-only", "non-authority", "safe_bounded"]],
+      ["packages/core/src/deepagent/mechanism-beacon.ts:engagedLogged", ["MechanismBeacon.observability", "process", "max-5-engage-logs", "cap-at-MAX_ENGAGE_LOGS", "stderr-emission-counter-only", "non-authority", "safe_bounded"]],
+    ] as const).map(([key, [owner, keyScope, bound, finalizer, durability, reachability, verdict]]) => [
+      key,
+      { owner, keyScope, bound, finalizer, durability, reachability, verdict } satisfies RuntimeStateAudit,
+    ]),
+  ),
+  // turn-observability (core): JSON_LENGTH_CACHE is a WeakMap length memo (gc with the key object);
+  // sessions is session-keyed and deleted at drain end — emitTurnSummary deletes on every exit
+  // (turn-observability.ts:432,438) via the runner's Effect.ensuring drain finalizer
+  // (session/runner/llm.ts:2035-2041). Counters feed stderr summaries and advisory repeat-guard
+  // nudges only.
+  ...Object.fromEntries(
+    ([
+      ["packages/core/src/deepagent/turn-observability.ts:JSON_LENGTH_CACHE", ["TurnObservability.estimator", "per-json-object", "weak-key-gc", "gc-with-key-object", "memoization-only", "instance-scoped", "safe_bounded"]],
+      ["packages/core/src/deepagent/turn-observability.ts:sessions", ["TurnObservability.per-drain-record", "per-session-key", "concurrent-sessions", "drain-exit-emitTurnSummary-delete", "observability-counters-only", "session-scoped", "safe_bounded"]],
+    ] as const).map(([key, [owner, keyScope, bound, finalizer, durability, reachability, verdict]]) => [
+      key,
+      { owner, keyScope, bound, finalizer, durability, reachability, verdict } satisfies RuntimeStateAudit,
+    ]),
+  ),
+  // prompt-policy (core): per-session stage-render dedup marker. forgetSessionStageMarker deletes
+  // the slot and is invoked on every drain exit by the same Effect.ensuring finalizer
+  // (prompt-policy.ts:206-208, session/runner/llm.ts:2039). A stale marker only repeats or omits
+  // advisory teaching prose in the volatile round context.
+  "packages/core/src/deepagent/prompt-policy.ts:lastRenderedStageBySession": {
+    owner: "PromptPolicy.stage-dedup",
+    keyScope: "per-session-key",
+    bound: "active-sessions",
+    finalizer: "drain-exit-forgetSessionStageMarker",
+    durability: "prompt-render-dedup-only",
+    reachability: "session-scoped",
+    verdict: "safe_bounded",
+  },
+  // event.ts EventV2 layer registries (re-pin of closure@592 after a one-line shift): typed is
+  // created per definition key in getOrCreate (event.ts:636-644); projectors/snapshotCodecs are
+  // registration-time registries with hard caps (64 per key at :2881; one codec per
+  // codec@schemaVersion key with duplicate-registration throw at :2889-2891); synchronized holds
+  // per-aggregate subscription pubsub sets removed by acquireRelease when a set empties
+  // (:2794-2806). The layer finalizer (:646-656) shuts down every pubsub.
+  ...Object.fromEntries(
+    ([
+      ["packages/core/src/event.ts:closure@593:595.synchronized", ["EventV2.layer-instance", "per-aggregate-subscription", "active-aggregate-subscriptions", "acquireRelease-delete-plus-layer-finalizer", "coordination-only", "instance-scoped", "safe_scoped"]],
+      ["packages/core/src/event.ts:closure@593:596.typed", ["EventV2.layer-instance", "per-definition-key", "source-definition-keyspace", "layer-finalizer-pubsub-shutdown", "coordination-only", "instance-scoped", "safe_scoped"]],
+      ["packages/core/src/event.ts:closure@593:599.projectors", ["EventV2.layer-instance", "per-definition-key", "max-64-projectors-per-key", "layer-finalizer", "coordination-only", "instance-scoped", "safe_scoped"]],
+      ["packages/core/src/event.ts:closure@593:600.snapshotCodecs", ["EventV2.layer-instance", "per-codec-schemaVersion-key", "one-codec-per-key", "layer-finalizer", "codec-registry-only", "instance-scoped", "safe_scoped"]],
+    ] as const).map(([key, [owner, keyScope, bound, finalizer, durability, reachability, verdict]]) => [
+      key,
+      { owner, keyScope, bound, finalizer, durability, reachability, verdict } satisfies RuntimeStateAudit,
+    ]),
+  ),
+  // session/projector.ts wire-egress memos: WIRE_SESSION_MEMO_MAX=2000 (:334,339) and
+  // WIRE_CURSOR_MEMO_MAX=10000 (:403,426) with clear-on-full; the cursor memo falls back to the
+  // DURABLE session_wire_projection fingerprint row for unknown keys (:418-424), so the durable
+  // cursor remains the dedup authority and a cleared memo costs one SELECT.
+  ...Object.fromEntries(
+    ([
+      ["packages/core/src/session/projector.ts:wireSessionMemo", ["SessionProjector.wire-egress", "per-session-key", "max-2000-clear-on-full", "clear-on-full-eviction", "memoization-only", "v2-wire-projection", "safe_bounded"]],
+      ["packages/core/src/session/projector.ts:wireCursorMemo", ["SessionProjector.wire-egress", "per-session-entity-id-key", "max-10000-clear-on-full", "clear-on-full-eviction", "durable-cursor-is-authority-memo-only", "v2-wire-projection", "safe_bounded"]],
+    ] as const).map(([key, [owner, keyScope, bound, finalizer, durability, reachability, verdict]]) => [
+      key,
+      { owner, keyScope, bound, finalizer, durability, reachability, verdict } satisfies RuntimeStateAudit,
+    ]),
+  ),
+  // tool/task-policy.ts: taskBatches is the fan-out admission ledger — per
+  // (session,assistantMessage) batch capped at MAX_SUBAGENT_FANOUT (:26) with a 1024-batch FIFO
+  // ceiling (:28); taskSlots is the per-session subagent semaphore pool, refcounted and deleted at
+  // zero users (:96-101). Coordination ceilings only — durable task authority is TaskRunAuthority.
+  ...Object.fromEntries(
+    ([
+      ["packages/core/src/tool/task-policy.ts:taskBatches", ["TaskPolicy.fanout-admission", "per-session-assistant-message", "fanout-cap-per-batch-plus-1024-batch-fifo", "fifo-eviction-at-cap", "coordination-only", "v2-task-admission", "safe_bounded"]],
+      ["packages/core/src/tool/task-policy.ts:taskSlots", ["TaskPolicy.concurrency-pool", "per-session-key", "active-sessions-refcount", "refcount-zero-delete", "mutex-only", "v2-task-admission", "safe_bounded"]],
+    ] as const).map(([key, [owner, keyScope, bound, finalizer, durability, reachability, verdict]]) => [
+      key,
+      { owner, keyScope, bound, finalizer, durability, reachability, verdict } satisfies RuntimeStateAudit,
+    ]),
+  ),
+  // task-run-dispatcher: inFlight is the per-instance claimed-run set — tick only admits
+  // (maxConcurrent − active) runs (:86-93) and every driveRun deletes its id via Effect.ensuring
+  // (:82); the layer finalizer stops scanning (:64). Durable claim authority is the CAS lease.
+  "packages/core/src/session/task-run-dispatcher.ts:closure@51:59.inFlight": {
+    owner: "TaskRunDispatcher.instance",
+    keyScope: "per-claimed-run-id",
+    bound: "maxConcurrent-default-4",
+    finalizer: "ensuring-delete-plus-scope-finalizer",
+    durability: "coordination-only",
+    reachability: "instance-scoped",
+    verdict: "safe_scoped",
+  },
+  // session/runner/llm.ts (re-pin of closure@500 after shift): both bindings live inside the
+  // runTurnAttempt invocation (starts :586) — withPublication is the turn's single-permit publish
+  // mutex (:1039), planResultMetadata is a per-turn map bounded by the turn's plan tool calls
+  // (:1145). Both die with the provider turn.
+  ...Object.fromEntries(
+    ([
+      ["packages/core/src/session/runner/llm.ts:closure@586:1039.withPublication", ["SessionRunner.runTurnAttempt-invocation", "single-turn", "call-stack", "return", "coordination-only", "per-turn", "safe_scoped"]],
+      ["packages/core/src/session/runner/llm.ts:closure@586:1145.planResultMetadata", ["SessionRunner.runTurnAttempt-invocation", "single-turn", "turn-plan-tool-call-count", "return", "turn-validation-only", "per-turn", "safe_scoped"]],
+    ] as const).map(([key, [owner, keyScope, bound, finalizer, durability, reachability, verdict]]) => [
+      key,
+      { owner, keyScope, bound, finalizer, durability, reachability, verdict } satisfies RuntimeStateAudit,
+    ]),
+  ),
+  // agent-gateway (re-pins of closure@1108/3563 after shift): the legacy learning queue's build()
+  // constructs the durable knowledge store per enqueued job from the captured baseDir+project root
+  // (:1110-1126); runtimeLayer constructs the storage runtime once per layer build (:3565-3569),
+  // living for the layer scope.
+  ...Object.fromEntries(
+    ([
+      ["packages/core/src/agent-gateway.ts:closure@1110:1118.durable", ["DeepAgent-workspace-build", "per-build-invocation", "workspace-lifetime", "owner-scope-finalizer", "durable-by-design", "instance-scoped", "safe_scoped"]],
+      ["packages/core/src/agent-gateway.ts:closure@3565:3567.storage", ["DeepAgent-runtime-instance", "per-runtime-layer", "layer-lifetime", "layer-scope-close", "durable-by-design", "instance-scoped", "safe_scoped"]],
+    ] as const).map(([key, [owner, keyScope, bound, finalizer, durability, reachability, verdict]]) => [
+      key,
+      { owner, keyScope, bound, finalizer, durability, reachability, verdict } satisfies RuntimeStateAudit,
+    ]),
+  ),
+  // sqlite backends: sqlCounts is the DEEPAGENT_CODE_PERF_DEBUG=1 statement histogram, keyed by the
+  // 60-char SQL shape and only touched inside the perf-debug timed() guard (sqlite.bun.ts:60-82);
+  // the worker backend owns one worker thread per client (terminate in the layer finalizer,
+  // sqlite.worker.ts:136-138) whose pending waiters are deleted on reply (:126) and rejected+cleared
+  // on worker error (:131-135).
+  "packages/core/src/database/sqlite.bun.ts:closure@49:64.sqlCounts": {
+    owner: "SqliteBun.client-instance",
+    keyScope: "sql-shape-60char",
+    bound: "distinct-statement-shapes",
+    finalizer: "client-scope-close",
+    durability: "perf-debug-histogram-only",
+    reachability: "non-production-debug-env",
+    verdict: "safe_bounded",
+  },
+  ...Object.fromEntries(
+    ([
+      ["packages/core/src/database/sqlite.worker.ts:closure@112:120.worker", ["SqliteWorker.client-instance", "per-instance", "one-worker-thread", "layer-finalizer-terminate", "transport-only", "instance-scoped", "safe_scoped"]],
+      ["packages/core/src/database/sqlite.worker.ts:closure@112:122.pending", ["SqliteWorker.client-instance", "in-flight-message-id", "in-flight-statements", "reply-delete-plus-error-clear", "coordination-only", "instance-scoped", "safe_bounded"]],
+    ] as const).map(([key, [owner, keyScope, bound, finalizer, durability, reachability, verdict]]) => [
+      key,
+      { owner, keyScope, bound, finalizer, durability, reachability, verdict } satisfies RuntimeStateAudit,
+    ]),
+  ),
+  // ---- deepagent-code ----
+  // learning-runtime: activityStartGit holds the git state an activity started from for the
+  // delivery-verdict metadata — MAX_ACTIVITY_START_GIT=64 FIFO ceiling (learning-runtime.ts:43,53-55)
+  // plus per-activity delete once the receipt is produced (:389). The reviewer-registry factories
+  // map is layer-scoped with per-register finalizer delete plus layer clear (:111-118).
+  "packages/deepagent-code/src/deepagent/learning-runtime.ts:activityStartGit": {
+    owner: "SessionFinalizer.git-start-state",
+    keyScope: "per-activity-key",
+    bound: "max-64-fifo-eviction",
+    finalizer: "receipt-delete-plus-fifo-eviction",
+    durability: "delivery-verdict-metadata-only",
+    reachability: "v2-settle-path",
+    verdict: "safe_bounded",
+  },
+  "packages/deepagent-code/src/deepagent/learning-runtime.ts:closure@110:111.factories": {
+    owner: "ReviewerRegistry.layer-instance",
+    keyScope: "per-symbol-token",
+    bound: "registered-factory-count",
+    finalizer: "register-finalizer-delete-plus-layer-clear",
+    durability: "registry-only",
+    reachability: "instance-scoped",
+    verdict: "safe_scoped",
+  },
+  // learning-reviewer-runner: one AbortController per isolated reviewer execute call, aborted by
+  // Effect.ensuring when the stream settles (learning-reviewer-runner.ts:94,113).
+  "packages/deepagent-code/src/deepagent/learning-reviewer-runner.ts:closure@82:94.abort": {
+    owner: "ReviewerPort.execute-invocation",
+    keyScope: "single-call",
+    bound: "call-stack",
+    finalizer: "ensuring-abort-on-exit",
+    durability: "abort-signal-only",
+    reachability: "instance-scoped",
+    verdict: "safe_scoped",
+  },
+  // instance-store (re-pin of closure@42 after shift): per-directory instance entries evicted by
+  // dispose/reload (instance-store.ts:83-88,118-124) and disposed wholesale by the layer finalizer
+  // (:184-212).
+  "packages/deepagent-code/src/project/instance-store.ts:closure@41:46.cache": {
+    owner: "InstanceStore.layer-instance",
+    keyScope: "per-directory-instance",
+    bound: "live-instance-directories",
+    finalizer: "dispose-eviction-plus-layer-finalizer-disposeAll",
+    durability: "coordination-only",
+    reachability: "instance-scoped",
+    verdict: "safe_bounded",
+  },
+  // multi-agent-runtime (re-pins after shift): ancestorsOf's acc is a per-call DAG-walk set
+  // (:377-391); tokenUsage is the layer's per-agent fallback budget buckets with 1h window-expiry
+  // reset (:226-240) — production debits the durable SQLite token ledger instead (:223-225).
+  ...Object.fromEntries(
+    ([
+      ["packages/deepagent-code/src/session/multi-agent-runtime.ts:ancestorsOf@377:378.acc", ["ancestorsOf-invocation", "single-call", "call-stack", "return", "ephemeral-runtime", "instance-scoped", "safe_scoped"]],
+      ["packages/deepagent-code/src/session/multi-agent-runtime.ts:closure@207:226.tokenUsage", ["MultiAgentRuntime.layer-instance", "per-agent-key", "distinct-agent-count", "window-expiry-reset", "test-fallback-budget-only-durable-ledger-is-authority", "instance-scoped", "safe_bounded"]],
+    ] as const).map(([key, [owner, keyScope, bound, finalizer, durability, reachability, verdict]]) => [
+      key,
+      { owner, keyScope, bound, finalizer, durability, reachability, verdict } satisfies RuntimeStateAudit,
+    ]),
+  ),
+  // processor DegenerationDetector (re-pin of @412 after shift): one detector per reasoning stream
+  // allocated at reasoning-start (processor.ts:1311) inside the per-create-invocation ctx (:671-699);
+  // prevNgramSet holds 4-grams of the 4000-char sliding window (:421-422,450-451) — window-bounded.
+  "packages/deepagent-code/src/session/processor.ts:DegenerationDetector.prevNgramSet@439": {
+    owner: "DegenerationDetector.instance",
+    keyScope: "per-reasoning-stream-detector",
+    bound: "window-4000-chars-ngrams",
+    finalizer: "stream-end-gc-with-processor-ctx",
+    durability: "circuit-breaker-coordination-only",
+    reachability: "per-turn",
+    verdict: "safe_bounded",
+  },
+  // SessionPrompt layer maps (re-pins of closure@1180/1181 after shift): activeFederatedContexts
+  // and activeReleasedKnowledge are deleted together by settleFederatedActivity, which the runLoop
+  // wrapper invokes on EVERY terminal exit via Effect.onExit (prompt.ts:1242-1247,6000-6003,6026-
+  // 6034) plus interrupted paths (:3305,6645); steerAbsorbRounds is deleted at the top of every
+  // activity run (:3794). Bounded by sessions with an open activity.
+  ...Object.fromEntries(
+    ([
+      ["packages/deepagent-code/src/session/prompt.ts:closure@1044:1228.activeFederatedContexts", ["SessionPrompt.layer-instance", "per-session-key", "active-sessions", "settle-cleanup-on-every-terminal-exit", "coordination-only", "instance-scoped", "safe_scoped"]],
+      ["packages/deepagent-code/src/session/prompt.ts:closure@1044:1232.steerAbsorbRounds", ["SessionPrompt.layer-instance", "per-session-key", "active-sessions", "activity-run-start-delete", "coordination-only", "instance-scoped", "safe_scoped"]],
+      ["packages/deepagent-code/src/session/prompt.ts:closure@1044:1233.activeReleasedKnowledge", ["SessionPrompt.layer-instance", "per-session-key", "active-sessions", "settle-cleanup-on-every-terminal-exit", "coordination-only", "instance-scoped", "safe_scoped"]],
+    ] as const).map(([key, [owner, keyScope, bound, finalizer, durability, reachability, verdict]]) => [
+      key,
+      { owner, keyScope, bound, finalizer, durability, reachability, verdict } satisfies RuntimeStateAudit,
+    ]),
+  ),
+  // SessionPrompt invocation-scope bindings (re-pins after shift): per-call dedup sets
+  // (resolveReferenceParts :1282-1284, resolvePromptParts :1319-1326), the per-subtask abort
+  // controller (handleSubtask :1457,1524-1530), the macro-round change-surface accumulator
+  // (:3342,3465-3468), and execRead's per-read abort controller aborted on interrupt
+  // (:2343-2356). All die with their owning call.
+  ...Object.fromEntries(
+    ([
+      ["packages/deepagent-code/src/session/prompt.ts:closure@1282:1284.seen", ["resolveReferenceParts-invocation", "single-call", "call-stack", "return", "ephemeral-runtime", "instance-scoped", "safe_scoped"]],
+      ["packages/deepagent-code/src/session/prompt.ts:closure@1319:1326.seen", ["resolvePromptParts-invocation", "single-call", "call-stack", "return", "ephemeral-runtime", "instance-scoped", "safe_scoped"]],
+      ["packages/deepagent-code/src/session/prompt.ts:closure@1457:1524.taskAbort", ["handleSubtask-invocation", "single-call", "call-stack", "return", "abort-signal-only", "instance-scoped", "safe_scoped"]],
+      ["packages/deepagent-code/src/session/prompt.ts:closure@3342:3468.accumulatedChangeSurface", ["deepagent-macro-round-invocation", "single-call", "files-touched-in-run", "return", "ephemeral-runtime", "instance-scoped", "safe_scoped"]],
+      ["packages/deepagent-code/src/session/prompt.ts:execRead@2343:2344.controller", ["execRead-invocation", "single-call", "tool-call-duration", "abort-on-interrupt", "abort-signal-only", "instance-scoped", "safe_scoped"]],
+    ] as const).map(([key, [owner, keyScope, bound, finalizer, durability, reachability, verdict]]) => [
+      key,
+      { owner, keyScope, bound, finalizer, durability, reachability, verdict } satisfies RuntimeStateAudit,
+    ]),
+  ),
+  // run-state (re-pins after shift): runners is the per-session runner-lane map — deleted on runner
+  // idle (:82) and cleared by the InstanceState finalizer (:60-68); cancelBackgroundJobs' pending/
+  // cancelled sets are per-invocation BFS frontier/dedup (:195-227).
+  ...Object.fromEntries(
+    ([
+      ["packages/deepagent-code/src/session/run-state.ts:closure@57:59.runners", ["RunState.instance-state", "per-session-key", "active-runner-lanes", "onIdle-delete-plus-finalizer-clear", "coordination-only", "instance-scoped", "safe_scoped"]],
+      ["packages/deepagent-code/src/session/run-state.ts:closure@195:200.pending", ["cancelBackgroundJobs-invocation", "single-call", "background-job-count", "return", "ephemeral-runtime", "instance-scoped", "safe_scoped"]],
+      ["packages/deepagent-code/src/session/run-state.ts:closure@195:201.cancelled", ["cancelBackgroundJobs-invocation", "single-call", "background-job-count", "return", "ephemeral-runtime", "instance-scoped", "safe_scoped"]],
+    ] as const).map(([key, [owner, keyScope, bound, finalizer, durability, reachability, verdict]]) => [
+      key,
+      { owner, keyScope, bound, finalizer, durability, reachability, verdict } satisfies RuntimeStateAudit,
+    ]),
+  ),
+  // session.ts (re-pins after shift): touch's timestamp is a per-call immutable value (:3168-3169);
+  // partOwnershipVerified memoizes the immutable part-ownership check for streamed deltas with a
+  // 10_000 clear-on-full ceiling (added in this wave; a cleared key costs one redundant SELECT —
+  // the durable row remains the ownership authority).
+  ...Object.fromEntries(
+    ([
+      ["packages/deepagent-code/src/session/session.ts:closure@3171:3172.updated", ["Session.touch-invocation", "single-call", "call-stack", "return", "ephemeral-runtime", "instance-scoped", "safe_scoped"]],
+      ["packages/deepagent-code/src/session/session.ts:closure@835:1183.partOwnershipVerified", ["Session.layer-instance", "per-part-key", "max-10000-clear-on-full", "clear-on-full-eviction", "memoization-only-durable-ownership-is-authority", "instance-scoped", "safe_bounded"]],
+    ] as const).map(([key, [owner, keyScope, bound, finalizer, durability, reachability, verdict]]) => [
+      key,
+      { owner, keyScope, bound, finalizer, durability, reachability, verdict } satisfies RuntimeStateAudit,
+    ]),
+  ),
+  // v2-plugin-tools-bridge: the AbortController is created per plugin tool-call execute
+  // (v2-plugin-tools-bridge.ts:63-70); the fiber signal's abort listener fires once and detaches
+  // (:75-78,101,111). The instance-scoped registration batch is disposed via
+  // InstanceRegistry.registerInstanceStateDisposer closing its Scope (:121-125).
+  "packages/deepagent-code/src/session/v2-plugin-tools-bridge.ts:closure@64:70.controller": {
+    owner: "PluginToolCall.execute-invocation",
+    keyScope: "single-call",
+    bound: "tool-call-duration",
+    finalizer: "signal-abort-listener-detach",
+    durability: "abort-signal-only",
+    reachability: "instance-scoped",
+    verdict: "safe_scoped",
+  },
 }
 
 const fileOfKey = (key: string) => key.split(":")[0]!

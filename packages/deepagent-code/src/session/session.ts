@@ -1176,7 +1176,10 @@ export const layer: Layer.Layer<
       if (!row) return yield* new NotFoundError({ message: `Message not found: ${input.messageID}` })
     })
 
-    // Deltas repeat thousands of times per part; ownership is immutable after creation.
+    // Deltas repeat thousands of times per part; ownership is immutable after creation. Bounded
+    // like the projector wire memos: clear-on-full keeps a long-lived process from growing the set
+    // without limit — a cleared key only costs one redundant ownership select.
+    const PART_OWNERSHIP_VERIFIED_MAX = 10_000
     const partOwnershipVerified = new Set<string>()
 
     const requirePartOwnership = Effect.fn("Session.requirePartOwnership")(function* (input: {
@@ -3547,6 +3550,7 @@ export const layer: Layer.Layer<
       const key = `${input.sessionID}:${input.messageID}:${input.partID}`
       if (!partOwnershipVerified.has(key)) {
         yield* requirePartOwnership(input).pipe(Effect.orDie)
+        if (partOwnershipVerified.size >= PART_OWNERSHIP_VERIFIED_MAX) partOwnershipVerified.clear()
         partOwnershipVerified.add(key)
       }
       yield* events.publish(MessageV2.Event.PartDelta, input)

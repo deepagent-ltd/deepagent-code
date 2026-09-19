@@ -2,9 +2,7 @@ import { describe, it, expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import { IMRepository, IMRepositoryLive } from "../src/im/repository"
 import { IMBroadcasterService, IMBroadcasterLive } from "../src/im/broadcaster"
-import { AgentContextBuilderService } from "../src/im/agent-executor"
 import { AgentListProviderService, AgentListProviderLive } from "../src/im/agent-list-provider"
-import { AgentContextBuilderLive } from "../src/im/context-builder"
 import { AgentV2 } from "../src/agent"
 import { MentionParser } from "../src/im/mention-parser"
 import { Database } from "@deepagent-code/core/database/database"
@@ -14,13 +12,11 @@ describe("IM Integration Tests", () => {
   const databaseLayer = Database.layerFromPath(":memory:")
   const repositoryLayer = Layer.provideMerge(IMRepositoryLive, databaseLayer)
   const agentLayer = Layer.provideMerge(AgentListProviderLive, AgentV2.layer)
-  const contextBuilderLayer = Layer.provideMerge(AgentContextBuilderLive, repositoryLayer)
   const testLayer = Layer.mergeAll(
     databaseLayer,
     repositoryLayer,
     IMBroadcasterLive,
     agentLayer,
-    contextBuilderLayer,
   )
 
   // Run database migrations before tests
@@ -145,63 +141,6 @@ describe("IM Integration Tests", () => {
     const result = await Effect.runPromise(program.pipe(Effect.provide(testLayer)))
     expect(result.group).toBeDefined()
     expect(result.message).toBeDefined()
-  })
-
-  it("should build context with chronological conversation history", async () => {
-    const program = Effect.gen(function* () {
-      yield* setupDatabase
-      const repo = yield* IMRepository
-      const contextBuilder = yield* AgentContextBuilderService
-
-      const workspaceID = "test-workspace"
-      const userID = "test-user"
-
-      // Create group and messages
-      const group = yield* repo.createGroup({
-        workspaceID,
-        name: "Test Group",
-        type: "project",
-        projectID: "test-project",
-        createdBy: userID,
-      })
-
-      yield* repo.createMessage({
-        groupID: group.id,
-        senderID: userID,
-        senderType: "user",
-        type: "text",
-        content: "First message",
-        mentions: [],
-      })
-
-      const msg2 = yield* repo.createMessage({
-        groupID: group.id,
-        senderID: userID,
-        senderType: "user",
-        type: "text",
-        content: "Second message with @CodeAgent",
-        mentions: ["CodeAgent"],
-      })
-
-      const context = yield* contextBuilder.build({
-        workspaceID,
-        groupID: group.id,
-        messageID: msg2.id,
-        task: "Second message with @CodeAgent",
-      })
-
-      expect(context.conversation.recentMessages.length).toBe(2)
-      expect(context.conversation.groupID).toBe(group.id)
-      expect(context.conversation.recentMessages.map((msg) => msg.content)).toEqual([
-        "First message",
-        "Second message with @CodeAgent",
-      ])
-
-      return context
-    })
-
-    const output = await Effect.runPromise(program.pipe(Effect.provide(testLayer)))
-    expect(output).toBeDefined()
   })
 
   it("should list available agents from AgentV2", async () => {

@@ -6803,7 +6803,9 @@ export const layer = Layer.effect(
                   return { output: text.text, exitCode: text.code }
                 }),
             }),
-          { concurrency: "unbounded" },
+          // Finite backpressure: blocks beyond the cap queue (forEach preserves result order); a
+          // command template's `!`-block count is small, so 8 never serializes realistic input.
+          { concurrency: 8 },
         )
         let index = 0
         template = template.replace(bashRegex, () => results[index++]?.output ?? "")

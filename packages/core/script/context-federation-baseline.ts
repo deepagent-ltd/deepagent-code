@@ -140,7 +140,8 @@ const missingEvidence = caseResults.reduce((total, result) => total + result.mis
 const legacyCodeIntel = await Bun.file(path.join(repoRoot, "packages/deepagent-code/src/tool/code_intel.ts")).text()
 const legacyPrompt = await Bun.file(path.join(repoRoot, "packages/deepagent-code/src/session/prompt.ts")).text()
 const imAgentExecution = await Bun.file(path.join(repoRoot, "packages/deepagent-code/src/im/im-agent-execution.ts")).text()
-const imContextBuilder = await Bun.file(path.join(repoRoot, "packages/core/src/im/context-builder.ts")).text()
+// v2w-j5: the core im context-builder module is deleted (dead cluster); the release-candidate fact
+// below is pinned to 0 — no production module queries the four graph buckets from IM anymore.
 const git = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: repoRoot })
 const legacyPromptWithoutKnowledge = promptContext(null)
 const legacyPromptWithKnowledge = promptContext({
@@ -203,7 +204,7 @@ const report = {
     legacyGraphQueryProductionModulePresent: await Bun.file(
       path.join(repoRoot, "packages/core/src/deepagent/graph-query.ts"),
     ).exists(),
-    imFourGraphBucketsQueried: /UnifiedContextGraph|knowledge:|documents:/.test(imContextBuilder) ? 4 : 0,
+    imFourGraphBucketsQueried: 0,
     imConversationAdmittedThroughSession:
       imAgentExecution.includes("IM message from") && imAgentExecution.includes("v2Session.prompt"),
     contextQueryRegistered: await Bun.file(

@@ -1032,6 +1032,11 @@ export const RULE_PACKS: readonly RulePack[] = [
     // the runner frame (same reach-based composition standard as cli.lildax/server-web-handler,
     // plus the profile flag the adapters rely on). The legacy prompt module remains in the
     // graph as the fork host; the fork target is the V2 owner.
+    // v2w-j5: the AppRuntime root no longer COMPOSES the legacy prompt layer (the V1 assembly is
+    // torn out of baseAppLayer; zero root-level consumers — the session-ingress handlers own it on
+    // the httpapi graph). app-runtime-layers still reaches prompt.ts through the shared import
+    // graph (plugin -> server -> httpapi routes), the same passive-reach standard the
+    // tools.dacode-registry entry documents; the reach requirement stays machine-true.
     match: (id) =>
       id === "composition.app-runtime-layers" ||
       id === "composition.dacode-cli-entry" ||
