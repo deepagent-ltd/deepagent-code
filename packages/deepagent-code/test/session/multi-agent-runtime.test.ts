@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Context, Deferred, Effect, Fiber, Layer } from "effect"
+import { Context, Cause, Deferred, Effect, Fiber, Layer } from "effect"
 import { MultiAgentRuntime } from "../../src/session/multi-agent-runtime"
 import type { SubagentTurnRunner } from "../../src/session/goal-loop-wiring"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
@@ -795,7 +795,7 @@ describe("MultiAgentRuntime DAG + idempotency + retry semantics", () => {
     }),
   )
 
-  it.effect("dispatch fails (→ nack) when coordination is unfinished", () =>
+  it.effect("dispatch without an admission bridge refuses typed (v2w-j4: the legacy fallback is deleted)", () =>
     Effect.gen(function* () {
       resetRunner()
       runnerOk = false
@@ -803,18 +803,24 @@ describe("MultiAgentRuntime DAG + idempotency + retry semantics", () => {
       setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
       const runtime = yield* MultiAgentRuntime.Service
       const exit = yield* runtime.dispatch({ event: event(), priority: "normal", targets: [] }).pipe(Effect.exit)
-      expect(exit._tag).toBe("Failure") // dispatcher will nack
+      // No eventV2Admission seam wired in this §C library harness: dispatch fails closed with the
+      // typed refusal — the coordination library is reachable only via `coordinate` now.
+      expect(exit._tag).toBe("Failure")
+      if (exit._tag === "Failure") {
+        expect(Cause.squash(exit.cause)).toBeInstanceOf(MultiAgentRuntime.EventV2AdmissionUnavailableError)
+      }
+      expect(ran).toEqual([]) // the deleted fallback never ran the turn runner
     }),
   )
 
-  it.effect("dispatch succeeds (→ ack) when every subtask reaches a terminal state", () =>
+  it.effect("coordination reaches a terminal state (→ would-ack) when every subtask completes", () =>
     Effect.gen(function* () {
       resetRunner()
       setNow(1_000)
       setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
       const runtime = yield* MultiAgentRuntime.Service
-      const exit = yield* runtime.dispatch({ event: event(), priority: "normal", targets: [] }).pipe(Effect.exit)
-      expect(exit._tag).toBe("Success")
+      const summary = yield* runtime.coordinate(event())
+      expect(summary.hasUnfinished).toBe(false)
     }),
   )
 })
