@@ -245,7 +245,7 @@ describe("live LLM route manifest", () => {
 
   test("keeps the worktree regression reachable from every owning production seam", () => {
     const paths = [
-      "packages/deepagent-code/src/session/prompt.ts",
+      "packages/deepagent-code/src/session/prompt-v2.ts",
       "packages/deepagent-code/src/tool/task.ts",
       "packages/deepagent-code/src/project/instance-store.ts",
       "packages/deepagent-code/src/project/instance-layer.ts",
@@ -341,7 +341,7 @@ describe("live LLM route manifest", () => {
       "packages/app/src/pages/session/message-timeline.data.ts",
       "packages/deepagent-code/src/session/activity-sql.ts",
       "packages/deepagent-code/src/session/prompt-intent.ts",
-      "packages/deepagent-code/src/session/prompt.ts",
+      "packages/deepagent-code/src/session/prompt-v2.ts",
       "packages/deepagent-code/src/session/steer.ts",
       "packages/deepagent-code/script/live-llm/activity-progress-lifecycle.ts",
       "packages/deepagent-code/script/live-llm/activity-progress-oracle.ts",
@@ -841,7 +841,7 @@ describe("pre-push dispatcher", () => {
     const runs = selectRoutes([
       "packages/llm/src/providers/openai-compatible.ts",
       "packages/core/src/tool/registry.ts",
-      "packages/deepagent-code/src/session/prompt.ts",
+      "packages/deepagent-code/src/session/prompt-v2.ts",
       "packages/deepagent-code/src/tool/task.ts",
     ]).runs.filter((run) => run.mode === "live")
 

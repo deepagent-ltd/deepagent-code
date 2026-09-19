@@ -4,7 +4,8 @@ import { SessionV1 } from "@deepagent-code/core/v1/session"
 
 import { Session } from "@/session/session"
 import { MessageV2 } from "@/session/message-v2"
-import { SessionPrompt } from "@/session/prompt"
+import { SessionPromptV2 } from "@/session/prompt-v2"
+import { SessionCommandV2 } from "@/session/command-v2"
 import { SessionRevert } from "@/session/revert"
 import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
@@ -129,7 +130,7 @@ export const SummarizePayload = Schema.Struct({
   modelID: ModelV2.ID,
   auto: Schema.optional(Schema.Boolean),
 })
-export const PromptPayload = Schema.Struct(Struct.omit(SessionPrompt.PromptInput.fields, ["sessionID"]))
+export const PromptPayload = Schema.Struct(Struct.omit(SessionPromptV2.PromptInput.fields, ["sessionID"]))
 export const PromptAsyncAccepted = Schema.Struct({
   messageID: MessageID,
   delivery: Schema.Literals(["turn", "steer", "queue", "goal_steer"]),
@@ -142,7 +143,7 @@ export const PromptPreparePayload = Schema.Struct({
   output_language: Schema.optional(Schema.Literals(["chinese", "english"])),
   intent_id: Schema.optional(Schema.String),
   intent_source: Schema.optional(Schema.Literals(["composer", "intelligence", "followup", "rewrite"])),
-  parts: SessionPrompt.PromptInput.fields.parts,
+  parts: SessionPromptV2.PromptInput.fields.parts,
 })
 export const PromptPrepareResult = Schema.Struct({
   prompt_draft_id: Schema.String,
@@ -185,8 +186,8 @@ export const PlanSnapshotResult = Schema.Struct({
   doc_id: Schema.NullOr(Schema.String),
   plan_version: Schema.NullOr(Schema.Number),
 })
-export const CommandPayload = Schema.Struct(Struct.omit(SessionPrompt.CommandInput.fields, ["sessionID"]))
-export const ShellPayload = Schema.Struct(Struct.omit(SessionPrompt.ShellInput.fields, ["sessionID"]))
+export const CommandPayload = Schema.Struct(Struct.omit(SessionCommandV2.CommandInput.fields, ["sessionID"]))
+export const ShellPayload = Schema.Struct(Struct.omit(SessionCommandV2.ShellInput.fields, ["sessionID"]))
 export const RevertPayload = Schema.Struct(Struct.omit(SessionRevert.RevertInput.fields, ["sessionID"]))
 export const PermissionResponsePayload = Schema.Struct({
   response: PermissionV1.Reply,

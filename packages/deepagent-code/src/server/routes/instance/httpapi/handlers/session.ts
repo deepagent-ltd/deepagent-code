@@ -11,7 +11,8 @@ import { SessionShare } from "@/share/session"
 import { Session } from "@/session/session"
 import { SessionCompaction } from "@/session/compaction"
 import { MessageV2 } from "@/session/message-v2"
-import { SessionPrompt } from "@/session/prompt"
+import { SessionPromptV2 } from "@/session/prompt-v2"
+import { SessionCommandV2 } from "@/session/command-v2"
 import { SessionPromptIntent } from "@/session/prompt-intent"
 import { LegacyExecutionUnavailable, guardLegacyExecution } from "@/session/legacy-execution-zero"
 import { AbsolutePath } from "@deepagent-code/core/schema"
@@ -72,7 +73,7 @@ const tryParseJson = (text: string) =>
     catch: () => new HttpApiError.BadRequest({}),
   })
 
-type PromptPreparePart = (typeof SessionPrompt.PromptInput.Type)["parts"][number]
+type PromptPreparePart = (typeof SessionPromptV2.PromptInput.Type)["parts"][number]
 
 const promptText = (parts: readonly PromptPreparePart[]) =>
   parts.map((part) => (part.type === "text" ? part.text : "")).join("")
@@ -91,7 +92,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
   Effect.gen(function* () {
     const session = yield* Session.Service
     const shareSvc = yield* SessionShare.Service
-    const promptSvc = yield* SessionPrompt.Service
+    const promptSvc = yield* SessionPromptV2.Service
+    const commandSvc = yield* SessionCommandV2.Service
     const database = yield* Database.Service
     const revertSvc = yield* SessionRevert.Service
     const compactSvc = yield* SessionCompaction.Service
@@ -438,7 +440,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof InitPayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
-      yield* promptSvc
+      yield* commandSvc
         .command({
           sessionID: ctx.params.sessionID,
           messageID: ctx.payload.messageID,
@@ -753,7 +755,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof CommandPayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
-      return yield* promptSvc
+      return yield* commandSvc
         .command({ ...ctx.payload, sessionID: ctx.params.sessionID })
         .pipe(
           Effect.mapError((error) =>
@@ -768,7 +770,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     }) {
       yield* requireSession(ctx.params.sessionID)
       yield* SessionError.mapBusy(assertSessionLaneAvailable(ctx.params.sessionID))
-      return yield* promptSvc
+      return yield* commandSvc
         .shell({ ...ctx.payload, sessionID: ctx.params.sessionID })
         .pipe(
           Effect.mapError((error) =>

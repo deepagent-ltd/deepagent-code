@@ -274,7 +274,24 @@ export async function runLegacyLiveCases(input: {
     const { SessionV2 } = await import("@deepagent-code/core/session")
     const { SessionMessage } = await import("@deepagent-code/core/session/message")
     const { SessionPromptIntent } = await import("../../src/session/prompt-intent")
-    const { SessionPrompt } = await import("../../src/session/prompt")
+    const { SessionPromptV2 } = await import("../../src/session/prompt-v2")
+    const { SessionCommandV2 } = await import("../../src/session/command-v2")
+    const { LLM } = await import("../../src/session/llm")
+    const { Snapshot } = await import("../../src/snapshot")
+    const { Reference } = await import("../../src/reference/reference")
+    const { FSUtil } = await import("@deepagent-code/core/fs-util")
+    const { Truncate } = await import("../../src/tool/truncate")
+    const { Instruction } = await import("../../src/session/instruction")
+    const { SystemPrompt } = await import("../../src/session/system")
+    const { SessionSummary } = await import("../../src/session/summary")
+    const { Image } = await import("../../src/image/image")
+    const { LocationIdentity } = await import("@deepagent-code/core/context-federation/identity")
+    const { Auth } = await import("../../src/auth")
+    const { Provider } = await import("../../src/provider/provider")
+    const { Config } = await import("../../src/config/config")
+    const { LSP } = await import("../../src/lsp/lsp")
+    const { MCP } = await import("../../src/mcp")
+    const { ToolRegistry } = await import("../../src/tool/registry")
     const { SessionRevert } = await import("../../src/session/revert")
     const { SessionRunState } = await import("../../src/session/run-state")
     const { MessageID } = await import("../../src/session/schema")
@@ -287,6 +304,7 @@ export async function runLegacyLiveCases(input: {
     const { V4PRCollaboration } = await import("../../src/session/v4-pr-collaboration")
     const { RuntimeFlags } = await import("../../src/effect/runtime-flags")
     const { InstanceRef } = await import("../../src/effect/instance-ref")
+    const { InstanceRegistry } = await import("../../src/effect/instance-registry")
     const { InstanceStore } = await import("../../src/project/instance-store")
     const { Worktree } = await import("../../src/worktree")
     const { consultPanel } = await import("../../src/panel/consult")
@@ -305,7 +323,7 @@ export async function runLegacyLiveCases(input: {
         }
       | undefined
     const program = Effect.gen(function* () {
-      const prompts = yield* SessionPrompt.Service
+      const prompts = yield* SessionPromptV2.Service
       const v2Session = yield* SessionV2.Service
       const database = yield* Database.Service
       const runState = yield* SessionRunState.Service
@@ -1499,8 +1517,7 @@ export async function runLegacyLiveCases(input: {
         v4,
       }
     })
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
+    const liveProgram = Effect.gen(function* () {
         const directory = yield* tmpdirScoped({
           git: true,
           config: liveWorkspaceConfig(config, input.permission, input.primaryPermission, input.mcp, {
@@ -1566,16 +1583,20 @@ export async function runLegacyLiveCases(input: {
         })
         const instances = yield* InstanceStore.Service
         return yield* instances.provide({ directory }, program.pipe(Effect.provideService(TestInstance, { directory })))
-      }).pipe(
+      })
+    const result = await Effect.runPromise(
+      liveProgram.pipe(
         Effect.scoped,
         Effect.provide(
           // LEGACY-EXECUTION-ZERO: one SHARED SessionV2 runtime — the subagent runner requires the
-          // V2 authority, and SessionPrompt.productionLayer consumes the same instance (defaultLayer
-          // would build a second, disjoint V2 runtime inside its own scope).
-          SessionPrompt.productionLayer.pipe(
+          // V2 authority, and the prompt surface consumes the same instance (a defaultLayer would
+          // build a second, disjoint V2 runtime inside its own scope).
+          // v2w-l2: command-v2's production layer composes the prompt-v2 layer internally; the
+          // monolith-era self-provides the E2E program still needs are provided here explicitly.
+          Layer.mergeAll(SessionCommandV2.productionLayer, SessionPromptV2.productionLayer).pipe(
             Layer.provideMerge(
               Layer.mergeAll(
-                SessionV2.liveLayer,
+                testInstanceStoreLayer,
                 Agent.defaultLayer,
                 SessionRunState.defaultLayer,
                 SessionSteer.defaultLayer,
@@ -1591,9 +1612,32 @@ export async function runLegacyLiveCases(input: {
                 PRQueue.layer.pipe(Layer.orDie),
                 CrossSpawnSpawner.defaultLayer,
                 Database.defaultLayer,
+                LLM.defaultLayer,
+                Snapshot.defaultLayer,
+                Reference.defaultLayer,
+                FSUtil.defaultLayer,
+                Truncate.configuredLayer,
+                Instruction.defaultLayer,
+                SystemPrompt.defaultLayer,
+                SessionSummary.defaultLayer,
+                Image.defaultLayer,
+                LocationIdentity.defaultLayer,
+                Auth.defaultLayer,
+                Provider.defaultLayer,
+                Config.defaultLayer,
+                LSP.defaultLayer,
+                MCP.defaultLayer,
+                ToolRegistry.productionLayer,
+                RuntimeFlags.defaultLayer,
+                InstanceRegistry.layer,
+                SessionV2.liveLayer,
               ),
             ),
-            Layer.provideMerge(testInstanceStoreLayer),
+            Layer.provide(SessionV2.liveLayer),
+            Layer.provide(InstanceRegistry.layer),
+            // Same layer objects as the provideMerges above — the shared memoMap keeps ONE
+            // instance; the explicit provides only close the type-level requirements.
+            Layer.provide(testInstanceStoreLayer),
           ),
         ),
         Effect.timeout(

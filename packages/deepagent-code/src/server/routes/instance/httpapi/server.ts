@@ -47,7 +47,8 @@ import { Reference } from "@/reference/reference"
 import { Session } from "@/session/session"
 import { SessionCompaction } from "@/session/compaction"
 import { LLM } from "@/session/llm"
-import { SessionPrompt } from "@/session/prompt"
+import { SessionPromptV2 } from "@/session/prompt-v2"
+import { SessionCommandV2 } from "@/session/command-v2"
 import { PromptEpoch } from "@/session/prompt-epoch"
 import { DurableLearningRuntime } from "@/deepagent/learning-runtime"
 import { LearningReviewerRunner } from "@/deepagent/learning-reviewer-runner"
@@ -429,7 +430,14 @@ export function createRoutes(corsOptions?: CorsOptions, runtimeFlagsLayer = Runt
       runtimeFlagsLayer,
       Session.defaultLayer,
       SessionCompaction.defaultLayer,
-      SessionPrompt.productionLayer,
+      // v2w-l2: the routes graph assembles the LEAN V2 prompt surfaces (admission/loop/cancel +
+      // command/shell receipts) instead of the deleted prompt.ts monolith's productionLayer. The
+      // shared services below (Session/Compaction/RunState/Status/Revert/...) keep feeding the
+      // graph's other members; the monolith-only self-provides (SessionProcessor, SystemPrompt,
+      // Image, LLM, SessionSteer, SessionFederatedContext/SessionProviderOwner/Readiness merge,
+      // ToolRegistry) left the composition with it — each remaining consumer self-provides its own.
+      SessionPromptV2.productionLayer,
+      SessionCommandV2.productionLayer,
       GoalManager.productionLayer,
       SessionRevert.defaultLayer,
       // V4.1 §N — the durable goal-steer buffer, exposed at the graph root so the v4-event-runtime's

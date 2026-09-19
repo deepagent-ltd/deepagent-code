@@ -103,7 +103,8 @@ import { RequestExecutor } from "@deepagent-code/llm/route"
 import { SessionSummary } from "../../src/session/summary"
 import { Instruction } from "../../src/session/instruction"
 import { SessionProcessor } from "../../src/session/processor"
-import { recoverProviderReceiptsOnStartup, SessionPrompt } from "../../src/session/prompt"
+import { recoverProviderReceiptsOnStartup } from "../../src/session/legacy-provider-receipt-recovery"
+import { SessionPromptV2 } from "../../src/session/prompt-v2"
 import { SessionRevert } from "../../src/session/revert"
 import { SessionRunState } from "../../src/session/run-state"
 import { SessionSteer } from "../../src/session/steer"
@@ -844,7 +845,7 @@ function makeIncidentPromptLayer() {
     Layer.provideMerge(deps),
   )
   const steer = SessionSteer.layer.pipe(Layer.provideMerge(deps))
-  return SessionPrompt.layer.pipe(
+  return SessionPromptV2.layer.pipe(
     Layer.provide(realV2Layer),
     Layer.provide(SessionProviderOwner.layer.pipe(Layer.provide(deps))),
     Layer.provide(testInstanceStoreLayer),
@@ -952,7 +953,7 @@ incidentPrompt.instance.skip(
   () =>
     Effect.gen(function* () {
       const { llm } = yield* useIncidentServerConfig(incidentProviderCfg)
-      const prompt = yield* SessionPrompt.Service
+      const prompt = yield* SessionPromptV2.Service
       const sessions = yield* Session.Service
       const question = yield* Question.Service
       const { db } = yield* Database.Service
@@ -1067,7 +1068,7 @@ incidentPrompt.instance.skip(
         ...incidentProviderCfg(url),
         experimental: { continue_loop_on_deny: true },
       }))
-      const prompt = yield* SessionPrompt.Service
+      const prompt = yield* SessionPromptV2.Service
       const sessions = yield* Session.Service
       const question = yield* Question.Service
       const { db } = yield* Database.Service

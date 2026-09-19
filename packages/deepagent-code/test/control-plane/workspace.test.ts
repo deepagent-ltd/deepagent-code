@@ -37,7 +37,7 @@ import * as Workspace from "../../src/control-plane/workspace"
 import { InstanceStore } from "@/project/instance-store"
 import { InstanceBootstrap } from "@/project/bootstrap"
 import { Auth } from "@/auth"
-import { SessionPrompt } from "@/session/prompt"
+import { SessionCommandV2 } from "@/session/command-v2"
 import { Project } from "@/project/project"
 import { Vcs } from "@/project/vcs"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -69,7 +69,7 @@ const workspaceLayer = (experimentalWorkspaces: boolean, runtimeFeatures?: Runti
   Workspace.layer.pipe(
     Layer.provide(Auth.defaultLayer),
     Layer.provide(SessionNs.defaultLayer),
-    Layer.provide(SessionPrompt.defaultLayer),
+    Layer.provide(SessionCommandV2.defaultLayer),
     Layer.provide(Project.defaultLayer),
     Layer.provide(Vcs.defaultLayer),
     Layer.provide(Database.defaultLayer),

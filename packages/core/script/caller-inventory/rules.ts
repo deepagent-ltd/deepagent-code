@@ -26,10 +26,10 @@ export type VerdictRule = {
 export type EntryRules = Readonly<Partial<Record<Dimension, VerdictRule>>>
 export type RulePack = { readonly match: (id: string) => boolean; readonly rules: EntryRules }
 
-const LEGACY_PROMPT_PATH = AUTHORITY.LEGACY_PROMPT
+const PROMPT_SURFACE_PATH = AUTHORITY.PROMPT_SURFACE
 const V2_EXEC_LOCAL_PATH = AUTHORITY.V2_EXECUTION_LOCAL
 
-const LEGACY_PROMPT: Requirement = { kind: "reach", pathSuffix: LEGACY_PROMPT_PATH }
+const PROMPT_SURFACE: Requirement = { kind: "reach", pathSuffix: PROMPT_SURFACE_PATH }
 const V2_EXEC_LOCAL: Requirement = { kind: "reach", pathSuffix: V2_EXEC_LOCAL_PATH }
 const V2_TOOL_REGISTRY: Requirement = { kind: "reach", pathSuffix: AUTHORITY.V2_TOOL_REGISTRY }
 const V2_EVENT_BUS: Requirement = { kind: "reach", pathSuffix: AUTHORITY.V2_EVENT_BUS }
@@ -49,7 +49,7 @@ const INSTANCE_STATE: Requirement = {
 }
 
 const AUTHORITY_WRITERS: readonly string[] = [
-  AUTHORITY.LEGACY_PROMPT,
+  AUTHORITY.PROMPT_SURFACE,
   AUTHORITY.V2_EXECUTION_LOCAL,
   AUTHORITY.V2_EXECUTION_RESTART,
   AUTHORITY.V2_TOOL_REGISTRY,
@@ -149,7 +149,7 @@ function withReadOnlyRest(
 
 /** Non-bus authority writers an event-plane consumer does not reach (so read_only rest is provable). */
 const EVENT_CONSUMER_READONLY: readonly Requirement[] = [
-  noReachPath(AUTHORITY.LEGACY_PROMPT),
+  noReachPath(AUTHORITY.PROMPT_SURFACE),
   noReachPath(AUTHORITY.V2_EXECUTION_LOCAL),
   noReachPath(AUTHORITY.V2_EXECUTION_RESTART),
   noReachPath(AUTHORITY.V2_TOOL_REGISTRY),
@@ -321,7 +321,7 @@ export const RULE_PACKS: readonly RulePack[] = [
       // The `@/` alias is only resolvable inside the deepagent-code package, so the positive read
       // fact is the entry's own resolved relative import: the server connection helper.
       { kind: "reach", pathSuffix: "packages/app/src/utils/server.ts" },
-      { kind: "noReach", pathSuffix: AUTHORITY.LEGACY_PROMPT },
+      { kind: "noReach", pathSuffix: AUTHORITY.PROMPT_SURFACE },
       { kind: "noReach", pathSuffix: AUTHORITY.V2_EXECUTION_LOCAL },
       { kind: "noReach", pathSuffix: AUTHORITY.V2_TOOL_REGISTRY },
       { kind: "noReach", pathSuffix: AUTHORITY.PROJECTOR },
@@ -332,7 +332,7 @@ export const RULE_PACKS: readonly RulePack[] = [
     match: (id) => id === "browser.remote-gateway-client",
     rules: all7(readOnly([
       { kind: "reach", pathSuffix: "packages/app/src/utils/gateway-client.ts" },
-      { kind: "noReach", pathSuffix: AUTHORITY.LEGACY_PROMPT },
+      { kind: "noReach", pathSuffix: AUTHORITY.PROMPT_SURFACE },
       { kind: "noReach", pathSuffix: AUTHORITY.V2_EXECUTION_LOCAL },
       { kind: "noReach", pathSuffix: AUTHORITY.V2_TOOL_REGISTRY },
       { kind: "noReach", pathSuffix: AUTHORITY.PROJECTOR },
@@ -344,7 +344,7 @@ export const RULE_PACKS: readonly RulePack[] = [
     rules: all7(readOnly([
       { kind: "reach", pathSuffix: "packages/core/src/contract/evidence-manifest.ts" },
       { kind: "reach", pathSuffix: "packages/core/src/system-context/capability-catalog.ts" },
-      { kind: "noReach", pathSuffix: AUTHORITY.LEGACY_PROMPT },
+      { kind: "noReach", pathSuffix: AUTHORITY.PROMPT_SURFACE },
       { kind: "noReach", pathSuffix: AUTHORITY.V2_EXECUTION_LOCAL },
       { kind: "noReach", pathSuffix: AUTHORITY.V2_TOOL_REGISTRY },
       { kind: "noReach", pathSuffix: AUTHORITY.PROJECTOR },
@@ -363,7 +363,7 @@ export const RULE_PACKS: readonly RulePack[] = [
     rules: v2All7([
       { kind: "productionProfile" },
       body("coreV2Session.compact"),
-      LEGACY_PROMPT,
+      PROMPT_SURFACE,
       V2_SESSION_CORE,
       V2_EXEC_LOCAL,
     ]),
@@ -380,7 +380,7 @@ export const RULE_PACKS: readonly RulePack[] = [
     rules: v2All7([
       { kind: "productionProfile" },
       body("promptSvc.cancel"),
-      call("coreV2Session.interrupt", LEGACY_PROMPT_PATH),
+      call("coreV2Session.interrupt", PROMPT_SURFACE_PATH),
       V2_SESSION_CORE,
       V2_EXEC_LOCAL,
     ]),
@@ -398,11 +398,11 @@ export const RULE_PACKS: readonly RulePack[] = [
     rules: all7(adapter([
       { kind: "productionProfile" },
       body("promptSvc"),
-      LEGACY_PROMPT,
+      PROMPT_SURFACE,
       V2_SESSION_CORE,
       V2_EXEC_LOCAL,
-      call("coreV2Session.prompt", LEGACY_PROMPT_PATH),
-      call("coreV2Session.resume", LEGACY_PROMPT_PATH),
+      call("coreV2Session.prompt", PROMPT_SURFACE_PATH),
+      call("coreV2Session.resume", PROMPT_SURFACE_PATH),
     ])),
   },
 
@@ -410,16 +410,19 @@ export const RULE_PACKS: readonly RulePack[] = [
   // HTTP — session-execution operations driving the legacy SessionPrompt turn
   // ===========================================================================
   {
+    // v2w-l2: command/shell/init resolve through the command surface service (commandSvc ->
+    // SessionCommandV2) which delegates execution to the prompt-v2 admission; the receipted
+    // side effects (P0-4) stay in the command module.
     match: (id) =>
       id.startsWith("http.instance.session.") &&
       ["command", "shell", "init"].includes(id.slice("http.instance.session.".length)),
     rules: all7(adapter([
       { kind: "productionProfile" },
-      body("promptSvc"),
-      LEGACY_PROMPT,
+      body("commandSvc"),
+      PROMPT_SURFACE,
       V2_SESSION_CORE,
       V2_EXEC_LOCAL,
-      call("coreV2Session.prompt", LEGACY_PROMPT_PATH),
+      call("coreV2Session.prompt", PROMPT_SURFACE_PATH),
     ])),
   },
   {
@@ -428,7 +431,7 @@ export const RULE_PACKS: readonly RulePack[] = [
       ["prompt", "promptAsync", "promptPrepare", "promptPrepareStream", "promptSuggestion"].includes(
         id.slice("http.instance.session.".length),
       ),
-    rules: legacyAll7([LEGACY_PROMPT, body("promptSvc")]),
+    rules: legacyAll7([PROMPT_SURFACE, body("promptSvc")]),
   },
   {
     // RI-71 zero wave: the recovery-resolution surfaces refuse BEFORE any legacy machinery under
@@ -444,7 +447,7 @@ export const RULE_PACKS: readonly RulePack[] = [
       // BEFORE any legacy-execution chain in the handler flow (line order = statement order in
       // the generator body, including same-file helper expansion).
       guardBeforeLegacy("refuseLegacyRecoveryMutation", "promptSvc"),
-      LEGACY_PROMPT,
+      PROMPT_SURFACE,
       V2_SESSION_CORE,
       V2_EXEC_LOCAL,
     ])),
@@ -714,14 +717,14 @@ export const RULE_PACKS: readonly RulePack[] = [
           call("SessionV2.ID.make", "packages/deepagent-code/src/im/im-agent-execution.ts"),
           call("SessionMessage.ID.make", "packages/deepagent-code/src/im/im-agent-execution.ts"),
           call("v2Session.prompt", "packages/deepagent-code/src/im/im-agent-execution.ts"),
-          noReachPath(AUTHORITY.LEGACY_PROMPT),
+          noReachPath(AUTHORITY.PROMPT_SURFACE),
         ]),
         execution_owner: v2([
           { kind: "reach", pathSuffix: "packages/deepagent-code/src/im/im-agent-execution.ts" },
           V2_SESSION_CORE,
           V2_EXEC_LOCAL,
           call("v2Session.prompt", "packages/deepagent-code/src/im/im-agent-execution.ts"),
-          noReachPath(AUTHORITY.LEGACY_PROMPT),
+          noReachPath(AUTHORITY.PROMPT_SURFACE),
         ]),
       },
       [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")],
@@ -801,14 +804,14 @@ export const RULE_PACKS: readonly RulePack[] = [
           call("SessionV2.ID.make", "packages/deepagent-code/src/github/github-agent-execution.ts"),
           call("SessionMessage.ID.make", "packages/deepagent-code/src/github/github-agent-execution.ts"),
           call("v2Session.prompt", "packages/deepagent-code/src/github/github-agent-execution.ts"),
-          noReachPath(AUTHORITY.LEGACY_PROMPT),
+          noReachPath(AUTHORITY.PROMPT_SURFACE),
         ]),
         execution_owner: v2([
           { kind: "reach", pathSuffix: "packages/deepagent-code/src/github/github-agent-execution.ts" },
           V2_SESSION_CORE,
           V2_EXEC_LOCAL,
           call("v2Session.prompt", "packages/deepagent-code/src/github/github-agent-execution.ts"),
-          noReachPath(AUTHORITY.LEGACY_PROMPT),
+          noReachPath(AUTHORITY.PROMPT_SURFACE),
         ]),
       },
       [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")],
@@ -1043,7 +1046,7 @@ export const RULE_PACKS: readonly RulePack[] = [
       id === "composition.instance-httpapi-stack",
     rules: v2All7([
       { kind: "productionProfile" },
-      LEGACY_PROMPT,
+      PROMPT_SURFACE,
       V2_SESSION_CORE,
       V2_EXEC_LOCAL,
       V2_SESSION_RUNTIME,
@@ -1141,7 +1144,7 @@ export const RULE_PACKS: readonly RulePack[] = [
     rules: all7(readOnly([
       { kind: "reach", pathSuffix: AUTHORITY.GOAL_LOOP },
       { kind: "reach", pathSuffix: "packages/core/src/deepagent/plan-store.ts" },
-      { kind: "noReach", pathSuffix: LEGACY_PROMPT_PATH },
+      { kind: "noReach", pathSuffix: PROMPT_SURFACE_PATH },
       notBody("promptSvc.promptOrSteer"),
       notBody("SessionV2.prompt"),
     ])),
