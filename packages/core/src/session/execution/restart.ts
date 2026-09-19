@@ -405,15 +405,34 @@ export const layer = Layer.effect(
                       ...(row.resolutionDecision === null ? {} : { resolutionDecision: row.resolutionDecision }),
                       ...(row.bridgeReceiptId === null ? {} : { bridgeReceiptId: row.bridgeReceiptId }),
                     }
-              const ownedElsewhere = row.ownerReleasedAt === null && (row.ownerExpiresAt ?? 0) > inventory.observedAt
+              // A TERMINAL receipt (settled / failed / indeterminate_after_crash) has its outcome
+              // durably decided: a still-live owner lease cannot represent in-flight work for it,
+              // so the lease fence only applies to non-terminal rows. This matters when a kill
+              // lands in the window between an idle successor drain's claim and its release —
+              // recovery must release that claim instead of fencing on the dead chain's lease.
+              const receiptTerminal = ["settled", "failed", "indeterminate_after_crash"].includes(receipt.state)
+              const ownedElsewhere =
+                !receiptTerminal &&
+                row.ownerReleasedAt === null &&
+                (row.ownerExpiresAt ?? 0) > inventory.observedAt
+              // A turn recorded under a DIFFERENT execution claim belongs to an older ownership
+              // chain: the claim CAS only lets this claim exist after that chain released, and a
+              // release follows the turn's terminal classification — so a TERMINAL row under a
+              // foreign token is settled history for this claim's disposition (releasing cannot
+              // replay it: past-dispatch work stays fenced by the wake barrier and the receipt
+              // state machine). A non-terminal foreign row keeps the conflict fence (unknown
+              // in-flight ownership).
+              const claimTokenMismatch = attempt !== undefined && attempt.executionClaimToken !== claim.token
               return {
                 receipt,
                 ...(attempt === undefined ? {} : { attempt }),
                 classification: ownedElsewhere
                   ? "owned_elsewhere"
-                  : attempt !== undefined && attempt.executionClaimToken !== claim.token
-                    ? "authority_conflict"
-                    : classifyTurn(receipt, attempt),
+                  : claimTokenMismatch && receiptTerminal
+                    ? "terminal_consistent"
+                    : claimTokenMismatch
+                      ? "authority_conflict"
+                      : classifyTurn(receipt, attempt),
               }
             })
           const tools = inventory.toolRows

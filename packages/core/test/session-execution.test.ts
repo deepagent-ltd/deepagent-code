@@ -25,6 +25,19 @@ import { Prompt } from "@deepagent-code/core/session/prompt"
 import { SessionSchema } from "@deepagent-code/core/session/schema"
 import { SessionInputTable, SessionTable } from "@deepagent-code/core/session/sql"
 import { SessionStore } from "@deepagent-code/core/session/store"
+import {
+  SessionActivityTable,
+  SessionContextSelectionTable,
+  SessionProviderAttemptTable,
+  SessionProviderOwnerLeaseTable,
+} from "@deepagent-code/core/context-federation/session-sql"
+import {
+  LocationIdentityTable,
+  ProjectScopeIdentityTable,
+  SecurityNamespaceTable,
+} from "@deepagent-code/core/context-federation/sql"
+import { LocationKey, ProjectScopeKey, SecurityNamespaceID } from "@deepagent-code/core/context-federation/reference"
+import { Hash } from "@deepagent-code/core/util/hash"
 import { V2ProviderTurnReceiptTable } from "@deepagent-code/core/session/runner/v2-provider-turn.sql"
 import { testEffect } from "./lib/effect"
 
@@ -339,6 +352,91 @@ describe("SessionExecution lifecycle", () => {
       yield* Effect.forEach([claimed, unclaimed], execution.awaitIdle, { discard: true })
       expect(providerCalls.toSorted()).toEqual([claimed, unclaimed].toSorted())
       expect(yield* suspensions(database)).toEqual({ [claimed]: false, [unclaimed]: false })
+    }),
+  )
+
+  // Durable shape of the packaged "kill-9 before wake" window: a turn dispatched under claim
+  // token-1 that reached a TERMINAL receipt state (failed / settled / indeterminate_after_crash —
+  // in the packaged scenario a user interrupt classified it indeterminate_after_crash), the
+  // chain released, and a later idle drain claimed token-2 before the process was killed
+  // mid-window. The token-2 claim must exact-release: the foreign-token terminal row is settled
+  // history, not an ownership conflict.
+  it.effect("releases a claim whose only turns are terminal history under an older claim token", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const sessionID = SessionSchema.ID.make("ses_foreign_terminal")
+      const foreignToken = Date.now() - 10_000
+      const claimToken = Date.now()
+      yield* seedForeignClaimTurn(database, sessionID, {
+        attemptToken: foreignToken,
+        claimToken,
+        terminal: true,
+      })
+
+      const scope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+      const context = yield* buildExecution(scope, () => Effect.void)
+      const restart = Context.get(context, SessionRestart.Service)
+
+      const pending = yield* restart.pendingRecovery
+      expect(pending[0]?.turns[0]?.classification).toBe("terminal_consistent")
+      expect(pending[0]?.disposition).toBe("terminal_consistent")
+      expect(yield* restart.redriveStartup).toEqual({ released: [sessionID], woken: [], blocked: [] })
+      expect(yield* suspensions(database)).toEqual({ [sessionID]: false })
+    }),
+  )
+
+  // A mid-drain recovery escalation (e.g. the runner refusing to replay an indeterminate receipt)
+  // owns its execution claim; the settled callback must release it instead of leaving the claim
+  // lingering — the recovery fence lives in the receipt state machine, not the execution claim.
+  it.effect("releases the execution claim when a drain escalates to recovery_required mid-flight", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const store = yield* SessionStore.Service
+      const sessionID = SessionSchema.ID.make("ses_escalation_release")
+      yield* seedSessions(database, [sessionID])
+
+      const scope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+      const context = yield* buildExecution(scope, () =>
+        Effect.fail(new SessionRunner.ExecutionRecoveryRequiredError({ sessionID })),
+      )
+      const execution = Context.get(context, SessionExecution.Service)
+
+      const exit = yield* execution.resume(sessionID).pipe(Effect.exit)
+      expect(exit._tag).toBe("Failure")
+      yield* execution.awaitIdle(sessionID)
+      expect(yield* suspensions(database)).toEqual({ [sessionID]: false })
+      expect(yield* store.claimToken(sessionID)).toBeUndefined()
+    }),
+  )
+
+  // The fence is preserved when the foreign-token turn is still in flight: a non-terminal row
+  // under another claim means unknown ownership and must block the exact-release.
+  it.effect("fences a claim when a foreign-token turn is still in flight", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const sessionID = SessionSchema.ID.make("ses_foreign_inflight")
+      yield* seedForeignClaimTurn(database, sessionID, {
+        attemptToken: Date.now() - 10_000,
+        claimToken: Date.now(),
+        terminal: false,
+      })
+
+      const scope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+      const context = yield* buildExecution(scope, () => Effect.void)
+      const restart = Context.get(context, SessionRestart.Service)
+
+      const pending = yield* restart.pendingRecovery
+      expect(pending[0]?.turns[0]?.classification).toBe("authority_conflict")
+      expect(pending[0]?.disposition).toBe("authority_conflict")
+      expect(yield* restart.redriveStartup).toEqual({
+        released: [],
+        woken: [],
+        blocked: [{ sessionID, disposition: "authority_conflict" }],
+      })
+      expect(yield* suspensions(database)).toEqual({ [sessionID]: true })
     }),
   )
 
@@ -722,5 +820,172 @@ function buildExecution(scope: Scope.Closeable, run: SessionRunner.Interface["ru
       ),
       scope,
     )
+  })
+}
+
+function seedForeignClaimTurn(
+  database: Database.Interface,
+  sessionID: SessionSchema.ID,
+  input: {
+    readonly attemptToken: number
+    readonly claimToken: number
+    readonly terminal: boolean
+  },
+) {
+  return Effect.gen(function* () {
+    yield* seedSessions(database, [sessionID], { time_suspended: input.claimToken })
+    const userMessageId = "msg_foreign_turn"
+    yield* database.db
+      .insert(SessionInputTable)
+      .values({
+        id: SessionMessage.ID.make(userMessageId),
+        session_id: sessionID,
+        prompt: new Prompt({ text: "foreign claim turn" }),
+        delivery: "steer",
+        admitted_seq: 0,
+        promoted_seq: 0,
+        time_created: 1,
+      })
+      .onConflictDoNothing()
+      .run()
+      .pipe(Effect.orDie)
+    yield* database.db
+      .insert(SessionActivityTable)
+      .values({
+        activity_id: "activity_foreign_turn",
+        session_id: sessionID,
+        ordinal: 0,
+        trigger_input_id: SessionMessage.ID.make(userMessageId),
+        delivery: "steer",
+        state: "active",
+        created_at: 1,
+      })
+      .onConflictDoNothing()
+      .run()
+      .pipe(Effect.orDie)
+    yield* database.db
+      .insert(SecurityNamespaceTable)
+      .values({
+        id: "security_foreign_turn",
+        kind: "implicit_local",
+        binding_hash: Hash.sha256("security_foreign_turn"),
+        created_at: 1,
+      })
+      .onConflictDoNothing()
+      .run()
+      .pipe(Effect.orDie)
+    yield* database.db
+      .insert(ProjectScopeIdentityTable)
+      .values({
+        security_namespace_id: SecurityNamespaceID.make("security_foreign_turn"),
+        project_scope_key: ProjectScopeKey.make("project_scope_foreign_turn"),
+        project_kind: "registered_root",
+        project_identity_hash: Hash.sha256("project_foreign_turn"),
+        created_at: 1,
+      })
+      .onConflictDoNothing()
+      .run()
+      .pipe(Effect.orDie)
+    yield* database.db
+      .insert(LocationIdentityTable)
+      .values({
+        security_namespace_id: SecurityNamespaceID.make("security_foreign_turn"),
+        location_key: LocationKey.make("location_foreign_turn"),
+        project_scope_key: ProjectScopeKey.make("project_scope_foreign_turn"),
+        canonical_root: "/tmp/foreign-turn",
+        created_at: 1,
+      })
+      .onConflictDoNothing()
+      .run()
+      .pipe(Effect.orDie)
+    yield* database.db
+      .insert(SessionContextSelectionTable)
+      .values({
+        selection_id: "selection_foreign_turn",
+        session_id: sessionID,
+        activity_id: "activity_foreign_turn",
+        revision: 0,
+        trigger_input_id: SessionMessage.ID.make(userMessageId),
+        location_key: LocationKey.make("location_foreign_turn"),
+        security_namespace_id: SecurityNamespaceID.make("security_foreign_turn"),
+        project_scope_key: ProjectScopeKey.make("project_scope_foreign_turn"),
+        query_fingerprint: "query_foreign_turn",
+        authorization_fingerprint: "authorization_foreign_turn",
+        authorization_epoch: 1,
+        execution_fingerprint: "execution_foreign_turn",
+        selected_source_fingerprint: "source_foreign_turn",
+        observed_location_mutation_epoch: 0,
+        next_revalidation_at: 2_000_000_000_000,
+        released_knowledge_binding_state: "unavailable",
+        released_knowledge_exact_refs: [],
+        released_knowledge_exact_refs_fingerprint: Hash.sha256("[]"),
+        graph_revisions: "{}",
+        graph_statuses: "{}",
+        selected_refs: "[]",
+        projection: "{}",
+        projection_hash: "projection_foreign_turn",
+        token_count: 0,
+        artifact_write_status: "degraded_unavailable",
+        inline_audit: "{}",
+        created_at: 1,
+      })
+      .onConflictDoNothing()
+      .run()
+      .pipe(Effect.orDie)
+    const ownerService = yield* SessionProviderOwner.Service
+    yield* ownerService.register({ ownerToken: "owner_foreign_turn", leaseMs: 60_000 })
+    yield* database.db
+      .insert(SessionProviderAttemptTable)
+      .values({
+        attempt_id: "attempt_foreign_turn",
+        session_id: sessionID,
+        activity_id: "activity_foreign_turn",
+        provider_turn_seq: 1,
+        selection_id: "selection_foreign_turn",
+        projection_hash: "projection_foreign_turn",
+        request_hash: "b".repeat(64),
+        provider_id: "provider-test",
+        owner_token: "owner_foreign_turn",
+        execution_claim_token: input.attemptToken,
+        state: "prepared",
+        created_at: 1,
+      })
+      .run()
+      .pipe(Effect.orDie)
+    yield* database.db
+      .insert(V2ProviderTurnReceiptTable)
+      .values({
+        receipt_id: "receipt_foreign_turn",
+        session_id: sessionID,
+        request_ordinal: 1,
+        provider_attempt_id: "attempt_foreign_turn",
+        activity_id: "activity_foreign_turn",
+        provider_turn_seq: 1,
+        user_message_id: userMessageId,
+        history_prompt_epoch: 1,
+        request_input_hash: "b".repeat(64),
+        provider_id: "provider-test",
+        model_id: "model-test",
+        protocol: "openai-chat",
+        owner_mode: "v2",
+        owner_token: "owner_foreign_turn",
+        state: "preparing",
+        created_at: 1,
+      })
+      .run()
+      .pipe(Effect.orDie)
+    if (input.terminal) {
+      // The legal preparing->failed terminal transition (any non-owner_lost error code); the
+      // packaged indeterminate_after_crash variant rides the same terminal set in the fix.
+      yield* database.db
+        .update(V2ProviderTurnReceiptTable)
+        .set({ state: "failed", error_code: "consumer_stream_failed", terminal_at: 2 })
+        .where(eq(V2ProviderTurnReceiptTable.receipt_id, "receipt_foreign_turn"))
+        .run()
+        .pipe(Effect.orDie)
+    }
+    // The foreign chain is dead: release its owner lease only AFTER the rows exist ( the attempt
+    // insert trigger requires a live lease), so recovery reads ownedElsewhere=false.
+    yield* ownerService.release({ ownerToken: "owner_foreign_turn" }).pipe(Effect.orDie)
   })
 }
