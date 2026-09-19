@@ -17,7 +17,7 @@ import { SessionStatus } from "@/session/status"
 
 import { SessionV2 } from "@deepagent-code/core/session"
 import { SessionStore } from "@deepagent-code/core/session/store"
-import { TaskTool, TaskWriteAuthorizationError, type TaskPromptOps } from "../../src/tool/task"
+import { TaskTool, TaskWriteAuthorizationError } from "../../src/tool/task"
 import { Truncate } from "@/tool/truncate"
 import { ToolRegistry } from "@/tool/registry"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -121,27 +121,14 @@ const seed = Effect.fn("TaskToolTest.seed")(function* (title = "Pinned") {
   return { chat, assistant }
 })
 
-function stubOps(): TaskPromptOps {
-  return {
-    cancel: () => Effect.void,
-    resolvePromptParts: (template) => Effect.succeed([{ type: "text" as const, text: template }]),
-    prompt: () => Effect.die("promptOps.prompt is not on the V2 authority path"),
-  }
-}
-
-function execCtx(input: {
-  sessionID: SessionID
-  messageID: MessageID
-  promptOps?: TaskPromptOps
-  ask?: () => Effect.Effect<void>
-}) {
+function execCtx(input: { sessionID: SessionID; messageID: MessageID; ask?: () => Effect.Effect<void> }) {
   return {
     sessionID: input.sessionID,
     messageID: input.messageID,
     callID: "tool_test_call",
     agent: "build",
     abort: new AbortController().signal,
-    extra: { promptOps: input.promptOps ?? stubOps() },
+    extra: {},
     messages: [],
     metadata: () => Effect.void,
     ask: () => (input.ask ? input.ask() : Effect.void),

@@ -88,7 +88,7 @@ import {
 import * as EffectLogger from "@deepagent-code/core/effect/logger"
 import { KeyedMutex } from "@deepagent-code/core/effect/keyed-mutex"
 import { InstanceState } from "@/effect/instance-state"
-import { TaskTool, type TaskPromptOps } from "@/tool/task"
+import { TaskTool } from "@/tool/task"
 import { validateStructuredOutput } from "@/tool/task-structured-output"
 import { SessionRunState } from "./run-state"
 import { SessionSteer } from "./steer"
@@ -1264,16 +1264,6 @@ export const layer = Layer.effect(
         Effect.provideService(MCP.Service, mcp),
         Effect.provideService(Plugin.Service, plugin),
       )
-    const ops = Effect.fn("SessionPrompt.ops")(function* () {
-      return {
-        cancel: (sessionID: SessionID) => cancel(sessionID),
-        resolvePromptParts: (template: string) => resolvePromptParts(template),
-        capabilitySnapshot,
-        prepareTaskInput: (input: PromptInput, timeCreated: number) => prepareTaskInput(input, timeCreated),
-        prompt: (input: PromptInput) => prompt(input).pipe(Effect.catch(Effect.die)),
-      } satisfies TaskPromptOps
-    })
-
     const cancel = Effect.fn("SessionPrompt.cancel")(function* (sessionID: SessionID) {
       // LEGACY-EXECUTION-ZERO: under the V2-only profile abort targets the V2 execution owner
       // (process-local interrupt, idle = no-op) instead of the legacy run-state cancel.
@@ -1474,7 +1464,6 @@ export const layer = Layer.effect(
     }) {
       const { task, model, lastUser, sessionID, session, msgs } = input
       const ctx = yield* InstanceState.context
-      const promptOps = yield* ops()
       const { task: taskTool } = yield* registry.named()
       const taskModel = task.model ? yield* getModel(task.model.providerID, task.model.modelID, sessionID) : model
       const assistantMessage: SessionV1.Assistant = yield* sessions.updateMessage({
@@ -1540,7 +1529,7 @@ export const layer = Layer.effect(
           sessionID,
           abort: taskAbort.signal,
           callID: part.callID,
-          extra: { bypassAgentCheck: true, promptOps },
+          extra: { bypassAgentCheck: true },
           messages: msgs,
           metadata: (val: { title?: string; metadata?: Record<string, any> }) =>
             Effect.gen(function* () {
@@ -4530,7 +4519,6 @@ export const layer = Layer.effect(
             sessionFederationActivation = yield* activateFederation()
             const lastUserMsg = msgs.findLast((m) => m.info.role === "user")
             const bypassAgentCheck = lastUserMsg?.parts.some((p) => p.type === "agent") ?? false
-            const promptOps = yield* ops()
 
             const tools: Record<string, AITool> = finalizerMode
               ? {}
@@ -4541,7 +4529,6 @@ export const layer = Layer.effect(
                   processor: handle,
                   bypassAgentCheck,
                   messages: msgs,
-                  promptOps,
                   contextFederationRollout: sessionFederationActivation.decision,
                 }).pipe(
                   Effect.provideService(Plugin.Service, plugin),
