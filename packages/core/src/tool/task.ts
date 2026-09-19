@@ -19,6 +19,7 @@ import {
   admitTaskCall,
   inheritedTaskPermissions,
   resolveOutputSchema,
+  resolveWorkspaceMode,
   taskLaunchRestriction,
   withTaskConcurrency,
 } from "./task-policy"
@@ -201,10 +202,10 @@ export const layer = Layer.effectDiscard(
                     return yield* toolFailure(`Cannot launch hidden agent type: ${params.subagent_type}.`)
                   if (restriction === "primary")
                     return yield* toolFailure(`Cannot launch primary agent type: ${params.subagent_type}.`)
-                  if (restriction === "shared_workspace_write")
-                    return yield* toolFailure(
-                      `Cannot launch write-capable agent type "${params.subagent_type}" in Core V2: task worktree isolation is not available yet. Use a read-only subagent or run the work in the primary session.`,
-                    )
+                  // Write-capable agents no longer refuse: they resolve to an isolated run-owned
+                  // worktree (workspace_mode='worktree'), whose durable preflight receipt settles
+                  // BEFORE the child session starts; read-only agents keep the shared parent.
+                  const workspaceMode = resolveWorkspaceMode(resolved)
                   const outputSchema = resolveOutputSchema(params.output_schema, params.subagent_type)
                   if (typeof params.output_schema === "string" && outputSchema === undefined)
                     return yield* toolFailure(`Unknown output schema: ${params.output_schema}.`)
@@ -298,13 +299,16 @@ export const layer = Layer.effectDiscard(
                         title: `task: ${params.description}`,
                         location: parent.location,
                         permissions: inheritedTaskPermissions(parentAgent?.permissions ?? [], parent.permissions),
+                        ...(workspaceMode === "worktree" ? { workspace: { mode: "worktree" as const } } : {}),
                       },
                     }).pipe(
                       Effect.mapError((error) =>
                         toolFailure(
                           error._tag === "TaskRunAuthority.AdmissionConflict"
                             ? "Cannot launch task: this tool call was already admitted with a different request."
-                            : `Cannot launch task: ${error._tag}`,
+                            : error._tag === "TaskWorkspace.Error"
+                              ? `Cannot launch task: workspace isolation failed (${error.code}): ${error.message}`
+                              : `Cannot launch task: ${error._tag}`,
                         ),
                       ),
                     )

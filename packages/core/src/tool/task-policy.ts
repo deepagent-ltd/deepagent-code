@@ -70,10 +70,20 @@ export function canRunInSharedWorkspace(rules: PermissionSchema.Ruleset) {
   )
 }
 
+/**
+ * Workspace classification at launch: agents whose permissions cannot run safely in the shared
+ * parent workspace (any non-denied mutation capability) get a run-owned isolated worktree; the
+ * `shared_workspace_write` fail-closed refusal is replaced by this isolation — writes land in
+ * the worktree, never the parent checkout.
+ */
+export function resolveWorkspaceMode(agent: Pick<AgentV2.Info, "permissions">) {
+  return canRunInSharedWorkspace(agent.permissions) ? ("shared" as const) : ("worktree" as const)
+}
+
+/** Launch refusals (hidden/primary); workspace classification itself is {@link resolveWorkspaceMode}. */
 export function taskLaunchRestriction(agent: Pick<AgentV2.Info, "hidden" | "mode" | "permissions">) {
   if (agent.hidden) return "hidden" as const
   if (agent.mode === "primary") return "primary" as const
-  if (!canRunInSharedWorkspace(agent.permissions)) return "shared_workspace_write" as const
 }
 
 export function withTaskConcurrency<A, E, R>(sessionID: string, effect: Effect.Effect<A, E, R>) {

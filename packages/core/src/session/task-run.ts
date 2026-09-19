@@ -17,6 +17,7 @@ import { Prompt } from "./prompt"
 import { SessionSchema } from "./schema"
 import { SessionTable, TaskAdmissionTable, TaskNotificationOutboxTable, TaskRunEventTable, TaskRunTable } from "./sql"
 import { V2StructuredOutputEvidenceTable } from "./runner/v2-structured-output-evidence.sql"
+import { TaskWorkspace } from "./task-workspace"
 import { V2TaskRunReceiptTable } from "./runner/v2-task-run-receipt.sql"
 import { V2TaskRunReceipt } from "./runner/v2-task-run-receipt"
 
@@ -39,6 +40,8 @@ export type ExecutionSpec = {
   readonly agent: string
   readonly outputSchema?: Record<string, unknown>
   readonly permissions: PermissionSchema.Ruleset
+  /** Frozen workspace intent: `worktree` runs execute write-isolated in a run-owned worktree. */
+  readonly workspace?: { readonly mode: "worktree" }
 }
 
 export type SubmitSpec = {
@@ -51,8 +54,15 @@ export type SubmitSpec = {
   readonly outputSchema?: Record<string, unknown>
   readonly child: {
     readonly title: string
+    /**
+     * Admission-time Location context. Shared runs create the child HERE; write-isolated
+     * (`workspace.mode === "worktree"`) runs prepare the worktree first and root the child at
+     * the receipt's worktree directory instead.
+     */
     readonly location: LocationRef.Ref
     readonly permissions: PermissionSchema.Ruleset
+    /** Omitted (or shared) keeps the current shared-parent behavior; `worktree` isolates writes. */
+    readonly workspace?: { readonly mode: "worktree" }
   }
 }
 
@@ -181,6 +191,10 @@ export const admitRun = Effect.fn("TaskRunAuthority.admitRun")(function* (db: Da
 
         const now = Date.now()
         const runID = Identifier.ascending("job")
+        // Workspace intent freezes at admission. Isolated (worktree) runs provision their
+        // workspace AFTER this commit (TaskWorkspace.prepare) and hold preflight_state='pending'
+        // as the child-start fence; shared runs are live-ready immediately (legacy behavior).
+        const isolated = spec.child.workspace?.mode === "worktree"
         const inserted = yield* tx
           .insert(TaskRunTable)
           .values({
@@ -204,14 +218,15 @@ export const admitRun = Effect.fn("TaskRunAuthority.admitRun")(function* (db: Da
             origin_key: key,
             session_mode: "new",
             context_mode: "fresh",
-            mutation_capability: "read_only",
+            mutation_capability: isolated ? "write" : "read_only",
             tool_capability_hash: Hash.sha256(canonicalJson(spec.child.permissions)),
-            workspace_mode: "shared",
-            workspace_owner: "parent",
-            workspace_visibility: "live",
-            parent_dirty_policy: "allow_live",
+            workspace_mode: isolated ? "worktree" : "shared",
+            workspace_owner: isolated ? "run" : "parent",
+            // An isolated child sees the recorded base commit, not live parent state.
+            workspace_visibility: isolated ? "base_commit" : "live",
+            parent_dirty_policy: isolated ? "exclude" : "allow_live",
             workspace_operation_key: childSessionID,
-            workspace_preflight_state: "ready",
+            workspace_preflight_state: isolated ? "pending" : "ready",
             input_state: "pending",
             execution_spec: executionSpec(spec),
             time_created: now,
@@ -252,19 +267,31 @@ export const admitRun = Effect.fn("TaskRunAuthority.admitRun")(function* (db: Da
 /**
  * Create — or ADOPT, after a crash between the ledger commit and the create — the deterministic
  * child session. Strictly after the admission transaction: adoption rides SessionV2.create's
- * existing identity check (`store.get` early return).
+ * existing identity check (`store.get` early return). Write-isolated runs are FENCED: the
+ * durable preflight receipt must be `ready` (typed refusal otherwise) and the child is then
+ * rooted at the receipt's worktree directory, so every Location-keyed service (filesystem,
+ * mutation tools) operates inside the worktree instead of the parent checkout.
  */
 export const ensureChildSession = Effect.fn("TaskRunAuthority.ensureChildSession")(
-  function* (sessions: SessionV2.Interface, spec: SubmitSpec, childSessionID: SessionSchema.ID) {
+  function* (
+    db: DatabaseService,
+    sessions: SessionV2.Interface,
+    spec: SubmitSpec,
+    run: Pick<Run, "runID" | "childSessionID">,
+  ) {
+    const location = yield* TaskWorkspace.childLocation(db, {
+      runID: run.runID,
+      fallback: spec.child.location,
+    })
     yield* sessions.create({
-      id: childSessionID,
+      id: run.childSessionID,
       parentID: spec.parentSessionID,
       agent: AgentV2.ID.make(spec.agent),
       title: spec.child.title,
-      location: spec.child.location,
+      location,
       permissions: spec.child.permissions,
     })
-    return childSessionID
+    return run.childSessionID
   },
 )
 
@@ -273,6 +300,7 @@ export const ensureChildSession = Effect.fn("TaskRunAuthority.ensureChildSession
  * projection, and the `task_run` input_state pending→ready CAS commit in the SAME transaction
  * (the EventV2 `{ commit }` hook). A hook failure rolls back BOTH the event and the projected
  * row, leaving the run at input_state='pending'; a retry then succeeds exactly once.
+ * Write-isolated runs admit ONLY against a ready workspace preflight receipt (typed refusal).
  */
 export const admitChildInput = Effect.fn("TaskRunAuthority.admitChildInput")(function* (
   db: DatabaseService,
@@ -280,6 +308,7 @@ export const admitChildInput = Effect.fn("TaskRunAuthority.admitChildInput")(fun
   run: Run,
   prompt: Prompt,
 ) {
+  yield* TaskWorkspace.requireAdmissible(db, run.runID)
   yield* SessionInput.admit(db, events, {
     id: run.childMessageID,
     sessionID: run.childSessionID,
@@ -294,8 +323,10 @@ export const admitChildInput = Effect.fn("TaskRunAuthority.admitChildInput")(fun
 
 /**
  * Submit a fresh durable task: admit the ledger transaction, then (strictly after the commit)
- * create-or-adopt the deterministic child session and admit the single first child input with
- * its atomic ready-CAS. No provider work runs here — the caller claims and executes.
+ * prepare the isolated workspace when the run is write-isolated — the durable preflight
+ * receipt settles BEFORE any child execution — create-or-adopt the deterministic child session
+ * and admit the single first child input with its atomic ready-CAS. No provider work runs
+ * here — the caller claims and executes.
  */
 export const submit = Effect.fn("TaskRunAuthority.submit")(function* (
   db: DatabaseService,
@@ -304,7 +335,12 @@ export const submit = Effect.fn("TaskRunAuthority.submit")(function* (
   spec: SubmitSpec,
 ) {
   const admission = yield* admitRun(db, spec)
-  yield* ensureChildSession(sessions, spec, admission.run.childSessionID)
+  if (spec.child.workspace?.mode === "worktree")
+    yield* TaskWorkspace.prepare(db, {
+      runID: admission.run.runID,
+      parentDirectory: spec.child.location.directory,
+    })
+  yield* ensureChildSession(db, sessions, spec, admission.run)
   const run = yield* admitChildInput(db, events, admission.run, spec.prompt)
   return { ...admission, run }
 })
@@ -859,6 +895,18 @@ const drainAndSettle = (
       Effect.catchTag("TaskRunAuthority.ClaimLost", (error) => new ExecutionLeaseLost({ runID: error.runID })),
     )
 
+    // Terminal settle is the workspace release fence: after the run is durably terminal the
+    // run-owned worktree is pruned best-effort (the receipt keeps the branch for the later PR
+    // flow). An interrupted parent turn settles separately below and deliberately KEEPS the
+    // workspace — the child stays resumable by task_id.
+    const releaseWorkspace = TaskWorkspace.release(input.db, { runID: input.run.runID }).pipe(
+      Effect.catchTag("TaskWorkspace.Error", (error) =>
+        Effect.logWarning(`workspace release deferred (${error.code}): ${error.message}`).pipe(
+          Effect.annotateLogs("runID", error.runID),
+        ),
+      ),
+    )
+
     if (result.outcome === "completed") {
       yield* settle(input.db, {
         runID: input.run.runID,
@@ -869,6 +917,7 @@ const drainAndSettle = (
         output: result.research,
         rawResultMessageID: result.rawResultMessageID,
       })
+      yield* releaseWorkspace
       return { outcome: result.outcome, research: result.research } as const
     }
     if (result.outcome === "timeout") {
@@ -880,6 +929,7 @@ const drainAndSettle = (
         reason: "task_timeout",
         error: { code: "task_timeout", message: `Subagent timed out after ${input.timeoutMs}ms.` },
       })
+      yield* releaseWorkspace
       return { outcome: result.outcome, research: result.research } as const
     }
     yield* settle(input.db, {
@@ -890,6 +940,7 @@ const drainAndSettle = (
       reason: "child_drain_failed",
       error: { code: "child_drain_failed", message: result.failureMessage },
     })
+    yield* releaseWorkspace
     return {
       outcome: result.outcome,
       research: result.research,
@@ -998,6 +1049,7 @@ const executionSpec = (spec: SubmitSpec): ExecutionSpec => ({
   agent: spec.agent,
   ...(spec.outputSchema === undefined ? {} : { outputSchema: spec.outputSchema }),
   permissions: spec.child.permissions,
+  ...(spec.child.workspace === undefined ? {} : { workspace: spec.child.workspace }),
 })
 
 const requestFingerprint = (spec: SubmitSpec) => ({
@@ -1006,6 +1058,7 @@ const requestFingerprint = (spec: SubmitSpec) => ({
   outputSchema: spec.outputSchema ?? null,
   deliveryMode: spec.deliveryMode,
   permissions: spec.child.permissions,
+  workspace: spec.child.workspace ?? null,
 })
 
 const outcomeHash = (input: SettleInput) =>

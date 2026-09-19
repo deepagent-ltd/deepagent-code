@@ -8,6 +8,7 @@ import {
   canRunInSharedWorkspace,
   inheritedTaskPermissions,
   resolveOutputSchema,
+  resolveWorkspaceMode,
   taskLaunchRestriction,
   withTaskConcurrency,
 } from "../src/tool/task-policy"
@@ -79,6 +80,26 @@ describe("Core V2 task policy", () => {
         { action: "custom_write", resource: "*", effect: "allow" },
       ]),
     ).toBeFalse()
+  })
+
+  test("classifies write-capable agents into isolated worktree mode instead of refusing them", () => {
+    const readOnly = [
+      { action: "*", resource: "*", effect: "deny" as const },
+      { action: "read", resource: "*", effect: "allow" as const },
+    ]
+    expect(resolveWorkspaceMode({ permissions: readOnly })).toBe("shared")
+    // The old `shared_workspace_write` fail-closed refusal: mutation-capable agents now isolate.
+    expect(resolveWorkspaceMode({ permissions: [{ action: "*", resource: "*", effect: "allow" as const }] })).toBe(
+      "worktree",
+    )
+    expect(
+      resolveWorkspaceMode({
+        permissions: [
+          { action: "*", resource: "*", effect: "deny" as const },
+          { action: "bash", resource: "*", effect: "allow" as const },
+        ],
+      }),
+    ).toBe("worktree")
   })
 
   test("rejects hidden and primary agents before launch", () => {
