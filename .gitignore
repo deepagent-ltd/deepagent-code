@@ -49,3 +49,6 @@ tsconfig.tsbuildinfo
 
 # Non-code domain packs — own git repo (deepagent-domain), not tracked by main repo.
 extra-domain/
+
+# Local DeepAgent Code runtime instance data (per-developer, never tracked).
+/.deepagent-code/
