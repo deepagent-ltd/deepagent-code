@@ -48,6 +48,13 @@ import { applyRuntimeDefaults, RUNTIME_DEFAULTS_SNAPSHOT_ENV, runtimeDefaultsEnv
 import { ProcessLifecycle } from "./effect/process-lifecycle"
 import * as mechanismBeacon from "@deepagent-code/core/deepagent/mechanism-beacon"
 
+// Bun's fetch treats a set-but-empty HTTP(S)_PROXY value as a proxy with an empty URL and
+// fails every request ("proxy.url must be a non-empty string"), killing the first provider
+// turn and background installs. Drop empties so an unset-in-spirit variable cannot do that.
+for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"]) {
+  if (process.env[key] === "") delete process.env[key]
+}
+
 // Normalize the environment inherited by subprocesses and compatibility readers. Core V2 feature
 // registries capture their own immutable value at construction; their canonical unset defaults are
 // identical to this table, so static ESM evaluation order cannot change feature authority.
