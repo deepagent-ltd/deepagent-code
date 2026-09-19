@@ -94,8 +94,8 @@ const gen = Effect.gen(function* () {
     .pipe(Effect.orDie)
   if (before?.total !== 0) throw new Error("child session already exists before recovery")
 
-  yield* TaskRunAuthority.ensureChildSession(sessions, spec, run.childSessionID)
-  yield* TaskRunAuthority.ensureChildSession(sessions, spec, run.childSessionID)
+  yield* TaskRunAuthority.ensureChildSession(db, sessions, spec, run)
+  yield* TaskRunAuthority.ensureChildSession(db, sessions, spec, run)
   const children = yield* db
     .select({ id: SessionTable.id })
     .from(SessionTable)

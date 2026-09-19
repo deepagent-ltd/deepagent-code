@@ -179,7 +179,7 @@ describe("Core V2 durable TaskRun authority", () => {
       const parent = yield* sessions.create({ location: { directory } })
       const spec = specFor(parent.id)
       const admitted = yield* TaskRunAuthority.admitRun(db, spec)
-      yield* TaskRunAuthority.ensureChildSession(sessions, spec, admitted.run.childSessionID)
+      yield* TaskRunAuthority.ensureChildSession(db, sessions, spec, admitted.run)
 
       // Injection: pre-flip input_state so the in-transaction pending→ready CAS cannot match and
       // the hook dies inside the event transaction (the "hook that throws" path).
@@ -457,7 +457,7 @@ describe("Core V2 durable TaskRun authority", () => {
       const parent = yield* sessions.create({ location: { directory } })
       const spec = { ...specFor(parent.id, "call-bg-1"), deliveryMode: "background" as const }
       const admitted = yield* TaskRunAuthority.admitRun(db, spec)
-      yield* TaskRunAuthority.ensureChildSession(sessions, spec, admitted.run.childSessionID)
+      yield* TaskRunAuthority.ensureChildSession(db, sessions, spec, admitted.run)
       yield* TaskRunAuthority.admitChildInput(db, events, admitted.run, spec.prompt)
       const claimed = yield* TaskRunAuthority.claim(db, {
         runID: admitted.run.runID,
