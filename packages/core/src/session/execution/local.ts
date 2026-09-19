@@ -100,8 +100,23 @@ export const layer = Layer.effect(
                 (item) =>
                   Cause.isFailReason(item) && item.error instanceof SessionRunner.ExecutionRecoveryRequiredError,
               )
-            )
+            ) {
+              // The no-event early return serves the START-time CAS refusal (no claim was ever
+              // acquired). A MID-DRAIN recovery escalation owns its execution claim: the drain is
+              // over, so releasing here is required — the recovery fence for the underlying
+              // evidence lives in the receipt state machine, not in this execution claim.
+              const token = ownedClaims.get(sessionID)
+              if (token !== undefined)
+                yield* store
+                  .release(sessionID, token)
+                  .pipe(
+                    Effect.flatMap((released) =>
+                      released ? Effect.sync(() => ownedClaims.delete(sessionID)) : Effect.void,
+                    ),
+                    Effect.ignore,
+                  )
               return
+            }
             const session = yield* store.get(sessionID)
             if (!session) return yield* Effect.die(`Session not found: ${sessionID}`)
             const outcome = SessionExecution.terminal(exit, reason)
