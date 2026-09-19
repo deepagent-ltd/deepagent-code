@@ -14,7 +14,6 @@ import { Truncate } from "@/tool/truncate"
 
 import { Plugin } from "@/plugin"
 import { RuntimeFlags } from "@/effect/runtime-flags"
-import type { TaskPromptOps } from "@/tool/task"
 import { type Tool as AITool, tool, jsonSchema, type ToolExecutionOptions, asSchema } from "ai"
 import { ToolFailure } from "@deepagent-code/llm"
 import type { JSONSchema7 } from "@ai-sdk/provider"
@@ -228,7 +227,6 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   processor: Pick<SessionProcessor.Handle, "message" | "updateToolCall" | "completeToolCall">
   bypassAgentCheck: boolean
   messages: SessionV1.WithParts[]
-  promptOps: TaskPromptOps
   contextFederationRollout?: ContextFederationRollout.Decision
 }) {
   using _ = log.time("resolveTools")
@@ -249,7 +247,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
       abort: options.abortSignal!,
       messageID: input.processor.message.id,
       callID: options.toolCallId,
-      extra: { model: input.model, bypassAgentCheck: input.bypassAgentCheck, promptOps: input.promptOps },
+      extra: { model: input.model, bypassAgentCheck: input.bypassAgentCheck },
       agent: input.agent.name,
       messages: input.messages,
       permissionEffectGrants,

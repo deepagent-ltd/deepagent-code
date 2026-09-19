@@ -15,7 +15,6 @@ import { MessageID, SessionID } from "../../src/session/schema"
 import type { Agent } from "@/agent/agent"
 import type { Provider } from "@/provider/provider"
 import type { Session } from "@/session/session"
-import type { TaskPromptOps } from "@/tool/task"
 import { tmpRoot } from "../fixture/fixture"
 
 // W6-1 / P3-1 behavior tests for the strict plan-gate escalation in session/tools.ts (evaluatePlanGate):
@@ -45,12 +44,6 @@ const processor = {
   updateToolCall: () => Effect.succeed(undefined),
   completeToolCall: () => Effect.void,
 }
-
-const promptOps = {
-  cancel: () => Effect.void,
-  resolvePromptParts: (template: string) => Effect.succeed([{ type: "text" as const, text: template }]),
-  prompt: () => Effect.die("unused"),
-} as TaskPromptOps
 
 const makeHarness = (
   toolId: string,
@@ -139,7 +132,6 @@ const makeHarness = (
       processor,
       bypassAgentCheck: false,
       messages: [],
-      promptOps,
     })
     return tools
   }).pipe(
