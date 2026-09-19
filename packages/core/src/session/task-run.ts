@@ -16,6 +16,7 @@ import { SessionMessage } from "./message"
 import { Prompt } from "./prompt"
 import { SessionSchema } from "./schema"
 import { SessionTable, TaskAdmissionTable, TaskNotificationOutboxTable, TaskRunEventTable, TaskRunTable } from "./sql"
+import { V2StructuredOutputEvidenceTable } from "./runner/v2-structured-output-evidence.sql"
 import { V2TaskRunReceiptTable } from "./runner/v2-task-run-receipt.sql"
 import { V2TaskRunReceipt } from "./runner/v2-task-run-receipt"
 
@@ -552,6 +553,24 @@ export const settle = Effect.fn("TaskRunAuthority.settle")(function* (db: Databa
             ownerToken: input.ownerToken,
             now,
           })
+          // Schema-bound runs record their structured-contract verdict durably. Terminal outcomes
+          // that foreclose a tool finalizer (failed/interrupted, or completed background runs
+          // with no foreground finalizer) seal 'unvalidated' evidence INSIDE the settle
+          // transaction — fail-closed: a divergent pre-existing record aborts the settle. A
+          // foreground completed settle defers to the task tool's finalizer, which records the
+          // validated/validation_failed verdict strictly after (UNIQUE(run_id) CAS converges).
+          const settledSchema = runOutputSchema(current)
+          if (settledSchema !== undefined && (input.state !== "completed" || current.delivery_mode === "background"))
+            yield* recordStructuredEvidenceInTransaction(tx, {
+              runId: current.run_id,
+              schemaName: "execution_spec",
+              schema: settledSchema,
+              validationOutcome: "unvalidated",
+              rawOutput: input.state === "completed" ? input.output ?? "" : "",
+              ...(input.rawResultMessageID === undefined ? {} : { outputMessageId: input.rawResultMessageID }),
+              ownerToken: input.ownerToken,
+              now,
+            })
           if (row.delivery_mode === "background") yield* enqueueNotification(tx, row, now)
           return { run: fromRow(row), converged: false } satisfies SettleOutcome
         }),
@@ -588,6 +607,184 @@ const convergeOrConflict = (
       })
     return yield* new SettlementConflict({ runID: input.runID, reason: "settlement_fence_lost" })
   })
+
+// ── Structured-output evidence (V2 authority) ────────────────────────────────────────────────
+// Every schema-bound V2 task run leaves exactly ONE immutable evidence row pinning its
+// structured-contract verdict and binding it to the V2 session_message that carries the final
+// answer. Two writers, one converge discipline (UNIQUE(run_id) + full evidence comparison):
+//  - the settle transaction itself, for terminal outcomes that foreclose the tool finalizer
+//    (failed/interrupted, completed background runs) — outcome 'unvalidated';
+//  - the task tool's finalizer, strictly after a foreground completed settle, with the final
+//    validated candidate ('validated') or the exhausted material ('validation_failed').
+// A crash between settle and the finalizer record converges on retry; a divergent record is a
+// typed conflict and — inside settle — aborts the settle (fail-closed: no silent schema-bound
+// terminal state without matching evidence). The frozen V1 `task_structured_output_evidence`
+// table is never read or written by the V2 authority.
+
+export type StructuredEvidenceOutcome = "validated" | "validation_failed" | "unvalidated"
+
+export type StructuredEvidence = {
+  readonly evidenceId: string
+  readonly runId: string
+  readonly sessionId: string
+  readonly childSessionId: string
+  readonly outputMessageId?: string
+  readonly schemaName: string
+  readonly validationOutcome: StructuredEvidenceOutcome
+  readonly outputSha256: string
+  readonly schemaSha256: string
+  readonly rawOutput: string
+  readonly ownerToken: string
+  readonly timeCreated: number
+}
+
+export type StructuredEvidenceInput = {
+  readonly runId: string
+  /**
+   * Label of the output contract: the named registry key the tool resolved, 'inline' for raw
+   * JSON-schema documents, or 'execution_spec' when the authority derived it from the frozen
+   * execution spec. Informational only — `schemaSha256` pins the exact contract content.
+   */
+  readonly schemaName: string
+  readonly schema: Record<string, unknown>
+  readonly validationOutcome: StructuredEvidenceOutcome
+  /** The final answer material: the validated candidate JSON, the last rejected material, or the bounded research text. */
+  readonly rawOutput: string
+  /** The child session_message carrying the final answer (required for 'validated'; the child's last assistant message otherwise). */
+  readonly outputMessageId?: SessionMessage.ID
+  readonly ownerToken: string
+  readonly now?: number
+}
+
+export class StructuredEvidenceConflict extends Data.TaggedError("TaskRunAuthority.StructuredEvidenceConflict")<{
+  readonly runId: string
+  readonly reason: "divergence"
+}> {}
+
+/** Record the structured-contract verdict for a settled schema-bound run (own immediate transaction). */
+export const recordStructuredEvidence = Effect.fn("TaskRunAuthority.recordStructuredEvidence")(function* (
+  db: DatabaseService,
+  input: StructuredEvidenceInput,
+) {
+  return yield* db.transaction((tx) => recordStructuredEvidenceInTransaction(tx, input), { behavior: "immediate" })
+})
+
+/**
+ * Tx-bound CAS writer: the first record wins, an exact re-record converges on the same row, and
+ * any divergence is a typed conflict — the recorded verdict is never overwritten. Shape or
+ * binding violations (hex64 hashes, outcome vocabulary, missing binding message, non-V2 run)
+ * abort the insert at the database guard, rolling the surrounding transaction back.
+ */
+export const recordStructuredEvidenceInTransaction = Effect.fn(
+  "TaskRunAuthority.recordStructuredEvidenceInTransaction",
+)(function* (tx: Transaction, input: StructuredEvidenceInput) {
+  const run = yield* tx
+    .select()
+    .from(TaskRunTable)
+    .where(eq(TaskRunTable.run_id, input.runId))
+    .get()
+    .pipe(Effect.orDie)
+  if (!run || run.execution_runtime !== "v2")
+    return yield* Effect.die(`structured evidence run missing or not v2: ${input.runId}`)
+  const schemaSha256 = Hash.sha256(canonicalJson(input.schema))
+  const outputSha256 = Hash.sha256(input.rawOutput)
+  const existing = yield* tx
+    .select()
+    .from(V2StructuredOutputEvidenceTable)
+    .where(eq(V2StructuredOutputEvidenceTable.run_id, input.runId))
+    .get()
+    .pipe(Effect.orDie)
+  if (existing) {
+    if (
+      existing.schema_name !== input.schemaName ||
+      existing.validation_outcome !== input.validationOutcome ||
+      existing.output_sha256 !== outputSha256 ||
+      existing.schema_sha256 !== schemaSha256 ||
+      existing.raw_output !== input.rawOutput ||
+      existing.output_message_id !== (input.outputMessageId ?? null)
+    )
+      return yield* new StructuredEvidenceConflict({ runId: input.runId, reason: "divergence" })
+    return fromEvidenceRow(existing)
+  }
+  const evidence: StructuredEvidence = {
+    evidenceId: Identifier.ascending("job"),
+    runId: run.run_id,
+    sessionId: run.parent_session_id,
+    childSessionId: run.child_session_id,
+    ...(input.outputMessageId === undefined ? {} : { outputMessageId: input.outputMessageId }),
+    schemaName: input.schemaName,
+    validationOutcome: input.validationOutcome,
+    outputSha256,
+    schemaSha256,
+    rawOutput: input.rawOutput,
+    ownerToken: input.ownerToken,
+    timeCreated: input.now ?? Date.now(),
+  }
+  yield* tx
+    .insert(V2StructuredOutputEvidenceTable)
+    .values({
+      evidence_id: evidence.evidenceId,
+      run_id: evidence.runId,
+      session_id: evidence.sessionId,
+      child_session_id: evidence.childSessionId,
+      output_message_id: evidence.outputMessageId ?? null,
+      schema_name: evidence.schemaName,
+      validation_outcome: evidence.validationOutcome,
+      output_sha256: evidence.outputSha256,
+      schema_sha256: evidence.schemaSha256,
+      raw_output: evidence.rawOutput,
+      owner_token: evidence.ownerToken,
+      time_created: evidence.timeCreated,
+    })
+    .run()
+    .pipe(Effect.orDie)
+  return evidence
+})
+
+/**
+ * Reader for status/review surfaces: the durable structured-contract verdict of a run, or
+ * undefined. A schema-bound V2 run that reads undefined after settling is missing its authority
+ * evidence (crash between a foreground completed settle and the finalizer record) and needs
+ * explicit recovery — the surface, not the reader, decides how to flag it.
+ */
+export const structuredEvidence = Effect.fn("TaskRunAuthority.structuredEvidence")(function* (
+  db: DatabaseService,
+  runID: string,
+) {
+  const row = yield* db
+    .select()
+    .from(V2StructuredOutputEvidenceTable)
+    .where(eq(V2StructuredOutputEvidenceTable.run_id, runID))
+    .get()
+    .pipe(Effect.orDie)
+  return row ? fromEvidenceRow(row) : undefined
+})
+
+// The frozen execution_spec carries the V2 structured contract under `outputSchema`; the V1
+// `structuredOutput` key stays V1-only, so the V1 trigger machinery never fires for V2 rows.
+const runOutputSchema = (row: typeof TaskRunTable.$inferSelect) => {
+  const schema = row.execution_spec?.outputSchema
+  return typeof schema === "object" && schema !== null && !Array.isArray(schema)
+    ? (schema as Record<string, unknown>)
+    : undefined
+}
+
+function fromEvidenceRow(row: typeof V2StructuredOutputEvidenceTable.$inferSelect): StructuredEvidence {
+  return {
+    evidenceId: row.evidence_id,
+    runId: row.run_id,
+    sessionId: row.session_id,
+    childSessionId: row.child_session_id,
+    ...(row.output_message_id === null ? {} : { outputMessageId: row.output_message_id }),
+    schemaName: row.schema_name,
+    validationOutcome: row.validation_outcome,
+    outputSha256: row.output_sha256,
+    schemaSha256: row.schema_sha256,
+    rawOutput: row.raw_output,
+    ownerToken: row.owner_token,
+    timeCreated: row.time_created,
+  }
+}
 
 // ── Executor: claim → resume → join → settle ──────────────────────────────────────────────────
 // The executor NEVER admits another prompt: the first input is durable (admitChildInput) and

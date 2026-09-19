@@ -54,7 +54,11 @@ import { migrations } from "../src/database/migration.gen"
 // Successor pin (2026-09-18, durable-only wave): four migrations joined — v2 task_run
 // execution_runtime discriminator, im_reply_outbox, command_side_effect_receipt, and the
 // one-time task_run v1 recovery_required sweep; `migration --check` green at re-pin time.
-const PINNED_DIGEST = "c73d61bf337abac2c77d014d926a4ae690fcc13bc8a9dcfe6ca4347f3de2a57d"
+// Successor pin (2026-09-19, durable-only wave 3 worklist #29 part 2): the V2 structured-output
+// evidence authority migration (20260919073750_v2_structured_output_evidence) joined the
+// registry (session_v2_structured_output_evidence + insert/update/delete guards);
+// `migration --check` green at re-pin time.
+const PINNED_DIGEST = "9f97f646a1612275ac711ba623caf5b4837af18335e83c28f9ccc4c01b953587"
 
 const digest = (entries: readonly { readonly id: string; readonly hash: string }[]) =>
   createHash("sha256").update(JSON.stringify(entries)).digest("hex")
