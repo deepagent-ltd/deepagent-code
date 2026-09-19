@@ -746,6 +746,20 @@ describe("DatabaseMigration", () => {
             sql`SELECT name, dflt_value FROM pragma_table_info('session_tool_argument_receipt') WHERE name = 'validation_outcome'`,
           ),
         ).toEqual({ name: "validation_outcome", dflt_value: "'not_evaluated'" })
+        expect(
+          yield* db.get(
+            sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_v2_structured_output_evidence'`,
+          ),
+        ).toEqual({ name: "session_v2_structured_output_evidence" })
+        expect(
+          yield* db.all(
+            sql`SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'session_v2_structured_output_evidence' ORDER BY name`,
+          ),
+        ).toEqual([
+          { name: "session_v2_structured_output_evidence_delete_guard" },
+          { name: "session_v2_structured_output_evidence_insert_guard" },
+          { name: "session_v2_structured_output_evidence_update_guard" },
+        ])
         yield* db.run(sql`
           INSERT INTO session_provider_owner_lease (
             owner_token, registered_at, heartbeat_at, lease_expires_at

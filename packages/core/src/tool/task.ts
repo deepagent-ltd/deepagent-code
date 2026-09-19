@@ -138,6 +138,11 @@ const lastAssistantText = (messages: readonly SessionMessage.Message[]) =>
     .filter((part): part is SessionMessage.AssistantText => part.type === "text")
     .at(-1)?.text ?? ""
 
+const lastAssistantMessageID = (messages: readonly SessionMessage.Message[]) =>
+  messages
+    .filter((message): message is SessionMessage.Assistant => message.type === "assistant")
+    .at(-1)?.id
+
 // A failed child drain surfaces as a typed RunError (step budget, model error...); its message is
 // populated (R3) so the parent sees why the subagent stopped.
 const drainMessage = (error: unknown) => {
@@ -274,8 +279,8 @@ export const layer = Layer.effectDiscard(
                   // create converges by adoption), and the single first input lands atomically
                   // with the run's input_state pending→ready CAS. The executor only claims and
                   // resumes the child; it NEVER admits another first prompt.
+                  const database = Option.getOrUndefined(yield* Effect.serviceOption(Database.Service))
                   const durableLaunch = Effect.gen(function* () {
-                    const database = Option.getOrUndefined(yield* Effect.serviceOption(Database.Service))
                     const events = Option.getOrUndefined(yield* Effect.serviceOption(EventV2.Service))
                     if (!database || !events)
                       return yield* toolFailure(
@@ -316,6 +321,7 @@ export const layer = Layer.effectDiscard(
                     if (result.outcome === "timeout") timedOut = true
                     return {
                       childID: admitted.run.childSessionID,
+                      runID: admitted.run.runID,
                       text:
                         result.outcome === "completed"
                           ? result.research
@@ -324,7 +330,7 @@ export const layer = Layer.effectDiscard(
                   })
                   const resumeLaunch = Effect.gen(function* () {
                     const childID = SessionSchema.ID.make(params.task_id!)
-                    return { childID, text: yield* drive(childID, params.prompt) }
+                    return { childID, runID: undefined, text: yield* drive(childID, params.prompt) }
                   })
                   const launch = yield* (params.task_id === undefined ? durableLaunch : resumeLaunch)
                   const childID = launch.childID
@@ -339,8 +345,43 @@ export const layer = Layer.effectDiscard(
 
                   // Structured contract (V1 finalizer parity): the schema rides the prompt text — V2
                   // has no provider-side format — with one bounded correction attempt.
+                  //
+                  // Structured evidence authority: a durable run that settled COMPLETED records its
+                  // finalizer verdict exactly once through the V2 authority (fail-closed — a
+                  // validated candidate without a sealed evidence row is a typed tool failure).
+                  // Runs that settled failed/interrupted carry the 'unvalidated' evidence their
+                  // settle transaction already sealed, so the finalizer never re-records; a
+                  // resume-by-task_id continuation has no live run row and is skipped.
+                  const schemaName =
+                    typeof params.output_schema === "string"
+                      ? params.output_schema.trim()
+                      : params.output_schema === undefined
+                        ? `default:${params.subagent_type}`
+                        : "inline"
+                  const recordEvidence = (
+                    validationOutcome: "validated" | "validation_failed",
+                    rawOutput: string,
+                    outputMessageID?: SessionMessage.ID,
+                  ) =>
+                    Effect.gen(function* () {
+                      if (launch.runID === undefined) return
+                      if (!database) return yield* Effect.die("task finalizer evidence requires the database service")
+                      const run = yield* TaskRunAuthority.get(database.db, launch.runID)
+                      if (run?.state !== "completed") return
+                      yield* TaskRunAuthority.recordStructuredEvidence(database.db, {
+                        runId: launch.runID,
+                        schemaName,
+                        schema: outputSchema,
+                        validationOutcome,
+                        rawOutput: rawOutput.slice(0, 24_000),
+                        ...(outputMessageID === undefined ? {} : { outputMessageID }),
+                        ownerToken: `core-v2-finalizer:${childID}`,
+                      })
+                    })
+
                   const boundedRaw = research.slice(0, 24_000)
                   let correction: string | undefined
+                  let lastMaterial = boundedRaw
                   for (const attempt of [1, 2] as const) {
                     const finalizerText = [
                       attempt === 1
@@ -353,21 +394,48 @@ export const layer = Layer.effectDiscard(
                       boundedRaw,
                       "</research_result>",
                     ].join("\n")
-                    const candidate = extractStructuredText(yield* drive(childID, finalizerText))
+                    const response = yield* drive(childID, finalizerText)
+                    lastMaterial = response.slice(0, 24_000)
                     if (timedOut) {
                       correction = "Subagent timed out while finalizing structured output."
                       break
                     }
+                    const candidate = extractStructuredText(response)
                     if (candidate === undefined) {
                       correction = "Model did not return a JSON value."
                       continue
                     }
                     const error = validateStructuredOutput(outputSchema, candidate)
-                    if (!error) return { task_id: childID, text: JSON.stringify(candidate) }
+                    if (!error) {
+                      // Bind the evidence to the child session_message that carries the final
+                      // answer — the finalizer turn just drained, so it is the last assistant
+                      // message (the documented fallback binding when the exact id is unavailable).
+                      const transcript = yield* sessions
+                        .messages({ sessionID: childID, order: "asc" })
+                        .pipe(Effect.orDie)
+                      yield* recordEvidence("validated", JSON.stringify(candidate), lastAssistantMessageID(transcript)).pipe(
+                        Effect.mapError((failure) =>
+                          toolFailure(
+                            `Task ${childID} produced a schema-valid structured output, but recording its durable evidence failed (${failure._tag}); retry the task call to seal the result.`,
+                          ),
+                        ),
+                      )
+                      return { task_id: childID, text: JSON.stringify(candidate) }
+                    }
                     correction = error.slice(0, 1_000)
                   }
+                  const transcript = yield* sessions.messages({ sessionID: childID, order: "asc" }).pipe(Effect.orDie)
+                  const failureEvidence = yield* recordEvidence(
+                    "validation_failed",
+                    lastMaterial,
+                    lastAssistantMessageID(transcript),
+                  ).pipe(Effect.exit)
                   return yield* toolFailure(
-                    `Subagent completed but its final answer never validated against the output schema${correction ? `: ${correction}` : ""}. Task id ${childID} holds the raw turns.`,
+                    `Subagent completed but its final answer never validated against the output schema${correction ? `: ${correction}` : ""}. Task id ${childID} holds the raw turns.${
+                      Exit.isFailure(failureEvidence)
+                        ? ` Additionally, recording the validation-failure evidence failed; the durable evidence record for this run is missing — retry the task call.`
+                        : ""
+                    }`,
                   )
                 }),
               ),
