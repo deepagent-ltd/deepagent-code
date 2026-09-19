@@ -20,7 +20,7 @@ import fs from "fs/promises"
 import path from "path"
 import { Session } from "@/session/session"
 import { LLM } from "../../src/session/llm"
-import { SessionPrompt } from "../../src/session/prompt"
+import { SessionPromptV2 } from "../../src/session/prompt-v2"
 import { SessionRevert } from "../../src/session/revert"
 import { SessionSummary } from "../../src/session/summary"
 import { MessageV2 } from "../../src/session/message-v2"
@@ -345,7 +345,7 @@ function makeHttp() {
   return Layer.mergeAll(
     TestLLMServer.layer,
     SessionSummary.defaultLayer,
-    SessionPrompt.layer.pipe(
+    SessionPromptV2.layer.pipe(
       Layer.provide(realV2Layer),
       Layer.provide(SessionProviderOwner.layer.pipe(Layer.provide(deps))),
       Layer.provide(testInstanceStoreLayer),
@@ -407,7 +407,7 @@ const providerCfg = (url: string) => ({
 it.live.skip("tool execution produces non-empty session diff (snapshot race)", () =>
   provideTmpdirServer(
     Effect.fnUntraced(function* ({ dir, llm }) {
-      const prompt = yield* SessionPrompt.Service
+      const prompt = yield* SessionPromptV2.Service
       const sessions = yield* Session.Service
       const summary = yield* SessionSummary.Service
       const { db } = yield* Database.Service

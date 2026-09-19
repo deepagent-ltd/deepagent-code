@@ -8,8 +8,14 @@
  * reachable-module fact, never by assumption.
  */
 export const AUTHORITY = {
-  /** Legacy SessionPrompt pipeline — the execution/admission authority for most surfaces today. */
-  LEGACY_PROMPT: "packages/deepagent-code/src/session/prompt.ts",
+  /**
+   * The prompt surface module — the execution/admission authority path for the session ingress.
+   * v2w-l2 (2026-09-19): the prompt.ts monolith was decomposed and deleted; the live V2
+   * admission/drain/cancel bodies (formerly promptV2/loop-V2-branch/cancel inside the monolith)
+   * moved verbatim to session/prompt-v2.ts. Rules that reach or call into the prompt surface
+   * re-anchor here; the legacy executor bodies they used to fence are gone.
+   */
+  PROMPT_SURFACE: "packages/deepagent-code/src/session/prompt-v2.ts",
   /** Core legacy SessionPrompt service definition (the authoritative legacy prompt module). */
   LEGACY_PROMPT_CORE: "packages/core/src/session/prompt.ts",
   /** Historical Core V1 Session schema/decoder. It is never the current Session authority. */

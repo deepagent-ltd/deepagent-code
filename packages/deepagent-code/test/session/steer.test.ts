@@ -30,7 +30,7 @@ import { RequestExecutor } from "@deepagent-code/llm/route"
 import { SessionSummary } from "../../src/session/summary"
 import { Instruction } from "../../src/session/instruction"
 import { SessionProcessor } from "../../src/session/processor"
-import { SessionPrompt } from "../../src/session/prompt"
+import { SessionPromptV2 } from "../../src/session/prompt-v2"
 import { SessionRevert } from "../../src/session/revert"
 import { SessionRunState } from "../../src/session/run-state"
 import { SessionSteer } from "../../src/session/steer"
@@ -352,7 +352,7 @@ function makePrompt(steering: boolean) {
     Layer.provideMerge(proc),
     Layer.provideMerge(deps),
   )
-  return SessionPrompt.layer
+  return SessionPromptV2.layer
     .pipe(
       Layer.provide(realV2Layer),
       Layer.provide(SessionProviderOwner.layer.pipe(Layer.provide(deps))),
@@ -873,7 +873,7 @@ on.instance(
   () =>
     Effect.gen(function* () {
       const { llm } = yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
+      const prompt = yield* SessionPromptV2.Service
       const steer = yield* SessionSteer.Service
       const sessions = yield* Session.Service
       const { db } = yield* Database.Service
@@ -965,7 +965,7 @@ on.instance(
   () =>
     Effect.gen(function* () {
       const { llm } = yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
+      const prompt = yield* SessionPromptV2.Service
       const steer = yield* SessionSteer.Service
       const sessions = yield* Session.Service
       const { db } = yield* Database.Service
@@ -1030,7 +1030,7 @@ on.instance(
   () =>
     Effect.gen(function* () {
       const { llm } = yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
+      const prompt = yield* SessionPromptV2.Service
       const sessions = yield* Session.Service
       const { db } = yield* Database.Service
       yield* mintSteerR0Authorization(db)
@@ -1095,7 +1095,7 @@ off.instance(
   () =>
     Effect.gen(function* () {
       const { llm } = yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
+      const prompt = yield* SessionPromptV2.Service
       const steer = yield* SessionSteer.Service
       const sessions = yield* Session.Service
       const { db } = yield* Database.Service
@@ -1155,7 +1155,7 @@ on.instance(
   () =>
     Effect.gen(function* () {
       yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
+      const prompt = yield* SessionPromptV2.Service
       const steer = yield* SessionSteer.Service
       const sessions = yield* Session.Service
       const state = yield* SessionRunState.Service
@@ -1208,7 +1208,7 @@ on.instance(
   () =>
     Effect.gen(function* () {
       const { llm } = yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
+      const prompt = yield* SessionPromptV2.Service
       const steer = yield* SessionSteer.Service
       const sessions = yield* Session.Service
       const { db } = yield* Database.Service
@@ -1271,7 +1271,7 @@ on.instance(
   () =>
     Effect.gen(function* () {
       const { llm } = yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
+      const prompt = yield* SessionPromptV2.Service
       const steer = yield* SessionSteer.Service
       const sessions = yield* Session.Service
       const state = yield* SessionRunState.Service
@@ -1365,7 +1365,7 @@ on.instance(
   () =>
     Effect.gen(function* () {
       const { llm } = yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
+      const prompt = yield* SessionPromptV2.Service
       const steer = yield* SessionSteer.Service
       const sessions = yield* Session.Service
       const { db } = yield* Database.Service

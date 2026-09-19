@@ -67,7 +67,7 @@ const { SessionV1 } = await import("@deepagent-code/core/v1/session")
 const { ModelV2 } = await import("@deepagent-code/core/model")
 const { ProviderV2 } = await import("@deepagent-code/core/provider")
 const { Effect, Layer, Schema } = await import("effect")
-const { SessionPrompt } = await import("../../src/session/prompt")
+const { SessionPromptV2 } = await import("../../src/session/prompt-v2")
 const { Session } = await import("../../src/session/session")
 const { testInstanceStoreLayer, withTmpdirInstance } = await import("../../test/fixture/fixture")
 
@@ -133,7 +133,7 @@ const workspaceConfig: ConfigV1.Info = {
 }
 
 const program = Effect.gen(function* () {
-  const prompts = yield* SessionPrompt.Service
+  const prompts = yield* SessionPromptV2.Service
   const sessions = yield* Session.Service
   const session = yield* sessions.create({ title: "Live structured output" })
   const startedAt = Date.now()
@@ -244,7 +244,7 @@ try {
       withTmpdirInstance({ git: true, config: workspaceConfig }),
       Effect.scoped,
       Effect.provide(
-        Layer.mergeAll(SessionPrompt.defaultLayer, Session.defaultLayer).pipe(Layer.provide(testInstanceStoreLayer)),
+        Layer.mergeAll(SessionPromptV2.defaultLayer, Session.defaultLayer).pipe(Layer.provide(testInstanceStoreLayer)),
       ),
       Effect.timeout(config.timeoutMs),
     ),

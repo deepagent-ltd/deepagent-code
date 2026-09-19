@@ -17,7 +17,6 @@ export type VerdictRule = {
 
 export type EntryRules = Readonly<Partial<Record<Dimension, VerdictRule>>>
 
-const PROMPT_PATH_SUFFIX = "packages/deepagent-code/src/session/prompt.ts"
 
 const RULES: ReadonlyArray<{ readonly match: (id: string) => boolean; readonly rules: EntryRules }> = [
   // C7-05 successor: the V2 admission path is ON by default and is the single writer — the

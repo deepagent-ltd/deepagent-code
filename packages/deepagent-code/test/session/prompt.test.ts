@@ -75,7 +75,9 @@ import { SessionCompaction } from "../../src/session/compaction"
 import { SessionSummary } from "../../src/session/summary"
 import { Instruction } from "../../src/session/instruction"
 import { SessionProcessor } from "../../src/session/processor"
-import { recoverProviderReceiptsOnStartup, SessionPrompt } from "../../src/session/prompt"
+import { SessionPromptV2 } from "../../src/session/prompt-v2"
+import { SessionCommandV2 } from "../../src/session/command-v2"
+import { recoverProviderReceiptsOnStartup } from "../../src/session/legacy-provider-receipt-recovery"
 import { CommandEffectReceipt } from "../../src/session/command-effect-receipt"
 import { SessionRevert } from "../../src/session/revert"
 import { SessionRunState } from "../../src/session/run-state"
@@ -109,7 +111,6 @@ import { SystemPrompt } from "../../src/session/system"
 import { Shell } from "../../src/shell/shell"
 import { Snapshot } from "../../src/snapshot"
 import { ToolRegistry } from "@/tool/registry"
-import { SessionToolCapability, ToolIDCollisionError } from "../../src/session/tool-capability"
 import { DebugService } from "@/debug/service"
 import { RuntimeBase } from "@/runtime/base"
 import { Truncate } from "@/tool/truncate"
@@ -438,26 +439,26 @@ function makePrompt(input?: PromptLayerOptions) {
     Layer.provideMerge(proc),
     Layer.provideMerge(deps),
   )
-  // V4.1 §S1.1: the durable steer buffer shares the SAME Database instance as Session (built over
-  // `deps`) so drained steers are visible to the loop's history reads.
-  const steer = SessionSteer.layer.pipe(Layer.provideMerge(deps))
-  const promptLayer = SessionPrompt.layer.pipe(
+  // v2w-l2: the harness target is the lean V2 pair (command/shell surface over the prompt-v2
+  // admission/loop service). The legacy-only requirements the monolith had (SessionProviderOwner,
+  // Instruction, SystemPrompt, Image, the steer buffer) left with it; everything else keeps the
+  // same instances the surrounding suites observe (run/compact/proc/registry/trunc over `deps`).
+  const promptLayer = SessionCommandV2.layer.pipe(
+    Layer.provideMerge(SessionPromptV2.layer),
     Layer.provide(input?.sessionV2 ?? SessionV2.defaultLayer),
-    Layer.provide(SessionProviderOwner.layer.pipe(Layer.provide(deps))),
     Layer.provide(testInstanceStoreLayer),
     Layer.provide(SessionRevert.defaultLayer),
-    Layer.provide(Image.defaultLayer),
+    Layer.provide(CrossSpawnSpawner.defaultLayer),
     Layer.provide(Reference.defaultLayer),
     Layer.provide(summary),
-    Layer.provideMerge(steer),
     Layer.provideMerge(run),
     Layer.provideMerge(compact),
     Layer.provideMerge(proc),
     Layer.provideMerge(registry),
     Layer.provideMerge(trunc),
+    // ToolRegistry.layer (above) still requires Instruction for the read tool; the monolith
+    // dropped this provide with its own requirement, but the registry keeps it.
     Layer.provide(Instruction.defaultLayer),
-    Layer.provide(SystemPrompt.defaultLayer),
-    Layer.provide(LocationIdentity.layer.pipe(Layer.provide(deps))),
     Layer.provide(
       Layer.succeed(
         ContextFederationReadiness.Service,
@@ -662,7 +663,9 @@ const assertPlanProtocolProviderBudget = Effect.fn("test.assertPlanProtocolProvi
   errorCode: string
 }) {
   const { llm } = yield* useServerConfig(providerCfg)
-  const prompt = yield* SessionPrompt.Service
+  const promptSvc = yield* SessionPromptV2.Service
+  const commandSvc = yield* SessionCommandV2.Service
+  const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
   const sessions = yield* Session.Service
   const { db } = yield* Database.Service
   yield* mintR0Authorization(db)
@@ -837,7 +840,9 @@ const addSubtask = (sessionID: SessionID, messageID: MessageID, model = ref) =>
 
 const boot = Effect.fn("test.boot")(function* (input?: { title?: string }) {
   const config = yield* Config.Service
-  const prompt = yield* SessionPrompt.Service
+  const promptSvc = yield* SessionPromptV2.Service
+  const commandSvc = yield* SessionCommandV2.Service
+  const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
   const run = yield* SessionRunState.Service
   const sessions = yield* Session.Service
   yield* config.get()
@@ -1175,105 +1180,14 @@ const mintR0Authorization = (db: Database.Interface["db"]): Effect.Effect<void, 
   })
 
 
-// RI-40（P0，CLOSED — 生产 request snapshot oracle）：task admission 经真实 SessionPrompt 组合
-// （非 stubOps）携带真实 capability snapshot——prompt.capabilitySnapshot() 是 ops() 的同款接线
-// （真实 registry/MCP/plugin 投影，prompt.ts capabilitySnapshot const）。admission 行的
-// tool_capability_hash 等于该 snapshot 的 64-hex hash（而非启发式 "static-write-type" 回退），
-// mutation_capability 与 snapshot 的 write 判定一致，且两次快照 hash 稳定一致。background 模式让
-// admission 在驱动返回前落行（冻结字段不受后续异步 drive 结局影响），非 durable 控制面避开
-// PR-queue 门（durable automatic writers 的专属门槛，oracle 不需要）。
-const backgroundSubagents = testEffect(makeHttp({ flags: { experimentalBackgroundSubagents: true } }))
-backgroundSubagents.instance(
-  "the frozen capability snapshot is deterministic with a stable hash",
-  () =>
-    Effect.gen(function* () {
-      const prompt = yield* SessionPrompt.Service
-      const snapshot = yield* prompt.capabilitySnapshot()
-      expect(snapshot.hash).toMatch(/^[0-9a-f]{64}$/)
-      expect(snapshot.tools.some((tool) => tool.toolID === "task" && tool.source === "builtin")).toBe(true)
-      // Stability: the frozen projection is deterministic across calls within the same composition.
-      expect((yield* prompt.capabilitySnapshot()).hash).toBe(snapshot.hash)
-    }),
-  25_000,
-)
-
-// RI-40（P0，CLOSED — MCP/custom 同名碰撞）：MCP 工具与内建工具同名（edit）时，生产 snapshot 接线
-// 必须以 ToolIDCollisionError 失败——admission 不得在碰撞面上静默二选一。碰撞经
-// SessionPrompt.Service 暴露的生产 snapshot（真实 registry + 碰撞 MCP stub）到达。
-const mcpToolCollision = testEffect(
-  makeHttpNoLLMServer({
-    mcp: mcpStub({
-      edit: { description: "colliding mcp edit tool", inputSchema: jsonSchema({ type: "object" }) } as Tool,
-    }),
-  }),
-)
-mcpToolCollision.instance("capability snapshot fails typed when an MCP tool collides with a builtin", () =>
-  Effect.gen(function* () {
-    const prompt = yield* SessionPrompt.Service
-    const exit = yield* prompt.capabilitySnapshot().pipe(Effect.exit)
-    expect(Exit.isFailure(exit)).toBe(true)
-    if (Exit.isFailure(exit)) {
-      const err = Cause.squash(exit.cause)
-      expect(err).toBeInstanceOf(ToolIDCollisionError)
-      if (err instanceof ToolIDCollisionError) {
-        expect(err.toolID).toBe("edit")
-        expect(err.sources.some((source) => source.startsWith("builtin:"))).toBe(true)
-        expect(err.sources.some((source) => source.startsWith("mcp:"))).toBe(true)
-      }
-    }
-  }),
-)
-
-noLLMServer.instance("prepareTaskInput materializes a stable envelope without persisting V1 rows", () =>
-  Effect.gen(function* () {
-    const { prompt, sessions, chat } = yield* boot()
-    const events = yield* EventV2Bridge.Service
-    const emitted: string[] = []
-    const off = yield* events.listen((event) =>
-      Effect.sync(() => {
-        if ((event.data as { sessionID?: SessionID }).sessionID !== chat.id) return
-        emitted.push(event.type)
-      }),
-    )
-    yield* Effect.addFinalizer(() => off)
-    const messageID = MessageID.ascending()
-    const prepared = yield* prompt.prepareTaskInput(
-      {
-        sessionID: chat.id,
-        messageID,
-        model: ref,
-        agent: "build",
-        metadata: { deepagent: { task_admission: { run_id: "run_prepare_test" } } },
-        parts: [
-          { type: "text", text: "inspect the durable boundary" },
-          { type: "text", text: "plugin-ready second part" },
-        ],
-      },
-      123_456,
-    )
-
-    expect(prepared.info.role).toBe("user")
-    expect(prepared.info.id).toBe(messageID)
-    expect(prepared.info.time.created).toBe(123_456)
-    if (prepared.info.role === "user") {
-      expect(SessionProcessor.planProtocolActivityID(prepared.info.metadata)).toBe(messageID)
-      expect(prepared.info.metadata).toMatchObject({
-        deepagent: { task_admission: { run_id: "run_prepare_test" } },
-      })
-    }
-    expect(prepared.parts).toHaveLength(2)
-    expect(prepared.parts.every((part) => part.messageID === messageID)).toBe(true)
-    expect(yield* sessions.messages({ sessionID: chat.id })).toEqual([])
-    expect(emitted).toEqual([])
-  }),
-)
-
 // Loop semantics
 
 v2Real.instance("loop calls LLM and returns assistant message", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)
-    const prompt = yield* SessionPrompt.Service
+    const promptSvc = yield* SessionPromptV2.Service
+    const commandSvc = yield* SessionCommandV2.Service
+    const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
     const sessions = yield* Session.Service
     const { db } = yield* Database.Service
     yield* mintR0Authorization(db)
@@ -1317,7 +1231,9 @@ v2RealLocations.instance(
   () =>
     Effect.gen(function* () {
       const { llm } = yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+      const commandSvc = yield* SessionCommandV2.Service
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const status = yield* SessionStatus.Service
       const locations = yield* LocationServiceMap
@@ -1414,7 +1330,9 @@ v2RealLocations.instance(
 v2Real.instance("fingerprints the final persisted structured assistant", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)
-    const prompt = yield* SessionPrompt.Service
+    const promptSvc = yield* SessionPromptV2.Service
+    const commandSvc = yield* SessionCommandV2.Service
+    const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
     const sessions = yield* Session.Service
     const { db } = yield* Database.Service
     yield* mintR0Authorization(db)
@@ -1488,7 +1406,9 @@ v2Real.instance("fingerprints the final persisted structured assistant", () =>
 v2Real.instance("delivers json_schema output through wire text.format", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(wireProviderCfg)
-    const prompt = yield* SessionPrompt.Service
+    const promptSvc = yield* SessionPromptV2.Service
+    const commandSvc = yield* SessionCommandV2.Service
+    const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
     const sessions = yield* Session.Service
     const { db } = yield* Database.Service
     yield* mintR0Authorization(db)
@@ -1550,7 +1470,9 @@ v2Real.instance("delivers json_schema output through wire text.format", () =>
 wireCapableAiSdk.instance.skip("keeps the synthetic StructuredOutput path when the runtime is AI SDK", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(wireProviderCfg)
-    const prompt = yield* SessionPrompt.Service
+    const promptSvc = yield* SessionPromptV2.Service
+    const commandSvc = yield* SessionCommandV2.Service
+    const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
     const sessions = yield* Session.Service
     const chat = yield* sessions.create({
       title: "Synthetic structured output",
@@ -1599,7 +1521,9 @@ wireCapableAiSdk.instance.skip("keeps the synthetic StructuredOutput path when t
 providerHistoryTransform.instance.skip("isolates provider message transforms from durable history authority", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)
-    const prompt = yield* SessionPrompt.Service
+    const promptSvc = yield* SessionPromptV2.Service
+    const commandSvc = yield* SessionCommandV2.Service
+    const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
     const sessions = yield* Session.Service
     const chat = yield* sessions.create({
       title: "Provider transform isolation",
@@ -1647,7 +1571,9 @@ v2Real.instance("rejects an oversized unknown-limit request before provider disp
       ...providerCfgWithContext(url, 0),
       compaction: { auto: false },
     }))
-    const prompt = yield* SessionPrompt.Service
+    const promptSvc = yield* SessionPromptV2.Service
+    const commandSvc = yield* SessionCommandV2.Service
+    const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
     const sessions = yield* Session.Service
     const { db } = yield* Database.Service
     yield* mintR0Authorization(db)
@@ -1710,7 +1636,9 @@ v2Real.instance("rejects an oversized unknown-limit request before provider disp
 it.instance.skip("quarantines corrupt committed history before provider dispatch", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)
-    const prompt = yield* SessionPrompt.Service
+    const promptSvc = yield* SessionPromptV2.Service
+    const commandSvc = yield* SessionCommandV2.Service
+    const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
     const sessions = yield* Session.Service
     const parent = yield* sessions.create({ title: "History authority corruption" })
     yield* prompt.prompt({
@@ -1764,7 +1692,9 @@ it.instance.skip("quarantines corrupt committed history before provider dispatch
 it.instance.skip("quarantines a missing committed replacement message before provider dispatch", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)
-    const prompt = yield* SessionPrompt.Service
+    const promptSvc = yield* SessionPromptV2.Service
+    const commandSvc = yield* SessionCommandV2.Service
+    const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
     const sessions = yield* Session.Service
     const parent = yield* sessions.create({ title: "Missing committed replacement message" })
     yield* prompt.prompt({
@@ -2193,7 +2123,9 @@ noLLMServer.instance.skip(
   "prompt emits v2 prompted and synthetic events (v2 projector disabled)",
   () =>
     Effect.gen(function* () {
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+      const commandSvc = yield* SessionCommandV2.Service
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const chat = yield* sessions.create({ title: "Pinned" })
 
@@ -2238,7 +2170,9 @@ noLLMServer.instance.skip(
 v2Real.instance("static loop returns assistant text through local provider", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)
-    const prompt = yield* SessionPrompt.Service
+    const promptSvc = yield* SessionPromptV2.Service
+    const commandSvc = yield* SessionCommandV2.Service
+    const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
     const sessions = yield* Session.Service
     const { db } = yield* Database.Service
     yield* mintR0Authorization(db)
@@ -2269,7 +2203,9 @@ v2Real.instance("static loop returns assistant text through local provider", () 
 v2Real.instance("static loop consumes queued replies across turns", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)
-    const prompt = yield* SessionPrompt.Service
+    const promptSvc = yield* SessionPromptV2.Service
+    const commandSvc = yield* SessionCommandV2.Service
+    const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
     const sessions = yield* Session.Service
     const { db } = yield* Database.Service
     yield* mintR0Authorization(db)
@@ -2316,7 +2252,9 @@ v2Real.instance("static loop consumes queued replies across turns", () =>
 v2Real.instance("loop continues when finish is tool-calls", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)
-    const prompt = yield* SessionPrompt.Service
+    const promptSvc = yield* SessionPromptV2.Service
+    const commandSvc = yield* SessionCommandV2.Service
+    const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
     const sessions = yield* Session.Service
     const { db } = yield* Database.Service
     yield* mintR0Authorization(db)
@@ -2396,7 +2334,9 @@ v2Real.instance("BUG-010 forward-compatible malformed plan stops before a third 
 v2Real.instance("loop continues (not exits) when finish is length: injects a continue nudge + re-prompts", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)
-    const prompt = yield* SessionPrompt.Service
+    const promptSvc = yield* SessionPromptV2.Service
+    const commandSvc = yield* SessionCommandV2.Service
+    const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
     const sessions = yield* Session.Service
     const { db } = yield* Database.Service
     yield* mintR0Authorization(db)
@@ -2458,7 +2398,9 @@ v2Real.instance("loop continues (not exits) when finish is length: injects a con
 v2Real.instance("synthetic output continuation preserves the durable legacy activity owner", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)
-    const prompt = yield* SessionPrompt.Service
+    const promptSvc = yield* SessionPromptV2.Service
+    const commandSvc = yield* SessionCommandV2.Service
+    const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
     const sessions = yield* Session.Service
     const { db } = yield* Database.Service
     yield* mintR0Authorization(db)
@@ -2527,7 +2469,9 @@ v2Real.instance("synthetic output continuation preserves the durable legacy acti
 v2Real.instance("loop retries truncated tool input with the bounded patch transaction guidance", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)
-    const prompt = yield* SessionPrompt.Service
+    const promptSvc = yield* SessionPromptV2.Service
+    const commandSvc = yield* SessionCommandV2.Service
+    const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
     const sessions = yield* Session.Service
     const { db } = yield* Database.Service
     yield* mintR0Authorization(db)
@@ -2604,7 +2548,9 @@ v2Real.instance("loop retries truncated tool input with the bounded patch transa
 v2Real.instance("glob tool keeps instance context during prompt runs", () =>
   Effect.gen(function* () {
     const { dir, llm } = yield* useServerConfig(providerCfg)
-    const prompt = yield* SessionPrompt.Service
+    const promptSvc = yield* SessionPromptV2.Service
+    const commandSvc = yield* SessionCommandV2.Service
+    const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
     const sessions = yield* Session.Service
     const { db } = yield* Database.Service
     yield* mintR0Authorization(db)
@@ -2649,7 +2595,9 @@ v2Real.instance("glob tool keeps instance context during prompt runs", () =>
 v2Real.instance("loop continues when finish is stop but assistant has tool parts", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)
-    const prompt = yield* SessionPrompt.Service
+    const promptSvc = yield* SessionPromptV2.Service
+    const commandSvc = yield* SessionCommandV2.Service
+    const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
     const sessions = yield* Session.Service
     const { db } = yield* Database.Service
     yield* mintR0Authorization(db)
@@ -2683,7 +2631,9 @@ v2Real.instance("loop continues when finish is stop but assistant has tool parts
 v2Real.instance("legacy non-interactive token metadata does not hard-stop a provider turn", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)
-    const prompt = yield* SessionPrompt.Service
+    const promptSvc = yield* SessionPromptV2.Service
+    const commandSvc = yield* SessionCommandV2.Service
+    const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
     const sessions = yield* Session.Service
     const { db } = yield* Database.Service
     yield* mintR0Authorization(db)
@@ -2724,7 +2674,9 @@ v2Real.instance("legacy non-interactive token metadata does not hard-stop a prov
 it.instance.skip("non-interactive task step budget prevents another provider turn", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)
-    const prompt = yield* SessionPrompt.Service
+    const promptSvc = yield* SessionPromptV2.Service
+    const commandSvc = yield* SessionCommandV2.Service
+    const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
     const sessions = yield* Session.Service
     const session = yield* sessions.create({
       title: "Pinned",
@@ -2765,7 +2717,9 @@ it.instance.skip("failed subtask preserves metadata on error tool state", () =>
         },
       },
     }))
-    const prompt = yield* SessionPrompt.Service
+    const promptSvc = yield* SessionPromptV2.Service
+    const commandSvc = yield* SessionCommandV2.Service
+    const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
     const sessions = yield* Session.Service
     const chat = yield* sessions.create({ title: "Pinned" })
     yield* llm.tool("task", {
@@ -2805,7 +2759,9 @@ it.instance.skip(
   () =>
     Effect.gen(function* () {
       const { llm } = yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+      const commandSvc = yield* SessionCommandV2.Service
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const chat = yield* sessions.create({ title: "Pinned" })
       yield* llm.hang
@@ -2841,7 +2797,9 @@ it.instance.skip(
   () =>
     Effect.gen(function* () {
       const { llm } = yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+      const commandSvc = yield* SessionCommandV2.Service
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const chat = yield* sessions.create({
         title: "Pinned",
@@ -2887,7 +2845,9 @@ v2Real.instance(
   () =>
     Effect.gen(function* () {
       const { llm } = yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+      const commandSvc = yield* SessionCommandV2.Service
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const status = yield* SessionStatus.Service
       const { db } = yield* Database.Service
@@ -2925,7 +2885,9 @@ v2Real.instance(
   () =>
     Effect.gen(function* () {
       const { llm } = yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+      const commandSvc = yield* SessionCommandV2.Service
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const status = yield* SessionStatus.Service
       const { db } = yield* Database.Service
@@ -3035,7 +2997,9 @@ it.instance.skip(
   () =>
     Effect.gen(function* () {
       const { llm } = yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+      const commandSvc = yield* SessionCommandV2.Service
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const status = yield* SessionStatus.Service
       const chat = yield* sessions.create({ title: "Pinned" })
@@ -3075,7 +3039,9 @@ v2Real.instance(
   () =>
     Effect.gen(function* () {
       const { llm } = yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+      const commandSvc = yield* SessionCommandV2.Service
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const { db } = yield* Database.Service
       yield* mintR0Authorization(db)
@@ -3119,7 +3085,9 @@ v2Real.instance(
 v2Real.instance("concurrent loop callers get same result", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)
-    const prompt = yield* SessionPrompt.Service
+    const promptSvc = yield* SessionPromptV2.Service
+    const commandSvc = yield* SessionCommandV2.Service
+    const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
     const run = yield* SessionRunState.Service
     const sessions = yield* Session.Service
     const { db } = yield* Database.Service
@@ -3161,7 +3129,9 @@ v2Real.instance(
   () =>
     Effect.gen(function* () {
       const { llm } = yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+      const commandSvc = yield* SessionCommandV2.Service
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const { db } = yield* Database.Service
       yield* mintR0Authorization(db)
@@ -3206,7 +3176,9 @@ v2Real.instance(
     Effect.gen(function* () {
       const { llm } = yield* useServerConfig(providerCfg)
       const gate = yield* Deferred.make<void>()
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+      const commandSvc = yield* SessionCommandV2.Service
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const { db } = yield* Database.Service
       yield* mintR0Authorization(db)
@@ -3289,7 +3261,9 @@ v2Real.instance(
     Effect.gen(function* () {
       const { llm } = yield* useServerConfig(providerCfg)
       const gate = yield* Deferred.make<void>()
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+      const commandSvc = yield* SessionCommandV2.Service
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const { db } = yield* Database.Service
       yield* mintR0Authorization(db)
@@ -3529,7 +3503,9 @@ v2Real.instance(
   () =>
     Effect.gen(function* () {
       const { llm } = yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+      const commandSvc = yield* SessionCommandV2.Service
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const { db } = yield* Database.Service
       yield* mintR0Authorization(db)
@@ -3694,7 +3670,9 @@ v2Real.instance(
   () =>
     Effect.gen(function* () {
       const { dir, llm } = yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+      const commandSvc = yield* SessionCommandV2.Service
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const { db } = yield* Database.Service
       yield* mintR0Authorization(db)
@@ -3827,7 +3805,9 @@ v2Real.instance(
   "direct prompts auto-claim one durable intent and reconcile exact retries",
   () =>
     Effect.gen(function* () {
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+      const commandSvc = yield* SessionCommandV2.Service
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const { db } = yield* Database.Service
       yield* mintR0Authorization(db)
@@ -3874,7 +3854,9 @@ v2Real.instance(
   "task notification prompt retries reuse the persisted user message",
   () =>
     Effect.gen(function* () {
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+      const commandSvc = yield* SessionCommandV2.Service
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const { db } = yield* Database.Service
       yield* mintR0Authorization(db)
@@ -3940,7 +3922,9 @@ v2Real.instance(
   () =>
     Effect.gen(function* () {
       const { directory: dir } = yield* TestInstance
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+      const commandSvc = yield* SessionCommandV2.Service
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const { db } = yield* Database.Service
       yield* mintR0Authorization(db)
@@ -3995,7 +3979,11 @@ noLLMServer.instance(
       yield* writeText(path.join(docs, "guide", "intro.md"), "reference intro")
       yield* writeText(path.join(dir, "docs", "README.md"), "workspace readme")
 
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+
+      const commandSvc = yield* SessionCommandV2.Service
+
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const parts = yield* prompt.resolvePromptParts(
         "Use @docs and @docs/README.md and @docs/guide and @docs/missing.md and @docs/README.md and @build",
       )
@@ -4032,7 +4020,11 @@ v2Real.instance(
       const { directory: dir } = yield* TestInstance
       yield* writeText(path.join(dir, "file#name.txt"), "special content\n")
 
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+
+      const commandSvc = yield* SessionCommandV2.Service
+
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const { db } = yield* Database.Service
       yield* mintR0Authorization(db)
@@ -4076,7 +4068,9 @@ v2Real.instance(
 v2Real.instance("does not loop empty assistant turns for a simple reply", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)
-    const prompt = yield* SessionPrompt.Service
+    const promptSvc = yield* SessionPromptV2.Service
+    const commandSvc = yield* SessionCommandV2.Service
+    const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
     const sessions = yield* Session.Service
     const { db } = yield* Database.Service
     yield* mintR0Authorization(db)
@@ -4111,7 +4105,9 @@ v2Real.instance("runs a prompt in the persisted session directory", () =>
       yield* Effect.promise(() => symlink(targetDirectory, persistedDirectory, "dir"))
     }
     const llm = yield* TestLLMServer
-    const prompt = yield* SessionPrompt.Service
+    const promptSvc = yield* SessionPromptV2.Service
+    const commandSvc = yield* SessionCommandV2.Service
+    const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
     const sessions = yield* Session.Service
     const instances = yield* InstanceStore.Service
     const events = yield* EventV2Bridge.Service
@@ -4192,7 +4188,9 @@ v2Real.instance(
   () =>
     Effect.gen(function* () {
       const { llm } = yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+      const commandSvc = yield* SessionCommandV2.Service
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const status = yield* SessionStatus.Service
       const bridge = yield* EventV2Bridge.Service
@@ -4244,7 +4242,9 @@ v2Real.instance(
   () =>
     Effect.gen(function* () {
       const { llm } = yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+      const commandSvc = yield* SessionCommandV2.Service
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const status = yield* SessionStatus.Service
       const { db } = yield* Database.Service
@@ -4329,7 +4329,9 @@ v2Real.instance(
   "applies agent variant only when using agent model",
   () =>
     Effect.gen(function* () {
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+      const commandSvc = yield* SessionCommandV2.Service
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const { db } = yield* Database.Service
       yield* mintR0Authorization(db)
@@ -4419,7 +4421,9 @@ v2Real.instance(
   "unknown agent throws typed error",
   () =>
     Effect.gen(function* () {
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+      const commandSvc = yield* SessionCommandV2.Service
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const { db } = yield* Database.Service
       yield* mintR0Authorization(db)
@@ -4451,7 +4455,9 @@ v2Real.instance(
   "unknown agent error includes available agent names",
   () =>
     Effect.gen(function* () {
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+      const commandSvc = yield* SessionCommandV2.Service
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const { db } = yield* Database.Service
       yield* mintR0Authorization(db)
@@ -4481,7 +4487,9 @@ noLLMServer.instance(
   "unknown command throws typed error with available names",
   () =>
     Effect.gen(function* () {
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+      const commandSvc = yield* SessionCommandV2.Service
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const session = yield* sessions.create({})
       const exit = yield* prompt
@@ -4540,7 +4548,9 @@ noLLMServer.instance(
   "intelligence draft fails closed for code tasks when model refinement fails",
   () =>
     Effect.gen(function* () {
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+      const commandSvc = yield* SessionCommandV2.Service
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const session = yield* sessions.create({})
 
@@ -4565,7 +4575,9 @@ it.instance(
   () =>
     Effect.gen(function* () {
       const { llm } = yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+      const commandSvc = yield* SessionCommandV2.Service
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const session = yield* sessions.create({})
 
@@ -4628,7 +4640,9 @@ it.instance(
       }))
       const auth = yield* Auth.Service
       yield* auth.set("test", { type: "api", key: "upstream-test-key" })
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+      const commandSvc = yield* SessionCommandV2.Service
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const session = yield* sessions.create({})
       const progress: string[] = []
@@ -4674,7 +4688,9 @@ v2Real.instance(
     Effect.gen(function* () {
       const { directory: dir } = yield* TestInstance
       const { llm } = yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+      const commandSvc = yield* SessionCommandV2.Service
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const { db } = yield* Database.Service
       yield* mintR0Authorization(db)
@@ -4736,7 +4752,9 @@ v2Real.instance(
   "legacy 'wish' prompt_pipeline mode is normalized to intelligence on submit",
   () =>
     Effect.gen(function* () {
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+      const commandSvc = yield* SessionCommandV2.Service
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const { db } = yield* Database.Service
       yield* mintR0Authorization(db)
@@ -4768,7 +4786,9 @@ v2Only.instance(
   "LEGACY-EXECUTION-ZERO: prompt admission refuses typed with zero legacy writer rows",
   () =>
     Effect.gen(function* () {
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+      const commandSvc = yield* SessionCommandV2.Service
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const { db } = yield* Database.Service
       const chat = yield* sessions.create({ title: "V2-only unavailable" })
@@ -4799,7 +4819,9 @@ v2Only.instance(
   () =>
     Effect.gen(function* () {
       const { llm } = yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+      const commandSvc = yield* SessionCommandV2.Service
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const { db } = yield* Database.Service
       const chat = yield* sessions.create({ title: "V2-only entries" })
@@ -4875,7 +4897,9 @@ v2Only.instance(
   "LEGACY-EXECUTION-ZERO: layer build registers no legacy provider owner lease under the profile",
   () =>
     Effect.gen(function* () {
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+      const commandSvc = yield* SessionCommandV2.Service
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const { db } = yield* Database.Service
       // Layer already built by the harness (fresh per test): under the V2-only profile the legacy
@@ -4903,7 +4927,9 @@ v2Only.instance(
   "LEGACY-EXECUTION-ZERO: loop refuses typed (not a defect) with the fork log showing blocked_v2_only",
   () =>
     Effect.gen(function* () {
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+      const commandSvc = yield* SessionCommandV2.Service
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const { db } = yield* Database.Service
       const chat = yield* sessions.create({ title: "V2-only loop" })
@@ -4929,7 +4955,9 @@ const realStackTestName = "1.4.8.rN REAL-STACK: interactive prompt executes thro
 const realStackTest = () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig(providerCfg)
-    const prompt = yield* SessionPrompt.Service
+    const promptSvc = yield* SessionPromptV2.Service
+    const commandSvc = yield* SessionCommandV2.Service
+    const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
     const sessions = yield* Session.Service
     const { db } = yield* Database.Service
     yield* mintR0Authorization(db)
@@ -4987,7 +5015,9 @@ v2Qualified.instance(
   "1.4.8.r0: qualified V2 owner executes the interactive prompt via admission + drain + mirror",
   () =>
     Effect.gen(function* () {
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+      const commandSvc = yield* SessionCommandV2.Service
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const { db } = yield* Database.Service
       yield* mintR0Authorization(db)
@@ -5035,7 +5065,9 @@ v2Qualified.instance(
   () =>
     Effect.gen(function* () {
       const { llm } = yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+      const commandSvc = yield* SessionCommandV2.Service
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const { db } = yield* Database.Service
       yield* mintR0Authorization(db)
@@ -5078,7 +5110,9 @@ v2Qualified.instance(
   "1.4.8.rN: prompt-async under the profile admits durably into V2 and drains explicitly",
   () =>
     Effect.gen(function* () {
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+      const commandSvc = yield* SessionCommandV2.Service
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const { db } = yield* Database.Service
       yield* mintR0Authorization(db)
@@ -5109,7 +5143,9 @@ v2Qualified.instance(
   () =>
     Effect.gen(function* () {
       const { directory: dir } = yield* TestInstance
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+      const commandSvc = yield* SessionCommandV2.Service
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const { db } = yield* Database.Service
       yield* mintR0Authorization(db)
@@ -5169,7 +5205,9 @@ v2Qualified.instance(
   "W16: coreV2Only + active goal routes the steer to SessionV2.prompt with delivery goal_steer (no legacy steer row)",
   () =>
     Effect.gen(function* () {
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+      const commandSvc = yield* SessionCommandV2.Service
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const { db } = yield* Database.Service
       yield* mintR0Authorization(db)
@@ -5213,7 +5251,9 @@ v2Qualified.instance(
   "W16: coreV2Only + NO active goal keeps the promptV2 chat admission unchanged (delivery defaults to steer)",
   () =>
     Effect.gen(function* () {
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+      const commandSvc = yield* SessionCommandV2.Service
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const { db } = yield* Database.Service
       yield* mintR0Authorization(db)
@@ -5248,7 +5288,9 @@ v2Qualified.instance(
   "W16: coreV2Only + TERMINAL goal phase does NOT route to goal_steer (falls through to the chat path)",
   () =>
     Effect.gen(function* () {
-      const prompt = yield* SessionPrompt.Service
+      const promptSvc = yield* SessionPromptV2.Service
+      const commandSvc = yield* SessionCommandV2.Service
+      const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
       const sessions = yield* Session.Service
       const { db } = yield* Database.Service
       yield* mintR0Authorization(db)
@@ -5327,7 +5369,9 @@ const bootReceiptSession = (template: (dir: string) => string) =>
       ...providerCfg(url),
       command: { receipt: { template: template(directory) } },
     }))
-    const prompt = yield* SessionPrompt.Service
+    const promptSvc = yield* SessionPromptV2.Service
+    const commandSvc = yield* SessionCommandV2.Service
+    const prompt = { ...promptSvc, command: commandSvc.command, shell: commandSvc.shell }
     const sessions = yield* Session.Service
     const { db } = yield* Database.Service
     yield* mintR0Authorization(db)
@@ -5630,3 +5674,4 @@ const v2RealPlugin = testEffect(
     }),
   30_000,
 )
+
