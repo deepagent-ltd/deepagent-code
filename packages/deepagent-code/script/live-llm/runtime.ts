@@ -284,7 +284,6 @@ export async function runLegacyLiveCases(input: {
     const { SessionToolRequestReceiptTable } = await import("../../src/session/tool-request-receipt.sql")
     const { EventDispatcher } = await import("../../src/session/event-dispatcher")
     const { MultiAgentRuntime } = await import("../../src/session/multi-agent-runtime")
-    const { makeEventTurnRunner } = await import("../../src/session/v4-event-runtime")
     const { V4PRCollaboration } = await import("../../src/session/v4-pr-collaboration")
     const { RuntimeFlags } = await import("../../src/effect/runtime-flags")
     const { InstanceRef } = await import("../../src/effect/instance-ref")
@@ -433,6 +432,13 @@ export async function runLegacyLiveCases(input: {
       })
       yield* Effect.addFinalizer(() => unsubscribeQuestions)
       const v4Event = input.v4Event
+      // v2w-j4 durable-only: the production V1 event turn runner is deleted and MultiAgentRuntime.dispatch
+      // is V2-admission-only. This LIVE §C harness still exercises the coordination library end-to-end
+      // (partition → gate → arbitrate → run → PR collaboration) with the V2-native subagent runner: the
+      // runner slot is deferred until the event id (hence its deterministic parent session) exists, and
+      // the dispatcher's dispatchPort drives `coordinate` directly — the harness-local equivalent of the
+      // deleted production dispatch branch, so the durable delivery/ack machinery stays exercised.
+      let v4Runner: ReturnType<typeof makeTaskSubagentRunner> | undefined
       const v4 =
         v4Event && agents && instances && gitService && prQueue
           ? yield* Effect.gen(function* () {
@@ -466,13 +472,17 @@ export async function runLegacyLiveCases(input: {
                       bus,
                       approvalQueue,
                     }),
-                    runner: makeEventTurnRunner({
-                      sessions,
-                      agents,
-                      sessionPrompt: prompts,
-                      instanceStore: instances,
-                      defaultModel: () => Effect.succeed({ providerID, modelID }),
-                    }),
+                    runner: (turn) =>
+                      v4Runner
+                        ? v4Runner(turn)
+                        : Effect.succeed({
+                            ok: false,
+                            reason: "runner_not_wired",
+                            structured: undefined,
+                            text: "",
+                            tokensUsed: 0,
+                            cost: 0,
+                          }),
                   })
                 }),
               ).pipe(Layer.provide(core), Layer.provide(registry))
@@ -481,7 +491,18 @@ export async function runLegacyLiveCases(input: {
                   const multiAgent = yield* MultiAgentRuntime.Service
                   const bus = yield* DeepAgentEventBus.Service
                   return EventDispatcher.layerWith({
-                    dispatchPort: { dispatch: multiAgent.dispatch },
+                    dispatchPort: {
+                      dispatch: (request) =>
+                        multiAgent.coordinate(request.event).pipe(
+                          Effect.flatMap((summary) =>
+                            summary.hasUnfinished
+                              ? Effect.fail(
+                                  new Error(`multi-agent coordination incomplete for event ${request.event.id}`),
+                                )
+                              : Effect.void,
+                          ),
+                        ),
+                    },
                     runLoops: false,
                     pendingDeliveryCount: bus.pendingDeliveryCount,
                   })
@@ -499,6 +520,25 @@ export async function runLegacyLiveCases(input: {
                 idempotencyKey: `live-v4:${input.suite}`,
                 priority: "normal",
                 payload: { ...v4Event.payload, directory: instance.directory },
+              })
+              // The event id now exists: create its deterministic parent session and install the
+              // V2-native subagent runner into the deferred slot (makeTaskSubagentRunner parents every
+              // child turn here and freezes the driver model onto the child session).
+              const parentSessionID = MultiAgentRuntime.parentSessionIDFor(event.id)
+              yield* V4PRCollaboration.ensureEventParent({
+                sessions,
+                instanceStore: instances,
+                parentSessionID,
+                directory: instance.directory,
+                correlationID: event.id,
+              })
+              v4Runner = makeTaskSubagentRunner({
+                sessions,
+                agents,
+                parentSessionID,
+                model: { providerID, modelID },
+                purpose: "generic",
+                v2Session,
               })
               const sourceDeliveryPendingBefore = (yield* bus.dueRetries(Number.MAX_SAFE_INTEGER)).some(
                 (delivery) =>
@@ -593,7 +633,6 @@ export async function runLegacyLiveCases(input: {
                   }
                 }),
               )
-              const parentSessionID = MultiAgentRuntime.parentSessionIDFor(event.id)
               const parentSession = yield* sessions.get(parentSessionID)
               const collaborationEntries = (yield* prQueue.list()).filter(
                 (entry) => entry.metadata?.eventID === event.id,

@@ -1,165 +1,149 @@
 import { test, expect, describe } from "bun:test"
-import { SessionV1 } from "@deepagent-code/core/v1/session"
-import { extractResponseText, formatPromptTooLargeError } from "../../src/cli/cmd/github"
-import type { MessageV2 } from "../../src/session/message-v2"
-import { SessionID, MessageID, PartID } from "../../src/session/schema"
+import { mkdtempSync } from "node:fs"
+import os from "node:os"
+import { Effect, Layer } from "effect"
+import { eq } from "drizzle-orm"
+import { Database } from "@deepagent-code/core/database/database"
+import { FSUtil } from "@deepagent-code/core/fs-util"
+import { Git } from "@deepagent-code/core/git"
+import { EventV2 } from "@deepagent-code/core/event"
+import { ProjectV2 } from "@deepagent-code/core/project"
+import { SessionV2 } from "@deepagent-code/core/session"
+import { SessionExecution } from "@deepagent-code/core/session/execution"
+import { SessionProjector } from "@deepagent-code/core/session/projector"
+import { SessionStore } from "@deepagent-code/core/session/store"
+import { SessionInputTable } from "@deepagent-code/core/session/sql"
+import { Prompt } from "@deepagent-code/core/session/prompt"
+import { formatPromptTooLargeError } from "../../src/cli/cmd/github"
+import { GitHubAgentExecution } from "@/github/github-agent-execution"
+import { testEffect } from "../lib/effect"
 
-// Helper to create minimal valid parts
-function createTextPart(text: string): SessionV1.Part {
-  return {
-    id: PartID.ascending(),
-    sessionID: SessionID.make("ses_test"),
-    messageID: MessageID.make("msg_test"),
-    type: "text" as const,
-    text,
-  }
+// v2w-j4 durable-only GitHub ingress — the admission half (src/github/github-agent-execution.ts),
+// mirroring test/im/im-agent-execution.test.ts. The durable execution record for a GitHub event
+// delivery IS the `session_input` row: keyed by the deterministic prompt message id for
+// (delivery, agent, turn), so a duplicate delivery of the same event reconciles as a SessionV2 exact
+// retry (ONE row, never two) and a conflicting prompt under the same id fails typed. Session identity
+// is stable per (lane, agent): follow-up events on the same issue/PR lane adopt the same session.
+
+const root = mkdtempSync(`${os.tmpdir()}/github-agent-execution-`)
+const database = Database.layerFromPath(":memory:")
+const events = EventV2.layer.pipe(Layer.provide(database))
+const projector = SessionProjector.layer.pipe(Layer.provide(events), Layer.provide(database))
+const store = SessionStore.layer.pipe(Layer.provide(database))
+const projects = ProjectV2.layer.pipe(
+  Layer.provide(database),
+  Layer.provide(FSUtil.defaultLayer),
+  Layer.provide(Git.defaultLayer),
+)
+// Noop execution: admission is durable; the advisory wake does not need a drain for these tests.
+const v2Session = SessionV2.layer.pipe(
+  Layer.provide(SessionExecution.noopLayer),
+  Layer.provide(store),
+  Layer.provide(projector),
+  Layer.provide(events),
+  Layer.provide(database),
+  Layer.provide(projects),
+  Layer.orDie,
+)
+const it = testEffect(Layer.mergeAll(database, events, projector, store, projects, v2Session))
+
+const delivery = {
+  laneID: "gh:acme/widgets#42",
+  deliveryID: "comment:1234567890",
+  turn: "work",
+  agent: "auto",
+  title: "GitHub acme/widgets#42",
+  directory: root,
+  prompt: new Prompt({ text: "/oc summarize" }),
 }
 
-function createReasoningPart(text: string): SessionV1.Part {
-  return {
-    id: PartID.ascending(),
-    sessionID: SessionID.make("ses_test"),
-    messageID: MessageID.make("msg_test"),
-    type: "reasoning" as const,
-    text,
-    time: { start: 0 },
-  }
-}
-
-function createToolPart(tool: string, title: string, status: "completed" | "running" = "completed"): SessionV1.Part {
-  if (status === "completed") {
-    return {
-      id: PartID.ascending(),
-      sessionID: SessionID.make("ses_test"),
-      messageID: MessageID.make("msg_test"),
-      type: "tool" as const,
-      callID: "c1",
-      tool,
-      state: {
-        status: "completed",
-        input: {},
-        output: "",
-        title,
-        metadata: {},
-        time: { start: 0, end: 1 },
-      },
-    }
-  }
-  return {
-    id: PartID.ascending(),
-    sessionID: SessionID.make("ses_test"),
-    messageID: MessageID.make("msg_test"),
-    type: "tool" as const,
-    callID: "c1",
-    tool,
-    state: {
-      status: "running",
-      input: {},
-      time: { start: 0 },
-    },
-  }
-}
-
-function createStepStartPart(): SessionV1.Part {
-  return {
-    id: PartID.ascending(),
-    sessionID: SessionID.make("ses_test"),
-    messageID: MessageID.make("msg_test"),
-    type: "step-start" as const,
-  }
-}
-
-function createStepFinishPart(): SessionV1.Part {
-  return {
-    id: PartID.ascending(),
-    sessionID: SessionID.make("ses_test"),
-    messageID: MessageID.make("msg_test"),
-    type: "step-finish" as const,
-    reason: "done",
-    cost: 0,
-    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-  }
-}
-
-describe("extractResponseText", () => {
-  test("returns text from text part", () => {
-    const parts = [createTextPart("Hello world")]
-    expect(extractResponseText(parts)).toBe("Hello world")
+const inputRowCount = (sessionID: SessionV2.ID) =>
+  Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    return (
+      yield* db
+        .select({ id: SessionInputTable.id })
+        .from(SessionInputTable)
+        .where(eq(SessionInputTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
+    ).length
   })
 
-  test("returns last text part when multiple exist", () => {
-    const parts = [createTextPart("First"), createTextPart("Last")]
-    expect(extractResponseText(parts)).toBe("Last")
-  })
+describe("GitHubAgentExecution.admitTurn (durable admission)", () => {
+  it.effect("a duplicate GitHub event delivery reconciles as an exact retry — exactly one session_input", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const first = yield* GitHubAgentExecution.admitTurn(session, delivery)
+      const duplicate = yield* GitHubAgentExecution.admitTurn(session, delivery)
 
-  test("returns text even when tool parts follow", () => {
-    const parts = [createTextPart("I'll help with that."), createToolPart("todowrite", "3 todos")]
-    expect(extractResponseText(parts)).toBe("I'll help with that.")
-  })
+      // Same lane session, same admitted row — the second delivery is an exact-retry no-op.
+      expect(duplicate.sessionID).toBe(first.sessionID)
+      expect(duplicate.admitted.id).toBe(first.admitted.id)
+      expect(duplicate.admitted.admittedSeq).toBe(first.admitted.admittedSeq)
+      expect(yield* inputRowCount(first.sessionID)).toBe(1)
+      expect(first.sessionID.startsWith("ses_gh_")).toBe(true)
+    }),
+  )
 
-  test("returns null for reasoning-only response (signals summary needed)", () => {
-    const parts = [createReasoningPart("Let me think about this...")]
-    expect(extractResponseText(parts)).toBeNull()
-  })
+  it.effect("a conflicting prompt under the same delivery id fails typed instead of mutating the work", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      yield* GitHubAgentExecution.admitTurn(session, delivery)
+      const conflict = yield* Effect.flip(
+        GitHubAgentExecution.admitTurn(session, {
+          ...delivery,
+          prompt: new Prompt({ text: "/oc DIFFERENT context snapshot" }),
+        }),
+      )
+      expect(conflict).toBeInstanceOf(SessionV2.PromptConflictError)
+      expect(yield* inputRowCount(GitHubAgentExecution.githubSessionIDFor(delivery.laneID, delivery.agent))).toBe(1)
+    }),
+  )
 
-  test("returns null for tool-only response (signals summary needed)", () => {
-    // This is the exact scenario from the bug report - todowrite with no text
-    const parts = [createToolPart("todowrite", "8 todos")]
-    expect(extractResponseText(parts)).toBeNull()
-  })
+  it.effect("a follow-up event on the same lane adopts the stable session; each turn is its own input", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const first = yield* GitHubAgentExecution.admitTurn(session, delivery)
+      const followUp = yield* GitHubAgentExecution.admitTurn(session, {
+        ...delivery,
+        deliveryID: "comment:9876543210",
+      })
+      const summaryTurn = yield* GitHubAgentExecution.admitTurn(session, {
+        ...delivery,
+        turn: "title-summary",
+      })
 
-  test("returns null for multiple completed tools", () => {
-    const parts = [
-      createToolPart("read", "src/file.ts"),
-      createToolPart("edit", "src/file.ts"),
-      createToolPart("bash", "bun test"),
-    ]
-    expect(extractResponseText(parts)).toBeNull()
-  })
+      // Same (lane, agent) conversation: one session, one durable input per (delivery, turn).
+      expect(followUp.sessionID).toBe(first.sessionID)
+      expect(summaryTurn.sessionID).toBe(first.sessionID)
+      expect(yield* inputRowCount(first.sessionID)).toBe(3)
 
-  test("returns null for running tool parts (signals summary needed)", () => {
-    const parts = [createToolPart("bash", "", "running")]
-    expect(extractResponseText(parts)).toBeNull()
-  })
+      // The session carries the GitHub binding.
+      const info = yield* session.get(first.sessionID)
+      expect(GitHubAgentExecution.githubSessionMetadata(info)).toEqual({
+        laneID: delivery.laneID,
+        agent: delivery.agent,
+      })
+    }),
+  )
 
-  test("throws on empty array", () => {
-    expect(() => extractResponseText([])).toThrow("no parts returned")
-  })
-
-  test("returns null for step-start only", () => {
-    const parts = [createStepStartPart()]
-    expect(extractResponseText(parts)).toBeNull()
-  })
-
-  test("returns null for step-finish only", () => {
-    const parts = [createStepFinishPart()]
-    expect(extractResponseText(parts)).toBeNull()
-  })
-
-  test("returns null for step-start and step-finish", () => {
-    const parts = [createStepStartPart(), createStepFinishPart()]
-    expect(extractResponseText(parts)).toBeNull()
-  })
-
-  test("returns text from multi-step response", () => {
-    const parts = [
-      createStepStartPart(),
-      createToolPart("read", "src/file.ts"),
-      createTextPart("Done"),
-      createStepFinishPart(),
-    ]
-    expect(extractResponseText(parts)).toBe("Done")
-  })
-
-  test("prefers text over reasoning when both present", () => {
-    const parts = [createReasoningPart("Internal thinking..."), createTextPart("Final answer")]
-    expect(extractResponseText(parts)).toBe("Final answer")
-  })
-
-  test("prefers text over tools when both present", () => {
-    const parts = [createToolPart("read", "src/file.ts"), createTextPart("Here's what I found")]
-    expect(extractResponseText(parts)).toBe("Here's what I found")
-  })
+  it.effect("terminalReply reads the settled activity's newest assistant evidence", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const { sessionID } = yield* GitHubAgentExecution.admitTurn(session, delivery)
+      // No assistant message yet: nothing settled (admission-only under the noop execution layer).
+      const before = yield* GitHubAgentExecution.terminalReply(session, sessionID)
+      expect(before).toBeUndefined()
+      // Sanity: the identity derivations are pure and stable.
+      expect(GitHubAgentExecution.githubPromptIDFor(delivery.deliveryID, delivery.agent, "work")).toBe(
+        GitHubAgentExecution.githubPromptIDFor(delivery.deliveryID, delivery.agent, "work"),
+      )
+      expect(GitHubAgentExecution.githubPromptIDFor(delivery.deliveryID, delivery.agent, "title-summary")).not.toBe(
+        GitHubAgentExecution.githubPromptIDFor(delivery.deliveryID, delivery.agent, "work"),
+      )
+    }),
+  )
 })
 
 describe("formatPromptTooLargeError", () => {
@@ -183,7 +167,7 @@ describe("formatPromptTooLargeError", () => {
     expect(result).toInclude("diagram.png (150 KB)")
   })
 
-  test("lists all files when multiple present", () => {
+  test("lists all files when multiple", () => {
     // Base64 sizes: 4KB -> 3KB, 8KB -> 6KB, 12KB -> 9KB
     const files = [
       { filename: "img1.png", content: "x".repeat(4 * 1024) },

@@ -53,11 +53,14 @@ const continuationRefFrom = (artifacts: ReadonlyArray<string>): string | undefin
   artifacts.find((artifact) => artifact.startsWith(GIT_REF_ARTIFACT_PREFIX))?.slice(GIT_REF_ARTIFACT_PREFIX.length)
 
 export interface Interface {
-  /** The DispatchPort surface — the Event Dispatcher calls this for a routed `dispatch` decision. */
+  /** The DispatchPort surface — the Event Dispatcher calls this for a routed `dispatch` decision.
+   * v2w-j4 durable-only: V2-admission-only; an unavailable admission lane is a typed
+   * `EventV2AdmissionUnavailableError` refusal (fail-closed), never a legacy execution. */
   readonly dispatch: (request: EventDispatcher.DispatchRequest) => Effect.Effect<void, unknown>
   /**
-   * Coordinate ONE event end-to-end (partition → gate → arbitrate → run → emit). Exposed for
-   * deterministic testing; `dispatch` delegates here. Returns a summary of what ran / was blocked.
+   * Coordinate ONE event end-to-end (partition → gate → arbitrate → run → emit). Exposed for the
+   * deterministic §C coordination library tests with an injected runner; production dispatch no
+   * longer reaches it (the V1 fallback branch is deleted). Returns a summary of what ran / was blocked.
    */
   readonly coordinate: (event: DeepAgentEvent.Event) => Effect.Effect<CoordinationSummary, unknown>
 }
@@ -105,10 +108,27 @@ export interface EventV2AdmissionBridge {
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/MultiAgentRuntime") {}
 
+/** Why a dispatch refused to run the V2 admission path (v2w-j4 durable-only: the legacy fallback is
+ * deleted, so an unavailable admission lane is a typed fail-closed refusal, never a silent V1 run). */
+export type EventV2AdmissionUnavailableReason = "admission_switch_off" | "admission_seam_absent"
+
+/** Typed refusal thrown by `dispatch` when the durable V2 admission lane is not live. */
+export class EventV2AdmissionUnavailableError extends Error {
+  readonly _tag = "MultiAgentRuntime.EventV2AdmissionUnavailableError"
+  readonly reason: EventV2AdmissionUnavailableReason
+  constructor(reason: EventV2AdmissionUnavailableReason, message: string) {
+    super(message)
+    this.name = "EventV2AdmissionUnavailableError"
+    this.reason = reason
+  }
+}
+
 export interface LayerOptions {
   readonly runtimeFeatures?: RuntimeFeatureRegistry
-  // the one-turn runner (production: makeTaskSubagentRunner). Tests inject a fake.
-  readonly runner: SubagentTurnRunner
+  // the one-turn runner (§C coordination library seam). v2w-j4 durable-only: production dispatch is
+  // V2-admission-only, so production wires NO runner — the legacy event turn runner is deleted. The
+  // §C coordination library (coordinate, deterministic tests) injects a runner; absent → fail closed.
+  readonly runner?: SubagentTurnRunner
   // Deterministic partition seam. Production uses TaskPartitioner.partition with stable event IDs;
   // tests can inject a valid DAG to prove same-wave scheduling without duplicating scheduler logic.
   readonly partition?: (event: DeepAgentEvent.Event) => TaskPartitioner.Partition
@@ -906,6 +926,8 @@ export const layerWith = (options: LayerOptions) =>
 
               // §C4 starts only after deterministic admission. Effect.all below runs every admitted turn
               // in this DAG wave concurrently; the next wave waits for all of them to settle.
+              // v2w-j4 durable-only: production wires NO turn runner (dispatch never reaches §C — the
+              // V1 fallback is deleted); an absent runner fails the turn closed, never a silent no-op.
               running.push(
                 emit(
                   event,
@@ -916,29 +938,38 @@ export const layerWith = (options: LayerOptions) =>
                     withExecutionLease(
                       event,
                       executionLease,
-                      runner({
-                        agentType: agent.name,
-                        prompt: [
-                          subtask.intent,
-                          "Work only inside the current Session directory and use repo-relative paths.",
-                          `Triggering event: ${event.type} (${event.id}).`,
-                          `Declared file scope: ${subtask.fileScope.length > 0 ? subtask.fileScope.join(", ") : "unspecified"}.`,
-                          `Event payload: ${JSON.stringify(promptPayload)}`,
-                        ].join("\n\n"),
-                        workspaceID: event.workspaceID,
-                        parentSessionID: parentSessionIDFor(event.id),
-                        requiresWriteIsolation: requiresWriteIsolation(subtask),
-                        ...(executionRecord?.continuationRef || dependencyRefs[0]
-                          ? { baseRef: executionRecord?.continuationRef ?? dependencyRefs[0] }
-                          : {}),
-                        correlationID: event.correlationID ?? event.id,
-                        ...(agent.limits?.maxTurnDurationMs != null
-                          ? { maxTurnDurationMs: agent.limits.maxTurnDurationMs }
-                          : {}),
-                        ...(typeof (event.payload as { directory?: unknown } | null)?.directory === "string"
-                          ? { directory: (event.payload as { directory: string }).directory }
-                          : {}),
-                      }),
+                      runner
+                        ? runner({
+                            agentType: agent.name,
+                            prompt: [
+                              subtask.intent,
+                              "Work only inside the current Session directory and use repo-relative paths.",
+                              `Triggering event: ${event.type} (${event.id}).`,
+                              `Declared file scope: ${subtask.fileScope.length > 0 ? subtask.fileScope.join(", ") : "unspecified"}.`,
+                              `Event payload: ${JSON.stringify(promptPayload)}`,
+                            ].join("\n\n"),
+                            workspaceID: event.workspaceID,
+                            parentSessionID: parentSessionIDFor(event.id),
+                            requiresWriteIsolation: requiresWriteIsolation(subtask),
+                            ...(executionRecord?.continuationRef || dependencyRefs[0]
+                              ? { baseRef: executionRecord?.continuationRef ?? dependencyRefs[0] }
+                              : {}),
+                            correlationID: event.correlationID ?? event.id,
+                            ...(agent.limits?.maxTurnDurationMs != null
+                              ? { maxTurnDurationMs: agent.limits.maxTurnDurationMs }
+                              : {}),
+                            ...(typeof (event.payload as { directory?: unknown } | null)?.directory === "string"
+                              ? { directory: (event.payload as { directory: string }).directory }
+                              : {}),
+                          })
+                        : Effect.succeed({
+                            ok: false,
+                            reason: "runner_unavailable",
+                            structured: undefined,
+                            text: "",
+                            tokensUsed: 0,
+                            cost: 0,
+                          } satisfies SubagentTurnResult),
                     ).pipe(
                       Effect.catchCause((cause) => {
                         log.error("subtask runner failed", { taskID: subtask.id, cause: Cause.pretty(cause) })
@@ -1153,22 +1184,28 @@ export const layerWith = (options: LayerOptions) =>
           return yield* bridge.admit({ request, scope })
         })
 
-      // dispatch: if any subtask was deferred / dep-unmet / runner-failed, FAIL so the Event Dispatcher
-      // nacks and the retry pump re-drives the event (idempotent thanks to stable ids + started-guard).
-      // A coordination where every subtask reached a terminal state (completed, or blocked for a
-      // permanent reason like no_capable_agent / autonomy / security / suggestion_only) returns void →
-      // the dispatcher acks. NOTE: no_capable_agent/autonomy/security are treated as TERMINAL here
-      // (retrying won't change the registry/gates); only deferred + runner_failed + dep_not_met retry.
+      // v2w-j4 durable-only: dispatch is V2-admission-ONLY. The hybrid fallback (switch off / seam
+      // absent → silently run the §C coordination through the V1 turn runner) is DELETED: the
+      // durable-only architecture forbids it. A disabled switch or an unwired seam is a TYPED refusal
+      // — dispatch fails, the dispatcher nacks, and the retry pump re-drives the event when the
+      // admission lane is live again. The event is never silently executed on the legacy path (and
+      // `coordinate` remains exposed for the §C coordination library's deterministic tests only).
       const dispatch: Interface["dispatch"] = (request) => {
-        // C5-04 — the V2 admission path is authoritative when the switch is ON + a seam is present.
-        if (isEventV2AdmissionEnabled(options.runtimeFeatures) && options.eventV2Admission) return dispatchV2(request)
-        return coordinate(request.event).pipe(
-          Effect.flatMap((summary) =>
-            summary.hasUnfinished
-              ? Effect.fail(new Error(`multi-agent coordination incomplete for event ${request.event.id}`))
-              : Effect.void,
-          ),
-        )
+        if (!isEventV2AdmissionEnabled(options.runtimeFeatures))
+          return Effect.fail(
+            new EventV2AdmissionUnavailableError(
+              "admission_switch_off",
+              `event V2 admission is disabled; refusing to dispatch event ${request.event.id} on the deleted legacy path`,
+            ),
+          )
+        if (!options.eventV2Admission)
+          return Effect.fail(
+            new EventV2AdmissionUnavailableError(
+              "admission_seam_absent",
+              `no eventV2Admission bridge is wired; refusing to dispatch event ${request.event.id} on the deleted legacy path`,
+            ),
+          )
+        return dispatchV2(request)
       }
 
       return Service.of({ dispatch, coordinate })

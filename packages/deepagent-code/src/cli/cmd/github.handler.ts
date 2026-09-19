@@ -20,21 +20,26 @@ import { UI } from "../ui"
 import { ModelsDev } from "@deepagent-code/core/models-dev"
 import { InstanceRef } from "@/effect/instance-ref"
 import { SessionShare } from "@/share/session"
-import { Session } from "@/session/session"
-import type { SessionID } from "../../session/schema"
-import { MessageID, PartID } from "../../session/schema"
 import { Provider } from "@/provider/provider"
 import { MessageV2 } from "../../session/message-v2"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@deepagent-code/core/event"
-import { SessionPrompt } from "@/session/prompt"
-import { LegacyExecutionUnavailable } from "@/session/legacy-execution-zero"
+import { SessionV2 } from "@deepagent-code/core/session"
+import { Prompt } from "@deepagent-code/core/session/prompt"
+import { ModelV2 } from "@deepagent-code/core/model"
+import { ProviderV2 } from "@deepagent-code/core/provider"
+import { AgentV2 } from "@deepagent-code/core/agent"
+import { Location } from "@deepagent-code/core/location"
+import { AbsolutePath } from "@deepagent-code/core/schema"
+import { InstallationVersion } from "@deepagent-code/core/installation/version"
+import { Agent } from "@/agent/agent"
 import { Git } from "@/git"
+import { GitHubAgentExecution } from "@/github/github-agent-execution"
 import { setTimeout as sleep } from "node:timers/promises"
 import { Process } from "@/util/process"
 import { parseGitHubRemote } from "@/util/repository"
-import { Effect } from "effect"
-import { extractResponseText, formatPromptTooLargeError } from "./github.shared"
+import { Effect, Option } from "effect"
+import { formatPromptTooLargeError } from "./github.shared"
 
 type GitHubAuthor = {
   login: string
@@ -380,18 +385,15 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
   const ctx = yield* InstanceRef
   if (!ctx) return yield* Effect.die("InstanceRef not provided")
   const gitSvc = yield* Git.Service
-  const sessionSvc = yield* Session.Service
   const sessionShare = yield* SessionShare.Service
-  const sessionPrompt = yield* SessionPrompt.Service
+  // v2w-j4 durable-only: the GitHub ingress admits event work through the durable V2 session
+  // authority (GitHubAgentExecution — deterministic lane/delivery ids, one session_input per
+  // (delivery, turn)); the legacy fresh-V1-Session-per-run + SessionPrompt path is deleted.
+  const v2Session = yield* SessionV2.Service
+  const agentSvc = yield* Agent.Service
   const events = yield* EventV2Bridge.Service
-  // LEGACY-EXECUTION-ZERO: surface the typed refusal as a friendly, message-bearing Error so the
-  // GitHub action logs `LegacyExecutionUnavailable: <reason>: <detail>` instead of `[object Object]`.
   const runLocalEffect = <A, E>(effect: Effect.Effect<A, E>) =>
-    Effect.runPromise(effect.pipe(Effect.provideService(InstanceRef, ctx))).catch((error) => {
-      if (error instanceof LegacyExecutionUnavailable)
-        throw new Error(`LegacyExecutionUnavailable: ${error.reason}: ${error.detail}`)
-      throw error
-    })
+    Effect.runPromise(effect.pipe(Effect.provideService(InstanceRef, ctx)))
   yield* Effect.promise(async () => {
     const isMock = args.token || args.event
 
@@ -442,13 +444,27 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
     let octoRest: Octokit
     let octoGraph: typeof graphql
     let gitConfig: string
-    let session: { id: SessionID; title: string; version: string }
+    let session: { id: SessionV2.ID; title: string; version: string }
+    let agentName: string
     let shareId: string | undefined
     let exitCode = 0
     type PromptFiles = Awaited<ReturnType<typeof getUserPrompt>>["promptFiles"]
     const triggerCommentId = isCommentEvent
       ? (payload as IssueCommentEvent | PullRequestReviewCommentEvent).comment.id
       : undefined
+    // v2w-j4 durable identity — the (lane, delivery, agent) key that makes every GitHub event
+    // delivery a deterministic durable V2 admission:
+    //   laneID      — the conversation the event belongs to (stable per issue/PR, per workflow run
+    //                 for repo events) → the STABLE session (follow-up comments adopt it).
+    //   deliveryID  — the event's foreign identity (comment id / issue-action / run id) → the
+    //                 idempotency key: a duplicate delivery reconciles as an exact retry.
+    const laneID = isRepoEvent || issueId === undefined ? `run:${runId}` : `gh:${owner}/${repo}#${issueId}`
+    const deliveryID = triggerCommentId
+      ? `comment:${triggerCommentId}`
+      : isRepoEvent || issueId === undefined
+        ? `run:${runId}`
+        : `${context.eventName}:${issueId}:${(payload as IssuesEvent | PullRequestEvent).action ?? ""}`
+    const sessionTitle = isRepoEvent || issueId === undefined ? `GitHub run ${runId}` : `GitHub ${owner}/${repo}#${issueId}`
     const useGithubToken = normalizeUseGithubToken()
     const commentType = isCommentEvent
       ? context.eventName === "pull_request_review_comment"
@@ -504,24 +520,43 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
         await addReaction(commentType)
       }
 
-      // Setup deepagent-code session
+      // Setup deepagent-code session (v2w-j4: durable V2 adoption — the stable (lane, agent) session;
+      // the fresh V1 Session per run is deleted). The agent is the instance default (the previous path
+      // omitted it and let the server resolve the same default).
       const repoData = await fetchRepo()
-      session = await runLocalEffect(
-        sessionSvc.create({
-          permission: [
-            {
-              permission: "question",
-              action: "deny",
-              pattern: "*",
-            },
-          ],
-        }),
-      )
+      agentName = await runLocalEffect(agentSvc.defaultAgent())
+      const sessionID = GitHubAgentExecution.githubSessionIDFor(laneID, agentName)
+      const model = {
+        id: ModelV2.ID.make(modelID),
+        providerID: ProviderV2.ID.make(providerID),
+        ...(variant ? { variant: ModelV2.VariantID.make(variant) } : {}),
+      }
+      const existing = await runLocalEffect(v2Session.get(sessionID).pipe(Effect.option))
+      if (Option.isNone(existing)) {
+        await runLocalEffect(
+          v2Session.create({
+            id: sessionID,
+            agent: AgentV2.ID.make(agentName),
+            title: sessionTitle,
+            metadata: { github: { laneID, agent: agentName } },
+            location: Location.Ref.make({ directory: AbsolutePath.make(ctx.worktree) }),
+            permissions: [{ action: "question", resource: "*", effect: "deny" }],
+            model,
+          }),
+        )
+      } else {
+        // Adoption: keep parity with the old fresh-session-per-run model resolution — the run's
+        // MODEL/VARIANT env applies to this run's turns (a durable switch, future provider turns only).
+        await runLocalEffect(v2Session.switchModel({ sessionID, model }))
+      }
+      session = { id: sessionID, title: sessionTitle, version: InstallationVersion }
       await subscribeSessionEvents()
       shareId = await (async () => {
         if (share === false) return
         if (!share && repoData.data.private) return
-        await runLocalEffect(sessionShare.share(session.id))
+        // Tolerate a compat-projection lag on the V1 share metadata row: the share itself is
+        // created remotely + in the share table first; only the cosmetic info write can miss.
+        await runLocalEffect(sessionShare.share(session.id).pipe(Effect.catchCause(() => Effect.void)))
         return session.id.slice(-8)
       })()
       console.log("deepagent-code session", session.id)
@@ -887,7 +922,7 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
 
     async function summarize(response: string) {
       try {
-        return await chat(`Summarize the following in less than 40 characters:\n\n${response}`)
+        return await chat(`Summarize the following in less than 40 characters:\n\n${response}`, [], "title-summary")
       } catch {
         const title = issueEvent
           ? issueEvent.issue.title
@@ -896,91 +931,62 @@ export const githubRun = Effect.fn("Cli.github.run")(function* (args: { event?: 
       }
     }
 
-    async function chat(message: string, files: PromptFiles = []) {
-      console.log("Sending message to deepagentCode...")
-
-      return runLocalEffect(
+    // v2w-j4 durable-only: one chat turn = ONE durable SessionV2 admission (deterministic prompt id
+    // per (delivery, turn) — a re-run of the same event is an exact retry, never duplicated agent
+    // work) + a wait for the session to settle, then the terminal assistant reply read back from the
+    // session's durable history. The legacy SessionPrompt.prompt call is deleted.
+    const runTurn = async (turn: string, message: string, files: PromptFiles) => {
+      const prompt = new Prompt({
+        text: message,
+        ...(files.length > 0
+          ? {
+              files: files.map((f) => ({
+                uri: `data:${f.mime};base64,${f.content}`,
+                mime: f.mime,
+                name: f.filename,
+                source: { start: f.start, end: f.end, text: f.replacement },
+              })),
+            }
+          : {}),
+      })
+      const reply = await runLocalEffect(
         Effect.gen(function* () {
-          const prompt = sessionPrompt
-          const result = yield* prompt.prompt({
-            sessionID: session.id,
-            messageID: MessageID.ascending(),
-            variant,
-            model: {
-              providerID,
-              modelID,
-            },
-            // agent is omitted - server will use default_agent from config or fall back to "build"
-            parts: [
-              {
-                id: PartID.ascending(),
-                type: "text",
-                text: message,
-              },
-              ...files.flatMap((f) => [
-                {
-                  id: PartID.ascending(),
-                  type: "file" as const,
-                  mime: f.mime,
-                  url: `data:${f.mime};base64,${f.content}`,
-                  filename: f.filename,
-                  source: {
-                    type: "file" as const,
-                    text: {
-                      value: f.replacement,
-                      start: f.start,
-                      end: f.end,
-                    },
-                    path: f.filename,
-                  },
-                },
-              ]),
-            ],
+          const { sessionID: id } = yield* GitHubAgentExecution.admitTurn(v2Session, {
+            laneID,
+            deliveryID,
+            turn,
+            agent: agentName,
+            title: sessionTitle,
+            directory: ctx.worktree,
+            prompt,
           })
-
-          if (result.info.role === "assistant" && result.info.error) {
-            const err = result.info.error
-            console.error("Agent error:", err)
-            if (err.name === "ContextOverflowError") throw new Error(formatPromptTooLargeError(files))
-            const message = "message" in err.data ? err.data.message : ""
-            throw new Error(`${err.name}: ${message}`)
-          }
-
-          const text = extractResponseText(result.parts)
-          if (text) return text
-
-          console.log("Requesting summary from agent...")
-          const summary = yield* prompt.prompt({
-            sessionID: session.id,
-            messageID: MessageID.ascending(),
-            variant,
-            model: {
-              providerID,
-              modelID,
-            },
-            tools: { "*": false },
-            parts: [
-              {
-                id: PartID.ascending(),
-                type: "text",
-                text: "Summarize the actions (tool calls & reasoning) you did for the user in 1-2 sentences.",
-              },
-            ],
-          })
-
-          if (summary.info.role === "assistant" && summary.info.error) {
-            const err = summary.info.error
-            console.error("Summary agent error:", err)
-            if (err.name === "ContextOverflowError") throw new Error(formatPromptTooLargeError(files))
-            const message = "message" in err.data ? err.data.message : ""
-            throw new Error(`${err.name}: ${message}`)
-          }
-
-          const summaryText = extractResponseText(summary.parts)
-          if (!summaryText) throw new Error("Failed to get summary from agent")
-          return summaryText
+          yield* v2Session.wait(id)
+          return yield* GitHubAgentExecution.terminalReply(v2Session, id)
         }),
       )
+      if (reply?.error) {
+        console.error("Agent error:", reply.error.message)
+        if (reply.error.message.includes("ContextOverflow")) throw new Error(formatPromptTooLargeError(files))
+        throw new Error(reply.error.message)
+      }
+      return reply?.text
+    }
+
+    async function chat(message: string, files: PromptFiles = [], turn = "work") {
+      console.log("Sending message to deepagentCode...")
+      const text = await runTurn(turn, message, files)
+      if (text) return text
+
+      // Tool-only turn (no text parts): ask the agent to summarize its actions — its own
+      // deterministic turn id, so a re-run of the same event reconciles the whole run idempotently.
+      console.log("Requesting summary from agent...")
+      const actionsSummary = await runTurn(
+        "actions-summary",
+        "Summarize the actions (tool calls & reasoning) you did for the user in 1-2 sentences.",
+        [],
+      )
+      if (!actionsSummary) throw new Error("Failed to get summary from agent")
+      return actionsSummary
     }
 
     async function getOidcToken() {

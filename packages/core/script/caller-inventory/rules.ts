@@ -778,6 +778,44 @@ export const RULE_PACKS: readonly RulePack[] = [
     rules: readOnlyNoBody(),
   },
 
+  // ---- github (v2w-j4 durable-only) ----
+  // The GitHub ingress durable ADMISSION half (src/github/github-agent-execution.ts). The legacy
+  // GitHub Action path (fresh V1 Session per run through Session.Service.create + SessionPrompt
+  // per chat turn) is deleted. One SessionV2 admission per (delivery, agent, turn) with
+  // deterministic ids — the session id derived from the (lane, agent) conversation so a follow-up
+  // event on the same issue/PR ADOPTS the session, the prompt message id from (delivery, agent,
+  // turn) so a duplicate delivery reconciles as an exact retry — admitted as the durable
+  // session_input row itself; execution is decoupled (advisory wake under the runner) and the
+  // terminal assistant message read back from the durable history is the terminal evidence.
+  // v2 on admission/execution: verified SessionV2.prompt admission chain plus the core session
+  // and local-execution authorities in the closure, and NO legacy prompt hop in the module's
+  // import closure (noReach). The remaining dimensions are read_only with the module's own
+  // admission surface as the genuine read fact.
+  {
+    match: (id) => id === "github.agent-execution",
+    rules: withReadOnlyRest(
+      {
+        admission_owner: v2([
+          { kind: "reach", pathSuffix: "packages/deepagent-code/src/github/github-agent-execution.ts" },
+          { kind: "reach", pathSuffix: AUTHORITY.V2_SESSION_INPUT },
+          call("SessionV2.ID.make", "packages/deepagent-code/src/github/github-agent-execution.ts"),
+          call("SessionMessage.ID.make", "packages/deepagent-code/src/github/github-agent-execution.ts"),
+          call("v2Session.prompt", "packages/deepagent-code/src/github/github-agent-execution.ts"),
+          noReachPath(AUTHORITY.LEGACY_PROMPT),
+        ]),
+        execution_owner: v2([
+          { kind: "reach", pathSuffix: "packages/deepagent-code/src/github/github-agent-execution.ts" },
+          V2_SESSION_CORE,
+          V2_EXEC_LOCAL,
+          call("v2Session.prompt", "packages/deepagent-code/src/github/github-agent-execution.ts"),
+          noReachPath(AUTHORITY.LEGACY_PROMPT),
+        ]),
+      },
+      [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")],
+      "packages/deepagent-code/src/github/github-agent-execution.ts",
+    ),
+  },
+
   // ---- tui ----
   // RI-71 W3 (2026-09-10): the TUI group is the terminal-UI control plane — every handler
   // publishes TuiEvent V2 definitions (tui.prompt/command/toast/select) through the EventV2

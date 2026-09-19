@@ -645,6 +645,21 @@ const FIXED_ENTRIES: readonly FixedEntry[] = [
     declare: "ServerAgentListProviderLive",
   },
 
+  // GitHub ingress (v2w-j4 durable-only): the GitHub Action's durable V2 admission face. The legacy
+  // path (a FRESH V1 Session per run through Session.Service.create + one SessionPrompt.prompt per
+  // chat turn, in cli/cmd/github.handler.ts) is DELETED; every GitHub event delivery is ONE durable
+  // SessionV2 admission with deterministic (lane, delivery, agent, turn) ids — a duplicate delivery
+  // (action re-run / redelivered webhook) reconciles as an exact retry, and the settled activity's
+  // terminal assistant message IS the terminal evidence.
+  {
+    id: "github.agent-execution",
+    surface: "cli-deepagent-code",
+    kind: "durable-agent-admission",
+    name: "GitHub event durable admission",
+    fileFromRoot: "packages/deepagent-code/src/github/github-agent-execution.ts",
+    declare: "admitTurn",
+  },
+
   // Event (surface 7): bus / router / bridge / daemon consumers.
   {
     id: "event.v2-bridge",
