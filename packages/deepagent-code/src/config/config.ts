@@ -1,7 +1,7 @@
 import * as Log from "@deepagent-code/core/util/log"
 import { serviceUse } from "@deepagent-code/core/effect/service-use"
 import path from "path"
-import { pathToFileURL } from "url"
+import { fileURLToPath, pathToFileURL } from "url"
 import os from "os"
 import { mergeDeep } from "remeda"
 import { Global } from "@deepagent-code/core/global"
@@ -757,6 +757,25 @@ export const layer = Layer.effect(
 
           yield* ensureGitignore(dir).pipe(Effect.orDie)
 
+          result.command = mergeDeep(result.command ?? {}, yield* Effect.promise(() => ConfigCommand.load(dir)))
+          result.agent = mergeDeep(result.agent ?? {}, yield* Effect.promise(() => ConfigAgent.load(dir)))
+          result.agent = mergeDeep(result.agent ?? {}, yield* Effect.promise(() => ConfigAgent.loadMode(dir)))
+          // Auto-discovered plugins under `.deepagent-code/plugin(s)` are already local files, so ConfigPlugin.load
+          // returns normalized Specs and we only need to attach origin metadata here.
+          const list = yield* Effect.promise(() => ConfigPlugin.load(dir))
+          yield* mergePluginOrigins(dir, list)
+
+          // The @deepagent-code/plugin support package only needs to be resolvable from directories that
+          // actually host file-based plugins; installing it into every config directory forces a registry
+          // round-trip on every instance boot even where no plugin can ever resolve it.
+          const hostsPlugins = (result.plugin_origins ?? []).some((origin) => {
+            const spec = ConfigPlugin.pluginSpecifier(origin.spec)
+            if (!spec.startsWith("file://")) return false
+            const file = fileURLToPath(spec)
+            return file === dir || file.startsWith(dir + path.sep)
+          })
+          if (!hostsPlugins) continue
+
           const dep = yield* npmSvc
             .install(dir, {
               add: [
@@ -779,14 +798,6 @@ export const layer = Layer.effect(
               Effect.forkScoped,
             )
           deps.push(dep)
-
-          result.command = mergeDeep(result.command ?? {}, yield* Effect.promise(() => ConfigCommand.load(dir)))
-          result.agent = mergeDeep(result.agent ?? {}, yield* Effect.promise(() => ConfigAgent.load(dir)))
-          result.agent = mergeDeep(result.agent ?? {}, yield* Effect.promise(() => ConfigAgent.loadMode(dir)))
-          // Auto-discovered plugins under `.deepagent-code/plugin(s)` are already local files, so ConfigPlugin.load
-          // returns normalized Specs and we only need to attach origin metadata here.
-          const list = yield* Effect.promise(() => ConfigPlugin.load(dir))
-          yield* mergePluginOrigins(dir, list)
         }
 
         if (process.env.DEEPAGENT_CODE_CONFIG_CONTENT) {
