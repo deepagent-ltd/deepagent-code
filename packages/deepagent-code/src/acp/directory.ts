@@ -53,6 +53,8 @@ export class Loader extends Context.Service<Loader, LoaderInterface>()("@deepage
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/ACPDirectory") {}
 
+export const MAX_CACHED_DIRECTORIES = 64
+
 export const modelKey = (model: DefaultModel) => `${model.providerID}/${model.modelID}`
 
 export const variants = (snapshot: Snapshot, model: DefaultModel) => snapshot.variantsByModel[modelKey(model)]
@@ -117,7 +119,7 @@ export const loaderLayer = Layer.effect(
           const providers = yield* provider.list()
           const [agents, defaultAgent, commands, defaultModel] = yield* Effect.all(
             [agent.list(), agent.defaultInfo(), command.list(), provider.defaultModel().pipe(Effect.option)],
-            { concurrency: "unbounded" },
+            { concurrency: 4 },
           )
           return build({
             directory,
@@ -139,64 +141,65 @@ export const loaderLayer = Layer.effect(
   }),
 )
 
+export function make(loader: LoaderInterface): Interface {
+  const snapshots = SynchronizedRef.makeUnsafe(new Map<string, Effect.Effect<Snapshot, ACPError.Error>>())
+
+  const cached = Effect.fnUntraced(function* (directory: string) {
+    return yield* SynchronizedRef.modifyEffect(
+      snapshots,
+      Effect.fnUntraced(function* (items) {
+        const current = items.get(directory)
+        if (current) return [current, items] as const
+        const next = yield* Effect.cached(
+          loader.load(directory).pipe(
+            Effect.tapError(() =>
+              SynchronizedRef.update(snapshots, (state) => {
+                const next = new Map(state)
+                next.delete(directory)
+                return next
+              }),
+            ),
+          ),
+        )
+        return [next, cache(items, directory, next)] as const
+      }),
+    )
+  })
+
+  const get = Effect.fn("ACPDirectory.get")(function* (directory: string) {
+    return yield* yield* cached(directory)
+  })
+
+  const refresh = Effect.fn("ACPDirectory.refresh")(function* (directory: string) {
+    return yield* SynchronizedRef.modifyEffect(
+      snapshots,
+      Effect.fnUntraced(function* (items) {
+        const next = yield* Effect.cached(
+          loader.load(directory).pipe(
+            Effect.tapError(() =>
+              SynchronizedRef.update(snapshots, (state) => {
+                const next = new Map(state)
+                next.delete(directory)
+                return next
+              }),
+            ),
+          ),
+        )
+        return [next, cache(items, directory, next)] as const
+      }),
+    ).pipe(Effect.flatten)
+  })
+
+  return Service.of({
+    get,
+    refresh,
+    variants,
+  })
+}
+
 export const layer = Layer.effect(
   Service,
-  Effect.gen(function* () {
-    const loader = yield* Loader
-    const snapshots = yield* SynchronizedRef.make(new Map<string, Effect.Effect<Snapshot, ACPError.Error>>())
-
-    const cached = Effect.fnUntraced(function* (directory: string) {
-      return yield* SynchronizedRef.modifyEffect(
-        snapshots,
-        Effect.fnUntraced(function* (items) {
-          const current = items.get(directory)
-          if (current) return [current, items] as const
-          const next = yield* Effect.cached(
-            loader.load(directory).pipe(
-              Effect.tapError(() =>
-                SynchronizedRef.update(snapshots, (state) => {
-                  const next = new Map(state)
-                  next.delete(directory)
-                  return next
-                }),
-              ),
-            ),
-          )
-          return [next, new Map(items).set(directory, next)] as const
-        }),
-      )
-    })
-
-    const get = Effect.fn("ACPDirectory.get")(function* (directory: string) {
-      return yield* yield* cached(directory)
-    })
-
-    const refresh = Effect.fn("ACPDirectory.refresh")(function* (directory: string) {
-      return yield* SynchronizedRef.modifyEffect(
-        snapshots,
-        Effect.fnUntraced(function* (items) {
-          const next = yield* Effect.cached(
-            loader.load(directory).pipe(
-              Effect.tapError(() =>
-                SynchronizedRef.update(snapshots, (state) => {
-                  const next = new Map(state)
-                  next.delete(directory)
-                  return next
-                }),
-              ),
-            ),
-          )
-          return [next, new Map(items).set(directory, next)] as const
-        }),
-      ).pipe(Effect.flatten)
-    })
-
-    return Service.of({
-      get,
-      refresh,
-      variants,
-    })
-  }),
+  Loader.use((loader) => Effect.succeed(Service.of(make(loader)))),
 )
 
 export const defaultLayer = layer.pipe(
@@ -206,5 +209,15 @@ export const defaultLayer = layer.pipe(
   Layer.provide(Command.defaultLayer),
   Layer.provide(InstanceStore.defaultLayer),
 )
+
+function cache(
+  items: Map<string, Effect.Effect<Snapshot, ACPError.Error>>,
+  directory: string,
+  snapshot: Effect.Effect<Snapshot, ACPError.Error>,
+) {
+  const next = new Map(items)
+  if (!next.has(directory) && next.size >= MAX_CACHED_DIRECTORIES) next.delete(next.keys().next().value!)
+  return next.set(directory, snapshot)
+}
 
 export * as Directory from "./directory"

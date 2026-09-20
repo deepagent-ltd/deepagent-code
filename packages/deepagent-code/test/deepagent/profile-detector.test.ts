@@ -3,9 +3,10 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { buildProfile } from "../../src/deepagent/profile-detector"
+import { tmpRoot, tmpRootShared } from "../fixture/fixture"
 
 const withWorkspace = (fn: (cwd: string) => void) => {
-  const cwd = mkdtempSync(path.join(tmpdir(), "deepagent-profile-detector-"))
+  const cwd = mkdtempSync(tmpRootShared())
   try {
     fn(cwd)
   } finally {

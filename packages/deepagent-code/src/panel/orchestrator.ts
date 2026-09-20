@@ -191,17 +191,16 @@ const runRound = (input: {
           ),
       })
 
-    // `concurrency: "unbounded"` here dispatches all seats at once; the ACTUAL parallelism is clamped
-    // by the per-session TaskConcurrency semaphore inside `runOne`, exactly like the `task` tool. We
-    // never exceed maxFanout because `specs` was already capped by `selectPanelists`.
-    const results = yield* Effect.forEach(specs, runOne, { concurrency: "unbounded" })
+    // TaskConcurrency inside `runOne` provides the execution limit; this outer bound also caps
+    // the number of fibers waiting on that semaphore if a future caller raises maxFanout.
+    const results = yield* Effect.forEach(specs, runOne, { concurrency: 16 })
     const survivors = results.filter((r): r is PanelOpinion => r !== null)
 
     if (opts.archive) {
       yield* Effect.forEach(
         survivors,
         (opinion) => opts.archive!({ opinion, round, question: opts.question }).pipe(Effect.ignore),
-        { concurrency: "unbounded", discard: true },
+        { concurrency: 16, discard: true },
       )
     }
     return survivors

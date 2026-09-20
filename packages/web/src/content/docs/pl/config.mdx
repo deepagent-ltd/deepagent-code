@@ -13,7 +13,7 @@ DeepAgent Code obsługuje formaty **JSON** i **JSONC** (JSON z komentarzami).
 
 ```jsonc title="deepagent-code.jsonc"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   // Theme configuration
   "theme": "deepagent-code",
   "model": "anthropic/claude-sonnet-4-5",
@@ -146,7 +146,7 @@ Katalog niestandardowy jest ładowany po globalnej konfiguracji i katalogach `.d
 
 ## Schemat
 
-Plik konfiguracyjny ma schemat JSON dostępny pod adresem [**`deepagent-code.ai/config.json`**](https://deepagent-code.ai/config.json).
+Plik konfiguracyjny ma schemat JSON dostępny pod adresem [**`ai.deepagent.ltd/config.schema.json`**](https://ai.deepagent.ltd/config.schema.json).
 
 Twój edytor powinien zapewniać walidację i autouzupełnianie na podstawie tego schematu.
 
@@ -158,7 +158,7 @@ Użyj dedykowanego pliku `tui.json` (lub `tui.jsonc`) dla ustawień specyficznyc
 
 ```json title="tui.json"
 {
-  "$schema": "https://deepagent-code.ai/tui.json",
+  "$schema": "https://ai.deepagent.ltd/tui.json",
   "scroll_speed": 3,
   "scroll_acceleration": {
     "enabled": true
@@ -181,7 +181,7 @@ Możesz skonfigurować serwer dla `deepagent-code serve` i `deepagent-code web` 
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "server": {
     "port": 4096,
     "hostname": "0.0.0.0",
@@ -210,7 +210,7 @@ Kontroluj, które narzędzia są dostępne dla LLM, za pomocą opcji `tools`.
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "tools": {
     "write": false,
     "bash": false
@@ -228,7 +228,7 @@ Możesz skonfigurować dostawców i modele, których chcesz używać, za pomocą
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {},
   "model": "anthropic/claude-sonnet-4-5",
   "small_model": "anthropic/claude-haiku-4-5"
@@ -241,7 +241,7 @@ Opcje dostawcy mogą zawierać `timeout` i `setCacheKey`:
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "anthropic": {
       "options": {
@@ -270,7 +270,7 @@ Amazon Bedrock umożliwia konfigurację połączenia z AWS:
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "amazon-bedrock": {
       "options": {
@@ -301,7 +301,7 @@ Ustaw motyw interfejsu użytkownika w `tui.json`.
 
 ```json title="tui.json"
 {
-  "$schema": "https://deepagent-code.ai/tui.json",
+  "$schema": "https://ai.deepagent.ltd/tui.json",
   "theme": "tokyonight"
 }
 ```
@@ -316,7 +316,7 @@ Możesz zdefiniować i skonfigurować agentów za pomocą opcji `agent`.
 
 ```jsonc title="deepagent-code.jsonc"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "agent": {
     "code-reviewer": {
       "description": "Reviews code for best practices and potential issues",
@@ -342,7 +342,7 @@ Domyślnego agenta można ustawić za pomocą opcji `default_agent`. Określa to
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "default_agent": "plan"
 }
 ```
@@ -359,7 +359,7 @@ Możesz skonfigurować [udostępnianie](/docs/share) za pomocą opcji `share`.
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "share": "manual"
 }
 ```
@@ -380,7 +380,7 @@ Możesz zdefiniować niestandardowe polecenia dla powtarzalnych zadań za pomoc�
 
 ```jsonc title="deepagent-code.jsonc"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "command": {
     "test": {
       "template": "Run the full test suite with coverage report and show any failures.\nFocus on the failing tests and suggest fixes.",
@@ -406,7 +406,7 @@ Dostosuj skróty klawiszowe w `tui.json`.
 
 ```json title="tui.json"
 {
-  "$schema": "https://deepagent-code.ai/tui.json",
+  "$schema": "https://ai.deepagent.ltd/tui.json",
   "keybinds": {}
 }
 ```
@@ -421,7 +421,7 @@ DeepAgent Code może automatycznie pobierać nowe wersje. Możesz to kontrolowa�
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "autoupdate": false
 }
 ```
@@ -437,7 +437,7 @@ Możesz skonfigurować formatery kodu za pomocą opcji `formatter`.
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "formatter": {
     "prettier": {
       "disabled": true
@@ -465,7 +465,7 @@ Na przykład, aby wymagać zatwierdzenia dla narzędzi `edit` i `bash`:
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": {
     "edit": "ask",
     "bash": "ask"
@@ -483,7 +483,7 @@ Możesz kontrolować zachowanie kompaktowania kontekstu za pomocą opcji `compac
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "compaction": {
     "auto": true,
     "prune": false
@@ -502,7 +502,7 @@ Skonfiguruj ignorowane wzorce plików dla obserwatora plików za pomocą `watche
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "watcher": {
     "ignore": ["node_modules/**", "dist/**", ".git/**"]
   }
@@ -519,7 +519,7 @@ Skonfiguruj serwery MCP, których chcesz używać, za pomocą opcji `mcp`.
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "mcp": {}
 }
 ```
@@ -536,7 +536,7 @@ Umieść pliki wtyczek w `.deepagent-code/plugins/` lub `~/.config/deepagent-cod
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "plugin": ["deepagent-code-helicone-session", "@my-org/custom-plugin"]
 }
 ```
@@ -551,7 +551,7 @@ Określ pliki instrukcji dla modelu, używając opcji `instructions`.
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "instructions": ["CONTRIBUTING.md", "docs/guidelines.md", ".cursor/rules/*.md"]
 }
 ```
@@ -566,7 +566,7 @@ Zapobiegaj automatycznemu ładowaniu dostawców za pomocą opcji `disabled_provi
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "disabled_providers": ["openai", "gemini"]
 }
 ```
@@ -589,7 +589,7 @@ Możesz określić listę dozwolonych dostawców za pomocą `enabled_providers`.
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "enabled_providers": ["anthropic", "openai"]
 }
 ```
@@ -610,7 +610,7 @@ Klucz `experimental` zawiera opcje, które są we wczesnej fazie rozwoju.
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "experimental": {}
 }
 ```
@@ -633,7 +633,7 @@ Użyj `{env:VARIABLE_NAME}`, aby wstawić wartość zmiennej środowiskowej:
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "model": "{env:DEEPAGENT_CODE_MODEL}",
   "provider": {
     "anthropic": {
@@ -656,7 +656,7 @@ Użyj `{file:path/to/file}`, aby wstawić zawartość pliku:
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "instructions": ["./custom-instructions.md"],
   "provider": {
     "openai": {

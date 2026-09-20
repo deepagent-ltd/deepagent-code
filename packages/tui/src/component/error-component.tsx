@@ -18,7 +18,7 @@ export function ErrorComponent(props: { error: Error; reset: () => void; mode?: 
   })
   const [copied, setCopied] = createSignal(false)
 
-  const issueURL = new URL("https://github.com/lessweb/deepagent-code/issues/new?template=bug-report.yml")
+  const issueURL = new URL("https://github.com/deepagent-ltd/deepagent-code/issues/new?template=bug-report.yml")
 
   // Choose safe fallback colors per mode since theme context may not be available
   const isLight = props.mode === "light"

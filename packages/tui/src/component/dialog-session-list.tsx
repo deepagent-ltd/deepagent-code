@@ -2,6 +2,7 @@ import { useDialog } from "../ui/dialog"
 import { DialogSelect } from "../ui/dialog-select"
 import { useRoute } from "../context/route"
 import { useSync } from "../context/sync"
+import { useTuiI18n } from "../context/i18n"
 import { createMemo, createResource, createSignal, onMount, type JSX } from "solid-js"
 import { Locale } from "../util/locale"
 import { useProject } from "../context/project"
@@ -28,6 +29,7 @@ export function DialogSessionList() {
   const sdk = useSDK()
   const local = useLocal()
   const toast = useToast()
+  const i18n = useTuiI18n()
   const [toDelete, setToDelete] = createSignal<string>()
   const [search, setSearch] = createDebouncedSignal("", 150)
   const deleteHint = useCommandShortcut("session.delete")
@@ -58,7 +60,7 @@ export function DialogSessionList() {
           result = await sdk.client.experimental.workspace.create({ type: selection.workspaceType, branch: null })
         } catch (err) {
           toast.show({
-            title: "Failed to create workspace",
+            title: i18n.t("tui.common.failedCreateWorkspace"),
             message: errorMessage(err),
             variant: "error",
           })
@@ -67,7 +69,7 @@ export function DialogSessionList() {
         const workspace = result?.data
         if (!workspace) {
           toast.show({
-            title: "Failed to create workspace",
+            title: i18n.t("tui.common.failedCreateWorkspace"),
             message: errorMessage(result?.error ?? "no response"),
             variant: "error",
           })
@@ -83,6 +85,7 @@ export function DialogSessionList() {
         sync,
         project,
         toast,
+        i18n,
         sourceWorkspaceID: session.workspaceID,
         workspaceID,
         sessionID: session.id,
@@ -102,7 +105,7 @@ export function DialogSessionList() {
           if (result.error) {
             toast.show({
               variant: "error",
-              title: "Failed to delete workspace",
+              title: i18n.t("tui.common.failedDeleteWorkspace"),
               message: errorMessage(result.error),
             })
             return false
@@ -122,6 +125,7 @@ export function DialogSessionList() {
             sync,
             project,
             toast,
+            i18n,
             onSelect: (selection) => {
               void warp(selection)
             },
@@ -268,7 +272,7 @@ export function DialogSessionList() {
                   } else {
                     toast.show({
                       variant: "error",
-                      title: "Failed to delete session",
+                      title: i18n.t("tui.common.failedDeleteSession"),
                       message: errorMessage(result.error),
                     })
                   }
@@ -281,7 +285,7 @@ export function DialogSessionList() {
                 } else {
                   toast.show({
                     variant: "error",
-                    title: "Failed to delete session",
+                    title: i18n.t("tui.common.failedDeleteSession"),
                     message: errorMessage(err),
                   })
                 }

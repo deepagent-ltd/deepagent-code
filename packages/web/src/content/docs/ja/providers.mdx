@@ -35,7 +35,7 @@ config.
 
 ```json title="deepagent-code.json" {6}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "anthropic": {
       "options": {
@@ -57,7 +57,7 @@ DeepAgent Code で適切に動作することがテストおよび検証され�
 初めての方は、DeepAgent Code Zen から始めることをお勧めします。
 :::
 
-1. TUI で `/connect` コマンドを実行し、`DeepAgent Code Zen` を選択して、[deepagent-code.ai/zen](https://deepagent-code.ai/zen) にアクセスします。
+1. TUI で `/connect` コマンドを実行し、`DeepAgent Code Zen` を選択して、[ai.deepagent.ltd/zen](https://ai.deepagent.ltd/zen) にアクセスします。
 
    ```txt
    /connect
@@ -88,7 +88,7 @@ DeepAgent Code で適切に動作することがテストおよび検証され�
 
 DeepAgent Code Go は、DeepAgent Code チームによって提供される、人気のあるオープンコーディングモデルへの信頼性の高いアクセスを提供する低コストのサブスクリプションプランです。これらは DeepAgent Code でうまく機能することがテストおよび検証されています。
 
-1. TUI で `/connect` コマンドを実行し、`DeepAgent Code Go` を選択して、[deepagent-code.ai/zen](https://deepagent-code.ai/zen) にアクセスします。
+1. TUI で `/connect` コマンドを実行し、`DeepAgent Code Go` を選択して、[ai.deepagent.ltd/zen](https://ai.deepagent.ltd/zen) にアクセスします。
 
    ```txt
    /connect
@@ -197,7 +197,7 @@ DeepAgent Code で Amazon Bedrock を使用するには:
 
    ```json title="deepagent-code.json"
    {
-     "$schema": "https://deepagent-code.ai/config.json",
+     "$schema": "https://ai.deepagent.ltd/config.schema.json",
      "provider": {
        "amazon-bedrock": {
          "options": {
@@ -226,7 +226,7 @@ DeepAgent Code で Amazon Bedrock を使用するには:
 
    ```json title="deepagent-code.json"
    {
-     "$schema": "https://deepagent-code.ai/config.json",
+     "$schema": "https://ai.deepagent.ltd/config.schema.json",
      "provider": {
        "amazon-bedrock": {
          "options": {
@@ -275,7 +275,7 @@ DeepAgent Code で Amazon Bedrock を使用するには:
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "amazon-bedrock": {
       // ...
@@ -335,7 +335,7 @@ deepagent-code は、OpenAI 互換の API サーバーの背後でローカル L
 
 ```json title="deepagent-code.json" "atomic-chat" {5, 6, 8, 10-14}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "atomic-chat": {
       "npm": "@ai-sdk/openai-compatible",
@@ -563,7 +563,7 @@ DeepAgent Code 設定を通じてモデルを追加することもできます�
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "cloudflare-ai-gateway": {
       "models": {
@@ -865,7 +865,7 @@ export GITLAB_OAUTH_CLIENT_ID=your_application_id_here
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "gitlab": {
       "options": {
@@ -882,7 +882,7 @@ GitLab ツール (マージリクエスト、問題、パイプライン、CI/CD
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "plugin": ["deepagent-code-gitlab-plugin"]
 }
 ```
@@ -1066,7 +1066,7 @@ DeepAgent Code を通じて自動的に構成されていない Helicone の機�
 
 ```jsonc title="~/.config/deepagent-code/deepagent-code.jsonc"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "helicone": {
       "npm": "@ai-sdk/openai-compatible",
@@ -1094,7 +1094,7 @@ Helicone は、キャッシュ、ユーザー追跡、セッション管理な�
 
 ```jsonc title="~/.config/deepagent-code/deepagent-code.jsonc"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "helicone": {
       "npm": "@ai-sdk/openai-compatible",
@@ -1148,7 +1148,7 @@ npm install -g deepagent-code-helicone-session
 
 ```json title="deepagent-code.json" "llama.cpp" {5, 6, 8, 10-15}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "llama.cpp": {
       "npm": "@ai-sdk/openai-compatible",
@@ -1215,7 +1215,7 @@ LM Studio を通じてローカルモデルを使用するように deepagent-co
 
 ```json title="deepagent-code.json" "lmstudio" {5, 6, 8, 10-14}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "lmstudio": {
       "npm": "@ai-sdk/openai-compatible",
@@ -1336,7 +1336,7 @@ Ollama は DeepAgent Code 用に自動的に構成できます。詳細につい
 
 ```json title="deepagent-code.json" "ollama" {5, 6, 8, 10-14}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "ollama": {
       "npm": "@ai-sdk/openai-compatible",
@@ -1498,7 +1498,7 @@ DeepAgent Code 設定を通じて追加のモデルを追加することもで�
 
 ```json title="deepagent-code.json" {6}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "openrouter": {
       "models": {
@@ -1513,7 +1513,7 @@ DeepAgent Code 設定を通じて追加のモデルを追加することもで�
 
    ```json title="deepagent-code.json"
    {
-     "$schema": "https://deepagent-code.ai/config.json",
+     "$schema": "https://ai.deepagent.ltd/config.schema.json",
      "provider": {
        "openrouter": {
          "models": {
@@ -1617,7 +1617,7 @@ SAP AI コアは、統合プラットフォームを通じて、OpenAI、Anthrop
 
 ### Scaleway
 
-[Scaleway Generative APIs](https://www.scaleway.com/en/docs/generative-apis/) を Opencode で使用するには:
+[Scaleway Generative APIs](https://www.scaleway.com/en/docs/generative-apis/) を DeepAgent Code で使用するには:
 
 1. [Scaleway Console IAM settings](https://console.scaleway.com/iam/api-keys) に移動して、新しい API キーを生成します。
 
@@ -1729,7 +1729,7 @@ DeepAgent Code 設定を通じてモデルをカスタマイズすることも�
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "vercel": {
       "models": {
@@ -1839,7 +1839,7 @@ DeepAgent Code 設定を通じて追加のモデルを追加することもで�
 
 ```json title="deepagent-code.json" {6}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "zenmux": {
       "models": {
@@ -1907,7 +1907,7 @@ OpenAI と互換性のある任意のプロバイダーを DeepAgent Code で使
 
    ```json title="deepagent-code.json" ""myprovider"" {5-15}
    {
-     "$schema": "https://deepagent-code.ai/config.json",
+     "$schema": "https://ai.deepagent.ltd/config.schema.json",
      "provider": {
        "myprovider": {
          "npm": "@ai-sdk/openai-compatible",
@@ -1946,7 +1946,7 @@ OpenAI と互換性のある任意のプロバイダーを DeepAgent Code で使
 
 ```json title="deepagent-code.json" {9,11,17-20}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "myprovider": {
       "npm": "@ai-sdk/openai-compatible",

@@ -6,12 +6,13 @@ import { Effect } from "effect"
 import { Fff } from "#fff"
 import { Search } from "@deepagent-code/core/filesystem/search"
 import { testEffect } from "../lib/effect"
+import { tmpRootAsync } from "../fixture/tmpdir"
 
 const it = testEffect(Search.defaultLayer)
 
 const tmpdir = (init?: (dir: string) => Effect.Effect<void>) =>
   Effect.acquireRelease(
-    Effect.promise(async () => fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "deepagent-code-test-")))),
+    Effect.promise(async () => fs.realpath(await tmpRootAsync())),
     (dir) =>
       Effect.promise(() => fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })).pipe(
         Effect.ignore,

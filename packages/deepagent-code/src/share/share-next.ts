@@ -183,8 +183,12 @@ export const layer = Layer.effect(
 
         yield* watch(Session.Event.Updated, (data) =>
           Effect.gen(function* () {
-            const info = data.info
-            yield* sync(info.id, [{ type: "session", data: structuredClone(info) as SDK.Session }])
+            // The payload shape depends on the publishing authority. Re-read the stored session
+            // (same source as `full`) so the push is complete regardless of whether the update,
+            // diff, or revert authority emitted the notification; the projector has committed the
+            // row before listeners run.
+            const info = yield* session.get(data.info.id)
+            yield* sync(info.id, [{ type: "session", data: info as SDK.Session }])
           }),
         )
         yield* watch(MessageV2.Event.Updated, (data) =>

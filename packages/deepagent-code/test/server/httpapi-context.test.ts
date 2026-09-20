@@ -36,8 +36,13 @@ describe("C6-03 context OpenAPI route table", () => {
   })
 
   test("every endpoint declares the typed ApiTypedError error union", () => {
+    // C6-04 split the aggregate 500 union into per-status typed-error responses.
     for (const path of [ContextPaths.readiness, ContextPaths.eventsCursor, ContextPaths.events]) {
-      expect(opOf(doc, path, "get")!.responses["500"]).toBeDefined()
+      const op = opOf(doc, path, "get")!
+      for (const status of ["400", "403", "404", "409", "410", "423", "503"]) {
+        expect(op.responses[status], `${path} ${status}`).toBeDefined()
+      }
+      expect(op.responses["500"], `${path} aggregate 500 union` ).toBeUndefined()
     }
   })
 })

@@ -11,6 +11,7 @@ import { stripPromptPartIDs as strip } from "../../prompt/part"
 import { requestSessionFork } from "../../util/session"
 import { useToast } from "../../ui/toast"
 import { errorMessage } from "../../util/error"
+import { useTuiI18n } from "../../context/i18n"
 
 export function DialogForkFromTimeline(props: { sessionID: string; onMove: (messageID?: string) => void }) {
   const sync = useSync()
@@ -18,6 +19,7 @@ export function DialogForkFromTimeline(props: { sessionID: string; onMove: (mess
   const sdk = useSDK()
   const route = useRoute()
   const toast = useToast()
+  const i18n = useTuiI18n()
 
   onMount(() => {
     dialog.setSize("large")
@@ -26,7 +28,7 @@ export function DialogForkFromTimeline(props: { sessionID: string; onMove: (mess
   const options = createMemo((): DialogSelectOption<string | undefined>[] => {
     const messages = sync.data.message[props.sessionID] ?? []
     const fullSession = {
-      title: "Full session",
+      title: i18n.t("tui.session.forkFromTimelineFullSession"),
       value: undefined,
       onSelect: async (dialog: DialogContext) => {
         const intentKey = `${props.sessionID}:full`
@@ -35,7 +37,12 @@ export function DialogForkFromTimeline(props: { sessionID: string; onMove: (mess
           request: (intentID) => sdk.client.session.fork({ sessionID: props.sessionID, intentID }),
         })
         if ("error" in forked) {
-          toast.show({ title: "Fork failed", message: errorMessage(forked.error), variant: "error", duration: 8000 })
+          toast.show({
+            title: i18n.t("tui.common.forkFailed"),
+            message: errorMessage(forked.error),
+            variant: "error",
+            duration: 8000,
+          })
           return
         }
         route.navigate({
@@ -68,7 +75,12 @@ export function DialogForkFromTimeline(props: { sessionID: string; onMove: (mess
               }),
           })
           if ("error" in forked) {
-            toast.show({ title: "Fork failed", message: errorMessage(forked.error), variant: "error", duration: 8000 })
+            toast.show({
+              title: i18n.t("tui.common.forkFailed"),
+              message: errorMessage(forked.error),
+              variant: "error",
+              duration: 8000,
+            })
             return
           }
           const parts = sync.data.part[message.id] ?? []

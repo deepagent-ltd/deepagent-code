@@ -1,15 +1,7 @@
 export * as SessionCompaction from "./compaction"
 
-import {
-  LLM,
-  LLMError,
-  LLMEvent,
-  Message,
-  LLMRequest,
-  isContextOverflowFailure,
-  type Model,
-} from "@deepagent-code/llm"
-import { Context, DateTime, Effect, Stream } from "effect"
+import { LLM, LLMError, LLMEvent, Message, LLMRequest, isContextOverflowFailure, type Model } from "@deepagent-code/llm"
+import { Context, DateTime, Effect, Schema, Stream } from "effect"
 import type { Config } from "../config"
 import type { SessionContext } from "../context-federation/session-context"
 import type { Database } from "../database/database"
@@ -26,8 +18,26 @@ import { V2ProviderTurn } from "./runner/v2-provider-turn"
 import { Log } from "../util/log"
 import { Token } from "../util/token"
 
-const DEFAULT_BUFFER = 20_000
+// Compaction budgets. Measured from the ablation runs: the previous absolute 20k buffer put the
+// trigger at ~92% of the window, which a 133-turn session never reached (compactions: 0 for the
+// whole run) — so nothing ever relieved the replay. The reference agents all trigger earlier and
+// scale the buffer with the window: Codex at `window*9/10`, deepseek-harness at `window*0.8`,
+// Claude Code at `effective − buffer` with the buffer TIERED by window size (13k/30k/50k). This
+// adopts the proportional form with a floor, which is the same shape for small windows and does not
+// hand a 1M-window model a 200k buffer.
+const DEFAULT_BUFFER_RATIO = 0.18
+/** Floor so a tiny window cannot make the trigger fire immediately. */
+const MIN_BUFFER_TOKENS = 2_000
 const DEFAULT_KEEP_TOKENS = 8_000
+/**
+ * Retention is a WINDOW-PROPORTIONAL budget with a ceiling. Evidence: only deepseek-harness scales
+ * retention (16% of window, which is 160k on a 1M window); Codex keeps a flat 20k/64k of user
+ * messages and Claude Code keeps nothing after a full compact, both regardless of window. A flat
+ * 8k would under-serve a 1M-window model, and 16% would over-serve it — so scale, but clamp.
+ */
+const DEFAULT_KEEP_RATIO = 0.05
+const MIN_KEEP_TOKENS = 8_000
+const MAX_KEEP_TOKENS = 32_000
 // UPD-005: single source of truth for the compaction-side tool-output truncation budget.
 // deepagent-code/src/session/compaction.ts imports this constant (it used to keep a duplicate
 // 2_000 copy); keep the two call sites in sync by editing ONLY this definition.
@@ -111,7 +121,9 @@ type Entry = {
 type Settings = {
   readonly auto: boolean
   readonly buffer: number
+  readonly bufferRatio: number
   readonly tokens: number
+  readonly keepRatio: number | undefined
 }
 
 type Dependencies = {
@@ -124,9 +136,7 @@ type Dependencies = {
   readonly contexts: SessionContext.Interface
   // §16.3 order 5 F3: resolved once at layer scope (like the other order-4 seams); undefined keeps
   // the local summary dispatch byte-for-byte.
-  readonly remoteCompaction?: (
-    input: RemoteCompactionRequest,
-  ) => Effect.Effect<RemoteCompactionResult, unknown>
+  readonly remoteCompaction?: (input: RemoteCompactionRequest) => Effect.Effect<RemoteCompactionResult, unknown>
   readonly config: readonly Config.Entry[]
 }
 
@@ -143,11 +153,25 @@ type Input = {
   readonly historyPromptEpoch: number
   readonly ownerMode: "shadow_v2" | "v2"
   readonly admission: SelectionAdmission
+  /** RI-18: manual compaction is forced (no token threshold) and reports reason "manual". */
+  readonly reason?: "auto" | "manual"
 }
 
 const estimate = (value: unknown) => Token.estimate(JSON.stringify(value))
 
 export const inputBudget = (context: number, buffer: number) => Math.max(0, context - buffer)
+
+/** Headroom below the trigger: an explicit absolute `buffer` wins, else the proportional default
+ * with a floor. Exported for the trigger tests. */
+export const resolvedBuffer = (context: number, settings: { buffer: number; bufferRatio: number }): number =>
+  settings.buffer > 0 ? settings.buffer : Math.max(MIN_BUFFER_TOKENS, Math.floor(context * settings.bufferRatio))
+
+/** Verbatim retention after a compaction: an explicit `keep.tokens` wins, else the proportional
+ * default clamped to a sane band. */
+export const resolvedKeepTokens = (context: number, settings: { tokens: number; keepRatio?: number }): number => {
+  if (settings.keepRatio === undefined) return settings.tokens
+  return Math.min(MAX_KEEP_TOKENS, Math.max(MIN_KEEP_TOKENS, Math.floor(context * settings.keepRatio)))
+}
 
 const modelInputLimit = (model: Model) => model.route.defaults.limits?.input ?? model.route.defaults.limits?.context
 
@@ -197,10 +221,41 @@ const settings = (documents: readonly Config.Entry[]) => {
     (result, current) => ({
       auto: current.auto ?? result.auto,
       buffer: current.buffer ?? result.buffer,
+      bufferRatio: current.buffer_ratio ?? result.bufferRatio,
       tokens: current.keep?.tokens ?? result.tokens,
+      keepRatio: current.keep_ratio ?? result.keepRatio,
     }),
-    { auto: true, buffer: DEFAULT_BUFFER, tokens: DEFAULT_KEEP_TOKENS },
+    {
+      auto: true,
+      buffer: 0,
+      bufferRatio: DEFAULT_BUFFER_RATIO,
+      tokens: DEFAULT_KEEP_TOKENS,
+      keepRatio: undefined,
+    },
   )
+}
+
+/**
+ * RI-18 manual selection: summarize everything BEFORE the last user exchange and retain the last
+ * exchange (its user message and everything after). A single-exchange history has nothing to
+ * summarize — the caller settles the request as a no-op.
+ */
+const selectForManual = (entries: readonly Entry[]): { readonly head: string; readonly recent: string } | undefined => {
+  const conversation = entries.filter((entry) => entry.message.type !== "compaction")
+  let lastUser = -1
+  for (let index = conversation.length - 1; index >= 0; index--) {
+    if (conversation[index]!.message.type === "user") {
+      lastUser = index
+      break
+    }
+  }
+  if (lastUser <= 0) return undefined
+  const serializeAll = (slice: readonly Entry[]) =>
+    slice
+      .map((entry) => serialize(entry.message))
+      .filter(Boolean)
+      .join("\n\n")
+  return { head: serializeAll(conversation.slice(0, lastUser)), recent: serializeAll(conversation.slice(lastUser)) }
 }
 
 const select = (
@@ -301,9 +356,26 @@ export type RemoteCompactionRequest = {
 export type RemoteCompactionResult =
   | { readonly kind: "compacted"; readonly summary: string }
   | { readonly kind: "recovery_required"; readonly reason: Contract.RemoteCompactRecoveryReason }
+/**
+ * W1.3 — a producer-side TYPED refusal of a remote compact (provider said no / not eligible /
+ * network-unknown / etc.) so the caller differentiates a concrete refusal reason from a blanket
+ * `provider_error`. A producer should fail with this (instead of a generic Error) whenever it knows
+ * the refusal's reason code; a plain fault still degrades to `provider_error`.
+ */
+export class RemoteCompactRefusedError extends Schema.TaggedErrorClass<RemoteCompactRefusedError>()(
+  "SessionCompaction.RemoteCompactRefusedError",
+  { reason: Contract.RemoteCompactRecoveryReason },
+) {}
 export const CurrentRemoteCompaction = Context.Reference<
   ((input: RemoteCompactionRequest) => Effect.Effect<RemoteCompactionResult, unknown>) | undefined
->("@deepagent-code/v2/SessionCompaction/CurrentRemoteCompaction", { defaultValue: () => undefined })
+>(
+  "@deepagent-code/v2/SessionCompaction/CurrentRemoteCompaction",
+  // W1.3 — NO production provider is registered in this package yet (the only wiring today is the
+  // test seam). Honest posture: the reference stays `undefined` ⇒ the V2-native LOCAL summary path
+  // dispatches, and a caller that wants a remote compact must provide a producer explicitly (the
+  // Responses-only gate + recovery differentiation below then apply).
+  { defaultValue: () => undefined },
+)
 
 /**
  * design §5.3 Responses-only gate (C2-05). Remote compact is only applicable to an explicit
@@ -324,7 +396,10 @@ export const make = (dependencies: Dependencies) => {
     const context = modelInputLimit(input.model)
     if (context === undefined || context <= 0) return false
     const output = input.request.generation?.maxTokens ?? input.model.route.defaults.limits?.output ?? 0
-    const selected = select(input.entries, config.tokens)
+    const selected =
+      input.reason === "manual"
+        ? selectForManual(input.entries)
+        : select(input.entries, resolvedKeepTokens(modelInputLimit(input.model) ?? 0, config))
     const previousSummary = input.entries.find((entry) => entry.message.type === "compaction")?.message
     if (!selected || (selected.head.length === 0 && previousSummary?.type !== "compaction")) return false
     const summaryPrompt = buildPrompt({
@@ -338,7 +413,7 @@ export const make = (dependencies: Dependencies) => {
       sessionID: input.sessionID,
       messageID,
       timestamp: yield* DateTime.now,
-      reason: "auto",
+      reason: input.reason ?? "auto",
     })
 
     const remote = dependencies.remoteCompaction
@@ -355,13 +430,17 @@ export const make = (dependencies: Dependencies) => {
         // design §5.3: an unknown/faulted remote result never degrades to a fake local success — it
         // enters compact recovery (the original history stays readable). Typed failures first, then
         // adapter defects, both logged; interrupts are caught by NEITHER stage so cancellation always
-        // propagates (the order-4 seams' catchCause swallowed them; this one must not).
+        // propagates (the order-4 seams' catchCause swallowed them; this one must not). W1.3: a
+        // producer's TYPED refusal (RemoteCompactRefusedError) keeps its specific reason code so the
+        // caller can differentiate a refusal (e.g. not-eligible / network-unknown / response_id
+        // missing) from a generic provider_error.
         Effect.catch((error): Effect.Effect<RemoteCompactionResult> => {
+          const reason = error instanceof RemoteCompactRefusedError ? error.reason : "provider_error"
           log.warn("remote compaction faulted, entering compact recovery", {
             sessionID: input.sessionID,
-            reason: String(error),
+            reason,
           })
-          return Effect.succeed({ kind: "recovery_required", reason: "provider_error" })
+          return Effect.succeed({ kind: "recovery_required", reason })
         }),
         Effect.catchDefect((): Effect.Effect<RemoteCompactionResult> => {
           log.warn("remote compaction adapter defect, entering compact recovery", {
@@ -376,11 +455,11 @@ export const make = (dependencies: Dependencies) => {
             sessionID: input.sessionID,
             messageID,
             timestamp: yield* DateTime.now,
-            reason: "auto",
+            reason: input.reason ?? "auto",
             text: remoteResult.summary,
             recent: selected.recent,
           })
-          return true
+          return { receiptID: null }
         }
         log.warn("remote compaction returned an empty summary, entering compact recovery", {
           sessionID: input.sessionID,
@@ -420,6 +499,7 @@ export const make = (dependencies: Dependencies) => {
     const summaryEvents: LLMEvent[] = []
     const chunks: string[] = []
     let failed = false
+    let summaryReceiptID: string | undefined
     // The summary provider request is a physical dispatch: it must own the same durable receipt
     // contract (admit -> wire seal -> settle/quarantine) as every other provider turn so a crash or
     // stream failure cannot bypass the recovery classifier. Receipt-seam refusals before dispatch
@@ -427,25 +507,24 @@ export const make = (dependencies: Dependencies) => {
     // summary request never ran; skip compaction instead of failing the surrounding turn.
     const summarized = yield* Effect.gen(function* () {
       // Same recoverable boundary as the surrounding turn: canonical attempt + receipt, bound.
-      const summaryReceipt = (
-        yield* SessionRunnerCanonical.commitTurn({
-          db: dependencies.db,
-          contexts: dependencies.contexts,
-          sessionID: input.sessionID,
-          admission: input.admission,
-          receipt: {
-            sessionId: input.sessionID,
-            userMessageId: input.userMessageID,
-            historyPromptEpoch: input.historyPromptEpoch,
-            requestInputHash: summaryRequestInputHash,
-            providerId: input.model.provider,
-            modelId: input.model.id,
-            protocol: input.model.route.protocol,
-            ownerMode: input.ownerMode,
-          },
-          ownerToken: dependencies.providerTurns.ownerToken,
-        })
-      ).receipt
+      const summaryReceipt = (yield* SessionRunnerCanonical.commitTurn({
+        db: dependencies.db,
+        contexts: dependencies.contexts,
+        sessionID: input.sessionID,
+        admission: input.admission,
+        receipt: {
+          sessionId: input.sessionID,
+          userMessageId: input.userMessageID,
+          historyPromptEpoch: input.historyPromptEpoch,
+          requestInputHash: summaryRequestInputHash,
+          providerId: input.model.provider,
+          modelId: input.model.id,
+          protocol: input.model.route.protocol,
+          ownerMode: input.ownerMode,
+        },
+        ownerToken: yield* dependencies.providerTurns.currentOwnerToken(),
+      })).receipt
+      summaryReceiptID = summaryReceipt.receiptId
       return yield* V2ProviderTurn.stream({
         service: dependencies.providerTurns,
         receipt: summaryReceipt,
@@ -521,11 +600,11 @@ export const make = (dependencies: Dependencies) => {
       sessionID: input.sessionID,
       messageID,
       timestamp: yield* DateTime.now,
-      reason: "auto",
+      reason: input.reason ?? "auto",
       text: summary,
       recent: selected.recent,
     })
-    return true
+    return { receiptID: summaryReceiptID ?? null }
   })
   const compactIfNeeded = Effect.fn("SessionCompaction.compactIfNeeded")(function* (input: Input) {
     if (!config.auto) return false
@@ -533,7 +612,7 @@ export const make = (dependencies: Dependencies) => {
     if (context === undefined || context <= 0) return false
     if (
       estimate({ system: input.request.system, messages: input.request.messages, tools: input.request.tools }) <=
-      inputBudget(context, config.buffer)
+      inputBudget(context, resolvedBuffer(context, config))
     )
       return false
     return yield* compactAfterOverflow(input)

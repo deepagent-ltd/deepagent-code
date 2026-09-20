@@ -126,11 +126,11 @@ for (const child of children) {
     throw new Error(`Child ${child.id} has incorrect parent lineage`)
   }
   if (
-    child.model?.providerID !== "live-deepseek" ||
+    child.model?.providerID !== artifact.fingerprint.runtimeProviderID ||
     child.model.id !== artifact.fingerprint.modelID ||
     child.assistants.some(
       (assistant) =>
-        assistant.providerID !== "live-deepseek" ||
+        assistant.providerID !== artifact.fingerprint.runtimeProviderID ||
         assistant.modelID !== artifact.fingerprint.modelID ||
         assistant.error !== undefined,
     )

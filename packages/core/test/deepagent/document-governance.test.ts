@@ -8,11 +8,12 @@ import {
   documentRevision,
   getGovernanceEnvelope,
 } from "../../src/deepagent/document-store"
+import { tmpRoot } from "../fixture/tmpdir"
 
 let root: string
 
 beforeEach(() => {
-  root = mkdtempSync(path.join(tmpdir(), "deepagent-document-governance-"))
+  root = mkdtempSync(tmpRoot())
 })
 
 afterEach(() => {

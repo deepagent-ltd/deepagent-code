@@ -94,4 +94,21 @@ describe("HttpApi WebSocketTracker", () => {
 
     expect(closed).toEqual([])
   })
+
+  test("fails closed at the process connection ceiling", async () => {
+    const accepted = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* Effect.forEach(
+            Array.from({ length: WebSocketTracker.MAX_TRACKED_WEBSOCKETS }),
+            () => WebSocketTracker.register(Effect.void),
+            { discard: true },
+          )
+          return (yield* WebSocketTracker.register(Effect.void)).accepted
+        }).pipe(Effect.provide(WebSocketTracker.layer)),
+      ),
+    )
+
+    expect(accepted).toBe(false)
+  })
 })

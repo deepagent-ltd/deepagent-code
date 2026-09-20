@@ -1,8 +1,7 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test"
-import { Cause, DateTime, Effect, Exit, Layer, Option, Stream } from "effect"
+import { DateTime, Effect } from "effect"
 import type { Diagnostic } from "../../src/lsp/client"
 import {
-  GoalLoopWiring,
   buildGraderPorts,
   buildStepExecutor,
   highestDiagnosticSeverity,
@@ -12,16 +11,17 @@ import {
   type PanelQuestionInput,
   type SubagentTurnResult,
   type SubagentTurnRunner,
+  type TaskSubagentRunnerDeps,
 } from "../../src/session/goal-loop-wiring"
 import { RuntimeFlags } from "../../src/effect/runtime-flags"
-import { LegacyExecutionUnavailable } from "../../src/session/legacy-execution-zero"
+import { makeGoalSteerRelay } from "../../src/session/goal-driver"
+import { SessionMessage } from "@deepagent-code/core/session/message"
 import type { ReviewResult } from "../../src/agent/schema/orchestration"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { DocumentStore } from "@deepagent-code/core/deepagent/document-store"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
-import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { SessionV2 } from "@deepagent-code/core/session"
 import type { Snapshot } from "../../src/snapshot"
 import { ModelV2 } from "@deepagent-code/core/model"
@@ -29,10 +29,10 @@ import { ProviderV2 } from "@deepagent-code/core/provider"
 import { Agent } from "../../src/agent/agent"
 import { Permission } from "../../src/permission"
 import type { Session } from "../../src/session/session"
-import type { SessionPrompt } from "../../src/session/prompt"
 import { SessionID } from "../../src/session/schema"
 import { PLAN_WRITE_OWN_GOAL } from "../../src/agent/subagent-permissions"
 import { createPlanDoc, planScope, type PlanDoc, type PlanStep } from "@deepagent-code/core/deepagent/plan-controller"
+import { tmpRoot, tmpRootShared } from "../fixture/fixture"
 
 /**
  * V3.9 §D wiring unit tests. Every leaf (LSP diagnostics, validation runner, subagent turn) is
@@ -101,73 +101,59 @@ describe("makeTaskSubagentRunner capability boundary", () => {
     options: {},
   }
 
+  // V2-ONLY harness: NO sessionPrompt dep exists on the runner anymore. The fake V1 Session service
+  // covers exactly what the V2 path still needs (parent lookup, child creation, evidence mirroring);
+  // the fake SessionV2 is the durable authority driving the turn.
   const run = async (
     input: { readonly allowPlanWriteCapability?: boolean; readonly purpose?: "goal-loop" | "panel" | "generic" },
-    turn: {
-      readonly outputSchema?: Record<string, unknown>
-      readonly finalizer?: "structured" | "text_fallback" | "degraded"
-    } = {},
   ) => {
     const created: Array<NonNullable<Session.CreateInput>> = []
-    const prompted: SessionPrompt.PromptInput[] = []
-    const assistants: SessionV1.WithParts[] = []
+    const v2Admissions: string[] = []
     const sessions = {
       get: () => Effect.succeed({ id: SessionID.make("ses_parent"), agent: parent.name, permission: [] }),
       create: (createInput: NonNullable<Session.CreateInput>) => {
         created.push(createInput)
         return Effect.succeed({ id: SessionID.make("ses_child") })
       },
-      messages: () => Effect.succeed(assistants),
+      messages: () => Effect.succeed([]),
+      updateMessage: (message: unknown) => Effect.succeed(message),
+      updatePart: (part: unknown) => Effect.succeed(part),
     } as unknown as Session.Interface
     const agents = {
       get: (name: string) => Effect.succeed(name === worker.name ? worker : name === parent.name ? parent : undefined),
     } as unknown as Agent.Interface
-    const sessionPrompt = {
-      resolvePromptParts: () => Effect.succeed([]),
-      cancel: () => Effect.void,
-      prompt: (promptInput: SessionPrompt.PromptInput) => {
-        prompted.push(promptInput)
-        const structured =
-          promptInput.metadata?.deepagent?.structured_finalizer?.attempt === 1 && turn.finalizer !== undefined
-            ? undefined
-            : promptInput.format
-              ? { verdict: "revise" }
-              : undefined
-        const text =
-          promptInput.metadata?.deepagent?.structured_finalizer?.attempt === 2 && turn.finalizer === "degraded"
-            ? "not json"
-            : promptInput.metadata?.deepagent?.structured_finalizer?.attempt === 2 && turn.finalizer === "text_fallback"
-              ? '{"verdict":"revise"}'
-              : promptInput.format
-                ? undefined
-                : "grounded review draft"
-        const assistant = {
-          info: {
-            role: "assistant",
-            id: `msg_${prompted.length}`,
-            tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
-            cost: 0,
-            ...(structured === undefined ? {} : { structured }),
-          },
-          parts: text === undefined ? [] : [{ type: "text", text, synthetic: false, ignored: false }],
-        } as unknown as SessionV1.WithParts
-        assistants.push(assistant)
-        return Effect.succeed(assistant)
+    const v2Session = {
+      prompt: (admission: { readonly prompt: { readonly text: string } }) => {
+        v2Admissions.push(admission.prompt.text)
+        return Effect.succeed({})
       },
-    } as unknown as SessionPrompt.Interface
+      resume: () => Effect.void,
+      interrupt: () => Effect.void,
+      messages: () =>
+        Effect.succeed([
+          {
+            type: "assistant",
+            id: "msg_turn_1",
+            agent: worker.name,
+            model: { id: "model-test", providerID: "test" },
+            time: { created: DateTime.makeUnsafe(1000) },
+            tokens: { input: 2, output: 3, reasoning: 1, cache: { read: 4, write: 5 } },
+            cost: 0.5,
+            content: [{ type: "text", id: "part_1", text: "grounded review draft" }],
+          },
+        ]),
+    } as unknown as SessionV2.Interface
     const runner = makeTaskSubagentRunner({
       sessions,
       agents,
-      sessionPrompt,
+      v2Session,
       parentSessionID: SessionID.make("ses_parent"),
       model: { providerID: "test", modelID: "test" },
       ...input,
     })
 
-    const result = await Effect.runPromise(
-      runner({ agentType: worker.name, prompt: "run", goalId: "goal-exact", outputSchema: turn.outputSchema }),
-    )
-    return { result, createInput: created[0], prompted }
+    const result = await Effect.runPromise(runner({ agentType: worker.name, prompt: "run", goalId: "goal-exact" }))
+    return { result, createInput: created[0], v2Admissions }
   }
 
   test("defaults plan-write capability to false and labels generic children accurately", async () => {
@@ -178,12 +164,13 @@ describe("makeTaskSubagentRunner capability boundary", () => {
   })
 
   test("goal-loop callers explicitly opt in and receive the capability grant", async () => {
-    const { result, createInput, prompted } = await run({ allowPlanWriteCapability: true, purpose: "goal-loop" })
+    const { result, createInput, v2Admissions } = await run({ allowPlanWriteCapability: true, purpose: "goal-loop" })
     expect(result.ok).toBe(true)
     expect(createInput?.title).toBe("goal-worker (goal-loop)")
     expect(Permission.evaluate("plan", "*", createInput?.permission ?? []).action).toBe("allow")
     expect(createInput?.metadata).toMatchObject({ goalID: "goal-exact" })
-    expect(prompted[0]?.metadata).toMatchObject({ deepagent: { goal_id: "goal-exact" } })
+    // V2-only: the turn is one durable admission; the raw prompt is the admission text.
+    expect(v2Admissions).toEqual(["run"])
   })
 
   test("panel callers remain opted out and use a panel child title", async () => {
@@ -193,9 +180,20 @@ describe("makeTaskSubagentRunner capability boundary", () => {
     expect(Permission.evaluate("plan", "*", createInput?.permission ?? []).action).not.toBe("allow")
   })
 
+  test("per-turn usage totals are read from the V2 assistant projection", async () => {
+    const { result } = await run({})
+    // GROSS = input+output+reasoning; inputTokens is the FULL billed input (input + cached prefix);
+    // carriedPrefix is the provider-reported cached prefix; cost sums finite assistant costs.
+    expect(result.ok).toBe(true)
+    expect(result.tokensUsed).toBe(6)
+    expect(result.inputTokens).toBe(11)
+    expect(result.outputTokens).toBe(4)
+    expect(result.carriedPrefixTokens).toBe(9)
+    expect(result.cost).toBe(0.5)
+  })
+
   test("v2-wired plain turns drive V2 admission and never call legacy prompt orchestration", async () => {
     const created: Array<NonNullable<Session.CreateInput>> = []
-    const legacyPrompts: unknown[] = []
     const v2Calls: Array<{
       kind: "prompt" | "resume" | "interrupt"
       text?: string
@@ -213,14 +211,6 @@ describe("makeTaskSubagentRunner capability boundary", () => {
     const agents = {
       get: (name: string) => Effect.succeed(name === worker.name ? worker : name === parent.name ? parent : undefined),
     } as unknown as Agent.Interface
-    const sessionPrompt = {
-      resolvePromptParts: (template: string) => Effect.succeed([{ type: "text", text: template }]),
-      cancel: () => Effect.void,
-      prompt: (promptInput: unknown) => {
-        legacyPrompts.push(promptInput)
-        return Effect.succeed({ info: { role: "assistant" }, parts: [] })
-      },
-    } as unknown as SessionPrompt.Interface
     const v2History: unknown[] = []
     const v2Session = {
       prompt: (input: { prompt: { text: string }; resume?: boolean; sessionID: string }) => {
@@ -245,7 +235,6 @@ describe("makeTaskSubagentRunner capability boundary", () => {
     const runner = makeTaskSubagentRunner({
       sessions,
       agents,
-      sessionPrompt,
       v2Session,
       parentSessionID: SessionID.make("ses_parent"),
       model: { providerID: "test", modelID: "test" },
@@ -260,7 +249,6 @@ describe("makeTaskSubagentRunner capability boundary", () => {
       { kind: "prompt", text: "run v2", resume: false, sessionID: "ses_child_v2" },
       { kind: "resume" },
     ])
-    expect(legacyPrompts).toEqual([])
     // The driver model is frozen onto the child session for V2 model resolution.
     expect(created[0]?.model).toEqual({ id: ModelV2.ID.make("test"), providerID: ProviderV2.ID.make("test") })
   })
@@ -296,11 +284,6 @@ describe("makeTaskSubagentRunner capability boundary", () => {
     const agents = {
       get: (name: string) => Effect.succeed(name === worker.name ? worker : undefined),
     } as unknown as Agent.Interface
-    const sessionPrompt = {
-      resolvePromptParts: (template: string) => Effect.succeed([{ type: "text", text: template }]),
-      cancel: () => Effect.void,
-      prompt: () => Effect.die(new Error("legacy prompt must not be called")),
-    } as unknown as SessionPrompt.Interface
     const v2History: unknown[] = []
     const v2Session = {
       prompt: () => {
@@ -324,7 +307,6 @@ describe("makeTaskSubagentRunner capability boundary", () => {
     const runner = makeTaskSubagentRunner({
       sessions,
       agents,
-      sessionPrompt,
       v2Session,
       ...(input.snapshot ? { snapshot: input.snapshot } : {}),
       parentSessionID: SessionID.make("ses_parent"),
@@ -511,6 +493,12 @@ describe("makeTaskSubagentRunner capability boundary", () => {
         cost: 0.5,
       }),
     ])
+    // The turn's own accounting comes from the SAME V2 projection (1 in + 2 out, no cached prefix).
+    expect(result.tokensUsed).toBe(3)
+    expect(result.inputTokens).toBe(1)
+    expect(result.outputTokens).toBe(2)
+    expect(result.carriedPrefixTokens).toBe(0)
+    expect(result.cost).toBe(0.5)
   })
 
   test("v2-wired turns mirror messages even without a snapshot, skipping only the patch part", async () => {
@@ -587,6 +575,15 @@ describe("makeTaskSubagentRunner capability boundary", () => {
         state: expect.objectContaining({ status: "error", error: "denied" }),
       }),
       expect.objectContaining({ type: "text", text: "final answer", id: "prt_assist_full_3" }),
+      // F-17 hardening: the canonical converter synthesizes a step-finish part (V1 turn
+      // accounting/token capture keys on it) — deterministic `<msgid>_finish` id.
+      expect.objectContaining({
+        type: "step-finish",
+        reason: "length",
+        id: "prt_assist_full_finish",
+        tokens: { input: 1, output: 2, reasoning: 3, cache: { read: 0, write: 0 } },
+        cost: 0.25,
+      }),
     ])
   })
 
@@ -600,11 +597,6 @@ describe("makeTaskSubagentRunner capability boundary", () => {
     const agents = {
       get: (name: string) => Effect.succeed(name === worker.name ? worker : undefined),
     } as unknown as Agent.Interface
-    const sessionPrompt = {
-      resolvePromptParts: (template: string) => Effect.succeed([{ type: "text", text: template }]),
-      cancel: () => Effect.void,
-      prompt: () => Effect.die(new Error("legacy prompt must not be called")),
-    } as unknown as SessionPrompt.Interface
     const v2Session = {
       prompt: () => Effect.succeed({}),
       resume: () => Effect.fail(new Error("drain failed")),
@@ -617,7 +609,6 @@ describe("makeTaskSubagentRunner capability boundary", () => {
     const runner = makeTaskSubagentRunner({
       sessions,
       agents,
-      sessionPrompt,
       v2Session,
       parentSessionID: SessionID.make("ses_parent"),
       model: { providerID: "test", modelID: "test" },
@@ -633,7 +624,6 @@ describe("makeTaskSubagentRunner capability boundary", () => {
     readonly snapshot?: Snapshot.Interface
   }) => {
     const v2Prompts: string[] = []
-    const legacyPrompts: unknown[] = []
     const mirrored: unknown[] = []
     const parts: unknown[] = []
     const history: Array<Record<string, unknown>> = []
@@ -660,14 +650,6 @@ describe("makeTaskSubagentRunner capability boundary", () => {
     const agents = {
       get: (name: string) => Effect.succeed(name === worker.name ? worker : undefined),
     } as unknown as Agent.Interface
-    const sessionPrompt = {
-      resolvePromptParts: (template: string) => Effect.succeed([{ type: "text", text: template }]),
-      cancel: () => Effect.void,
-      prompt: (promptInput: unknown) => {
-        legacyPrompts.push(promptInput)
-        return Effect.die(new Error("legacy prompt must not be called"))
-      },
-    } as unknown as SessionPrompt.Interface
     const v2Session = {
       prompt: (admission: { readonly prompt: { readonly text: string } }) => {
         v2Prompts.push(admission.prompt.text)
@@ -692,7 +674,6 @@ describe("makeTaskSubagentRunner capability boundary", () => {
     const runner = makeTaskSubagentRunner({
       sessions,
       agents,
-      sessionPrompt,
       v2Session,
       ...(input.snapshot ? { snapshot: input.snapshot } : {}),
       parentSessionID: SessionID.make("ses_parent"),
@@ -707,11 +688,11 @@ describe("makeTaskSubagentRunner capability boundary", () => {
           outputSchema: { type: "object", properties: { verdict: { type: "string" } }, required: ["verdict"] },
         }),
       )
-    return { run, v2Prompts, legacyPrompts, mirrored, parts }
+    return { run, v2Prompts, mirrored, parts }
   }
 
   test("v2-wired structured turns drive research and finalizer admissions with seam-side validation", async () => {
-    const { run, v2Prompts, legacyPrompts } = structuredHarness({
+    const { run, v2Prompts } = structuredHarness({
       replies: ["the migration looks correct", '{"verdict":"approve"}'],
     })
     const result = await run()
@@ -719,7 +700,6 @@ describe("makeTaskSubagentRunner capability boundary", () => {
     expect(result.structured).toEqual({ verdict: "approve" })
     expect(result.text).toBe('{"verdict":"approve"}')
     expect(result.structuredOutput).toEqual({ attempt: 1, transport: "text_fallback" })
-    expect(legacyPrompts).toEqual([])
     // One research admission + one finalizer admission; the finalizer embeds the research result
     // and the schema because V2 has no provider-side format to carry them.
     expect(v2Prompts).toHaveLength(2)
@@ -808,74 +788,6 @@ describe("makeTaskSubagentRunner capability boundary", () => {
     expect(result.ok).toBe(false)
     // Only the research admission ran — the finalizer loop never started on an empty result.
     expect(v2Prompts).toHaveLength(1)
-  })
-
-  test("structured reviewer turns collect evidence before the separate finalizer", async () => {
-    const { result, prompted } = await run(
-      { purpose: "panel" },
-      {
-        outputSchema: {
-          type: "object",
-          properties: { verdict: { type: "string" } },
-          required: ["verdict"],
-        },
-      },
-    )
-
-    expect(result.ok).toBe(true)
-    expect(result.structured).toEqual({ verdict: "revise" })
-    expect(prompted).toHaveLength(2)
-    expect(prompted[0]?.format).toBeUndefined()
-    expect(prompted[1]?.format?.type).toBe("json_schema")
-    expect(prompted[1]?.metadata?.deepagent?.structured_finalizer).toBeDefined()
-  })
-
-  test("explicit-schema panel caller accepts validated JSON text as structured output", async () => {
-    const { result, prompted } = await run(
-      { purpose: "panel" },
-      {
-        outputSchema: {
-          type: "object",
-          properties: { verdict: { type: "string" } },
-          required: ["verdict"],
-        },
-        finalizer: "text_fallback",
-      },
-    )
-
-    expect(result.structured).toEqual({ verdict: "revise" })
-    expect(result.structuredOutput).toEqual({ attempt: 2, transport: "text_fallback" })
-    expect(prompted).toHaveLength(3)
-    expect(prompted[2]?.format).toBeUndefined()
-  })
-
-  test("Level-2 text remains fail-closed for structured grader consumers", async () => {
-    const { result, prompted } = await run(
-      { purpose: "panel" },
-      {
-        outputSchema: {
-          type: "object",
-          properties: { verdict: { type: "string" } },
-          required: ["verdict"],
-        },
-        finalizer: "degraded",
-      },
-    )
-
-    expect(result.ok).toBe(true)
-    expect(result.structured).toBeUndefined()
-    expect(result.structuredOutput).toEqual({
-      attempt: 2,
-      transport: "degraded_text",
-      reason: "structured_output_missing",
-    })
-    expect(JSON.parse(result.text)).toEqual({
-      _degraded: true,
-      _reason: "structured_output_missing",
-      _attempts: 2,
-      _raw: "grounded review draft",
-    })
-    expect(prompted).toHaveLength(3)
   })
 })
 
@@ -1150,6 +1062,74 @@ describe("V3.9 §D wiring — buildStepExecutor", () => {
     expect(res.tokensUsed).toBe(7)
     expect(res.critical).toBeUndefined()
   })
+
+  // W1.1 — two-channel 收口: the core `steerGuidance` channel (W1, pendingGoalSteers threaded into the
+  // StepExecutor input) and the §S1.3 relay channel (staged session-steer guidance) merge into ONE
+  // USER GUIDANCE section at the executor. The two buffers are DISJOINT rows (session_steer vs the V2
+  // session_input goal_steer rows), so weaving both here is the single point: a steer is never
+  // duplicated and never dropped, whichever channel carried it.
+  test("W1.1: core steerGuidance alone is woven as exactly ONE USER GUIDANCE section", async () => {
+    let seenPrompt = ""
+    const exec = buildStepExecutor((input) => {
+      seenPrompt = input.prompt
+      return Effect.succeed(turnFrom({ ok: true }))
+    })
+    await Effect.runPromise(
+      exec(
+        execInput({
+          steerGuidance: ["core channel: also handle the empty-input edge case"],
+        }),
+      ),
+    )
+    expect(seenPrompt).toContain("USER GUIDANCE (mid-run steering)")
+    expect(seenPrompt).toContain("core channel: also handle the empty-input edge case")
+    // One section — the core channel never opens a second section.
+    expect(seenPrompt.match(/USER GUIDANCE \(mid-run steering\)/g)).toHaveLength(1)
+  })
+
+  test("W1.1: relay staged + core steerGuidance merge into ONE section, relay first, each exactly once", async () => {
+    let seenPrompt = ""
+    const relay = makeGoalSteerRelay()
+    relay.stage([{ id: SessionMessage.ID.create(), text: "relay channel: skip step 3" }])
+    const exec = buildStepExecutor(
+      (input) => {
+        seenPrompt = input.prompt
+        return Effect.succeed(turnFrom({ ok: true }))
+      },
+      undefined,
+      relay,
+    )
+    await Effect.runPromise(
+      exec(
+        execInput({
+          steerGuidance: ["core channel: prefer the async API"],
+        }),
+      ),
+    )
+    // One merged section; the pre-existing relay bullets keep their order and position, core appended.
+    expect(seenPrompt.match(/USER GUIDANCE \(mid-run steering\)/g)).toHaveLength(1)
+    expect(seenPrompt.indexOf("relay channel: skip step 3")).toBeLessThan(
+      seenPrompt.indexOf("core channel: prefer the async API"),
+    )
+    expect(seenPrompt.match(/relay channel: skip step 3/g)).toHaveLength(1)
+    expect(seenPrompt.match(/core channel: prefer the async API/g)).toHaveLength(1)
+    // The relay records exactly the staged steer as threaded-this-tick (driver stamps these ids).
+    expect(relay.takeDrained().map((steer) => steer.text)).toEqual(["relay channel: skip step 3"])
+  })
+
+  test("W1.1: neither source staged ⇒ no USER GUIDANCE section (base behaviour unchanged)", async () => {
+    let seenPrompt = ""
+    const exec = buildStepExecutor(
+      (input) => {
+        seenPrompt = input.prompt
+        return Effect.succeed(turnFrom({ ok: true }))
+      },
+      undefined,
+      makeGoalSteerRelay(),
+    )
+    await Effect.runPromise(exec(execInput()))
+    expect(seenPrompt).not.toContain("USER GUIDANCE")
+  })
 })
 
 describe("V3.9 §E F3 wiring — plan bridge (worker plan edits reach the goal plan doc)", () => {
@@ -1158,7 +1138,7 @@ describe("V3.9 §E F3 wiring — plan bridge (worker plan edits reach the goal p
   // configured root (plan-store). Configure a fresh state dir per case so the child session's
   // getPlan/setPlan (used by seedChildPlan/mirrorChildPlan) has a plan-store root.
   beforeEach(() => {
-    AgentGateway.DeepAgentSessionState.configure(mkdtempSync(path.join(tmpdir(), "deepagent-f3-state-")))
+    AgentGateway.DeepAgentSessionState.configure(mkdtempSync(tmpRoot()))
   })
   const step = (id: string, status: PlanStep["status"]): PlanStep => ({
     step_id: id,
@@ -1182,7 +1162,7 @@ describe("V3.9 §E F3 wiring — plan bridge (worker plan edits reach the goal p
     }).id
   }
   const freshStore = () => {
-    const root = mkdtempSync(path.join(tmpdir(), "deepagent-f3-"))
+    const root = mkdtempSync(tmpRootShared())
     roots.push(root)
     return new DocumentStore(root)
   }
@@ -1326,64 +1306,117 @@ describe("V3.9 §D/§F.3 wiring — makeGoalLoopWiring flag gate", () => {
     expect(typeof deps!.now).toBe("function")
   })
 })
-// LEGACY-EXECUTION-ZERO: the subagent-drive V2 seam resolution must (a) stay legacy when both the
-// experimental flag and the V2-only profile are off, (b) resolve the V2 stack when the flag is on,
-// (c) FORCE the V2 stack under the V2-only profile even with the flag off, and (d) refuse typed at
-// layer build when the V2-only profile runs without the SessionV2 stack in the composition root.
-const stubSessionV2 = SessionV2.Service.of({
-  list: () => Effect.die("stub unused"),
-  create: () => Effect.die("stub unused"),
-  get: () => Effect.die("stub unused"),
-  messages: () => Effect.die("stub unused"),
-  message: () => Effect.die("stub unused"),
-  context: () => Effect.die("stub unused"),
-  events: () => Stream.empty as never,
-  switchAgent: () => Effect.die("stub unused"),
-  switchModel: () => Effect.die("stub unused"),
-  prompt: () => Effect.die("stub unused"),
-  shell: () => Effect.die("stub unused"),
-  skill: () => Effect.die("stub unused"),
-  compact: () => Effect.die("stub unused"),
-  wait: () => Effect.die("stub unused"),
-  resume: () => Effect.die("stub unused"),
-  interrupt: () => Effect.void,
+// LEGACY-EXECUTION-ZERO: the subagent runner is V2-ONLY. The legacy branches (SessionPrompt.prompt
+// plain-turn fallback, runSubagentPrompt structured fallback, V1 sessions.messages accounting) are
+// DELETED, and `coreV2Only` is hardcoded `Config.succeed(true)` in runtime-flags.ts (fail-closed,
+// RI-122) — there is no flag and no dep that can reselect a legacy executor. These locks prove it.
+type DepsHaveNoSessionPrompt = "sessionPrompt" extends keyof TaskSubagentRunnerDeps ? never : true
+type DepsHaveNoV2Only = "v2Only" extends keyof TaskSubagentRunnerDeps ? never : true
+type DepsRequireV2Session = TaskSubagentRunnerDeps extends { readonly v2Session: SessionV2.Interface }
+  ? true
+  : never
+
+describe("makeTaskSubagentRunner is V2-only (LEGACY-EXECUTION-ZERO)", () => {
+  test("the runner contract has no legacy prompt dep, no v2Only fork, and requires the V2 authority", () => {
+    // Compile-time locks: if any of these regresses (a sessionPrompt or v2Only field reappears, or
+    // v2Session becomes optional again) the type below stops assigning to `true` and typecheck fails.
+    const noPrompt: DepsHaveNoSessionPrompt = true
+    const noFork: DepsHaveNoV2Only = true
+    const required: DepsRequireV2Session = true
+    expect([noPrompt, noFork, required]).toEqual([true, true, true])
+  })
+
+  test("drives structured + plain turns end-to-end with no legacy deps and no V1 message reads", async () => {
+    const worker: Agent.Info = {
+      name: "reviewer",
+      mode: "subagent",
+      permission: [],
+      options: {},
+    }
+    const v2Admissions: string[] = []
+    const v2MessageReads: string[] = []
+    const v1MessageReads: string[] = []
+    const history: Array<Record<string, unknown>> = []
+    let turn = 0
+    const sessions = {
+      get: () =>
+        Effect.succeed({
+          id: SessionID.make("ses_parent"),
+          agent: "parent",
+          permission: [],
+          directory: "/project",
+        }),
+      create: () => Effect.succeed({ id: SessionID.make("ses_child_v2only") }),
+      // The legacy accounting path read V1 messages; under V2-only this must NEVER be called.
+      messages: () => {
+        v1MessageReads.push("read")
+        return Effect.succeed([])
+      },
+      updateMessage: (message: unknown) => Effect.succeed(message),
+      updatePart: (part: unknown) => Effect.succeed(part),
+    } as unknown as Session.Interface
+    const agents = {
+      get: (name: string) => Effect.succeed(name === "reviewer" ? worker : undefined),
+    } as unknown as Agent.Interface
+    const v2Session = {
+      prompt: (admission: { readonly prompt: { readonly text: string } }) => {
+        v2Admissions.push(admission.prompt.text)
+        turn += 1
+        // Alternating script: research → schema-valid JSON finalizer → plain text.
+        const reply = turn === 1 ? "research ok" : turn === 2 ? '{"verdict":"approve"}' : "plain turn text"
+        history.push({
+          type: "assistant",
+          id: `msg_v2only_${turn}`,
+          agent: "reviewer",
+          model: { id: "model-test", providerID: "test" },
+          time: { created: DateTime.makeUnsafe(1000 + turn) },
+          tokens: { input: 1, output: 2, reasoning: 0, cache: { read: 0, write: 0 } },
+          cost: 0.25,
+          content: [{ type: "text", id: `part_${turn}`, text: reply }],
+        })
+        return Effect.succeed({})
+      },
+      resume: () => Effect.void,
+      interrupt: () => Effect.void,
+      messages: (input: { readonly sessionID: string }) => {
+        v2MessageReads.push(input.sessionID)
+        return Effect.succeed(history)
+      },
+    } as unknown as SessionV2.Interface
+    // THE regression: the runner is constructed with NO sessionPrompt dep (and no v2Only fork) —
+    // the only drive is the durable V2 session machinery.
+    const runner = makeTaskSubagentRunner({
+      sessions,
+      agents,
+      v2Session,
+      parentSessionID: SessionID.make("ses_parent"),
+      model: { providerID: "test", modelID: "test" },
+    })
+
+    const structured = await Effect.runPromise(
+      runner({
+        agentType: "reviewer",
+        prompt: "review the change",
+        outputSchema: { type: "object", properties: { verdict: { type: "string" } }, required: ["verdict"] },
+      }),
+    )
+    expect(structured.ok).toBe(true)
+    expect(structured.structured).toEqual({ verdict: "approve" })
+    expect(structured.structuredOutput).toEqual({ attempt: 1, transport: "text_fallback" })
+    expect(structured.sessionID).toBe("ses_child_v2only")
+    // Structured usage totals come from the V2 projection (2 admissions × 3 gross tokens).
+    expect(structured.tokensUsed).toBe(6)
+    expect(structured.cost).toBe(0.5)
+
+    const plain = await Effect.runPromise(runner({ agentType: "reviewer", prompt: "just answer" }))
+    expect(plain.ok).toBe(true)
+    expect(plain.text).toBe("plain turn text")
+    expect(plain.structured).toBeUndefined()
+    expect(plain.structuredOutput).toBeUndefined()
+
+    // Every turn ran as durable V2 admissions; accounting read the V2 projection only.
+    expect(v2Admissions).toEqual(["review the change", expect.stringContaining("<research_result>"), "just answer"])
+    expect(v2MessageReads.length).toBeGreaterThan(0)
+    expect(v1MessageReads).toEqual([])
+  })
 })
-
-const resolveDrive = (overrides: Partial<RuntimeFlags.Info>, withV2: boolean) =>
-  GoalLoopWiring.resolveV2SubagentDrive().pipe(
-    Effect.provide(
-      withV2
-        ? RuntimeFlags.layer({ ...overrides }).pipe(Layer.provideMerge(Layer.succeed(SessionV2.Service, stubSessionV2)))
-        : RuntimeFlags.layer({ ...overrides }),
-    ),
-  )
-
-describe("resolveV2SubagentDrive (LEGACY-EXECUTION-ZERO)", () => {
-  test("flag OFF and profile OFF resolves no V2 seam (legacy stays the default)", async () => {
-    const { v2Session } = await Effect.runPromise(resolveDrive({}, false))
-    expect(v2Session).toBeUndefined()
-  })
-
-  test("flag ON resolves the V2 seam from the composition root", async () => {
-    const { v2Session } = await Effect.runPromise(resolveDrive({ experimentalV2SubagentDrive: true }, true))
-    expect(v2Session).toBe(stubSessionV2)
-  })
-
-  test("V2-only profile forces the V2 seam even with the experimental flag off", async () => {
-    const { v2Session } = await Effect.runPromise(resolveDrive({ coreV2Only: true }, true))
-    expect(v2Session).toBe(stubSessionV2)
-  })
-
-  test("V2-only profile without the V2 stack resolves v2Only (refusal is turn-time, no build die)", async () => {
-    const resolved = await Effect.runPromise(resolveDrive({ coreV2Only: true }, false))
-    expect(resolved.v2Only).toBe(true)
-    expect(resolved.v2Session).toBeUndefined()
-  })
-
-  test("profile OFF with the flag on and no stack keeps legacy (no v2Only flag)", async () => {
-    const resolved = await Effect.runPromise(resolveDrive({ experimentalV2SubagentDrive: true }, false))
-    expect(resolved.v2Only).toBe(false)
-    expect(resolved.v2Session).toBeUndefined()
-  })
-})
-

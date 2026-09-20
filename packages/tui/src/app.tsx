@@ -41,6 +41,21 @@ import { DialogMcp } from "./component/dialog-mcp"
 import { DialogStatus } from "./component/dialog-status"
 import { DialogThemeList } from "./component/dialog-theme-list"
 import { DialogHelp } from "./ui/dialog-help"
+import { DialogReviewList } from "./component/dialog-review-list"
+import { DialogKnowledgeReview } from "./component/dialog-knowledge-review"
+import { DialogOversight } from "./component/dialog-oversight"
+import { DialogDeepAgentSettings } from "./component/dialog-deepagent-settings"
+import { DialogIM } from "./component/dialog-im"
+import { DialogStats } from "./component/dialog-stats"
+import { DialogGitTimeline } from "./component/dialog-git-timeline"
+import { DialogTerminal } from "./component/dialog-terminal"
+import { DialogPacks } from "./component/dialog-packs"
+import { DialogAgentSystem } from "./component/dialog-agent-system"
+import { DialogProfile } from "./component/dialog-profile"
+import { DialogWorktree } from "./component/dialog-worktree"
+import { DialogBackup } from "./component/dialog-backup"
+import { DialogDebug } from "./component/dialog-debug"
+import { DialogWikiPages } from "./component/dialog-wiki-pages"
 import { DialogAgent } from "./component/dialog-agent"
 import { DialogSessionList } from "./component/dialog-session-list"
 import { DialogWorkspaceList } from "./component/dialog-workspace-list"
@@ -56,6 +71,7 @@ import { DialogConfirm } from "./ui/dialog-confirm"
 import { ToastProvider, useToast } from "./ui/toast"
 import { isDefaultTitle, requestSessionFork } from "./util/session"
 import { KVProvider, useKV } from "./context/kv"
+import { TuiI18nProvider, useTuiI18n, type TuiI18nLocale } from "./context/i18n"
 import * as Model from "./util/model"
 import { ArgsProvider, useArgs, type Args } from "./context/args"
 import open from "open"
@@ -258,7 +274,8 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                         <OpencodeKeymapProvider keymap={keymap}>
                           <ArgsProvider {...input.args}>
                             <KVProvider>
-                              <ToastProvider>
+                              <TuiI18nProvider>
+                                <ToastProvider>
                                 <RouteProvider
                                   initialRoute={
                                     input.args.continue
@@ -309,6 +326,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
                                   </TuiConfigProvider>
                                 </RouteProvider>
                               </ToastProvider>
+                              </TuiI18nProvider>
                             </KVProvider>
                           </ArgsProvider>
                         </OpencodeKeymapProvider>
@@ -344,6 +362,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
   const event = useEvent()
   const sdk = useSDK()
   const toast = useToast()
+  const i18n = useTuiI18n()
   const themeState = useTheme()
   const { theme, mode, setMode, locked, lock, unlock } = themeState
   const sync = useSync()
@@ -392,7 +411,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     "key",
     ({ event }) => {
       if (!Flag.DEEPAGENT_CODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT) return
-      Selection.handleSelectionKey(renderer, toast, event, clipboard)
+      Selection.handleSelectionKey(renderer, toast, event, clipboard, i18n.t)
     },
     { priority: 1 },
   )
@@ -407,7 +426,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
 
     await clipboard
       .write?.(text)
-      .then(() => toast.show({ message: "Copied to clipboard", variant: "info" }))
+      .then(() => toast.show({ message: i18n.t("tui.common.copiedToClipboard"), variant: "info" }))
       .catch(toast.error)
 
     renderer.clearSelection()
@@ -428,7 +447,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         return
       }
 
-      toast.show({ title: "Fork failed", message: errorMessage(result.error), variant: "error", duration: 8000 })
+      toast.show({ title: i18n.t("tui.common.forkFailed"), message: errorMessage(result.error), variant: "error", duration: 8000 })
       const retry = await DialogConfirm.show(
         dialog,
         "Retry fork?",
@@ -542,8 +561,8 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     [
       {
         name: COMMAND_PALETTE_COMMAND,
-        title: "Show command palette",
-        category: "System",
+        title: i18n.t("tui.app.showCommandPalette"),
+        category: i18n.t("tui.category.system"),
         hidden: true,
         run: () => {
           dialog.replace(() => <CommandPaletteDialog />)
@@ -551,8 +570,8 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       },
       {
         name: "session.list",
-        title: "Switch session",
-        category: "Session",
+        title: i18n.t("tui.app.switchSession"),
+        category: i18n.t("tui.category.session"),
         suggested: sync.data.session.length > 0,
         slashName: "sessions",
         slashAliases: ["resume", "continue"],
@@ -562,9 +581,9 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       },
       {
         name: "session.new",
-        title: "New session",
+        title: i18n.t("tui.app.newSession"),
         suggested: route.data.type === "session",
-        category: "Session",
+        category: i18n.t("tui.category.session"),
         slashName: "new",
         slashAliases: ["clear"],
         run: () => {
@@ -576,7 +595,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       },
       {
         name: "workspace.copy_path",
-        title: "Copy worktree path",
+        title: i18n.t("tui.app.copyWorktreePath"),
         category: "Workspace",
         enabled: () => currentWorktreeWorkspace() !== undefined,
         run: async () => {
@@ -584,14 +603,14 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
           if (!workspace?.directory) return
           await clipboard
             .write?.(workspace.directory)
-            .then(() => toast.show({ message: "Copied worktree path", variant: "info" }))
+            .then(() => toast.show({ message: i18n.t("tui.app.copiedWorktreePath"), variant: "info" }))
             .catch(toast.error)
           dialog.clear()
         },
       },
       {
         name: "workspace.list",
-        title: "Manage workspaces",
+        title: i18n.t("tui.app.manageWorkspaces"),
         category: "Workspace",
         hidden: !Flag.DEEPAGENT_CODE_EXPERIMENTAL_WORKSPACES,
         slashName: "workspaces",
@@ -601,8 +620,8 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       },
       ...Array.from({ length: 9 }, (_, i) => ({
         name: `session.quick_switch.${i + 1}`,
-        title: `Switch to session in quick slot ${i + 1}`,
-        category: "Session",
+        title: i18n.t("tui.app.switchToQuickSlotSession", { slot: i + 1 }),
+        category: i18n.t("tui.category.session"),
         hidden: true,
         run: () => {
           local.session.quickSwitch(i + 1)
@@ -610,9 +629,9 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       })),
       {
         name: "model.list",
-        title: "Switch model",
+        title: i18n.t("tui.app.switchModel"),
         suggested: true,
-        category: "Agent",
+        category: i18n.t("tui.category.agent"),
         slashName: "models",
         // Bias /mo toward /models over /move without changing global fuzzy scoring.
         slashAliases: ["mo"],
@@ -622,8 +641,8 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       },
       {
         name: "model.cycle_recent",
-        title: "Model cycle",
-        category: "Agent",
+        title: i18n.t("tui.app.modelCycle"),
+        category: i18n.t("tui.category.agent"),
         hidden: true,
         run: () => {
           local.model.cycle(1)
@@ -631,8 +650,8 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       },
       {
         name: "model.cycle_recent_reverse",
-        title: "Model cycle reverse",
-        category: "Agent",
+        title: i18n.t("tui.app.modelCycleReverse"),
+        category: i18n.t("tui.category.agent"),
         hidden: true,
         run: () => {
           local.model.cycle(-1)
@@ -640,8 +659,8 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       },
       {
         name: "model.cycle_favorite",
-        title: "Favorite cycle",
-        category: "Agent",
+        title: i18n.t("tui.app.favoriteCycle"),
+        category: i18n.t("tui.category.agent"),
         hidden: true,
         run: () => {
           local.model.cycleFavorite(1)
@@ -649,8 +668,8 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       },
       {
         name: "model.cycle_favorite_reverse",
-        title: "Favorite cycle reverse",
-        category: "Agent",
+        title: i18n.t("tui.app.favoriteCycleReverse"),
+        category: i18n.t("tui.category.agent"),
         hidden: true,
         run: () => {
           local.model.cycleFavorite(-1)
@@ -658,8 +677,8 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       },
       {
         name: "agent.list",
-        title: "Switch agent",
-        category: "Agent",
+        title: i18n.t("tui.app.switchAgent"),
+        category: i18n.t("tui.category.agent"),
         slashName: "agents",
         run: () => {
           dialog.replace(() => <DialogAgent />)
@@ -667,8 +686,8 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       },
       {
         name: "mcp.list",
-        title: "Toggle MCPs",
-        category: "Agent",
+        title: i18n.t("tui.app.toggleMcps"),
+        category: i18n.t("tui.category.agent"),
         slashName: "mcps",
         run: () => {
           dialog.replace(() => <DialogMcp />)
@@ -676,8 +695,8 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       },
       {
         name: "agent.cycle",
-        title: "Agent cycle",
-        category: "Agent",
+        title: i18n.t("tui.app.agentCycle"),
+        category: i18n.t("tui.category.agent"),
         hidden: true,
         run: () => {
           local.agent.move(1)
@@ -685,23 +704,23 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       },
       {
         name: "variant.cycle",
-        title: "Variant cycle",
-        category: "Agent",
+        title: i18n.t("tui.app.variantCycle"),
+        category: i18n.t("tui.category.agent"),
         run: () => {
           local.model.variant.cycle()
         },
       },
       {
         name: "variant.list",
-        title: "Switch model variant",
-        category: "Agent",
+        title: i18n.t("tui.app.switchModelVariant"),
+        category: i18n.t("tui.category.agent"),
         hidden: local.model.variant.list().length === 0,
         slashName: "variants",
         run: () => {
           if (local.model.variant.list().length === 0) {
             return toast.show({
-              title: "No variants available",
-              message: "The current model does not support any variants.",
+              title: i18n.t("tui.app.noVariantsAvailable"),
+              message: i18n.t("tui.app.noVariantsSupport"),
               variant: "info",
             })
           }
@@ -710,8 +729,8 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       },
       {
         name: "agent.cycle.reverse",
-        title: "Agent cycle reverse",
-        category: "Agent",
+        title: i18n.t("tui.app.agentCycleReverse"),
+        category: i18n.t("tui.category.agent"),
         hidden: true,
         run: () => {
           local.agent.move(-1)
@@ -719,7 +738,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       },
       {
         name: "provider.connect",
-        title: "Connect provider",
+        title: i18n.t("tui.app.connectProvider"),
         suggested: !connected(),
         slashName: "connect",
         run: () => {
@@ -731,7 +750,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         ? [
             {
               name: "console.org.switch",
-              title: "Switch org",
+              title: i18n.t("tui.app.switchOrg"),
               suggested: Boolean(sync.data.console_state.activeOrgName),
               slashName: "org",
               slashAliases: ["orgs", "switch-org"],
@@ -744,71 +763,235 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         : []),
       {
         name: "deepagent-code.status",
-        title: "View status",
+        title: i18n.t("tui.app.viewStatus"),
         slashName: "status",
         run: () => {
           dialog.replace(() => <DialogStatus />)
         },
-        category: "System",
+        category: i18n.t("tui.category.system"),
       },
       {
         name: "theme.switch",
-        title: "Switch theme",
+        title: i18n.t("tui.app.switchTheme"),
         slashName: "themes",
         run: () => {
           dialog.replace(() => <DialogThemeList />)
         },
-        category: "System",
+        category: i18n.t("tui.category.system"),
       },
       {
         name: "theme.switch_mode",
-        title: mode() === "dark" ? "Switch to light mode" : "Switch to dark mode",
+        title: mode() === "dark" ? i18n.t("tui.app.switchToLightMode") : i18n.t("tui.app.switchToDarkMode"),
         run: () => {
           setMode(mode() === "dark" ? "light" : "dark")
           dialog.clear()
         },
-        category: "System",
+        category: i18n.t("tui.category.system"),
       },
       {
         name: "theme.mode.lock",
-        title: locked() ? "Unlock theme mode" : "Lock theme mode",
+        title: locked() ? i18n.t("tui.app.unlockThemeMode") : i18n.t("tui.app.lockThemeMode"),
         run: () => {
           if (locked()) unlock()
           else lock()
           dialog.clear()
         },
-        category: "System",
+        category: i18n.t("tui.category.system"),
       },
       {
         name: "help.show",
-        title: "Help",
+        title: i18n.t("tui.app.help"),
         slashName: "help",
         run: () => {
           dialog.replace(() => <DialogHelp />)
         },
-        category: "System",
+        category: i18n.t("tui.category.system"),
       },
       {
         name: "docs.open",
-        title: "Open docs",
+        title: i18n.t("tui.app.openDocs"),
         run: () => {
           open("https://ai.deepagent.ltd/").catch(() => {})
           dialog.clear()
         },
-        category: "System",
+        category: i18n.t("tui.category.system"),
+      },
+      {
+        // W4-1 full face — read-only review list; the full review flow stays GUI-only.
+        name: "review.list",
+        title: i18n.t("tui.app.browseRunReviews"),
+        slashName: "reviews",
+        run: () => {
+          dialog.replace(() => <DialogReviewList />)
+        },
+        category: i18n.t("tui.category.system"),
+      },
+      {
+        // W2-6 — oversight face: approval queue + metrics + trace + takeover/rollback.
+        name: "oversight.show",
+        title: i18n.t("tui.app.oversightDashboard"),
+        slashName: "oversight",
+        run: () => {
+          dialog.replace(() => <DialogOversight />)
+        },
+        category: i18n.t("tui.category.system"),
+      },
+      {
+        // GUI settings-v2 parity — DeepAgent mode/self-learning/subagent-intensity/prompt-mode.
+        name: "deepagent.settings",
+        title: i18n.t("tui.app.deepagentSettings"),
+        slashName: "deepagent",
+        run: () => {
+          dialog.replace(() => <DialogDeepAgentSettings />)
+        },
+        category: i18n.t("tui.category.system"),
+      },
+      {
+        // W4-1 companion — durable knowledge pending review (approve/reject with CAS identity).
+        name: "review.pending",
+        title: i18n.t("tui.app.reviewPendingKnowledge"),
+        slashName: "knowledge",
+        run: () => {
+          dialog.replace(() => <DialogKnowledgeReview />)
+        },
+        category: i18n.t("tui.category.system"),
+      },
+      {
+        // W4-2 — wiki browser with editing for editable page types.
+        name: "wiki.pages",
+        title: i18n.t("tui.app.browseWikiPages"),
+        slashName: "wiki",
+        run: () => {
+          dialog.replace(() => <DialogWikiPages />)
+        },
+        category: i18n.t("tui.category.system"),
+      },
+      {
+        // W4-4a — usage stats (client-side aggregation over the synced session list).
+        name: "stats.show",
+        title: i18n.t("tui.app.usageStats"),
+        slashName: "stats",
+        run: () => {
+          dialog.replace(() => <DialogStats />)
+        },
+        category: i18n.t("tui.category.system"),
+      },
+      {
+        // W4-4a — git timeline: local `git log --follow` for a picked file.
+        name: "git.timeline",
+        title: i18n.t("tui.app.gitTimelineForFile"),
+        slashName: "git",
+        run: () => {
+          dialog.replace(() => <DialogGitTimeline />)
+        },
+        category: i18n.t("tui.category.system"),
+      },
+      {
+        // W4-4b — domain packs catalog with pin/unpin.
+        name: "packs.list",
+        title: i18n.t("tui.app.domainPacks"),
+        slashName: "packs",
+        run: () => {
+          dialog.replace(() => <DialogPacks />)
+        },
+        category: i18n.t("tui.category.system"),
+      },
+      {
+        // W4-4b — agent-system overview from the synced store (agents + providers).
+        name: "agentSystem.show",
+        title: i18n.t("tui.app.agentSystem"),
+        run: () => {
+          dialog.replace(() => <DialogAgentSystem />)
+        },
+        category: i18n.t("tui.category.system"),
+      },
+      {
+        // W4-4b — profiler runs + hotspots.
+        name: "profile.show",
+        title: i18n.t("tui.app.profiler"),
+        slashName: "profile",
+        run: () => {
+          dialog.replace(() => <DialogProfile />)
+        },
+        category: i18n.t("tui.category.system"),
+      },
+      {
+        // W4-4b — worktree changes, merge-back, fail-closed removal.
+        name: "worktree.show",
+        title: i18n.t("tui.app.worktree"),
+        slashName: "worktree",
+        run: () => {
+          dialog.replace(() => <DialogWorktree />)
+        },
+        category: i18n.t("tui.category.system"),
+      },
+      {
+        // W4-4b — backup list + verify (restore stays GUI-side).
+        name: "backup.list",
+        title: i18n.t("tui.app.backups"),
+        slashName: "backup",
+        run: () => {
+          dialog.replace(() => <DialogBackup />)
+        },
+        category: i18n.t("tui.category.system"),
+      },
+      {
+        // W4-4b — DAP session registry + stack inspection.
+        name: "debug.sessions",
+        title: i18n.t("tui.app.debugSessions"),
+        slashName: "debug",
+        run: () => {
+          dialog.replace(() => <DialogDebug />)
+        },
+        category: i18n.t("tui.category.system"),
+      },
+      {
+        // W4-4a — terminal registry over the pty API (create/list/remove).
+        name: "terminal.list",
+        title: i18n.t("tui.app.terminals"),
+        slashName: "terminal",
+        run: () => {
+          dialog.replace(() => <DialogTerminal />)
+        },
+        category: i18n.t("tui.category.system"),
+      },
+      {
+        // W4-3 — IM panel: group list, chat view with live WS messages, send.
+        name: "im.list",
+        title: i18n.t("tui.app.messages"),
+        slashName: "im",
+        run: () => {
+          dialog.replace(() => <DialogIM />)
+        },
+        category: i18n.t("tui.category.system"),
+      },
+      {
+        // W2-7 — locale switcher for the TUI's own surfaces (persists via kv "tui_locale").
+        name: "tui.language",
+        title: i18n.t("tui.app.switchTuiLanguage"),
+        slashName: "language",
+        run: () => {
+          const order: TuiI18nLocale[] = ["en", "zh", "zht"]
+          const labels: Record<TuiI18nLocale, string> = { en: "English", zh: "简体中文", zht: "繁體中文" }
+          const next = order[(order.indexOf(i18n.locale()) + 1) % order.length]!
+          i18n.setLocale(next)
+          toast.show({ message: labels[next], variant: "info", duration: 3000 })
+          dialog.clear()
+        },
+        category: i18n.t("tui.category.system"),
       },
       {
         name: "app.exit",
-        title: "Exit the app",
+        title: i18n.t("tui.app.exitApp"),
         slashName: "exit",
         slashAliases: ["quit", "q"],
         run: () => destroyRenderer(renderer),
-        category: "System",
+        category: i18n.t("tui.category.system"),
       },
       {
         name: "app.debug",
-        title: "Toggle debug panel",
-        category: "System",
+        title: i18n.t("tui.app.toggleDebugPanel"),
+        category: i18n.t("tui.category.system"),
         run: () => {
           renderer.toggleDebugOverlay()
           dialog.clear()
@@ -816,8 +999,8 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       },
       {
         name: "app.console",
-        title: "Toggle console",
-        category: "System",
+        title: i18n.t("tui.app.toggleConsole"),
+        category: i18n.t("tui.category.system"),
         run: () => {
           renderer.console.toggle()
           dialog.clear()
@@ -825,8 +1008,8 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       },
       {
         name: "app.heap_snapshot",
-        title: "Write heap snapshot",
-        category: "System",
+        title: i18n.t("tui.app.writeHeapSnapshot"),
+        category: i18n.t("tui.category.system"),
         run: async () => {
           const files = await props.onSnapshot?.()
           toast.show({
@@ -839,8 +1022,8 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       },
       {
         name: "terminal.suspend",
-        title: "Suspend terminal",
-        category: "System",
+        title: i18n.t("tui.app.suspendTerminal"),
+        category: i18n.t("tui.category.system"),
         hidden: true,
         enabled: process.platform !== "win32",
         run: () => {
@@ -852,7 +1035,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       {
         name: "terminal.title.toggle",
         title: terminalTitleEnabled() ? "Disable terminal title" : "Enable terminal title",
-        category: "System",
+        category: i18n.t("tui.category.system"),
         run: () => {
           setTerminalTitleEnabled((prev) => {
             const next = !prev
@@ -866,7 +1049,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       {
         name: "app.toggle.animations",
         title: kv.get("animations_enabled", true) ? "Disable animations" : "Enable animations",
-        category: "System",
+        category: i18n.t("tui.category.system"),
         run: () => {
           kv.set("animations_enabled", !kv.get("animations_enabled", true))
           dialog.clear()
@@ -875,7 +1058,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       {
         name: "app.toggle.file_context",
         title: kv.get("file_context_enabled", true) ? "Disable file context" : "Enable file context",
-        category: "System",
+        category: i18n.t("tui.category.system"),
         run: () => {
           kv.set("file_context_enabled", !kv.get("file_context_enabled", true))
           dialog.clear()
@@ -884,7 +1067,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       {
         name: "app.toggle.diffwrap",
         title: kv.get("diff_wrap_mode", "word") === "word" ? "Disable diff wrapping" : "Enable diff wrapping",
-        category: "System",
+        category: i18n.t("tui.category.system"),
         run: () => {
           const current = kv.get("diff_wrap_mode", "word")
           kv.set("diff_wrap_mode", current === "word" ? "none" : "word")
@@ -894,7 +1077,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       {
         name: "app.toggle.paste_summary",
         title: pasteSummaryEnabled() ? "Disable paste summary" : "Enable paste summary",
-        category: "System",
+        category: i18n.t("tui.category.system"),
         run: () => {
           setPasteSummaryEnabled((prev) => {
             const next = !prev
@@ -909,7 +1092,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         title: kv.get("session_directory_filter_enabled", true)
           ? "Disable session directory filtering"
           : "Enable session directory filtering",
-        category: "System",
+        category: i18n.t("tui.category.system"),
         run: async () => {
           kv.set("session_directory_filter_enabled", !kv.get("session_directory_filter_enabled", true))
           await sync.session.refresh()
@@ -973,7 +1156,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       route.navigate({ type: "home" })
       toast.show({
         variant: "info",
-        message: "The current session was deleted",
+        message: i18n.t("tui.app.currentSessionDeleted"),
       })
     }
   })
@@ -1023,8 +1206,8 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     if (result.error || !result.data?.success) {
       toast.show({
         variant: "error",
-        title: "Update Failed",
-        message: "Update failed",
+        title: i18n.t("tui.app.updateFailedTitle"),
+        message: i18n.t("tui.app.updateFailed"),
         duration: 10000,
       })
       return
@@ -1057,13 +1240,13 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
         if (!Flag.DEEPAGENT_CODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT) return
         if (evt.button !== MouseButton.RIGHT) return
 
-        if (!Selection.copy(renderer, toast, clipboard)) return
+        if (!Selection.copy(renderer, toast, clipboard, i18n.t)) return
         evt.preventDefault()
         evt.stopPropagation()
       }}
       onMouseUp={
         !Flag.DEEPAGENT_CODE_EXPERIMENTAL_DISABLE_COPY_ON_SELECT
-          ? () => Selection.copy(renderer, toast, clipboard)
+          ? () => Selection.copy(renderer, toast, clipboard, i18n.t)
           : undefined
       }
     >

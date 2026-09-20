@@ -17,7 +17,6 @@ import type {
   RollbackPort,
   GoalStatus,
 } from "@deepagent-code/core/deepagent/goal-loop"
-import { DeepAgentLearningLifecycleTrigger } from "@deepagent-code/core/deepagent/learning-lifecycle-trigger"
 import {
   materializePlanDoc,
   startGoal,
@@ -25,6 +24,7 @@ import {
   noopPorts,
   type GoalDriverPorts,
 } from "../../src/session/goal-driver"
+import { tmpRoot } from "../fixture/fixture"
 
 /**
  * V3.9 §D — the Goal Driver. Verifies the production seam that goal-loop.ts + goal-loop-wiring.ts left
@@ -38,11 +38,10 @@ let store: DocumentStore
 const SESSION = "drv-session-1"
 
 beforeEach(() => {
-  root = mkdtempSync(path.join(tmpdir(), "goal-driver-"))
+  root = mkdtempSync(tmpRoot())
   store = new DocumentStore(root)
 })
 afterEach(() => {
-  DeepAgentLearningLifecycleTrigger.setRuntimeObserver(undefined)
   rmSync(root, { recursive: true, force: true })
 })
 
@@ -225,13 +224,6 @@ describe("startGoal + runToCompletion", () => {
     const deps = controllerDeps()
     let paused = true
     const ports: GoalDriverPorts = { ...noopPorts, shouldPause: () => Effect.succeed(paused) }
-    const boundaries: DeepAgentLearningLifecycleTrigger.ObserveInput[] = []
-    DeepAgentLearningLifecycleTrigger.setRuntimeObserver({
-      observe: async (input) => {
-        boundaries.push(input)
-        return { state: "skipped", reason: "no_exact_settled_run" }
-      },
-    })
     const { handle } = await Effect.runPromise(
       startGoal({
         deps,
@@ -243,23 +235,11 @@ describe("startGoal + runToCompletion", () => {
     // Paused ⇒ the driver returns "continue" without marking terminal.
     const first = await Effect.runPromise(runToCompletion({ deps, handle, ports }))
     expect(first).toBe("continue")
-    expect(boundaries).toEqual([
-      expect.objectContaining({
-        trigger: "pause",
-        sessionID: SESSION,
-        match: "parent",
-        goalID: handle.goalId,
-      }),
-    ])
-    expect((boundaries[0] as DeepAgentLearningLifecycleTrigger.SessionBoundary).boundaryKey).toBe(
-      `goal-pause:${handle.goalId}`,
-    )
     // Unpause + complete the plan ⇒ resuming drives to done.
     paused = false
     store.update(planDocId, JSON.stringify(plan([step("a", "done")])))
     const second = await Effect.runPromise(runToCompletion({ deps, handle, ports }))
     expect(second).toBe("done")
-    DeepAgentLearningLifecycleTrigger.setRuntimeObserver(undefined)
   })
 })
 

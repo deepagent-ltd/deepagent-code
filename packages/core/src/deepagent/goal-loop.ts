@@ -113,6 +113,14 @@ export const GoalHandle = Schema.Struct({
 }).annotate({ identifier: "GoalHandle" })
 export type GoalHandle = Schema.Schema.Type<typeof GoalHandle>
 
+/**
+ * V4.1 §S1.3 (core side) — one piece of goal-directed guidance waiting for the next tick. `id` is the
+ * durable session_input row key (the consume stamp the runner marks after delivery); `text` is the
+ * guidance threaded into the next step prompt. Kept as a plain pair (never a history message): a
+ * goal-tick steer's destination is the next STEP PROMPT, not the goal session's transcript.
+ */
+export type PendingGoalSteer = { readonly id: string; readonly text: string }
+
 // The observable Budget Ledger — per-goal accumulation, persisted so a restart recovers it.
 export const BudgetLedger = Schema.Struct({
   ticks: Schema.Int,
@@ -241,6 +249,10 @@ const evaluateOne = (
         // than trusting report.complete, so a blocked plan surfaces a gap instead of a silent "done".
         if (hasBlockedSteps(plan))
           return `plan_complete: blocked steps need a human [${report.blocked.join(", ")}]`
+        // A step that declared acceptance but carries no runtime evidence is `done` on the model's word
+        // alone. Naming it here is what stops "the model said so" from closing the goal.
+        if (report.unverified.length > 0)
+          return `plan_complete: steps marked done without validation [${report.unverified.join(", ")}]`
         return report.complete
           ? null
           : `plan_complete: outstanding steps [${report.outstanding.join(", ")}]`
@@ -379,6 +391,14 @@ export type StepExecutor = (input: {
   /** Unmet criteria from the previous completed tick. Empty on the first tick. */
   readonly graderFeedback: readonly string[]
   /**
+   * §S1.3 (core side) — goal-directed guidance enqueued between ticks (`enqueueGoalSteer`), threaded
+   * into THIS tick's executor. Advisory at-least-once: a duplicate re-thread after a crash is harmless
+   * and guidance is never dropped (a short-circuited tick leaves the steers pending). Present only
+   * when non-empty; an executor that ignores it simply does not surface the guidance to the model
+   * (the production wiring threads it into the step prompt like the grader feedback).
+   */
+  readonly steerGuidance?: readonly string[]
+  /**
    * V4.0.1 P2 §4.4 — the goal's budget so far (accumulated through PRIOR ticks; this tick's spend is not
    * yet folded in) + the goal's limits, so the wiring can thread a tiered cost soft-notice into this
    * tick's step-prompt TAIL (`budgetNotice`, gated by `goalBudgetSoftNotify`). The core loop supplies
@@ -439,6 +459,13 @@ type GoalRuntimeState = {
   readonly gaps: readonly string[]
   /** Grader gaps supplied to the most recent executor turn. */
   readonly lastDeliveredFeedback: readonly string[]
+  /**
+   * §S1.3 (core side) — goal-directed guidance enqueued BETWEEN ticks via `enqueueGoalSteer` (the
+   * runner drains the session_input goal_steer rows into this). The next EXECUTING tick threads it
+   * into the step executor (`steerGuidance`) and clears it once delivered — a short-circuited tick
+   * (terminal replay / pre-breach limit) leaves it pending so no guidance is lost (at-least-once).
+   */
+  readonly pendingSteers: readonly PendingGoalSteer[]
   // V4.0.1 P2 §4.5 — the token ACCOUNTING convention stamped at goal creation. Persisted so a restart (or
   // a mid-flight flag flip) never re-interprets an existing ledger: tick() picks the accumulation by THIS
   // marker, not the live flag. A state written before this field existed reads as undefined and is
@@ -477,8 +504,10 @@ const doneStepCount = (plan: PlanDoc | null): number =>
 const evidenceCount = (plan: PlanDoc | null): number =>
   plan == null ? 0 : plan.steps.reduce((n, s) => n + (s.evidence?.length ?? 0), 0)
 
-const persistState = (deps: ControllerDeps, state: GoalRuntimeState): void => {
-  deps.store.upsert({
+const persistState = (deps: ControllerDeps, state: GoalRuntimeState): void => writeState(deps.store, state)
+
+const writeState = (store: DocumentStore, state: GoalRuntimeState): void => {
+  store.upsert({
     type: "run_context",
     scope: planScope(state.sessionId),
     description: `goal loop state ${state.goalId}`,
@@ -496,10 +525,13 @@ const persistState = (deps: ControllerDeps, state: GoalRuntimeState): void => {
   })
 }
 
-const loadState = (deps: ControllerDeps, handle: GoalHandle): GoalRuntimeState | null => {
+const loadState = (deps: ControllerDeps, handle: GoalHandle): GoalRuntimeState | null =>
+  loadStateFromStore(deps.store, handle)
+
+const loadStateFromStore = (store: DocumentStore, handle: GoalHandle): GoalRuntimeState | null => {
   // The state doc id is deterministic (idSlug) — but allocateId adds the type/scope prefix, so scan.
-  for (const ref of deps.store.list({ type: "run_context", scope: planScope(handle.sessionId) })) {
-    const doc = deps.store.get(ref.id)
+  for (const ref of store.list({ type: "run_context", scope: planScope(handle.sessionId) })) {
+    const doc = store.get(ref.id)
     if (!doc) continue
     if (doc.extensions?.goal_id !== handle.goalId) continue
     try {
@@ -515,12 +547,33 @@ const loadState = (deps: ControllerDeps, handle: GoalHandle): GoalRuntimeState |
         lastEvidenceCount: parsed.lastEvidenceCount ?? 0,
         lastDeliveredFeedback: parsed.lastDeliveredFeedback ?? [],
         budgetTokenScope: parsed.budgetTokenScope ?? "gross",
+        // §S1.3: a state persisted before the steer buffer existed reads as undefined; default to an
+        // empty queue so a pre-upgrade goal never crashes on the pending-steer arithmetic.
+        pendingSteers: parsed.pendingSteers ?? [],
       }
     } catch {
       return null
     }
   }
   return null
+}
+
+/**
+ * §S1.3 (core side) — enqueue one goal-directed steer into the goal's durable runtime state so the
+ * NEXT tick threads it into the step executor. `"no_goal"` means the handle's state is absent or the
+ * goal is no longer `running` (the caller keeps the steer pending and tells the user). Idempotent by
+ * steer id: a crash-after-enqueue re-enqueue of the same steer never duplicates the guidance.
+ */
+export const enqueueGoalSteer = (
+  store: DocumentStore,
+  handle: GoalHandle,
+  steer: PendingGoalSteer,
+): "enqueued" | "no_goal" => {
+  const state = loadStateFromStore(store, handle)
+  if (state == null || state.phase !== "running") return "no_goal"
+  if (state.pendingSteers.some((pending) => pending.id === steer.id)) return "enqueued"
+  writeState(store, { ...state, pendingSteers: [...state.pendingSteers, steer] })
+  return "enqueued"
 }
 
 // V4.1 §N — durable command cursor. Weight ticks by one more than the maximum continuing stall count so
@@ -775,6 +828,7 @@ export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
         lastOutcome: null,
         gaps: [],
         lastDeliveredFeedback: [],
+        pendingSteers: [],
         // P2 §4.5: stamp the accounting convention ONCE, from the flag, at creation. tick() reads this
         // marker (never the live flag) so a later flag flip never re-interprets this goal's ledger.
         budgetTokenScope: deps.netTokenBudget === true ? "net" : "gross",
@@ -819,7 +873,11 @@ export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
       const hasUndeliveredFeedback =
         state.gaps.length !== state.lastDeliveredFeedback.length ||
         state.gaps.some((gap, index) => gap !== state.lastDeliveredFeedback[index])
-      if (state.lastProcessedVersion === version && state.lastOutcome != null && !hasUndeliveredFeedback) {
+      // §S1.3 — pending goal-steers must run even when the plan version is unchanged: the replay
+      // guard would otherwise short-circuit a tick that still owes the executor its guidance. The
+      // steers are delivered to the executor below and cleared once the tick actually ran.
+      const hasUndeliveredSteers = state.pendingSteers.length > 0
+      if (state.lastProcessedVersion === version && state.lastOutcome != null && !hasUndeliveredFeedback && !hasUndeliveredSteers) {
         // 幂等: a replay at the SAME version with already-delivered feedback has NO side effects — never re-execute, never re-accrue
         // budget (ticks/tokens/cost). BUT a replay at an unchanged version is by definition a
         // NO-PROGRESS tick: if we just returned the recorded (non-terminal) outcome forever, an
@@ -854,6 +912,10 @@ export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
       // back rather than crashing the driver.
       const activeStep = plan?.steps.find((step) => step.step_id === plan.active_step_id) ?? null
       const deliveredFeedback = state.gaps
+      // §S1.3 — thread the enqueued goal-steers into this tick's executor. `deliveredSteers` is the
+      // set this tick OWNS: it is cleared below once the executor ran (delivered), while the
+      // short-circuit paths above preserve the pending list (no loss, at-least-once advisory).
+      const deliveredSteers = state.pendingSteers
       const execResult = yield* deps
         .executor({
           goalId: state.goalId,
@@ -863,6 +925,9 @@ export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
           activeStepId: plan?.active_step_id ?? null,
           activeStep,
           graderFeedback: deliveredFeedback,
+          ...(deliveredSteers.length > 0
+            ? { steerGuidance: deliveredSteers.map((steer) => steer.text) }
+            : {}),
           // P2 §4.4: the budget-so-far (prior ticks) + limits, so the wiring can thread a tiered cost
           // soft-notice into THIS tick's step-prompt tail (budgetNotice). Read-only for the executor.
           ledger: state.ledger,
@@ -963,6 +1028,10 @@ export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
         lastOutcome: outcome,
         gaps: grader.gaps,
         lastDeliveredFeedback: deliveredFeedback,
+        // §S1.3 — the steers were delivered to the executor this tick; the queue is drained. A crash
+        // before persistState re-enqueues (at-least-once) — never lost, never duplicated after the
+        // crash-replay window.
+        pendingSteers: [],
       }
 
       // 可观测: persist state + audit BEFORE side-effecting rollback so the trail is durable even if the

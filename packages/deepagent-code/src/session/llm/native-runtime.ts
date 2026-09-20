@@ -4,7 +4,7 @@ import { ProviderTransform } from "@/provider/transform"
 import { errorMessage } from "@/util/error"
 import { isRecord } from "@/util/record"
 import { asSchema, type ModelMessage, type Tool } from "ai"
-import { Cause, Effect, FiberSet, Queue } from "effect"
+import { Cause, Effect, FiberSet, Queue, Ref } from "effect"
 import * as Stream from "effect/Stream"
 import { FetchHttpClient } from "effect/unstable/http"
 import {
@@ -128,7 +128,8 @@ export function stream(input: StreamInput): StreamResult {
     Stream.unwrap(
       Effect.gen(function* () {
         const settlements = yield* FiberSet.make<void>()
-        const results = yield* Queue.unbounded<LLMEvent, Cause.Done>()
+        const localToolCalls = yield* Ref.make(0)
+        const results = yield* Queue.bounded<LLMEvent, Cause.Done>(512)
         const provider = input.llmClient
           .stream(
             LLMRequest.update(request, {
@@ -136,10 +137,13 @@ export function stream(input: StreamInput): StreamResult {
             }),
           )
           .pipe(
-            Stream.flatMap((event) =>
-              event.type !== "tool-call" || event.providerExecuted
-                ? Stream.make(event)
-                : Stream.make(
+            Stream.flatMap((event) => {
+              if (event.type !== "tool-call" || event.providerExecuted) return Stream.make(event)
+              return Stream.fromEffect(Ref.updateAndGet(localToolCalls, (count) => count + 1)).pipe(
+                Stream.flatMap((count) => {
+                  if (count > 256)
+                    return Stream.fail(new Error("Provider turn exceeded the 256 local tool-call safety limit"))
+                  return Stream.make(
                     event.name === "apply_patch" && typeof event.input === "string"
                       ? { ...event, input: FreeformTools.input(event.input) }
                       : event,
@@ -154,8 +158,10 @@ export function stream(input: StreamInput): StreamResult {
                         ),
                       ),
                     ),
-                  ),
-            ),
+                  )
+                }),
+              )
+            }),
             Stream.concat(
               Stream.fromEffectDrain(
                 FiberSet.awaitEmpty(settlements).pipe(Effect.andThen(Queue.end(results)), Effect.asVoid),

@@ -46,7 +46,10 @@ import { createColors, createFrames } from "../../ui/spinner"
 import { useDialog } from "../../ui/dialog"
 import { DialogProvider as DialogProviderConnect } from "../dialog-provider"
 import { DialogAlert } from "../../ui/dialog-alert"
+import { DialogSelect } from "../../ui/dialog-select"
+import { DialogPrompt } from "../../ui/dialog-prompt"
 import { useToast } from "../../ui/toast"
+import { useTuiI18n } from "../../context/i18n"
 import { useKV } from "../../context/kv"
 import { createFadeIn } from "../../util/signal"
 import { DialogSkill } from "../dialog-skill"
@@ -171,7 +174,127 @@ export function Prompt(props: PromptProps) {
   const tuiConfig = useTuiConfig()
   const dialog = useDialog()
   const toast = useToast()
+  const i18n = useTuiI18n()
+
+  // GUI parity (D1): the intelligence prepare pipeline. POSTs the raw text to
+  // /session/:id/prompt_prepare_stream (SSE), then shows the prepared draft in an editable review.
+  // Returns the send metadata (confirmed draft, or direct_override on degrade), or false when the
+  // user dismissed the review. Mirrors submit.ts prepareDeepAgentPromptDraft + W1-3 fallback.
+  const prepareIntelligenceDraft = async (sessionID: string, text: string): Promise<Record<string, unknown> | false> => {
+    const intentID = `int_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+    const direct: Record<string, unknown> = {
+      deepagent: { agent_mode_override: "general", prompt_pipeline: { mode: "direct_override" } },
+    }
+    try {
+      const streamResult = await (
+        sdk.client as unknown as {
+          client: {
+            request<D>(o: {
+              method: string
+              url: string
+              body?: unknown
+              headers?: Record<string, string>
+              parseAs?: "stream"
+            }): Promise<{ data?: D }>
+          }
+        }
+      ).client.request<ReadableStream<Uint8Array>>({
+        method: "POST",
+        url: `/session/${sessionID}/prompt_prepare_stream`,
+        body: {
+          mode: "intelligence",
+          output_language: "english",
+          intent_id: intentID,
+          intent_source: "intelligence",
+          parts: [{ type: "text", text }],
+        },
+        headers: { "Content-Type": "application/json" },
+        parseAs: "stream",
+      })
+      if (!streamResult.data) throw new Error("prepare returned no stream")
+      const reader = streamResult.data.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ""
+      let result: { route?: string; prompt_draft_id?: string; goal?: string; preview?: string; intent_id?: string } | undefined
+      const readEvent = (block: string) => {
+        const data = block
+          .split("\n")
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).trimStart())
+          .join("\n")
+        if (!data) return
+        const event = JSON.parse(data) as { type: string; preview?: string; result?: typeof result; message?: string }
+        if (event.type === "progress") return
+        if (event.type === "error") throw new Error(event.message ?? "prepare failed")
+        result = event.result
+      }
+      while (true) {
+        const part = await reader.read()
+        if (part.done) break
+        buffer += decoder.decode(part.value, { stream: true })
+        const blocks = buffer.split("\n\n")
+        buffer = blocks.pop() ?? ""
+        blocks.forEach(readEvent)
+      }
+      if (!result || result.route === "general" || !result.prompt_draft_id) return direct
+      if (result.intent_id && result.intent_id !== intentID) throw new Error("prepare returned a different intent")
+      const editable = (result.preview ?? result.goal ?? "").trim()
+      if (!editable) return direct
+      const edited = await DialogPrompt.show(dialog, i18n.t("tui.intelligence.reviewTitle"), {
+        value: editable,
+      })
+      if (edited === null) return false
+      return {
+        deepagent: {
+          prompt_pipeline: {
+            mode: "intelligence",
+            confirmed_draft_id: result.prompt_draft_id,
+            edited_goal: edited.trim() || editable,
+          },
+        },
+      }
+    } catch {
+      // W1-3 — refinement is an enhancement, not a gate: degrade to direct override.
+      toast.show({ message: i18n.t("tui.intelligence.degraded"), variant: "info", duration: 3000 })
+      return direct
+    }
+  }
+
   const status = createMemo(() => sync.data.session_status?.[props.sessionID ?? ""] ?? { type: "idle" })
+  const working = createMemo(() => status().type === "busy" || status().type === "retry")
+  const recovery = createMemo(() => {
+    const current = status()
+    if (current.type !== "recovery_required") return
+    return current
+  })
+  const intelligenceMode = createMemo(
+    () => props.sessionID && (kv.get("intelligence_mode", {}) as Record<string, boolean>)[props.sessionID] === true,
+  )
+  // GUI followup-dock parity: while the session is busy, `/followup <text>` parks the text in a
+  // kv-persisted per-session FIFO; when the session returns to idle the head is sent as a normal
+  // prompt (server-side delivery is steer-or-queue as usual — this is the local editing buffer
+  // the GUI followup dock owns).
+  const followups = () => kv.get("prompt_followups", {}) as Record<string, string[]>
+  const setFollowups = (sessionID: string, next: string[]) =>
+    kv.set("prompt_followups", { ...followups(), [sessionID]: next })
+  createEffect(() => {
+    const sessionID = props.sessionID
+    if (!sessionID) return
+    if (status().type !== "idle") return
+    const queue = followups()[sessionID]
+    const text = queue?.[0]
+    if (!text) return
+    setFollowups(sessionID, queue.slice(1))
+    void sdk.client.session
+      .prompt({ sessionID, parts: [{ type: "text", text }] })
+      .catch((error) => {
+        toast.show({
+          message: error instanceof Error ? error.message : "Failed to send followup",
+          variant: "error",
+          duration: 5000,
+        })
+      })
+  })
   const history = usePromptHistory()
   const stash = usePromptStash()
   const keymap = useOpencodeKeymap()
@@ -226,7 +349,7 @@ export function Prompt(props: PromptProps) {
   function promptModelWarning() {
     toast.show({
       variant: "warning",
-      message: "Connect a provider to send prompts",
+      message: i18n.t("tui.prompt.connectProvider"),
       duration: 3000,
     })
     if (sync.data.provider.length === 0) {
@@ -340,7 +463,7 @@ export function Prompt(props: PromptProps) {
   const promptCommands = createMemo(() =>
     [
       {
-        title: "Clear prompt",
+        title: i18n.t("tui.prompt.clearPrompt"),
         name: "prompt.clear",
         category: "Prompt",
         hidden: true,
@@ -350,7 +473,7 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "Submit prompt",
+        title: i18n.t("tui.prompt.submitPrompt"),
         name: "prompt.submit",
         category: "Prompt",
         hidden: true,
@@ -363,7 +486,7 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "Remove editor context",
+        title: i18n.t("tui.prompt.removeEditorContext"),
         name: "prompt.editor_context.clear",
         category: "Prompt",
         enabled: Boolean(editorContext()),
@@ -373,7 +496,7 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "Paste",
+        title: i18n.t("tui.prompt.paste"),
         name: "prompt.paste",
         category: "Prompt",
         hidden: true,
@@ -395,11 +518,11 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "Interrupt session",
+        title: i18n.t("tui.prompt.interruptSession"),
         name: "session.interrupt",
         category: "Session",
         hidden: true,
-        enabled: status().type !== "idle",
+        enabled: working(),
         run: () => {
           if (auto()?.visible) return
           if (!input.focused) return
@@ -426,7 +549,7 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "Open editor",
+        title: i18n.t("tui.prompt.openEditor"),
         category: "Session",
         name: "prompt.editor",
         slashName: "editor",
@@ -518,7 +641,7 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "Skills",
+        title: i18n.t("tui.prompt.skills"),
         name: "prompt.skills",
         category: "Prompt",
         slashName: "skills",
@@ -538,8 +661,8 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "Warp",
-        desc: "Change the workspace for the session",
+        title: i18n.t("tui.prompt.warp"),
+        desc: i18n.t("tui.prompt.workspace.change"),
         name: "workspace.set",
         category: "Session",
         enabled: Flag.DEEPAGENT_CODE_EXPERIMENTAL_WORKSPACES,
@@ -549,8 +672,8 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "Expert panel",
-        desc: "Convene the expert panel (会诊) on the current conversation",
+        title: i18n.t("tui.prompt.expertPanel"),
+        desc: i18n.t("tui.prompt.expertPanelDesc"),
         name: "deepagent.panel",
         category: "Session",
         slashName: "panel",
@@ -558,7 +681,7 @@ export function Prompt(props: PromptProps) {
         run: async () => {
           const sessionID = props.sessionID
           if (!sessionID) return
-          toast.show({ variant: "info", message: "Convening expert panel…", duration: 3000 })
+          toast.show({ variant: "info", message: i18n.t("tui.prompt.conveningExpertPanel"), duration: 3000 })
           try {
             const res = await rawRequest<{ decision: string; confidence: number; rounds: number }>({
               method: "POST",
@@ -575,13 +698,13 @@ export function Prompt(props: PromptProps) {
               duration: 6000,
             })
           } catch {
-            toast.show({ variant: "warning", message: "Expert panel failed", duration: 3000 })
+            toast.show({ variant: "warning", message: i18n.t("tui.prompt.expertPanelFailed"), duration: 3000 })
           }
         },
       },
       {
-        title: "Start goal",
-        desc: "Drive the current plan to completion as an autonomous goal",
+        title: i18n.t("tui.prompt.startGoal"),
+        desc: i18n.t("tui.prompt.startGoalDesc"),
         name: "deepagent.goal",
         category: "Session",
         slashName: "goal",
@@ -593,6 +716,28 @@ export function Prompt(props: PromptProps) {
           // seeds a plan server-side (used when the session has no plan yet); otherwise the goal loop
           // drives the session's existing plan.
           const objective = store.prompt.input.replace(/^\/goal\b\s*/, "").trim()
+          // W2-1 — control subcommands mirror the app's goal-status-bar controls (pause/resume/stop
+          // ride POST /deepagent/goal/{action}); they act on the session's RUNNING goal.
+          const control = ["pause", "resume", "stop"].includes(objective) ? objective : undefined
+          if (control) {
+            try {
+              await rawRequest<{ ok: boolean }>({
+                method: "POST",
+                url: `/deepagent/goal/${control}`,
+                body: { sessionID },
+                headers: { "Content-Type": "application/json" },
+              })
+              toast.show({ variant: "success", message: `Goal ${control}d`, duration: 3000 })
+            } catch (error) {
+              toast.show({
+                variant: "warning",
+                message: error instanceof Error ? error.message : `Could not ${control} the goal`,
+                duration: 4000,
+              })
+            }
+            dialog.clear()
+            return
+          }
           try {
             const res = await rawRequest<{ goalId: string; phase: string }>({
               method: "POST",
@@ -613,20 +758,104 @@ export function Prompt(props: PromptProps) {
           } catch {
             toast.show({
               variant: "warning",
-              message: "Could not start goal — describe an objective (/goal ...) or make a plan first",
+              message: i18n.t("tui.prompt.startGoalFailed"),
               duration: 4000,
             })
           }
         },
       },
       {
-        title: "Move session",
-        desc: "Move the session to another project directory",
+        title: i18n.t("tui.prompt.moveSession"),
+        desc: i18n.t("tui.prompt.moveSessionDesc"),
         name: "session.move",
         category: "Session",
         slashName: "move",
         run: () => {
           move.open()
+        },
+      },
+      {
+        // GUI D1 parity — the per-session intelligence toggle (scenario-toggle). While on, sends
+        // run through the prepare pipeline with an editable draft review before submission.
+        title: intelligenceMode() ? i18n.t("tui.intelligence.toggleOn") : i18n.t("tui.intelligence.toggleOff"),
+        desc: i18n.t("tui.intelligence.desc"),
+        name: "prompt.intelligence",
+        category: "Session",
+        slashName: "intelligence",
+        run: () => {
+          const sessionID = props.sessionID
+          if (!sessionID) return
+          const next = !intelligenceMode()
+          kv.set("intelligence_mode", { ...(kv.get("intelligence_mode", {}) as Record<string, boolean>), [sessionID]: next })
+          toast.show({
+            message: next ? i18n.t("tui.intelligence.on") : i18n.t("tui.intelligence.off"),
+            variant: "info",
+            duration: 4000,
+          })
+          dialog.clear()
+        },
+      },
+      {
+        title: i18n.t("tui.followup.title"),
+        desc: i18n.t("tui.followup.desc"),
+        name: "prompt.followup",
+        category: "Session",
+        slashName: "followup",
+        enabled: working(),
+        run: () => {
+          const sessionID = props.sessionID
+          if (!sessionID) return
+          const text = store.prompt.input.replace(/^\/followup\b\s*/, "").trim()
+          if (!text) {
+            toast.show({ message: i18n.t("tui.followup.usage"), variant: "info", duration: 4000 })
+            return
+          }
+          setFollowups(sessionID, [...(followups()[sessionID] ?? []), text])
+          input.setText("")
+          setStore("prompt", { input: "", parts: [] })
+          toast.show({
+            message: i18n.t("tui.followup.queued", { count: (followups()[sessionID] ?? []).length }),
+            variant: "info",
+            duration: 3000,
+          })
+          dialog.clear()
+        },
+      },
+      {
+        title: i18n.t("tui.followup.list"),
+        name: "prompt.followup.list",
+        category: "Session",
+        slashName: "followups",
+        run: () => {
+          const sessionID = props.sessionID
+          if (!sessionID) return
+          const queue = followups()[sessionID] ?? []
+          if (queue.length === 0) {
+            toast.show({ message: i18n.t("tui.followup.none"), variant: "info", duration: 3000 })
+            return
+          }
+          dialog.replace(() => (
+            <DialogSelect
+              title={i18n.t("tui.followup.queueTitle", { count: queue.length })}
+              options={queue.map((text, index) => ({
+                title: text.length > 90 ? `${text.slice(0, 90)}…` : text,
+                value: index,
+                footer: `#${index + 1}`,
+              }))}
+              current={undefined}
+              actions={[
+                {
+                  command: "followup.delete",
+                  title: "delete",
+                  onTrigger: (option: { value: number }) => {
+                    const next = (followups()[sessionID] ?? []).filter((_, index) => index !== option.value)
+                    setFollowups(sessionID, next)
+                    if (next.length === 0) dialog.clear()
+                  },
+                },
+              ]}
+            />
+          ))
         },
       },
     ].map((entry) => ({
@@ -811,7 +1040,7 @@ export function Prompt(props: PromptProps) {
   const stashCommands = createMemo(() =>
     [
       {
-        title: "Stash prompt",
+        title: i18n.t("tui.prompt.stash"),
         name: "prompt.stash",
         category: "Prompt",
         enabled: !!store.prompt.input,
@@ -829,7 +1058,7 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "Stash pop",
+        title: i18n.t("tui.prompt.stashPop"),
         name: "prompt.stash.pop",
         category: "Prompt",
         enabled: stash.list().length > 0,
@@ -845,7 +1074,7 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "Stash list",
+        title: i18n.t("tui.prompt.stashList"),
         name: "prompt.stash.list",
         category: "Prompt",
         enabled: stash.list().length > 0,
@@ -904,7 +1133,7 @@ export function Prompt(props: PromptProps) {
       bindings: [
         {
           key: "!",
-          desc: "Shell mode",
+          desc: i18n.t("tui.prompt.shellMode"),
           group: "Prompt",
           cmd: () => {
             setStore("placeholder", randomIndex(shell().length))
@@ -919,7 +1148,9 @@ export function Prompt(props: PromptProps) {
     return {
       target: inputTarget,
       enabled: inputTarget() !== undefined && store.mode === "shell",
-      bindings: [{ key: "escape", desc: "Exit shell mode", group: "Prompt", cmd: () => setStore("mode", "normal") }],
+      bindings: [
+        { key: "escape", desc: i18n.t("tui.prompt.exitShellMode"), group: "Prompt", cmd: () => setStore("mode", "normal") },
+      ],
     }
   })
 
@@ -930,7 +1161,9 @@ export function Prompt(props: PromptProps) {
         cursorVersion()
         return inputTarget() !== undefined && store.mode === "shell" && input?.visualCursor.offset === 0
       })(),
-      bindings: [{ key: "backspace", desc: "Exit shell mode", group: "Prompt", cmd: () => setStore("mode", "normal") }],
+      bindings: [
+        { key: "backspace", desc: i18n.t("tui.prompt.exitShellMode"), group: "Prompt", cmd: () => setStore("mode", "normal") },
+      ],
     }
   })
 
@@ -944,7 +1177,7 @@ export function Prompt(props: PromptProps) {
       commands: [
         {
           name: "prompt.history.previous",
-          title: "Previous prompt history",
+          title: i18n.t("tui.prompt.historyPrevious"),
           category: "Prompt",
           run() {
             if (input.cursorOffset !== 0) {
@@ -976,7 +1209,7 @@ export function Prompt(props: PromptProps) {
       commands: [
         {
           name: "prompt.history.next",
-          title: "Next prompt history",
+          title: i18n.t("tui.prompt.historyNext"),
           category: "Prompt",
           run() {
             if (input.cursorOffset !== input.plainText.length) {
@@ -1088,7 +1321,7 @@ export function Prompt(props: PromptProps) {
         console.log("Creating a session failed:", res.error)
 
         toast.show({
-          message: "Creating a session failed. Open console for more details.",
+          message: i18n.t("tui.prompt.createSessionFailed"),
           variant: "error",
         })
 
@@ -1133,15 +1366,25 @@ export function Prompt(props: PromptProps) {
 
     if (store.mode === "shell") {
       move.startSubmit()
-      void sdk.client.session.shell({
-        sessionID,
-        agent: agent.name,
-        model: {
-          providerID: selectedModel.providerID,
-          modelID: selectedModel.modelID,
-        },
-        command: inputText,
-      })
+      void sdk.client.session
+        .shell({
+          sessionID,
+          agent: agent.name,
+          model: {
+            providerID: selectedModel.providerID,
+            modelID: selectedModel.modelID,
+          },
+          command: inputText,
+        })
+        .catch((error) => {
+          // V2-only profile refuses the legacy shell route with a typed 503 whose message
+          // carries the reason — surface it instead of dropping the `!` command silently.
+          toast.show({
+            message: error instanceof Error ? error.message : "Shell command failed",
+            variant: "error",
+            duration: 5000,
+          })
+        })
       setStore("mode", "normal")
     } else if (
       inputText.startsWith("/") &&
@@ -1155,17 +1398,44 @@ export function Prompt(props: PromptProps) {
       const restOfInput = firstLineEnd === -1 ? "" : inputText.slice(firstLineEnd + 1)
       const args = firstLineArgs.join(" ") + (restOfInput ? "\n" + restOfInput : "")
 
-      void sdk.client.session.command({
-        sessionID,
-        command: command.slice(1),
-        arguments: args,
-        agent: agent.name,
-        model: `${selectedModel.providerID}/${selectedModel.modelID}`,
-        variant,
-        parts: nonTextParts.filter((x) => x.type === "file"),
-      })
+      void sdk.client.session
+        .command({
+          sessionID,
+          command: command.slice(1),
+          arguments: args,
+          agent: agent.name,
+          model: `${selectedModel.providerID}/${selectedModel.modelID}`,
+          variant,
+          parts: nonTextParts.filter((x) => x.type === "file"),
+        })
+        .catch((error) => {
+          // Commands may refuse with typed errors (e.g. subtask commands under the V2-only
+          // profile) whose message carries the reason — show it instead of failing silently.
+          toast.show({
+            message: error instanceof Error ? error.message : `Command /${command.slice(1)} failed`,
+            variant: "error",
+            duration: 5000,
+          })
+        })
     } else {
       move.startSubmit()
+      // GUI parity (D1): when intelligence mode is on for this session, run the prompt
+      // through the prepare pipeline first — SSE progress + an editable draft review — then send
+      // with the confirmed-draft metadata. Prepare failures degrade to direct_override (W1-3
+      // semantics; W0-3b made refinement itself run under the V2-only profile).
+      const intelligenceOn = props.sessionID
+        ? kv.get("intelligence_mode", {})[props.sessionID] === true
+        : false
+      let metadata: Record<string, unknown> | undefined
+      if (intelligenceOn && inputText.trim()) {
+        const prepared = await prepareIntelligenceDraft(sessionID!, inputText)
+        if (prepared === false) {
+          // user dismissed the draft review — abort the send, keep the composer text
+          input.setText(inputText)
+          return true
+        }
+        metadata = prepared
+      }
       sdk.client.session
         .prompt({
           sessionID,
@@ -1173,6 +1443,7 @@ export function Prompt(props: PromptProps) {
           agent: agent.name,
           model: selectedModel,
           variant,
+          metadata,
           parts: [
             ...editorParts,
             {
@@ -1182,7 +1453,26 @@ export function Prompt(props: PromptProps) {
             ...nonTextParts,
           ],
         })
-        .catch(() => {})
+        .then((result) => {
+          // V4.1 §S1.2 steer ack: a message sent mid-turn is absorbed as a steer and delivered
+          // at the next step boundary — keep that visible instead of appearing dropped.
+          const ack = result as unknown as { steered?: boolean }
+          if (ack.steered)
+            toast.show({
+              message: i18n.t("tui.prompt.steered"),
+              variant: "info",
+              duration: 4000,
+            })
+        })
+        .catch((error) => {
+          // Typed refusals (v2 owner unavailable, intent conflicts) carry the reason in the
+          // message — surface them; silence hid real send failures.
+          toast.show({
+            message: error instanceof Error ? error.message : "Failed to send message",
+            variant: "error",
+            duration: 5000,
+          })
+        })
       if (editorParts.length > 0) editor.markSelectionSent()
     }
     history.append({
@@ -1387,7 +1677,7 @@ export function Prompt(props: PromptProps) {
 
   const spinnerDef = createMemo(() => {
     const agent =
-      status().type !== "idle"
+      working()
         ? (local.agent.list().find((a) => a.name === lastUserMessage()?.agent) ?? local.agent.current())
         : local.agent.current()
     const color = agent ? local.agent.color(agent.name) : theme.border
@@ -1573,7 +1863,15 @@ export function Prompt(props: PromptProps) {
         </box>
         <box width="100%" flexDirection="row" justifyContent="space-between">
           <Switch>
-            <Match when={status().type !== "idle"}>
+            <Match when={recovery()}>
+              {(required) => (
+                <box paddingLeft={1} flexDirection="row" gap={1}>
+                  <text fg={theme.error}>recovery required:</text>
+                  <text fg={theme.textMuted}>{required().message}</text>
+                </box>
+              )}
+            </Match>
+            <Match when={working()}>
               <box
                 flexDirection="row"
                 gap={1}

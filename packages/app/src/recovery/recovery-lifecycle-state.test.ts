@@ -93,3 +93,96 @@ describe("recovery lifecycle (switch / sleep-wake / quit / reconnect)", () => {
     expect(snap.sessions.get("ses-free")?.inflight?.commandId).toBe("f1") // unaffected
   })
 })
+
+describe("recovery lifecycle (session.execution.* track)", () => {
+  test("started → succeeded closes the slot with a typed record", () => {
+    const lc = createRecoveryLifecycle()
+    lc.onEvent({ type: "execution-started", sessionID: "ses-a", timestamp: 10 })
+    let state = lc.snapshot().sessions.get("ses-a")!
+    expect(state.execution?.ref).toEqual({ commandId: "execution:1", attemptId: "ses-a:execution:1" })
+    expect(state.execution?.startedAt).toBe(10)
+
+    lc.onEvent({ type: "execution-succeeded", sessionID: "ses-a", timestamp: 20 })
+    state = lc.snapshot().sessions.get("ses-a")!
+    expect(state.execution).toBeUndefined()
+    expect(state.lastExecution?.state).toBe("succeeded")
+    expect(state.lastExecution?.ref.commandId).toBe("execution:1")
+    expect(state.lastExecution?.at).toBe(20)
+  })
+
+  test("failed records the structured error; interrupted records its reason", () => {
+    const lc = createRecoveryLifecycle()
+    lc.onEvent({ type: "execution-started", sessionID: "ses-a", timestamp: 10 })
+    lc.onEvent({ type: "execution-failed", sessionID: "ses-a", timestamp: 11, error: { type: "unknown", message: "boom" } })
+    let state = lc.snapshot().sessions.get("ses-a")!
+    expect(state.lastExecution?.state).toBe("failed")
+    expect((state.lastExecution?.error as { message: string }).message).toBe("boom")
+
+    lc.onEvent({ type: "execution-started", sessionID: "ses-a", timestamp: 12 })
+    lc.onEvent({ type: "execution-interrupted", sessionID: "ses-a", timestamp: 13, reason: "user" })
+    state = lc.snapshot().sessions.get("ses-a")!
+    expect(state.lastExecution?.state).toBe("interrupted")
+    expect(state.lastExecution?.reason).toBe("user")
+    expect(state.execution).toBeUndefined()
+  })
+
+  test("a started without a terminal event is closed as superseded by the next started (no zombie)", () => {
+    const lc = createRecoveryLifecycle()
+    lc.onEvent({ type: "execution-started", sessionID: "ses-a", timestamp: 10 })
+    lc.onEvent({ type: "execution-started", sessionID: "ses-a", timestamp: 11 })
+    const state = lc.snapshot().sessions.get("ses-a")!
+    expect(state.execution?.ref.commandId).toBe("execution:2")
+    expect(state.lastExecution?.state).toBe("interrupted")
+    expect(state.lastExecution?.reason).toBe("superseded")
+    expect(state.lastExecution?.ref.commandId).toBe("execution:1")
+  })
+
+  test("terminal events without a start synthesize the missed slot (outcome is never dropped)", () => {
+    // W9.5 — the page mounted after `started` (or the started was lost to a gap): the terminal
+    // event still records the outcome, with a synthetic slot closed in the same step. No fake
+    // "running" state is left behind.
+    const lc = createRecoveryLifecycle()
+    lc.onEvent({ type: "execution-succeeded", sessionID: "ses-gap", timestamp: 5 })
+    let state = lc.snapshot().sessions.get("ses-gap")!
+    expect(state.execution).toBeUndefined()
+    expect(state.lastExecution).toEqual({
+      ref: { commandId: "execution:1", attemptId: "ses-gap:execution:1" },
+      state: "succeeded",
+      at: 5,
+      number: 1,
+    })
+
+    lc.onEvent({ type: "execution-failed", sessionID: "ses-gap", timestamp: 6, error: new Error("x") })
+    state = lc.snapshot().sessions.get("ses-gap")!
+    expect(state.lastExecution?.state).toBe("failed")
+    expect(state.lastExecution?.number).toBe(2)
+
+    lc.onEvent({ type: "execution-interrupted", sessionID: "ses-gap", timestamp: 7, reason: "shutdown" })
+    state = lc.snapshot().sessions.get("ses-gap")!
+    expect(state.execution).toBeUndefined()
+    expect(state.lastExecution?.state).toBe("interrupted")
+    expect(state.lastExecution?.number).toBe(3)
+  })
+
+  test("quit discards a running execution slot (no zombie), command notices unchanged", () => {
+    const lc = createRecoveryLifecycle()
+    lc.onEvent({ type: "execution-started", sessionID: "ses-a", timestamp: 10 })
+    lc.onEvent({ type: "execution-started", sessionID: "ses-a", timestamp: 12 })
+    lc.onEvent({ type: "command-started", sessionID: "ses-a", command: cmd("c1") })
+    lc.onEvent({ type: "quit" })
+    const state = lc.snapshot().sessions.get("ses-a")!
+    expect(state.execution).toBeUndefined()
+    expect(state.abandonedOnQuit).toEqual({ commandId: "c1" })
+  })
+
+  test("execution track is per-session: one session's turn never leaks into another", () => {
+    const lc = createRecoveryLifecycle()
+    lc.onEvent({ type: "execution-started", sessionID: "ses-a", timestamp: 10 })
+    lc.onEvent({ type: "execution-started", sessionID: "ses-b", timestamp: 11 })
+    const snap = lc.snapshot()
+    expect(snap.sessions.get("ses-a")?.execution?.ref.commandId).toBe("execution:1")
+    expect(snap.sessions.get("ses-b")?.execution?.ref.commandId).toBe("execution:1")
+    lc.onEvent({ type: "execution-succeeded", sessionID: "ses-b", timestamp: 12 })
+    expect(snap.sessions.get("ses-a")?.execution?.ref.commandId).toBe("execution:1") // unaffected
+  })
+})

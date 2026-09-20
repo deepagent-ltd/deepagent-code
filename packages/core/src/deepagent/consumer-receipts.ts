@@ -89,6 +89,25 @@ export function receiptFor(db: DatabaseClient, consumerKind: ConsumerKind, sourc
   })
 }
 
+/**
+ * Clear a PENDING failure receipt (W5 F4): a consumer that eventually succeeded removes its own pending
+ * failure record so the ledger does not show a stale "failure" for work that completed. A `done` receipt
+ * is NEVER cleared (the completed side effect stays the idempotency authority). No-op when absent.
+ */
+export function clearPending(db: DatabaseClient, consumerKind: ConsumerKind, sourceEventId: string): Effect.Effect<void> {
+  return db
+    .delete(ConsumerReceiptTable)
+    .where(
+      and(
+        eq(ConsumerReceiptTable.consumer_kind, consumerKind),
+        eq(ConsumerReceiptTable.source_event_id, sourceEventId),
+        eq(ConsumerReceiptTable.status, "pending"),
+      ),
+    )
+    .run()
+    .pipe(Effect.asVoid, Effect.orDie)
+}
+
 /** The deterministic content reference of a completed side effect (proves WHICH consumer.event ran). */
 export const receiptRefFor = (consumerKind: ConsumerKind, sourceEventId: string): string =>
   createHash("sha256").update(`${consumerKind}:${sourceEventId}`).digest("hex")

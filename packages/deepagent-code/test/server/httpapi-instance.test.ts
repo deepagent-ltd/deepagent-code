@@ -8,6 +8,7 @@ import * as Socket from "effect/unstable/socket/Socket"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 import { ControlPaths } from "../../src/server/routes/instance/httpapi/groups/control"
 import { InstancePaths } from "../../src/server/routes/instance/httpapi/groups/instance"
+import { ProfilePaths } from "../../src/server/routes/instance/httpapi/groups/profile"
 import { SessionPaths } from "../../src/server/routes/instance/httpapi/groups/session"
 import { Vcs } from "../../src/project/vcs"
 import {
@@ -143,14 +144,61 @@ describe("instance HttpApi", () => {
           // §H3 / V4.1 — the event-driven capability flags are advertised; most stay default OFF (operator
           // opt-in per the staged rollout), while v4MultiAgentRuntime is PROMOTED ON (the §N event-driven
           // goal-tick chain is the live driver; daemon audit GO). This test builds RuntimeFlags from empty
-          // env, so the capability endpoint reports the production defaults.
-          v4EventDrivenIm: false,
+          // env, so the capability endpoint reports the production defaults. (v4EventDrivenIm was removed
+          // with the V2 IM durable-only migration — no such field on the wire anymore.)
           v4AgentPushEnabled: true,
           v4MultiAgentRuntime: true,
           v4ThreadEnabled: false,
           v4FileUploadEnabled: false,
         },
       })
+    }),
+  )
+
+  it.live("isolates profile run metadata and artifacts by routed workspace", () =>
+    Effect.gen(function* () {
+      const dirA = yield* tmpdirScoped({ git: true })
+      const dirB = yield* tmpdirScoped({ git: true })
+      const create = yield* HttpClientRequest.post(ProfilePaths.run).pipe(
+        directoryHeader(dirA),
+        HttpClientRequest.bodyJson({ program: "true", profiler: "missing-test-adapter" }),
+        Effect.flatMap(HttpClient.execute),
+      )
+
+      expect(create.status).toBe(200)
+      const created = (yield* create.json) as { runId: string; status: string; error?: string }
+      const createdError = created.error ?? ""
+      expect(created.status).toBe("error")
+      expect(createdError).toContain("missing-test-adapter")
+
+      const [ownerResult, foreignResult, ownerRuns, foreignRuns, foreignHotspots] = yield* Effect.all(
+        [
+          HttpClientRequest.get(ProfilePaths.result).pipe(
+            HttpClientRequest.setUrlParam("runId", created.runId),
+            directoryHeader(dirA),
+            HttpClient.execute,
+          ),
+          HttpClientRequest.get(ProfilePaths.result).pipe(
+            HttpClientRequest.setUrlParam("runId", created.runId),
+            directoryHeader(dirB),
+            HttpClient.execute,
+          ),
+          HttpClientRequest.get(ProfilePaths.runs).pipe(directoryHeader(dirA), HttpClient.execute),
+          HttpClientRequest.get(ProfilePaths.runs).pipe(directoryHeader(dirB), HttpClient.execute),
+          HttpClientRequest.get(ProfilePaths.hotspots).pipe(
+            HttpClientRequest.setUrlParam("runId", created.runId),
+            directoryHeader(dirB),
+            HttpClient.execute,
+          ),
+        ],
+        { concurrency: "unbounded" },
+      )
+
+      expect(yield* ownerResult.json).toEqual({ status: "error", error: createdError })
+      expect(yield* foreignResult.json).toEqual({ status: "error", error: "runId not found" })
+      expect(yield* ownerRuns.json).toEqual([expect.objectContaining({ runId: created.runId, status: "error" })])
+      expect(yield* foreignRuns.json).toEqual([])
+      expect(yield* foreignHotspots.json).toEqual([])
     }),
   )
 
@@ -452,25 +500,31 @@ describe("instance HttpApi", () => {
     }),
   )
 
-  it.live("maps an oversized raw VCS patch to the typed 503 response", () =>
-    Effect.gen(function* () {
-      const dir = yield* tmpdirScoped({ git: true })
-      const fs = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
-      yield* fs.writeFileString(path.join(dir, "oversized.txt"), "x".repeat(Vcs.RawDiffLimits.patchBytes + 1))
+  it.live(
+    "maps an oversized raw VCS patch to the typed 503 response",
+    () =>
+      Effect.gen(function* () {
+        const dir = yield* tmpdirScoped({ git: true })
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        yield* fs.writeFileString(path.join(dir, "oversized.txt"), "x".repeat(Vcs.RawDiffLimits.patchBytes + 1))
 
-      const response = yield* HttpClientRequest.get(InstancePaths.vcsDiffRaw).pipe(
-        directoryHeader(dir),
-        HttpClient.execute,
-      )
+        const response = yield* HttpClientRequest.get(InstancePaths.vcsDiffRaw).pipe(
+          directoryHeader(dir),
+          HttpClient.execute,
+        )
 
-      expect(response.status).toBe(503)
-      expect(yield* response.json).toMatchObject({
-        name: "VcsRawDiffError",
-        data: {
-          reason: "untracked-output",
-        },
-      })
-    }),
+        expect(response.status).toBe(503)
+        expect(yield* response.json).toMatchObject({
+          name: "VcsRawDiffError",
+          data: {
+            reason: "untracked-output",
+          },
+        })
+      }),
+    // The default budget is enough alone (1.2s) and was not enough under a full-suite run, where
+    // this file's HTTP tests contend with four other suites for two CPUs and exceeded 30s once.
+    // Racy only by TIMING: the assertion is a typed 503, not a deadline.
+    120_000,
   )
 })

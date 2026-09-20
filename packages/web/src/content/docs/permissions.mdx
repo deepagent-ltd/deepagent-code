@@ -25,7 +25,7 @@ You can set permissions globally (with `*`), and override specific tools.
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": {
     "*": "ask",
     "bash": "allow",
@@ -38,7 +38,7 @@ You can also set all permissions at once:
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": "allow"
 }
 ```
@@ -51,7 +51,7 @@ For most permissions, you can use an object to apply different actions based on 
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": {
     "bash": {
       "*": "ask",
@@ -96,7 +96,7 @@ For example, this allows access to everything under `~/projects/personal/`:
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": {
     "external_directory": {
       "~/projects/personal/**": "allow"
@@ -109,7 +109,7 @@ Any directory allowed here inherits the same defaults as the current workspace. 
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": {
     "external_directory": {
       "~/projects/personal/**": "allow"
@@ -190,7 +190,7 @@ Refer to the [Granular Rules (Object Syntax)](#granular-rules-object-syntax) sec
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": {
     "bash": {
       "*": "ask",

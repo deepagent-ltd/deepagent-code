@@ -5,6 +5,7 @@ import path from "node:path"
 import * as SessionState from "../../src/deepagent/session-state"
 import * as PlanController from "../../src/deepagent/plan-controller"
 import { planGate, HookPolicy } from "../../src/deepagent/hooks"
+import { tmpRoot } from "../fixture/tmpdir"
 
 // U1 end-to-end contract (the exact decision the tools.ts chokepoint computes). DESIGN (aligned with
 // codex exec_policy): plan-ledger state is orthogonal to whether a tool may run, so a stale plan
@@ -35,7 +36,7 @@ const decideAt = (sessionId: string, toolId: string, mode: string, command?: str
 
 describe("U1 soft-gate loop (chokepoint contract)", () => {
   beforeEach(() => {
-    SessionState.configure(mkdtempSync(path.join(tmpdir(), "plan-gate-")))
+    SessionState.configure(mkdtempSync(tmpRoot()))
   })
 
   test("high mode: stale plan WARNS on edit (never blocks), allows read/plan, plan tool clears warn", () => {
@@ -155,7 +156,7 @@ describe("U9 binding gate — warn-only", () => {
   })
 
   test("grace counter machinery still tracks blocks/resets (telemetry, no longer gates)", () => {
-    SessionState.configure(mkdtempSync(path.join(tmpdir(), "plan-gate-bind-")))
+    SessionState.configure(mkdtempSync(tmpRoot()))
     SessionState.getOrCreate("gate-bind", "xhigh")
     SessionState.markPlanStale("gate-bind", "validation_failed")
     SessionState.recordPlanGateBlock("gate-bind")

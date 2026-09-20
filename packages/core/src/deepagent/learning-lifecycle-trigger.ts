@@ -4,7 +4,7 @@ import path from "node:path"
 import { existsSync } from "node:fs"
 import { readFile, readdir, realpath } from "node:fs/promises"
 import { and, asc, eq } from "drizzle-orm"
-import { Effect, Schema } from "effect"
+import { Context, Effect, Schema } from "effect"
 import { Database } from "../database/database"
 import { CanonicalJson } from "../util/canonical-json"
 import { Hash } from "../util/hash"
@@ -35,7 +35,10 @@ export type ObserveInput = SessionBoundary | ProjectBoundary
 // runtime observer wired (pure CLI path / observer torn down), while `no_exact_settled_run` means an
 // observer DID run but found no matching settled source run. Telemetry/operators can tell the two apart.
 export type Outcome =
-  | { readonly state: "skipped"; readonly reason: "no_exact_settled_run" | "no_observer_registered" }
+  | {
+      readonly state: "skipped"
+      readonly reason: "no_exact_settled_run" | "no_observer_registered" | "not_learning_boundary"
+    }
   | { readonly state: "prepared" | "admitted"; readonly receiptId: string; readonly runId: string }
 
 export type RuntimeObserver = {
@@ -62,16 +65,25 @@ export class IdentityConflictError extends Schema.TaggedErrorClass<IdentityConfl
   { trigger: Schema.String, sessionId: Schema.String, runId: Schema.String },
 ) {}
 
-let runtimeObserver: RuntimeObserver | undefined
-
-export const setRuntimeObserver = (observer: RuntimeObserver | undefined) => {
-  runtimeObserver = observer
-}
+export const CurrentRuntimeObserver = Context.Reference<RuntimeObserver | undefined>(
+  "@deepagent-code/v2/DeepAgentLearningLifecycleTrigger/CurrentRuntimeObserver",
+  { defaultValue: () => undefined },
+)
 
 // FEAT-004: an UNREGISTERED observer is its own skip reason — the trigger never searched for a source
 // run at all (distinct from observe() finding no matching settled run).
-export const notify = (input: ObserveInput): Promise<Outcome> =>
-  runtimeObserver?.observe(input) ?? Promise.resolve({ state: "skipped", reason: "no_observer_registered" })
+export const notify = Effect.fn("DeepAgentLearningLifecycleTrigger.notify")(function* (input: ObserveInput) {
+  const observer = yield* CurrentRuntimeObserver
+  if (!observer) return { state: "skipped", reason: "no_observer_registered" } as const
+  // idle is the ordinary end of every runner turn, while pause and project_switch are transport
+  // lifecycle signals. None proves either a completed top-level task or a durably timed
+  // long-stopped generation. The old implementation searched for an already-submitted completed
+  // source and admitted it again under a different trigger, so one source could be learned up to
+  // four times. Until a durable long-stopped generation/evidence-snapshot schema exists, these
+  // signals are deliberately non-learning. session_finalization remains the sole admission path.
+  void input
+  return { state: "skipped", reason: "not_learning_boundary" } as const
+})
 
 export const observe = Effect.fn("DeepAgentLearningLifecycleTrigger.observe")(function* (
   db: DatabaseClient,

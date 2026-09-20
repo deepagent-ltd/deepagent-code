@@ -17,7 +17,6 @@ export type VerdictRule = {
 
 export type EntryRules = Readonly<Partial<Record<Dimension, VerdictRule>>>
 
-const PROMPT_PATH_SUFFIX = "packages/deepagent-code/src/session/prompt.ts"
 
 const RULES: ReadonlyArray<{ readonly match: (id: string) => boolean; readonly rules: EntryRules }> = [
   // C7-05 successor: the V2 admission path is ON by default and is the single writer — the
@@ -34,20 +33,6 @@ const RULES: ReadonlyArray<{ readonly match: (id: string) => boolean; readonly r
           { kind: "importOf", fileSuffix: "src/event-v2-bridge.ts", specifierSuffix: "@/bus/global" },
           { kind: "callChain", chain: "events.publish", fileSuffix: "src/event-v2-bridge.ts" },
           { kind: "callChain", chain: "isEventV2AdmissionEnabled", fileSuffix: "src/event-v2-bridge.ts" },
-        ],
-      },
-    },
-  },
-  // Known legacy-only production path: IM server-side agents execute strictly through
-  // the legacy SessionPrompt service (its own source documents this contract).
-  {
-    match: (id) => id === "im.agent-executor",
-    rules: {
-      execution_owner: {
-        verdict: "legacy",
-        requirements: [
-          { kind: "reach", pathSuffix: PROMPT_PATH_SUFFIX },
-          { kind: "callChain", chain: "promptOrSteer", fileSuffix: PROMPT_PATH_SUFFIX },
         ],
       },
     },
@@ -136,15 +121,6 @@ const RULES: ReadonlyArray<{ readonly match: (id: string) => boolean; readonly r
         // closure since de09e5b17 (recovery-binding.ts imports the drizzle type directly); the
         // classifier still reads via its injected db — read-only, no write path.
         requirements: [{ kind: "reach", pathSuffix: "packages/core/src/database/recovery-binding.ts" }],
-      },
-    },
-  },
-  {
-    match: (id) => id === "recovery.task-recovery-tool",
-    rules: {
-      recovery_owner: {
-        verdict: "legacy",
-        requirements: [{ kind: "reach", pathSuffix: "packages/deepagent-code/src/tool/task_recovery.ts" }],
       },
     },
   },

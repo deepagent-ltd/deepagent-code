@@ -45,7 +45,11 @@ tsconfig.tsbuildinfo
 # README files, language documentation, or the reviewed design/ tree.
 /docs/
 /release-evidence/
+/gui-test-screenshots/
 /specs/v2/
 
 # Non-code domain packs — own git repo (deepagent-domain), not tracked by main repo.
 extra-domain/
+
+# Local DeepAgent Code runtime instance data (per-developer, never tracked).
+/.deepagent-code/

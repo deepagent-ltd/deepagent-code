@@ -1,5 +1,6 @@
 import { TextAttributes } from "@opentui/core"
 import { useTheme } from "../context/theme"
+import { useTuiI18n } from "../context/i18n"
 import { useDialog, type DialogContext } from "./dialog"
 import { createStore } from "solid-js/store"
 import { For } from "solid-js"
@@ -18,6 +19,7 @@ export type DialogConfirmResult = boolean | undefined
 
 export function DialogConfirm(props: DialogConfirmProps) {
   const dialog = useDialog()
+  const i18n = useTuiI18n()
   const { theme } = useTheme()
   const [store, setStore] = createStore({
     active: "confirm" as "confirm" | "cancel",
@@ -27,7 +29,7 @@ export function DialogConfirm(props: DialogConfirmProps) {
     bindings: [
       {
         key: "return",
-        desc: "Confirm dialog selection",
+        desc: i18n.t("tui.dialog.confirm.selection"),
         group: "Dialog",
         cmd: () => {
           if (store.active === "confirm") props.onConfirm?.()
@@ -37,7 +39,7 @@ export function DialogConfirm(props: DialogConfirmProps) {
       },
       {
         key: "left",
-        desc: "Previous dialog option",
+        desc: i18n.t("tui.dialog.confirm.previousOption"),
         group: "Dialog",
         cmd: () => {
           setStore("active", store.active === "confirm" ? "cancel" : "confirm")
@@ -45,7 +47,7 @@ export function DialogConfirm(props: DialogConfirmProps) {
       },
       {
         key: "right",
-        desc: "Next dialog option",
+        desc: i18n.t("tui.dialog.confirm.nextOption"),
         group: "Dialog",
         cmd: () => {
           setStore("active", store.active === "confirm" ? "cancel" : "confirm")

@@ -28,9 +28,9 @@ npm install @deepagent-code/sdk
 Crea un'istanza di deepagent-code:
 
 ```javascript
-import { createOpencode } from "@deepagent-code/sdk"
+import { createDeepAgentCode } from "@deepagent-code/sdk"
 
-const { client } = await createOpencode()
+const { client } = await createDeepAgentCode()
 ```
 
 Questo avvia sia un server sia un client
@@ -52,9 +52,9 @@ Questo avvia sia un server sia un client
 Puoi passare un oggetto di configurazione per personalizzare il comportamento. L'istanza legge comunque `deepagent-code.json`, ma puoi sovrascrivere o aggiungere configurazione inline:
 
 ```javascript
-import { createOpencode } from "@deepagent-code/sdk"
+import { createDeepAgentCode } from "@deepagent-code/sdk"
 
-const deepagent-code = await createOpencode({
+const deepagentCode = await createDeepAgentCode({
   hostname: "127.0.0.1",
   port: 4096,
   config: {
@@ -62,9 +62,9 @@ const deepagent-code = await createOpencode({
   },
 })
 
-console.log(`Server running at ${deepagent-code.server.url}`)
+console.log(`Server running at ${deepagentCode.server.url}`)
 
-deepagent-code.server.close()
+deepagentCode.server.close()
 ```
 
 ## Solo client
@@ -72,9 +72,9 @@ deepagent-code.server.close()
 Se hai gia un'istanza di deepagent-code in esecuzione, puoi creare un client per collegarti:
 
 ```javascript
-import { createOpencodeClient } from "@deepagent-code/sdk"
+import { createDeepAgentCodeClient } from "@deepagent-code/sdk"
 
-const client = createOpencodeClient({
+const client = createDeepAgentCodeClient({
   baseUrl: "http://localhost:4096",
 })
 ```

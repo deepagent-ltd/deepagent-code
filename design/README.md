@@ -9,6 +9,7 @@ The architecture is designed around one requirement: a long-running agent must r
 ## User Guides
 
 - [Running Real-LLM Tests](./real-llm-testing.md)
+- [V2.0 R1 Implementation-Wave Review Summary](./v2.0-r1-wave-review-summary.md)
 
 ## Design Principles
 

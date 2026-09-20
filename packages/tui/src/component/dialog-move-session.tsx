@@ -6,6 +6,7 @@ import { DialogSelect, type DialogSelectOption } from "../ui/dialog-select"
 import { useDialog } from "../ui/dialog"
 import { useSDK } from "../context/sdk"
 import { useTheme } from "../context/theme"
+import { useTuiI18n } from "../context/i18n"
 import { useSync } from "../context/sync"
 import { abbreviateHome } from "../runtime"
 import { useTuiPaths } from "../context/runtime"
@@ -33,6 +34,7 @@ export function DialogMoveSession(props: {
   const sync = useSync()
   const projectContext = useProject()
   const toast = useToast()
+  const i18n = useTuiI18n()
   const paths = useTuiPaths()
   const [working, setWorking] = createSignal(Boolean(props.initialRemoving))
   const [toDelete, setToDelete] = createSignal<string>()
@@ -74,10 +76,12 @@ export function DialogMoveSession(props: {
   const options = createMemo<DialogSelectOption<MoveSessionSelection | undefined>[]>(() => {
     const data = directories()
     const main = project()
-    if (directories.loading && !data && !main) return [{ title: "Loading project directories...", value: undefined }]
-    if (directories.error && !data && !main) return [{ title: "Failed to load project directories", value: undefined }]
+    if (directories.loading && !data && !main)
+      return [{ title: i18n.t("tui.moveSession.loadingDirectories"), value: undefined }]
+    if (directories.error && !data && !main)
+      return [{ title: i18n.t("tui.moveSession.failedLoadDirectories"), value: undefined }]
     const roots = [...new Set(main ? [main, ...(data ?? [])] : (data ?? []))]
-    if (roots.length === 0) return [{ title: "No project directories found", value: undefined }]
+    if (roots.length === 0) return [{ title: i18n.t("tui.moveSession.noDirectories"), value: undefined }]
     const subdirectories = sync.data.session
       .filter((session) => session.projectID === props.projectID && session.path && ![".", "/"].includes(session.path))
       .map((session) => session.directory)
@@ -152,11 +156,11 @@ export function DialogMoveSession(props: {
     if (result.error) {
       setRemoving(undefined)
       setWorking(false)
-      if ("data" in result.error && result.error.data.forceRequired) {
+        if ("data" in result.error && result.error.data.forceRequired) {
         const status = await sdk.client.vcs.status({ directory: option.value.directory }).catch(() => undefined)
         const choice = await DialogWorkspaceFileChanges.show(dialog, status?.data ?? [], {
-          title: "Delete working copy?",
-          message: "This working copy has file changes. Do you want to delete it anyway?",
+          title: i18n.t("tui.moveSession.deleteWorkingCopyTitle"),
+          message: i18n.t("tui.moveSession.deleteWorkingCopyMessage"),
         })
         if (choice !== "yes") {
           reopen()
@@ -169,7 +173,7 @@ export function DialogMoveSession(props: {
         if (forced.error) {
           toast.show({
             variant: "error",
-            title: "Failed to delete project copy",
+            title: i18n.t("tui.moveSession.failedDeleteProjectCopy"),
             message: errorMessage(forced.error),
           })
         }
@@ -178,7 +182,7 @@ export function DialogMoveSession(props: {
       }
       toast.show({
         variant: "error",
-        title: "Failed to delete project copy",
+        title: i18n.t("tui.moveSession.failedDeleteProjectCopy"),
         message: errorMessage(result.error),
       })
       return

@@ -5,11 +5,12 @@ import path from "node:path"
 import { DocumentStore } from "../../src/deepagent/document-store"
 import { buildRunGraph, type RunSummary } from "../../src/deepagent/run-graph"
 import { explainCandidate } from "../../src/deepagent/reviewer"
+import { tmpRoot } from "../fixture/tmpdir"
 
 let root: string
 let store: DocumentStore
 beforeEach(() => {
-  root = mkdtempSync(path.join(tmpdir(), "deepagent-rg-"))
+  root = mkdtempSync(tmpRoot())
   store = new DocumentStore(root)
 })
 afterEach(() => rmSync(root, { recursive: true, force: true }))

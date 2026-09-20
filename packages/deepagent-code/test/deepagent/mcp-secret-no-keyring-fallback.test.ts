@@ -4,13 +4,14 @@ import fs from "fs"
 import os from "os"
 import path from "path"
 import { SecretStore } from "@/mcp/secret-store"
+import { tmpRoot, tmpRootShared } from "../fixture/fixture"
 
 // M-CRED (S1-v3.5) acceptance (c): with NO OS keyring available (headless / CI / container,
 // no daemon), the store falls back to a `chmod 0600` local credentials file — NOT to the
 // project config repo (fail-safe, never fail-open). This test drives the file backend
 // directly with a temp path so it never writes the real data dir.
 
-const tmpFile = () => path.join(fs.mkdtempSync(path.join(os.tmpdir(), "mcp-secret-")), "mcp-secrets.json")
+const tmpFile = () => path.join(fs.mkdtempSync(tmpRootShared()), "mcp-secrets.json")
 
 describe("M-CRED no-keyring fallback", () => {
   test("selectBackend degrades to the file backend when no native keyring is available", async () => {

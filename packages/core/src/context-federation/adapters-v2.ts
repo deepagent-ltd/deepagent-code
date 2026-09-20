@@ -6,6 +6,8 @@ import { type IndexStatus } from "../code-intelligence/code-graph"
 import { canonicalProjectionRevision, type ProjectScopeKey, type SecurityNamespaceID } from "./reference"
 import type { GraphKind } from "../contract/selection"
 import type { GraphStatusReasonCode } from "../contract/selection"
+import type { SelectionQueryIntent } from "../contract/selection"
+import type { CodeIntelIntent } from "./contract"
 import { ContextAdapters, type Scope as LegacyScope, type Adapter as LegacyAdapter } from "./adapters"
 import { type ContextCandidate } from "./federation"
 import { type EgressPolicy, type Principal } from "./authorization"
@@ -30,6 +32,8 @@ export const AdapterVersion = {
  */
 export type V2AdapterInput = {
   readonly query: string
+  /** Selection query intent (or an already-bounded code-intel intent); mapped by `intentFor`. */
+  readonly intent?: SelectionQueryIntent | CodeIntelIntent
   readonly entityIds?: readonly string[]
   readonly limit?: number
   readonly now: number
@@ -78,7 +82,7 @@ export function code(input: { readonly service: CodeQuery.Interface }): V2Adapte
     resolve: (query) => {
       return input.service
         .query({
-          intent: intentFor(),
+          intent: intentFor(query.intent),
           query: query.query,
           limit: Math.min(Math.max(query.limit ?? 12, 1), 100),
           consistency: "stale_ok",
@@ -197,11 +201,27 @@ export function memory(input: {
   readonly revision: string
   readonly observedMutationEpoch: number
 }): V2Adapter {
-  const adapter = ContextAdapters.memory({
-    stores: input.stores,
-    scope: input.scope,
-    releasedSelection: input.releasedSelection!,
-  })
+  const adapter = input.releasedSelection
+    ? ContextAdapters.memory({
+        stores: input.stores,
+        scope: input.scope,
+        releasedSelection: input.releasedSelection,
+      })
+    : undefined
+  if (!adapter) {
+    return {
+      graph: "memory",
+      source: "durable_memory",
+      adapterVersion: AdapterVersion.memory,
+      resolve: () =>
+        Effect.succeed({
+          candidates: [],
+          revision: input.revision,
+          observedMutationEpoch: input.observedMutationEpoch,
+          available: true,
+        }),
+    }
+  }
   return wrapLegacy({
     adapter,
     adapterVersion: AdapterVersion.memory,
@@ -265,10 +285,42 @@ function toLegacyResult(
   }
 }
 
-function intentFor(): import("../context-federation/contract").CodeIntelIntent {
-  // A bounded mapping from selection query intent to code-intel intent; falls
-  // back to "search" (the only fallback that is a valid bounded member).
-  return "search"
+/**
+ * W3.2 — real intent mapping. A selection query intent is mapped onto the bounded
+ * code-intel intent set; an already-bounded code intent passes through unchanged
+ * (both unions are closed, so "definition" reaches the code service as-is). An
+ * absent intent falls back to "search" (the only bounded member that is a valid
+ * generic fallback).
+ */
+export function intentFor(intent: SelectionQueryIntent | CodeIntelIntent | undefined): CodeIntelIntent {
+  if (intent === undefined) return "search"
+  if (isCodeIntelIntent(intent)) return intent
+  switch (intent) {
+    case "recall":
+      return "search"
+    case "related":
+    case "explain_decision":
+      return "overview"
+    case "trace_evidence":
+    case "find_conflicts":
+      return "references"
+  }
+}
+
+function isCodeIntelIntent(value: SelectionQueryIntent | CodeIntelIntent): value is CodeIntelIntent {
+  return (
+    value === "search" ||
+    value === "overview" ||
+    value === "definition" ||
+    value === "references" ||
+    value === "implementations" ||
+    value === "calls_in" ||
+    value === "calls_out" ||
+    value === "dependencies" ||
+    value === "dependents" ||
+    value === "outline" ||
+    value === "diagnostics"
+  )
 }
 
 function toCandidate(hit: import("../code-intelligence/query").Hit): ContextCandidate {

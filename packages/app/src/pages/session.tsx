@@ -53,6 +53,7 @@ import {
   sendFollowupDraft,
 } from "@/components/prompt-input/submit"
 import { createSessionComposerState, SessionComposerRegion } from "@/pages/session/composer"
+import { SessionLifecycle } from "@/recovery/session-lifecycle"
 import { createFollowupSubmissionRegistry } from "@/pages/session/followup-submission"
 import {
   createForkAction,
@@ -1482,27 +1483,24 @@ export default function Page() {
 
       setFollowup("failed", input.sessionID, undefined)
 
-      const controller = new AbortController()
-      const promise = sendFollowupDraft({
-        client: sdk.client,
-        sync,
-        serverSync,
-        draft: item,
-        intentID: item.id,
-        intentSource: "followup",
-        optimisticBusy: item.sessionDirectory === sdk.directory,
-        confirmPromptDraft,
-        promptPrepareSignal: controller.signal,
-      })
-      followupSubmissions.register({ ...input, controller, promise })
-      const ok = await promise
+      const ok = await followupSubmissions
+        .run(input, (signal) =>
+          sendFollowupDraft({
+            client: sdk.client,
+            sync,
+            serverSync,
+            draft: item,
+            intentID: item.id,
+            intentSource: "followup",
+            optimisticBusy: item.sessionDirectory === sdk.directory,
+            confirmPromptDraft,
+            promptPrepareSignal: signal,
+          }),
+        )
         .catch((err) => {
           setFollowup("failed", input.sessionID, input.id)
           fail(err)
           return false
-        })
-        .finally(() => {
-          followupSubmissions.clear(input.sessionID, input.id)
         })
       if (!ok) return
 
@@ -1828,9 +1826,10 @@ export default function Page() {
   )
 
   return (
-    <div class="relative size-full overflow-hidden flex flex-col">
-      {sessionSync() ?? ""}
-      <SessionHeader />
+    <SessionLifecycle>
+      <div class="relative size-full overflow-hidden flex flex-col">
+        {sessionSync() ?? ""}
+        <SessionHeader />
       <div class="flex-1 min-h-0 flex flex-col md:flex-row ">
         <Show when={!isDesktop() && !!params.id}>
           <Tabs value={store.mobileTab} class="h-auto">
@@ -1947,6 +1946,7 @@ export default function Page() {
       </div>
 
       <TerminalPanel onOpenFile={(path, line) => fileNavigator()?.(path, line)} />
-    </div>
+      </div>
+    </SessionLifecycle>
   )
 }

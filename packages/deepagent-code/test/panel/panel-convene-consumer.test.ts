@@ -1,6 +1,7 @@
 import { describe, expect } from "bun:test"
 import { Effect, Layer, Stream } from "effect"
 import { PanelConveneConsumer } from "../../src/panel/panel-convene-consumer"
+import { ConsumerReceipts } from "@deepagent-code/core/deepagent/consumer-receipts"
 import { RuntimeFlags } from "../../src/effect/runtime-flags"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
@@ -176,6 +177,12 @@ describe("PanelConveneConsumer.handle (§M flag ON)", () => {
         expect(verdicts.filter((v) => v.causationID === ev.id).length).toBe(1)
         const pending = yield* queue.listPending("wrk_1")
         expect(pending.filter((p) => p.correlationID === ev.id).length).toBe(1)
+        // C5-10: the convene side effect left a durable `done` receipt (the once-run authority).
+        const { db } = yield* Database.Service
+        const receipt = yield* ConsumerReceipts.receiptFor(db, "panel", ev.id)
+        expect(receipt?.status).toBe("done")
+        expect(receipt?.attempts).toBe(1)
+        expect(receipt?.receiptRef).toBe(ConsumerReceipts.receiptRefFor("panel", ev.id))
       }),
     )
   })
@@ -263,6 +270,11 @@ describe("PanelConveneConsumer.handle (§M flag ON)", () => {
         // nacked → still owed (a retry will re-drive it). next_attempt_at is scheduled in the future,
         // so it is due at MAX_SAFE_INTEGER.
         expect(yield* isPending(ev.id)).toBe(true)
+        // C5-10: the failed convene left the receipt PENDING (E3 retryable — the retry re-runs it).
+        const { db } = yield* Database.Service
+        const receipt = yield* ConsumerReceipts.receiptFor(db, "panel", ev.id)
+        expect(receipt?.status).toBe("pending")
+        expect(receipt?.lastError).toContain("panel run blew up")
       }),
     )
   })

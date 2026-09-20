@@ -11,6 +11,8 @@ import { FilePartArtifact } from "../file-part-artifact"
 import { FilePartArtifactBindingTable } from "../file-part-artifact.sql"
 import { SessionEvent } from "./event"
 import { SessionV1 } from "../v1/session"
+import { ProviderV2 } from "../provider"
+import { ModelV2 } from "../model"
 import { WorkspaceTable } from "../control-plane/workspace.sql"
 import { SessionMessage } from "./message"
 import { SessionMessageUpdater } from "./message-updater"
@@ -24,7 +26,10 @@ import {
   SessionInputTable,
   SessionMessageTable,
   SessionTable,
+  SessionWireProjectionTable,
 } from "./sql"
+import { V2ProviderTurnReceiptTable } from "./runner/v2-provider-turn.sql"
+import { legacyAssistant as legacyAssistantExport } from "./legacy-wire"
 import type { DeepMutable } from "../schema"
 import { SessionSchema } from "./schema"
 
@@ -44,14 +49,6 @@ type Usage = {
     reasoning: number
     cache: { read: number; write: number }
   }
-}
-
-function usage(part: (typeof SessionV1.Event.PartUpdated.Type)["data"]["part"] | unknown): Usage | undefined {
-  if (typeof part !== "object" || part === null) return undefined
-  const value = part as Record<string, unknown>
-  if (value.type !== "step-finish") return undefined
-  if (!("cost" in value) || !("tokens" in value)) return undefined
-  return { cost: value.cost as Usage["cost"], tokens: value.tokens as Usage["tokens"] }
 }
 
 function sessionRow(info: SessionV1.SessionInfo): typeof SessionTable.$inferInsert {
@@ -89,6 +86,46 @@ function sessionRow(info: SessionV1.SessionInfo): typeof SessionTable.$inferInse
     time_compacting: info.time.compacting,
     time_archived: info.time.archived,
     preview: info.preview,
+  }
+}
+
+function createdSessionRow(event: SessionEvent.Created): typeof SessionTable.$inferInsert {
+  return {
+    id: event.data.info.id,
+    project_id: event.data.info.projectID,
+    workspace_id: event.data.info.location.workspaceID ?? null,
+    parent_id: event.data.info.parentID,
+    slug: event.data.slug,
+    directory: event.data.info.location.directory,
+    path: event.data.info.subpath,
+    title: event.data.info.title,
+    agent: event.data.info.agent,
+    model: event.data.info.model,
+    version: event.data.version,
+    cost: event.data.info.cost,
+    tokens_input: event.data.info.tokens.input,
+    tokens_output: event.data.info.tokens.output,
+    tokens_reasoning: event.data.info.tokens.reasoning,
+    tokens_cache_read: event.data.info.tokens.cache.read,
+    tokens_cache_write: event.data.info.tokens.cache.write,
+    permission: event.data.info.permissions,
+    summary_additions: event.data.info.summary?.additions,
+    summary_deletions: event.data.info.summary?.deletions,
+    summary_files: event.data.info.summary?.files,
+    summary_diff_manifest: event.data.info.summary?.diffManifest
+      ? {
+          ...event.data.info.summary.diffManifest,
+          truncationReasons: [...event.data.info.summary.diffManifest.truncationReasons],
+        }
+      : undefined,
+    metadata: event.data.info.metadata,
+    share_url: event.data.info.share?.url,
+    preview: event.data.info.preview,
+    time_created: DateTime.toEpochMillis(event.data.info.time.created),
+    time_updated: DateTime.toEpochMillis(event.data.info.time.updated),
+    time_archived: event.data.info.time.archived
+      ? DateTime.toEpochMillis(event.data.info.time.archived)
+      : undefined,
   }
 }
 
@@ -278,6 +315,313 @@ function insertMessage(db: DatabaseService, event: SessionEvent.Event, message: 
     .pipe(Effect.orDie)
 }
 
+// ── W4-6: journal → V1-wire projection egress ────────────────────────────────────────────────
+// The single production line: durable session.next.* events fold into SessionMessageTable (run
+// above), and THIS egress derives the V1 wire rows from that folded state — publishing
+// SessionV1.Event.MessageUpdated/PartUpdated so the existing V1 projection handlers write the
+// wire tables and the SSE surface fans out to both clients. Exactly-once: the
+// session_wire_projection fingerprint cursor (durable, unlike the F-17 drain-local map it
+// replaces) skips byte-identical re-derivations across replay/overlap windows.
+
+// Per-session memo for the egress' per-event constants: the first wire parent, the session
+// directory row and V2 ownership are identity lookups that do not change while a session streams,
+// yet each was a synchronous SELECT on every delta (measured: 75k each in one run, the top
+// remaining reader load). Values only change by a new session id; bounded map.
+const wireSessionMemo = new Map<
+  string,
+  { parent: { id: string } | null; directory: { directory: string; path: string } | null; v2Owned?: boolean }
+>()
+const WIRE_SESSION_MEMO_MAX = 2_000
+const wireSessionEntry = (sessionID: SessionSchema.ID) => {
+  const key = String(sessionID)
+  let entry = wireSessionMemo.get(key)
+  if (!entry) {
+    if (wireSessionMemo.size >= WIRE_SESSION_MEMO_MAX) wireSessionMemo.clear()
+    entry = { parent: null, directory: null }
+    wireSessionMemo.set(key, entry)
+  }
+  return entry
+}
+
+const loadMessageRow = (db: DatabaseService, sessionID: SessionSchema.ID, messageID: SessionMessage.ID) =>
+  db
+    .select()
+    .from(SessionMessageTable)
+    .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.id, messageID)))
+    .get()
+    .pipe(Effect.orDie)
+
+const decodeRow = (row: typeof SessionMessageTable.$inferSelect) =>
+  decodeMessage({ ...row.data, id: row.id, type: row.type })
+
+function wireFingerprintCursor(
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  entity: "message" | "part",
+  entityID: string,
+) {
+  return db
+    .select({ fingerprint: SessionWireProjectionTable.fingerprint })
+    .from(SessionWireProjectionTable)
+    .where(
+      and(
+        eq(SessionWireProjectionTable.session_id, sessionID),
+        eq(SessionWireProjectionTable.entity, entity),
+        eq(SessionWireProjectionTable.entity_id, entityID),
+      ),
+    )
+    .get()
+    .pipe(Effect.orDie)
+}
+
+const recordWireFingerprint = (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  entity: "message" | "part",
+  entityID: string,
+  fingerprint: string,
+) =>
+  db
+    .insert(SessionWireProjectionTable)
+    .values({ session_id: sessionID, entity, entity_id: entityID, fingerprint, time_updated: Date.now() })
+    .onConflictDoUpdate({
+      target: [SessionWireProjectionTable.session_id, SessionWireProjectionTable.entity, SessionWireProjectionTable.entity_id],
+      set: { fingerprint, time_updated: Date.now() },
+    })
+    .run()
+    .pipe(Effect.orDie)
+
+// Publish a wire entity when its content fingerprint advanced. Set-then-publish ordering (the
+// cursor row lands before the event) keeps concurrent folds race-free, mirroring F-19.
+// In-process fast path for the durable fingerprint cursor. A streaming turn re-enters this egress
+// once per delta; each entry used to cost a synchronous SELECT plus a one-statement transaction
+// (measured: 24k transactions and 46k cursor selects in a single run, the dominant writer load).
+// The durable row is still written on every CHANGE (cross-process/replay dedup unchanged) — only
+// the redundant read and the no-op write are skipped when this process already recorded the same
+// fingerprint. Bounded so a long-lived server cannot grow it without limit.
+const wireCursorMemo = new Map<string, string>()
+const WIRE_CURSOR_MEMO_MAX = 10_000
+
+function publishWireOnce(
+  db: DatabaseService,
+  events: EventV2.Interface,
+  sessionID: SessionSchema.ID,
+  entity: "message" | "part",
+  entityID: string,
+  fingerprint: string,
+  publish: () => Effect.Effect<void, unknown>,
+) {
+  return Effect.gen(function* () {
+    const key = `${sessionID}:${entity}:${entityID}`
+    if (wireCursorMemo.get(key) === fingerprint) return
+    // Unknown in-process state: fall back to the durable cursor exactly as before.
+    if (!wireCursorMemo.has(key)) {
+      const cursor = yield* wireFingerprintCursor(db, sessionID, entity, entityID)
+      if (cursor?.fingerprint === fingerprint) {
+        if (wireCursorMemo.size < WIRE_CURSOR_MEMO_MAX) wireCursorMemo.set(key, fingerprint)
+        return
+      }
+    }
+    yield* recordWireFingerprint(db, sessionID, entity, entityID, fingerprint)
+    if (wireCursorMemo.size >= WIRE_CURSOR_MEMO_MAX) wireCursorMemo.clear()
+    wireCursorMemo.set(key, fingerprint)
+    yield* publish().pipe(Effect.orDie)
+  })
+}
+
+// The V1 wire parent linkage needs the first user message of the session; the F-17 mirror used
+// the same resolution (sessions.findMessage(role === "user")).
+const firstWireParent = (db: DatabaseService, sessionID: SessionSchema.ID) => {
+  const entry = wireSessionEntry(sessionID)
+  if (entry.parent !== null) return Effect.succeed(entry.parent)
+  return db
+    .select({ id: SessionMessageTable.id })
+    .from(SessionMessageTable)
+    .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.type, "user")))
+    .orderBy(asc(SessionMessageTable.seq))
+    .get()
+    .pipe(
+      Effect.orDie,
+      Effect.tap((row) =>
+        Effect.sync(() => {
+          wireSessionEntry(sessionID).parent = (row as { id: string } | undefined) ?? null
+        }),
+      ),
+    )
+}
+
+function legacyUserRow(input: {
+  readonly sessionID: SessionSchema.ID
+  readonly message: SessionMessage.User | SessionMessage.Synthetic
+  readonly agent: string | null
+  readonly model: { id: string; providerID: string; variant?: string } | null
+  readonly synthetic?: boolean
+}): SessionV1.WithParts {
+  const created = DateTime.toEpochMillis(input.message.time.created)
+  const messageID = SessionV1.MessageID.ascending(input.message.id)
+  const parts: SessionV1.Part[] = []
+  if (input.message.text) {
+    parts.push({
+      id: SessionV1.PartID.ascending(`prt_${input.message.id.slice("msg_".length)}_0`),
+      sessionID: input.sessionID,
+      messageID,
+      type: "text",
+      text: input.message.text,
+      ...(input.synthetic === true ? { synthetic: true } : {}),
+      time: { start: created, end: created },
+    })
+  }
+  const files = input.message.type === "user" ? (input.message.files ?? []) : []
+  for (const [index, file] of files.entries()) {
+    parts.push({
+      id: SessionV1.PartID.ascending(`prt_${input.message.id.slice("msg_".length)}_f${index}`),
+      sessionID: input.sessionID,
+      messageID,
+      type: "file",
+      url: file.uri,
+      mime: file.mime,
+      ...(file.name === undefined ? {} : { filename: file.name }),
+      time: { start: created, end: created },
+    } as SessionV1.Part)
+  }
+  return {
+    info: {
+      id: messageID,
+      sessionID: input.sessionID,
+      role: "user",
+      time: { created },
+      agent: input.agent ?? "",
+      // The wire user row feeds next-turn model resolution (currentModel falls back to the last
+      // user message's model); carry the session's model so the fallback never resolves empty.
+      model: {
+        providerID: (input.model?.providerID ?? "") as ProviderV2.ID,
+        modelID: (input.model?.id ?? "") as ModelV2.ID,
+        ...(input.model?.variant === undefined ? {} : { variant: input.model.variant }),
+      },
+    },
+    parts,
+  }
+}
+
+// Derive + publish the V1 wire rows for one folded SessionMessage. Assistant rows carry the full
+// legacyAssistant conversion (model/cost/tokens/path + synthesized step-finish); user rows carry
+// the text part, file attachments, and the session's agent/model identity. Idempotent via the
+// durable fingerprint cursor.
+function publishWireForMessage(
+  db: DatabaseService,
+  events: EventV2.Interface,
+  sessionID: SessionSchema.ID,
+  messageID: SessionMessage.ID,
+) {
+  return Effect.gen(function* () {
+    const row = yield* loadMessageRow(db, sessionID, messageID)
+    if (!row) return
+    const message = decodeRow(row)
+    const projected =
+      message.type === "assistant"
+        ? yield* Effect.gen(function* () {
+            const parent = yield* firstWireParent(db, sessionID)
+            const directory = yield* db
+              .select({ directory: SessionTable.directory, path: SessionTable.path })
+              .from(SessionTable)
+              .where(eq(SessionTable.id, sessionID))
+              .get()
+              .pipe(Effect.orDie)
+            return legacyAssistantExport({
+              sessionID,
+              parentMessageID: SessionV1.MessageID.ascending(parent ? parent.id : message.id),
+              directory: directory?.directory ?? "",
+              root: directory?.path ?? "",
+              message,
+            })
+          })
+        : message.type === "user" || message.type === "synthetic"
+          ? yield* Effect.gen(function* () {
+              const identity = yield* db
+                .select({ agent: SessionTable.agent, model: SessionTable.model })
+                .from(SessionTable)
+                .where(eq(SessionTable.id, sessionID))
+                .get()
+                .pipe(Effect.orDie)
+              return legacyUserRow({
+                sessionID,
+                message,
+                agent: identity?.agent ?? null,
+                model: identity?.model ?? null,
+                // Runner-injected synthetic messages (e.g. the output-continuation nudge) surface
+                // on the V1 wire as user rows with a synthetic text part (V1 parity).
+                synthetic: message.type === "synthetic",
+              })
+            })
+          : undefined
+    if (!projected) return
+    const existing = yield* db
+      .select({ data: MessageTable.data })
+      .from(MessageTable)
+      .where(eq(MessageTable.id, projected.info.id))
+      .get()
+      .pipe(Effect.orDie)
+    // Ownership scoping (staged 6b-1): the host authors wire rows for legacy-loop sessions with
+    // host-side extras (`structured`, host part ids, reference-mention parts...) the V2
+    // projection does not model. The egress therefore only CREATES rows it cannot see (crash
+    // recovery: the row was never written) plus assistant rows for V2-owned sessions (the
+    // mirror's exact audience); existing host-authored rows stay untouched until 6b-2 retires
+    // the mirror and the egress becomes the single writer.
+    if (projected.info.role === "user") {
+      if (existing) return
+      const messageFingerprint = JSON.stringify(projected.info)
+      yield* publishWireOnce(db, events, sessionID, "message", projected.info.id, messageFingerprint, () =>
+        events.publish(SessionV1.Event.MessageUpdated, {
+          sessionID,
+          info: structuredClone(projected.info),
+        }),
+      )
+      for (const part of projected.parts) {
+        const fingerprint = JSON.stringify(part)
+        yield* publishWireOnce(db, events, sessionID, "part", part.id, fingerprint, () =>
+          events.publish(SessionV1.Event.PartUpdated, {
+            sessionID,
+            part: structuredClone(part),
+            time: Date.now(),
+          }),
+        )
+      }
+      return
+    }
+    const v2Owned = yield* db
+      .select({ id: V2ProviderTurnReceiptTable.receipt_id })
+      .from(V2ProviderTurnReceiptTable)
+      .where(and(eq(V2ProviderTurnReceiptTable.session_id, sessionID), eq(V2ProviderTurnReceiptTable.owner_mode, "v2")))
+      .get()
+      .pipe(Effect.orDie)
+    if (v2Owned) {
+      // Merge-preserve: keep wire-row fields the V2 projection does not model (assistant
+      // `structured`, providerAttemptID...) on top of the derived row.
+      const mergedInfo =
+        existing?.data && typeof existing.data === "object"
+          ? ({ ...structuredClone(projected.info), ...structuredClone(existing.data) } as typeof projected.info)
+          : projected.info
+      const messageFingerprint = JSON.stringify(mergedInfo)
+      yield* publishWireOnce(db, events, sessionID, "message", mergedInfo.id, messageFingerprint, () =>
+        events.publish(SessionV1.Event.MessageUpdated, {
+          sessionID,
+          info: structuredClone(mergedInfo),
+        }),
+      )
+    }
+    for (const part of projected.parts) {
+      const fingerprint = JSON.stringify(part)
+      yield* publishWireOnce(db, events, sessionID, "part", part.id, fingerprint, () =>
+        events.publish(SessionV1.Event.PartUpdated, {
+          sessionID,
+          part: structuredClone(part),
+          time: Date.now(),
+        }),
+      )
+    }
+  })
+}
+
 export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const events = yield* EventV2.Service
@@ -286,6 +630,10 @@ export const layer = Layer.effectDiscard(
       codec: "session-projection",
       schemaVersion: 1,
       rebuildEventTypes: new Set([
+        SessionEvent.Created,
+        SessionEvent.Updated,
+        SessionEvent.DiffUpdated,
+        SessionEvent.RevertChanged,
         SessionV1.Event.Created,
         SessionV1.Event.Updated,
         SessionV1.Event.MessageUpdated,
@@ -294,8 +642,10 @@ export const layer = Layer.effectDiscard(
         SessionV1.Event.PartRemoved,
         SessionEvent.AgentSwitched,
         SessionEvent.ModelSwitched,
+        SessionEvent.PermissionsChanged,
         SessionEvent.ContextUpdated,
         SessionEvent.Synthetic,
+        SessionEvent.StructuredCaptured,
         SessionEvent.Shell.Started,
         SessionEvent.Shell.Ended,
         SessionEvent.Step.Started,
@@ -597,12 +947,72 @@ export const layer = Layer.effectDiscard(
         )
       },
     })
+    const guardReplayedUpdatePlacement = Effect.fnUntraced(function* (
+      sessionID: SessionSchema.ID,
+      placement: { projectID: string; directory: string; workspaceID?: string },
+    ) {
+      const current = yield* db
+        .select({
+          projectID: SessionTable.project_id,
+          directory: SessionTable.directory,
+          workspaceID: SessionTable.workspace_id,
+        })
+        .from(SessionTable)
+        .where(eq(SessionTable.id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
+      if (!current)
+        return yield* Effect.die(
+          new EventV2.InvalidSyncEventError({
+            type: "session.updated",
+            message: "Session update replay requires an existing projected Session",
+          }),
+        )
+      if (
+        current.projectID === placement.projectID &&
+        current.directory === placement.directory &&
+        (current.workspaceID ?? undefined) === (placement.workspaceID ?? undefined)
+      )
+        return
+      return yield* Effect.die(
+        new EventV2.InvalidSyncEventError({
+          type: "session.updated",
+          message: "Session update replay cannot change project, directory, or workspace placement",
+        }),
+      )
+    })
     yield* events.beforeCommit((event) => SessionInput.guardReservedID(db, event))
+    // Preview is a write-once V2 field. The durable projector guard closes the race between two
+    // concurrent first-message updates: once a value exists, an event carrying a different (or
+    // omitted) preview is rejected instead of letting a stale full-state mirror clear it.
+    yield* events.beforeCommit((event) =>
+      Effect.gen(function* () {
+        if (!Schema.is(SessionEvent.Updated)(event)) return
+        const current = yield* db
+          .select({ preview: SessionTable.preview })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, event.data.sessionID))
+          .get()
+          .pipe(Effect.orDie)
+        if (!current || current.preview === null || current.preview === event.data.info.preview) return
+        return yield* Effect.die(
+          new EventV2.InvalidSyncEventError({
+            type: event.type,
+            message: "Session preview is write-once and cannot be changed after first projection",
+          }),
+        )
+      }),
+    )
     yield* events.beforeCommit((event) =>
       Effect.gen(function* () {
         if (!event.replay) return
         if (
-          (Schema.is(SessionV1.Event.Created)(event) || Schema.is(SessionV1.Event.Updated)(event)) &&
+          (Schema.is(SessionEvent.Created)(event) ||
+            Schema.is(SessionV1.Event.Created)(event) ||
+            Schema.is(SessionEvent.Updated)(event) ||
+            Schema.is(SessionV1.Event.Updated)(event) ||
+            Schema.is(SessionEvent.Deleted)(event) ||
+            Schema.is(SessionV1.Event.Deleted)(event)) &&
           event.data.info.id !== event.data.sessionID
         )
           return yield* Effect.die(
@@ -628,10 +1038,12 @@ export const layer = Layer.effectDiscard(
             .pipe(Effect.orDie)
           const freshCreated =
             !authority &&
-            Schema.is(SessionV1.Event.Created)(event) &&
+            (Schema.is(SessionEvent.Created)(event) || Schema.is(SessionV1.Event.Created)(event)) &&
             event.seq === 0 &&
             event.data.info.id === replaySessionID &&
-            event.data.info.workspaceID === event.replayOwnerID
+            (Schema.is(SessionEvent.Created)(event)
+              ? event.data.info.location.workspaceID
+              : event.data.info.workspaceID) === event.replayOwnerID
           if ((!authority && !freshCreated) || (authority && authority.workspaceID !== event.replayOwnerID))
             return yield* Effect.die(
               new EventV2.InvalidSyncEventError({
@@ -647,36 +1059,20 @@ export const layer = Layer.effectDiscard(
               message: "Session placement replay requires a durable transfer operation receipt",
             }),
           )
-        if (!Schema.is(SessionV1.Event.Updated)(event)) return
-        const current = yield* db
-          .select({
-            projectID: SessionTable.project_id,
-            directory: SessionTable.directory,
-            workspaceID: SessionTable.workspace_id,
+        // The v1 wire event carries placement as flat info fields; the v2 authority nests them in
+        // info.location. Both versions get the same placement freeze on the sync ingress.
+        if (Schema.is(SessionEvent.Updated)(event))
+          return yield* guardReplayedUpdatePlacement(event.data.sessionID, {
+            projectID: event.data.info.projectID,
+            directory: event.data.info.location.directory,
+            workspaceID: event.data.info.location.workspaceID,
           })
-          .from(SessionTable)
-          .where(eq(SessionTable.id, event.data.sessionID))
-          .get()
-          .pipe(Effect.orDie)
-        if (!current)
-          return yield* Effect.die(
-            new EventV2.InvalidSyncEventError({
-              type: event.type,
-              message: "Session update replay requires an existing projected Session",
-            }),
-          )
-        if (
-          current.projectID === event.data.info.projectID &&
-          current.directory === event.data.info.directory &&
-          (current.workspaceID ?? undefined) === (event.data.info.workspaceID ?? undefined)
-        )
-          return
-        return yield* Effect.die(
-          new EventV2.InvalidSyncEventError({
-            type: event.type,
-            message: "Session update replay cannot change project, directory, or workspace placement",
-          }),
-        )
+        if (!Schema.is(SessionV1.Event.Updated)(event)) return
+        yield* guardReplayedUpdatePlacement(event.data.sessionID, {
+          projectID: event.data.info.projectID,
+          directory: event.data.info.directory,
+          workspaceID: event.data.info.workspaceID,
+        })
       }),
     )
     yield* events.project(SessionV1.Event.Created, (event) =>
@@ -699,6 +1095,26 @@ export const layer = Layer.effectDiscard(
         }
       }),
     )
+    yield* events.project(SessionEvent.Created, (event) =>
+      Effect.gen(function* () {
+        const stored = yield* db
+          .insert(SessionTable)
+          .values(createdSessionRow(event))
+          .onConflictDoNothing()
+          .returning({ sessionID: SessionTable.id })
+          .get()
+          .pipe(Effect.orDie)
+        if (!stored) return yield* Effect.die(new SessionAlreadyProjected())
+        if (event.data.info.location.workspaceID) {
+          yield* db
+            .update(WorkspaceTable)
+            .set({ time_used: Date.now() })
+            .where(eq(WorkspaceTable.id, event.data.info.location.workspaceID))
+            .run()
+            .pipe(Effect.orDie)
+        }
+      }),
+    )
     yield* events.project(SessionV1.Event.Updated, (event) =>
       db
         .update(SessionTable)
@@ -706,6 +1122,104 @@ export const layer = Layer.effectDiscard(
         .where(eq(SessionTable.id, event.data.sessionID))
         .run()
         .pipe(Effect.orDie),
+    )
+    // Native V2 update authority: full-state mirror of the SessionSchema.Info fields. Placement
+    // (project/directory/workspace/path), identity (slug/version), and the remaining V1-only
+    // columns (summary, revert, compacting) keep their independent event owners. Absent optional V2
+    // state means cleared (null) for fields owned by this event; V1 import/replay remains available
+    // for compatibility ingestion.
+    yield* events.project(SessionEvent.Updated, (event) =>
+      db
+        .update(SessionTable)
+        .set({
+          parent_id: event.data.info.parentID ?? null,
+          title: event.data.info.title,
+          agent: event.data.info.agent ?? null,
+          model: event.data.info.model ?? null,
+          cost: event.data.info.cost,
+          tokens_input: event.data.info.tokens.input,
+          tokens_output: event.data.info.tokens.output,
+          tokens_reasoning: event.data.info.tokens.reasoning,
+          tokens_cache_read: event.data.info.tokens.cache.read,
+          tokens_cache_write: event.data.info.tokens.cache.write,
+          permission: [...event.data.info.permissions],
+          metadata: event.data.info.metadata ?? null,
+          share_url: event.data.info.share?.url ?? null,
+          preview: event.data.info.preview ?? null,
+          time_updated: DateTime.toEpochMillis(event.data.info.time.updated),
+          time_archived: event.data.info.time.archived
+            ? DateTime.toEpochMillis(event.data.info.time.archived)
+            : null,
+        })
+        .where(eq(SessionTable.id, event.data.sessionID))
+        .run()
+        .pipe(Effect.orDie),
+    )
+    // Native diff authority owns the bounded summary columns and the independently transported file
+    // descriptors. It is intentionally separate from SessionEvent.Updated so a metadata/title update
+    // cannot erase a large diff payload.
+    yield* events.project(SessionEvent.DiffUpdated, (event) =>
+      db
+        .update(SessionTable)
+        .set({
+          summary_additions: event.data.summary.additions,
+          summary_deletions: event.data.summary.deletions,
+          summary_files: event.data.summary.files,
+          summary_diff_manifest: event.data.summary.diffManifest
+            ? {
+                ...event.data.summary.diffManifest,
+                truncationReasons: [...event.data.summary.diffManifest.truncationReasons],
+              }
+            : null,
+          summary_diffs: event.data.diff.map((diff) => ({ ...diff })),
+        })
+        .where(eq(SessionTable.id, event.data.sessionID))
+        .run()
+        .pipe(Effect.orDie),
+    )
+    // Revert is an independent authority. Local publish uses the commit hook to perform the
+    // mutation_epoch CAS and supersede pending intent/steer rows; replay applies the event state here.
+    yield* events.project(SessionEvent.RevertChanged, (event) => {
+      if (!event.replay)
+        return Effect.void
+      return db
+        .update(SessionTable)
+        .set({
+          mutation_epoch: event.data.mutationEpoch,
+          revert: event.data.revert
+            ? {
+                ...event.data.revert,
+                messageID: SessionV1.MessageID.make(event.data.revert.messageID),
+                partID: event.data.revert.partID
+                  ? SessionV1.PartID.make(event.data.revert.partID)
+                  : undefined,
+              }
+            : null,
+          ...(event.data.summary
+            ? {
+                summary_additions: event.data.summary.additions,
+                summary_deletions: event.data.summary.deletions,
+                summary_files: event.data.summary.files,
+                summary_diff_manifest: event.data.summary.diffManifest
+                  ? {
+                      ...event.data.summary.diffManifest,
+                      truncationReasons: [...event.data.summary.diffManifest.truncationReasons],
+                    }
+                  : null,
+              }
+            : {}),
+          time_updated: DateTime.toEpochMillis(event.data.timestamp),
+        })
+        .where(eq(SessionTable.id, event.data.sessionID))
+        .run()
+        .pipe(Effect.orDie)
+    })
+    // Native V2 deletion is terminal: the event's EventV2 commit installs the aggregate tombstone,
+    // then this projector removes the materialized Session row in the same transaction. The
+    // tombstone is intentionally not in the snapshot rebuild set; deleting an aggregate must not
+    // be represented as a resurrectable empty snapshot.
+    yield* events.project(SessionEvent.Deleted, (event) =>
+      db.delete(SessionTable).where(eq(SessionTable.id, event.data.sessionID)).run().pipe(Effect.orDie),
     )
     yield* events.project(SessionEvent.Moved, (event) =>
       Effect.gen(function* () {
@@ -756,10 +1270,6 @@ export const layer = Layer.effectDiscard(
           .where(and(eq(PartTable.message_id, event.data.messageID), eq(PartTable.session_id, event.data.sessionID)))
           .all()
           .pipe(Effect.orDie)
-        for (const row of rows) {
-          const previous = usage(row.data)
-          if (previous) yield* applyUsage(db, event.data.sessionID, previous, -1)
-        }
         yield* db
           .delete(MessageTable)
           .where(and(eq(MessageTable.id, event.data.messageID), eq(MessageTable.session_id, event.data.sessionID)))
@@ -781,8 +1291,6 @@ export const layer = Layer.effectDiscard(
           )
           .get()
           .pipe(Effect.orDie)
-        const previous = row && usage(row.data)
-        if (previous) yield* applyUsage(db, event.data.sessionID, previous, -1)
         yield* db
           .delete(PartTable)
           .where(
@@ -819,10 +1327,9 @@ export const layer = Layer.effectDiscard(
           .onConflictDoUpdate({ target: PartTable.id, set: { data } })
           .run()
           .pipe(Effect.orDie)
-        const previous = row && usage(row.data)
-        const next = usage(event.data.part)
-        if (previous) yield* applyUsage(db, row.session_id, previous, -1)
-        if (next) yield* applyUsage(db, sessionID, next)
+        // R4 — a projected step-finish part does NOT apply usage: every such part is the mirror of
+        // a turn whose Step.Ended event already applied the same usage below. Applying here too
+        // double-counted every V2 turn (and each mirror re-projection re-counted it again).
       }),
     )
     yield* events.project(SessionEvent.AgentSwitched, (event) => {
@@ -852,6 +1359,19 @@ export const layer = Layer.effectDiscard(
         yield* SessionContextEpoch.requestReplacement(db, event.data.sessionID, event.seq)
       }),
     )
+    yield* events.project(SessionEvent.PermissionsChanged, (event) => {
+      if (event.seq === undefined) return Effect.die("Synchronized Session event is missing aggregate sequence")
+      return db
+        .update(SessionTable)
+        .set({ permission: event.data.permissions, time_updated: DateTime.toEpochMillis(event.data.timestamp) })
+        .where(eq(SessionTable.id, event.data.sessionID))
+        .run()
+        .pipe(
+          Effect.orDie,
+          Effect.andThen(run(db, event)),
+          Effect.andThen(SessionContextEpoch.requestReplacement(db, event.data.sessionID, event.seq)),
+        )
+    })
     yield* events.project(SessionEvent.Prompted, (event) =>
       Effect.gen(function* () {
         const messageID = event.data.messageID
@@ -906,7 +1426,21 @@ export const layer = Layer.effectDiscard(
         )
       }),
     )
-    yield* events.project(SessionEvent.InterruptRequested, () => Effect.void)
+    yield* events.project(SessionEvent.InterruptRequested, (event) => {
+      if (event.seq === undefined)
+        return Effect.die("Synchronized Session interrupt event is missing aggregate sequence")
+      return db
+        .update(SessionTable)
+        .set({ interrupt_seq: event.seq, time_updated: sql`${SessionTable.time_updated}` })
+        .where(
+          and(
+            eq(SessionTable.id, event.data.sessionID),
+            sql`(${SessionTable.interrupt_seq} IS NULL OR ${SessionTable.interrupt_seq} < ${event.seq})`,
+          ),
+        )
+        .run()
+        .pipe(Effect.orDie)
+    })
     yield* events.project(SessionEvent.Execution.Started, () => Effect.void)
     yield* events.project(SessionEvent.Execution.Succeeded, () => Effect.void)
     yield* events.project(SessionEvent.Execution.Failed, () => Effect.void)
@@ -931,6 +1465,7 @@ export const layer = Layer.effectDiscard(
       }),
     )
     yield* events.project(SessionEvent.Step.Failed, (event) => run(db, event))
+    yield* events.project(SessionEvent.StructuredCaptured, (event) => run(db, event))
     yield* events.project(SessionEvent.Text.Started, (event) => run(db, event))
     yield* events.project(SessionEvent.Text.Ended, (event) => run(db, event))
     yield* events.project(SessionEvent.Tool.Input.Started, (event) => run(db, event))
@@ -951,6 +1486,31 @@ export const layer = Layer.effectDiscard(
         yield* SessionContextEpoch.requestReplacement(db, event.data.sessionID, seq)
       })
     })
+
+    // W4-6 — the journal→V1-wire egress runs OUTSIDE the projection transaction: publishing
+    // V1 wire events from inside events.project would insert into the same event table the
+    // fold is committing to (unique-aggregate collision). A post-commit listener sees the
+    // journal after the fold settled, re-reads the folded SessionMessage, derives the wire
+    // rows, and the durable fingerprint cursor keeps it exactly-once across replays. This
+    // replaces the F-17 in-process mirror with the same listen structure but journal-derived,
+    // crash-safe state.
+    yield* events.listen((event) =>
+      Effect.suspend(() => {
+        if (!event.type.startsWith("session.next.")) return Effect.void
+        const data = event.data as { sessionID?: string; assistantMessageID?: string; messageID?: string }
+        if (typeof data.sessionID !== "string") return Effect.void
+        const messageIDs = [data.assistantMessageID, data.messageID].filter(
+          (id): id is string => typeof id === "string",
+        )
+        if (messageIDs.length === 0) return Effect.void
+        return Effect.forEach(
+          messageIDs,
+          (messageID) =>
+            publishWireForMessage(db, events, SessionSchema.ID.make(data.sessionID!), SessionMessage.ID.make(messageID)),
+          { concurrency: 2 },
+        ).pipe(Effect.ignore)
+      }),
+    )
   }),
 )
 

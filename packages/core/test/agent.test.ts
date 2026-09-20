@@ -118,14 +118,23 @@ describe("AgentV2", () => {
       expect(agents.map((item) => String(item.id)).sort()).toEqual([
         "auto",
         "compaction",
+        "design",
         "explore",
         "general",
+        "goal-worker",
+        "loop",
         "plan",
         "researcher",
+        "reviewer",
+        "senior-reviewer",
         "summary",
         "title",
       ])
-      for (const item of agents) {
+      // goal-worker is the sanctioned exception: the Goal Loop worker (V3.9 §D) carries out plan
+      // steps, which requires a working ruleset — bash runs the step's validation commands.
+      // senior-reviewer (RI-26 port) may apply ordinary file fixes but still gets bash only via the
+      // wildcard default, never a literal bash grant.
+      for (const item of agents.filter((item) => item.id !== AgentV2.ID.make("goal-worker"))) {
         expect(item.permissions.some((rule) => rule.action === "bash" && rule.effect !== "deny")).toBe(false)
       }
 
@@ -136,6 +145,36 @@ describe("AgentV2", () => {
       for (const action of ["bash", "write", "edit", "task", "question"]) {
         expect(PermissionV2.evaluate(action, "*", researcher?.permissions ?? []).effect).toBe("deny")
       }
+
+      const goalWorker = yield* agent.get(AgentV2.ID.make("goal-worker"))
+      expect(goalWorker).toBeDefined()
+      expect(goalWorker?.hidden).toBe(true)
+      expect(goalWorker?.mode).toBe("subagent")
+      for (const action of ["read", "grep", "edit", "write", "bash", "plan"]) {
+        expect(PermissionV2.evaluate(action, "*", goalWorker?.permissions ?? []).effect).toBe("allow")
+      }
+      expect(PermissionV2.evaluate("task", "*", goalWorker?.permissions ?? []).effect).toBe("deny")
+
+      const build = yield* agent.get(AgentV2.defaultID)
+      expect(build?.system).toContain("maps each requirement to concrete code or validation evidence")
+      expect(build?.system).toContain("plan status alone is not proof")
+      expect(build?.system).toContain("reserve the remaining work for validation")
+    }),
+  )
+
+  it.effect("resolves the legacy build selection to auto without registering a duplicate agent", () =>
+    Effect.gen(function* () {
+      const agent = yield* AgentV2.Service
+      yield* agent.update((editor) =>
+        editor.update(AgentV2.defaultID, (item) => {
+          item.mode = "primary"
+          item.system = "Auto instructions"
+        }),
+      )
+
+      expect(yield* agent.get(AgentV2.ID.make("build"))).toBeUndefined()
+      expect(yield* agent.resolve("build")).toMatchObject({ id: AgentV2.defaultID, system: "Auto instructions" })
+      expect(yield* agent.select("build")).toMatchObject({ id: AgentV2.defaultID, info: { id: AgentV2.defaultID } })
     }),
   )
 })

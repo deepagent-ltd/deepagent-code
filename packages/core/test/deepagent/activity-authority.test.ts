@@ -373,6 +373,44 @@ describe("DeepAgentActivityAuthority", () => {
     )
   })
 
+  test("configure survives an objective row stamped ahead of the database clock", async () => {
+    await run(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        // The objective insert trigger stamps updated_at from the activity's
+        // application-clock created_at, which can lead the database clock; exaggerate the
+        // lead so the clamp, not the clock, decides the next updated_at.
+        const future = Date.now() + 60_000
+        yield* db.run(
+          "INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated) VALUES ('session-clock', 'project-1', 'session-clock', '/tmp/project-1', 'Clock', '1', 1, 1)",
+        )
+        yield* db.run(
+          "INSERT INTO session_intent (intent_id, session_id, source, state, selected_variant, selected_payload_hash, delivery, admitted_message_id, mutation_epoch, version, time_created, time_admitted, time_updated) VALUES ('intent-clock', 'session-clock', 'composer', 'admitted', 'original', 'admission-clock-payload', 'turn', 'message-clock', 0, 1, 1, 1, 1)",
+        )
+        yield* db.run(
+          `INSERT INTO session_activity_admission (admission_id, session_id, source_kind, legacy_intent_id, admitted_message_id, delivery, payload_fingerprint_kind, payload_fingerprint, created_at) VALUES ('admission-clock', 'session-clock', 'legacy_intent', 'intent-clock', 'message-clock', 'turn', 'payload_hash', 'admission-clock-payload', ${future})`,
+        )
+        yield* db.run(
+          `INSERT INTO session_legacy_activity (activity_id, session_id, ordinal, trigger_admission_id, owner_token, state, terminal_reason, created_at, settled_at) VALUES ('activity-clock', 'session-clock', 0, 'admission-clock', 'owner-1', 'active', NULL, ${future}, NULL)`,
+        )
+        yield* db.run(
+          "INSERT INTO session_legacy_activity_admission (activity_id, admission_id, ordinal, role, attached_at) VALUES ('activity-clock', 'admission-clock', 0, 'trigger', 1)",
+        )
+        const configured = yield* DeepAgentActivityAuthority.configure({
+          activityKind: "legacy",
+          activityID: "activity-clock",
+          expectedVersion: 1,
+          objectiveText: "Finish the durable activity",
+          completionCriteria: [{ kind: "plan_complete" }],
+          enforcementState: "monitoring",
+          stallThreshold: 2,
+        })
+        expect(configured).toMatchObject({ version: 2, enforcementState: "monitoring" })
+        expect(configured.updatedAt).toBe(future)
+      }),
+    )
+  })
+
   test("settles the base activity and objective in one transaction", async () => {
     await run(
       Effect.gen(function* () {

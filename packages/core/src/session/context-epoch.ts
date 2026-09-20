@@ -72,7 +72,7 @@ const prepareOnce = Effect.fnUntraced(function* (
   location: Location.Ref,
   agent: AgentV2.ID,
 ) {
-  const [value, stored] = yield* Effect.all([context, find(db, sessionID)], { concurrency: "unbounded" })
+  const [value, stored] = yield* Effect.all([context, find(db, sessionID)], { concurrency: 2 })
   if (!stored) {
     const generation = yield* SystemContext.initialize(value)
     const baselineSeq = yield* insert(db, sessionID, location, agent, generation)

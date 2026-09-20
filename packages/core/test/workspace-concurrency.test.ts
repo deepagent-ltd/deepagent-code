@@ -73,4 +73,18 @@ describe("WorkspaceConcurrency (§E2)", () => {
       expect(second.admitted).toBe(false) // over the override cap of 1
     }),
   )
+
+  it.effect("caps aggregate execution across high-cardinality workspaces and reuses released capacity", () =>
+    Effect.gen(function* () {
+      const wc = yield* WorkspaceConcurrency.Service
+      for (let index = 0; index < WorkspaceConcurrency.AGENT_EXEC_CONCURRENT_GLOBAL; index++)
+        expect((yield* wc.acquire(`wrk_global_${index}`)).admitted).toBe(true)
+
+      expect((yield* wc.acquire("wrk_global_overflow")).admitted).toBe(false)
+      expect(wc.totalDepth()).toBe(WorkspaceConcurrency.AGENT_EXEC_CONCURRENT_GLOBAL)
+
+      wc.release("wrk_global_0")
+      expect((yield* wc.acquire("wrk_global_overflow")).admitted).toBe(true)
+    }),
+  )
 })

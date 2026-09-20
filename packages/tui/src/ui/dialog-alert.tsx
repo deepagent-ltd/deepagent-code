@@ -1,5 +1,6 @@
 import { TextAttributes } from "@opentui/core"
 import { useTheme } from "../context/theme"
+import { useTuiI18n } from "../context/i18n"
 import { useDialog, type DialogContext } from "./dialog"
 import { useBindings } from "../keymap"
 
@@ -11,13 +12,14 @@ export type DialogAlertProps = {
 
 export function DialogAlert(props: DialogAlertProps) {
   const dialog = useDialog()
+  const i18n = useTuiI18n()
   const { theme } = useTheme()
 
   useBindings(() => ({
     bindings: [
       {
         key: "return",
-        desc: "Confirm alert",
+        desc: i18n.t("tui.dialog.alert.confirm"),
         group: "Dialog",
         cmd: () => {
           props.onConfirm?.()

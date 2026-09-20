@@ -45,6 +45,8 @@ import { ContextQueryFacade } from "@/context-federation/context-query-facade"
 import { ContextFederationReadiness } from "@/context-federation/readiness"
 import { ContextFederationRollout } from "@deepagent-code/core/context-federation/rollout"
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
+import { SessionV2 } from "@deepagent-code/core/session"
+import { Snapshot } from "@/snapshot"
 
 const node = CrossSpawnSpawner.defaultLayer
 const configLayer = TestConfig.layer({
@@ -92,6 +94,8 @@ const registryLayer = (opts: RegistryLayerOptions = {}) =>
           Database.defaultLayer,
           Search.defaultLayer,
           Truncate.defaultLayer,
+          SessionV2.defaultLayer,
+          Snapshot.defaultLayer,
           Layer.succeed(CodeIntelFacade.Service, CodeIntelFacade.Service.of({ execute: () => Effect.die("unused") })),
           Layer.succeed(
             ContextQueryFacade.Service,

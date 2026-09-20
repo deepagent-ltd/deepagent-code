@@ -74,24 +74,35 @@ function normalizeEvent(update: ParcelWatcher.Event): "add" | "change" | "unlink
 
 export const hasNativeBinding = () => !!watcher()
 
-export interface Interface {}
+export interface Interface {
+  /**
+   * Completes once every subscription this Location opens has been ESTABLISHED by the backend.
+   *
+   * Without it a caller cannot distinguish "the watcher is live and nothing changed" from "the
+   * watcher has not started yet", so the only available strategy is to write a probe file and wait —
+   * which is exactly what the tests did, and it made them collapse whenever the machine was busy
+   * (fs-events under load delivers the first callback seconds later, or coalesces it away entirely).
+   * A readiness signal is a fact the service owns; polling for it is an assumption about timing.
+   */
+  readonly ready: Effect.Effect<void>
+}
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/v2/FileWatcher") {}
 
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
-    if (yield* Flag.DEEPAGENT_CODE_EXPERIMENTAL_DISABLE_FILEWATCHER) return Service.of({})
+    if (yield* Flag.DEEPAGENT_CODE_EXPERIMENTAL_DISABLE_FILEWATCHER) return Service.of({ ready: Effect.void })
 
     const backend = getBackend()
     const location = yield* Location.Service
     if (!backend) {
       log.error("watcher backend not supported", { directory: location.directory, platform: process.platform })
-      return Service.of({})
+      return Service.of({ ready: Effect.void })
     }
 
     const w = watcher()
-    if (!w) return Service.of({})
+    if (!w) return Service.of({ ready: Effect.void })
 
     log.info("watcher backend", { directory: location.directory, platform: process.platform, backend })
     const events = yield* EventV2.Service
@@ -104,6 +115,21 @@ export const layer = Layer.effect(
       Effect.promise(() => Promise.allSettled(subscriptions.map((subscription) => subscription.unsubscribe()))),
     )
 
+    // Readiness bookkeeping. The subscriptions are opened asynchronously (forkScoped), so the Service
+    // cannot simply return after them. `pending` counts how many this Location WILL open; each
+    // subscription settles it exactly once — on success AND on the failure path, because readiness
+    // must not hang when the backend rejects a subscription (that path already publishes Overflow).
+    let pending = 0
+    let settled = 0
+    let markReady: (() => void) | undefined
+    const readyPromise = new Promise<void>((resolve) => {
+      markReady = resolve
+    })
+    const settle = () =>
+      Effect.sync(() => {
+        settled++
+        if (settled >= pending) markReady?.()
+      })
     const callback: ParcelWatcher.SubscribeCallback = (error, updates) => {
       if (error) {
         runFork(events.publish(Event.Overflow, { reason: "backend_error" }))
@@ -115,43 +141,53 @@ export const layer = Layer.effect(
     }
 
     const subscribe = (directory: string, ignore: string[]) => {
-      const pending = w.subscribe(directory, callback, { ignore, backend })
-      return Effect.promise(() => pending).pipe(
+      const pendingSubscription = w.subscribe(directory, callback, { ignore, backend })
+      return Effect.promise(() => pendingSubscription).pipe(
         Effect.tap((subscription) => Effect.sync(() => subscriptions.push(subscription))),
         Effect.timeout(SUBSCRIBE_TIMEOUT_MS),
         Effect.catchCause((cause) => {
           log.error("failed to subscribe", { directory, cause: Cause.pretty(cause) })
-          pending.then((subscription) => subscription.unsubscribe()).catch(() => {})
+          pendingSubscription.then((subscription) => subscription.unsubscribe()).catch(() => {})
           return events.publish(Event.Overflow, { reason: "subscription_failed" })
         }),
+        Effect.ensuring(settle()),
       )
     }
 
     const config = (yield* (yield* Config.Service).entries())
       .filter((entry): entry is Config.Document => entry.type === "document")
       .flatMap((item) => item.info.watcher?.ignore ?? [])
+    const gitSubscription = (() => {
+      if (location.vcs?.type !== "git") return undefined
+      return { resolved: undefined as string | undefined }
+    })()
+    if (yield* Flag.DEEPAGENT_CODE_EXPERIMENTAL_FILEWATCHER) pending++
+    if (location.vcs?.type === "git") {
+      const resolved = yield* git.dir(location.directory)
+      const vcs = resolved ? yield* fs.realPath(resolved).pipe(Effect.catch(() => Effect.succeed(resolved))) : undefined
+      if (vcs && !config.includes(".git") && !config.includes(vcs) && (!resolved || !config.includes(resolved))) {
+        pending++
+        const ignore = (yield* fs.readDirectoryEntries(vcs).pipe(Effect.catch(() => Effect.succeed([])))).flatMap(
+          (entry) => (entry.name === "HEAD" ? [] : [entry.name]),
+        )
+        yield* Effect.forkScoped(subscribe(vcs, ignore))
+      } else {
+        void gitSubscription
+      }
+    }
     if (yield* Flag.DEEPAGENT_CODE_EXPERIMENTAL_FILEWATCHER) {
       yield* Effect.forkScoped(
         subscribe(location.directory, [...Ignore.PATTERNS, ...config, ...protecteds(location.directory)]),
       )
     }
+    // A Location with no subscriptions at all is trivially ready.
+    if (pending === 0) markReady?.()
 
-    if (location.vcs?.type === "git") {
-      const resolved = yield* git.dir(location.directory)
-      const vcs = resolved ? yield* fs.realPath(resolved).pipe(Effect.catch(() => Effect.succeed(resolved))) : undefined
-      if (vcs && !config.includes(".git") && !config.includes(vcs) && (!resolved || !config.includes(resolved))) {
-        const ignore = (yield* fs.readDirectoryEntries(vcs).pipe(Effect.catch(() => Effect.succeed([])))).flatMap(
-          (entry) => (entry.name === "HEAD" ? [] : [entry.name]),
-        )
-        yield* Effect.forkScoped(subscribe(vcs, ignore))
-      }
-    }
-
-    return Service.of({})
+    return Service.of({ ready: Effect.promise(() => readyPromise) })
   }).pipe(
     Effect.catchCause((cause) => {
       log.error("failed to init watcher service", { cause: Cause.pretty(cause) })
-      return Effect.succeed(Service.of({}))
+      return Effect.succeed(Service.of({ ready: Effect.void }))
     }),
   ),
 )

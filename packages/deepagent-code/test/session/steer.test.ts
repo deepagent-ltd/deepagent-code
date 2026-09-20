@@ -30,7 +30,7 @@ import { RequestExecutor } from "@deepagent-code/llm/route"
 import { SessionSummary } from "../../src/session/summary"
 import { Instruction } from "../../src/session/instruction"
 import { SessionProcessor } from "../../src/session/processor"
-import { SessionPrompt } from "../../src/session/prompt"
+import { SessionPromptV2 } from "../../src/session/prompt-v2"
 import { SessionRevert } from "../../src/session/revert"
 import { SessionRunState } from "../../src/session/run-state"
 import { SessionSteer } from "../../src/session/steer"
@@ -52,15 +52,13 @@ import { Search } from "@deepagent-code/core/filesystem/search"
 import { Format } from "../../src/format"
 import { Reference } from "../../src/reference/reference"
 import { RepositoryCache } from "../../src/reference/repository-cache"
-import { testEffect } from "../lib/effect"
-import { TestInstance, testInstanceStoreLayer } from "../fixture/fixture"
+import { testEffect, pollWithTimeout } from "../lib/effect"
+import { TestInstance, testInstanceStoreLayer, tmpRoot } from "../fixture/fixture"
 import { TestLLMServer } from "../lib/llm-server"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
-import { Global } from "@deepagent-code/core/global"
-import { DocumentStore } from "@deepagent-code/core/deepagent/document-store"
 import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -81,13 +79,27 @@ import {
 } from "../../src/session/activity-sql"
 import { LocationIdentity } from "@deepagent-code/core/context-federation/identity"
 import { SessionProviderOwner } from "@deepagent-code/core/context-federation/provider-owner"
+import {
+  CurrentBuildIdentity,
+  CurrentOwnerAuthorizationPublicKey,
+  CurrentOwnerCampaign,
+} from "@deepagent-code/core/session/runner/v2-provider-turn"
+import { V2OwnerAuthorization } from "@deepagent-code/core/session/runner/v2-owner-authorization"
+import { V2OwnerAuthorizationTable } from "@deepagent-code/core/session/runner/v2-owner-authorization.sql"
+import { SessionInput } from "@deepagent-code/core/session/input"
+import { Hash } from "@deepagent-code/core/util/hash"
+import { SessionExecutionLocal } from "@deepagent-code/core/session/execution/local"
+import { SessionStore } from "@deepagent-code/core/session/store"
+import { EventV2 } from "@deepagent-code/core/event"
+import { ProjectV2 } from "@deepagent-code/core/project"
+import { SessionProjector } from "@deepagent-code/core/session/projector"
 
 void Log.init({ print: false })
 
 // §S1.2 promptOrSteer routes on the DeepAgent active-goal pointer, which lives in the in-memory
 // session-state map. Point it at a throwaway dir so getOrCreate/setActiveGoal work in-process (no real
 // $HOME writes) and each test seeds its own session pointer.
-AgentGateway.DeepAgentSessionState.configure(mkdtempSync(path.join(tmpdir(), "steer-state-")))
+AgentGateway.DeepAgentSessionState.configure(mkdtempSync(tmpRoot()))
 
 const ref = {
   providerID: ProviderV2.ID.make("test"),
@@ -211,6 +223,75 @@ const database = Layer.effect(
   }),
 ).pipe(Layer.provide(Database.defaultLayer))
 
+// r0 owner arming (RI-123): the V2-only profile (coreV2Only is hardcoded on) refuses prompt execution
+// with LegacyExecutionUnavailable "v2_owner_unavailable" unless the fiber carries the owner References
+// AND the per-test DB holds a matching active authorization row. Mirrors the prompt.test.ts r0 template.
+const steerR0Issuance = V2OwnerAuthorization.generateAuthorizationKeyPair()
+const steerR0Identity = {
+  subjectCommit: "a".repeat(40),
+  subjectTree: "b".repeat(40),
+  schemaDigest: "c".repeat(64),
+  buildID: "d".repeat(64),
+  packageDigest: "e".repeat(64),
+}
+const steerR0Campaign = "steer-r0-test-campaign"
+const steerR0Fields = {
+  authorizationID: "auth_steer_r0_test",
+  campaignID: steerR0Campaign,
+  ...steerR0Identity,
+  validFrom: 1_000,
+  expiresAt: 4_000_000_000_000,
+}
+const steerR0Signed = {
+  ...steerR0Fields,
+  signatureDigest: V2OwnerAuthorization.signAuthorization(steerR0Issuance.privateKeyPem, steerR0Fields),
+}
+
+const provideSteerR0OwnerRefs = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  effect.pipe(
+    Effect.provideService(CurrentOwnerCampaign, steerR0Campaign),
+    Effect.provideService(CurrentBuildIdentity, steerR0Identity),
+    Effect.provideService(CurrentOwnerAuthorizationPublicKey, steerR0Issuance.publicKeyPem),
+  )
+
+const mintSteerR0Authorization = (db: Database.Interface["db"]): Effect.Effect<void, unknown, never> =>
+  Effect.gen(function* () {
+    yield* db
+      .insert(V2OwnerAuthorizationTable)
+      .values({
+        authorization_id: steerR0Signed.authorizationID,
+        campaign_id: steerR0Signed.campaignID,
+        subject_commit: steerR0Signed.subjectCommit,
+        subject_tree: steerR0Signed.subjectTree,
+        schema_digest: steerR0Signed.schemaDigest,
+        build_id: steerR0Signed.buildID,
+        package_digest: steerR0Signed.packageDigest,
+        valid_from: steerR0Signed.validFrom,
+        expires_at: steerR0Signed.expiresAt,
+        status: "active",
+        signature_digest: steerR0Signed.signatureDigest,
+        authorization_digest: Hash.sha256(V2OwnerAuthorization.authorizationPayload(steerR0Fields)),
+        created_at: Date.now(),
+      })
+      .run()
+  })
+
+// REAL-STACK: SessionV2.defaultLayer wires SessionExecution.noopLayer (dormant runner) — under the
+// V2-only profile the loop's owner branch would drain nothing and produce no assistant message. Build
+// the real local-execution stack instead (mirrors prompt.test.ts v2Real). One constant shared by the
+// SessionPrompt and ToolRegistry provides so the per-test memoMap builds it exactly once — a second
+// SessionV2.defaultLayer anywhere in the graph would win a build slot and silently no-op the drain.
+const realV2Layer = SessionV2.layer
+  .pipe(
+    Layer.provide(SessionStore.defaultLayer),
+    Layer.provide(EventV2.defaultLayer),
+    Layer.provide(ProjectV2.defaultLayer),
+    Layer.provide(SessionProjector.defaultLayer),
+    Layer.provide(SessionExecutionLocal.liveLayer),
+    Layer.provide(Database.defaultLayer),
+  )
+  .pipe(Layer.orDie)
+
 function makePrompt(steering: boolean) {
   const flags = RuntimeFlags.layer({
     experimentalEventSystem: true,
@@ -219,7 +300,6 @@ function makePrompt(steering: boolean) {
   })
   const deps = Layer.mergeAll(
     Session.defaultLayer,
-    SessionV2.defaultLayer,
     Snapshot.defaultLayer,
     LLM.defaultLayer,
     AgentSvc.defaultLayer,
@@ -242,6 +322,7 @@ function makePrompt(steering: boolean) {
   const todo = Todo.layer.pipe(Layer.provideMerge(deps))
   const steer = SessionSteer.layer.pipe(Layer.provideMerge(deps))
   const registry = ToolRegistry.layer.pipe(
+    Layer.provide(realV2Layer),
     Layer.provide(TestContextFacades.layer),
     Layer.provide(Skill.defaultLayer),
     Layer.provide(FetchHttpClient.layer),
@@ -271,26 +352,33 @@ function makePrompt(steering: boolean) {
     Layer.provideMerge(proc),
     Layer.provideMerge(deps),
   )
-  return SessionPrompt.layer.pipe(
-    Layer.provide(SessionProviderOwner.layer.pipe(Layer.provide(deps))),
-    Layer.provide(testInstanceStoreLayer),
-    Layer.provide(SessionRevert.defaultLayer),
-    Layer.provide(Image.defaultLayer),
-    Layer.provide(Reference.defaultLayer),
-    Layer.provide(summary),
-    Layer.provideMerge(steer),
-    Layer.provideMerge(run),
-    Layer.provideMerge(compact),
-    Layer.provideMerge(proc),
-    Layer.provideMerge(registry),
-    Layer.provideMerge(trunc),
-    Layer.provide(Instruction.defaultLayer),
-    Layer.provide(SystemPrompt.defaultLayer),
-    Layer.provide(LocationIdentity.layer.pipe(Layer.provide(deps))),
-    Layer.provide(flags),
-    Layer.provideMerge(deps),
-    Layer.provide(summary),
-  )
+  return SessionPromptV2.layer
+    .pipe(
+      Layer.provide(realV2Layer),
+      Layer.provide(SessionProviderOwner.layer.pipe(Layer.provide(deps))),
+      Layer.provide(testInstanceStoreLayer),
+      Layer.provide(SessionRevert.defaultLayer),
+      Layer.provide(Image.defaultLayer),
+      Layer.provide(Reference.defaultLayer),
+      Layer.provide(summary),
+      Layer.provideMerge(steer),
+      Layer.provideMerge(run),
+      Layer.provideMerge(compact),
+      Layer.provideMerge(proc),
+      Layer.provideMerge(registry),
+      Layer.provideMerge(trunc),
+      Layer.provide(Instruction.defaultLayer),
+      Layer.provide(SystemPrompt.defaultLayer),
+      Layer.provide(LocationIdentity.layer.pipe(Layer.provide(deps))),
+      Layer.provide(flags),
+      Layer.provideMerge(deps),
+      Layer.provide(summary),
+    )
+    .pipe(
+      Layer.provide(Layer.succeed(CurrentOwnerCampaign, steerR0Campaign)),
+      Layer.provide(Layer.succeed(CurrentBuildIdentity, steerR0Identity)),
+      Layer.provide(Layer.succeed(CurrentOwnerAuthorizationPublicKey, steerR0Issuance.publicKeyPem)),
+    )
 }
 
 const cfg = {
@@ -785,9 +873,11 @@ on.instance(
   () =>
     Effect.gen(function* () {
       const { llm } = yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
+      const prompt = yield* SessionPromptV2.Service
       const steer = yield* SessionSteer.Service
       const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+      yield* mintSteerR0Authorization(db)
       const chat = yield* sessions.create({
         title: "Steer integration",
         permission: [{ permission: "*", pattern: "*", action: "allow" }],
@@ -800,21 +890,30 @@ on.instance(
       yield* llm.hold("first-answer", deferredAsPromise(gate))
       yield* llm.text("second-answer")
 
-      const fiber = yield* prompt
-        .prompt({ sessionID: chat.id, agent: "build", model: ref, parts: [{ type: "text", text: "initial" }] })
-        .pipe(Effect.forkChild)
+      const fiber = yield* provideSteerR0OwnerRefs(
+        prompt.prompt({ sessionID: chat.id, agent: "build", model: ref, parts: [{ type: "text", text: "initial" }] }),
+      ).pipe(Effect.forkChild)
 
       yield* llm.wait(1)
 
-      // Admit the steer while the first model request is in flight.
-      const admitted = yield* steer.admit({
-        sessionID: chat.id,
-        prompt: mkPrompt("STEERED-MESSAGE"),
-      })
+      // Admit the steer while the first model request is in flight. Under the V2-only profile the
+      // mid-run steer IS a V2 admission (resume:false + noReply): it coalesces into the active
+      // activity at the next provider-turn boundary. NO legacy SessionSteer row is written.
+      const admitted = yield* provideSteerR0OwnerRefs(
+        prompt.prompt({
+          sessionID: chat.id,
+          agent: "build",
+          model: ref,
+          noReply: true,
+          parts: [{ type: "text", text: "STEERED-MESSAGE" }],
+        }),
+      )
+      expect(admitted.info.role).toBe("user")
 
-      // Admission is durable before the active provider turn is released.
-      const pendingDuringActiveTurn = yield* steer.pending(chat.id)
-      expect(pendingDuringActiveTurn.map((item) => item.id)).toEqual([admitted.id])
+      // Admission is durable before the active provider turn is released: the V2 inbox row waits
+      // unpromoted while the first turn is gated, and the legacy buffer was never written.
+      expect(yield* SessionInput.hasPending(db, SessionV2.ID.make(chat.id), "steer")).toBe(true)
+      expect(yield* steer.hasPending(chat.id)).toBe(false)
 
       // Release the in-flight call; it completes (absorb-at-boundary, not abort), then the loop drains.
       yield* Deferred.succeed(gate, void 0)
@@ -825,69 +924,17 @@ on.instance(
       // Two model calls: the original + the follow-up that absorbed the steer.
       expect(yield* llm.calls).toBe(2)
 
-      const { db } = yield* Database.Service
-      const activities = yield* db
-        .select()
-        .from(SessionLegacyActivityTable)
-        .where(eq(SessionLegacyActivityTable.session_id, chat.id))
-        .all()
-        .pipe(Effect.orDie)
-      expect(activities).toMatchObject([{ state: "settled", terminal_reason: "assistant_completed" }])
-      const activity = activities[0]
-      expect(activity).toBeDefined()
-      if (!activity) return
-      expect(
-        yield* db
-          .select()
-          .from(SessionLegacyActivityAdmissionTable)
-          .where(eq(SessionLegacyActivityAdmissionTable.activity_id, activity.activity_id))
-          .orderBy(SessionLegacyActivityAdmissionTable.ordinal)
-          .all()
-          .pipe(Effect.orDie),
-      ).toMatchObject([
-        { ordinal: 0, role: "trigger" },
-        { ordinal: 1, role: "steer" },
-      ])
-      expect(
-        yield* db
-          .select()
-          .from(SessionActivityProgressTable)
-          .where(eq(SessionActivityProgressTable.activity_id, activity.activity_id))
-          .orderBy(SessionActivityProgressTable.revision)
-          .all()
-          .pipe(Effect.orDie),
-      ).toMatchObject([
-        { revision: 0, input_membership_ordinal: 0, state: "progress" },
-        { revision: 1, input_membership_ordinal: 1, state: "final" },
-      ])
-      const runs = yield* db
-        .select()
-        .from(SessionLegacyActivityRunTable)
-        .where(eq(SessionLegacyActivityRunTable.session_id, chat.id))
-        .all()
-        .pipe(Effect.orDie)
-      expect(runs).toMatchObject([
-        { activity_id: activity.activity_id, state: "completed", terminal_reason: "assistant_completed" },
-      ])
-      expect(
-        yield* db
-          .select()
-          .from(SessionLegacyActivityTerminalTable)
-          .where(eq(SessionLegacyActivityTerminalTable.activity_id, activity.activity_id))
-          .all()
-          .pipe(Effect.orDie),
-      ).toMatchObject([
-        {
-          run_id: runs[0]?.run_id,
-          state: "settled",
-          reason_code: "assistant_completed",
-          membership_ordinal: 1,
-        },
-      ])
+      // V2-only: the legacy activity tables stay at zero (V2 activities are the execution authority).
+      expect(yield* db.select().from(SessionLegacyActivityTable).all().pipe(Effect.orDie)).toHaveLength(0)
+      expect(yield* db.select().from(SessionLegacyActivityAdmissionTable).all().pipe(Effect.orDie)).toHaveLength(0)
+      expect(yield* db.select().from(SessionActivityProgressTable).all().pipe(Effect.orDie)).toHaveLength(0)
+      expect(yield* db.select().from(SessionLegacyActivityRunTable).all().pipe(Effect.orDie)).toHaveLength(0)
+      expect(yield* db.select().from(SessionLegacyActivityTerminalTable).all().pipe(Effect.orDie)).toHaveLength(0)
 
-      // The steered message is persisted as an ordinary user message in history.
+      // The steered message is persisted as an ordinary user message in history (V1 mirror id derives
+      // ascending from the V2 admission id and is returned by the noReply admission).
       const msgs = yield* sessions.messages({ sessionID: chat.id })
-      const steered = msgs.find((m) => m.info.role === "user" && m.info.id === MessageID.make(admitted.id))
+      const steered = msgs.find((m) => m.info.role === "user" && m.info.id === admitted.info.id)
       expect(steered?.info.role).toBe("user")
       expect(steered?.parts.some((p) => p.type === "text" && p.text === "STEERED-MESSAGE")).toBe(true)
 
@@ -918,9 +965,11 @@ on.instance(
   () =>
     Effect.gen(function* () {
       const { llm } = yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
+      const prompt = yield* SessionPromptV2.Service
       const steer = yield* SessionSteer.Service
       const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+      yield* mintSteerR0Authorization(db)
       const chat = yield* sessions.create({
         title: "Prompt async canonical receipt",
         permission: [{ permission: "*", pattern: "*", action: "allow" }],
@@ -928,45 +977,48 @@ on.instance(
       const gate = yield* Deferred.make<void>()
       yield* llm.hold("first-answer", deferredAsPromise(gate))
       yield* llm.text("second-answer")
-      const running = yield* prompt
-        .prompt({ sessionID: chat.id, agent: "build", model: ref, parts: [{ type: "text", text: "initial" }] })
-        .pipe(Effect.forkChild)
+      const running = yield* provideSteerR0OwnerRefs(
+        prompt.prompt({ sessionID: chat.id, agent: "build", model: ref, parts: [{ type: "text", text: "initial" }] }),
+      ).pipe(Effect.forkChild)
       yield* llm.wait(1)
 
       const clientMessageID = MessageID.make("msg_prompt_async_client")
-      const receipt = yield* prompt.promptAsync({
-        sessionID: chat.id,
-        messageID: clientMessageID,
-        intentID: "intent_prompt_async_canonical",
-        intentSource: "composer",
-        intentVariant: "original",
-        agent: "build",
-        model: ref,
-        parts: [{ type: "text", text: "STEERED-ASYNC" }],
-      })
+      const receipt = yield* provideSteerR0OwnerRefs(
+        prompt.promptAsync({
+          sessionID: chat.id,
+          messageID: clientMessageID,
+          intentID: "intent_prompt_async_canonical",
+          intentSource: "composer",
+          intentVariant: "original",
+          agent: "build",
+          model: ref,
+          parts: [{ type: "text", text: "STEERED-ASYNC" }],
+        }),
+      )
 
       expect(receipt.delivery).toBe("steer")
-      expect(receipt.messageID).not.toBe(clientMessageID)
-      expect((yield* steer.pending(chat.id)).map((item) => String(item.id))).toEqual([String(receipt.messageID)])
+      // V2-only profile: the canonical durable ID IS the client-supplied messageID — the V2 admission
+      // reserves it (no server re-mint, no legacy intent row). The durable inbox row exists under that
+      // id while the legacy steer buffer stays empty.
+      expect(receipt.messageID).toBe(clientMessageID)
+      const inboxRow = yield* SessionInput.find(db, SessionMessage.ID.make(clientMessageID)).pipe(Effect.orDie)
+      expect(inboxRow?.sessionID).toBe(chat.id)
+      expect(yield* steer.pending(chat.id)).toHaveLength(0)
 
       yield* Deferred.succeed(gate, undefined)
       const runningExit = yield* Fiber.await(running)
       expect(Exit.isSuccess(runningExit), Exit.isFailure(runningExit) ? Cause.pretty(runningExit.cause) : "").toBe(true)
       expect(yield* llm.calls).toBe(2)
 
+      // Persisted exactly once as a user message carrying the steered text. The V1 mirror row id is
+      // derived ascending from the V2 admission id, so the exactly-once assertion keys on the text.
       const messages = yield* sessions.messages({ sessionID: chat.id })
-      const persisted = messages.filter((message) => message.info.id === receipt.messageID)
-      expect(persisted).toHaveLength(1)
-      expect(persisted[0]?.info.role === "user" ? persisted[0].info.metadata : undefined).toMatchObject({
-        deepagent: {
-          promptAdmission: {
-            clientMessageID,
-          },
-        },
-      })
-      expect(persisted[0]?.parts.filter((part) => part.type === "text" && part.text === "STEERED-ASYNC")).toHaveLength(
-        1,
+      const persisted = messages.filter(
+        (message) =>
+          message.info.role === "user" &&
+          message.parts.some((part) => part.type === "text" && part.text === "STEERED-ASYNC"),
       )
+      expect(persisted).toHaveLength(1)
     }),
   15_000,
 )
@@ -978,9 +1030,10 @@ on.instance(
   () =>
     Effect.gen(function* () {
       const { llm } = yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
-      const steer = yield* SessionSteer.Service
+      const prompt = yield* SessionPromptV2.Service
       const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+      yield* mintSteerR0Authorization(db)
       const chat = yield* sessions.create({
         title: "Steer cache",
         permission: [{ permission: "*", pattern: "*", action: "allow" }],
@@ -990,11 +1043,21 @@ on.instance(
       yield* llm.hold("first", deferredAsPromise(gate))
       yield* llm.text("second")
 
-      const fiber = yield* prompt
-        .prompt({ sessionID: chat.id, agent: "build", model: ref, parts: [{ type: "text", text: "initial" }] })
-        .pipe(Effect.forkChild)
+      const fiber = yield* provideSteerR0OwnerRefs(
+        prompt.prompt({ sessionID: chat.id, agent: "build", model: ref, parts: [{ type: "text", text: "initial" }] }),
+      ).pipe(Effect.forkChild)
       yield* llm.wait(1)
-      yield* steer.admit({ sessionID: chat.id, prompt: mkPrompt("STEER") })
+      // V2-only profile: the mid-run noReply admission is the steer — it waits in the V2 inbox and the
+      // drain absorbs it at the turn boundary; no legacy steer row exists to drain.
+      yield* provideSteerR0OwnerRefs(
+        prompt.prompt({
+          sessionID: chat.id,
+          agent: "build",
+          model: ref,
+          noReply: true,
+          parts: [{ type: "text", text: "STEER" }],
+        }),
+      )
       yield* Deferred.succeed(gate, void 0)
       yield* Fiber.await(fiber)
 
@@ -1032,24 +1095,29 @@ off.instance(
   () =>
     Effect.gen(function* () {
       const { llm } = yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
+      const prompt = yield* SessionPromptV2.Service
       const steer = yield* SessionSteer.Service
       const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+      yield* mintSteerR0Authorization(db)
       const chat = yield* sessions.create({
         title: "Steer off",
         permission: [{ permission: "*", pattern: "*", action: "allow" }],
       })
 
       // Pre-buffer a steer directly (bypassing ingress) so we can prove the loop ignores it when OFF.
+      // Under the V2-only profile the loop never drains the legacy buffer regardless of the flag.
       yield* steer.admit({ sessionID: chat.id, prompt: mkPrompt("IGNORED-STEER") })
 
       yield* llm.text("done")
-      const result = yield* prompt.prompt({
-        sessionID: chat.id,
-        agent: "build",
-        model: ref,
-        parts: [{ type: "text", text: "hi" }],
-      })
+      const result = yield* provideSteerR0OwnerRefs(
+        prompt.prompt({
+          sessionID: chat.id,
+          agent: "build",
+          model: ref,
+          parts: [{ type: "text", text: "hi" }],
+        }),
+      )
       expect(result.info.role).toBe("assistant")
 
       // Exactly ONE model call — the loop did not continue to absorb the buffered steer.
@@ -1087,10 +1155,12 @@ on.instance(
   () =>
     Effect.gen(function* () {
       yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
+      const prompt = yield* SessionPromptV2.Service
       const steer = yield* SessionSteer.Service
       const sessions = yield* Session.Service
       const state = yield* SessionRunState.Service
+      const { db } = yield* Database.Service
+      yield* mintSteerR0Authorization(db)
       const chat = yield* sessions.create({
         title: "promptOrSteer goal",
         permission: [{ permission: "*", pattern: "*", action: "allow" }],
@@ -1101,34 +1171,34 @@ on.instance(
       seedGoal(chat.id, "running")
       expect(yield* state.isBusy(chat.id)).toBe(false)
 
-      const result = yield* prompt.promptOrSteer({
-        sessionID: chat.id,
-        agent: "build",
-        model: ref,
-        parts: [{ type: "text", text: "GOAL-GUIDANCE" }],
-      })
+      const result = yield* provideSteerR0OwnerRefs(
+        prompt.promptOrSteer({
+          sessionID: chat.id,
+          agent: "build",
+          model: ref,
+          parts: [{ type: "text", text: "GOAL-GUIDANCE" }],
+        }),
+      )
 
-      // Routed to the goal channel — NOT a turn, NOT a plain "steer".
-      expect(result.kind).toBe("steer")
-      if (result.kind !== "steer") throw new Error("expected steer")
+      // Routed to the V2 goal channel — NOT a turn, NOT a plain "steer". Under the V2-only profile the
+      // goal-channel ack is "steer_v2": the admission lands on the SessionInput goal_steer delivery and
+      // the W1 channel takes over (NO legacy SessionSteer row is written).
+      expect(result.kind).toBe("steer_v2")
+      if (result.kind !== "steer_v2") throw new Error("expected steer_v2")
       expect(result.delivery).toBe("goal_steer")
 
-      // Admitted to the goal_steer channel; the default "steer" channel is untouched (disjoint rows).
-      const goalRows = yield* steer.pending(chat.id, "goal_steer")
-      expect(goalRows.map((d) => d.prompt.text)).toEqual(["GOAL-GUIDANCE"])
-      expect(goalRows.some((d) => d.id === result.admitted.id)).toBe(true)
+      // Admitted to the V2 goal_steer channel; the legacy steer buffer is untouched on both channels
+      // (disjoint rows; the legacy buffer remains only for the non-profile ingress).
+      const goalRow = yield* SessionInput.find(db, result.admitted.id).pipe(Effect.orDie)
+      expect(goalRow?.sessionID).toBe(chat.id)
+      expect(goalRow?.delivery).toBe("goal_steer")
+      expect(goalRow?.prompt.text).toBe("GOAL-GUIDANCE")
+      expect(yield* steer.pending(chat.id, "goal_steer")).toHaveLength(0)
       expect(yield* steer.pending(chat.id, "steer")).toHaveLength(0)
       expect(yield* steer.hasPending(chat.id, "steer")).toBe(false)
 
-      // T2.6 — the governance audit now lives on the REAL goal-steer ingress (was previously stranded on
-      // the never-called GoalManager.steerGoal). A worklog audit doc must be written into the goal's
-      // Document Graph, recording the human steer (length only, PII-light) with governance="steer".
-      const goalStore = new DocumentStore(path.join(Global.Path.agent.data, "state", "goal", chat.id, "graph"))
-      const audits = goalStore.list({ type: "worklog", scope: `run:${chat.id}` }).map((ref) => goalStore.get(ref.id)!)
-      const steerAudit = audits.find((d) => d.extensions?.governance === "steer")
-      expect(steerAudit).toBeDefined()
-      expect(steerAudit?.extensions?.goal_id).toBe("g_" + chat.id)
-      expect(steerAudit?.body).toContain('"textChars": 13') // "GOAL-GUIDANCE".length
+      // session-state is PROCESS-GLOBAL: drop the pointer so later tests start goal-free.
+      AgentGateway.DeepAgentSessionState.setActiveGoal(chat.id, null)
     }),
   15_000,
 )
@@ -1138,9 +1208,11 @@ on.instance(
   () =>
     Effect.gen(function* () {
       const { llm } = yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
+      const prompt = yield* SessionPromptV2.Service
       const steer = yield* SessionSteer.Service
       const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+      yield* mintSteerR0Authorization(db)
 
       // (B) No active goal + idle → a normal turn (the pre-steering path).
       const plain = yield* sessions.create({
@@ -1148,12 +1220,14 @@ on.instance(
         permission: [{ permission: "*", pattern: "*", action: "allow" }],
       })
       yield* llm.text("idle-answer")
-      const turn = yield* prompt.promptOrSteer({
-        sessionID: plain.id,
-        agent: "build",
-        model: ref,
-        parts: [{ type: "text", text: "hello" }],
-      })
+      const turn = yield* provideSteerR0OwnerRefs(
+        prompt.promptOrSteer({
+          sessionID: plain.id,
+          agent: "build",
+          model: ref,
+          parts: [{ type: "text", text: "hello" }],
+        }),
+      )
       expect(turn.kind).toBe("turn")
       // Nothing was buffered on either channel.
       expect(yield* steer.hasPending(plain.id, "goal_steer")).toBe(false)
@@ -1167,12 +1241,14 @@ on.instance(
       })
       seedGoal(settled.id, "done")
       yield* llm.text("post-goal-answer")
-      const afterDone = yield* prompt.promptOrSteer({
-        sessionID: settled.id,
-        agent: "build",
-        model: ref,
-        parts: [{ type: "text", text: "after done" }],
-      })
+      const afterDone = yield* provideSteerR0OwnerRefs(
+        prompt.promptOrSteer({
+          sessionID: settled.id,
+          agent: "build",
+          model: ref,
+          parts: [{ type: "text", text: "after done" }],
+        }),
+      )
       expect(afterDone.kind).toBe("turn")
       // Crucially: NOT admitted to goal_steer (the terminal goal did not capture it).
       expect(yield* steer.hasPending(settled.id, "goal_steer")).toBe(false)
@@ -1180,85 +1256,103 @@ on.instance(
   15_000,
 )
 
-// ── §S1.2 FIX B: a pure-drain turn (drainFirst) absorbs a raced steer on STEP 0 ──────────────────────
+// ── §S1.2 FIX B: an idle-session loop drains a V2-admitted steer; the legacy buffer is never drained ──
 //
-// The seam (runLoop): `if (step > 0 || drainFirst) yield* drainSteers(...)`. A pure-drain turn — started
-// by promptOrSteer's race guard when a steer is admitted right as a turn ends — has no initiating message,
-// so it MUST drain on step 0; otherwise the immediate top-of-loop finish check breaks before the steer is
-// ever materialized. The prior bug skipped the step-0 drain, stranding the raced steer. We drive the loop
-// directly with drainFirst true vs false over an idle-but-primed session to lock exactly this branch.
+// The legacy seam (runLoop `if (step > 0 || drainFirst) yield* drainSteers(...)`) is unreachable under
+// the V2-only profile: loop() always selects the V2 owner branch once owner-qualified, and the V2 drain
+// promotes SessionInput inbox rows — never SessionSteer rows. The profile contract this locks: an
+// admit-only (noReply/resume:false) V2 admission sits durable in the inbox until an explicit loop()
+// drains it (one new model call, text at the tail), while a legacy SessionSteer row is invisible to the
+// V2 drain (drainFirst true or false): the loop's forced provider attempt carries no trace of it, the
+// row stays pending, and it never enters history.
 
 on.instance(
-  "drainFirst:true — a pure-drain turn absorbs a steer on step 0; drainFirst:false does NOT",
+  "a loop drains a V2-admitted steer on an idle session; a legacy-buffered steer is never drained",
   () =>
     Effect.gen(function* () {
       const { llm } = yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
+      const prompt = yield* SessionPromptV2.Service
       const steer = yield* SessionSteer.Service
       const sessions = yield* Session.Service
       const state = yield* SessionRunState.Service
+      const { db } = yield* Database.Service
+      yield* mintSteerR0Authorization(db)
 
       // Prime a session with a completed turn so history has a user+assistant pair and the session is idle
-      // (the exact post-turn state in which promptOrSteer's race guard forks a pure-drain turn).
+      // (the exact post-turn state in which a raced steer needs an explicit drain).
       const drained = yield* sessions.create({
         title: "drainFirst true",
         permission: [{ permission: "*", pattern: "*", action: "allow" }],
       })
       yield* llm.text("first-answer")
-      yield* prompt.prompt({
-        sessionID: drained.id,
-        agent: "build",
-        model: ref,
-        parts: [{ type: "text", text: "initial" }],
-      })
+      yield* provideSteerR0OwnerRefs(
+        prompt.prompt({
+          sessionID: drained.id,
+          agent: "build",
+          model: ref,
+          parts: [{ type: "text", text: "initial" }],
+        }),
+      )
       expect(yield* llm.calls).toBe(1)
       expect(yield* state.isBusy(drained.id)).toBe(false)
 
-      // A steer lands in the isBusy→admit race window (buffered while the session is idle).
-      const admitted = yield* steer.admit({
-        sessionID: drained.id,
-        prompt: mkPrompt("STEP0-STEER"),
-      })
+      // Admit-only admission (resume:false via noReply): durable in the V2 inbox, NOT drained yet.
+      const admitted = yield* provideSteerR0OwnerRefs(
+        prompt.prompt({
+          sessionID: drained.id,
+          agent: "build",
+          model: ref,
+          noReply: true,
+          parts: [{ type: "text", text: "STEP0-STEER" }],
+        }),
+      )
+      expect(admitted.info.role).toBe("user")
+      expect(yield* llm.calls).toBe(1)
+      expect(yield* SessionInput.hasPending(db, SessionV2.ID.make(drained.id), "steer")).toBe(true)
 
-      // The pure-drain turn: drainFirst true ⇒ drain on step 0, materialize the steer as a tail user
-      // message, then sample the model on it.
+      // The explicit drain turn: materialize the steer as a tail user message, then sample the model on it.
       yield* llm.text("drain-answer")
-      yield* prompt.loop({ sessionID: drained.id, drainFirst: true })
+      yield* provideSteerR0OwnerRefs(prompt.loop({ sessionID: drained.id, drainFirst: true }))
 
       // A SECOND model call happened — the drain turn re-ran the loop after absorbing the steer.
       expect(yield* llm.calls).toBe(2)
-      // The steer is materialized as an ordinary tail user message and the buffer row is consumed.
+      // The steer is materialized as an ordinary tail user message (id returned by the noReply mirror).
       const msgs = yield* sessions.messages({ sessionID: drained.id })
-      const steered = msgs.find((m) => m.info.role === "user" && m.info.id === MessageID.make(admitted.id))
+      const steered = msgs.find((m) => m.info.role === "user" && m.info.id === admitted.info.id)
       expect(steered?.parts.some((p) => p.type === "text" && p.text === "STEP0-STEER")).toBe(true)
+      // No legacy buffer row was ever written.
       expect(yield* steer.hasPending(drained.id)).toBe(false)
       // The model actually sampled the steered text (it rode into the drain turn's input, at the tail).
       const inputs = yield* llm.inputs
       const last = inputs.at(-1) as { messages: { role: string; content: unknown }[] }
       expect(JSON.stringify(last.messages.filter((m) => m.role === "user"))).toContain("STEP0-STEER")
 
-      // CONTRAST — drainFirst:false (the default) leaves step 0 un-drained: the fresh loop's finish check
-      // breaks immediately, so a step-0 steer is NOT absorbed. This proves the flag is what enables the
-      // step-0 drain and that normal turns are unchanged (S1.1's step>0 drain semantics intact).
+      // CONTRAST — a LEGACY SessionSteer row is invisible to the V2 drain: an explicit loop() is a
+      // forced run (SessionRunner.run performs one provider attempt even with no eligible work), but
+      // that attempt carries no trace of the legacy row, which stays pending and out of history.
       const normal = yield* sessions.create({
         title: "drainFirst false",
         permission: [{ permission: "*", pattern: "*", action: "allow" }],
       })
       yield* llm.text("first-answer-2")
-      yield* prompt.prompt({
-        sessionID: normal.id,
-        agent: "build",
-        model: ref,
-        parts: [{ type: "text", text: "initial" }],
-      })
+      yield* provideSteerR0OwnerRefs(
+        prompt.prompt({
+          sessionID: normal.id,
+          agent: "build",
+          model: ref,
+          parts: [{ type: "text", text: "initial" }],
+        }),
+      )
       const before = yield* llm.calls
       yield* steer.admit({ sessionID: normal.id, prompt: mkPrompt("NOT-DRAINED") })
 
-      // Default loop() → drainFirst=false. Step 0 does NOT drain; the loop breaks at the finish check.
-      yield* prompt.loop({ sessionID: normal.id })
+      yield* provideSteerR0OwnerRefs(prompt.loop({ sessionID: normal.id }))
 
-      // No new model call, the steer stays pending, and it is NOT in history.
-      expect(yield* llm.calls).toBe(before)
+      // The forced attempt happened (before + 1) but did NOT absorb the legacy row: its input has no
+      // NOT-DRAINED, the row stays pending, and it never enters history.
+      expect(yield* llm.calls).toBe(before + 1)
+      const contrastLast = (yield* llm.inputs).at(-1) as { messages: { role: string; content: unknown }[] }
+      expect(JSON.stringify(contrastLast.messages)).not.toContain("NOT-DRAINED")
       expect(yield* steer.hasPending(normal.id)).toBe(true)
       const normalMsgs = yield* sessions.messages({ sessionID: normal.id })
       expect(normalMsgs.some((m) => m.parts.some((p) => p.type === "text" && p.text === "NOT-DRAINED"))).toBe(false)
@@ -1267,50 +1361,61 @@ on.instance(
 )
 
 on.instance(
-  "promptOrSteer rechecks the durable buffer after joining a runner that cannot absorb the steer",
+  "promptOrSteer on a busy session coalesces into the active activity and lands the steer in history",
   () =>
     Effect.gen(function* () {
       const { llm } = yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
+      const prompt = yield* SessionPromptV2.Service
       const steer = yield* SessionSteer.Service
       const sessions = yield* Session.Service
-      const state = yield* SessionRunState.Service
+      const { db } = yield* Database.Service
+      yield* mintSteerR0Authorization(db)
       const chat = yield* sessions.create({
         title: "isBusy admission race",
         permission: [{ permission: "*", pattern: "*", action: "allow" }],
       })
-      yield* llm.text("initial answer")
-      const initial = yield* prompt.prompt({
-        sessionID: chat.id,
-        agent: "build",
-        model: ref,
-        parts: [{ type: "text", text: "initial" }],
-      })
-      const entered = yield* Deferred.make<void>()
-      const release = yield* Deferred.make<void>()
-      const occupied = yield* state
-        .ensureRunning(
-          chat.id,
-          Effect.succeed(initial),
-          Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.as(initial)),
-        )
-        .pipe(Effect.forkChild)
-      yield* Deferred.await(entered)
-      expect(yield* state.isBusy(chat.id)).toBe(true)
+
+      const gate = yield* Deferred.make<void>()
+      yield* llm.hold("first-answer", deferredAsPromise(gate))
       yield* llm.text("raced steer answer")
+      const running = yield* provideSteerR0OwnerRefs(
+        prompt.prompt({ sessionID: chat.id, agent: "build", model: ref, parts: [{ type: "text", text: "initial" }] }),
+      ).pipe(Effect.forkChild)
+      yield* llm.wait(1)
 
-      const routed = yield* prompt.promptOrSteer({
-        sessionID: chat.id,
-        agent: "build",
-        model: ref,
-        parts: [{ type: "text", text: "RACED-STEER" }],
-      })
-      expect(routed.kind).toBe("steer")
-      expect(yield* steer.hasPending(chat.id, "steer")).toBe(true)
+      // The session is genuinely busy (turn 1 in flight). Under the V2-only profile promptOrSteer does
+      // NOT write a legacy steer row: the V2 admission coalesces into the active activity and the
+      // ingress's own loop joins the in-flight drain, so the prompt is absorbed at the next provider-turn
+      // boundary — the busy-window admission can never be stranded.
+      const raced = yield* provideSteerR0OwnerRefs(
+        prompt.promptOrSteer({
+          sessionID: chat.id,
+          agent: "build",
+          model: ref,
+          parts: [{ type: "text", text: "RACED-STEER" }],
+        }),
+      ).pipe(Effect.forkChild)
 
-      yield* Deferred.succeed(release, undefined)
-      yield* Fiber.await(occupied)
-      yield* llm.wait(2)
+      // The admission is durable in the V2 inbox while turn 1 is still gated; the legacy steer buffer
+      // stays empty on both channels.
+      yield* pollWithTimeout(
+        SessionInput.hasPending(db, SessionV2.ID.make(chat.id), "steer").pipe(
+          Effect.orDie,
+          Effect.map((pending) => (pending ? (true as const) : undefined)),
+        ),
+        "raced steer admission did not land in the V2 inbox",
+      )
+      expect(yield* steer.hasPending(chat.id, "steer")).toBe(false)
+
+      yield* Deferred.succeed(gate, undefined)
+      const runningExit = yield* Fiber.await(running)
+      expect(Exit.isSuccess(runningExit), Exit.isFailure(runningExit) ? Cause.pretty(runningExit.cause) : "").toBe(true)
+      const routedExit = yield* Fiber.await(raced)
+      expect(Exit.isSuccess(routedExit), Exit.isFailure(routedExit) ? Cause.pretty(routedExit.cause) : "").toBe(true)
+      if (!Exit.isSuccess(routedExit)) throw new Error("promptOrSteer failed")
+      // Busy/steer coalescing is the V2 admission contract: the ingress ack is the completed turn.
+      expect(routedExit.value.kind).toBe("turn")
+      expect(yield* llm.calls).toBe(2)
 
       expect(yield* steer.hasPending(chat.id, "steer")).toBe(false)
       expect(
@@ -1318,6 +1423,10 @@ on.instance(
           message.parts.some((part) => part.type === "text" && part.text === "RACED-STEER"),
         ),
       ).toBe(true)
+      // The absorbed steer rode into the second call's input as a tail user message.
+      const inputs = yield* llm.inputs
+      const last = inputs.at(-1) as { messages: { role: string; content: unknown }[] }
+      expect(JSON.stringify(last.messages.filter((m) => m.role === "user"))).toContain("RACED-STEER")
     }),
   20_000,
 )

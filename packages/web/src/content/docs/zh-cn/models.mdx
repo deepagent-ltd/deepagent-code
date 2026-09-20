@@ -52,7 +52,7 @@ DeepAgent Code 使用 [AI SDK](https://ai-sdk.dev/) 和 [Models.dev](https://mod
 
 ```json title="deepagent-code.json" {3}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "model": "lmstudio/google/gemma-3n-e4b"
 }
 ```
@@ -69,7 +69,7 @@ DeepAgent Code 使用 [AI SDK](https://ai-sdk.dev/) 和 [Models.dev](https://mod
 
 ```jsonc title="deepagent-code.jsonc" {7-12,19-24}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "openai": {
       "models": {
@@ -108,7 +108,7 @@ DeepAgent Code 使用 [AI SDK](https://ai-sdk.dev/) 和 [Models.dev](https://mod
 
 ```jsonc title="deepagent-code.jsonc" {6-21}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "deepagent-code": {
       "models": {
@@ -173,7 +173,7 @@ DeepAgent Code 为许多提供商提供了默认变体：
 
 ```jsonc title="deepagent-code.jsonc" {7-18}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "openai": {
       "models": {
@@ -210,7 +210,7 @@ DeepAgent Code 启动时，会按以下优先顺序加载模型：
 
    ```json title="deepagent-code.json"
    {
-     "$schema": "https://deepagent-code.ai/config.json",
+     "$schema": "https://ai.deepagent.ltd/config.schema.json",
      "model": "anthropic/claude-sonnet-4-20250514"
    }
    ```

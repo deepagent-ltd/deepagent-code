@@ -2,13 +2,10 @@ import { DateTime, Schema } from "effect"
 import { DateTimeUtcFromMillis } from "effect/Schema"
 import { ModelProtocolCapabilities } from "./contract/model-protocol"
 import { ProviderV2 } from "./provider"
+import { ID, Ref, VariantID } from "./model/ref"
 import { ModelRequest } from "./model-request"
 
-export const ID = Schema.String.pipe(Schema.brand("ModelV2.ID"))
-export type ID = typeof ID.Type
-
-export const VariantID = Schema.String.pipe(Schema.brand("VariantID"))
-export type VariantID = typeof VariantID.Type
+export { ID, Ref, VariantID }
 
 // Grouping of models, eg claude opus, claude sonnet
 export const Family = Schema.String.pipe(Schema.brand("Family"))
@@ -35,12 +32,6 @@ export const Cost = Schema.Struct({
   }),
 })
 
-export const Ref = Schema.Struct({
-  id: ID,
-  providerID: ProviderV2.ID,
-  variant: VariantID.pipe(Schema.optional),
-})
-export type Ref = typeof Ref.Type
 
 export const Api = Schema.Union([
   Schema.Struct({

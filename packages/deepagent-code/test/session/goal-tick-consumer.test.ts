@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { Effect, Layer } from "effect"
 import { GoalTickConsumer } from "../../src/session/goal-tick-consumer"
 import { recoverGoalTickRequest } from "../../src/session/goal-tick-port"
+import { ConsumerReceipts } from "@deepagent-code/core/deepagent/consumer-receipts"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
 import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
@@ -243,6 +244,67 @@ describe("GoalTickConsumer — port failure nacks", () => {
       const cmd = yield* publishTick(seq0Command({ goalId: "gfail" }))
       // handle must NOT throw — it catches the defect and nacks internally.
       yield* consumer.handle(cmd)
+    }),
+  )
+})
+
+describe("GoalTickConsumer — C5-10 durable side-effect receipt", () => {
+  let calls = 0
+  const it = testEffect(
+    makeLayer({
+      runTick: () =>
+        Effect.sync(() => {
+          calls++
+          return { progress: "continue", nextSeq: 1, nextExpectedPlanVersion: 1 } as StubResult
+        }),
+    }),
+  )
+
+  it.effect("a completed tick writes a done receipt; redelivery runs NOTHING again", () =>
+    Effect.gen(function* () {
+      const consumer = yield* GoalTickConsumer.Service
+      const { db } = yield* Database.Service
+      calls = 0
+      const cmd = yield* publishTick(seq0Command({ goalId: "grecpt" }))
+      yield* consumer.handle(cmd)
+      expect(calls).toBe(1) // the tick ran once
+      // the durable receipt proves the side effect completed for this (goal_tick, event) pair.
+      const receipt = yield* ConsumerReceipts.receiptFor(db, "goal_tick", cmd.id)
+      expect(receipt?.status).toBe("done")
+      expect(receipt?.attempts).toBe(1)
+      expect(receipt?.receiptRef).toBe(ConsumerReceipts.receiptRefFor("goal_tick", cmd.id))
+      // redelivery: the done receipt short-circuits — no second tick, no receipt churn.
+      yield* consumer.handle(cmd)
+      expect(calls).toBe(1)
+      const after = yield* ConsumerReceipts.receiptFor(db, "goal_tick", cmd.id)
+      expect(after?.attempts).toBe(1)
+    }),
+  )
+})
+
+describe("GoalTickConsumer — C5-10 receipt stays pending on failure", () => {
+  let calls = 0
+  const it = testEffect(
+    makeLayer({
+      runTick: () =>
+        Effect.sync(() => {
+          calls++
+          throw new Error("tick failed")
+        }),
+    }),
+  )
+
+  it.effect("a failed tick keeps the receipt PENDING (E3 retryable) and nacks", () =>
+    Effect.gen(function* () {
+      const consumer = yield* GoalTickConsumer.Service
+      const { db } = yield* Database.Service
+      calls = 0
+      const cmd = yield* publishTick(seq0Command({ goalId: "grecpt-fail" }))
+      yield* consumer.handle(cmd) // nacks internally; does not throw
+      expect(calls).toBe(1)
+      const receipt = yield* ConsumerReceipts.receiptFor(db, "goal_tick", cmd.id)
+      expect(receipt?.status).toBe("pending")
+      expect(receipt?.lastError).toContain("tick failed")
     }),
   )
 })

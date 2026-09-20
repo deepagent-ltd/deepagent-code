@@ -110,5 +110,12 @@ export function MessageMetadataCard(props: MessageMetadataCardProps) {
           </div>
         </div>
       )
+
+    // W0.4 (P9) — `agent_no_trigger_mention` receipt: deliberately rendered as NULL (no card chunk, no
+    // pixel change). The receipt is a plain text IM message whose body already tells the user their
+    // @mention was not dispatched; the metadata fields are the durable/diagnostic link to the
+    // initiating mention. Showing a card on top of the body would duplicate the same information.
+    case "agent_no_trigger_mention":
+      return null
   }
 }

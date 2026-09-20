@@ -329,6 +329,8 @@ interface SessionTerminalEntry {
   side: TerminalPtySnapshot | null
   /** Monotonic counter used for LRU ordering — higher = more recently accessed. */
   lruTick: number
+  /** Location-correct cleanup retained with an inactive snapshot. */
+  discard?: (ptyId: string) => void
 }
 
 /**
@@ -346,6 +348,7 @@ const workspaceDiscardFn = new Map<string, (ptyId: string) => void>()
 
 /** Max non-current session entries kept per {scope, directory} workspace. */
 const MAX_CACHED_SESSION_ENTRIES = 5
+export const MAX_CACHED_TERMINAL_ENTRIES = 128
 
 let lruClock = 0
 function nextLruTick(): number {
@@ -372,6 +375,36 @@ function getWorkspaceCacheEntries(scope: ServerScopeValue, dir: string): Array<[
   return result
 }
 
+function discardTerminalEntry(entry: SessionTerminalEntry, fallback?: (ptyId: string) => void) {
+  const discard = entry.discard ?? fallback
+  if (!discard) return
+  const ids = [
+    ...(entry.bottom?.ptys.map((pty) => pty.ptyId) ?? []),
+    ...(entry.side?.ptys.map((pty) => pty.ptyId) ?? []),
+  ]
+  for (const id of ids) discard(id)
+}
+
+function evictGlobalTerminalEntries(protectedKey: string) {
+  while (sessionTerminalCache.size > MAX_CACHED_TERMINAL_ENTRIES) {
+    const oldest = [...sessionTerminalCache.entries()]
+      .filter(([key]) => key !== protectedKey)
+      .sort((a, b) => a[1].lruTick - b[1].lruTick)[0]
+    if (!oldest) return
+    discardTerminalEntry(oldest[1])
+    sessionTerminalCache.delete(oldest[0])
+  }
+}
+
+function cacheTerminalEntry(key: string, entry: SessionTerminalEntry) {
+  sessionTerminalCache.set(key, entry)
+  evictGlobalTerminalEntries(key)
+}
+
+function unregisterWorkspaceDiscard(key: string, discard: (ptyId: string) => void) {
+  if (workspaceDiscardFn.get(key) === discard) workspaceDiscardFn.delete(key)
+}
+
 /**
  * Evict the least-recently-used non-current entries for a workspace so that at
  * most MAX_CACHED_SESSION_ENTRIES non-current entries remain.
@@ -390,11 +423,7 @@ function evictLruEntries(
   nonCurrent.sort((a, b) => a[1].lruTick - b[1].lruTick)
   const toEvict = nonCurrent.slice(0, nonCurrent.length - MAX_CACHED_SESSION_ENTRIES)
   for (const [key, entry] of toEvict) {
-    const ptyIds = [
-      ...(entry.bottom?.ptys.map((p) => p.ptyId) ?? []),
-      ...(entry.side?.ptys.map((p) => p.ptyId) ?? []),
-    ]
-    for (const ptyId of ptyIds) discardFn(ptyId)
+    discardTerminalEntry(entry, discardFn)
     sessionTerminalCache.delete(key)
   }
 }
@@ -427,13 +456,7 @@ export function clearWorkspaceTerminals(
   const wsKey = workspaceScopeKey(scope, dir)
   const discardFn = workspaceDiscardFn.get(wsKey)
   for (const [key, entry] of getWorkspaceCacheEntries(scope, dir)) {
-    const ptyIds = [
-      ...(entry.bottom?.ptys.map((p) => p.ptyId) ?? []),
-      ...(entry.side?.ptys.map((p) => p.ptyId) ?? []),
-    ]
-    if (discardFn) {
-      for (const ptyId of ptyIds) discardFn(ptyId)
-    }
+    discardTerminalEntry(entry, discardFn)
     sessionTerminalCache.delete(key)
   }
 
@@ -923,6 +946,8 @@ function createWorkspaceTerminalSession(
   sessionTerminalCache,
   sessionEntryKey,
   evictLruEntries,
+  evictGlobalTerminalEntries,
+  unregisterWorkspaceDiscard,
   invalidateScopeSnapshots,
   workspaceDiscardFn,
   clearSessionCache() {
@@ -999,9 +1024,9 @@ const { use: useTerminalDual, provider: TerminalProvider } = createSimpleContext
     const initKey = sessionEntryKey(scope, sdk.directory, effectiveSessionKey())
     const initEntry = sessionTerminalCache.get(initKey)
     if (initEntry) {
-      sessionTerminalCache.set(initKey, { ...initEntry, lruTick: nextLruTick() })
       if (initEntry.bottom) bottomSession.restore(initEntry.bottom)
       if (initEntry.side) sideSession.restore(initEntry.side)
+      sessionTerminalCache.delete(initKey)
     }
 
     // Register sessions in the global set so clearWorkspaceTerminals can reach them.
@@ -1040,19 +1065,21 @@ const { use: useTerminalDual, provider: TerminalProvider } = createSimpleContext
       // the user keeps the same shell after the first message creates the session.
       const isDraftMigration = prevKey === draftKey && !sessionTerminalCache.has(nextEntryKey)
       if (isDraftMigration) {
-        sessionTerminalCache.set(nextEntryKey, {
+        cacheTerminalEntry(nextEntryKey, {
           bottom: bottomSnap,
           side: sideSnap,
           lruTick: nextLruTick(),
+          discard: discardPty,
         })
         sessionTerminalCache.delete(prevEntryKey)
       } else {
         // Normal session switch: persist current state under the previous key.
         if (bottomSnap || sideSnap) {
-          sessionTerminalCache.set(prevEntryKey, {
+          cacheTerminalEntry(prevEntryKey, {
             bottom: bottomSnap,
             side: sideSnap,
             lruTick: nextLruTick(),
+            discard: discardPty,
           })
         }
       }
@@ -1066,10 +1093,9 @@ const { use: useTerminalDual, provider: TerminalProvider } = createSimpleContext
       // Restore from cache if an entry exists for the target session.
       const nextEntry = sessionTerminalCache.get(nextEntryKey)
       if (nextEntry) {
-        // Touch LRU.
-        sessionTerminalCache.set(nextEntryKey, { ...nextEntry, lruTick: nextLruTick() })
         if (nextEntry.bottom) bottomSession!.restore(nextEntry.bottom)
         if (nextEntry.side) sideSession!.restore(nextEntry.side)
+        sessionTerminalCache.delete(nextEntryKey)
       }
 
       // Evict least-recently-used entries beyond the per-workspace cap.
@@ -1092,10 +1118,11 @@ const { use: useTerminalDual, provider: TerminalProvider } = createSimpleContext
       const bottomSnap = bottomSession?.snapshot() ?? null
       const sideSnap = sideSession?.snapshot() ?? null
       if (bottomSnap || sideSnap) {
-        sessionTerminalCache.set(currentKey, {
+        cacheTerminalEntry(currentKey, {
           bottom: bottomSnap,
           side: sideSnap,
           lruTick: nextLruTick(),
+          discard: discardPty,
         })
       } else {
         // Remove a stale empty entry if nothing is alive.
@@ -1103,7 +1130,7 @@ const { use: useTerminalDual, provider: TerminalProvider } = createSimpleContext
       }
       sessions.delete(bottomReg)
       sessions.delete(sideReg)
-      workspaceDiscardFn.delete(wsKey)
+      unregisterWorkspaceDiscard(wsKey, discardPty)
     })
 
     return { bottom: bottomSession, side: sideSession }

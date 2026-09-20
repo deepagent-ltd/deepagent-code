@@ -1,6 +1,7 @@
 export * as SessionRunner from "./index"
 export * as SessionProviderRecovery from "./recovery"
 export * as SessionProviderRecoveryStore from "./recovery-store"
+export * as SessionProviderRecoveryDurable from "./recovery-durable-store"
 
 import type { LLMError } from "@deepagent-code/llm"
 import { Context, Effect, Schema } from "effect"
@@ -12,14 +13,96 @@ import type { SessionContextEpoch } from "../context-epoch"
 import type { ToolOutputStore } from "../../tool-output-store"
 import type { AdmissionError } from "./canonical-turn"
 import type { Error as V2ProviderTurnError } from "./v2-provider-turn"
+import type { RecoveryRequiredError } from "./v2-tool-effect"
+import type { NotFoundError } from "../../agent"
+import type { RuntimeInterface } from "../../agent-gateway"
 
+/** W7 — settle hook input. `activityId` is the durable activity that just settled; it is absent
+ * when the drain ran without dispatching any provider turn (e.g. an early no-op wake). */
+export type OnSessionSettledInput = {
+  readonly sessionID: SessionSchema.ID
+  readonly workspacePath: string
+  readonly activityId?: string
+}
+
+/**
+ * G-E — what the settle hook observed about delivery. The hook knows the verdict (it runs the
+ * finalizer); the RUNNER owns event publication, so the hook hands the receipt back through this
+ * callback and core records it as a replayable `session.delivery.recorded` fact. A callback rather
+ * than a mutable ref because the hook runs outside the runner's Effect context and cannot publish
+ * events itself.
+ */
+export type DeliveryReceipt = {
+  readonly verdict:
+    | "committed"
+    | "no_changes"
+    | "no_changes_on_this_branch"
+    | "withheld_unverified"
+    | "withheld_validation_failed"
+    | "skipped"
+  readonly branch?: string
+  readonly headBefore?: string
+  readonly headAfter?: string
+  readonly touchedPaths: number
+  readonly unattributable: number
+  readonly commit?: string
+  readonly recoveryRef?: string
+  readonly reason?: string
+}
+
+/** W7 — host-injectable hook invoked once after a drain chain settles, beside the W10 project-docs
+ * tail. Unwired (`undefined` default) = no-op; the deepagent-code composition injects the
+ * durable-learning admission implementation. */
+export const CurrentOnSessionSettled = Context.Reference<
+  | ((
+      input: OnSessionSettledInput,
+      runtime: RuntimeInterface,
+      report?: (receipt: DeliveryReceipt) => void,
+    ) => Effect.Effect<void>)
+  | undefined
+>("@deepagent-code/v2/SessionRunner/OnSessionSettled", { defaultValue: () => undefined })
+
+// W2-V2 seam: the plan gate (understand→plan→execute discipline) lives in the deepagent-code
+// layer — it wraps the V1 SessionTools execution path but the V2 runner settles tools through the
+// core registry, so the gate never fired on the V2 path (run-mode evidence: edits executed with
+// zero plan calls and zero blocks). The composition wires this reference with the same
+// evaluatePlanGate decision; absent (core-only compositions) tools settle ungated exactly as before.
+export type ToolSettleGateInput = {
+  readonly sessionID: string
+  readonly toolName: string
+  readonly args: unknown
+}
+export type ToolSettleGateDecision = { kind: "pass"; reminder?: string } | { kind: "block"; output: string }
+export const CurrentToolSettleGate = Context.Reference<
+  ((input: ToolSettleGateInput) => Effect.Effect<ToolSettleGateDecision>) | undefined
+>("@deepagent-code/v2/SessionRunner/ToolSettleGate", { defaultValue: () => undefined })
+
+// R3 — the message carries the diagnosis (TaggedErrorClass otherwise renders an empty message
+// on every log/SSE surface that prints `error.message`).
 export class StepLimitExceededError extends Schema.TaggedErrorClass<StepLimitExceededError>()(
   "SessionRunner.StepLimitExceededError",
   {
     sessionID: SessionSchema.ID,
     limit: Schema.Int,
   },
-) {}
+) {
+  constructor(props: { readonly sessionID: SessionSchema.ID; readonly limit: number }) {
+    super(props)
+    this.message = `step limit ${props.limit} exceeded for session ${props.sessionID}`
+  }
+}
+
+/** A durable execution claim already exists. The caller must classify/recover that Session instead
+ * of starting another provider drain whose preceding physical outcome may be unknown. */
+export class ExecutionRecoveryRequiredError extends Schema.TaggedErrorClass<ExecutionRecoveryRequiredError>()(
+  "SessionRunner.ExecutionRecoveryRequiredError",
+  { sessionID: SessionSchema.ID },
+) {
+  constructor(props: { readonly sessionID: SessionSchema.ID }) {
+    super(props)
+    this.message = `session ${props.sessionID} has an unresolved execution claim; explicit recovery is required`
+  }
+}
 
 export type RunError =
   | LLMError
@@ -27,10 +110,13 @@ export type RunError =
   | MessageDecodeError
   | ContextSnapshotDecodeError
   | StepLimitExceededError
+  | ExecutionRecoveryRequiredError
   | SystemContext.InitializationBlocked
   | SessionContextEpoch.AgentReplacementBlocked
   | ToolOutputStore.Error
   | V2ProviderTurnError
+  | RecoveryRequiredError
+  | NotFoundError
   | AdmissionError
 
 /** Runs one local continuation from already-recorded Session history. */

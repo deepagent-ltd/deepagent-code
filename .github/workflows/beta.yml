@@ -19,6 +19,9 @@ jobs:
 
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
+        # W0.5: the V2 owner authorization is minted by publish.yml (a REAL signing job) from the
+        # release build identity and exported as owner-authorization.json; this cron sync job must
+        # never depend on the signing secret — a missing secret would otherwise block the beta sync.
 
       - name: Setup Git Committer
         id: setup-git-committer

@@ -1,5 +1,8 @@
-import { SessionV1 } from "@deepagent-code/core/v1/session"
-import { legacyAssistant } from "@deepagent-code/core/session"
+import type { SessionV1 } from "@deepagent-code/core/v1/session"
+// Deep import: the core/session barrel drags the server-side execution graph
+// (execution/local → location-layer → plugin/boot → skill .md text import) into the
+// browser bundle, which vite cannot parse. legacy-wire is the lightweight extraction.
+import { legacyAssistant } from "@deepagent-code/core/session/legacy-wire"
 import type { SessionMessage } from "@deepagent-code/sdk"
 
 // §16.5 API-APP-PACKAGE P6 — the App main session rendering capability seam. The timeline

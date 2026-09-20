@@ -13,7 +13,7 @@ DeepAgent Code는 **JSON**과 **JSONC**(주석이 포함된 JSON) 형식을 모�
 
 ```jsonc title="deepagent-code.jsonc"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "model": "anthropic/claude-sonnet-4-5",
   "autoupdate": true,
   "server": {
@@ -147,9 +147,9 @@ custom 디렉토리는 전역 config와 `.deepagent-code` 디렉토리 뒤에 �
 
 ## Schema
 
-server/runtime config schema는 [**`deepagent-code.ai/config.json`**](https://deepagent-code.ai/config.json)에 정의되어 있습니다.
+server/runtime config schema는 [**`ai.deepagent.ltd/config.schema.json`**](https://ai.deepagent.ltd/config.schema.json)에 정의되어 있습니다.
 
-TUI config는 [**`deepagent-code.ai/tui.json`**](https://deepagent-code.ai/tui.json)을 사용합니다.
+TUI config는 [**`ai.deepagent.ltd/tui.json`**](https://ai.deepagent.ltd/tui.json)을 사용합니다.
 
 편집기에서 이 schema를 기반으로 validation과 autocomplete를 사용할 수 있습니다.
 
@@ -161,7 +161,7 @@ TUI 관련 설정에는 전용 `tui.json` (또는 `tui.jsonc`) 파일을 사용�
 
 ```json title="tui.json"
 {
-  "$schema": "https://deepagent-code.ai/tui.json",
+  "$schema": "https://ai.deepagent.ltd/tui.json",
   "scroll_speed": 3,
   "scroll_acceleration": {
     "enabled": true
@@ -184,7 +184,7 @@ TUI 관련 설정에는 전용 `tui.json` (또는 `tui.jsonc`) 파일을 사용�
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "server": {
     "port": 4096,
     "hostname": "0.0.0.0",
@@ -213,7 +213,7 @@ TUI 관련 설정에는 전용 `tui.json` (또는 `tui.jsonc`) 파일을 사용�
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "tools": {
     "write": false,
     "bash": false
@@ -231,7 +231,7 @@ DeepAgent Code config의 `provider`, `model`, `small_model` 옵션으로 사용�
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {},
   "model": "anthropic/claude-sonnet-4-5",
   "small_model": "anthropic/claude-haiku-4-5"
@@ -244,7 +244,7 @@ provider 옵션에는 `timeout`, `setCacheKey`를 포함할 수 있습니다.
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "anthropic": {
       "options": {
@@ -273,7 +273,7 @@ Amazon Bedrock은 AWS 전용 config를 지원합니다.
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "amazon-bedrock": {
       "options": {
@@ -304,7 +304,7 @@ Bearer token(`AWS_BEARER_TOKEN_BEDROCK` 또는 `/connect`)은 profile 기반 인
 
 ```json title="tui.json"
 {
-  "$schema": "https://deepagent-code.ai/tui.json",
+  "$schema": "https://ai.deepagent.ltd/tui.json",
   "theme": "tokyonight"
 }
 ```
@@ -319,7 +319,7 @@ Bearer token(`AWS_BEARER_TOKEN_BEDROCK` 또는 `/connect`)은 profile 기반 인
 
 ```jsonc title="deepagent-code.jsonc"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "agent": {
     "code-reviewer": {
       "description": "Reviews code for best practices and potential issues",
@@ -345,7 +345,7 @@ Bearer token(`AWS_BEARER_TOKEN_BEDROCK` 또는 `/connect`)은 profile 기반 인
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "default_agent": "plan"
 }
 ```
@@ -362,7 +362,7 @@ Bearer token(`AWS_BEARER_TOKEN_BEDROCK` 또는 `/connect`)은 profile 기반 인
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "share": "manual"
 }
 ```
@@ -383,7 +383,7 @@ Bearer token(`AWS_BEARER_TOKEN_BEDROCK` 또는 `/connect`)은 profile 기반 인
 
 ```jsonc title="deepagent-code.jsonc"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "command": {
     "test": {
       "template": "Run the full test suite with coverage report and show any failures.\nFocus on the failing tests and suggest fixes.",
@@ -409,7 +409,7 @@ Bearer token(`AWS_BEARER_TOKEN_BEDROCK` 또는 `/connect`)은 profile 기반 인
 
 ```json title="tui.json"
 {
-  "$schema": "https://deepagent-code.ai/tui.json",
+  "$schema": "https://ai.deepagent.ltd/tui.json",
   "keybinds": {}
 }
 ```
@@ -424,7 +424,7 @@ DeepAgent Code는 시작 시 새 업데이트를 자동으로 다운로드합니
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "autoupdate": false
 }
 ```
@@ -440,7 +440,7 @@ DeepAgent Code는 시작 시 새 업데이트를 자동으로 다운로드합니
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "formatter": {
     "prettier": {
       "disabled": true
@@ -468,7 +468,7 @@ DeepAgent Code는 시작 시 새 업데이트를 자동으로 다운로드합니
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": {
     "edit": "ask",
     "bash": "ask"
@@ -486,7 +486,7 @@ DeepAgent Code는 시작 시 새 업데이트를 자동으로 다운로드합니
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "compaction": {
     "auto": true,
     "prune": false,
@@ -507,7 +507,7 @@ DeepAgent Code는 시작 시 새 업데이트를 자동으로 다운로드합니
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "watcher": {
     "ignore": ["node_modules/**", "dist/**", ".git/**"]
   }
@@ -524,7 +524,7 @@ DeepAgent Code는 시작 시 새 업데이트를 자동으로 다운로드합니
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "mcp": {}
 }
 ```
@@ -541,7 +541,7 @@ plugin 파일은 `.deepagent-code/plugins/` 또는 `~/.config/deepagent-code/plu
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "plugin": ["deepagent-code-helicone-session", "@my-org/custom-plugin"]
 }
 ```
@@ -556,7 +556,7 @@ plugin 파일은 `.deepagent-code/plugins/` 또는 `~/.config/deepagent-code/plu
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "instructions": ["CONTRIBUTING.md", "docs/guidelines.md", ".cursor/rules/*.md"]
 }
 ```
@@ -571,7 +571,7 @@ plugin 파일은 `.deepagent-code/plugins/` 또는 `~/.config/deepagent-code/plu
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "disabled_providers": ["openai", "gemini"]
 }
 ```
@@ -594,7 +594,7 @@ plugin 파일은 `.deepagent-code/plugins/` 또는 `~/.config/deepagent-code/plu
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "enabled_providers": ["anthropic", "openai"]
 }
 ```
@@ -615,7 +615,7 @@ provider를 하나씩 비활성화하는 대신, DeepAgent Code가 특정 provid
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "experimental": {}
 }
 ```
@@ -638,7 +638,7 @@ config 파일에서 환경 변수와 파일 내용을 참조할 수 있도록 �
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "model": "{env:DEEPAGENT_CODE_MODEL}",
   "provider": {
     "anthropic": {
@@ -661,7 +661,7 @@ config 파일에서 환경 변수와 파일 내용을 참조할 수 있도록 �
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "instructions": ["./custom-instructions.md"],
   "provider": {
     "openai": {

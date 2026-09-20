@@ -8,6 +8,7 @@ import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import { Global } from "@deepagent-code/core/global"
 import { discoverModelsCached, type DiscoverModelsCachedInput } from "@/provider/discovery-cache"
 import { ProviderDiscoveryError, type DiscoveredModel } from "@/provider/model-discovery"
+import { tmpRootAsync, tmpRootSharedAsync } from "../fixture/fixture"
 
 // Point the data root at a throwaway dir so cache files (Global.Path.cache) never touch the real
 // home. Global reads DEEPAGENT_CODE_HOME lazily on each Path.cache access.
@@ -15,7 +16,7 @@ let tmp: string
 let prevHome: string | undefined
 
 beforeAll(async () => {
-  tmp = await mkdtemp(path.join(os.tmpdir(), "discovery-cache-"))
+  tmp = await tmpRootSharedAsync()
   prevHome = process.env.DEEPAGENT_CODE_HOME
   process.env.DEEPAGENT_CODE_HOME = tmp
 })
@@ -133,6 +134,25 @@ describe("discoverModelsCached", () => {
       ProviderDiscoveryError,
     )
     expect(calls).toBe(3)
+  })
+
+  test("bounds authentication-failure throttles under high-cardinality endpoints", async () => {
+    let calls = 0
+    const fetch = async () => {
+      calls++
+      throw new ProviderDiscoveryError("revoked", 401)
+    }
+    const inputs = Array.from({ length: 129 }, (_, index) => baseInput(`bounded-auth-${index}`))
+
+    for (const input of inputs)
+      await expect(run((fs, flock) => discoverModelsCached(fs, flock, input, fetch))).rejects.toBeInstanceOf(
+        ProviderDiscoveryError,
+      )
+    await expect(run((fs, flock) => discoverModelsCached(fs, flock, inputs[0], fetch))).rejects.toBeInstanceOf(
+      ProviderDiscoveryError,
+    )
+
+    expect(calls).toBe(130)
   })
 
   test("returns [] when there is no cache and the fetch fails", async () => {

@@ -6,6 +6,7 @@ export const SESSION_PREFETCH_TTL = 15_000
 
 // Keep every client page request within the server's bounded MessageV2 contract.
 export const SESSION_MESSAGE_PAGE_LIMIT = 100
+export const SESSION_PREFETCH_CACHE_LIMIT = 256
 
 type Meta = {
   limit: number
@@ -29,8 +30,32 @@ export function shouldSkipSessionPrefetch(input: { message: boolean; info?: Meta
 const cache = new Map<string, Meta>()
 const inflight = new Map<string, Promise<Meta | undefined>>()
 const rev = new Map<string, number>()
+let nextRevision = 0
 
-const version = (id: string) => rev.get(id) ?? 0
+const version = (id: string) => {
+  const current = rev.get(id)
+  if (current !== undefined) return current
+  const next = ++nextRevision
+  rev.set(id, next)
+  return next
+}
+
+const invalidate = (id: string) => {
+  const active = inflight.get(id)
+  const invalidated = ++nextRevision
+  rev.set(id, invalidated)
+  cache.delete(id)
+  inflight.delete(id)
+  if (!active) {
+    rev.delete(id)
+    return
+  }
+  void active
+    .finally(() => {
+      if (!inflight.has(id) && rev.get(id) === invalidated) rev.delete(id)
+    })
+    .catch(() => {})
+}
 
 export function getSessionPrefetch(scope: ServerScope, directory: string, sessionID: string) {
   return cache.get(key(scope, directory, sessionID))
@@ -43,12 +68,12 @@ export function getSessionPrefetchPromise(scope: ServerScope, directory: string,
 export function clearSessionPrefetchInflight(scope: ServerScope) {
   const prefix = ScopedKey.prefix(scope)
   for (const id of inflight.keys()) {
-    if (id.startsWith(prefix)) inflight.delete(id)
+    if (id.startsWith(prefix)) invalidate(id)
   }
 }
 
 export function isSessionPrefetchCurrent(scope: ServerScope, directory: string, sessionID: string, value: number) {
-  return version(key(scope, directory, sessionID)) === value
+  return rev.get(key(scope, directory, sessionID)) === value
 }
 
 export function runSessionPrefetch(input: {
@@ -60,11 +85,13 @@ export function runSessionPrefetch(input: {
   const id = key(input.scope, input.directory, input.sessionID)
   const pending = inflight.get(id)
   if (pending) return pending
+  if (inflight.size >= SESSION_PREFETCH_CACHE_LIMIT) return Promise.resolve(undefined)
 
   const value = version(id)
 
   const promise = input.task(value).finally(() => {
     if (inflight.get(id) === promise) inflight.delete(id)
+    if (!inflight.has(id) && rev.get(id) === value) rev.delete(id)
   })
 
   inflight.set(id, promise)
@@ -80,7 +107,9 @@ export function setSessionPrefetch(input: {
   complete: boolean
   at?: number
 }) {
-  cache.set(key(input.scope, input.directory, input.sessionID), {
+  const id = key(input.scope, input.directory, input.sessionID)
+  if (!cache.has(id) && cache.size >= SESSION_PREFETCH_CACHE_LIMIT) cache.delete(cache.keys().next().value!)
+  cache.set(id, {
     limit: input.limit,
     cursor: input.cursor,
     complete: input.complete,
@@ -92,19 +121,15 @@ export function clearSessionPrefetch(scope: ServerScope, directory: string, sess
   for (const sessionID of sessionIDs) {
     if (!sessionID) continue
     const id = key(scope, directory, sessionID)
-    rev.set(id, version(id) + 1)
-    cache.delete(id)
-    inflight.delete(id)
+    invalidate(id)
   }
 }
 
 export function clearSessionPrefetchDirectory(scope: ServerScope, directory: string) {
   const prefix = ScopedKey.prefix(scope, directory)
-  const keys = new Set([...cache.keys(), ...inflight.keys()])
+  const keys = new Set([...cache.keys(), ...inflight.keys(), ...rev.keys()])
   for (const id of keys) {
     if (!id.startsWith(prefix)) continue
-    rev.set(id, version(id) + 1)
-    cache.delete(id)
-    inflight.delete(id)
+    invalidate(id)
   }
 }

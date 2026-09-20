@@ -6,7 +6,7 @@ import { SelectionWriter } from "../../src/context-federation/selection-writer"
 import { AdvanceSelection } from "../../src/context-federation/advance-selection"
 import { budgetSelection } from "../../src/context-federation/selection-budget"
 import { Hash } from "../../src/util/hash"
-import { type QueryEnvelope, type QueryResultV2 } from "../../src/context-federation/resolver-v2"
+import { type QueryEnvelope, type QueryResultV2, type GraphStatusRecord } from "../../src/context-federation/resolver-v2"
 import {
   SessionActivityTable,
   SessionContextSelectionTable,
@@ -88,7 +88,7 @@ function envelope(overrides?: Partial<QueryEnvelope>): QueryEnvelope {
   }
 }
 
-function status(graph: GraphKind, state: GraphStatus["status"], revision: string, candidateCount: number): GraphStatus {
+function status(graph: GraphKind, state: GraphStatus["status"], revision: string, candidateCount: number): GraphStatusRecord {
   return {
     graph,
     status: state,
@@ -98,6 +98,7 @@ function status(graph: GraphKind, state: GraphStatus["status"], revision: string
     latencyMs: 1,
     candidateCount,
     reasonCode: state === "ready" ? "none" : state === "denied" ? "scope_denied" : "none",
+    rejectedCount: 0,
   }
 }
 
@@ -114,7 +115,7 @@ function result(candidates: readonly ContextCandidate[]): QueryResultV2 {
     status: status(graph, byGraph.get(graph)?.length ? "ready" : "empty", `${graph}:1`, byGraph.get(graph)?.length ?? 0),
     candidates: byGraph.get(graph) ?? [],
   }))
-  const graphStatuses = Object.fromEntries(results.map((entry) => [entry.graph, entry.status])) as Record<GraphKind, GraphStatus>
+  const graphStatuses = Object.fromEntries(results.map((entry) => [entry.graph, entry.status])) as Record<GraphKind, GraphStatusRecord>
   return {
     queryFingerprint: "qf-advance",
     authorizationFingerprint: "af-advance",
@@ -229,7 +230,7 @@ function seedSession() {
     yield* db.insert(ProjectTable).values({ id: projectId, worktree: AbsolutePath.make("/tmp/advance-test"), sandboxes: [] }).run()
     yield* db
       .insert(SessionTable)
-      .values({ id: sessionId, project_id: projectId, slug: "advance-test", directory: "/tmp/advance-test", title: "Advance test", version: "test" })
+      .values({ id: sessionId, project_id: projectId, slug: "advance-test", directory: "/tmp/advance-test", title: "Advance test", version: "test", time_suspended: 101 })
       .run()
     yield* db
       .insert(SessionInputTable)

@@ -14,8 +14,24 @@ export function fromRow(row: typeof SessionTable.$inferSelect): SessionSchema.In
     id: SessionSchema.ID.make(row.id),
     projectID: ProjectV2.ID.make(row.project_id),
     title: row.title,
+    summary:
+      row.summary_additions !== null || row.summary_deletions !== null || row.summary_files !== null
+        ? {
+            additions: row.summary_additions ?? 0,
+            deletions: row.summary_deletions ?? 0,
+            files: row.summary_files ?? 0,
+            diffManifest: row.summary_diff_manifest
+              ? { ...row.summary_diff_manifest, truncationReasons: [...row.summary_diff_manifest.truncationReasons] }
+              : undefined,
+          }
+        : undefined,
     parentID: row.parent_id ? SessionSchema.ID.make(row.parent_id) : undefined,
     agent: row.agent ? AgentV2.ID.make(row.agent) : undefined,
+    permissions: (row.permission ?? []).map((rule) =>
+      "permission" in rule
+        ? { action: rule.permission, resource: rule.pattern, effect: rule.action }
+        : { action: rule.action, resource: rule.resource, effect: rule.effect },
+    ),
     model: row.model
       ? {
           id: ModelV2.ID.make(row.model.id),
@@ -43,5 +59,10 @@ export function fromRow(row: typeof SessionTable.$inferSelect): SessionSchema.In
       updated: DateTime.makeUnsafe(row.time_updated),
       archived: row.time_archived ? DateTime.makeUnsafe(row.time_archived) : undefined,
     },
+    metadata: row.metadata ?? undefined,
+    share: row.share_url ? { url: row.share_url } : undefined,
+    preview: row.preview ?? undefined,
   })
 }
+
+export * as SessionInfo from "./info"

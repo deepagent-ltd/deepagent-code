@@ -28,9 +28,9 @@ npm install @deepagent-code/sdk
 建立一個 deepagent-code 實例：
 
 ```javascript
-import { createOpencode } from "@deepagent-code/sdk"
+import { createDeepAgentCode } from "@deepagent-code/sdk"
 
-const { client } = await createOpencode()
+const { client } = await createDeepAgentCode()
 ```
 
 這會同時啟動伺服器和用戶端。
@@ -52,9 +52,9 @@ const { client } = await createOpencode()
 您可以傳入一個設定物件來自訂行為。實例仍然會讀取您的 `deepagent-code.json`，但您可以透過內嵌方式覆寫或新增設定：
 
 ```javascript
-import { createOpencode } from "@deepagent-code/sdk"
+import { createDeepAgentCode } from "@deepagent-code/sdk"
 
-const deepagent-code = await createOpencode({
+const deepagentCode = await createDeepAgentCode({
   hostname: "127.0.0.1",
   port: 4096,
   config: {
@@ -62,9 +62,9 @@ const deepagent-code = await createOpencode({
   },
 })
 
-console.log(`Server running at ${deepagent-code.server.url}`)
+console.log(`Server running at ${deepagentCode.server.url}`)
 
-deepagent-code.server.close()
+deepagentCode.server.close()
 ```
 
 ## 僅用戶端模式
@@ -72,9 +72,9 @@ deepagent-code.server.close()
 如果您已經有一個正在執行的 deepagent-code 實例，可以建立一個用戶端實例來連線：
 
 ```javascript
-import { createOpencodeClient } from "@deepagent-code/sdk"
+import { createDeepAgentCodeClient } from "@deepagent-code/sdk"
 
-const client = createOpencodeClient({
+const client = createDeepAgentCodeClient({
   baseUrl: "http://localhost:4096",
 })
 ```

@@ -16,6 +16,7 @@ import type { Prompt } from "./prompt"
 import type { SessionInput } from "./input"
 import type { Snapshot } from "../snapshot"
 import { PermissionV1 } from "../v1/permission"
+import { PermissionV2 } from "../permission"
 import { ProjectV2 } from "../project"
 import type { SessionSchema } from "./schema"
 import type { MessageID, PartID, SessionV1 } from "../v1/session"
@@ -57,8 +58,11 @@ export const SessionTable = sqliteTable(
     tokens_cache_read: integer().notNull().default(0),
     tokens_cache_write: integer().notNull().default(0),
     mutation_epoch: integer().notNull().default(0),
+    // Highest durable interrupt event admitted for this Session. Advisory wakes at or below this
+    // aggregate sequence must remain suppressed across process restarts.
+    interrupt_seq: integer(),
     revert: text({ mode: "json" }).$type<{ messageID: MessageID; partID?: PartID; snapshot?: string; diff?: string }>(),
-    permission: text({ mode: "json" }).$type<PermissionV1.Ruleset>(),
+    permission: text({ mode: "json" }).$type<PermissionV1.Ruleset | PermissionV2.Ruleset>(),
     agent: text(),
     model: text({ mode: "json" }).$type<{
       id: string
@@ -342,6 +346,26 @@ export const SessionHistoryStateTable = sqliteTable("session_history_state", {
   time_updated: integer().notNull(),
 })
 
+// W4-6 — durable content-fingerprint cursor for the journal→V1-wire projection egress. One row
+// per projected V1 entity (message or part); the fingerprint is the JSON of the last published
+// wire payload. Replay/overlap windows re-derive identical payloads and skip (exactly-once
+// publish), while a genuine state transition always differs and re-publishes. Replaces the
+// F-17 in-process mirrorPublished map, which was drain-local and lost on crash.
+export const SessionWireProjectionTable = sqliteTable(
+  "session_wire_projection",
+  {
+    session_id: text()
+      .$type<SessionSchema.ID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    entity: text().notNull(),
+    entity_id: text().notNull(),
+    fingerprint: text().notNull(),
+    time_updated: integer().notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.session_id, table.entity, table.entity_id] })],
+)
+
 // Immutable ordered replacement membership for the legacy Session prompt authority.
 // The row is the durable model-visible base; physical messages added after the
 // epoch boundary are appended by the production projector.
@@ -529,6 +553,13 @@ export const TaskRunTable = sqliteTable(
     run_id: text().primaryKey(),
     root_run_id: text(),
     request_hash: text().notNull(),
+    /**
+     * Which execution authority owns this row: historical rows stay `'v1'` (the legacy app-layer
+     * TaskDispatcher) while every row written by the Core V2 `TaskRunAuthority` carries `'v2'`.
+     * Claim/recovery paths filter on `'v2'` so the native dispatcher can never pick up old V1
+     * work, and V1 callers keep ignoring V2 rows.
+     */
+    execution_runtime: text().$type<"v1" | "v2">().notNull().default("v1"),
     parent_session_id: text()
       .$type<SessionSchema.ID>()
       .notNull()

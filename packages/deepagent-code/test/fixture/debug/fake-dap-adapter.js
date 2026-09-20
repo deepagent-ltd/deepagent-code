@@ -156,6 +156,13 @@ function handle(raw) {
       setTimeout(() => process.exit(0), 10)
       break
 
+    case "hang":
+      break
+
+    case "crash":
+      process.exit(7)
+      break
+
     default:
       // Unknown command: respond unsuccessfully, like a real adapter would.
       respond(req, undefined, false)

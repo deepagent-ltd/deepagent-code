@@ -11,12 +11,13 @@ import {
 } from "../../src/deepagent/document-store"
 import { writeFileAtomic, writeFileExclusive } from "../../src/deepagent/atomic-write"
 import { DurableKnowledgeStore } from "../../src/deepagent/durable-knowledge-store"
+import { tmpRoot, tmpRootShared } from "../fixture/tmpdir"
 
 let root: string
 let store: DocumentStore
 
 beforeEach(() => {
-  root = mkdtempSync(path.join(tmpdir(), "deepagent-ds-"))
+  root = mkdtempSync(tmpRoot())
   store = new DocumentStore(root)
 })
 afterEach(() => rmSync(root, { recursive: true, force: true }))
@@ -136,7 +137,13 @@ describe("V3 DocumentStore", () => {
   // the constructor). The bad file is skipped; valid docs are still indexed.
   test("rebuildIndex skips a corrupt doc file and still opens the store", () => {
     const a = store.create(design("a", "valid design a"))
-    const b = store.create({ type: "candidate", scope: "run:t1", body: "b", description: "valid cand b", provenance: prov })
+    const b = store.create({
+      type: "candidate",
+      scope: "run:t1",
+      body: "b",
+      description: "valid cand b",
+      provenance: prov,
+    })
     // Drop a truncated/partial-write .json into a type dir alongside the valid files.
     const badDir = path.join(root, "docs", "design")
     mkdirSync(badDir, { recursive: true })
@@ -322,7 +329,7 @@ describe("F30-1 DocumentStore.shared same-process authority", () => {
   })
 
   test("shared handles for DIFFERENT roots are isolated", () => {
-    const otherRoot = mkdtempSync(path.join(tmpdir(), "deepagent-ds-shared-other-"))
+    const otherRoot = mkdtempSync(tmpRootShared())
     try {
       const a = DocumentStore.shared(root).create(design("in root"))
       const other = DocumentStore.shared(otherRoot)
@@ -346,7 +353,13 @@ describe("V3.8 Phase 0 graph-model extension (code_symbol / ledger / bridge)", (
   })
 
   test("code_symbol create/link/neighbors round-trip (references code->doc)", () => {
-    const design = store.create({ type: "design", scope: "durable:project:p1", body: "d", description: "auth design", provenance: prov })
+    const design = store.create({
+      type: "design",
+      scope: "durable:project:p1",
+      body: "d",
+      description: "auth design",
+      provenance: prov,
+    })
     const code = store.create(codeSymbol())
     expect(code.id).toMatch(/^doc:code_symbol:/)
     expect(code.version).toBe(1)
@@ -356,15 +369,33 @@ describe("V3.8 Phase 0 graph-model extension (code_symbol / ledger / bridge)", (
   })
 
   test("code_symbol implements requirements edge round-trips", () => {
-    const req = store.create({ type: "requirements", scope: "durable:project:p1", body: "r", description: "must auth", provenance: prov })
+    const req = store.create({
+      type: "requirements",
+      scope: "durable:project:p1",
+      body: "r",
+      description: "must auth",
+      provenance: prov,
+    })
     const code = store.create(codeSymbol("login handler"))
     store.link(code.id, "implements", req.id)
     expect(store.neighbors(code.id, ["implements"], 1).some((x) => x.id === req.id)).toBe(true)
   })
 
   test("ledger and bridge create + reuse existing derived_from/refines edges", () => {
-    const ledger = store.create({ type: "ledger", scope: "run:t1", body: "{}", description: "session ledger", provenance: prov })
-    const bridge = store.create({ type: "bridge", scope: "durable:project:p1", body: "{}", description: "project bridge", provenance: prov })
+    const ledger = store.create({
+      type: "ledger",
+      scope: "run:t1",
+      body: "{}",
+      description: "session ledger",
+      provenance: prov,
+    })
+    const bridge = store.create({
+      type: "bridge",
+      scope: "durable:project:p1",
+      body: "{}",
+      description: "project bridge",
+      provenance: prov,
+    })
     expect(ledger.id).toMatch(/^doc:ledger:/)
     expect(bridge.id).toMatch(/^doc:bridge:/)
     // App-A reuse: bridge refines the session ledger it was distilled from.
@@ -381,10 +412,16 @@ describe("V3.8 Phase 0 graph-model extension (code_symbol / ledger / bridge)", (
   })
 
   test("linking a new-type node across two stores is rejected by INV-3", () => {
-    const otherRoot = mkdtempSync(path.join(tmpdir(), "deepagent-ds-other-"))
+    const otherRoot = mkdtempSync(tmpRootShared())
     try {
       const other = new DocumentStore(otherRoot)
-      const remoteDesign = other.create({ type: "design", scope: "durable:project:p1", body: "d", description: "remote design", provenance: prov })
+      const remoteDesign = other.create({
+        type: "design",
+        scope: "durable:project:p1",
+        body: "d",
+        description: "remote design",
+        provenance: prov,
+      })
       const code = store.create(codeSymbol())
       // The link target lives in `other`, not `store` — INV-3 (link target must exist) rejects it.
       expect(() => store.link(code.id, "references", remoteDesign.id)).toThrow()
@@ -414,9 +451,7 @@ describe("V3.8 Phase 0 graph-model extension (code_symbol / ledger / bridge)", (
       })
     }
     // Requesting them explicitly still yields nothing: the whitelist filters them at the type gate.
-    expect(
-      durable.retrieve({ types: ["code_symbol", "ledger", "bridge"], projectId: "p1", limit: 10 }),
-    ).toHaveLength(0)
+    expect(durable.retrieve({ types: ["code_symbol", "ledger", "bridge"], projectId: "p1", limit: 10 })).toHaveLength(0)
   })
 })
 

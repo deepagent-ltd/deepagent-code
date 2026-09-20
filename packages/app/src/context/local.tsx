@@ -27,6 +27,7 @@ type Saved = {
 
 const WORKSPACE_KEY = "__workspace__"
 const handoff = new Map<string, State>()
+const HANDOFF_LIMIT = 128
 
 const handoffKey = (scope: ServerScope, dir: string, id: string) => ScopedKey.from(scope, dir, id)
 
@@ -383,7 +384,9 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
             return
           }
 
-          handoff.set(handoffKey(serverSDK.scope, dir, session), next)
+          const key = handoffKey(serverSDK.scope, dir, session)
+          if (!handoff.has(key) && handoff.size >= HANDOFF_LIMIT) handoff.delete(handoff.keys().next().value!)
+          handoff.set(key, next)
           setStore("draft", undefined)
         },
         restore(msg: { sessionID: string; agent: string; model: ModelKey }) {

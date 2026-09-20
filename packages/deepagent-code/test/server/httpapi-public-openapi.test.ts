@@ -89,21 +89,31 @@ describe("PublicApi OpenAPI v2 errors", () => {
     )
   })
 
-  test("documents nested legacy global sync events", () => {
+  test("documents nested V2 global sync events", () => {
     const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
-    const schema = spec.components.schemas.SyncEventSessionCreated
+    // Every registered sync version is declared as its own version-stamped component: the sync
+    // channel emits both legacy V1 writes and native V2 facts, and the unversioned component
+    // name was lossy (it could only describe one of them).
+    expect(spec.components.schemas.SyncEventSessionCreated).toBeUndefined()
 
-    expect(schema?.required).toEqual(["type", "id", "syncEvent"])
-    expect(schema?.properties?.type?.enum).toEqual(["sync"])
-    expect(schema?.properties?.syncEvent).toMatchObject({
-      required: ["type", "id", "seq", "aggregateID", "data"],
-      properties: {
-        type: { enum: ["session.created.1"] },
-        id: { type: "string" },
-        seq: { type: "number" },
-        aggregateID: { type: "string" },
-      },
-    })
+    for (const [component, versionedType] of [
+      ["SyncEventSessionCreated1", "session.created.1"],
+      ["SyncEventSessionCreated2", "session.created.2"],
+    ] as const) {
+      const schema = spec.components.schemas[component]
+
+      expect(schema?.required).toEqual(["type", "id", "syncEvent"])
+      expect(schema?.properties?.type?.enum).toEqual(["sync"])
+      expect(schema?.properties?.syncEvent).toMatchObject({
+        required: ["type", "id", "seq", "aggregateID", "data"],
+        properties: {
+          type: { enum: [versionedType] },
+          id: { type: "string" },
+          seq: { type: "number" },
+          aggregateID: { type: "string" },
+        },
+      })
+    }
   })
 
   test("preserves /api auth responses", () => {

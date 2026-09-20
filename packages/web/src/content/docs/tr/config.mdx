@@ -13,7 +13,7 @@ deepagent-code hem **JSON** hem de **JSONC** (JSON Yorumlarla birlikte) formatla
 
 ```jsonc title="deepagent-code.jsonc"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   // Theme configuration
   "theme": "deepagent-code",
   "model": "anthropic/claude-sonnet-4-5",
@@ -146,7 +146,7 @@ deepagent-code run "Hello world"
 
 ## Şema
 
-Yapılandırma dosyası [**`deepagent-code.ai/config.json`**](https://deepagent-code.ai/config.json)'da tanımlanan bir şemaya sahiptir.
+Yapılandırma dosyası [**`ai.deepagent.ltd/config.schema.json`**](https://ai.deepagent.ltd/config.schema.json)'da tanımlanan bir şemaya sahiptir.
 
 Editörünüz şemaya göre doğrulama ve otomatik tamamlama yapabilmelidir.
 
@@ -158,7 +158,7 @@ TUI'ye özgü ayarları `tui` seçeneği aracılığıyla yapılandırabilirsini
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "tui": {
     "scroll_speed": 3,
     "scroll_acceleration": {
@@ -185,7 +185,7 @@ Mevcut seçenekler:
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "server": {
     "port": 4096,
     "hostname": "0.0.0.0",
@@ -214,7 +214,7 @@ Bir LLM'nin kullanabileceği araçları `tools` seçeneği aracılığıyla yön
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "tools": {
     "write": false,
     "bash": false
@@ -232,7 +232,7 @@ deepagent-code yapılandırmanızda kullanmak istediğiniz sağlayıcıları ve 
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {},
   "model": "anthropic/claude-sonnet-4-5",
   "small_model": "anthropic/claude-haiku-4-5"
@@ -245,7 +245,7 @@ Sağlayıcı seçenekleri `timeout` ve `setCacheKey` içerebilir:
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "anthropic": {
       "options": {
@@ -274,7 +274,7 @@ Amazon Bedrock, AWS'a özgü yapılandırmayı destekler:
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "provider": {
     "amazon-bedrock": {
       "options": {
@@ -305,7 +305,7 @@ deepagent-code yapılandırmanızda kullanmak istediğiniz temayı `theme` seçe
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "theme": ""
 }
 ```
@@ -320,7 +320,7 @@ deepagent-code yapılandırmanızda kullanmak istediğiniz temayı `theme` seçe
 
 ```jsonc title="deepagent-code.jsonc"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "agent": {
     "code-reviewer": {
       "description": "Reviews code for best practices and potential issues",
@@ -347,7 +347,7 @@ Agent'ları `~/.config/deepagent-code/agents/` veya `.deepagent-code/agents/` i�
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "default_agent": "plan"
 }
 ```
@@ -364,7 +364,7 @@ Bu ayar tüm arayüzler için geçerlidir: TUI, CLI (`deepagent-code run`), masa
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "share": "manual"
 }
 ```
@@ -385,7 +385,7 @@ Varsayılan olarak paylaşım, `/share` komutunu kullanarak konuşmaları açık
 
 ```jsonc title="deepagent-code.jsonc"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "command": {
     "test": {
       "template": "Run the full test suite with coverage report and show any failures.\nFocus on the failing tests and suggest fixes.",
@@ -411,7 +411,7 @@ Tuş atamalarınızı `keybinds` seçeneği aracılığıyla özelleştirebilirs
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "keybinds": {}
 }
 ```
@@ -426,7 +426,7 @@ deepagent-code başlatıldığında yeni güncellemeleri otomatik olarak indirec
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "autoupdate": false
 }
 ```
@@ -442,7 +442,7 @@ Kod formatlayıcılarını `formatter` seçeneği aracılığıyla yapılandıra
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "formatter": {
     "prettier": {
       "disabled": true
@@ -470,7 +470,7 @@ Varsayılan olarak, deepagent-code açık bir onay gerektirmeden **tüm işlemle
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": {
     "edit": "ask",
     "bash": "ask"
@@ -488,7 +488,7 @@ Bağlam sıkıştırma davranışını `compaction` seçeneği aracılığıyla 
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "compaction": {
     "auto": true,
     "prune": false,
@@ -509,7 +509,7 @@ Dosya izleyicinin yok sayma kalıplarını `watcher` seçeneği aracılığıyla
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "watcher": {
     "ignore": ["node_modules/**", "dist/**", ".git/**"]
   }
@@ -526,7 +526,7 @@ Kullanmak istediğiniz MCP sunucularını `mcp` seçeneği aracılığıyla yap�
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "mcp": {}
 }
 ```
@@ -543,7 +543,7 @@ Eklenti dosyalarını `.deepagent-code/plugins/` veya `~/.config/deepagent-code/
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "plugin": ["deepagent-code-helicone-session", "@my-org/custom-plugin"]
 }
 ```
@@ -558,7 +558,7 @@ Kullandığınız modele ilişkin talimatları `instructions` seçeneği aracıl
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "instructions": ["CONTRIBUTING.md", "docs/guidelines.md", ".cursor/rules/*.md"]
 }
 ```
@@ -573,7 +573,7 @@ Bu, talimat dosyalarına giden bir dizi yolu ve glob desenini alır. [Kurallar h
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "disabled_providers": ["openai", "gemini"]
 }
 ```
@@ -596,7 +596,7 @@ Bu, talimat dosyalarına giden bir dizi yolu ve glob desenini alır. [Kurallar h
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "enabled_providers": ["anthropic", "openai"]
 }
 ```
@@ -617,7 +617,7 @@ Bir sağlayıcı hem `enabled_providers` hem de `disabled_providers`'de görün�
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "experimental": {}
 }
 ```
@@ -640,7 +640,7 @@ Ortam değişkenlerini değiştirmek için `{env:VARIABLE_NAME}` kullanın:
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "model": "{env:DEEPAGENT_CODE_MODEL}",
   "provider": {
     "anthropic": {
@@ -663,7 +663,7 @@ Bir dosyanın biçimini değiştirmek için `{file:path/to/file}` kullanın:
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "instructions": ["./custom-instructions.md"],
   "provider": {
     "openai": {

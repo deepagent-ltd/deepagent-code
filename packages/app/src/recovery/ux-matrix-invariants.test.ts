@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { createRecoveryLifecycle } from "./recovery-lifecycle-state"
+import { createRecoveryLifecycle, executionStatusOf } from "./recovery-lifecycle-state"
 import {
   descriptorDeadEnd,
   hasExecutableExit,
@@ -104,5 +104,23 @@ describe("C6-10 UX matrix fixture invariants", () => {
     const state = lc.snapshot().sessions.get("ses-1")!
     expect(state.lastError?.commandId).toBe("c1")
     expect((state.lastError?.error as { data: { code: string } }).data.code).toBe("cursor_gap_exceeded")
+  })
+
+  test("execution status view: open turn wins, terminal shows the last outcome, quiet session stays hidden", () => {
+    // W9.5 — the RecoveryDock line renders ONLY from this view; a session that never ran an
+    // execution turn must yield undefined (zero pixel surface for the default state).
+    const lc = createRecoveryLifecycle()
+    lc.onEvent({ type: "session-switch", sessionID: "ses-quiet", cursor: 0 })
+    expect(executionStatusOf(lc.snapshot().sessions.get("ses-quiet")!)).toBeUndefined()
+
+    lc.onEvent({ type: "execution-started", sessionID: "ses-1", timestamp: 1 })
+    expect(executionStatusOf(lc.snapshot().sessions.get("ses-1")!)).toEqual({ kind: "running", number: 1 })
+
+    lc.onEvent({ type: "execution-succeeded", sessionID: "ses-1", timestamp: 2 })
+    expect(executionStatusOf(lc.snapshot().sessions.get("ses-1")!)).toEqual({ kind: "terminal", state: "succeeded", number: 1 })
+
+    lc.onEvent({ type: "execution-started", sessionID: "ses-1", timestamp: 3 })
+    lc.onEvent({ type: "execution-failed", sessionID: "ses-1", timestamp: 4, error: new Error("boom") })
+    expect(executionStatusOf(lc.snapshot().sessions.get("ses-1")!)).toEqual({ kind: "terminal", state: "failed", number: 2 })
   })
 })

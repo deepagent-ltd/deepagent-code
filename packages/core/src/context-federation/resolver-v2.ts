@@ -1,10 +1,9 @@
 export * as SessionContextResolverV2 from "./resolver-v2"
 
-import { Context, Effect, Layer, Schema } from "effect"
+import { Context, Effect, Layer } from "effect"
 import { Hash } from "../util/hash"
 import { CanonicalJson } from "../util/canonical-json"
 import {
-  GraphStatus as GraphStatusSchema,
   type GraphKind,
   type GraphStatus,
   type GraphStatusReasonCode,
@@ -84,9 +83,19 @@ export type QueryEnvelope = {
 /** Per-graph resolution output: the graph's status plus the candidates it produced. */
 export type GraphResultV2 = {
   readonly graph: GraphKind
-  readonly status: GraphStatus
+  readonly status: GraphStatusRecord
   readonly candidates: readonly ContextCandidate[]
 }
+
+/**
+ * W3.4 — RUNTIME graph status (the record the resolver produces and the selection row stores):
+ * the frozen contract `GraphStatus` plus `rejectedCount`. The contract schema is NOT extended
+ * (frozen; design §6 / audit ruling "runtime 记录补字段、contract 保持不变"): consumers that
+ * decode against the contract schema still decode the contract fields, while the runtime record
+ * distinguishes "no data" (rejectedCount 0, empty) from "all candidates were rejected by
+ * authorization" (empty with rejectedCount > 0).
+ */
+export type GraphStatusRecord = GraphStatus & { readonly rejectedCount: number }
 
 /**
  * Deterministic resolution result. Every invocation produces all four graph
@@ -100,7 +109,7 @@ export type QueryResultV2 = {
   readonly membership: SelectionMembership
   readonly location: SelectionLocation
   readonly results: readonly GraphResultV2[]
-  readonly graphStatuses: Readonly<Record<GraphKind, GraphStatus>>
+  readonly graphStatuses: Readonly<Record<GraphKind, GraphStatusRecord>>
   readonly candidates: readonly ContextCandidate[]
   readonly successorRebuild: SuccessorRebuildSignal | undefined
   readonly truncated: boolean
@@ -147,11 +156,11 @@ export const resolveGraphs = Effect.fn("SessionContextResolverV2.resolveGraphs")
     const resolved = yield* Effect.forEach(
       GraphOrder,
       (graph) => resolveGraph(envelope, graph, adapters[graph], perGraphTimeoutMs, startedAt),
-      { concurrency: "unbounded" },
+      { concurrency: 4 },
     )
     const graphStatuses = Object.fromEntries(
       resolved.map((entry) => [entry.graph, entry.status]),
-    ) as Record<GraphKind, GraphStatus>
+    ) as Record<GraphKind, GraphStatusRecord>
     const successors = resolved.flatMap((entry) => (entry.successor ? [entry.successor] : []))
     const candidates = resolved.flatMap((entry) => entry.candidates).toSorted(compareCandidates)
     return {
@@ -180,7 +189,7 @@ function resolveGraph(
   adapter: V2Adapter | undefined,
   perGraphTimeoutMs: number,
   startedAt: number,
-): Effect.Effect<{ readonly graph: GraphKind; readonly status: GraphStatus; readonly candidates: readonly ContextCandidate[]; readonly successor?: SuccessorRebuildSignal }> {
+): Effect.Effect<{ readonly graph: GraphKind; readonly status: GraphStatusRecord; readonly candidates: readonly ContextCandidate[]; readonly successor?: SuccessorRebuildSignal }> {
   const denial = graphDenial(envelope, graph)
   if (denial) {
     return Effect.succeed({
@@ -236,10 +245,14 @@ function finalizeGraph(
   adapter: V2Adapter,
   result: { readonly candidates: readonly ContextCandidate[]; readonly revision: string; readonly observedMutationEpoch: number; readonly available: boolean; readonly unavailableReasonCode?: GraphStatusReasonCode },
   startedAt: number,
-): { readonly graph: GraphKind; readonly status: GraphStatus; readonly candidates: readonly ContextCandidate[]; readonly successor?: SuccessorRebuildSignal } {
-  const candidates = result.candidates.filter((item) =>
+): { readonly graph: GraphKind; readonly status: GraphStatusRecord; readonly candidates: readonly ContextCandidate[]; readonly successor?: SuccessorRebuildSignal } {
+  const filtered = result.candidates.filter((item) =>
     ContextAuthorization.authorizeScope(item.ref, envelope.principal).allowed,
   )
+  // W3.4: post-filter rejection is recorded, so an `empty` status distinguishes "the source had no
+  // data" (rejectedCount 0) from "the source had data but every candidate was rejected".
+  const rejectedCount = result.candidates.length - filtered.length
+  const candidates = filtered
   const state =
     result.unavailableReasonCode === "source_timeout"
       ? "timeout"
@@ -268,6 +281,7 @@ function finalizeGraph(
       candidateCount: candidates.length,
       adapterVersion: adapter.adapterVersion,
       revision: result.revision,
+      rejectedCount,
     }),
     candidates,
     ...(successor ? { successor } : {}),
@@ -301,7 +315,14 @@ function SuccessorFor(
       observed: String(envelope.observedLocationMutationEpoch ?? 0),
     })
   }
-  if (graph === "knowledge" && state === "degraded_unavailable") {
+  // W3.3: a released-snapshot drift is ONLY a drift when an expectation existed (the envelope
+  // bound a snapshot). A degraded knowledge graph with NO bound snapshot (e.g. staged
+  // source_disabled or an unbound snapshot) is an explicit degraded status, never a successor signal.
+  if (
+    graph === "knowledge" &&
+    state === "degraded_unavailable" &&
+    envelope.releasedKnowledge.binding === "bound"
+  ) {
     signals.push({
       trigger: "released_snapshot_drift",
       expected: envelope.releasedKnowledge.snapshotId,
@@ -322,6 +343,7 @@ function pickSuccessor(signals: readonly SuccessorRebuildSignal[]): SuccessorReb
 function toAdapterInput(envelope: QueryEnvelope): V2AdapterInput {
   return {
     query: envelope.query,
+    intent: envelope.queryIntent,
     ...(envelope.entityIds && envelope.entityIds.length > 0 ? { entityIds: envelope.entityIds } : {}),
     limit: envelope.limit,
     now: envelope.now ?? Date.now(),
@@ -358,8 +380,11 @@ function buildStatus(input: {
   readonly observedMutationEpoch: number
   readonly latencyMs: number
   readonly candidateCount: number
-}): GraphStatus {
-  return decodeStatus({
+  readonly rejectedCount?: number
+}): GraphStatusRecord {
+  // W3.4: the runtime record is built directly (contract schema stays frozen — no schema decode
+  // here); the extra `rejectedCount` is intentionally NOT part of the contract `GraphStatus`.
+  return {
     graph: input.graph,
     status: input.state,
     revision: input.revision,
@@ -368,10 +393,9 @@ function buildStatus(input: {
     latencyMs: input.latencyMs,
     candidateCount: input.candidateCount,
     reasonCode: input.reasonCode,
-  })
+    rejectedCount: input.rejectedCount ?? 0,
+  }
 }
-
-const decodeStatus = Schema.decodeUnknownSync(GraphStatusSchema, { onExcessProperty: "error" })
 
 // ---------------------------------------------------------------------------
 // fingerprint helpers (deterministic, clock/abs-path independent)

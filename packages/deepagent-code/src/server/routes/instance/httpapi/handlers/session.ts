@@ -11,13 +11,17 @@ import { SessionShare } from "@/share/session"
 import { Session } from "@/session/session"
 import { SessionCompaction } from "@/session/compaction"
 import { MessageV2 } from "@/session/message-v2"
-import { SessionPrompt } from "@/session/prompt"
+import { SessionPromptV2 } from "@/session/prompt-v2"
+import { SessionCommandV2 } from "@/session/command-v2"
 import { SessionPromptIntent } from "@/session/prompt-intent"
 import { LegacyExecutionUnavailable, guardLegacyExecution } from "@/session/legacy-execution-zero"
+import { AbsolutePath } from "@deepagent-code/core/schema"
+import { AgentV2 } from "@deepagent-code/core/agent"
+import { SessionV2 } from "@deepagent-code/core/session"
+import { SessionRuntimeStatus } from "@deepagent-code/core/session/runtime-status"
 import { SessionMutationEpoch } from "@/session/mutation-epoch"
 import { SessionRevert } from "@/session/revert"
 import { SessionRunState } from "@/session/run-state"
-import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
 import { SessionLegacyProviderResolution } from "@/session/legacy-provider-resolution"
 import { DevCampaignMint } from "@/effect/dev-campaign-mint"
@@ -69,7 +73,7 @@ const tryParseJson = (text: string) =>
     catch: () => new HttpApiError.BadRequest({}),
   })
 
-type PromptPreparePart = (typeof SessionPrompt.PromptInput.Type)["parts"][number]
+type PromptPreparePart = (typeof SessionPromptV2.PromptInput.Type)["parts"][number]
 
 const promptText = (parts: readonly PromptPreparePart[]) =>
   parts.map((part) => (part.type === "text" ? part.text : "")).join("")
@@ -88,14 +92,16 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
   Effect.gen(function* () {
     const session = yield* Session.Service
     const shareSvc = yield* SessionShare.Service
-    const promptSvc = yield* SessionPrompt.Service
+    const promptSvc = yield* SessionPromptV2.Service
+    const commandSvc = yield* SessionCommandV2.Service
     const database = yield* Database.Service
     const revertSvc = yield* SessionRevert.Service
     const compactSvc = yield* SessionCompaction.Service
+    const coreV2Session = yield* SessionV2.Service
     const runState = yield* SessionRunState.Service
     const agentSvc = yield* Agent.Service
     const permissionSvc = yield* Permission.Service
-    const statusSvc = yield* SessionStatus.Service
+    const runtimeStatus = yield* SessionRuntimeStatus.Service
     const todoSvc = yield* Todo.Service
     const summary = yield* SessionSummary.Service
     const events = yield* EventV2Bridge.Service
@@ -114,6 +120,18 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           error.reason + ": " + error.detail + (error.sessionID ? " (session " + error.sessionID + ")" : ""),
       })
 
+    const refuseLegacyRecoveryMutation = (sessionID: SessionID, operation: string) =>
+      flags.coreV2Only
+        ? Effect.fail(
+            new ServiceUnavailableError({
+              service: operation,
+              message:
+                `Core V2-only runtime cannot apply the legacy recovery state machine for ${sessionID}; ` +
+                "use the exact durable maintenance recovery command surface",
+            }),
+          )
+        : Effect.void
+
     const list = Effect.fn("SessionHttpApi.list")(function* (ctx: { query: typeof ListQuery.Type }) {
       return yield* session.list({
         directory: ctx.query.scope === "project" ? undefined : ctx.query.directory,
@@ -127,7 +145,28 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     })
 
     const status = Effect.fn("SessionHttpApi.status")(function* () {
-      return Object.fromEntries(yield* statusSvc.list())
+      return Object.fromEntries(
+        [...(yield* runtimeStatus.list)].map(([sessionID, state]) => [
+          sessionID,
+          state === "busy"
+            ? { type: "busy" as const }
+            : {
+                type: "recovery_required" as const,
+                message: "Execution stopped with an unresolved durable claim; inspect recovery before resuming",
+              },
+        ]),
+      )
+    })
+
+    // Core V2 drains do not occupy the compatibility SessionRunState lane. History mutations must
+    // therefore consult both authorities or a revert/delete can race a live provider/tool turn.
+    // Treat recovery_required as non-mutable too: its durable claim must be resolved before any
+    // compatibility projection is rewritten.
+    const assertSessionLaneAvailable = Effect.fn("SessionHttpApi.assertSessionLaneAvailable")(function* (
+      sessionID: SessionID,
+    ) {
+      if ((yield* runtimeStatus.list).has(sessionID)) return yield* new Session.BusyError({ sessionID })
+      yield* runState.assertNotBusy(sessionID)
     })
 
     const requireSession = Effect.fn("SessionHttpApi.requireSession")(function* (sessionID: SessionID) {
@@ -270,6 +309,34 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     })
 
     const create = Effect.fn("SessionHttpApi.create")(function* (ctx: { payload?: Session.CreateInput }) {
+      // RI-16/RI-25: under the V2-only profile session create is Core-native (session.created.2
+      // authority; the V1 wire shape below is egress only — the bridge derives client events and
+      // the shared session row carries the response).
+      if (flags.coreV2Only) {
+        const instanceCtx = yield* InstanceState.context
+        const workspaceID = yield* InstanceState.workspaceID
+        const created = yield* coreV2Session.create({
+          ...(ctx.payload?.parentID ? { parentID: SessionV2.ID.make(ctx.payload.parentID) } : {}),
+          ...(ctx.payload?.title ? { title: ctx.payload.title } : {}),
+          ...(ctx.payload?.metadata ? { metadata: ctx.payload.metadata } : {}),
+          ...(ctx.payload?.agent ? { agent: AgentV2.ID.make(ctx.payload.agent) } : {}),
+          ...(ctx.payload?.model
+            ? { model: { id: ctx.payload.model.id, providerID: ctx.payload.model.providerID } }
+            : {}),
+          permissions: SessionV2.permissionsFromLegacy(ctx.payload?.permission),
+          location: { directory: AbsolutePath.make(instanceCtx.directory), ...(workspaceID ? { workspaceID } : {}) },
+        }).pipe(
+          // RI-04 admission validation surfaces as a typed 400 like the public V2 endpoint.
+          Effect.catchTags({
+            "AgentV2.NotFoundError": (error) =>
+              Effect.fail(new HttpApiError.BadRequest({})),
+            "Session.AgentNotSelectableError": (error) =>
+              Effect.fail(new HttpApiError.BadRequest({})),
+          }),
+        )
+        // Read-back cannot miss a session Core just projected; a miss is a defect, not a 404.
+        return yield* session.get(SessionID.make(created.id)).pipe(Effect.orDie)
+      }
       return yield* shareSvc.create(ctx.payload)
     })
 
@@ -309,10 +376,21 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
         yield* session.setMetadata({ sessionID: ctx.params.sessionID, metadata: ctx.payload.metadata })
       }
       if (ctx.payload.permission !== undefined) {
+        const permission = Permission.merge(current.permission ?? [], ctx.payload.permission)
         yield* session.setPermission({
           sessionID: ctx.params.sessionID,
-          permission: Permission.merge(current.permission ?? [], ctx.payload.permission),
+          permission,
         })
+        if (flags.coreV2Only) {
+          const v2ID = SessionV2.ID.make(ctx.params.sessionID)
+          const adopted = yield* coreV2Session.get(v2ID).pipe(Effect.option)
+          if (Option.isSome(adopted)) {
+            yield* coreV2Session.setPermissions({
+              sessionID: v2ID,
+              permissions: SessionV2.permissionsFromLegacy(permission),
+            }).pipe(Effect.orDie)
+          }
+        }
       }
       if (ctx.payload.time?.archived !== undefined) {
         yield* session.setArchived({ sessionID: ctx.params.sessionID, time: ctx.payload.time.archived })
@@ -362,7 +440,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof InitPayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
-      yield* promptSvc
+      yield* commandSvc
         .command({
           sessionID: ctx.params.sessionID,
           messageID: ctx.payload.messageID,
@@ -402,8 +480,32 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof SummarizePayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
-      // LEGACY-EXECUTION-ZERO: refuse BEFORE compaction/marker writes under the profile.
-      yield* guardLegacyExecution(flags, { sessionID: ctx.params.sessionID }).pipe(Effect.mapError(mapLegacyZero))
+      // W0-1 — under the V2-only profile manual compaction routes through SessionV2.compact, which
+      // delegates to the host CurrentManualCompaction seam (the same SessionCompaction.create state
+      // machine below) after awaiting an idle session. Legacy profiles keep the direct path.
+      if (flags.coreV2Only) {
+        const currentSession = yield* requireSession(ctx.params.sessionID)
+        yield* coreV2Session.compact({
+          sessionID: SessionV2.ID.make(ctx.params.sessionID),
+          model: { providerID: ctx.payload.providerID, modelID: ctx.payload.modelID },
+          auto: ctx.payload.auto ?? false,
+        })
+          .pipe(
+            Effect.mapError(
+              (error) =>
+                new ServiceUnavailableError({
+                  service: "session.compact",
+                  message:
+                    "reason" in error && typeof error.reason === "string"
+                      ? error.reason
+                      : error instanceof Error
+                        ? error.message
+                        : String(error),
+                }),
+            ),
+          )
+        return true
+      }
       yield* revertSvc.cleanup(yield* requireSession(ctx.params.sessionID))
       const messages = yield* SessionError.mapStorageNotFound(session.messages({ sessionID: ctx.params.sessionID }))
       const defaultAgent = yield* agentSvc.defaultAgent()
@@ -418,7 +520,15 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
         },
         auto: ctx.payload.auto ?? false,
       })
-      yield* promptSvc.loop({ sessionID: ctx.params.sessionID }).pipe(Effect.mapError(mapLegacyZero))
+      // F-18 follow-up: the V2 drain loop may fail with a typed admission Conflict (reason in
+      // `error.reason`) — render it as 503 with the reason instead of leaking a defect.
+      yield* promptSvc.loop({ sessionID: ctx.params.sessionID }).pipe(
+        Effect.mapError((error) =>
+          error instanceof SessionPromptIntent.Conflict
+            ? new ServiceUnavailableError({ service: "session.v2.admission", message: error.reason })
+            : mapLegacyZero(error),
+        ),
+      )
       return true
     })
 
@@ -481,24 +591,32 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       const rawInput = promptText(input.ctx.payload.parts)
       if (!rawInput.trim()) return yield* new HttpApiError.BadRequest({})
       if (input.ctx.payload.intent_id) {
-        yield* guardLegacyExecution(flags, { sessionID: input.ctx.params.sessionID }).pipe(
-          Effect.mapError(mapLegacyZero),
-        )
-        yield* SessionPromptIntent.prepare({
-          intentID: input.ctx.payload.intent_id,
-          sessionID: input.ctx.params.sessionID,
-          source: input.ctx.payload.intent_source ?? "intelligence",
-        }).pipe(
-          Effect.provideService(Database.Service, database),
-          Effect.mapError((error) =>
-            error instanceof SessionMutationEpoch.Stale
-              ? new ConflictError({
-                  message: "prompt intent was superseded by a session revert",
-                  resource: `session:${error.sessionID}`,
-                })
-              : new ConflictError({ message: error.reason, resource: `session_intent:${error.intentID}` }),
-          ),
-        )
+        // W0-3b — the V1 intent admission (SessionPromptIntent.prepare) is the intelligence
+        // pipeline's ONLY legacy durable write, and it exists to make the V1 claim/renew chain
+        // idempotent. Under the V2-only profile that chain is retired: V2 prompt idempotency is
+        // carried by the SessionV2 messageID, so prepare is skipped and refinement runs for real
+        // (auxiliary model call + fs draft — no legacy rows). intent_id still round-trips so the
+        // client's identity checks are unaffected.
+        if (!flags.coreV2Only) {
+          yield* guardLegacyExecution(flags, { sessionID: input.ctx.params.sessionID }).pipe(
+            Effect.mapError(mapLegacyZero),
+          )
+          yield* SessionPromptIntent.prepare({
+            intentID: input.ctx.payload.intent_id,
+            sessionID: input.ctx.params.sessionID,
+            source: input.ctx.payload.intent_source ?? "intelligence",
+          }).pipe(
+            Effect.provideService(Database.Service, database),
+            Effect.mapError((error) =>
+              error instanceof SessionMutationEpoch.Stale
+                ? new ConflictError({
+                    message: "prompt intent was superseded by a session revert",
+                    resource: `session:${error.sessionID}`,
+                  })
+                : new ConflictError({ message: error.reason, resource: `session_intent:${error.intentID}` }),
+            ),
+          )
+        }
       }
       const result = yield* promptSvc
         .refineIntelligenceDraft({
@@ -552,10 +670,16 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
       payload: typeof PromptPreparePayload.Type
     }) {
-      const queue = yield* Queue.unbounded<unknown>()
+      const queue = yield* Queue.dropping<unknown, Error | Cause.Done>(64)
       yield* preparePromptDraft({
         ctx,
-        onProgress: (preview) => Queue.offerUnsafe(queue, { type: "progress", preview }),
+        onProgress: (preview) => {
+          if (Queue.offerUnsafe(queue, { type: "progress", preview })) return
+          Queue.failCauseUnsafe(
+            queue,
+            Cause.fail(new Error("Prompt preparation consumer exceeded its 64-event buffer")),
+          )
+        },
       }).pipe(
         Effect.tap((result) => Effect.sync(() => Queue.offerUnsafe(queue, { type: "result", result }))),
         Effect.catchCause((cause) =>
@@ -631,7 +755,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof CommandPayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
-      return yield* promptSvc
+      return yield* commandSvc
         .command({ ...ctx.payload, sessionID: ctx.params.sessionID })
         .pipe(
           Effect.mapError((error) =>
@@ -645,7 +769,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof ShellPayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
-      return yield* promptSvc
+      yield* SessionError.mapBusy(assertSessionLaneAvailable(ctx.params.sessionID))
+      return yield* commandSvc
         .shell({ ...ctx.payload, sessionID: ctx.params.sessionID })
         .pipe(
           Effect.mapError((error) =>
@@ -664,11 +789,13 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof RevertPayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
+      yield* SessionError.mapBusy(assertSessionLaneAvailable(ctx.params.sessionID))
       return yield* SessionError.mapRevert(revertSvc.revert({ sessionID: ctx.params.sessionID, ...ctx.payload }))
     })
 
     const unrevert = Effect.fn("SessionHttpApi.unrevert")(function* (ctx: { params: { sessionID: SessionID } }) {
       yield* requireSession(ctx.params.sessionID)
+      yield* SessionError.mapBusy(assertSessionLaneAvailable(ctx.params.sessionID))
       return yield* SessionError.mapBusy(revertSvc.unrevert({ sessionID: ctx.params.sessionID }))
     })
 
@@ -694,7 +821,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID; messageID: MessageID }
     }) {
       yield* requireSession(ctx.params.sessionID)
-      yield* SessionError.mapBusy(runState.assertNotBusy(ctx.params.sessionID))
+      yield* SessionError.mapBusy(assertSessionLaneAvailable(ctx.params.sessionID))
       const messages = yield* SessionError.mapStorageNotFound(session.messages({ sessionID: ctx.params.sessionID }))
       if (!messages.some((message) => message.info.id === ctx.params.messageID))
         return yield* notFound(`Message not found: ${ctx.params.messageID}`)
@@ -737,12 +864,27 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
         .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
     })
 
+    // RI-71 zero wave: under the production profile the surface refuses BEFORE any legacy
+    // resolution machinery — the refusal is a structural early return, and the legacy state
+    // machine lives in the legacy-profile helper below so the handler body itself cannot reach
+    // the legacy execution chain.
     const contextAttemptResolve = Effect.fn("SessionHttpApi.contextAttemptResolve")(function* (ctx: {
       params: { sessionID: SessionID; attemptID: string }
       payload: typeof ContextAttemptResolvePayload.Type
     }) {
+      yield* requireSession(ctx.params.sessionID)
+      yield* refuseLegacyRecoveryMutation(ctx.params.sessionID, "session.context-attempt-resolution")
+      return yield* legacyContextAttemptResolve(ctx)
+    })
+
+    // Legacy-profile path only (unreachable under coreV2Only — see the refusal above): creates a
+    // provider-attempt successor without the Core V2 receipt/Session-claim transaction. V2 uses
+    // the exact durable maintenance recovery command authority.
+    const legacyContextAttemptResolve = Effect.fn("SessionHttpApi.legacyContextAttemptResolve")(function* (ctx: {
+      params: { sessionID: SessionID; attemptID: string }
+      payload: typeof ContextAttemptResolvePayload.Type
+    }) {
       const current = yield* requireSession(ctx.params.sessionID)
-      yield* guardLegacyExecution(flags, { sessionID: ctx.params.sessionID }).pipe(Effect.mapError(mapLegacyZero))
       const resolved = yield* contextDiagnosticsSvc
         .resolveAttempt({
           session: current,
@@ -792,7 +934,16 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof ProviderResolutionPayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
-      yield* guardLegacyExecution(flags, { sessionID: ctx.params.sessionID }).pipe(Effect.mapError(mapLegacyZero))
+      yield* refuseLegacyRecoveryMutation(ctx.params.sessionID, "session.provider-resolution")
+      return yield* legacyProviderResolutionResolve(ctx)
+    })
+
+    // Legacy-profile path only (unreachable under coreV2Only — see the refusal above): applies
+    // the legacy provider-resolution state machine.
+    const legacyProviderResolutionResolve = Effect.fn("SessionHttpApi.legacyProviderResolutionResolve")(function* (ctx: {
+      params: { sessionID: SessionID }
+      payload: typeof ProviderResolutionPayload.Type
+    }) {
       const actor = yield* getWorkspaceContext()
       return yield* providerResolutionSvc
         .resolve({ ...ctx.payload, sessionID: ctx.params.sessionID, actorID: actor.userID })
@@ -817,7 +968,18 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof ContinuationResolutionPayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
-      yield* guardLegacyExecution(flags, { sessionID: ctx.params.sessionID }).pipe(Effect.mapError(mapLegacyZero))
+      yield* refuseLegacyRecoveryMutation(ctx.params.sessionID, "session.continuation-resolution")
+      return yield* legacyContinuationResolutionResolve(ctx)
+    })
+
+    // Legacy-profile path only (unreachable under coreV2Only — see the refusal above): resolves
+    // explicit compaction continuations and replays through the legacy loop.
+    const legacyContinuationResolutionResolve = Effect.fn(
+      "SessionHttpApi.legacyContinuationResolutionResolve",
+    )(function* (ctx: {
+      params: { sessionID: SessionID }
+      payload: typeof ContinuationResolutionPayload.Type
+    }) {
       const actor = yield* getWorkspaceContext()
       const result = yield* compactSvc
         .resolveContinuation({ ...ctx.payload, sessionID: ctx.params.sessionID, actorID: actor.userID })

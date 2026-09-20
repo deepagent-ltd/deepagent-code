@@ -130,13 +130,25 @@ export const buildPromptContext = (input: OrchestratorInput): PromptContext => {
   // §5b: compute the concrete per-turn fan-out verdict from this turn's request text so the
   // DeepAgent-active prompt (the primary user path) surfaces task-specific numbers, not just the
   // generic guidance. Deterministic pure function; ADVISORY only (the §5a semaphore is the hard cap).
-  const fanoutDecision = state.userRequest
+  // G3 review fix (round 2): the freeze happens at the FIRST request the session ever sees —
+  // regardless of whether the `task` tool is materialized yet (round-1 permission/materialization
+  // timing must not open a window where the stable section appears mid-session and busts the
+  // cached prefix). No task tool ⇒ the session classifies as "no orchestration" (0) and stays so;
+  // a later round with the tool present reads the SAME frozen value for the stable section.
+  const fanoutDecision = state.userRequest && input.tools.availableTools.some((tool) => tool.name === "task")
     ? decideFanout({
         mode: state.mode,
         signals: estimateSignalsFromText({ userRequest: state.userRequest }),
         caps: input.orchestrationCaps,
       })
     : undefined
+  if (state.frozenComplexity === null && state.userRequest !== null) {
+    SessionState.update(input.sessionId, {
+      frozenComplexity: fanoutDecision !== undefined ? fanoutDecision.complexity : 0,
+    })
+    state.frozenComplexity = fanoutDecision !== undefined ? fanoutDecision.complexity : 0
+  }
+  const stableComplexity = state.frozenComplexity ?? fanoutDecision?.complexity
 
   // V3.8 App-A C3: cross-session handoff injection. Gated at the SAME door as knowledge
   // (shouldLoadBridge: mode !== general/disabled). Load the project bridge from the project-scoped
@@ -165,6 +177,7 @@ export const buildPromptContext = (input: OrchestratorInput): PromptContext => {
   return {
     mode: state.mode,
     round: roundState.round,
+    sessionID: input.sessionId,
     activation,
     roundState,
     environment: input.environment,
@@ -182,6 +195,7 @@ export const buildPromptContext = (input: OrchestratorInput): PromptContext => {
     previousResults,
     userInstructions: null,
     ...(fanoutDecision ? { fanoutDecision } : {}),
+    ...(stableComplexity !== undefined ? { stableComplexity } : {}),
     ...(bridge ? { bridge } : {}),
   }
 }

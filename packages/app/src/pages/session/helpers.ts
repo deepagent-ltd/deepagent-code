@@ -9,6 +9,49 @@ export type TurnPreview = { title?: string; body?: string }
 
 const TURN_PREVIEW_TITLE_MAX = 80
 const TURN_PREVIEW_BODY_MAX = 160
+export const FORK_STATE_LIMIT = 256
+
+export function createForkRequestRegistry<T, U = T | undefined>(map?: (request: Promise<T | undefined>) => Promise<U>) {
+  const pendingIntents = new Map<string, string>()
+  const pendingRequests = new Map<string, Promise<U>>()
+
+  return {
+    request(key: string, run: (intentID: string) => Promise<T | undefined>): Promise<U> {
+      const pending = pendingRequests.get(key)
+      if (pending) return pending
+      if (pendingRequests.size >= FORK_STATE_LIMIT) {
+        return Promise.reject(new Error(`Too many active fork requests (limit ${FORK_STATE_LIMIT})`))
+      }
+      const retained = pendingIntents.get(key)
+      if (retained) {
+        pendingIntents.delete(key)
+        pendingIntents.set(key, retained)
+      }
+      if (!retained && pendingIntents.size >= FORK_STATE_LIMIT) {
+        const stale = pendingIntents.keys().find((candidate) => !pendingRequests.has(candidate))
+        if (!stale) return Promise.reject(new Error(`Too many retained fork intents (limit ${FORK_STATE_LIMIT})`))
+        pendingIntents.delete(stale)
+      }
+      const intentID = retained ?? Identifier.ascending("fork")
+      pendingIntents.set(key, intentID)
+      const started = (() => {
+        try {
+          return run(intentID)
+        } catch (error) {
+          return Promise.reject(error)
+        }
+      })()
+      const settled = started.then((result) => {
+        if (result !== undefined && pendingIntents.get(key) === intentID) pendingIntents.delete(key)
+        return result
+      })
+      // `map` runs once per request (not per caller) so coalesced callers keep one shared promise.
+      const request = (map ? map(settled) : (settled as unknown as Promise<U>)).finally(() => pendingRequests.delete(key))
+      pendingRequests.set(key, request)
+      return request
+    },
+  }
+}
 
 const truncatePreview = (value: string, max: number) =>
   value.length > max ? `${value.slice(0, max - 1).trimEnd()}…` : value
@@ -64,30 +107,25 @@ export const createForkAction = (deps: {
   onError?: (error: unknown) => void
 }) =>
   (() => {
-    const pendingIntents = new Map<string, string>()
-    const pendingRequests = new Map<string, Promise<void>>()
+    const requests = createForkRequestRegistry<boolean, void>((shared) => shared.then(() => {}))
     return (input?: { sessionID: string; messageID: string }) => {
       if (input && deps.messages && deps.fork && deps.navigate) {
         const intentKey = `${input.sessionID}:${input.messageID}`
-        const pending = pendingRequests.get(intentKey)
-        if (pending) return pending
-        const intentID = pendingIntents.get(intentKey) ?? Identifier.ascending("fork")
-        pendingIntents.set(intentKey, intentID)
-        const request = deps
-          .fork({
-            sessionID: input.sessionID,
-            messageID: forkCutoffMessageID(deps.messages(input.sessionID), input.messageID),
-            intentID,
-          })
-          .then((session) => {
+        return requests.request(intentKey, async (intentID) => {
+          try {
+            const session = await deps.fork!({
+              sessionID: input.sessionID,
+              messageID: forkCutoffMessageID(deps.messages!(input.sessionID), input.messageID),
+              intentID,
+            })
             if (!session) return
-            pendingIntents.delete(intentKey)
             deps.navigate!(session.id)
-          })
-          .catch((error: unknown) => deps.onError?.(error))
-          .finally(() => pendingRequests.delete(intentKey))
-        pendingRequests.set(intentKey, request)
-        return request
+            return true
+          } catch (error) {
+            deps.onError?.(error)
+            return
+          }
+        })
       }
 
       const load = deps.loadDialog ?? (() => import("@/components/dialog-fork"))

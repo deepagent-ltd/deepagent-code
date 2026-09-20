@@ -41,7 +41,6 @@ export const layer = Layer.effect(
     const sessions = yield* Session.Service
     const snap = yield* Snapshot.Service
     const storage = yield* Storage.Service
-    const events = yield* EventV2Bridge.Service
     const state = yield* SessionRunState.Service
 
     const revertUnlocked = Effect.fn("SessionRevert.revertUnlocked")(function* (input: RevertInput) {
@@ -128,7 +127,6 @@ export const layer = Layer.effect(
           }) satisfies Snapshot.FileDiff,
       )
       yield* storage.write(["session_diff", input.sessionID], diffs).pipe(Effect.ignore)
-      yield* events.publish(Session.Event.Diff, { sessionID: input.sessionID, diff: diffs, manifest: descriptor })
       yield* sessions.commitRevert({
         sessionID: input.sessionID,
         revert: rev,
@@ -138,6 +136,16 @@ export const layer = Layer.effect(
           files: manifest.totalFiles,
           diffManifest: descriptor,
         },
+      })
+      yield* sessions.setSummary({
+        sessionID: input.sessionID,
+        summary: {
+          additions: manifest.additions,
+          deletions: manifest.deletions,
+          files: manifest.totalFiles,
+          diffManifest: descriptor,
+        },
+        diff: diffs,
       })
       return yield* sessions.get(input.sessionID).pipe(Effect.orDie)
     })

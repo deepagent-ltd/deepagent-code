@@ -23,6 +23,7 @@ import { createServerSdkContext, useServerSDK } from "./server-sdk"
 import { type createServerSyncContextInner } from "./server-sync"
 import { promptAdmissionClientMessageID } from "./global-sync/prompt-admission"
 import { mergeMessage } from "./global-sync/event-reducer"
+import { snapshotRows } from "@/context/v2-session-projector"
 
 const SKIP_PARTS = new Set(["patch", "step-start", "step-finish"])
 type ActivityProgress = NonNullable<Extract<Message, { role: "assistant" }>["activityProgress"]>
@@ -419,6 +420,28 @@ export const createDirSyncContext = (
     }
   }
 
+  // 6b-3 — V2-authoritative fallback. A journal-driven session whose V1 wire page comes back
+  // EMPTY has its history only in the V2 message store (the wire egress materializes rows as
+  // events commit, so pre-egress or crash-window history can lag). Project the durable V2
+  // snapshot through the same row shape the timeline consumes (snapshotRows from
+  // v2-session-projector) instead of showing an empty transcript. First page only: paging
+  // stays on the wire path, which the egress keeps filled.
+  const fetchMessagesV2Fallback = async (input: { client: typeof client; sessionID: string; directory: string; root: string }) => {
+    const v2 = await retry(() => input.client.v2.session.messages({ sessionID: input.sessionID, limit: 100 }))
+    const rows = snapshotRows({
+      sessionID: input.sessionID,
+      directory: input.directory,
+      root: input.root,
+      messages: (v2.data?.data ?? []) as never[],
+    })
+    return {
+      session: rows.map((row) => clean(row.info as Message)).sort((a, b) => compareMessages(a, b)),
+      part: rows.map((row) => ({ id: row.info.id as string, part: sortParts(row.parts as Part[]) })),
+      cursor: undefined,
+      complete: true,
+    }
+  }
+
   const tracked = (directory: string, sessionID: string) => seen.get(directory)?.has(sessionID) ?? false
 
   const loadMessages = async (input: {
@@ -443,7 +466,24 @@ export const createDirSyncContext = (
       )
       let conflict = false
       setMeta("loading", key, true)
-      await fetchMessages(input)
+      // 6b-3: first page (no cursor) that comes back EMPTY tries the V2-authoritative
+      // fallback before committing the empty page — journal-driven sessions keep their
+      // history in the V2 store when the wire egress lagged.
+      let page = await fetchMessages(input)
+      if (!input.before && page.session.length === 0) {
+        try {
+          const v2page = await fetchMessagesV2Fallback({
+            client: input.client,
+            sessionID: input.sessionID,
+            directory: input.directory,
+            root: input.directory,
+          })
+          if (v2page.session.length > 0) page = v2page
+        } catch {
+          // V2 route unavailable (older sidecar) — keep the (empty) wire page.
+        }
+      }
+      await Promise.resolve(page)
         .then((page) => {
           if (!tracked(input.directory, input.sessionID)) return
           const optimistic = getOptimistic(input.directory, input.sessionID)
