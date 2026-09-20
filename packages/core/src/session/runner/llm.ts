@@ -815,12 +815,22 @@ export const layer = Layer.effect(
         [system.baseline],
       )
       const volatileSystemParts: string[] = []
-      // G3 history projection — durable rows lower to the model-facing view with graded
-      // tool-output budgets. Errors and the resent tail survive verbatim (pure function of
-      // content ⇒ byte-stable projection ⇒ prompt cache holds). The result carries THIS
-      // call's truncation stats (no module-global counters — concurrent sessions cannot
-      // settle each other's numbers); the per-turn fold into observability happens below.
-      const projection = SessionHistoryProjection.projectForModel(context)
+      // G3 history projection — durable rows lower to the model-facing view with bounded
+      // tool-output budgets (pure function of content ⇒ byte-stable projection ⇒ prompt cache
+      // holds). The result carries THIS call's truncation stats (no module-global counters —
+      // concurrent sessions cannot settle each other's numbers); the per-turn fold into
+      // observability happens below.
+      // Hoisted ahead of the projection call so the reasoning-replay default can be
+      // protocol-aware: OpenAI-family wire formats never replay past reasoning_content
+      // (DeepSeek only requires the FIELD on tool-call turns, and an empty string satisfies
+      // it), while Anthropic keeps the current turn's signed thinking for tool continuity.
+      const openaiFamilyProtocol =
+        modelProtocol === "openai.responses" ||
+        modelProtocol === "openai-compatible.responses" ||
+        modelProtocol === "openai-compatible.chat"
+      const projection = SessionHistoryProjection.projectForModel(context, {
+        reasoningKeep: openaiFamilyProtocol ? 0 : undefined,
+      })
       const historyRequestMessages = yield* normalizeAttachments(
         projection.messages,
         modelInfo?.capabilities.input,
@@ -844,10 +854,6 @@ export const layer = Layer.effect(
       // support; user/provider config merged later still wins over this runtime default.
       const modelProfile = ModelPromptProfile.profileFor(model.provider, model.id)
       turnObservability.recordModelProfile(ModelPromptProfile.profileKeyFor(model.provider, model.id), sessionID)
-      const openaiFamilyProtocol =
-        modelProtocol === "openai.responses" ||
-        modelProtocol === "openai-compatible.responses" ||
-        modelProtocol === "openai-compatible.chat"
       const reasoningEffort =
         openaiFamilyProtocol && modelInfo?.api.protocolCapabilities?.reasoningItems
           ? ModelPromptProfile.clampReasoningEffort(

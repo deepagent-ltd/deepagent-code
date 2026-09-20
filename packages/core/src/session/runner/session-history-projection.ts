@@ -20,9 +20,12 @@ import { flipFlagValueOn } from "../../deepagent/flip-flag"
 //      the evidence the model needs to repair, so they are near-intact; only a pathological
 //      crash log (way past 4× the class cap) is excerpted (review fix: the first version had NO
 //      bound on errors at all).
-//   3. The RESENT tail is never projected — the most recent K settled tool results (default
-//      4) stay verbatim: the model is actively reasoning about them and the provider may not
-//      have seen their content cross-turn otherwise (only completed results are durable).
+//   3. Budget-triggered clearing — below the clear budget the projection is append-only
+//      (every row's bytes fixed from its first send); crossing it stubs everything outside
+//      the keep window in ONE batched, latched event. A per-arrival stub retro-changed
+//      bytes mid-prefix EVERY turn (measured on GLM as cached-token plateaus lagging the
+//      prompt by 2-3 turns). Caps apply UNIFORMLY to every settled result: a
+//      verbatim-then-excerpt rotation would tear the prefix the same way.
 //   4. Bounded — every non-exempt tool result obeys its class cap; oversized text keeps
 //      head+tail excerpts with an explicit truncation marker (code errors usually live at
 //      the tail of a long log, so tail-keeping is load-bearing, not cosmetic).
@@ -31,9 +34,8 @@ import { flipFlagValueOn } from "../../deepagent/flip-flag"
 // (llm.ts), after entriesForRunner, before toLLMMessages.
 
 const PROJECTION_ENABLED_DEFAULT = true
-const RESENT_TAIL_RESULTS_DEFAULT = 4
 
-// Per-tool-class char caps for projected (non-exempt, non-tail) tool results. Chars, not
+// Per-tool-class char caps for projected tool results. Chars, not
 // tokens, for determinism and zero-cost measurement; ~4 chars/token makes the bash cap
 // ≈10K tokens — generous against compaction's 2_000-char serializer, because these results
 // must remain actionable for repair, not just summarizable.
@@ -59,25 +61,31 @@ const parseNonNegativeInt = (raw: string | undefined, fallback: number) => {
   return Number.isInteger(value) && value >= 0 ? value : fallback
 }
 
-export const resentTailResults = () =>
-  parseNonNegativeInt(process.env["DEEPAGENT_CODE_HISTORY_PROJECTION_TAIL"], RESENT_TAIL_RESULTS_DEFAULT)
-
 /**
- * CLEAR window (G-C) — how many of the most recent settled tool results survive the elision pass at
- * all; everything older is replaced by a stub (subject to the RESENT tail, which always stays
- * verbatim and therefore sets the effective floor). This is the cheap, LLM-free half of compaction (Claude Code
- * micro-compact / deepseek-harness tool-result-pruner): it costs one pass and no summarizer call,
- * and the durable history keeps every byte, so an elided result is recoverable by re-reading.
- *
- * Sized from the offline replay of the real abs traces (deep-agent-ab/replay): on this workload the
- * shipped per-result caps NEVER fire (largest single result 26.5k chars vs a 40k cap — the reason
- * `projection_truncated` sat at 0 for whole runs), while clearing everything older than the last
- * 5–12 results removes 79–88% of the tool-result weight that is otherwise re-sent every turn.
- * `0` disables the clear (the previous behaviour).
+ * CLEAR window (G-C) — the keep window: at a clear event, the newest K settled tool results
+ * survive verbatim and everything older is replaced by a stub. This is the cheap, LLM-free
+ * half of compaction (Claude Code micro-compact / deepseek-harness tool-result-pruner): it
+ * costs one pass and no summarizer call, and the durable history keeps every byte, so an
+ * elided result is recoverable by re-reading.
  */
 const CLEAR_OLDER_THAN_DEFAULT = 8
 export const clearedAfterResults = () =>
   parseNonNegativeInt(process.env["DEEPAGENT_CODE_HISTORY_PROJECTION_CLEAR_AFTER"], CLEAR_OLDER_THAN_DEFAULT)
+
+/**
+ * CLEAR budget (opencode-aligned) — the content-estimate threshold that triggers a clear
+ * event. Below the budget the projection is pure append-only: every row's bytes are fixed
+ * from its first send (caps are position-independent, no stubs), so the provider prefix
+ * cache behaves like an unmodified agent's. Crossing the budget fires ONE batched clear —
+ * every settled result older than the keep window is stubbed together, the estimate drops,
+ * and the walk continues append-only until the next crossing. Tears therefore happen only at
+ * compaction-like boundaries (rare, batched, latched) instead of on every arrival; the
+ * per-turn age rotation this replaces was measured at ~50% short-gap cache loss on GLM.
+ * `0` disables clearing entirely (append-only forever).
+ */
+const CLEAR_BUDGET_DEFAULT = 200_000
+export const clearedBudgetTokens = () =>
+  parseNonNegativeInt(process.env["DEEPAGENT_CODE_HISTORY_PROJECTION_CLEAR_BUDGET"], CLEAR_BUDGET_DEFAULT)
 
 /**
  * REASONING replay (measured, round-10). The durable history keeps the model's reasoning blocks
@@ -95,12 +103,19 @@ export const clearedAfterResults = () =>
  * keeps its reasoning and every older one loses it.
  *
  * `DEEPAGENT_CODE_HISTORY_PROJECTION_REASONING=all` restores full replay for A/B measurement.
+ *
+ * Protocol-aware default: the caller (runner/llm.ts) passes `reasoningKeep: 0` for the
+ * OpenAI-family wire formats, where replaying past `reasoning_content` is optional (DeepSeek
+ * only requires the FIELD on tool-call turns and an empty string satisfies it; GLM harnesses
+ * never replay). Anthropic keeps the current turn's signed thinking for tool-call continuity,
+ * so the module default stays 1 there.
  */
 const REASONING_KEEP_DEFAULT = 1
-export const reasoningMessagesKept = (): number => {
+// `fallback` is the protocol-aware default from the caller; an explicit env override still wins.
+export const reasoningMessagesKept = (fallback: number = REASONING_KEEP_DEFAULT): number => {
   const raw = process.env["DEEPAGENT_CODE_HISTORY_PROJECTION_REASONING"]
   if (raw !== undefined && raw.trim().toLowerCase() === "all") return Number.MAX_SAFE_INTEGER
-  return parseNonNegativeInt(raw, REASONING_KEEP_DEFAULT)
+  return parseNonNegativeInt(raw, fallback)
 }
 
 const toolOutputCaps = (): Record<string, number> => {
@@ -225,38 +240,85 @@ export type ProjectionResult = {
  * content scan of already-small results). The caller owns the returned stats — nothing
  * accumulates across calls or leaks across sessions.
  */
-export const projectForModel = (messages: readonly SessionMessage.Message[]): ProjectionResult => {
+export const projectForModel = (
+  messages: readonly SessionMessage.Message[],
+  options?: { readonly reasoningKeep?: number },
+): ProjectionResult => {
   if (!projectionEnabled()) return { messages, truncated: 0, savedChars: 0 }
   const caps = toolOutputCaps()
-  const tail = resentTailResults()
   const clearAfter = clearedAfterResults()
+  const budget = clearedBudgetTokens()
   const stats = { truncated: 0, savedChars: 0 }
-  // Index (from the end) of settled tool results that stay verbatim. The RESENT window is
-  // over tool results globally, not per-message, so `tail=4` protects the last 4 results
-  // wherever they sit. The CLEAR window is the same walk continued outward: everything past it is
-  // elided to a stub (the tool name plus what was there), which is what actually stops a 133-turn
-  // run from re-sending every early read on every later turn.
-  // The RESENT tail and the CLEAR window are independent budgets: the tail is the minimum number of
-  // recent results that stay verbatim, the window is how many recent results survive the elision
-  // pass at all. `clearAfter < tail` would make the window a no-op (the tail protects more than the
-  // window keeps), so the effective horizon is the larger of the two.
-  const horizon = Math.max(tail, clearAfter)
+  // All settled tool results, newest first, walked globally over tool results (not per-message).
   const settled: Array<{ message: number; part: number }> = []
-  for (let m = messages.length - 1; m >= 0 && settled.length < horizon; m--) {
+  for (let m = messages.length - 1; m >= 0; m--) {
     const message = messages[m]
     if (message?.type !== "assistant") continue
-    for (let p = message.content.length - 1; p >= 0 && settled.length < horizon; p--) {
+    for (let p = message.content.length - 1; p >= 0; p--) {
       const part = message.content[p]
       if (part?.type === "tool" && (part.state.status === "completed" || part.state.status === "error"))
         settled.push({ message: m, part: p })
     }
   }
-  const resent = new Set(settled.slice(0, tail).map((spot) => `${spot.message}:${spot.part}`))
-  // Everything past the tail but inside the window: elided unless the stub would not be smaller.
-  const clearable = new Set(clearAfter === 0 ? [] : settled.slice(tail).map((spot) => `${spot.message}:${spot.part}`))
+  // Budget-triggered clear with latching (see clearedBudgetTokens): a single oldest-first walk
+  // accumulates the capped content estimate; each time it crosses `budget`, one clear event
+  // stubs every walked settled result outside the keep window. The walk is a pure function of
+  // the message list and the stub set only ever grows, so a row's projected bytes are fixed
+  // from its first send until a batched clear event (if any) touches it once.
+  const stubbed = new Set<string>()
+  if (budget > 0 && clearAfter > 0) {
+    const stubEstimate = 50
+    const toolEstimate = new Map<string, number>()
+    for (const spot of settled) {
+      const message = messages[spot.message]
+      if (message?.type !== "assistant") continue
+      const part = message.content[spot.part] as SessionMessage.AssistantTool
+      const state = part.state
+      if (state.status !== "completed" && state.status !== "error") continue
+      const chars = state.content.reduce(
+        (total, item) => (item.type === "text" ? total + [...item.text].length : total),
+        0,
+      )
+      const cap = caps[part.name]
+      const bounded = cap === undefined || cap === 0 ? chars : Math.min(chars, state.status === "error" ? cap * 4 : cap)
+      toolEstimate.set(`${spot.message}:${spot.part}`, Math.ceil(bounded / 4))
+    }
+    const oldestFirst = [...settled].reverse()
+    let estimate = 0
+    let walked = 0
+    for (let m = 0; m < messages.length; m++) {
+      const message = messages[m]!
+      if (message.type === "assistant") {
+        for (const part of message.content) {
+          if (part.type === "text") estimate += Math.ceil([...part.text].length / 4)
+        }
+      }
+      while (walked < oldestFirst.length && oldestFirst[walked]!.message === m) {
+        estimate += toolEstimate.get(`${m}:${oldestFirst[walked]!.part}`)!
+        walked++
+      }
+      if (estimate < budget) continue
+      const keepFrom = Math.max(0, walked - clearAfter)
+      for (let k = 0; k < keepFrom; k++) {
+        const spot = oldestFirst[k]!
+        const key = `${spot.message}:${spot.part}`
+        if (stubbed.has(key)) continue
+        const holder = messages[spot.message]
+        if (holder?.type !== "assistant") continue
+        const part = holder.content[spot.part] as SessionMessage.AssistantTool
+        const est = toolEstimate.get(key)!
+        // Mirror clearedToolResult's eligibility exactly: errors are repair evidence and a
+        // stub that would not be smaller is a no-op — neither may enter the stub set, or the
+        // walk's estimate would drift from what is actually sent.
+        if (part.state.status !== "completed" || est * 4 <= 200) continue
+        stubbed.add(key)
+        estimate -= est - stubEstimate
+      }
+    }
+  }
   // Which assistant messages keep their reasoning. Walk from the newest: the first `keep` messages
   // that CARRY reasoning are protected, everything older loses it.
-  const keepReasoning = reasoningMessagesKept()
+  const keepReasoning = reasoningMessagesKept(options?.reasoningKeep)
   const reasoningKept = new Set<number>()
   for (let m = messages.length - 1; m >= 0 && reasoningKept.size < keepReasoning; m--) {
     const message = messages[m]
@@ -292,13 +354,13 @@ export const projectForModel = (messages: readonly SessionMessage.Message[]): Pr
       }
       const key = `${m}:${p}`
       const cap = caps[part.name]
-      if (clearable.has(key)) {
+      if (stubbed.has(key)) {
         const cleared = clearedToolResult(part, stats)
         if (cleared !== part) changed = true
         content.push(cleared)
         continue
       }
-      if (resent.has(key) || cap === undefined || cap === 0) {
+      if (cap === undefined || cap === 0) {
         content.push(part)
         continue
       }
