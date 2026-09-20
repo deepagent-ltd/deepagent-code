@@ -28,9 +28,9 @@ npm install @deepagent-code/sdk
 创建一个 deepagent-code 实例：
 
 ```javascript
-import { createOpencode } from "@deepagent-code/sdk"
+import { createDeepAgentCode } from "@deepagent-code/sdk"
 
-const { client } = await createOpencode()
+const { client } = await createDeepAgentCode()
 ```
 
 这会同时启动服务器和客户端。
@@ -52,9 +52,9 @@ const { client } = await createOpencode()
 你可以传入一个配置对象来自定义行为。实例仍然会读取你的 `deepagent-code.json`，但你可以通过内联方式覆盖或添加配置：
 
 ```javascript
-import { createOpencode } from "@deepagent-code/sdk"
+import { createDeepAgentCode } from "@deepagent-code/sdk"
 
-const deepagent-code = await createOpencode({
+const deepagentCode = await createDeepAgentCode({
   hostname: "127.0.0.1",
   port: 4096,
   config: {
@@ -62,9 +62,9 @@ const deepagent-code = await createOpencode({
   },
 })
 
-console.log(`Server running at ${deepagent-code.server.url}`)
+console.log(`Server running at ${deepagentCode.server.url}`)
 
-deepagent-code.server.close()
+deepagentCode.server.close()
 ```
 
 ## 仅客户端模式
@@ -72,9 +72,9 @@ deepagent-code.server.close()
 如果你已经有一个正在运行的 deepagent-code 实例，可以创建一个客户端实例来连接它：
 
 ```javascript
-import { createOpencodeClient } from "@deepagent-code/sdk"
+import { createDeepAgentCodeClient } from "@deepagent-code/sdk"
 
-const client = createOpencodeClient({
+const client = createDeepAgentCodeClient({
   baseUrl: "http://localhost:4096",
 })
 ```

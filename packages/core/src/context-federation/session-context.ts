@@ -647,12 +647,15 @@ export const layer = Layer.effect(
       if (
         input.outcome === "valid" &&
         (input.validUntil <= input.validatedAt ||
-          input.validUntil > selection.next_revalidation_at ||
           input.selectedSourceFingerprint !== selection.selected_source_fingerprint ||
           input.observedLocationMutationEpoch < selection.observed_location_mutation_epoch)
       ) {
         return yield* new ValidationError()
       }
+      // §4.1 step 7 revalidation refresh: a validation may extend the freshness window past the
+      // selection row's original next_revalidation_at when the identity still matches — long
+      // provider turns routinely outlive the 60s TTL. The immutable selection row keeps its
+      // original window; the validation row carries the extended one.
       const id = opaque("validation")
       yield* db
         .insert(SessionContextValidationTable)

@@ -364,10 +364,19 @@ export class PlanProtocolTracker {
   private readonly pending = new Set<string>()
   private readonly settled = new Set<string>()
   private consecutiveViolations: number
+  /**
+   * Identity of the payload that produced the last violation. V2 learned this the hard way: the plan
+   * tool's own rejections say "correct the plan payload and retry once", so a model that CHANGES its
+   * payload is doing what it was told, while one that resends the same bytes is looping. Counting
+   * both alike terminated activities whose model was still correcting (measured on the full-roster
+   * sweep; the same tasks pass once the streak is payload-aware). Kept here so V1 and V2 agree.
+   */
+  private lastViolationIdentity: string | undefined
 
   constructor(consecutiveViolations = 0) {
     this.consecutiveViolations = Math.max(0, Math.floor(consecutiveViolations))
   }
+
 
   start(callID: string, toolName: string): void {
     if (toolName === "plan") this.pending.add(callID)
@@ -376,19 +385,31 @@ export class PlanProtocolTracker {
   preview(callID: string, outcome: PlanProtocolOutcome): { consecutive: number; terminal: boolean } | undefined {
     if (!this.pending.has(callID) || this.settled.has(callID)) return undefined
     if (outcome === "success" || outcome === "progress") return { consecutive: 0, terminal: false }
-    const consecutive = this.consecutiveViolations + 1
-    return { consecutive, terminal: consecutive >= 2 }
+    // A preview cannot know the payload identity yet, so it must not claim the second strike: the
+    // terminal decision belongs to `settle`, which sees the arguments.
+    return { consecutive: this.consecutiveViolations + 1, terminal: false }
   }
 
-  settle(callID: string, outcome: PlanProtocolOutcome): { consecutive: number; terminal: boolean } | undefined {
+  settle(
+    callID: string,
+    outcome: PlanProtocolOutcome,
+    payload?: unknown,
+  ): { consecutive: number; terminal: boolean } | undefined {
     if (!this.pending.has(callID) || this.settled.has(callID)) return undefined
     this.pending.delete(callID)
     this.settled.add(callID)
     if (outcome === "success" || outcome === "progress") {
       this.consecutiveViolations = 0
+      this.lastViolationIdentity = undefined
       return { consecutive: 0, terminal: false }
     }
-    this.consecutiveViolations += 1
+    // An orphan failure (schema/transport error that arrives before the durable tool-call part, so
+    // there are no arguments to hash) is still the SAME failure repeating: two of them are the loop
+    // the budget stops, not a model correcting itself. Only a real payload change resets the streak.
+    const identity = payload === undefined ? undefined : Hash.sha256(JSON.stringify(payload))
+    const repeated = identity === this.lastViolationIdentity
+    this.lastViolationIdentity = identity
+    this.consecutiveViolations = repeated ? this.consecutiveViolations + 1 : 1
     return { consecutive: this.consecutiveViolations, terminal: this.consecutiveViolations >= 2 }
   }
 }
@@ -408,11 +429,27 @@ const DEGENERATION_K = 3 // consecutive samples required
 class DegenerationDetector {
   private totalChars = 0
   private windowText = ""
+  // Deltas arrive token-by-token; keeping the sliding window up to date must not cost O(window)
+  // per delta (that was thousands of 4k-char string copies per reasoning stream and dominated the
+  // event loop — see PERF_DEBUG hot frames). Accumulate chunks cheaply and fold them into the
+  // window only when a sample actually runs.
+  private readonly pending: string[] = []
+  private pendingChars = 0
   private charsSinceLastSample = 0
   private prevNgramSet: Set<string> | undefined
   private consecutiveHits = 0
 
   constructor(private readonly mode: string) {}
+
+  /** Fold accumulated deltas into the bounded sliding window (O(window), never O(stream)). */
+  private foldWindow() {
+    if (this.pending.length === 0) return
+    const combined = this.windowText + this.pending.join("")
+    this.pending.length = 0
+    this.pendingChars = 0
+    this.windowText =
+      combined.length > DEGENERATION_WINDOW_SIZE ? combined.slice(combined.length - DEGENERATION_WINDOW_SIZE) : combined
+  }
 
   private computeNgrams(text: string): Map<string, number> {
     const counts = new Map<string, number>()
@@ -442,22 +479,39 @@ class DegenerationDetector {
   }
 
   /** Feed a reasoning delta; returns the chars and ratio if degeneration is confirmed. */
+  feedCalls = 0
+  feedSampleChars = 0
   feed(delta: string): { triggered: boolean; chars?: number; ratio?: number } {
     if (this.mode === "off") return { triggered: false }
+    if (process.env["DEEPAGENT_CODE_PERF_DEBUG"] === "1") {
+      this.feedCalls++
+      this.feedSampleChars += delta.length
+      if (this.feedCalls % 5_000 === 0)
+        console.error(
+          `[perf] feed calls=${this.feedCalls} deltaChars=${this.feedSampleChars} windowLen=${this.windowText.length} pending=${this.pending.length}`,
+        )
+    }
 
     this.totalChars += delta.length
     this.charsSinceLastSample += delta.length
+    this.pending.push(delta)
+    this.pendingChars += delta.length
 
-    // Maintain sliding window: keep only the last WINDOW_SIZE chars
-    const combined = this.windowText + delta
-    this.windowText =
-      combined.length > DEGENERATION_WINDOW_SIZE ? combined.slice(combined.length - DEGENERATION_WINDOW_SIZE) : combined
-
-    if (this.totalChars < DEGENERATION_ENABLE_THRESHOLD) return { triggered: false }
-    if (this.charsSinceLastSample < DEGENERATION_SAMPLE_INTERVAL) return { triggered: false }
+    // Fold into the sliding window whenever the gate opens OR the accumulation would otherwise
+    // grow without bound. The bound matters: a stream whose deltas trickle below the sample gate
+    // would otherwise let `pending` grow to the whole stream and pay one enormous join later.
+    // Fold only when the window is actually consumed (a sample runs) or the accumulation reaches
+    // one full window. Folding on every small delta is the same per-delta O(window) cost the
+    // incremental rewrite was meant to remove.
+    const dueForSample =
+      this.totalChars >= DEGENERATION_ENABLE_THRESHOLD && this.charsSinceLastSample >= DEGENERATION_SAMPLE_INTERVAL
+    if (!dueForSample) {
+      if (this.pendingChars >= DEGENERATION_WINDOW_SIZE) this.foldWindow()
+      return { triggered: false }
+    }
 
     this.charsSinceLastSample = 0
-
+    this.foldWindow()
     const ngrams = this.computeNgrams(this.windowText)
     const ratio = this.repetitionRatio(ngrams)
     const currentSet = new Set(ngrams.keys())
@@ -677,8 +731,9 @@ export const layer = Layer.effect(
         toolName: string,
         outcome: PlanProtocolOutcome,
         code?: string,
+        payload?: unknown,
       ) => {
-        const result = ctx.planTracker?.settle(planTrackerCallID(toolCallID), outcome)
+        const result = ctx.planTracker?.settle(planTrackerCallID(toolCallID), outcome, payload)
         if (!result?.terminal) return Effect.void
         return Effect.fail(
           new SessionV1.PlanProtocolViolationError({
@@ -1000,7 +1055,10 @@ export const layer = Layer.effect(
             : undefined,
         )
         if (protocol) {
-          yield* settlePlanProtocol(toolCallID, match.part.tool, protocol.outcome, protocol.code)
+          // The call's ARGUMENTS are the identity: two rejections of different payloads mean the model
+          // is correcting itself, which must not accumulate toward termination.
+          const payload = match.part.state.status === "running" ? match.part.state.input : undefined
+          yield* settlePlanProtocol(toolCallID, match.part.tool, protocol.outcome, protocol.code, payload)
         }
         if (input.noProgressLimit && noProgress && noProgress.count >= input.noProgressLimit) {
           slog.warn("subagent.loop.detected", {
@@ -1942,7 +2000,7 @@ export const layer = Layer.effect(
         yield* Effect.forEach(
           Object.values(ctx.toolcalls),
           (call) => Deferred.await(call.done).pipe(Effect.timeout("250 millis"), Effect.ignore),
-          { concurrency: "unbounded" },
+          { concurrency: 16 },
         )
 
         for (const toolCallID of Object.keys(ctx.toolcalls)) {

@@ -1,7 +1,9 @@
 import fsNode from "fs/promises"
 import path from "path"
+import { randomUUID } from "node:crypto"
 import { Global } from "@deepagent-code/core/global"
 import { OFFICIAL_PROVIDER_ID_SET } from "@deepagent-code/core/provider-official"
+import { Flock } from "@deepagent-code/core/util/flock"
 
 /**
  * First-party settings store — the single home for settings that must NOT live in the
@@ -167,24 +169,33 @@ export namespace SettingsStore {
     return out
   }
 
-  /** Read + validate the settings file. Cached in-memory; missing/broken file → empty settings. */
+  /** Read + validate the settings file. Cached in-memory; a missing file is empty. */
   export async function read(): Promise<Settings> {
     const file = FILE()
     if (cache && cache.path === file) return cache.value
-    const value = await fsNode
-      .readFile(file, "utf8")
-      .then((text) => normalize(JSON.parse(text)))
-      .catch(() => ({}) as Settings)
+    const value = await readDisk(file)
     cache = { path: file, value }
     return value
   }
 
-  async function write(value: Settings): Promise<void> {
-    const file = FILE()
+  async function readDisk(file: string): Promise<Settings> {
+    return fsNode
+      .readFile(file, "utf8")
+      .then((text) => normalize(JSON.parse(text)))
+      .catch((error: unknown) => {
+        if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") return {}
+        throw new Error(`Cannot read settings from ${file}`, { cause: error })
+      })
+  }
+
+  async function write(file: string, value: Settings): Promise<void> {
     await fsNode.mkdir(path.dirname(file), { recursive: true }).catch(() => {})
-    const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
+    const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`
     await fsNode.writeFile(tmp, JSON.stringify(value, null, 2), { mode: 0o600 })
-    await fsNode.rename(tmp, file)
+    await fsNode.rename(tmp, file).catch(async (error) => {
+      await fsNode.rm(tmp, { force: true }).catch(() => {})
+      throw error
+    })
     cache = { path: file, value }
   }
 
@@ -199,26 +210,36 @@ export namespace SettingsStore {
     deepagent?: DeepAgentSettings
     providers?: Record<string, TransportSettings>
   }): Promise<{ settings: Settings; changed: boolean }> {
-    const current = await read()
-    const next: Settings = { ...current }
-    if (patch.deepagent) {
-      next.deepagent = normalizeDeepAgent({ ...(current.deepagent ?? {}), ...patch.deepagent })
-    }
-    if (patch.providers) {
-      const merged: Record<string, TransportSettings> = { ...(current.providers ?? {}) }
-      for (const [id, value] of Object.entries(patch.providers)) {
-        if (!OFFICIAL_PROVIDER_ID_SET.has(id)) continue
-        const t = normalizeTransport({ ...(merged[id] ?? {}), ...value })
-        if (t) merged[id] = t
-        else delete merged[id]
-      }
-      next.providers = Object.keys(merged).length > 0 ? merged : undefined
-    }
-    // Strip empty families so the file stays tidy.
-    if (next.deepagent && Object.keys(next.deepagent).length === 0) delete next.deepagent
-    if (next.providers && Object.keys(next.providers).length === 0) delete next.providers
-    const changed = JSON.stringify(next) !== JSON.stringify(current)
-    if (changed) await write(next)
-    return { settings: next, changed }
+    const file = FILE()
+    return Flock.withLock(
+      `settings:${file}`,
+      async () => {
+        // Always re-read under the lock. The in-memory cache cannot observe writes from another
+        // process and using it here would turn an otherwise serialized update into a lost update.
+        const current = await readDisk(file)
+        const next: Settings = { ...current }
+        if (patch.deepagent) {
+          next.deepagent = normalizeDeepAgent({ ...(current.deepagent ?? {}), ...patch.deepagent })
+        }
+        if (patch.providers) {
+          const merged: Record<string, TransportSettings> = { ...(current.providers ?? {}) }
+          for (const [id, value] of Object.entries(patch.providers)) {
+            if (!OFFICIAL_PROVIDER_ID_SET.has(id)) continue
+            const t = normalizeTransport({ ...(merged[id] ?? {}), ...value })
+            if (t) merged[id] = t
+            else delete merged[id]
+          }
+          next.providers = Object.keys(merged).length > 0 ? merged : undefined
+        }
+        // Strip empty families so the file stays tidy.
+        if (next.deepagent && Object.keys(next.deepagent).length === 0) delete next.deepagent
+        if (next.providers && Object.keys(next.providers).length === 0) delete next.providers
+        const changed = JSON.stringify(next) !== JSON.stringify(current)
+        if (changed) await write(file, next)
+        else cache = { path: file, value: next }
+        return { settings: next, changed }
+      },
+      { dir: path.join(path.dirname(file), ".locks") },
+    )
   }
 }

@@ -31,4 +31,19 @@ describe("v2 notification mapping", () => {
     expect(toNotificationEvent("session.next.text.delta", { sessionID: "ses-1", text: "hi" })).toBeUndefined()
     expect(toNotificationEvent("session.execution.started", { sessionID: "ses-1" })).toBeUndefined()
   })
+
+  test("strips the version suffix: journal rows match the same vocabulary", () => {
+    // W9.5 — EventTable.type is versioned (`session.execution.succeeded.1`); the SSE mirror emits
+    // the unversioned definition type — the mapping must accept both.
+    expect(toNotificationEvent("session.execution.succeeded.1", { sessionID: "ses-1" })).toEqual({
+      type: "session.idle",
+      sessionID: "ses-1",
+    })
+    expect(toNotificationEvent("session.execution.failed.1", { sessionID: "ses-1", error: { message: "boom" } })).toEqual({
+      type: "session.error",
+      sessionID: "ses-1",
+      error: { type: "unknown", message: "boom" },
+    })
+    expect(toNotificationEvent("session.execution.started.1", { sessionID: "ses-1" })).toBeUndefined()
+  })
 })

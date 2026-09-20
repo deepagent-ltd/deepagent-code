@@ -3,14 +3,17 @@ import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable
 import { DatabaseBootstrap } from "@deepagent-code/core/database/bootstrap"
 import { UpgradeRun } from "@deepagent-code/core/contract/upgrade-run"
 import { RecoveryCommandContract } from "@deepagent-code/core/contract/recovery-command"
+import { CompositionDigest } from "@/effect/composition-digest"
 import { Authorization } from "../middleware/authorization"
-import { ApiTypedError } from "../typed-error"
+import { ApiTypedErrors } from "../typed-error"
 import { described } from "./metadata"
 
-// C6-01 (design §11.1): bootstrap health/status, backup list/verify, upgrade
-// status and the C1B recovery descriptors/commands surface. Every error uses the
-// C0-03 typed envelope (typed-error.ts). Client decisions use `code` +
-// `retryability` + `httpStatus`, never `message`.
+// C6-01 (design §11.1): process-admin bootstrap health/status, backup list/verify,
+// upgrade status and the C1B recovery descriptors/commands surface. This API owns
+// the process database and intentionally has no workspace/directory routing. It is
+// composed beside InstanceHttpApi, never inside it. Every error uses the C0-03
+// typed envelope (typed-error.ts). Client decisions use `code` + `retryability` +
+// `httpStatus`, never `message`.
 
 const root = ""
 
@@ -85,8 +88,8 @@ const BackupVerifySchema = Schema.Union([BackupVerifyOkSchema, BackupVerifyFailu
 })
 
 const RestoreStatusSchema = Schema.Struct({
-  // C7-05 honest surface: a dry_run request reports "dry_run"; a real verified restore reports
-  // "restored" (or "failed" with the quarantine retained) — never a dry-run label on a real install.
+  // A dry_run request reports "dry_run"; a real verified restore reports "restored". Failures use
+  // the typed error contract and retain the quarantine instead of returning a false success body.
   status: Schema.Literals(["dry_run", "restored", "failed"]),
   inProgress: Schema.Boolean,
   restoreId: Schema.optional(Schema.String),
@@ -192,6 +195,7 @@ export const MaintenancePaths = {
   recoveryCommand: `${root}/recovery/command`,
   recoveryCommandGet: `${root}/recovery/commandGet`,
   recoveryEvidenceExport: `${root}/recovery/evidenceExport`,
+  compositionDigest: `${root}/composition/digest`,
 } as const
 
 export const MaintenanceApi = HttpApi.make("maintenance").add(
@@ -199,7 +203,7 @@ export const MaintenanceApi = HttpApi.make("maintenance").add(
     .add(
       HttpApiEndpoint.get("bootstrapStatus", MaintenancePaths.bootstrapStatus, {
         success: described(BootstrapStateSchema, "Current bootstrap state"),
-        error: ApiTypedError,
+        error: ApiTypedErrors,
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "maintenance.bootstrap.status",
@@ -211,7 +215,7 @@ export const MaintenanceApi = HttpApi.make("maintenance").add(
       HttpApiEndpoint.get("backupList", MaintenancePaths.backupList, {
         query: BackupQuery,
         success: described(BackupListSchema, "Backup manifest list"),
-        error: ApiTypedError,
+        error: ApiTypedErrors,
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "maintenance.backup.list",
@@ -222,7 +226,7 @@ export const MaintenanceApi = HttpApi.make("maintenance").add(
       HttpApiEndpoint.get("backupVerify", MaintenancePaths.backupVerify, {
         query: VerifyQuery,
         success: described(BackupVerifySchema, "Backup verify result"),
-        error: ApiTypedError,
+        error: ApiTypedErrors,
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "maintenance.backup.verify",
@@ -232,19 +236,19 @@ export const MaintenanceApi = HttpApi.make("maintenance").add(
       ),
       HttpApiEndpoint.post("backupRestore", MaintenancePaths.backupRestore, {
         payload: RestoreInput,
-        success: described(RestoreStatusSchema, "Restore dry-run status"),
-        error: ApiTypedError,
+        success: described(RestoreStatusSchema, "Verified restore status"),
+        error: ApiTypedErrors,
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "maintenance.backup.restore",
-          summary: "Restore (dry-run/status)",
+          summary: "Verify or restore a backup",
           description:
-            "Fixture-gated restore status surface: reports whether a restore could proceed and whether one is in progress. The actual restore install is a service call, not this endpoint (this lane).",
+            "Verifies the selected backup. In the incident-only maintenance shell, dry_run:false acquires the exclusive database owner, quarantines the current DB/WAL/SHM, restores and forward-migrates, then requires a process restart. A live business runtime refuses installation.",
         }),
       ),
       HttpApiEndpoint.get("upgradeStatus", MaintenancePaths.upgradeStatus, {
         success: described(UpgradeStatusSchema, "Upgrade run status"),
-        error: ApiTypedError,
+        error: ApiTypedErrors,
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "maintenance.upgrade.status",
@@ -255,7 +259,7 @@ export const MaintenanceApi = HttpApi.make("maintenance").add(
       HttpApiEndpoint.get("recoveryList", MaintenancePaths.recoveryList, {
         query: SessionQuery,
         success: described(RecoveryListSchema, "Recovery descriptors for a session"),
-        error: ApiTypedError,
+        error: ApiTypedErrors,
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "maintenance.recovery.list",
@@ -266,7 +270,7 @@ export const MaintenanceApi = HttpApi.make("maintenance").add(
       HttpApiEndpoint.post("recoveryCommand", MaintenancePaths.recoveryCommand, {
         payload: RecoveryCommandInput,
         success: described(RecoveryCommandResultSchema, "Classified recovery command"),
-        error: ApiTypedError,
+        error: ApiTypedErrors,
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "maintenance.recovery.command",
@@ -277,7 +281,7 @@ export const MaintenanceApi = HttpApi.make("maintenance").add(
       HttpApiEndpoint.get("recoveryCommandGet", MaintenancePaths.recoveryCommandGet, {
         query: CommandGetQuery,
         success: described(RecoveryDescriptorRecordSchema, "Recovery command record"),
-        error: ApiTypedError,
+        error: ApiTypedErrors,
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "maintenance.recovery.commandGet",
@@ -288,23 +292,36 @@ export const MaintenanceApi = HttpApi.make("maintenance").add(
       HttpApiEndpoint.get("recoveryEvidenceExport", MaintenancePaths.recoveryEvidenceExport, {
         query: EvidenceExportQuery,
         success: described(EvidenceExportManifestSchema, "Evidence export manifest"),
-        error: ApiTypedError,
+        error: ApiTypedErrors,
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "maintenance.recovery.evidenceExport",
           summary: "Read an evidence export manifest",
-          description: "Reads a redacted evidence export manifest by export id; a settled/expired export is a typed 410.",
+          description:
+            "Reserved encrypted evidence-export endpoint; returns typed 503 until artifact and unlock authorities are available.",
         }),
       ),
       HttpApiEndpoint.post("recoveryEvidenceExportCreate", MaintenancePaths.recoveryEvidenceExport, {
         payload: EvidenceExportInput,
         success: described(EvidenceExportManifestSchema, "Evidence export manifest"),
-        error: ApiTypedError,
+        error: ApiTypedErrors,
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "maintenance.recovery.evidenceExport.create",
           summary: "Export recovery evidence manifest",
-          description: "Records an evidence export manifest for a session (default-redacted; the body stays behind the permission gate).",
+          description:
+            "Reserved encrypted evidence-export endpoint; never emits a manifest without an encrypted artifact and unlock authority.",
+        }),
+      ),
+      HttpApiEndpoint.get("compositionDigest", MaintenancePaths.compositionDigest, {
+        success: described(CompositionDigest.Record, "Root composition digest"),
+        error: ApiTypedErrors,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "maintenance.composition.digest",
+          summary: "Root composition digest",
+          description:
+            "Reports the stable composition digest of this process root (session owner, tool registry, database, Location host). The incident-only maintenance shell constructs no business runtime and answers a typed 503 instead.",
         }),
       ),
     )

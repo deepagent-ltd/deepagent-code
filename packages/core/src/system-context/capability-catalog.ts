@@ -1,6 +1,6 @@
 export * as CapabilityCatalog from "./capability-catalog"
 
-import { Schema } from "effect"
+import { Context, Schema } from "effect"
 import { assertContentLoadBudget } from "../contract/capability-load"
 import { SystemContext } from "./index"
 import { SystemContextRegistry } from "./registry"
@@ -53,7 +53,7 @@ export const capabilityCatalog: ReadonlyArray<CapabilityManifest> = sortManifest
       availability: "stable",
       required_permissions: ["edit"],
       required_runtime_features: [],
-      entry_tools: ["edit", "write", "apply-patch"],
+      entry_tools: ["edit", "write", "apply_patch"],
       body_ref: "capability://deepagent.code-edit@1.0.0-beta.0",
       max_body_tokens: CapabilityBudget.l2SingleMaxTokens,
     },
@@ -87,8 +87,8 @@ export const capabilityCatalog: ReadonlyArray<CapabilityManifest> = sortManifest
       summary: "Query authorized cross-graph project context",
       use_when: ["recalling project context", "tracing evidence", "finding conflicts"],
       availability: "stable",
-      required_permissions: ["context.read"],
-      required_runtime_features: ["context_federation_v2"],
+      required_permissions: ["context_query"],
+      required_runtime_features: ["context_federation_v2", "context_query_tools_v2"],
       entry_tools: ["context_query"],
       body_ref: "capability://deepagent.context-query@1.0.0-beta.0",
       max_body_tokens: CapabilityBudget.l2SingleMaxTokens,
@@ -149,21 +149,63 @@ export const capabilityCatalogMetrics = (text: string): CatalogMetrics => ({
  * DeepAgentCode capabilities. L0 only explains entry points and when to use them
  * (design §7.3) — it never repeats tool schemas and never includes a procedure
  * body. Each line is one capability with its entry tools and the situations it
- * is for.
+ * is for. W4.1 drawing the §7.6 line in the render itself: a NON-stable
+ * capability is annotated with its availability (`[maintenance]`) and its entry
+ * vector is withheld (`Entry: (not yet available)`) — the directory stays
+ * complete, but the model is never shown an executable entry point for a
+ * capability the runtime won't serve.
  */
 export function renderCapabilityCatalog(catalog: ReadonlyArray<CapabilityManifest> = capabilityCatalog): string {
+  if (catalog.length === 0) return "No DeepAgentCode capabilities are available under the current permissions."
   return [
     "DeepAgentCode capabilities (discovery; load a body for a full procedure):",
-    ...catalog.map(
-      (manifest) =>
-        `- ${manifest.id} — ${manifest.summary}. Entry: ${manifest.entry_tools.join(", ")}. Use: ${manifest.use_when.join(", ")}.`,
-    ),
+    ...catalog.map((manifest) => l0Line(manifest)),
   ].join("\n")
 }
 
+export const CurrentGrantedPermissions = Context.Reference<ReadonlySet<string> | undefined>(
+  "@deepagent-code/v2/CapabilityCatalog/CurrentGrantedPermissions",
+  { defaultValue: () => undefined },
+)
+
+export const CurrentAvailableToolNames = Context.Reference<ReadonlySet<string> | undefined>(
+  "@deepagent-code/v2/CapabilityCatalog/CurrentAvailableToolNames",
+  { defaultValue: () => undefined },
+)
+
+export function authorizedCatalog(
+  grantedPermissions?: ReadonlySet<string>,
+  availableToolNames?: ReadonlySet<string>,
+): ReadonlyArray<CapabilityManifest> {
+  return capabilityCatalog.filter((manifest) =>
+    (grantedPermissions === undefined || manifest.required_permissions.every((permission) => grantedPermissions.has(permission))) &&
+    (availableToolNames === undefined || manifest.entry_tools.every((tool) => availableToolNames.has(tool))),
+  )
+}
+
 /** A capability's rendered L0 line (stable, deterministic). */
-export const capabilityL0Line = (manifest: CapabilityManifest): string =>
-  `- ${manifest.id} — ${manifest.summary}. Entry: ${manifest.entry_tools.join(", ")}. Use: ${manifest.use_when.join(", ")}.`
+export const capabilityL0Line = (manifest: CapabilityManifest): string => l0Line(manifest)
+
+/** L0 line: availability mark (non-stable) + summary + entry vector + when to use. */
+function l0Line(manifest: CapabilityManifest): string {
+  const availability = manifest.availability === "stable" ? "" : ` [${l0AvailabilityLabel(manifest.availability)}]`
+  return `- ${manifest.id}${availability} — ${manifest.summary}. Entry: ${l0EntryVector(manifest)}. Use: ${manifest.use_when.join(", ")}.`
+}
+
+/** The L0 availability label: the enum value with a compact alias for `maintenance_only`. */
+function l0AvailabilityLabel(availability: CapabilityManifest["availability"]): string {
+  return availability === "maintenance_only" ? "maintenance" : availability
+}
+
+/**
+ * The L0 entry vector: stable capabilities advertise their executable entry
+ * tools; a non-stable capability never advertises an executable vector (design
+ * §7.6 — never promise an unusable capability), so the model sees an explicit
+ * not-yet-available marker instead of a tool list.
+ */
+function l0EntryVector(manifest: CapabilityManifest): string {
+  return manifest.availability === "stable" ? manifest.entry_tools.join(", ") : "(not yet available)"
+}
 
 /**
  * Build/start gate: the rendered L0 catalog must stay within the frozen budget
@@ -185,8 +227,10 @@ export function assertCapabilityCatalogWithinBudget(text: string): void {
 export const capabilityCatalogSource = SystemContext.make({
   key: SystemContext.Key.make("deepagent/capability-catalog"),
   codec: Schema.toCodecJson(Schema.String),
-  load: Effect.sync(() => {
-    const text = renderCapabilityCatalog()
+  load: Effect.gen(function* () {
+    const text = renderCapabilityCatalog(
+      authorizedCatalog(yield* CurrentGrantedPermissions, yield* CurrentAvailableToolNames),
+    )
     assertCapabilityCatalogWithinBudget(text)
     return text
   }),

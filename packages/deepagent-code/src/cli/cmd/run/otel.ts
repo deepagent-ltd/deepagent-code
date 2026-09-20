@@ -1,7 +1,8 @@
 import { INVALID_SPAN_CONTEXT, context, trace, SpanStatusCode, type Span } from "@opentelemetry/api"
 import { Effect, ManagedRuntime } from "effect"
-import { memoMap } from "@deepagent-code/core/effect/memo-map"
+import { makeMemoMap } from "@deepagent-code/core/effect/memo-map"
 import { Observability } from "@deepagent-code/core/effect/observability"
+import { ProcessLifecycle } from "@/effect/process-lifecycle"
 
 type AttributeValue = string | number | boolean | undefined
 
@@ -9,7 +10,8 @@ export type RunSpanAttributes = Record<string, AttributeValue>
 
 const noop = trace.wrapSpanContext(INVALID_SPAN_CONTEXT)
 const tracer = trace.getTracer("deepagent-code.run")
-const runtime = ManagedRuntime.make(Observability.layer, { memoMap })
+const runtime = ManagedRuntime.make(Observability.layer, { memoMap: makeMemoMap() })
+ProcessLifecycle.register("cli.run.otel", () => runtime.dispose())
 let ready: Promise<void> | undefined
 
 function attributes(input?: RunSpanAttributes): Record<string, string | number | boolean> | undefined {

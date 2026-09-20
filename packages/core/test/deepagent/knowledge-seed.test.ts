@@ -5,11 +5,12 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { openUserGlobalStore } from "../../src/deepagent/durable-knowledge-store"
 import { seedCoreKnowledge, seedCoreKnowledgeAt } from "../../src/deepagent/knowledge-seed"
+import { tmpRoot } from "../fixture/tmpdir"
 
 let base: string
 
 beforeEach(() => {
-  base = mkdtempSync(path.join(tmpdir(), "deepagent-seed-"))
+  base = mkdtempSync(tmpRoot())
 })
 afterEach(() => rmSync(base, { recursive: true, force: true }))
 

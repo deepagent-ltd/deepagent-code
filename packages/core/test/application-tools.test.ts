@@ -288,4 +288,27 @@ describe("ApplicationTools", () => {
       expect(applicationContexts).toEqual([])
     }),
   )
+
+  it.effect("bounds application tool names and per-name overlays", () =>
+    Effect.gen(function* () {
+      const applications = yield* ApplicationTools.Service
+      yield* applications.register(
+        Object.fromEntries(
+          Array.from({ length: ApplicationTools.MAX_APPLICATION_TOOL_NAMES }, (_, index) => [
+            `tool_${index}`,
+            contextual([]),
+          ]),
+        ),
+      )
+      expect(yield* Effect.flip(applications.register({ overflow: contextual([]) }))).toMatchObject({
+        _tag: "Tool.RegistrationError",
+      })
+
+      for (let index = 1; index < ApplicationTools.MAX_TOOL_OVERLAYS_PER_NAME; index++)
+        yield* applications.register({ tool_0: contextual([]) })
+      expect(yield* Effect.flip(applications.register({ tool_0: contextual([]) }))).toMatchObject({
+        _tag: "Tool.RegistrationError",
+      })
+    }),
+  )
 })

@@ -21,6 +21,7 @@ import {
 } from "@deepagent-code/core/deepagent/goal-loop"
 import { createPlanDoc, planScope, type PlanDoc, type PlanStep } from "@deepagent-code/core/deepagent/plan-controller"
 import { testEffect } from "../lib/effect"
+import { tmpRoot } from "../fixture/fixture"
 
 // V4.1 §N COLD RECOVERY — the end-to-end proof that a goal survives a process restart on the event-driven
 // path. It asserts the CENTRAL claim of makeGoalTickPort: given ONLY the goal's durable run_context doc on
@@ -44,7 +45,7 @@ let executions: number
 const SESSION = "s-cold-1"
 
 beforeEach(() => {
-  root = mkdtempSync(path.join(tmpdir(), "deepagent-cold-"))
+  root = mkdtempSync(tmpRoot())
   executions = 0
 })
 afterEach(() => rmSync(root, { recursive: true, force: true }))
@@ -76,21 +77,23 @@ const putPlan = (rootDir: string, steps: PlanStep[]): string => {
 
 // A stub executor that ADVANCES the plan (marks the first pending step done) using a FRESH store handle —
 // exactly like the goal-worker mirror-back, so a tick makes real forward progress and bumps the version.
-const advancingExecutor = (rootDir: string): StepExecutor => (input) =>
-  Effect.sync(() => {
-    executions++
-    const store = new DocumentStore(rootDir)
-    const doc = store.get(input.planDocId)
-    if (doc) {
-      const plan = JSON.parse(doc.body) as PlanDoc
-      const next = plan.steps.find((s) => s.status !== "done")
-      if (next) {
-        const steps = plan.steps.map((s) => (s.step_id === next.step_id ? { ...s, status: "done" as const } : s))
-        store.update(input.planDocId, JSON.stringify({ ...plan, steps }))
+const advancingExecutor =
+  (rootDir: string): StepExecutor =>
+  (input) =>
+    Effect.sync(() => {
+      executions++
+      const store = new DocumentStore(rootDir)
+      const doc = store.get(input.planDocId)
+      if (doc) {
+        const plan = JSON.parse(doc.body) as PlanDoc
+        const next = plan.steps.find((s) => s.status !== "done")
+        if (next) {
+          const steps = plan.steps.map((s) => (s.step_id === next.step_id ? { ...s, status: "done" as const } : s))
+          store.update(input.planDocId, JSON.stringify({ ...plan, steps }))
+        }
       }
-    }
-    return { tokensUsed: 5 }
-  })
+      return { tokensUsed: 5 }
+    })
 
 const passingPortsExceptPlan = (): GraderPorts => ({
   runTests: () => Effect.succeed({ pass: true }),

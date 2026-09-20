@@ -53,6 +53,8 @@ type WslServersControllerOptions = {
 }
 
 export type WslServersController = ReturnType<typeof createWslServersController>
+export const MAX_WSL_SERVERS = 32
+export const MAX_WSL_SUBSCRIBERS = 64
 
 export function wslServerIdForDistro(distro: string) {
   return `wsl:${distro}`
@@ -67,6 +69,7 @@ export function createWslServersController(
   const listeners = new Set<(event: WslServersEvent) => void>()
   const sidecars = new Map<string, RunningSidecar>()
   const startAttempts = new Map<string, number>()
+  let startAttemptSequence = 0
   let jobAbort: AbortController | undefined
   const logger = options?.logger
   const readServers = options?.readServers ?? readPersistedServers
@@ -183,13 +186,13 @@ export function createWslServersController(
   }
 
   const nextStartAttempt = (id: string) => {
-    const next = (startAttempts.get(id) ?? 0) + 1
+    const next = ++startAttemptSequence
     startAttempts.set(id, next)
     return next
   }
 
   const invalidateStartAttempt = (id: string) => {
-    startAttempts.set(id, (startAttempts.get(id) ?? 0) + 1)
+    startAttempts.set(id, ++startAttemptSequence)
   }
 
   const isCurrentStartAttempt = (id: string, attempt: number) => {
@@ -284,6 +287,9 @@ export function createWslServersController(
       return state
     },
     subscribe(listener: (event: WslServersEvent) => void) {
+      if (!listeners.has(listener) && listeners.size >= MAX_WSL_SUBSCRIBERS) {
+        throw new Error(`Too many WSL server subscribers (limit ${MAX_WSL_SUBSCRIBERS})`)
+      }
       listeners.add(listener)
       return () => listeners.delete(listener)
     },
@@ -373,6 +379,9 @@ export function createWslServersController(
       if (state.servers.some((item) => item.config.id === id)) {
         throw new Error(`${distro} is already added`)
       }
+      if (state.servers.length >= MAX_WSL_SERVERS) {
+        throw new Error(`Too many WSL servers (limit ${MAX_WSL_SERVERS})`)
+      }
       const config: WslServerConfig = {
         id,
         distro,
@@ -389,6 +398,7 @@ export function createWslServersController(
       const distro = state.servers.find((item) => item.config.id === id)?.config.distro
       invalidateStartAttempt(id)
       await stopServerInternal(id)
+      startAttempts.delete(id)
       const remaining = readServers().filter((item) => item.id !== id)
       persistServers(remaining)
       setState({
@@ -409,6 +419,7 @@ export function createWslServersController(
         }
       }
       sidecars.clear()
+      startAttempts.clear()
     },
   }
 }

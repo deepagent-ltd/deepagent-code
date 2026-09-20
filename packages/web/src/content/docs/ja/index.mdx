@@ -34,7 +34,7 @@ export const console = config.console
 DeepAgent Code をインストールする最も簡単な方法は、インストールスクリプトを使用することです。
 
 ```bash
-curl -fsSL https://deepagent-code.ai/install | bash
+curl -fsSL https://deepagent.ltd/install | bash
 ```
 
 次のコマンドを使用してインストールすることもできます。
@@ -75,11 +75,7 @@ curl -fsSL https://deepagent-code.ai/install | bash
 
 - **macOS および Linux での Homebrew の使用**
 
-  ```bash
-  brew install anomalyco/tap/deepagent-code
-  ```
-
-  > 最新のリリースには DeepAgent Code タップを使用することをお勧めします。公式の `brew install deepagent-code` 式は Homebrew チームによって維持されており、更新頻度は低くなります。
+  > Homebrew での配布はまだ公開されていません — formulae.brew.sh に `deepagent-code` の Formula は存在しません。上記のインストールスクリプトをご利用ください。Homebrew タップは今後のリリースで公開予定です。
 
 - **Arch Linux での Paru の使用**
 
@@ -115,18 +111,18 @@ Windows で最高のエクスペリエンスを得るには、[Windows Subsystem
 - **Mise の使用**
 
   ```bash
-  mise use -g github:lessweb/deepagent-code
+  mise use -g github:deepagent-ltd/deepagent-code
   ```
 
 - **Docker の使用**
 
   ```bash
-  docker run -it --rm ghcr.io/lessweb/deepagent-code
+  docker run -it --rm ghcr.io/deepagent-ltd/deepagent-code
   ```
 
 Bun を使用して Windows に DeepAgent Code をインストールするためのサポートは現在進行中です。
 
-[Releases](https://github.com/lessweb/deepagent-code/releases).
+[Releases](https://github.com/deepagent-ltd/deepagent-code/releases).
 
 ---
 
@@ -137,7 +133,7 @@ DeepAgent Code を使用すると、API キーを構成することで任意の 
 LLM プロバイダーを初めて使用する場合は、[DeepAgent Code Zen](/docs/zen) をお勧めします。
 これは、DeepAgent Code チームによってテストおよび検証されたモデルの厳選されたリストです。
 
-1. TUI で `/connect` コマンドを実行し、deepagent-code を選択して、[deepagent-code.ai/auth](https://deepagent-code.ai/auth) で認証します。
+1. TUI で `/connect` コマンドを実行し、deepagent-code を選択して、[ai.deepagent.ltd/auth](https://ai.deepagent.ltd/auth) で認証します。
 
    ```txt
    /connect
@@ -339,7 +335,7 @@ DeepAgent Code との会話は [他のチームメンバーと共有できます
 会話はデフォルトでは共有されません。
 :::
 
-これは [DeepAgent Code を使用した会話 ](https://deepagent-code.ai/s/4XP1fce5) の例です。
+これは [DeepAgent Code を使用した会話 ](https://ai.deepagent.ltd/s/4XP1fce5) の例です。
 
 ---
 

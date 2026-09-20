@@ -1,6 +1,6 @@
 # deepagent-code GitHub Action
 
-A GitHub Action that integrates [deepagent-code](https://deepagent-code.ai) directly into your GitHub workflow.
+A GitHub Action that integrates [deepagent-code](https://ai.deepagent.ltd) directly into your GitHub workflow.
 
 The release workflow reads the target version from `github/VERSION` and publishes that exact tag.
 

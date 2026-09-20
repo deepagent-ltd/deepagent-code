@@ -243,7 +243,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | ChildProcessSpa
             Stream.mkString(Stream.decodeText(handle.stderr)),
             handle.exitCode,
           ],
-          { concurrency: "unbounded" },
+          { concurrency: 3 },
         )
         return { stdout, stderr, code }
       }, Effect.scoped)
@@ -358,7 +358,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | ChildProcessSpa
                 const stdout = yield* Stream.decodeText(handle.stdout).pipe(
                   Stream.splitLines,
                   Stream.filter((line) => line.length > 0),
-                  Stream.runForEach((line) => Effect.sync(() => Queue.offerUnsafe(queue, clean(line)))),
+                  Stream.runForEach((line) => Queue.offer(queue, clean(line))),
                   Effect.forkScoped,
                 )
                 const code = yield* raceAbort(handle.exitCode, input.signal)
@@ -377,6 +377,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | ChildProcessSpa
               ),
             )
           }),
+          { bufferSize: 64, strategy: "suspend" },
         )
 
       const search: Interface["search"] = Effect.fn("Ripgrep.search")(function* (input: SearchInput) {
@@ -400,7 +401,7 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | ChildProcessSpa
                 Stream.mkString(Stream.decodeText(handle.stderr)),
                 handle.exitCode,
               ],
-              { concurrency: "unbounded" },
+              { concurrency: 3 },
             )
 
             if (code !== 0 && code !== 1 && code !== 2) {

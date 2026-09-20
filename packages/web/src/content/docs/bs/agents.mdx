@@ -147,7 +147,7 @@ Konfigurirajte agente u svom konfiguracijskom fajlu `deepagent-code.json`:
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "agent": {
     "build": {
       "mode": "primary",
@@ -376,7 +376,7 @@ Kontrolirajte koji su alati dostupni u ovom agentu koristeći konfiguraciju `too
 
 ```json title="deepagent-code.json" {3-6,9-12}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "tools": {
     "write": true,
     "bash": true
@@ -400,7 +400,7 @@ Također možete koristiti zamjenske znakove za kontrolu više alata odjednom. N
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "agent": {
     "readonly": {
       "tools": {
@@ -427,7 +427,7 @@ Možete konfigurirati dozvole za upravljanje radnjama koje agent može poduzeti.
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": {
     "edit": "deny"
   }
@@ -438,7 +438,7 @@ Možete nadjačati ove dozvole po agentu.
 
 ```json title="deepagent-code.json" {3-5,8-10}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": {
     "edit": "deny"
   },
@@ -475,7 +475,7 @@ Možete postaviti dozvole za određene bash komande.
 
 ```json title="deepagent-code.json" {7}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "agent": {
     "build": {
       "permission": {
@@ -493,7 +493,7 @@ Ovo može koristiti glob uzorak.
 
 ```json title="deepagent-code.json" {7}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "agent": {
     "build": {
       "permission": {
@@ -511,7 +511,7 @@ Budući da posljednje podudarno pravilo ima prednost, prvo postavite zamjenski z
 
 ```json title="deepagent-code.json" {8}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "agent": {
     "build": {
       "permission": {
@@ -704,7 +704,7 @@ Evo nekoliko uobičajenih slučajeva upotrebe različitih agenata.
 Evo nekoliko primjera agenata koji bi vam mogli biti korisni.
 
 :::tip
-Imate li agenta kojeg biste željeli podijeliti? [Pošalji PR](https://github.com/lessweb/deepagent-code).
+Imate li agenta kojeg biste željeli podijeliti? [Pošalji PR](https://github.com/deepagent-ltd/deepagent-code).
 :::
 
 ---

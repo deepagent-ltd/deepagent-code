@@ -4,10 +4,8 @@ import { Effect, Layer } from "effect"
 import type * as Scope from "effect/Scope"
 import { AgentV2 } from "../src/agent"
 import { Database } from "../src/database/database"
-import { AgentContextBuilderService } from "../src/im/agent-executor"
 import { AgentListProviderService, AgentListProviderLive } from "../src/im/agent-list-provider"
 import { IMBroadcasterService, IMBroadcasterLive } from "../src/im/broadcaster"
-import { AgentContextBuilderLive } from "../src/im/context-builder"
 import { MentionParser } from "../src/im/mention-parser"
 import { IMRepository, IMRepositoryLive } from "../src/im/repository"
 import type { ServerEvent } from "../src/im/websocket"
@@ -15,9 +13,8 @@ import type { ServerEvent } from "../src/im/websocket"
 describe("IM System E2E Tests", () => {
   const databaseLayer = Database.layerFromPath(":memory:")
   const repositoryLayer = Layer.provideMerge(IMRepositoryLive, databaseLayer)
-  const contextBuilderLayer = Layer.provideMerge(AgentContextBuilderLive, repositoryLayer)
   const agentLayer = Layer.provideMerge(AgentListProviderLive, AgentV2.layer)
-  const testLayer = Layer.mergeAll(databaseLayer, repositoryLayer, contextBuilderLayer, IMBroadcasterLive, agentLayer)
+  const testLayer = Layer.mergeAll(databaseLayer, repositoryLayer, IMBroadcasterLive, agentLayer)
   type TestServices = Layer.Success<typeof testLayer>
 
   const run = <A, E>(effect: Effect.Effect<A, E, TestServices | Scope.Scope>) =>
@@ -37,13 +34,12 @@ describe("IM System E2E Tests", () => {
     `)
   })
 
-  it("persists mentioned messages and builds chronological context on migrated schema", async () => {
-    const context = await run(
+  it("persists mentioned messages on migrated schema", async () => {
+    const message = await run(
       Effect.gen(function* () {
         yield* seedWorkspace
 
         const repo = yield* IMRepository
-        const contextBuilder = yield* AgentContextBuilderService
         const group = yield* repo.createGroup({
           workspaceID: "wrk_im_e2e",
           projectID: "proj_im_e2e",
@@ -72,21 +68,12 @@ describe("IM System E2E Tests", () => {
         })
 
         expect(message.mentions).toEqual(["build"])
-
-        return yield* contextBuilder.build({
-          workspaceID: "wrk_im_e2e",
-          groupID: group.id,
-          messageID: message.id,
-          task: content,
-        })
+        return message
       }),
     )
 
-    expect(context.conversation.groupID).toMatch(/^img_/)
-    expect(context.conversation.recentMessages.map((message) => message.content)).toEqual([
-      "First observation",
-      "Please inspect this @build",
-    ])
+    expect(message.groupID).toMatch(/^img_/)
+    expect(message.mentions).toEqual(["build"])
   })
 
   it("broadcasts message and agent status events to registered group connections", async () => {

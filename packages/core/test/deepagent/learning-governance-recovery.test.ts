@@ -18,11 +18,12 @@ import { DeepAgentLearningGovernance } from "../../src/deepagent/learning-govern
 import { DeepAgentLearningJob } from "../../src/deepagent/learning-job"
 import { CanonicalJson } from "../../src/util/canonical-json"
 import { Hash } from "../../src/util/hash"
+import { tmpRoot } from "../fixture/tmpdir"
 
 let root: string
 
 beforeEach(() => {
-  root = mkdtempSync(path.join(tmpdir(), "deepagent-learning-governance-recovery-"))
+  root = mkdtempSync(tmpRoot())
 })
 
 afterEach(() => rmSync(root, { recursive: true, force: true }))

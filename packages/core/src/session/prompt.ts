@@ -29,6 +29,16 @@ export class AgentAttachment extends Schema.Class<AgentAttachment>("Prompt.Agent
   source: Source.pipe(Schema.optional),
 }) {}
 
+// UPD-002/RI-126: structured-output format requested with the prompt. Mirrors the legacy
+// SessionV1.Format json_schema variant; the V2 runner either lowers it onto the wire
+// (`responseFormat`, Responses-family + format-capable routes) or synthesizes the
+// StructuredOutput tool for chat routes.
+export class OutputFormat extends Schema.Class<OutputFormat>("Prompt.OutputFormat")({
+  type: Schema.Literals(["text", "json_schema"]),
+  schema: Schema.Record(Schema.String, Schema.Any).pipe(Schema.optional),
+  retryCount: Schema.Int.pipe(Schema.optional),
+}) {}
+
 export class ReferenceAttachment extends Schema.Class<ReferenceAttachment>("Prompt.ReferenceAttachment")({
   name: Schema.String,
   kind: Schema.Literals(["local", "git", "invalid"]),
@@ -46,15 +56,17 @@ export class Prompt extends Schema.Class<Prompt>("Prompt")({
   files: Schema.Array(FileAttachment).pipe(Schema.optional),
   agents: Schema.Array(AgentAttachment).pipe(Schema.optional),
   references: Schema.Array(ReferenceAttachment).pipe(Schema.optional),
+  format: OutputFormat.pipe(Schema.optional),
 }) {
   static readonly equivalence = Schema.toEquivalence(Prompt)
 
-  static fromUserMessage(input: Pick<Prompt, "text" | "files" | "agents" | "references">) {
+  static fromUserMessage(input: Pick<Prompt, "text" | "files" | "agents" | "references" | "format">) {
     return new Prompt({
       text: input.text,
       ...(input.files === undefined ? {} : { files: input.files }),
       ...(input.agents === undefined ? {} : { agents: input.agents }),
       ...(input.references === undefined ? {} : { references: input.references }),
+      ...(input.format === undefined ? {} : { format: input.format }),
     })
   }
 }

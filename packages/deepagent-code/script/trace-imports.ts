@@ -2,7 +2,7 @@
 import * as path from "path"
 import * as ts from "typescript"
 
-const BASE_DIR = "/home/thdxr/dev/projects/lessweb/deepagent-code/packages/deepagent-code"
+const BASE_DIR = "/home/thdxr/dev/projects/deepagent-ltd/deepagent-code/packages/deepagent-code"
 
 // Get entry file from command line arg or use default
 const ENTRY_FILE = process.argv[2] || "src/plugin/tui/runtime.ts"

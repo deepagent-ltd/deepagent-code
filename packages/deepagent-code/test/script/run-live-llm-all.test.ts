@@ -115,11 +115,18 @@ describe("all real LLM test runner", () => {
       DISPLAY: ":99",
       MODELS_DEV_API_JSON: "/isolated/models.json",
       DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE: config.apiKeyFile,
+      DEEPAGENT_CODE_LIVE_LLM_PROVIDER: "deepseek",
       DEEPAGENT_CODE_LIVE_LLM_BASE_URL: config.baseURL,
       DEEPAGENT_CODE_LIVE_LLM_MODEL: config.model,
       DEEPAGENT_CODE_LIVE_LLM_TIMEOUT_MS: String(config.requestTimeoutMs),
       DEEPAGENT_CODE_LIVE_LLM_EVAL_RUNS: String(config.evalRuns),
     })
+    // Desktop's live harness parses DEEPAGENT_CODE_LIVE_LLM_PROVIDER with live-* runtime-id
+    // semantics; the unprefixed registry id must never reach it (it would flip desktop to
+    // the raw-key catalog mode).
+    expect(runnerEnvironment(config, hostEnvironment, true, "desktop")).not.toHaveProperty(
+      "DEEPAGENT_CODE_LIVE_LLM_PROVIDER",
+    )
   })
 
   test("pins the repository models snapshot when the host does not provide one", () => {
@@ -186,6 +193,15 @@ describe("all real LLM test runner", () => {
       modelID: "kimi-k3",
       baseURL: "https://api.moonshot.ai/v1",
     })
+    const zai = await loadPlanLiveLLMConfig({
+      DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE: file,
+      DEEPAGENT_CODE_PLAN_LIVE_LLM_PROVIDER: "zai",
+    })
+    expect(zai).toMatchObject({
+      providerID: "zai",
+      modelID: "glm-5.3-flash",
+      baseURL: "https://open.bigmodel.cn/api/paas/v4",
+    })
     await expect(loadLiveLLMConfig({ DEEPSEEK_API_KEY: "ambient-user-key" })).rejects.toThrow(
       "Raw API key environment variables are not accepted",
     )
@@ -207,6 +223,54 @@ describe("all real LLM test runner", () => {
     await expect(loadLiveLLMConfig({ DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE: file })).rejects.toThrow(
       "exactly one non-empty line",
     )
+  })
+
+  test("selects the zai provider from the runner environment and registers live-zai", async () => {
+    await using directory = await tmpdir()
+    const file = path.join(directory.path, "glm.key")
+    await Bun.write(file, "file-only-key\n")
+    await chmod(file, 0o600)
+
+    const loaded = await loadLiveLLMConfig({
+      DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE: file,
+      DEEPAGENT_CODE_LIVE_LLM_PROVIDER: "zai",
+      DEEPAGENT_CODE_LIVE_LLM_BASE_URL: "https://api.z.ai/api/paas/v4",
+      DEEPAGENT_CODE_LIVE_LLM_MODEL: "glm-5.3-flash",
+    })
+    expect(loaded).toMatchObject({ providerID: "zai", modelID: "glm-5.3-flash" })
+
+    await expect(
+      loadLiveLLMConfig({
+        DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE: file,
+        DEEPAGENT_CODE_LIVE_LLM_PROVIDER: "zai",
+        DEEPAGENT_CODE_LIVE_LLM_BASE_URL: "https://example.com",
+      }),
+    ).rejects.toThrow(
+      "Official GLM live tests require https://open.bigmodel.cn/api/paas/v4 or https://api.z.ai/api/paas/v4",
+    )
+
+    await expect(
+      loadLiveLLMConfig({
+        DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE: file,
+        DEEPAGENT_CODE_LIVE_LLM_PROVIDER: "openai",
+      }),
+    ).rejects.toThrow("DEEPAGENT_CODE_LIVE_LLM_PROVIDER must be deepseek, kimi, zai, or zai-coding-plan")
+
+    const moonshotai = await loadLiveLLMConfig({
+      DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE: file,
+      DEEPAGENT_CODE_LIVE_LLM_PROVIDER: "moonshotai",
+      DEEPAGENT_CODE_LIVE_LLM_BASE_URL: "https://api.moonshot.ai/v1",
+    })
+    expect(moonshotai).toMatchObject({ providerID: "kimi" })
+
+    const workspaceConfig = liveWorkspaceConfig(loaded, { "*": "deny" })
+    expect(workspaceConfig.enabled_providers).toEqual(["live-zai"])
+    expect(workspaceConfig.model).toBe("live-zai/glm-5.3-flash")
+    expect(workspaceConfig.provider?.["live-zai"]?.api).toBe("https://api.z.ai/api/paas/v4")
+    expect(workspaceConfig.provider?.["live-zai"]?.models?.["glm-5.3-flash"]).toMatchObject({
+      reasoning: true,
+      options: { reasoningEffort: "low", maxTokens: 1024 },
+    })
   })
 
   test("injects a file reference into production provider config without serializing the key", () => {

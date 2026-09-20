@@ -936,7 +936,7 @@ export const layer = Layer.effect(
               }),
             ),
           ),
-        { concurrency: "unbounded" },
+        { concurrency: 16 },
       ).pipe(Effect.map((items) => items.flat()))
 
       yield* Effect.forEach(

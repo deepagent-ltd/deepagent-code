@@ -1,10 +1,10 @@
 # deepagent-code VS Code Extension
 
-A Visual Studio Code extension that integrates [deepagent-code](https://deepagent-code.ai) directly into your development workflow.
+A Visual Studio Code extension that integrates [deepagent-code](https://ai.deepagent.ltd) directly into your development workflow.
 
 ## Prerequisites
 
-This extension requires the [deepagent-code CLI](https://deepagent-code.ai) to be installed on your system. Visit [deepagent-code.ai](https://deepagent-code.ai) for installation instructions.
+This extension requires the [deepagent-code CLI](https://ai.deepagent.ltd) to be installed on your system. Visit [ai.deepagent.ltd](https://ai.deepagent.ltd) for installation instructions.
 
 ## Features
 
@@ -15,7 +15,7 @@ This extension requires the [deepagent-code CLI](https://deepagent-code.ai) to b
 
 ## Support
 
-This is an early release. If you encounter issues or have feedback, please create an issue at https://github.com/lessweb/deepagent-code/issues.
+This is an early release. If you encounter issues or have feedback, please create an issue at https://github.com/deepagent-ltd/deepagent-code/issues.
 
 ## Development
 

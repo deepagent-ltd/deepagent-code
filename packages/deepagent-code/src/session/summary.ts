@@ -90,7 +90,6 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const sessions = yield* Session.Service
     const snapshot = yield* Snapshot.Service
-    const events = yield* EventV2Bridge.Service
     const config = yield* Config.Service
 
     const snapshots = (messages: SessionV1.WithParts[]) => {
@@ -162,10 +161,15 @@ export const layer = Layer.effect(
           diffManifest: descriptor(empty),
         },
       })
-      yield* events.publish(Session.Event.Diff, {
+      yield* sessions.setSummary({
         sessionID: input.sessionID,
+        summary: {
+          additions: 0,
+          deletions: 0,
+          files: 0,
+          diffManifest: descriptor(empty),
+        },
         diff: [],
-        manifest: descriptor(empty),
       })
       if ((yield* config.get()).snapshot === false) return
       const target = yield* sessions
@@ -187,11 +191,7 @@ export const layer = Layer.effect(
           files: manifest.totalFiles,
           diffManifest: descriptor(manifest),
         },
-      })
-      yield* events.publish(Session.Event.Diff, {
-        sessionID: input.sessionID,
         diff: diffs,
-        manifest: descriptor(manifest),
       })
       yield* sessions.updateMessage(target.info)
     })

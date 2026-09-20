@@ -5,6 +5,7 @@ import * as path from "node:path"
 import { EVIDENCE_LEVEL_DECLARATION, buildAndWriteManifest } from "../script/perf-baseline/manifest"
 import { UNIT, writeSummariesJsonl } from "../script/perf-baseline/samples"
 import type { ScenarioOutcome } from "../script/perf-baseline/lib"
+import { tmpRoot, tmpRootShared } from "./fixture/tmpdir"
 
 const sampleOutcome: ScenarioOutcome = {
   name: "probe-scenario",
@@ -49,7 +50,7 @@ describe("perf baseline run manifest integrity", () => {
   })
 
   test("written manifest carries every required identity/environment/statistics field", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "perf-manifest-test-"))
+    const dir = fs.mkdtempSync(tmpRootShared())
     try {
       const manifestPath = await buildAndWriteManifest({
         runId: "unit-run-id",
@@ -102,7 +103,7 @@ describe("perf baseline run manifest integrity", () => {
   })
 
   test("interference at_start/at_end are genuine independent samples with capture timestamps", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "perf-manifest-iso-"))
+    const dir = fs.mkdtempSync(tmpRootShared())
     try {
       const startSnapshot = {
         captured_at: "2026-01-01T00:00:00.000Z",
@@ -143,7 +144,7 @@ describe("perf baseline run manifest integrity", () => {
   })
 
   test("summaries jsonl writes one parseable JSON object per line", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "perf-jsonl-test-"))
+    const dir = fs.mkdtempSync(tmpRootShared())
     try {
       const target = path.join(dir, "summaries.jsonl")
       writeSummariesJsonl(target, [

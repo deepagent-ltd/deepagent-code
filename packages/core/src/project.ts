@@ -11,13 +11,8 @@ import { Git } from "./git"
 import { Hash } from "./util/hash"
 import { ProjectDirectoryTable } from "./project/sql"
 
-export const ID = Schema.String.pipe(
-  Schema.brand("Project.ID"),
-  withStatics((schema) => ({
-    global: schema.make("global"),
-  })),
-)
-export type ID = typeof ID.Type
+import { ID } from "./project/id"
+export { ID }
 
 export const Vcs = Schema.Union([
   Schema.Struct({

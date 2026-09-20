@@ -6,6 +6,7 @@ import { createAgentWorktree, cleanupAgentWorktree } from "../../src/session/age
 import { Global } from "@deepagent-code/core/global"
 import { DEFAULT_WORKER_IDENTITY } from "../../src/agent/collaboration-identity"
 import { Filesystem } from "../../src/util/filesystem"
+import { tmpRootAsync, tmpRootSharedAsync } from "../fixture/fixture"
 
 // §C3.2 (P4.5a) — the git-CLI worktree helper against a REAL temp git repo. Proves: a git repo yields a
 // distinct, isolated worktree dir on a dedicated branch; cleanup preserves committed work (branch KEPT)
@@ -23,7 +24,7 @@ afterEach(async () => {
 })
 
 const makeRepo = async (): Promise<string> => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "deepagent-wt-test-"))
+  const dir = await tmpRootSharedAsync()
   cleanupDirs.push(dir)
   await git(["init", "-b", "main"], dir)
   await git(["config", "user.email", "test@test.dev"], dir)
@@ -96,7 +97,7 @@ describe("agent-worktree (§C3.2 / P4.5a)", () => {
   })
 
   test("non-git directory → null (the caller chooses read-only fallback or write fail-closed)", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "deepagent-nongit-"))
+    const dir = await tmpRootSharedAsync()
     cleanupDirs.push(dir)
     const wt = await createAgentWorktree({ eventDirectory: dir, label: "x" })
     expect(wt).toBeNull()

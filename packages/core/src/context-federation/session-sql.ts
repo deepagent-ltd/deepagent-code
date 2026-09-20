@@ -167,6 +167,13 @@ export const SessionProviderAttemptTable = sqliteTable(
       .notNull()
       .references(() => SessionActivityTable.activity_id, { onDelete: "cascade" }),
     provider_turn_seq: integer().notNull(),
+    // Monotonic optimistic-concurrency version for recovery descriptors and maintenance CAS.
+    // It advances on every state/identity transition, including prepared-turn sealing.
+    attempt_version: integer().notNull().default(0),
+    // Exact Session execution claim under which this provider attempt was prepared.
+    // Historical rows migrate with 0 (an impossible live token) and therefore fail
+    // closed during recovery instead of releasing a successor execution's claim.
+    execution_claim_token: integer().notNull().default(0),
     selection_id: text()
       .notNull()
       .references(() => SessionContextSelectionTable.selection_id),

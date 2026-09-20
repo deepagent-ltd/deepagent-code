@@ -73,7 +73,7 @@ jobs:
 
       - name: Configure git identity
         run: |
-          git config --global user.email "bot@deepagent-code.ai"
+          git config --global user.email "bot@ai.deepagent.ltd"
           git config --global user.name "deepagent-code"
 
       - name: Cache Turbo

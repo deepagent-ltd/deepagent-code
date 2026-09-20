@@ -15,7 +15,7 @@ Use the `permission` field to control tool behavior. You can allow, deny, or req
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": {
     "edit": "deny",
     "bash": "ask",
@@ -28,7 +28,7 @@ You can also use wildcards to control multiple tools at once. For example, to re
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": {
     "mymcp_*": "ask"
   }
@@ -51,7 +51,7 @@ Execute shell commands in your project environment.
 
 ```json title="deepagent-code.json" {4}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": {
     "bash": "allow"
   }
@@ -68,7 +68,7 @@ Modify existing files using exact string replacements.
 
 ```json title="deepagent-code.json" {4}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": {
     "edit": "allow"
   }
@@ -85,7 +85,7 @@ Create new files or overwrite existing ones.
 
 ```json title="deepagent-code.json" {4}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": {
     "edit": "allow"
   }
@@ -106,7 +106,7 @@ Read file contents from your codebase.
 
 ```json title="deepagent-code.json" {4}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": {
     "read": "allow"
   }
@@ -123,7 +123,7 @@ Search file contents using regular expressions.
 
 ```json title="deepagent-code.json" {4}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": {
     "grep": "allow"
   }
@@ -140,7 +140,7 @@ Find files by pattern matching.
 
 ```json title="deepagent-code.json" {4}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": {
     "glob": "allow"
   }
@@ -161,7 +161,7 @@ This tool is only available when `DEEPAGENT_CODE_EXPERIMENTAL_LSP_TOOL=true` (or
 
 ```json title="deepagent-code.json" {4}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": {
     "lsp": "allow"
   }
@@ -180,7 +180,7 @@ Apply patches to files.
 
 ```json title="deepagent-code.json" {4}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": {
     "edit": "allow"
   }
@@ -205,7 +205,7 @@ Load a [skill](/docs/skills) (a `SKILL.md` file) and return its content in the c
 
 ```json title="deepagent-code.json" {4}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": {
     "skill": "allow"
   }
@@ -220,7 +220,7 @@ Manage todo lists during coding sessions.
 
 ```json title="deepagent-code.json" {4}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": {
     "todowrite": "allow"
   }
@@ -241,7 +241,7 @@ Fetch web content.
 
 ```json title="deepagent-code.json" {4}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": {
     "webfetch": "allow"
   }
@@ -269,7 +269,7 @@ DEEPAGENT_CODE_ENABLE_EXA=1 deepagent-code
 
 ```json title="deepagent-code.json" {4}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": {
     "websearch": "allow"
   }
@@ -292,7 +292,7 @@ Ask the user questions during execution.
 
 ```json title="deepagent-code.json" {4}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "permission": {
     "question": "allow"
   }

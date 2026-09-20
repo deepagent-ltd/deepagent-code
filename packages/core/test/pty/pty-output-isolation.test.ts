@@ -107,4 +107,21 @@ describe("pty output isolation", () => {
       expect(yield* waitForOutput(socket.output, "AAA")).toContain("AAA")
     }),
   )
+
+  ptyTest("closes subscribers beyond the per-session ceiling", () =>
+    Effect.gen(function* () {
+      const pty = yield* Pty.Service
+      const info = yield* createPty("cat")
+      const closes: Array<{ code?: number; reason?: string }> = []
+      for (let index = 0; index <= Pty.MAX_SUBSCRIBERS_PER_SESSION; index++) {
+        const socket = yield* makeSocket({ connection: index })
+        socket.socket.close = (code, reason) => closes.push({ code, reason })
+        yield* pty.connect(info.id, socket.socket)
+      }
+
+      expect(closes).toEqual([
+        { code: 4429, reason: `Too many PTY subscribers (limit ${Pty.MAX_SUBSCRIBERS_PER_SESSION})` },
+      ])
+    }),
+  )
 })

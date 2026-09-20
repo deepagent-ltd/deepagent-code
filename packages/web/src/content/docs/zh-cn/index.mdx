@@ -34,7 +34,7 @@ export const console = config.console
 安装 DeepAgent Code 最简单的方法是通过安装脚本。
 
 ```bash
-curl -fsSL https://deepagent-code.ai/install | bash
+curl -fsSL https://deepagent.ltd/install | bash
 ```
 
 你也可以使用以下方式安装：
@@ -75,11 +75,7 @@ curl -fsSL https://deepagent-code.ai/install | bash
 
 - **在 macOS 和 Linux 上使用 Homebrew**
 
-  ```bash
-  brew install anomalyco/tap/deepagent-code
-  ```
-
-  > 我们推荐使用 DeepAgent Code tap 以获取最新版本。官方的 `brew install deepagent-code` formula 由 Homebrew 团队维护，更新频率较低。
+  > Homebrew 安装尚未发布 — formulae.brew.sh 上没有 `deepagent-code` formula。请使用上方的安装脚本；Homebrew tap 计划在未来版本中发布。
 
 - **在 Arch Linux 上安装**
 
@@ -115,18 +111,18 @@ curl -fsSL https://deepagent-code.ai/install | bash
 - **使用 Mise**
 
   ```bash
-  mise use -g github:lessweb/deepagent-code
+  mise use -g github:deepagent-ltd/deepagent-code
   ```
 
 - **使用 Docker**
 
   ```bash
-  docker run -it --rm ghcr.io/lessweb/deepagent-code
+  docker run -it --rm ghcr.io/deepagent-ltd/deepagent-code
   ```
 
 在 Windows 上通过 Bun 安装 DeepAgent Code 的支持目前正在开发中。
 
-你也可以从 [Releases](https://github.com/lessweb/deepagent-code/releases) 页面直接下载二进制文件。
+你也可以从 [Releases](https://github.com/deepagent-ltd/deepagent-code/releases) 页面直接下载二进制文件。
 
 ---
 
@@ -136,7 +132,7 @@ curl -fsSL https://deepagent-code.ai/install | bash
 
 如果你刚开始接触 LLM 提供商，我们推荐使用 [DeepAgent Code Zen](/docs/zen)。这是一组经过 DeepAgent Code 团队测试和验证的精选模型。
 
-1. 在 TUI 中运行 `/connect` 命令，选择 deepagent-code，然后前往 [deepagent-code.ai/auth](https://deepagent-code.ai/auth)。
+1. 在 TUI 中运行 `/connect` 命令，选择 deepagent-code，然后前往 [ai.deepagent.ltd/auth](https://ai.deepagent.ltd/auth)。
 
    ```txt
    /connect
@@ -332,7 +328,7 @@ Can you refactor the function in @packages/functions/src/api/index.ts?
 对话默认不会被分享。
 :::
 
-这是一个与 DeepAgent Code 的[示例对话](https://deepagent-code.ai/s/4XP1fce5)。
+这是一个与 DeepAgent Code 的[示例对话](https://ai.deepagent.ltd/s/4XP1fce5)。
 
 ---
 

@@ -10,14 +10,13 @@ import { LocationServiceMap } from "@deepagent-code/core/location-layer"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { Shell } from "@/shell/shell"
-import { EffectBridge } from "@/effect/bridge"
 import { CorsConfig, isAllowedRequestOrigin, type CorsOptions } from "@/server/cors"
 import {
   PTY_CONNECT_TICKET_QUERY,
   PTY_CONNECT_TOKEN_HEADER,
   PTY_CONNECT_TOKEN_HEADER_VALUE,
 } from "@/server/shared/pty-ticket"
-import { Effect, Layer, Option, Schema } from "effect"
+import { Deferred, Effect, Layer, Option, Queue, Schema, Stream } from "effect"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import * as Socket from "effect/unstable/socket/Socket"
@@ -25,6 +24,8 @@ import { InstanceHttpApi } from "../api"
 import * as ApiError from "../errors"
 import { CursorQuery, PtyConnectApi } from "../groups/pty"
 import { WebSocketTracker } from "../websocket-tracker"
+
+export const MAX_PTY_OUTGOING_FRAMES = 256
 
 function validOrigin(request: HttpServerRequest.HttpServerRequest, opts: CorsOptions | undefined) {
   return isAllowedRequestOrigin(request.headers.origin, request.headers.host, opts)
@@ -41,7 +42,7 @@ export const ptyHandlers = HttpApiBuilder.group(InstanceHttpApi, "pty", (handler
     const tickets = yield* PtyTicket.Service
     const cors = yield* CorsConfig
     const locations = yield* LocationServiceMap
-    const unregister = registerDisposer((directory) =>
+    const unregister = yield* registerDisposer((directory) =>
       Effect.runPromise(locations.invalidate({ directory: AbsolutePath.make(directory) })),
     )
     yield* Effect.addFinalizer(() => Effect.sync(unregister))
@@ -114,6 +115,15 @@ export const ptyHandlers = HttpApiBuilder.group(InstanceHttpApi, "pty", (handler
               message: `Cannot open terminal in "${error.cwd}": ${error.message}`,
               kind: "Spawn",
               field: "cwd",
+            }),
+          ),
+        ),
+        Effect.catchTag("Pty.CapacityError", (error) =>
+          Effect.fail(
+            new ApiError.InvalidRequestError({
+              message: `Too many active terminal sessions (limit ${error.limit})`,
+              kind: "Capacity",
+              field: "pty",
             }),
           ),
         ),
@@ -196,14 +206,14 @@ export const ptyHandlers = HttpApiBuilder.group(InstanceHttpApi, "pty", (handler
       .handle("remove", remove)
       .handle("connectToken", connectToken)
   }),
-).pipe(Layer.provide(LocationServiceMap.layer))
+)
 
 export const ptyConnectHandlers = HttpApiBuilder.group(PtyConnectApi, "pty-connect", (handlers) =>
   Effect.gen(function* () {
     const tickets = yield* PtyTicket.Service
     const cors = yield* CorsConfig
     const locations = yield* LocationServiceMap
-    const unregister = registerDisposer((directory) =>
+    const unregister = yield* registerDisposer((directory) =>
       Effect.runPromise(locations.invalidate({ directory: AbsolutePath.make(directory) })),
     )
     yield* Effect.addFinalizer(() => Effect.sync(unregister))
@@ -255,25 +265,30 @@ export const ptyConnectHandlers = HttpApiBuilder.group(PtyConnectApi, "pty-conne
           yield* closeAccepted(WebSocketTracker.SERVER_CLOSING_EVENT())
           return HttpServerResponse.empty()
         }
-        const bridge = yield* EffectBridge.make()
-        const writeScoped = (effect: Effect.Effect<void, unknown>) => {
-          bridge.fork(effect.pipe(Effect.catch(() => Effect.void)))
-        }
+        const outgoing = yield* Queue.dropping<string | Uint8Array>(MAX_PTY_OUTGOING_FRAMES)
+        const closeRequested = yield* Deferred.make<Socket.CloseEvent>()
         let closed = false
+        const close = (code?: number, reason?: string) => {
+          if (closed) return
+          closed = true
+          Deferred.doneUnsafe(closeRequested, Effect.succeed(new Socket.CloseEvent(code, reason)))
+        }
         const adapter = {
           get readyState() {
             return closed ? 3 : 1
           },
           send: (data: string | Uint8Array | ArrayBuffer) => {
             if (closed) return
-            writeScoped(write(data instanceof ArrayBuffer ? new Uint8Array(data) : data))
+            if (Queue.offerUnsafe(outgoing, data instanceof ArrayBuffer ? new Uint8Array(data) : data)) return
+            close(1013, `Slow PTY WebSocket consumer (queue ${MAX_PTY_OUTGOING_FRAMES})`)
           },
-          close: (code?: number, reason?: string) => {
-            if (closed) return
-            closed = true
-            writeScoped(write(new Socket.CloseEvent(code, reason)))
-          },
+          close,
         }
+        yield* Stream.fromQueue(outgoing).pipe(
+          Stream.runForEach(write),
+          Effect.onError(() => Effect.sync(() => close(1011, "PTY WebSocket write failed"))),
+          Effect.forkScoped,
+        )
         const handler = yield* pty(
           Pty.Service.use((service) => service.connect(ctx.params.ptyID, adapter, cursor)),
         ).pipe(
@@ -281,19 +296,31 @@ export const ptyConnectHandlers = HttpApiBuilder.group(PtyConnectApi, "pty-conne
             closeAccepted(new Socket.CloseEvent(4404, "session not found")).pipe(Effect.as(undefined)),
           ),
         )
-        if (!handler) return HttpServerResponse.empty()
+        if (!handler) {
+          yield* Queue.shutdown(outgoing)
+          return HttpServerResponse.empty()
+        }
 
         // The handshake runs inside `socket.runRaw`, after the input callback is
         // registered, so the client cannot send frames before PTY input is wired.
-        yield* Effect.raceFirst(
+        // raceAllFirst: a client disconnect fails runRaw and must end the race
+        // (raceAll would swallow the failure and wait for shutdown). The
+        // 1-second timeout bounds only the close-frame write; applying it to
+        // the Deferred.await would terminate every connection after 1 second.
+        yield* Effect.raceAllFirst([
           socket.runRaw((message) => handlePtyInput(handler, message)),
           registration.shutdown,
-        ).pipe(
+          Deferred.await(closeRequested).pipe(
+            Effect.flatMap((event) => write(event).pipe(Effect.timeout("1 second"))),
+            Effect.catch(() => Effect.void),
+          ),
+        ]).pipe(
           Effect.catchReason("SocketError", "SocketCloseError", () => Effect.void),
           Effect.ensuring(
-            Effect.sync(() => {
+            Effect.gen(function* () {
               closed = true
               handler.onClose()
+              yield* Queue.shutdown(outgoing)
             }),
           ),
           Effect.orDie,
@@ -302,4 +329,4 @@ export const ptyConnectHandlers = HttpApiBuilder.group(PtyConnectApi, "pty-conne
       }),
     )
   }),
-).pipe(Layer.provide(LocationServiceMap.layer))
+)

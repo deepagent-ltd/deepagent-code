@@ -7,6 +7,7 @@ import { Global } from "@deepagent-code/core/global"
 import { DeepAgentContext } from "@deepagent-code/core/deepagent/index"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { ConversationLogWriter } from "../../src/session/conversation-log-writer"
+import { tmpRoot } from "../fixture/fixture"
 
 // V3.8 App-A C2.5 (Stage 5): proves the Conversation Log WRITE side actually populates the same
 // per-session jsonl the query_log read tool consumes — a full turn's user/assistant/reasoning/tool
@@ -65,7 +66,7 @@ const assistantMsg = (id: string, parts: unknown[], completed = true): SessionV1
   }) as unknown as SessionV1.WithParts
 
 beforeEach(() => {
-  home = mkdtempSync(path.join(tmpdir(), "deepagent-logwriter-"))
+  home = mkdtempSync(tmpRoot())
   prevHome = process.env.DEEPAGENT_CODE_HOME
   process.env.DEEPAGENT_CODE_HOME = home
 })
@@ -80,7 +81,14 @@ describe("ConversationLogWriter (Stage 5 write side)", () => {
     const msgs: SessionV1.WithParts[] = [
       userMsg("msg_user", "please add pagination"),
       assistantMsg("msg_asst", [
-        { id: "prt_r", sessionID: SESSION, messageID: "msg_asst", type: "reasoning", text: "think about it", time: { start: 1 } },
+        {
+          id: "prt_r",
+          sessionID: SESSION,
+          messageID: "msg_asst",
+          type: "reasoning",
+          text: "think about it",
+          time: { start: 1 },
+        },
         {
           id: "prt_tool",
           sessionID: SESSION,
@@ -137,9 +145,10 @@ describe("ConversationLogWriter (Stage 5 write side)", () => {
   })
 
   test("re-recording the same messages is idempotent (content dedup, incl. fresh writer)", () => {
-    const msgs = [userMsg("msg_u", "hello"), assistantMsg("msg_a", [
-      { id: "p_t", sessionID: SESSION, messageID: "msg_a", type: "text", text: "hi there" },
-    ])]
+    const msgs = [
+      userMsg("msg_u", "hello"),
+      assistantMsg("msg_a", [{ id: "p_t", sessionID: SESSION, messageID: "msg_a", type: "text", text: "hi there" }]),
+    ]
     record(msgs)
     record(msgs) // same live path again
     record(msgs) // a brand-new writer rebuilds seen-set from disk

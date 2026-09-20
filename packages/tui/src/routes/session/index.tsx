@@ -42,6 +42,7 @@ import { Locale } from "../../util/locale"
 import { webSearchProviderLabel } from "../../util/tool-display"
 import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import { useSDK } from "../../context/sdk"
+import { useTuiI18n } from "../../context/i18n"
 import { useEditorContext } from "../../context/editor"
 import { openEditor } from "../../editor"
 import { useDialog } from "../../ui/dialog"
@@ -50,9 +51,12 @@ import { TodoItem } from "../../component/todo-item"
 import { DialogMessage } from "./dialog-message"
 import type { PromptInfo } from "../../component/prompt/history"
 import { DialogConfirm } from "../../ui/dialog-confirm"
+import { DialogSelect } from "../../ui/dialog-select"
+import { DialogPrompt } from "../../ui/dialog-prompt"
 import { DialogTimeline } from "./dialog-timeline"
 import { DialogForkFromTimeline } from "./dialog-fork-from-timeline"
 import { DialogSessionRename } from "../../component/dialog-session-rename"
+import { DialogArchivedSessions } from "../../component/dialog-archived-sessions"
 import { Sidebar } from "./sidebar"
 import { SubagentFooter } from "./subagent-footer.tsx"
 import { filetype } from "../../util/filetype"
@@ -126,6 +130,7 @@ const sessionBindingCommands = [
   "session.toggle.actions",
   "session.toggle.scrollbar",
   "session.toggle.generic_tool_output",
+  "session.toggle.auto_accept",
   "session.first",
   "session.last",
   "session.messages_last_user",
@@ -228,6 +233,32 @@ export function Session() {
     if (session()?.parentID) return []
     return children().flatMap((x) => sync.data.permission[x.id] ?? [])
   })
+
+  // GUI parity: session-scoped auto-accept. The persisted map keys accept either a bare sessionID
+  // or `session/child` pairs — while auto-accepting, new permission.asked events are answered
+  // with a single-use "once" reply (never persisted as a rule), mirroring the GUI permission
+  // auto-respond semantics. V2 asks settle through the session-scoped V2 route.
+  const autoAccept = () => kv.get("permission_auto_accept", {}) as Record<string, boolean>
+  const isAutoAccepting = () => autoAccept()[route.sessionID] === true
+  createEffect(() => {
+    if (!isAutoAccepting()) return
+    const request = permissions()[0]
+    if (!request) return
+    if (sync.permissionV2(request.id)) {
+      void sdk.client.v2.session.permission.reply({
+        sessionID: request.sessionID,
+        requestID: request.id,
+        reply: "once",
+      })
+      return
+    }
+    void sdk.client.permission.reply({
+      reply: "once",
+      requestID: request.id,
+      directory: sync.session.get(request.sessionID)?.directory,
+      workspace: project.workspace.current(),
+    })
+  })
   const questions = createMemo(() => {
     if (session()?.parentID) return []
     return children().flatMap((x) => sync.data.question[x.id] ?? [])
@@ -274,6 +305,10 @@ export function Session() {
   const scrollAcceleration = createMemo(() => getScrollAcceleration(tuiConfig))
   const toast = useToast()
   const sdk = useSDK()
+  const rawRequest = <T,>(options: { method: string; url: string; body?: unknown; headers?: Record<string, string> }) =>
+    (sdk.client as unknown as { client: { request<D>(o: typeof options): Promise<{ data?: D }> } }).client.request<T>(
+      options,
+    )
   const editor = useEditorContext()
 
   createEffect(() => {
@@ -345,6 +380,7 @@ export function Session() {
   }
   const keymap = useOpencodeKeymap()
   const dialog = useDialog()
+  const i18n = useTuiI18n()
   const renderer = useRenderer()
 
   event.on("session.status", (evt) => {
@@ -429,6 +465,8 @@ export function Session() {
     })
     const status = sync.data.session_status[sessionID]
     if (status?.type === "retry") void DialogAlert.show(dialog, "Retry Error", status.message)
+    if (status?.type === "recovery_required")
+      void DialogAlert.show(dialog, "Recovery Required", status.message)
   }
 
   function moveFirstChild() {
@@ -460,7 +498,7 @@ export function Session() {
       title: session()?.share?.url ? "Copy share link" : "Share session",
       value: "session.share",
       suggested: route.type === "session",
-      category: "Session",
+      category: i18n.t("tui.category.session"),
       enabled: sync.data.config.share !== "disabled",
       slash: {
         name: "share",
@@ -469,8 +507,8 @@ export function Session() {
         const copy = (url: string) =>
           clipboard
             .write?.(url)
-            .then(() => toast.show({ message: "Share URL copied to clipboard!", variant: "success" }))
-            .catch(() => toast.show({ message: "Failed to copy URL to clipboard", variant: "error" }))
+            .then(() => toast.show({ message: i18n.t("tui.session.shareUrlCopied"), variant: "success" }))
+            .catch(() => toast.show({ message: i18n.t("tui.session.failedCopyUrl"), variant: "error" }))
         const url = session()?.share?.url
         if (url) {
           await copy(url)
@@ -497,9 +535,9 @@ export function Session() {
       },
     },
     {
-      title: "Rename session",
+      title: i18n.t("tui.session.rename"),
       value: "session.rename",
-      category: "Session",
+      category: i18n.t("tui.category.session"),
       slash: {
         name: "rename",
       },
@@ -508,9 +546,9 @@ export function Session() {
       },
     },
     {
-      title: "Jump to message",
+      title: i18n.t("tui.session.jumpToMessage"),
       value: "session.timeline",
-      category: "Session",
+      category: i18n.t("tui.category.session"),
       slash: {
         name: "timeline",
       },
@@ -530,9 +568,9 @@ export function Session() {
       },
     },
     {
-      title: "Fork session",
+      title: i18n.t("tui.session.fork"),
       value: "session.fork",
-      category: "Session",
+      category: i18n.t("tui.category.session"),
       slash: {
         name: "fork",
       },
@@ -552,9 +590,214 @@ export function Session() {
       },
     },
     {
-      title: "Compact session",
+      title: i18n.t("tui.session.showNextStepSuggestion"),
+      desc: i18n.t("tui.session.showNextStepSuggestionDesc"),
+      value: "session.suggest",
+      category: i18n.t("tui.category.session"),
+      slash: {
+        name: "suggest",
+      },
+      run: async () => {
+        const sessionID = route.sessionID
+        if (!sessionID) return
+        const suggestion = await sdk.client.session
+          .promptSuggestion({ sessionID })
+          .then((x) => x.data)
+          .catch(() => undefined)
+        if (!suggestion || !suggestion.body) {
+          toast.show({ variant: "warning", message: i18n.t("tui.suggest.none"), duration: 4000 })
+          dialog.clear()
+          return
+        }
+        toast.show({ variant: "info", message: suggestion.body, duration: 8000 })
+        dialog.clear()
+      },
+    },
+    {
+      title: i18n.t("tui.session.archive"),
+      desc: i18n.t("tui.session.archiveDesc"),
+      value: "session.archive",
+      category: i18n.t("tui.category.session"),
+      slash: {
+        name: "archive",
+      },
+      run: async () => {
+        const sessionID = route.sessionID
+        if (!sessionID) return
+        try {
+          await sdk.client.session.update({
+            sessionID,
+            time: { archived: Date.now() },
+          })
+          await sync.session.refresh()
+          toast.show({ variant: "success", message: i18n.t("tui.archive.archived"), duration: 3000 })
+          navigate({ type: "home" })
+        } catch (error) {
+          toast.show({
+            variant: "error",
+            message: error instanceof Error ? error.message : i18n.t("tui.archive.archiveFailed"),
+            duration: 5000,
+          })
+        }
+        dialog.clear()
+      },
+    },
+    {
+      title: i18n.t("tui.archive.title"),
+      desc: i18n.t("tui.session.archivedDesc"),
+      value: "session.archive.list",
+      category: i18n.t("tui.category.session"),
+      run: () => {
+        dialog.replace(() => <DialogArchivedSessions />)
+      },
+    },
+    {
+      title: i18n.t("tui.queue.title"),
+      desc: i18n.t("tui.session.queuedInputsDesc"),
+      value: "session.queued_prompts",
+      category: i18n.t("tui.category.session"),
+      slash: {
+        name: "queue",
+      },
+      run: async () => {
+        const sessionID = route.sessionID
+        if (!sessionID) return
+        // W2-3 — GET /deepagent/queue is served by path and not in the generated SDK; rawRequest
+        // reaches it the same way the /goal commands do. Read is non-consuming: promotion happens
+        // at the next activity boundary, so the dialog is view-only.
+        const result = await rawRequest<{ items: { id: string; admittedSeq: number; text: string; timeCreated: number }[] }>({
+          method: "GET",
+          url: `/deepagent/queue?sessionID=${encodeURIComponent(sessionID)}`,
+        }).catch(() => undefined)
+        const items = result?.data?.items ?? []
+        if (items.length === 0) {
+          toast.show({
+            variant: "info",
+            message: i18n.t("tui.queue.empty"),
+            duration: 5000,
+          })
+          dialog.clear()
+          return
+        }
+        dialog.replace(() => (
+          <DialogSelect
+            title={`${i18n.t("tui.queue.title")} (${items.length})`}
+            options={items.map((x) => ({
+              title: x.text.length > 90 ? `${x.text.slice(0, 90)}…` : x.text,
+              value: x.id,
+              category: "Queue",
+              footer: `#${x.admittedSeq} · ${Locale.time(x.timeCreated)} · ${i18n.t("tui.queue.promotesInOrder")}`,
+            }))}
+            onSelect={() => {}}
+          />
+        ))
+      },
+    },
+    {
+      title: i18n.t("tui.session.showPlan"),
+      desc: i18n.t("tui.session.showPlanDesc"),
+      value: "session.plan",
+      category: i18n.t("tui.category.session"),
+      slash: {
+        name: "plan",
+      },
+      run: async () => {
+        const sessionID = route.sessionID
+        if (!sessionID) return
+        // W2-2 — plan view + edit. The read path has no legacy guard (DeepAgentPlanStore); edits ride
+        // the same /deepagent/goal/edit-plan admission the app's plan editor uses.
+        const planResponse = await sdk.client.session
+          .plan({ sessionID })
+          .then((x) => x.data)
+          .catch(() => undefined)
+        const result = planResponse?.plan
+        if (!result) {
+          toast.show({
+            variant: "warning",
+            message: i18n.t("tui.session.noPlanYet"),
+            duration: 4000,
+          })
+          dialog.clear()
+          return
+        }
+        const choice = await new Promise<string | null>((resolve) => {
+          dialog.replace(
+            () => (
+              <DialogSelect
+                title={`Plan — ${result.goal}`}
+                skipFilter={true}
+                options={[
+                  {
+                    title: i18n.t("tui.session.editPlan"),
+                    value: "plan.edit",
+                    description: "rewrite goal and steps",
+                  },
+                  ...result.steps.map((step, index) => ({
+                    title: `${index + 1}. ${step.title}`,
+                    description: step.status,
+                    value: `step:${index}`,
+                  })),
+                ]}
+                onSelect={(option) => resolve(option.value)}
+              />
+            ),
+            () => resolve(null),
+          )
+        })
+        if (choice !== "plan.edit") {
+          dialog.clear()
+          return
+        }
+        // Edit flow: multiline input "goal\nstep 1\nstep 2…" → edit-plan admission (replan).
+        const edited = await DialogPrompt.show(dialog, "Edit plan — one goal line, then one step per line", {
+          value: [result.goal, ...result.steps.map((s) => s.title)].join("\n"),
+        })
+        if (edited === null) {
+          dialog.clear()
+          return
+        }
+        const [goalLine, ...stepLinesIn] = edited.split("\n").map((l) => l.trim()).filter(Boolean)
+        if (!goalLine || stepLinesIn.length === 0) {
+          toast.show({ variant: "warning", message: i18n.t("tui.session.editPlanNeedsGoalAndSteps"), duration: 4000 })
+          dialog.clear()
+          return
+        }
+        try {
+          await rawRequest({
+            method: "POST",
+            url: "/deepagent/goal/edit-plan",
+            body: {
+              sessionID,
+              request_id: `tui-plan-edit-${Date.now()}`,
+              plan_write: {
+                operation: "replan",
+                expected_plan_id: result.plan_id,
+                expected_version: Number(planResponse?.plan_version ?? 0),
+                replan_reason: "tui plan editor",
+                goal: goalLine,
+                steps: stepLinesIn.map((title, index) => ({
+                  title,
+                  status: index === 0 ? "active" : "pending",
+                })),
+              },
+            },
+            headers: { "Content-Type": "application/json" },
+          })
+          toast.show({ variant: "success", message: i18n.t("tui.session.planUpdated"), duration: 3000 })
+        } catch (error) {
+          toast.show({
+            variant: "error",
+            message: error instanceof Error ? error.message : "Plan edit was rejected",
+            duration: 5000,
+          })
+        }
+        dialog.clear()
+      },
+    },
+    {
+      title: i18n.t("tui.session.compact"),
       value: "session.compact",
-      category: "Session",
+      category: i18n.t("tui.category.session"),
       slash: {
         name: "compact",
         aliases: ["summarize"],
@@ -564,23 +807,34 @@ export function Session() {
         if (!selectedModel) {
           toast.show({
             variant: "warning",
-            message: "Connect a provider to summarize this session",
+            message: i18n.t("tui.session.compactNeedsProvider"),
             duration: 3000,
           })
           return
         }
-        void sdk.client.session.summarize({
-          sessionID: route.sessionID,
-          modelID: selectedModel.modelID,
-          providerID: selectedModel.providerID,
-        })
+        void sdk.client.session
+          .summarize({
+            sessionID: route.sessionID,
+            modelID: selectedModel.modelID,
+            providerID: selectedModel.providerID,
+          })
+          .then(() => toast.show({ message: i18n.t("tui.session.compacted"), variant: "success" }))
+          .catch((error) => {
+            // V2-only profile refuses manual compaction with a typed 503 whose message carries
+            // the reason — surface it instead of failing silently.
+            toast.show({
+              message: error instanceof Error ? error.message : "Failed to compact session",
+              variant: "error",
+              duration: 5000,
+            })
+          })
         dialog.clear()
       },
     },
     {
-      title: "Unshare session",
+      title: i18n.t("tui.session.unshare"),
       value: "session.unshare",
-      category: "Session",
+      category: i18n.t("tui.category.session"),
       enabled: !!session()?.share?.url,
       slash: {
         name: "unshare",
@@ -590,7 +844,7 @@ export function Session() {
           .unshare({
             sessionID: route.sessionID,
           })
-          .then(() => toast.show({ message: "Session unshared successfully", variant: "success" }))
+          .then(() => toast.show({ message: i18n.t("tui.session.unshared"), variant: "success" }))
           .catch((error) => {
             toast.show({
               message: error instanceof Error ? error.message : "Failed to unshare session",
@@ -601,15 +855,16 @@ export function Session() {
       },
     },
     {
-      title: "Undo previous message",
+      title: i18n.t("tui.session.undoPreviousMessage"),
       value: "session.undo",
-      category: "Session",
+      category: i18n.t("tui.category.session"),
       slash: {
         name: "undo",
       },
       run: async () => {
         const status = sync.data.session_status?.[route.sessionID]
-        if (status?.type !== "idle") await sdk.client.session.abort({ sessionID: route.sessionID }).catch(() => {})
+        if (status?.type === "busy" || status?.type === "retry")
+          await sdk.client.session.abort({ sessionID: route.sessionID }).catch(() => {})
         const revert = session()?.revert?.messageID
         const message = messages().findLast((x) => (!revert || x.id < revert) && x.role === "user")
         if (!message) return
@@ -638,9 +893,9 @@ export function Session() {
       },
     },
     {
-      title: "Redo",
+      title: i18n.t("tui.session.redo"),
       value: "session.redo",
-      category: "Session",
+      category: i18n.t("tui.category.session"),
       enabled: !!session()?.revert?.messageID,
       slash: {
         name: "redo",
@@ -725,11 +980,29 @@ export function Session() {
       },
     },
     {
-      title: "Toggle session scrollbar",
+      title: i18n.t("tui.session.toggleScrollbar"),
       value: "session.toggle.scrollbar",
-      category: "Session",
+      category: i18n.t("tui.category.session"),
       run: () => {
         setShowScrollbar((prev) => !prev)
+        dialog.clear()
+      },
+    },
+    {
+      title: isAutoAccepting() ? i18n.t("tui.autoaccept.toggleOn") : i18n.t("tui.autoaccept.toggleOff"),
+      value: "session.toggle.auto_accept",
+      category: "Session",
+      slash: {
+        name: "permissions",
+      },
+      run: () => {
+        const next = !isAutoAccepting()
+        kv.set("permission_auto_accept", { ...autoAccept(), [route.sessionID]: next })
+        toast.show({
+          message: next ? i18n.t("tui.autoaccept.on") : i18n.t("tui.autoaccept.off"),
+          variant: "info",
+          duration: 4000,
+        })
         dialog.clear()
       },
     },
@@ -743,9 +1016,9 @@ export function Session() {
       },
     },
     {
-      title: "Page up",
+      title: i18n.t("tui.common.pageUp"),
       value: "session.page.up",
-      category: "Session",
+      category: i18n.t("tui.category.session"),
       hidden: true,
       run: () => {
         scroll.scrollBy(-scroll.height / 2)
@@ -753,9 +1026,9 @@ export function Session() {
       },
     },
     {
-      title: "Page down",
+      title: i18n.t("tui.common.pageDown"),
       value: "session.page.down",
-      category: "Session",
+      category: i18n.t("tui.category.session"),
       hidden: true,
       run: () => {
         scroll.scrollBy(scroll.height / 2)
@@ -763,9 +1036,9 @@ export function Session() {
       },
     },
     {
-      title: "Line up",
+      title: i18n.t("tui.session.lineUp"),
       value: "session.line.up",
-      category: "Session",
+      category: i18n.t("tui.category.session"),
       hidden: true,
       run: () => {
         scroll.scrollBy(-1)
@@ -773,9 +1046,9 @@ export function Session() {
       },
     },
     {
-      title: "Line down",
+      title: i18n.t("tui.session.lineDown"),
       value: "session.line.down",
-      category: "Session",
+      category: i18n.t("tui.category.session"),
       hidden: true,
       run: () => {
         scroll.scrollBy(1)
@@ -783,9 +1056,9 @@ export function Session() {
       },
     },
     {
-      title: "Half page up",
+      title: i18n.t("tui.session.halfPageUp"),
       value: "session.half.page.up",
-      category: "Session",
+      category: i18n.t("tui.category.session"),
       hidden: true,
       run: () => {
         scroll.scrollBy(-scroll.height / 4)
@@ -793,9 +1066,9 @@ export function Session() {
       },
     },
     {
-      title: "Half page down",
+      title: i18n.t("tui.session.halfPageDown"),
       value: "session.half.page.down",
-      category: "Session",
+      category: i18n.t("tui.category.session"),
       hidden: true,
       run: () => {
         scroll.scrollBy(scroll.height / 4)
@@ -803,9 +1076,9 @@ export function Session() {
       },
     },
     {
-      title: "First message",
+      title: i18n.t("tui.session.firstMessage"),
       value: "session.first",
-      category: "Session",
+      category: i18n.t("tui.category.session"),
       hidden: true,
       run: () => {
         scroll.scrollTo(0)
@@ -813,9 +1086,9 @@ export function Session() {
       },
     },
     {
-      title: "Last message",
+      title: i18n.t("tui.session.lastMessage"),
       value: "session.last",
-      category: "Session",
+      category: i18n.t("tui.category.session"),
       hidden: true,
       run: () => {
         scroll.scrollTo(scroll.scrollHeight)
@@ -823,9 +1096,9 @@ export function Session() {
       },
     },
     {
-      title: "Jump to last user message",
+      title: i18n.t("tui.session.jumpToLastUserMessage"),
       value: "session.messages_last_user",
-      category: "Session",
+      category: i18n.t("tui.category.session"),
       hidden: true,
       run: () => {
         const messages = sync.data.message[route.sessionID]
@@ -854,30 +1127,30 @@ export function Session() {
       },
     },
     {
-      title: "Next message",
+      title: i18n.t("tui.session.nextMessage"),
       value: "session.message.next",
-      category: "Session",
+      category: i18n.t("tui.category.session"),
       hidden: true,
       run: () => scrollToMessage("next", dialog),
     },
     {
-      title: "Previous message",
+      title: i18n.t("tui.session.previousMessage"),
       value: "session.message.previous",
-      category: "Session",
+      category: i18n.t("tui.category.session"),
       hidden: true,
       run: () => scrollToMessage("prev", dialog),
     },
     {
-      title: "Copy last assistant message",
+      title: i18n.t("tui.session.copyLastAssistantMessage"),
       value: "messages.copy",
-      category: "Session",
+      category: i18n.t("tui.category.session"),
       run: () => {
         const revertID = session()?.revert?.messageID
         const lastAssistantMessage = messages().findLast(
           (msg) => msg.role === "assistant" && (!revertID || msg.id < revertID),
         )
         if (!lastAssistantMessage) {
-          toast.show({ message: "No assistant messages found", variant: "error" })
+          toast.show({ message: i18n.t("tui.session.noAssistantMessages"), variant: "error" })
           dialog.clear()
           return
         }
@@ -885,7 +1158,7 @@ export function Session() {
         const parts = sync.data.part[lastAssistantMessage.id] ?? []
         const textParts = parts.filter((part) => part.type === "text")
         if (textParts.length === 0) {
-          toast.show({ message: "No text parts found in last assistant message", variant: "error" })
+          toast.show({ message: i18n.t("tui.session.noTextPartsInLastAssistant"), variant: "error" })
           dialog.clear()
           return
         }
@@ -896,7 +1169,7 @@ export function Session() {
           .trim()
         if (!text) {
           toast.show({
-            message: "No text content found in last assistant message",
+            message: i18n.t("tui.session.noTextContentInLastAssistant"),
             variant: "error",
           })
           dialog.clear()
@@ -905,15 +1178,15 @@ export function Session() {
 
         clipboard
           .write?.(text)
-          .then(() => toast.show({ message: "Message copied to clipboard!", variant: "success" }))
-          .catch(() => toast.show({ message: "Failed to copy to clipboard", variant: "error" }))
+          .then(() => toast.show({ message: i18n.t("tui.session.messageCopied"), variant: "success" }))
+          .catch(() => toast.show({ message: i18n.t("tui.session.failedCopyMessage"), variant: "error" }))
         dialog.clear()
       },
     },
     {
-      title: "Copy session transcript",
+      title: i18n.t("tui.session.copyTranscript"),
       value: "session.copy",
-      category: "Session",
+      category: i18n.t("tui.category.session"),
       slash: {
         name: "copy",
       },
@@ -933,17 +1206,17 @@ export function Session() {
             },
           )
           await clipboard.write?.(transcript)
-          toast.show({ message: "Session transcript copied to clipboard!", variant: "success" })
+          toast.show({ message: i18n.t("tui.session.transcriptCopied"), variant: "success" })
         } catch {
-          toast.show({ message: "Failed to copy session transcript", variant: "error" })
+          toast.show({ message: i18n.t("tui.session.failedCopyTranscript"), variant: "error" })
         }
         dialog.clear()
       },
     },
     {
-      title: "Export session transcript",
+      title: i18n.t("tui.session.exportTranscript"),
       value: "session.export",
-      category: "Session",
+      category: i18n.t("tui.category.session"),
       slash: {
         name: "export",
       },
@@ -1010,15 +1283,15 @@ export function Session() {
             toast.show({ message: `Session exported to ${filename}`, variant: "success" })
           }
         } catch {
-          toast.show({ message: "Failed to export session", variant: "error" })
+          toast.show({ message: i18n.t("tui.session.failedExport"), variant: "error" })
         }
         dialog.clear()
       },
     },
     {
-      title: "Background subagents",
+      title: i18n.t("tui.session.backgroundSubagents"),
       value: "session.background",
-      category: "Session",
+      category: i18n.t("tui.category.session"),
       hidden: true,
       enabled: foregroundTasks().length > 0,
       run: () => {
@@ -1030,9 +1303,9 @@ export function Session() {
       },
     },
     {
-      title: "Go to child session",
+      title: i18n.t("tui.session.goToChildSession"),
       value: "session.child.first",
-      category: "Session",
+      category: i18n.t("tui.category.session"),
       hidden: true,
       run: () => {
         dialog.clear()
@@ -1040,9 +1313,9 @@ export function Session() {
       },
     },
     {
-      title: "Go to parent session",
+      title: i18n.t("tui.session.goToParentSession"),
       value: "session.parent",
-      category: "Session",
+      category: i18n.t("tui.category.session"),
       hidden: true,
       enabled: !!session()?.parentID,
       run: childSessionHandler(() => {
@@ -1057,9 +1330,9 @@ export function Session() {
       }),
     },
     {
-      title: "Next child session",
+      title: i18n.t("tui.session.nextChildSession"),
       value: "session.child.next",
-      category: "Session",
+      category: i18n.t("tui.category.session"),
       hidden: true,
       enabled: !!session()?.parentID,
       run: childSessionHandler(() => {
@@ -1068,9 +1341,9 @@ export function Session() {
       }),
     },
     {
-      title: "Previous child session",
+      title: i18n.t("tui.session.previousChildSession"),
       value: "session.child.previous",
-      category: "Session",
+      category: i18n.t("tui.category.session"),
       hidden: true,
       enabled: !!session()?.parentID,
       run: childSessionHandler(() => {

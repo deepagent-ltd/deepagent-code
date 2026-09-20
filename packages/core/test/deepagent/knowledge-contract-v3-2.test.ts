@@ -12,6 +12,7 @@ import { seedCoreKnowledge } from "../../src/deepagent/knowledge-seed"
 import { retrieve, invalidateCache } from "../../src/deepagent/knowledge-retriever"
 import type { TaskContext, ToolContext } from "../../src/deepagent/prompt-policy"
 import { releasedUserGlobalSelection } from "./released-selection-fixture"
+import { tmpRoot } from "../fixture/tmpdir"
 
 // V3.2.1 decision B (docs/34) regression guards for the knowledge-retrieval contract:
 //   P1-4 dynamic global cap of selected refs across all types (docs/review_38 §八: 5/8/12 by
@@ -52,7 +53,7 @@ const seedApproved = (input: KnowledgeDocInput): string => {
 }
 
 beforeEach(() => {
-  base = mkdtempSync(path.join(tmpdir(), "deepagent-knowledge-contract-"))
+  base = mkdtempSync(tmpRoot())
   knowledgeSource.configure(base)
   // Seed core strategies/methodologies so total selected can exceed global cap of 5 (P1-4).
   seedCoreKnowledge(openUserGlobalStore(base))

@@ -12,6 +12,7 @@ import { readJson, writeJsonAtomic } from "../util/persistence"
 import { useTheme } from "./theme"
 import { useToast } from "../ui/toast"
 import { useRoute } from "./route"
+import { useTuiI18n } from "./i18n"
 
 export type LocalTheme = {
   secondary: RGBA
@@ -56,6 +57,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const theme = useTheme().theme
     const route = useRoute()
     const paths = useTuiPaths()
+    const i18n = useTuiI18n()
 
     function isModelValid(model: { providerID: string; modelID: string }) {
       const provider = sync.data.provider.find((x) => x.id === model.providerID)
@@ -289,7 +291,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           if (!favorites.length) {
             toast.show({
               variant: "info",
-              message: "Add a favorite model to use this shortcut",
+              message: i18n.t("tui.local.addFavoriteModelHint"),
               duration: 3000,
             })
             return

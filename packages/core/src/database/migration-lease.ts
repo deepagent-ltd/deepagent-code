@@ -98,6 +98,12 @@ export function ensureTables(db: Database) {
 
 type OsHandle = { dir: string; token: string; heartbeat: () => void; release: () => Promise<void> }
 
+export type ProcessLock = {
+  readonly dir: string
+  readonly token: string
+  readonly release: Effect.Effect<void>
+}
+
 function code(err: unknown): string | undefined {
   if (typeof err !== "object" || err === null || !("code" in err)) return undefined
   const value = (err as { code?: unknown }).code
@@ -119,6 +125,13 @@ async function stats(file: string) {
 
 async function isStaleLock(lockDir: string, opts: LeaseOptions): Promise<boolean> {
   const staleMs = opts.staleMs ?? 60_000
+  const owner = await localOwner(lockDir)
+  if (owner === "alive") return false
+  // A meta.json pinning THIS host with a verifiably dead pid is abandoned: the owner can never
+  // refresh its heartbeat again, so the mtime grace window would only delay crash takeover —
+  // a kill -9 restart must reacquire immediately. Foreign-host or unreadable metadata cannot be
+  // adjudicated locally and falls back to the mtime checks below.
+  if (owner === "dead") return true
   const hb = await stats(path.join(lockDir, "heartbeat"))
   if (hb && clockNow(opts) - hb.mtimeMs > staleMs) return true
   const meta = await stats(path.join(lockDir, "meta.json"))
@@ -126,6 +139,24 @@ async function isStaleLock(lockDir: string, opts: LeaseOptions): Promise<boolean
   const dir = await stats(lockDir)
   if (!dir) return false
   return clockNow(opts) - dir.mtimeMs > staleMs
+}
+
+async function localOwner(lockDir: string): Promise<"alive" | "dead" | "unknown"> {
+  const metadata = await readFile(path.join(lockDir, "meta.json"), "utf8")
+    .then((raw) => JSON.parse(raw) as unknown)
+    .catch(() => undefined)
+  if (typeof metadata !== "object" || metadata === null) return "unknown"
+  if (!("hostname" in metadata) || metadata.hostname !== os.hostname()) return "unknown"
+  if (!("pid" in metadata) || typeof metadata.pid !== "number" || !Number.isInteger(metadata.pid) || metadata.pid <= 0)
+    return "unknown"
+  try {
+    process.kill(metadata.pid, 0)
+    return "alive"
+  } catch (error) {
+    // EPERM: the process exists but is owned by another user — treat as alive, never breakable.
+    if (code(error) === "EPERM") return "alive"
+    return code(error) === "ESRCH" ? "dead" : "unknown"
+  }
 }
 
 async function tryAcquireOsLock(lockDir: string, opts: LeaseOptions): Promise<OsHandle | undefined> {
@@ -225,6 +256,32 @@ async function acquireOsLock(lockDir: string, opts: LeaseOptions): Promise<OsHan
     waited += delay
     delay = Math.min(2_000, Math.floor(delay * 1.7))
   }
+}
+
+/** Read-only process-owner probe used before opening the business database. */
+export async function processLockActive(lockDir: string, options: LeaseOptions = {}): Promise<boolean> {
+  if (!(await stats(lockDir))) return false
+  return !(await isStaleLock(lockDir, options))
+}
+
+/**
+ * Acquire a token-fenced OS/process lock and keep its heartbeat alive until the enclosing Scope
+ * releases it. This is the runtime-owner primitive; the migration lease composes the same primitive
+ * with its separate DB generation lease.
+ */
+export function acquireProcessLock(lockDir: string, options: LeaseOptions = {}) {
+  return Effect.tryPromise({
+    try: async () => {
+      const handle = await acquireOsLock(lockDir, options)
+      handle.heartbeat()
+      return {
+        dir: handle.dir,
+        token: handle.token,
+        release: Effect.promise(() => handle.release()).pipe(Effect.ignore),
+      } satisfies ProcessLock
+    },
+    catch: (error) => asLeaseError(error),
+  })
 }
 
 function asLeaseError(error: unknown): LeaseLost | LeaseTimeout | LeaseCompromised {

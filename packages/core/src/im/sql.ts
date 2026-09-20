@@ -71,6 +71,18 @@ export const ErrorMetadata = Schema.Struct({
 })
 export type ErrorMetadata = Schema.Schema.Type<typeof ErrorMetadata>
 
+// W0.4 — durable @mention-routing receipt. Written by the event-dispatcher mention router when a
+// mentioned agent did not declare the mention trigger (or no agent declared it), so the user gets an
+// explicit receipt instead of a silent no_match drop. Additive: older rows decode unchanged.
+export const NoTriggerMentionMetadata = Schema.Struct({
+  type: Schema.Literal("agent_no_trigger_mention"),
+  agentID: Schema.optional(Schema.String),
+  agentNames: Schema.optional(Schema.Array(Schema.String)),
+  eventID: Schema.optional(Schema.String),
+  messageID: Schema.optional(Schema.String),
+})
+export type NoTriggerMentionMetadata = Schema.Schema.Type<typeof NoTriggerMentionMetadata>
+
 export const MessageMetadata = Schema.Union([
   FileRefMetadata,
   CodeRefMetadata,
@@ -78,6 +90,7 @@ export const MessageMetadata = Schema.Union([
   DebugMetadata,
   ProfileMetadata,
   ErrorMetadata,
+  NoTriggerMentionMetadata,
 ]).pipe(Schema.toTaggedUnion("type"))
 export type MessageMetadata = Schema.Schema.Type<typeof MessageMetadata>
 

@@ -2,8 +2,12 @@ import { describe, expect, test } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import { tmpRoot, tmpRootShared } from "../fixture/fixture"
 
-const runWorker = async (home: string, input: { readonly action: "create"; readonly id: string } | { readonly action: "list" }) => {
+const runWorker = async (
+  home: string,
+  input: { readonly action: "create"; readonly id: string } | { readonly action: "list" },
+) => {
   const child = Bun.spawn([process.execPath, "test/fixture/pr-queue-worker.ts", JSON.stringify(input)], {
     cwd: path.resolve(import.meta.dir, "../.."),
     env: { ...process.env, DEEPAGENT_CODE_TEST_HOME: home, DEEPAGENT_CODE_HOME: home },
@@ -21,7 +25,7 @@ const runWorker = async (home: string, input: { readonly action: "create"; reado
 
 describe("PRQueue cross-process durability", () => {
   test("serializes concurrent writers without losing either entry", async () => {
-    const home = mkdtempSync(path.join(tmpdir(), "deepagent-pr-queue-process-"))
+    const home = mkdtempSync(tmpRootShared())
     try {
       await Promise.all([
         runWorker(home, { action: "create", id: "process-a" }),

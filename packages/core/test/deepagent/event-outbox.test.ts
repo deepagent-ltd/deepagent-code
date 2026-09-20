@@ -99,6 +99,17 @@ describe("EventOutbox claim/lease + fencing", () => {
         // stale token from worker-1 can no longer settle the re-claimed row.
         const settled = yield* EventOutbox.markPublished(db, { outboxId: first.rows[0]!.outboxId, claimToken: first.claimToken, now: 700 })
         expect(settled).toBe(false)
+        const failed = yield* EventOutbox.markFailed(db, {
+          outboxId: first.rows[0]!.outboxId,
+          claimToken: first.claimToken,
+          now: 700,
+          reason: "stale worker failure",
+          maxAttempts: 1,
+        })
+        expect(failed).toBe(false)
+        const row = yield* EventOutbox.getByID(db, first.rows[0]!.outboxId)
+        expect(row?.status).toBe("publishing")
+        expect(row?.claimToken).toBe(recovery.claimToken)
       }),
     )
   })

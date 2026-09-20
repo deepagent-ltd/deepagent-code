@@ -26,7 +26,7 @@ import { Tooltip } from "@deepagent-code/ui/tooltip"
 import { DropdownMenu } from "@deepagent-code/ui/dropdown-menu"
 import { Dialog } from "@deepagent-code/ui/dialog"
 import { getFilename } from "@deepagent-code/core/util/path"
-import { Session, type Message } from "@deepagent-code/sdk/client"
+import { Session, type Message, type PermissionRequest } from "@deepagent-code/sdk/client"
 import { usePlatform } from "@/context/platform"
 import { useSettings } from "@/context/settings"
 import { createStore, produce, reconcile } from "solid-js/store"
@@ -50,6 +50,7 @@ import {
 } from "@/context/global-sync/session-prefetch"
 import { useNotification } from "@/context/notification"
 import { usePermission } from "@/context/permission"
+import { permissionRequestFromV2 } from "@/context/global-sync/permission-v2"
 import { Binary } from "@deepagent-code/core/util/binary"
 import { retry } from "@deepagent-code/core/util/retry"
 import { playSoundById } from "@/utils/sound"
@@ -95,6 +96,8 @@ import {
 } from "./layout/sidebar-workspace"
 import { ProjectDragOverlay, SortableProject, type ProjectSidebarContext } from "./layout/sidebar-project"
 import { SidebarContent } from "./layout/sidebar-shell"
+
+export const NOTIFICATION_ALERT_LIMIT = 128
 
 export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: () => void }>) {
   const serverSDK = useServerSDK()
@@ -448,7 +451,8 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
         if (
           e.details?.type === "question.replied" ||
           e.details?.type === "question.rejected" ||
-          e.details?.type === "permission.replied"
+          e.details?.type === "permission.replied" ||
+          e.details?.type === "permission.v2.replied"
         ) {
           const props = e.details.properties as { sessionID: string }
           const sessionKey = `${e.name}:${props.sessionID}`
@@ -456,20 +460,28 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
           return
         }
 
-        if (e.details?.type !== "permission.asked" && e.details?.type !== "question.asked") return
-        const title =
-          e.details.type === "permission.asked"
-            ? language.t("notification.permission.title")
-            : language.t("notification.question.title")
-        const icon = e.details.type === "permission.asked" ? ("checklist" as const) : ("bubble-5" as const)
-        const directory = e.name
-        const props = e.details.properties
         if (
-          e.details.type === "permission.asked" &&
-          (permission.autoResponds(e.details.properties, directory) ||
-            permission.autoRejects(e.details.properties, directory))
+          e.details?.type !== "permission.asked" &&
+          e.details?.type !== "permission.v2.asked" &&
+          e.details?.type !== "question.asked"
         )
           return
+        const isPermission = e.details.type === "permission.asked" || e.details.type === "permission.v2.asked"
+        const title = isPermission
+          ? language.t("notification.permission.title")
+          : language.t("notification.question.title")
+        const icon = isPermission ? ("checklist" as const) : ("bubble-5" as const)
+        const directory = e.name
+        const props = e.details.properties
+        if (isPermission) {
+          // V2 asks carry the PermissionV2 vocabulary; normalize before the auto-respond/reject
+          // checks (autoRejects reads the legacy `permission` field).
+          const request =
+            e.details.type === "permission.v2.asked"
+              ? permissionRequestFromV2(e.details.properties)
+              : (e.details.properties as PermissionRequest)
+          if (permission.autoResponds(request, directory) || permission.autoRejects(request, directory)) return
+        }
 
         const [store] = serverSync.child(directory, { bootstrap: false })
         const session = store.session.find((s) => s.id === props.sessionID)
@@ -477,18 +489,21 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
 
         const sessionTitle = session?.title ?? language.t("command.session.new")
         const projectName = getFilename(directory)
-        const description =
-          e.details.type === "permission.asked"
-            ? language.t("notification.permission.description", { sessionTitle, projectName })
-            : language.t("notification.question.description", { sessionTitle, projectName })
+        const description = isPermission
+          ? language.t("notification.permission.description", { sessionTitle, projectName })
+          : language.t("notification.question.description", { sessionTitle, projectName })
         const href = `/${base64Encode(directory)}/session/${props.sessionID}`
+
+        const currentSession = params.id
+        if (pathKey(directory) === pathKey(currentDir()) && props.sessionID === currentSession) return
+        if (pathKey(directory) === pathKey(currentDir()) && session?.parentID === currentSession) return
 
         const now = Date.now()
         const lastAlerted = alertedAtBySession.get(sessionKey) ?? 0
         if (now - lastAlerted < cooldownMs) return
         alertedAtBySession.set(sessionKey, now)
 
-        if (e.details.type === "permission.asked") {
+        if (isPermission) {
           if (settings.sounds.permissionsEnabled()) {
             void playSoundById(settings.sounds.permissions())
           }
@@ -502,10 +517,6 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
             void platform.notify(title, description, href)
           }
         }
-
-        const currentSession = params.id
-        if (pathKey(directory) === pathKey(currentDir()) && props.sessionID === currentSession) return
-        if (pathKey(directory) === pathKey(currentDir()) && session?.parentID === currentSession) return
 
         dismissSessionAlert(sessionKey)
 
@@ -526,8 +537,18 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
           ],
         })
         toastBySession.set(sessionKey, toastId)
+        while (toastBySession.size > NOTIFICATION_ALERT_LIMIT) {
+          const oldest = toastBySession.keys().next().value
+          if (!oldest) break
+          dismissSessionAlert(oldest)
+        }
       })
-      onCleanup(unsub)
+      onCleanup(() => {
+        unsub()
+        for (const id of toastBySession.values()) toaster.dismiss(id)
+        toastBySession.clear()
+        alertedAtBySession.clear()
+      })
 
       createEffect(() => {
         const currentSession = params.id
@@ -1002,6 +1023,33 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
     }
   }
 
+  // W3-3 — parity with the TUI /move command: relocate the session to another project directory
+  // through the same experimental.controlPlane.moveSession admission (durable transfer). The
+  // destination is entered directly (the desktop native directory picker is available via the
+  // preload bridge; the web app uses the text prompt).
+  async function moveSessionDialog() {
+    const session = currentSessions().find((s) => s.id === params.id)
+    if (!session) return
+    const destination = window.prompt(language.t("command.session.move.prompt"), session.directory)
+    if (!destination || destination === session.directory) return
+    try {
+      await serverSDK.client.experimental.controlPlane.moveSession(
+        {
+          sessionID: session.id,
+          destination: { directory: destination },
+        },
+        { throwOnError: true },
+      )
+      showToast({ variant: "success", title: language.t("command.session.move.done") })
+    } catch (error) {
+      showToast({
+        variant: "error",
+        title: language.t("common.requestFailed"),
+        description: error instanceof Error ? error.message : undefined,
+      })
+    }
+  }
+
   async function archiveSession(session: Session) {
     const [store, setStore] = serverSync.child(session.directory)
     const sessions = store.session ?? []
@@ -1137,6 +1185,13 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
           const session = currentSessions().find((s) => s.id === params.id)
           if (session) void archiveSession(session)
         },
+      },
+      {
+        id: "session.move",
+        title: language.t("command.session.move"),
+        category: language.t("command.category.session"),
+        disabled: !params.dir || !params.id,
+        onSelect: () => void moveSessionDialog(),
       },
       {
         id: "session.archived",

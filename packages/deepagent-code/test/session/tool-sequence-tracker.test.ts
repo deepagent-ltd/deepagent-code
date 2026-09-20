@@ -474,26 +474,39 @@ describe("sliding window (max 12 calls)", () => {
 })
 
 describe("activity-level plan protocol budget", () => {
-  test("allows one violation and terminates on the second consecutive violation", () => {
+  test("terminates on the SAME rejected payload twice", () => {
     const tracker = new PlanProtocolTracker()
     tracker.start("p1", "plan")
     expect(tracker.preview("p1", "invalid")).toEqual({ consecutive: 1, terminal: false })
-    expect(tracker.settle("p1", "invalid")).toEqual({ consecutive: 1, terminal: false })
+    expect(tracker.settle("p1", "invalid", { goal: "same" })).toEqual({ consecutive: 1, terminal: false })
     tracker.start("p2", "plan")
-    expect(tracker.preview("p2", "conflict")).toEqual({ consecutive: 2, terminal: true })
-    expect(tracker.settle("p2", "conflict")).toEqual({ consecutive: 2, terminal: true })
+    // `preview` cannot see the arguments, so only `settle` decides the second strike.
+    expect(tracker.preview("p2", "invalid")).toEqual({ consecutive: 2, terminal: false })
+    expect(tracker.settle("p2", "invalid", { goal: "same" })).toEqual({ consecutive: 2, terminal: true })
   })
 
-  test("a valid progress resets the consecutive budget and duplicate settlement is ignored", () => {
+  test("a CORRECTED payload restarts the streak instead of terminating", () => {
     const tracker = new PlanProtocolTracker()
     tracker.start("p1", "plan")
-    expect(tracker.settle("p1", "invalid")?.consecutive).toBe(1)
-    expect(tracker.settle("p1", "invalid")).toBeUndefined()
+    expect(tracker.settle("p1", "invalid", { goal: "first" })?.consecutive).toBe(1)
+    tracker.start("p2", "plan")
+    // Changed arguments = the model did what the rejection asked; not a loop.
+    expect(tracker.settle("p2", "invalid", { goal: "second" })?.consecutive).toBe(1)
+    tracker.start("p3", "plan")
+    // The unchanged payload repeated IS the loop this budget exists to stop.
+    expect(tracker.settle("p3", "invalid", { goal: "second" })).toEqual({ consecutive: 2, terminal: true })
+  })
+
+  test("a valid progress resets the streak and duplicate settlement is ignored", () => {
+    const tracker = new PlanProtocolTracker()
+    tracker.start("p1", "plan")
+    expect(tracker.settle("p1", "invalid", { goal: "x" })?.consecutive).toBe(1)
+    expect(tracker.settle("p1", "invalid", { goal: "x" })).toBeUndefined()
     tracker.start("p2", "plan")
     expect(tracker.settle("p2", "progress")).toEqual({ consecutive: 0, terminal: false })
     tracker.start("p3", "plan")
     expect(tracker.preview("p3", "schema")).toEqual({ consecutive: 1, terminal: false })
-    expect(tracker.settle("p3", "schema")).toEqual({ consecutive: 1, terminal: false })
+    expect(tracker.settle("p3", "schema", { goal: "x" })).toEqual({ consecutive: 1, terminal: false })
   })
 
   test("non-plan calls never consume the plan budget", () => {
@@ -507,9 +520,10 @@ describe("activity-level plan protocol budget", () => {
     // AI SDK may emit tool-error directly after input validation. The processor starts the
     // call at tool-input-start/tool-error so this execute-before-failure still consumes one slot.
     tracker.start("schema-1", "plan")
-    expect(tracker.settle("schema-1", "schema")).toEqual({ consecutive: 1, terminal: false })
+    expect(tracker.settle("schema-1", "schema", { goal: "malformed" })).toEqual({ consecutive: 1, terminal: false })
     tracker.start("schema-2", "plan")
-    expect(tracker.settle("schema-2", "schema")).toEqual({ consecutive: 2, terminal: true })
+    // Same malformed payload again: that is the loop the budget stops.
+    expect(tracker.settle("schema-2", "schema", { goal: "malformed" })).toEqual({ consecutive: 2, terminal: true })
   })
 
   test("restores one durable failure across a compaction continuation", () => {
@@ -560,7 +574,9 @@ describe("activity-level plan protocol budget", () => {
     expect(restorePlanProtocolFailures(history)).toBe(1)
     const tracker = new PlanProtocolTracker(restorePlanProtocolFailures(history))
     tracker.start("plan-2", "plan")
-    expect(tracker.settle("plan-2", "invalid")).toEqual({ consecutive: 2, terminal: true })
+    // The restored count is durable history, so the payload identity starts unknown: the first
+    // in-turn rejection continues the restored streak (a re-seeded 1 + 1).
+    expect(tracker.settle("plan-2", "invalid", { goal: "reshaped" })?.consecutive).toBe(1)
     expect(history[2]!.info.metadata).toMatchObject({
       deepagent: {
         planProtocolActivityID: activity,

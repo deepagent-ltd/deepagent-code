@@ -14,6 +14,7 @@
 // visible to the goal driver and vice versa, with no second cache to drift. The shared index IS the
 // hot cache: getPlanDoc is an in-memory Map lookup + a JSON.parse, not a disk read.
 import path from "node:path"
+import { AsyncLocalStorage } from "node:async_hooks"
 import { DocumentConflictError, DocumentStore, type Provenance } from "./document-store"
 import {
   PlanConflictError,
@@ -39,17 +40,25 @@ export const planDescription = (sessionId: string): string => `session plan ${se
 // goal store uses, so the two paths converge on one doc. Set by configureRoot (called from the same
 // gateway configure that sets session-state's dir), so core never has to import the deepagent-code
 // goal-manager resolver.
-let stateDir: string | null = null
+export type RuntimeState = { readonly stateDir: string }
+
+const runtime = new AsyncLocalStorage<RuntimeState>()
+let defaultStateDir: string | null = null
+
+export const createRuntime = (dir: string): RuntimeState => ({ stateDir: path.resolve(dir) })
+
+export const withRuntime = <A>(state: RuntimeState, operation: () => A): A => runtime.run(state, operation)
 
 export const configureRoot = (dir: string): void => {
-  stateDir = dir
+  defaultStateDir = path.resolve(dir)
 }
 
 // planStoreRoot(sid) === goalStoreRoot(sid) === <stateDir>/goal/<sid>/graph. Kept private-by-convention
 // (exported for the goal path + tests to assert convergence). Throws if used before configureRoot — a
 // plan write with no configured root is a wiring bug, not something to silently drop.
 export const planStoreRoot = (sessionId: string): string => {
-  if (!stateDir) throw new Error("plan-store: configureRoot() not called (no state dir)")
+  const stateDir = runtime.getStore()?.stateDir ?? defaultStateDir
+  if (!stateDir) throw new Error("plan-store: no runtime state dir")
   return path.join(stateDir, "goal", sessionId, "graph")
 }
 
@@ -172,6 +181,46 @@ const provenanceFor = (origin: PlanWriteOrigin, sessionId: string): Provenance =
   source: origin === "human_goal_edit" ? "human" : origin === "model_tool" ? "model" : "runner",
   run_ref: planScope(sessionId),
 })
+
+// W4 (gap audit B3): the run document set. requirements/design (model-authored during the
+// understand/design phases) and the settle-time completion worklog live in the SAME session store
+// as the plan, under the same run scope, with model/runner provenance. The full-document-set
+// design declared these DocTypes without any production writer — this is that writer. Federation
+// graph reachability is W4.2 (needs the run-mode index attach) and is deliberately NOT faked here.
+export type SpecDocKind = "requirements" | "design" | "worklog"
+
+const specSlug = (value: string): string =>
+  value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48) || "untitled"
+
+export const writeSpecDoc = (
+  sessionId: string,
+  input: { kind: SpecDocKind; title: string; body: string; origin?: "model" | "runner" },
+): { id: string; version: number } => {
+  const doc = store(sessionId).upsert({
+    type: input.kind,
+    scope: planScope(sessionId),
+    description: `${input.kind}: ${input.title}`,
+    idSlug: `${input.kind}-${specSlug(input.title)}`,
+    body: input.body,
+    provenance: { source: input.origin ?? "model", run_ref: planScope(sessionId) },
+  })
+  return { id: doc.id, version: doc.version }
+}
+
+export const listSpecDocs = (
+  sessionId: string,
+): ReadonlyArray<{ kind: SpecDocKind; id: string; version: number; description: string }> => {
+  const documentStore = store(sessionId)
+  return (["requirements", "design", "worklog"] as const).flatMap((kind) =>
+    documentStore
+      .list({ type: kind, scope: planScope(sessionId) })
+      .map((ref) => ({ kind, id: ref.id, version: ref.version, description: ref.description })),
+  )
+}
 
 const currentPlanFromStore = (
   documentStore: DocumentStore,

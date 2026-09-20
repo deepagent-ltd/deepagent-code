@@ -12,6 +12,87 @@ import { prepareToolSandbox } from "./sandbox"
 
 export const runtimeProviderID = "live-deepseek"
 
+/**
+ * The V2 owner gate is default-on (a production install qualifies through the shipped
+ * signed row). Live suites qualify a harness-owned dev campaign instead: the envs must be
+ * set BEFORE any layer boots (Context.Reference defaults read process.env once and cache),
+ * the dev identity must be PROVIDED (ownerQualified reads CurrentBuildIdentity through
+ * serviceOption — a default never satisfies it), and the matching row must be seeded
+ * BEFORE the main program boots (the process-global execution coordinator can drain and
+ * hit the owner gate during layer boot). Identity fields match by construction.
+ */
+export async function prepareHarnessOwner() {
+  const { Layer } = await import("effect")
+  const { V2OwnerAuthorization } = await import("../../src/session/runner/v2-owner-authorization")
+  const { V2OwnerAuthorizationTable } = await import("../../src/session/runner/v2-owner-authorization.sql")
+  const { V2ProviderTurn } = await import("../../src/session/runner/v2-provider-turn")
+  const seed = crypto.randomUUID().replace(/-/g, "")
+  const fields = {
+    authorizationID: `auth_live_harness_${seed.slice(0, 12)}`,
+    campaignID: "v2-owner-live-harness",
+    subjectCommit: seed.repeat(2).slice(0, 40),
+    subjectTree: seed.repeat(2).slice(0, 40),
+    schemaDigest: seed.repeat(2).slice(0, 64),
+    buildID: seed.repeat(2).slice(0, 64),
+    packageDigest: seed.repeat(2).slice(0, 64),
+    validFrom: Date.now() - 1_000,
+    expiresAt: Date.now() + 90 * 86_400_000,
+  }
+  const pair = V2OwnerAuthorization.generateAuthorizationKeyPair()
+  process.env.DEEPAGENT_CODE_V2_OWNER_CAMPAIGN = fields.campaignID
+  process.env.DEEPAGENT_CODE_V2_BUILD_IDENTITY = JSON.stringify({
+    subjectCommit: fields.subjectCommit,
+    subjectTree: fields.subjectTree,
+    schemaDigest: fields.schemaDigest,
+    buildID: fields.buildID,
+    packageDigest: fields.packageDigest,
+  })
+  process.env.DEEPAGENT_CODE_V2_OWNER_AUTHORIZATION_PUBLIC_KEY = pair.publicKeyPem
+  const identity = JSON.parse(process.env.DEEPAGENT_CODE_V2_BUILD_IDENTITY)
+  const ownerLayer = Layer.mergeAll(
+    Layer.succeed(V2ProviderTurn.CurrentBuildIdentity, identity),
+    Layer.succeed(V2ProviderTurn.CurrentOwnerAuthorizationPublicKey, pair.publicKeyPem),
+  )
+  const seedRow = async () => {
+    const { Effect } = await import("effect")
+    const { Database } = await import("../../src/database/database")
+    const { Hash } = await import("../../src/util/hash")
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* Database.Service
+        yield* service.db
+          .insert(V2OwnerAuthorizationTable)
+          .values({
+            authorization_id: fields.authorizationID,
+            campaign_id: fields.campaignID,
+            subject_commit: fields.subjectCommit,
+            subject_tree: fields.subjectTree,
+            schema_digest: fields.schemaDigest,
+            build_id: fields.buildID,
+            package_digest: fields.packageDigest,
+            valid_from: fields.validFrom,
+            expires_at: fields.expiresAt,
+            status: "active" as const,
+            signature_digest: V2OwnerAuthorization.signAuthorization(pair.privateKeyPem, fields),
+            authorization_digest: Hash.sha256(V2OwnerAuthorization.authorizationPayload(fields)),
+            created_at: Date.now(),
+          })
+          .run()
+          .pipe(Effect.orDie)
+      }).pipe(Effect.provide(Database.defaultLayer), Effect.scoped),
+    )
+  }
+  return { ownerLayer, seedRow }
+}
+
+export function runtimeProviderIDFor(config: Pick<LiveLLMConfig, "providerID">) {
+  return `live-${config.providerID}`
+}
+
+export function liveProviderLabel(config: Pick<LiveLLMConfig, "providerID">) {
+  return config.providerID === "deepseek" ? "DeepSeek" : config.providerID === "kimi" ? "Kimi" : "GLM"
+}
+
 export type V2LiveAgent = {
   prompt: string
   permission: Record<string, "allow" | "deny" | Record<string, "allow" | "deny">>
@@ -42,6 +123,7 @@ export async function runV2LiveCases(input: {
     await mkdir(workspace, { recursive: true })
     await mkdir(isolatedHome, { recursive: true })
     isolateProcess(testRoot, isolatedHome, isolatedData, config)
+    const ownerSetup = await prepareHarnessOwner()
     await Promise.all(
       Object.entries(input.files ?? {}).map(async ([file, content]) => {
         await mkdir(path.dirname(path.join(workspace, file)), { recursive: true })
@@ -61,6 +143,7 @@ export async function runV2LiveCases(input: {
     const { Database } = await import("../../src/database/database")
     const { EventV2 } = await import("../../src/event")
     const { EventTable } = await import("../../src/event/sql")
+    const { Hash } = await import("../../src/util/hash")
     const { Location } = await import("../../src/location")
     const { LocationServiceMap } = await import("../../src/location-layer")
     const { ModelV2 } = await import("../../src/model")
@@ -73,6 +156,7 @@ export async function runV2LiveCases(input: {
     const { SessionProjector } = await import("../../src/session/projector")
     const { SessionStore } = await import("../../src/session/store")
     const { ApplicationTools } = await import("../../src/tool/application-tools")
+    const { Delegation } = await import("../../src/tool/delegation")
     const { Effect, Layer } = await import("effect")
     const { eq } = await import("drizzle-orm")
 
@@ -84,6 +168,7 @@ export async function runV2LiveCases(input: {
       Layer.provide(store),
       Layer.provide(events),
       Layer.provide(locations),
+      Layer.provide(Delegation.delegationSlotLayer),
     )
     const sessions = SessionV2.layer.pipe(
       Layer.provide(events),
@@ -101,11 +186,17 @@ export async function runV2LiveCases(input: {
       locations,
       execution,
       sessions,
-    )
+    ).pipe(Layer.provide(ownerSetup.ownerLayer))
     const location = Location.Ref.make({ directory: AbsolutePath.make(workspace) })
-    const providerID = ProviderV2.ID.make(runtimeProviderID)
+    const providerID = ProviderV2.ID.make(runtimeProviderIDFor(config))
     const modelID = ModelV2.ID.make(config.modelID)
     const startedAt = Date.now()
+
+    // Seed the qualified row in a preparatory program: the process-global execution
+    // coordinator can drain (and hit the owner gate) during main-program layer boot,
+    // before any in-program insert would run. The database layer reopens afterwards —
+    // migrations are idempotent and the row survives.
+    await ownerSetup.seedRow()
 
     const observations = await Effect.runPromise(
       Effect.gen(function* () {
@@ -189,7 +280,7 @@ export async function runV2LiveCases(input: {
       mode: "live" as const,
       stack: "session-v2" as const,
       status: "passed" as const,
-      fingerprint: { ...modelFingerprint(config), runtimeProviderID },
+      fingerprint: { ...modelFingerprint(config), runtimeProviderID: runtimeProviderIDFor(config) },
       preflight: { durationMs: preflight.durationMs },
       sandbox: sandbox?.evidence,
       cases: observations,
@@ -232,14 +323,14 @@ function isolateProcess(testRoot: string, isolatedHome: string, isolatedData: st
 function workspaceConfig(config: LiveLLMConfig, agents: Record<string, V2LiveAgent>, shell?: string) {
   return {
     $schema: "https://ai.deepagent.ltd/config.schema.json",
-    model: `${runtimeProviderID}/${config.modelID}`,
+    model: `${runtimeProviderIDFor(config)}/${config.modelID}`,
     snapshot: false,
     ...(shell ? { shell } : {}),
     permission: { "*": "deny" },
     agent: Object.fromEntries(Object.entries(agents).map(([id, agent]) => [id, { mode: "primary", ...agent }])),
     provider: {
-      [runtimeProviderID]: {
-        name: "DeepSeek V2 live test",
+      [runtimeProviderIDFor(config)]: {
+        name: `${liveProviderLabel(config)} V2 live test`,
         env: [],
         npm: "@ai-sdk/openai-compatible",
         api: config.baseURL,
@@ -252,15 +343,18 @@ function workspaceConfig(config: LiveLLMConfig, agents: Record<string, V2LiveAge
         models: {
           [config.modelID]: {
             id: config.modelID,
-            name: "DeepSeek V4 Flash live test",
-            reasoning: false,
-            temperature: true,
+            name: `${config.modelID} live test`,
+            reasoning: config.providerID !== "deepseek",
+            temperature: config.providerID === "deepseek",
             tool_call: true,
             release_date: "2026-07-27",
             limit: { context: 1_000_000, output: 2048 },
             cost: { input: 0, output: 0 },
             modalities: { input: ["text"], output: ["text"] },
-            options: { thinking: { type: "disabled" }, maxTokens: 512, temperature: 0 },
+            options:
+              config.providerID === "deepseek"
+                ? { thinking: { type: "disabled" }, maxTokens: 512, temperature: 0 }
+                : { reasoningEffort: "low", maxTokens: 1024 },
           },
         },
       },

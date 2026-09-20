@@ -20,7 +20,11 @@ import { prepareToolSandbox, type ToolSandbox } from "../../../core/script/live-
 export const runtimeProviderID = "live-deepseek"
 
 export function runtimeProviderIDFor(config: Pick<LiveLLMConfig, "providerID">) {
-  return config.providerID === "deepseek" ? runtimeProviderID : "live-kimi"
+  return `live-${config.providerID}`
+}
+
+function liveProviderLabel(config: Pick<LiveLLMConfig, "providerID">) {
+  return config.providerID === "deepseek" ? "DeepSeek" : config.providerID === "kimi" ? "Kimi" : "GLM"
 }
 
 export async function directoryExists(directory: string): Promise<boolean> {
@@ -84,7 +88,7 @@ export function parseLegacyLiveRuntimeConfig(
 
   return {
     providerID: "deepseek",
-    modelID: env.DEEPAGENT_CODE_LIVE_LLM_MODEL?.trim() || "deepseek-v4-flash",
+    modelID: env.DEEPAGENT_CODE_LIVE_LLM_MODEL?.trim() || "deepseek-flash",
     modelRevision: env.DEEPAGENT_CODE_LIVE_LLM_REVISION?.trim() || undefined,
     baseURL,
     timeoutMs,
@@ -270,7 +274,24 @@ export async function runLegacyLiveCases(input: {
     const { SessionV2 } = await import("@deepagent-code/core/session")
     const { SessionMessage } = await import("@deepagent-code/core/session/message")
     const { SessionPromptIntent } = await import("../../src/session/prompt-intent")
-    const { SessionPrompt } = await import("../../src/session/prompt")
+    const { SessionPromptV2 } = await import("../../src/session/prompt-v2")
+    const { SessionCommandV2 } = await import("../../src/session/command-v2")
+    const { LLM } = await import("../../src/session/llm")
+    const { Snapshot } = await import("../../src/snapshot")
+    const { Reference } = await import("../../src/reference/reference")
+    const { FSUtil } = await import("@deepagent-code/core/fs-util")
+    const { Truncate } = await import("../../src/tool/truncate")
+    const { Instruction } = await import("../../src/session/instruction")
+    const { SystemPrompt } = await import("../../src/session/system")
+    const { SessionSummary } = await import("../../src/session/summary")
+    const { Image } = await import("../../src/image/image")
+    const { LocationIdentity } = await import("@deepagent-code/core/context-federation/identity")
+    const { Auth } = await import("../../src/auth")
+    const { Provider } = await import("../../src/provider/provider")
+    const { Config } = await import("../../src/config/config")
+    const { LSP } = await import("../../src/lsp/lsp")
+    const { MCP } = await import("../../src/mcp")
+    const { ToolRegistry } = await import("../../src/tool/registry")
     const { SessionRevert } = await import("../../src/session/revert")
     const { SessionRunState } = await import("../../src/session/run-state")
     const { MessageID } = await import("../../src/session/schema")
@@ -280,10 +301,10 @@ export async function runLegacyLiveCases(input: {
     const { SessionToolRequestReceiptTable } = await import("../../src/session/tool-request-receipt.sql")
     const { EventDispatcher } = await import("../../src/session/event-dispatcher")
     const { MultiAgentRuntime } = await import("../../src/session/multi-agent-runtime")
-    const { makeEventTurnRunner } = await import("../../src/session/v4-event-runtime")
     const { V4PRCollaboration } = await import("../../src/session/v4-pr-collaboration")
     const { RuntimeFlags } = await import("../../src/effect/runtime-flags")
     const { InstanceRef } = await import("../../src/effect/instance-ref")
+    const { InstanceRegistry } = await import("../../src/effect/instance-registry")
     const { InstanceStore } = await import("../../src/project/instance-store")
     const { Worktree } = await import("../../src/worktree")
     const { consultPanel } = await import("../../src/panel/consult")
@@ -302,7 +323,8 @@ export async function runLegacyLiveCases(input: {
         }
       | undefined
     const program = Effect.gen(function* () {
-      const prompts = yield* SessionPrompt.Service
+      const prompts = yield* SessionPromptV2.Service
+      const v2Session = yield* SessionV2.Service
       const database = yield* Database.Service
       const runState = yield* SessionRunState.Service
       const steers = yield* SessionSteer.Service
@@ -428,6 +450,13 @@ export async function runLegacyLiveCases(input: {
       })
       yield* Effect.addFinalizer(() => unsubscribeQuestions)
       const v4Event = input.v4Event
+      // v2w-j4 durable-only: the production V1 event turn runner is deleted and MultiAgentRuntime.dispatch
+      // is V2-admission-only. This LIVE §C harness still exercises the coordination library end-to-end
+      // (partition → gate → arbitrate → run → PR collaboration) with the V2-native subagent runner: the
+      // runner slot is deferred until the event id (hence its deterministic parent session) exists, and
+      // the dispatcher's dispatchPort drives `coordinate` directly — the harness-local equivalent of the
+      // deleted production dispatch branch, so the durable delivery/ack machinery stays exercised.
+      let v4Runner: ReturnType<typeof makeTaskSubagentRunner> | undefined
       const v4 =
         v4Event && agents && instances && gitService && prQueue
           ? yield* Effect.gen(function* () {
@@ -461,13 +490,17 @@ export async function runLegacyLiveCases(input: {
                       bus,
                       approvalQueue,
                     }),
-                    runner: makeEventTurnRunner({
-                      sessions,
-                      agents,
-                      sessionPrompt: prompts,
-                      instanceStore: instances,
-                      defaultModel: () => Effect.succeed({ providerID, modelID }),
-                    }),
+                    runner: (turn) =>
+                      v4Runner
+                        ? v4Runner(turn)
+                        : Effect.succeed({
+                            ok: false,
+                            reason: "runner_not_wired",
+                            structured: undefined,
+                            text: "",
+                            tokensUsed: 0,
+                            cost: 0,
+                          }),
                   })
                 }),
               ).pipe(Layer.provide(core), Layer.provide(registry))
@@ -476,7 +509,18 @@ export async function runLegacyLiveCases(input: {
                   const multiAgent = yield* MultiAgentRuntime.Service
                   const bus = yield* DeepAgentEventBus.Service
                   return EventDispatcher.layerWith({
-                    dispatchPort: { dispatch: multiAgent.dispatch },
+                    dispatchPort: {
+                      dispatch: (request) =>
+                        multiAgent.coordinate(request.event).pipe(
+                          Effect.flatMap((summary) =>
+                            summary.hasUnfinished
+                              ? Effect.fail(
+                                  new Error(`multi-agent coordination incomplete for event ${request.event.id}`),
+                                )
+                              : Effect.void,
+                          ),
+                        ),
+                    },
                     runLoops: false,
                     pendingDeliveryCount: bus.pendingDeliveryCount,
                   })
@@ -494,6 +538,25 @@ export async function runLegacyLiveCases(input: {
                 idempotencyKey: `live-v4:${input.suite}`,
                 priority: "normal",
                 payload: { ...v4Event.payload, directory: instance.directory },
+              })
+              // The event id now exists: create its deterministic parent session and install the
+              // V2-native subagent runner into the deferred slot (makeTaskSubagentRunner parents every
+              // child turn here and freezes the driver model onto the child session).
+              const parentSessionID = MultiAgentRuntime.parentSessionIDFor(event.id)
+              yield* V4PRCollaboration.ensureEventParent({
+                sessions,
+                instanceStore: instances,
+                parentSessionID,
+                directory: instance.directory,
+                correlationID: event.id,
+              })
+              v4Runner = makeTaskSubagentRunner({
+                sessions,
+                agents,
+                parentSessionID,
+                model: { providerID, modelID },
+                purpose: "generic",
+                v2Session,
               })
               const sourceDeliveryPendingBefore = (yield* bus.dueRetries(Number.MAX_SAFE_INTEGER)).some(
                 (delivery) =>
@@ -588,7 +651,6 @@ export async function runLegacyLiveCases(input: {
                   }
                 }),
               )
-              const parentSessionID = MultiAgentRuntime.parentSessionIDFor(event.id)
               const parentSession = yield* sessions.get(parentSessionID)
               const collaborationEntries = (yield* prQueue.list()).filter(
                 (entry) => entry.metadata?.eventID === event.id,
@@ -948,7 +1010,7 @@ export async function runLegacyLiveCases(input: {
             const runTurn = makeTaskSubagentRunner({
               sessions,
               agents,
-              sessionPrompt: prompts,
+              v2Session,
               parentSessionID: session.id,
               model,
               purpose: "panel",
@@ -1455,8 +1517,7 @@ export async function runLegacyLiveCases(input: {
         v4,
       }
     })
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
+    const liveProgram = Effect.gen(function* () {
         const directory = yield* tmpdirScoped({
           git: true,
           config: liveWorkspaceConfig(config, input.permission, input.primaryPermission, input.mcp, {
@@ -1522,27 +1583,62 @@ export async function runLegacyLiveCases(input: {
         })
         const instances = yield* InstanceStore.Service
         return yield* instances.provide({ directory }, program.pipe(Effect.provideService(TestInstance, { directory })))
-      }).pipe(
+      })
+    const result = await Effect.runPromise(
+      liveProgram.pipe(
         Effect.scoped,
         Effect.provide(
-          Layer.mergeAll(
-            SessionPrompt.defaultLayer,
-            Agent.defaultLayer,
-            SessionRunState.defaultLayer,
-            SessionSteer.defaultLayer,
-            SessionCompaction.defaultLayer,
-            SessionRevert.defaultLayer,
-            Session.defaultLayer,
-            Permission.defaultLayer,
-            Question.defaultLayer,
-            EventV2Bridge.defaultLayer,
-            Worktree.appLayer,
-            Git.defaultLayer,
-            EffectFlock.defaultLayer,
-            PRQueue.layer.pipe(Layer.orDie),
-            CrossSpawnSpawner.defaultLayer,
-            Database.defaultLayer,
-          ).pipe(Layer.provideMerge(testInstanceStoreLayer)),
+          // LEGACY-EXECUTION-ZERO: one SHARED SessionV2 runtime — the subagent runner requires the
+          // V2 authority, and the prompt surface consumes the same instance (a defaultLayer would
+          // build a second, disjoint V2 runtime inside its own scope).
+          // v2w-l2: command-v2's production layer composes the prompt-v2 layer internally; the
+          // monolith-era self-provides the E2E program still needs are provided here explicitly.
+          Layer.mergeAll(SessionCommandV2.productionLayer, SessionPromptV2.productionLayer).pipe(
+            Layer.provideMerge(
+              Layer.mergeAll(
+                testInstanceStoreLayer,
+                Agent.defaultLayer,
+                SessionRunState.defaultLayer,
+                SessionSteer.defaultLayer,
+                SessionCompaction.defaultLayer,
+                SessionRevert.defaultLayer,
+                Session.defaultLayer,
+                Permission.defaultLayer,
+                Question.defaultLayer,
+                EventV2Bridge.defaultLayer,
+                Worktree.appLayer,
+                Git.defaultLayer,
+                EffectFlock.defaultLayer,
+                PRQueue.layer.pipe(Layer.orDie),
+                CrossSpawnSpawner.defaultLayer,
+                Database.defaultLayer,
+                LLM.defaultLayer,
+                Snapshot.defaultLayer,
+                Reference.defaultLayer,
+                FSUtil.defaultLayer,
+                Truncate.configuredLayer,
+                Instruction.defaultLayer,
+                SystemPrompt.defaultLayer,
+                SessionSummary.defaultLayer,
+                Image.defaultLayer,
+                LocationIdentity.defaultLayer,
+                Auth.defaultLayer,
+                Provider.defaultLayer,
+                Config.defaultLayer,
+                LSP.defaultLayer,
+                MCP.defaultLayer,
+                ToolRegistry.productionLayer,
+                RuntimeFlags.defaultLayer,
+                InstanceRegistry.layer,
+                SessionV2.liveLayer,
+              ),
+            ),
+            Layer.provide(SessionV2.liveLayer),
+            Layer.provide(InstanceRegistry.layer),
+            // Same layer objects as the provideMerges above — the shared memoMap keeps ONE
+            // instance; the explicit provides only close the type-level requirements.
+            Layer.provide(testInstanceStoreLayer),
+          ),
         ),
         Effect.timeout(
           Math.min(config.timeoutMs, input.timeoutMs ?? config.timeoutMs) * Math.max(1, input.cases.length),
@@ -1722,7 +1818,7 @@ export function liveWorkspaceConfig(
           }
         : {}),
       [liveProviderID]: {
-        name: `${config.providerID === "deepseek" ? "DeepSeek" : "Kimi"} legacy live test`,
+        name: `${liveProviderLabel(config)} live test`,
         env: [],
         npm: "@ai-sdk/openai-compatible",
         api: config.baseURL,
@@ -1736,7 +1832,7 @@ export function liveWorkspaceConfig(
           [config.modelID]: {
             id: config.modelID,
             name: `${config.modelID} live test`,
-            reasoning: config.providerID === "kimi",
+            reasoning: config.providerID !== "deepseek",
             temperature: config.providerID === "deepseek",
             tool_call: true,
             release_date: "2026-07-27",

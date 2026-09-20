@@ -332,13 +332,23 @@ async function loadLiveLLMConfig() {
   const apiKey = (await readFile(apiKeyFile, "utf8")).trim()
   if (!apiKey || /[\r\n]/.test(apiKey)) throw new Error("Live LLM key file must contain exactly one non-empty line")
 
+  const officialEndpoints = [
+    "https://api.deepseek.com",
+    "https://api.moonshot.ai/v1",
+    "https://open.bigmodel.cn/api/paas/v4",
+    "https://open.bigmodel.cn/api/coding/paas/v4",
+    "https://api.z.ai/api/paas/v4",
+    "https://api.z.ai/api/coding/paas/v4",
+  ]
   const baseURL = (process.env.DEEPAGENT_CODE_LIVE_LLM_BASE_URL?.trim() || "https://api.deepseek.com").replace(
     /\/$/,
     "",
   )
   const endpoint = new URL(baseURL)
-  if (endpoint.protocol !== "https:" || endpoint.hostname !== "api.deepseek.com") {
-    throw new Error(`Official DeepSeek live tests require https://api.deepseek.com, received ${baseURL}`)
+  if (endpoint.protocol !== "https:" || !officialEndpoints.includes(baseURL)) {
+    throw new Error(
+      `Official live tests require a known provider endpoint (${officialEndpoints.join(", ")}), received ${baseURL}`,
+    )
   }
   const timeoutMs = Number(process.env.DEEPAGENT_CODE_LIVE_LLM_TIMEOUT_MS || 120_000)
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 15 * 60_000) {
@@ -349,7 +359,7 @@ async function loadLiveLLMConfig() {
     apiKey,
     apiKeyFile,
     timeoutMs,
-    modelID: process.env.DEEPAGENT_CODE_LIVE_LLM_MODEL?.trim() || "deepseek-v4-flash",
+    modelID: process.env.DEEPAGENT_CODE_LIVE_LLM_MODEL?.trim() || "deepseek-flash",
     modelRevision: process.env.DEEPAGENT_CODE_LIVE_LLM_REVISION?.trim() || undefined,
   }
 }

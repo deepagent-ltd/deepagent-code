@@ -338,6 +338,27 @@ describe("strict plan write admission", () => {
     expect(hash).toBe(planWriteCandidateHash({ ...decoded!, goal: "ship a reliable change" }))
   })
 
+  test("coerces provider-stringified numbers and nulls in plan-write inputs (GLM 5.x)", () => {
+    // Observed live in the wazero ablation run: GLM serializes tool-argument numbers as
+    // strings and null as "null", which previously exhausted the plan attempt budget.
+    const decoded = decodePlanWriteInput(
+      input({
+        expected_plan_id: "null",
+        expected_version: "0" as unknown as number,
+        active_step_id: "null",
+        steps: [{ title: "implement", status: "active" }],
+      }),
+    )
+    expect(decoded).not.toBeNull()
+    expect(decoded!.expected_plan_id).toBeNull()
+    expect(decoded!.expected_version).toBe(0)
+    expect(decoded!.active_step_id).toBeNull()
+    // Honest coercion boundaries: fractional/malformed strings still reject.
+    expect(decodePlanWriteInput({ ...input({}), expected_version: "1.5" as unknown as number })).toBeNull()
+    expect(decodePlanWriteInput({ ...input({}), expected_version: "abc" as unknown as number })).toBeNull()
+    expect(decodePlanWriteInput({ ...input({}), expected_plan_id: 42 as unknown as string })).toBeNull()
+  })
+
   test("quality challenge uses a stable candidate hash and a fresh challenge id", () => {
     const previous = buildPlanFromWriteInput("s1", input(), null, null)
     const candidate = input({

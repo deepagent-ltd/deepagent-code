@@ -1,4 +1,5 @@
 import { EventV2 } from "@deepagent-code/core/event"
+import { Location } from "@deepagent-code/core/location"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { DateTime, Effect, Stream } from "effect"
 import { HttpServerResponse } from "effect/unstable/http"
@@ -9,6 +10,7 @@ import { SessionsCursor } from "../groups/session"
 import {
   ConflictError,
   InvalidCursorError,
+  InvalidRequestError,
   ServiceUnavailableError,
   SessionNotFoundError,
   UnknownError,
@@ -21,6 +23,46 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
     const session = yield* SessionV2.Service
 
     return handlers
+      .handle(
+        "session.create",
+        Effect.fn(function* (ctx) {
+          const location = yield* Location.Service
+          return {
+            data: yield* session
+              .create({
+                id: ctx.payload.id,
+                agent: ctx.payload.agent,
+                model: ctx.payload.model,
+                location: {
+                  directory: location.directory,
+                  workspaceID: location.workspaceID,
+                },
+              })
+              .pipe(
+                // RI-04 admission validation surfaces as a 400: the agent is unknown to the Location
+                // roster or not directly selectable (subagent/hidden).
+                Effect.catchTags({
+                  "AgentV2.NotFoundError": (error) =>
+                    Effect.fail(
+                      new InvalidRequestError({
+                        message: `Unknown agent: ${error.id}`,
+                        kind: "unknown_agent",
+                        field: "agent",
+                      }),
+                    ),
+                  "Session.AgentNotSelectableError": (error) =>
+                    Effect.fail(
+                      new InvalidRequestError({
+                        message: `Agent is not selectable for a Session: ${error.id}`,
+                        kind: "agent_not_selectable",
+                        field: "agent",
+                      }),
+                    ),
+                }),
+              ),
+          }
+        }),
+      )
       .handle(
         "session.list",
         Effect.fn(function* (ctx) {
@@ -67,22 +109,6 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.prompt",
         Effect.fn(function* (ctx) {
-          if (ctx.payload.resume !== false) {
-            yield* session.get(ctx.params.sessionID).pipe(
-              Effect.catchTag("Session.NotFoundError", (error) =>
-                Effect.fail(
-                  new SessionNotFoundError({
-                    sessionID: error.sessionID,
-                    message: `Session not found: ${error.sessionID}`,
-                  }),
-                ),
-              ),
-            )
-            return yield* new ServiceUnavailableError({
-              message: "Session execution is not available on this endpoint",
-              service: "session.prompt",
-            })
-          }
           return {
             data: yield* session
               .prompt({
@@ -90,7 +116,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 id: ctx.payload.id,
                 prompt: ctx.payload.prompt,
                 delivery: ctx.payload.delivery,
-                resume: false,
+                resume: ctx.payload.resume,
               })
               .pipe(
                 Effect.catchTag("Session.NotFoundError", (error) =>
@@ -149,13 +175,17 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 }),
               ),
             ),
-            Effect.catchTag("Session.OperationUnavailableError", (error) =>
-              Effect.fail(
-                new ServiceUnavailableError({
-                  message: `Session ${error.operation} is not available yet`,
-                  service: `session.${error.operation}`,
-                }),
-              ),
+            // W1.2 — wait is now REAL (SessionExecution.awaitIdle): its failures are the underlying
+            // drain's RunError. Surface them as unavailable with the concrete message instead of a
+            // stale typed-unavailable mapping.
+            Effect.catch(
+              (error): Effect.Effect<void, ServiceUnavailableError> =>
+                Effect.fail(
+                  new ServiceUnavailableError({
+                    message: `Session wait failed: ${error instanceof Error ? error.message : String(error)}`,
+                    service: "session.wait",
+                  }),
+                ),
             ),
           )
           return HttpApiSchema.NoContent.make()
@@ -234,21 +264,19 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
             }
           }
           return HttpServerResponse.stream(
-            session
-              .events({ sessionID, after })
-              .pipe(
-                Stream.mapError(
-                  (error) =>
-                    new SessionNotFoundError({
-                      message: "Session not found",
-                      sessionID: error.sessionID,
-                    }),
-                ),
-                Stream.map((row) => row.event),
-                Stream.map(eventData),
-                Stream.pipeThroughChannel(Sse.encode()),
-                Stream.encodeText,
+            session.events({ sessionID, after }).pipe(
+              Stream.mapError(
+                (error) =>
+                  new SessionNotFoundError({
+                    message: "Session not found",
+                    sessionID: error.sessionID,
+                  }),
               ),
+              Stream.map((row) => row.event),
+              Stream.map(eventData),
+              Stream.pipeThroughChannel(Sse.encode()),
+              Stream.encodeText,
+            ),
             {
               contentType: "text/event-stream",
               headers: {

@@ -1,0 +1,34 @@
+Create or update the authoritative working plan for the current task. Use this before making file
+changes on a non-trivial task, after a step finishes, when the situation changes, or when validation
+shows the plan no longer matches reality.
+
+The plan is versioned and compare-and-commit protected; a rejected payload is never partially
+applied. The runtime, goal loop, and UI read the committed document as the authority.
+
+Fields: `operation` is create, advance, or replan (omit for create). `expected_plan_id` and
+`expected_version` are null for create; for advance/replan copy them exactly from the latest
+<plan-status> or plan result — never infer them. `goal` and `steps` are required for create/replan.
+`replan_reason` is required for replan.
+
+Never send step ids. Steps have no id in your payload: the server tracks them, matches a step you
+resend to the one it already has by its title and acceptance, and keeps the runtime evidence attached
+to it. A step whose title or acceptance you change is a new step and starts without evidence, so
+repeat a step's wording verbatim when you mean "the same step".
+
+Operations:
+- create: for a session with no plan.
+- advance: a status patch over the EXISTING steps. Send the steps whose status or note changes (or
+  the whole list); omit a step to leave it as it is. `goal` and `assumptions` may be revised here.
+- replan: a structural revision that must explain itself — use it to add, remove, reorder or reword
+  steps. Omit `assumptions` to retain the current list (send [] to clear). Never use replan to bypass
+  the version precondition or erase unresolved work.
+
+Steps: `status` is pending, active, done, cancelled, or blocked (a blocked step needs a `note`). At
+most one step is active, and the server derives `active_step_id` from the statuses. Do not send
+evidence — validation and the runtime attach it after admission, which is what makes the completion
+report a record of what actually ran rather than a claim.
+
+When a step finishes, call this immediately with the next step and the exact latest
+`expected_plan_id`, `expected_version` and step ids. If an identity value is unavailable, do not guess:
+inspect the snapshot in the error. Retry a rejected write once with corrected fields, never with an
+unchanged payload.

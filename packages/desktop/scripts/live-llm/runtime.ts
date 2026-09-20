@@ -90,6 +90,20 @@ const main = path.join(packageRoot, "out/main/index.js")
 const activeApps = new Set<ElectronApplication>()
 const activePermissionMonitors = new Map<ElectronApplication, { abort: AbortController; task: Promise<void> }>()
 
+/** Official providers → the env var their catalog auth loader reads (catalog-driver path). */
+function envKeyForProvider(providerID: string): string | undefined {
+  if (providerID === "deepseek") return "DEEPSEEK_API_KEY"
+  if (providerID === "kimi") return "MOONSHOT_API_KEY"
+  if (providerID === "zai" || providerID === "zhipuai" || providerID === "zhipuai-coding-plan" || providerID === "zai-coding-plan")
+    return "ZHIPU_API_KEY"
+  return undefined
+}
+
+/** The config-content provider key mirrors the runtime provider id (catalog ids only). */
+function runtimeProviderKeyFor(config: { providerID: string }) {
+  return envKeyForProvider(config.providerID) ? config.providerID : "live-deepseek"
+}
+
 export async function loadLiveConfig() {
   if (process.env.DEEPAGENT_CODE_LIVE_LLM_API_KEY?.trim() || process.env.DEEPSEEK_API_KEY?.trim()) {
     throw new Error(
@@ -100,28 +114,43 @@ export async function loadLiveConfig() {
   const apiKeyFile = await validateKeyFile(process.env.DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE)
   const apiKey = (await readFile(apiKeyFile, "utf8")).trim()
   if (!apiKey || /[\r\n]/.test(apiKey)) throw new Error("Live LLM key file must contain exactly one non-empty line")
+  // Official endpoints per provider (mirrors the llm-package live config profiles); any other
+  // https endpoint still requires the explicit DEEPAGENT_CODE_LIVE_LLM_ALLOW_NON_DEEPSEEK opt-in.
+  const officialEndpoints: Record<string, string> = {
+    deepseek: "https://api.deepseek.com",
+    kimi: "https://api.moonshot.ai/v1",
+    zai: "https://open.bigmodel.cn/api/paas/v4",
+  }
   const baseURL = (process.env.DEEPAGENT_CODE_LIVE_LLM_BASE_URL?.trim() || "https://api.deepseek.com").replace(
     /\/$/,
     "",
   )
   const endpoint = new URL(baseURL)
-  // The official suite is pinned to api.deepseek.com; the r0-interactive live test may target any
-  // OpenAI-compatible endpoint when the operator explicitly opts in (the DeepSeek key on this
-  // machine is invalidated, so the same mechanism is verified against the saved Kimi credential).
-  if (endpoint.protocol !== "https:" || (endpoint.hostname !== "api.deepseek.com" && !process.env.DEEPAGENT_CODE_LIVE_LLM_ALLOW_NON_DEEPSEEK)) {
-    throw new Error(`Official DeepSeek live tests require https://api.deepseek.com, received ${baseURL}`)
+  const requestedProvider = process.env.DEEPAGENT_CODE_LIVE_LLM_PROVIDER?.trim() || ""
+  const endpointIsOfficial = Object.values(officialEndpoints).includes(baseURL)
+  const providerMatchesEndpoint = !requestedProvider || officialEndpoints[requestedProvider] === baseURL
+  if (
+    endpoint.protocol !== "https:" ||
+    (!endpointIsOfficial && !process.env.DEEPAGENT_CODE_LIVE_LLM_ALLOW_NON_DEEPSEEK) ||
+    !providerMatchesEndpoint
+  ) {
+    throw new Error(
+      `Official desktop live tests require a known provider endpoint (${Object.entries(officialEndpoints)
+        .map(([id, url]) => `${id}=${url}`)
+        .join(", ")}), received ${baseURL}`,
+    )
   }
   // The V2-only r0 flow executes on the CORE catalog: a models.dev provider (e.g. "deepseek")
-  // is already seeded in the catalog; the "live-deepseek" config-content provider only serves the
-  // legacy harness paths. Default keeps legacy behavior for the official suite.
-  const providerID = process.env.DEEPAGENT_CODE_LIVE_LLM_PROVIDER?.trim() || "live-deepseek" as const
+  // is already seeded in the catalog; the config-content provider id only serves the legacy
+  // harness paths. Default keeps legacy behavior for the official deepseek suite.
+  const providerID = requestedProvider || "live-deepseek"
   const timeoutMs = Number(process.env.DEEPAGENT_CODE_LIVE_LLM_TIMEOUT_MS || 180_000)
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 15 * 60_000) {
     throw new Error("DEEPAGENT_CODE_LIVE_LLM_TIMEOUT_MS must be an integer between 1000 and 900000")
   }
   return {
     baseURL,
-    modelID: process.env.DEEPAGENT_CODE_LIVE_LLM_MODEL?.trim() || "deepseek-v4-flash",
+    modelID: process.env.DEEPAGENT_CODE_LIVE_LLM_MODEL?.trim() || "deepseek-flash",
     modelRevision: process.env.DEEPAGENT_CODE_LIVE_LLM_REVISION?.trim() || undefined,
     apiKey,
     apiKeyFile,
@@ -137,13 +166,13 @@ export async function preflight(config: LiveConfig) {
     redirect: "error",
     signal: AbortSignal.timeout(Math.min(config.timeoutMs, 30_000)),
   })
-  if (!response.ok) throw new Error(`DeepSeek model preflight failed with HTTP ${response.status}`)
+  if (!response.ok) throw new Error(`Model preflight failed with HTTP ${response.status}`)
   const payload: unknown = await response.json()
   if (!isRecord(payload) || !Array.isArray(payload.data))
-    throw new Error("DeepSeek model preflight returned invalid JSON")
+    throw new Error("Model preflight returned invalid JSON")
   const models = payload.data.flatMap((item) => (isRecord(item) && typeof item.id === "string" ? [item.id] : []))
   if (!models.includes(config.modelID)) {
-    throw new Error(`DeepSeek model ${config.modelID} is not available; reported models: ${models.join(", ")}`)
+    throw new Error(`Model ${config.modelID} is not available; reported models: ${models.join(", ")}`)
   }
   return { durationMs: Date.now() - startedAt }
 }
@@ -198,7 +227,7 @@ export async function launch(name: string, config: LiveConfig, options: LaunchOp
       // Only the catalog-driver (core catalog provider) path reads the key via env; the
       // config-content provider uses the {file:...} seam and the official suite asserts the key
       // never leaks into the app environment.
-      ...(config.providerID === "deepseek" ? { DEEPSEEK_API_KEY: config.apiKey } : {}),
+      ...(envKeyForProvider(config.providerID) ? { [envKeyForProvider(config.providerID)!]: config.apiKey } : {}),
       DEEPAGENT_ENABLED: "false",
       DEEPAGENT_CODE_CONFIG_CONTENT: JSON.stringify({
         snapshot: false,
@@ -254,8 +283,8 @@ export async function launch(name: string, config: LiveConfig, options: LaunchOp
           },
         },
         provider: {
-          "live-deepseek": {
-            name: "DeepSeek V4 Flash isolated desktop test",
+          [runtimeProviderKeyFor(config)]: {
+            name: "Isolated desktop live test",
             env: [],
             npm: "@ai-sdk/openai-compatible",
             api: config.baseURL,
@@ -268,14 +297,17 @@ export async function launch(name: string, config: LiveConfig, options: LaunchOp
             models: {
               [config.modelID]: {
                 id: config.modelID,
-                name: "DeepSeek V4 Flash isolated desktop test",
-                reasoning: false,
-                temperature: true,
+                name: "Isolated desktop live test",
+                reasoning: config.providerID !== "deepseek",
+                temperature: config.providerID === "deepseek",
                 tool_call: true,
                 limit: { context: 1_000_000, output: 2048 },
                 cost: { input: 0, output: 0 },
                 modalities: { input: ["text"], output: ["text"] },
-                options: { thinking: { type: "disabled" }, maxTokens: 1024, temperature: 0 },
+                options:
+                  config.providerID === "deepseek"
+                    ? { thinking: { type: "disabled" }, maxTokens: 1024, temperature: 0 }
+                    : { reasoningEffort: "low", maxTokens: 1024 },
               },
             },
           },
@@ -497,7 +529,7 @@ export async function startPrompt(runtime: Runtime, sessionID: string, text: str
   await request<void>(runtime, `/session/${sessionID}/prompt_async`, {
     method: "POST",
     body: JSON.stringify({
-      model: { providerID: "live-deepseek", modelID: runtime.config.modelID },
+      model: { providerID: runtime.config.providerID, modelID: runtime.config.modelID },
       agent,
       parts: [{ type: "text", text }],
     }),
@@ -536,12 +568,13 @@ export function visibleText(items: Message[]) {
     .join("\n")
 }
 
-export function assertModel(items: Message[], modelID: string, providerID = "live-deepseek") {
+export function assertModel(items: Message[], modelID: string, providerID?: string) {
+  const expected = providerID ?? process.env.DEEPAGENT_CODE_LIVE_LLM_PROVIDER?.trim() ?? "live-deepseek"
   assert.equal(
     items.some(
       (message) =>
         message.info.role === "assistant" &&
-        message.info.providerID === providerID &&
+        message.info.providerID === expected &&
         message.info.modelID === modelID,
     ),
     true,

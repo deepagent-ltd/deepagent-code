@@ -23,11 +23,11 @@ Visse MCP-servere, som GitHub MCP-servere, har en tendens til at tilføje mange 
 
 ## Aktivering
 
-Du kan definere MCP-servere i din [DeepAgent Code Config](https://deepagent-code.ai/docs/config/) under `mcp`. Tilføj hver MCP med et unikt navn. Du kan henvise til denne MCP ved navn, når du spørger LLM.
+Du kan definere MCP-servere i din [DeepAgent Code Config](https://ai.deepagent.ltd/docs/config/) under `mcp`. Tilføj hver MCP med et unikt navn. Du kan henvise til denne MCP ved navn, når du spørger LLM.
 
 ```jsonc title="deepagent-code.jsonc" {6}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "mcp": {
     "name-of-mcp-server": {
       // ...
@@ -52,7 +52,7 @@ For at aktivere en specifik server fra din organisationers fjernkonfiguration sk
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "mcp": {
     "jira": {
       "type": "remote",
@@ -73,7 +73,7 @@ Tilføj lokale MCP-servere ved hjælp af `type` til `"local"` i MCP-objektet.
 
 ```jsonc title="deepagent-code.jsonc" {15}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "mcp": {
     "my-local-mcp-server": {
       "type": "local",
@@ -94,7 +94,7 @@ For eksempel kan du tilføje test-MCP-serveren [`@modelcontextprotocol/server-ev
 
 ```jsonc title="deepagent-code.jsonc"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "mcp": {
     "mcp_everything": {
       "type": "local",
@@ -132,7 +132,7 @@ Tilføj ekstern MCP-server ved at indstille `type` til `"remote"`.
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "mcp": {
     "my-remote-mcp": {
       "type": "remote",
@@ -179,7 +179,7 @@ For de fleste OAuth-aktiverede MCP-servere kræver ingen speciel konfiguration. 
 
 ```json title="deepagent-code.json"
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "mcp": {
     "my-oauth-server": {
       "type": "remote",
@@ -199,7 +199,7 @@ Hvis du har klientlegitimationsoplysninger fra MCP-serverudbyderen, kan du konfi
 
 ```json title="deepagent-code.json" {7-11}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "mcp": {
     "my-oauth-server": {
       "type": "remote",
@@ -248,7 +248,7 @@ Hvis du vil deaktivere automatisk OAuth for en server (f.eks. for servere, der b
 
 ```json title="deepagent-code.json" {7}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "mcp": {
     "my-api-key-server": {
       "type": "remote",
@@ -301,7 +301,7 @@ Det betyder, at du kan aktivere eller deaktivere dem globalt.
 
 ```json title="deepagent-code.json" {14}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "mcp": {
     "my-mcp-foo": {
       "type": "local",
@@ -322,7 +322,7 @@ Vi kan også bruge et globmønster til at deaktivere alle matchende MCPs.
 
 ```json title="deepagent-code.json" {14}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "mcp": {
     "my-mcp-foo": {
       "type": "local",
@@ -352,7 +352,7 @@ Hvis du har et stort antal MCP-servere, vil du måske kun aktivere dem pr. agent
 
 ```json title="deepagent-code.json" {11, 14-18}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "mcp": {
     "my-mcp": {
       "type": "local",
@@ -406,7 +406,7 @@ Tilføj [Sentry MCP server](https://mcp.sentry.dev) for at interagere med dine S
 
 ```json title="deepagent-code.json" {4-8}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "mcp": {
     "sentry": {
       "type": "remote",
@@ -439,7 +439,7 @@ Tilføj [Context7 MCP server](https://github.com/upstash/context7) for at søge 
 
 ```json title="deepagent-code.json" {4-7}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "mcp": {
     "context7": {
       "type": "remote",
@@ -453,7 +453,7 @@ Hvis du har tilmeldt dig en gratis konto, kan du bruge din API-nøgle og få hø
 
 ```json title="deepagent-code.json" {7-9}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "mcp": {
     "context7": {
       "type": "remote",
@@ -488,7 +488,7 @@ Tilføj serveren [Grep by Vercel](https://grep.app) MCP for at søge gennem kode
 
 ```json title="deepagent-code.json" {4-7}
 {
-  "$schema": "https://deepagent-code.ai/config.json",
+  "$schema": "https://ai.deepagent.ltd/config.schema.json",
   "mcp": {
     "gh_grep": {
       "type": "remote",

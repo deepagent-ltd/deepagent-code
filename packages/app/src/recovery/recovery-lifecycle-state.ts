@@ -9,19 +9,63 @@ import type { RecoveryCommandResult } from "../maintenance/types"
 //     disposal (typed notice), no zombie timers/loops survive.
 //   - server 重连: paused → resume from the last cursor (no data loss, no feedback loop).
 //   - cross-session isolation: one Session's blocked/queued command never locks another Session.
+//   - real `session.execution.*` events (SessionEvent.Execution) drive a dedicated per-session
+//     execution track (serial: one turn at a time; terminal event closes it, a missed start is
+//     closed as superseded by the next started — never a stuck "running"). A terminal event with
+//     NO open slot (the page mounted after `started`, or a stream gap) synthesizes the slot from
+//     the terminal event itself, so a duplicated/missed window never silently drops an outcome.
 
 export type RecoveryCommandRef = { readonly commandId: string; readonly attemptId: string }
+
+export const EXECUTION_INTERRUPT_REASONS = ["user", "shutdown", "superseded"] as const
+export type ExecutionInterruptReason = (typeof EXECUTION_INTERRUPT_REASONS)[number]
 
 export type LifecycleEvent =
   | { type: "session-switch"; sessionID: string; cursor: number }
   | { type: "command-started"; sessionID: string; command: RecoveryCommandRef }
   | { type: "command-completed"; sessionID: string; commandId: string; result: RecoveryCommandResult }
   | { type: "command-failed"; sessionID: string; commandId: string; error: unknown }
+  // Real `SessionEvent.Execution.*` events (core session/event.ts) mapped 1:1. The execution
+  // track is per-session and serial (one turn at a time), kept separate from the recovery
+  // command queue: `started` opens a typed execution slot, the terminal event closes it.
+  | { type: "execution-started"; sessionID: string; timestamp: number }
+  | { type: "execution-succeeded"; sessionID: string; timestamp: number }
+  | { type: "execution-failed"; sessionID: string; timestamp: number; error: unknown }
+  | { type: "execution-interrupted"; sessionID: string; timestamp: number; reason: ExecutionInterruptReason }
   | { type: "sleep" }
   | { type: "wake" }
   | { type: "disconnect" }
   | { type: "reconnect" }
   | { type: "quit" }
+
+export type SessionExecutionRecord = {
+  readonly ref: RecoveryCommandRef
+  readonly state: "succeeded" | "failed" | "interrupted"
+  readonly at: number
+  readonly error?: unknown
+  readonly reason?: ExecutionInterruptReason
+  /** 1-based turn number (the serial execution counter). */
+  readonly number: number
+}
+
+export type SessionExecutionSlot = {
+  readonly ref: RecoveryCommandRef
+  readonly startedAt: number
+  /** 1-based turn number (the serial execution counter). */
+  readonly number: number
+}
+
+export type ExecutionStatusView =
+  | { readonly kind: "running"; readonly number: number }
+  | { readonly kind: "terminal"; readonly state: "succeeded" | "failed" | "interrupted"; readonly number: number }
+
+/** The dock-facing view of the current session's execution track (open turn wins; a closed turn
+ * surfaces as the last terminal outcome). Undefined = no turn observed yet. */
+export const executionStatusOf = (state: SessionLifecycleState): ExecutionStatusView | undefined => {
+  if (state.execution) return { kind: "running", number: state.execution.number }
+  if (state.lastExecution) return { kind: "terminal", state: state.lastExecution.state, number: state.lastExecution.number }
+  return undefined
+}
 
 export type SessionLifecycleState = {
   readonly sessionID: string
@@ -35,6 +79,10 @@ export type SessionLifecycleState = {
   readonly lastError?: { readonly commandId: string; readonly error: unknown }
   /** A quit with an in-flight command surfaces this typed notice once. */
   readonly abandonedOnQuit?: { readonly commandId: string }
+  /** Live `session.execution.*` turn: set by started, cleared by the terminal event. */
+  readonly execution?: SessionExecutionSlot
+  /** Last terminal execution turn outcome (succeeded/failed/interrupted). */
+  readonly lastExecution?: SessionExecutionRecord
 }
 
 export type LifecycleSnapshot = {
@@ -54,6 +102,9 @@ type MutableSession = {
   lastResult?: { commandId: string; result: RecoveryCommandResult }
   lastError?: { commandId: string; error: unknown }
   abandonedOnQuit?: { commandId: string }
+  execution?: SessionExecutionSlot
+  lastExecution?: SessionExecutionRecord
+  executionSeq: number
 }
 
 export const createRecoveryLifecycle = () => {
@@ -64,7 +115,14 @@ export const createRecoveryLifecycle = () => {
   const read = (sessionID: string): MutableSession => {
     const existing = sessions.get(sessionID)
     if (existing) return existing
-    const created: MutableSession = { sessionID, cursor: 0, suspended: false, disconnected: false, queue: [] }
+    const created: MutableSession = {
+      sessionID,
+      cursor: 0,
+      suspended: false,
+      disconnected: false,
+      queue: [],
+      executionSeq: 0,
+    }
     sessions.set(sessionID, created)
     return created
   }
@@ -100,6 +158,57 @@ export const createRecoveryLifecycle = () => {
         if (state.inflight?.commandId === event.commandId) state.inflight = undefined
         return
       }
+      case "execution-started": {
+        const state = read(event.sessionID)
+        // A started event while a turn is still open means the previous turn was superseded
+        // without its own terminal event (stream gap) — close it as interrupted, never leak.
+        if (state.execution) {
+          state.lastExecution = {
+            ref: state.execution.ref,
+            state: "interrupted",
+            at: event.timestamp,
+            reason: "superseded",
+            number: state.execution.number,
+          }
+        }
+        state.executionSeq += 1
+        state.execution = {
+          ref: { commandId: `execution:${state.executionSeq}`, attemptId: `${event.sessionID}:execution:${state.executionSeq}` },
+          startedAt: event.timestamp,
+          number: state.executionSeq,
+        }
+        return
+      }
+      case "execution-succeeded": {
+        const state = read(event.sessionID)
+        const closed = closeExecutionSlot(state, event.timestamp)
+        state.lastExecution = { ref: closed.ref, state: "succeeded", at: event.timestamp, number: closed.number }
+        return
+      }
+      case "execution-failed": {
+        const state = read(event.sessionID)
+        const closed = closeExecutionSlot(state, event.timestamp)
+        state.lastExecution = {
+          ref: closed.ref,
+          state: "failed",
+          at: event.timestamp,
+          error: event.error,
+          number: closed.number,
+        }
+        return
+      }
+      case "execution-interrupted": {
+        const state = read(event.sessionID)
+        const closed = closeExecutionSlot(state, event.timestamp)
+        state.lastExecution = {
+          ref: closed.ref,
+          state: "interrupted",
+          at: event.timestamp,
+          reason: event.reason,
+          number: closed.number,
+        }
+        return
+      }
       case "sleep":
         suspended = true
         return
@@ -121,6 +230,9 @@ export const createRecoveryLifecycle = () => {
             state.inflight = undefined
             state.queue.length = 0
           }
+          // A running execution turn is discarded with the disposal (no zombie slot; the
+          // terminal event for it either already arrived or never will).
+          state.execution = undefined
         }
         return
     }
@@ -136,3 +248,23 @@ export const createRecoveryLifecycle = () => {
 }
 
 export type RecoveryLifecycle = ReturnType<typeof createRecoveryLifecycle>
+
+/** The `started` slot a terminal event closes. When no slot is open the `started` was missed
+ * (the page mounted while the turn was in flight, or a stream gap): synthesize the slot from the
+ * terminal event itself so the outcome is recorded — never silently dropped (W9.5). The
+ * synthesized `startedAt` anchors at the terminal timestamp because the real start is unknown;
+ * the terminal event then closes it in the same step, so no fake "running" state is visible. */
+function closeExecutionSlot(state: MutableSession, timestamp: number): { readonly ref: RecoveryCommandRef; readonly number: number } {
+  if (state.execution) {
+    const ref = state.execution.ref
+    const number = state.execution.number
+    state.execution = undefined
+    return { ref, number }
+  }
+  state.executionSeq += 1
+  const ref = {
+    commandId: `execution:${state.executionSeq}`,
+    attemptId: `${state.sessionID}:execution:${state.executionSeq}`,
+  }
+  return { ref, number: state.executionSeq }
+}

@@ -150,6 +150,28 @@ jobs:
           test -n "$executable"
           DEEPAGENT_CODE_DESKTOP_EXECUTABLE="$executable" bun run test:subagents-cold-start
 
+      # W9.3: first real Windows run of the local-first + WSL-fallback routing.
+      # Launches the packaged app and asserts GET /global/health with Basic auth
+      # (the desktop sidecar always configures a password, so the typed API route
+      # answers 401 to a credential-less curl — the auth'd fetch proves the full
+      # sidecar bootstrap path, not just a listening port).
+      - name: Smoke test packaged Windows sidecar health
+        if: matrix.group == 'win'
+        working-directory: packages/desktop
+        shell: pwsh
+        run: |
+          # Wildcard matches both prod ("DeepAgent Code.exe") and beta
+          # ("DeepAgent Code Beta.exe") artifact names so the beta build
+          # cannot silently fail this smoke because of an exact name filter.
+          $exe = Get-ChildItem -Path "dist/win-unpacked" -Filter "*DeepAgent Code*.exe" -Recurse -File | Select-Object -First 1
+          if (-not $exe) {
+            Write-Error "Packaged executable not found under dist/win-unpacked"
+            exit 1
+          }
+          $env:DEEPAGENT_CODE_DESKTOP_EXECUTABLE = $exe.FullName
+          $env:DEEPAGENT_CODE_SMOKE_PORT = "3188"
+          bun run test:sidecar-health-smoke
+
       - name: Upload package artifacts
         uses: actions/upload-artifact@v4
         with:

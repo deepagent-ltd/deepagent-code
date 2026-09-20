@@ -16,6 +16,7 @@ type State =
     }
 
 const state = new Map<string, State>()
+const STATE_LIMIT = 256
 const waiters = new Map<
   string,
   {
@@ -23,6 +24,19 @@ const waiters = new Map<
     resolve: (state: State) => void
   }
 >()
+
+const forget = (id: string) => {
+  state.delete(id)
+  const waiter = waiters.get(id)
+  if (!waiter) return
+  waiters.delete(id)
+  waiter.resolve({ status: "failed", message: "worktree wait cancelled" })
+}
+
+const set = (id: string, value: State) => {
+  if (!state.has(id) && state.size >= STATE_LIMIT) forget(state.keys().next().value!)
+  state.set(id, value)
+}
 
 function deferred() {
   const box = { resolve: (_: State) => {} }
@@ -40,12 +54,12 @@ export const Worktree = {
     const id = key(scope, directory)
     const current = state.get(id)
     if (current && current.status !== "pending") return
-    state.set(id, { status: "pending" })
+    set(id, { status: "pending" })
   },
   ready(scope: ServerScope, directory: string) {
     const id = key(scope, directory)
     const next = { status: "ready" } as const
-    state.set(id, next)
+    set(id, next)
     const waiter = waiters.get(id)
     if (!waiter) return
     waiters.delete(id)
@@ -54,7 +68,7 @@ export const Worktree = {
   failed(scope: ServerScope, directory: string, message: string) {
     const id = key(scope, directory)
     const next = { status: "failed", message } as const
-    state.set(id, next)
+    set(id, next)
     const waiter = waiters.get(id)
     if (!waiter) return
     waiters.delete(id)
@@ -72,5 +86,8 @@ export const Worktree = {
 
     waiters.set(id, waiter)
     return waiter.promise
+  },
+  forget(scope: ServerScope, directory: string) {
+    forget(key(scope, directory))
   },
 }

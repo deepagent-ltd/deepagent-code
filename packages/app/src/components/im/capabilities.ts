@@ -11,7 +11,6 @@ type RawSdkClient = {
 
 export type IMCapabilities = {
   im: boolean
-  v4EventDrivenIm: boolean
   v4AgentPushEnabled: boolean
   v4ThreadEnabled: boolean
   v4FileUploadEnabled: boolean
@@ -19,7 +18,6 @@ export type IMCapabilities = {
 
 type WireFeatures = {
   im?: boolean
-  v4EventDrivenIm?: boolean
   v4AgentPushEnabled?: boolean
   v4ThreadEnabled?: boolean
   v4FileUploadEnabled?: boolean
@@ -34,7 +32,6 @@ export const fetchIMCapabilities = async (client: RawSdkClient): Promise<IMCapab
     const f = response.data?.features ?? {}
     return {
       im: f.im ?? true,
-      v4EventDrivenIm: f.v4EventDrivenIm ?? false,
       v4AgentPushEnabled: f.v4AgentPushEnabled ?? false,
       v4ThreadEnabled: f.v4ThreadEnabled ?? false,
       v4FileUploadEnabled: f.v4FileUploadEnabled ?? false,
@@ -43,7 +40,6 @@ export const fetchIMCapabilities = async (client: RawSdkClient): Promise<IMCapab
     // An older server (or a transient failure) ⇒ treat all V4 flags as disabled.
     return {
       im: true,
-      v4EventDrivenIm: false,
       v4AgentPushEnabled: false,
       v4ThreadEnabled: false,
       v4FileUploadEnabled: false,

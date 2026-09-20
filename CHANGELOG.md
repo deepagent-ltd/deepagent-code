@@ -2,15 +2,19 @@
 
 This changelog contains public, user-facing product changes. Internal incident identifiers, local paths, private environment topology, test credentials, release-gate evidence, and operational measurements are intentionally excluded.
 
-## Core V2.0 beta / Desktop 2.0 beta
+## Core 2.0 / Desktop 2.0
 
-Release labels: `core-v2.0beta` and `desktop-v2.0beta` (`2.0.0-beta.0`).
+Release labels: `core-v2.0` and `desktop-v2.0` (`2.0.0`).
 
 - Consolidated the durable V2 session runtime as the beta release line for Core and Desktop: sessions survive restarts, interruption and startup recovery settle predictably, and provider ownership, activity projection and migration compatibility are hardened.
 - Added the official DeepAgent platform provider (OpenAI Chat Completions + Responses, Anthropic-compatible) with live calibration; GPT/DeepSeek families run on the Responses protocol.
 - Added the capability system: a machine-readable manifest catalog, L0 boot catalog and `capability_search` discovery entry in the production context, with durable load receipts and a per-session catalog/load snapshot bound into the prepared attempt identity.
 - Connected the four-graph context base into the V2 runner with explicit per-graph readiness status (never a silent fallback), staged V2 adapters, and deterministic selection rows.
-- Aligned Core, CLI, renderer, and Electron package metadata for the beta build.
+- Added byte-stable history projection: uniform tool-output caps, protocol-aware reasoning replay, and budget-triggered batched clearing — measured 96%+ prefix-cache hit rate.
+- Measured on DeepSWE tasks against the mini-swe-agent baseline (same model): output tokens cut to roughly one third, fix-to-pass rate up from 71.8% to 98.4% on harder tasks.
+- Added durable task delegation: isolated git worktrees for write-capable subagents, per-SHA PR review, generation-fenced recovery.
+- Removed 7,269-line prompt.ts V1 monolith; replaced with lean V2 surfaces.
+- Added download distribution with mirror priority, sha256 verification, and GitHub Releases fallback.
 
 ## Desktop 1.4.7 / DeepAgent Core V4.0.8
 

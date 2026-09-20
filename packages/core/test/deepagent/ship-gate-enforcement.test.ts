@@ -10,6 +10,7 @@ import type { TaskContext, ToolContext } from "../../src/deepagent/prompt-policy
 import { DeepAgentReleasedSnapshot } from "../../src/deepagent/released-snapshot"
 import { Hash } from "../../src/util/hash"
 import { documentRevision } from "../../src/deepagent/document-store"
+import { tmpRoot } from "../fixture/tmpdir"
 
 // docs/34: the ablation ship gate has TEETH. evaluateSnapshot consumes a REAL measured metric
 // matrix. Governance status and model visibility are separate: a released revision remains replayable
@@ -27,7 +28,7 @@ const tools: ToolContext = { availableTools: [], mcpServers: [], totalToolCount:
 
 let base: string
 beforeEach(() => {
-  base = mkdtempSync(path.join(tmpdir(), "deepagent-shipgate-"))
+  base = mkdtempSync(tmpRoot())
   knowledgeSource.configure(base)
 })
 afterEach(() => {

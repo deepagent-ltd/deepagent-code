@@ -20,11 +20,23 @@ import { Effect } from "effect"
 import type { OpencodeClient } from "@deepagent-code/sdk"
 import * as ACPError from "./error"
 import * as ACPService from "./service"
+import { ACPEvent } from "./event"
 
 export function init({ sdk: _sdk }: { sdk: OpencodeClient }) {
+  const subscriptions = new Set<ACPEvent.Subscription>()
   return {
     create: (connection: AgentSideConnection) => {
-      return new Agent(ACPService.make({ sdk: _sdk, connection }))
+      return new Agent(
+        ACPService.make({
+          sdk: _sdk,
+          connection,
+          eventSubscription: (subscription) => subscriptions.add(subscription),
+        }),
+      )
+    },
+    dispose: () => {
+      subscriptions.forEach((subscription) => subscription.stop())
+      subscriptions.clear()
     },
   }
 }

@@ -37,14 +37,6 @@ export class ConflictError extends Schema.TaggedErrorClass<ConflictError>()("V2T
   reason: Schema.String,
 }) {}
 
-// Optional capability seam: compositions wired for the V2 capability port provide a recorder and
-// settleTaskRun records the compensation receipt inside its own settlement transaction. Default
-// undefined keeps unwired compositions receipt-less without writing legacy state.
-export const CurrentTaskRunTerminalRecorder = Context.Reference<
-  | ((tx: Transaction, input: RecordInput) => Effect.Effect<TaskRunReceipt, ConflictError>)
-  | undefined
->("@deepagent-code/v2/TaskRunReceipt/CurrentTaskRunTerminalRecorder", { defaultValue: () => undefined })
-
 export function recordInTransaction(tx: Transaction, input: RecordInput): Effect.Effect<TaskRunReceipt, ConflictError> {
   return Effect.gen(function* () {
     const existing = yield* tx

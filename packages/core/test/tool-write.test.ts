@@ -3,6 +3,7 @@ import path from "path"
 import { fileURLToPath } from "url"
 import { describe, expect, test } from "bun:test"
 import { Effect, Layer } from "effect"
+import * as SessionState from "@deepagent-code/core/deepagent/session-state"
 import { FileMutation } from "@deepagent-code/core/file-mutation"
 import { FileLock } from "@deepagent-code/core/file-lock"
 import { FSUtil } from "@deepagent-code/core/fs-util"
@@ -19,6 +20,9 @@ import { testEffect } from "./lib/effect"
 import { toolIdentity, executeTool, settleTool, toolDefinitions } from "./lib/tool"
 
 const sessionID = SessionV2.ID.make("ses_write_tool_test")
+// The write leaf's freshness precondition records its observation on the session's DeepAgent state;
+// production always has one, a bare tool harness must seed it.
+SessionState.getOrCreate(sessionID, "high")
 const assertions: PermissionV2.AssertInput[] = []
 const writes: string[] = []
 let denyAction: string | undefined
@@ -72,10 +76,12 @@ const withTool = <A, E, R>(directory: string, body: (registry: ToolRegistry.Inte
     Layer.provide(resolution),
     Layer.provide(mutation),
     Layer.provide(FileLock.layer),
+    // The write leaf's freshness precondition stats the target through the shared fs service.
+    Layer.provide(filesystem),
   )
   return Effect.gen(function* () {
     return yield* body(yield* ToolRegistry.Service)
-  }).pipe(Effect.provide(Layer.mergeAll(registry, resolution, mutation, write)))
+  }).pipe(Effect.provide(Layer.mergeAll(registry, resolution, mutation, filesystem, write)))
 }
 
 const call = (input: typeof WriteTool.Input.Type, id = "call-write") => ({
@@ -127,7 +133,11 @@ describe("WriteTool", () => {
         reset()
         return Effect.promise(() => fs.writeFile(path.join(tmp.path, "existing.txt"), "before")).pipe(
           Effect.andThen(
-            withTool(tmp.path, (registry) => settleTool(registry, call({ path: "existing.txt", content: "after" }))),
+            // `overwrite: true` is the explicit "replace this unread file" declaration the freshness
+            // precondition requires; the guard's own tests cover the refusal path.
+            withTool(tmp.path, (registry) =>
+              settleTool(registry, call({ path: "existing.txt", content: "after", overwrite: true })),
+            ),
           ),
           Effect.andThen((settled) =>
             Effect.gen(function* () {
@@ -158,10 +168,13 @@ describe("WriteTool", () => {
           Effect.andThen(
             withTool(tmp.path, (registry) =>
               Effect.gen(function* () {
-                yield* settleTool(registry, call({ path: "preserved.txt", content: "after" }, "call-preserved"))
                 yield* settleTool(
                   registry,
-                  call({ path: "deduplicated.txt", content: "\uFEFFafter" }, "call-deduplicated"),
+                  call({ path: "preserved.txt", content: "after", overwrite: true }, "call-preserved"),
+                )
+                yield* settleTool(
+                  registry,
+                  call({ path: "deduplicated.txt", content: "\uFEFFafter", overwrite: true }, "call-deduplicated"),
                 )
 
                 expect(yield* Effect.promise(() => fs.readFile(preserved, "utf8"))).toBe("\uFEFFafter")
@@ -169,6 +182,88 @@ describe("WriteTool", () => {
               }),
             ),
           ),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  // The freshness precondition `edit` gets for free from its `oldString` match but which `write`
+  // had no equivalent of: an agent must not silently clobber a file it never read, nor overwrite a
+  // file that changed since it read it. The failure is an ordinary tool error naming the recovery
+  // step — nothing is retried for the model (the same posture as the reference agents).
+  it.live("refuses to replace an existing file the session never read", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        return Effect.promise(() => fs.writeFile(path.join(tmp.path, "unread.txt"), "someone else's work")).pipe(
+          Effect.andThen(
+            withTool(tmp.path, (registry) => settleTool(registry, call({ path: "unread.txt", content: "mine" }))),
+          ),
+          Effect.andThen((settled) =>
+            Effect.gen(function* () {
+              expect(settled.result).toEqual({
+                type: "error",
+                value:
+                  "File unread.txt already exists and has not been read in this session. Read it first, or pass overwrite: true if replacing it is intended.",
+              })
+              // Nothing was written: the guard fails before the mutation.
+              expect(yield* Effect.promise(() => fs.readFile(path.join(tmp.path, "unread.txt"), "utf8"))).toBe(
+                "someone else's work",
+              )
+              expect(writes).toHaveLength(0)
+            }),
+          ),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("a write is itself an observation: the session may write again without re-reading", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        return withTool(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            const first = yield* settleTool(registry, call({ path: "owned.txt", content: "one" }, "call-1"))
+            expect(first.result).toEqual({ type: "text", value: "Created file successfully: owned.txt" })
+            // No `overwrite` needed: this session wrote the file, so it knows the version.
+            const second = yield* settleTool(registry, call({ path: "owned.txt", content: "two" }, "call-2"))
+            expect(second.result).toEqual({ type: "text", value: "Wrote file successfully: owned.txt" })
+            expect(yield* Effect.promise(() => fs.readFile(path.join(tmp.path, "owned.txt"), "utf8"))).toBe("two")
+          }),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("refuses a write when the file changed after this session observed it", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        return withTool(tmp.path, (registry) =>
+          Effect.gen(function* () {
+            yield* settleTool(registry, call({ path: "contested.txt", content: "mine" }, "call-1"))
+            // Another writer (the user, a linter, a parallel task) changes it after our observation.
+            yield* Effect.promise(() => fs.writeFile(path.join(tmp.path, "contested.txt"), "theirs, and longer"))
+            const settled = yield* settleTool(
+              registry,
+              call({ path: "contested.txt", content: "mine again" }, "call-2"),
+            )
+            expect(settled.result).toEqual({
+              type: "error",
+              value:
+                "File contested.txt was modified since it was read (by you, the user, or a linter). Read it again before attempting to write it.",
+            })
+            expect(yield* Effect.promise(() => fs.readFile(path.join(tmp.path, "contested.txt"), "utf8"))).toBe(
+              "theirs, and longer",
+            )
+          }),
         )
       },
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
@@ -282,7 +377,7 @@ test("keeps the locked write schema, semantics docstring, and deferred UX TODOs 
   if (!tool || tool.type !== "function") throw new Error("write must register as a function tool")
   const schema = tool.inputSchema as { readonly properties?: Record<string, unknown> }
 
-  expect(Object.keys(schema.properties ?? {}).sort()).toEqual(["content", "path"])
+  expect(Object.keys(schema.properties ?? {}).sort()).toEqual(["content", "overwrite", "path"])
   expect(source).toContain(
     "Named project references\n * are read-oriented and deliberately are not accepted by mutation tools.",
   )

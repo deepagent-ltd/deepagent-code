@@ -34,16 +34,24 @@ function convertToLineEnding(text: string, ending: "\n" | "\r\n"): string {
   return text.replaceAll("\n", "\r\n")
 }
 
-const locks = new Map<string, Semaphore.Semaphore>()
+const locks = new Map<string, { readonly semaphore: Semaphore.Semaphore; users: number }>()
 
-function lock(filePath: string) {
+function withFileLock<A, E, R>(filePath: string, operation: Effect.Effect<A, E, R>) {
   const resolvedFilePath = FSUtil.resolve(filePath)
-  const hit = locks.get(resolvedFilePath)
-  if (hit) return hit
-
-  const next = Semaphore.makeUnsafe(1)
-  locks.set(resolvedFilePath, next)
-  return next
+  return Effect.acquireUseRelease(
+    Effect.sync(() => {
+      const entry = locks.get(resolvedFilePath) ?? { semaphore: Semaphore.makeUnsafe(1), users: 0 }
+      entry.users++
+      locks.set(resolvedFilePath, entry)
+      return entry
+    }),
+    (entry) => entry.semaphore.withPermits(1)(operation),
+    (entry) =>
+      Effect.sync(() => {
+        entry.users--
+        if (entry.users === 0 && locks.get(resolvedFilePath) === entry) locks.delete(resolvedFilePath)
+      }),
+  )
 }
 
 export const Parameters = Schema.Struct({
@@ -87,7 +95,8 @@ export const EditTool = Tool.define(
           let diff = ""
           let contentOld = ""
           let contentNew = ""
-          yield* lock(filePath).withPermits(1)(
+          yield* withFileLock(
+            filePath,
             Effect.gen(function* () {
               if (params.oldString === "") {
                 const existed = yield* afs.existsSafe(filePath)

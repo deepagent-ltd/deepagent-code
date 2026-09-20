@@ -25,6 +25,19 @@ export type MessageMetadata =
   | { type: "debug"; info: string }
   | { type: "profile"; operation: string; duration: number }
   | { type: "error"; code: string; message: string }
+  // W0.4 (P9) — @mention routing receipt. Fields mirror core `NoTriggerMentionMetadata`
+  // (packages/core/src/im/sql.ts) exactly: the receipt tells the user their @mention was NOT dispatched
+  // (the mentioned agent did not declare the mention trigger, or nobody declared it at all). The
+  // optional eventID/messageID/agentID fields link the receipt to the initiating mention message for
+  // debugging; the message body itself is the user-visible copy (rendered as plain text — see
+  // message-metadata-card.tsx).
+  | {
+      type: "agent_no_trigger_mention"
+      agentID?: string
+      agentNames?: string[]
+      eventID?: string
+      messageID?: string
+    }
 
 export interface IMMessage {
   id: string

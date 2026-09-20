@@ -12,16 +12,34 @@ const repository = resolve(import.meta.dir, "../../../..")
 // Pinned completion evidence (§8 of the migration plan): the legacy orchestration denominator is
 // fully classified and its canonical hash is fixed. Any new legacy call surface must be added to
 // the classifier through a reviewed change, which moves this hash deliberately.
+// v2f-i + v2f-h2 re-pin (2026-09-18): the durable-only wave removed the remaining code references
+// to SessionPrompt from the task-*/goal-*/facade-activity child-execution callers and core's im
+// orchestrator (v2f-i), then deleted the legacy task executor/input/dispatcher/delivery modules
+// and moved the task tool onto the Core V2 TaskRunAuthority (v2f-h2). Both sweeps independently
+// converged on this 8-file denominator and hash. prompt.ts remains the single orchestration
+// authority surface. Any new legacy call surface must be added to the classifier through a
+// reviewed change, which moves this hash deliberately.
+// v2w-j5 re-pin (2026-09-19): the V1 assembly is torn out of the AppRuntime root graph
+// (app-runtime.ts drops the SessionPrompt import + productionLayer listing; zero root-level
+// consumers), so the denominator shrinks to the httpapi session-ingress surface (groups/handlers/
+// server — the F-slice command/shell receipts + V2-resume bridge that still require the monolith)
+// plus prompt.ts itself as the single orchestration surface (8→4 files).
+// v2w-l2 re-pin (2026-09-19): the prompt.ts monolith is decomposed and deleted. The httpapi
+// session ingress re-points at the lean V2 surfaces (session/prompt-v2.ts + session/
+// command-v2.ts — new symbols, not the legacy identifier), the legacy provider-receipt recovery
+// sweeps moved to session/legacy-provider-receipt-recovery.ts, and the structured-output helpers
+// to session/structured-output-prompt.ts. The denominator reaches its honest minimum: ZERO
+// production code references to SessionPrompt (4→0 files).
 const PINNED_COUNTS = {
-  admission_control: 6,
-  orchestration: 1,
-  child_execution: 5,
+  admission_control: 0,
+  orchestration: 0,
+  child_execution: 0,
   recovery_compaction_context: 0,
-  projection_permission: 1,
-  composition_compat: 1,
+  projection_permission: 0,
+  composition_compat: 0,
   unclassified: 0,
 } as const
-const PINNED_RESULT_SHA256 = "cee86cb006cd7b4cc93b559cee634819fe2b6cd3cd3ef5ca81fa99ee67687f52"
+const PINNED_RESULT_SHA256 = "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
 
 describe("Core V2 caller inventory classification", () => {
   test("classifies every §8 category by explicit path rules", () => {
@@ -32,7 +50,7 @@ describe("Core V2 caller inventory classification", () => {
     expect(classifyCaller("packages/deepagent-code/src/cli/cmd/github.handler.ts")).toBe("admission_control")
     expect(classifyCaller("packages/deepagent-code/src/session/prompt.ts")).toBe("orchestration")
     expect(classifyCaller("packages/deepagent-code/src/session/steer.ts")).toBe("orchestration")
-    expect(classifyCaller("packages/deepagent-code/src/session/task-executor.ts")).toBe("child_execution")
+    expect(classifyCaller("packages/deepagent-code/src/tool/task.ts")).toBe("child_execution")
     expect(classifyCaller("packages/deepagent-code/src/session/goal-manager.ts")).toBe("child_execution")
     expect(classifyCaller("packages/core/src/deepagent/goal-loop.ts")).toBe("child_execution")
     expect(classifyCaller("packages/deepagent-code/src/session/compaction.ts")).toBe("recovery_compaction_context")
@@ -46,11 +64,12 @@ describe("Core V2 caller inventory classification", () => {
   })
 
   test("comments, strings, and renamed V2 symbols never enter the denominator", () => {
-    // prompt.ts keeps exactly one code reference (its own export name); its hundreds of
-    // SessionPromptLoop/SessionPromptEpoch-era mentions are distinct symbols or prose.
+    // v2w-l2: the monolith is deleted; the moved modules (prompt-v2, command-v2,
+    // legacy-provider-receipt-recovery, structured-output-prompt) keep their historical
+    // "SessionPrompt.*" Effect.fn span labels and prose mentions, which are strings and never
+    // enter the identifier-scanned denominator.
     const inventory = scanCallerInventory(repository)
-    const prompt = inventory.entries.find((entry) => entry.path === "packages/deepagent-code/src/session/prompt.ts")
-    expect(prompt?.references).toBe(1)
+    expect(inventory.entries.length).toBe(0)
     // Files that only mention the symbol in comments/strings or via SessionPromptIntent/Epoch
     // symbols are excluded entirely.
     expect(inventory.entries.some((entry) => entry.path === "packages/deepagent-code/src/session/steer.ts")).toBe(
@@ -86,7 +105,8 @@ describe("Core V2 caller inventory gate", () => {
     const inventory = scanCallerInventory(repository)
     expect(inventory.query_id).toBe(CALLER_INVENTORY_QUERY_ID)
     expect(inventory.query_version).toBe(CALLER_INVENTORY_QUERY_VERSION)
-    expect(inventory.entries.length).toBe(14)
+    // v2w-l2: zero — the legacy orchestration identifier has no production code references.
+    expect(inventory.entries.length).toBe(0)
     expect(inventory.unclassified).toBe(0)
     expect(inventory.counts).toEqual(PINNED_COUNTS)
   })

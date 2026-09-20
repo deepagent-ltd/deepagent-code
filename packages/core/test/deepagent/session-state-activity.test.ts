@@ -3,6 +3,7 @@ import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { DeepAgentPlanStore, DeepAgentSessionState } from "../../src/deepagent"
+import { tmpRoot } from "../fixture/tmpdir"
 
 const plan = (sessionId: string, planId: string, goal: string) => ({
   plan_id: planId,
@@ -16,7 +17,7 @@ const plan = (sessionId: string, planId: string, goal: string) => ({
 
 describe("DeepAgent activity lifecycle", () => {
   beforeEach(() => {
-    DeepAgentSessionState.configure(mkdtempSync(path.join(tmpdir(), "deepagent-activity-")))
+    DeepAgentSessionState.configure(mkdtempSync(tmpRoot()))
   })
 
   test("a new admission reopens completed activity state without deleting plan history", () => {

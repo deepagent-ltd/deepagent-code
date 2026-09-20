@@ -2,10 +2,11 @@ import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { DocumentStore, type CreateDocInput } from "@deepagent-code/core/deepagent/document-store"
+import { tmpRoot, tmpRootShared } from "../fixture/fixture"
 
 // A fresh on-disk DocumentStore in a temp dir. Callers rmSync the returned root in afterEach.
 export const freshStore = (): { store: DocumentStore; root: string } => {
-  const root = mkdtempSync(path.join(tmpdir(), "deepagent-wiki-"))
+  const root = mkdtempSync(tmpRootShared())
   return { store: new DocumentStore(root), root }
 }
 

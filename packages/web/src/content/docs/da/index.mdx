@@ -34,7 +34,7 @@ For at bruge DeepAgent Code i din terminal skal du bruge:
 Den nemmeste måde at installere DeepAgent Code på er gennem installationsscriptet.
 
 ```bash
-curl -fsSL https://deepagent-code.ai/install | bash
+curl -fsSL https://deepagent.ltd/install | bash
 ```
 
 Du kan også installere det med følgende kommandoer:
@@ -75,11 +75,7 @@ Du kan også installere det med følgende kommandoer:
 
 - **Brug af Homebrew på macOS og Linux**
 
-  ```bash
-  brew install anomalyco/tap/deepagent-code
-  ```
-
-  > Vi anbefaler at bruge DeepAgent Code-tap for at få de mest opdaterede udgivelser. Den officielle `brew install deepagent-code`-formel vedligeholdes af Homebrew-teamet og opdateret sjældnere.
+  > Homebrew-pakken er endnu ikke udgivet — der findes ingen `deepagent-code`-formel på formulae.brew.sh. Brug installationsscriptet ovenfor; et Homebrew-tap er planlagt til en kommende udgivelse.
 
 - **Brug af Paru på Arch Linux**
 
@@ -115,18 +111,18 @@ For at få den bedste oplevelse på Windows anbefaler vi at bruge [Windows Subsy
 - **Brug af Mise**
 
   ```bash
-  mise use -g github:lessweb/deepagent-code
+  mise use -g github:deepagent-ltd/deepagent-code
   ```
 
 - **Brug af Docker**
 
   ```bash
-  docker run -it --rm ghcr.io/lessweb/deepagent-code
+  docker run -it --rm ghcr.io/deepagent-ltd/deepagent-code
   ```
 
 Support til installation af DeepAgent Code på Windows ved hjælp af Bun er i gang.
 
-Du kan også få fat i binæren fra [Releases](https://github.com/lessweb/deepagent-code/releases).
+Du kan også få fat i binæren fra [Releases](https://github.com/deepagent-ltd/deepagent-code/releases).
 
 ---
 
@@ -138,7 +134,7 @@ Hvis du er ny til at bruge LLM-udbydere, anbefaler vi at bruge [DeepAgent Code Z
 Det er en udvalgt liste over modeller, der er blevet testet og verificeret af DeepAgent Code
 holde.
 
-1. Kør kommandoen `/connect` i TUI, vælg deepagent-code, og gå til [deepagent-code.ai/auth](https://deepagent-code.ai/auth).
+1. Kør kommandoen `/connect` i TUI, vælg deepagent-code, og gå til [ai.deepagent.ltd/auth](https://ai.deepagent.ltd/auth).
 
    ```txt
    /connect
@@ -349,7 +345,7 @@ Dette vil oprette et link til den aktuelle samtale og kopiere det til denne udkl
 Samtaler dele ikke som standard.
 :::
 
-Her er en [eksempelsamtale](https://deepagent-code.ai/s/4XP1fce5) med DeepAgent Code.
+Her er en [eksempelsamtale](https://ai.deepagent.ltd/s/4XP1fce5) med DeepAgent Code.
 
 ---
 

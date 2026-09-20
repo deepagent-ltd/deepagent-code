@@ -8,7 +8,6 @@ import { Decimal } from "decimal.js"
 import type { ProviderMetadata, Usage } from "@deepagent-code/llm"
 import { InstallationVersion } from "@deepagent-code/core/installation/version"
 import { Database } from "@deepagent-code/core/database/database"
-import { makeRuntime } from "@deepagent-code/core/effect/runtime"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@deepagent-code/core/event"
 
@@ -28,6 +27,9 @@ import { lt } from "drizzle-orm"
 import { or } from "drizzle-orm"
 import { notLike } from "drizzle-orm"
 import type { SQL } from "drizzle-orm"
+import { SessionMessageTable } from "@deepagent-code/core/session/sql"
+import { EventSequenceTable } from "@deepagent-code/core/event/sql"
+import { SessionMessage } from "@deepagent-code/core/session/message"
 import { getTableColumns } from "drizzle-orm"
 import {
   MessageTable,
@@ -43,6 +45,7 @@ import {
   SessionWorldStateBaselineTable,
 } from "@deepagent-code/core/session/sql"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
+import { SessionSchema } from "@deepagent-code/core/session/schema"
 import { Log } from "@deepagent-code/core/util/log"
 import { MessageV2 } from "./message-v2"
 import {
@@ -70,6 +73,7 @@ import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { Location } from "@deepagent-code/core/location"
 import { SessionEvent } from "@deepagent-code/core/session/event"
+import { SessionInfo } from "@deepagent-code/core/session/info"
 import { Hash } from "@deepagent-code/core/util/hash"
 import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
 import { SessionPromptEpochTable } from "./prompt-epoch.sql"
@@ -79,7 +83,6 @@ import { Cause, Data } from "effect"
 import { KeyedMutex } from "@deepagent-code/core/effect/keyed-mutex"
 
 const log = Log.create({ service: "session" })
-const runtime = makeRuntime(Database.Service, Database.defaultLayer)
 const forkLocks = KeyedMutex.makeUnsafe<string>()
 
 const parentTitlePrefix = "New session - "
@@ -177,7 +180,11 @@ export function fromRow(row: SessionRow): Info {
     share,
     metadata: row.metadata ?? undefined,
     revert,
-    permission: row.permission ? [...row.permission] : undefined,
+    permission: row.permission?.map((rule) =>
+      "permission" in rule
+        ? { permission: rule.permission, pattern: rule.pattern, action: rule.action }
+        : { permission: rule.action, pattern: rule.resource, action: rule.effect },
+    ),
     time: {
       created: row.time_created,
       updated: row.time_updated,
@@ -488,7 +495,7 @@ export const SetArchivedInput = Schema.Struct({
 })
 export const SetMetadataInput = Schema.Struct({
   sessionID: SessionID,
-  metadata: Metadata,
+  metadata: Schema.NullOr(Metadata),
 })
 export const SetPermissionInput = Schema.Struct({
   sessionID: SessionID,
@@ -512,6 +519,7 @@ export type ListInput = {
   start?: number
   search?: string
   limit?: number
+  includeInternal?: boolean
 }
 
 export type GlobalListInput = {
@@ -522,6 +530,7 @@ export type GlobalListInput = {
   search?: string
   limit?: number
   archived?: boolean
+  includeInternal?: boolean
 }
 
 const CreatedEventSchema = Schema.Struct({
@@ -571,25 +580,7 @@ export const Event = {
   Created: SessionV1.Event.Created,
   Updated: SessionV1.Event.Updated,
   Deleted: SessionV1.Event.Deleted,
-  Diff: EventV2.define({
-    type: "session.diff",
-    schema: {
-      sessionID: SessionID,
-      diff: Schema.Array(Snapshot.FileDiff),
-      manifest: Schema.optional(
-        Schema.Struct({
-          completeness: Snapshot.DiffManifest.fields.completeness,
-          truncationReasons: Snapshot.DiffManifest.fields.truncationReasons,
-          manifestHash: Snapshot.DiffManifest.fields.manifestHash,
-          totalFiles: Snapshot.DiffManifest.fields.totalFiles,
-          totalFilesExact: Snapshot.DiffManifest.fields.totalFilesExact,
-          statisticsExact: optionalOmitUndefined(Snapshot.DiffManifest.fields.statisticsExact),
-          includedFiles: Snapshot.DiffManifest.fields.includedFiles,
-          truncatedFiles: Snapshot.DiffManifest.fields.truncatedFiles,
-        }),
-      ),
-    },
-  }),
+  Diff: SessionV1.Event.Diff,
   Error: EventV2.define({
     type: "session.error",
     schema: {
@@ -763,7 +754,11 @@ export interface Interface {
   }) => Effect.Effect<void>
   readonly commitUnrevert: (sessionID: SessionID) => Effect.Effect<void>
   readonly clearRevert: (sessionID: SessionID) => Effect.Effect<void>
-  readonly setSummary: (input: { sessionID: SessionID; summary: Info["summary"] }) => Effect.Effect<void>
+  readonly setSummary: (input: {
+    sessionID: SessionID
+    summary: Info["summary"]
+    diff?: Snapshot.FileDiff[]
+  }) => Effect.Effect<void>
   readonly setShare: (input: { sessionID: SessionID; share: Info["share"] }) => Effect.Effect<void>
   readonly setWorkspace: (input: {
     sessionID: SessionID
@@ -968,6 +963,8 @@ export const layer: Layer.Layer<
 
     const listGlobal = Effect.fn("Session.listGlobal")(function* (input?: GlobalListInput) {
       const conditions: SQL[] = []
+      if (input?.includeInternal !== true)
+        conditions.push(notLike(SessionTable.id, `${SessionSchema.LEARNING_REVIEWER_SESSION_PREFIX}%`))
       if (input?.directory) conditions.push(eq(SessionTable.directory, input.directory))
       if (input?.roots) conditions.push(isNull(SessionTable.parent_id))
       if (input?.start) conditions.push(gte(SessionTable.time_updated, input.start))
@@ -1034,7 +1031,19 @@ export const layer: Layer.Layer<
           yield* remove(child.id)
         }
 
-        yield* events.publish(SessionV1.Event.Deleted, { sessionID, info: session })
+        const row = yield* db
+          .select()
+          .from(SessionTable)
+          .where(eq(SessionTable.id, sessionID))
+          .get()
+          .pipe(Effect.orDie)
+        if (!row) return
+        yield* events.publish(SessionEvent.Deleted, {
+          sessionID,
+          info: SessionInfo.fromRow(row),
+          slug: row.slug,
+          version: row.version,
+        })
         yield* events.remove(sessionID)
       } catch (e) {
         log.error(e)
@@ -1166,6 +1175,12 @@ export const layer: Layer.Layer<
         .pipe(Effect.orDie)
       if (!row) return yield* new NotFoundError({ message: `Message not found: ${input.messageID}` })
     })
+
+    // Deltas repeat thousands of times per part; ownership is immutable after creation. Bounded
+    // like the projector wire memos: clear-on-full keeps a long-lived process from growing the set
+    // without limit — a cleared key only costs one redundant ownership select.
+    const PART_OWNERSHIP_VERIFIED_MAX = 10_000
+    const partOwnershipVerified = new Set<string>()
 
     const requirePartOwnership = Effect.fn("Session.requirePartOwnership")(function* (input: {
       sessionID: SessionID
@@ -1508,6 +1523,16 @@ export const layer: Layer.Layer<
       intent: typeof SessionForkIntentTable.$inferSelect,
     ) {
       if (intent.side_effects_completed_at) return
+      // The clone copies the parent's session_message rows at the parent's sequence numbers while
+      // the wire delivery allocates the child's event sequence from zero — the child's sequence
+      // must end ABOVE the cloned history or the next event's projected message collides on
+      // (session_id, seq). Running here (delivery complete, no future publisher yet) is the
+      // race-free point; GREATEST keeps it a no-op when the sequence already leads.
+      yield* db
+        .run(
+          sql`UPDATE event_sequence SET seq = MAX(seq, (SELECT COALESCE(MAX(\`seq\`), 0) FROM session_message WHERE session_id = ${intent.target_session_id})) WHERE aggregate_id = ${intent.target_session_id}`,
+        )
+        .pipe(Effect.ignore)
       if (intent.fork_mode === "foreground") {
         yield* forwardLedgerOnForkRequired({
           parentSessionID: intent.source_session_id,
@@ -2562,6 +2587,40 @@ export const layer: Layer.Layer<
                   )
                 }
 
+                // RI-25/V2: the child's DURABLE V2 history must be cloned too — the V2 runner
+                // reconstructs context from session_message, and without this copy a fork under the
+                // V2-only profile starts with empty model context. New V2 message ids keep the
+                // (session_id, seq) keys unique; parentID references follow the same map.
+                const parentV2Rows = yield* db
+                  .select()
+                  .from(SessionMessageTable)
+                  .where(eq(SessionMessageTable.session_id, input.sessionID))
+                  .orderBy(asc(SessionMessageTable.seq))
+                  .all()
+                  .pipe(Effect.orDie)
+                const v2IDMap = new Map<string, SessionMessage.ID>()
+                for (const row of parentV2Rows) v2IDMap.set(row.id, SessionMessage.ID.create())
+                for (const row of parentV2Rows) {
+                  const data = row.data as Record<string, unknown>
+                  const parentID = typeof data.parentID === "string" ? v2IDMap.get(data.parentID) : undefined
+                  yield* db
+                    .insert(SessionMessageTable)
+                    .values({
+                      id: v2IDMap.get(row.id)!,
+                      session_id: session.id,
+                      type: row.type,
+                      seq: row.seq,
+                      time_created: row.time_created,
+                      time_updated: row.time_updated,
+                      data:
+                        parentID === undefined
+                          ? row.data
+                          : ({ ...data, parentID } as unknown as typeof SessionMessageTable.$inferInsert.data),
+                    })
+                    .onConflictDoNothing()
+                    .run()
+                }
+
                 for (const message of cloned) {
                   yield* db
                     .insert(MessageTable)
@@ -3088,12 +3147,38 @@ export const layer: Layer.Layer<
         yield* events.publish(SessionV1.Event.Updated, { sessionID, info: next })
       })
 
+    // RI-16 — native V2 update authority reads the stored row, applies the change onto the full
+    // `SessionSchema.Info` mirror, and publishes `session.updated.2`; the legacy client shape is
+    // rebuilt by the EventV2Bridge egress adapter. Summary/diff and revert use their independent
+    // durable V2 event authorities below.
+    const publishUpdated = (sessionID: SessionID, apply: (info: SessionSchema.Info) => SessionSchema.Info) =>
+      Effect.gen(function* () {
+        const row = yield* db
+          .select()
+          .from(SessionTable)
+          .where(eq(SessionTable.id, sessionID))
+          .get()
+          .pipe(Effect.orDie)
+        if (!row) return yield* new NotFoundError({ message: `Session not found: ${sessionID}` })
+        yield* events.publish(SessionEvent.Updated, {
+          sessionID,
+          info: apply(SessionInfo.fromRow(row)),
+          slug: row.slug,
+          version: row.version,
+        })
+      })
+
     const touch = Effect.fn("Session.touch")(function* (sessionID: SessionID) {
-      yield* patch(sessionID, { time: { updated: Date.now() } }).pipe(Effect.orDie)
+      const updated = DateTime.makeUnsafe(Date.now())
+      yield* publishUpdated(sessionID, (info) =>
+        SessionSchema.Info.make({ ...info, time: { ...info.time, updated } }),
+      ).pipe(Effect.orDie)
     })
 
     const setTitle = Effect.fn("Session.setTitle")(function* (input: { sessionID: SessionID; title: string }) {
-      yield* patch(input.sessionID, { title: input.title }).pipe(Effect.orDie)
+      yield* publishUpdated(input.sessionID, (info) => SessionSchema.Info.make({ ...info, title: input.title })).pipe(
+        Effect.orDie,
+      )
     })
 
     // Write-once: the preview snapshots the FIRST user message only. Later prompts must not overwrite
@@ -3103,18 +3188,31 @@ export const layer: Layer.Layer<
       if (!trimmed) return
       const current = yield* get(input.sessionID).pipe(Effect.orDie)
       if (current.preview) return
-      yield* patch(input.sessionID, { preview: trimmed }).pipe(Effect.orDie)
+      yield* publishUpdated(input.sessionID, (info) => SessionSchema.Info.make({ ...info, preview: trimmed })).pipe(
+        Effect.orDie,
+      )
     })
 
     const setArchived = Effect.fn("Session.setArchived")(function* (input: {
       sessionID: SessionID
       time?: number | null
     }) {
-      yield* patch(input.sessionID, { time: { archived: input.time } }).pipe(Effect.orDie)
+      // `undefined` keeps the current flag (the version 1 patch omitted the key); `null` clears it.
+      if (input.time === undefined) return
+      const archived = input.time === null ? undefined : DateTime.makeUnsafe(input.time)
+      yield* publishUpdated(input.sessionID, (info) =>
+        SessionSchema.Info.make({ ...info, time: { ...info.time, archived } }),
+      ).pipe(Effect.orDie)
     })
 
     const setMetadata = Effect.fn("Session.setMetadata")(function* (input: typeof SetMetadataInput.Type) {
-      yield* patch(input.sessionID, { metadata: input.metadata, time: { updated: Date.now() } }).pipe(Effect.orDie)
+      yield* publishUpdated(input.sessionID, (info) =>
+        SessionSchema.Info.make({
+          ...info,
+          metadata: input.metadata ?? undefined,
+          time: { ...info.time, updated: DateTime.makeUnsafe(Date.now()) },
+        }),
+      ).pipe(Effect.orDie)
     })
 
     const setDirectory = Effect.fn("Session.setDirectory")(function* (input: {
@@ -3153,11 +3251,7 @@ export const layer: Layer.Layer<
       revert: Info["revert"]
       summary: Info["summary"]
     }) {
-      yield* patch(input.sessionID, {
-        summary: input.summary,
-        time: { updated: Date.now() },
-        revert: input.revert,
-      }).pipe(Effect.orDie)
+      yield* mutateRevert(input)
     })
 
     const mutateRevert = Effect.fn("Session.mutateRevert")(function* (input: {
@@ -3166,42 +3260,81 @@ export const layer: Layer.Layer<
       summary?: Info["summary"]
     }) {
       const now = Date.now()
-      const updated = yield* db
-        .transaction(
-          (tx) =>
+      const row = yield* db
+        .select()
+        .from(SessionTable)
+        .where(eq(SessionTable.id, input.sessionID))
+        .get()
+        .pipe(Effect.orDie)
+      if (!row) return yield* Effect.die(`Session not found: ${input.sessionID}`)
+      const mutationEpoch = row.mutation_epoch + 1
+      const summary = input.summary
+        ? SessionSchema.Summary.make({
+            additions: input.summary.additions,
+            deletions: input.summary.deletions,
+            files: input.summary.files,
+            diffManifest: input.summary.diffManifest,
+        })
+        : undefined
+      const revert = input.revert ? SessionSchema.Revert.make(input.revert) : null
+      yield* events.publish(
+        SessionEvent.RevertChanged,
+        {
+          sessionID: input.sessionID,
+          timestamp: DateTime.makeUnsafe(now),
+          info: SessionInfo.fromRow(row),
+          slug: row.slug,
+          version: row.version,
+          mutationEpoch,
+          revert,
+          ...(summary ? { summary } : {}),
+        },
+        {
+          commit: (_seq, _event) =>
             Effect.gen(function* () {
-              const current = yield* tx
-                .select({ mutationEpoch: SessionTable.mutation_epoch })
-                .from(SessionTable)
-                .where(eq(SessionTable.id, input.sessionID))
-                .get()
-                .pipe(Effect.orDie)
-              if (!current) return yield* Effect.die(`Session not found: ${input.sessionID}`)
-              const mutationEpoch = current.mutationEpoch + 1
-              const row = yield* tx
+              const updated = yield* db
                 .update(SessionTable)
                 .set({
                   mutation_epoch: mutationEpoch,
-                  revert: input.revert,
-                  ...(input.summary
+                  revert: revert
                     ? {
-                        summary_additions: input.summary.additions,
-                        summary_deletions: input.summary.deletions,
-                        summary_files: input.summary.files,
-                        summary_diffs: input.summary.diffs,
-                        summary_diff_manifest: input.summary.diffManifest,
+                        ...revert,
+                        messageID: SessionV1.MessageID.make(revert.messageID),
+                        partID: revert.partID ? SessionV1.PartID.make(revert.partID) : undefined,
+                      }
+                    : null,
+                  ...(summary
+                    ? {
+                        summary_additions: summary.additions,
+                        summary_deletions: summary.deletions,
+                        summary_files: summary.files,
+                        summary_diff_manifest: summary.diffManifest
+                          ? { ...summary.diffManifest, truncationReasons: [...summary.diffManifest.truncationReasons] }
+                          : null,
                       }
                     : {}),
                   time_updated: now,
                 })
                 .where(
-                  and(eq(SessionTable.id, input.sessionID), eq(SessionTable.mutation_epoch, current.mutationEpoch)),
+                  and(
+                    eq(SessionTable.id, input.sessionID),
+                    eq(SessionTable.mutation_epoch, mutationEpoch - 1),
+                  ),
                 )
-                .returning(sessionClientColumns)
+                .returning({ id: SessionTable.id })
                 .get()
                 .pipe(Effect.orDie)
-              if (!row) return yield* Effect.die("Session mutation epoch changed inside an IMMEDIATE transaction")
-              yield* tx
+              if (!updated) {
+                const current = yield* db
+                  .select({ mutationEpoch: SessionTable.mutation_epoch })
+                  .from(SessionTable)
+                  .where(eq(SessionTable.id, input.sessionID))
+                  .get()
+                  .pipe(Effect.orDie)
+                if (current?.mutationEpoch !== mutationEpoch)
+                  return yield* Effect.die("Session mutation epoch changed inside an IMMEDIATE transaction")
+              }
+              yield* db
                 .update(SessionIntentTable)
                 .set({
                   state: "superseded",
@@ -3219,7 +3352,7 @@ export const layer: Layer.Layer<
                 )
                 .run()
                 .pipe(Effect.orDie)
-              yield* tx
+              yield* db
                 .update(SessionSteerTable)
                 .set({ superseded_at: now })
                 .where(
@@ -3232,12 +3365,9 @@ export const layer: Layer.Layer<
                 )
                 .run()
                 .pipe(Effect.orDie)
-              return row
             }),
-          { behavior: "immediate" },
-        )
-        .pipe(Effect.catchTag("SqlError", Effect.die))
-      yield* events.publish(SessionV1.Event.Updated, { sessionID: input.sessionID, info: fromRow(updated) })
+        },
+      )
     })
 
     const commitRevert = Effect.fn("Session.commitRevert")(function* (input: {
@@ -3253,18 +3383,32 @@ export const layer: Layer.Layer<
     })
 
     const clearRevert = Effect.fn("Session.clearRevert")(function* (sessionID: SessionID) {
-      yield* patch(sessionID, { time: { updated: Date.now() }, revert: null }).pipe(Effect.orDie)
+      yield* mutateRevert({ sessionID, revert: null })
     })
 
     const setSummary = Effect.fn("Session.setSummary")(function* (input: {
       sessionID: SessionID
       summary: Info["summary"]
+      diff?: Snapshot.FileDiff[]
     }) {
-      yield* patch(input.sessionID, { time: { updated: Date.now() }, summary: input.summary }).pipe(Effect.orDie)
+      if (!input.summary) return
+      yield* events.publish(SessionEvent.DiffUpdated, {
+        sessionID: input.sessionID,
+        timestamp: DateTime.makeUnsafe(Date.now()),
+        summary: SessionSchema.Summary.make({
+          additions: input.summary.additions,
+          deletions: input.summary.deletions,
+          files: input.summary.files,
+          diffManifest: input.summary.diffManifest,
+        }),
+        diff: (input.diff ?? input.summary.diffs ?? []).map((item) => ({ ...item })),
+      })
     })
 
     const setShare = Effect.fn("Session.setShare")(function* (input: { sessionID: SessionID; share: Info["share"] }) {
-      yield* patch(input.sessionID, { share: input.share ?? null, time: { updated: Date.now() } }).pipe(Effect.orDie)
+      yield* publishUpdated(input.sessionID, (info) =>
+        SessionSchema.Info.make({ ...info, share: input.share ?? undefined, time: { ...info.time, updated: DateTime.makeUnsafe(Date.now()) } }),
+      ).pipe(Effect.orDie)
     })
 
     const setWorkspace = Effect.fn("Session.setWorkspace")(function* (input: {
@@ -3399,7 +3543,16 @@ export const layer: Layer.Layer<
       field: string
       delta: string
     }) {
-      yield* requirePartOwnership(input).pipe(Effect.orDie)
+      // A streamed part emits thousands of deltas; re-validating ownership per delta is a
+      // synchronous SQLite select each time (measured: dominant `prepare`/`values` hot frames and
+      // multi-second event-loop stalls). The part's owning turn is immutable once created, so the
+      // check is memoized per part for this process; the delta publish itself needs no re-read.
+      const key = `${input.sessionID}:${input.messageID}:${input.partID}`
+      if (!partOwnershipVerified.has(key)) {
+        yield* requirePartOwnership(input).pipe(Effect.orDie)
+        if (partOwnershipVerified.size >= PART_OWNERSHIP_VERIFIED_MAX) partOwnershipVerified.clear()
+        partOwnershipVerified.add(key)
+      }
       yield* events.publish(MessageV2.Event.PartDelta, input)
     })
 
@@ -3487,7 +3640,7 @@ const cancelBackgroundJobs = Effect.fn("Session.cancelBackgroundJobs")(function*
       return job.metadata?.parentSessionId === sessionID
     }),
     (job) => background.cancel(job.id),
-    { concurrency: "unbounded", discard: true },
+    { concurrency: 16, discard: true },
   )
 })
 
@@ -3499,6 +3652,8 @@ function listByProject(
   },
 ) {
   const conditions = [eq(SessionTable.project_id, input.projectID)]
+  if (!input.includeInternal)
+    conditions.push(notLike(SessionTable.id, `${SessionSchema.LEARNING_REVIEWER_SESSION_PREFIX}%`))
 
   if (input.workspaceID) {
     conditions.push(eq(SessionTable.workspace_id, input.workspaceID))
@@ -3544,78 +3699,6 @@ function listByProject(
       Effect.orDie,
       Effect.map((rows) => rows.map(fromRow)),
     )
-}
-
-export function* listGlobal(input?: {
-  directory?: string
-  roots?: boolean
-  start?: number
-  cursor?: number
-  search?: string
-  limit?: number
-  archived?: boolean
-}) {
-  const conditions: SQL[] = []
-
-  if (input?.directory) {
-    conditions.push(eq(SessionTable.directory, input.directory))
-  }
-  if (input?.roots) {
-    conditions.push(isNull(SessionTable.parent_id))
-  }
-  if (input?.start) {
-    conditions.push(gte(SessionTable.time_updated, input.start))
-  }
-  if (input?.cursor) {
-    conditions.push(lt(SessionTable.time_updated, input.cursor))
-  }
-  if (input?.search) {
-    conditions.push(like(SessionTable.title, `%${input.search}%`))
-  }
-  if (input?.archived) {
-    conditions.push(isNotNull(SessionTable.time_archived))
-  } else {
-    conditions.push(isNull(SessionTable.time_archived))
-  }
-
-  const limit = input?.limit ?? 100
-
-  const rows = runtime.runSync(({ db }) => {
-    const query =
-      conditions.length > 0
-        ? db
-            .select(sessionClientColumns)
-            .from(SessionTable)
-            .where(and(...conditions))
-        : db.select(sessionClientColumns).from(SessionTable)
-    return query.orderBy(desc(SessionTable.time_updated), desc(SessionTable.id)).limit(limit).all().pipe(Effect.orDie)
-  })
-
-  const ids = [...new Set(rows.map((row) => row.project_id))]
-  const projects = new Map<string, ProjectInfo>()
-
-  if (ids.length > 0) {
-    const items = runtime.runSync(({ db }) =>
-      db
-        .select({ id: ProjectTable.id, name: ProjectTable.name, worktree: ProjectTable.worktree })
-        .from(ProjectTable)
-        .where(inArray(ProjectTable.id, ids))
-        .all()
-        .pipe(Effect.orDie),
-    )
-    for (const item of items) {
-      projects.set(item.id, {
-        id: item.id,
-        name: item.name ?? undefined,
-        worktree: item.worktree,
-      })
-    }
-  }
-
-  for (const row of rows) {
-    const project = projects.get(row.project_id) ?? null
-    yield { ...fromRow(row), project }
-  }
 }
 
 export * as Session from "./session"

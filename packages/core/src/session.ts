@@ -1,8 +1,8 @@
 export * as SessionV2 from "./session"
 export * from "./session/schema"
 
-import { Cause, DateTime, Effect, Layer, Schema, Context, Stream } from "effect"
-import { and, asc, desc, eq, gt, inArray, like, lt, or, type SQL } from "drizzle-orm"
+import { Cause, DateTime, Effect, Exit, Layer, Option, Schema, Context, Stream } from "effect"
+import { and, asc, count, desc, eq, gt, inArray, like, lt, max, notLike, or, type SQL } from "drizzle-orm"
 import { ProjectV2 } from "./project"
 import { WorkspaceV2 } from "./workspace"
 import { ModelV2 } from "./model"
@@ -14,10 +14,12 @@ import { EventV2 } from "./event"
 import { Database } from "./database/database"
 import { SessionProjector } from "./session/projector"
 import { MessageTable, PartTable, SessionMessageTable, SessionTable } from "./session/sql"
+import { CompactionRequest } from "./session/compaction-request"
 import { SessionSchema } from "./session/schema"
 import { AbsolutePath, PositiveInt, RelativePath } from "./schema"
 import { AgentV2 } from "./agent"
 import { SessionV1 } from "./v1/session"
+import { PermissionV1 } from "./v1/permission"
 import { InstallationVersion } from "./installation/version"
 import { Slug } from "./util/slug"
 import { ProjectTable } from "./project/sql"
@@ -31,6 +33,9 @@ import { logFailure } from "./session/logging"
 import { MessageDecodeError, SessionNotFound } from "./session/error"
 import { SessionEvent } from "./session/event"
 import { SessionInput } from "./session/input"
+import { PermissionV2 } from "./permission"
+import { PluginBoot } from "./plugin/boot"
+import { LocationServiceMap } from "./location-layer"
 
 // get project -> project.locations
 //
@@ -54,6 +59,8 @@ const ListInputBase = {
   limit: PositiveInt.pipe(Schema.optional),
   order: Schema.Literals(["asc", "desc"]).pipe(Schema.optional),
   anchor: ListAnchor.pipe(Schema.optional),
+  // Internal infrastructure sessions (learning reviewer) are hidden unless explicitly requested.
+  includeInternal: Schema.Boolean.pipe(Schema.optional),
 }
 
 const ListDirectoryInput = Schema.Struct({
@@ -74,14 +81,29 @@ export type ListInput = typeof ListInput.Type
 
 type CreateInput = {
   id?: SessionSchema.ID
+  parentID?: SessionSchema.ID
+  title?: string
+  metadata?: SessionSchema.Metadata
   agent?: AgentV2.ID
   model?: ModelV2.Ref
+  permissions?: PermissionV2.Ruleset
   location: Location.Ref
+}
+
+export function permissionsFromLegacy(ruleset?: PermissionV1.Ruleset): PermissionV2.Ruleset {
+  return (ruleset ?? []).map((rule) => ({
+    action: rule.permission,
+    resource: rule.pattern,
+    effect: rule.action,
+  }))
 }
 
 type CompactInput = {
   sessionID: SessionSchema.ID
   prompt?: Prompt
+  model?: { readonly providerID: ProviderV2.ID; readonly modelID: ModelV2.ID }
+  agent?: AgentV2.ID
+  auto?: boolean
 }
 
 type LegacyMessageWithParts = {
@@ -90,12 +112,35 @@ type LegacyMessageWithParts = {
 }
 
 export const NotFoundError = SessionNotFound.Error
+
+// W0-1 — host seam for MANUAL compaction under the V2 surface. The deepagent-code composition
+// provides the implementation (summary model resolution + the legacy continuation/soft-landing
+// semantics); core keeps only the admission contract (session exists, idle, then delegate).
+// W0-2 — host seam for the projection-layer manual shell (spawn + V1 wire mirror; see the
+// shell entry above for the classification rationale).
+export type ShellExchange = {
+  readonly sessionID: SessionSchema.ID
+  readonly command: string
+  readonly agent?: AgentV2.ID
+  readonly model?: ModelV2.Ref
+}
+export const CurrentManualShell = Context.Reference<
+  ((input: ShellExchange) => Effect.Effect<void, unknown>) | undefined
+>("@deepagent-code/v2/SessionV2/CurrentManualShell", { defaultValue: () => undefined })
+
 export type NotFoundError = SessionNotFound.Error
 
+/**
+ * A manual (user-initiated) Session control that the wired core services cannot serve yet. Typed,
+ * never a silent no-op: callers and the UI surface the `reason` directly. `operation` stays the
+ * coarse command name; `reason` states the concrete gap (e.g. the manual compaction state machine is
+ * not ported to the V2 runner) so a refusal is distinguishable from an unknown command.
+ */
 export class OperationUnavailableError extends Schema.TaggedErrorClass<OperationUnavailableError>()(
   "Session.OperationUnavailableError",
   {
     operation: Schema.Literals(["move", "shell", "skill", "switchAgent", "compact", "wait"]),
+    reason: Schema.String,
   },
 ) {}
 
@@ -106,122 +151,30 @@ export class PromptConflictError extends Schema.TaggedErrorClass<PromptConflictE
   messageID: SessionMessage.ID,
 }) {}
 
-export type Error = NotFoundError | MessageDecodeError | OperationUnavailableError | PromptConflictError
+/**
+ * The requested agent exists in the Location roster but is not directly selectable for a Session
+ * (`mode: "subagent"` or `hidden` — the same rule AgentV2 applies when selecting the default agent).
+ * Internal agents (goal-worker, compaction, title, summary) are driven by name by their owning
+ * machinery; admitting one as a user-selected Session agent would strand the Session on an agent the
+ * per-turn default-resolution can never pick.
+ */
+export class AgentNotSelectableError extends Schema.TaggedErrorClass<AgentNotSelectableError>()(
+  "Session.AgentNotSelectableError",
+  { id: AgentV2.ID },
+) {}
 
-export function legacyAssistant(input: {
-  readonly sessionID: SessionSchema.ID
-  readonly parentMessageID: SessionV1.MessageID
-  readonly directory: string
-  readonly root: string
-  readonly message: SessionMessage.Assistant
-}): SessionV1.WithParts {
-  const created = DateTime.toEpochMillis(input.message.time.created)
-  const completed = input.message.time.completed ? DateTime.toEpochMillis(input.message.time.completed) : undefined
-  const messageID = SessionV1.MessageID.ascending(input.message.id)
-  const parts = input.message.content.map((part, index): SessionV1.Part => {
-    const id = SessionV1.PartID.ascending(`prt_${input.message.id.slice("msg_".length)}_${index}`)
-    if (part.type === "text") {
-      return {
-        id,
-        sessionID: input.sessionID,
-        messageID,
-        type: "text",
-        text: part.text,
-        time: { start: created, ...(completed === undefined ? {} : { end: completed }) },
-      }
-    }
-    if (part.type === "reasoning") {
-      return {
-        id,
-        sessionID: input.sessionID,
-        messageID,
-        type: "reasoning",
-        text: part.text,
-        metadata: part.providerMetadata,
-        time: { start: created, ...(completed === undefined ? {} : { end: completed }) },
-      }
-    }
-    return {
-      id,
-      sessionID: input.sessionID,
-      messageID,
-      type: "tool",
-      callID: part.id,
-      tool: part.name,
-      metadata: part.provider?.metadata,
-      state: legacyAssistantToolState(part, { sessionID: input.sessionID, messageID }),
-    }
-  })
-  const tokens = input.message.tokens ?? { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
-  return {
-    info: {
-      id: messageID,
-      sessionID: input.sessionID,
-      role: "assistant",
-      time: { created, ...(completed === undefined ? {} : { completed }) },
-      ...(input.message.error
-        ? { error: { name: "UnknownError", data: { message: input.message.error.message } } }
-        : {}),
-      parentID: input.parentMessageID,
-      modelID: input.message.model.id,
-      providerID: input.message.model.providerID,
-      mode: input.message.agent,
-      agent: input.message.agent,
-      path: { cwd: input.directory, root: input.root },
-      cost: input.message.cost ?? 0,
-      tokens,
-      ...(input.message.model.variant === undefined ? {} : { variant: input.message.model.variant }),
-      ...(input.message.finish === undefined ? {} : { finish: input.message.finish }),
-    },
-    parts,
-  }
-}
+export type Error =
+  | NotFoundError
+  | MessageDecodeError
+  | OperationUnavailableError
+  | PromptConflictError
+  | AgentNotSelectableError
+  | AgentV2.NotFoundError
 
-function legacyAssistantToolState(
-  part: SessionMessage.AssistantTool,
-  identity: { readonly sessionID: SessionSchema.ID; readonly messageID: SessionV1.MessageID },
-): SessionV1.ToolState {
-  const start = DateTime.toEpochMillis(part.time.ran ?? part.time.created)
-  if (part.state.status === "pending") {
-    return { status: "pending", input: {}, raw: part.state.input }
-  }
-  if (part.state.status === "running") {
-    return { status: "running", input: part.state.input, title: part.name, time: { start } }
-  }
-  if (part.state.status === "completed") {
-    return {
-      status: "completed",
-      input: part.state.input,
-      output: typeof part.state.result === "string" ? part.state.result : JSON.stringify(part.state.result),
-      title: part.name,
-      metadata: part.provider?.resultMetadata ?? {},
-      time: { start, end: DateTime.toEpochMillis(part.time.completed ?? part.time.created) },
-      attachments: part.state.attachments?.map((file, index) => ({
-        id: SessionV1.PartID.ascending(`prt_${part.id}_${index}`),
-        sessionID: identity.sessionID,
-        messageID: identity.messageID,
-        type: "file",
-        mime: file.mime,
-        filename: file.name,
-        url: file.uri,
-        source: file.source
-          ? {
-              type: "file",
-              path: file.uri,
-              text: { value: file.source.text, start: file.source.start, end: file.source.end },
-            }
-          : undefined,
-      })),
-    }
-  }
-  return {
-    status: "error",
-    input: part.state.input,
-    error: part.state.error.message,
-    metadata: part.provider?.resultMetadata,
-    time: { start, end: DateTime.toEpochMillis(part.time.completed ?? part.time.created) },
-  }
-}
+// W4-6 — the canonical V2→V1 wire converter now lives in session/legacy-wire.ts (extracted so
+// the core projector can import it without a module cycle; this re-export keeps the host
+// call sites' SessionV2.legacyAssistant spelling).
+export { legacyAssistant } from "./session/legacy-wire"
 
 const V2ConversationTypes = ["user", "synthetic", "system", "shell", "assistant", "compaction"] as const
 
@@ -420,7 +373,9 @@ function compareMessageTime(left: SessionMessage.Message, right: SessionMessage.
 
 export interface Interface {
   readonly list: (input?: ListInput) => Effect.Effect<SessionSchema.Info[]>
-  readonly create: (input: CreateInput) => Effect.Effect<SessionSchema.Info>
+  readonly create: (
+    input: CreateInput,
+  ) => Effect.Effect<SessionSchema.Info, AgentV2.NotFoundError | AgentNotSelectableError>
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.Info, NotFoundError>
   readonly messages: (input: {
     sessionID: SessionSchema.ID
@@ -445,10 +400,14 @@ export interface Interface {
   readonly switchAgent: (input: {
     sessionID: SessionSchema.ID
     agent: string
-  }) => Effect.Effect<void, OperationUnavailableError>
+  }) => Effect.Effect<void, NotFoundError | AgentV2.NotFoundError | AgentNotSelectableError>
   readonly switchModel: (input: {
     sessionID: SessionSchema.ID
     model: ModelV2.Ref
+  }) => Effect.Effect<void, NotFoundError>
+  readonly setPermissions: (input: {
+    sessionID: SessionSchema.ID
+    permissions: PermissionV2.Ruleset
   }) => Effect.Effect<void, NotFoundError>
   readonly prompt: (input: {
     id?: SessionMessage.ID
@@ -462,20 +421,23 @@ export interface Interface {
     sessionID: SessionSchema.ID
     command: string
     resume?: boolean
-  }) => Effect.Effect<void, OperationUnavailableError>
+  }) => Effect.Effect<void, NotFoundError | OperationUnavailableError>
   readonly skill: (input: {
     id?: EventV2.ID
     sessionID: SessionSchema.ID
     skill: string
     resume?: boolean
-  }) => Effect.Effect<void, OperationUnavailableError>
+  }) => Effect.Effect<void, NotFoundError | OperationUnavailableError>
   readonly compact: (input: CompactInput) => Effect.Effect<void, NotFoundError | OperationUnavailableError>
-  readonly wait: (id: SessionSchema.ID) => Effect.Effect<void, NotFoundError | OperationUnavailableError>
+  readonly wait: (id: SessionSchema.ID) => Effect.Effect<void, NotFoundError | SessionRunner.RunError>
   readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | SessionRunner.RunError>
   readonly interrupt: (sessionID: SessionSchema.ID) => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/v2/Session") {}
+
+/** RI-18: bounded await for a manual compaction request's terminal state. */
+const MANUAL_COMPACTION_DEADLINE_MS = 10 * 60_000
 
 export const layer = Layer.effect(
   Service,
@@ -485,6 +447,7 @@ export const layer = Layer.effect(
     const projects = yield* ProjectV2.Service
     const execution = yield* SessionExecution.Service
     const store = yield* SessionStore.Service
+    const locations = yield* Effect.serviceOption(LocationServiceMap)
     const decodeMessage = Schema.decodeUnknownEffect(SessionMessage.Message)
     const isDurableSessionEvent = Schema.is(SessionEvent.Durable)
     const scope = yield* Effect.scope
@@ -500,6 +463,34 @@ export const layer = Layer.effect(
         Effect.forkIn(scope, { startImmediately: true }),
         Effect.asVoid,
       )
+
+    // RI-04 — admission-side agent validation for create/switchAgent. The roster is Location-scoped
+    // and populated asynchronously by PluginBoot (forkScoped at boot), so the check AWAITS boot
+    // before resolving: an id missing after a completed boot is a confirmed miss, never a
+    // startup-race guess, and an agent registered late during boot still admits. A composition
+    // without a LocationServiceMap (unit tests, noop execution) skips the check — the runner's
+    // per-turn AgentV2.NotFoundError stays the last defense there. The selectable rule mirrors
+    // AgentV2's own default-selection rule (not subagent, not hidden). Delegated children
+    // (`parentID` set — the Core `task` tool's subagent spawns) intentionally bypass ONLY the
+    // selectable half: subagent-mode/hidden agents are the point of delegation, but an unknown id
+    // still fails at admission.
+    const requireAdmissionAgent = Effect.fn("V2Session.requireAdmissionAgent")(function* (
+      location: Location.Ref,
+      agent: AgentV2.ID,
+      selectable: boolean,
+    ) {
+      if (Option.isNone(locations)) return
+      const services = yield* Effect.all({
+        boot: Effect.serviceOption(PluginBoot.Service),
+        agents: Effect.serviceOption(AgentV2.Service),
+      }).pipe(Effect.provide(locations.value.get(location)))
+      if (Option.isNone(services.agents)) return
+      if (Option.isSome(services.boot)) yield* services.boot.value.wait()
+      const resolved = yield* services.agents.value.resolve(agent)
+      if (resolved === undefined) return yield* new AgentV2.NotFoundError({ id: agent })
+      if (selectable && (resolved.mode === "subagent" || resolved.hidden))
+        return yield* new AgentNotSelectableError({ id: agent })
+    })
 
     const decode = (row: typeof SessionMessageTable.$inferSelect) =>
       decodeMessage({ ...row.data, id: row.id, type: row.type }).pipe(
@@ -603,6 +594,12 @@ export const layer = Layer.effect(
         const sessionID = input.id ?? SessionSchema.ID.create()
         const recorded = yield* store.get(sessionID)
         if (recorded) return recorded
+        // RI-04 — validate the requested agent against the Location roster BEFORE projecting the
+        // created Session. Adopted/existing Sessions return above without re-validation. Root
+        // creates require a selectable agent; delegated children (parentID set, e.g. the Core
+        // `task` tool) may name subagent-mode/hidden agents but not unknown ones.
+        if (input.agent !== undefined)
+          yield* requireAdmissionAgent(input.location, input.agent, input.parentID === undefined)
         const project = yield* projects.resolve(input.location.directory)
         yield* db
           .insert(ProjectTable)
@@ -611,29 +608,28 @@ export const layer = Layer.effect(
           .run()
           .pipe(Effect.orDie)
         const now = Date.now()
-        const info = SessionV1.SessionInfo.make({
+        const subpath = path.relative(project.directory, input.location.directory).replaceAll("\\", "/")
+        const info = SessionSchema.Info.make({
           id: sessionID,
-          slug: Slug.create(),
-          version: InstallationVersion,
+          parentID: input.parentID,
           projectID: project.id,
-          directory: input.location.directory,
-          path: path.relative(project.directory, input.location.directory).replaceAll("\\", "/"),
-          workspaceID: input.location.workspaceID ? WorkspaceV2.ID.make(input.location.workspaceID) : undefined,
-          title: `New session - ${new Date(now).toISOString()}`,
+          title: input.title ?? `New session - ${new Date(now).toISOString()}`,
+          metadata: input.metadata,
           agent: input.agent,
-          model: input.model
-            ? {
-                id: ModelV2.ID.make(input.model.id),
-                providerID: input.model.providerID,
-                variant: input.model.variant,
-              }
-            : undefined,
+          permissions: input.permissions ?? [],
+          model: input.model,
           cost: 0,
           tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
-          time: { created: now, updated: now },
+          time: { created: DateTime.makeUnsafe(now), updated: DateTime.makeUnsafe(now) },
+          location: input.location,
+          subpath: subpath ? RelativePath.make(subpath) : undefined,
         })
         const projected = yield* events
-          .publish(SessionV1.Event.Created, { sessionID, info }, { location: input.location })
+          .publish(
+            SessionEvent.Created,
+            { sessionID, info, slug: Slug.create(), version: InstallationVersion },
+            { location: input.location },
+          )
           .pipe(
             Effect.as({ type: "created" } as const),
             Effect.catchDefect((defect) => {
@@ -665,6 +661,8 @@ export const layer = Layer.effect(
         const order = direction === "previous" ? (requestedOrder === "asc" ? "desc" : "asc") : requestedOrder
         const sortColumn = SessionTable.time_created
         const conditions: SQL[] = []
+        if (input.includeInternal !== true)
+          conditions.push(notLike(SessionTable.id, `${SessionSchema.LEARNING_REVIEWER_SESSION_PREFIX}%`))
         if ("directory" in input) conditions.push(eq(SessionTable.directory, input.directory))
         if (input.workspaceID) conditions.push(eq(SessionTable.workspace_id, input.workspaceID))
         if ("project" in input) conditions.push(eq(SessionTable.project_id, input.project))
@@ -779,14 +777,58 @@ export const layer = Layer.effect(
           }),
         ),
       ),
-      shell: Effect.fn("V2Session.shell")(function* () {
-        return yield* new OperationUnavailableError({ operation: "shell" })
+      // W1.2 — manual shell execution is NOT wired as a core service: a user-initiated shell command
+      // runs only through the provider-turn tool path (the model executes it as a tool), and the V2
+      // runner has no standalone "run this command now" seam. Typed refusal with the concrete reason
+      // rather than a silent no-op.
+      shell: Effect.fn("V2Session.shell")(function* (input) {
+        // W0-2 — manual shell is a projection-layer surface: the host implementation spawns the
+        // process and mirrors the exchange as V1 wire rows (no legacy durable writes, no provider
+        // call). Wired hosts inject CurrentManualShell; an unwired composition keeps the typed
+        // refusal with the concrete reason.
+        yield* result.get(input.sessionID)
+        const manual = yield* CurrentManualShell
+        if (!manual)
+          return yield* new OperationUnavailableError({
+            operation: "shell",
+            reason:
+              "manual shell execution is not wired in this composition (provide CurrentManualShell); the V2 runner executes shell only as model tool calls",
+          })
+        const exit = yield* manual(input).pipe(Effect.exit)
+        if (Exit.isFailure(exit)) {
+          const failure = Cause.squash(exit.cause)
+          return yield* new OperationUnavailableError({
+            operation: "shell",
+            reason: failure instanceof Error ? failure.message : String(failure),
+          })
+        }
       }),
-      skill: Effect.fn("V2Session.skill")(function* () {
-        return yield* new OperationUnavailableError({ operation: "skill" })
+      // W1.2 — manual skill invocation is NOT wired as a core service: SkillGuidance is per-turn
+      // advisory composition (loaded into the system context at turn boundaries), with no standalone
+      // "inject this skill now" service. Typed refusal with the concrete reason.
+      skill: Effect.fn("V2Session.skill")(function* (input) {
+        yield* result.get(input.sessionID)
+        return yield* new OperationUnavailableError({
+          operation: "skill",
+          reason: "manual skill invocation is not wired: skill guidance composes into the next turn's system context only",
+        })
       }),
-      switchAgent: Effect.fn("V2Session.switchAgent")(function* () {
-        return yield* new OperationUnavailableError({ operation: "switchAgent" })
+      // W1.2 (revised by RI-04) — switchAgent is REAL: the AgentSwitched event still owns the
+      // transition (the projector updates the Session's agent and requests a ContextEpoch replacement
+      // at the next provider-turn boundary, exactly like the sibling switchModel path), but admission
+      // now validates the target agent against the Location roster FIRST (RI-04): an unknown id fails
+      // AgentV2.NotFoundError and a non-selectable (subagent/hidden) agent fails
+      // Session.AgentNotSelectableError, instead of projecting a switch the per-turn runner resolve
+      // would reject later. The event owns the transition; admission owns the refusal.
+      switchAgent: Effect.fn("V2Session.switchAgent")(function* (input) {
+        const session = yield* result.get(input.sessionID)
+        yield* requireAdmissionAgent(session.location, AgentV2.ID.make(input.agent), true)
+        yield* events.publish(SessionEvent.AgentSwitched, {
+          sessionID: input.sessionID,
+          messageID: SessionMessage.ID.create(),
+          timestamp: yield* DateTime.now,
+          agent: input.agent,
+        })
       }),
       switchModel: Effect.fn("V2Session.switchModel")(function* (input) {
         yield* result.get(input.sessionID)
@@ -797,18 +839,65 @@ export const layer = Layer.effect(
           model: input.model,
         })
       }),
-      // §16.3 order 4 package E: overflow-triggered compaction and its continuation loop run
-      // natively in the V2 runner, but MANUAL compaction needs the legacy compaction state
-      // machine (continuation state, soft-landing, remote artifacts), which is not ported yet.
-      // Keep the typed refusal — fail-closed for callers, honest API surface — rather than a
-      // partial reimplementation.
+      setPermissions: Effect.fn("V2Session.setPermissions")(function* (input) {
+        yield* result.get(input.sessionID)
+        yield* events.publish(SessionEvent.PermissionsChanged, {
+          sessionID: input.sessionID,
+          timestamp: yield* DateTime.now,
+          permissions: input.permissions,
+        })
+      }),
+      // RI-18 native manual compaction: admit a durable request (fixing the summary model and the
+      // history fence), wake the drain — the summary provider turn runs inside SessionCompaction
+      // with the full receipt contract — and await the request's terminal state. Interruptions and
+      // crashes leave recovery_required for the maintenance surface; a settled no-op means the
+      // history had nothing worth compacting.
       compact: Effect.fn("V2Session.compact")(function* (input) {
         yield* result.get(input.sessionID)
-        return yield* new OperationUnavailableError({ operation: "compact" })
+        // The summary model identity is EXPLICIT — a caller that cannot name the model gets a
+        // typed refusal, never a fabricated or defaulted identity.
+        if (input.model === undefined)
+          return yield* new OperationUnavailableError({
+            operation: "compact",
+            reason: "manual compaction requires an explicit summary model identity (provider/model)",
+          })
+        const fence = yield* db
+          .select({ total: count(), lastID: max(SessionMessageTable.id) })
+          .from(SessionMessageTable)
+          .where(eq(SessionMessageTable.session_id, input.sessionID))
+          .get()
+          .pipe(Effect.orDie)
+        if (fence === undefined || fence.lastID === null)
+          return yield* new OperationUnavailableError({
+            operation: "compact",
+            reason: "manual compaction requires a non-empty session history",
+          })
+        const request = yield* CompactionRequest.admit(db, {
+          sessionID: input.sessionID,
+          providerID: input.model.providerID,
+          modelID: input.model.modelID,
+          fenceMessageCount: fence.total,
+          fenceLastMessageID: fence.lastID,
+        })
+        yield* execution.wake(input.sessionID).pipe(Effect.ignore)
+        const terminal = yield* CompactionRequest.awaitTerminal(db, request.request_id, MANUAL_COMPACTION_DEADLINE_MS)
+        if (terminal === undefined)
+          return yield* new OperationUnavailableError({
+            operation: "compact",
+            reason: "manual compaction did not settle within its budget",
+          })
+        if (terminal.status === "settled") return
+        return yield* new OperationUnavailableError({
+          operation: "compact",
+          reason: terminal.outcome ?? terminal.status,
+        })
       }),
+      // W1.2 — wait is REAL: it maps to SessionExecution.awaitIdle — the process-local ownership
+      // chain resolves once the Session is idle (a no-op when nothing is running). With the no-op
+      // execution layer (tests) it resolves immediately.
       wait: Effect.fn("V2Session.wait")(function* (sessionID) {
         yield* result.get(sessionID)
-        return yield* new OperationUnavailableError({ operation: "wait" })
+        yield* execution.awaitIdle(sessionID)
       }),
       resume: Effect.fn("V2Session.resume")(function* (sessionID) {
         yield* result.get(sessionID)
@@ -845,8 +934,9 @@ export const defaultLayer = layer.pipe(
   Layer.orDie,
 )
 
-export const liveLayer = layer.pipe(
-  Layer.provide(SessionExecutionLocal.liveLayer),
+/** Production Session service with an explicitly supplied Location map. */
+export const runtimeLayer = layer.pipe(
+  Layer.provide(SessionExecutionLocal.defaultLayer),
   Layer.provide(SessionStore.defaultLayer),
   Layer.provide(SessionProjector.defaultLayer),
   Layer.provide(EventV2.defaultLayer),
@@ -854,3 +944,9 @@ export const liveLayer = layer.pipe(
   Layer.provide(ProjectV2.defaultLayer),
   Layer.orDie,
 )
+
+/** Standalone production default. Hosts with application Location services must use runtimeLayer. */
+// Layer.suspend defers the LocationServiceMap access to build time: session.ts ↔ location-layer
+// form a module cycle (location-layer → tool builtins → tool/task → session), and a top-level
+// access here can hit the TDZ depending on the entrypoint's import order.
+export const liveLayer = Layer.suspend(() => runtimeLayer.pipe(Layer.provide(LocationServiceMap.layer)))

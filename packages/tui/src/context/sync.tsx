@@ -5,7 +5,7 @@ import type {
   Session,
   Part,
   Config,
-  Todo,
+  SessionTodoInfo,
   Command,
   PermissionRequest,
   QuestionRequest,
@@ -20,6 +20,18 @@ import type {
   SnapshotFileDiff,
   ConsoleState,
 } from "@deepagent-code/sdk"
+
+// W2-1 — the projected goal.updated payload shape (kept structural; the SDK schema lives server-side).
+export type GoalStatus = {
+  goalId: string
+  planDocId: string
+  phase: string
+  ticks: number
+  tokens: number
+  cost: number
+  gaps: string[]
+  stallCount: number
+}
 import { createStore, produce, reconcile } from "solid-js/store"
 import { useProject } from "./project"
 import { useEvent } from "./event"
@@ -33,6 +45,7 @@ import path from "path"
 import { aggregateFailures } from "./aggregate-failures"
 import { useKV } from "./kv"
 import { destroyRenderer } from "../util/renderer"
+import * as V2WireProjection from "./v2-wire-projection"
 
 const emptyConsoleState: ConsoleState = {
   consoleManagedProviders: [],
@@ -85,7 +98,7 @@ export const {
         [sessionID: string]: SnapshotFileDiff[]
       }
       todo: {
-        [sessionID: string]: Todo[]
+        [sessionID: string]: SessionTodoInfo[]
       }
       message: {
         [sessionID: string]: Message[]
@@ -94,6 +107,11 @@ export const {
         [messageID: string]: Part[]
       }
       lsp: LspStatus[]
+      // W2-1 — live Goal Loop status per session, fed by the goal.updated SSE event (same stream
+      // the app's goal-status-bar consumes). Undefined = no goal running.
+      session_goal: {
+        [sessionID: string]: GoalStatus
+      }
       mcp: {
         [key: string]: McpStatus
       }
@@ -125,6 +143,7 @@ export const {
       message: {},
       part: {},
       lsp: [],
+      session_goal: {},
       mcp: {},
       mcp_resource: {},
       formatter: [],
@@ -138,6 +157,9 @@ export const {
     const fullSyncedSessions = new Set<string>()
     const syncingSessions = new Map<string, Promise<void>>()
     const hydratingSessions = new Map<string, { messages: Set<string>; parts: Set<string> }>()
+    // Provenance for permission requests normalized from permission.v2.asked: their replies must
+    // go through the session-scoped V2 route (legacy /permission/:id/reply 404s on PermissionV2).
+    const v2PermissionRequests = new Set<string>()
     const touchMessage = (sessionID: string, messageID: string) => {
       hydratingSessions.get(sessionID)?.messages.add(messageID)
     }
@@ -161,45 +183,77 @@ export const {
         .then((x) => (x.data ?? []).toSorted((a, b) => a.id.localeCompare(b.id)))
     }
 
+    const upsertPermission = (request: PermissionRequest) => {
+      const requests = store.permission[request.sessionID]
+      if (!requests) {
+        setStore("permission", request.sessionID, [request])
+        return
+      }
+      const match = search(requests, request.id, (r) => r.id)
+      if (match.found) {
+        setStore("permission", request.sessionID, match.index, reconcile(request))
+        return
+      }
+      setStore(
+        "permission",
+        request.sessionID,
+        produce((draft) => {
+          draft.splice(match.index, 0, request)
+        }),
+      )
+    }
+
+    const removePermission = (sessionID: string, requestID: string) => {
+      const requests = store.permission[sessionID]
+      if (!requests) return
+      const match = search(requests, requestID, (r) => r.id)
+      if (!match.found) return
+      setStore(
+        "permission",
+        sessionID,
+        produce((draft) => {
+          draft.splice(match.index, 1)
+        }),
+      )
+    }
+
     event.subscribe((event, { workspace }) => {
       switch (event.type) {
         case "server.instance.disposed":
           void bootstrap()
           break
-        case "permission.replied": {
-          const requests = store.permission[event.properties.sessionID]
-          if (!requests) break
-          const match = search(requests, event.properties.requestID, (r) => r.id)
-          if (!match.found) break
-          setStore(
-            "permission",
-            event.properties.sessionID,
-            produce((draft) => {
-              draft.splice(match.index, 1)
-            }),
-          )
+        case "permission.replied":
+        case "permission.v2.replied": {
+          v2PermissionRequests.delete(event.properties.requestID)
+          removePermission(event.properties.sessionID, event.properties.requestID)
           break
         }
 
         case "permission.asked": {
-          const request = event.properties
-          const requests = store.permission[request.sessionID]
-          if (!requests) {
-            setStore("permission", request.sessionID, [request])
-            break
-          }
-          const match = search(requests, request.id, (r) => r.id)
-          if (match.found) {
-            setStore("permission", request.sessionID, match.index, reconcile(request))
-            break
-          }
-          setStore(
-            "permission",
-            request.sessionID,
-            produce((draft) => {
-              draft.splice(match.index, 0, request)
-            }),
-          )
+          upsertPermission(event.properties)
+          break
+        }
+
+        case "permission.v2.asked": {
+          // V2 asks carry the PermissionV2 vocabulary (action/resources); normalize to the legacy
+          // PermissionRequest shape the dialog renders and record provenance for the reply route.
+          v2PermissionRequests.add(event.properties.id)
+          upsertPermission({
+            id: event.properties.id,
+            sessionID: event.properties.sessionID,
+            permission: event.properties.action,
+            patterns: event.properties.resources,
+            metadata: event.properties.metadata ?? {},
+            always: event.properties.save ?? [],
+            ...(event.properties.source
+              ? {
+                  tool: {
+                    messageID: event.properties.source.messageID,
+                    callID: event.properties.source.callID,
+                  },
+                }
+              : {}),
+          })
           break
         }
 
@@ -294,6 +348,27 @@ export const {
 
         case "session.status": {
           setStore("session_status", event.properties.sessionID, event.properties.status)
+          break
+        }
+
+        case "goal.updated": {
+          const goal = event.properties
+          const terminal = ["done", "stopped", "rolled_back"].includes(goal.phase)
+          setStore(
+            "session_goal",
+            goal.sessionID,
+            reconcile({
+              goalId: goal.goalId,
+              planDocId: goal.planDocId,
+              phase: goal.phase,
+              ticks: Number(goal.ledger?.ticks ?? 0),
+              tokens: Number(goal.ledger?.tokens ?? 0),
+              cost: Number(goal.ledger?.cost ?? 0),
+              gaps: goal.gaps ?? [],
+              stallCount: Number(goal.stallCount ?? 0),
+            }),
+          )
+          if (terminal) setTimeout(() => setStore("session_goal", goal.sessionID, undefined as unknown as GoalStatus), 8000)
           break
         }
 
@@ -547,6 +622,9 @@ export const {
       get path() {
         return project.instance.path()
       },
+      permissionV2(requestID: string) {
+        return v2PermissionRequests.has(requestID)
+      },
       session: {
         get(sessionID: string) {
           const match = search(store.session, sessionID, (s) => s.id)
@@ -577,12 +655,29 @@ export const {
           const tracker = { messages: new Set<string>(), parts: new Set<string>() }
           hydratingSessions.set(sessionID, tracker)
           const task = (async () => {
-            const [session, messages, todo, diff] = await Promise.all([
+            const [session, wirePage, todo, diff] = await Promise.all([
               sdk.client.session.get({ sessionID }, { throwOnError: true }),
               sdk.client.session.messages({ sessionID, limit: 100 }),
               sdk.client.session.todo({ sessionID }),
               sdk.client.session.diff({ sessionID }),
             ])
+            // 6b-4 — V2-authoritative fallback (mirrors the app's directory-sync path): a first
+            // wire page that comes back EMPTY has its history only in the durable V2 store
+            // (journal-driven session whose wire egress lagged). Project the V2 snapshot into
+            // the WithParts rows this store consumes instead of rendering an empty transcript.
+            let messages = wirePage
+            if ((messages.data ?? []).length === 0) {
+              const v2 = await sdk.client.v2.session.messages({ sessionID, limit: 100 }).catch(() => undefined)
+              const rows = v2?.data?.data?.length
+                ? V2WireProjection.snapshotRows({
+                    sessionID,
+                    directory: session.data?.directory ?? "",
+                    root: session.data?.directory ?? "",
+                    messages: v2.data.data as never[],
+                  })
+                : []
+              if (rows.length > 0) messages = { ...messages, data: rows as never }
+            }
             setStore(
               produce((draft) => {
                 const match = search(draft.session, sessionID, (s) => s.id)

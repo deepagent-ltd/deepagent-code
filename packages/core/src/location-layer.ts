@@ -1,4 +1,4 @@
-import { Layer, LayerMap } from "effect"
+import { Context, Effect, Layer, LayerMap } from "effect"
 import { Location } from "./location"
 import { Policy } from "./policy"
 import { Config } from "./config"
@@ -13,6 +13,7 @@ import { Auth } from "./auth"
 import { Npm } from "./npm"
 import { ModelsDev } from "./models-dev"
 import { FSUtil } from "./fs-util"
+import { Git } from "./git"
 import { Global } from "./global"
 import { Database } from "./database/database"
 import { PermissionV2 } from "./permission"
@@ -34,37 +35,123 @@ import { ApplicationTools } from "./tool/application-tools"
 import { ToolOutputStore } from "./tool-output-store"
 import { AppProcess } from "./process"
 import { Ripgrep } from "./ripgrep"
+import { EffectFlock } from "./util/effect-flock"
 import { SessionStore } from "./session/store"
 import { SessionTodo } from "./session/todo"
 import { QuestionV2 } from "./question"
-import { LLMClient } from "@deepagent-code/llm"
+import { ClientMiddlewareService, LLMClient } from "@deepagent-code/llm"
 import { AgentGateway } from "./agent-gateway"
 import { RequestExecutor } from "@deepagent-code/llm/route"
 import * as SessionRunnerLLM from "./session/runner/llm"
 import { SessionRunnerModel } from "./session/runner/model"
 import { SystemContextBuiltIns } from "./system-context/builtins"
 import { CapabilityCatalog } from "./system-context/capability-catalog"
+import { ProjectDocs } from "./system-context/project-docs"
 import { SystemContextRegistry } from "./system-context/registry"
 import { SessionProviderOwner } from "./context-federation/provider-owner"
 import { SessionContext } from "./context-federation/session-context"
+import { ProductionV2Sources } from "./context-federation/production-adapters"
+import { ContextQueryAuthorization } from "./context-federation/query-authorization"
+import { ContextToolRuntime } from "./context-federation/tool-runtime"
 import { SessionRunnerCanonical } from "./session/runner/canonical-turn"
 import { V2ProviderTurn } from "./session/runner/v2-provider-turn"
+import { SessionRunner } from "./session/runner"
 import { V2ToolEffect } from "./session/runner/v2-tool-effect"
 import { FetchHttpClient } from "effect/unstable/http"
 
 const deepagentEnabledFromEnv = () => process.env.DEEPAGENT_ENABLED !== "false" && process.env.DEEPAGENT_ENABLED !== "0"
+
+export interface LocationRuntimeHostInterface {
+  /** Supplies the host-owned query/runtime seams for one cached Location tree. */
+  readonly layer: (
+    ref: Location.Ref,
+  ) => Layer.Layer<ProductionV2Sources | ContextToolRuntime.Service, never, AgentGateway.Runtime>
+}
+
+/**
+ * Explicit host boundary for services that Core cannot implement by itself. The value is captured
+ * when the LocationServiceMap is built, then invoked for each ref before that keyed tree starts.
+ * This prevents a self-contained Core default from shadowing a production host override.
+ */
+export class LocationRuntimeHost extends Context.Service<LocationRuntimeHost, LocationRuntimeHostInterface>()(
+  "@deepagent-code/v2/LocationRuntimeHost",
+) {}
+
+export const defaultLocationRuntimeHost = Layer.effect(
+  LocationRuntimeHost,
+  Effect.gen(function* () {
+    const buildIdentity = yield* V2ProviderTurn.CurrentBuildIdentity
+    const ownerAuthorizationPublicKey = yield* V2ProviderTurn.CurrentOwnerAuthorizationPublicKey
+    return LocationRuntimeHost.of({
+      layer: () =>
+        Layer.mergeAll(
+          Layer.succeed(ProductionV2Sources, {}),
+          ContextToolRuntime.unavailableLayer,
+          Layer.succeed(SessionRunner.CurrentToolSettleGate, undefined),
+          Layer.succeed(SessionRunner.CurrentOnSessionSettled, undefined),
+          Layer.succeed(V2ProviderTurn.CurrentBuildIdentity, buildIdentity),
+          Layer.succeed(V2ProviderTurn.CurrentOwnerAuthorizationPublicKey, ownerAuthorizationPublicKey),
+        ),
+    })
+  }),
+)
+
+/** Default dependencies are exported so an enhanced host can replace only the host boundary. */
+export const locationServiceMapDependencies = <HE, HR, DE, DR, EE, ER, GE, GR>(
+  runtimeHost: Layer.Layer<LocationRuntimeHost, HE, HR>,
+  database: Layer.Layer<Database.Service, DE, DR>,
+  events: Layer.Layer<EventV2.Service, EE, ER>,
+  gateway: Layer.Layer<AgentGateway.Runtime | ClientMiddlewareService, GE, GR>,
+) => {
+  const fs = FSUtil.defaultLayer
+  const global = Global.defaultLayer
+  const flock = EffectFlock.layer.pipe(Layer.provide(fs), Layer.provide(global))
+  const ownerReferences = V2ProviderTurn.ownerReferencesLayer.pipe(Layer.provide(global))
+  return [
+    Project.layer.pipe(Layer.provide(database), Layer.provide(fs), Layer.provide(Git.defaultLayer)),
+    events,
+    Auth.layer.pipe(Layer.provide(fs), Layer.provide(global), Layer.provide(events)),
+    Npm.defaultLayer,
+    ModelsDev.layer.pipe(
+      Layer.provide(FetchHttpClient.layer),
+      Layer.provide(fs),
+      Layer.provide(events),
+      Layer.provide(global),
+      Layer.provide(flock),
+    ),
+    fs,
+    AppProcess.defaultLayer,
+    global,
+    database,
+    SessionStore.layer.pipe(Layer.provide(database)),
+    PermissionSaved.layer.pipe(Layer.provide(database)),
+    RepositoryCache.defaultLayer,
+    Layer.mergeAll(
+      gateway,
+      LLMClient.managedLayer.pipe(Layer.provide(gateway), Layer.provide(RequestExecutor.defaultLayer)),
+    ),
+    FetchHttpClient.layer,
+    ToolOutputStore.defaultCleanupLayer,
+    ApplicationTools.layer,
+    runtimeHost.pipe(Layer.provide(ownerReferences)),
+  ] as const
+}
 
 export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()(
   "@deepagent-code/example/LocationServiceMap",
   {
     lookup: (ref: Location.Ref) => {
       const location = Location.layer(ref)
+      const runtimeHost = Layer.unwrap(Effect.map(LocationRuntimeHost, (host) => host.layer(ref)))
       // Production System Context stack (design §7.3 L0): the host-local builtins +
-      // ambient instructions, plus the stably-loaded `deepagent/capability-catalog`
-      // source so the boot catalog is part of every V2 session context.
+      // ambient instructions, the stably-loaded `deepagent/capability-catalog`
+      // source (so the boot catalog is part of every V2 session context), and the
+      // W10 project docs source (`deepagent/project-docs`) over the worksetted
+      // four-document suite.
       const systemContext = Layer.mergeAll(
         SystemContextBuiltIns.locationLayer,
         CapabilityCatalog.layer,
+        ProjectDocs.layer,
       ).pipe(Layer.provideMerge(SystemContextRegistry.layer))
       const base = Layer.mergeAll(
         location,
@@ -89,7 +176,7 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()(
         Layer.provide(resources),
         Layer.provide(base),
       )
-      const services = Layer.mergeAll(base, resources, permissionsAndTools)
+      const services = Layer.mergeAll(base, resources, permissionsAndTools, ContextQueryAuthorization.defaultLayer)
       const image = Image.layer.pipe(Layer.provide(services))
       const mutation = FileMutation.locationLayer.pipe(Layer.provide(services))
       const searches = LocationSearch.layer.pipe(Layer.provide(Ripgrep.layer), Layer.provide(services))
@@ -111,6 +198,8 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()(
         Layer.provide(services),
       )
       const runner = SessionRunnerLLM.defaultLayer.pipe(
+        Layer.provide(FSUtil.defaultLayer),
+        Layer.provide(Git.defaultLayer),
         Layer.provide(services),
         Layer.provide(model),
         Layer.provide(skillGuidance),
@@ -129,32 +218,18 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()(
         model,
         runner,
         builtInTools,
-      ).pipe(Layer.fresh)
+      ).pipe(Layer.provide(runtimeHost), Layer.fresh)
     },
     idleTimeToLive: "60 minutes",
-    dependencies: [
-      Project.defaultLayer,
-      EventV2.defaultLayer,
-      Auth.defaultLayer,
-      Npm.defaultLayer,
-      ModelsDev.defaultLayer,
-      FSUtil.defaultLayer,
-      AppProcess.defaultLayer,
-      Global.defaultLayer,
+    dependencies: locationServiceMapDependencies(
+      defaultLocationRuntimeHost,
       Database.defaultLayer,
-      SessionStore.layer.pipe(Layer.provide(Database.defaultLayer)),
-      PermissionSaved.defaultLayer,
-      RepositoryCache.defaultLayer,
-      Layer.mergeAll(
-        AgentGateway.layer({
-          enabled: deepagentEnabledFromEnv(),
-          runsDir: Global.Path.agent.runs,
-        }),
-        LLMClient.layer.pipe(Layer.provide(RequestExecutor.defaultLayer)),
-      ),
-      FetchHttpClient.layer,
-      ToolOutputStore.defaultCleanupLayer,
-      ApplicationTools.layer,
-    ],
+      EventV2.layer.pipe(Layer.provide(Database.defaultLayer)),
+      AgentGateway.runtimeLayer({
+        enabled: deepagentEnabledFromEnv(),
+        runsDir: Global.Path.agent.runs,
+        durableLearning: false,
+      }),
+    ),
   },
 ) {}

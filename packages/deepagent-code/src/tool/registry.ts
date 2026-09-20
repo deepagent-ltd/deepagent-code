@@ -1,5 +1,6 @@
 import { PlanExitTool } from "./plan"
 import { PlanTool } from "./plan-write"
+import { SpecTool } from "./spec"
 import { Session } from "@/session/session"
 import { QuestionTool } from "./question"
 import { ShellTool } from "./shell"
@@ -86,6 +87,8 @@ import { ModelV2 } from "@deepagent-code/core/model"
 import { Git } from "@/git"
 import { PRQueue } from "@/agent/pr-queue"
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
+import { SessionV2 } from "@deepagent-code/core/session"
+import { Snapshot } from "@/snapshot"
 
 const log = Log.create({ service: "tool.registry" })
 
@@ -109,6 +112,8 @@ type State = {
 export interface Interface {
   readonly ids: () => Effect.Effect<string[]>
   readonly all: () => Effect.Effect<Tool.Def[]>
+  /** Plugin + config-glob custom tools only (no builtins) — the V2 bridge surface. */
+  readonly custom: () => Effect.Effect<Tool.Def[]>
   readonly named: () => Effect.Effect<{ task: TaskDef; read: ReadDef }>
   readonly tools: (model: {
     providerID: ProviderV2.ID
@@ -149,6 +154,8 @@ const layerWithFacades: Layer.Layer<
   | CodeIntelFacade.Service
   | ContextQueryFacade.Service
   | EffectFlock.Service
+  | SessionV2.Service
+  | Snapshot.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -178,6 +185,7 @@ const layerWithFacades: Layer.Layer<
     const lsptool = yield* LspTool
     const plan = yield* PlanExitTool
     const planwrite = yield* PlanTool
+    const spectool = yield* SpecTool
     const webfetch = yield* WebFetchTool
     const websearch = yield* WebSearchTool
     const shell = yield* ShellTool
@@ -377,6 +385,7 @@ const layerWithFacades: Layer.Layer<
           debug: Tool.init(debugtool),
           plan: Tool.init(plan),
           planwrite: Tool.init(planwrite),
+          spectool: Tool.init(spectool),
           query_log: Tool.init(querylog),
           git_read: Tool.init(gitreadtool),
         })
@@ -406,6 +415,7 @@ const layerWithFacades: Layer.Layer<
             tool.patch_chunk,
             tool.git_read,
             tool.planwrite,
+            tool.spectool,
             ...(flags.experimentalLspTool ? [tool.lsp] : []),
             ...(flags.codeIntelTool ? [tool.code_intel] : []),
             ...(rollout.enabled.contextQueryToolsV2 ? [contextQuery] : []),
@@ -438,6 +448,11 @@ const layerWithFacades: Layer.Layer<
 
     const ids: Interface["ids"] = Effect.fn("ToolRegistry.ids")(function* () {
       return (yield* all()).map((tool) => tool.id)
+    })
+
+    const custom: Interface["custom"] = Effect.fn("ToolRegistry.custom")(function* () {
+      const s = yield* InstanceState.get(state)
+      return [...s.custom] as Tool.Def[]
     })
 
     const describeTask = Effect.fn("ToolRegistry.describeTask")(function* (agent: Agent.Info) {
@@ -516,7 +531,7 @@ const layerWithFacades: Layer.Layer<
             formatValidationError: tool.formatValidationError,
           }
         }),
-        { concurrency: "unbounded" },
+        { concurrency: 16 },
       )
     })
 
@@ -525,7 +540,7 @@ const layerWithFacades: Layer.Layer<
       return { task: s.task, read: s.read }
     })
 
-    return Service.of({ ids, all, named, tools })
+    return Service.of({ ids, all, custom, named, tools })
   }),
 )
 
@@ -542,7 +557,7 @@ const noopBootstrapInstanceStore = InstanceStore.defaultLayer.pipe(
   Layer.provide(Layer.succeed(InstanceBootstrap.Service, InstanceBootstrap.Service.of({ run: Effect.void }))),
 )
 
-export const defaultLayer = Layer.suspend(() =>
+export const productionLayer = Layer.suspend(() =>
   layer.pipe(
     Layer.provide(
       Layer.mergeAll(
@@ -593,10 +608,14 @@ export const defaultLayer = Layer.suspend(() =>
         Git.defaultLayer,
         EffectFlock.defaultLayer,
         PRQueue.layer.pipe(Layer.orDie),
+        Snapshot.defaultLayer,
       ),
     ),
   ),
 )
+
+/** Standalone default. Production roots must provide one shared SessionV2 runtime to productionLayer. */
+export const defaultLayer = productionLayer.pipe(Layer.provide(SessionV2.liveLayer))
 
 function isZodType(value: unknown): value is z.ZodType {
   return typeof value === "object" && value !== null && "_zod" in value

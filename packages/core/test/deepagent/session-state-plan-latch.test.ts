@@ -3,6 +3,7 @@ import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import * as SessionState from "../../src/deepagent/session-state"
+import { tmpRoot } from "../fixture/tmpdir"
 
 // U1: the session-state latch mutators (the production seam the live loop calls). Verifies the latch
 // is DERIVED from runtime facts — recordValidation with a failing result flips stale WITHOUT any
@@ -10,7 +11,7 @@ import * as SessionState from "../../src/deepagent/session-state"
 
 describe("session-state plan latch", () => {
   beforeEach(() => {
-    SessionState.configure(mkdtempSync(path.join(tmpdir(), "plan-latch-")))
+    SessionState.configure(mkdtempSync(tmpRoot()))
   })
 
   test("a new session starts with a fresh latch", () => {
@@ -111,7 +112,7 @@ describe("session-state plan latch", () => {
 // U10 step-reporting: the mutation-since-report counter and evidence plumbing on the production seam.
 describe("session-state progress-nudge counter", () => {
   beforeEach(() => {
-    SessionState.configure(mkdtempSync(path.join(tmpdir(), "plan-nudge-")))
+    SessionState.configure(mkdtempSync(tmpRoot()))
   })
 
   const plan = (sessionID: string, steps: Array<{ id: string; status: string }>, activeId: string | null = null) => ({
@@ -236,7 +237,7 @@ describe("session-state progress-nudge counter", () => {
 // compareAndCommitPlan instead. This test pins the legacy behavior so changes to it are visible.
 describe("session-state setPlan compat seam (BUG-010 Fix-A)", () => {
   beforeEach(() => {
-    SessionState.configure(mkdtempSync(path.join(tmpdir(), "plan-bypass-")))
+    SessionState.configure(mkdtempSync(tmpRoot()))
   })
 
   test("setPlan writes a plan without operation/version preconditions (compat seam, not an admission gate)", () => {

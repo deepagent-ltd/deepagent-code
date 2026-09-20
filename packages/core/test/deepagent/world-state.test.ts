@@ -5,6 +5,7 @@ import path from "node:path"
 import { DocumentStore } from "../../src/deepagent/document-store"
 import * as WorldState from "../../src/deepagent/context/world-state"
 import * as Bridge from "../../src/deepagent/context/bridge"
+import { tmpRoot } from "../fixture/tmpdir"
 
 // V4.0.1 P1 (§3.6) — World State snapshot-diff + tail re-injection invariants.
 
@@ -84,7 +85,7 @@ describe("world state — renderWorldState tail byte-stability + responsibility 
 describe("world state — project-scoped persistence (bridge, gate-free goal-worker read)", () => {
   let base: string
   beforeEach(() => {
-    base = mkdtempSync(path.join(tmpdir(), "deepagent-ws-"))
+    base = mkdtempSync(tmpRoot())
   })
   afterEach(() => {
     rmSync(base, { recursive: true, force: true })

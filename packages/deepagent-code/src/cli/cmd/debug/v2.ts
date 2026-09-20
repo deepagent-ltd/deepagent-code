@@ -29,7 +29,7 @@ export const V2Command = effectCmd({
                 (model) => [provider.id, Option.getOrUndefined(Option.map(model, (item) => item.id))] as const,
               ),
             ),
-            { concurrency: "unbounded" },
+            { concurrency: 16 },
           ),
         ),
       }

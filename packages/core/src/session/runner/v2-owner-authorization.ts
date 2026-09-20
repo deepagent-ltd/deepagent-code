@@ -27,10 +27,25 @@ export type AuthorizationFields = {
 // immediately; nothing shipped can sign for it. The r0 authorization process must issue its own
 // pair and pin the replacement public key through a reviewed commit before any production
 // authorization can qualify. Until then owner qualification stays fail-closed false.
-export const PRODUCTION_OWNER_AUTHORIZATION_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
-MCowBQYDK2VwAyEA/uzuRoFszBOpVbKUO2uM4YIWYLfY6AXcdCPyBINSasU=
------END PUBLIC KEY-----
-`
+// Release issuance public key, injected per-release at build time (define). The 2026-09-11
+// ruling retired the held production keypair: each release generates a ONE-TIME Ed25519 pair
+// (mint --ephemeral), signs its authorization row, pins the public half HERE via
+// DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY, and the private half dies with the mint process. No
+// secret is held across releases. Non-injected builds resolve the empty string: production-style
+// qualification then fail-closes (no key can verify), while dev builds self-bootstrap through
+// V2OwnerDevMint's own keypair.
+declare global {
+  // eslint-disable-next-line no-var
+  const DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY: string | undefined
+}
+
+export const RELEASE_OWNER_AUTHORIZATION_PUBLIC_KEY: string =
+  typeof DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY === "string" && DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY.trim()
+    ? DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY
+    : ""
+
+/** @deprecated legacy alias (held-key era); resolves the per-release injected key. */
+export const PRODUCTION_OWNER_AUTHORIZATION_PUBLIC_KEY = RELEASE_OWNER_AUTHORIZATION_PUBLIC_KEY
 
 // The signed payload deliberately excludes the signature itself: everything an authorization
 // claims (identity binding, validity window, campaign) is covered, and the signature cannot

@@ -16,7 +16,7 @@ import * as Truncate from "@/tool/truncate"
 import { Agent } from "@/agent/agent"
 import { Tool } from "@/tool/tool"
 import { ProfileTool, type ProfileMetadata } from "@/tool/profile"
-import { disposeAllInstances } from "../fixture/fixture"
+import { disposeAllInstances, tmpRootAsync, tmpRootSharedAsync } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { InstanceStore } from "@/project/instance-store"
 import { MessageID, SessionID } from "@/session/schema"
@@ -54,7 +54,7 @@ const PERF_STAT = ` Performance counter stats for './bench':
 `
 
 beforeAll(async () => {
-  fakeBinDir = await fs.mkdtemp(path.join(os.tmpdir(), "deepagent-fakeperf-"))
+  fakeBinDir = await tmpRootSharedAsync()
   // A fake `perf` that answers record/report/stat like the real one. Node shebang
   // keeps it cross-platform (macOS test runner has no real perf).
   const script = `#!/usr/bin/env node

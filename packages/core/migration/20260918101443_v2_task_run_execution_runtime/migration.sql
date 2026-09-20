@@ -1,0 +1,1 @@
+ALTER TABLE `task_run` ADD `execution_runtime` text DEFAULT 'v1' NOT NULL;

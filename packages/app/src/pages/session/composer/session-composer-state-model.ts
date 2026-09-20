@@ -1,4 +1,4 @@
-import type { Todo } from "@deepagent-code/sdk"
+import type { SessionTodoInfo } from "@deepagent-code/sdk"
 
 export const todoState = (input: {
   count: number
@@ -11,7 +11,7 @@ export const todoState = (input: {
   return "close"
 }
 
-export const planStepTodoStatus = (status: string): Todo["status"] => {
+export const planStepTodoStatus = (status: string): SessionTodoInfo["status"] => {
   const value = status.trim().toLowerCase()
   if (value === "active" || value === "in_progress") return "in_progress"
   if (value === "done" || value === "completed") return "completed"

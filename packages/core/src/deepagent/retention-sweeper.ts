@@ -9,6 +9,7 @@ import { ApprovalQueueTable } from "./approval-queue-sql"
 import { WorkspaceConfig } from "./workspace-config"
 import { AgentPushLogTable } from "../im/push-log-sql"
 import { EventArtifactTable, EventCompactionReceiptTable, EventSequenceTable } from "../event/sql"
+import { sweepExpiredAggregateTombstones } from "../event"
 import {
   FilePartArtifactBindingTable,
   FilePartArtifactDiscardTable,
@@ -47,6 +48,9 @@ export interface SweepSummary {
   // PERF: EventV2 mirror events pruned for archived sessions. Reported separately because the
   // accounting is by aggregate (session), not individual rows, so it has different semantics.
   readonly deletedEventV2Sequences: number
+  // Deletion fences are retained independently of workspace event retention and reclaimed only
+  // after their explicit aggregate tombstone TTL.
+  readonly deletedEventV2Tombstones: number
 }
 
 export interface Interface {
@@ -84,6 +88,7 @@ export const layerWith = (options?: LayerOptions) =>
       const sweepOnce: Interface["sweepOnce"] = (nowArg) =>
         Effect.gen(function* () {
           const at = nowArg ?? now()
+          const deletedEventV2Tombstones = yield* sweepExpiredAggregateTombstones(db, at)
 
           const eventWorkspaceRows = yield* db
             .selectDistinct({ workspaceID: DeepAgentEventTable.workspace_id })
@@ -240,6 +245,7 @@ export const layerWith = (options?: LayerOptions) =>
             deletedPushLogs,
             deletedApprovals,
             deletedEventV2Sequences,
+            deletedEventV2Tombstones,
           }
         })
 
@@ -257,6 +263,7 @@ export const layerWith = (options?: LayerOptions) =>
                   deletedPushLogs: 0,
                   deletedApprovals: 0,
                   deletedEventV2Sequences: 0,
+                  deletedEventV2Tombstones: 0,
                 }),
               ),
             ),
