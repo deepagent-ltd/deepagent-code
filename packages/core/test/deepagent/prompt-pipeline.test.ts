@@ -18,12 +18,13 @@ import {
   intelligenceContextMessage,
   intelligenceRefinementSystemPrompt,
 } from "../../src/deepagent/prompt-pipeline"
+import { tmpRoot } from "../fixture/tmpdir"
 
 let root: string
 let home: DeepAgentCodeHome
 
 beforeEach(() => {
-  root = mkdtempSync(path.join(tmpdir(), "deepagent-code-prompt-"))
+  root = mkdtempSync(tmpRoot())
   home = new DeepAgentCodeHome(root)
 })
 

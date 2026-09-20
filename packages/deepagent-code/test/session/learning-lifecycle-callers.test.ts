@@ -1,6 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { Effect, Layer } from "effect"
-import { DeepAgentLearningLifecycleTrigger } from "@deepagent-code/core/deepagent/learning-lifecycle-trigger"
 import type { SessionV1 } from "@deepagent-code/core/v1/session"
 import { BackgroundJob } from "../../src/background/job"
 import { InstanceRef } from "../../src/effect/instance-ref"
@@ -8,23 +7,9 @@ import { SessionRunState } from "../../src/session/run-state"
 import { SessionID } from "../../src/session/schema"
 import { SessionStatus } from "../../src/session/status"
 
-afterEach(() => DeepAgentLearningLifecycleTrigger.setRuntimeObserver(undefined))
-
 describe("learning lifecycle production callers", () => {
-  test("SessionRunState publishes the idle boundary after work settles and before idle status", async () => {
+  test("SessionRunState does not treat ordinary runner idle as a learning boundary", async () => {
     const events: string[] = []
-    DeepAgentLearningLifecycleTrigger.setRuntimeObserver({
-      observe: async (input) => {
-        events.push(`learning:${input.trigger}`)
-        expect(input).toMatchObject({
-          trigger: "idle",
-          sessionID: "ses-caller",
-          match: "session",
-        })
-        expect(input.boundaryKey).toBe("session-idle:ses-caller")
-        return { state: "skipped", reason: "no_exact_settled_run" }
-      },
-    })
     const sessionID = SessionID.make("ses-caller")
     const result = {
       info: {
@@ -76,6 +61,6 @@ describe("learning lifecycle production callers", () => {
       ),
     )
 
-    expect(events).toEqual(["work:settled", "learning:idle", "status:idle"])
+    expect(events).toEqual(["work:settled", "status:idle"])
   })
 })

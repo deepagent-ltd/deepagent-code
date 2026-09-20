@@ -6,6 +6,8 @@ import {
   assertAttachmentBudget,
   createPickedFileAuthorizations,
   MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENT_FILES,
+  MAX_PICKER_AUTHORIZATIONS,
   readAttachment,
 } from "./attachment-picker"
 
@@ -83,5 +85,29 @@ describe("picked file authorizations", () => {
 
     await authorizations.read(1, token, "a.txt")
     await expect(authorizations.read(1, token, "b.txt")).rejects.toThrow("budget exceeded")
+  })
+
+  test("releases all picker grants when a renderer exits", async () => {
+    const authorizations = createPickedFileAuthorizations(read)
+    const first = authorizations.add(1, ["a.txt"])
+    const second = authorizations.add(1, ["b.txt"])
+    authorizations.add(2, ["c.txt"])
+
+    authorizations.releaseSender(1)
+
+    await expect(authorizations.read(1, first, "a.txt")).rejects.toThrow("not selected")
+    await expect(authorizations.read(1, second, "b.txt")).rejects.toThrow("not selected")
+    expect(authorizations.active()).toBe(1)
+  })
+
+  test("bounds selected paths and outstanding authorization tokens", () => {
+    const authorizations = createPickedFileAuthorizations(read)
+    expect(() => authorizations.add(1, Array.from({ length: MAX_ATTACHMENT_FILES + 1 }, (_, i) => `${i}`))).toThrow(
+      "Select between",
+    )
+    for (let index = 0; index < MAX_PICKER_AUTHORIZATIONS; index++) {
+      authorizations.add(1, [`${index}`])
+    }
+    expect(() => authorizations.add(1, ["overflow"])).toThrow("Too many active file picker authorizations")
   })
 })

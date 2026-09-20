@@ -5,6 +5,7 @@ import path from "node:path"
 import { resolveDeepAgentCodeHome } from "../../src/deepagent/workspace"
 import { openUserGlobalStore, userGlobalKnowledgeRoot } from "../../src/deepagent/durable-knowledge-store"
 import * as sessionState from "../../src/deepagent/session-state"
+import { tmpRoot, tmpRootShared } from "../fixture/tmpdir"
 
 // [storage-root-dual-resolver] guard: under DEEPAGENT_CODE_TEST_HOME, durable DeepAgent writes must
 // land under the tmp root, NEVER the real user home. This is the second half of the P0-0 contract
@@ -19,7 +20,7 @@ afterEach(() => {
 
 describe("no write to real home", () => {
   test("resolveDeepAgentCodeHome under TEST_HOME points inside the tmp root, not real home", () => {
-    const testHome = mkdtempSync(path.join(tmpdir(), "deepagent-testhome-"))
+    const testHome = mkdtempSync(tmpRootShared())
     created.push(testHome)
     const resolved = resolveDeepAgentCodeHome({ DEEPAGENT_CODE_TEST_HOME: testHome })
     expect(resolved.startsWith(path.resolve(testHome))).toBe(true)
@@ -27,7 +28,7 @@ describe("no write to real home", () => {
   })
 
   test("durable knowledge + session-state writes land under the configured baseDir (tmp), not real home", () => {
-    const testHome = mkdtempSync(path.join(tmpdir(), "deepagent-testhome-"))
+    const testHome = mkdtempSync(tmpRootShared())
     created.push(testHome)
     const baseDir = path.join(resolveDeepAgentCodeHome({ DEEPAGENT_CODE_TEST_HOME: testHome }))
     // Snapshot the real-home knowledge dir contents (if any) so we can assert we did NOT add to it.

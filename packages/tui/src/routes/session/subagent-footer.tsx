@@ -7,18 +7,20 @@ import { Locale } from "../../util/locale"
 import { contextUsage } from "../../util/session"
 import { useTerminalDimensions } from "@opentui/solid"
 import { useCommandShortcut, useOpencodeKeymap } from "../../keymap"
+import { useTuiI18n } from "../../context/i18n"
 
 export function SubagentFooter() {
   const route = useRouteData("session")
   const sync = useSync()
+  const i18n = useTuiI18n()
   const messages = createMemo(() => sync.data.message[route.sessionID] ?? [])
   const session = createMemo(() => sync.session.get(route.sessionID))
 
   const subagentInfo = createMemo(() => {
     const s = session()
-    if (!s) return { label: "Subagent", index: 0, total: 0 }
+    if (!s) return { label: i18n.t("tui.subagent.defaultLabel"), index: 0, total: 0 }
     const agentMatch = s.title.match(/@(\w+) subagent/)
-    const label = agentMatch ? Locale.titlecase(agentMatch[1]) : "Subagent"
+    const label = agentMatch ? Locale.titlecase(agentMatch[1]) : i18n.t("tui.subagent.defaultLabel")
 
     if (!s.parentID) return { label, index: 0, total: 0 }
 

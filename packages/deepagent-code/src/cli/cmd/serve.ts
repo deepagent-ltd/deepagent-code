@@ -8,11 +8,9 @@ import { randomUUID } from "node:crypto"
 import fsSync from "node:fs"
 import path from "node:path"
 
-// PARITY-003 (Wave 0): lets the new CLI daemon mount this legacy server. Mirrors Daemon.register
-// (packages/cli/src/services/daemon.ts) — atomic state/server.json write, 10s heartbeat that
-// self-terminates when superseded, and file removal on shutdown while we still own it. Plain Node
-// on purpose: the legacy CLI must not depend on the new cli package.
-function registerWithDaemon(url: string, stop: () => Promise<void>) {
+// Atomic daemon registration with a heartbeat that asks the owning Effect to stop when superseded.
+// The caller owns signal handling and server/runtime finalization.
+function registerWithDaemon(url: string, shutdown: () => void) {
   const file = path.join(Global.Path.state, "server.json")
   const id = randomUUID()
   const read = (): { id?: string } | undefined => {
@@ -32,14 +30,11 @@ function registerWithDaemon(url: string, stop: () => Promise<void>) {
 
   const heartbeat = setInterval(() => {
     // Another server took over the registration — the daemon moved on, step down.
-    if (!owned()) process.kill(process.pid, "SIGTERM")
+    if (!owned()) shutdown()
   }, 10_000)
   heartbeat.unref()
 
-  let exiting = false
-  const shutdown = () => {
-    if (exiting) return
-    exiting = true
+  return () => {
     clearInterval(heartbeat)
     if (owned()) {
       try {
@@ -48,12 +43,7 @@ function registerWithDaemon(url: string, stop: () => Promise<void>) {
         // A concurrent takeover may have already replaced the file.
       }
     }
-    void stop().finally(() => process.exit(0))
-    // Hard ceiling so a stuck graceful stop cannot outlive the daemon's SIGKILL budget.
-    setTimeout(() => process.exit(0), 2_000).unref()
   }
-  process.on("SIGTERM", shutdown)
-  process.on("SIGINT", shutdown)
 }
 
 export const ServeCommand = effectCmd({
@@ -68,6 +58,9 @@ export const ServeCommand = effectCmd({
   // Server loads instances per-request via x-deepagent-code-directory header — no
   // need for an ambient project InstanceContext at startup.
   instance: false,
+  // Server.listen preflights, opens, migrates, and lifetime-locks the database itself; it must
+  // be the ONLY database owner in this process (see effectCmd's `standalone` contract).
+  standalone: true,
   handler: Effect.fn("Cli.serve")(function* (args) {
     const { Server } = yield* Effect.promise(() => import("../../server/server"))
     const opts = yield* resolveNetworkOptions(args)
@@ -87,10 +80,32 @@ export const ServeCommand = effectCmd({
     const server = yield* Effect.promise(() => Server.listen(opts))
     console.log(`deepagent-code server listening on http://${server.hostname}:${server.port}`)
 
-    if (args.register) {
-      registerWithDaemon(`http://${server.hostname}:${server.port}`, () => server.stop(true))
-    }
-
-    yield* Effect.never
+    // Effect.callback's canceler only runs on interruption; the graceful
+    // SIGTERM/SIGINT path resumes normally and would skip it. Keep the canceler
+    // for interruption and repeat cleanup in `ensuring` (idempotent) so the
+    // daemon registration is removed on every exit.
+    let cleanup = () => {}
+    yield* Effect.callback<void, never>((resume) => {
+      let stopping = false
+      const shutdown = () => {
+        if (stopping) return
+        stopping = true
+        resume(Effect.void)
+      }
+      const unregister = args.register
+        ? registerWithDaemon(`http://${server.hostname}:${server.port}`, shutdown)
+        : () => {}
+      cleanup = () => {
+        process.off("SIGTERM", shutdown)
+        process.off("SIGINT", shutdown)
+        unregister()
+      }
+      process.on("SIGTERM", shutdown)
+      process.on("SIGINT", shutdown)
+      return Effect.sync(() => cleanup())
+    }).pipe(
+      Effect.ensuring(Effect.sync(() => cleanup())),
+      Effect.ensuring(Effect.promise(() => server.stop(true))),
+    )
   }),
 })

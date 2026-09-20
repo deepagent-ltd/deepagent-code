@@ -40,9 +40,10 @@ process.on("uncaughtException", (e) => {
 })
 
 // Subscribe to global events and forward them via RPC
-GlobalBus.on("event", (event) => {
+const forwardGlobalEvent = (event: Parameters<typeof GlobalBus.emit<"event">>[1]) => {
   Rpc.emit("global.event", event)
-})
+}
+GlobalBus.on("event", forwardGlobalEvent)
 
 let server: Awaited<ReturnType<typeof Server.listen>> | undefined
 
@@ -91,8 +92,11 @@ export const rpc = {
   async shutdown() {
     Log.Default.info("worker shutting down")
 
+    GlobalBus.off("event", forwardGlobalEvent)
     await InstanceRuntime.disposeAllInstances()
     if (server) await server.stop(true)
+    await Server.disposeDefault()
+    Heap.stop()
   },
 }
 

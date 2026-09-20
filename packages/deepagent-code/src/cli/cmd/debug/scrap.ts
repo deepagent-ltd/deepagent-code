@@ -11,8 +11,9 @@ export const ScrapCommand = cmd({
     const { makeRuntime } = await import("@deepagent-code/core/effect/runtime")
     const runtime = makeRuntime(Project.Service, Project.defaultLayer)
     const timer = Log.Default.time("scrap")
-    const list = await runtime.runPromise((project) => project.list())
-    process.stdout.write(JSON.stringify(list, null, 2) + EOL)
-    timer.stop()
+    await runtime
+      .runPromise((project) => project.list())
+      .then((list) => process.stdout.write(JSON.stringify(list, null, 2) + EOL))
+      .finally(() => Promise.all([runtime.dispose(), Promise.resolve(timer.stop())]))
   },
 })

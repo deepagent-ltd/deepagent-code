@@ -1,8 +1,10 @@
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import { Authorization } from "../middleware/authorization"
-import { ApiTypedError } from "../typed-error"
+import { ApiTypedErrors } from "../typed-error"
 import { described } from "./metadata"
+import { InstanceContextMiddleware } from "../middleware/instance-context"
+import { WorkspaceRoutingMiddleware, WorkspaceRoutingQuery } from "../middleware/workspace-routing"
 
 // C6-02 system-context diagnostics (design §11.1 + §7.5): the capability/system
 // context snapshot is exposed as a read-only diagnostic. It reports the L0 catalog
@@ -38,8 +40,9 @@ export const SystemContextApi = HttpApi.make("system-context").add(
   HttpApiGroup.make("system-context")
     .add(
       HttpApiEndpoint.get("snapshot", SystemContextPaths.snapshot, {
+        query: WorkspaceRoutingQuery,
         success: described(SystemContextSnapshotSchema, "System context snapshot diagnostics"),
-        error: ApiTypedError,
+        error: ApiTypedErrors,
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "system-context.snapshot",
@@ -55,5 +58,7 @@ export const SystemContextApi = HttpApi.make("system-context").add(
         description: "System context snapshot diagnostics HttpApi surface (C6-02).",
       }),
     )
+    .middleware(InstanceContextMiddleware)
+    .middleware(WorkspaceRoutingMiddleware)
     .middleware(Authorization),
 )

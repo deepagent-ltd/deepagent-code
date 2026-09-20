@@ -1,5 +1,5 @@
 {
-  "$schema": "https://deepagent-code.ai/theme.json",
+  "$schema": "https://ai.deepagent.ltd/theme.json",
   "defs": {
     "base03": "#002b36",
     "base02": "#073642",

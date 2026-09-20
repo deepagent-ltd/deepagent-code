@@ -73,7 +73,6 @@ const makeLayer = (
 ) => {
   const database = Database.layerFromPath(":memory:")
   const flagsLayer = RuntimeFlags.layer({
-    v4EventDrivenIm: true,
     v4AgentPushEnabled: true,
     v4MultiAgentRuntime: true,
     ...flags,
@@ -329,7 +328,7 @@ describe("EventDispatcher quiet-hours tick filter", () => {
   // quiet-hours window and observe the dispatcher defer during it.
   const makeQuietLayer = () => {
     const database = Database.layerFromPath(":memory:")
-    const flagsLayer = RuntimeFlags.layer({ v4EventDrivenIm: true, v4AgentPushEnabled: true, v4MultiAgentRuntime: true })
+    const flagsLayer = RuntimeFlags.layer({ v4AgentPushEnabled: true, v4MultiAgentRuntime: true })
     const core = Layer.mergeAll(
       DeepAgentEventBus.layerWith({ now }),
       Scheduler.layerWith({ now }),
@@ -425,7 +424,9 @@ describe("EventDispatcher.flagForEventType", () => {
   it.effect("maps event-type prefixes to the right flag", () =>
     Effect.gen(function* () {
       const flags = yield* RuntimeFlags.Service
-      expect(EventDispatcher.flagForEventType(flags, "im.message.created")).toBe(flags.v4EventDrivenIm)
+      // v4EventDrivenIm was removed with the V2 IM durable-only migration: im.* has no dedicated
+      // flag anymore (no producer publishes im.*) and rides the multi-agent master switch default.
+      expect(EventDispatcher.flagForEventType(flags, "im.message.created")).toBe(flags.v4MultiAgentRuntime)
       expect(EventDispatcher.flagForEventType(flags, "agent.push.requested")).toBe(flags.v4AgentPushEnabled)
       expect(EventDispatcher.flagForEventType(flags, "ci.failure")).toBe(flags.v4MultiAgentRuntime)
       expect(EventDispatcher.flagForEventType(flags, "git.push")).toBe(flags.v4MultiAgentRuntime)

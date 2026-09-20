@@ -175,6 +175,7 @@ export function isPathPluginSpec(spec: string) {
 const pluginTargetFailures = new Map<string, { readonly retryAt: number; readonly error: unknown }>()
 const pluginTargetResolutions = new Map<string, Promise<string>>()
 const pluginTargetFailureBackoffMs = 5 * 60_000
+const maxPluginTargetCacheEntries = 128
 
 export function resetPluginTargetResolutionCache() {
   pluginTargetFailures.clear()
@@ -215,17 +216,26 @@ export async function checkPluginCompatibility(target: string, deepagentCodeVers
 
 export async function resolvePluginTarget(spec: string) {
   if (isPathPluginSpec(spec)) return resolvePathPluginTarget(spec)
+  for (const [key, failure] of pluginTargetFailures) {
+    if (failure.retryAt <= Date.now()) pluginTargetFailures.delete(key)
+  }
   const failed = pluginTargetFailures.get(spec)
   if (failed && failed.retryAt > Date.now()) throw failed.error
   if (failed) pluginTargetFailures.delete(spec)
   const active = pluginTargetResolutions.get(spec)
   if (active) return active
+  if (pluginTargetResolutions.size >= maxPluginTargetCacheEntries)
+    throw new Error("Too many concurrent plugin resolutions")
   const hit = parse(spec)
   const pkg = hit?.name && hit.raw === hit.name ? `${hit.name}@latest` : spec
   const resolution = Npm.add(pkg)
     .then((result) => result.directory)
     .catch((error) => {
       pluginTargetFailures.set(spec, { retryAt: Date.now() + pluginTargetFailureBackoffMs, error })
+      if (pluginTargetFailures.size > maxPluginTargetCacheEntries) {
+        const oldest = pluginTargetFailures.keys().next().value
+        if (oldest !== undefined) pluginTargetFailures.delete(oldest)
+      }
       throw error
     })
     .finally(() => pluginTargetResolutions.delete(spec))

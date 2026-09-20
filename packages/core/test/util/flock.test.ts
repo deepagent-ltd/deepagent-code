@@ -5,6 +5,7 @@ import path from "path"
 import os from "os"
 import { Flock } from "@deepagent-code/core/util/flock"
 import { Hash } from "@deepagent-code/core/util/hash"
+import { tmpRootAsync } from "../fixture/tmpdir"
 
 type Msg = {
   key: string
@@ -23,7 +24,7 @@ const root = path.join(import.meta.dir, "../..")
 const worker = path.join(import.meta.dir, "../fixture/flock-worker.ts")
 
 async function tmpdir() {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "flock-test-"))
+  const dir = await tmpRootAsync()
   return {
     path: dir,
     async [Symbol.asyncDispose]() {

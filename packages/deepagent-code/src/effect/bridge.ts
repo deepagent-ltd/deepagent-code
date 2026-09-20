@@ -11,6 +11,12 @@ export interface Shape {
   readonly bind: <Args extends readonly unknown[], Result>(fn: (...args: Args) => Result) => (...args: Args) => Result
 }
 
+export const MAX_ACTIVE_BRIDGE_FIBERS = 256
+
+export class CapacityError extends Error {
+  readonly _tag = "EffectBridge.CapacityError"
+}
+
 function restoreWorkspace<R>(workspace: WorkspaceV2.ID | undefined, fn: () => R): R {
   if (workspace !== undefined) return WorkspaceContext.restore(workspace, fn)
   return fn()
@@ -86,6 +92,14 @@ export function make(): Effect.Effect<Shape> {
     const workspace = (yield* WorkspaceRef) ?? captured.workspace
     const wrap = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       attachWith(effect.pipe(Effect.provide(ctx)) as Effect.Effect<A, E, never>, { instance, eventRoute, workspace })
+    let activeForks = 0
+
+    const fork = <A, E, R>(effect: Effect.Effect<A, E, R>): Fiber.Fiber<A, E> => {
+      if (activeForks >= MAX_ACTIVE_BRIDGE_FIBERS)
+        return Effect.runFork(Effect.die(new CapacityError("Effect bridge fiber capacity exceeded")))
+      activeForks++
+      return Effect.runFork(wrap(effect).pipe(Effect.ensuring(Effect.sync(() => activeForks--))))
+    }
 
     return {
       promise: <A, E, R>(effect: Effect.Effect<A, E, R>, signal?: AbortSignal) =>
@@ -99,8 +113,7 @@ export function make(): Effect.Effect<Shape> {
             })
             .finally(abort.cleanup)
         }),
-      fork: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        restoreWorkspace(workspace, () => Effect.runFork(wrap(effect))),
+      fork: <A, E, R>(effect: Effect.Effect<A, E, R>) => restoreWorkspace(workspace, () => fork(effect)),
       run: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
         Effect.callback<A, E>((resume, signal) => {
           const interrupt = restoreWorkspace(workspace, () =>

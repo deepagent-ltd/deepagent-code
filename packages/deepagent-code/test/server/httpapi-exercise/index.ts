@@ -1628,24 +1628,6 @@ const scenarios: Scenario[] = [
     .at((ctx) => ({ path: "/tui/select-session", headers: ctx.headers(), body: { sessionID: ctx.state.id } }))
     .json(200, boolean, "status"),
   http.protected
-    .post("/tui/control/response", "tui.control.response")
-    .at((ctx) => ({ path: "/tui/control/response", headers: ctx.headers(), body: { ok: true } }))
-    .json(200, boolean, "status"),
-  http.protected
-    .get("/tui/control/next", "tui.control.next")
-    .mutating()
-    .seeded((ctx) => ctx.tuiRequest({ path: "/tui/exercise", body: { text: "queued" } }))
-    .json(
-      200,
-      (body) => {
-        object(body)
-        check(body.path === "/tui/exercise", "control next should return queued path")
-        object(body.body)
-        check(body.body.text === "queued", "control next should return queued body")
-      },
-      "status",
-    ),
-  http.protected
     .post("/global/upgrade", "global.upgrade")
     .global()
     .probe({ path: "/global/upgrade", body: { target: 1 } })

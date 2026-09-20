@@ -46,6 +46,7 @@ type Deps = {
 
 export function registerIpcHandlers(deps: Deps) {
   const updaterSubscriptions = createUpdaterSubscriptions()
+  const pickerSenders = new Set<number>()
   app.once("will-quit", updaterSubscriptions.clear)
 
   ipcMain.handle("kill-sidecar", () => deps.killSidecar())
@@ -153,7 +154,15 @@ export function registerIpcHandlers(deps: Deps) {
         })),
       )
       assertAttachmentBudget(files)
-      const token = pickedFiles.add(event.sender.id, result.filePaths)
+      const senderID = event.sender.id
+      const token = pickedFiles.add(senderID, result.filePaths)
+      if (!pickerSenders.has(senderID)) {
+        pickerSenders.add(senderID)
+        event.sender.once("destroyed", () => {
+          pickedFiles.releaseSender(senderID)
+          pickerSenders.delete(senderID)
+        })
+      }
       return { token, files }
     },
   )

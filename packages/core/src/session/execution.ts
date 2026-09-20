@@ -24,15 +24,32 @@ export type InterruptReason = "user" | "shutdown" | "superseded"
 
 export function terminal(exit: Exit.Exit<void, SessionRunner.RunError>, reason?: InterruptReason) {
   if (Exit.isSuccess(exit)) return { type: "succeeded" as const }
-  if (Cause.hasInterrupts(exit.cause)) return { type: "interrupted" as const, reason: reason ?? "shutdown" }
+  if (Cause.hasInterruptsOnly(exit.cause)) return { type: "interrupted" as const, reason: reason ?? "shutdown" }
   const failure = Cause.squash(exit.cause)
   return {
     type: "failed" as const,
     error: {
       type: "unknown" as const,
-      message: failure instanceof Error ? failure.message : String(failure),
+      message:
+        failure instanceof Error && failure.message.trim().length > 0 ? failure.message : describeFailure(failure),
     },
   }
+}
+
+/**
+ * R3 — TaggedErrorClass errors render an empty `message` until each class carries one; this
+ * fallback serializes the tag plus the error's own fields so an Execution.Failed event never
+ * shows an empty reason while the per-class fixes catch up.
+ */
+function describeFailure(failure: unknown): string {
+  const tag = (failure as { readonly _tag?: unknown })._tag
+  if (failure instanceof Error && typeof tag === "string") {
+    const fields = { ...(failure as unknown as Record<string, unknown>) }
+    delete fields["_tag"]
+    const detail = JSON.stringify(fields)
+    return detail === "{}" ? tag : `${tag} ${detail}`
+  }
+  return String(failure)
 }
 
 /** Low-level compatibility layer for callers that only need durable Session recording. */

@@ -11,11 +11,54 @@ import { migrations } from "../src/database/migration.gen"
 // the ordered (id, source-content-hash) pairs, so it captures BOTH the id list and each
 // migration's executable body.
 // Re-pinned after five incident-labelled migration identities were canonicalized while retaining
+// W4-6: re-pinned again for the session_wire_projection migration (20260904171154) — the
+// journal→V1-wire egress fingerprint cursor table.
 // their released database IDs as compatibility aliases.
 // Successor pin (2026-08-28): the event-ledger wiring migration body
 // (20260829030000_wire_event_ledgers) joined the registry, so the ordered
 // registry digest moved. The pin tracks the current release candidate.
-const PINNED_DIGEST = "c1762b0df77600e7fb84e238aaa4f8e10629629b50792169eb05fd06dbb537c7"
+// Successor pin (W2, 2026-09-01): the session-provider recovery persistence
+// migration (20260830000000_session_provider_recovery) joined the registry, so
+// the ordered registry digest moved again.
+// Successor pin (W2-1, 2026-09-02): the session-provider recovery migration body
+// gained the recovery_command state CHECK and the descriptor immutability
+// triggers (anti-review W2-1 issue 7), so the ordered registry digest moved
+// again. Explicit re-pin: the previous pin covered the pre-hardening body.
+// Successor pin (W4, 2026-09-01): the session_capability_load persistence
+// migration joined the registry (generated from the Drizzle schema via
+// `bun script/migration.ts`), so the ordered registry digest moved again.
+// Successor pin (W8, 2026-09-04): the W8 protocol-close migration
+// (20260904120000_v2_provider_prepared_turn_canonical_hash) re-created the V2
+// provider transition guard and the parity receipt authority guard for the
+// identity-folded canonical prepared_turn_hash, so the ordered registry digest
+// moved again.
+// Successor pin (W5.1, 2026-09-10): the event-admission refusal-reason
+// migration (20260910000000_event_admission_refusal_reason) joined the
+// registry (event admission no longer refuses with a coarse static reason but
+// persists the per-admission refusal reason), so the ordered registry digest
+// moved again. Explicit re-pin of the W5.1 trigger.
+// Successor pin (2026-09-08, runtime-integrity remediation): four migrations
+// joined the registry — 20260906190036_capability_load_catalog_identity
+// (capability-load catalog identity unique index), 20260907020000_session_interrupt_barrier
+// (RI-115 durable interrupt barrier), 20260907120000_provider_attempt_version
+// (RI-53 attempt_version + execution_claim_token), 20260907130000_migration_journal_content_hash
+// (journal content-hash column). `migration --check` green and fresh-apply/re-apply
+// oracle green; explicit re-pin of the release candidate.
+// Successor pin (2026-09-09, RI-16/RI-24): session-delete tombstones, retention index,
+// runtime-integrity evidence, and signature persistence migrations joined the registry; the
+// journal content-hash migration also gained a missing-receipt guard for old disk fixtures.
+// Successor pin (2026-09-09, RI-24 artifact wave): the independent content-addressed runtime
+// integrity evidence artifact table and its immutable signature-attachment trigger joined.
+// Successor pin (2026-09-10, RI-18): the durable session_v2_compaction_request migration joined
+// the registry (native manual compaction); `migration --check` green at re-pin time.
+// Successor pin (2026-09-18, durable-only wave): four migrations joined — v2 task_run
+// execution_runtime discriminator, im_reply_outbox, command_side_effect_receipt, and the
+// one-time task_run v1 recovery_required sweep; `migration --check` green at re-pin time.
+// Successor pin (2026-09-19, durable-only wave 3 worklist #29 part 2): the V2 structured-output
+// evidence authority migration (20260919073750_v2_structured_output_evidence) joined the
+// registry (session_v2_structured_output_evidence + insert/update/delete guards);
+// `migration --check` green at re-pin time.
+const PINNED_DIGEST = "9f97f646a1612275ac711ba623caf5b4837af18335e83c28f9ccc4c01b953587"
 
 const digest = (entries: readonly { readonly id: string; readonly hash: string }[]) =>
   createHash("sha256").update(JSON.stringify(entries)).digest("hex")

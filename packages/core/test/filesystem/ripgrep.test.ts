@@ -6,12 +6,13 @@ import os from "os"
 import path from "path"
 import { Ripgrep } from "@deepagent-code/core/filesystem/ripgrep"
 import { testEffect } from "../lib/effect"
+import { tmpRootAsync } from "../fixture/tmpdir"
 
 const it = testEffect(Ripgrep.defaultLayer)
 
 const tmpdir = (init?: (dir: string) => Effect.Effect<void>) =>
   Effect.acquireRelease(
-    Effect.promise(async () => fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "deepagent-code-test-")))),
+    Effect.promise(async () => fs.realpath(await tmpRootAsync())),
     (dir) =>
       Effect.promise(() =>
         fs.rm(dir, {

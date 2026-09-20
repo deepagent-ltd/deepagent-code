@@ -24,7 +24,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
 Affero General Public License for more details.
 
 Source code is available at:
-  https://github.com/lessweb/deepagent-code
+  https://github.com/deepagent-ltd/deepagent-code
 
 ──────────────────────────────────────────────────────────
 Upstream Attribution
@@ -61,7 +61,7 @@ export const SettingsAboutV2: Component = () => {
               title={language.t("settings.about.attribution.title")}
               description={language.t("settings.about.attribution.description")}
             >
-              <Link href="https://github.com/lessweb/deepagent-code">deepagent-code</Link>
+              <Link href="https://github.com/deepagent-ltd/deepagent-code">deepagent-code</Link>
             </SettingsRowV2>
           </SettingsListV2>
         </div>

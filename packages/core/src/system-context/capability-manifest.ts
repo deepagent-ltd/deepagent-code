@@ -206,20 +206,36 @@ export interface CapabilityInventory {
   readonly permissionActions: ReadonlySet<string>
 }
 
-/** Product tool inventory: the shipped Location-scoped built-in tools plus context-federation tools. */
+/**
+ * Product tool inventory: exactly the shipped Location-scoped built-in tool set
+ * (`BuiltInTools.builtinToolNames` — the potential set `locationLayer` registers).
+ * The two graph tools (`code_intel`, `context_query`) are additionally gated at
+ * runtime by the `context_query_tools_v2` flag and `ContextToolRuntime` availability,
+ * so a host without the graph runtime offers the remaining 14; they stay in the
+ * inventory because the inventory names what the product ships, not what one host
+ * enables. A build gate (`assertInventoryCoversBuiltinTools` in the test suite and
+ * `script/assert-capability-inventory.ts`) pins this set to the registry exactly,
+ * so a tool added to the layer without inventory coverage (or vice versa) fails.
+ */
 export const DeepAgentCodeToolInventory: CapabilityInventory = {
   toolNames: new Set([
     "read",
     "glob",
     "grep",
+    "git_read",
     "edit",
     "write",
-    "apply-patch",
+    "apply_patch",
+    "apply_patch_chunk",
     "bash",
     "websearch",
     "webfetch",
     "question",
     "skill",
+    "plan",
+    "task",
+    "capability_search",
+    "capability_load",
     "context_query",
     "code_intel",
   ]),
@@ -237,13 +253,26 @@ export const DeepAgentCodeToolInventory: CapabilityInventory = {
     "read",
     "glob",
     "grep",
+    "git_read",
     "edit",
     "bash",
     "websearch",
     "webfetch",
     "question",
     "skill",
+    "plan",
+    "task",
     "context.read",
+    "code_intel",
+    "context_query",
+    // W4.1 (§7.2 single permission directory): the capability load tools are authorized by
+    // `capability.read` (Tool.withPermission), so the action belongs in the one permission
+    // catalog the coherence gate validates manifests against — a manifest (or the
+    // runtime-authorized search grant set derived from this inventory) can now name it.
+    "capability.read",
+    // `capability_search` declares no static action: its authorization is derived per call
+    // from the agent/session rulesets (`CapabilityRuntimeSearch.permissionAuthorization`),
+    // so there is no catalog action to list here.
   ]),
 }
 
@@ -300,6 +329,91 @@ export function assertCapabilityCatalogConsistent(
     throw new CapabilityCatalogGateError({ message: `duplicate capability ids: [${duplicates.join(", ")}]` })
   }
   for (const manifest of manifests) assertCapabilityManifestConsistent(manifest, inventory)
+}
+
+/** Typed violation: a stable catalog manifest advertises an entry tool the runtime does not register. */
+export class CatalogRegistryMismatchError extends Schema.TaggedErrorClass<CatalogRegistryMismatchError>()(
+  "CapabilityManifest.CatalogRegistryMismatchError",
+  { missing: Schema.Array(Schema.String) },
+) {}
+
+/**
+ * W4 inventory ↔ registry consistency gate (design §7.2: a manifest is only advertisable
+ * when its entry tools exist in the runtime). The constraint is the subset direction: the
+ * stable catalog's entry-tool set must be REGISTERED in the shipped tool registry —
+ * advertising a capability whose entry tool is absent is a build gate failure (the model
+ * would discover a feature it cannot operate). Extra registered tools (question,
+ * capability_search, the load tools) are fine; missing tools are not.
+ *
+ * The Core V2 context tools are part of the shipped built-in set, so their stable
+ * manifests pass this gate. Maintenance-only capabilities remain excluded because
+ * they are never advertised as operable.
+ */
+export function assertInventoryMatchesRegistry(
+  registeredTools: ReadonlyArray<string> | ReadonlySet<string>,
+  manifests: ReadonlyArray<CapabilityManifest>,
+): void {
+  const registered = registeredTools instanceof Set ? registeredTools : new Set(registeredTools)
+  const advertised = new Set<string>()
+  for (const manifest of manifests) {
+    if (manifest.availability !== "stable") continue
+    for (const tool of manifest.entry_tools) advertised.add(tool)
+  }
+  const missing = [...advertised].filter((tool) => !registered.has(tool)).sort()
+  if (missing.length > 0) throw new CatalogRegistryMismatchError({ missing })
+}
+
+/** Typed violation: the product inventory and the shipped built-in registry drifted apart. */
+export class InventoryRegistryDriftError extends Schema.TaggedErrorClass<InventoryRegistryDriftError>()(
+  "CapabilityManifest.InventoryRegistryDriftError",
+  {
+    missingFromRegistry: Schema.Array(Schema.String),
+    missingFromInventory: Schema.Array(Schema.String),
+  },
+) {}
+
+/**
+ * RI-113 exact gate (design §1.2 single capability surface): the product inventory's
+ * tool set must EQUAL the shipped built-in registry. The subset gate
+ * (`assertInventoryMatchesRegistry`) only stops a catalog from advertising an absent
+ * tool — it cannot see a registered tool the inventory forgot, which the coherence
+ * gate would later reject as "unknown entry tool" when a manifest tries to name it
+ * (the two sources of truth having drifted). The symmetric difference must be empty.
+ * The caller supplies `BuiltInTools.builtinToolNames` so this module keeps no
+ * dependency on the tool registry (which transitively imports this module).
+ */
+export function assertInventoryCoversBuiltinTools(
+  registeredTools: ReadonlyArray<string> | ReadonlySet<string>,
+  inventory: CapabilityInventory,
+): void {
+  const registered = registeredTools instanceof Set ? registeredTools : new Set(registeredTools)
+  const missingFromRegistry = [...inventory.toolNames].filter((tool) => !registered.has(tool)).sort()
+  const missingFromInventory = [...registered].filter((tool) => !inventory.toolNames.has(tool)).sort()
+  if (missingFromRegistry.length > 0 || missingFromInventory.length > 0) {
+    throw new InventoryRegistryDriftError({ missingFromRegistry, missingFromInventory })
+  }
+}
+
+/**
+ * W4.1 reverse warning (design §7.6 诚实化): a `maintenance_only` capability whose
+ * entry tools are ALL registered is an upgrade candidate — the runtime now ships
+ * the tool the manifest declared, so the capability can be promoted to `stable`
+ * (and re-gated) instead of staying hidden from the model. This is a WARNING
+ * surface, never a gate error: the returned list is a prompt to act, not a
+ * violation. Deterministic order (id asc); a maintenance manifest with no entry
+ * tools is not a candidate (nothing to register).
+ */
+export function findUpgradableMaintenance(
+  registeredTools: ReadonlyArray<string> | ReadonlySet<string>,
+  manifests: ReadonlyArray<CapabilityManifest>,
+): ReadonlyArray<CapabilityManifest> {
+  const registered = registeredTools instanceof Set ? registeredTools : new Set(registeredTools)
+  return sortManifests(manifests).filter(
+    (manifest) =>
+      manifest.availability === "maintenance_only" &&
+      manifest.entry_tools.length > 0 &&
+      manifest.entry_tools.every((tool) => registered.has(tool)),
+  )
 }
 
 /** Deterministically sort manifests by id, then version. */

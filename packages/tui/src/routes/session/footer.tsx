@@ -17,6 +17,22 @@ export function Footer() {
     if (route.data.type !== "session") return []
     return sync.data.permission[route.data.sessionID] ?? []
   })
+  // W2-1 — live goal status for THIS session (goal.updated SSE projection). Rendered as a compact
+  // phase + budget chip so a long-running autonomous goal is observable from the terminal.
+  const goal = createMemo(() => {
+    if (route.data.type !== "session") return undefined
+    return sync.data.session_goal?.[route.data.sessionID]
+  })
+  const goalPhaseColor = (phase: string) =>
+    phase === "running"
+      ? theme.success
+      : phase === "paused"
+        ? theme.warning
+        : phase === "needs_human"
+          ? theme.error
+          : theme.text
+  const goalLabel = (phase: string) =>
+    phase === "needs_human" ? "needs human" : phase === "rolled_back" ? "rolled back" : phase
   const directory = useDirectory()
   const connected = useConnected()
 
@@ -60,6 +76,15 @@ export function Footer() {
             </text>
           </Match>
           <Match when={connected()}>
+            <Show when={goal()}>
+              {(g) => (
+                <text fg={goalPhaseColor(g().phase)}>
+                  <span style={{ fg: goalPhaseColor(g().phase) }}>◉</span> goal {goalLabel(g().phase)} · t
+                  {g().ticks} · {(g().tokens / 1000).toFixed(1)}k tok
+                  {g().cost > 0 ? ` · $${g().cost.toFixed(2)}` : ""}
+                </text>
+              )}
+            </Show>
             <Show when={permissions().length > 0}>
               <text fg={theme.warning}>
                 <span style={{ fg: theme.warning }}>△</span> {permissions().length} Permission

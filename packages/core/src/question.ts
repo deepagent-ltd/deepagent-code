@@ -90,6 +90,12 @@ export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Que
   requestID: ID,
 }) {}
 
+export const MAX_PENDING_REQUESTS = 128
+
+export class CapacityError extends Schema.TaggedErrorClass<CapacityError>()("QuestionV2.CapacityError", {
+  limit: Schema.Number,
+}) {}
+
 export interface AskInput {
   readonly sessionID: SessionSchema.ID
   readonly questions: ReadonlyArray<Info>
@@ -102,7 +108,7 @@ export interface ReplyInput {
 }
 
 export interface Interface {
-  readonly ask: (input: AskInput) => Effect.Effect<ReadonlyArray<Answer>, RejectedError>
+  readonly ask: (input: AskInput) => Effect.Effect<ReadonlyArray<Answer>, RejectedError | CapacityError>
   readonly reply: (input: ReplyInput) => Effect.Effect<void, NotFoundError>
   readonly reject: (requestID: ID) => Effect.Effect<void, NotFoundError>
   readonly list: () => Effect.Effect<ReadonlyArray<Request>>
@@ -143,6 +149,7 @@ export const layer = Layer.effect(
         Effect.gen(function* () {
           const id = ID.ascending()
           const deferred = yield* Deferred.make<ReadonlyArray<Answer>, RejectedError>()
+          if (pending.size >= MAX_PENDING_REQUESTS) return yield* new CapacityError({ limit: MAX_PENDING_REQUESTS })
           const request: Request = { id, ...input }
           pending.set(id, { request, deferred })
           return yield* events.publish(Event.Asked, request).pipe(

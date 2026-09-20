@@ -14,6 +14,7 @@ import { useServerSDK } from "@/context/server-sdk"
 import { ScopedKey } from "@/utils/server-scope"
 
 const cache = new Map<string, { tab: number; answers: QuestionAnswer[]; custom: string[]; customOn: boolean[] }>()
+const CACHE_LIMIT = 100
 
 function Mark(props: { multi: boolean; picked: boolean; onClick?: (event: MouseEvent) => void }) {
   return (
@@ -195,6 +196,7 @@ export const SessionQuestionDock: Component<{ request: QuestionRequest; onSubmit
   onCleanup(() => {
     if (focusFrame !== undefined) cancelAnimationFrame(focusFrame)
     if (replied) return
+    if (!cache.has(cacheKey) && cache.size >= CACHE_LIMIT) cache.delete(cache.keys().next().value!)
     cache.set(cacheKey, {
       tab: store.tab,
       answers: store.answers.map((a) => (a ? [...a] : [])),

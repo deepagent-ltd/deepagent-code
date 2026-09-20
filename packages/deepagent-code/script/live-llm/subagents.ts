@@ -55,11 +55,11 @@ if (subagent.state !== "completed" || subagent.finished !== true || subagent.rea
   throw new Error("Foreground child durable metadata is not a valid completed structured result")
 }
 if (
-  child.model?.providerID !== "live-deepseek" ||
+  child.model?.providerID !== artifact.fingerprint.runtimeProviderID ||
   child.model.id !== artifact.fingerprint.modelID ||
   child.assistants.some(
     (assistant) =>
-      assistant.providerID !== "live-deepseek" || assistant.modelID !== artifact.fingerprint.modelID,
+      assistant.providerID !== artifact.fingerprint.runtimeProviderID || assistant.modelID !== artifact.fingerprint.modelID,
   )
 ) {
   throw new Error("Foreground child persisted the wrong provider/model identity")

@@ -12,6 +12,7 @@ import { CanonicalJson } from "../../src/util/canonical-json"
 import { Hash } from "../../src/util/hash"
 import type { LearningCandidate } from "../../src/deepagent/learning"
 import type { TaskContext, ToolContext } from "../../src/deepagent/prompt-policy"
+import { tmpRoot } from "../fixture/tmpdir"
 
 let dir: string
 let rejected: RejectedBuffer
@@ -30,7 +31,7 @@ const cand = (over: Partial<LearningCandidate> = {}): LearningCandidate => ({
 })
 
 beforeEach(() => {
-  dir = mkdtempSync(path.join(tmpdir(), "deepagent-promo-"))
+  dir = mkdtempSync(tmpRoot())
   rejected = new RejectedBuffer(dir)
 })
 afterEach(() => rmSync(dir, { recursive: true, force: true }))
@@ -72,6 +73,19 @@ describe("V3 promotion gate", () => {
 
   test("fingerprint stable per content", () => {
     expect(fingerprint(cand())).toBe(fingerprint(cand()))
+  })
+
+  test("preserves concurrent-instance additions without whole-file lost updates", () => {
+    const first = new RejectedBuffer(dir)
+    const second = new RejectedBuffer(dir)
+    const firstFingerprint = fingerprint(cand({ summary: "first" }))
+    const secondFingerprint = fingerprint(cand({ summary: "second" }))
+    first.add(firstFingerprint, "first reason")
+    second.add(secondFingerprint, "second reason")
+
+    const reopened = new RejectedBuffer(dir)
+    expect(reopened.has(firstFingerprint)).toBe(true)
+    expect(reopened.has(secondFingerprint)).toBe(true)
   })
 
   test("approval preserves the staged candidate identity and the retriever can load it", () => {

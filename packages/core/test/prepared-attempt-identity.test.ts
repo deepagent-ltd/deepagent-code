@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test"
 import { DateTime } from "effect"
+import { Hash } from "@deepagent-code/core/util/hash"
+import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { ModelProtocol } from "@deepagent-code/core/model-protocol"
 import { ProviderV2 } from "@deepagent-code/core/provider"
@@ -67,7 +69,7 @@ const budget: PreparedProviderTurn.Budget = {
 }
 
 const turnInput = (
-  identity: ReturnType<typeof ModelProtocol.protocolAttemptIdentityFor>,
+  identity: ReturnType<typeof ModelProtocol.protocolAttemptIdentityFor> | undefined,
 ): PreparedProviderTurn.Input => ({
   sessionID: "ses_0000000000000000000000000000000000000000000000000000000000000001",
   requestOrdinal: 1,
@@ -97,8 +99,12 @@ const turnInput = (
   wireRequestHash: "ab".repeat(32),
   receiptID: "receipt_1",
   userMessageID: "msg_1",
-  protocolAttemptIdentity: identity,
-  protocolAttemptIdentityHash: ModelProtocol.protocolAttemptIdentityHash(identity),
+  ...(identity === undefined
+    ? {}
+    : {
+        protocolAttemptIdentity: identity,
+        protocolAttemptIdentityHash: ModelProtocol.protocolAttemptIdentityHash(identity),
+      }),
 })
 
 describe("C2-04 protocol attempt identity (route/origin/capability/lowering)", () => {
@@ -224,8 +230,101 @@ describe("C2-04 runtime prepared-attempt record carries the identity (contract u
   })
 })
 
-describe("C4-08 capability catalog/load snapshot on the runtime attempt record (K3 assembly)", () => {
-  const snapshot = {
+describe("W8 canonical prepared_turn_hash folds the route/protocol/origin identity (audit DEFECT 3)", () => {
+  test("identical prepare carries the identity-folded canonical hash (exact retry stable, W8 composition)", () => {
+    const provider = mkProvider({ type: "aisdk", package: "@ai-sdk/openai-compatible", url: "https://compat.example/v1" })
+    const identity = ModelProtocol.protocolAttemptIdentityFor(mkModel(compatible), provider)
+
+    const turn = PreparedProviderTurn.prepare(turnInput(identity))
+    const repeat = PreparedProviderTurn.prepare(turnInput(identity))
+
+    // W8 canonical composition: sha256(request_hash + protocolAttemptIdentityHash).
+    const folded = Hash.sha256(
+      CanonicalJson.stringify({
+        request_hash: turn.request_hash,
+        protocol_attempt_identity_hash: IdentityHash0(turn),
+      }),
+    )
+    expect(turn.prepared_turn_hash).toBe(folded)
+    expect(repeat.prepared_turn_hash).toBe(turn.prepared_turn_hash)
+    expect(turn.prepared_turn_hash).toMatch(/^[0-9a-f]{64}$/)
+    // The canonical hash differs from the raw content hash once an identity is bound.
+    expect(turn.prepared_turn_hash).not.toBe(turn.request_hash)
+    // And the preparedTurnHash helper reproduces the record value.
+    expect(PreparedProviderTurn.preparedTurnHash(turn)).toBe(turn.prepared_turn_hash)
+  })
+
+  test("an identity-less turn folds the request hash alone (pre-W8 receipts stay byte-stable)", () => {
+    const turn = PreparedProviderTurn.prepare(turnInput(undefined))
+    expect(turn.protocol_attempt_identity_hash).toBeUndefined()
+    // Omit the identity key from the composition: sha256({request_hash}) — identical to the value
+    // an unbound turn hash always produced, so existing identity-less receipts remain stable.
+    const folded = Hash.sha256(CanonicalJson.stringify({ request_hash: turn.request_hash }))
+    expect(turn.prepared_turn_hash).toBe(folded)
+  })
+
+  test("route/protocol drift changes the canonical hash while the request hash stays identical", () => {
+    const provider = mkProvider({ type: "aisdk", package: "@ai-sdk/openai-compatible", url: "https://compat.example/v1" })
+    const chatTurn = PreparedProviderTurn.prepare(
+      turnInput(ModelProtocol.protocolAttemptIdentityFor(mkModel(compatible), provider)),
+    )
+    const responsesTurn = PreparedProviderTurn.prepare(
+      turnInput(
+        ModelProtocol.protocolAttemptIdentityFor(
+          mkModel({ ...compatible, protocol: "openai-compatible.responses" }),
+          deepseekProvider,
+        ),
+      ),
+    )
+
+    // The audit oracle: the payload hash is unchanged, the canonical hash must move on a route change.
+    expect(responsesTurn.request_hash).toBe(chatTurn.request_hash)
+    expect(responsesTurn.prepared_turn_hash).not.toBe(chatTurn.prepared_turn_hash)
+    // Identity hash of the drifted config differs too, so the C2-04 drift guard rebuilds.
+    expect(
+      ModelProtocol.configDrift(
+        ModelProtocol.protocolAttemptIdentityFor(
+          mkModel({ ...compatible, protocol: "openai-compatible.responses" }),
+          deepseekProvider,
+        ),
+        IdentityHash0(chatTurn),
+      ),
+    ).toBe(true)
+  })
+
+  test("a capability-snapshot drift does not spoil the W8 canonical hash but still changes the attempt identity", () => {
+    const provider = mkProvider({ type: "aisdk", package: "@ai-sdk/openai-compatible", url: "https://compat.example/v1" })
+    const identity = ModelProtocol.protocolAttemptIdentityFor(mkModel(compatible), provider)
+    const snapshot = {
+      catalogSnapshotId: "capability_catalog:test-snap",
+      catalogBodyHash: `sha256:${"ab".repeat(32)}`,
+      catalogRuntimeHash: `sha256:${"cd".repeat(32)}`,
+      catalogPermissionHash: `sha256:${"ef".repeat(32)}`,
+      loadedCapabilities: [],
+    }
+
+    const base = PreparedProviderTurn.prepare({ ...turnInput(identity), capabilitySnapshot: snapshot })
+    const drifted = PreparedProviderTurn.prepare({
+      ...turnInput(identity),
+      capabilitySnapshot: { ...snapshot, catalogBodyHash: `sha256:${"77".repeat(32)}` },
+    })
+
+    // W8 canonical hash folds only request + protocol identity (design composition), so a catalog
+    // drift does NOT move it; attemptIdentityHash (superset) does, per its documented semantics.
+    expect(drifted.prepared_turn_hash).toBe(base.prepared_turn_hash)
+    expect(PreparedProviderTurn.attemptIdentityHash(drifted)).not.toBe(
+      PreparedProviderTurn.attemptIdentityHash(base),
+    )
+  })
+})
+
+function IdentityHash0(turn: PreparedProviderTurn.PreparedProviderTurn) {
+  const hash = turn.protocol_attempt_identity_hash
+  if (hash === undefined) throw new Error("expected a bound protocol attempt identity hash")
+  return hash
+}
+
+describe("C4-08 capability catalog/load snapshot on the runtime attempt record (K3 assembly)", () => {  const snapshot = {
     catalogSnapshotId: "capability_catalog:test-snap",
     catalogBodyHash: `sha256:${"ab".repeat(32)}`,
     catalogRuntimeHash: `sha256:${"cd".repeat(32)}`,

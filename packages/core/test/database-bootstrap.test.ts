@@ -161,4 +161,12 @@ describe("DatabaseBootstrap state machine", () => {
     expect(result.diagnostics.buildDigest).toBe(buildDigest)
     expect(result.diagnostics.correlationId.length).toBeGreaterThan(0)
   })
+
+  test("an admitted owner publishes terminal ready without probing its own lock", () => {
+    const result = DatabaseBootstrap.readyState(opts)
+    expect(result.phase).toBe("ready")
+    expect(result.mode).toBe("ready")
+    expect(result.ready).toBe(true)
+    expect(result.diagnostics.stableCode).toBe("ready")
+  })
 })

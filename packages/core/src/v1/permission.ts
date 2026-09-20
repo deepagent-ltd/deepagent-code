@@ -1,7 +1,7 @@
 export * as PermissionV1 from "./permission"
 
 import { Schema } from "effect"
-import { ProjectV2 } from "../project"
+import { ProjectID } from "../project/id"
 import { withStatics } from "../schema"
 import { SessionSchema } from "../session/schema"
 import { Identifier } from "../util/identifier"
@@ -49,7 +49,7 @@ export const ReplyBody = Schema.Struct({
 export type ReplyBody = typeof ReplyBody.Type
 
 export const Approval = Schema.Struct({
-  projectID: ProjectV2.ID,
+  projectID: ProjectID.ID,
   patterns: Schema.Array(Schema.String),
 }).annotate({ identifier: "PermissionApproval" })
 export type Approval = typeof Approval.Type

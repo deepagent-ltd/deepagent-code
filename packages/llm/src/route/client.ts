@@ -388,29 +388,22 @@ const generateWith = (stream: Interface["stream"]) =>
     )
   })
 
-// Runtime middleware seam (DeepAgent global runtime, registered from @deepagent-code/core).
-// llm is a pure SDK and must not depend on the control-plane (that would make llm -> core a
-// cycle). Core's agent-gateway calls `registerClientMiddleware` at module load to wrap the raw
-// client with routing/stream-management. Default is identity passthrough, so llm works standalone
-// (and in llm's own tests) with zero DeepAgent behavior.
-//
-// The middleware only transforms `prepare` + `stream`; `generate` is always rebuilt by llm from
-// the wrapped `stream` (via `generateWith`), so the control-plane never reimplements folding.
+// Runtime middleware seam. The middleware is an Effect service owned by the caller's runtime;
+// there is deliberately no module singleton or import-time registration. A plain `layer` is the
+// standalone/raw SDK client, while `managedLayer` requires one explicit middleware provider.
+// `generate` is always rebuilt from the selected stream so a middleware cannot be applied twice.
 export type ClientStreamMiddleware = {
   readonly prepare: (next: Interface["prepare"]) => Interface["prepare"]
   readonly stream: (next: Interface["stream"]) => Interface["stream"]
 }
 export type ClientMiddleware = (base: Pick<Interface, "prepare" | "stream">) => ClientStreamMiddleware
 
-let clientMiddleware: ClientMiddleware | null = null
+export class Middleware extends Context.Service<Middleware, ClientMiddleware>()(
+  "@deepagent-code/LLMClientMiddleware",
+) {}
 
-export const registerClientMiddleware = (mw: ClientMiddleware): void => {
-  clientMiddleware = mw
-}
-
-const managed = (delegate: Interface): Interface => {
-  if (!clientMiddleware) return delegate
-  const mw = clientMiddleware({ prepare: delegate.prepare, stream: delegate.stream })
+const managed = (delegate: Interface, middleware: ClientMiddleware): Interface => {
+  const mw = middleware({ prepare: delegate.prepare, stream: delegate.stream })
   const stream = mw.stream(delegate.stream)
   return {
     prepare: mw.prepare(delegate.prepare),
@@ -443,14 +436,20 @@ export const streamRequest = (request: LLMRequest) =>
     }),
   )
 
-export const layer: Layer.Layer<Service, never, RequestExecutor.Service> = Layer.effect(
+const service = Effect.gen(function* () {
+  const stream = streamRequestWith({
+    http: yield* RequestExecutor.Service,
+    webSocket: Option.getOrUndefined(yield* Effect.serviceOption(WebSocketExecutor.Service)),
+  })
+  return Service.of({ prepare: prepareWith as Interface["prepare"], stream, generate: generateWith(stream) })
+})
+
+export const layer: Layer.Layer<Service, never, RequestExecutor.Service> = Layer.effect(Service, service)
+
+export const managedLayer: Layer.Layer<Service, never, RequestExecutor.Service | Middleware> = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const stream = streamRequestWith({
-      http: yield* RequestExecutor.Service,
-      webSocket: Option.getOrUndefined(yield* Effect.serviceOption(WebSocketExecutor.Service)),
-    })
-    return Service.of(managed({ prepare: prepareWith as Interface["prepare"], stream, generate: generateWith(stream) }))
+    return managed(yield* service, yield* Middleware)
   }),
 )
 
@@ -458,7 +457,9 @@ export const Route = { make } as const
 
 export const LLMClient = {
   Service,
+  Middleware,
   layer,
+  managedLayer,
   prepare,
   stream,
   generate,

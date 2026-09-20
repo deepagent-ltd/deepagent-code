@@ -2,13 +2,12 @@ import { GlobalBus } from "@/bus/global"
 import { serviceUse } from "@deepagent-code/core/effect/service-use"
 import { WorkspaceContext } from "@/control-plane/workspace-context"
 import { InstanceRef } from "@/effect/instance-ref"
-import { disposeInstance as runDisposers, initializeInstance } from "@/effect/instance-registry"
+import { disposeInstanceState, InstanceRegistry } from "@/effect/instance-registry"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { Context, Deferred, Duration, Effect, Exit, Layer, Scope } from "effect"
 import { assertSafeInstanceRoot, isFilesystemRoot, type InstanceContext } from "./instance-context"
 import { InstanceBootstrap } from "./bootstrap-service"
 import * as Project from "./project"
-import { DeepAgentLearningLifecycleTrigger } from "@deepagent-code/core/deepagent/learning-lifecycle-trigger"
 
 export interface LoadInput {
   directory: string
@@ -33,11 +32,16 @@ interface Entry {
   readonly deferred: Deferred.Deferred<InstanceContext>
 }
 
-export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootstrap.Service> = Layer.effect(
+export const layer: Layer.Layer<
+  Service,
+  never,
+  Project.Service | InstanceBootstrap.Service | InstanceRegistry.Service
+> = Layer.effect(
   Service,
   Effect.gen(function* () {
     const project = yield* Project.Service
     const bootstrap = yield* InstanceBootstrap.Service
+    const registry = yield* InstanceRegistry.Service
     const scope = yield* Scope.Scope
     const cache = new Map<string, Entry>()
 
@@ -64,13 +68,15 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
                 })),
               )
         yield* bootstrap.run.pipe(Effect.provideService(InstanceRef, ctx))
-        yield* Effect.promise(() => initializeInstance(ctx)).pipe(
-          Effect.catchCause((cause) =>
-            Effect.logWarning("instance initializer failed").pipe(
-              Effect.annotateLogs({ directory: ctx.directory, cause }),
+        yield* registry
+          .initialize(ctx)
+          .pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("instance initializer failed").pipe(
+                Effect.annotateLogs({ directory: ctx.directory, cause }),
+              ),
             ),
-          ),
-        )
+          )
         return ctx
       }).pipe(Effect.withSpan("InstanceStore.boot"))
 
@@ -105,14 +111,7 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
 
     const disposeContext = Effect.fn("InstanceStore.disposeContext")(function* (ctx: InstanceContext) {
       yield* Effect.logInfo("disposing instance").pipe(Effect.annotateLogs("directory", ctx.directory))
-      yield* Effect.promise(() => runDisposers(ctx.directory))
-      yield* Effect.promise(() =>
-        DeepAgentLearningLifecycleTrigger.notify({
-          trigger: "project_switch",
-          boundaryKey: `project-switch:${ctx.directory}`,
-          directory: ctx.directory,
-        }),
-      ).pipe(Effect.ignore)
+      yield* registry.dispose(ctx.directory).pipe(Effect.ensuring(disposeInstanceState(ctx)))
       yield* emitDisposed({ directory: ctx.directory, project: ctx.project.id })
     })
 
@@ -152,15 +151,8 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
           yield* Effect.gen(function* () {
             yield* Effect.logInfo("reloading instance").pipe(Effect.annotateLogs("directory", directory))
             if (previous) {
-              yield* Deferred.await(previous.deferred).pipe(Effect.ignore)
-              yield* Effect.promise(() => runDisposers(directory))
-              yield* Effect.promise(() =>
-                DeepAgentLearningLifecycleTrigger.notify({
-                  trigger: "project_switch",
-                  boundaryKey: `project-switch:${directory}`,
-                  directory,
-                }),
-              ).pipe(Effect.ignore)
+              const previousContext = yield* Deferred.await(previous.deferred)
+              yield* registry.dispose(directory).pipe(Effect.ensuring(disposeInstanceState(previousContext)))
               yield* emitDisposed({ directory, project: input.project?.id })
             }
             yield* completeLoad(directory, input, entry)
@@ -230,6 +222,6 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
   }),
 )
 
-export const defaultLayer = layer.pipe(Layer.provide(Project.defaultLayer))
+export const defaultLayer = layer.pipe(Layer.provide(Project.defaultLayer), Layer.provideMerge(InstanceRegistry.layer))
 
 export * as InstanceStore from "./instance-store"

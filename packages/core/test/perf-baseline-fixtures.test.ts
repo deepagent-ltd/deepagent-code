@@ -5,12 +5,13 @@ import * as path from "node:path"
 import { Database } from "bun:sqlite"
 import { buildDbFixture, timeOpen } from "../script/perf-baseline/fixtures"
 import { csvEscape, sha256Short, writeSamplesCsv } from "../script/perf-baseline/samples"
+import { tmpRoot, tmpRootShared } from "./fixture/tmpdir"
 
 const tinyPlan = { sessions: 3, messages_per_session: 4 }
 
 describe("perf baseline db fixture builder", () => {
   test("empty tier runs real migrations and leaves zero rows", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "perf-fixture-test-empty-"))
+    const root = fs.mkdtempSync(tmpRootShared())
     try {
       const fixture = await buildDbFixture(root, "empty", { sessions: 0, messages_per_session: 0 })
       expect(fixture.actual_session_rows).toBe(0)
@@ -19,7 +20,9 @@ describe("perf baseline db fixture builder", () => {
 
       const sqlite = new Database(fixture.file)
       try {
-        const tables = sqlite.query("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>
+        const tables = sqlite.query("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{
+          name: string
+        }>
         const names = tables.map((row) => row.name)
         expect(names).toContain("session")
         expect(names).toContain("session_message")
@@ -35,7 +38,7 @@ describe("perf baseline db fixture builder", () => {
   })
 
   test("populated tier writes exact row counts through real tables", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "perf-fixture-test-mid-"))
+    const root = fs.mkdtempSync(tmpRootShared())
     try {
       const fixture = await buildDbFixture(root, "mid", tinyPlan)
       expect(fixture.planned_message_rows).toBe(tinyPlan.sessions * tinyPlan.messages_per_session)
@@ -60,7 +63,7 @@ describe("perf baseline db fixture builder", () => {
   })
 
   test("production open path succeeds on a populated fixture (migration recheck)", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "perf-fixture-test-reopen-"))
+    const root = fs.mkdtempSync(tmpRootShared())
     try {
       const fixture = await buildDbFixture(root, "large", tinyPlan)
       const { timeOpen } = await import("../script/perf-baseline/fixtures")
@@ -82,7 +85,7 @@ describe("perf baseline artifact formats", () => {
   })
 
   test("writeSamplesCsv emits header plus every raw sample unfiltered", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "perf-csv-test-"))
+    const dir = fs.mkdtempSync(tmpRootShared())
     try {
       const target = path.join(dir, "samples.csv")
       writeSamplesCsv(target, "scenario/group", [

@@ -197,7 +197,10 @@ describe("SessionV2.prompt", () => {
         [EventV2.Cursor.make(0), "session.next.prompt.admitted"],
         [EventV2.Cursor.make(1), "session.next.prompt.admitted"],
         [EventV2.Cursor.make(2), "session.next.prompt.promoted"],
-        [EventV2.Cursor.make(3), "session.next.prompt.promoted"],
+        // W4-6 wire egress: the promoted user message also derives a V1 wire row, so the wire
+        // message.updated event consumes aggregate seq 3 (and its part seq 4) before the second
+        // promotion lands. Aggregate cursors are gapped by design; the STREAM stays ordered.
+        [EventV2.Cursor.make(5), "session.next.prompt.promoted"],
       ])
       expect(
         Array.from(

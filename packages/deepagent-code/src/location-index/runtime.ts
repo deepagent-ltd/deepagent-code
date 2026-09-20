@@ -28,8 +28,6 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/LocationIndexRuntime") {}
 
-const indexBuild = Semaphore.makeUnsafe(1)
-
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -39,50 +37,58 @@ export const layer = Layer.effect(
     const journal = yield* LocationChangeJournal.Service
     const lock = yield* LocationCommitLock.Service
     const events = yield* EventV2Bridge.Service
+    const indexBuild = Semaphore.makeUnsafe(1)
     const ownerId = `${process.pid}:${randomUUID()}`
     const state = yield* InstanceState.make(
       Effect.fn("LocationIndexRuntime.instance")(function* (instance) {
         if (!flags.locationIndexesV2Shadow) return undefined
         return yield* indexBuild.withPermits(1)(Effect.gen(function* () {
-        // Non-git instances resolve to the "global" sentinel project id, which is NOT a valid
-        // observed project for durable authorities: the released-knowledge scope guard pins
-        // context_project_scope_identity.observed_project_id to the canonical durable knowledge
-        // project id. Record that canonical id here so whichever resolver arrives first writes it.
-        const identity = yield* identities.resolve({
-          boundary: { kind: "implicit_local" },
-          directory: AbsolutePath.make(instance.directory),
-          project: instance.project.vcs === "git"
-            ? { kind: "git", observedProjectId: instance.project.id }
-            : { kind: "registered_root", observedProjectId: projectIdForWorkspace(instance.directory) },
-        })
-        const built = yield* Layer.build(
-          LocationIndexCoordinator.layer({
-            identity,
-            ownerId,
-            indexDirectory: path.join(Global.Path.cache, "context-indexes"),
-          }).pipe(
-            Layer.provide(Layer.succeed(LocationIndexCoordination.Service, coordination)),
-            Layer.provide(Layer.succeed(LocationChangeJournal.Service, journal)),
-            Layer.provide(Layer.succeed(LocationCommitLock.Service, lock)),
-          ),
-        )
-        const coordinator = Context.get(built, LocationIndexCoordinator.Service)
-        yield* start({ coordinator, events, instance }).pipe(
-          Effect.catchCause((cause) => Effect.logWarning("Location index runtime stopped", { cause })),
-          Effect.forkScoped,
-        )
+          // Non-git instances resolve to the "global" sentinel project id, which is NOT a valid
+          // observed project for durable authorities: the released-knowledge scope guard pins
+          // context_project_scope_identity.observed_project_id to the canonical durable knowledge
+          // project id. Record that canonical id here so whichever resolver arrives first writes it.
+          const identity = yield* identities.resolve({
+            boundary: { kind: "implicit_local" },
+            directory: AbsolutePath.make(instance.directory),
+            project: instance.project.vcs === "git"
+              ? { kind: "git", observedProjectId: instance.project.id }
+              : { kind: "registered_root", observedProjectId: projectIdForWorkspace(instance.directory) },
+          })
+          const built = yield* Layer.build(
+            LocationIndexCoordinator.layer({
+              identity,
+              ownerId,
+              indexDirectory: path.join(Global.Path.cache, "context-indexes"),
+            }).pipe(
+              Layer.provide(Layer.succeed(LocationIndexCoordination.Service, coordination)),
+              Layer.provide(Layer.succeed(LocationChangeJournal.Service, journal)),
+              Layer.provide(Layer.succeed(LocationCommitLock.Service, lock)),
+            ),
+          )
+          const coordinator = Context.get(built, LocationIndexCoordinator.Service)
+          yield* start({ coordinator, events, instance }).pipe(
+            Effect.catchCause((cause) => Effect.logWarning("Location index runtime stopped", { cause })),
+            Effect.forkScoped,
+          )
           return { identity, coordinator }
         }))
       }),
     )
+    // W3.9 — "runtime unavailable" is the expected outcome whenever the consumer runs outside an
+    // instance context (no `InstanceRef`) or the index flag is off; every consumer already degrades
+    // honestly (undefined handle → unavailable/uninitialized), so a WARN here is noise that the
+    // Effect default logger would write to STDOUT (breaking machine-readable CLI output). Debug
+    // keeps the cause available in logs without polluting stdout. There is no explicit
+    // server-start `init()` caller today (verified W3.9), so contexts cannot be distinguished —
+    // unified debug per the W3.9 decision.
     return Service.of({
       init: () => InstanceState.get(state).pipe(
-        Effect.catchCause((cause) => Effect.logWarning("Location index runtime unavailable", { cause })),
+        Effect.catchCause((cause) => Effect.logDebug("Location index runtime unavailable", { cause })),
         Effect.asVoid,
       ),
       current: () => InstanceState.get(state).pipe(
         Effect.catchCause((cause) =>
-          Effect.logWarning("Location index runtime unavailable", { cause }).pipe(Effect.as(undefined)),
+          Effect.logDebug("Location index runtime unavailable", { cause }).pipe(Effect.as(undefined)),
         ),
       ),
     })

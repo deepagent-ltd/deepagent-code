@@ -120,7 +120,7 @@ const materializers = Effect.fn("Reference.materializers")(function* (
     Effect.fnUntraced(function* (reference) {
       return { path: reference.path, run: yield* Effect.cached(materializeReference(cache, reference)) }
     }),
-    { concurrency: "unbounded" },
+    { concurrency: 16 },
   )
 })
 

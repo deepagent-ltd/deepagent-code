@@ -16,6 +16,7 @@ import {
 import type { TaskContext, ToolContext } from "../../src/deepagent/prompt-policy"
 import { DeepAgentReleasedSnapshot, type Selection } from "../../src/deepagent/released-snapshot"
 import { Hash } from "../../src/util/hash"
+import { tmpRoot, tmpRootShared } from "../fixture/tmpdir"
 
 const task: TaskContext = {
   userRequest: "fix the failing typecheck in the auth module",
@@ -38,7 +39,7 @@ const item = (ref_id: string, relevance: number, evidence_strength: EvidenceStre
 beforeAll(() => {
   // isolate disk knowledge so retrieve() has a clean store, then seed the core in-code knowledge
   // into it (DAP-11: the curated strategies/methodologies now live in DocumentStore, not in-code).
-  const dir = mkdtempSync(path.join(tmpdir(), "deepagent-mem-"))
+  const dir = mkdtempSync(tmpRootShared())
   knowledgeSource.configure(dir)
   const store = openUserGlobalStore(dir)
   seedCoreKnowledge(store)

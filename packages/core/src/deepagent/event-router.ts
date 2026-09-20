@@ -3,6 +3,7 @@ export * as EventRouter from "./event-router"
 import { DeepAgentEvent } from "./deepagent-event"
 import { LMNEvents } from "./lmn-events"
 import type { AgentDescriptor } from "../im/mention-parser"
+import { readonlySet } from "../util/readonly-collections"
 
 // V4.0 §A4 — the Event Router POLICY. This is a PURE, deterministic decision function: given an event,
 // the candidate agent registry projection, the current queue pressure, and the recent same-type events
@@ -46,7 +47,7 @@ export type DropReason = "flag_disabled" | "no_match" | "deduped" | "backpressur
 // Guarding it in the PURE router (rather than relying on "no agent happens to subscribe") makes it robust
 // to an operator registering a broad-glob (`*` / `dlq.*`) trigger agent — such an agent can never grab an
 // operational alert, and the alert is terminal-acked (never an infinite no_capable_agent nack loop).
-export const OPERATIONAL_EVENT_TYPES: ReadonlySet<string> = new Set([LMNEvents.DLQ_ALERT])
+export const OPERATIONAL_EVENT_TYPES = readonlySet(new Set([LMNEvents.DLQ_ALERT]))
 export const isOperationalEvent = (eventType: string): boolean => OPERATIONAL_EVENT_TYPES.has(eventType)
 
 // §C4 RE-ENTRANCY GUARD — the coordination/derivative event-type family. The Multi-Agent Runtime emits
@@ -80,8 +81,8 @@ export interface RouteInput {
   // registry projection, ALREADY permission-filtered by the caller (only agents allowed to see this
   // workspace/project/event). The router matches on `triggers` within this set.
   readonly agents: ReadonlyArray<AgentDescriptor>
-  // resolved feature-flag gate for this event's path (e.g. v4EventDrivenIm for im.*). A disabled flag
-  // drops the event fail-closed — the legacy synchronous path stays authoritative.
+  // resolved feature-flag gate for this event's path (e.g. v4AgentPushEnabled for agent.push.*). A
+  // disabled flag drops the event fail-closed — nothing else becomes authoritative.
   readonly flagEnabled: boolean
   // current depth of the dispatch queue and its capacity (回压). Omit `maxQueueDepth` for no limit.
   readonly queueDepth?: number

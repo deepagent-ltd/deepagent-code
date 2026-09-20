@@ -88,6 +88,9 @@ describe("SkillV2", () => {
               content: "# review",
             },
           ])
+
+          yield* Effect.promise(() => write(second, "review", "Updated"))
+          expect((yield* skill.list()).find((item) => item.name === "review")?.description).toBe("Updated")
         }),
       ),
     ),

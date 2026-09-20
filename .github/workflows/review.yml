@@ -32,7 +32,7 @@ jobs:
       - uses: ./.github/actions/setup-bun
 
       - name: Install deepagent-code
-        run: curl -fsSL https://deepagent-code.ai/install | bash
+        run: curl -fsSL https://deepagent.ltd/install | bash
 
       - name: Get PR details
         id: pr-details

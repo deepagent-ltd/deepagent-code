@@ -72,6 +72,11 @@ function scheduleDeferredMount(fn: () => void) {
   scheduleDeferredFlush()
   return () => {
     item.active = false
+    const index = deferredMounts.indexOf(item)
+    if (index !== -1) deferredMounts.splice(index, 1)
+    if (deferredMounts.length || deferredFrame === undefined) return
+    cancelAnimationFrame(deferredFrame)
+    deferredFrame = undefined
   }
 }
 

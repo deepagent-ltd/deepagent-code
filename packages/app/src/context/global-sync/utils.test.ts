@@ -37,7 +37,7 @@ describe("normalizeAgentList", () => {
 describe("directoryKey", () => {
   test("normalizes slashes", () => {
     expect(String(directoryKey("C:\\Repos\\sst\\deepagent-code"))).toBe("C:/Repos/sst/deepagent-code")
-    expect(String(directoryKey("C:/Repos/lessweb/deepagent-code"))).toBe("C:/Repos/lessweb/deepagent-code")
+    expect(String(directoryKey("C:/Repos/deepagent-ltd/deepagent-code"))).toBe("C:/Repos/deepagent-ltd/deepagent-code")
   })
 
   test("preserves backslashes in posix paths", () => {
@@ -45,7 +45,7 @@ describe("directoryKey", () => {
   })
 
   test("trims trailing slashes without breaking roots", () => {
-    expect(String(directoryKey("C:/Repos/lessweb/deepagent-code/"))).toBe("C:/Repos/lessweb/deepagent-code")
+    expect(String(directoryKey("C:/Repos/deepagent-ltd/deepagent-code/"))).toBe("C:/Repos/deepagent-ltd/deepagent-code")
     expect(String(directoryKey("C:/"))).toBe("C:/")
     expect(String(directoryKey("/"))).toBe("/")
   })

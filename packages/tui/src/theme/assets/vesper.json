@@ -1,5 +1,5 @@
 {
-  "$schema": "https://deepagent-code.ai/theme.json",
+  "$schema": "https://ai.deepagent.ltd/theme.json",
   "defs": {
     "vesperBg": "#101010",
     "vesperFg": "#FFF",

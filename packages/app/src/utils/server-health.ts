@@ -17,6 +17,7 @@ const defaultTimeoutMs = 30_000
 const defaultRetryCount = 2
 const defaultRetryDelayMs = 100
 const cacheMs = 750
+const cacheLimit = 64
 const healthCache = new Map<
   string,
   { at: number; done: boolean; fetch: typeof globalThis.fetch; promise: Promise<ServerHealth> }
@@ -111,6 +112,7 @@ export function useCheckServerHealth() {
       next.done = true
       next.at = Date.now()
     })
+    if (!healthCache.has(key) && healthCache.size >= cacheLimit) healthCache.delete(healthCache.keys().next().value!)
     healthCache.set(key, { at: now, done: false, fetch: fetcher, promise })
     return promise
   }

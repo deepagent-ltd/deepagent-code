@@ -12,7 +12,7 @@ import type {
   Session,
   SessionStatus,
   SnapshotFileDiff,
-  Todo,
+  SessionTodoInfo,
   VcsInfo,
 } from "@deepagent-code/sdk/client"
 import { NormalizedProviderListResponse } from "@deepagent-code/ui/context"
@@ -120,10 +120,18 @@ export type State = {
     [sessionID: string]: SnapshotFileDiff[]
   }
   todo: {
-    [sessionID: string]: Todo[]
+    [sessionID: string]: SessionTodoInfo[]
   }
   permission: {
     [sessionID: string]: PermissionRequest[]
+  }
+  // Provenance for requests normalized from permission.v2.asked (stored in `permission` in the
+  // legacy shape): their replies must go through the session-scoped V2 route — the legacy respond
+  // route 404s on PermissionV2 request IDs.
+  permission_v2: {
+    [sessionID: string]: {
+      [requestID: string]: true | undefined
+    }
   }
   question: {
     [sessionID: string]: QuestionRequest[]

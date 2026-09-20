@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { Exit, Schema } from "effect"
 import { MessageV2 } from "../../src/session/message-v2"
-import { SessionPrompt } from "../../src/session/prompt"
+import { SessionStructuredOutput } from "../../src/session/structured-output-prompt"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { ToolInternal } from "../../src/tool/internal"
 
@@ -249,7 +249,7 @@ describe("structured-output.AssistantMessage", () => {
 
 describe("structured-output.createStructuredOutputTool", () => {
   test("creates tool with description", () => {
-    const tool = SessionPrompt.createStructuredOutputTool({
+    const tool = SessionStructuredOutput.createStructuredOutputTool({
       schema: { type: "object" },
       onSuccess: () => {},
     })
@@ -268,7 +268,7 @@ describe("structured-output.createStructuredOutputTool", () => {
       required: ["company"],
     }
 
-    const tool = SessionPrompt.createStructuredOutputTool({
+    const tool = SessionStructuredOutput.createStructuredOutputTool({
       schema,
       onSuccess: () => {},
     })
@@ -287,7 +287,7 @@ describe("structured-output.createStructuredOutputTool", () => {
       properties: { name: { type: "string" } },
     }
 
-    const tool = SessionPrompt.createStructuredOutputTool({
+    const tool = SessionStructuredOutput.createStructuredOutputTool({
       schema,
       onSuccess: () => {},
     })
@@ -300,7 +300,7 @@ describe("structured-output.createStructuredOutputTool", () => {
   test("execute calls onSuccess with valid args", async () => {
     let capturedOutput: unknown
 
-    const tool = SessionPrompt.createStructuredOutputTool({
+    const tool = SessionStructuredOutput.createStructuredOutputTool({
       schema: { type: "object", properties: { name: { type: "string" } } },
       onSuccess: (output) => {
         capturedOutput = output
@@ -324,7 +324,7 @@ describe("structured-output.createStructuredOutputTool", () => {
     // Note: The AI SDK validates the input against the schema BEFORE calling execute()
     // So invalid inputs never reach the tool's execute function
     // This test documents the expected schema behavior
-    const tool = SessionPrompt.createStructuredOutputTool({
+    const tool = SessionStructuredOutput.createStructuredOutputTool({
       schema: {
         type: "object",
         properties: {
@@ -347,7 +347,7 @@ describe("structured-output.createStructuredOutputTool", () => {
     // Note: The AI SDK validates the input against the schema BEFORE calling execute()
     // So invalid inputs never reach the tool's execute function
     // This test documents the expected schema behavior
-    const tool = SessionPrompt.createStructuredOutputTool({
+    const tool = SessionStructuredOutput.createStructuredOutputTool({
       schema: {
         type: "object",
         properties: {
@@ -367,7 +367,7 @@ describe("structured-output.createStructuredOutputTool", () => {
   test("execute handles nested objects", async () => {
     let capturedOutput: unknown
 
-    const tool = SessionPrompt.createStructuredOutputTool({
+    const tool = SessionStructuredOutput.createStructuredOutputTool({
       schema: {
         type: "object",
         properties: {
@@ -410,7 +410,7 @@ describe("structured-output.createStructuredOutputTool", () => {
   test("execute handles arrays", async () => {
     let capturedOutput: unknown
 
-    const tool = SessionPrompt.createStructuredOutputTool({
+    const tool = SessionStructuredOutput.createStructuredOutputTool({
       schema: {
         type: "object",
         properties: {
@@ -446,7 +446,7 @@ describe("structured-output.createStructuredOutputTool", () => {
   })
 
   test("toModelOutput returns text value", async () => {
-    const tool = SessionPrompt.createStructuredOutputTool({
+    const tool = SessionStructuredOutput.createStructuredOutputTool({
       schema: { type: "object" },
       onSuccess: () => {},
     })
@@ -478,7 +478,7 @@ describe("structured-output.createStructuredOutputTool", () => {
 // of "module" for ResearchResult).
 describe("structured-output.buildStructuredOutputSystemPrompt", () => {
   test("includes field names in the prompt", () => {
-    const result = SessionPrompt.buildStructuredOutputSystemPrompt({
+    const result = SessionStructuredOutput.buildStructuredOutputSystemPrompt({
       type: "object",
       properties: {
         module: { type: "string" },
@@ -493,20 +493,20 @@ describe("structured-output.buildStructuredOutputSystemPrompt", () => {
   })
 
   test("falls back gracefully when schema has no properties", () => {
-    const result = SessionPrompt.buildStructuredOutputSystemPrompt({ type: "object" })
+    const result = SessionStructuredOutput.buildStructuredOutputSystemPrompt({ type: "object" })
     expect(result).toContain("StructuredOutput")
     // should not contain a field hint line
     expect(result).not.toContain("Required fields:")
   })
 
   test("falls back gracefully for empty schema", () => {
-    const result = SessionPrompt.buildStructuredOutputSystemPrompt({})
+    const result = SessionStructuredOutput.buildStructuredOutputSystemPrompt({})
     expect(result).toContain("StructuredOutput")
     expect(result).not.toContain("Required fields:")
   })
 
   test("uses ONLY exact field names, not descriptions or types", () => {
-    const result = SessionPrompt.buildStructuredOutputSystemPrompt({
+    const result = SessionStructuredOutput.buildStructuredOutputSystemPrompt({
       type: "object",
       properties: {
         summary: { type: "string", description: "A long description here" },
@@ -522,7 +522,7 @@ describe("structured-output.buildStructuredOutputSystemPrompt", () => {
 
 describe("structured-output.buildStructuredOutputRuntimeTail", () => {
   test("keeps schema and bounded finalizer guidance in one ephemeral tail", () => {
-    const result = SessionPrompt.buildStructuredOutputRuntimeTail(
+    const result = SessionStructuredOutput.buildStructuredOutputRuntimeTail(
       {
         type: "json_schema",
         schema: {
@@ -539,11 +539,11 @@ describe("structured-output.buildStructuredOutputRuntimeTail", () => {
   })
 
   test("text turns add no volatile structured-output tail", () => {
-    expect(SessionPrompt.buildStructuredOutputRuntimeTail({ type: "text" }, false)).toBe("")
+    expect(SessionStructuredOutput.buildStructuredOutputRuntimeTail({ type: "text" }, false)).toBe("")
   })
 
   test("text-compatible finalizers remain bounded and forbid tool use", () => {
-    const result = SessionPrompt.buildStructuredOutputRuntimeTail({ type: "text" }, true, true)
+    const result = SessionStructuredOutput.buildStructuredOutputRuntimeTail({ type: "text" }, true, true)
 
     expect(result).toContain("bounded finalizer turn")
     expect(result).toContain("exactly one JSON value")
@@ -556,7 +556,7 @@ describe("structured-output.buildStructuredOutputRuntimeTail", () => {
 // and the retry-cap corrective hint.
 describe("structured-output.extractSchemaTopLevelFields", () => {
   test("returns top-level property names", () => {
-    const fields = SessionPrompt.extractSchemaTopLevelFields({
+    const fields = SessionStructuredOutput.extractSchemaTopLevelFields({
       type: "object",
       properties: { module: {}, mechanism: {}, keyFiles: {} },
     })
@@ -564,12 +564,12 @@ describe("structured-output.extractSchemaTopLevelFields", () => {
   })
 
   test("returns empty array when no properties", () => {
-    expect(SessionPrompt.extractSchemaTopLevelFields({ type: "object" })).toEqual([])
-    expect(SessionPrompt.extractSchemaTopLevelFields({})).toEqual([])
+    expect(SessionStructuredOutput.extractSchemaTopLevelFields({ type: "object" })).toEqual([])
+    expect(SessionStructuredOutput.extractSchemaTopLevelFields({})).toEqual([])
   })
 
   test("returns empty array for non-object/null schema", () => {
-    expect(SessionPrompt.extractSchemaTopLevelFields(null as any)).toEqual([])
-    expect(SessionPrompt.extractSchemaTopLevelFields(undefined as any)).toEqual([])
+    expect(SessionStructuredOutput.extractSchemaTopLevelFields(null as any)).toEqual([])
+    expect(SessionStructuredOutput.extractSchemaTopLevelFields(undefined as any)).toEqual([])
   })
 })

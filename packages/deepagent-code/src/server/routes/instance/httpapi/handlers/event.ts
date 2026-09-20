@@ -3,7 +3,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { GlobalBus } from "@/bus/global"
 import { EventV2 } from "@deepagent-code/core/event"
 import * as Log from "@deepagent-code/core/util/log"
-import { Effect, Queue } from "effect"
+import { Cause, Effect, Queue } from "effect"
 import * as Stream from "effect/Stream"
 import { HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
@@ -31,34 +31,42 @@ function eventResponse(events: EventV2.Interface) {
     const workspaceID = yield* InstanceState.workspaceID
     // Listener registration is eager, so events published after this point cannot
     // be lost while the HTTP body fiber is starting or emitting server.connected.
-    const queue = yield* Queue.unbounded<EventV2.Payload>()
-    const unsubscribe = yield* events.listen((event) => Effect.sync(() => Queue.offerUnsafe(queue, event)))
+    const queue = yield* Queue.dropping<EventV2.Payload, Error | Cause.Done>(1024)
+    const unsubscribe = yield* events.listen((event) =>
+      Effect.sync(() => {
+        if (
+          event.location?.directory !== instance.directory ||
+          (event.location.workspaceID !== undefined && event.location.workspaceID !== workspaceID)
+        )
+          return
+        if (Queue.offerUnsafe(queue, event)) return
+        Queue.failCauseUnsafe(queue, Cause.fail(new Error("Event stream consumer exceeded its 1024-event buffer")))
+      }),
+    )
     yield* Effect.addFinalizer(() => unsubscribe)
     const stream = Stream.fromQueue(queue).pipe(
-      Stream.filter(
-        (event) =>
-          event.location?.directory === instance.directory &&
-          (event.location.workspaceID === undefined || event.location.workspaceID === workspaceID),
-      ),
       Stream.map((event) => ({ id: event.id, type: event.type, properties: event.data })),
     )
-    const disposed = Stream.callback<{ id: string; type: string; properties: unknown }>((queue) => {
-      const listener = (event: {
-        directory?: string
-        payload: { id?: string; type?: string; properties?: unknown }
-      }) => {
-        if (event.directory !== instance.directory || event.payload.type !== "server.instance.disposed") return
-        Queue.offerUnsafe(queue, {
-          id: event.payload.id ?? eventID(),
-          type: "server.instance.disposed",
-          properties: event.payload.properties ?? {},
-        })
-      }
-      return Effect.acquireRelease(
-        Effect.sync(() => GlobalBus.on("event", listener)),
-        () => Effect.sync(() => GlobalBus.off("event", listener)),
-      )
-    })
+    const disposed = Stream.callback<{ id: string; type: string; properties: unknown }>(
+      (queue) => {
+        const listener = (event: {
+          directory?: string
+          payload: { id?: string; type?: string; properties?: unknown }
+        }) => {
+          if (event.directory !== instance.directory || event.payload.type !== "server.instance.disposed") return
+          Queue.offerUnsafe(queue, {
+            id: event.payload.id ?? eventID(),
+            type: "server.instance.disposed",
+            properties: event.payload.properties ?? {},
+          })
+        }
+        return Effect.acquireRelease(
+          Effect.sync(() => GlobalBus.on("event", listener)),
+          () => Effect.sync(() => GlobalBus.off("event", listener)),
+        )
+      },
+      { bufferSize: 1, strategy: "dropping" },
+    )
     const output = stream.pipe(
       Stream.merge(disposed, { haltStrategy: "left" }),
       Stream.takeUntil((event) => event.type === "server.instance.disposed"),

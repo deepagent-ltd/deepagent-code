@@ -16,11 +16,17 @@ const args = parseArgs({
   options: {
     check: { type: "boolean" },
     name: { type: "string" },
+    "registry-only": { type: "boolean" },
   },
 })
 
 if (args.values.check) {
   await check()
+  process.exit(0)
+}
+
+if (args.values["registry-only"]) {
+  await Bun.write(registry, await renderRegistry(await migrationNamesInRegistryOrder()))
   process.exit(0)
 }
 
@@ -40,7 +46,7 @@ for (const name of sqlMigrations) {
   )
 }
 
-await Bun.write(registry, renderRegistry(await migrationNamesInRegistryOrder()))
+await Bun.write(registry, await renderRegistry(await migrationNamesInRegistryOrder()))
 
 async function check() {
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "deepagent-code-core-migration-check-"))
@@ -72,7 +78,7 @@ export default { ...config, out: ${JSON.stringify(output)} }
         `Database migration TypeScript wrapper is missing for ${name}. Run \`bun script/migration.ts\` from packages/core.`,
       )
     }
-    if ((await Bun.file(registry).text()) !== renderRegistry(await migrationNamesInRegistryOrder())) {
+    if ((await Bun.file(registry).text()) !== (await renderRegistry(await migrationNamesInRegistryOrder()))) {
       throw new Error("Database migration registry is stale. Run `bun script/migration.ts` from packages/core.")
     }
   } finally {
@@ -142,13 +148,25 @@ function escapeTemplate(line: string) {
   return line.replaceAll("\\", "\\\\").replaceAll("`", "\\`").replaceAll("${", "\\${")
 }
 
-function renderRegistry(names: string[]) {
+async function renderRegistry(names: string[]) {
+  const bodyHashes = await Promise.all(
+    names.map(async (name) =>
+      Bun.CryptoHasher.hash("sha256", await Bun.file(path.join(tsDir, `${name}.ts`)).arrayBuffer(), "hex"),
+    ),
+  )
   return `import type { DatabaseMigration } from "./migration"
 
-export const migrations = (
-  await Promise.all([
+const modules = await Promise.all([
 ${names.map((name) => `    import("./migration/${name}"),`).join("\n")}
-  ])
-).map((module) => module.default) satisfies DatabaseMigration.Migration[]
+])
+
+const bodyHashes = [
+${bodyHashes.map((hash) => `  ${JSON.stringify(hash)},`).join("\n")}
+]
+
+export const migrations = modules.map((module, index) => ({
+  ...module.default,
+  bodyHash: bodyHashes[index]!,
+})) satisfies DatabaseMigration.Migration[]
 `
 }

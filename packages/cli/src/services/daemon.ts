@@ -32,135 +32,90 @@ function sameRegistration(left: Registration, right: Registration) {
   return left.id === right.id && left.version === right.version && left.url === right.url && left.pid === right.pid
 }
 
-// PARITY-003 (Wave 0): the daemon's spawn target is switchable. DEEPAGENT_CODE_DAEMON_BACKEND=legacy
-// mounts the full legacy deepagent-code server instead of the v2 `serve`; the legacy entrypoint is
-// resolved from DEEPAGENT_CODE_DAEMON_LEGACY_ENTRYPOINT. Read lazily so each call observes the
-// current environment.
-const backend = () => (process.env.DEEPAGENT_CODE_DAEMON_BACKEND === "legacy" ? "legacy" : "v2")
+const makeLayer = (entrypointOverride?: string) =>
+  Layer.effect(
+    Service,
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const directory = Global.Path.state
+      const file = path.join(directory, "server.json")
+      const passwordFile = path.join(directory, "password")
+      const decodeRegistration = Schema.decodeUnknownEffect(Schema.fromJsonString(Registration))
 
-export const layer = Layer.effect(
-  Service,
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem
-    const directory = Global.Path.state
-    const file = path.join(directory, "server.json")
-    const passwordFile = path.join(directory, "password")
-    const decodeRegistration = Schema.decodeUnknownEffect(Schema.fromJsonString(Registration))
+      const password = Effect.fn("cli.daemon.password")(function* (value?: string) {
+        const existing = yield* fs.readFileString(passwordFile).pipe(Effect.catch(() => Effect.succeed(undefined)))
+        if (value === undefined && existing) return existing
 
-    const password = Effect.fn("cli.daemon.password")(function* (value?: string) {
-      const existing = yield* fs.readFileString(passwordFile).pipe(Effect.catch(() => Effect.succeed(undefined)))
-      if (value === undefined && existing) return existing
-
-      // Keep one private credential across server restarts so discovered clients
-      // can reconnect without exposing a password flag or environment variable.
-      const generated = value ?? randomBytes(32).toString("base64url")
-      const temp = passwordFile + ".tmp"
-      yield* fs.makeDirectory(directory, { recursive: true })
-      yield* fs.writeFileString(temp, generated, { mode: 0o600 })
-      yield* fs.rename(temp, passwordFile)
-      return generated
-    })
-
-    const registration = Effect.fnUntraced(function* () {
-      return yield* fs.readFileString(file).pipe(Effect.flatMap(decodeRegistration))
-    })
-
-    const createClient = Effect.fnUntraced(function* (url: string) {
-      return createOpencodeClient({ baseUrl: url, headers: ServerAuth.headers({ password: yield* password() }) })
-    })
-
-    // The legacy server exposes GET /global/health -> { healthy, version, runtimeId } guarded by
-    // the same Basic-auth credential, instead of the v2 /api/health SDK route.
-    const legacyHealth = Effect.fnUntraced(function* (info: Registration) {
-      const credential = yield* password()
-      const body = yield* Effect.tryPromise({
-        try: async () => {
-          const response = await fetch(`${info.url}/global/health`, {
-            headers: ServerAuth.headers({ password: credential }),
-            signal: AbortSignal.timeout(2_000),
-          })
-          if (!response.ok) throw new Error(`Legacy health endpoint responded ${response.status}`)
-          return (await response.json()) as { healthy?: boolean; version?: string }
-        },
-        catch: (cause) => new Error("Legacy health check failed", { cause }),
+        // Keep one private credential across server restarts so discovered clients
+        // can reconnect without exposing a password flag or environment variable.
+        const generated = value ?? randomBytes(32).toString("base64url")
+        const temp = passwordFile + ".tmp"
+        yield* fs.makeDirectory(directory, { recursive: true })
+        yield* fs.writeFileString(temp, generated, { mode: 0o600 })
+        yield* fs.rename(temp, passwordFile)
+        return generated
       })
-      if (body?.healthy !== true) return yield* Effect.fail(new Error("Registered server is not healthy"))
-      // The legacy endpoint reports its own version; prefer it so compatible() keeps the same
-      // handshake semantics as the v2 registration file.
-      return typeof body.version === "string" ? { ...info, version: body.version } : info
-    })
 
-    const healthy = Effect.fnUntraced(function* () {
-      const info = yield* registration()
-      if (backend() === "legacy") return yield* legacyHealth(info)
-      const client = yield* createClient(info.url)
-      const response = yield* Effect.tryPromise(() => client.v2.health.get({ signal: AbortSignal.timeout(2_000) }))
-      if (response.data?.healthy === true) return info
-      return yield* Effect.fail(new Error("Registered server is not healthy"))
-    })
+      const registration = Effect.fnUntraced(function* () {
+        return yield* fs.readFileString(file).pipe(Effect.flatMap(decodeRegistration))
+      })
 
-    const compatible = Effect.fnUntraced(function* () {
-      const info = yield* healthy()
-      if (info.version === InstallationVersion) return info
-      return yield* Effect.fail(new Error("Registered server version does not match the client"))
-    })
+      const createClient = Effect.fnUntraced(function* (url: string) {
+        return createOpencodeClient({ baseUrl: url, headers: ServerAuth.headers({ password: yield* password() }) })
+      })
 
-    const signal = (pid: number, signal: NodeJS.Signals) =>
-      Effect.try({ try: () => process.kill(pid, signal), catch: (cause) => cause }).pipe(Effect.ignore)
+      const healthy = Effect.fnUntraced(function* () {
+        const info = yield* registration()
+        const client = yield* createClient(info.url)
+        const response = yield* Effect.tryPromise(() => client.v2.health.get({ signal: AbortSignal.timeout(2_000) }))
+        if (response.data?.healthy === true) return info
+        return yield* Effect.fail(new Error("Registered server is not healthy"))
+      })
 
-    const awaitStopped = Effect.fnUntraced(function* (pid: number) {
-      const running = yield* Effect.try({ try: () => process.kill(pid, 0), catch: () => false }).pipe(
-        Effect.orElseSucceed(() => false),
-      )
-      if (!running) return true
-      return yield* Effect.fail(new Error(`Server process ${pid} is still running`))
-    })
+      const compatible = Effect.fnUntraced(function* () {
+        const info = yield* healthy()
+        if (info.version === InstallationVersion) return info
+        return yield* Effect.fail(new Error("Registered server version does not match the client"))
+      })
 
-    const stopProcess = Effect.fnUntraced(function* (info: Registration) {
-      const current = yield* healthy().pipe(Effect.option)
-      if (Option.isNone(current) || !sameRegistration(current.value, info)) return
+      const signal = (pid: number, signal: NodeJS.Signals) =>
+        Effect.try({ try: () => process.kill(pid, signal), catch: (cause) => cause }).pipe(Effect.ignore)
 
-      yield* signal(info.pid, "SIGTERM")
-      const stopped = yield* awaitStopped(info.pid).pipe(
-        Effect.retry(Schedule.spaced("50 millis").pipe(Schedule.both(Schedule.recurs(100)))),
-        Effect.option,
-      )
-      if (Option.isSome(stopped)) return
+      const awaitStopped = Effect.fnUntraced(function* (pid: number) {
+        const running = yield* Effect.try({ try: () => process.kill(pid, 0), catch: () => false }).pipe(
+          Effect.orElseSucceed(() => false),
+        )
+        if (!running) return true
+        return yield* Effect.fail(new Error(`Server process ${pid} is still running`))
+      })
 
-      const latest = yield* healthy().pipe(Effect.option)
-      if (Option.isNone(latest) || !sameRegistration(latest.value, info)) return
-      yield* signal(info.pid, "SIGKILL")
-      yield* awaitStopped(info.pid).pipe(
-        Effect.retry(Schedule.spaced("50 millis").pipe(Schedule.both(Schedule.recurs(100)))),
-      )
-    })
+      const stopProcess = Effect.fnUntraced(function* (info: Registration) {
+        const current = yield* healthy().pipe(Effect.option)
+        if (Option.isNone(current) || !sameRegistration(current.value, info)) return
 
-    const start = Effect.fn("cli.daemon.start")(function* () {
-      const existing = yield* healthy().pipe(Effect.option)
-      const found = Option.getOrUndefined(existing)
-      const compiled = path.basename(process.execPath).replace(/\.exe$/, "") !== "bun"
-      if (found?.version === InstallationVersion && compiled) return found.url
-      if (found) yield* stopProcess(found).pipe(Effect.ignore)
+        yield* signal(info.pid, "SIGTERM")
+        const stopped = yield* awaitStopped(info.pid).pipe(
+          Effect.retry(Schedule.spaced("50 millis").pipe(Schedule.both(Schedule.recurs(100)))),
+          Effect.option,
+        )
+        if (Option.isSome(stopped)) return
 
-      if (backend() === "legacy") {
-        // Wave 0: spawn the legacy deepagent-code CLI `serve --register`. The password is passed
-        // through the environment the legacy server already honors (DEEPAGENT_CODE_SERVER_PASSWORD).
-        const legacyEntrypoint = process.env.DEEPAGENT_CODE_DAEMON_LEGACY_ENTRYPOINT
-        if (!legacyEntrypoint)
-          return yield* Effect.fail(new Error("DEEPAGENT_CODE_DAEMON_LEGACY_ENTRYPOINT is required for the legacy backend"))
-        const credential = yield* password()
-        yield* Effect.try({
-          try: () => {
-            spawn(process.execPath, [legacyEntrypoint, "serve", "--register"], {
-              detached: true,
-              stdio: "ignore",
-              env: { ...process.env, DEEPAGENT_CODE_SERVER_PASSWORD: credential },
-            }).unref()
-          },
-          catch: (cause) => new Error("Failed to start legacy server", { cause }),
-        })
-      } else {
-        const entrypoint = compiled ? undefined : process.argv[1]
+        const latest = yield* healthy().pipe(Effect.option)
+        if (Option.isNone(latest) || !sameRegistration(latest.value, info)) return
+        yield* signal(info.pid, "SIGKILL")
+        yield* awaitStopped(info.pid).pipe(
+          Effect.retry(Schedule.spaced("50 millis").pipe(Schedule.both(Schedule.recurs(100)))),
+        )
+      })
+
+      const start = Effect.fn("cli.daemon.start")(function* () {
+        const existing = yield* healthy().pipe(Effect.option)
+        const found = Option.getOrUndefined(existing)
+        const compiled = path.basename(process.execPath).replace(/\.exe$/, "") !== "bun"
+        if (found?.version === InstallationVersion && compiled) return found.url
+        if (found) yield* stopProcess(found).pipe(Effect.ignore)
+
+        const entrypoint = compiled ? undefined : (entrypointOverride ?? process.argv[1])
         if (!compiled && entrypoint === undefined)
           return yield* Effect.fail(new Error("Failed to resolve CLI entrypoint"))
         yield* Effect.try({
@@ -172,70 +127,76 @@ export const layer = Layer.effect(
           },
           catch: (cause) => new Error("Failed to start server", { cause }),
         })
-      }
 
-      return yield* compatible().pipe(
-        Effect.retry(Schedule.spaced("50 millis").pipe(Schedule.both(Schedule.recurs(100)))),
-        Effect.map((info) => info.url),
-        Effect.mapError(() => new Error("Failed to start server")),
-      )
-    })
+        return yield* compatible().pipe(
+          Effect.retry(Schedule.spaced("50 millis").pipe(Schedule.both(Schedule.recurs(100)))),
+          Effect.map((info) => info.url),
+          Effect.mapError(() => new Error("Failed to start server")),
+        )
+      })
 
-    const transport = Effect.fn("cli.daemon.transport")(function* () {
-      return { url: yield* start(), headers: ServerAuth.headers({ password: yield* password() }) }
-    })
+      const transport = Effect.fn("cli.daemon.transport")(function* () {
+        return { url: yield* start(), headers: ServerAuth.headers({ password: yield* password() }) }
+      })
 
-    const client = Effect.fn("cli.daemon.client")(function* () {
-      const connection = yield* transport()
-      return createOpencodeClient({ baseUrl: connection.url, headers: connection.headers })
-    })
+      const client = Effect.fn("cli.daemon.client")(function* () {
+        const connection = yield* transport()
+        return createOpencodeClient({ baseUrl: connection.url, headers: connection.headers })
+      })
 
-    const status = Effect.fn("cli.daemon.status")(function* () {
-      const existing = yield* healthy().pipe(Effect.option)
-      const found = Option.getOrUndefined(existing)
-      if (found?.version === InstallationVersion) return found.url
-      if (found) return undefined
-      yield* fs.remove(file).pipe(Effect.ignore)
-      return undefined
-    })
+      const status = Effect.fn("cli.daemon.status")(function* () {
+        const existing = yield* healthy().pipe(Effect.option)
+        const found = Option.getOrUndefined(existing)
+        if (found?.version === InstallationVersion) return found.url
+        if (found) return undefined
+        yield* fs.remove(file).pipe(Effect.ignore)
+        return undefined
+      })
 
-    const stop = Effect.fn("cli.daemon.stop")(function* () {
-      const existing = yield* healthy().pipe(Effect.option)
-      // A stale registration may point at a PID that has since been reused by
-      // another process. Only signal the PID after authenticating the server.
-      if (Option.isNone(existing)) return yield* fs.remove(file).pipe(Effect.ignore)
-      yield* stopProcess(existing.value)
-      yield* fs.remove(file).pipe(Effect.ignore)
-    })
+      const stop = Effect.fn("cli.daemon.stop")(function* () {
+        const existing = yield* healthy().pipe(Effect.option)
+        // A stale registration may point at a PID that has since been reused by
+        // another process. Only signal the PID after authenticating the server.
+        if (Option.isNone(existing)) return yield* fs.remove(file).pipe(Effect.ignore)
+        yield* stopProcess(existing.value)
+        yield* fs.remove(file).pipe(Effect.ignore)
+      })
 
-    const register = Effect.fn("cli.daemon.register")(function* (address: HttpServer.Address) {
-      const id = randomUUID()
-      const temp = file + "." + id + ".tmp"
-      yield* fs.makeDirectory(directory, { recursive: true })
-      yield* fs.writeFileString(
-        temp,
-        JSON.stringify({ id, version: InstallationVersion, url: HttpServer.formatAddress(address), pid: process.pid }),
-        { mode: 0o600 },
-      )
-      yield* fs.rename(temp, file)
-      yield* registration().pipe(
-        Effect.flatMap((info) => (info.id === id ? Effect.void : signal(process.pid, "SIGTERM"))),
-        Effect.catch(() => signal(process.pid, "SIGTERM")),
-        Effect.repeat(Schedule.spaced("10 seconds")),
-        Effect.forkScoped,
-      )
-      yield* Effect.addFinalizer(() =>
-        registration().pipe(
-          Effect.flatMap((info) => (info.id === id ? fs.remove(file) : Effect.void)),
-          Effect.ignore,
-        ),
-      )
-    })
+      const register = Effect.fn("cli.daemon.register")(function* (address: HttpServer.Address) {
+        const id = randomUUID()
+        const temp = file + "." + id + ".tmp"
+        yield* fs.makeDirectory(directory, { recursive: true })
+        yield* fs.writeFileString(
+          temp,
+          JSON.stringify({
+            id,
+            version: InstallationVersion,
+            url: HttpServer.formatAddress(address),
+            pid: process.pid,
+          }),
+          { mode: 0o600 },
+        )
+        yield* fs.rename(temp, file)
+        yield* registration().pipe(
+          Effect.flatMap((info) => (info.id === id ? Effect.void : signal(process.pid, "SIGTERM"))),
+          Effect.catch(() => signal(process.pid, "SIGTERM")),
+          Effect.repeat(Schedule.spaced("10 seconds")),
+          Effect.forkScoped,
+        )
+        yield* Effect.addFinalizer(() =>
+          registration().pipe(
+            Effect.flatMap((info) => (info.id === id ? fs.remove(file) : Effect.void)),
+            Effect.ignore,
+          ),
+        )
+      })
 
-    return Service.of({ client, transport, start, status, stop, password, register })
-  }),
-)
+      return Service.of({ client, transport, start, status, stop, password, register })
+    }),
+  )
 
+export const layer = makeLayer()
+export const layerForEntrypoint = (entrypoint: string) => makeLayer(entrypoint)
 export const defaultLayer = layer
 
 export * as Daemon from "./daemon"

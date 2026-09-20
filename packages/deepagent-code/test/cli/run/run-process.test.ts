@@ -52,12 +52,13 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
     "auto-approves an asked permission without human input when explicitly requested",
     ({ llm, home, deepagentCode }) =>
       Effect.gen(function* () {
-        const target = path.join(home, ".env")
-        yield* Effect.promise(() => Bun.write(target, "UNATTENDED_PERMISSION_MARKER\n"))
-        yield* llm.tool("read", { filePath: target })
+        // V2 read hard-errors on external absolute paths (no permission path); write is the tool
+        // that surfaces the external_directory approval this scenario is about.
+        const target = path.join(home, "marker.txt")
+        yield* llm.tool("write", { path: target, content: "UNATTENDED_PERMISSION_MARKER\n" })
         yield* llm.text("permission flow completed")
 
-        const result = yield* deepagentCode.run("read the marker", {
+        const result = yield* deepagentCode.run("write the marker", {
           format: "json",
           extraArgs: ["--dangerously-skip-permissions"],
         })
@@ -77,9 +78,11 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
               typeof event.part === "object" &&
               event.part !== null &&
               "tool" in event.part &&
-              event.part.tool === "read",
+              event.part.tool === "write",
           ),
         ).toBe(true)
+        // The approval must be effective: the write reached the disk.
+        expect(yield* Effect.promise(() => Bun.file(target).exists())).toBe(true)
       }),
     60_000,
   )
@@ -92,7 +95,7 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
     "read-only permission mode rejects mutating permissions",
     ({ llm, home, deepagentCode }) =>
       Effect.gen(function* () {
-        yield* llm.tool("write", { filePath: path.join(home, "mutated.txt"), content: "nope\n" })
+        yield* llm.tool("write", { path: path.join(home, "mutated.txt"), content: "nope\n" })
         yield* llm.text("read-only flow completed")
 
         const result = yield* deepagentCode.run("try to mutate", {
@@ -190,6 +193,30 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
         )
         deepagentCode.expectExit(result, 0)
         expect(result.stdout).toContain("attachment accepted")
+      }),
+    60_000,
+  )
+
+  cliIt.concurrent(
+    "inlines a directory attachment as a listing instead of sending x-directory media on the wire",
+    ({ llm, home, deepagentCode }) =>
+      Effect.gen(function* () {
+        yield* Effect.promise(() => mkdir(path.join(home, "attached-dir")))
+        yield* Effect.promise(() => Bun.write(path.join(home, "attached-dir", "marker-entry.txt"), "MARKER\n"))
+        yield* llm.text("directory accepted")
+
+        const result = yield* deepagentCode.spawn(
+          ["run", "inspect the directory", "--model", "test/test-model", "--file", "attached-dir"],
+          { env: { PWD: path.join(home, "stale-pwd") } },
+        )
+        deepagentCode.expectExit(result, 0)
+        expect(result.stdout).toContain("directory accepted")
+
+        const wire = JSON.stringify((yield* llm.hits)[0]?.body)
+        expect(wire).toContain("<attached-directory")
+        expect(wire).toContain("<type>directory</type>")
+        expect(wire).toContain("marker-entry.txt")
+        expect(wire).not.toContain("application/x-directory")
       }),
     60_000,
   )

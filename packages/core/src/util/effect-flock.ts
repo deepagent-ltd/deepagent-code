@@ -166,9 +166,8 @@ export namespace EffectFlock {
 
       type Handle = { token: string; metaPath: string; heartbeatPath: string; lockDir: string }
 
-      const tryAcquireLockDir = (lockDir: string, key: string) =>
+      const tryAcquireLockDir = (lockDir: string, key: string, token: string) =>
         Effect.gen(function* () {
-          const token = randomUUID()
           const metaPath = path.join(lockDir, "meta.json")
           const heartbeatPath = path.join(lockDir, "heartbeat")
 
@@ -218,14 +217,23 @@ export namespace EffectFlock {
 
       // -- retry wrapper (preserves Handle type) --
 
-      const acquireHandle = (lockfile: string, key: string): Effect.Effect<Handle, LockError> =>
-        tryAcquireLockDir(lockfile, key).pipe(
+      const acquireHandle = (lockfile: string, key: string): Effect.Effect<Handle, LockError> => {
+        const token = randomUUID()
+        // A single claim attempt stays uninterruptible so it either fully
+        // claims (dir + heartbeat + meta) or fully doesn't; only the retry
+        // waits in between honor interruption.
+        return Effect.uninterruptible(tryAcquireLockDir(lockfile, key, token)).pipe(
           Effect.retry({
             while: (err) => err._tag === "NotAcquired",
             schedule: retrySchedule,
           }),
           Effect.catchTag("NotAcquired", () => Effect.fail(new LockTimeoutError({ key }))),
+          // An interrupt can land right after a successful attempt, before the
+          // scope finalizer is registered — drop our own claim so the dir
+          // isn't orphaned until it goes stale.
+          Effect.onInterrupt(() => releaseIfOwned(lockfile, token)),
         )
+      }
 
       // -- release --
 
@@ -248,6 +256,14 @@ export namespace EffectFlock {
           yield* forceRemove(handle.lockDir)
         })
 
+      /** Remove the lock dir only when our token owns it; never touches another owner's dir. */
+      const releaseIfOwned = (lockfile: string, token: string) =>
+        fs.readFileString(path.join(lockfile, "meta.json")).pipe(
+          Effect.flatMap((raw) => Effect.sync(() => decodeMeta(raw))),
+          Effect.flatMap((meta) => (meta.token === token ? forceRemove(lockfile) : Effect.void)),
+          Effect.ignore,
+        )
+
       // -- build service --
 
       const acquire = Effect.fn("EffectFlock.acquire")(function* (key: string, dir?: string) {
@@ -256,8 +272,13 @@ export namespace EffectFlock {
 
         const lockfile = path.join(lockDir, Hash.fast(key) + ".lock")
 
-        // acquireRelease: acquire is uninterruptible, release is guaranteed
-        const handle = yield* Effect.acquireRelease(acquireHandle(lockfile, key), (handle) => release(handle))
+        // interruptible acquire: the retry wait honors interruption so
+        // disposing a stuck scope can't block until the lock goes stale.
+        // acquireRelease still registers release atomically once a handle is
+        // claimed, so release of a handed-out handle is guaranteed.
+        const handle = yield* Effect.acquireRelease(acquireHandle(lockfile, key), (handle) => release(handle), {
+          interruptible: true,
+        })
 
         // Heartbeat fiber — scoped, so it's interrupted before release runs
         yield* fs

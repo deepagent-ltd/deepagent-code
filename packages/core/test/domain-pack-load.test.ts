@@ -7,7 +7,7 @@ import {
   loadDomainPack,
   resetDomainPackLoader,
 } from "@deepagent-code/core/deepagent/domain-pack-load"
-import { resetCapabilityLoader } from "@deepagent-code/core/system-context/capability-loader"
+import { resetCapabilityLoader } from "@deepagent-code/core/system-context/capability-loader-memory"
 
 // C4-06 — `domain_pack_load`: reuses the durable capability loader kernel, then
 // adds the session-scoped active pack snapshot ref cap (default 3 per session).

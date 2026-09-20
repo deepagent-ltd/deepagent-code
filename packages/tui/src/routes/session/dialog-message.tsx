@@ -9,6 +9,7 @@ import { stripPromptPartIDs as strip } from "../../prompt/part"
 import { requestSessionFork } from "../../util/session"
 import { useToast } from "../../ui/toast"
 import { errorMessage } from "../../util/error"
+import { useTuiI18n } from "../../context/i18n"
 
 export function DialogMessage(props: {
   messageID: string
@@ -21,13 +22,14 @@ export function DialogMessage(props: {
   const route = useRoute()
   const clipboard = useClipboard()
   const toast = useToast()
+  const i18n = useTuiI18n()
 
   return (
     <DialogSelect
       title="Message Actions"
       options={[
         {
-          title: "Revert",
+          title: i18n.t("tui.session.messageDialogRevert"),
           value: "session.revert",
           description: "undo messages and file changes",
           onSelect: (dialog) => {
@@ -58,7 +60,7 @@ export function DialogMessage(props: {
           },
         },
         {
-          title: "Copy",
+          title: i18n.t("tui.session.messageDialogCopy"),
           value: "message.copy",
           description: "message text to clipboard",
           onSelect: async (dialog) => {
@@ -78,7 +80,7 @@ export function DialogMessage(props: {
           },
         },
         {
-          title: "Fork",
+          title: i18n.t("tui.session.messageDialogFork"),
           value: "session.fork",
           description: "create a new session",
           onSelect: async (dialog) => {
@@ -94,7 +96,7 @@ export function DialogMessage(props: {
             })
             if ("error" in result) {
               toast.show({
-                title: "Fork failed",
+                title: i18n.t("tui.common.forkFailed"),
                 message: errorMessage(result.error),
                 variant: "error",
                 duration: 8000,

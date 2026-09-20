@@ -1,6 +1,7 @@
 import { useRenderer, useTerminalDimensions } from "@opentui/solid"
 import { batch, createContext, createEffect, onCleanup, Show, useContext, type JSX, type ParentProps } from "solid-js"
 import { useTheme } from "../context/theme"
+import { useTuiI18n } from "../context/i18n"
 import { MouseButton, Renderable, RGBA } from "@opentui/core"
 import { createStore } from "solid-js/store"
 import { useToast } from "./toast"
@@ -74,6 +75,7 @@ function init() {
 
   const renderer = useRenderer()
   const modeStack = useOpencodeModeStack()
+  const i18n = useTuiI18n()
 
   createEffect(() => {
     if (store.stack.length === 0) return
@@ -104,7 +106,7 @@ function init() {
     bindings: [
       {
         key: "escape",
-        desc: "Close dialog",
+        desc: i18n.t("tui.dialog.close"),
         group: "Dialog",
         cmd: () => {
           if (renderer.getSelection()) {
@@ -118,7 +120,7 @@ function init() {
       },
       {
         key: "ctrl+c",
-        desc: "Close dialog",
+        desc: i18n.t("tui.dialog.close"),
         group: "Dialog",
         cmd: () => {
           if (renderer.getSelection()) {
@@ -181,12 +183,13 @@ export function DialogProvider(props: ParentProps) {
   const renderer = useRenderer()
   const toast = useToast()
   const clipboard = useClipboard()
+  const i18n = useTuiI18n()
 
   function copySelection() {
     const text = renderer.getSelection()?.getSelectedText()
     if (!text || !clipboard.write) return false
     void clipboard.write(text).then(
-      () => toast.show({ message: "Copied to clipboard", variant: "info" }),
+      () => toast.show({ message: i18n.t("tui.common.copiedToClipboard"), variant: "info" }),
       (error) => toast.error(error),
     )
     renderer.clearSelection()

@@ -44,6 +44,19 @@ interface EffectCmdOpts<Args, A> {
    * `serve`, `web`, `account`, `db`, `upgrade`).
    */
   instance?: boolean | ((args: Args) => boolean)
+  /**
+   * `true`: run the handler OUTSIDE the AppRuntime root graph, with only
+   * `Config.defaultLayer` provided. Any `AppRuntime.runPromise` eagerly builds the full
+   * AppLayer — including the database root, whose lifetime runtime lock is
+   * process-exclusive. Server-listening commands (`serve`, `web`) must stay standalone so
+   * `Server.listen` remains the SOLE database owner in the process: its preflight can then
+   * boot the maintenance shell when a FOREIGN process holds the lock, instead of the
+   * listener misclassifying this process's own pre-built root as a competitor and forcing
+   * every file-backed boot into read-only maintenance. Standalone handlers must not yield
+   * AppServices beyond `Config.Service` — doing so fails fast with a service-not-found
+   * defect. Implies `instance: false` behavior.
+   */
+  standalone?: boolean
   /** Defaults to process.cwd(). Override for commands that take a directory positional. */
   directory?: (args: Args) => string
   handler: (args: WithDoubleDash<Args>) => Effect.Effect<A, CliError, AppServices | InstanceStore.Service>
@@ -76,6 +89,16 @@ export const effectCmd = <Args, A>(opts: EffectCmdOpts<Args, A>) =>
       const { AppRuntime } = await import("@/effect/app-runtime")
       // yargs typing wraps Args in ArgumentsCamelCase<WithDoubleDash<...>>; cast at the boundary.
       const args = rawArgs as unknown as WithDoubleDash<Args>
+      if (opts.standalone === true) {
+        const { Config } = await import("@/config/config")
+        // The standalone contract (see the option doc) limits the handler's requirements to
+        // Config.Service; the cast documents that narrowing at this boundary. `standaloneLayer`
+        // is the DB-free Config boot — building `defaultLayer` here would open + lock the
+        // database (AccountRepo) before Server.listen and recreate the self-lock misclassification.
+        const handler = opts.handler(args).pipe(Effect.provide(Config.standaloneLayer)) as Effect.Effect<A, CliError>
+        await Effect.runPromise(handler)
+        return
+      }
       const useInstance = typeof opts.instance === "function" ? opts.instance(args) : opts.instance !== false
       if (!useInstance) {
         await AppRuntime.runPromise(opts.handler(args))

@@ -1,5 +1,5 @@
 {
-  "$schema": "https://deepagent-code.ai/theme.json",
+  "$schema": "https://ai.deepagent.ltd/theme.json",
   "defs": {
     "darkStep1": "#2d353b",
     "darkStep2": "#333c43",

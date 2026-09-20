@@ -24,6 +24,7 @@ import { EnvironmentFactAdoption } from "./environment-fact-adoption"
 import { CanonicalJson } from "../util/canonical-json"
 import { Hash } from "../util/hash"
 import path from "node:path"
+import { AsyncLocalStorage } from "node:async_hooks"
 
 // V3.2.1 decision B (docs/34 §8): the read-side adapter between the knowledge retriever and the
 // durable DocumentStore. Durable knowledge lives in TWO roots under the single injected base
@@ -34,30 +35,44 @@ import path from "node:path"
 // changes are immediately visible without rebuilding the disk index. invalidateCache() is reserved
 // for explicit cold-reload/testing paths. This module is the ONLY durable read path the retriever uses.
 
-let baseDir: string | null = null
-let userGlobalCache: DurableKnowledgeStore | null = null
-const projectCache = new Map<string, DurableKnowledgeStore>()
-// H32-1: optional shared DocumentStore injected by the gateway so knowledge operations participate
-// in the same CAS/SSOT instance as plan/session docs. When null, each store creates its own
-// DocumentStore (existing behaviour, backward-compatible).
-let sharedDocumentStore: DocumentStore | null = null
+export type RuntimeState = {
+  readonly baseDir: string
+  userGlobalCache: DurableKnowledgeStore | null
+  readonly projectCache: Map<string, DurableKnowledgeStore>
+  readonly sharedDocumentStore: DocumentStore | null
+}
+
+const runtime = new AsyncLocalStorage<RuntimeState>()
+let defaultRuntime: RuntimeState | null = null
+
+export const createRuntime = (dir: string, sharedStore?: DocumentStore): RuntimeState => ({
+  baseDir: path.resolve(dir),
+  userGlobalCache: null,
+  projectCache: new Map(),
+  sharedDocumentStore: sharedStore ?? null,
+})
+
+export const withRuntime = <A>(state: RuntimeState, operation: () => A): A => runtime.run(state, operation)
+
+const activeRuntime = (): RuntimeState => {
+  const state = runtime.getStore() ?? defaultRuntime
+  if (!state) throw new Error("knowledge-source: no runtime configured")
+  return state
+}
 
 // Configure the durable knowledge base dir (the gateway calls this alongside SessionState/MemoryStore
 // configure, from the injected baseDir — never a self-resolved home).
 // H32-1: optional sharedStore accepted; passed through to openUserGlobalStore/openProjectStore.
 export const configure = (dir: string, sharedStore?: DocumentStore): void => {
-  const nextBaseDir = path.resolve(dir)
-  const nextSharedDocumentStore = sharedStore ?? null
-  if (baseDir === nextBaseDir && sharedDocumentStore === nextSharedDocumentStore) return
-  baseDir = nextBaseDir
-  sharedDocumentStore = nextSharedDocumentStore
-  userGlobalCache = null
-  projectCache.clear()
+  if (defaultRuntime?.baseDir === path.resolve(dir) && defaultRuntime.sharedDocumentStore === (sharedStore ?? null))
+    return
+  defaultRuntime = createRuntime(dir, sharedStore)
 }
 
-export const isConfigured = (): boolean => baseDir !== null
+export const isConfigured = (): boolean => runtime.getStore() !== undefined || defaultRuntime !== null
 
-export const isConfiguredFor = (dir: string): boolean => baseDir === path.resolve(dir)
+export const isConfiguredFor = (dir: string): boolean =>
+  (runtime.getStore() ?? defaultRuntime)?.baseDir === path.resolve(dir)
 
 // Reset to the unconfigured state (baseDir=null + caches cleared). `configure` is a process-global
 // setter with no other way back to null; tests that assert the UNCONFIGURED path (isConfigured()===false
@@ -65,35 +80,34 @@ export const isConfiguredFor = (dir: string): boolean => baseDir === path.resolv
 // test in the same process having called configure(). Not used by production wiring (the gateway only
 // ever configures forward).
 export const reset = (): void => {
-  baseDir = null
-  sharedDocumentStore = null
-  userGlobalCache = null
-  projectCache.clear()
+  defaultRuntime = null
 }
 
 // Clear cached stores so a subsequent query re-reads from disk. Normal in-process writes must use
 // the cached handles instead; this cold path is only for explicit external-change recovery/tests.
 export const invalidateCache = (): void => {
-  userGlobalCache = null
-  projectCache.clear()
+  const state = activeRuntime()
+  state.userGlobalCache = null
+  state.projectCache.clear()
 }
 
-const ensureBase = (): string => {
-  if (!baseDir) throw new Error("knowledge-source: not configured. Call configure(baseDir) first.")
-  return baseDir
-}
+const ensureBase = (): string => activeRuntime().baseDir
 
 const userGlobalStore = (): DurableKnowledgeStore => {
-  if (!userGlobalCache) userGlobalCache = openUserGlobalStore(ensureBase(), sharedDocumentStore ?? undefined)
-  return userGlobalCache
+  const state = activeRuntime()
+  if (!state.userGlobalCache) {
+    state.userGlobalCache = openUserGlobalStore(state.baseDir, state.sharedDocumentStore ?? undefined)
+  }
+  return state.userGlobalCache
 }
 
 const projectStore = (workspacePath: string): DurableKnowledgeStore => {
+  const state = activeRuntime()
   const pid = projectIdForWorkspace(workspacePath)
-  let store = projectCache.get(pid)
+  let store = state.projectCache.get(pid)
   if (!store) {
-    store = openProjectStore(ensureBase(), workspacePath, sharedDocumentStore ?? undefined)
-    projectCache.set(pid, store)
+    store = openProjectStore(state.baseDir, workspacePath, state.sharedDocumentStore ?? undefined)
+    state.projectCache.set(pid, store)
   }
   return store
 }
@@ -337,12 +351,7 @@ export const commitReviewDecisionForWorkspace = (
   }
 }
 
-function isExactRejectReplay(
-  store: DocumentStore,
-  expected: ReviewAuthority,
-  current: Doc,
-  actor: GovernanceActor,
-) {
+function isExactRejectReplay(store: DocumentStore, expected: ReviewAuthority, current: Doc, actor: GovernanceActor) {
   const original = store.get(expected.id, expected.version)
   const governance = getGovernanceEnvelope(current)
   return (

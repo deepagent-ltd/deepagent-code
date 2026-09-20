@@ -5,7 +5,7 @@ import { Snapshot } from "../snapshot"
 import * as Project from "./project"
 import * as Vcs from "./vcs"
 import { InstanceState } from "@/effect/instance-state"
-import { registerDisposer } from "@/effect/instance-registry"
+import { registerInstanceStateDisposer } from "@/effect/instance-registry"
 import { ShareNext } from "@/share/share-next"
 import { Search } from "@deepagent-code/core/filesystem/search"
 import { Effect, Layer, Scope } from "effect"
@@ -34,12 +34,9 @@ export const layer = Layer.effect(
     const vcs = yield* Vcs.Service
     const scope = yield* Scope.Scope
 
-    // once we dispose the service - also release all the internal fff resources
-    const off = registerDisposer((directory) => Effect.runPromise(search.release(directory)))
-    yield* Effect.addFinalizer(() => Effect.sync(off))
-
     const run = Effect.gen(function* () {
       const ctx = yield* InstanceState.context
+      registerInstanceStateDisposer(ctx, () => Effect.runPromise(search.release(ctx.directory)))
       yield* Effect.logInfo("bootstrapping").pipe(Effect.annotateLogs("directory", ctx.directory))
       // everything depends on config so eager load it for nice traces
       yield* config.get()
@@ -58,7 +55,7 @@ export const layer = Layer.effect(
       yield* Effect.forEach(
         [reference, lsp, shareNext, format, vcs, snapshot, project],
         (s) => s.init().pipe(Effect.catchCause((cause) => Effect.logWarning("init failed", { cause }))),
-        { concurrency: "unbounded", discard: true },
+        { concurrency: 16, discard: true },
       ).pipe(Effect.withSpan("InstanceBootstrap.init"))
     }).pipe(Effect.withSpan("InstanceBootstrap"))
 
@@ -66,19 +63,21 @@ export const layer = Layer.effect(
   }),
 )
 
-export const defaultLayer: Layer.Layer<Service> = layer.pipe(
-  Layer.provide([
-    Config.defaultLayer,
-    Format.defaultLayer,
-    LSP.defaultLayer,
-    Plugin.defaultLayer,
-    Project.defaultLayer,
-    Reference.defaultLayer,
-    Search.defaultLayer,
-    ShareNext.defaultLayer,
-    Snapshot.defaultLayer,
-    Vcs.defaultLayer,
-  ]),
-).pipe(Layer.orDie)
+export const defaultLayer: Layer.Layer<Service> = layer
+  .pipe(
+    Layer.provide([
+      Config.defaultLayer,
+      Format.defaultLayer,
+      LSP.defaultLayer,
+      Plugin.defaultLayer,
+      Project.defaultLayer,
+      Reference.defaultLayer,
+      Search.defaultLayer,
+      ShareNext.defaultLayer,
+      Snapshot.defaultLayer,
+      Vcs.defaultLayer,
+    ]),
+  )
+  .pipe(Layer.orDie)
 
 export * as InstanceBootstrap from "./bootstrap"

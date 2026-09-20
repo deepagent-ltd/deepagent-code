@@ -1,5 +1,7 @@
 export * as LMNEvents from "./lmn-events"
 
+import { readonlySet } from "../util/readonly-collections"
+
 // V4.0 §L/§M/§N — the canonical DeepAgentEvent `type` strings for wiring the existing V3.9 bodies
 // (Repo & Wiki, Expert Panel, Goal Loop) onto the Event Bus. These are NOT new mechanics — the bodies
 // already exist (V3.9); this module just fixes the event vocabulary so the producers (session loop,
@@ -108,15 +110,15 @@ export const AGENT_HANDOFF_REQUESTED = "agent.handoff.requested"
 
 // The set of event types that represent a TERMINAL outcome requiring human attention — the Oversight
 // Approval Queue (§D2) is populated from these. Kept as a set so the wiring can test membership.
-export const APPROVAL_QUEUE_TYPES: ReadonlySet<string> = new Set([
+export const APPROVAL_QUEUE_TYPES = readonlySet(new Set([
   GOAL_NEEDS_HUMAN,
   GOAL_ROLLED_BACK,
   AGENT_TASK_NEEDS_HUMAN,
   PANEL_VERDICT, // only when the verdict is needs_human — the wiring checks the payload
-])
+]))
 
 // The event types the §L ExecutionArchiver consumes to build Wiki execution-archive pages.
-export const ARCHIVE_TRIGGER_TYPES: ReadonlySet<string> = new Set([SESSION_COMPLETED, GOAL_COMPLETED])
+export const ARCHIVE_TRIGGER_TYPES = readonlySet(new Set([SESSION_COMPLETED, GOAL_COMPLETED]))
 
 // Is this event type a CANDIDATE for the Approval Queue? Renamed from a definitive-sounding
 // `isApprovalQueueType` because PANEL_VERDICT is only conditionally queued (on decision=needs_human) —

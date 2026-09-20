@@ -99,7 +99,13 @@ export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Per
   requestID: ID,
 }) {}
 
-export type Error = DeniedError | RejectedError | CorrectedError
+export const MAX_PENDING_REQUESTS = 512
+
+export class CapacityError extends Schema.TaggedErrorClass<CapacityError>()("PermissionV2.CapacityError", {
+  limit: Schema.Number,
+}) {}
+
+export type Error = DeniedError | RejectedError | CorrectedError | CapacityError
 
 export function evaluate(action: string, resource: string, ...rulesets: Ruleset[]): Rule {
   return (
@@ -117,8 +123,15 @@ export function merge(...rulesets: Ruleset[]): Ruleset {
   return rulesets.flat()
 }
 
+export function isActionWhollyDenied(action: string, ...rulesets: Ruleset[]): boolean {
+  return rulesets.some((rules) => {
+    const rule = rules.findLast((rule) => Wildcard.match(action, rule.action))
+    return rule?.resource === "*" && rule.effect === "deny"
+  })
+}
+
 export interface Interface {
-  readonly ask: (input: AssertInput) => EffectRuntime.Effect<AskResult, SessionNotFound.Error>
+  readonly ask: (input: AssertInput) => EffectRuntime.Effect<AskResult, SessionNotFound.Error | CapacityError>
   readonly assert: (input: AssertInput) => EffectRuntime.Effect<void, Error | SessionNotFound.Error>
   readonly reply: (input: ReplyInput) => EffectRuntime.Effect<void, NotFoundError>
   readonly get: (id: ID) => EffectRuntime.Effect<Request | undefined>
@@ -169,24 +182,36 @@ export const layer = Layer.effect(
       const session = yield* sessions.get(sessionID)
       if (!session) return yield* new SessionNotFound.Error({ sessionID })
       const agent = yield* agents.resolve(agentID ?? session.agent)
-      return agent?.permissions ?? missingAgentPermissions
+      return [agent?.permissions ?? missingAgentPermissions, session.permissions] as const
     })
 
-    function denied(input: AssertInput, rules: Ruleset) {
-      return input.resources.some((resource) => evaluate(input.action, resource, rules).effect === "deny")
+    function configuredEffect(action: string, resource: string, rulesets: readonly Ruleset[]): Effect {
+      const rules = rulesets
+        .map((rules) => rules.findLast((rule) => Wildcard.match(action, rule.action) && Wildcard.match(resource, rule.resource)))
+        .filter((rule): rule is Rule => rule !== undefined)
+      if (rules.some((rule) => rule.effect === "deny")) return "deny"
+      if (rules.some((rule) => rule.effect === "ask")) return "ask"
+      return rules.length > 0 ? "allow" : "ask"
     }
 
-    function relevant(input: AssertInput, rules: Ruleset) {
-      return rules.filter((rule) => Wildcard.match(input.action, rule.action))
+    function denied(input: AssertInput, rulesets: readonly Ruleset[]) {
+      return input.resources.some((resource) => configuredEffect(input.action, resource, rulesets) === "deny")
+    }
+
+    function relevant(input: AssertInput, rulesets: readonly Ruleset[]) {
+      return rulesets.flat().filter((rule) => Wildcard.match(input.action, rule.action))
     }
 
     const evaluateInput = EffectRuntime.fnUntraced(function* (input: AssertInput) {
-      const rules = yield* configured(input.sessionID, input.agent)
-      if (denied(input, rules)) return { effect: "deny" as const, rules }
-      const all = [...rules, ...(yield* savedRules())]
-      const effects = input.resources.map((resource) => evaluate(input.action, resource, all).effect)
+      const rulesets = yield* configured(input.sessionID, input.agent)
+      if (denied(input, rulesets)) return { effect: "deny" as const, rules: relevant(input, rulesets) }
+      const saved = yield* savedRules()
+      const effects = input.resources.map((resource) => {
+        const effect = configuredEffect(input.action, resource, rulesets)
+        return effect === "ask" ? evaluate(input.action, resource, saved).effect : effect
+      })
       const effect: Effect = effects.includes("deny") ? "deny" : effects.includes("ask") ? "ask" : "allow"
-      return { effect, rules: all }
+      return { effect, rules: [...rulesets.flat(), ...saved] }
     })
 
     function request(input: AssertInput): Request {
@@ -205,6 +230,7 @@ export const layer = Layer.effect(
       EffectRuntime.uninterruptible(
         EffectRuntime.gen(function* () {
           const deferred = yield* Deferred.make<void, RejectedError | CorrectedError>()
+          if (pending.size >= MAX_PENDING_REQUESTS) return yield* new CapacityError({ limit: MAX_PENDING_REQUESTS })
           const item = { request, agent, deferred }
           if (pending.has(request.id)) return yield* EffectRuntime.die(`Duplicate pending permission ID: ${request.id}`)
           pending.set(request.id, item)
@@ -228,7 +254,7 @@ export const layer = Layer.effect(
           const result = yield* evaluateInput(input)
           if (result.effect === "deny") {
             return yield* new DeniedError({
-              rules: relevant(input, result.rules),
+              rules: result.rules,
             })
           }
           if (result.effect === "allow") return
@@ -288,12 +314,12 @@ export const layer = Layer.effect(
           const rememberedRules = yield* savedRules()
           for (const [id, item] of pending) {
             const input = { ...item.request }
-            const rules = yield* configured(item.request.sessionID, item.agent).pipe(
+            const rulesets = yield* configured(item.request.sessionID, item.agent).pipe(
               EffectRuntime.catchTag("Session.NotFoundError", () => EffectRuntime.succeed(undefined)),
             )
-            if (!rules) continue
-            if (denied(input, rules)) continue
-            const effective = [...rules, ...rememberedRules]
+            if (!rulesets) continue
+            if (denied(input, rulesets)) continue
+            const effective = [...rulesets.flat(), ...rememberedRules]
             if (
               !item.request.resources.every(
                 (resource) => evaluate(item.request.action, resource, effective).effect === "allow",

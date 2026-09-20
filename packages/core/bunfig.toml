@@ -1,0 +1,10 @@
+[test]
+# Test processes behave like a RELEASE install: this preload sets
+# DEEPAGENT_CODE_VERSION (via test/fixture/install-version.ts) BEFORE any module in a worker
+# evaluates. `src/installation/version.ts` captures the global at module-eval time, and bun
+# test workers SHARE the module registry across the files they run — so without the preload a
+# worker whose first version-importing file was a non-owner test freezes
+# InstallationVersion="local", and the owner mint/seed suites then fail (identity_mismatch:
+# the minted file is signed for the package version but the seed verifier compares against
+# "local"). The preload makes the install version deterministic for every core test process.
+preload = ["./test/fixture/install-version.ts"]

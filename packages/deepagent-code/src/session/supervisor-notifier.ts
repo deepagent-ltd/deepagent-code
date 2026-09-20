@@ -2,6 +2,7 @@ export * as SupervisorNotifier from "./supervisor-notifier"
 
 import { Context, Deferred, Effect, Layer, Stream, Schedule, Duration, Cause } from "effect"
 import { and, eq, isNull, inArray } from "drizzle-orm"
+import { ConsumerReceipts } from "@deepagent-code/core/deepagent/consumer-receipts"
 import { Database } from "@deepagent-code/core/database/database"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
@@ -190,53 +191,72 @@ export const layerWith = (options?: LayerOptions) =>
 
           const { reason, content } = notifyContent(event)
 
-          // Push to each group. A DB error inside AgentPush surfaces as a defect → we catch the cause and
-          // nack for retry (transient). A POLICY outcome (blocked/digest/deliver) is a success of the gate,
-          // never a nack. The idempotencyKey pins one push per (event, group) so a retry never double-sends.
+          // C5-10 durable side-effect receipt: the multi-group push is ONE idempotency unit for this
+          // (push, event) pair. Per-group re-push safety comes from AgentPush's own idempotencyKey
+          // (`notify:<eventID>:<groupID>`), so a pending-receipt redelivery re-attempts the failing
+          // groups without double-sending to the groups that already succeeded:
+          //   - first delivery → receipt `pending` → push per group → receipt `done`;
+          //   - redelivery     → a `done` receipt returns "existing" → ack, nothing re-pushes;
+          //   - sink failure   → the receipt STAYS `pending` and the bus nack re-drives it.
+          // A POLICY outcome (blocked/digest/deliver) is a success of the gate, never a failure.
           let attempted = 0
-          let failed = false
-          for (const groupID of groups) {
-            const request: AgentPushPolicy.AgentPushRequest = {
-              workspaceID: event.workspaceID,
-              groupID,
-              agentID: SYSTEM_PUSHER_AGENT_ID,
-              reason,
-              // §E4 — human-attention escalations are urgent, so push at "high": they PUNCH THROUGH quiet
-              // hours (deliver-with-requiresReason) rather than being held for a digest. The reason is
-              // recorded on the audit row (§E4 requiresReason) as required.
-              priority: "high",
-              content,
-              idempotencyKey: `notify:${event.id}:${groupID}`,
-            }
-            const outcome = yield* pushRuntime
-              // §B2 — authorize via the workspace-push-permission leg (the notifier is the runtime, not a
-              // group member). Quiet-hours + rate + content-safety still run inside push.
-              .push(request, { hasWorkspacePushPermission: true })
-              .pipe(
-                Effect.map((r) => ({ ok: true as const, r })),
-                Effect.catchCause((cause) => Effect.succeed({ ok: false as const, cause })),
-              )
-            attempted++
-            if (!outcome.ok) {
-              failed = true
-              log.error("supervisor push failed", {
-                eventID: event.id,
-                groupID,
-                cause: Cause.pretty(outcome.cause),
-              })
-            } else {
-              log.info("supervisor notification pushed", {
-                eventID: event.id,
-                groupID,
-                decision: outcome.r.decision,
-              })
-            }
-          }
+          const outcome = yield* ConsumerReceipts.runOnce(db, {
+            consumerKind: "push",
+            sourceEventId: event.id,
+            sideEffect: Effect.gen(function* () {
+              let failed = false
+              for (const groupID of groups) {
+                const request: AgentPushPolicy.AgentPushRequest = {
+                  workspaceID: event.workspaceID,
+                  groupID,
+                  agentID: SYSTEM_PUSHER_AGENT_ID,
+                  reason,
+                  // §E4 — human-attention escalations are urgent, so push at "high": they PUNCH THROUGH
+                  // quiet hours (deliver-with-requiresReason) rather than being held for a digest. The
+                  // reason is recorded on the audit row (§E4 requiresReason) as required.
+                  priority: "high",
+                  content,
+                  idempotencyKey: `notify:${event.id}:${groupID}`,
+                }
+                const pushOutcome = yield* pushRuntime
+                  // §B2 — authorize via the workspace-push-permission leg (the notifier is the runtime,
+                  // not a group member). Quiet-hours + rate + content-safety still run inside push.
+                  .push(request, { hasWorkspacePushPermission: true })
+                  .pipe(
+                    Effect.map((r) => ({ ok: true as const, r })),
+                    Effect.catchCause((cause) => Effect.succeed({ ok: false as const, cause })),
+                  )
+                attempted++
+                if (!pushOutcome.ok) {
+                  failed = true
+                  log.error("supervisor push failed", {
+                    eventID: event.id,
+                    groupID,
+                    cause: Cause.pretty(pushOutcome.cause),
+                  })
+                } else {
+                  log.info("supervisor notification pushed", {
+                    eventID: event.id,
+                    groupID,
+                    decision: pushOutcome.r.decision,
+                  })
+                }
+              }
+              if (failed) return yield* Effect.fail(new Error("supervisor push failed"))
+            }),
+            now: Date.now(),
+          }).pipe(Effect.exit)
 
-          if (failed) {
+          if (outcome._tag === "Failure") {
             // at least one group's push errored transiently — nack so the pump re-drives (idempotent).
             yield* bus.nack({ subscriptionGroup: NOTIFY_GROUP, eventID: event.id, reason: "supervisor push failed" })
             return attempted
+          }
+          if (outcome.value.kind === "existing") {
+            // Redelivery of an already-completed push: the receipt is the once-run authority.
+            log.info("push receipt done; skipping redelivered push", { eventID: event.id })
+            yield* ack(event)
+            return 0
           }
           yield* ack(event)
           return attempted

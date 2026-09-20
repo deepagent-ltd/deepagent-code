@@ -226,7 +226,8 @@ export function overflowStatus(input: {
     }
   }
 
-  // User explicitly disabled autocompaction — return "ok" with a distinct reason.
+  // The user's own config disabled auto-compaction (`compaction.auto: false`). This is a product
+  // setting, not an ablation switch: the env escape hatch was removed so the mechanism ships on.
   if (input.cfg.compaction?.auto === false) {
     return { phase: "ok", reason: "auto_disabled", used, prefixTokens: prefix, softLine, fallbackLine, hardLine }
   }

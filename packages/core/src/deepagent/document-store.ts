@@ -2,6 +2,7 @@ import { mkdirSync, readdirSync, readFileSync, existsSync } from "node:fs"
 import { createHash } from "node:crypto"
 import path from "node:path"
 import { writeFileExclusive, writeRecoverableFileExclusive } from "./atomic-write"
+import { readonlySet } from "../util/readonly-collections"
 
 // V3 Document System (docs/28): the bedrock. All persistent state is a typed-document
 // graph — small files, content-addressed, append-only with a supersede chain, bidirectional
@@ -107,12 +108,12 @@ export type EvidenceStrength = "strong" | "medium" | "weak" | "none"
 // Phase 0 additions code_symbol/ledger/bridge are deliberately NOT here (roadmap C3, decision #4):
 // they are non-knowledge derived data (code entities, session state, cross-session handoff), so they
 // never require confidence and never pass the retrieve() whitelist (KNOWLEDGE_DOC_TYPES). Do not add.
-export const KNOWLEDGE_TYPES: ReadonlySet<DocType> = new Set<DocType>([
+export const KNOWLEDGE_TYPES = readonlySet(new Set<DocType>([
   "knowledge",
   "strategy",
   "methodology",
   "memory",
-])
+]))
 
 export type DocLink = { readonly rel: LinkRel; readonly to: string; readonly note?: string }
 export type Provenance = {
@@ -218,8 +219,8 @@ export const getGovernanceEnvelope = (doc: Doc): GovernanceEnvelope | undefined 
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined
   const governance = value as Record<string, unknown>
   if (typeof governance.fingerprint !== "string") return undefined
-  if (!['pending', 'approved', 'rejected', 'quarantined'].includes(String(governance.review_status))) return undefined
-  if (!['human', 'agent', 'model_reviewer', 'system'].includes(String(governance.actor_type))) return undefined
+  if (!["pending", "approved", "rejected", "quarantined"].includes(String(governance.review_status))) return undefined
+  if (!["human", "agent", "model_reviewer", "system"].includes(String(governance.actor_type))) return undefined
   if (typeof governance.actor_id !== "string") return undefined
   if (typeof governance.source_doc_ref !== "string") return undefined
   if (typeof governance.updated_at !== "number" || !Number.isFinite(governance.updated_at)) return undefined
@@ -372,12 +373,20 @@ const idToFile = (id: string): string => id.replace(/:/g, "__")
 // so two long-lived handles to the same root in one process do NOT see each other's writes — a
 // latent divergence the goal code today routes around with an out-of-band control channel. This
 // process-level registry, keyed by the RESOLVED absolute root, lets callers opt into a single shared
-// in-memory index via `DocumentStore.shared(root)`: every shared handle for a root reuses the same
-// `docs` Map, so a write through one handle is immediately visible through every other. The plain
+// in-memory index via `DocumentStore.shared(root)`: every LIVE shared handle for a root reuses the same
+// `docs` Map, so a write through one handle is immediately visible through every other. Registry values
+// are weak and dead keys are finalized/opportunistically swept, so completed Session roots are not
+// retained for the process lifetime. The plain
 // constructor is intentionally UNCHANGED (unshared, disk-rebuilt) so it keeps faithfully simulating a
 // cold/second-process reconstruction (the shape several recovery tests depend on). Cross-process
 // safety is provided by Part 1's exclusive-create CAS + atomic writes, not by this in-memory registry.
-const sharedIndexRegistry = new Map<string, Map<string, Map<number, Doc>>>()
+type SharedIndex = Map<string, Map<number, Doc>>
+type SharedIndexReference = { readonly key: string; readonly reference: WeakRef<SharedIndex> }
+
+const sharedIndexRegistry = new Map<string, WeakRef<SharedIndex>>()
+const sharedIndexFinalizers = new FinalizationRegistry<SharedIndexReference>(({ key, reference }) => {
+  if (sharedIndexRegistry.get(key) === reference) sharedIndexRegistry.delete(key)
+})
 
 export class DocumentStore {
   // id -> version -> Doc
@@ -392,17 +401,23 @@ export class DocumentStore {
     mkdirSync(path.join(root, "docs"), { recursive: true })
     if (shared) {
       const key = path.resolve(root)
-      let index = sharedIndexRegistry.get(key)
-      if (!index) {
-        // First shared handle for this root: build the authoritative shared index from disk once.
-        index = new Map<string, Map<number, Doc>>()
-        sharedIndexRegistry.set(key, index)
+      const index = sharedIndexRegistry.get(key)?.deref()
+      if (index) {
+        // Subsequent live handles reuse the same index; the registry itself does not keep it alive.
         this.docs = index
-        this.rebuildIndex()
-      } else {
-        // Subsequent shared handles reuse the live shared index (already coherent with prior writes).
-        this.docs = index
+        return
       }
+      // Clear dead keys opportunistically as well as through FinalizationRegistry. This keeps the
+      // registry bounded by live roots even when the host delays finalizer callbacks.
+      for (const [registeredKey, reference] of sharedIndexRegistry) {
+        if (!reference.deref()) sharedIndexRegistry.delete(registeredKey)
+      }
+      // First live shared handle for this root: rebuild from disk and publish only a weak reference.
+      this.docs = new Map<string, Map<number, Doc>>()
+      const reference = new WeakRef(this.docs)
+      sharedIndexRegistry.set(key, reference)
+      sharedIndexFinalizers.register(this.docs, { key, reference }, reference)
+      this.rebuildIndex()
       return
     }
     // Unshared (default): own index, rebuilt from disk — byte-identical to the pre-F30-1 behavior.
@@ -421,6 +436,7 @@ export class DocumentStore {
   // Test-only: drop the shared-index registry so a fresh process is simulated. Not part of the durable
   // contract — only used to keep unit tests hermetic when they exercise DocumentStore.shared.
   static __resetSharedRegistryForTests(): void {
+    for (const reference of sharedIndexRegistry.values()) sharedIndexFinalizers.unregister(reference)
     sharedIndexRegistry.clear()
   }
 
@@ -710,7 +726,9 @@ export class DocumentStore {
             violations.push({ invariant: "INV-3", docId: id, detail: `dangling link -> ${l.to}` })
         if (doc.superseded_by) {
           const target = `${id}@v`
-          const targetVersion = doc.superseded_by.startsWith(target) ? Number(doc.superseded_by.slice(target.length)) : NaN
+          const targetVersion = doc.superseded_by.startsWith(target)
+            ? Number(doc.superseded_by.slice(target.length))
+            : NaN
           if (!Number.isSafeInteger(targetVersion) || targetVersion <= v || !versions.has(targetVersion))
             violations.push({ invariant: "INV-4", docId: `${id}@v${v}`, detail: "invalid superseded_by target" })
         }

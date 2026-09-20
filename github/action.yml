@@ -35,7 +35,7 @@ inputs:
     required: false
 
   oidc_base_url:
-    description: "Base URL for OIDC token exchange API. Only required when running a custom GitHub App install. Defaults to https://api.deepagent-code.ai"
+    description: "Base URL for OIDC token exchange API. Only required when running a custom GitHub App install. Defaults to https://api.deepagent.ltd"
     required: false
 
 runs:
@@ -58,7 +58,7 @@ runs:
     - name: Install deepagent-code
       if: steps.cache.outputs.cache-hit != 'true'
       shell: bash
-      run: curl -fsSL https://deepagent-code.ai/install | bash
+      run: curl -fsSL https://deepagent.ltd/install | bash
 
     - name: Add deepagent-code to PATH
       shell: bash

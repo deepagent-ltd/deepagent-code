@@ -1,5 +1,6 @@
 import { App } from "@slack/bolt"
-import { createOpencode, type ToolPart } from "@deepagent-code/sdk"
+import { createHash } from "node:crypto"
+import { createDeepAgentCode, type SessionMessageAssistant } from "@deepagent-code/sdk"
 
 const app = new App({
   token: process.env.SLACK_BOT_TOKEN,
@@ -8,136 +9,141 @@ const app = new App({
   appToken: process.env.SLACK_APP_TOKEN,
 })
 
-console.log("🔧 Bot configuration:")
+console.log("Bot configuration:")
 console.log("- Bot token present:", !!process.env.SLACK_BOT_TOKEN)
 console.log("- Signing secret present:", !!process.env.SLACK_SIGNING_SECRET)
 console.log("- App token present:", !!process.env.SLACK_APP_TOKEN)
 
-console.log("🚀 Starting deepagent-code server...")
-const deepagentCode = await createOpencode({
-  port: 0,
-})
-console.log("✅ Opencode server ready")
+console.log("Starting deepagent-code server...")
+const shutdownController = new AbortController()
+const deepagentCode = await createDeepAgentCode({ port: 0, signal: shutdownController.signal })
+console.log("DeepAgent Core V2 server ready")
 
-const sessions = new Map<string, { client: any; server: any; sessionId: string; channel: string; thread: string }>()
-void (async () => {
-  const events = await deepagentCode.client.event.subscribe()
-  for await (const event of events.stream) {
-    if (event.type === "message.part.updated") {
-      const part = event.properties.part
-      if (part.type === "tool") {
-        // Find the session for this tool update
-        for (const [_sessionKey, session] of sessions.entries()) {
-          if (session.sessionId === part.sessionID) {
-            void handleToolUpdate(part, session.channel, session.thread)
-            break
-          }
-        }
-      }
-    }
-  }
-})()
+// One active queue per Slack thread serializes prompt/wait/message projection. Both the
+// number of active threads and queued messages per thread are bounded; entries are removed
+// by the owning handlers and never own durable Session identity.
+const pendingThreads = new Map<string, { tail: Promise<void>; count: number }>()
+const MAX_ACTIVE_THREADS = 128
+const MAX_PENDING_PER_THREAD = 16
 
-async function handleToolUpdate(part: ToolPart, channel: string, thread: string) {
-  if (part.state.status !== "completed") return
-  const toolMessage = `*${part.tool}* - ${part.state.title}`
-  await app.client.chat
-    .postMessage({
-      channel,
-      thread_ts: thread,
-      text: toolMessage,
-    })
-    .catch(() => {})
-}
-
-app.use(async ({ next, context }) => {
-  console.log("📡 Raw Slack event:", JSON.stringify(context, null, 2))
-  await next()
-})
-
-app.message(async ({ message, say }) => {
-  console.log("📨 Received message event:", JSON.stringify(message, null, 2))
-
-  if (message.subtype || !("text" in message) || !message.text) {
-    console.log("⏭️ Skipping message - no text or has subtype")
-    return
-  }
-
-  console.log("✅ Processing message:", message.text)
+app.message(async ({ message }) => {
+  if (message.subtype || !("text" in message) || !message.text) return
 
   const channel = message.channel
-  const thread = (message as any).thread_ts || message.ts
-  const sessionKey = `${channel}-${thread}`
-
-  let session = sessions.get(sessionKey)
-
-  if (!session) {
-    console.log("🆕 Creating new deepagent-code session...")
-    const { client, server } = deepagentCode
-
-    const createResult = await client.session.create({ title: `Slack thread ${thread}` })
-
-    if (createResult.error) {
-      console.error("❌ Failed to create session:", createResult.error)
-      await say({
-        text: "Sorry, I had trouble creating a session. Please try again.",
-        thread_ts: thread,
-      })
-      return
-    }
-
-    console.log("✅ Created deepagent-code session:", createResult.data.id)
-
-    session = { client, server, sessionId: createResult.data.id, channel, thread }
-    sessions.set(sessionKey, session)
-
-    const shareResult = await client.session.share({ sessionID: createResult.data.id })
-    if (!shareResult.error && shareResult.data) {
-      const sessionUrl = shareResult.data.share?.url
-      console.log("🔗 Session shared:", sessionUrl)
-      await app.client.chat.postMessage({ channel, thread_ts: thread, text: sessionUrl })
-    }
-  }
-
-  console.log("📝 Sending to deepagent-code:", message.text)
-  const result = await session.client.session.prompt({
-    path: { id: session.sessionId },
-    body: { parts: [{ type: "text", text: message.text }] },
-  })
-
-  console.log("📤 Opencode response:", JSON.stringify(result, null, 2))
-
-  if (result.error) {
-    console.error("❌ Failed to send message:", result.error)
-    await say({
-      text: "Sorry, I had trouble processing your message. Please try again.",
+  const thread = "thread_ts" in message && message.thread_ts ? message.thread_ts : message.ts
+  const key = JSON.stringify([channel, thread])
+  const existing = pendingThreads.get(key)
+  if ((!existing && pendingThreads.size >= MAX_ACTIVE_THREADS) || (existing?.count ?? 0) >= MAX_PENDING_PER_THREAD) {
+    await app.client.chat.postMessage({
+      channel,
       thread_ts: thread,
+      text: "DeepAgent is busy. Please retry after the current requests finish.",
     })
     return
   }
-
-  const response = result.data
-
-  // Build response text
-  const responseText =
-    response.info?.content ||
-    response.parts
-      ?.filter((p: any) => p.type === "text")
-      .map((p: any) => p.text)
-      .join("\n") ||
-    "I received your message but didn't have a response."
-
-  console.log("💬 Sending response:", responseText)
-
-  // Send main response (tool updates will come via live events)
-  await say({ text: responseText, thread_ts: thread })
+  const entry = existing ?? { tail: Promise.resolve(), count: 0 }
+  entry.count++
+  const current = entry.tail.catch(() => undefined).then(() => processMessage({ channel, thread, text: message.text! }))
+  entry.tail = current
+  pendingThreads.set(key, entry)
+  await current
+    .catch((error) =>
+      app.client.chat.postMessage({
+        channel,
+        thread_ts: thread,
+        text: `DeepAgent failed: ${error instanceof Error ? error.message : String(error)}`,
+      }),
+    )
+    .finally(() => {
+      entry.count--
+      if (entry.count === 0 && pendingThreads.get(key) === entry) pendingThreads.delete(key)
+    })
 })
 
-app.command("/test", async ({ command, ack, say }) => {
+async function processMessage(input: { readonly channel: string; readonly thread: string; readonly text: string }) {
+  const sessionID = `ses_${createHash("sha256")
+    .update(JSON.stringify(["slack.thread", JSON.stringify([input.channel, input.thread])]))
+    .digest("hex")}`
+  const created = await deepagentCode.client.v2.session.create({ id: sessionID })
+  if (created.error || !created.data) throw new Error(`Session create failed: ${JSON.stringify(created.error)}`)
+
+  const admitted = await deepagentCode.client.v2.session.prompt({
+    sessionID: created.data.data.id,
+    prompt: { text: input.text },
+    delivery: "queue",
+  })
+  if (admitted.error) throw new Error(`Prompt admission failed: ${JSON.stringify(admitted.error)}`)
+
+  const waited = await deepagentCode.client.v2.session.wait({ sessionID: created.data.data.id })
+  if (waited.error) throw new Error(`Session execution failed: ${JSON.stringify(waited.error)}`)
+
+  const messages = await deepagentCode.client.v2.session.messages({
+    sessionID: created.data.data.id,
+    order: "desc",
+    limit: 20,
+  })
+  if (messages.error || !messages.data) throw new Error(`Message projection failed: ${JSON.stringify(messages.error)}`)
+  const response = messages.data.data.find(
+    (message): message is SessionMessageAssistant => message.type === "assistant",
+  )
+  if (!response) throw new Error("Session settled without an assistant projection")
+
+  await Promise.all(
+    response.content.flatMap((part) =>
+      part.type === "tool" && (part.state.status === "completed" || part.state.status === "error")
+        ? [
+            app.client.chat.postMessage({
+              channel: input.channel,
+              thread_ts: input.thread,
+              text: `*${part.name}* — ${part.state.status}`,
+            }),
+          ]
+        : [],
+    ),
+  )
+  const text = response.content
+    .flatMap((part) => (part.type === "text" ? [part.text] : []))
+    .join("\n")
+    .trim()
+  await app.client.chat.postMessage({
+    channel: input.channel,
+    thread_ts: input.thread,
+    text: text || "DeepAgent completed without a text response.",
+  })
+}
+
+app.command("/test", async ({ ack, say }) => {
   await ack()
-  console.log("🧪 Test command received:", JSON.stringify(command, null, 2))
-  await say("🤖 Bot is working! I can hear you loud and clear.")
+  await say("DeepAgent Core V2 bot is running.")
 })
 
-await app.start()
-console.log("⚡️ Slack bot is running!")
+let shutdown: Promise<void> | undefined
+const stop = () => {
+  if (shutdown) return shutdown
+  process.off("SIGINT", onSignal)
+  process.off("SIGTERM", onSignal)
+  const task = app
+    .stop()
+    .then(() => Promise.allSettled([...pendingThreads.values()].map((entry) => entry.tail)))
+    .then(() => undefined)
+    .finally(() => {
+      shutdownController.abort()
+      deepagentCode.server.close()
+    })
+  shutdown = task
+  return task
+}
+const onSignal = () => {
+  void stop().catch((error) => console.error("Slack bot shutdown failed", error))
+}
+process.once("SIGINT", onSignal)
+process.once("SIGTERM", onSignal)
+
+await app.start().catch((error) => {
+  process.off("SIGINT", onSignal)
+  process.off("SIGTERM", onSignal)
+  shutdownController.abort()
+  deepagentCode.server.close()
+  throw error
+})
+console.log("Slack bot is running")

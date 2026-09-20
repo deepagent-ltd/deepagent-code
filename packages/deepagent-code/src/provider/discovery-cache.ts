@@ -15,7 +15,13 @@ import {
 
 const log = Log.create({ service: "provider-discovery-cache" })
 const AUTH_FAILURE_RETRY_MS = 60_000
+const MAX_AUTH_FAILURES = 128
 const authFailures = new Map<string, { error: unknown; retryAt: number }>()
+
+function pruneAuthFailures(now: number) {
+  for (const [key, value] of authFailures) if (value.retryAt <= now) authFailures.delete(key)
+  while (authFailures.size > MAX_AUTH_FAILURES) authFailures.delete(authFailures.keys().next().value!)
+}
 
 // Bounds on what an untrusted /models endpoint can inject into the provider model map. `id` becomes a
 // map key and `api.id` (flows into request payloads); `name` is display-only. Cap both count and
@@ -92,6 +98,7 @@ export const discoverModelsCached = Effect.fn("ProviderDiscovery.cached")(functi
 ) {
   const ttl = input.ttl ?? DEFAULT_DISCOVERY_TTL
   const filepath = cacheFile(input)
+  pruneAuthFailures(Date.now())
   const blocked = authFailures.get(filepath)
   if (!force && blocked && blocked.retryAt > Date.now()) return yield* Effect.fail(blocked.error)
   if (blocked) authFailures.delete(filepath)
@@ -157,6 +164,7 @@ export const discoverModelsCached = Effect.fn("ProviderDiscovery.cached")(functi
         Effect.gen(function* () {
           if (isProviderDiscoveryAuthError(error)) {
             authFailures.set(filepath, { error, retryAt: Date.now() + AUTH_FAILURE_RETRY_MS })
+            pruneAuthFailures(Date.now())
             log.warn("model discovery authentication failed", { providerID: input.providerID, error })
             return yield* Effect.fail(error)
           }

@@ -1,6 +1,7 @@
 import { Binary } from "@deepagent-code/core/util/binary"
 import { produce, reconcile, type SetStoreFunction, type Store } from "solid-js/store"
 import type {
+  EventPermissionV2Asked,
   Message,
   Part,
   PermissionRequest,
@@ -11,6 +12,7 @@ import type {
   SnapshotFileDiff,
 } from "@deepagent-code/sdk/client"
 import type { State, VcsCache, SessionPlan, SessionGoal, SessionPlanUpdateOptions } from "./types"
+import { permissionRequestFromV2 } from "./permission-v2"
 import { trimSessions } from "./session-trim"
 import { dropSessionCaches } from "./session-cache"
 import { diffs as list, message as clean } from "@/utils/diffs"
@@ -424,8 +426,21 @@ export function applyDirectoryEvent(input: {
       if (input.vcsCache) input.vcsCache.setStore("value", next)
       break
     }
-    case "permission.asked": {
-      const permission = event.properties as PermissionRequest
+    case "permission.asked":
+    case "permission.v2.asked": {
+      // V2 asks carry the PermissionV2 vocabulary; normalize to the legacy PermissionRequest shape
+      // the dock renders and record provenance so replies take the session-scoped V2 route.
+      const permission =
+        event.type === "permission.v2.asked"
+          ? permissionRequestFromV2(event.properties as EventPermissionV2Asked["properties"])
+          : (event.properties as PermissionRequest)
+      if (event.type === "permission.v2.asked") {
+        input.setStore(
+          produce((draft) => {
+            ;(draft.permission_v2[permission.sessionID] ??= {})[permission.id] = true
+          }),
+        )
+      }
       const permissions = input.store.permission[permission.sessionID]
       if (!permissions) {
         input.setStore("permission", permission.sessionID, [permission])
@@ -445,8 +460,17 @@ export function applyDirectoryEvent(input: {
       )
       break
     }
-    case "permission.replied": {
+    case "permission.replied":
+    case "permission.v2.replied": {
       const props = event.properties as { sessionID: string; requestID: string }
+      input.setStore(
+        produce((draft) => {
+          const tracked = draft.permission_v2[props.sessionID]
+          if (!tracked) return
+          delete tracked[props.requestID]
+          if (Object.keys(tracked).length === 0) delete draft.permission_v2[props.sessionID]
+        }),
+      )
       const permissions = input.store.permission[props.sessionID]
       if (!permissions) break
       const result = Binary.search(permissions, props.requestID, (p) => p.id)

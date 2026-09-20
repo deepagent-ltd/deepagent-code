@@ -1,10 +1,11 @@
 import { Effect, Layer } from "effect"
 import { LLM, ToolDefinition } from "../../src"
-import { deepseek } from "../../src/providers/openai-compatible"
+import { configure } from "../../src/providers/openai-compatible"
 import { LLMClient, RequestExecutor, WebSocketExecutor } from "../../src/route"
 import { assertTextResponse, assertToolResponse } from "./assertions"
 import {
   liveLLMArtifactDirectory,
+  liveLLMFingerprintFromEnvironment,
   loadLiveLLMConfig,
   modelFingerprint,
   preflightLiveLLM,
@@ -17,12 +18,7 @@ const suite = "provider-smoke"
 const startedAt = new Date().toISOString()
 const bootstrap = {
   artifactDirectory: liveLLMArtifactDirectory(),
-  fingerprint: {
-    providerID: "deepseek",
-    modelID: process.env.DEEPAGENT_CODE_LIVE_LLM_MODEL?.trim() || "deepseek-v4-flash",
-    modelRevision: process.env.DEEPAGENT_CODE_LIVE_LLM_REVISION?.trim() || undefined,
-    baseURL: (process.env.DEEPAGENT_CODE_LIVE_LLM_BASE_URL?.trim() || "https://api.deepseek.com").replace(/\/$/, ""),
-  } satisfies ModelFingerprint,
+  fingerprint: liveLLMFingerprintFromEnvironment(),
 }
 await writeLiveArtifact(bootstrap, suite, {
   suite,
@@ -36,10 +32,12 @@ await writeLiveArtifact(bootstrap, suite, {
 const config = await loadLiveLLMConfig().catch((error: unknown) =>
   failProviderSmoke(bootstrap, bootstrap.fingerprint, error, "configuration", startedAt),
 )
+// GLM 5.x models always think and reject thinking:disabled (API error 1210) — request low effort instead.
+const thinkingControl = config.providerID === "zai" ? { reasoning_effort: "low" } : { thinking: { type: "disabled" } }
 const preflight = await preflightLiveLLM(config).catch((error: unknown) =>
   failProviderSmoke(config, modelFingerprint(config), error, "preflight", startedAt),
 )
-const provider = deepseek.configure({ baseURL: config.baseURL, apiKey: config.apiKey })
+const provider = configure({ provider: config.providerID, baseURL: config.baseURL, apiKey: config.apiKey })
 const model = provider.model(config.modelID)
 const dependencies = Layer.mergeAll(RequestExecutor.defaultLayer, WebSocketExecutor.layer)
 const client = LLMClient.layer.pipe(Layer.provide(dependencies))
@@ -51,8 +49,8 @@ const program = Effect.gen(function* () {
     LLM.request({
       model,
       prompt: "Reply with a short acknowledgement.",
-      generation: { maxTokens: 64, temperature: 0 },
-      http: { body: { thinking: { type: "disabled" } } },
+      generation: { maxTokens: config.providerID === "zai" ? 512 : 64, temperature: 0 },
+      http: { body: thinkingControl },
     }),
   )
   if (prepared.model.provider !== config.providerID || prepared.model.id !== config.modelID) {
@@ -66,8 +64,8 @@ const program = Effect.gen(function* () {
         model,
         system: "Follow the user instruction exactly and answer briefly.",
         prompt: "Reply with a short acknowledgement.",
-        generation: { maxTokens: 64, temperature: 0 },
-        http: { body: { thinking: { type: "disabled" } } },
+        generation: { maxTokens: config.providerID === "zai" ? 512 : 64, temperature: 0 },
+        http: { body: thinkingControl },
       }),
     ),
   )
@@ -95,8 +93,8 @@ const program = Effect.gen(function* () {
           }),
         ],
         toolChoice: "echo_special",
-        generation: { maxTokens: 128, temperature: 0 },
-        http: { body: { thinking: { type: "disabled" } } },
+        generation: { maxTokens: config.providerID === "zai" ? 512 : 128, temperature: 0 },
+        http: { body: thinkingControl },
       }),
     ),
     "echo_special",

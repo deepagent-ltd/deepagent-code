@@ -11,12 +11,17 @@ import type { EventTypeRegistration, RegisteredEventEnvelope } from "@deepagent-
 import { assertPublishable, createEventRegistry } from "@deepagent-code/core/deepagent/event-registry"
 import { commandEnvelope, HASH } from "./event-fixture"
 import type { WorkBudget, WorkContextQuery } from "@deepagent-code/core/contract/event-envelope"
+import { createRuntimeFeatureRegistry } from "@deepagent-code/core/flag/runtime-features"
 
 // C5-09 — IM single-write: one durable receipt + one execution owner through the E4a admission bridge;
 // OFF defaults to `im_single_write_unavailable` + legacy behavior preserved; ownership fencing rejects a
 // competing owner. Design §B1 (the IM double-write) + §8.4 (bounded envelope admission receipt).
 
 type Db = Database.Interface["db"]
+
+const singleWriteOff = createRuntimeFeatureRegistry(undefined, {
+  [ImSingleWrite.IM_SINGLE_WRITE_ENV]: "false",
+})
 
 const imReg: EventTypeRegistration = {
   eventType: "im.message.created",
@@ -251,26 +256,22 @@ describe("C5-09 IM single-write", () => {
   })
 
   test("OFF: the single-write path is a typed `im_single_write_unavailable` (legacy path authoritative)", async () => {
-    process.env[ImSingleWrite.IM_SINGLE_WRITE_ENV] = "false"
-    try {
-      await run((db) =>
-        Effect.gen(function* () {
-          const envelope = build(imEnvelope("e-im-5"))
-          const err = yield* refusalOf(
-            ImSingleWrite.admit(db, {
-              imMessageId: "msg-5",
-              envelope,
-              sessionID: SESSION,
-              ownerID: "owner-1",
-              sessionAdapter: recorder([]),
-              now: 10,
-            }),
-          )
-          expect(err?.reason).toBe("im_single_write_unavailable")
-        }),
-      )
-    } finally {
-      process.env[ImSingleWrite.IM_SINGLE_WRITE_ENV] = "true"
-    }
+    await run((db) =>
+      Effect.gen(function* () {
+        const envelope = build(imEnvelope("e-im-5"))
+        const err = yield* refusalOf(
+          ImSingleWrite.admit(db, {
+            imMessageId: "msg-5",
+            envelope,
+            sessionID: SESSION,
+            ownerID: "owner-1",
+            sessionAdapter: recorder([]),
+            now: 10,
+            runtimeFeatures: singleWriteOff,
+          }),
+        )
+        expect(err?.reason).toBe("im_single_write_unavailable")
+      }),
+    )
   })
 })

@@ -39,7 +39,6 @@ import { SessionV2 } from "@deepagent-code/core/session"
 import { Session } from "./session"
 import { Agent } from "../agent/agent"
 import { Snapshot } from "../snapshot"
-import { SessionPrompt } from "./prompt"
 import { SessionRevert } from "./revert"
 import { SessionSteer } from "./steer"
 import { LSP } from "../lsp/lsp"
@@ -214,7 +213,6 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const sessions = yield* Session.Service
     const agents = yield* Agent.Service
-    const sessionPrompt = yield* SessionPrompt.Service
     const revert = yield* SessionRevert.Service
     // §S1.3 — the durable steer buffer the goal driver drains between ticks (goal-directed steering).
     const steerBuffer = yield* SessionSteer.Service
@@ -223,9 +221,11 @@ export const layer = Layer.effect(
     const provider = yield* Provider.Service
     const lsp = yield* LSP.Service
     const flags = yield* RuntimeFlags.Service
-    // §16.3 order 3 caller wiring: flag-gated V2 subagent drive. serviceOption keeps compositions
-    // that don't assemble the V2 session stack on the legacy path even with the flag on.
-    const { v2Session, snapshot: v2Snapshot } = yield* GoalLoopWiring.resolveV2SubagentDrive()
+    // Capture the V2 owner explicitly — it is REQUIRED (the legacy SessionPrompt subagent fallback is
+    // deleted), so a composition without the SessionV2 stack fails at layer build, not on first turn.
+    // A sibling layer is not an input dependency.
+    const v2Session = yield* SessionV2.Service
+    const v2Snapshot = yield* Snapshot.Service
     // V4.0 §N — the event bus + Approval Queue the goal loop escalates through. Only used when the
     // event-driven runtime flag is on (default OFF → behavior byte-identical to V3.9).
     const eventBus = yield* DeepAgentEventBus.Service
@@ -450,12 +450,12 @@ export const layer = Layer.effect(
         const runTurn = makeTaskSubagentRunner({
           sessions,
           agents,
-          sessionPrompt,
           parentSessionID: SessionID.make(sessionID),
           model,
           allowPlanWriteCapability: true,
           purpose: "goal-loop",
-          ...GoalLoopWiring.v2DriveDeps(v2Session, v2Snapshot, flags.coreV2Only),
+          v2Session,
+          snapshot: v2Snapshot,
         })
 
         // §S1.3 — ONE goal-steer relay per run, shared by the wiring (executor threads staged guidance
@@ -670,12 +670,12 @@ export const layer = Layer.effect(
         const runTurn = makeTaskSubagentRunner({
           sessions,
           agents,
-          sessionPrompt,
           parentSessionID: SessionID.make(sessionID),
           model,
           allowPlanWriteCapability: true,
           purpose: "goal-loop",
-          ...GoalLoopWiring.v2DriveDeps(v2Session, v2Snapshot, flags.coreV2Only),
+          v2Session,
+          snapshot: v2Snapshot,
         })
         // §S1.3 — a fresh relay for the resumed run (steers admitted while paused are still pending in the
         // durable buffer, so the resumed driver re-drains and threads them on its first tick — no loss).
@@ -868,11 +868,10 @@ const planEditAdmission = <A>(operation: () => A): Effect.Effect<A, GoalPlanEdit
     },
   })
 
-export const defaultLayer = Layer.suspend(() =>
+export const productionLayer = Layer.suspend(() =>
   layer.pipe(
     Layer.provide(Session.defaultLayer),
     Layer.provide(Agent.defaultLayer),
-    Layer.provide(SessionPrompt.defaultLayer),
     Layer.provide(SessionRevert.defaultLayer),
     Layer.provide(SessionSteer.defaultLayer),
     Layer.provide(EventV2Bridge.defaultLayer),
@@ -880,9 +879,13 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(Provider.defaultLayer),
     Layer.provide(LSP.defaultLayer),
     Layer.provide(RuntimeFlags.defaultLayer),
+    Layer.provide(Snapshot.defaultLayer),
     Layer.provide(DeepAgentEventBus.defaultLayer),
     Layer.provide(ApprovalQueue.defaultLayer),
   ),
 )
+
+/** Standalone default. Production roots must provide one shared SessionV2 runtime to productionLayer. */
+export const defaultLayer = productionLayer.pipe(Layer.provide(SessionV2.liveLayer))
 
 export * as GoalManager from "./goal-manager"

@@ -8,10 +8,11 @@ import {
   preflightLiveLLM,
   writeLiveArtifact,
 } from "../../../llm/script/live-llm/config"
+import { liveProviderLabel, prepareHarnessOwner, runtimeProviderIDFor } from "./runtime"
 
 const suite = "v2-provider-loop"
-const runtimeProviderID = "live-deepseek"
 const config = await loadLiveLLMConfig()
+const runtimeProviderID = runtimeProviderIDFor(config)
 const preflight = await preflightLiveLLM(config)
 const testRoot = await mkdtemp(path.join(os.tmpdir(), "deepagent-code-v2-live-llm-"))
 const workspace = path.join(testRoot, "workspace")
@@ -20,6 +21,7 @@ const isolatedData = path.join(testRoot, "deepagent-home")
 
 await mkdir(workspace, { recursive: true })
 await mkdir(isolatedHome, { recursive: true })
+await mkdir(isolatedData, { recursive: true })
 process.env.HOME = isolatedHome
 process.env.XDG_DATA_HOME = path.join(testRoot, "data")
 process.env.XDG_CONFIG_HOME = path.join(testRoot, "config")
@@ -32,6 +34,8 @@ process.env.DEEPAGENT_CODE_DISABLE_MODELS_FETCH = "1"
 process.env.DEEPAGENT_CODE_DISABLE_DEFAULT_PLUGINS = "1"
 process.env.DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE = config.apiKeyFile
 process.env.DEEPAGENT_ENABLED = "false"
+// Qualify the V2 owner gate AFTER env isolation but BEFORE any layer boots.
+const ownerSetup = await prepareHarnessOwner()
 
 await Bun.write(
   path.join(workspace, "deepagent-code.json"),
@@ -50,7 +54,7 @@ await Bun.write(
     },
     provider: {
       [runtimeProviderID]: {
-        name: "DeepSeek V2 live test",
+        name: `${liveProviderLabel(config)} V2 live test`,
         env: [],
         npm: "@ai-sdk/openai-compatible",
         api: config.baseURL,
@@ -58,19 +62,22 @@ await Bun.write(
         models: {
           [config.modelID]: {
             id: config.modelID,
-            name: "DeepSeek V4 Flash live test",
-            reasoning: false,
-            temperature: true,
+            name: `${config.modelID} live test`,
+            reasoning: config.providerID !== "deepseek",
+            temperature: config.providerID === "deepseek",
             tool_call: true,
             release_date: "2026-07-27",
             limit: { context: 1_000_000, output: 1024 },
             cost: { input: 0, output: 0 },
             modalities: { input: ["text"], output: ["text"] },
-            options: {
-              thinking: { type: "disabled" },
-              maxTokens: 256,
-              temperature: 0,
-            },
+            options:
+              config.providerID === "deepseek"
+                ? {
+                    thinking: { type: "disabled" },
+                    maxTokens: 256,
+                    temperature: 0,
+                  }
+                : { reasoningEffort: "low", maxTokens: 1024 },
           },
         },
       },
@@ -98,6 +105,7 @@ const { ProjectV2 } = await import("../../src/project")
 const { ProviderV2 } = await import("../../src/provider")
 const { AbsolutePath } = await import("../../src/schema")
 const { SessionV2 } = await import("../../src/session")
+const { Delegation } = await import("../../src/tool/delegation")
 const { SessionEvent } = await import("../../src/session/event")
 const { V2ProviderTurnReceiptTable } = await import("../../src/session/runner/v2-provider-turn.sql")
 const sessionExecutionLocal = await import("../../src/session/execution/local")
@@ -144,6 +152,7 @@ const execution = sessionExecutionLocal.layer.pipe(
   Layer.provide(store),
   Layer.provide(events),
   Layer.provide(locations),
+  Layer.provide(Delegation.delegationSlotLayer),
 )
 const sessions = SessionV2.layer.pipe(
   Layer.provide(events),
@@ -162,7 +171,8 @@ const liveLayer = Layer.mergeAll(
   locations,
   execution,
   sessions,
-)
+).pipe(Layer.provide(ownerSetup.ownerLayer))
+await ownerSetup.seedRow()
 
 const program = Effect.gen(function* () {
   const service = yield* SessionV2.Service

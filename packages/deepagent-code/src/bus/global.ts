@@ -19,10 +19,16 @@ class GlobalBusEmitter extends EventEmitter<GlobalBusEvents> {
   ): boolean {
     const event = eventName === "event" ? (args[0] as GlobalEvent | undefined) : undefined
     if (event?.payload && typeof event.payload === "object" && !("id" in event.payload)) {
-      event.payload.id = event.payload.syncEvent?.id ?? Identifier.create("evt", "ascending")
+      return super.emit("event", {
+        ...event,
+        payload: {
+          ...event.payload,
+          id: event.payload.syncEvent?.id ?? Identifier.create("evt", "ascending"),
+        },
+      })
     }
     return super.emit(eventName, ...(args as K extends keyof GlobalBusEvents ? GlobalBusEvents[K] : never))
   }
 }
 
-export const GlobalBus = new GlobalBusEmitter()
+export const GlobalBus = new GlobalBusEmitter({ captureRejections: true }).setMaxListeners(2048)

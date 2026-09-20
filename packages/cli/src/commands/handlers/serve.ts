@@ -1,13 +1,9 @@
 import { NodeHttpServer } from "@effect/platform-node"
-import { Database } from "@deepagent-code/core/database/database"
-import { EventV2 } from "@deepagent-code/core/event"
-import { LocationServiceMap } from "@deepagent-code/core/location-layer"
-import { PermissionSaved } from "@deepagent-code/core/permission/saved"
-import { Context, Layer, Option } from "effect"
+import { Cause, Context, Layer, Option } from "effect"
 import * as Effect from "effect/Effect"
 import { HttpRouter, HttpServer } from "effect/unstable/http"
 import { createServer } from "node:http"
-import { createRoutes } from "@deepagent-code/server/routes"
+import { createRoutes, runtimeLayer } from "@deepagent-code/server/routes"
 import { Commands } from "../commands"
 import { Runtime } from "../../framework/runtime"
 import { Daemon } from "../../services/daemon"
@@ -39,8 +35,20 @@ export default Runtime.handler(
 function listen(hostname: string, port: Option.Option<number>, password: string) {
   if (Option.isSome(port)) return bind(hostname, port.value, password)
   // Preserve the familiar default when available, but let the OS choose a free
-  // port when another local server already owns 4096.
-  return bind(hostname, 4096, password).pipe(Effect.catch(() => bind(hostname, 0, password)))
+  // port only when another local server already owns 4096. Runtime/bootstrap
+  // failures must remain visible and must never be retried under a different port.
+  return bind(hostname, 4096, password).pipe(
+    Effect.catchCause((cause) =>
+      errorCode(Cause.squash(cause)) === "EADDRINUSE" ? bind(hostname, 0, password) : Effect.failCause(cause),
+    ),
+  )
+}
+
+function errorCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null) return undefined
+  if ("code" in error && typeof error.code === "string") return error.code
+  if ("cause" in error) return errorCode(error.cause)
+  return undefined
 }
 
 function bind(hostname: string, port: number, password: string) {
@@ -49,10 +57,7 @@ function bind(hostname: string, port: number, password: string) {
       Layer.provideMerge(NodeHttpServer.layer(() => createServer(), { port, host: hostname })),
     ),
   ).pipe(
-    Effect.provide(LocationServiceMap.layer),
-    Effect.provide(Database.defaultLayer),
-    Effect.provide(EventV2.defaultLayer),
-    Effect.provide(PermissionSaved.defaultLayer),
+    Effect.provide(runtimeLayer),
     Effect.map((context) => Context.get(context, HttpServer.HttpServer).address),
   )
 }

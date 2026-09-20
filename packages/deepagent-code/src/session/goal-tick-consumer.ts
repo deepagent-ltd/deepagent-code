@@ -1,6 +1,8 @@
 export * as GoalTickConsumer from "./goal-tick-consumer"
 
 import { Context, Deferred, Effect, Layer, Option, Stream, Schedule, Duration, Cause } from "effect"
+import { ConsumerReceipts } from "@deepagent-code/core/deepagent/consumer-receipts"
+import { Database } from "@deepagent-code/core/database/database"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
 import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
@@ -164,6 +166,7 @@ export const layerWith = (options: LayerOptions) =>
     Effect.gen(function* () {
       const bus = yield* DeepAgentEventBus.Service
       const flags = yield* RuntimeFlags.Service
+      const { db } = yield* Database.Service
       const runTick = options.runTick
       const runLoop = options.runLoop ?? true
       const retryPumpIntervalMs = options.retryPumpIntervalMs ?? DEFAULT_RETRY_PUMP_INTERVAL_MS
@@ -264,13 +267,53 @@ export const layerWith = (options: LayerOptions) =>
             }
           }
 
-          // Execute exactly ONE tick. A defect degrades to a nack so the bus retries the REAL tick.
-          const outcome = yield* runTick(request).pipe(
-            Effect.map((r) => ({ ok: true as const, r })),
-            Effect.catchCause((cause) => Effect.succeed({ ok: false as const, cause })),
-          )
+          // Execute exactly ONE tick — C5-10 durable side-effect receipt. The tick + the self-driving
+          // chain re-emit are ONE idempotency unit for this (goal_tick, event) pair:
+          //   - first delivery → receipt `pending` → runTick → re-emit (if continue) → receipt `done`;
+          //   - redelivery     → a `done` receipt returns "existing" and runs NOTHING again (the receipt
+          //                       is the durable dedupe of the completed tick — cold-recovery safe);
+          //   - sink failure   → the receipt STAYS `pending` and the bus nack re-drives the real side
+          //                       effect (the port's seq guard makes the re-run a no-op; the re-emit
+          //                       rides the bus idempotencyKey `goal:tick:<goalId>:<seq>`).
+          // A defect degrades to a nack so the bus retries the REAL tick.
+          const outcome = yield* ConsumerReceipts.runOnce(db, {
+            consumerKind: "goal_tick",
+            sourceEventId: event.id,
+            sideEffect: runTick(request).pipe(
+              Effect.tap(({ progress, nextSeq, nextExpectedPlanVersion }) =>
+                progress === "continue"
+                  ? bus.publish(
+                      tickCommand({
+                        sessionID: request.sessionID,
+                        goalId: request.goalId,
+                        planDocId: request.planDocId,
+                        seq: nextSeq,
+                        expectedPlanVersion: nextExpectedPlanVersion,
+                        workspaceID: request.workspaceID,
+                      }),
+                    ).pipe(
+                      Effect.tap(() =>
+                        Effect.logInfo("goal tick executed; re-emitted next command", {
+                          goalId: request.goalId,
+                          seq: request.seq,
+                          nextSeq,
+                        }),
+                      ),
+                    )
+                  : // terminal / paused / stopped: do NOT re-emit. The terminal FACT (goal.completed /
+                    // needs_human / rolled_back) is emitted by the tick's own onStatus port; resume
+                    // re-seeds the chain for a paused goal.
+                    Effect.logInfo("goal tick chain halted", {
+                      goalId: request.goalId,
+                      seq: request.seq,
+                      progress,
+                    }),
+              ),
+            ),
+            now: Date.now(),
+          }).pipe(Effect.exit)
 
-          if (!outcome.ok) {
+          if (outcome._tag === "Failure") {
             log.error("goal tick execution failed; nacking for retry", {
               eventID: event.id,
               goalId: request.goalId,
@@ -279,32 +322,16 @@ export const layerWith = (options: LayerOptions) =>
             yield* bus.nack({ subscriptionGroup: TICK_GROUP, eventID: event.id, reason: "goal tick execution failed" })
             return
           }
-
-          const { progress, nextSeq, nextExpectedPlanVersion } = outcome.r
-          if (progress === "continue") {
-            // Self-driving chain: publish the NEXT command. nextSeq advanced (progress → ledger.ticks++,
-            // no-progress replay → stallCount++), so its key differs and the bus publishes it — the chain
-            // never silently dies on a no-progress tick (the loop's stall guard still escalates).
-            yield* bus.publish(
-              tickCommand({
-                sessionID: request.sessionID,
-                goalId: request.goalId,
-                planDocId: request.planDocId,
-                seq: nextSeq,
-                expectedPlanVersion: nextExpectedPlanVersion,
-                workspaceID: request.workspaceID,
-              }),
-            )
-            log.info("goal tick executed; re-emitted next command", {
+          if (outcome.value.kind === "existing") {
+            // Redelivery of an already-completed tick (crash after `done`, or a replayed delivery):
+            // ack without re-running — the durable receipt is the once-run authority.
+            log.info("goal tick receipt done; skipping redelivered tick", {
+              eventID: event.id,
               goalId: request.goalId,
               seq: request.seq,
-              nextSeq,
             })
-          } else {
-            // terminal / paused / stopped: do NOT re-emit. The terminal FACT (goal.completed /
-            // needs_human / rolled_back) is emitted by the tick's own onStatus port; resume re-seeds the
-            // chain for a paused goal.
-            log.info("goal tick chain halted", { goalId: request.goalId, seq: request.seq, progress })
+            yield* ack(event)
+            return
           }
           yield* ack(event)
         })

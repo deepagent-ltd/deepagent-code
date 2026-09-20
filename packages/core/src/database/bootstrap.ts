@@ -190,7 +190,7 @@ const buildDiagnostics = (
   issue?: PreflightIssue,
   extras?: Partial<BootstrapDiagnostics>,
 ): BootstrapDiagnostics => ({
-  stableCode: issue?.code ?? (mode === "ready" ? "ready" : phase),
+  stableCode: issue?.code ?? extras?.stableCode ?? (mode === "ready" ? "ready" : phase),
   mode,
   phase,
   sqliteExtendedCode: issue?.sqliteExtendedCode ?? extras?.sqliteExtendedCode,
@@ -269,6 +269,35 @@ export const describeBootstrap = (input: BootstrapInput, options: DescribeOption
     return state("backup_required", "ready", options, "backup required before migration")
   return state("migration_applying", "ready", options, "applying forward migrations")
 }
+
+/** Builds the typed fail-closed state for an anomaly discovered after the writable DB was opened. */
+export const startupRecoveryState = (
+  options: DescribeOptions,
+  input: {
+    readonly stableCode: string
+    readonly message: string
+    readonly table?: string
+    readonly key?: string
+  },
+): BootstrapState =>
+  state("read_only_recovery", "read_only_recovery", options, input.message, undefined, {
+    stableCode: input.stableCode,
+    table: input.table,
+    key: input.key,
+  })
+
+/** A consistency backup could not be created or verified, so migration must not start. */
+export const backupFailureState = (options: DescribeOptions, message: string): BootstrapState =>
+  state("blocked_schema", "blocked_schema", options, message, undefined, { stableCode: "backup_failed" })
+
+/**
+ * Terminal state published by the process that already owns the lifetime database lock and has
+ * completed migration, post-verify, capability validation, and startup-inventory validation.
+ * Re-running the external preflight at that point would observe this process's own lock and
+ * incorrectly classify it as another active process.
+ */
+export const readyState = (options: DescribeOptions): BootstrapState =>
+  state("ready", "ready", options, "database ready")
 
 /**
  * Error raised by the business Database layer when bootstrap is NOT ready. It

@@ -12,11 +12,12 @@ import { buildProfile } from "../../src/deepagent/profile-builder"
 import { activationForProfile } from "../../src/deepagent/knowledge-retriever"
 import { configureRegistry, type ExtendedProblemProfile } from "../../src/deepagent/domain-pack-registry"
 import { deterministicToolPolicy, shouldActivateQueryControls } from "../../src/deepagent/deterministic-task"
+import { tmpRoot, tmpRootShared } from "../fixture/tmpdir"
 
 beforeAll(() => configureRegistry(undefined))
 
 const withWorkspace = (fn: (cwd: string) => void) => {
-  const cwd = mkdtempSync(path.join(tmpdir(), "deepagent-feat002-"))
+  const cwd = mkdtempSync(tmpRootShared())
   try {
     fn(cwd)
   } finally {

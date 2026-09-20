@@ -83,7 +83,7 @@ if (completed[0] && (!completed[0].output?.includes(marker) || !observation?.fin
 if (prompt.includes(marker)) failures.push({ classification: "runtime", message: "MCP marker leaked into the prompt" })
 if (
   observation?.models.some(
-    (model) => model.providerID !== "live-deepseek" || model.modelID !== artifact.fingerprint.modelID,
+    (model) => model.providerID !== artifact.fingerprint.runtimeProviderID || model.modelID !== artifact.fingerprint.modelID,
   )
 ) {
   failures.push({ classification: "runtime", message: "MCP marker used the wrong provider/model identity" })

@@ -13,7 +13,11 @@
  * The gate is script+test only (never imported by production src), so it carries zero
  * overhead when unused.
  */
+import { createHash } from "node:crypto"
+import { existsSync, readFileSync } from "node:fs"
+import { join } from "node:path"
 import { buildInventory } from "../caller-inventory/build"
+import { rootRepoPath } from "../caller-inventory/ast"
 import type { Inventory } from "../caller-inventory/types"
 import {
   computeCounters,
@@ -44,6 +48,9 @@ export type LegacyZeroSnapshot = {
   readonly selectionBridgeSites: readonly SelectionBridgeSite[]
   readonly violations: readonly Violation[]
   readonly violationCounts: Readonly<Record<string, number>>
+  /** SHA-256 of every evidence-anchor file's content (repo-relative path -> digest), so the
+   * snapshot binds source bytes, not only file:line anchors. Missing files carry a fixed marker. */
+  readonly evidenceFileDigests: Readonly<Record<string, string>>
   /** Byte-stable SHA-256 over the stable identity (excludes itself). */
   readonly snapshotDigest: string
 }
@@ -80,6 +87,7 @@ function stableIdentity(snapshot: Omit<LegacyZeroSnapshot, "snapshotDigest">): u
     selectionBridgeSites: snapshot.selectionBridgeSites,
     violations: snapshot.violations,
     violationCounts: snapshot.violationCounts,
+    evidenceFileDigests: snapshot.evidenceFileDigests,
   }
 }
 
@@ -103,10 +111,38 @@ export function buildSnapshot(inventory: Inventory, bridgeSites: readonly Select
     selectionBridgeSites: bridgeSites,
     violations,
     violationCounts: violationsByVerdict(violations),
+    evidenceFileDigests: digestEvidenceFiles(inventory, bridgeSites),
     snapshotDigest: "",
   }
   const digest = contentDigest(stableIdentity(stable))
   return { ...stable, snapshotDigest: digest }
+}
+
+const ABSENT_FILE_DIGEST = contentDigest({ present: false })
+
+/**
+ * Content-bind every file the snapshot anchors to: entry modules, structurally linked handler
+ * modules, role evidence hits and selection-bridge sites. A content-only edit that keeps every
+ * file:line anchor identical still changes the snapshot digest. Fixture tests reference
+ * nonexistent paths; those keep a fixed absent marker so the digest stays deterministic.
+ */
+function digestEvidenceFiles(inventory: Inventory, bridgeSites: readonly SelectionBridgeSite[]): Record<string, string> {
+  const files = new Set<string>()
+  for (const entry of inventory.entries) {
+    files.add(entry.entry.repoFile)
+    for (const handler of entry.handlers) files.add(handler.repoFile)
+    for (const role of entry.roles) for (const proof of role.evidence) files.add(proof.repoFile)
+  }
+  for (const site of bridgeSites) files.add(site.repoFile)
+  const root = rootRepoPath()
+  const out: Record<string, string> = {}
+  for (const repoFile of [...files].sort()) {
+    const absolute = join(root, repoFile)
+    out[repoFile] = existsSync(absolute)
+      ? createHash("sha256").update(readFileSync(absolute, "utf8")).digest("hex")
+      : ABSENT_FILE_DIGEST
+  }
+  return out
 }
 
 /**
@@ -115,27 +151,35 @@ export function buildSnapshot(inventory: Inventory, bridgeSites: readonly Select
  * An inventory may be supplied to avoid re-running the AST extraction; by default the gate
  * builds the frozen production caller inventory itself.
  */
-export function currentTreeCounts(inventory: Inventory = buildInventory()): LegacyZeroCounters {
-  return computeCounters(inventory)
+export async function currentTreeCounts(inventory?: Inventory): Promise<LegacyZeroCounters> {
+  return computeCounters(inventory ?? (await buildInventory()))
 }
 
 /**
- * mustBeZero(): throw a LegacyZeroError naming every violating entry+dimension and every
- * selection-bridge site while any zero-target is non-zero. Returns the snapshot digest when
- * the tree is clean (legacy=0, double-write=0, adapter=0, selection-bridge=0). Pass a
- * bridgeSites override (e.g. [] in a fixture test) to decouple the counter check from the live
- * source scan.
+ * mustBeZero(): the C0-08 exit gate over the V2-DEFAULT ENTRY SET (user decision D2,
+ * 2026-09-03): the tree fails while double-write or selection-bridge authority is non-zero —
+ * those are authority leaks inside the default V2 path. `legacy` and `unclassified` dimensions
+ * are release-blocking; an `adapter` is informational because valid V2↔vendor protocol adapters
+ * are not V1 authority. Returns the snapshot digest when the
+ * gate passes. Pass a bridgeSites override (e.g. [] in a fixture test) to decouple the counter
+ * check from the live source scan.
  */
-export function mustBeZero(inventory: Inventory = buildInventory(), bridgeSites: readonly SelectionBridgeSite[] = selectionBridgeSites()): string {
+export async function mustBeZero(inventory?: Inventory, bridgeSites: readonly SelectionBridgeSite[] = selectionBridgeSites()): Promise<string> {
+  inventory ??= await buildInventory()
   const counters = computeCounters(inventory)
   const bridgeUsages = countSelectionBridgeUsages(bridgeSites)
   const violations = violationsFor(inventory)
-  if (counters.legacyDims === 0 && counters.doubleWrite === 0 && counters.adapterDims === 0 && bridgeUsages === 0) {
+  if (
+    counters.legacyDims === 0 &&
+    counters.doubleWrite === 0 &&
+    counters.unclassifiedDims === 0 &&
+    bridgeUsages === 0
+  ) {
     return buildSnapshot(inventory, bridgeSites).snapshotDigest
   }
   const lines: string[] = []
-  lines.push("legacy-zero gate FAILED — production tree still carries legacy authority:")
-  lines.push(`  legacy dims=${counters.legacyDims} double_write=${counters.doubleWrite} adapter=${counters.adapterDims} selection_bridge=${bridgeUsages}`)
+  lines.push("legacy-zero gate FAILED — the V2-default entry set still carries split authority:")
+  lines.push(`  legacy=${counters.legacyDims} double_write=${counters.doubleWrite} unclassified=${counters.unclassifiedDims} selection_bridge=${bridgeUsages} (informational adapters=${counters.adapterDims})`)
   lines.push("violations (entry :: dimension :: verdict):")
   for (const violation of violations) {
     lines.push(`    ${violation.entryId} :: ${violation.dimension} :: ${violation.verdict}`)
@@ -151,7 +195,8 @@ export function mustBeZero(inventory: Inventory = buildInventory(), bridgeSites:
  * redOracle(): print the counts and return the byte-stable snapshot. The print is a single
  * ordered block so re-running the oracle on the same tree produces identical output.
  */
-export function redOracle(inventory: Inventory = buildInventory()): LegacyZeroSnapshot {
+export async function redOracle(inventory?: Inventory): Promise<LegacyZeroSnapshot> {
+  inventory ??= await buildInventory()
   const snapshot = buildSnapshot(inventory)
   const c = snapshot.counters
   console.log("C0-08 legacy-zero inventory gate (red oracle)")

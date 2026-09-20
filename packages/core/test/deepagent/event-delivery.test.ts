@@ -215,6 +215,15 @@ describe("C5-06 claim/lease + fencing + crash recovery", () => {
         // the stale worker-1 token can no longer commit the result.
         const committed = yield* EventConsumer.commitResult(db, { outboxId: row.outboxId, consumerKey: CONSUMER, claimToken: claim1.claimToken, now: 140 })
         expect(committed).toBe(false)
+        const nacked = yield* EventConsumer.nack(db, {
+          outboxId: row.outboxId,
+          consumerKey: CONSUMER,
+          claimToken: claim1.claimToken,
+          reason: "stale worker failure",
+          now: 140,
+        })
+        expect(nacked).toBe(false)
+        expect((yield* EventConsumer.getByDelivery(db, row.outboxId, CONSUMER))?.claimToken).toBe(revive.claimToken)
         // worker-2's token commits.
         const ok = yield* EventConsumer.commitResult(db, { outboxId: row.outboxId, consumerKey: CONSUMER, claimToken: revive.claimToken, now: 140 })
         expect(ok).toBe(true)

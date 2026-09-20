@@ -1,5 +1,6 @@
 import { TextAttributes } from "@opentui/core"
 import { useTheme } from "../context/theme"
+import { useTuiI18n } from "../context/i18n"
 import { useDialog } from "../ui/dialog"
 import { createStore } from "solid-js/store"
 import { For } from "solid-js"
@@ -13,6 +14,7 @@ export function DialogSessionDeleteFailed(props: {
   onDone?: () => void
 }) {
   const dialog = useDialog()
+  const i18n = useTuiI18n()
   const { theme } = useTheme()
   const [store, setStore] = createStore({
     active: "delete" as "delete" | "restore",
@@ -21,14 +23,14 @@ export function DialogSessionDeleteFailed(props: {
   const options = [
     {
       id: "delete" as const,
-      title: "Delete workspace",
-      description: "Delete the workspace and all sessions attached to it.",
+      title: i18n.t("tui.sessionDeleteFailed.deleteWorkspace"),
+      description: i18n.t("tui.sessionDeleteFailed.deleteWorkspaceDesc"),
       run: props.onDelete,
     },
     {
       id: "restore" as const,
-      title: "Restore to new workspace",
-      description: "Try to restore this session into a new workspace.",
+      title: i18n.t("tui.sessionDeleteFailed.restoreNewWorkspace"),
+      description: i18n.t("tui.sessionDeleteFailed.restoreNewWorkspaceDesc"),
       run: props.onRestore,
     },
   ]
@@ -42,11 +44,36 @@ export function DialogSessionDeleteFailed(props: {
 
   useBindings(() => ({
     bindings: [
-      { key: "return", desc: "Confirm recovery option", group: "Dialog", cmd: () => void confirm() },
-      { key: "left", desc: "Delete broken session", group: "Dialog", cmd: () => setStore("active", "delete") },
-      { key: "up", desc: "Delete broken session", group: "Dialog", cmd: () => setStore("active", "delete") },
-      { key: "right", desc: "Restore broken session", group: "Dialog", cmd: () => setStore("active", "restore") },
-      { key: "down", desc: "Restore broken session", group: "Dialog", cmd: () => setStore("active", "restore") },
+      {
+        key: "return",
+        desc: i18n.t("tui.sessionDeleteFailed.confirmOption"),
+        group: i18n.t("tui.category.dialog"),
+        cmd: () => void confirm(),
+      },
+      {
+        key: "left",
+        desc: i18n.t("tui.sessionDeleteFailed.deleteBrokenSession"),
+        group: i18n.t("tui.category.dialog"),
+        cmd: () => setStore("active", "delete"),
+      },
+      {
+        key: "up",
+        desc: i18n.t("tui.sessionDeleteFailed.deleteBrokenSession"),
+        group: i18n.t("tui.category.dialog"),
+        cmd: () => setStore("active", "delete"),
+      },
+      {
+        key: "right",
+        desc: i18n.t("tui.sessionDeleteFailed.restoreBrokenSession"),
+        group: i18n.t("tui.category.dialog"),
+        cmd: () => setStore("active", "restore"),
+      },
+      {
+        key: "down",
+        desc: i18n.t("tui.sessionDeleteFailed.restoreBrokenSession"),
+        group: i18n.t("tui.category.dialog"),
+        cmd: () => setStore("active", "restore"),
+      },
     ],
   }))
 

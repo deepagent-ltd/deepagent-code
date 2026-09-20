@@ -238,13 +238,21 @@ interface PendingOAuth {
 
 let oauthServer: ReturnType<typeof createServer> | undefined
 let pendingOAuth: PendingOAuth | undefined
+let oauthStart: Promise<{ port: number; redirectUri: string }> | undefined
 
-async function startOAuthServer(): Promise<{ port: number; redirectUri: string }> {
+function startOAuthServer(): Promise<{ port: number; redirectUri: string }> {
   if (oauthServer) {
-    return { port: OAUTH_PORT, redirectUri: `http://localhost:${OAUTH_PORT}/auth/callback` }
+    return Promise.resolve({ port: OAUTH_PORT, redirectUri: `http://localhost:${OAUTH_PORT}/auth/callback` })
   }
+  if (oauthStart) return oauthStart
+  oauthStart = startOAuthServerOnce().finally(() => {
+    oauthStart = undefined
+  })
+  return oauthStart
+}
 
-  oauthServer = createServer((req, res) => {
+async function startOAuthServerOnce(): Promise<{ port: number; redirectUri: string }> {
+  const next = createServer((req, res) => {
     const url = new URL(req.url || "/", `http://localhost:${OAUTH_PORT}`)
 
     if (url.pathname === "/auth/callback") {
@@ -305,38 +313,42 @@ async function startOAuthServer(): Promise<{ port: number; redirectUri: string }
   })
 
   await new Promise<void>((resolve, reject) => {
-    oauthServer!.listen(OAUTH_PORT, () => {
+    const onError = (error: Error) => {
+      next.removeListener("listening", onListening)
+      reject(error)
+    }
+    const onListening = () => {
+      next.removeListener("error", onError)
       log.info("codex oauth server started", { port: OAUTH_PORT })
       resolve()
-    })
-    oauthServer!.on("error", reject)
+    }
+    next.once("error", onError)
+    next.once("listening", onListening)
+    next.listen(OAUTH_PORT, "127.0.0.1")
   })
+  next.on("error", (error) => log.warn("codex oauth server error", { error }))
+  oauthServer = next
 
   return { port: OAUTH_PORT, redirectUri: `http://localhost:${OAUTH_PORT}/auth/callback` }
 }
 
 function stopOAuthServer() {
-  if (oauthServer) {
-    oauthServer.close(() => {
+  pendingOAuth?.reject(new Error("OAuth callback server stopped"))
+  pendingOAuth = undefined
+  const current = oauthServer
+  oauthServer = undefined
+  if (current) {
+    current.close(() => {
       log.info("codex oauth server stopped")
     })
-    oauthServer = undefined
   }
 }
 
 function waitForOAuthCallback(pkce: PkceCodes, state: string): Promise<TokenResponse> {
+  pendingOAuth?.reject(new Error("Superseded by a newer Codex authorize request"))
+  pendingOAuth = undefined
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(
-      () => {
-        if (pendingOAuth) {
-          pendingOAuth = undefined
-          reject(new Error("OAuth callback timeout - authorization took too long"))
-        }
-      },
-      5 * 60 * 1000,
-    ) // 5 minute timeout
-
-    pendingOAuth = {
+    const pending: PendingOAuth = {
       pkce,
       state,
       resolve: (tokens) => {
@@ -348,6 +360,16 @@ function waitForOAuthCallback(pkce: PkceCodes, state: string): Promise<TokenResp
         reject(error)
       },
     }
+    const timeout = setTimeout(
+      () => {
+        if (pendingOAuth !== pending) return
+        pendingOAuth = undefined
+        reject(new Error("OAuth callback timeout - authorization took too long"))
+      },
+      5 * 60 * 1000,
+    ) // 5 minute timeout
+
+    pendingOAuth = pending
   })
 }
 
@@ -359,6 +381,7 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
 
   return {
     async dispose() {
+      stopOAuthServer()
       for (const websocketFetch of websocketFetches) websocketFetch.close()
       websocketFetches.length = 0
     },
@@ -532,15 +555,18 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
               instructions: "Complete authorization in your browser. This window will close automatically.",
               method: "auto" as const,
               callback: async () => {
-                const tokens = await callbackPromise
-                stopOAuthServer()
-                const accountId = extractAccountId(tokens)
-                return {
-                  type: "success" as const,
-                  refresh: tokens.refresh_token,
-                  access: tokens.access_token,
-                  expires: Date.now() + (tokens.expires_in ?? 3600) * 1000,
-                  accountId,
+                try {
+                  const tokens = await callbackPromise
+                  const accountId = extractAccountId(tokens)
+                  return {
+                    type: "success" as const,
+                    refresh: tokens.refresh_token,
+                    access: tokens.access_token,
+                    expires: Date.now() + (tokens.expires_in ?? 3600) * 1000,
+                    accountId,
+                  }
+                } finally {
+                  stopOAuthServer()
                 }
               },
             }

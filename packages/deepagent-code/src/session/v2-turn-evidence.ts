@@ -1,4 +1,4 @@
-import { Effect, DateTime } from "effect"
+import { Effect, DateTime, Option } from "effect"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import { ModelV2 } from "@deepagent-code/core/model"
@@ -14,6 +14,14 @@ import type { Snapshot } from "../snapshot"
 type V2UserMessage = Extract<SessionMessage.Message, { readonly type: "user" }>
 type V2AssistantMessage = Extract<SessionMessage.Message, { readonly type: "assistant" }>
 
+// R2 — this projector runs on EVERY driven turn and used to re-publish the ENTIRE transcript
+// (every message + part) each time: O(N²) event traffic and event-storage growth over a session,
+// and duplicate SSE for every already-mirrored part. Publish only DELTAS: read the existing V1
+// mirror row first and skip writes (and their event publications) whose content is unchanged.
+// Fingerprints are whole-value JSON — a real state transition (pending→completed, cost updates)
+// changes the fingerprint and still publishes.
+const mirrorFingerprint = (value: unknown) => JSON.stringify(value)
+
 export const recordTurnEvidence = Effect.fn("recordTurnEvidence")(function* (input: {
   readonly sessions: Session.Interface
   readonly session: SessionV2.Interface
@@ -25,29 +33,48 @@ export const recordTurnEvidence = Effect.fn("recordTurnEvidence")(function* (inp
   readonly snapshot?: Snapshot.Interface
   readonly baseline?: string
 }) {
+  const perfDebug = process.env["DEEPAGENT_CODE_PERF_DEBUG"] === "1"
+  const evidenceT0 = Date.now()
   const messages = yield* input.session
     .messages({ sessionID: input.sessionID, order: "asc" })
     .pipe(Effect.catchCause(() => Effect.succeed([] as readonly SessionMessage.Message[])))
+  if (perfDebug)
+    console.error(`[perf] recordTurnEvidence read ${Date.now() - evidenceT0}ms for ${messages.length} messages`)
   const parent = yield* input.sessions.get(input.parentSessionID).pipe(Effect.orDie)
   // Single ascending pass: each assistant pairs with the most recent user before it (the same anchor
   // SessionRevert resolves); without a preceding user (degenerate shape) it falls back to the
   // previous assistant instead of pointing at itself.
   let lastUser: V2UserMessage | undefined
   let lastAssistant: V2AssistantMessage | undefined
+  let lastAssistantMirrorParts: Map<string, string> | undefined
   for (const message of messages) {
+    // R2 follow-up — the fingerprint gate is an optimization, never an authority: when the
+    // existing mirror row cannot be read (Session.Interface stubs without getMessage, transient
+    // read failures), fall back to publishing unconditionally rather than dropping evidence.
+    const mirrored =
+      typeof input.sessions.getMessage === "function"
+        ? yield* input.sessions
+            .getMessage({ sessionID: input.sessionID, messageID: MessageID.make(message.id) })
+            .pipe(Effect.option, Effect.catchCause(() => Effect.succeed(Option.none())))
+        : Option.none()
+    const mirroredInfo = Option.isSome(mirrored) ? mirrorFingerprint(mirrored.value.info) : undefined
+    const mirroredParts = Option.isSome(mirrored)
+      ? new Map(mirrored.value.parts.map((part) => [part.id, mirrorFingerprint(part)]))
+      : undefined
     if (message.type === "user") {
       lastUser = message
-      yield* input.sessions.updateMessage({
+      const info = {
         id: MessageID.make(message.id),
         sessionID: input.sessionID,
-        role: "user",
+        role: "user" as const,
         time: { created: DateTime.toEpochMillis(message.time.created) },
         agent: input.agentName,
         model: {
           providerID: ProviderV2.ID.make(input.model.providerID),
           modelID: ModelV2.ID.make(input.model.modelID),
         },
-      })
+      }
+      if (mirroredInfo !== mirrorFingerprint(info)) yield* input.sessions.updateMessage(info)
       continue
     }
     if (message.type !== "assistant") continue
@@ -62,9 +89,13 @@ export const recordTurnEvidence = Effect.fn("recordTurnEvidence")(function* (inp
       root: parent.directory,
       message,
     })
-    yield* input.sessions.updateMessage(legacy.info)
-    for (const part of legacy.parts) yield* input.sessions.updatePart(part)
+    if (mirroredInfo !== mirrorFingerprint(legacy.info)) yield* input.sessions.updateMessage(legacy.info)
+    for (const part of legacy.parts) {
+      if (mirroredParts?.get(part.id) === mirrorFingerprint(part)) continue
+      yield* input.sessions.updatePart(part)
+    }
     lastAssistant = message
+    lastAssistantMirrorParts = mirroredParts
   }
   // One aggregate patch part per driven turn, attached to its last assistant message. SessionRevert's
   // collector keeps the first patch per file, so a turn-granularity patch composes correctly across
@@ -73,15 +104,17 @@ export const recordTurnEvidence = Effect.fn("recordTurnEvidence")(function* (inp
   if (!lastAssistant) return
   const patch = yield* input.snapshot.patch(input.baseline)
   if (patch.files.length === 0) return
-  yield* input.sessions.updatePart({
+  const patchPart = {
     // ID namespace is disjoint from the converter's content parts by construction: content part
     // suffixes are always numeric (`prt_<id-without-msg-prefix>_<index>`), this suffix is always
     // `_patch` under the full `prt_msg_…` prefix — they can never collide.
     id: PartID.make(`prt_${lastAssistant.id}_patch`),
     messageID: MessageID.make(lastAssistant.id),
     sessionID: input.sessionID,
-    type: "patch",
+    type: "patch" as const,
     hash: patch.hash,
     files: patch.files,
-  })
+  }
+  if (lastAssistantMirrorParts?.get(patchPart.id) === mirrorFingerprint(patchPart)) return
+  yield* input.sessions.updatePart(patchPart)
 })

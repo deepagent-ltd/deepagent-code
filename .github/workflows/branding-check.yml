@@ -1,0 +1,40 @@
+name: branding-check
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  branding-check:
+    name: branding-check
+    # W11: brand-residue audit gate (legacy brand tokens from the upstream and
+    # migration-era orgs/domains). Pure stateless gate, no build deps; mirrors
+    # the test-fixture-gate pattern.
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Run brand-residue audit
+        # Fails the job on any non-exempt hit; no continue-on-error.
+        working-directory: packages/deepagent-code
+        run: bun script/audit-branding.ts
+
+      - name: Run capability inventory consistency gate
+        # W4 step 7: stable catalog entry_tools must all be in the builtin registry.
+        working-directory: packages/deepagent-code
+        run: bun script/assert-capability-inventory.ts

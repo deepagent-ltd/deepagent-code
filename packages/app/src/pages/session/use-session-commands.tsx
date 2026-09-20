@@ -13,12 +13,15 @@ import { useSync } from "@/context/sync"
 import { useTerminalHosts } from "@/context/terminal"
 import { showToast } from "@/utils/toast"
 import { findLast } from "@deepagent-code/core/util/array"
-import { createSessionTabs } from "@/pages/session/helpers"
+import { createForkRequestRegistry, createSessionTabs } from "@/pages/session/helpers"
 import { extractPromptFromParts } from "@/utils/prompt"
-import { UserMessage } from "@deepagent-code/sdk"
+import { type Session, UserMessage } from "@deepagent-code/sdk"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { errorMessage } from "@/pages/layout/helpers"
-import { Identifier } from "@/utils/id"
+import { useSettings } from "@/context/settings"
+import { formatTranscript } from "@/utils/transcript"
+import { createPromptStash } from "@/pages/session/prompt-stash"
+import { DialogPromptStash } from "@/components/dialog-prompt-stash"
 
 export type SessionCommandContext = {
   navigateMessageByOffset: (offset: number) => void
@@ -44,10 +47,11 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   const prompt = usePrompt()
   const sdk = useSDK()
   const sync = useSync()
+  const settings = useSettings()
   const terminalHosts = useTerminalHosts()
   const layout = useLayout()
   const navigate = useNavigate()
-  const forkIntents = new Map<string, string>()
+  const forkRequests = createForkRequestRegistry<Session>()
   const { params, tabs, view } = useSessionLayout()
 
   const info = () => {
@@ -354,22 +358,52 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       return
     }
 
-    await sdk.client.session.summarize({
-      sessionID,
-      modelID: model.id,
-      providerID: model.provider.id,
-    })
+    await sdk.client.session
+      .summarize({
+        sessionID,
+        modelID: model.id,
+        providerID: model.provider.id,
+      })
+      .catch((err) => {
+        // The V2-only profile refuses manual compaction with a typed 503 whose message carries
+        // the reason — surface it instead of failing silently (fork uses the same pattern).
+        showToast({
+          title: language.t("common.requestFailed"),
+          description: errorMessage(err, language.t("common.requestFailed")),
+        })
+      })
+  }
+
+  // W3-4 — human-readable Markdown export (parity with the TUI /export command; the formatter is
+  // the ported TUI transcript renderer). Triggers a browser download of the .md file.
+  const exportTranscript = async () => {
+    const sessionID = params.id
+    const sessionInfo = info()
+    if (!sessionID || !sessionInfo) return
+    const withParts = messages().map((info) => ({ info, parts: sync.data.part[info.id] ?? [] }))
+    if (withParts.length === 0) {
+      showToast({ title: language.t("command.session.export.empty") })
+      return
+    }
+    const markdown = formatTranscript(
+      { id: sessionInfo.id, title: sessionInfo.title ?? sessionInfo.id, time: sessionInfo.time },
+      withParts,
+      { thinking: true, toolDetails: true, assistantMetadata: true },
+    )
+    const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement("a")
+    anchor.href = url
+    anchor.download = `session-${sessionID.slice(0, 8)}.md`
+    anchor.click()
+    URL.revokeObjectURL(url)
   }
 
   const fork = async () => {
     const sessionID = params.id
     if (!sessionID) return
-    const intentID = forkIntents.get(sessionID) ?? Identifier.ascending("fork")
-    forkIntents.set(sessionID, intentID)
-
-    const forked = await sdk.client.session
-      .fork({ sessionID, intentID })
-      .then((x) => x.data)
+    const forked = await forkRequests
+      .request(sessionID, (intentID) => sdk.client.session.fork({ sessionID, intentID }).then((result) => result.data))
       .catch((err) => {
         showToast({
           title: language.t("common.requestFailed"),
@@ -378,11 +412,38 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
         return undefined
       })
     if (!forked) return
-    forkIntents.delete(sessionID)
 
     local.session.promote(sdk.directory, forked.id)
     layout.handoff.setTabs(local.slug(), forked.id)
     navigate(`/${local.slug()}/session/${forked.id}`)
+  }
+
+  // W3-2 — prompt stash, parity with the TUI prompt.stash / prompt.stash.pop / prompt.stash.list
+  // bindings. The store is per-workspace persisted (see prompt-stash.ts); push snapshots the
+  // composer draft, pop restores the newest entry, list opens the browser dialog.
+  const stash = createPromptStash()
+  const stashPush = () => {
+    const draft = prompt.current()
+    if (!prompt.dirty()) {
+      showToast({ title: language.t("dialog.stash.noText"), variant: "default" })
+      return
+    }
+    stash.push(draft)
+    prompt.reset()
+    actions.focusInput()
+  }
+  const stashPop = () => {
+    const entry = stash.pop()
+    if (!entry) {
+      showToast({ title: language.t("dialog.stash.empty") })
+      return
+    }
+    const text = entry.prompt.map((p) => ("content" in p ? p.content : "")).join("")
+    prompt.set(entry.prompt, text.length)
+    actions.focusInput()
+  }
+  const stashList = () => {
+    dialog.show(() => <DialogPromptStash entries={stash.list} onRestore={() => undefined} onRemove={stash.remove} />)
   }
 
   const shareCmds = () => {
@@ -436,6 +497,28 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       onSelect: redo,
     }),
     sessionCommand({
+      id: "session.skills",
+      title: language.t("dialog.skills.title"),
+      description: language.t("command.session.skills.description"),
+      slash: "skills",
+      onSelect: () => {
+        void import("@/components/dialog-select-skill").then((x) => {
+          dialog.show(() => <x.DialogSelectSkill />)
+        })
+      },
+    }),
+    sessionCommand({
+      id: "session.thinking",
+      title: settings.general.showReasoningSummaries()
+        ? language.t("command.session.thinking.collapse")
+        : language.t("command.session.thinking.expand"),
+      description: language.t("command.session.thinking.description"),
+      slash: "thinking",
+      onSelect: () => {
+        settings.general.setShowReasoningSummaries(!settings.general.showReasoningSummaries())
+      },
+    }),
+    sessionCommand({
       id: "session.compact",
       title: language.t("command.session.compact"),
       description: language.t("command.session.compact.description"),
@@ -444,12 +527,40 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       onSelect: compact,
     }),
     sessionCommand({
+      id: "session.export",
+      title: language.t("command.session.export"),
+      description: language.t("command.session.export.description"),
+      slash: "export",
+      disabled: !params.id || visibleUserMessages().length === 0,
+      onSelect: exportTranscript,
+    }),
+    sessionCommand({
       id: "session.fork",
       title: language.t("command.session.fork"),
       description: language.t("command.session.fork.description"),
       slash: "fork",
       disabled: !params.id || visibleUserMessages().length === 0,
       onSelect: fork,
+    }),
+    sessionCommand({
+      id: "prompt.stash",
+      title: language.t("command.prompt.stash"),
+      description: language.t("command.prompt.stash.description"),
+      keybind: "mod+shift+s",
+      onSelect: stashPush,
+    }),
+    sessionCommand({
+      id: "prompt.stash.pop",
+      title: language.t("command.prompt.stash.pop"),
+      description: language.t("command.prompt.stash.pop.description"),
+      keybind: "mod+shift+p",
+      onSelect: stashPop,
+    }),
+    sessionCommand({
+      id: "prompt.stash.list",
+      title: language.t("command.prompt.stash.list"),
+      description: language.t("command.prompt.stash.list.description"),
+      onSelect: stashList,
     }),
   ]
 

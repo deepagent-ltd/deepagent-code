@@ -1,0 +1,1 @@
+CREATE INDEX `event_aggregate_tombstone_retention_idx` ON `event_aggregate_tombstone` (`retention_until`);

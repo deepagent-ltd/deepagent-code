@@ -9,7 +9,7 @@ import { InstallationVersion } from "@deepagent-code/core/installation/version"
 import { Flag } from "@deepagent-code/core/flag/flag"
 import { IM_PROTOCOL_VERSION } from "@deepagent-code/core/im/protocol"
 import * as Log from "@deepagent-code/core/util/log"
-import { Effect, Queue, Schema } from "effect"
+import { Cause, Effect, Queue, Schema } from "effect"
 import * as Stream from "effect/Stream"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
@@ -19,6 +19,7 @@ import { GlobalUpgradeInput, ImportRequestSchema } from "../groups/global"
 import { runImport } from "@/import"
 import { Database } from "@deepagent-code/core/database/database"
 import { ProjectDirectoryTable, ProjectTable } from "@deepagent-code/core/project/sql"
+import { SessionTable } from "@deepagent-code/core/session/sql"
 import { ProjectV2 } from "@deepagent-code/core/project"
 import { resolveDataPath } from "@deepagent-code/core/global-path"
 import { eq } from "drizzle-orm"
@@ -45,13 +46,19 @@ function parseBody(body: string) {
 
 function eventResponse() {
   log.info("global event connected")
-  const events = Stream.callback<GlobalBusEvent>((queue) => {
-    const handler = (event: GlobalBusEvent) => Queue.offerUnsafe(queue, event)
-    return Effect.acquireRelease(
-      Effect.sync(() => GlobalBus.on("event", handler)),
-      () => Effect.sync(() => GlobalBus.off("event", handler)),
-    )
-  })
+  const events = Stream.callback<GlobalBusEvent, Error>(
+    (queue) => {
+      const handler = (event: GlobalBusEvent) => {
+        if (Queue.offerUnsafe(queue, event)) return
+        Queue.failCauseUnsafe(queue, Cause.fail(new Error("Global event consumer exceeded its 1024-event buffer")))
+      }
+      return Effect.acquireRelease(
+        Effect.sync(() => GlobalBus.on("event", handler)),
+        () => Effect.sync(() => GlobalBus.off("event", handler)),
+      )
+    },
+    { bufferSize: 1024, strategy: "dropping" },
+  )
   const heartbeat = Stream.tick("10 seconds").pipe(
     Stream.drop(1),
     Stream.map(() => ({ payload: { id: EventV2.ID.create(), type: "server.heartbeat", properties: {} } })),
@@ -106,7 +113,6 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
           wiki: flags.experimentalWiki,
           // V4.0 §H3 — advertise the event-driven Agent-OS flags (all default OFF) so UI availability
           // == route availability. The routes fail-close on the same flags.
-          v4EventDrivenIm: flags.v4EventDrivenIm,
           v4AgentPushEnabled: flags.v4AgentPushEnabled,
           v4MultiAgentRuntime: flags.v4MultiAgentRuntime,
           v4ThreadEnabled: flags.v4ThreadEnabled,
@@ -164,9 +170,25 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
       for (const row of directoryRows) if (row.directory) directories.add(row.directory)
       yield* disposeInstancesForDirectories([...directories])
 
+      const sessionIDs = yield* db
+        .select({ id: SessionTable.id })
+        .from(SessionTable)
+        .where(eq(SessionTable.project_id, projectID))
+        .all()
+        .pipe(Effect.orDie)
+      if (sessionIDs.length > 0) {
+        yield* Effect.forEach(
+          sessionIDs,
+          (session) => EventV2.deleteAggregate(db, session.id, { reason: "project_deleted" }),
+          { concurrency: 1, discard: true },
+        )
+      }
+
       // Delete the project row. Sessions, messages, parts, project_directory rows and every
-      // other table that references the project cascade automatically (onDelete: "cascade").
-      // Idempotent: deleting an unknown project affects zero rows and still succeeds.
+      // other table that references the project cascade automatically (onDelete: "cascade"). The
+      // per-session deletion fence above closes the event-stream resurrection gap before the
+      // relational cascade removes the projections. Idempotent: deleting an unknown project affects
+      // zero rows and still succeeds.
       yield* db.delete(ProjectTable).where(eq(ProjectTable.id, projectID)).run().pipe(Effect.orDie)
     })
 
@@ -243,7 +265,7 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
         return HttpServerResponse.jsonUnsafe({ error: "Invalid request body: schema decode failed", detail: decoded.error }, { status: 400 })
       }
       const opts = decoded.payload
-      const queue = yield* Queue.unbounded<unknown>()
+      const queue = yield* Queue.dropping<unknown, Error | Cause.Done>(128)
       // Hot-import: write into the SAME database + knowledge root this sidecar
       // actually uses. `Database.path()` is channel-aware (dev vs prod use
       // different `Global.Path.data` + a `deepagent-code-<channel>.db` file), so
@@ -260,25 +282,32 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
         outputDataRoot: resolveDataPath(),
         cwdFilter: opts.cwdFilter,
         onProgress: (event) => {
-          Queue.offerUnsafe(queue, event)
+          if (Queue.offerUnsafe(queue, event)) return
+          Queue.failCauseUnsafe(queue, Cause.fail(new Error("Import progress consumer exceeded its 128-event buffer")))
         },
       })
         .then((report) => {
           Queue.offerUnsafe(queue, { phase: "done", report })
-          Queue.shutdown(queue)
         })
         .catch((err: unknown) => {
           Queue.offerUnsafe(queue, {
             phase: "error",
             message: err instanceof Error ? err.message : String(err),
           })
-          Queue.shutdown(queue)
         })
       return HttpServerResponse.stream(
         Stream.fromQueue(queue).pipe(
+          Stream.takeUntil(
+            (event) =>
+              typeof event === "object" &&
+              event !== null &&
+              "phase" in event &&
+              (event.phase === "done" || event.phase === "error"),
+          ),
           Stream.map(eventData),
           Stream.pipeThroughChannel(Sse.encode()),
           Stream.encodeText,
+          Stream.ensuring(Queue.shutdown(queue)),
         ),
         {
           contentType: "text/event-stream",

@@ -195,7 +195,9 @@ describe("C5-12 V2 admission bridge provider", () => {
         const rows = yield* EventAdmission.forSession(db, parentSessionIDFor(req.event.id))
         expect(rows.length).toBe(1)
         expect(rows[0].envelope.eventType).toBe("ci.failure")
-        expect(rows[0].status).toBe("admitted")
+        // W5 receipts honesty: the receipt is written AFTER the effect completed → the terminal state
+        // of a successful admission is `resolved` (never the old pre-effect "admitted" claim).
+        expect(rows[0].status).toBe("resolved")
       }),
     )
   })

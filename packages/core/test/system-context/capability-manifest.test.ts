@@ -1,12 +1,16 @@
 import { describe, expect, test } from "bun:test"
+import { builtinToolNames } from "@deepagent-code/core/tool/builtins"
 import {
   CapabilityBudget,
   DeepAgentCodeToolInventory,
+  InventoryRegistryDriftError,
   assertCapabilityCatalogConsistent,
   assertCapabilityManifestConsistent,
+  assertInventoryCoversBuiltinTools,
   capabilityCatalogDigest,
   capabilityManifestSignature,
   decodeCapabilityManifest,
+  findUpgradableMaintenance,
   manifestCoherence,
   type CapabilityManifest,
 } from "@deepagent-code/core/system-context/capability-manifest"
@@ -165,6 +169,38 @@ describe("CapabilityManifest consistency gate", () => {
   })
 })
 
+describe("W4.1 reverse warning: findUpgradableMaintenance + the single permission directory", () => {
+  test("a maintenance_only capability whose entry tools are ALL registered is an upgrade candidate", () => {
+    const maintenance = capabilityCatalog.map((manifest) =>
+      manifest.id === "deepagent.context-query" ? { ...manifest, availability: "maintenance_only" as const } : manifest,
+    )
+    const candidates = findUpgradableMaintenance(["context_query"], maintenance)
+    expect(candidates.map((manifest) => String(manifest.id))).toEqual(["deepagent.context-query"])
+  })
+
+  test("the current stable catalog has no maintenance upgrade candidates", () => {
+    expect(findUpgradableMaintenance(builtinToolNames, capabilityCatalog)).toEqual([])
+  })
+
+  test("stable/disabled/unavailable capabilities are never candidates (maintenance_only only), order deterministic", () => {
+    const shifted = capabilityCatalog.map((manifest) => {
+      if (manifest.id === "deepagent.context-query") return { ...manifest, availability: "disabled" as const }
+      if (manifest.id === "deepagent.code-read") return { ...manifest, availability: "maintenance_only" as const }
+      return manifest
+    })
+    // `deepagent.code-read` is maintenance with fully-registered tools → the only candidate.
+    expect(findUpgradableMaintenance(builtinToolNames, shifted).map((manifest) => String(manifest.id))).toEqual([
+      "deepagent.code-read",
+    ])
+    // Same input twice → identical listing (deterministic).
+    expect(findUpgradableMaintenance(builtinToolNames, shifted)).toEqual(findUpgradableMaintenance(builtinToolNames, shifted))
+  })
+
+  test("the single permission directory (§7.2) includes the capability_load authorization action", () => {
+    expect(DeepAgentCodeToolInventory.permissionActions.has("capability.read")).toBe(true)
+  })
+})
+
 describe("C4-01 first batch", () => {
   test("passes the product consistency gate", () => {
     expect(() => assertFirstBatchConsistent()).not.toThrow()
@@ -189,5 +225,37 @@ describe("C4-01 first batch", () => {
     // The manifest ids/summaries are the source; the rendered L0 stays small.
     expect(CapabilityBudget.l0MaxTokens).toBe(700)
     expect(CapabilityBudget.l0MaxBytes).toBe(4096)
+  })
+})
+
+describe("RI-113 inventory ↔ builtin registry exact gate", () => {
+  test("the product tool inventory equals the shipped builtin registry exactly", () => {
+    expect(() => assertInventoryCoversBuiltinTools(builtinToolNames, DeepAgentCodeToolInventory)).not.toThrow()
+    expect([...DeepAgentCodeToolInventory.toolNames].sort()).toEqual([...builtinToolNames].sort())
+  })
+
+  test("drift in either direction fails the gate", () => {
+    const driftOf = (toolNames: ReadonlySet<string>) => {
+      try {
+        assertInventoryCoversBuiltinTools(builtinToolNames, { ...DeepAgentCodeToolInventory, toolNames })
+        return null
+      } catch (error) {
+        return error instanceof InventoryRegistryDriftError ? error : null
+      }
+    }
+    const missing = driftOf(new Set([...DeepAgentCodeToolInventory.toolNames].filter((tool) => tool !== "plan")))
+    expect(missing?.missingFromInventory).toEqual(["plan"])
+    expect(missing?.missingFromRegistry).toEqual([])
+    const phantom = driftOf(new Set([...DeepAgentCodeToolInventory.toolNames, "phantom_tool"]))
+    expect(phantom?.missingFromRegistry).toEqual(["phantom_tool"])
+    expect(phantom?.missingFromInventory).toEqual([])
+  })
+
+  test("every builtin tool with a static permission action is catalogued in the inventory", () => {
+    // The registered tools declare these actions (Tool.withPermission); capability_search
+    // intentionally has none (per-call derived authorization).
+    for (const action of ["read", "glob", "grep", "edit", "bash", "websearch", "webfetch", "question", "skill", "plan", "code_intel", "context_query", "capability.read"]) {
+      expect(DeepAgentCodeToolInventory.permissionActions.has(action)).toBe(true)
+    }
   })
 })

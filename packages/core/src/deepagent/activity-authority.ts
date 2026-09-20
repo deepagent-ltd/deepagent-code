@@ -195,7 +195,7 @@ export const configure = Effect.fn("DeepAgentActivityAuthority.configure")(funct
               enforcement_state: input.enforcementState,
               stall_threshold: input.stallThreshold ?? null,
               no_progress_count: 0,
-              updated_at: now,
+              updated_at: monotonicObjectiveUpdatedAt,
             })
             .where(and(activityWhere(input), eq(SessionActivityObjectiveTable.version, input.expectedVersion)))
             .returning()
@@ -420,7 +420,7 @@ export const observe = Effect.fn("DeepAgentActivityAuthority.observe")(function*
               latest_vector_hash: vectorHash,
               next_action: input.nextAction ?? null,
               terminal_reason: stalled ? "no_progress" : null,
-              updated_at: now,
+              updated_at: monotonicObjectiveUpdatedAt,
               settled_at: stalled ? now : null,
             })
             .where(and(activityWhere(input), eq(SessionActivityObjectiveTable.version, input.expectedVersion)))
@@ -503,7 +503,7 @@ export const settle = Effect.fn("DeepAgentActivityAuthority.settle")(function* (
               version: current.version + 1,
               state: input.state,
               terminal_reason: input.terminalReason,
-              updated_at: now,
+              updated_at: monotonicObjectiveUpdatedAt,
               settled_at: now,
             })
             .where(and(activityWhere(input), eq(SessionActivityObjectiveTable.version, input.expectedVersion)))
@@ -1064,7 +1064,7 @@ const decidePermissionInternal = Effect.fn("DeepAgentActivityAuthority.decidePer
                   state: "active",
                   no_progress_count: 0,
                   terminal_reason: null,
-                  updated_at: now,
+                  updated_at: monotonicObjectiveUpdatedAt,
                   settled_at: null,
                 })
                 .where(
@@ -1129,7 +1129,7 @@ const decidePermissionInternal = Effect.fn("DeepAgentActivityAuthority.decidePer
                   version: current.version + 1,
                   state: "interrupted",
                   terminal_reason: terminalReason,
-                  updated_at: now,
+                  updated_at: monotonicObjectiveUpdatedAt,
                   settled_at: now,
                 })
                 .where(
@@ -2095,7 +2095,7 @@ function recoverPendingPermissionsInTransaction(
               version: objective.version + 1,
               state,
               terminal_reason: terminalReason,
-              updated_at: now,
+              updated_at: monotonicObjectiveUpdatedAt,
               settled_at: now,
             })
             .where(
@@ -2147,6 +2147,11 @@ function recoverPendingPermissionsInTransaction(
 
 const databaseNow = sql`CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)`
 const PermissionOwnerMaxLeaseMs = 31_536_000_000
+
+// Objective rows are born with the activity's application-clock created_at (the
+// session_*_activity_objective_insert triggers), which can sit ~1ms ahead of the database
+// clock; clamp so the legal-update trigger never sees time move backwards.
+const monotonicObjectiveUpdatedAt = sql`MAX(${databaseNow}, ${SessionActivityObjectiveTable.updated_at})`
 
 function observedAtInTransaction(tx: Transaction) {
   return tx.get<{ observedAt: number }>(sql`SELECT ${databaseNow} AS observedAt`).pipe(
@@ -2370,7 +2375,7 @@ function recoverActivityToRequired(
         version: objective.version + 1,
         state: "recovery_required",
         terminal_reason: terminalReason,
-        updated_at: now,
+        updated_at: monotonicObjectiveUpdatedAt,
         settled_at: now,
       })
       .where(
@@ -2563,7 +2568,7 @@ function reconcilePermissionFanout(
             state: "active",
             no_progress_count: 0,
             terminal_reason: null,
-            updated_at: input.decidedAt,
+            updated_at: monotonicObjectiveUpdatedAt,
             settled_at: null,
           })
           .where(
@@ -2628,7 +2633,7 @@ function reconcilePermissionFanout(
           version: objective.version + 1,
           state: "interrupted",
           terminal_reason: terminalReason,
-          updated_at: input.decidedAt,
+          updated_at: monotonicObjectiveUpdatedAt,
           settled_at: input.decidedAt,
         })
         .where(

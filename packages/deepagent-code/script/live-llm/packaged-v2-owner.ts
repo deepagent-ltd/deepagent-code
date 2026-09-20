@@ -8,7 +8,7 @@ import {
   preflightLiveLLM,
   writeLiveArtifact,
 } from "../../../llm/script/live-llm/config"
-import { liveSubprocessEnvironment, liveWorkspaceConfig } from "./runtime"
+import { liveSubprocessEnvironment, liveWorkspaceConfig, runtimeProviderIDFor } from "./runtime"
 
 const binary = process.env.DEEPAGENT_CODE_TEST_BINARY?.trim()
 if (!binary || !(await Bun.file(binary).exists())) {
@@ -18,7 +18,7 @@ if (!binary || !(await Bun.file(binary).exists())) {
 const config = await loadLiveLLMConfig()
 const preflight = await preflightLiveLLM(config)
 const ownerMode = process.env.DEEPAGENT_CODE_PACKAGED_OWNER === "legacy" ? "legacy" : "v2"
-const runtimeProviderID = "deepseek"
+const runtimeProviderID = runtimeProviderIDFor(config)
 const root = await mkdtemp(path.join(os.tmpdir(), `deepagent-code-packaged-${ownerMode}-owner-`))
 const workspace = path.join(root, "workspace")
 const home = path.join(root, "home")

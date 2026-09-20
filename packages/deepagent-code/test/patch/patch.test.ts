@@ -6,6 +6,7 @@ import { tmpdir } from "os"
 import { Patch } from "../../src/patch"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { testEffect } from "../lib/effect"
+import { tmpRootAsync } from "../fixture/fixture"
 
 const it = testEffect(FSUtil.defaultLayer)
 
@@ -13,7 +14,7 @@ describe("Patch namespace", () => {
   let tempDir: string
 
   beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(tmpdir(), "patch-test-"))
+    tempDir = await tmpRootAsync()
   })
 
   afterEach(async () => {

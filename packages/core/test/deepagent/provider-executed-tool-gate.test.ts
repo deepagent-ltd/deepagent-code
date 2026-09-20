@@ -5,8 +5,9 @@ import { tmpdir } from "node:os"
 import { Effect, Stream } from "effect"
 import { LLMEvent } from "@deepagent-code/llm"
 import { AgentGateway } from "../../src/agent-gateway"
+import { tmpRootAsync, tmpRootSharedAsync } from "../fixture/tmpdir"
 
-const tempRunsDir = () => mkdtemp(path.join(tmpdir(), "deepagent-provider-tool-"))
+const tempRunsDir = () => tmpRootSharedAsync()
 
 describe("DeepAgent provider-executed tool gate", () => {
   test("blocks hosted tools unless explicitly allowlisted", async () => {

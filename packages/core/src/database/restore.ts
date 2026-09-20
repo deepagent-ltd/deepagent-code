@@ -9,6 +9,7 @@ import { Backup, type BackupManifest } from "./backup"
 import { BackupVerify } from "./backup-verify"
 import { sha256File } from "./file-sha256"
 import { Database } from "./database"
+import { DatabaseMigrationLease } from "./migration-lease"
 
 // §10.9 VERIFIED RESTORE (C1A-13). Restore must EXPLICITLY select a verified backup, quarantine the
 // current DB/WAL/SHM into an incident set (never overwrite the only accident copy), atomically install
@@ -24,8 +25,8 @@ import { Database } from "./database"
 // copy" — copy preserves that invariant strictly and is idempotent-recoverable, so a crash during
 // install leaves the original still on disk.
 //
-// FIXTURE-ONLY: exercised against temp fixture DBs (DEEPAGENT_CODE_TEST_HOME/tmp). It never touches a
-// production/user database and is never called implicitly at startup.
+// This operation is production-capable but never implicit: only the authenticated incident
+// maintenance control plane may call it for the configured database path. Tests use temp fixtures.
 
 export type RestoreErrorCode =
   | "backup_unverified"
@@ -35,6 +36,7 @@ export type RestoreErrorCode =
   | "install_failed"
   | "reopen_verify_failed"
   | "forward_migrate_failed"
+  | "target_busy"
 
 export class RestoreError extends Data.TaggedError("Restore.RestoreError")<{
   readonly code: RestoreErrorCode
@@ -179,7 +181,7 @@ const verifyInstalled = (dbPath: string, manifest: BackupManifest) =>
  * Restore `dbPath` from a verified backup. Returns the restore manifest on success; on any failure
  * the incident set is retained (safety net) and the original live DB is put back.
  */
-export const restoreVerified = Effect.fn("Restore.restoreVerified")(function* (options: RestoreOptions) {
+const restoreVerifiedOwned = Effect.fn("Restore.restoreVerifiedOwned")(function* (options: RestoreOptions) {
   const restoreId = randomUUID()
   const dbPath = path.resolve(options.dbPath)
   const quarantineRoot = path.resolve(options.quarantineDir ?? path.join(path.dirname(dbPath), "restore-incidents"))
@@ -234,7 +236,7 @@ export const restoreVerified = Effect.fn("Restore.restoreVerified")(function* (o
       }
     }
     yield* verifyInstalled(dbPath, options.backup)
-    const { db } = yield* Database.Service.pipe(Effect.provide(Database.layerFromPath(dbPath)), Effect.scoped)
+    const { db } = yield* Database.Service.pipe(Effect.provide(Database.ownedLayerFromPath(dbPath)), Effect.scoped)
     void db
     return { restored: true as const, error: undefined }
   }).pipe(
@@ -293,6 +295,24 @@ export const restoreVerified = Effect.fn("Restore.restoreVerified")(function* (o
   if (!result.restored) return yield* Effect.fail(result.error)
 
   return manifest
+})
+
+/**
+ * Restore under the same lifetime owner fence used by the business runtime. The target is never
+ * replaced while another process or an already-open production runtime owns it; forward migration
+ * uses the explicit already-owned layer so this process does not contend with itself.
+ */
+export const restoreVerified = Effect.fn("Restore.restoreVerified")(function* (options: RestoreOptions) {
+  const dbPath = path.resolve(options.dbPath)
+  const owner = yield* DatabaseMigrationLease.acquireProcessLock(`${dbPath}.runtime.lock`, {
+    staleMs: 15_000,
+    timeoutMs: 1_000,
+  }).pipe(
+    Effect.mapError(
+      () => new RestoreError({ code: "target_busy", detail: "database target is owned by an active runtime" }),
+    ),
+  )
+  return yield* restoreVerifiedOwned(options).pipe(Effect.ensuring(owner.release))
 })
 
 export const restoreManifestPathFor = (dbPath: string) => `${dbPath}.restore-manifest.json`

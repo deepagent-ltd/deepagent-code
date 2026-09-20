@@ -224,3 +224,30 @@ describe("§5b orchestration section is stable (no per-turn verdict inlined)", (
     expect(section).toContain("deepagent-round-context")
   })
 })
+
+// G3 (gamma plan 阶段四) — runtime-driven orchestration: a complexity-0 session withholds the
+// full researcher/reviewer tutorial; the one-line notice replaces it. Higher complexity keeps
+// the complete workflow, and an unknown estimate (undefined) preserves the legacy full section.
+describe("G3 orchestration section slims simple tasks", () => {
+  test("complexity 0 at tier>0 yields the short notice, not the tutorial", () => {
+    const section = buildOrchestrationSection("max", 0)!
+    expect(section).toContain("简单任务")
+    expect(section).not.toContain("并行研究")
+    expect(section.length).toBeLessThan(buildOrchestrationSection("max")!.length)
+  })
+
+  test("complexity >= 1 keeps the full fan-out workflow", () => {
+    const section = buildOrchestrationSection("max", 2)!
+    expect(section).toContain("并行研究")
+    expect(section).toContain("独立审查")
+  })
+
+  test("undefined complexity preserves the legacy full section byte-for-byte", () => {
+    expect(buildOrchestrationSection("high", undefined)).toBe(buildOrchestrationSection("high"))
+  })
+
+  test("simple-request estimate actually reaches 0 through the full chain", () => {
+    const signals = estimateSignalsFromText({ userRequest: "fix the typo in foo.ts" })
+    expect(estimateComplexity(signals)).toBe(0)
+  })
+})

@@ -35,14 +35,34 @@ export const audit = Effect.fn("RecoveryBinding.audit")(function* (db: Database)
   `)
   problems.push(...turns.map((t) => ({ chain: "provider_turn" as const, kind: "receipt_attempt_mismatch", ...t })))
 
-  // tool_effect: bound receipt must exist and agree on session; attempt must exist; grant
-  // evidence columns must be all set or all null (the insert guard contract).
+  // tool_effect admission: the pre-execution authority must bind to the same Session, provider
+  // attempt, and owner as its provider receipt. An admitted row may intentionally lack a terminal
+  // effect after a crash, but it may never float across authorities.
+  const admissions = yield* db.all<{ row: string; detail: string }>(sql`
+    SELECT e.admission_id AS row, e.session_id || '/' || e.receipt_id AS detail
+    FROM session_v2_tool_effect_admission e
+    LEFT JOIN session_v2_provider_turn_receipt r ON r.receipt_id = e.receipt_id
+    LEFT JOIN session_provider_attempt a ON a.attempt_id = e.provider_attempt_id
+    WHERE r.receipt_id IS NULL OR r.session_id != e.session_id
+       OR r.provider_attempt_id != e.provider_attempt_id OR r.owner_token != e.owner_token
+       OR a.attempt_id IS NULL OR a.session_id != e.session_id OR a.owner_token != e.owner_token
+  `)
+  problems.push(...admissions.map((e) => ({ chain: "tool_effect" as const, kind: "admission_binding_mismatch", ...e })))
+
+  // Terminal tool effects must have an exact admission identity. Grant evidence columns must be
+  // all set or all null (the insert guard contract).
   const effects = yield* db.all<{ row: string; detail: string }>(sql`
     SELECT e.effect_id AS row, e.session_id || '/' || e.receipt_id AS detail
     FROM session_v2_tool_effect e
     LEFT JOIN session_v2_provider_turn_receipt r ON r.receipt_id = e.receipt_id
     LEFT JOIN session_provider_attempt a ON a.attempt_id = e.provider_attempt_id
+    LEFT JOIN session_v2_tool_effect_admission admission
+      ON admission.receipt_id = e.receipt_id AND admission.tool_call_id = e.tool_call_id
     WHERE r.receipt_id IS NULL OR r.session_id != e.session_id OR a.attempt_id IS NULL
+       OR admission.admission_id IS NULL OR admission.session_id != e.session_id
+       OR admission.provider_attempt_id != e.provider_attempt_id
+       OR admission.tool_name != e.tool_name OR admission.effect_kind != e.effect_kind
+       OR admission.owner_token != e.owner_token
   `)
   problems.push(...effects.map((e) => ({ chain: "tool_effect" as const, kind: "binding_mismatch", ...e })))
 

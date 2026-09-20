@@ -264,8 +264,15 @@ const isReadOnlySegment = (segment: string): boolean => {
   // Any output redirection in the segment → mutating. Strip fd-duplication (2>&1, 1>&2, >&2) first,
   // which is not a file write, then look for a real `>`. Only a NUMERIC right-hand side is an fd-dup;
   // `>&file`/`>&out.txt` (word RHS) is bash shorthand for redirecting both stdout+stderr to a FILE, so
-  // it must NOT be stripped — its `>` has to survive the write-check below.
-  const withoutFdDup = trimmed.replace(/\d*>&\d/g, " ")
+  // it must NOT be stripped — its `>` has to survive the write-check below. A `>` inside a quoted
+  // span is a literal character (a pattern like "foo>bar"), not a redirect, so quoted spans are
+  // masked before this check and restored for tokenization below.
+  const quotedForCheck: string[] = []
+  const maskedForCheck = trimmed.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, (m) => {
+    quotedForCheck.push(m)
+    return ` q${quotedForCheck.length - 1} `
+  })
+  const withoutFdDup = maskedForCheck.replace(/\d*>&\d/g, " ")
   if (withoutFdDup.includes(">")) return false
 
   const tokens = tokenize(trimmed)
@@ -337,17 +344,30 @@ const isReadOnlySegment = (segment: string): boolean => {
  */
 export const classifyCommand = (command: string): CommandIntent => {
   if (typeof command !== "string" || command.trim() === "") return "mutating"
+  // Mask quoted spans BEFORE segmenting: a quoted regex alternation (`grep "A\|B" file`) carries a
+  // literal `|` the shell never sees, and quoted prose can carry `>`/`&&`/`;` the same way. Splitting
+  // on those cut the command mid-string and condemned the trailing fragment as an unknown (mutating)
+  // command — the empirical top cause of read-only greps being plan-gate blocked (14 of 15 blocks in
+  // the abs ablation seed2 run were quoted-pattern greps). Placeholders hold no separator chars, so
+  // the quoted content survives segmentation opaque and is restored for per-segment analysis.
+  const quotedSpans: string[] = []
+  const maskQuoted = command.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, (m) => {
+    const token = ` qspan${quotedSpans.length}q `
+    quotedSpans.push(m)
+    return token
+  })
   // Mask fd-duplication spans (2>&1, 1>&2, >&2) before splitting so their internal `&` is not
   // mistaken for a background/`&&` command separator. Spans are captured by index and restored
   // exactly per-segment; the placeholder holds no separator or `>` char so it survives the split,
   // and isReadOnlySegment strips fd-dup again defensively.
   const fdSpans: string[] = []
-  const masked = command.replace(/\d*>&\d/g, (m) => {
+  const masked = maskQuoted.replace(/\d*>&\d/g, (m) => {
     const token = " fd" + fdSpans.length + "fd "
     fdSpans.push(m)
     return token
   })
-  const restore = (segment: string) => segment.replace(/ fd(\d+)fd /g, (_, idx) => fdSpans[Number(idx)] ?? "")
+  const restore = (segment: string) =>
+    segment.replace(/ fd(\d+)fd /g, (_, idx) => fdSpans[Number(idx)] ?? "").replace(/qspan(\d+)q/g, (_, idx) => quotedSpans[Number(idx)] ?? "")
   const segments = masked.split(SEGMENT_SPLIT)
   for (const rawSegment of segments) {
     const segment = restore(rawSegment)

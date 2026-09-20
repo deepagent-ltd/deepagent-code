@@ -3,14 +3,19 @@ import fs from "fs/promises"
 import os from "os"
 import path from "path"
 import { SettingsStore } from "@/settings/store"
+import { tmpRootAsync } from "../fixture/fixture"
 
-// SettingsStore resolves its file under Global.Path.data, which honors DEEPAGENT_CODE_HOME. Point it
-// at a throwaway dir so we never touch the real ~/.deepagent/code.
+// SettingsStore resolves its file under Global.Path.data. BOTH variables are required to point it at
+// a throwaway dir: `resolveDataPath` (global-path.ts) honours DEEPAGENT_CODE_HOME only alongside the
+// explicit DEEPAGENT_CODE_TEST_HOME boundary. Setting DEEPAGENT_CODE_HOME alone left the path at the
+// real ~/.deepagent/code — the opposite of the isolation this fixture claims.
 let home: string
 const prevHome = process.env.DEEPAGENT_CODE_HOME
+const prevTestHome = process.env.DEEPAGENT_CODE_TEST_HOME
 
 beforeEach(async () => {
-  home = await fs.mkdtemp(path.join(os.tmpdir(), "deepagent-settings-test-"))
+  home = await tmpRootAsync()
+  process.env.DEEPAGENT_CODE_TEST_HOME = home
   process.env.DEEPAGENT_CODE_HOME = home
   SettingsStore.invalidate()
 })
@@ -18,6 +23,8 @@ beforeEach(async () => {
 afterEach(async () => {
   if (prevHome === undefined) delete process.env.DEEPAGENT_CODE_HOME
   else process.env.DEEPAGENT_CODE_HOME = prevHome
+  if (prevTestHome === undefined) delete process.env.DEEPAGENT_CODE_TEST_HOME
+  else process.env.DEEPAGENT_CODE_TEST_HOME = prevTestHome
   SettingsStore.invalidate()
   await fs.rm(home, { recursive: true, force: true }).catch(() => {})
 })
@@ -29,8 +36,18 @@ describe("SettingsStore", () => {
     expect(await SettingsStore.read()).toEqual({})
   })
 
+  test("refuses to overwrite a corrupt settings file", async () => {
+    await fs.writeFile(settingsFile(), "{broken")
+
+    await expect(SettingsStore.read()).rejects.toThrow("Cannot read settings")
+    await expect(SettingsStore.update({ deepagent: { agentMode: "high" } })).rejects.toThrow("Cannot read settings")
+    expect(await fs.readFile(settingsFile(), "utf8")).toBe("{broken")
+  })
+
   test("update persists deepagent settings and reports changed", async () => {
-    const first = await SettingsStore.update({ deepagent: { agentMode: "xhigh", intelligenceModel: "zhipuai/glm-4.7" } })
+    const first = await SettingsStore.update({
+      deepagent: { agentMode: "xhigh", intelligenceModel: "zhipuai/glm-4.7" },
+    })
     expect(first.changed).toBe(true)
     expect(first.settings.deepagent).toEqual({ agentMode: "xhigh", intelligenceModel: "zhipuai/glm-4.7" })
 
@@ -78,6 +95,25 @@ describe("SettingsStore", () => {
     expect(merged.settings.deepagent).toEqual({ agentMode: "high", selfLearning: "auto" })
   })
 
+  test("serializes concurrent disjoint updates without losing either field", async () => {
+    await Promise.all([
+      SettingsStore.update({ deepagent: { agentMode: "xhigh" } }),
+      SettingsStore.update({ deepagent: { selfLearning: "auto" } }),
+    ])
+
+    SettingsStore.invalidate()
+    expect((await SettingsStore.read()).deepagent).toEqual({ agentMode: "xhigh", selfLearning: "auto" })
+  })
+
+  test("re-reads disk under the update lock instead of merging from a stale cache", async () => {
+    await SettingsStore.update({ deepagent: { agentMode: "high" } })
+    await fs.writeFile(settingsFile(), JSON.stringify({ deepagent: { selfLearning: "manual" } }))
+
+    await SettingsStore.update({ deepagent: { subagentIntensity: "downgrade" } })
+    SettingsStore.invalidate()
+    expect((await SettingsStore.read()).deepagent).toEqual({ selfLearning: "manual", subagentIntensity: "downgrade" })
+  })
+
   test("subagentIntensity round-trips (write → read back)", async () => {
     const w = await SettingsStore.update({ deepagent: { subagentIntensity: "downgrade" } })
     expect(w.changed).toBe(true)
@@ -109,10 +145,7 @@ describe("SettingsStore", () => {
   })
 
   test("non-boolean expertPanelDefault is dropped on read", async () => {
-    await fs.writeFile(
-      settingsFile(),
-      JSON.stringify({ deepagent: { expertPanelDefault: "yes", agentMode: "high" } }),
-    )
+    await fs.writeFile(settingsFile(), JSON.stringify({ deepagent: { expertPanelDefault: "yes", agentMode: "high" } }))
     SettingsStore.invalidate()
     expect((await SettingsStore.read()).deepagent).toEqual({ agentMode: "high" })
   })

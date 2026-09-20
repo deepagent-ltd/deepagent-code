@@ -52,11 +52,12 @@ import type { Session } from "../../src/session/session"
 import { LiveContextQueryAuthorization } from "../../src/context-federation/query-authorization"
 import { SessionFederatedContext } from "../../src/context-federation/session-context-runtime"
 import { LocationIndexRuntime } from "../../src/location-index/runtime"
+import { tmpRoot } from "../fixture/fixture"
 
 let root: string
 
 beforeEach(() => {
-  root = mkdtempSync(path.join(tmpdir(), "deepagent-learning-release-run-ab-"))
+  root = mkdtempSync(tmpRoot())
 })
 
 afterEach(() => rmSync(root, { recursive: true, force: true }))
@@ -517,6 +518,9 @@ function seedAuthority(input: {
         version: "test",
         time_created: 1,
         time_updated: 1,
+        // RI-53: provider attempt prepare requires an active execution claim on the session
+        // row (CAS token in time_suspended); the claim is held for the whole test.
+        time_suspended: 1,
       })
       .run()
     yield* input.db

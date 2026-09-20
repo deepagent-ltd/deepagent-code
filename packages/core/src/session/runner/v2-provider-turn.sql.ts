@@ -3,6 +3,7 @@ import { SessionProviderAttemptTable, SessionProviderOwnerLeaseTable } from "../
 import { SessionTable } from "../sql"
 import type { SessionSchema } from "../schema"
 import type { PreparedProviderTurn } from "./prepared-provider-turn"
+import type { RuntimeIntegrityEvidenceContract } from "../../contract/runtime-integrity-evidence"
 
 export const V2ProviderTurnReceiptTable = sqliteTable(
   "session_v2_provider_turn_receipt",
@@ -40,6 +41,10 @@ export const V2ProviderTurnReceiptTable = sqliteTable(
     dispatching_at: integer(),
     first_event_at: integer(),
     terminal_at: integer(),
+    /** RI-24 digest-only evidence bound to this immutable provider receipt. */
+    integrity_evidence: text({ mode: "json" }).$type<RuntimeIntegrityEvidenceContract.RuntimeIntegrityEvidence>(),
+    integrity_evidence_hash: text(),
+    integrity_evidence_signature: text({ mode: "json" }).$type<RuntimeIntegrityEvidenceContract.SignedRuntimeIntegrityEvidence>(),
   },
   (table) => [
     uniqueIndex("session_v2_provider_turn_receipt_ordinal_idx").on(table.session_id, table.request_ordinal),
@@ -55,6 +60,31 @@ export const V2ProviderTurnReceiptTable = sqliteTable(
       table.request_input_hash,
     ),
     index("session_v2_provider_turn_receipt_owner_state_idx").on(table.owner_token, table.state, table.created_at),
+  ],
+)
+
+/**
+ * RI-24 independent evidence artifact authority. The provider receipt keeps a digest-only copy
+ * for request-local reads, while this table is the durable content-addressed record used by
+ * exporters and release gates. It intentionally has no Session foreign key: deleting a Session
+ * must not erase the evidence needed to explain a released or investigated provider turn.
+ */
+export const RuntimeIntegrityEvidenceArtifactTable = sqliteTable(
+  "runtime_integrity_evidence_artifact",
+  {
+    artifact_id: text().primaryKey(),
+    receipt_id: text().notNull().unique(),
+    session_id: text().notNull(),
+    attempt_id: text().notNull(),
+    evidence_hash: text().notNull(),
+    evidence: text({ mode: "json" }).$type<RuntimeIntegrityEvidenceContract.RuntimeIntegrityEvidence>().notNull(),
+    signature: text({ mode: "json" }).$type<RuntimeIntegrityEvidenceContract.SignedRuntimeIntegrityEvidence>(),
+    created_at: integer().notNull(),
+    signed_at: integer(),
+  },
+  (table) => [
+    uniqueIndex("runtime_integrity_evidence_artifact_hash_idx").on(table.evidence_hash),
+    index("runtime_integrity_evidence_artifact_session_idx").on(table.session_id, table.created_at),
   ],
 )
 

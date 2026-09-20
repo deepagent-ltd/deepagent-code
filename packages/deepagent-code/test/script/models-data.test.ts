@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { loadModelsData } from "../../script/models-data"
+import { tmpRootAsync, tmpRootSharedAsync } from "../fixture/fixture"
 
 const catalog = {
   deepseek: {
@@ -18,7 +19,7 @@ const catalog = {
 }
 
 async function fixture() {
-  const root = await mkdtemp(path.join(os.tmpdir(), "deepagent-models-build-"))
+  const root = await tmpRootSharedAsync()
   return {
     root,
     [Symbol.asyncDispose]: () => rm(root, { recursive: true, force: true }),

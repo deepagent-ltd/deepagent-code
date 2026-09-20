@@ -21,7 +21,7 @@ import {
 import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
 import { ServerAuth } from "../../src/server/auth"
 import { resetDatabase } from "../fixture/db"
-import { tmpdirScoped } from "../fixture/fixture"
+import { tmpdirScoped, tmpRoot, tmpRootShared } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
 // FEAT-003 — pack.changed eventing for packsPin/packsUnpin. Runs the REAL publish path
@@ -46,7 +46,7 @@ describe("FEAT-003 pack.changed (pin/unpin eventing)", () => {
     Effect.gen(function* () {
       const bus = yield* DeepAgentEventBus.Service
       // Mirror the handler flow: file write first, then publish with the authoritative after-write set.
-      const memoryDir = mkdtempSync(path.join(tmpdir(), "packs-events-"))
+      const memoryDir = mkdtempSync(tmpRootShared())
       writePinnedPacks(memoryDir, ["pack-b", "pack-a"])
       yield* publishPackChanged(bus, {
         workspacePath: WORKSPACE,
@@ -131,16 +131,16 @@ describe("FEAT-003 pack.changed (pin/unpin eventing)", () => {
     Effect.gen(function* () {
       const base = packChangedIdempotencyKey({ workspacePath: WORKSPACE, action: "pin", pinnedIds: ["a", "b"] })
       // same set, different order/duplication ⇒ same key
-      expect(
-        packChangedIdempotencyKey({ workspacePath: WORKSPACE, action: "pin", pinnedIds: ["b", "a", "a"] }),
-      ).toBe(base)
+      expect(packChangedIdempotencyKey({ workspacePath: WORKSPACE, action: "pin", pinnedIds: ["b", "a", "a"] })).toBe(
+        base,
+      )
       // different workspace / action / set ⇒ different keys (no cross-workspace or cross-action swallow)
       expect(
         packChangedIdempotencyKey({ workspacePath: "/tmp/workspace-b", action: "pin", pinnedIds: ["a", "b"] }),
       ).not.toBe(base)
-      expect(
-        packChangedIdempotencyKey({ workspacePath: WORKSPACE, action: "unpin", pinnedIds: ["a", "b"] }),
-      ).not.toBe(base)
+      expect(packChangedIdempotencyKey({ workspacePath: WORKSPACE, action: "unpin", pinnedIds: ["a", "b"] })).not.toBe(
+        base,
+      )
       expect(
         packChangedIdempotencyKey({ workspacePath: WORKSPACE, action: "pin", pinnedIds: ["a", "b", "c"] }),
       ).not.toBe(base)
@@ -194,11 +194,7 @@ const itE2e = testEffect(
     e2eStateLayer,
     // same proven harness as httpapi-instance.test.ts; the cast silences serve()'s generic noise and
     // keeps the two services the test body actually draws (HttpClient + the spawner tmpdirScoped needs).
-    e2eRoutes as unknown as Layer.Layer<
-      HttpClient.HttpClient | ChildProcessSpawner.ChildProcessSpawner,
-      never,
-      never
-    >,
+    e2eRoutes as unknown as Layer.Layer<HttpClient.HttpClient | ChildProcessSpawner.ChildProcessSpawner, never, never>,
   ),
 )
 

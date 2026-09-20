@@ -10,8 +10,9 @@ import {
   type EnvironmentFactCandidate,
 } from "../../src/deepagent/environment-fact"
 import { openUserGlobalStore } from "../../src/deepagent/durable-knowledge-store"
+import { tmpRoot, tmpRootShared } from "../fixture/tmpdir"
 
-const base = () => mkdtempSync(path.join(tmpdir(), "envfact-"))
+const base = () => mkdtempSync(tmpRootShared())
 
 describe("V3.8.1 §G environment-fact desensitization (fail-closed)", () => {
   test("strips a connection-URL credential and mints a secret ref", () => {
@@ -57,7 +58,13 @@ describe("V3.8.1 §G environment-fact desensitization (fail-closed)", () => {
 describe("V3.8.1 §G decideFastPath routing", () => {
   const clean: EnvironmentFactCandidate = {
     description: "milvus integration test server",
-    body: { host: "10.0.0.4", port: 19530, container: "milvus-standalone", purpose: "integration tests", last_confirmed_at: "2026-07-07T00:00:00Z" },
+    body: {
+      host: "10.0.0.4",
+      port: 19530,
+      container: "milvus-standalone",
+      purpose: "integration tests",
+      last_confirmed_at: "2026-07-07T00:00:00Z",
+    },
   }
 
   test("clean fact takes the fast path", () => {
@@ -130,9 +137,19 @@ describe("V3.8.1 §G provisional store write + no silent injection", () => {
 
 describe("V3.8.1 §G use-gate adoption (per project × fact)", () => {
   const facts: readonly AdoptionRecord[] = [
-    { fact_id: "doc:environment_fact:milvus", stance: "adopted", decided_at: "2026-07-08T00:00:00Z", adopted_version: 1 },
+    {
+      fact_id: "doc:environment_fact:milvus",
+      stance: "adopted",
+      decided_at: "2026-07-08T00:00:00Z",
+      adopted_version: 1,
+    },
     { fact_id: "doc:environment_fact:old-redis", stance: "rejected", decided_at: "2026-07-08T00:00:00Z" },
-    { fact_id: "doc:environment_fact:pg", stance: "adopted", decided_at: "2026-07-08T00:00:00Z", override_doc_id: "doc:environment_fact:pg-local" },
+    {
+      fact_id: "doc:environment_fact:pg",
+      stance: "adopted",
+      decided_at: "2026-07-08T00:00:00Z",
+      override_doc_id: "doc:environment_fact:pg-local",
+    },
   ]
 
   test("unseen fact -> ask", () => {

@@ -1,20 +1,21 @@
-// End-to-end smoke test for the IM @agent path through the REAL server stack.
+// E2E for the V2 IM durable-only @mention path through the REAL server stack.
 //
-// This is the test that would have caught the production defect where IM agent
-// mentions were wired to core SessionV2 (a no-op execution layer) and never
-// actually ran an agent. It boots the real `HttpApiApp.routes` — including the
-// IM runtime layer (ServerAgentExecutorLive/ServerAgentListProviderLive) — and a
-// fake LLM server, posts an `@auto` message to an IM group over HTTP, and asserts
-// that a real agent reply is persisted back into the group.
+// The legacy path (ServerAgentExecutor → fresh V1 session per turn → SessionPrompt.promptOrSteer,
+// forked fire-and-forget from the message handler) is deleted. This test pins its durable
+// replacement end-to-end: the handler performs exactly ONE durable SessionV2 admission per mention
+// (the session_input row keyed by the deterministic prompt id), the production V2 runner executes
+// the turn against a fake LLM, the settle drives the im_reply_outbox, and the terminal assistant
+// reply is durably delivered back into the IM group (metadata.sessionID binds the reply to the
+// admitted session — only the outbox writes that linkage).
 //
-// The agent runs in a forked fiber (fire-and-forget from the message handler), so
-// we poll the group for the assistant reply rather than awaiting the response.
+// No live-provider key is needed: the V2 runner talks to the in-process TestLLMServer.
 
 import { afterEach, describe, expect } from "bun:test"
 import { NodeHttpServer, NodeServices } from "@effect/platform-node"
 import { Config, Effect, Layer } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse, HttpRouter, HttpServer } from "effect/unstable/http"
 import { layerWebSocketConstructorGlobal } from "effect/unstable/socket/Socket"
+import { like } from "drizzle-orm"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
 import { Flag } from "@deepagent-code/core/flag/flag"
 import { Workspace } from "../../src/control-plane/workspace"
@@ -24,6 +25,8 @@ import { InstanceStore } from "../../src/project/instance-store"
 import { Project } from "../../src/project/project"
 import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
 import { Session } from "@/session/session"
+import { IMReplyOutbox } from "@/im/im-reply-outbox"
+import { SessionInputTable } from "@deepagent-code/core/session/sql"
 import { Database } from "@deepagent-code/core/database/database"
 import * as Log from "@deepagent-code/core/util/log"
 import { resetDatabase } from "../fixture/db"
@@ -33,12 +36,6 @@ import { testProviderConfig } from "../lib/test-provider"
 import { pollWithTimeout, testEffect } from "../lib/effect"
 
 void Log.init({ print: false })
-
-// The IM-agent path runs the full SessionPrompt stack including agent fibers.
-// Under the parallel load of the full test suite the fiber scheduling can
-// exceed the 30 s test timeout even though the test passes in isolation.
-// Skip unless a real LLM integration key is present.
-const hasLLMKey = !!(process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.DEEPAGENT_API_KEY)
 
 const originalWorkspaces = Flag.DEEPAGENT_CODE_EXPERIMENTAL_WORKSPACES
 const workspaceLayer = Workspace.defaultLayer.pipe(
@@ -95,50 +92,121 @@ afterEach(async () => {
 })
 
 type IMGroup = { id: string }
-type IMMessage = { id: string; senderType: string; senderID: string; content: string }
+type IMMessage = {
+  id: string
+  senderType: string
+  senderID: string
+  content: string
+  metadata: { type?: string; sessionID?: string } | null
+}
 type IMMessagePage = { messages: IMMessage[] }
 
-describe("IM agent HttpApi (real SessionPrompt stack)", () => {
-  ;(hasLLMKey ? it.live : it.live.skip)(
-    "an @agent mention runs the real agent and persists its reply into the group",
+/** All durable IM-lane admissions (the `ses_im_` session identity lane). */
+const imAdmissions = () =>
+  Effect.gen(function* () {
+    const { db } = yield* Database.Service
+    return yield* db
+      .select({ id: SessionInputTable.id, sessionID: SessionInputTable.session_id })
+      .from(SessionInputTable)
+      .where(like(SessionInputTable.session_id, "ses_im_%"))
+      .all()
+      .pipe(Effect.orDie)
+  })
+
+const postMention = (directory: string, groupID: string, content: string) =>
+  request(`/api/v1/im/groups/${groupID}/messages?directory=${encodeURIComponent(directory)}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ senderType: "user", type: "text", content }),
+  })
+
+describe("IM agent HttpApi (V2 durable-only)", () => {
+  it.live(
+    "an @mention performs exactly one durable V2 admission and the outbox delivers the terminal reply",
     () =>
       Effect.gen(function* () {
         const llm = yield* TestLLMServer
-        yield* llm.text("hello from the agent", { usage: { input: 1, output: 1 } })
+        yield* llm.text("hello from the v2 agent", { usage: { input: 1, output: 1 } })
 
         const directory = yield* tmpdirScoped({ git: true, config: testProviderConfig(llm.url) })
-        const q = `directory=${encodeURIComponent(directory)}`
-        const headers = { "content-type": "application/json" }
-
-        // Create an IM group in this workspace.
-        const group = yield* requestJson<IMGroup>(`/api/v1/im/groups?${q}`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify({ type: "project", name: "Smoke" }),
-        })
-
-        // Post a user message that @mentions the default primary "auto" agent
-        // (renamed from the legacy "build"). "auto" is also reused by the hidden
-        // BUILTIN_AGENT_DESCRIPTORS, so this also guards the shadowing fix.
-        const createResponse = yield* request(`/api/v1/im/groups/${group.id}/messages?${q}`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify({ senderType: "user", type: "text", content: "@auto please answer" }),
-        })
-        expect(createResponse.status).toBe(200)
-
-        // The agent runs in a forked fiber; poll the group until its reply lands.
-        const agentReply = yield* pollWithTimeout(
-          requestJson<IMMessagePage>(`/api/v1/im/groups/${group.id}/messages?${q}`, { headers }).pipe(
-            Effect.map((page) => page.messages.find((m) => m.senderType === "agent")),
-          ),
-          "agent reply was never persisted to the IM group",
-          "15 seconds",
+        const group = yield* requestJson<IMGroup>(
+          `/api/v1/im/groups?directory=${encodeURIComponent(directory)}`,
+          { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ type: "project", name: "V2 Smoke" }) },
         )
 
-        expect(agentReply).toBeDefined()
-        expect(agentReply!.content.length).toBeGreaterThan(0)
-        expect(agentReply!.content).toContain("hello from the agent")
+        // The send itself synchronously performs the single durable admission.
+        expect((yield* postMention(directory, group.id, "@auto please answer")).status).toBe(200)
+        const admissions = yield* imAdmissions()
+        expect(admissions.length).toBe(1)
+
+        // The agent runs through SessionExecution's advisory wake; the reply returns via the
+        // im_reply_outbox daemon (the ONLY writer of metadata.sessionID on agent messages).
+        const reply = yield* pollWithTimeout(
+          requestJson<IMMessagePage>(
+            `/api/v1/im/groups/${group.id}/messages?directory=${encodeURIComponent(directory)}`,
+          ).pipe(Effect.map((page) => page.messages.find((m) => m.senderType === "agent" && m.metadata?.sessionID))),
+          "the outbox never delivered the agent reply to the group",
+          "30 seconds",
+        )
+        expect(reply.content).toContain("hello from the v2 agent")
+        expect(reply.metadata?.type).toBe("agent_run")
+        expect(reply.metadata?.sessionID).toBe(admissions[0]!.sessionID)
+
+        // No duplicate admission materialized while the turn ran.
+        expect((yield* imAdmissions()).length).toBe(1)
+
+        // The outbox row settles delivered.
+        const { db } = yield* Database.Service
+        const outbox = yield* db
+          .select({ status: IMReplyOutbox.IMReplyOutboxTable.status, text: IMReplyOutbox.IMReplyOutboxTable.reply_text })
+          .from(IMReplyOutbox.IMReplyOutboxTable)
+          .all()
+          .pipe(Effect.orDie)
+        expect(outbox).toEqual([{ status: "delivered", text: "hello from the v2 agent" }])
       }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
+    60_000,
+  )
+
+  it.live(
+    "a follow-up mention adopts the same (group, agent) session — one stable lane, two admissions",
+    () =>
+      Effect.gen(function* () {
+        const llm = yield* TestLLMServer
+        yield* llm.text("first v2 reply", { usage: { input: 1, output: 1 } })
+        yield* llm.text("second v2 reply", { usage: { input: 1, output: 1 } })
+
+        const directory = yield* tmpdirScoped({ git: true, config: testProviderConfig(llm.url) })
+        const group = yield* requestJson<IMGroup>(
+          `/api/v1/im/groups?directory=${encodeURIComponent(directory)}`,
+          { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ type: "project", name: "V2 Adopt" }) },
+        )
+
+        yield* postMention(directory, group.id, "@auto first question")
+        const firstReply = yield* pollWithTimeout(
+          requestJson<IMMessagePage>(
+            `/api/v1/im/groups/${group.id}/messages?directory=${encodeURIComponent(directory)}`,
+          ).pipe(Effect.map((page) => page.messages.find((m) => m.senderType === "agent" && m.content.includes("first v2 reply")))),
+          "first reply was never delivered",
+          "30 seconds",
+        )
+        const firstAdmissions = yield* imAdmissions()
+
+        yield* postMention(directory, group.id, "@auto follow-up question")
+        yield* pollWithTimeout(
+          requestJson<IMMessagePage>(
+            `/api/v1/im/groups/${group.id}/messages?directory=${encodeURIComponent(directory)}`,
+          ).pipe(Effect.map((page) => page.messages.find((m) => m.senderType === "agent" && m.content.includes("second v2 reply")))),
+          "second reply was never delivered",
+          "30 seconds",
+        )
+
+        const admissions = yield* imAdmissions()
+        expect(admissions.length).toBe(2)
+        // Adoption: both mentions steered the SAME durable (group, agent) session.
+        expect(new Set(admissions.map((row) => row.sessionID)).size).toBe(1)
+        expect(firstReply.metadata?.sessionID).toBe(admissions[0]!.sessionID)
+        expect(firstAdmissions[0]!.sessionID).toBe(admissions[1]!.sessionID)
+      }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
+    60_000,
   )
 })

@@ -111,7 +111,7 @@ describe("ModelProtocol resolution (design §5.2, C2-01)", () => {
       "deepagent",
     )
     expect(DEEPAGENT_MODEL_PROTOCOL["openai/gpt-5.6-sol"]).toBe("openai-compatible.responses")
-    expect(DEEPAGENT_MODEL_PROTOCOL["deepseek-v4-flash"]).toBe("openai-compatible.responses")
+    expect(DEEPAGENT_MODEL_PROTOCOL["deepseek-flash"]).toBe("openai-compatible.responses")
     const model = mkModel({ ...compatible, protocol: DEEPAGENT_MODEL_PROTOCOL["openai/gpt-5.6-sol"] })
     expect(ModelProtocol.resolveModelProtocol(model, platform)).toMatchObject({
       protocol: "openai-compatible.responses",

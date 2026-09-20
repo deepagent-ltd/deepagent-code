@@ -14,7 +14,7 @@ import { Backup } from "@deepagent-code/core/database/backup"
 import { BackupVerify } from "@deepagent-code/core/database/backup-verify"
 import { Restore, RestoreError } from "@deepagent-code/core/database/restore"
 import { migrations } from "@deepagent-code/core/database/migration.gen"
-import { tmpdir } from "./fixture/tmpdir"
+import { tmpdir, tmpRootAsync, tmpRootSharedAsync } from "./fixture/tmpdir"
 import {
   registryIds,
   aliasesByCanonical,
@@ -192,7 +192,8 @@ const seedJournalFile = async (filename: string, rows: { id: string; content_has
 
 const incidentUnknownRows = () => [...registryIds.map((id) => ({ id })), { id: "20250101000000_unreleased_legacy" }]
 
-const incidentAliasHoleRows = () => registryIds.map((id, index) => ({ id: index === 0 ? "20250101000000_ghost_alias" : id }))
+const incidentAliasHoleRows = () =>
+  registryIds.map((id, index) => ({ id: index === 0 ? "20250101000000_ghost_alias" : id }))
 
 const incidentHashRows = () =>
   registryIds.map((id) => ({ id, content_hash: contentHashes.get(id) === "aaaa" ? "bbbb" : "deadbeef" }))
@@ -205,7 +206,9 @@ const eras: EraSpec[] = [
     seedable: true,
     journal: () => ({ ids: [] }),
     seededPrefix: 0,
-    seed: async (file) => { await Bun.write(file, "") },
+    seed: async (file) => {
+      await Bun.write(file, "")
+    },
   },
   {
     name: "1.4.7",
@@ -258,7 +261,11 @@ const eras: EraSpec[] = [
     journal: () => ({
       ids: registryIds,
       obsOverride: {
-        journalRows: incidentHashRows().map((row) => ({ id: row.id, time_completed: 1, content_hash: row.content_hash })),
+        journalRows: incidentHashRows().map((row) => ({
+          id: row.id,
+          time_completed: 1,
+          content_hash: row.content_hash,
+        })),
       },
     }),
     blockedCode: "migration_journal_content_mismatch",
@@ -268,7 +275,9 @@ const eras: EraSpec[] = [
 
 const canonical = (id: string) => DatabaseMigration.historicalAliases.get(id) ?? id
 
-const classifyEra = (spec: EraSpec): { label: EraLabel; result: DatabasePreflight.PreflightResult; state: DatabaseBootstrap.BootstrapState } => {
+const classifyEra = (
+  spec: EraSpec,
+): { label: EraLabel; result: DatabasePreflight.PreflightResult; state: DatabaseBootstrap.BootstrapState } => {
   const { ids, obsOverride } = spec.journal()
   const result = DatabasePreflight.analyzePreflight(preflightOptionsFor(), observationsFor(ids, obsOverride ?? {}))
   const completed = new Set(ids.map(canonical))
@@ -339,10 +348,7 @@ describe("C7-02 · era classification matrix (deterministic oracle)", () => {
   })
 
   test("incident eras bootstrap to blocked_schema over a real file, and the writable layer refuses admission", async () => {
-    // content-mismatch is excluded here: the production bootstrap preflight (database.ts
-    // preflightOptionsFor) does NOT wire knownContentHashes, so a content-hash divergence is not
-    // caught at boot (documented residual below; the C1A-15 oracle flags it when hashes are wired).
-    const hardBlockedAtBoot = eras.filter((era) => !era.migratable && era.blockedCode !== "migration_journal_content_mismatch")
+    const hardBlockedAtBoot = eras.filter((era) => !era.migratable)
     expect(hardBlockedAtBoot.length).toBeGreaterThan(0)
     for (const spec of hardBlockedAtBoot) {
       await using tmp = await tmpdir()
@@ -365,10 +371,7 @@ describe("C7-02 · era classification matrix (deterministic oracle)", () => {
     }
   }, 120_000)
 
-  test("content-mismatch over a real file: the C1A-15 oracle blocks it, but the production boot path does not (residual)", async () => {
-    // The install-time oracle (knownContentHashes wired) flags a content-hash divergence as a hard
-    // blocker — this is what the classification matrix proves. The PRODUCTION bootstrap (database.ts
-    // preflightOptionsFor) omits knownContentHashes, so the same divergence is NOT detected at boot.
+  test("content-mismatch over a real file is blocked by the production preflight", async () => {
     const spec = eras.find((era) => era.name === "incident-content-mismatch")!
     const { label, result } = classifyEra(spec)
     expect(label).toBe("blocked_schema")
@@ -380,10 +383,8 @@ describe("C7-02 · era classification matrix (deterministic oracle)", () => {
     const file = path.join(tmp.path, "hash.db")
     await spec.seed!(file)
     const boot = await Database.bootstrap(file)
-    // Honest current behavior: the production boot path admits this DB (no content-hash gate).
-    // This is a documented residual/GAP for the mission's "content-mismatch ⇒ blocked_schema" gate,
-    // not a fixture limitation — it requires wiring knownContentHashes into the production preflight.
-    expect(boot.mode).toBe("ready")
+    expect(boot.mode).toBe("blocked_schema")
+    expect(boot.diagnostics.stableCode).toBe("migration_journal_content_mismatch")
   }, 60_000)
 })
 
@@ -582,7 +583,9 @@ describe("C7-02 · disk / space and WAL recovery scenarios", () => {
       cdb.run("PRAGMA journal_mode = WAL")
       cdb.run("CREATE TABLE migration (id TEXT PRIMARY KEY, time_completed INTEGER NOT NULL)")
       cdb.run("INSERT INTO migration VALUES ('m1',1),('m2',1),('m3',1)")
-      cdb.run("CREATE TABLE database_capability (capability TEXT PRIMARY KEY, minimum_reader_protocol INTEGER, minimum_writer_protocol INTEGER)")
+      cdb.run(
+        "CREATE TABLE database_capability (capability TEXT PRIMARY KEY, minimum_reader_protocol INTEGER, minimum_writer_protocol INTEGER)",
+      )
       cdb.run("INSERT INTO database_capability VALUES ('bounded_event_snapshot_v1',2,2)")
       cdb.run("PRAGMA wal_checkpoint(TRUNCATE)")
       cdb.close()
@@ -642,7 +645,7 @@ describe("C7-02 · restore-over-existing + incident recovery", () => {
 // but NO production path ran the backup — open would migrate without it).
 // ---------------------------------------------------------------------------
 test("§10.4 executor: existing DB with pending migrations backs up + verifies before migrating", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "dt-104-executor-"))
+  const root = await tmpRootSharedAsync()
   try {
     const filename = path.join(root, "deepagent-code.db")
     // Real file with a contiguous journal prefix (pending migrations ahead of it).
@@ -659,9 +662,10 @@ test("§10.4 executor: existing DB with pending migrations backs up + verifies b
     const entries = await fs.readdir(backupsDir)
     expect(entries.some((name) => name.endsWith(".manifest.json"))).toBe(true)
     const manifestFiles = entries.filter((name) => name.endsWith(".manifest.json"))
-    const manifest = JSON.parse(
-      await fs.readFile(path.join(backupsDir, manifestFiles[0]), "utf8"),
-    ) as { backup: { sha256: string }; source: { schemaDigest: string } }
+    const manifest = JSON.parse(await fs.readFile(path.join(backupsDir, manifestFiles[0]), "utf8")) as {
+      backup: { sha256: string }
+      source: { schemaDigest: string }
+    }
     expect(manifest.backup.sha256).toBeTruthy()
     expect(manifest.source.schemaDigest).toBeTruthy()
 

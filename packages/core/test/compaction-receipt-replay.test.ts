@@ -140,16 +140,21 @@ describe("V2ProviderTurn.receiptByIdentity (§16.3 order 4 package B)", () => {
       // Walk the durable state machine the insert/transition triggers enforce
       // (preparing → dispatching → streaming → settled).
       const now = Date.now()
-      // The transition trigger only reads request_hash/wire_request_hash off the JSON; the full
+      // The transition trigger only reads the canonical/wire hashes off the JSON; the full
       // PreparedProviderTurn shape is irrelevant to this lookup test.
       const preparedTurn = JSON.parse(
-        '{"request_hash":"prepared_hash_lookup","wire_request_hash":"wire_hash_lookup"}',
+        JSON.stringify({
+          request_hash: "prepared_hash_lookup",
+          wire_request_hash: "wire_hash_lookup",
+          // W8: the transition trigger pins the identity-folded canonical hash carried in the JSON.
+          prepared_turn_hash: PreparedProviderTurn.preparedTurnHash({ request_hash: "prepared_hash_lookup" }),
+        }),
       ) as PreparedProviderTurn.PreparedProviderTurn
       yield* db
         .update(V2ProviderTurnReceiptTable)
         .set({
           state: "dispatching",
-          prepared_turn_hash: preparedTurn.request_hash,
+          prepared_turn_hash: preparedTurn.prepared_turn_hash,
           wire_request_hash: preparedTurn.wire_request_hash,
           prepared_turn: preparedTurn,
           dispatching_at: now,

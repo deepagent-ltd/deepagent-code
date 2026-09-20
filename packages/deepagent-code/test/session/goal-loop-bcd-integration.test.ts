@@ -14,6 +14,7 @@ import {
 import { WikiGraph, WikiService } from "../../src/wiki/wiki-service"
 import { runPanel, type PanelistRunner } from "../../src/panel/orchestrator"
 import { DEFAULT_QUORUM_POLICY, type PanelOpinion } from "../../src/agent/schema/panel"
+import { tmpRoot, tmpRootShared } from "../fixture/fixture"
 
 /**
  * V3.9 §G integration — the B/C/D collaborative CLOSED LOOP (§D.7), proven deterministically.
@@ -37,7 +38,7 @@ afterEach(() => {
   for (const r of roots.splice(0)) rmSync(r, { recursive: true, force: true })
 })
 const freshStore = () => {
-  const root = mkdtempSync(path.join(tmpdir(), "deepagent-bcd-"))
+  const root = mkdtempSync(tmpRootShared())
   roots.push(root)
   return new DocumentStore(root)
 }
@@ -71,18 +72,19 @@ const updatePlan = (store: DocumentStore, planDocId: string, mut: (p: PlanDoc) =
 }
 
 // A real panelist runner backed by a fixed opinion table (the ONLY stubbed leaf on the C side).
-const fixedPanelist = (byLens: Record<string, PanelOpinion["verdict"]>): PanelistRunner => ({ spec }) =>
-  Effect.succeed({
-    lens: spec.lens,
-    verdict: byLens[spec.lens] ?? "approve",
-    findings: [],
-    confidence: 0.9,
-  })
+const fixedPanelist =
+  (byLens: Record<string, PanelOpinion["verdict"]>): PanelistRunner =>
+  ({ spec }) =>
+    Effect.succeed({
+      lens: spec.lens,
+      verdict: byLens[spec.lens] ?? "approve",
+      findings: [],
+      confidence: 0.9,
+    })
 
 // The panel_approves port drives the REAL runPanel (real arbiter) with the fixed panelist.
 const panelPort =
-  (byLens: Record<string, PanelOpinion["verdict"]>) =>
-  (): Effect.Effect<{ readonly decision: string }> =>
+  (byLens: Record<string, PanelOpinion["verdict"]>) => (): Effect.Effect<{ readonly decision: string }> =>
     runPanel({
       question: {
         question: "approve the destructive migration?",
@@ -102,7 +104,11 @@ const ports = (panelByLens: Record<string, PanelOpinion["verdict"]>): GraderPort
   panelApproves: panelPort(panelByLens),
 })
 
-const deps = (store: DocumentStore, executor: StepExecutor, panelByLens: Record<string, PanelOpinion["verdict"]>): ControllerDeps => ({
+const deps = (
+  store: DocumentStore,
+  executor: StepExecutor,
+  panelByLens: Record<string, PanelOpinion["verdict"]>,
+): ControllerDeps => ({
   store,
   ports: ports(panelByLens),
   executor,
@@ -134,9 +140,7 @@ describe("V3.9 §G — B/C/D closed loop (real controller + real panel + real ar
 
     // criteria: plan_complete AND panel_approves — the goal is only "done" when BOTH hold, so the
     // Grader MUST actually convene the panel (§D.7 × C).
-    const loop = makeGoalLoop(
-      deps(store, stepExecutor, { correctness: "approve", security: "approve" }),
-    )
+    const loop = makeGoalLoop(deps(store, stepExecutor, { correctness: "approve", security: "approve" }))
     const spec = {
       planDocId,
       criteria: [{ kind: "plan_complete" as const }, { kind: "panel_approves" as const }],

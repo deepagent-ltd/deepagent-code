@@ -6,6 +6,7 @@ import { Effect } from "effect"
 import { buildWikiEditGate, openWikiSearchIndex } from "@/wiki/session-archive"
 import { WikiSearchIndex } from "@/wiki/search-index"
 import { freshStore } from "./helpers"
+import { tmpRoot, tmpRootShared } from "../fixture/fixture"
 
 // V3.9 §B closeout — the two production-wiring factories the audit flagged as holes:
 //   1. buildWikiEditGate  — the REAL evidence-gate (promotion.validate) for editKnowledge, not the
@@ -14,7 +15,7 @@ import { freshStore } from "./helpers"
 
 const roots: string[] = []
 const freshMemoryDir = (): string => {
-  const d = mkdtempSync(path.join(tmpdir(), "deepagent-wiki-mem-"))
+  const d = mkdtempSync(tmpRootShared())
   roots.push(d)
   return d
 }

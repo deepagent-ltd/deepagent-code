@@ -87,21 +87,30 @@ if (
 }
 
 const tools = continuation.newTools.filter((tool) => tool.status === "completed")
-const expectedTools = ["bash", ...facts.map(() => "read")]
+// Provider-generic continuation contract: the failing validation is observed, every fact is
+// read exactly once before being reported, and the turn context is a compact continuation.
+// The exact interleaving of bash/read calls is model behavior, not a product guarantee.
+const toolNames = tools.map((tool) => tool.name)
 if (
-  tools.length !== expectedTools.length ||
-  tools.some((tool, index) => tool.name !== expectedTools[index]) ||
+  tools.length === 0 ||
+  !toolNames.includes("bash") ||
+  toolNames.filter((name) => name === "read").length !== facts.length ||
   continuation.newTools.some((tool) => tool.status !== "completed")
 ) {
   throw new Error(
     `Continuation tool sequence mismatch: ${continuation.newTools.map((tool) => `${tool.name}:${tool.status}`).join(", ")}`,
   )
 }
-if (!tools[0]?.output?.includes(failMarker)) {
+const failOutput = tools.find((tool) => tool.name === "bash" && tool.output?.includes(failMarker))
+if (!failOutput) {
   throw new Error("Continuation activity did not observe the expected failing validation")
 }
+const factOutputs = tools.filter((tool) => tool.name === "read")
 for (const [index, fact] of facts.entries()) {
-  if (!tools[index + 1]?.output?.includes(fact.marker) || !continuation.finalText.includes(fact.marker)) {
+  if (
+    !factOutputs.some((tool) => tool.output?.includes(fact.marker)) ||
+    !continuation.finalText.includes(fact.marker)
+  ) {
     throw new Error(`Continuation activity did not preserve fact ${index + 1}`)
   }
 }
@@ -118,7 +127,10 @@ const contextKinds = continuation.assembledRequestFingerprints.map((fingerprint)
 if (contextKinds[0] !== "none") {
   throw new Error(`New activity inherited stale runtime context: ${contextKinds.join(" -> ")}`)
 }
-if (contextKinds.length < expectedTools.length + 1 || contextKinds.slice(1).some((kind) => kind !== "continuation")) {
+if (
+  contextKinds.length < tools.length + 1 ||
+  contextKinds.slice(1).some((kind) => kind !== "continuation")
+) {
   throw new Error(`Tool turns did not use compact continuation context: ${contextKinds.join(" -> ")}`)
 }
 const objectiveOccurrences = (continuation.allText.match(new RegExp(objectiveMarker, "g")) ?? []).length

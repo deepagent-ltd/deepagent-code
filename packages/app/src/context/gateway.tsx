@@ -1,6 +1,6 @@
 import { createSimpleContext } from "@deepagent-code/ui/context"
-import { createSignal } from "solid-js"
-import { createStore } from "solid-js/store"
+import { createSignal, onCleanup } from "solid-js"
+import { createStore, produce } from "solid-js/store"
 import { usePlatform } from "./platform"
 import { ServerConnection } from "./server"
 import {
@@ -16,6 +16,8 @@ interface GatewaySession {
   client: GatewayClient
   user?: GatewayUser
 }
+
+export const GATEWAY_SESSION_LIMIT = 64
 
 /**
  * Owns the live Server Edition (gateway) sessions — one `GatewayClient` per
@@ -39,12 +41,32 @@ function createGateway() {
     users: {} as Record<string, GatewayUser | undefined>,
     containers: {} as Record<string, ContainerResponse | undefined>,
   })
-  const [busy, setBusy] = createSignal(false)
+  const [busyCount, setBusyCount] = createSignal(0)
+  const clearState = (key: string) =>
+    setState(
+      produce((state) => {
+        delete state.tokens[key]
+        delete state.users[key]
+        delete state.containers[key]
+      }),
+    )
 
   const clientFor = (conn: ServerConnection.Server): GatewaySession => {
     const key = ServerConnection.key(conn)
     const existing = sessions.get(key)
-    if (existing) return existing
+    if (existing) {
+      sessions.delete(key)
+      sessions.set(key, existing)
+      return existing
+    }
+    if (sessions.size >= GATEWAY_SESSION_LIMIT) {
+      const oldest = sessions.keys().next().value
+      if (oldest) {
+        sessions.get(oldest)?.client.setAccessToken(null)
+        sessions.delete(oldest)
+        clearState(oldest)
+      }
+    }
     const client = createGatewayClient({
       gatewayUrl: conn.gatewayUrl,
       fetch: baseFetch,
@@ -56,7 +78,7 @@ function createGateway() {
   }
 
   const login = async (conn: ServerConnection.Server, email: string, password: string) => {
-    setBusy(true)
+    setBusyCount((value) => value + 1)
     try {
       const session = clientFor(conn)
       const result = await session.client.login(email, password)
@@ -64,7 +86,7 @@ function createGateway() {
       setState("users", ServerConnection.key(conn), result.user)
       return result
     } finally {
-      setBusy(false)
+      setBusyCount((value) => value - 1)
     }
   }
 
@@ -72,8 +94,8 @@ function createGateway() {
     const key = ServerConnection.key(conn)
     const session = sessions.get(key)
     if (session) await session.client.logout()
-    setState("users", key, undefined)
-    setState("containers", key, undefined)
+    sessions.delete(key)
+    clearState(key)
   }
 
   // Ensure the caller's container exists and is running, polling until ready.
@@ -111,14 +133,11 @@ function createGateway() {
   const fetchFor = (conn: ServerConnection.Server): typeof globalThis.fetch => {
     const authFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const { client } = clientFor(conn)
-      const withAuth = (token: string | null): RequestInit => ({
-        ...init,
-        credentials: "include",
-        headers: {
-          ...(init?.headers as Record<string, string> | undefined),
-          ...(token ? { authorization: `Bearer ${token}` } : {}),
-        },
-      })
+      const withAuth = (token: string | null): RequestInit => {
+        const headers = new Headers(init?.headers)
+        if (token) headers.set("authorization", `Bearer ${token}`)
+        return { ...init, credentials: "include", headers }
+      }
       let response = await baseFetch(input as never, withAuth(client.accessToken) as never)
       if (response.status === 401) {
         const refreshed = await client.refresh()
@@ -131,8 +150,13 @@ function createGateway() {
     return Object.assign(authFetch, { preconnect: () => {} }) as typeof globalThis.fetch
   }
 
+  onCleanup(() => {
+    for (const session of sessions.values()) session.client.setAccessToken(null)
+    sessions.clear()
+  })
+
   return {
-    busy,
+    busy: () => busyCount() > 0,
     login,
     logout,
     ensureContainer,

@@ -8,7 +8,7 @@ import {
   writeLiveArtifact,
 } from "../../../llm/script/live-llm/config"
 import { finishLiveScript } from "./lifecycle"
-import { liveSubprocessEnvironment, liveWorkspaceConfig, runtimeProviderID } from "./runtime"
+import { liveSubprocessEnvironment, liveWorkspaceConfig, runtimeProviderIDFor } from "./runtime"
 
 const config = await loadLiveLLMConfig()
 const preflight = await preflightLiveLLM(config)
@@ -81,7 +81,7 @@ try {
         "Do not call another tool. Report both markers exactly after the read completes.",
       ].join("\n"),
       "--model",
-      `${runtimeProviderID}/${config.modelID}`,
+      `${runtimeProviderIDFor(config)}/${config.modelID}`,
       "--agent",
       "live-test",
       "--format",
@@ -148,7 +148,7 @@ try {
       mode: "live",
       stack: "cli-subprocess",
       status: "observed",
-      fingerprint: { ...modelFingerprint(config), runtimeProviderID },
+      fingerprint: { ...modelFingerprint(config), runtimeProviderID: runtimeProviderIDFor(config) },
       preflight: { durationMs: preflight.durationMs },
       process: {
         exitCode,
@@ -204,7 +204,7 @@ try {
     mode: "live" as const,
     stack: "cli-subprocess" as const,
     status: "passed" as const,
-    fingerprint: { ...modelFingerprint(config), runtimeProviderID },
+    fingerprint: { ...modelFingerprint(config), runtimeProviderID: runtimeProviderIDFor(config) },
     preflight: { durationMs: preflight.durationMs },
     process: {
       exitCode,

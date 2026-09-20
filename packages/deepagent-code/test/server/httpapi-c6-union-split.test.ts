@@ -12,7 +12,13 @@ import { SystemContextPaths } from "../../src/server/routes/instance/httpapi/gro
 // on `code` + `httpStatus`, never `message`).
 
 type Operation = {
-  responses: Record<string, { description?: string; content?: Record<string, { schema?: { $ref?: string } }> }>
+  responses: Record<
+    string,
+    {
+      description?: string
+      content?: Record<string, { schema?: { $ref?: string; anyOf?: ReadonlyArray<{ $ref?: string }> } }>
+    }
+  >
 }
 
 const opOf = (doc: unknown, path: string, method: string): Operation | undefined => {
@@ -22,6 +28,13 @@ const opOf = (doc: unknown, path: string, method: string): Operation | undefined
 
 const statusRef = (op: Operation, status: string): string | undefined =>
   op.responses[status]?.content?.["application/json"]?.schema?.$ref
+
+const statusRefs = (op: Operation, status: string) => {
+  const schema = op.responses[status]?.content?.["application/json"]?.schema
+  return [schema?.$ref, ...(schema?.anyOf?.map((item) => item.$ref) ?? [])].filter(
+    (ref): ref is string => ref !== undefined,
+  )
+}
 
 describe("C6-04 typed-error union split", () => {
   const doc = OpenApi.fromApi(PublicApi)
@@ -61,7 +74,7 @@ describe("C6-04 typed-error union split", () => {
     }
     const op = opOf(doc, ContextPaths.events, "get")!
     for (const [status, component] of Object.entries(expectedRefs)) {
-      expect(statusRef(op, status)).toBe(`#/components/schemas/${component}`)
+      expect(statusRefs(op, status)).toContain(`#/components/schemas/${component}`)
     }
   })
 

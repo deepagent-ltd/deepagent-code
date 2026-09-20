@@ -2,9 +2,10 @@ import { describe, expect, test, beforeEach, afterEach } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { HookPolicy, stopHookGate, patchSizeGuard } from "../../src/deepagent/hooks"
+import { HookPolicy, MAX_HOOK_HANDLERS_PER_EVENT, stopHookGate, patchSizeGuard } from "../../src/deepagent/hooks"
 import { DocumentStore } from "../../src/deepagent/document-store"
 import { explainCandidate } from "../../src/deepagent/reviewer"
+import { tmpRoot } from "../fixture/tmpdir"
 
 describe("V3 hooks", () => {
   test("stop hook blocks without validation", () => {
@@ -17,6 +18,11 @@ describe("V3 hooks", () => {
     expect(p.evaluate({ name: "before_patch_apply", payload: { diffLines: 250 } }).decision).toBe("block")
     expect(p.evaluate({ name: "before_patch_apply", payload: { diffLines: 10 } }).decision).toBe("allow")
   })
+  test("rejects unbounded handler registration", () => {
+    const policy = new HookPolicy()
+    for (let index = 0; index < MAX_HOOK_HANDLERS_PER_EVENT; index++) policy.on("stop", stopHookGate())
+    expect(() => policy.on("stop", stopHookGate())).toThrow(`limit ${MAX_HOOK_HANDLERS_PER_EVENT}`)
+  })
   // P2-2: providerToolGuard removed — the gateway's ProviderExecutedToolPolicy is the single
   // authoritative provider-executed-tool gate (no parallel hook copy).
 })
@@ -25,7 +31,7 @@ describe("V3 reviewer projection", () => {
   let root: string
   let store: DocumentStore
   beforeEach(() => {
-    root = mkdtempSync(path.join(tmpdir(), "deepagent-rev-"))
+    root = mkdtempSync(tmpRoot())
     store = new DocumentStore(root)
   })
   afterEach(() => rmSync(root, { recursive: true, force: true }))

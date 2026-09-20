@@ -4,7 +4,7 @@ import { Cause, Duration, Effect, Exit, Layer } from "effect"
 import * as Scope from "effect/Scope"
 import * as TestClock from "effect/testing/TestClock"
 import * as TestConsole from "effect/testing/TestConsole"
-import { memoMap } from "@deepagent-code/core/effect/memo-map"
+import { makeMemoMap } from "@deepagent-code/core/effect/memo-map"
 import type { Config } from "@/config/config"
 import { TestInstance, withTmpdirInstance } from "../fixture/fixture"
 import { InstanceStore } from "@/project/instance-store"
@@ -46,7 +46,9 @@ const isolatedRun: Runner = (value, layer) =>
     return yield* exit
   }).pipe(Effect.runPromise)
 
-// Builds the test layer through the shared process-wide memoMap so cached
+const memoMap = makeMemoMap()
+
+// Builds the test layer through a shared test-owned memoMap so cached
 // services (Bus, Session, …) match Server.Default's instances. Use for tests
 // that publish to an in-process HTTP server and need pub/sub identity with
 // the server's handlers.
@@ -140,7 +142,7 @@ export const testEffect = <R, E>(layer: Layer.Layer<R, E>) =>
   make<R, E>(Layer.provideMerge(layer, testEnv), Layer.provideMerge(layer, liveEnv))
 
 // Variant of `testEffect` that builds the test layer through the shared
-// process-wide memoMap so services like Bus/Session resolve to the same
+// test-owned memoMap so services like Bus/Session resolve to the same
 // instances Server.Default uses. Use when a test needs pub/sub identity with
 // an in-process HTTP server — most tests should stick with `testEffect`.
 export const testEffectShared = <R, E>(layer: Layer.Layer<R, E>) =>

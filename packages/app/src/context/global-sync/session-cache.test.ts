@@ -6,7 +6,7 @@ import type {
   QuestionRequest,
   SessionStatus,
   SnapshotFileDiff,
-  Todo,
+  SessionTodoInfo,
 } from "@deepagent-code/sdk/client"
 import { dropSessionCaches, pickSessionCacheEvictions } from "./session-cache"
 
@@ -34,7 +34,7 @@ describe("app session cache", () => {
     const store: {
       session_status: Record<string, SessionStatus | undefined>
       session_diff: Record<string, SnapshotFileDiff[] | undefined>
-      todo: Record<string, Todo[] | undefined>
+      todo: Record<string, SessionTodoInfo[] | undefined>
       message: Record<string, Message[] | undefined>
       part: Record<string, Part[] | undefined>
       permission: Record<string, PermissionRequest[] | undefined>
@@ -43,7 +43,7 @@ describe("app session cache", () => {
     } = {
       session_status: { ses_1: { type: "busy" } as SessionStatus },
       session_diff: { ses_1: [] },
-      todo: { ses_1: [] as Todo[] },
+      todo: { ses_1: [] as SessionTodoInfo[] },
       message: {},
       part: { msg_1: [part("prt_1", "ses_1", "msg_1")] },
       permission: { ses_1: [] as PermissionRequest[] },
@@ -68,7 +68,7 @@ describe("app session cache", () => {
     const store: {
       session_status: Record<string, SessionStatus | undefined>
       session_diff: Record<string, SnapshotFileDiff[] | undefined>
-      todo: Record<string, Todo[] | undefined>
+      todo: Record<string, SessionTodoInfo[] | undefined>
       message: Record<string, Message[] | undefined>
       part: Record<string, Part[] | undefined>
       permission: Record<string, PermissionRequest[] | undefined>

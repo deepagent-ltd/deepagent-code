@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
-import { mkdirSync, readFileSync, existsSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync } from "node:fs"
 import path from "node:path"
-import { writeFileAtomic } from "./atomic-write"
+import { writeFileExclusive } from "./atomic-write"
 import type { LearningCandidate } from "./learning"
 import { DurableKnowledgeStore } from "./durable-knowledge-store"
 import { documentRevision, type Doc, type GovernanceActor } from "./document-store"
@@ -38,20 +38,82 @@ export type PromotedRecord = {
 export const fingerprint = (c: LearningCandidate): string =>
   "fp:" + createHash("sha256").update(`${c.type}:${c.summary}`).digest("hex").slice(0, 24)
 
+export const MAX_REJECTED_FINGERPRINTS = 10_000
+export const MAX_REJECTION_REASON_BYTES = 4096
+const MAX_REJECTION_SLOT_BYTES = MAX_REJECTION_REASON_BYTES + 256
+
 export class RejectedBuffer {
-  private file: string
-  private map: Map<string, string>
+  private directory: string
   constructor(dir: string) {
     mkdirSync(dir, { recursive: true })
-    this.file = path.join(dir, "rejected_buffer.json")
-    this.map = existsSync(this.file) ? new Map(Object.entries(JSON.parse(readFileSync(this.file, "utf8")))) : new Map()
+    this.directory = path.join(dir, "rejected-buffer")
+    mkdirSync(this.directory, { recursive: true })
+    const legacy = path.join(dir, "rejected_buffer.json")
+    if (!existsSync(legacy)) return
+    const content = readFileSync(legacy, "utf8")
+    if (Buffer.byteLength(content) > MAX_REJECTED_FINGERPRINTS * MAX_REJECTION_SLOT_BYTES)
+      throw new Error("RejectedBuffer legacy file exceeds the migration limit")
+    const parsed = JSON.parse(content) as unknown
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+      throw new Error("RejectedBuffer legacy file is invalid")
+    const entries = Object.entries(parsed)
+    if (entries.length > MAX_REJECTED_FINGERPRINTS)
+      throw new Error(`RejectedBuffer exceeds ${MAX_REJECTED_FINGERPRINTS} entries`)
+    for (const [fp, reason] of entries) {
+      if (typeof reason !== "string") throw new Error("RejectedBuffer legacy reason is invalid")
+      this.add(fp, reason)
+    }
   }
   has(fp: string): boolean {
-    return this.map.has(fp)
+    this.requireFingerprint(fp)
+    for (let offset = 0; offset < MAX_REJECTED_FINGERPRINTS; offset++) {
+      const entry = this.readSlot(this.slot(fp, offset))
+      if (!entry) return false
+      if (entry.fingerprint === fp) return true
+    }
+    return false
   }
   add(fp: string, reason: string): void {
-    this.map.set(fp, reason)
-    writeFileAtomic(this.file, JSON.stringify(Object.fromEntries(this.map), null, 2))
+    this.requireFingerprint(fp)
+    if (Buffer.byteLength(reason) > MAX_REJECTION_REASON_BYTES)
+      throw new Error(`RejectedBuffer reason exceeds ${MAX_REJECTION_REASON_BYTES} bytes`)
+    for (let offset = 0; offset < MAX_REJECTED_FINGERPRINTS; offset++) {
+      const slot = this.slot(fp, offset)
+      const entry = this.readSlot(slot)
+      if (entry?.fingerprint === fp) return
+      if (entry) continue
+      try {
+        writeFileExclusive(slot, JSON.stringify({ fingerprint: fp, reason }))
+        return
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") continue
+        throw error
+      }
+    }
+    throw new Error(`RejectedBuffer exceeds ${MAX_REJECTED_FINGERPRINTS} entries`)
+  }
+  private requireFingerprint(fp: string) {
+    if (!/^fp:[0-9a-f]{24}$/.test(fp)) throw new Error("RejectedBuffer fingerprint is invalid")
+  }
+  private slot(fp: string, offset: number) {
+    const start = Number.parseInt(createHash("sha256").update(fp).digest("hex").slice(0, 8), 16)
+    return path.join(this.directory, `${String((start + offset) % MAX_REJECTED_FINGERPRINTS).padStart(5, "0")}.json`)
+  }
+  private readSlot(file: string) {
+    if (!existsSync(file)) return undefined
+    const content = readFileSync(file, "utf8")
+    if (Buffer.byteLength(content) > MAX_REJECTION_SLOT_BYTES) throw new Error(`RejectedBuffer slot is oversized: ${file}`)
+    const entry = JSON.parse(content) as unknown
+    if (
+      !entry ||
+      typeof entry !== "object" ||
+      !("fingerprint" in entry) ||
+      typeof entry.fingerprint !== "string" ||
+      !("reason" in entry) ||
+      typeof entry.reason !== "string"
+    )
+      throw new Error(`RejectedBuffer slot is invalid: ${file}`)
+    return { fingerprint: entry.fingerprint, reason: entry.reason }
   }
 }
 

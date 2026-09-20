@@ -12,6 +12,7 @@ import {
   type WorkspaceSelection,
 } from "../dialog-workspace-create"
 import type { WorkspaceStatus } from "../workspace-label"
+import { useTuiI18n } from "../../context/i18n"
 
 export function usePromptWorkspace(sessionID?: string) {
   const dialog = useDialog()
@@ -19,6 +20,7 @@ export function usePromptWorkspace(sessionID?: string) {
   const project = useProject()
   const sync = useSync()
   const toast = useToast()
+  const i18n = useTuiI18n()
   const [selection, setSelection] = createSignal<WorkspaceSelection>()
   const [creating, setCreating] = createSignal(false)
   const [creatingDots, setCreatingDots] = createSignal(3)
@@ -32,14 +34,14 @@ export function usePromptWorkspace(sessionID?: string) {
     } catch (err) {
       setSelection(undefined)
       setCreating(false)
-      toast.show({ title: "Creating workspace failed", message: errorMessage(err), variant: "error" })
+      toast.show({ title: i18n.t("tui.common.failedCreateWorkspace"), message: errorMessage(err), variant: "error" })
       return
     }
     if (result.error || !result.data) {
       setSelection(undefined)
       setCreating(false)
       toast.show({
-        title: "Creating workspace failed",
+        title: i18n.t("tui.common.failedCreateWorkspace"),
         message: errorMessage(result.error ?? "no response"),
         variant: "error",
       })
@@ -85,6 +87,7 @@ export function usePromptWorkspace(sessionID?: string) {
       sync,
       project,
       toast,
+      i18n,
       sourceWorkspaceID,
       workspaceID: workspace.id,
       sessionID,
@@ -103,7 +106,7 @@ export function usePromptWorkspace(sessionID?: string) {
   }
 
   function open() {
-    void openWorkspaceSelect({ dialog, sdk, sync, project, toast, onSelect: warp })
+    void openWorkspaceSelect({ dialog, sdk, sync, project, toast, i18n, onSelect: warp })
   }
 
   createEffect(() => {

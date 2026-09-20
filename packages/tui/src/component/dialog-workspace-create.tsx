@@ -4,6 +4,7 @@ import { DialogSelect, type DialogSelectOption } from "../ui/dialog-select"
 import { useSync } from "../context/sync"
 import { useProject } from "../context/project"
 import { useRoute } from "../context/route"
+import { useTuiI18n } from "../context/i18n"
 import { createMemo, createSignal, onMount } from "solid-js"
 import { errorMessage } from "../util/error"
 import { useSDK } from "../context/sdk"
@@ -53,6 +54,7 @@ async function loadWorkspaceAdapters(input: {
   sdk: ReturnType<typeof useSDK>
   sync: ReturnType<typeof useSync>
   toast: ReturnType<typeof useToast>
+  i18n: ReturnType<typeof useTuiI18n>
 }) {
   const dir = input.sync.path.directory || input.sdk.directory
   try {
@@ -61,7 +63,7 @@ async function loadWorkspaceAdapters(input: {
     return response.data
   } catch (err) {
     input.toast.show({
-      title: "Failed to load workspace adapters",
+      title: input.i18n.t("tui.workspaceCreate.failedLoadAdapters"),
       message: errorMessage(err),
       variant: "error",
     })
@@ -75,6 +77,7 @@ export async function openWorkspaceSelect(input: {
   sync: ReturnType<typeof useSync>
   project: ReturnType<typeof useProject>
   toast: ReturnType<typeof useToast>
+  i18n: ReturnType<typeof useTuiI18n>
   onSelect: (selection: WorkspaceSelection) => Promise<void> | void
 }) {
   input.dialog.clear()
@@ -91,6 +94,7 @@ export async function warpWorkspaceSession(input: {
   sync: ReturnType<typeof useSync>
   project: ReturnType<typeof useProject>
   toast: ReturnType<typeof useToast>
+  i18n: ReturnType<typeof useTuiI18n>
   sourceWorkspaceID?: string
   workspaceID: string | null
   sessionID: string
@@ -106,7 +110,7 @@ export async function warpWorkspaceSession(input: {
     })
   } catch (err) {
     input.toast.show({
-      title: "Failed to warp session",
+      title: input.i18n.t("tui.workspaceCreate.failedWarpSession"),
       message: errorMessage(err),
       variant: "error",
     })
@@ -116,14 +120,14 @@ export async function warpWorkspaceSession(input: {
     if (result?.error && "name" in result.error && result.error.name === "VcsApplyError") {
       await DialogAlert.show(
         input.dialog,
-        "Unable to Warp Session",
-        "Unable to apply file changes to this workspace. It has existing changes that conflict or is based off a different branch. Session has not been warped.",
+        input.i18n.t("tui.workspaceCreate.unableToWarpTitle"),
+        input.i18n.t("tui.workspaceCreate.unableToWarpMessage"),
       )
       return false
     }
 
     input.toast.show({
-      title: "Failed to warp session",
+      title: input.i18n.t("tui.workspaceCreate.failedWarpSession"),
       message: errorMessage(result?.error ?? "no response"),
       variant: "error",
     })
@@ -185,6 +189,7 @@ export function DialogWorkspaceSelect(props: {
   const sync = useSync()
   const sdk = useSDK()
   const toast = useToast()
+  const i18n = useTuiI18n()
   const [adapters, setAdapters] = createSignal<Adapter[] | undefined>(props.adapters)
   const omittedWorkspaceID = createMemo(() => (route.data.type === "session" ? project.workspace.current() : undefined))
 
@@ -192,7 +197,7 @@ export function DialogWorkspaceSelect(props: {
     dialog.setSize("medium")
     void (async () => {
       if (adapters()) return
-      const res = await loadWorkspaceAdapters({ sdk, sync, toast })
+      const res = await loadWorkspaceAdapters({ sdk, sync, toast, i18n })
       if (!res) return
       setAdapters(res)
     })()
@@ -214,7 +219,7 @@ export function DialogWorkspaceSelect(props: {
         category: "New workspace",
       })),
       {
-        title: "None",
+        title: i18n.t("tui.workspaceCreate.none"),
         value: { type: "none" as const },
         description: "Use the local project",
         category: "Choose workspace",
@@ -233,7 +238,7 @@ export function DialogWorkspaceSelect(props: {
       ...(hasMore
         ? [
             {
-              title: "View all workspaces",
+              title: i18n.t("tui.workspaceCreate.viewAllWorkspaces"),
               value: { type: "existing-list" as const },
               description: "Choose from all workspaces",
               category: "Choose workspace",

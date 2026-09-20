@@ -417,7 +417,10 @@ let incidentOrdinalOrig = 0
 const incidentOriginalPayloadLLM = Layer.sync(LLM.Service, () =>
   LLM.Service.of({
     stream: () => {
-      const shape = incidentStepShapes[incidentOrdinalOrig % incidentStepShapes.length]
+      // The SAME malformed payload every dispatch. The incident was a model resending a plan the
+      // tool had already rejected; a fixture that varied the payload between dispatches would now
+      // describe a model correcting itself, which the budget deliberately does not terminate.
+      const shape = incidentStepShapes[0]!
       const id = `incident-orig-${incidentOrdinalOrig}`
       incidentOrdinalOrig += 1
       // Exact payload structure from the incident: no operation, no version fields
@@ -464,7 +467,7 @@ let incidentOrdinalFwd = 0
 const incidentForwardCompatPayloadLLM = Layer.sync(LLM.Service, () =>
   LLM.Service.of({
     stream: () => {
-      const shape = incidentStepShapes[incidentOrdinalFwd % incidentStepShapes.length]
+      const shape = incidentStepShapes[0]!
       const id = `incident-fwd-${incidentOrdinalFwd}`
       incidentOrdinalFwd += 1
       const input = {

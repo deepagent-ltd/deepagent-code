@@ -1,13 +1,7 @@
 import { Option, Schema, SchemaGetter } from "effect"
-import { Hash } from "./util/hash"
 
-export type ExternalID = {
-  readonly namespace: string
-  readonly key: string
-}
-
-export const externalID = (prefix: string, input: ExternalID) =>
-  `${prefix}_${Hash.sha256(JSON.stringify([input.namespace, input.key]))}`
+export { externalID } from "./schema/external-id"
+export type { ExternalID } from "./schema/external-id"
 
 /**
  * Integer greater than zero.

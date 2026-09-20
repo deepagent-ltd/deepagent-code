@@ -11,6 +11,7 @@ import type { ExtendedProblemProfile } from "../../src/deepagent/domain-pack-reg
 import type { TaskContext, ToolContext } from "../../src/deepagent/prompt-policy"
 import type { Selection } from "../../src/deepagent/released-snapshot"
 import { releasedUserGlobalSelection } from "./released-selection-fixture"
+import { tmpRoot, tmpRootShared } from "../fixture/tmpdir"
 
 // docs/review_38 第0轮: lock the detector-tightening (B3) and dynamic-cap + per-pack-quota (B4)
 // wins so they cannot silently regress. These mirror how profileFromInput builds the LIVE profile:
@@ -253,7 +254,7 @@ describe("batch 2/4 new packs activate (review_4 coverage)", () => {
 
 describe("selectedRefs per-pack quota + dynamic cap (docs/review_38 B4)", () => {
   const withSeed = (fn: (releasedSelection: Selection) => void) => {
-    const dir = mkdtempSync(path.join(tmpdir(), "deepagent-quota-"))
+    const dir = mkdtempSync(tmpRootShared())
     try {
       knowledgeSource.configure(dir)
       seedCoreKnowledge(openUserGlobalStore(dir))

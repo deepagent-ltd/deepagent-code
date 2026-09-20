@@ -6,6 +6,7 @@ import { Database } from "./database/database"
 import {
   EventArtifactTable,
   EventArtifactChunkTable,
+  EventAggregateTombstoneTable,
   EventCompactionReceiptTable,
   EventDedupeTable,
   EventSequenceTable,
@@ -28,49 +29,25 @@ import { createHash } from "node:crypto"
 import { FilePartArtifact } from "./file-part-artifact"
 import { FilePartArtifactBindingTable } from "./file-part-artifact.sql"
 
-export const ID = Schema.String.check(Schema.isStartsWith("evt_")).pipe(
-  Schema.brand("Event.ID"),
-  withStatics((schema) => ({
-    create: () => schema.make("evt_" + Identifier.ascending()),
-    fromExternal: (input: ExternalID) => schema.make(externalID("evt", input)),
-  })),
-)
-export type ID = typeof ID.Type
+import {
+  Cursor,
+  ID,
+  define,
+  durableType,
+  registry,
+  syncRegistry,
+  versionedType,
+  type Definition,
+  type Payload,
+  type SyncDefinition,
+} from "./event/define"
 
-/**
- * Durable aggregate continuation position for embedded replay streams.
- * TODO: Decide whether a future HTTP / SDK surface should expose an opaque cursor instead.
- */
-export const Cursor = NonNegativeInt.pipe(Schema.brand("EventV2.Cursor"))
-export type Cursor = typeof Cursor.Type
+export { Cursor, ID, define, durableType, registry, syncRegistry, versionedType }
+export type { Definition, Payload, SyncDefinition } from "./event/define"
 
-export type Definition<Type extends string = string, DataSchema extends Schema.Top = Schema.Top> = {
-  readonly type: Type
-  readonly sync?: {
-    readonly version: number
-    readonly aggregate: string
-  }
-  readonly data: DataSchema
-}
 
 export type Data<D extends Definition> = Schema.Schema.Type<D["data"]>
 
-export type Payload<D extends Definition = Definition> = {
-  readonly id: ID
-  readonly type: D["type"]
-  readonly data: Data<D>
-  /** Durable aggregate order, populated while synchronized events are projected. */
-  readonly seq?: number
-  readonly version?: number
-  readonly location?: Location.Ref
-  readonly metadata?: Record<string, unknown>
-  /** Internal replay marker for projectors that own non-replicated operational state. */
-  readonly replay?: boolean
-  /** Internal exact-replay marker set only after the durable event identity and payload are verified. */
-  readonly replayExact?: boolean
-  /** Internal owner authority supplied by a replay ingress. It is never serialized into the event payload. */
-  readonly replayOwnerID?: string
-}
 
 export type Projector<D extends Definition = Definition> = (event: Payload<D>) => Effect.Effect<void>
 type AnyProjector = (event: Payload) => Effect.Effect<void>
@@ -232,6 +209,141 @@ export const ARTIFACT_CHUNK_BYTES = 256 * 1024
 export const LEGACY_ARTIFACT_MAX_SOURCE_BYTES = 64 * 1024 * 1024
 export const LEGACY_ARTIFACT_MAX_BODY_BYTES = 64 * 1024 * 1024
 export const LEGACY_ARTIFACT_MAX_FILES = 10_000
+export const AGGREGATE_TOMBSTONE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
+export const AGGREGATE_TOMBSTONE_SWEEP_BATCH = 100
+const aggregateDeletionTypes = new Set(["session.deleted.1", "session.deleted.2"])
+
+const removeAggregateRowsInTransaction = (db: Database.Interface["db"], aggregateID: string) =>
+  Effect.gen(function* () {
+    const snapshots = yield* db
+      .select({ snapshotID: EventSnapshotTable.snapshot_id })
+      .from(EventSnapshotTable)
+      .where(eq(EventSnapshotTable.aggregate_id, aggregateID))
+      .all()
+      .pipe(Effect.orDie)
+    const attempts = yield* db
+      .select({ snapshotID: EventSnapshotAttemptTable.snapshot_id })
+      .from(EventSnapshotAttemptTable)
+      .where(eq(EventSnapshotAttemptTable.aggregate_id, aggregateID))
+      .all()
+      .pipe(Effect.orDie)
+    const snapshotIDs = [...new Set([...snapshots, ...attempts].map((row) => row.snapshotID))]
+    const snapshotRowsCondition = snapshotIDs.length > 0
+      ? or(eq(EventSnapshotRowTable.aggregate_id, aggregateID), inArray(EventSnapshotRowTable.snapshot_id, snapshotIDs))
+      : eq(EventSnapshotRowTable.aggregate_id, aggregateID)
+    const rowHashes = yield* db
+      .select({ rowHash: EventSnapshotRowTable.row_hash })
+      .from(EventSnapshotRowTable)
+      .where(snapshotRowsCondition)
+      .all()
+      .pipe(Effect.orDie)
+    const artifactIDs = yield* db
+      .selectDistinct({ id: FilePartArtifactBindingTable.artifact_id })
+      .from(FilePartArtifactBindingTable)
+      .where(eq(FilePartArtifactBindingTable.aggregate_id, aggregateID))
+      .all()
+      .pipe(Effect.orDie)
+    // The snapshot guards intentionally reject deleting rows while an aggregate sequence still
+    // points at a snapshot. Remove the sequence first; its cleanup trigger removes active
+    // snapshot/attempt metadata, after which the row/chunk guards permit the final cleanup.
+    yield* db.delete(EventSequenceTable).where(eq(EventSequenceTable.aggregate_id, aggregateID)).run()
+    yield* db.delete(EventSnapshotRowTable).where(snapshotRowsCondition).run().pipe(Effect.orDie)
+    if (rowHashes.length > 0)
+      yield* db
+        .delete(EventSnapshotChunkTable)
+        .where(and(
+          inArray(EventSnapshotChunkTable.row_hash, rowHashes.map((row) => row.rowHash)),
+          sql`NOT EXISTS (SELECT 1 FROM ${EventSnapshotRowTable} WHERE ${EventSnapshotRowTable.row_hash} = ${EventSnapshotChunkTable.row_hash})`,
+        ))
+        .run()
+        .pipe(Effect.orDie)
+    yield* db
+      .delete(EventSyncIndexTable)
+      .where(eq(EventSyncIndexTable.aggregate_id, aggregateID))
+      .run()
+      .pipe(Effect.orDie)
+    if (artifactIDs.length > 0)
+      yield* db.run(sql`
+        DELETE FROM file_part_artifact
+        WHERE artifact_id IN ${artifactIDs.map((row) => row.id)}
+          AND NOT EXISTS (
+            SELECT 1 FROM file_part_artifact_binding binding
+            WHERE binding.artifact_id = file_part_artifact.artifact_id
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM file_part_artifact_import imported
+            WHERE imported.artifact_id = file_part_artifact.artifact_id
+          )
+      `).pipe(Effect.orDie)
+  })
+
+const removeAggregateRows = (db: Database.Interface["db"], aggregateID: string) =>
+  db.transaction(() => removeAggregateRowsInTransaction(db, aggregateID), { behavior: "immediate" }).pipe(Effect.orDie)
+
+/** Remove expired deletion fences together with any late event-side rows in one transaction. */
+export function sweepExpiredAggregateTombstones(
+  db: Database.Interface["db"],
+  now = Date.now(),
+  limit = AGGREGATE_TOMBSTONE_SWEEP_BATCH,
+) {
+  return db
+    .transaction(
+      () =>
+        Effect.gen(function* () {
+          const expired = yield* db
+            .select({ aggregateID: EventAggregateTombstoneTable.aggregate_id })
+            .from(EventAggregateTombstoneTable)
+            .where(lte(EventAggregateTombstoneTable.retention_until, now))
+            .limit(Math.min(Math.max(limit, 1), AGGREGATE_TOMBSTONE_SWEEP_BATCH))
+            .all()
+            .pipe(Effect.orDie)
+          for (const row of expired) {
+            yield* removeAggregateRowsInTransaction(db, row.aggregateID)
+            yield* db
+              .delete(EventAggregateTombstoneTable)
+              .where(
+                and(
+                  eq(EventAggregateTombstoneTable.aggregate_id, row.aggregateID),
+                  lte(EventAggregateTombstoneTable.retention_until, now),
+                ),
+              )
+              .run()
+              .pipe(Effect.orDie)
+          }
+          return expired.length
+        }),
+      { behavior: "immediate" },
+    )
+    .pipe(Effect.orDie)
+}
+
+export function deleteAggregate(
+  db: Database.Interface["db"],
+  aggregateID: string,
+  options?: PublishOptions["tombstone"],
+) {
+  const now = Date.now()
+  return db
+    .transaction(
+      () =>
+        Effect.gen(function* () {
+          yield* db
+            .insert(EventAggregateTombstoneTable)
+            .values({
+              aggregate_id: aggregateID,
+              deleted_at: now,
+              retention_until: now + Math.max(options?.retentionMs ?? AGGREGATE_TOMBSTONE_RETENTION_MS, 0),
+              reason: options?.reason ?? "aggregate_deleted",
+            })
+            .onConflictDoNothing()
+            .run()
+            .pipe(Effect.orDie)
+          yield* removeAggregateRowsInTransaction(db, aggregateID)
+        }),
+      { behavior: "immediate" },
+    )
+    .pipe(Effect.orDie)
+}
 
 export class EncodedPayloadTooLargeError extends Schema.TaggedErrorClass<EncodedPayloadTooLargeError>()(
   "EventV2.EncodedPayloadTooLarge",
@@ -263,18 +375,6 @@ export class MaintenanceRequiredError extends Schema.TaggedErrorClass<Maintenanc
     message: Schema.String,
   },
 ) {}
-
-export function versionedType(type: string, version: number) {
-  return `${type}.${version}`
-}
-
-export const registry = new Map<string, Definition>()
-type SyncDefinition = Definition & {
-  readonly sync: NonNullable<Definition["sync"]>
-  readonly encode: (data: unknown) => unknown
-  readonly decode: (data: unknown) => unknown
-}
-const syncRegistry = new Map<string, SyncDefinition>()
 
 function admitEncodedPayload(definition: SyncDefinition, data: unknown) {
   const encoded = definition.encode(data) as Record<string, unknown>
@@ -324,48 +424,6 @@ function isCompactedLegacyFileArtifactRetry(
     FilePartArtifact.isLegacySyntheticCanonical(binding.canonicalData, encoded)
 }
 
-// Synchronized events cross a JSON boundary, so their data schemas must encode and decode without services.
-const syncCodec = (definition: Definition) => definition.data as Schema.Codec<unknown, unknown, never, never>
-
-export function define<const Type extends string, Fields extends Schema.Struct.Fields>(input: {
-  readonly type: Type
-  readonly sync?: {
-    readonly version: number
-    readonly aggregate: string
-  }
-  readonly schema: Fields
-}): Schema.Schema<Payload<Definition<Type, Schema.Struct<Fields>>>> & Definition<Type, Schema.Struct<Fields>> {
-  const Data = Schema.Struct(input.schema)
-  const Payload = Schema.Struct({
-    id: ID,
-    metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
-    type: Schema.Literal(input.type),
-    version: Schema.optional(Schema.Number),
-    location: Schema.optional(Location.Ref),
-    data: Data,
-  }).annotate({ identifier: input.type })
-
-  const definition = Object.assign(Payload, {
-    type: input.type,
-    ...(input.sync === undefined ? {} : { sync: input.sync }),
-    data: Data,
-  })
-  const existing = registry.get(input.type)
-  if (input.sync === undefined || existing?.sync === undefined || input.sync.version >= existing.sync.version) {
-    registry.set(input.type, definition)
-  }
-  if (input.sync)
-    syncRegistry.set(
-      versionedType(input.type, input.sync.version),
-      Object.assign(definition, {
-        encode: Schema.encodeUnknownSync(syncCodec(definition)),
-        decode: Schema.decodeUnknownSync(syncCodec(definition)),
-      }) as SyncDefinition,
-    )
-  return definition as Schema.Schema<Payload<Definition<Type, Schema.Struct<Fields>>>> &
-    Definition<Type, Schema.Struct<Fields>>
-}
-
 export function definitions() {
   return registry.values().toArray()
 }
@@ -377,11 +435,23 @@ export interface PublishOptions {
   readonly metadata?: Record<string, unknown>
   readonly location?: Location.Ref
   /**
-   * Local operational projection committed atomically with a synchronized event. Exact idempotent
-   * publish retries run this hook again so a caller can repair a missing local receipt; the hook must
-   * therefore use an idempotent write or CAS. It is not replayed from the serialized event log.
+   * Insert a durable deletion fence in the same transaction as the synchronized event and its
+   * projectors. The fence intentionally survives `remove()` event-stream cleanup.
    */
-  readonly commit?: (seq: number) => Effect.Effect<void>
+  readonly tombstone?: {
+    readonly reason?: string
+    readonly retentionMs?: number
+  }
+  /**
+   * Local operational projection committed atomically with a synchronized event — the hook runs INSIDE
+   * the same transaction as the durable event row. Exact idempotent publish retries run this hook again
+   * so a caller can repair a missing local receipt; the hook must therefore use an idempotent write or
+   * CAS. It is not replayed from the serialized event log. The second argument is the canonical event
+   * being committed (as projected/re-encoded in this commit), so a hook that mirrors the event can
+   * derive from the same bytes that hit the event row. A hook failure rolls back the whole transaction
+   * (fail-closed: no durable event without its local projection).
+   */
+  readonly commit?: (seq: number, event: Payload) => Effect.Effect<void, unknown>
 }
 
 export interface Interface {
@@ -403,11 +473,26 @@ export interface Interface {
   readonly registerSnapshotCodec?: (codec: SnapshotCodec) => Effect.Effect<void>
   readonly replay: (
     event: SerializedEvent,
-    options?: { readonly publish?: boolean; readonly ownerID?: string; readonly strictOwner?: boolean },
+    options?: {
+      readonly publish?: boolean
+      readonly ownerID?: string
+      readonly strictOwner?: boolean
+      /**
+       * In-transaction mirror hook: runs inside the same transaction as the replayed event row (same
+       * contract as `PublishOptions.commit`). Idempotent-write/CAS discipline applies; a failure rolls
+       * back the replayed commit. Used by the EventV2Bridge to land replayed commits into the C5 outbox.
+       */
+      readonly onCommit?: (seq: number, event: Payload) => Effect.Effect<void, unknown>
+    },
   ) => Effect.Effect<void>
   readonly replayAll: (
     events: SerializedEvent[],
-    options?: { readonly publish?: boolean; readonly ownerID?: string; readonly strictOwner?: boolean },
+    options?: {
+      readonly publish?: boolean
+      readonly ownerID?: string
+      readonly strictOwner?: boolean
+      readonly onCommit?: (seq: number, event: Payload) => Effect.Effect<void, unknown>
+    },
   ) => Effect.Effect<string | undefined>
   readonly snapshot: (aggregateID: string) => Effect.Effect<SerializedSnapshot | undefined>
   readonly aggregateState?: (aggregateID: string) => Effect.Effect<{
@@ -488,6 +573,8 @@ export interface Interface {
     readonly now?: number
   }) => Effect.Effect<{ readonly processed: number; readonly complete: boolean }>
   readonly remove: (aggregateID: string) => Effect.Effect<void>
+  readonly isDeleted?: (aggregateID: string) => Effect.Effect<boolean>
+  readonly deleteAggregate?: (aggregateID: string, options?: PublishOptions["tombstone"]) => Effect.Effect<void>
   readonly claim: (aggregateID: string, ownerID: string) => Effect.Effect<void>
 }
 
@@ -504,22 +591,55 @@ export const layerWith = (layerOptions?: LayerOptions) =>
   Layer.effect(
     Service,
     Effect.gen(function* () {
-      const all = yield* PubSub.unbounded<Payload>()
+      const all = yield* PubSub.sliding<Payload>(1024)
       const synchronized = new Map<string, Set<PubSub.PubSub<void>>>()
       const typed = new Map<string, PubSub.PubSub<Payload>>()
+      // Synchronized definitions are routed by their full wire identity (`type.version`).
+      // A base type alone is insufficient once old decoders and a successor projector coexist.
       const projectors = new Map<string, AnyProjector[]>()
       const snapshotCodecs = new Map<string, SnapshotCodec>()
       const commitGuards = new Array<CommitGuard>()
       const listeners = new Array<Listener>()
       const syncHandlers = new Array<Sync>()
+      let activeStreams = 0
       const { db } = yield* Database.Service
+
+      const boundedStream = <A, E, R>(stream: Stream.Stream<A, E, R>): Stream.Stream<A, E, R> =>
+        Stream.unwrap(
+          Effect.acquireRelease(
+            Effect.sync(() => {
+              if (activeStreams >= 2048) throw new Error("Event stream limit exceeded (2048)")
+              activeStreams++
+              return stream
+            }),
+            () =>
+              Effect.sync(() => {
+                activeStreams--
+              }),
+          ),
+        )
+
+      const definitionKey = (definition: Definition) =>
+        definition.sync ? versionedType(definition.type, definition.sync.version) : definition.type
+      const eventKey = (event: Payload) =>
+        event.version === undefined ? event.type : versionedType(event.type, event.version)
+      const decodeSyncData = (definition: SyncDefinition, data: unknown) =>
+        Effect.try({
+          try: () => definition.decode(data),
+          catch: (error) =>
+            new InvalidSyncEventError({
+              type: versionedType(definition.type, definition.sync.version),
+              message: `Invalid synchronized event payload: ${String(error)}`,
+            }),
+        }).pipe(Effect.orDie)
 
       const getOrCreate = (definition: Definition) =>
         Effect.gen(function* () {
-          const existing = typed.get(definition.type)
+          const key = definitionKey(definition)
+          const existing = typed.get(key)
           if (existing) return existing
-          const pubsub = yield* PubSub.unbounded<Payload>()
-          typed.set(definition.type, pubsub)
+          const pubsub = yield* PubSub.sliding<Payload>(1024)
+          typed.set(key, pubsub)
           return pubsub
         })
 
@@ -536,6 +656,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
       )
 
       function commitSyncEvent(
+        definition: Definition,
         event: Payload,
         input?: {
           readonly seq: number
@@ -543,22 +664,28 @@ export const layerWith = (layerOptions?: LayerOptions) =>
           readonly ownerID?: string
           readonly strictOwner?: boolean
         },
-        commit?: (seq: number) => Effect.Effect<void>,
+        commit?: (seq: number, event: Payload) => Effect.Effect<void, unknown>,
         idempotent = false,
         deferDurableWake = false,
+        tombstoneOptions?: PublishOptions["tombstone"],
       ) {
         return Effect.gen(function* () {
-          const definition = registry.get(event.type)
-          const sync = definition?.sync
-          if (sync) {
-            if (event.version !== sync.version) {
+          const sync = definition.sync
+          if (!sync)
+            return yield* Effect.die(
+              new InvalidSyncEventError({
+                type: event.type,
+                message: "Cannot durably commit an unsynchronized event definition",
+              }),
+            )
+          if (event.version !== sync.version) {
               yield* Effect.die(
                 new InvalidSyncEventError({
                   type: event.type,
                   message: `Expected event version ${sync.version}, got ${event.version}`,
                 }),
               )
-            }
+          }
             const aggregateID = (event.data as Record<string, unknown>)[sync.aggregate]
             if (typeof aggregateID !== "string") {
               yield* Effect.die(
@@ -576,7 +703,14 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                   }),
                 )
               }
-              const codec = syncRegistry.get(versionedType(definition.type, sync.version))!
+              const codec = syncRegistry.get(versionedType(definition.type, sync.version))
+              if (!codec)
+                return yield* Effect.die(
+                  new InvalidSyncEventError({
+                    type: event.type,
+                    message: `Missing synchronized codec for ${versionedType(definition.type, sync.version)}`,
+                  }),
+                )
               const original = codec.encode(event.data) as Record<string, unknown>
               const prepared = FilePartArtifact.prepare(
                 definition.type,
@@ -588,7 +722,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
               const admission = admitEncodedPayload(codec, canonicalEvent.data)
               if ("error" in admission) return yield* Effect.die(admission.error)
               const encoded = admission.encoded
-              const list = projectors.get(event.type) ?? []
+              const list = projectors.get(versionedType(event.type, sync.version)) ?? []
               return yield* Effect.uninterruptible(
                 Effect.gen(function* () {
                   const committed = yield* db
@@ -606,6 +740,59 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                             .get()
                             .pipe(Effect.orDie)
                           const latest = row?.seq ?? -1
+                          const deletionType = aggregateDeletionTypes.has(versionedType(definition.type, sync.version))
+                          const tombstone = yield* db
+                            .select()
+                            .from(EventAggregateTombstoneTable)
+                            .where(eq(EventAggregateTombstoneTable.aggregate_id, aggregateID))
+                            .get()
+                            .pipe(Effect.orDie)
+                          if (tombstone) {
+                            if (idempotent && tombstone.deletion_event_id === event.id && deletionType) {
+                              const existing = yield* db
+                                .select()
+                                .from(EventTable)
+                                .where(eq(EventTable.id, event.id))
+                                .get()
+                                .pipe(Effect.orDie)
+                              if (
+                                existing &&
+                                existing.aggregate_id === aggregateID &&
+                                existing.type === versionedType(definition.type, sync.version) &&
+                                isDeepStrictEqual(existing.data, encoded)
+                              )
+                                return { aggregateID, seq: existing.seq, inserted: false, event }
+                            }
+                            return yield* Effect.die(
+                              new InvalidSyncEventError({
+                                type: event.type,
+                                message: `Aggregate ${aggregateID} was deleted at ${tombstone.deleted_at} and cannot accept new events`,
+                              }),
+                            )
+                          }
+                          if (tombstoneOptions || deletionType) {
+                            const now = Date.now()
+                            const inserted = yield* db
+                              .insert(EventAggregateTombstoneTable)
+                              .values({
+                                aggregate_id: aggregateID,
+                                deleted_at: now,
+                                retention_until: now + Math.max(tombstoneOptions?.retentionMs ?? AGGREGATE_TOMBSTONE_RETENTION_MS, 0),
+                                reason: tombstoneOptions?.reason ?? "aggregate_deleted",
+                                deletion_event_id: event.id,
+                              })
+                              .onConflictDoNothing()
+                              .returning({ aggregateID: EventAggregateTombstoneTable.aggregate_id })
+                              .get()
+                              .pipe(Effect.orDie)
+                            if (!inserted)
+                              return yield* Effect.die(
+                                new InvalidSyncEventError({
+                                  type: event.type,
+                                  message: `Aggregate ${aggregateID} deletion fence was concurrently created`,
+                                }),
+                              )
+                          }
                           if (input?.strictOwner && row?.ownerID && row.ownerID !== input.ownerID) {
                             yield* Effect.die(
                               new InvalidSyncEventError({
@@ -789,7 +976,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                                 )
                               : isDeepStrictEqual(stored.data, encoded))
                           ) {
-                            if (commit) yield* commit(stored.seq)
+                            if (commit) yield* commit(stored.seq, canonicalEvent)
                             return { aggregateID, seq: stored.seq, inserted: false }
                           }
                           if (stored)
@@ -812,7 +999,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                           for (const projector of list) {
                             yield* projector({ ...canonicalEvent, seq } as Payload)
                           }
-                          if (commit) yield* commit(seq)
+                          if (commit) yield* commit(seq, canonicalEvent)
                           yield* db
                             .insert(EventSequenceTable)
                             .values([{ aggregate_id: aggregateID, seq, owner_id: input?.ownerID }])
@@ -875,17 +1062,18 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                 }),
               )
             }
-          }
         })
       }
 
       function publishEvent<D extends Definition>(
+        definition: D,
         event: Payload<D>,
         commit?: PublishOptions["commit"],
         idempotent = false,
+        tombstone?: PublishOptions["tombstone"],
       ) {
         return Effect.gen(function* () {
-          const durable = registry.get(event.type)?.sync !== undefined
+          const durable = definition.sync !== undefined
           if (!durable && commit)
             return yield* Effect.die(
               new InvalidSyncEventError({
@@ -894,7 +1082,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
               }),
             )
           if (durable) {
-            const committed = yield* commitSyncEvent(event as Payload, undefined, commit, idempotent)
+            const committed = yield* commitSyncEvent(definition, event as Payload, undefined, commit, idempotent, false, tombstone)
             if (committed) {
               event = { ...(committed.event ?? event), seq: committed.seq } as Payload<D>
               if (committed.inserted) {
@@ -929,7 +1117,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
             (listener) => (isolateListeners ? observe(event, "listener", listener) : listener(event)),
             { discard: true },
           )
-          const pubsub = typed.get(event.type)
+          const pubsub = typed.get(eventKey(event))
           if (pubsub) yield* PubSub.publish(pubsub, event)
           yield* PubSub.publish(all, event)
         })
@@ -952,6 +1140,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
               ? { directory: serviceLocation.directory, workspaceID: serviceLocation.workspaceID }
               : undefined)
           return yield* publishEvent(
+            definition,
             {
               id: options?.id ?? ID.create(),
               ...(options?.metadata ? { metadata: options.metadata } : {}),
@@ -962,6 +1151,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
             } as Payload<D>,
             options?.commit,
             options?.idempotent,
+            options?.tombstone,
           )
         })
       }
@@ -973,6 +1163,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
           readonly ownerID?: string
           readonly strictOwner?: boolean
           readonly onCommitted?: (event: Payload) => void
+          readonly onCommit?: (seq: number, event: Payload) => Effect.Effect<void, unknown>
           readonly deferDurableWake?: boolean
         },
       ) {
@@ -988,11 +1179,12 @@ export const layerWith = (layerOptions?: LayerOptions) =>
               type: definition.type,
               version: definition.sync.version,
               seq: event.seq,
-              data: definition.decode(event.data),
+              data: yield* decodeSyncData(definition, event.data),
               replay: true,
               ...(options?.ownerID ? { replayOwnerID: options.ownerID } : {}),
             } as Payload
             const committed = yield* commitSyncEvent(
+              definition,
               payload,
               {
                 seq: event.seq,
@@ -1000,7 +1192,10 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                 ownerID: options?.ownerID,
                 strictOwner: options?.strictOwner,
               },
-              undefined,
+              // The in-transaction mirror hook (outbox landing for replayed commits): it runs inside the
+              // same transaction as the replayed event row, so a replayed commit can never survive
+              // without its local projection (same contract as PublishOptions.commit).
+              options?.onCommit,
               false,
               options?.deferDurableWake,
             )
@@ -1014,7 +1209,12 @@ export const layerWith = (layerOptions?: LayerOptions) =>
 
       function replayAll(
         events: SerializedEvent[],
-        options?: { readonly publish?: boolean; readonly ownerID?: string; readonly strictOwner?: boolean },
+        options?: {
+          readonly publish?: boolean
+          readonly ownerID?: string
+          readonly strictOwner?: boolean
+          readonly onCommit?: (seq: number, event: Payload) => Effect.Effect<void, unknown>
+        },
       ) {
         return Effect.gen(function* () {
           const source = events[0]?.aggregateID
@@ -1047,7 +1247,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
               )
               continue
             }
-            const admission = admitEncodedPayload(definition, definition.decode(event.data))
+            const admission = admitEncodedPayload(definition, yield* decodeSyncData(definition, event.data))
             if ("error" in admission) return yield* Effect.die(admission.error)
           }
           const committed: Payload[] = []
@@ -2409,34 +2609,25 @@ export const layerWith = (layerOptions?: LayerOptions) =>
       }
 
       function remove(aggregateID: string) {
-        return db
-          .transaction(() =>
-            Effect.gen(function* () {
-              const artifactIDs = yield* db
-                .selectDistinct({ id: FilePartArtifactBindingTable.artifact_id })
-                .from(FilePartArtifactBindingTable)
-                .where(eq(FilePartArtifactBindingTable.aggregate_id, aggregateID))
-                .all()
-                .pipe(Effect.orDie)
-              yield* db.delete(EventSequenceTable).where(eq(EventSequenceTable.aggregate_id, aggregateID)).run()
-              if (artifactIDs.length > 0)
-                yield* db.run(sql`
-                  DELETE FROM file_part_artifact
-                  WHERE artifact_id IN ${artifactIDs.map((row) => row.id)}
-                    AND NOT EXISTS (
-                      SELECT 1 FROM file_part_artifact_binding binding
-                      WHERE binding.artifact_id = file_part_artifact.artifact_id
-                    )
-                    AND NOT EXISTS (
-                      SELECT 1 FROM file_part_artifact_import imported
-                      WHERE imported.artifact_id = file_part_artifact.artifact_id
-                    )
-                `).pipe(Effect.orDie)
-            }),
-            { behavior: "immediate" },
-          )
-          .pipe(Effect.orDie)
+        return removeAggregateRows(db, aggregateID)
       }
+
+      const isDeleted = Effect.fn("EventV2.isDeleted")(function* (aggregateID: string) {
+        const tombstone = yield* db
+          .select({ aggregateID: EventAggregateTombstoneTable.aggregate_id })
+          .from(EventAggregateTombstoneTable)
+          .where(eq(EventAggregateTombstoneTable.aggregate_id, aggregateID))
+          .get()
+          .pipe(Effect.orDie)
+        return tombstone !== undefined
+      })
+
+      const deleteAggregateEffect = Effect.fn("EventV2.deleteAggregate")(function* (
+        aggregateID: string,
+        options?: PublishOptions["tombstone"],
+      ) {
+        yield* deleteAggregate(db, aggregateID, options)
+      })
 
       function claim(aggregateID: string, ownerID: string) {
         return db
@@ -2448,28 +2639,32 @@ export const layerWith = (layerOptions?: LayerOptions) =>
       }
 
       const subscribe = <D extends Definition>(definition: D): Stream.Stream<Payload<D>> =>
-        Stream.unwrap(getOrCreate(definition).pipe(Effect.map((pubsub) => Stream.fromPubSub(pubsub)))).pipe(
-          Stream.map((event) => event as Payload<D>),
+        boundedStream(
+          Stream.unwrap(getOrCreate(definition).pipe(Effect.map((pubsub) => Stream.fromPubSub(pubsub)))).pipe(
+            Stream.map((event) => event as Payload<D>),
+          ),
         )
 
-      const streamAll = (): Stream.Stream<Payload> => Stream.fromPubSub(all)
+      const streamAll = (): Stream.Stream<Payload> => boundedStream(Stream.fromPubSub(all))
 
-      const decodeSerializedEvent = (event: SerializedEvent): CursorEvent => {
-        const definition = syncRegistry.get(event.type)
-        if (!definition) {
-          throw new InvalidSyncEventError({ type: event.type, message: `Unknown sync event type ${event.type}` })
-        }
-        return {
-          cursor: Cursor.make(event.seq),
-          event: {
-            id: event.id,
-            type: definition.type,
-            version: definition.sync.version,
-            seq: event.seq,
-            data: definition.decode(event.data),
-          },
-        }
-      }
+      const decodeSerializedEvent = (event: SerializedEvent): Effect.Effect<CursorEvent> =>
+        Effect.gen(function* () {
+          const definition = syncRegistry.get(event.type)
+          if (!definition)
+            return yield* Effect.die(
+              new InvalidSyncEventError({ type: event.type, message: `Unknown sync event type ${event.type}` }),
+            )
+          return {
+            cursor: Cursor.make(event.seq),
+            event: {
+              id: event.id,
+              type: definition.type,
+              version: definition.sync.version,
+              seq: event.seq,
+              data: yield* decodeSyncData(definition, event.data),
+            },
+          }
+        })
 
       const decodeStoredEventData = Schema.decodeUnknownSync(Schema.UnknownFromJsonString)
 
@@ -2579,7 +2774,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                 message: `Stored event ${missing.id} disappeared while reading aggregate ${aggregateID}`,
               }),
             )
-          const events = metadata.map((event) =>
+          const events = yield* Effect.forEach(metadata, (event) =>
             decodeSerializedEvent({
               id: event.id,
               aggregateID,
@@ -2616,7 +2811,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
         readonly aggregateID: string
         readonly after?: Cursor
       }): Stream.Stream<CursorEvent> =>
-        Stream.unwrap(
+        boundedStream(Stream.unwrap(
           Effect.gen(function* () {
             const synchronized = yield* subscribeSynchronized(input.aggregateID)
             let cursor = input.after ?? -1
@@ -2651,10 +2846,11 @@ export const layerWith = (layerOptions?: LayerOptions) =>
             )
             return Stream.concat(drain(), live)
           }),
-        )
+        ))
 
       const listen = (listener: Listener): Effect.Effect<Unsubscribe> =>
         Effect.sync(() => {
+          if (listeners.length >= 2048) throw new Error("Event listener limit exceeded (2048)")
           listeners.push(listener)
           return Effect.sync(() => {
             const index = listeners.indexOf(listener)
@@ -2664,6 +2860,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
 
       const sync = (handler: Sync): Effect.Effect<Unsubscribe> =>
         Effect.sync(() => {
+          if (syncHandlers.length >= 256) throw new Error("Event sync handler limit exceeded (256)")
           syncHandlers.push(handler)
           return Effect.sync(() => {
             const index = syncHandlers.indexOf(handler)
@@ -2673,14 +2870,17 @@ export const layerWith = (layerOptions?: LayerOptions) =>
 
       const beforeCommit = (guard: CommitGuard): Effect.Effect<void> =>
         Effect.sync(() => {
+          if (commitGuards.length >= 256) throw new Error("Event commit guard limit exceeded (256)")
           commitGuards.push(guard)
         })
 
       const project = <D extends Definition>(definition: D, projector: Projector<D>): Effect.Effect<void> =>
         Effect.sync(() => {
-          const list = projectors.get(definition.type) ?? []
+          const key = definitionKey(definition)
+          const list = projectors.get(key) ?? []
+          if (list.length >= 64) throw new Error(`Event projector limit exceeded for ${key} (64)`)
           list.push((event) => projector(event as Payload<D>))
-          projectors.set(definition.type, list)
+          projectors.set(key, list)
         })
 
       const registerSnapshotCodec = (codec: SnapshotCodec) =>
@@ -2815,6 +3015,8 @@ export const layerWith = (layerOptions?: LayerOptions) =>
         importSnapshotBundle,
         backfillSyncIndex,
         remove,
+        isDeleted,
+        deleteAggregate: deleteAggregateEffect,
         claim,
       })
     }),

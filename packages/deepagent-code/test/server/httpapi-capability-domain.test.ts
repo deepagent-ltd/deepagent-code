@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { CapabilityCatalog } from "@deepagent-code/core/system-context/capability-catalog"
-import { CapabilityLoader } from "@deepagent-code/core/system-context/capability-loader"
+import { CapabilityLoaderMemory } from "@deepagent-code/core/system-context/capability-loader-memory"
 import { CapabilitySearch } from "@deepagent-code/core/system-context/capability-search"
 import { CapabilityRuntimeSearch } from "@deepagent-code/core/system-context/capability-runtime-search"
 
@@ -78,7 +78,7 @@ describe("capability catalog/search diagnostics", () => {
   })
 
   test("load receipts expose identity/metrics but never the loaded body", () => {
-    CapabilityLoader.resetCapabilityLoader()
-    expect(CapabilityLoader.recordedCapabilityLoads()).toEqual([])
+    CapabilityLoaderMemory.resetCapabilityLoader()
+    expect(CapabilityLoaderMemory.recordedCapabilityLoads()).toEqual([])
   })
 })

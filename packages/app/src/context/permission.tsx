@@ -15,6 +15,7 @@ import {
   isMutatingPermission,
   autoRespondsPermission,
 } from "./permission-auto-respond"
+import { permissionRequestFromV2, replyPermission } from "./global-sync/permission-v2"
 
 export type DirectoryApprovalMode = "read-only" | "request" | "full-access"
 
@@ -23,6 +24,8 @@ type PermissionRespondFn = (input: {
   permissionID: string
   response: "once" | "always" | "reject"
   directory?: string
+  message?: string
+  v2?: boolean
 }) => void
 
 function isNonAllowRule(rule: unknown) {
@@ -142,12 +145,19 @@ export const { use: usePermission, provider: PermissionProvider } = createSimple
     }
 
     const respond: PermissionRespondFn = (input) => {
-      serverSDK.client.permission.respond(input).catch(() => {
+      replyPermission(serverSDK.client, {
+        sessionID: input.sessionID,
+        requestID: input.permissionID,
+        response: input.response,
+        directory: input.directory,
+        message: input.message,
+        v2: input.v2,
+      }).catch(() => {
         responded.delete(input.permissionID)
       })
     }
 
-    function respondOnce(permission: PermissionRequest, directory?: string) {
+    function respondOnce(permission: PermissionRequest, directory?: string, v2?: boolean) {
       const now = Date.now()
       const hit = responded.has(permission.id)
       responded.delete(permission.id)
@@ -159,6 +169,7 @@ export const { use: usePermission, provider: PermissionProvider } = createSimple
         permissionID: permission.id,
         response: "once",
         directory,
+        v2,
       })
     }
 
@@ -189,7 +200,7 @@ export const { use: usePermission, provider: PermissionProvider } = createSimple
       return isMutatingPermission(permission.permission)
     }
 
-    function respondReject(permission: PermissionRequest, directory?: string) {
+    function respondReject(permission: PermissionRequest, directory?: string, v2?: boolean) {
       const now = Date.now()
       const hit = responded.has(permission.id)
       responded.delete(permission.id)
@@ -201,6 +212,7 @@ export const { use: usePermission, provider: PermissionProvider } = createSimple
         permissionID: permission.id,
         response: "reject",
         directory,
+        v2,
       })
     }
 
@@ -211,18 +223,38 @@ export const { use: usePermission, provider: PermissionProvider } = createSimple
       return next
     }
 
+    // Toggling auto-accept/read-only must also sweep pending V2 asks: they never appear in the
+    // legacy /permission list the enable paths iterate, and the dock hides auto-responding
+    // requests — without the sweep a pending V2 ask would strand unanswered and invisible.
+    function sweepV2(
+      directory: string,
+      should: (perm: PermissionRequest) => boolean,
+      act: (perm: PermissionRequest, directory: string, v2: true) => void,
+    ) {
+      const [childStore] = serverSync.child(directory, { bootstrap: false })
+      for (const perms of Object.values(childStore.permission)) {
+        for (const perm of perms ?? []) {
+          if (!perm?.id) continue
+          if (childStore.permission_v2[perm.sessionID]?.[perm.id] !== true) continue
+          if (!should(perm)) continue
+          act(perm, directory, true)
+        }
+      }
+    }
+
     const unsubscribe = serverSDK.event.listen((e) => {
       const event = e.details
-      if (event?.type !== "permission.asked") return
+      if (event?.type !== "permission.asked" && event?.type !== "permission.v2.asked") return
 
-      const perm = event.properties
+      const v2 = event.type === "permission.v2.asked"
+      const perm = v2 ? permissionRequestFromV2(event.properties) : event.properties
       if (shouldAutoReject(perm, e.name)) {
-        respondReject(perm, e.name)
+        respondReject(perm, e.name, v2)
         return
       }
       if (!shouldAutoRespond(perm, e.name)) return
 
-      respondOnce(perm, e.name)
+      respondOnce(perm, e.name, v2)
     })
     onCleanup(unsubscribe)
 
@@ -245,6 +277,7 @@ export const { use: usePermission, provider: PermissionProvider } = createSimple
             if (!shouldAutoRespond(perm, directory)) continue
             respondOnce(perm, directory)
           }
+          sweepV2(directory, (perm) => shouldAutoRespond(perm, directory), respondOnce)
         })
         .catch(() => undefined)
     }
@@ -279,6 +312,7 @@ export const { use: usePermission, provider: PermissionProvider } = createSimple
             if (!shouldAutoReject(perm, directory)) continue
             respondReject(perm, directory)
           }
+          sweepV2(directory, (perm) => shouldAutoReject(perm, directory), respondReject)
         })
         .catch(() => undefined)
     }
@@ -335,6 +369,7 @@ export const { use: usePermission, provider: PermissionProvider } = createSimple
             if (!shouldAutoRespond(perm, directory)) continue
             respondOnce(perm, directory)
           }
+          sweepV2(directory, (perm) => shouldAutoRespond(perm, directory), respondOnce)
         })
         .catch(() => undefined)
     }

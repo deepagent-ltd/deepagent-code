@@ -2,9 +2,14 @@ import { Schema } from "effect"
 import type { LLMRequest, ReasoningEffort, TextVerbosity as TextVerbosityValue } from "../../schema"
 import { ReasoningEfforts, TextVerbosity } from "../../schema"
 
-export const OpenAIReasoningEfforts = ReasoningEfforts.filter(
-  (effort): effort is Exclude<ReasoningEffort, "max"> => effort !== "max",
-)
+// This is the wire vocabulary for the OpenAI-SHAPED protocols (openai.chat / openai.responses and
+// their openai-compatible variants) — not OpenAI's own value set. The two used to be conflated:
+// `max` was filtered out here on the grounds that OpenAI rejects it, which made the value
+// unreachable for every openai-compatible endpoint that DOES accept it. Measured: the DeepSeek
+// endpoint answers `reasoning_effort: "max"` with 200, while the runtime silently downgraded the
+// activation policy's `max` to `high` before the request was ever built — a provider that supports a
+// tier the runtime refuses to send. `xhigh` is included for the same reason.
+export const OpenAIReasoningEfforts = ReasoningEfforts
 export type OpenAIReasoningEffort = (typeof OpenAIReasoningEfforts)[number]
 
 // Mirrors OpenAI's `ResponseIncludable` union from the official SDK. Keep this

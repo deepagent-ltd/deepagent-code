@@ -1,8 +1,13 @@
 export * as SessionMessage from "./message"
 
 import { Schema } from "effect"
-import { ProviderMetadata } from "@deepagent-code/llm"
-import { ModelV2 } from "../model"
+// Deep import: the llm barrel exports route/client (node:http/Buffer transport) which is
+// unparseable in the browser bundle reached via app → legacy-wire → message. The schema
+// submodule carries only the JSON schemas.
+import { ProviderMetadata } from "@deepagent-code/llm/schema"
+// Deep import: model.ts carries the contract/model-protocol edge (node:crypto digest);
+// the Ref schema alone lives in the dependency-free model/ref module.
+import { ModelRef } from "../model/ref"
 import { ToolOutput } from "../tool-output"
 import { V2Schema } from "../v2-schema"
 import { SessionEvent } from "./event"
@@ -29,7 +34,7 @@ export class AgentSwitched extends Schema.Class<AgentSwitched>("Session.Message.
 export class ModelSwitched extends Schema.Class<ModelSwitched>("Session.Message.ModelSwitched")({
   ...Base,
   type: Schema.Literal("model-switched"),
-  model: ModelV2.Ref,
+  model: ModelRef.Ref,
 }) {}
 
 export class User extends Schema.Class<User>("Session.Message.User")({
@@ -38,6 +43,7 @@ export class User extends Schema.Class<User>("Session.Message.User")({
   files: Prompt.fields.files,
   agents: Prompt.fields.agents,
   references: Prompt.fields.references,
+  format: Prompt.fields.format,
   type: Schema.Literal("user"),
   time: Schema.Struct({
     created: V2Schema.DateTimeUtcFromMillis,
@@ -151,6 +157,9 @@ export class Assistant extends Schema.Class<Assistant>("Session.Message.Assistan
     start: Schema.String.pipe(Schema.optional),
     end: Schema.String.pipe(Schema.optional),
   }).pipe(Schema.optional),
+  // RI-126: captured structured-output value (StructuredCaptured event). Independent of
+  // finish: the synthetic path ends "tool-calls", the wire path "stop".
+  structured: Schema.Unknown.pipe(Schema.optional),
   finish: Schema.String.pipe(Schema.optional),
   cost: Schema.Finite.pipe(Schema.optional),
   tokens: Schema.Struct({

@@ -113,6 +113,7 @@ const seedIndeterminateTurn = (suffix: string, seq = 1) =>
         directory: "/project",
         title: "resolution",
         version: "test",
+        time_suspended: 105,
       })
       .onConflictDoNothing()
       .run()
@@ -157,7 +158,7 @@ const seedIndeterminateTurn = (suffix: string, seq = 1) =>
         protocol: "openai-chat",
         ownerMode: "v2",
       },
-      ownerToken: turnsService.ownerToken,
+      ownerToken: yield* turnsService.currentOwnerToken(),
     })
     const receipt = committed.receipt
     const prepared = V2ProviderTurn.prepare(
@@ -213,7 +214,7 @@ const resolveAbandoned = (attemptId: string) =>
     const attemptsService = yield* SessionProviderAttempt.Service
     const ownersService = yield* SessionProviderOwner.Service
     // Resolution is a recovery command: the crashed owner must be stale and a recovery owner live.
-    yield* ownersService.release({ ownerToken: (yield* V2ProviderTurn.Service).ownerToken })
+    yield* ownersService.release({ ownerToken: (yield* (yield* V2ProviderTurn.Service).currentOwnerToken()) })
     yield* ownersService.register({ ownerToken: recoveryOwnerToken, leaseMs: 600_000 })
     return yield* attemptsService.resolve({
       attemptId,
@@ -229,8 +230,11 @@ it.effect("bridges a resolution exactly once and rejects mismatched bindings", (
   Effect.gen(function* () {
     const seeded = yield* seedIndeterminateTurn("bridge")
     const attemptsService = yield* SessionProviderAttempt.Service
+    const before = yield* attemptsService.get(seeded.attemptId)
     const resolved = yield* resolveAbandoned(seeded.attemptId)
     expect(resolved.attempt.state).toBe("resolved_abandoned")
+    expect(resolved.attempt.attemptVersion).toBe((before?.attemptVersion ?? -1) + 1)
+    expect((yield* attemptsService.get(seeded.attemptId))?.attemptVersion).toBe(resolved.attempt.attemptVersion)
 
     yield* attemptsService.bridgeResolution({
       resolutionId: resolved.resolutionId,

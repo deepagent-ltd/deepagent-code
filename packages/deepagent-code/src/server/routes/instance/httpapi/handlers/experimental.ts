@@ -43,7 +43,7 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
           account.orgsByAccount().pipe(Effect.catch(() => Effect.fail(new HttpApiError.InternalServerError({})))),
         ],
         {
-          concurrency: "unbounded",
+          concurrency: 2,
         },
       )
       return {
@@ -60,7 +60,7 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
           account.active().pipe(Effect.catch(() => Effect.fail(new HttpApiError.InternalServerError({})))),
         ],
         {
-          concurrency: "unbounded",
+          concurrency: 2,
         },
       )
       const info = Option.getOrUndefined(active)
@@ -201,7 +201,7 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
           job.metadata?.parentSessionId === ctx.params.sessionID &&
           job.metadata.background !== true,
       )
-      const promoted = yield* Effect.forEach(jobs, (job) => background.promote(job.id), { concurrency: "unbounded" })
+      const promoted = yield* Effect.forEach(jobs, (job) => background.promote(job.id), { concurrency: 16 })
       return promoted.some((job) => job !== undefined)
     })
 

@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises"
 
 let audio: Audio | null | undefined
 const sounds = new Map<string, Promise<AudioSound | null>>()
+export const SOUND_CACHE_LIMIT = 256
 
 function getAudio() {
   if (audio !== undefined) return audio
@@ -25,6 +26,10 @@ export function loadSoundFile(file: string) {
   if (!current) return Promise.resolve(null)
   const cached = sounds.get(file)
   if (cached) return cached
+  if (sounds.size >= SOUND_CACHE_LIMIT) {
+    console.debug("tui sound cache capacity reached", { file, limit: SOUND_CACHE_LIMIT })
+    return Promise.resolve(null)
+  }
   const task = readFile(file)
     .then((bytes) => current.loadSound(bytes))
     .catch((error) => {

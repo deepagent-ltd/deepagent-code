@@ -5,6 +5,7 @@ import { IconButton } from "@deepagent-code/ui/icon-button"
 import { useNavigate, useParams } from "@solidjs/router"
 import { useSDK } from "@/context/sdk"
 import { fetchCapabilities } from "@/components/deepagent/panel-goal.api"
+import { showToast } from "@/utils/toast"
 import { OversightDashboard } from "@/components/deepagent/oversight-dashboard"
 import { isSubagentInterrupted, subagentMetadata } from "./subagent-state"
 
@@ -113,13 +114,46 @@ export const SidePanelSubagents: Component<{ onClose: () => void }> = (props) =>
     <div class="h-full w-full min-w-0 overflow-y-auto bg-background-base">
       <div class="sticky top-0 z-10 h-10 flex items-center justify-between px-3 bg-background-base border-b border-border-weaker-base">
         <span class="text-12-medium text-text">{language.t("session.subagents.title")}</span>
-        <IconButton
-          icon="close-small"
-          variant="ghost"
-          class="h-7 w-7 rounded-md"
-          onClick={props.onClose}
-          aria-label={language.t("common.close")}
-        />
+        <span class="flex items-center gap-1">
+          {/* W3-1 — parity with the TUI /background command: promote the session's running
+              FOREGROUND task subagents to background jobs (same experimental admission). */}
+          <Show when={children().some((child) => sync.data.session_working(child.id))}>
+            <IconButton
+              icon="arrow-down-to-line"
+              variant="ghost"
+              class="h-7 w-7 rounded-md"
+              onClick={() => {
+                const sessionID = params.id
+                if (!sessionID) return
+                void sdk.client.experimental.session
+                  .background({ sessionID })
+                  .then((result) => {
+                    showToast({
+                      variant: result.data ? "success" : "default",
+                      title: language.t(
+                        result.data ? "session.subagents.background.done" : "session.subagents.background.none",
+                      ),
+                    })
+                  })
+                  .catch((error) => {
+                    showToast({
+                      variant: "error",
+                      title: language.t("common.requestFailed"),
+                      description: error instanceof Error ? error.message : undefined,
+                    })
+                  })
+              }}
+              aria-label={language.t("session.subagents.background")}
+            />
+          </Show>
+          <IconButton
+            icon="close-small"
+            variant="ghost"
+            class="h-7 w-7 rounded-md"
+            onClick={props.onClose}
+            aria-label={language.t("common.close")}
+          />
+        </span>
       </div>
 
       {/* ── Subagent list ── */}

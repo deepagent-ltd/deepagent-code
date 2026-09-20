@@ -1,9 +1,0 @@
-{
-  "$schema": "https://deepagent-code.ai/config.json",
-  "provider": {},
-  "permission": {},
-  "reference": {
-    "effect": "github.com/Effect-TS/effect-smol",
-  },
-  "mcp": {},
-}

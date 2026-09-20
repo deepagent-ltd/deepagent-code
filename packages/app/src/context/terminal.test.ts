@@ -388,10 +388,12 @@ describe("F6: session-scoped terminal cache helpers", () => {
   // These are resolved from the same module instance already loaded by beforeAll above.
   let sessionEntryKey: (typeof import("./terminal"))["TerminalTesting"]["sessionEntryKey"]
   let evictLruEntries: (typeof import("./terminal"))["TerminalTesting"]["evictLruEntries"]
+  let evictGlobalTerminalEntries: (typeof import("./terminal"))["TerminalTesting"]["evictGlobalTerminalEntries"]
   let invalidateScopeSnapshots: (typeof import("./terminal"))["TerminalTesting"]["invalidateScopeSnapshots"]
   let sessionTerminalCache: (typeof import("./terminal"))["TerminalTesting"]["sessionTerminalCache"]
   let workspaceDiscardFn: (typeof import("./terminal"))["TerminalTesting"]["workspaceDiscardFn"]
   let clearSessionCache: (typeof import("./terminal"))["TerminalTesting"]["clearSessionCache"]
+  let unregisterWorkspaceDiscard: (typeof import("./terminal"))["TerminalTesting"]["unregisterWorkspaceDiscard"]
   let clearWorkspaceTerminals: typeof import("./terminal")["clearWorkspaceTerminals"]
   type Scope = typeof import("@/utils/server-scope").ServerScope.local
 
@@ -399,10 +401,12 @@ describe("F6: session-scoped terminal cache helpers", () => {
     const mod = await import("./terminal")
     sessionEntryKey = mod.TerminalTesting.sessionEntryKey
     evictLruEntries = mod.TerminalTesting.evictLruEntries
+    evictGlobalTerminalEntries = mod.TerminalTesting.evictGlobalTerminalEntries
     invalidateScopeSnapshots = mod.TerminalTesting.invalidateScopeSnapshots
     sessionTerminalCache = mod.TerminalTesting.sessionTerminalCache
     workspaceDiscardFn = mod.TerminalTesting.workspaceDiscardFn
     clearSessionCache = mod.TerminalTesting.clearSessionCache
+    unregisterWorkspaceDiscard = mod.TerminalTesting.unregisterWorkspaceDiscard
     clearWorkspaceTerminals = mod.clearWorkspaceTerminals
   })
 
@@ -506,6 +510,40 @@ describe("F6: session-scoped terminal cache helpers", () => {
 
       evictLruEntries(local, dir, currentKey, () => undefined)
       expect(sessionTerminalCache.has(otherKey)).toBe(true)
+    })
+  })
+
+  describe("global cache ownership", () => {
+    beforeEach(() => {
+      clearSessionCache()
+    })
+
+    test("bounds snapshots across different workspaces and uses their own cleanup", async () => {
+      const { MAX_CACHED_TERMINAL_ENTRIES } = await import("./terminal")
+      const discarded: string[] = []
+      for (let index = 0; index <= MAX_CACHED_TERMINAL_ENTRIES; index++) {
+        sessionTerminalCache.set(sessionEntryKey(local, `/repo-${index}`, "sess-A"), {
+          ...makeEntry(`p${index}`, index),
+          discard: (id) => discarded.push(id),
+        })
+      }
+
+      const protectedKey = sessionEntryKey(local, `repo-${MAX_CACHED_TERMINAL_ENTRIES}`, "sess-A")
+      evictGlobalTerminalEntries(protectedKey)
+
+      expect(sessionTerminalCache.size).toBe(MAX_CACHED_TERMINAL_ENTRIES)
+      expect(discarded).toEqual(["p0-bot", "p0-side"])
+    })
+
+    test("an old provider cannot unregister a replacement discard owner", () => {
+      const key = "local\0/repo"
+      const oldOwner = () => {}
+      const replacement = () => {}
+      workspaceDiscardFn.set(key, replacement)
+
+      unregisterWorkspaceDiscard(key, oldOwner)
+
+      expect(workspaceDiscardFn.get(key)).toBe(replacement)
     })
   })
 

@@ -764,6 +764,41 @@ describe("session.llm-native.request", () => {
     }),
   )
 
+  it.effect("fails a provider turn that exceeds the bounded local tool-result budget", () =>
+    Effect.gen(function* () {
+      const lookup = {
+        description: "Lookup data",
+        inputSchema: jsonSchema({ type: "object" }),
+        execute: async () => ({ output: "ok" }),
+      } satisfies Tool
+      const llmClient = {
+        prepare: () => Effect.die("unused"),
+        stream: () =>
+          Stream.fromIterable(
+            Array.from({ length: 257 }, (_, index) =>
+              LLMEvent.toolCall({ id: `call-${index}`, name: "lookup", input: {} }),
+            ),
+          ),
+        generate: () => Effect.die("unused"),
+      } as LLMClientShape
+      const native = LLMNativeRuntime.stream({
+        model: baseModel,
+        provider: providerInfo,
+        auth: undefined,
+        llmClient,
+        messages: [],
+        tools: { lookup },
+        headers: {},
+        abort: new AbortController().signal,
+      })
+      expect(native.type).toBe("supported")
+      if (native.type === "unsupported") throw new Error(native.reason)
+
+      const error = yield* Stream.runDrain(native.stream).pipe(Effect.flip)
+      expect(String(error)).toContain("256 local tool-call safety limit")
+    }),
+  )
+
   it.effect("compiles through the native OpenAI Responses route", () =>
     expectOpenAIResponsesRequest({
       history: [storedSession.user("hello")],

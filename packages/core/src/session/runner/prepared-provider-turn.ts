@@ -95,6 +95,17 @@ export interface PreparedProviderTurn {
   readonly budget: Budget
   readonly wire_request_hash: string
   readonly request_hash: string
+  /**
+   * W8 canonical attempt hash (design §4.1 step 8, audit DEFECT 3): the durable
+   * canonical `prepared_turn_hash` folds the C2-04 protocol attempt identity hash
+   * (route/protocol/endpoint-origin/capability/lowering) into the request content
+   * hash — `sha256(canonicalJson({request_hash, protocol_attempt_identity_hash}))`,
+   * a canonical-JSON concatenation (NOT a spec-literal string join; the exact
+   * composition is pinned by the oracle tests) — so the persisted
+   * exact-retry identity changes on a route/protocol/origin drift even when the
+   * request payload is byte-identical. See `preparedTurnHash`.
+   */
+  readonly prepared_turn_hash: string
   readonly cache_prefix_hash: string
   readonly volatile_tail_hash: string
   readonly receipt_id: string
@@ -128,6 +139,38 @@ export function attemptIdentityHash(turn: PreparedProviderTurn): string {
       ...(turn.capability_snapshot_hash === undefined
         ? {}
         : { capability_snapshot_hash: turn.capability_snapshot_hash }),
+    }),
+  )
+}
+
+/**
+ * W8 canonical attempt hash (design §4.1 step 8 + C2-04): `prepared_turn_hash =
+ * sha256(canonicalJson({request_hash, protocol_attempt_identity_hash}))` — canonical-JSON
+ * concatenation (NOT a spec-literal string join; the exact composition is pinned by the
+ * oracle tests). The canonical hash that is
+ * persisted in the durable `prepared_turn_hash` column (and mirrored onto the
+ * provider attempt) must carry the route/protocol/endpoint-origin binding — the
+ * audit found the production path persisted only `request_hash`, which omits
+ * route/protocol/origin. `request_hash` keeps its content-only semantics (it is
+ * the payload identity, compared across legacy/V2 parity), while this folded
+ * value is the exact-retry identity: an identical payload on a drifted route no
+ * longer hashes to the same canonical value. An identity-less turn (embedded
+ * resolvers that leave `protocolAttemptIdentity` unbound) folds the request hash
+ * alone — `sha256(canonicalJson({request_hash}))`, still deterministic, but NOT
+ * byte-stable with the pre-W8 receipts whose column held the raw `request_hash`
+ * digest: the JSON wrapper changes the pre-image, so the fold re-hashes rather
+ * than reproducing the pre-W8 value.
+ */
+export function preparedTurnHash(turn: {
+  readonly request_hash: string
+  readonly protocol_attempt_identity_hash?: string
+}): string {
+  return Hash.sha256(
+    CanonicalJson.stringify({
+      request_hash: turn.request_hash,
+      ...(turn.protocol_attempt_identity_hash === undefined
+        ? {}
+        : { protocol_attempt_identity_hash: turn.protocol_attempt_identity_hash }),
     }),
   )
 }
@@ -174,13 +217,18 @@ export function prepare(input: Input): PreparedProviderTurn {
     budget: input.budget,
     wire_request_hash: wireRequestHash,
   }
+  const requestHash = fingerprint(fields)
   return {
     ...fields,
     owner: input.owner,
     system_stable_parts: systemStableParts,
     system_volatile_parts: systemVolatileParts,
     history_message_count: input.historyMessages.length,
-    request_hash: fingerprint(fields),
+    request_hash: requestHash,
+    prepared_turn_hash: preparedTurnHash({
+      request_hash: requestHash,
+      protocol_attempt_identity_hash: input.protocolAttemptIdentityHash,
+    }),
     cache_prefix_hash: Hash.sha256(`${systemStableHash}:${input.historyPromptEpoch}`),
     volatile_tail_hash: systemVolatileHash,
     receipt_id: input.receiptID,
@@ -205,16 +253,37 @@ export function mergeSystemParts(...groups: ReadonlyArray<ReadonlyArray<string |
   return groups.flatMap((group) => group.filter((part): part is string => part !== undefined && part.length > 0))
 }
 
+const positiveEnv = (name: string, fallback: number) => {
+  const value = Number(process.env[name])
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback
+}
+
 // Shared by the session runner and the compaction summary turn so every durable receipt budgets the
 // same way; compaction cannot import the runner layer without a module cycle.
-export function budget(model: Model): Budget {
+//
+// An absent/zero context limit means UNKNOWN (legacy `requestBudget` parity): the host guard
+// (DEEPAGENT_CODE_UNKNOWN_CONTEXT_GUARD, default 32k) is the only budget line, so the estimate
+// decides. The runner consumes `decision` as a pre-dispatch guard; the receipt records the outcome.
+export function budget(model: Model, estimatedFullRequestTokens = 0): Budget {
   const context = model.route.defaults.limits?.input ?? model.route.defaults.limits?.context
   const output = model.route.defaults.limits?.output ?? 0
-  if (!context || !Number.isFinite(context) || context <= 0)
+  if (context === undefined || context === 0) {
+    const hostGuard = positiveEnv("DEEPAGENT_CODE_UNKNOWN_CONTEXT_GUARD", 32_768)
+    return {
+      decision: estimatedFullRequestTokens < hostGuard ? "ok" : "unavailable",
+      ...(estimatedFullRequestTokens >= hostGuard ? { reason: "context_limit_unknown" as const } : {}),
+      estimatedFullRequestTokens,
+      physicalInputBudget: hostGuard,
+      reservedOutputTokens: output,
+      safetyMargin: 0,
+      provenance: "host_guard",
+    }
+  }
+  if (!Number.isFinite(context) || context < 0)
     return {
       decision: "unavailable",
-      reason: context === undefined ? "context_limit_unknown" : "context_limit_invalid",
-      estimatedFullRequestTokens: 0,
+      reason: "context_limit_invalid",
+      estimatedFullRequestTokens,
       physicalInputBudget: 0,
       reservedOutputTokens: output,
       safetyMargin: 0,
@@ -222,7 +291,7 @@ export function budget(model: Model): Budget {
     }
   return {
     decision: "ok",
-    estimatedFullRequestTokens: 0,
+    estimatedFullRequestTokens,
     physicalInputBudget: context,
     reservedOutputTokens: output,
     safetyMargin: 0,

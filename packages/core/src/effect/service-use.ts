@@ -14,6 +14,8 @@ type ServiceUse<Identifier, Shape> = {
     : never
 }
 
+export const MAX_CACHED_ACCESSORS = 128
+
 export const serviceUse = <Identifier, Shape>(tag: Context.Service<Identifier, Shape>) => {
   const cache = new Map<string, (...args: unknown[]) => Effect.Effect<unknown, unknown, unknown>>()
   // This is the only dynamic boundary: TypeScript knows the accessor shape,
@@ -33,7 +35,7 @@ export const serviceUse = <Identifier, Shape>(tag: Context.Service<Identifier, S
             // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- ServiceUse exposes only Effect-returning methods.
             return (method as (...args: unknown[]) => Effect.Effect<unknown, unknown, unknown>)(...args)
           })
-        cache.set(key, accessor)
+        if (cache.size < MAX_CACHED_ACCESSORS) cache.set(key, accessor)
         return accessor
       },
     },

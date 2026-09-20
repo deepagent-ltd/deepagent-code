@@ -20,14 +20,24 @@ import {
 } from "@deepagent-code/core/context-federation/sql"
 import { Prompt } from "@deepagent-code/core/session/prompt"
 import { SessionMessage } from "@deepagent-code/core/session/message"
-import { SessionHistoryStateTable, SessionInputTable, SessionTable } from "@deepagent-code/core/session/sql"
+import {
+  SessionHistoryStateTable,
+  SessionInputTable,
+  SessionTable,
+  SessionToolRequestResolutionTable,
+} from "@deepagent-code/core/session/sql"
 import { and, eq, sql } from "drizzle-orm"
 import { ContextFederationRollout } from "@deepagent-code/core/context-federation/rollout"
 import { ProjectScopeKey, SecurityNamespaceID } from "@deepagent-code/core/context-federation/reference"
 import { ContextActivationReceipt } from "@/context-federation/activation-receipt"
 import { Effect, Layer } from "effect"
 import { MessageV2 } from "@/session/message-v2"
+import { RuntimeFlags } from "@/effect/runtime-flags"
 import { SessionPromptEpochTable } from "@/session/prompt-epoch.sql"
+import {
+  CompactionContinuationResolutionCommandTable,
+  CompactionContinuationResolutionTable,
+} from "@/session/compaction-sql"
 import { MessageID, PartID } from "@/session/schema"
 import { Session } from "@/session/session"
 import { SessionToolRequestReceiptTable } from "@/session/tool-request-receipt.sql"
@@ -35,10 +45,23 @@ import { SessionPaths } from "@/server/routes/instance/httpapi/groups/session"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
-import { httpApiLayer, requestInDirectory } from "./httpapi-layer"
+import { httpApiLayer, httpApiLayerWithRuntimeFlags, requestInDirectory } from "./httpapi-layer"
 
 const originalWorkspaceID = Flag.DEEPAGENT_CODE_WORKSPACE_ID
 const it = testEffect(Layer.mergeAll(Session.defaultLayer, Database.defaultLayer, httpApiLayer))
+const v2OnlyRuntimeFlags = Layer.effect(
+  RuntimeFlags.Service,
+  RuntimeFlags.Service.use((flags) =>
+    Effect.succeed(RuntimeFlags.Service.of({ ...flags, coreV2Only: true })),
+  ),
+).pipe(Layer.provide(RuntimeFlags.defaultLayer))
+const v2OnlyIt = testEffect(
+  Layer.mergeAll(
+    Session.defaultLayer,
+    Database.defaultLayer,
+    httpApiLayerWithRuntimeFlags(v2OnlyRuntimeFlags),
+  ),
+)
 const model = { providerID: ProviderV2.ID.make("test"), modelID: ModelV2.ID.make("model") }
 
 type Descriptor = {
@@ -464,14 +487,99 @@ afterEach(async () => {
 })
 
 describe("provider recovery HttpApi", () => {
+  v2OnlyIt.instance(
+    "V2-only refuses every legacy recovery mutation before durable state changes",
+    () =>
+      Effect.gen(function* () {
+        const instance = yield* TestInstance
+        const { db } = yield* Database.Service
+        const headers = { "content-type": "application/json" }
+        const seeded = yield* seedRecovery("http v2-only legacy recovery fence", true)
+        if (!seeded.providerAttemptID) return
+
+        const contextResponse = yield* requestInDirectory(
+          SessionPaths.contextAttemptResolve
+            .replace(":sessionID", seeded.session.id)
+            .replace(":attemptID", seeded.providerAttemptID),
+          instance.directory,
+          {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              decision: "abandoned",
+              reason: "legacy context recovery must be fenced",
+              riskAcknowledged: false,
+            }),
+          },
+        )
+        expect({
+          status: contextResponse.status,
+          body: yield* parseJson<Record<string, unknown>>(contextResponse),
+        }).toMatchObject({ status: 503 })
+
+        const listed = yield* requestInDirectory(pathFor(seeded.session.id), instance.directory, { headers })
+        expect(listed.status).toBe(200)
+        const [descriptor] = yield* parseJson<Descriptor[]>(listed)
+        if (!descriptor) return
+        const providerResponse = yield* requestInDirectory(pathFor(seeded.session.id), instance.directory, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(command(descriptor, "http-v2-only-provider-fence")),
+        })
+        expect(providerResponse.status).toBe(503)
+
+        const continuationResponse = yield* requestInDirectory(
+          SessionPaths.continuationResolution.replace(":sessionID", seeded.session.id),
+          instance.directory,
+          {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              runID: "run-missing",
+              failureID: "failure-missing",
+              commandID: "http-v2-only-continuation-fence",
+              decision: "replay",
+              reason: "legacy continuation recovery must be fenced",
+            }),
+          },
+        )
+        expect(continuationResponse.status).toBe(503)
+
+        expect(yield* db.select().from(SessionProviderAttemptResolutionTable).all()).toEqual([])
+        expect(yield* db.select().from(SessionProviderAttemptRecoveryBridgeTable).all()).toEqual([])
+        expect(yield* db.select().from(SessionToolRequestResolutionTable).all()).toEqual([])
+        expect(yield* db.select().from(CompactionContinuationResolutionCommandTable).all()).toEqual([])
+        expect(yield* db.select().from(CompactionContinuationResolutionTable).all()).toEqual([])
+        expect(
+          yield* db
+            .select({ state: SessionProviderAttemptTable.state })
+            .from(SessionProviderAttemptTable)
+            .where(eq(SessionProviderAttemptTable.attempt_id, seeded.providerAttemptID))
+            .get(),
+        ).toEqual({ state: "indeterminate_after_crash" })
+        expect(
+          yield* db
+            .select({ state: SessionHistoryStateTable.state })
+            .from(SessionHistoryStateTable)
+            .where(eq(SessionHistoryStateTable.session_id, seeded.session.id))
+            .get(),
+        ).toEqual({ state: "recovery_required" })
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+    30_000,
+  )
+
   it.instance(
-    "enforces GET authority, exact retry, command conflict, stale CAS, and workspace ownership",
+    "fences legacy recovery mutations before conflict, stale CAS, and workspace checks under V2-only",
     () =>
       Effect.gen(function* () {
         const instance = yield* TestInstance
         const { db } = yield* Database.Service
         const headers = { "content-type": "application/json" }
 
+        // RuntimeFlags.coreV2Only is hardwired on, so the handler fences every legacy recovery
+        // mutation with 503 before any resolution/conflict/CAS/workspace check runs. The GET
+        // list stays the read authority and refused mutations never touch durable state.
         const dual = yield* seedRecovery("http unified provider authority", true)
         if (!dual.providerAttemptID || !dual.activityID) return
         const contextPath = SessionPaths.contextAttemptResolve
@@ -486,7 +594,11 @@ describe("provider recovery HttpApi", () => {
             riskAcknowledged: false,
           }),
         })
-        expect(independentlyResolved.status).toBe(400)
+        expect(independentlyResolved.status).toBe(503)
+        expect(yield* parseJson<Record<string, unknown>>(independentlyResolved)).toMatchObject({
+          _tag: "ServiceUnavailableError",
+          service: "session.context-attempt-resolution",
+        })
         expect(yield* db.select().from(SessionProviderAttemptResolutionTable).all()).toEqual([])
 
         const dualList = yield* requestInDirectory(pathFor(dual.session.id), instance.directory, { headers })
@@ -499,47 +611,40 @@ describe("provider recovery HttpApi", () => {
           headers,
           body: JSON.stringify(dualCommand),
         })
-        expect(dualResponse.status).toBe(200)
-        const dualResolution = yield* parseJson<{ resolutionID: string }>(dualResponse)
+        expect(dualResponse.status).toBe(503)
+        expect(yield* parseJson<Record<string, unknown>>(dualResponse)).toMatchObject({
+          _tag: "ServiceUnavailableError",
+          service: "session.provider-resolution",
+        })
         const dualRetry = yield* requestInDirectory(pathFor(dual.session.id), instance.directory, {
           method: "POST",
           headers,
           body: JSON.stringify(dualCommand),
         })
-        expect(dualRetry.status).toBe(200)
-        expect(yield* parseJson<{ resolutionID: string }>(dualRetry)).toEqual(dualResolution)
-        expect(yield* db.select().from(SessionProviderAttemptRecoveryBridgeTable).get()).toMatchObject({
-          resolution_id: dualResolution.resolutionID,
-          attempt_id: dual.providerAttemptID,
-          receipt_id: dual.receiptID,
-          command_id: dualCommand.commandID,
-        })
-        expect(yield* db.select().from(SessionProviderAttemptResolutionTable).get()).toMatchObject({
-          resolution_id: dualResolution.resolutionID,
-          attempt_id: dual.providerAttemptID,
-          decision: "abandoned",
-        })
+        expect(dualRetry.status).toBe(503)
+        expect(yield* db.select().from(SessionProviderAttemptRecoveryBridgeTable).all()).toEqual([])
+        expect(yield* db.select().from(SessionProviderAttemptResolutionTable).all()).toEqual([])
         expect(
           yield* db
             .select({ state: SessionProviderAttemptTable.state })
             .from(SessionProviderAttemptTable)
             .where(eq(SessionProviderAttemptTable.attempt_id, dual.providerAttemptID))
             .get(),
-        ).toEqual({ state: "resolved_abandoned" })
+        ).toEqual({ state: "indeterminate_after_crash" })
         expect(
           yield* db
             .select({ state: SessionActivityTable.state })
             .from(SessionActivityTable)
             .where(eq(SessionActivityTable.activity_id, dual.activityID))
             .get(),
-        ).toEqual({ state: "interrupted" })
+        ).toEqual({ state: "active" })
         expect(
           yield* db
             .select({ state: SessionHistoryStateTable.state })
             .from(SessionHistoryStateTable)
             .where(eq(SessionHistoryStateTable.session_id, dual.session.id))
             .get(),
-        ).toEqual({ state: "ready" })
+        ).toEqual({ state: "recovery_required" })
 
         const exact = yield* seedRecovery("http exact retry")
         const listed = yield* requestInDirectory(pathFor(exact.session.id), instance.directory, { headers })
@@ -558,30 +663,28 @@ describe("provider recovery HttpApi", () => {
           headers,
           body: JSON.stringify(exactCommand),
         })
-        expect(first.status).toBe(200)
-        const firstResolution = yield* parseJson<Record<string, unknown>>(first)
+        expect(first.status).toBe(503)
         const retry = yield* requestInDirectory(pathFor(exact.session.id), instance.directory, {
           method: "POST",
           headers,
           body: JSON.stringify(exactCommand),
         })
-        expect(retry.status).toBe(200)
-        expect(yield* parseJson<Record<string, unknown>>(retry)).toEqual(firstResolution)
+        expect(retry.status).toBe(503)
 
+        // The fence precedes command-id conflict detection, and the refused command leaves the
+        // descriptor listed as still unresolved.
         const conflict = yield* requestInDirectory(pathFor(exact.session.id), instance.directory, {
           method: "POST",
           headers,
           body: JSON.stringify({ ...exactCommand, reason: "reuse the command ID with different authority" }),
         })
-        expect(conflict.status).toBe(409)
-        expect(yield* parseJson<Record<string, unknown>>(conflict)).toMatchObject({
-          _tag: "ConflictError",
-          resource: "command_id_conflict",
-        })
-        const cleared = yield* requestInDirectory(pathFor(exact.session.id), instance.directory, { headers })
-        expect(cleared.status).toBe(200)
-        expect(yield* parseJson<unknown[]>(cleared)).toEqual([])
+        expect(conflict.status).toBe(503)
+        const stillListed = yield* requestInDirectory(pathFor(exact.session.id), instance.directory, { headers })
+        expect(stillListed.status).toBe(200)
+        const [remaining] = yield* parseJson<Descriptor[]>(stillListed)
+        expect(remaining?.receiptID).toBe(exact.receiptID)
 
+        // The fence precedes the stale session-mutation CAS check.
         const stale = yield* seedRecovery("http stale cas")
         const staleList = yield* requestInDirectory(pathFor(stale.session.id), instance.directory, { headers })
         const [staleDescriptor] = yield* parseJson<Descriptor[]>(staleList)
@@ -597,12 +700,9 @@ describe("provider recovery HttpApi", () => {
           headers,
           body: JSON.stringify(command(staleDescriptor, "http-provider-recovery-stale")),
         })
-        expect(staleResponse.status).toBe(409)
-        expect(yield* parseJson<Record<string, unknown>>(staleResponse)).toMatchObject({
-          _tag: "ConflictError",
-          resource: "stale_session_mutation",
-        })
+        expect(staleResponse.status).toBe(503)
 
+        // The fence precedes workspace-ownership classification.
         const workspace = yield* seedRecovery("http workspace unsupported")
         const workspaceList = yield* requestInDirectory(pathFor(workspace.session.id), instance.directory, { headers })
         const [workspaceDescriptor] = yield* parseJson<Descriptor[]>(workspaceList)
@@ -620,11 +720,7 @@ describe("provider recovery HttpApi", () => {
           headers,
           body: JSON.stringify(command(workspaceDescriptor, "http-provider-recovery-workspace")),
         })
-        expect(workspaceResponse.status).toBe(409)
-        expect(yield* parseJson<Record<string, unknown>>(workspaceResponse)).toMatchObject({
-          _tag: "ConflictError",
-          resource: "workspace_recovery_not_supported",
-        })
+        expect(workspaceResponse.status).toBe(503)
       }),
     { git: true, config: { formatter: false, lsp: false } },
     30_000,

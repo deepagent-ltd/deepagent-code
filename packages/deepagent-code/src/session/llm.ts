@@ -675,7 +675,7 @@ const live: Layer.Layer<
           auth.get(input.model.providerID),
           modelAuthID ? auth.get(modelAuthID) : Effect.succeed(undefined),
         ],
-        { concurrency: "unbounded" },
+        { concurrency: 4 },
       )
       const info = input.model.providerID === "deepagent" ? (modelAuth ?? providerAuth) : providerAuth
       // Official providers can configure a retry count via the connect dialog (SettingsStore →
@@ -1225,10 +1225,7 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(Provider.defaultLayer),
     Layer.provide(Plugin.defaultLayer),
     Layer.provide(
-      Layer.mergeAll(
-        AgentGateway.layer({ enabled: true, runsDir: Global.Path.agent.runs }),
-        LLMClient.layer.pipe(Layer.provide(Layer.mergeAll(RequestExecutor.defaultLayer, WebSocketExecutor.layer))),
-      ),
+      LLMClient.layer.pipe(Layer.provide(Layer.mergeAll(RequestExecutor.defaultLayer, WebSocketExecutor.layer))),
     ),
     Layer.provide(RuntimeFlags.defaultLayer),
   ),

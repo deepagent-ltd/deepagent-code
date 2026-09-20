@@ -2,6 +2,7 @@ export * as EventConsumer from "./event-consumer"
 
 import { and, eq, isNotNull, isNull, lte, or } from "drizzle-orm"
 import { Effect } from "effect"
+import { randomUUID } from "node:crypto"
 import { Database } from "../database/database"
 import {
   DeepAgentEventConsumerTable,
@@ -409,9 +410,10 @@ export function claimDue(db: DatabaseClient, input: ClaimDueInput): Effect.Effec
       }
     }
 
-    const claimToken = `consumerclaim_${input.consumerKey}_${input.claimantId}_${input.now}`
+    const claimToken = `consumerclaim_${input.consumerKey}_${input.claimantId}_${randomUUID()}`
+    const claimed: DeliveryRow[] = []
     for (const row of due) {
-      yield* db
+      const updated = yield* db
         .update(DeepAgentEventConsumerDeliveryTable)
         .set({
           status: "claimed" as const,
@@ -426,22 +428,24 @@ export function claimDue(db: DatabaseClient, input: ClaimDueInput): Effect.Effec
             eq(DeepAgentEventConsumerDeliveryTable.outbox_id, row.outbox_id),
             eq(DeepAgentEventConsumerDeliveryTable.consumer_key, row.consumer_key),
             eq(DeepAgentEventConsumerDeliveryTable.status, row.status),
+            row.claim_token === null
+              ? isNull(DeepAgentEventConsumerDeliveryTable.claim_token)
+              : eq(DeepAgentEventConsumerDeliveryTable.claim_token, row.claim_token),
+            row.lease_expires_at === null
+              ? isNull(DeepAgentEventConsumerDeliveryTable.lease_expires_at)
+              : eq(DeepAgentEventConsumerDeliveryTable.lease_expires_at, row.lease_expires_at),
           ),
         )
-        .run()
+        .returning()
+        .all()
         .pipe(Effect.orDie)
+      if (updated.length !== 1) continue
+      claimed.push(decodeDelivery(updated[0]!))
     }
     // Return the POST-claim view so the caller settles with the token it was just issued.
     return {
       claimToken,
-      deliveries: due.map((row): DeliveryRow => ({
-        ...decodeDelivery(row),
-        status: "claimed",
-        claimToken,
-        claimantId: input.claimantId,
-        claimedAt: input.now,
-        leaseExpiresAt: input.now + input.leaseMs,
-      })),
+      deliveries: claimed,
     }
   })
 }
@@ -519,7 +523,7 @@ export function nack(db: DatabaseClient, input: NackInput): Effect.Effect<boolea
     const maxAttempts = input.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
     const attempts = row.attempts + 1
     if (attempts >= maxAttempts) {
-      yield* db
+      const updated = yield* db
         .update(DeepAgentEventConsumerDeliveryTable)
         .set({
           status: "dead" as const,
@@ -535,15 +539,18 @@ export function nack(db: DatabaseClient, input: NackInput): Effect.Effect<boolea
           and(
             eq(DeepAgentEventConsumerDeliveryTable.outbox_id, input.outboxId),
             eq(DeepAgentEventConsumerDeliveryTable.consumer_key, input.consumerKey),
+            eq(DeepAgentEventConsumerDeliveryTable.claim_token, input.claimToken),
+            eq(DeepAgentEventConsumerDeliveryTable.status, "claimed"),
           ),
         )
-        .run()
+        .returning({ outbox_id: DeepAgentEventConsumerDeliveryTable.outbox_id })
+        .all()
         .pipe(Effect.orDie)
-      return true
+      return updated.length === 1
     }
     const backoffBaseMs = input.backoffBaseMs ?? DEFAULT_BACKOFF_BASE_MS
     const nextAttemptAt = input.now + backoffBaseMs * Math.pow(2, attempts - 1)
-    yield* db
+    const updated = yield* db
       .update(DeepAgentEventConsumerDeliveryTable)
       .set({
         status: "pending" as const,
@@ -560,11 +567,14 @@ export function nack(db: DatabaseClient, input: NackInput): Effect.Effect<boolea
         and(
           eq(DeepAgentEventConsumerDeliveryTable.outbox_id, input.outboxId),
           eq(DeepAgentEventConsumerDeliveryTable.consumer_key, input.consumerKey),
+          eq(DeepAgentEventConsumerDeliveryTable.claim_token, input.claimToken),
+          eq(DeepAgentEventConsumerDeliveryTable.status, "claimed"),
         ),
       )
-      .run()
+      .returning({ outbox_id: DeepAgentEventConsumerDeliveryTable.outbox_id })
+      .all()
       .pipe(Effect.orDie)
-    return true
+    return updated.length === 1
   })
 }
 

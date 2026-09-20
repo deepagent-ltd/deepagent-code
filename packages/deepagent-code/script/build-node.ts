@@ -20,6 +20,12 @@ const result = await Bun.build({
   sourcemap: "linked",
   external: ["@lydell/node-pty", "jsonc-parser"],
   define: {
+    // W0.5 (major-6): same semantics as script/build.ts — the node sidecar must ship the REAL
+    // installation version (Script.version; CI passes the release version via DEEPAGENT_CODE_VERSION)
+    // instead of falling back to InstallationVersion "local". The V2 owner chain derives its build
+    // identity from InstallationVersion, so a sidecar built without this define can never match the
+    // minted v2-owner-<version> authorization row.
+    DEEPAGENT_CODE_VERSION: `'${Script.version}'`,
     DEEPAGENT_CODE_MODELS_DEV: generated.modelsData,
     DEEPAGENT_CODE_CHANNEL: `'${Script.channel}'`,
   },

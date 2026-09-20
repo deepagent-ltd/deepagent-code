@@ -326,7 +326,15 @@ export const maybeRunRounds = <T>(ops: MultiRoundOps<T>): Effect.Effect<T> =>
       const hasBlocked = blockedSteps.length > 0
       const stopDecision = StopHook.evaluate({
         name: "stop",
-        payload: { requiredValidationsRun, planStale, hardGate, planExists, hasCompletionReport },
+        payload: {
+          requiredValidationsRun,
+          planStale,
+          hardGate,
+          planExists,
+          hasCompletionReport,
+          // The gate names the specific gap so the model's next move is unambiguous.
+          unverifiedSteps: completionReport?.unverified ?? [],
+        },
       })
       const baseStatus = RoundReport.deriveStatus(report)
       // T3: a 🔴 triage exit (or exhausted narrowing) forces needs_human with the triage reason, so the

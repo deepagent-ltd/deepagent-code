@@ -74,7 +74,7 @@ export const load = Effect.fn("SessionHistory.load")(function* (db: DatabaseServ
         .pipe(Effect.orDie),
       latestCompaction(db, sessionID),
     ],
-    { concurrency: "unbounded" },
+    { concurrency: 2 },
   )
   return yield* Effect.forEach(yield* messageRows(db, sessionID, compaction, epoch?.baselineSeq), decodeMessageRow)
 })

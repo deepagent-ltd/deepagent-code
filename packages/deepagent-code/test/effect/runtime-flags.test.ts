@@ -3,7 +3,6 @@ import { ConfigProvider, Effect, Layer } from "effect"
 import {
   DEFAULT_SUBAGENT_OUTPUT_MAX_CHARS,
   DEFAULT_SUBAGENT_TIMEOUT_MS,
-  isCoreV2OnlyVersion,
   RuntimeFlags,
 } from "../../src/effect/runtime-flags"
 import { it } from "../lib/effect"
@@ -14,21 +13,6 @@ const fromConfig = (input: Record<string, unknown>) =>
 const readFlags = RuntimeFlags.Service.useSync((flags) => flags)
 
 describe("RuntimeFlags", () => {
-  it.effect("forces the Core V2 alpha release series into V2-only mode", () =>
-    Effect.sync(() => {
-      expect(isCoreV2OnlyVersion("1.4.7")).toBe(false)
-      expect(isCoreV2OnlyVersion("1.4.8")).toBe(true)
-      expect(isCoreV2OnlyVersion("1.4.8-r0")).toBe(true)
-      expect(isCoreV2OnlyVersion("1.4.8.r3")).toBe(true)
-      expect(isCoreV2OnlyVersion("2.0alpha")).toBe(true)
-      expect(isCoreV2OnlyVersion("2.0.0-alpha.0")).toBe(true)
-      expect(isCoreV2OnlyVersion("2.0.0-alpha.1")).toBe(true)
-      expect(isCoreV2OnlyVersion("2.0.0-beta.1")).toBe(false)
-      expect(isCoreV2OnlyVersion("2.0.0")).toBe(false)
-      expect(isCoreV2OnlyVersion("1.4.80")).toBe(false)
-    }),
-  )
-
   it.effect("defaultLayer defaults autoShare to false", () =>
     Effect.gen(function* () {
       const flags = yield* readFlags.pipe(Effect.provide(fromConfig({})))
@@ -37,18 +21,27 @@ describe("RuntimeFlags", () => {
     }),
   )
 
-  it.effect("V2 subagent drive defaults off and enables explicitly (§16.3 order 3 rollout gate)", () =>
+  it.effect("strictPlanGate defaults ON and disables explicitly (=false → warn-only)", () =>
     Effect.gen(function* () {
       const defaults = yield* readFlags.pipe(Effect.provide(fromConfig({})))
-      expect(defaults.experimentalV2SubagentDrive).toBe(false)
-      const on = yield* readFlags.pipe(
-        Effect.provide(fromConfig({ DEEPAGENT_CODE_EXPERIMENTAL_V2_SUBAGENT_DRIVE: "true" })),
-      )
-      expect(on.experimentalV2SubagentDrive).toBe(true)
+      expect(defaults.strictPlanGate).toBe(true)
+      const off = yield* readFlags.pipe(Effect.provide(fromConfig({ DEEPAGENT_CODE_STRICT_PLAN_GATE: "false" })))
+      expect(off.strictPlanGate).toBe(false)
     }),
   )
 
-  it.effect("defaults four-graph reads on but contains the Core V2 execution owner", () =>
+  it.effect("context ledger (Project Bridge write) defaults ON and disables explicitly (W7)", () =>
+    Effect.gen(function* () {
+      const defaults = yield* readFlags.pipe(Effect.provide(fromConfig({})))
+      expect(defaults.experimentalContextLedger).toBe(true)
+      const off = yield* readFlags.pipe(
+        Effect.provide(fromConfig({ DEEPAGENT_CODE_EXPERIMENTAL_CONTEXT_LEDGER: "false" })),
+      )
+      expect(off.experimentalContextLedger).toBe(false)
+    }),
+  )
+
+  it.effect("defaults four-graph reads on and ships the Core V2 execution owner ON (W0.2)", () =>
     Effect.gen(function* () {
       const defaults = yield* readFlags.pipe(Effect.provide(fromConfig({})))
       expect({
@@ -63,8 +56,8 @@ describe("RuntimeFlags", () => {
         locationIndexesV2Shadow: true,
         contextProjectionV2: true,
         contextQueryToolsV2: true,
-        coreV2ExecutionOwner: false,
-        coreV2Only: false,
+        coreV2ExecutionOwner: true,
+        coreV2Only: true,
       })
 
       const disabled = yield* readFlags.pipe(
@@ -73,7 +66,7 @@ describe("RuntimeFlags", () => {
       expect(disabled.contextFederationShadow).toBe(false)
       expect(disabled.contextProjectionV2).toBe(true)
       expect(disabled.contextQueryToolsV2).toBe(true)
-      expect(disabled.coreV2ExecutionOwner).toBe(false)
+      expect(disabled.coreV2ExecutionOwner).toBe(true)
 
       const explicit = yield* readFlags.pipe(
         Effect.provide(fromConfig({ DEEPAGENT_CODE_CORE_V2_EXECUTION_OWNER: "true" })),
@@ -81,6 +74,41 @@ describe("RuntimeFlags", () => {
       expect(explicit.coreV2ExecutionOwner).toBe(true)
       const v2Only = yield* readFlags.pipe(Effect.provide(fromConfig({ DEEPAGENT_CODE_CORE_V2_ONLY: "true" })))
       expect(v2Only.coreV2Only).toBe(true)
+      const noLegacyFallback = yield* readFlags.pipe(
+        Effect.provide(fromConfig({ DEEPAGENT_CODE_CORE_V2_ONLY: "false" })),
+      )
+      expect(noLegacyFallback.coreV2Only).toBe(true)
+    }),
+  )
+
+  it.effect("W0.2: coreV2ExecutionOwner turns off only on explicit =false/=0 (case/whitespace tolerant)", () =>
+    Effect.gen(function* () {
+      // W0.1 semantic convergence (core/deepagent/flip-flag): a defined "" counts as an explicit
+      // off value; only an ABSENT key keeps the default-ON state.
+      const empty = yield* readFlags.pipe(
+        Effect.provide(fromConfig({ DEEPAGENT_CODE_CORE_V2_EXECUTION_OWNER: "" })),
+      )
+      expect(empty.coreV2ExecutionOwner).toBe(false)
+      for (const value of ["false", "0", "False", " FALSE ", "\t0\n", " false "]) {
+        const off = yield* readFlags.pipe(
+          Effect.provide(fromConfig({ DEEPAGENT_CODE_CORE_V2_EXECUTION_OWNER: value })),
+        )
+        expect(off.coreV2ExecutionOwner).toBe(false)
+      }
+      for (const value of ["true", "1", "yes", "TRUE", " anything "]) {
+        const stillOn = yield* readFlags.pipe(
+          Effect.provide(fromConfig({ DEEPAGENT_CODE_CORE_V2_EXECUTION_OWNER: value })),
+        )
+        expect(stillOn.coreV2ExecutionOwner).toBe(true)
+      }
+      // W0.5 (audit 9): the table only treats ""/"false"/"0" as OFF — "off"/"no" are NOT off values
+      // and must keep the default-ON state (do not extend the OFF set in the future).
+      for (const value of ["off", "no"]) {
+        const stillOn = yield* readFlags.pipe(
+          Effect.provide(fromConfig({ DEEPAGENT_CODE_CORE_V2_EXECUTION_OWNER: value })),
+        )
+        expect(stillOn.coreV2ExecutionOwner).toBe(true)
+      }
     }),
   )
 
@@ -177,7 +205,6 @@ describe("RuntimeFlags", () => {
     Effect.gen(function* () {
       const flags = yield* readFlags.pipe(Effect.provide(fromConfig({})))
       // Still operator opt-in (default OFF): experimental or risky features not yet broadly tested.
-      expect(flags.v4EventDrivenIm).toBe(false)
       expect(flags.v4ThreadEnabled).toBe(false)
       expect(flags.v4FileUploadEnabled).toBe(false)
       // Promoted ON (stableOn): daemon audit GO, broadly deployed.
@@ -204,7 +231,6 @@ describe("RuntimeFlags", () => {
       // capability by capability. Uses v4ThreadEnabled, which remains OFF-by-default.
       const flags = yield* readFlags.pipe(Effect.provide(fromConfig({ DEEPAGENT_CODE_V4_THREAD_ENABLED: "true" })))
       expect(flags.v4ThreadEnabled).toBe(true)
-      expect(flags.v4EventDrivenIm).toBe(false)
       expect(flags.v4FileUploadEnabled).toBe(false)
       // stableOn flags are unaffected by the override — they remain ON
       expect(flags.v4AgentPushEnabled).toBe(true)
@@ -212,12 +238,13 @@ describe("RuntimeFlags", () => {
     }),
   )
 
-  it.effect("§H1: all six V4.0 flags can be turned ON together via env (full-stack opt-in)", () =>
+  it.effect("§H1: all five V4.0 flags can be turned ON together via env (full-stack opt-in)", () =>
     Effect.gen(function* () {
+      // v4EventDrivenIm was removed with the V2 IM durable-only migration (no bus-mediated IM path
+      // remains to gate); the surviving V4.0 flags remain independent full-stack opt-ins.
       const flags = yield* readFlags.pipe(
         Effect.provide(
           fromConfig({
-            DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM: "true",
             DEEPAGENT_CODE_V4_AGENT_PUSH_ENABLED: "true",
             DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME: "true",
             DEEPAGENT_CODE_V4_THREAD_ENABLED: "true",
@@ -226,7 +253,6 @@ describe("RuntimeFlags", () => {
           }),
         ),
       )
-      expect(flags.v4EventDrivenIm).toBe(true)
       expect(flags.v4AgentPushEnabled).toBe(true)
       expect(flags.v4MultiAgentRuntime).toBe(true)
       expect(flags.v4ThreadEnabled).toBe(true)

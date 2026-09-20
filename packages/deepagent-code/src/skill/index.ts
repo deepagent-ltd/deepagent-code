@@ -238,7 +238,7 @@ const loadSkills = Effect.fnUntraced(function* (
   events: EventV2Bridge.Service["Service"],
 ) {
   yield* Effect.forEach(discovered.matches, (match) => add(state, match, events), {
-    concurrency: "unbounded",
+    concurrency: 16,
     discard: true,
   })
 

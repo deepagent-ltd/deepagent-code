@@ -1,4 +1,5 @@
 import { describe, expect, test, beforeEach } from "bun:test"
+import { Effect } from "effect"
 import { Hash } from "@deepagent-code/core/util/hash"
 import {
   buildCapabilityLoadSnapshot,
@@ -8,7 +9,8 @@ import {
   defaultCatalogSnapshotId,
 } from "@deepagent-code/core/system-context/capability-snapshot"
 import { sessionCapabilityLoad, type CapabilityLoadRequest, type CapabilityLoadTurnIdentity } from "@deepagent-code/core/system-context/capability-load-adapter"
-import { recordedCapabilityLoads, resetCapabilityLoader } from "@deepagent-code/core/system-context/capability-loader"
+import { Database } from "@deepagent-code/core/database/database"
+import { recordedCapabilityLoads, resetCapabilityLoader } from "@deepagent-code/core/system-context/capability-loader-memory"
 import { capabilityCatalog } from "@deepagent-code/core/system-context/capability-catalog"
 
 // C4-08 — bind the catalog/load snapshot into the Context Epoch / PreparedProviderTurn
@@ -33,6 +35,15 @@ function loadRequest(capabilityId: string, body: string, catalogSnapshotId = "ca
     grantedPermissions: ["read"],
   }
 }
+
+/** Run one adapter load against a fresh in-memory DB. */
+const load = (args: Parameters<typeof sessionCapabilityLoad>[1]) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      return yield* sessionCapabilityLoad(db, args)
+    }).pipe(Effect.provide(Database.layerFromPath(":memory:"))),
+  )
 
 beforeEach(() => resetCapabilityLoader())
 
@@ -87,10 +98,10 @@ describe("snapshot binds loads via the frozen PreparedCapabilitySnapshotRef", ()
 })
 
 describe("compaction / restart recovery rebuilds the same snapshot", () => {
-  test("snapshot can be rebuilt from the persisted receipts after a simulated restart", () => {
+  test("snapshot can be rebuilt from the persisted receipts after a simulated restart", async () => {
     // Two real loads through the kernel record durable receipts (the session_capability_load facts).
-    sessionCapabilityLoad({ request: loadRequest("deepagent.code-read", "Read body"), identity: IDENTITY, contextEpoch: "epoch-1" })
-    sessionCapabilityLoad({ request: loadRequest("deepagent.code-edit", "Edit body"), identity: IDENTITY, contextEpoch: "epoch-1" })
+    await load({ request: loadRequest("deepagent.code-read", "Read body"), identity: IDENTITY, contextEpoch: "epoch-1" })
+    await load({ request: loadRequest("deepagent.code-edit", "Edit body"), identity: IDENTITY, contextEpoch: "epoch-1" })
 
     // Capture the surviving durable receipts BEFORE the restart.
     const surviving = receiptsAsLoaded(recordedCapabilityLoads())

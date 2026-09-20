@@ -17,7 +17,7 @@ const out = outIndex >= 0 ? args[outIndex + 1] : defaultOut
 if (!out) throw new Error("--out requires a directory argument")
 
 const started = Date.now()
-const { jsonPath, summaryPath, inventory } = writeReport(out)
+const { jsonPath, summaryPath, inventory } = await writeReport(out)
 const durationMs = Date.now() - started
 
 console.log(`caller inventory: ${inventory.totals.entries} entries across ${Object.keys(inventory.totals.bySurface).length} surfaces`)

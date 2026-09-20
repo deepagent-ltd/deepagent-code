@@ -9,7 +9,7 @@ concurrency: ${{ github.workflow }}-${{ github.ref }}
 
 jobs:
   stats:
-    if: github.repository == 'lessweb/deepagent-code'
+    if: github.repository == 'deepagent-ltd/deepagent-code'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: write

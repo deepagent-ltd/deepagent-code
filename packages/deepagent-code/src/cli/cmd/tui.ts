@@ -129,6 +129,7 @@ export const TuiThreadCommand = cmd({
         process.chdir(next)
       } catch {
         UI.error("Failed to change directory to " + next)
+        process.exitCode = 1
         return
       }
       const cwd = Filesystem.resolve(process.cwd())
@@ -140,6 +141,7 @@ export const TuiThreadCommand = cmd({
       const worker = new Worker(file, {
         env,
       })
+      const client = Rpc.client<typeof rpc>(worker)
       worker.onerror = (e) => {
         Log.Default.error("thread error", {
           message: e.message,
@@ -148,9 +150,9 @@ export const TuiThreadCommand = cmd({
           colno: e.colno,
           error: e.error,
         })
+        client.close(new Error(e.message || "TUI worker failed"))
       }
 
-      const client = Rpc.client<typeof rpc>(worker)
       const error = (e: unknown) => {
         Log.Default.error("process error", { error: errorMessage(e) })
       }
@@ -177,6 +179,7 @@ export const TuiThreadCommand = cmd({
             error: errorMessage(error),
           })
         })
+        client.close()
         worker.terminate()
       }
 
@@ -251,7 +254,6 @@ export const TuiThreadCommand = cmd({
       } finally {
         await stop()
       }
-      process.exit(0)
     } finally {
       try {
         unguard?.()

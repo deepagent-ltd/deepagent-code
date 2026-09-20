@@ -1,14 +1,15 @@
 import { Effect, Layer, Stream } from "effect"
 import { LLM, LLMEvent, LLMResponse } from "../../src"
-import { deepseek } from "../../src/providers/openai-compatible"
+import { configure } from "../../src/providers/openai-compatible"
 import { LLMClient, RequestExecutor, WebSocketExecutor } from "../../src/route"
 import { assertTextResponse } from "./assertions"
 import { loadLiveLLMConfig, modelFingerprint, preflightLiveLLM, writeLiveArtifact } from "./config"
 
 const suite = "provider-abort"
 const config = await loadLiveLLMConfig()
+const thinkingControl = config.providerID === "zai" ? { reasoning_effort: "low" } : { thinking: { type: "disabled" } }
 const preflight = await preflightLiveLLM(config)
-const provider = deepseek.configure({ baseURL: config.baseURL, apiKey: config.apiKey })
+const provider = configure({ provider: config.providerID, baseURL: config.baseURL, apiKey: config.apiKey })
 const dependencies = Layer.mergeAll(RequestExecutor.defaultLayer, WebSocketExecutor.layer)
 const client = LLMClient.layer.pipe(Layer.provide(dependencies))
 
@@ -23,7 +24,7 @@ const program = Effect.gen(function* () {
           system: "Follow the requested output format exactly.",
           prompt: "Write the integers from 1 through 1000, one integer per line.",
           generation: { maxTokens: 2048, temperature: 0 },
-          http: { body: { thinking: { type: "disabled" } } },
+          http: { body: thinkingControl },
         }),
       )
       .pipe(Stream.takeUntil(LLMEvent.is.textDelta), Stream.runCollect),
@@ -37,8 +38,9 @@ const program = Effect.gen(function* () {
     LLM.request({
       model: provider.model(config.modelID),
       prompt: "Reply with exactly RECOVERED.",
-      generation: { maxTokens: 32, temperature: 0 },
-      http: { body: { thinking: { type: "disabled" } } },
+      // Always-thinking providers (GLM) spend the budget on reasoning before any text.
+      generation: { maxTokens: config.providerID === "zai" ? 512 : 32, temperature: 0 },
+      http: { body: thinkingControl },
     }),
   )
   const recovery = assertTextResponse(recoveryResponse)

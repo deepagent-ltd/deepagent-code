@@ -8,6 +8,7 @@ import {
 } from "@opentui/core"
 import type { Binding } from "@opentui/keymap"
 import { useTheme, selectedForeground } from "../context/theme"
+import { useTuiI18n } from "../context/i18n"
 import { entries, filter, flatMap, groupBy, pipe } from "remeda"
 import { batch, createEffect, createMemo, createSignal, For, Show, type JSX, on } from "solid-js"
 import { createStore } from "solid-js/store"
@@ -82,6 +83,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
   type VisibleAction = (Action & { label: string }) | FooterHint
 
   const dialog = useDialog()
+  const i18n = useTuiI18n()
   const { theme } = useTheme()
   const tuiConfig = useTuiConfig()
   const scrollAcceleration = createMemo(() => getScrollAcceleration(tuiConfig))
@@ -292,7 +294,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
       commands: [
         {
           name: "dialog.select.prev",
-          title: "Previous item",
+          title: i18n.t("tui.dialog.select.previousItem"),
           category: "Dialog",
           run() {
             setStore("input", "keyboard")
@@ -301,7 +303,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
         },
         {
           name: "dialog.select.next",
-          title: "Next item",
+          title: i18n.t("tui.dialog.select.nextItem"),
           category: "Dialog",
           run() {
             setStore("input", "keyboard")
@@ -310,7 +312,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
         },
         {
           name: "dialog.select.page_up",
-          title: "Page up",
+          title: i18n.t("tui.common.pageUp"),
           category: "Dialog",
           run() {
             setStore("input", "keyboard")
@@ -319,7 +321,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
         },
         {
           name: "dialog.select.page_down",
-          title: "Page down",
+          title: i18n.t("tui.common.pageDown"),
           category: "Dialog",
           run() {
             setStore("input", "keyboard")
@@ -328,7 +330,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
         },
         {
           name: "dialog.select.home",
-          title: "First item",
+          title: i18n.t("tui.dialog.select.firstItem"),
           category: "Dialog",
           run() {
             if (props.locked) return
@@ -338,7 +340,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
         },
         {
           name: "dialog.select.end",
-          title: "Last item",
+          title: i18n.t("tui.dialog.select.lastItem"),
           category: "Dialog",
           run() {
             if (props.locked) return
@@ -348,7 +350,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
         },
         {
           name: "dialog.select.submit",
-          title: "Select item",
+          title: i18n.t("tui.dialog.select.selectItem"),
           category: "Dialog",
           run: submit,
         },
@@ -381,13 +383,13 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
           ? [
               {
                 key: "tab",
-                desc: "Next dialog action",
+                desc: i18n.t("tui.dialog.select.nextAction"),
                 group: "Dialog",
                 cmd: () => moveAction(1),
               },
               {
                 key: "shift+tab",
-                desc: "Previous dialog action",
+                desc: i18n.t("tui.dialog.select.previousAction"),
                 group: "Dialog",
                 cmd: () => moveAction(-1),
               },

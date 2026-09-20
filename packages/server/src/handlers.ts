@@ -1,5 +1,3 @@
-import { SessionV2 } from "@deepagent-code/core/session"
-import { LocationServiceMap } from "@deepagent-code/core/location-layer"
 import { PermissionSaved } from "@deepagent-code/core/permission/saved"
 import { Layer } from "effect"
 import { layer as locationLayer } from "./groups/location"
@@ -33,7 +31,5 @@ export const handlers = Layer.mergeAll(
 ).pipe(
   Layer.provide(sessionLocationLayer),
   Layer.provide(locationLayer),
-  Layer.provide(SessionV2.defaultLayer),
   Layer.provide(PermissionSaved.defaultLayer),
-  Layer.provide(LocationServiceMap.layer),
 )

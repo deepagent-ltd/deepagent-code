@@ -48,4 +48,52 @@ describe("McpOAuthCallback.ensureRunning", () => {
     await McpOAuthCallback.ensureRunning(`http://127.0.0.1:${port}/custom/callback`)
     expect(McpOAuthCallback.isRunning()).toBe(true)
   })
+
+  test("fails when another process owner already holds the callback port", async () => {
+    const occupied = createServer()
+    await new Promise<void>((resolve, reject) => {
+      occupied.once("error", reject)
+      occupied.listen(0, "127.0.0.1", resolve)
+    })
+    const address = occupied.address()
+    const port = typeof address === "object" && address ? address.port : 0
+
+    await expect(McpOAuthCallback.ensureRunning(`http://127.0.0.1:${port}/custom/callback`)).rejects.toMatchObject({
+      code: "EADDRINUSE",
+    })
+    expect(McpOAuthCallback.isRunning()).toBe(false)
+    await new Promise<void>((resolve, reject) => occupied.close((error) => (error ? reject(error) : resolve())))
+  })
+
+  test("serializes concurrent starts onto one listener", async () => {
+    const port = await freePort()
+    await Promise.all([
+      McpOAuthCallback.ensureRunning(`http://127.0.0.1:${port}/custom/callback`),
+      McpOAuthCallback.ensureRunning(`http://127.0.0.1:${port}/custom/callback`),
+    ])
+    expect(McpOAuthCallback.isRunning()).toBe(true)
+  })
+
+  test("rejects duplicate pending state without replacing the original callback", async () => {
+    const original = McpOAuthCallback.waitForCallback("oauth-state", "demo").catch((error) => error)
+    await expect(McpOAuthCallback.waitForCallback("oauth-state", "demo")).rejects.toThrow(
+      "OAuth state is already pending",
+    )
+    McpOAuthCallback.cancelPending("demo")
+    expect(await original).toBeInstanceOf(Error)
+  })
+
+  test("escapes provider-controlled error descriptions in the callback page", async () => {
+    const port = await freePort()
+    const state = "escaped-error-state"
+    const pending = McpOAuthCallback.waitForCallback(state, "escaped-error").catch((error) => error)
+    await McpOAuthCallback.ensureRunning(`http://127.0.0.1:${port}/custom/callback`)
+    const response = await fetch(
+      `http://127.0.0.1:${port}/custom/callback?state=${state}&error=denied&error_description=${encodeURIComponent("<script>alert(1)</script>")}`,
+    )
+    const html = await response.text()
+    expect(html).not.toContain("<script>alert(1)</script>")
+    expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;")
+    expect(await pending).toBeInstanceOf(Error)
+  })
 })

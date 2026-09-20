@@ -3,8 +3,10 @@ import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable
 import { CapabilityManifest } from "@deepagent-code/core/system-context/capability-manifest"
 import { CapabilitySearch } from "@deepagent-code/core/system-context/capability-search"
 import { Authorization } from "../middleware/authorization"
-import { ApiTypedError } from "../typed-error"
+import { ApiTypedErrors } from "../typed-error"
 import { described } from "./metadata"
+import { InstanceContextMiddleware } from "../middleware/instance-context"
+import { WorkspaceRoutingMiddleware, WorkspaceRoutingQuery } from "../middleware/workspace-routing"
 
 // C6-02 (design §11.1 + §7.3): capability catalog, L1 search and load-receipt
 // diagnostics. The catalogue/identity fields (id/version/summary/entry_tools/
@@ -57,8 +59,9 @@ export const CapabilityApi = HttpApi.make("capability").add(
   HttpApiGroup.make("capability")
     .add(
       HttpApiEndpoint.get("catalog", CapabilityPaths.catalog, {
+        query: WorkspaceRoutingQuery,
         success: described(CapabilityCatalogSchema, "Capability catalog snapshot"),
-        error: ApiTypedError,
+        error: ApiTypedErrors,
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "capability.catalog",
@@ -68,9 +71,10 @@ export const CapabilityApi = HttpApi.make("capability").add(
         }),
       ),
       HttpApiEndpoint.post("search", CapabilityPaths.search, {
+        query: WorkspaceRoutingQuery,
         payload: CapabilitySearchPayload,
         success: described(CapabilitySearch.CapabilitySearchOutput, "L1 capability search cards"),
-        error: ApiTypedError,
+        error: ApiTypedErrors,
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "capability.search",
@@ -80,8 +84,9 @@ export const CapabilityApi = HttpApi.make("capability").add(
         }),
       ),
       HttpApiEndpoint.get("loadReceipts", CapabilityPaths.loadReceipts, {
+        query: WorkspaceRoutingQuery,
         success: described(CapabilityLoadReceiptsSchema, "Capability load receipts"),
-        error: ApiTypedError,
+        error: ApiTypedErrors,
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "capability.loadReceipts",
@@ -97,5 +102,7 @@ export const CapabilityApi = HttpApi.make("capability").add(
         description: "Capability catalog/search/loadReceipts HttpApi surface (C6-02).",
       }),
     )
+    .middleware(InstanceContextMiddleware)
+    .middleware(WorkspaceRoutingMiddleware)
     .middleware(Authorization),
 )

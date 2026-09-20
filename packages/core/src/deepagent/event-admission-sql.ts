@@ -38,11 +38,32 @@ export const DeepAgentEventAdmissionTable = sqliteTable("deepagent_event_admissi
   status: text().$type<EventAdmissionStatus>().notNull(),
   // The durable SessionV2 prompt message id admitted (exact-retry anchor).
   message_id: text(),
+  // WHY the last attempt was `refused` (strategic refusal reason or the adapter's refusal). NULL for
+  // `resolved`/`admitted` rows. `refused` = the last attempt was refused; a re-drive flips it to
+  // `resolved` (W5 F3 semantics).
+  reason: text(),
   // The bounded work envelope JSON as admitted — the model-facing work is THIS, never the raw payload.
   envelope_json: text().notNull(),
   admitted_at: integer().notNull(),
   updated_at: integer().notNull(),
 })
+
+/**
+ * The forward-only migration that adds the `reason` column (W5 F3: refusal rows record WHY the last
+ * attempt was refused). Guarded on `PRAGMA table_info` so a fresh DB (whose CREATE TABLE already
+ * carries the column) is a skip. Precedent: `20260813125000_event_sync_backfill_authority`.
+ */
+export const eventAdmissionReasonMigration: DatabaseMigration.Migration = {
+  id: "20260910000000_event_admission_refusal_reason",
+  up(tx) {
+    return Effect.gen(function* () {
+      const columns = yield* tx.all<{ name: string }>("PRAGMA table_info('deepagent_event_admission')")
+      if (!columns.some((column) => column.name === "reason")) {
+        yield* tx.run("ALTER TABLE deepagent_event_admission ADD COLUMN reason TEXT")
+      }
+    })
+  },
+}
 
 /**
  * The migration that creates the admission receipt ledger. Defined HERE (the event hotspot) so the
@@ -60,6 +81,7 @@ export const eventAdmissionMigration: DatabaseMigration.Migration = {
           \`envelope_digest\` text NOT NULL,
           \`status\` text NOT NULL,
           \`message_id\` text,
+          \`reason\` text,
           \`envelope_json\` text NOT NULL,
           \`admitted_at\` integer NOT NULL,
           \`updated_at\` integer NOT NULL,

@@ -2,6 +2,7 @@ import { Effect, Schema } from "effect"
 import * as Tool from "./tool"
 import DESCRIPTION from "./plan-write.txt"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
+import type { PlanStep } from "@deepagent-code/core/deepagent/plan-controller"
 import { EventV2 } from "@deepagent-code/core/event"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { SessionID } from "../session/schema"
@@ -68,16 +69,22 @@ const PlanStep = Schema.Struct({
 })
 
 export const Parameters = Schema.Struct({
-  operation: Schema.Literals(["create", "advance", "replan"]).annotate({
-    description: "create a plan, advance an existing plan, or replan with a reason",
+  operation: Schema.optional(Schema.Literals(["create", "advance", "replan"])).annotate({
+    description: "create a plan, advance an existing plan, or replan with a reason; omit for the default create",
   }),
-  expected_plan_id: Schema.NullOr(Schema.String).annotate({
+  // Provider-tolerant decoding (GLM 5.x serializes tool-argument numbers as strings and null
+  // as "null"): the schema accepts the coerced shapes and execute normalizes them, so the strict
+  // protocol semantics downstream are unchanged. F-10: expected_* are OPTIONAL — GLM omits
+  // meaningless fields, and for create they are meaningless (absent = null). An advance/replan
+  // that omits them lands on the coached PlanConflict path (correction payload with the exact
+  // authoritative values) instead of a dead schema rejection.
+  expected_plan_id: Schema.optional(Schema.NullOr(Schema.String)).annotate({
     description:
-      "Use null for create; for advance/replan copy expected_plan_id exactly from the latest <plan-status> or plan result",
+      "Use null (or omit) for create; for advance/replan copy expected_plan_id exactly from the latest <plan-status> or plan result",
   }),
-  expected_version: Schema.NullOr(NonNegativeInt).annotate({
+  expected_version: Schema.optional(Schema.NullOr(Schema.Union([NonNegativeInt, Schema.NumberFromString]))).annotate({
     description:
-      "Use null for create; for advance/replan copy expected_version exactly from the latest <plan-status> or plan result",
+      "Use null (or omit) for create; for advance/replan copy expected_version exactly from the latest <plan-status> or plan result",
   }),
   replan_reason: Schema.optional(Schema.String).annotate({
     description: "Required for replan; omit for create/advance",
@@ -87,14 +94,14 @@ export const Parameters = Schema.Struct({
   }),
   steps: Schema.mutable(Schema.Array(PlanStep)).annotate({
     description:
-      "Ordered plan steps for create/replan; for advance copy existing step_id values from <plan-status> and send status/note updates",
+      "Ordered plan steps. For advance, send the steps whose status or note changes; for replan, the full revised list. step_id is never required and is ignored.",
   }),
   assumptions: Schema.optional(Schema.mutable(Schema.Array(Schema.String))).annotate({
     description: "Facts for create; for replan omit to retain the authoritative list, or send [] to clear it",
   }),
   active_step_id: Schema.optional(Schema.NullOr(Schema.String)).annotate({
     description:
-      "For create/replan, omit this field because supplying it is rejected; mark at most one step active and the server derives its ID. For advance, copy a visible step_id, omit to retain it, or use null to clear it",
+      "Ignored — mark exactly one step status=active (or none) and the server derives the active step from the statuses.",
   }),
 })
 export const PlanWriteParameters = Parameters
@@ -128,8 +135,8 @@ export const PlanTool = Tool.define<typeof Parameters, Metadata, EventV2Bridge.S
         // server-owned and intentionally excluded from its semantic proposal.
         advance_patch: input.operation === "advance",
         operation: input.operation,
-        expected_plan_id: input.expected_plan_id,
-        expected_version: input.expected_version,
+        expected_plan_id: input.expected_plan_id ?? null,
+        expected_version: input.expected_version ?? null,
         replan_reason: input.operation === "advance" ? null : (input.replan_reason ?? null),
         goal: input.operation === "advance" ? null : (input.goal?.trim() ?? null),
         assumptions: input.operation === "advance" ? [] : (input.assumptions ?? []).map((value) => value.trim()),
@@ -234,11 +241,27 @@ export const PlanTool = Tool.define<typeof Parameters, Metadata, EventV2Bridge.S
               const validation = error
               const offending = validation.offending_step_ids
               const offendingText = offending.length ? " Offending step IDs: " + offending.join(", ") + "." : ""
+              // F-9: the all-steps-done advance has a legal terminal form (active_step_id null) —
+              // teach it in the rejection itself instead of letting the budget die on it.
+              const terminalHint =
+                validation.code === "invalid_active_step" && params.operation === "advance"
+                  ? " If every step is done after this update, resend the same advance with active_step_id set to null — a completed plan with no active step is the terminal state."
+                  : ""
               const validationOutput = [
                 "The plan was not committed (" + validation.code + ").",
                 offendingText,
+                terminalHint,
                 " Correct the plan payload and retry once.",
-                validation.challenge_id ? " Confirmation: " + validation.challenge_id : "",
+                // A challenge is confirmed through the plan-edit receipt by the human/HTTP path
+                // (`plan-edit-protocol.ts` `confirmed_challenge_id` -> `goal-loop.ts`), and no
+                // model-facing field can carry it. Rendering the token here showed the model a value
+                // it could not use, so it resent the same payload and was rejected again. Tell it
+                // what it can actually do instead.
+                validation.challenge_id
+                  ? " This rejection is a safety challenge and only a human can confirm it: restore the" +
+                    " steps you removed, or explain why they are no longer needed so the change can be" +
+                    " approved."
+                  : "",
                 renderModelPlanCorrection(params, validation.code, previous, ref),
               ].join("")
               return {
@@ -347,28 +370,63 @@ export const normalizeModelPlanWrite = (
   previous: ReturnType<typeof AgentGateway.DeepAgentPlanStore.getPlanDoc>,
   expected: AgentGateway.DeepAgentPlanController.PlanExpected | null,
 ) => {
+  // Provider-tolerant normalization (GLM 5.x): the literal "null" string and stringified
+  // numbers decode through the tolerant schema but must land as real nulls/numbers before
+  // the strict core precondition runs. NumberFromString can also surface the "null" string
+  // as NaN — a number-typed value that still fails every downstream `!== null` check — so
+  // only finite non-negative integers survive as versions; everything else reads as absent.
+  const expectedVersionNumber =
+    typeof params.expected_version === "number" ? params.expected_version : Number(params.expected_version)
+  const expectedPlanID =
+    params.expected_plan_id == null || params.expected_plan_id === "null" ? null : params.expected_plan_id
+  // F-11: providers omit `operation` on obvious payload shapes. Infer instead of defaulting to
+  // create: no prior plan (or no expected precondition) → create; a supplied precondition with an
+  // existing plan → advance (replan iff it carries a reason). Wrong inferences land on the coached
+  // validation/conflict paths, never a dead schema rejection.
+  const inferredOperation =
+    previous == null || (expectedPlanID == null && params.expected_version == null)
+      ? "create"
+      : params.replan_reason !== undefined
+        ? "replan"
+        : "advance"
+  const normalized = {
+    ...params,
+    operation: params.operation ?? inferredOperation,
+    expected_plan_id: expectedPlanID,
+    expected_version:
+      params.expected_version == null || !Number.isInteger(expectedVersionNumber) || expectedVersionNumber < 0
+        ? null
+        : expectedVersionNumber,
+    active_step_id:
+      params.active_step_id === undefined ? undefined : params.active_step_id === "null" ? null : params.active_step_id,
+  }
   // Stale writers are concurrency conflicts even when a concurrent replan also changed step IDs.
   // Check the shared core precondition before interpreting the patch against current authority.
-  AgentGateway.DeepAgentPlanController.requirePlanWriteExpected(params, previous, expected)
+  AgentGateway.DeepAgentPlanController.requirePlanWriteExpected(normalized, previous, expected)
   const base = {
-    operation: params.operation,
-    expected_plan_id: params.expected_plan_id,
-    expected_version: params.expected_version,
+    operation: normalized.operation,
+    expected_plan_id: normalized.expected_plan_id,
+    expected_version: normalized.expected_version,
     ...(params.replan_reason !== undefined ? { replan_reason: params.replan_reason } : {}),
     goal: params.goal ?? "",
   }
 
-  if (params.operation === "create") {
-    const suppliedIDs = params.steps.map((step) => step.step_id?.trim()).filter((stepID) => stepID !== undefined)
-    if (suppliedIDs.length > 0 || params.active_step_id !== undefined) {
-      throw new AgentGateway.DeepAgentPlanController.PlanValidationError("unsafe_step_identity", [
-        ...new Set([...suppliedIDs, ...(typeof params.active_step_id === "string" ? [params.active_step_id] : [])]),
-      ])
-    }
+  if (normalized.operation === "create") {
+    // Step ids are SERVER-OWNED. The model is never required to supply one, and one it does supply is
+    // ignored rather than rejected: an id is the anchor that carries runtime evidence across plan
+    // rewrites, so demanding the model reproduce it turned an internal bookkeeping detail into a
+    // submission-blocking rule. `buildPlanFromInput` mints `step_${i+1}` for a new plan.
+    //
+    // History: this branch used to reject ANY supplied id ("unsafe_step_identity"), and `replan`
+    // rejected ids absent from the previous plan. Both fired in the full-roster sweep: a model that
+    // invented `step_snap_types` for a NEW step had its whole submission rejected, twice, and the
+    // session was terminated. None of Codex, Claude Code or deepseek-harness exposes step ids to the
+    // model at all (Claude Code's TaskCreate has the harness allocate them), so the requirement had
+    // no precedent and only taxed naming habits.
     return {
       ...base,
       assumptions: params.assumptions,
-      steps: params.steps.map((step) => ({ ...step, title: step.title ?? "" })),
+      steps: params.steps.map((step) => ({ ...step, step_id: undefined, title: step.title ?? "" })),
     }
   }
 
@@ -376,82 +434,78 @@ export const normalizeModelPlanWrite = (
     throw new AgentGateway.DeepAgentPlanController.PlanValidationError("plan_missing")
   }
 
-  if (params.operation === "advance") {
-    const suppliedIDs = params.steps.map((step) => step.step_id?.trim() ?? "")
-    if (suppliedIDs.some((stepID) => stepID === "")) {
-      throw new AgentGateway.DeepAgentPlanController.PlanValidationError("unsafe_step_identity", [], previous.plan_id)
+  if (normalized.operation === "advance") {
+    // Identity is RECOVERED, not demanded. A supplied id is used only when it names a step of the
+    // previous plan; otherwise the step is matched by the content the model already authored
+    // (title + acceptance, the same pair `hasSameIdentity` uses). An unmatched step is simply not an
+    // update — it cannot invent a step through `advance`, because `advance` only patches statuses.
+    const byID = new Map(previous.steps.map((step) => [step.step_id, step] as const))
+    const byContent = stepIdentityIndex(previous.steps)
+    const updates = new Map<string, (typeof params.steps)[number]>()
+    for (const update of params.steps) {
+      const supplied = update.step_id?.trim() ?? ""
+      const prior = supplied !== "" ? byID.get(supplied) : matchByIdentity(byContent, update)
+      if (prior === undefined) continue
+      // Last write wins for a repeated target: the model asked for the same step twice.
+      updates.set(prior.step_id, update)
     }
-    const duplicateIDs = suppliedIDs.filter((stepID, index) => suppliedIDs.indexOf(stepID) !== index)
-    if (duplicateIDs.length > 0) {
-      throw new AgentGateway.DeepAgentPlanController.PlanValidationError(
-        "duplicate_step_id",
-        [...new Set(duplicateIDs)],
-        previous.plan_id,
-      )
-    }
-    const knownIDs = new Set(previous.steps.map((step) => step.step_id))
-    const unknownIDs = suppliedIDs.filter((stepID) => !knownIDs.has(stepID))
-    if (unknownIDs.length > 0) {
-      throw new AgentGateway.DeepAgentPlanController.PlanValidationError(
-        "unsafe_step_identity",
-        unknownIDs,
-        previous.plan_id,
-      )
-    }
-    const updates = new Map(params.steps.map((step, index) => [suppliedIDs[index], step] as const))
+    const built = previous.steps.map((step) => {
+      const update = updates.get(step.step_id)
+      return {
+        step_id: step.step_id,
+        title: step.title,
+        status: update?.status ?? step.status,
+        acceptance: step.acceptance ?? null,
+        assigned_agent: step.assigned_agent ?? null,
+        note: update?.note ?? step.note ?? null,
+      }
+    })
+    // F-9/F-11/F-12: the supplied active_step_id is ADVISORY on advance — the built statuses are
+    // the truth (exactly one active step, or none on the legal terminal close). Every hard-failure
+    // variant so far was a pointer/statuses contradiction: retain-resurrected dead pointers, and
+    // explicit stale pointers copied verbatim from a correction payload while that step was being
+    // marked done. A pointer that matches a built ACTIVE step passes through; anything else is
+    // dropped and the controller derives from statuses.
+    const advisoryActive =
+      normalized.active_step_id != null &&
+      built.some((step) => step.step_id === normalized.active_step_id && step.status === "active")
+        ? normalized.active_step_id
+        : undefined
     return {
       ...base,
-      goal: previous.goal,
-      assumptions: [...previous.assumptions],
-      active_step_id: params.active_step_id === undefined ? previous.active_step_id : params.active_step_id,
-      steps: previous.steps.map((step) => {
-        const update = updates.get(step.step_id)
-        return {
-          step_id: step.step_id,
-          title: step.title,
-          status: update?.status ?? step.status,
-          acceptance: step.acceptance ?? null,
-          assigned_agent: step.assigned_agent ?? null,
-          note: update?.note ?? step.note ?? null,
-        }
-      }),
+      // The goal is EDITABLE: a long-horizon task legitimately narrows or reframes its objective, and
+      // freezing it forced a `replan` (with its own rejections) for what is often a one-word change.
+      goal: base.goal.trim() === "" ? previous.goal : base.goal,
+      assumptions: params.assumptions === undefined ? [...previous.assumptions] : params.assumptions,
+      ...(advisoryActive !== undefined ? { active_step_id: advisoryActive } : {}),
+      steps: built,
     }
   }
 
-  const suppliedIDs = params.steps.map((step) => step.step_id?.trim() ?? "")
-  const duplicateIDs = suppliedIDs.filter((stepID, index) => suppliedIDs.indexOf(stepID) !== index)
-  const duplicateKnownIDs = duplicateIDs.filter(Boolean)
-  if (duplicateKnownIDs.length > 0) {
-    throw new AgentGateway.DeepAgentPlanController.PlanValidationError(
-      "duplicate_step_id",
-      [...new Set(duplicateKnownIDs)],
-      previous.plan_id,
-    )
-  }
-  const knownIDs = new Set(previous.steps.map((step) => step.step_id))
-  const unknownIDs = suppliedIDs.filter((stepID) => stepID !== "" && !knownIDs.has(stepID))
-  if (unknownIDs.length > 0) {
-    throw new AgentGateway.DeepAgentPlanController.PlanValidationError(
-      "unsafe_step_identity",
-      unknownIDs,
-      previous.plan_id,
-    )
-  }
-  if (params.active_step_id !== undefined) {
-    throw new AgentGateway.DeepAgentPlanController.PlanValidationError(
-      "unsafe_step_identity",
-      typeof params.active_step_id === "string" ? [params.active_step_id] : [],
-      previous.plan_id,
-    )
-  }
+  // Replan is a structural revision, so identity is recovered per step rather than demanded:
+  //   1. an id that names a previous step wins (the model echoed the authoritative payload), and
+  //   2. otherwise the step is matched by title + acceptance — the SAME pair `hasSameIdentity` uses
+  //      to decide whether runtime evidence may be carried forward. Matching by that pair is what
+  //      keeps the anchor honest: a step the model reworded is genuinely a new step and starts with
+  //      no evidence, while one it merely re-sent keeps its proof.
+  // A supplied id that matches nothing is treated as a NEW step (its id is dropped and the
+  // controller mints one). Rejecting it instead was the defect that ended whole sessions.
+  const byID = new Map(previous.steps.map((step) => [step.step_id, step] as const))
+  const byContent = stepIdentityIndex(previous.steps)
+  const claimed = new Set<string>()
   return {
     ...base,
     assumptions: params.assumptions === undefined ? [...previous.assumptions] : params.assumptions,
     steps: params.steps.map((update) => {
-      const stepID = update.step_id?.trim() ?? ""
-      const prior = stepID === "" ? undefined : previous.steps.find((step) => step.step_id === stepID)
+      const supplied = update.step_id?.trim() ?? ""
+      const echoed = supplied === "" ? undefined : byID.get(supplied)
+      // A previous step may back at most one submitted step: a wholesale copy-paste of the old list
+      // must not make several new steps claim one step's identity (and its evidence).
+      const prior =
+        echoed !== undefined && !claimed.has(echoed.step_id) ? echoed : matchByIdentity(byContent, update, claimed)
+      if (prior !== undefined) claimed.add(prior.step_id)
       return {
-        step_id: stepID === "" ? undefined : stepID,
+        step_id: prior?.step_id,
         title: update.title ?? prior?.title ?? "",
         status: update.status,
         acceptance: update.acceptance ?? prior?.acceptance ?? null,
@@ -460,6 +514,44 @@ export const normalizeModelPlanWrite = (
       }
     }),
   }
+}
+
+/**
+ * Index the previous plan's steps by the content pair that defines step identity (`hasSameIdentity`).
+ * A key maps to every step carrying it, so an ambiguous match can be refused rather than guessed.
+ */
+const stepIdentityIndex = (steps: readonly PlanStep[]) => {
+  const index = new Map<string, PlanStep[]>()
+  for (const step of steps) {
+    const key = stepIdentityKey(step.title, step.acceptance)
+    const bucket = index.get(key)
+    if (bucket === undefined) index.set(key, [step])
+    else bucket.push(step)
+  }
+  return index
+}
+
+const stepIdentityKey = (title: string | null | undefined, acceptance: string | null | undefined) =>
+  `${(title ?? "").trim()}\u0000${(acceptance ?? "").trim()}`
+
+/**
+ * Recover the previous step a submission refers to, by content.
+ *
+ * Candidates are the previous steps whose title + acceptance match exactly; an already-claimed step
+ * is skipped, and an ambiguous match (two previous steps with identical content) yields nothing —
+ * refusing to guess is the safe direction here, because a wrong match would carry another step's
+ * runtime evidence onto this one.
+ */
+const matchByIdentity = (
+  index: ReadonlyMap<string, readonly PlanStep[]>,
+  update: { readonly title?: string | undefined; readonly acceptance?: string | undefined },
+  claimed: ReadonlySet<string> = new Set(),
+): PlanStep | undefined => {
+  if (update.title === undefined) return undefined
+  const bucket = index.get(stepIdentityKey(update.title, update.acceptance))
+  if (bucket === undefined) return undefined
+  const open = bucket.filter((step) => !claimed.has(step.step_id))
+  return open.length === 1 ? open[0] : undefined
 }
 
 export const renderModelPlanCorrection = (
@@ -475,7 +567,7 @@ export const renderModelPlanCorrection = (
       renderPlanRetryBase(previous, ref)
     )
   }
-  if (params.operation === "create") {
+  if ((params.operation ?? "create") === "create") {
     return (
       "\n\nCorrection protocol for create: copy the schema-valid payload below. It deliberately omits every step_id and active_step_id; the server allocates IDs and derives the active pointer. Do not invent a future server ID.\n" +
       JSON.stringify({
@@ -498,7 +590,7 @@ export const renderModelPlanCorrection = (
     return "\n\nAuthoritative replan parameters are unavailable. Do not guess expected_plan_id, expected_version, step_id, or active_step_id. If no plan exists, use create with null expected values."
   }
   return (
-    "\n\nCorrection protocol for replan: start from the schema-valid authoritative payload below. Retain a step only with its exact step_id; for every new step, omit step_id. Omit active_step_id and mark at most one step status=active so the server derives its ID after allocation. Omit assumptions to retain the authoritative list, or send [] only when you intentionally clear it.\n" +
+    "\n\nCorrection protocol for replan: start from the schema-valid authoritative payload below. Repeat the title and acceptance of a step VERBATIM to keep it as the same step (that is how the server carries its runtime evidence forward); any step you reword is new. Do not send step_id or active_step_id — both are ignored — and mark at most one step status=active so the server derives the active step. Omit assumptions to retain the authoritative list, or send [] only when you intentionally clear it.\n" +
     JSON.stringify({
       operation: "replan",
       expected_plan_id: previous.plan_id,
@@ -506,8 +598,9 @@ export const renderModelPlanCorrection = (
       replan_reason: params.replan_reason?.trim() || "Correct the rejected replan against current authority",
       goal: params.goal ?? previous.goal,
       ...(params.assumptions !== undefined ? { assumptions: params.assumptions } : {}),
+      // No `step_id` in the example payload: the prose above says the field is ignored, and showing
+      // ids here would contradict it — the model copies what it is shown.
       steps: previous.steps.map((step) => ({
-        step_id: step.step_id,
         title: step.title,
         status: step.status,
         ...(step.acceptance != null ? { acceptance: step.acceptance } : {}),

@@ -11,6 +11,7 @@ import { arbitrate } from "../../src/panel/arbiter"
 import { DEFAULT_QUORUM_POLICY, type PanelOpinion } from "../../src/agent/schema/panel"
 import { makeGoalLoopWiring, type SubagentTurnRunner } from "../../src/session/goal-loop-wiring"
 import type { Diagnostic } from "../../src/lsp/client"
+import { tmpRoot } from "../fixture/fixture"
 
 /**
  * V3.9 §F.3 — Feature-flag independence. The three V3.9 capability flags (`experimentalWiki`,
@@ -47,7 +48,7 @@ const opinions: PanelOpinion[] = [
 
 let root: string
 const fresh = () => {
-  root = mkdtempSync(path.join(tmpdir(), "deepagent-flagindep-"))
+  root = mkdtempSync(tmpRoot())
   return new DocumentStore(root)
 }
 const cleanup = () => root && rmSync(root, { recursive: true, force: true })
@@ -59,7 +60,9 @@ describe("V3.9 §F.3 — feature-flag independence", () => {
       // goal-loop wiring is unavailable (null) …
       const deps = await Effect.runPromise(
         makeGoalLoopWiring(goalWiringInput(store)).pipe(
-          Effect.provide(flagLayer({ experimentalGoalLoop: false, experimentalWiki: true, experimentalExpertPanel: true })),
+          Effect.provide(
+            flagLayer({ experimentalGoalLoop: false, experimentalWiki: true, experimentalExpertPanel: true }),
+          ),
         ),
       )
       expect(deps).toBeNull()
@@ -89,7 +92,9 @@ describe("V3.9 §F.3 — feature-flag independence", () => {
     try {
       const deps = await Effect.runPromise(
         makeGoalLoopWiring(goalWiringInput(store)).pipe(
-          Effect.provide(flagLayer({ experimentalWiki: false, experimentalGoalLoop: true, experimentalExpertPanel: true })),
+          Effect.provide(
+            flagLayer({ experimentalWiki: false, experimentalGoalLoop: true, experimentalExpertPanel: true }),
+          ),
         ),
       )
       expect(deps).not.toBeNull() // goal loop unaffected by wiki being off
@@ -97,8 +102,15 @@ describe("V3.9 §F.3 — feature-flag independence", () => {
       // Panel still runs end-to-end (pure orchestrator + arbiter), no wiki dependency.
       const verdict = await Effect.runPromise(
         runPanel({
-          question: { question: "q", codeRefs: [], lenses: ["correctness", "security"], maxRounds: 1, policy: DEFAULT_QUORUM_POLICY },
-          runPanelist: ({ spec }) => Effect.succeed({ lens: spec.lens, verdict: "approve", findings: [], confidence: 0.9 }),
+          question: {
+            question: "q",
+            codeRefs: [],
+            lenses: ["correctness", "security"],
+            maxRounds: 1,
+            policy: DEFAULT_QUORUM_POLICY,
+          },
+          runPanelist: ({ spec }) =>
+            Effect.succeed({ lens: spec.lens, verdict: "approve", findings: [], confidence: 0.9 }),
           parentSessionID: "s",
         }),
       )
@@ -117,7 +129,9 @@ describe("V3.9 §F.3 — feature-flag independence", () => {
       // goal-loop-wiring.test.ts "§F.3 panel flag OFF". The arbiter itself remains a pure function.
       const deps = await Effect.runPromise(
         makeGoalLoopWiring(goalWiringInput(store)).pipe(
-          Effect.provide(flagLayer({ experimentalExpertPanel: false, experimentalGoalLoop: true, experimentalWiki: true })),
+          Effect.provide(
+            flagLayer({ experimentalExpertPanel: false, experimentalGoalLoop: true, experimentalWiki: true }),
+          ),
         ),
       )
       expect(deps).not.toBeNull()
@@ -145,7 +159,9 @@ describe("V3.9 §F.3 — feature-flag independence", () => {
     try {
       const deps = await Effect.runPromise(
         makeGoalLoopWiring(goalWiringInput(store)).pipe(
-          Effect.provide(flagLayer({ experimentalWiki: false, experimentalExpertPanel: false, experimentalGoalLoop: false })),
+          Effect.provide(
+            flagLayer({ experimentalWiki: false, experimentalExpertPanel: false, experimentalGoalLoop: false }),
+          ),
         ),
       )
       expect(deps).toBeNull()

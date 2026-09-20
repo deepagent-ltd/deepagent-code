@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test"
 import { Schema } from "effect"
 
 import { Session } from "@/session/session"
-import { SessionPrompt } from "../../src/session/prompt"
+import { SessionPromptV2 } from "../../src/session/prompt-v2"
+import { SessionCommandV2 } from "../../src/session/command-v2"
 import { SessionRevert } from "../../src/session/revert"
 import { SessionStatus } from "../../src/session/status"
 import { SessionSummary } from "../../src/session/summary"
@@ -265,12 +266,12 @@ describe("Todo.Info", () => {
 
 describe("SessionPrompt input schemas", () => {
   test("LoopInput is just sessionID", () => {
-    const decode = decodeUnknown(SessionPrompt.LoopInput)
+    const decode = decodeUnknown(SessionPromptV2.LoopInput)
     expect(decode({ sessionID })).toEqual({ sessionID })
   })
 
   test("ShellInput requires agent + command", () => {
-    const decode = decodeUnknown(SessionPrompt.ShellInput)
+    const decode = decodeUnknown(SessionCommandV2.ShellInput)
     const expected = { sessionID, agent: "build", command: "echo hi" }
     const input: unknown = expected
     expect(decode(input)).toEqual(expected)
@@ -278,7 +279,7 @@ describe("SessionPrompt input schemas", () => {
   })
 
   test("PromptInput accepts a text part and a file part", () => {
-    const decode = decodeUnknown(SessionPrompt.PromptInput)
+    const decode = decodeUnknown(SessionPromptV2.PromptInput)
     const expected = {
       sessionID,
       parts: [
@@ -294,7 +295,7 @@ describe("SessionPrompt input schemas", () => {
   })
 
   test("PromptInput rejects unknown part type", () => {
-    const decode = decodeUnknown(SessionPrompt.PromptInput)
+    const decode = decodeUnknown(SessionPromptV2.PromptInput)
     const bad = {
       sessionID,
       parts: [{ type: "nonsense", payload: 42 }],
@@ -303,7 +304,7 @@ describe("SessionPrompt input schemas", () => {
   })
 
   test("CommandInput round-trips core fields", () => {
-    const decode = decodeUnknown(SessionPrompt.CommandInput)
+    const decode = decodeUnknown(SessionCommandV2.CommandInput)
     const expected = {
       sessionID,
       arguments: "--flag",

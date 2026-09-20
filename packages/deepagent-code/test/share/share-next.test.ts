@@ -12,7 +12,7 @@ import { Config } from "@/config/config"
 import { Provider } from "@/provider/provider"
 import { Session } from "@/session/session"
 import { SessionProjector } from "@deepagent-code/core/session/projector"
-import type { SessionID } from "../../src/session/schema"
+import { MessageID, type SessionID } from "../../src/session/schema"
 import { ShareNext } from "@/share/share-next"
 import { SessionShareTable } from "@deepagent-code/core/share/sql"
 import { Database } from "@deepagent-code/core/database/database"
@@ -356,6 +356,96 @@ describe("ShareNext", () => {
               status: "modified",
             },
           ])
+        }).pipe(Effect.provide(wired(client)))
+      },
+      { config: { enterprise: { url: "https://legacy-share.example.com" } } },
+    ),
+  )
+
+  it.live("incremental session push carries all fields after V2 and V1 authority updates", () =>
+    provideTmpdirInstance(
+      () => {
+        const seen: Array<{ url: string; body: string }> = []
+        const client = HttpClient.make((req) => {
+          if (req.url.endsWith("/sync") && req.body._tag === "Uint8Array") {
+            seen.push({ url: req.url, body: new TextDecoder().decode(req.body.body) })
+          }
+          return Effect.succeed(json(req, { ok: true }))
+        })
+
+        return Effect.gen(function* () {
+          const share = yield* ShareNext.Service
+          const session = yield* Session.Service
+
+          const info = yield* session.create({ title: "first" })
+          // Seed the V1-owned fields before the share subscriber is attached so these updates
+          // are not share syncs themselves.
+          yield* session.setMetadata({ sessionID: info.id, metadata: { origin: "seed", rank: 1 } })
+          yield* session.setShare({
+            sessionID: info.id,
+            share: { url: "https://legacy-share.example.com/share/abc" },
+          })
+          yield* session.setRevert({
+            sessionID: info.id,
+            revert: { messageID: MessageID.make("msg_seed"), snapshot: "snap-1" },
+            summary: { additions: 3, deletions: 1, files: 2 },
+          })
+          yield* session.setPreview({ sessionID: info.id, preview: "seed preview" })
+
+          const { db } = yield* Database.Service
+          yield* db
+            .insert(SessionShareTable)
+            .values({
+              session_id: info.id,
+              id: "shr_abc",
+              url: "https://legacy-share.example.com/share/abc",
+              secret: "sec_123",
+            })
+            .run()
+            .pipe(Effect.orDie)
+          yield* share.init()
+
+          const pushed = (index: number) => {
+            const body = JSON.parse(seen[index].body) as {
+              secret: string
+              data: Array<{ type: string; data: Record<string, unknown> }>
+            }
+            expect(body.secret).toBe("sec_123")
+            expect(body.data).toHaveLength(1)
+            expect(body.data[0].type).toBe("session")
+            return body.data[0].data
+          }
+          const expectComplete = (pushedSession: Record<string, unknown>, metadata: unknown) => {
+            expect(pushedSession.metadata).toEqual(metadata)
+            expect(pushedSession.share).toEqual({ url: "https://legacy-share.example.com/share/abc" })
+            expect(pushedSession.summary).toEqual({ additions: 3, deletions: 1, files: 2 })
+            expect(pushedSession.revert).toEqual({ messageID: "msg_seed", snapshot: "snap-1" })
+            expect(pushedSession.preview).toBe("seed preview")
+          }
+
+          // V2 authority update (session.updated.2 via publishUpdated): the bridge's V1 rebuild of
+          // the payload drops metadata/share/summary/revert/preview, so the push must carry the
+          // stored session instead of the event payload.
+          yield* session.setTitle({ sessionID: info.id, title: "renamed" })
+          yield* pollWithTimeout(
+            Effect.sync(() => (seen.length === 1 ? true : undefined)),
+            "timed out waiting for V2 share sync",
+            "5 seconds",
+          )
+          const v2 = pushed(0)
+          expect(v2.title).toBe("renamed")
+          expectComplete(v2, { origin: "seed", rank: 1 })
+
+          // V1 patch path push stays complete.
+          yield* session.setMetadata({ sessionID: info.id, metadata: { origin: "seed", rank: 2 } })
+          yield* pollWithTimeout(
+            Effect.sync(() => (seen.length === 2 ? true : undefined)),
+            "timed out waiting for V1 share sync",
+            "5 seconds",
+          )
+          const v1 = pushed(1)
+          expect(v1.title).toBe("renamed")
+          expectComplete(v1, { origin: "seed", rank: 2 })
         }).pipe(Effect.provide(wired(client)))
       },
       { config: { enterprise: { url: "https://legacy-share.example.com" } } },

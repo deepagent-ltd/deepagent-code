@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Effect, Exit, Fiber, Layer } from "effect"
+import { Effect, Layer } from "effect"
 import { PermissionV2 } from "@deepagent-code/core/permission"
 import { QuestionV2 } from "@deepagent-code/core/question"
 import { SessionV2 } from "@deepagent-code/core/session"
@@ -136,20 +136,18 @@ describe("QuestionTool", () => {
     }),
   )
 
-  it.effect("keeps dismissed questions out of model-facing output", () =>
+  it.effect("settles dismissed questions as a model-visible tool error", () =>
     Effect.gen(function* () {
       captured = undefined
       reject = true
       deny = false
       const registryService = yield* ToolRegistry.Service
-      const fiber = yield* executeTool(registryService, {
+      const result = yield* executeTool(registryService, {
         sessionID,
         ...toolIdentity,
         call: { type: "tool-call", id: "call-question", name: "question", input: { questions: [] } },
-      }).pipe(Effect.forkScoped)
-
-      const exit = yield* Fiber.await(fiber)
-      expect(Exit.isFailure(exit)).toBe(true)
+      })
+      expect(result).toEqual({ type: "error", value: "Question dismissed" })
     }),
   )
 })

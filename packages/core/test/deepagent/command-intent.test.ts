@@ -238,3 +238,38 @@ describe("CommandIntent.classifyCommand", () => {
     }
   })
 })
+
+// Regression: quoted regex alternations carry a literal `|`/`>` the shell never sees. Before the
+// quoted-span masking, segmentation cut `grep "A\|B" file` after `grep "A` and condemned the
+// trailing fragment as an unknown command — the empirical top cause of read-only greps being
+// plan-gate blocked (14 of 15 blocks in the abs ablation seed2 run were exactly this shape).
+describe("quoted regex alternations stay read_only (abs seed2 fixtures)", () => {
+  const readOnly = [
+    `grep -n "IndexExpression\\|IsRange\\|COLON\\|parseIndex" parser/parser.go`,
+    `grep -n "IndexExpression\\|IsRange\\|Index(\\|AssignStatement\\|IsHashLiteral\\|Range" evaluator/evaluator.go`,
+    `grep -n "index ranges can only be numerical\\|index operator not supported\\|IsRange\\|\\[.*:" evaluator/evaluator.go`,
+    `grep -n "TestArrayIndexExpressions\\|TestIndexAssign\\|TestArray\\|func Test" evaluator/evaluator_test.go`,
+    `grep -n "IndexExpression\\|IsRange\\|\\[[0-9]*:\\|parseIndex\\|Range" parser/parser_test.go | cat`,
+    `grep -rn "runes\\|Rune\\|[]rune\\|utf8" evaluator/ object/ | cat`,
+    `grep -rn "&ast.IndexExpression{\\|&IndexExpression{\\|ast.IndexExpression{" --include="*.go" . | cat`,
+    `grep -n "func logErrorWithPosition\\|func TestStringIndexExpressions\\|func TestArrayIndexExpressions" evaluator/evaluator_test.go`,
+    `grep -rn "\\.End\\b\\|\\.Step\\b\\|\\.IsRange\\b\\|\\.Index\\b" --include="*.go" . | grep -i "index\\|range\\|Expr"`,
+    `rg "foo>bar" src/`, // quoted `>` is a literal, not a redirect
+  ]
+  for (const cmd of readOnly) {
+    test(`read_only: ${cmd.slice(0, 60)}`, () => {
+      expect(classifyCommand(cmd)).toBe("read_only")
+    })
+  }
+  // Genuine redirects and command substitution behind quotes-free spans stay mutating.
+  const mutating = [
+    `grep -n "func Test" evaluator_test.go > /tmp/out.txt`, // real redirect after the quoted span
+    `echo "a|b" && rm -rf /`,
+    `cat "file|with|pipes" | tee /etc/passwd`, // pipe into a mutating writer
+  ]
+  for (const cmd of mutating) {
+    test(`mutating: ${cmd.slice(0, 60)}`, () => {
+      expect(classifyCommand(cmd)).toBe("mutating")
+    })
+  }
+})

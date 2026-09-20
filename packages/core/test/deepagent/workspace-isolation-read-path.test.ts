@@ -13,6 +13,7 @@ import { retrieve, invalidateCache } from "../../src/deepagent/knowledge-retriev
 import type { TaskContext, ToolContext } from "../../src/deepagent/prompt-policy"
 import { DeepAgentReleasedSnapshot } from "../../src/deepagent/released-snapshot"
 import { Hash } from "../../src/util/hash"
+import { tmpRoot } from "../fixture/tmpdir"
 
 // V3.2.1 decision B (docs/34 §8): workspace isolation must be ENFORCED on the durable read path.
 // The retriever reads the DocumentStore via knowledge-source, which unions user-global with THIS
@@ -103,7 +104,7 @@ const memoryRefsFor = (workspacePath?: string): readonly string[] => {
 }
 
 beforeEach(() => {
-  base = mkdtempSync(path.join(tmpdir(), "deepagent-ws-iso-"))
+  base = mkdtempSync(tmpRoot())
   knowledgeSource.configure(base)
 })
 afterEach(() => {

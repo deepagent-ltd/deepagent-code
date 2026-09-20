@@ -4,6 +4,7 @@ import {
   clearSessionPrefetchDirectory,
   getSessionPrefetch,
   runSessionPrefetch,
+  SESSION_PREFETCH_CACHE_LIMIT,
   SESSION_MESSAGE_PAGE_LIMIT,
   setSessionPrefetch,
   shouldSkipSessionPrefetch,
@@ -139,5 +140,22 @@ describe("session prefetch", () => {
         now: 1 + 15_001,
       }),
     ).toBe(true)
+  })
+
+  test("evicts old metadata at the process cache ceiling", () => {
+    clearSessionPrefetchDirectory(scope, "/bounded")
+    for (let index = 0; index <= SESSION_PREFETCH_CACHE_LIMIT; index++) {
+      setSessionPrefetch({
+        scope,
+        directory: "/bounded",
+        sessionID: `ses_${index}`,
+        limit: 1,
+        complete: true,
+      })
+    }
+
+    expect(getSessionPrefetch(scope, "/bounded", "ses_0")).toBeUndefined()
+    expect(getSessionPrefetch(scope, "/bounded", `ses_${SESSION_PREFETCH_CACHE_LIMIT}`)).toBeDefined()
+    clearSessionPrefetchDirectory(scope, "/bounded")
   })
 })

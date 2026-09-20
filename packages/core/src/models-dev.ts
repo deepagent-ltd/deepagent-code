@@ -3,7 +3,7 @@ import { Context, Duration, Effect, Layer, Option, Schedule, Schema } from "effe
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { Global } from "./global"
 import { Flag } from "./flag/flag"
-import { Flock } from "./util/flock"
+import { EffectFlock } from "./util/effect-flock"
 import { Hash } from "./util/hash"
 import { FSUtil } from "./fs-util"
 import { InstallationChannel, InstallationVersion } from "./installation/version"
@@ -157,9 +157,7 @@ const vendoredModel = (
     temperature: true,
     tool_call: true,
     limit: { context: input.context, output: input.output ?? 16_000 },
-    provider: input.anthropic
-      ? { npm: "@ai-sdk/anthropic", api: "https://api.deepagent.ltd/v1" }
-      : undefined,
+    provider: input.anthropic ? { npm: "@ai-sdk/anthropic", api: "https://api.deepagent.ltd/v1" } : undefined,
   })
 
 /** Fully schema-decoded (validated at module load) vendored official catalog. */
@@ -173,26 +171,108 @@ export const OFFICIAL_VENDORED_CATALOG: Record<string, Provider> = Schema.decode
     npm: "@ai-sdk/openai-compatible",
     env: ["DEEPAGENT_API_KEY"],
     models: {
-      "openai/gpt-5.6-sol": vendoredModel("openai/gpt-5.6-sol", "GPT-5.6 Sol", { context: 1_000_000, output: 32_000, reasoning: true, family: "openai" }),
-      "openai/gpt-5.6-terra": vendoredModel("openai/gpt-5.6-terra", "GPT-5.6 Terra", { context: 1_000_000, output: 32_000, reasoning: true, family: "openai" }),
-      "openai/gpt-5.6-luna": vendoredModel("openai/gpt-5.6-luna", "GPT-5.6 Luna", { context: 1_000_000, output: 32_000, reasoning: true, family: "openai" }),
-      "anthropic/claude-opus-5": vendoredModel("anthropic/claude-opus-5", "Claude Opus 5", { context: 200_000, output: 32_000, reasoning: true, family: "anthropic", anthropic: true }),
-      "anthropic/claude-sonnet-5": vendoredModel("anthropic/claude-sonnet-5", "Claude Sonnet 5", { context: 200_000, output: 32_000, reasoning: true, family: "anthropic", anthropic: true }),
-      "anthropic/claude-fable-5": vendoredModel("anthropic/claude-fable-5", "Claude Fable 5", { context: 200_000, output: 32_000, reasoning: true, family: "anthropic", anthropic: true }),
-      "anthropic/claude-haiku-4.5": vendoredModel("anthropic/claude-haiku-4.5", "Claude Haiku 4.5", { context: 200_000, output: 32_000, family: "anthropic", anthropic: true }),
-      "x-ai/grok-4.6": vendoredModel("x-ai/grok-4.6", "Grok 4.6", { context: 256_000, output: 32_000, reasoning: true, family: "xai" }),
-      "google/gemini-3.7-flash": vendoredModel("google/gemini-3.7-flash", "Gemini 3.7 Flash", { context: 1_000_000, output: 64_000, reasoning: true, attachment: true, family: "google" }),
-      "deepseek-v4-flash": vendoredModel("deepseek-v4-flash", "DeepSeek V4 Flash", { context: 128_000, reasoning: true, family: "deepseek" }),
-      "deepseek-v4-pro": vendoredModel("deepseek-v4-pro", "DeepSeek V4 Pro", { context: 128_000, reasoning: true, family: "deepseek" }),
-      "deepseek-v4-flash-vision-exp": vendoredModel("deepseek-v4-flash-vision-exp", "DeepSeek V4 Vision", { context: 128_000, reasoning: true, attachment: true, family: "deepseek" }),
+      "openai/gpt-5.6-sol": vendoredModel("openai/gpt-5.6-sol", "GPT-5.6 Sol", {
+        context: 1_000_000,
+        output: 32_000,
+        reasoning: true,
+        family: "openai",
+      }),
+      "openai/gpt-5.6-terra": vendoredModel("openai/gpt-5.6-terra", "GPT-5.6 Terra", {
+        context: 1_000_000,
+        output: 32_000,
+        reasoning: true,
+        family: "openai",
+      }),
+      "openai/gpt-5.6-luna": vendoredModel("openai/gpt-5.6-luna", "GPT-5.6 Luna", {
+        context: 1_000_000,
+        output: 32_000,
+        reasoning: true,
+        family: "openai",
+      }),
+      "anthropic/claude-opus-5": vendoredModel("anthropic/claude-opus-5", "Claude Opus 5", {
+        context: 200_000,
+        output: 32_000,
+        reasoning: true,
+        family: "anthropic",
+        anthropic: true,
+      }),
+      "anthropic/claude-sonnet-5": vendoredModel("anthropic/claude-sonnet-5", "Claude Sonnet 5", {
+        context: 200_000,
+        output: 32_000,
+        reasoning: true,
+        family: "anthropic",
+        anthropic: true,
+      }),
+      "anthropic/claude-fable-5": vendoredModel("anthropic/claude-fable-5", "Claude Fable 5", {
+        context: 200_000,
+        output: 32_000,
+        reasoning: true,
+        family: "anthropic",
+        anthropic: true,
+      }),
+      "anthropic/claude-haiku-4.5": vendoredModel("anthropic/claude-haiku-4.5", "Claude Haiku 4.5", {
+        context: 200_000,
+        output: 32_000,
+        family: "anthropic",
+        anthropic: true,
+      }),
+      "x-ai/grok-4.6": vendoredModel("x-ai/grok-4.6", "Grok 4.6", {
+        context: 256_000,
+        output: 32_000,
+        reasoning: true,
+        family: "xai",
+      }),
+      "google/gemini-3.7-flash": vendoredModel("google/gemini-3.7-flash", "Gemini 3.7 Flash", {
+        context: 1_000_000,
+        output: 64_000,
+        reasoning: true,
+        attachment: true,
+        family: "google",
+      }),
+      // The DeepSeek window + output are MEASURED against the endpoint, not guessed. They were
+      // vendored as 128_000 / 16_000, which is not a conservative bound the provider enforces — it is
+      // simply wrong, and the window propagated into the auto-compaction trigger
+      // (`window - window*0.18`): 104,960 instead of ~860,000, i.e. 10% of the real window. The
+      // provider states both limits directly:
+      //   "This model's maximum context length is 1048576 tokens"   (a ~320,000-token request succeeds)
+      //   "the valid range of max_tokens is [1, 393216]"
+      // Every ablation run recorded so far peaks between 56k and 193k prompt tokens (5-18% of the
+      // window), so auto-compaction never had a reason to fire there — which is the intended
+      // behaviour for a mechanism that costs a summarization call and drops history.
+      // The endpoint's id is `deepseek-flash` — NOT `deepseek-v4-flash`, which the catalog used to
+      // carry. A vendored id the provider does not serve resolves to no limits (and, on the API
+      // side, to a 400), so the id here is the API's, verbatim.
+      "deepseek-flash": vendoredModel("deepseek-flash", "DeepSeek Flash", {
+        context: 1_048_576,
+        output: 393_216,
+        reasoning: true,
+        family: "deepseek",
+      }),
+      "deepseek-v4-pro": vendoredModel("deepseek-v4-pro", "DeepSeek V4 Pro", {
+        context: 1_048_576,
+        output: 393_216,
+        reasoning: true,
+        family: "deepseek",
+      }),
       "qwen3.8-flash": vendoredModel("qwen3.8-flash", "Qwen 3.8 Flash", { context: 128_000, family: "qwen" }),
-      "qwen3.8-max": vendoredModel("qwen3.8-max", "Qwen 3.8 Max", { context: 128_000, reasoning: true, family: "qwen" }),
+      "qwen3.8-max": vendoredModel("qwen3.8-max", "Qwen 3.8 Max", {
+        context: 128_000,
+        reasoning: true,
+        family: "qwen",
+      }),
       "glm-5.3": vendoredModel("glm-5.3", "GLM 5.3", { context: 200_000, reasoning: true, family: "glm" }),
-      "glm-5.3-flash": vendoredModel("glm-5.3-flash", "GLM 5.3 Flash", { context: 128_000, family: "glm" }),
+      "glm-5.3-flash": vendoredModel("glm-5.3-flash", "GLM 5.3 Flash", {
+        context: 128_000,
+        reasoning: true,
+        family: "glm",
+      }),
       "kimi-k3": vendoredModel("kimi-k3", "Kimi K3", { context: 256_000, reasoning: true, family: "kimi" }),
       "k3-256k": vendoredModel("k3-256k", "Kimi K3 256K", { context: 256_000, reasoning: true, family: "kimi" }),
       "kimi-for-coding": vendoredModel("kimi-for-coding", "Kimi Coding", { context: 128_000, family: "kimi" }),
-      "kimi-for-coding-highspeed": vendoredModel("kimi-for-coding-highspeed", "Kimi Coding HS", { context: 128_000, family: "kimi" }),
+      "kimi-for-coding-highspeed": vendoredModel("kimi-for-coding-highspeed", "Kimi Coding HS", {
+        context: 128_000,
+        family: "kimi",
+      }),
     },
   },
 })
@@ -210,9 +290,8 @@ export const DEEPAGENT_MODEL_PROTOCOL: Record<string, "openai-compatible.respons
   "openai/gpt-5.6-sol": "openai-compatible.responses",
   "openai/gpt-5.6-terra": "openai-compatible.responses",
   "openai/gpt-5.6-luna": "openai-compatible.responses",
-  "deepseek-v4-flash": "openai-compatible.responses",
+  "deepseek-flash": "openai-compatible.responses",
   "deepseek-v4-pro": "openai-compatible.responses",
-  "deepseek-v4-flash-vision-exp": "openai-compatible.responses",
 }
 
 const mergeVendored = (loaded: Record<string, Provider>) => ({ ...OFFICIAL_VENDORED_CATALOG, ...loaded })
@@ -229,6 +308,8 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const fs = yield* FSUtil.Service
     const events = yield* EventV2.Service
+    const global = yield* Global.Service
+    const flock = yield* EffectFlock.Service
     const http = HttpClient.filterStatusOk(
       (yield* HttpClient.HttpClient).pipe(
         HttpClient.retryTransient({
@@ -241,7 +322,7 @@ export const layer = Layer.effect(
 
     const source = Flag.DEEPAGENT_CODE_MODELS_URL || "https://models.dev"
     const filepath = path.join(
-      Global.Path.cache,
+      global.cache,
       source === "https://models.dev" ? "models.json" : `models-${Hash.fast(source)}.json`,
     )
     const ttl = Duration.minutes(5)
@@ -302,10 +383,11 @@ export const layer = Layer.effect(
       const snapshot = yield* loadSnapshot
       if (snapshot) return mergeVendored(snapshot)
       if (Flag.DEEPAGENT_CODE_DISABLE_MODELS_FETCH) return OFFICIAL_VENDORED_CATALOG
-      // Flock is cross-process: concurrent deepagent-code CLIs can race on this cache file.
+      // The root-scoped flock is cross-process: concurrent CLIs sharing this Global root serialize
+      // the cache file, while independent embedded roots cannot accidentally share a module path.
       const text = yield* Effect.scoped(
         Effect.gen(function* () {
-          yield* Flock.effect(lockKey)
+          yield* flock.acquire(lockKey)
           return yield* fetchAndWrite()
         }),
       )
@@ -320,7 +402,7 @@ export const layer = Layer.effect(
       if (!force && (yield* fresh())) return
       yield* Effect.scoped(
         Effect.gen(function* () {
-          yield* Flock.effect(lockKey)
+          yield* flock.acquire(lockKey)
           // Re-check under the lock: another process may have refreshed between
           // our outer check and lock acquisition.
           if (!force && (yield* fresh())) return
@@ -345,12 +427,18 @@ export const layer = Layer.effect(
   }),
 )
 
-export const node = makeGlobalNode({ service: Service, layer: layer, deps: [FSUtil.node, EventV2.node, httpClient] })
+export const node = makeGlobalNode({
+  service: Service,
+  layer,
+  deps: [FSUtil.node, EventV2.node, Global.node, EffectFlock.node, httpClient],
+})
 
 export const defaultLayer = layer.pipe(
   Layer.provide(FetchHttpClient.layer),
   Layer.provide(FSUtil.defaultLayer),
   Layer.provide(EventV2.defaultLayer),
+  Layer.provide(Global.layer),
+  Layer.provide(EffectFlock.layer.pipe(Layer.provide(FSUtil.defaultLayer), Layer.provide(Global.layer))),
 )
 
 export * as ModelsDev from "./models-dev"

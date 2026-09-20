@@ -38,6 +38,7 @@ interface RouterEntry {
 
 let oauthServer: ReturnType<typeof createServer> | undefined
 let pendingOAuth: PendingOAuth | undefined
+let oauthStart: Promise<void> | undefined
 
 function generateState(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(32))
@@ -120,9 +121,17 @@ const HTML_CALLBACK = `<!doctype html>
   </body>
 </html>`
 
-async function startOAuthServer(): Promise<void> {
-  if (oauthServer) return
-  oauthServer = createServer((req, res) => {
+function startOAuthServer(): Promise<void> {
+  if (oauthServer) return Promise.resolve()
+  if (oauthStart) return oauthStart
+  oauthStart = startOAuthServerOnce().finally(() => {
+    oauthStart = undefined
+  })
+  return oauthStart
+}
+
+async function startOAuthServerOnce() {
+  const next = createServer((req, res) => {
     const url = new URL(req.url || "/", `http://localhost:${OAUTH_PORT}`)
 
     if (req.method === "GET" && url.pathname === OAUTH_REDIRECT_PATH) {
@@ -187,32 +196,36 @@ async function startOAuthServer(): Promise<void> {
   })
 
   await new Promise<void>((resolve, reject) => {
-    oauthServer!.listen(OAUTH_PORT, () => {
+    const onError = (error: Error) => {
+      next.removeListener("listening", onListening)
+      reject(error)
+    }
+    const onListening = () => {
+      next.removeListener("error", onError)
       log.info("digitalocean oauth server started", { port: OAUTH_PORT })
       resolve()
-    })
-    oauthServer!.on("error", reject)
+    }
+    next.once("error", onError)
+    next.once("listening", onListening)
+    next.listen(OAUTH_PORT, "127.0.0.1")
   })
+  next.on("error", (error) => log.warn("digitalocean oauth server error", { error }))
+  oauthServer = next
 }
 
 function stopOAuthServer() {
-  if (!oauthServer) return
-  oauthServer.close(() => log.info("digitalocean oauth server stopped"))
+  pendingOAuth?.reject(new Error("OAuth callback server stopped"))
+  pendingOAuth = undefined
+  const current = oauthServer
   oauthServer = undefined
+  current?.close(() => log.info("digitalocean oauth server stopped"))
 }
 
 function waitForOAuthCallback(state: string): Promise<ImplicitTokenPayload> {
+  pendingOAuth?.reject(new Error("Superseded by a newer DigitalOcean authorize request"))
+  pendingOAuth = undefined
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(
-      () => {
-        if (pendingOAuth) {
-          pendingOAuth = undefined
-          reject(new Error("OAuth callback timeout - authorization took too long"))
-        }
-      },
-      5 * 60 * 1000,
-    )
-    pendingOAuth = {
+    const pending: PendingOAuth = {
       state,
       resolve: (tokens) => {
         clearTimeout(timeout)
@@ -223,6 +236,15 @@ function waitForOAuthCallback(state: string): Promise<ImplicitTokenPayload> {
         reject(error)
       },
     }
+    const timeout = setTimeout(
+      () => {
+        if (pendingOAuth !== pending) return
+        pendingOAuth = undefined
+        reject(new Error("OAuth callback timeout - authorization took too long"))
+      },
+      5 * 60 * 1000,
+    )
+    pendingOAuth = pending
   })
 }
 
@@ -285,6 +307,9 @@ function parseRoutersJSON(raw: string | undefined): RouterEntry[] {
 
 export async function DigitalOceanAuthPlugin(input: PluginInput): Promise<Hooks> {
   return {
+    async dispose() {
+      stopOAuthServer()
+    },
     provider: {
       id: "digitalocean",
       async models(provider, ctx) {

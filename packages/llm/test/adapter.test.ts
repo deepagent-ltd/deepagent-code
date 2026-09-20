@@ -1,5 +1,5 @@
-import { describe, expect } from "bun:test"
-import { Effect, Schema, Stream } from "effect"
+import { describe, expect, test } from "bun:test"
+import { Effect, Layer, Schema, Stream } from "effect"
 import { LLM } from "../src"
 import { Route, Endpoint, LLMClient, Protocol, type FramingDef } from "../src/route"
 import { Model } from "../src/schema"
@@ -107,6 +107,42 @@ const echoLayer = dynamicResponse(({ text, respond }) =>
 const it = testEffect(echoLayer)
 
 describe("llm route", () => {
+  test("managed clients isolate middleware per runtime and apply it exactly once", async () => {
+    const exercise = async () => {
+      let prepareCount = 0
+      let streamCount = 0
+      const client = LLMClient.managedLayer.pipe(
+        Layer.provide(
+          Layer.succeed(LLMClient.Middleware, () => ({
+            prepare: (next) => (request) => {
+              prepareCount += 1
+              return next(request)
+            },
+            stream: (next) => (request) => {
+              streamCount += 1
+              return next(request)
+            },
+          })),
+        ),
+        Layer.provide(echoLayer),
+      )
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const llm = yield* LLMClient.Service
+          yield* llm.prepare(request)
+          yield* llm.stream(request).pipe(Stream.runDrain)
+          yield* llm.generate(request)
+        }).pipe(Effect.provide(client)),
+      )
+      return { prepareCount, streamCount }
+    }
+
+    expect(await Promise.all([exercise(), exercise()])).toEqual([
+      { prepareCount: 1, streamCount: 2 },
+      { prepareCount: 1, streamCount: 2 },
+    ])
+  })
+
   it.effect("stream and generate use the route pipeline", () =>
     Effect.gen(function* () {
       const llm = yield* LLMClient.Service

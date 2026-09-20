@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { Effect, Layer } from "effect"
 import { Session } from "@/session/session"
-import { SessionPrompt } from "../../src/session/prompt"
+import { SessionPromptV2 } from "../../src/session/prompt-v2"
 import * as Log from "@deepagent-code/core/util/log"
 import { MessageV2 } from "../../src/session/message-v2"
 import { testEffect } from "../lib/effect"
@@ -13,7 +13,7 @@ void Log.init({ print: false })
 // Skip tests if no API key is available
 const hasApiKey = !!process.env.ANTHROPIC_API_KEY
 const it = testEffect(
-  Layer.mergeAll(SessionPrompt.defaultLayer, Session.defaultLayer).pipe(Layer.provide(testInstanceStoreLayer)),
+  Layer.mergeAll(SessionPromptV2.defaultLayer, Session.defaultLayer).pipe(Layer.provide(testInstanceStoreLayer)),
 )
 const live = hasApiKey ? it.instance : it.instance.skip
 
@@ -22,7 +22,7 @@ describe("StructuredOutput Integration", () => {
     "produces structured output with simple schema",
     () =>
       Effect.gen(function* () {
-        const prompt = yield* SessionPrompt.Service
+        const prompt = yield* SessionPromptV2.Service
         const sessions = yield* Session.Service
         const session = yield* sessions.create({ title: "Structured Output Test" })
 
@@ -72,7 +72,7 @@ describe("StructuredOutput Integration", () => {
     "produces structured output with nested objects",
     () =>
       Effect.gen(function* () {
-        const prompt = yield* SessionPrompt.Service
+        const prompt = yield* SessionPromptV2.Service
         const sessions = yield* Session.Service
         const session = yield* sessions.create({ title: "Nested Schema Test" })
 
@@ -137,7 +137,7 @@ describe("StructuredOutput Integration", () => {
     "works with text outputFormat (default)",
     () =>
       Effect.gen(function* () {
-        const prompt = yield* SessionPrompt.Service
+        const prompt = yield* SessionPromptV2.Service
         const sessions = yield* Session.Service
         const session = yield* sessions.create({ title: "Text Output Test" })
 
@@ -175,7 +175,7 @@ describe("StructuredOutput Integration", () => {
     "stores outputFormat on user message",
     () =>
       Effect.gen(function* () {
-        const prompt = yield* SessionPrompt.Service
+        const prompt = yield* SessionPromptV2.Service
         const sessions = yield* Session.Service
         const session = yield* sessions.create({ title: "OutputFormat Storage Test" })
 
