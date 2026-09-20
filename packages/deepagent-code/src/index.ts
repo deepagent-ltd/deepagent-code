@@ -45,6 +45,22 @@ import { Heap } from "./cli/heap"
 import { ensureProcessMetadata } from "@deepagent-code/core/util/deepagent-code-process"
 import { isRecord } from "@/util/record"
 import { applyRuntimeDefaults, RUNTIME_DEFAULTS_SNAPSHOT_ENV, runtimeDefaultsEnvSnapshot } from "./runtime-defaults"
+import { ProxyEnv } from "@/util/proxy-env"
+
+// Bun's fetch does not honor HTTP(S)_PROXY environment variables (plugin/openai/ws.ts documents
+// the same gap for WebSockets), so behind a corporate or harness proxy every outbound request
+// must pass the proxy explicitly. Wrap the global fetch once: the LLM transport, model-catalog
+// fetches, and background installs all resolve the proxy through ProxyEnv (which also honors
+// no_proxy).
+const nativeFetch = globalThis.fetch
+globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+  const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url
+  const proxy = ProxyEnv.getProxyForUrl(url)
+  if (!proxy || (init as RequestInit & { proxy?: string } | undefined)?.proxy !== undefined) {
+    return nativeFetch(input, init)
+  }
+  return nativeFetch(input, { ...init, proxy })
+}) as typeof globalThis.fetch
 import { ProcessLifecycle } from "./effect/process-lifecycle"
 import * as mechanismBeacon from "@deepagent-code/core/deepagent/mechanism-beacon"
 
