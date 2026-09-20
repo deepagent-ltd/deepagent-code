@@ -66,6 +66,17 @@ afterEach(async () => {
   // Reset any SettingsStore official-transport override written by a test so it can't leak into the
   // next (the store is backed by a shared global file + in-memory cache).
   await SettingsStore.update({
+    deepagent: {
+      promptMode: undefined as never,
+      intelligenceModel: undefined as never,
+      agentMode: undefined as never,
+      subagentIntensity: undefined as never,
+      selfLearning: undefined as never,
+      runsDir: undefined as never,
+      allowProviderExecutedTools: undefined as never,
+      allowProviderExecutedToolNames: undefined as never,
+      expertPanelDefault: undefined as never,
+    },
     providers: {
       openai: {
         baseURL: undefined as never,
@@ -779,6 +790,49 @@ itWithAuth.instance(
       },
     },
   },
+)
+
+it.instance("settings-only deepagent overlay does not register a connected provider", () =>
+  Effect.gen(function* () {
+    yield* remove("DEEPAGENT_API_KEY")
+    // Config.get() overlays the SettingsStore DeepAgent runtime settings as a pseudo
+    // `provider.deepagent` entry. It must not surface as a connection on its own.
+    yield* Effect.promise(() =>
+      SettingsStore.update({
+        deepagent: { promptMode: "direct", intelligenceModel: "deepseek/deepseek-v4-flash", agentMode: "xhigh" },
+      }),
+    )
+    SettingsStore.invalidate()
+    const providers = yield* list
+    expect(providers[ProviderV2.ID.make("deepagent")]).toBeUndefined()
+  }),
+)
+
+it.instance("deepagent connects via the auth key store even with settings present", () =>
+  Effect.gen(function* () {
+    yield* remove("DEEPAGENT_API_KEY")
+    yield* Effect.promise(() => SettingsStore.update({ deepagent: { promptMode: "direct", agentMode: "xhigh" } }))
+    SettingsStore.invalidate()
+    yield* connect(ProviderV2.ID.make("deepagent"), "deepagent-api-key")
+    const providers = yield* list
+    const deepagent = providers[ProviderV2.ID.make("deepagent")]
+    expect(deepagent).toBeDefined()
+    expect(deepagent.source).toBe("api")
+    expect(Object.keys(deepagent.models).length).toBeGreaterThan(0)
+  }),
+)
+
+it.instance(
+  "deepagent config entry with an apiKey is a real custom connection",
+  Effect.gen(function* () {
+    yield* remove("DEEPAGENT_API_KEY")
+    const providers = yield* list
+    const deepagent = providers[ProviderV2.ID.make("deepagent")]
+    expect(deepagent).toBeDefined()
+    expect(deepagent.source).toBe("custom")
+    expect(deepagent.options.apiKey).toBe("deepagent-config-key")
+  }),
+  { config: { provider: { deepagent: { options: { apiKey: "deepagent-config-key" } } } } },
 )
 
 it.instance("getModel throws ModelNotFoundError for invalid model", () =>
