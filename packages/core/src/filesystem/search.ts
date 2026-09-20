@@ -270,7 +270,9 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | Ripgrep.Service
             // fff uses a bit different log version, also with spans so keep
             // them in the same folder for debuggability
             logFilePath: path.join(Global.Path.log, "fff.log"),
-            logLevel: Log.getLevel().toLowerCase() as Lowercase<Log.Level>,
+            // fff logs per-file diagnostics at debug level, which floods gigabytes of logs on
+            // repos where its git index queries systematically fail — clamp DEBUG to info.
+            logLevel: (Log.getLevel() === "DEBUG" ? "info" : Log.getLevel().toLowerCase()) as Lowercase<Log.Level>,
             aiMode: true,
             // only the first toolcall picker can accumulate resources to index
             // home directory, if the user specifically opened deepagent-code at the
