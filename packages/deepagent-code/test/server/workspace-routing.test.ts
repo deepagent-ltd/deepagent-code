@@ -48,6 +48,11 @@ describe("isLocalWorkspaceRoute", () => {
     expect(isLocalWorkspaceRoute("GET", "/pty/pty_abc123/connect")).toBe(true)
     expect(isLocalWorkspaceRoute("POST", "/pty/pty_abc123/connect-token")).toBe(true)
   })
+
+  test("/pty rule matches on prefix boundary only", () => {
+    expect(isLocalWorkspaceRoute("GET", "/ptyfoo")).toBe(false)
+    expect(isLocalWorkspaceRoute("GET", "/ptys")).toBe(false)
+  })
 })
 
 describe("getWorkspaceRouteSessionID", () => {
