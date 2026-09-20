@@ -4,6 +4,7 @@ import { LocationServiceMap } from "@deepagent-code/core/location-layer"
 import { PermissionSaved } from "@deepagent-code/core/permission/saved"
 import { ProjectV2 } from "@deepagent-code/core/project"
 import { SessionRuntime } from "@deepagent-code/core/session/runtime"
+import { Delegation } from "@deepagent-code/core/tool/delegation"
 import { FetchHttpClient, HttpRouter, HttpServer } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { Layer, Option } from "effect"
@@ -25,6 +26,7 @@ export const runtimeLayer = Layer.mergeAll(
   LocationServiceMap.layer.pipe(Layer.provide(databaseLayer), Layer.provide(eventLayer)),
   ProjectV2.defaultLayer,
   PermissionSaved.defaultLayer,
+  Delegation.delegationSlotLayer,
 )
 
 export function createRoutes(password?: string) {
