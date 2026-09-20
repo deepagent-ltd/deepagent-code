@@ -1,6 +1,7 @@
 export * as TaskPRReview from "./task-pr-review"
 
 import { and, eq, inArray, isNull, ne, or, sql } from "drizzle-orm"
+import { spawnSync } from "node:child_process"
 import { Data, Effect, Exit, Option, Schema } from "effect"
 import Ajv from "ajv"
 import type { Database } from "../database/database"
@@ -814,10 +815,10 @@ type GitResult = { readonly exitCode: number; readonly stdout: string; readonly 
 const git = (cwd: string, args: readonly string[]): Effect.Effect<GitResult> =>
   Effect.sync(() => {
     try {
-      const proc = Bun.spawnSync({ cmd: ["git", ...args], cwd, stdout: "pipe", stderr: "pipe" })
-      if (proc.exitCode === null)
+      const proc = spawnSync("git", args, { cwd, encoding: "buffer" })
+      if (proc.status === null)
         return { exitCode: -1, stdout: "", stderr: `git ${args[0]} could not run in ${cwd}` }
-      return { exitCode: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() }
+      return { exitCode: proc.status, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() }
     } catch {
       return { exitCode: -1, stdout: "", stderr: `git ${args[0]} could not run in ${cwd}` }
     }
@@ -858,9 +859,10 @@ const branchExists = (repo: string, branch: string) =>
 // Synchronous git for pure boolean predicates; a missing/unusable git reads as false.
 const gitInSync = (cwd: string, args: readonly string[]) => {
   try {
-    return Bun.spawnSync({ cmd: ["git", ...args], cwd, stdout: "pipe", stderr: "pipe" })
+    const proc = spawnSync("git", args, { cwd, encoding: "buffer" })
+    return { exitCode: proc.status ?? -1, stdout: proc.stdout, stderr: proc.stderr }
   } catch {
-    return { exitCode: -1, stdout: Buffer.from([]), stderr: Buffer.from([]) } as ReturnType<typeof Bun.spawnSync>
+    return { exitCode: -1, stdout: Buffer.from([]), stderr: Buffer.from([]) }
   }
 }
 

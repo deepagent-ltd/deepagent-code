@@ -2,6 +2,8 @@ export * as DeepAgentWorkspace from "./workspace-context"
 
 import { readFile, stat } from "node:fs/promises"
 import path from "node:path"
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import type { ValidationCommand } from "@deepagent-code/core/deepagent/validation"
 
@@ -100,11 +102,15 @@ async function detectImpl(cwd: string): Promise<WorkspaceInfo> {
 }
 
 async function gitInfo(cwd: string) {
+  // node:child_process (not Bun.spawn): this module ships in the desktop main-process bundle,
+  // which runs on Node and forbids Bun-only APIs.
   const run = async (args: string[]) => {
-    const process = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "ignore" })
-    if ((await process.exited) !== 0) return null
-    const value = (await new Response(process.stdout).text()).trim()
-    return value || null
+    try {
+      const { stdout } = await promisify(execFile)("git", args, { cwd })
+      return stdout.trim() || null
+    } catch {
+      return null
+    }
   }
   return {
     branch: await run(["branch", "--show-current"]).catch(() => null),

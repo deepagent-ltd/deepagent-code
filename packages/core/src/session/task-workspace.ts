@@ -29,6 +29,7 @@ export * as TaskWorkspace from "./task-workspace"
 
 import fs from "fs/promises"
 import path from "path"
+import { spawnSync } from "node:child_process"
 import { and, eq, isNull, or, sql } from "drizzle-orm"
 import { Data, Effect } from "effect"
 import type { Database } from "../database/database"
@@ -536,11 +537,12 @@ export const release = Effect.fn("TaskWorkspace.release")(function* (
 
 type GitResult = { readonly exitCode: number; readonly stdout: string; readonly stderr: string }
 
-// Bun.spawnSync throws synchronously for an unusable cwd (or a missing git); surface that as an
-// ordinary failed result so callers keep exactly one typed error path.
+// node:child_process is used (not Bun.spawnSync) because the desktop main process bundles this
+// server code for Node; an unusable cwd or missing git surfaces as status null, which the
+// caller folds into the one typed failure path.
 const spawnOrNull = (cwd: string, args: readonly string[]) => {
   try {
-    return Bun.spawnSync({ cmd: ["git", ...args], cwd, stdout: "pipe", stderr: "pipe" })
+    return spawnSync("git", args, { cwd, encoding: "buffer" })
   } catch {
     return undefined
   }
@@ -549,10 +551,10 @@ const spawnOrNull = (cwd: string, args: readonly string[]) => {
 const git = (cwd: string, args: readonly string[]): Effect.Effect<GitResult> =>
   Effect.sync(() => {
     const proc = spawnOrNull(cwd, args)
-    if (proc === undefined || proc.exitCode === null)
+    if (proc === undefined || proc.status === null)
       return { exitCode: -1, stdout: "", stderr: `git ${args[0]} could not run in ${cwd}` }
     return {
-      exitCode: proc.exitCode,
+      exitCode: proc.status,
       stdout: proc.stdout.toString(),
       stderr: proc.stderr.toString(),
     }

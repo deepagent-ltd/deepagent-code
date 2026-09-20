@@ -6,6 +6,8 @@ import { Context, Effect, Layer, Schema } from "effect"
 import { makeLocationNode } from "./effect/app-node"
 import { FSUtil } from "./fs-util"
 import { Global } from "./global"
+import * as Log from "./util/log"
+
 import { Location } from "./location"
 import { PermissionSchema } from "./permission/schema"
 import { Policy } from "./policy"
@@ -161,11 +163,21 @@ export const layer = Layer.effect(
           ),
         )
       }
+      // Removed-feature leftovers (the share/autoupdate era) are stripped with a warning
+      // instead of failing the load: an upgrading user's stale key must not brick project
+      // reloads, and the field has no semantics left to protect.
+      const leftover = removedFeatureFields(input)
+      if (leftover.length > 0) {
+        Log.Default.warn("config", {
+          filepath,
+          stripped: leftover,
+          note: "fields of removed features; no Core V2 consumer exists",
+        })      }
 
       // Disabled-compatibility fields are stripped in BOTH branches: an explicitly-disabled
       // value (formatter/lsp/snapshot/snapshots = false) is accepted regardless of which
       // generation's shape the file uses.
-      const stripped = withoutDisabledCompatibilityFields(input)
+      const stripped = withoutRemovedFeatureFields(withoutDisabledCompatibilityFields(input))
       const info = yield* (v1
         ? decodeV1Info(stripped).pipe(Effect.map(ConfigMigrateV1.migrate), Effect.flatMap(decodeInfo))
         : decodeInfo(stripped)
@@ -243,11 +255,6 @@ function unsupportedRuntimeFields(input: unknown, v1: boolean) {
   const info = input as Record<string, unknown>
   const fields = v1
     ? [
-        ["autoupdate", "autoupdate"],
-        ["share", "share"],
-        ["autoshare", "autoshare"],
-        ["enterprise", "enterprise"],
-        ["username", "username"],
         ["snapshot", "snapshot"],
         ["formatter", "formatter"],
         ["lsp", "lsp"],
@@ -257,10 +264,6 @@ function unsupportedRuntimeFields(input: unknown, v1: boolean) {
         ["reference", "reference (DEEPAGENT_CODE_EXPERIMENTAL_REFERENCES is disabled)"],
       ]
     : [
-        ["autoupdate", "autoupdate"],
-        ["share", "share"],
-        ["enterprise", "enterprise"],
-        ["username", "username"],
         ["snapshots", "snapshots"],
         ["formatter", "formatter"],
         ["lsp", "lsp"],
@@ -290,6 +293,22 @@ function withoutDisabledCompatibilityFields(input: unknown) {
   return Object.fromEntries(
     Object.entries(input).filter(([key, value]) => !isDisabledCompatibilityField(key, value)),
   )
+}
+
+// Fields of features that were REMOVED entirely (share/autoupdate era). Unlike the
+// unsupported-runtime gate above, these are stripped with a warning: the feature they
+// configured no longer exists, so the only correct action is deletion, and bricking
+// project reloads for an upgrading user's stale key is hostile.
+const REMOVED_FEATURE_FIELDS = new Set(["autoupdate", "share", "autoshare", "enterprise", "username"])
+
+function removedFeatureFields(input: unknown) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return []
+  return Object.keys(input).filter((key) => REMOVED_FEATURE_FIELDS.has(key))
+}
+
+function withoutRemovedFeatureFields(input: unknown) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input
+  return Object.fromEntries(Object.entries(input).filter(([key]) => !REMOVED_FEATURE_FIELDS.has(key)))
 }
 
 export const node = makeLocationNode({

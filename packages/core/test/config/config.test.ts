@@ -598,10 +598,9 @@ describe("Config", () => {
             fs.writeFile(
               path.join(tmp.path, "deepagent-code.json"),
               JSON.stringify({
-                autoupdate: false,
-                share: "disabled",
-                enterprise: { url: "https://share.example.com" },
-                username: "name",
+                // Removed-feature leftovers (autoupdate/share/enterprise/username) are NOT
+                // here on purpose: they are stripped with a warning, not rejected — see the
+                // dedicated test below.
                 // Truthy on purpose: an ACTIVE snapshots value stays rejected; `false` is the
                 // explicitly-disabled compatibility value (see the disabled-fields test below).
                 snapshots: true,
@@ -638,10 +637,6 @@ describe("Config", () => {
             const error = Cause.pretty(exit.cause)
             expect(error).toContain("Unsupported Core V2 config")
             for (const field of [
-              "autoupdate",
-              "share",
-              "enterprise",
-              "username",
               "snapshots",
               "mcp",
               "instructions",
@@ -652,6 +647,37 @@ describe("Config", () => {
               expect(error).toContain(field)
             }
           }
+        }),
+      ),
+    ),
+  )
+
+  it.live("strips removed-feature leftovers with a warning instead of failing the load", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() =>
+            fs.writeFile(
+              path.join(tmp.path, "deepagent-code.json"),
+              JSON.stringify({
+                autoupdate: false,
+                share: "disabled",
+                autoshare: true,
+                enterprise: { url: "https://share.example.com" },
+                username: "httpapi-global",
+              }),
+            ),
+          )
+          const exit = yield* Config.Service.use((config) => config.entries()).pipe(
+            Effect.provide(testLayer(tmp.path)),
+            Effect.exit,
+          )
+          // The load SUCCEEDS: these fields configure features that no longer exist, and a
+          // stale key from an upgraded config must not brick project reloads.
+          expect(Exit.isSuccess(exit)).toBe(true)
         }),
       ),
     ),
