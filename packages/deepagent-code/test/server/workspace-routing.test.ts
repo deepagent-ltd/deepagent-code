@@ -37,6 +37,17 @@ describe("isLocalWorkspaceRoute", () => {
     expect(isLocalWorkspaceRoute("GET", "/config")).toBe(false)
     expect(isLocalWorkspaceRoute("POST", "/session/ses_abc/message")).toBe(false)
   })
+
+  test("/pty stays on the control plane so WebSocket upgrades reach the PTY handler", () => {
+    // Regression: without this rule, workspace routing proxies /pty/{id}/connect
+    // WebSocket upgrades to the workspace server, which has no PTY handler —
+    // the terminal silently times out ("Terminal creation timed out").
+    expect(isLocalWorkspaceRoute("GET", "/pty")).toBe(true)
+    expect(isLocalWorkspaceRoute("POST", "/pty")).toBe(true)
+    expect(isLocalWorkspaceRoute("GET", "/pty/pty_abc123")).toBe(true)
+    expect(isLocalWorkspaceRoute("GET", "/pty/pty_abc123/connect")).toBe(true)
+    expect(isLocalWorkspaceRoute("POST", "/pty/pty_abc123/connect-token")).toBe(true)
+  })
 })
 
 describe("getWorkspaceRouteSessionID", () => {
