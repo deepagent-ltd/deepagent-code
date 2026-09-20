@@ -18,7 +18,7 @@ import path from "path"
 import { pathToFileURL } from "url"
 import { Effect } from "effect"
 import { UI } from "../ui"
-import { effectCmd } from "../effect-cmd"
+import { CliError, effectCmd } from "../effect-cmd"
 import { EOL } from "os"
 import { Filesystem } from "@/util/filesystem"
 import { createOpencodeClient, type OpencodeClient, type ToolPart } from "@deepagent-code/sdk"
@@ -278,8 +278,7 @@ export const RunCommand = effectCmd({
       const rawMessage = [...args.message, ...(args["--"] || [])].join(" ")
       const thinking = args.interactive ? (args.thinking ?? true) : (args.thinking ?? false)
       const die = (message: string): never => {
-        UI.error(message)
-        process.exit(1)
+        throw new CliError({ message, exitCode: 1 })
       }
       const dieInteractive = (error: unknown): never => {
         if (error instanceof Error && error.message === INTERACTIVE_INPUT_ERROR) {
@@ -357,6 +356,14 @@ export const RunCommand = effectCmd({
 
       const replay = args.replay || args["replay-limit"] !== undefined
 
+      // run 模式适配（F-15 收口）：dev 构建在进入任何 prompt 路径之前自举 V2 owner 授权 —
+      // 守卫可能在 httpapi 图构建（图内 mint）之前被直连路径触发，入口处武装是唯一稳态。
+      if (process.env.DEEPAGENT_CODE_V2_OWNER_DEV_MINT !== "0") {
+        const { bootstrapDevOwnerAuthorization } = await import(
+          "@deepagent-code/core/session/runner/v2-owner-dev-mint"
+        )
+        await bootstrapDevOwnerAuthorization()
+      }
       const root = Filesystem.resolve(process.cwd())
       const directory = (() => {
         if (!args.dir) return args.attach ? undefined : root
@@ -366,8 +373,7 @@ export const RunCommand = effectCmd({
           process.chdir(path.isAbsolute(args.dir) ? args.dir : path.join(root, args.dir))
           return process.cwd()
         } catch {
-          UI.error("Failed to change directory to " + args.dir)
-          process.exit(1)
+          return die("Failed to change directory to " + args.dir)
         }
       })()
       const attachHeaders = args.attach
@@ -388,8 +394,7 @@ export const RunCommand = effectCmd({
         for (const filePath of list) {
           const resolvedPath = path.resolve(args.attach ? root : (directory ?? root), filePath)
           if (!(await Filesystem.exists(resolvedPath))) {
-            UI.error(`File not found: ${filePath}`)
-            process.exit(1)
+            return die(`File not found: ${filePath}`)
           }
 
           const mime = (await Filesystem.isDir(resolvedPath)) ? "application/x-directory" : "text/plain"
@@ -409,13 +414,11 @@ export const RunCommand = effectCmd({
       const forkIntentID = `fork_${Identifier.ascending()}`
 
       if (message.trim().length === 0 && !args.command && !args.interactive && !args.goal) {
-        UI.error("You must provide a message or a command")
-        process.exit(1)
+        return die("You must provide a message or a command")
       }
 
       if (args.fork && !args.continue && !args.session) {
-        UI.error("--fork requires --continue or --session")
-        process.exit(1)
+        return die("--fork requires --continue or --session")
       }
 
       const rules: PermissionV1.Ruleset = args.interactive
@@ -453,8 +456,7 @@ export const RunCommand = effectCmd({
             .catch(() => undefined)
 
           if (!current?.data) {
-            UI.error("Session not found")
-            process.exit(1)
+            return die("Session not found")
           }
 
           if (args.fork) {
@@ -586,8 +588,7 @@ export const RunCommand = effectCmd({
           return next
         }
 
-        UI.error("Failed to resolve remote directory")
-        process.exit(1)
+        return die("Failed to resolve remote directory")
       }
 
       async function localAgent() {
@@ -668,8 +669,7 @@ export const RunCommand = effectCmd({
       async function execute(sdk: OpencodeClient) {
         const sess = await session(sdk)
         if (!sess?.id) {
-          UI.error("Session not found")
-          process.exit(1)
+          return die("Session not found")
         }
         const sessionID = sess.id
         const background = createBackgroundSessions()
@@ -712,6 +712,43 @@ export const RunCommand = effectCmd({
         async function loop(client: OpencodeClient, events: Awaited<ReturnType<typeof sdk.event.subscribe>>) {
           const toggles = new Map<string, boolean>()
           const goalMode = args.goal === true
+          // The V2 runner never persists step-start parts, so its json stream has no
+          // turn boundaries. Consumers that group events by step_start/step_finish
+          // (pier's ATIF conversion) need one synthetic step_start per provider turn,
+          // emitted before the first content part of that turn.
+          let turnOpen = false
+          // W3 gap repair (design-code-gap-audit B5): per-turn mechanism activation evidence in the
+          // CLI json stream. The benchmark trajectories previously could not self-attest which
+          // mechanisms fired (the wazero C2 analysis had to reverse-engineer "compact" keyword hits
+          // that turned out to be task content). Plan state and gate blocks are folded from the very
+          // parts flowing through this loop; four-graph statuses come from the C6 readiness probe.
+          const mechanismTrace = args.format === "json" && !!process.env.DEEPAGENT_CODE_MECHANISM_TRACE?.trim()
+          const trace = {
+            turn: 0,
+            blocks: 0,
+            plan: null as null | { done: number; total: number; version: number; protocol: string },
+            graphs: false,
+          }
+          const emitTrace = (extra: Record<string, unknown> = {}) =>
+            emit("mechanism_trace", {
+              turn: trace.turn,
+              plan: trace.plan,
+              gate: { blocks: trace.blocks },
+              ...extra,
+            })
+          const probeGraphs = (client: OpencodeClient) => {
+            // retry until the first success — the earliest turns may race session projection
+            if (trace.graphs) return
+            void client.context
+              .readiness({ session_id: sessionID })
+              .then((result) => {
+                const statuses = result.data?.statuses
+                if (!statuses) return
+                trace.graphs = true
+                emitTrace({ graphs: statuses })
+              })
+              .catch(() => {})
+          }
           const sessions = createSessionTree(sessionID, async (candidate) => {
             const result = await client.session.get({ sessionID: candidate }).catch(() => undefined)
             return result?.data
@@ -760,7 +797,27 @@ export const RunCommand = effectCmd({
               }
 
               if (part.type === "tool" && (part.state.status === "completed" || part.state.status === "error")) {
-                if (emit("tool_use", { part })) continue
+                if (!turnOpen && emit("step_start", { part: { type: "step-start" } })) {
+                  turnOpen = true
+                }
+                if (emit("tool_use", { part })) {
+                  if (mechanismTrace) {
+                    const meta = (part.state as { metadata?: Record<string, unknown> }).metadata ?? {}
+                    if (part.tool === "plan" && meta.plan_protocol) {
+                      trace.plan = {
+                        done: Number(meta.done ?? 0),
+                        total: Number(meta.total ?? 0),
+                        version: Number(meta.plan_version ?? 0),
+                        protocol: String(meta.plan_protocol),
+                      }
+                    }
+                    const output = String((part.state as { output?: unknown }).output ?? "")
+                    if (output.includes("No plan exists yet") || output.includes("blocked until the plan is re-synced")) {
+                      trace.blocks++
+                    }
+                  }
+                  continue
+                }
                 if (part.state.status === "completed") {
                   await tool(part)
                   continue
@@ -781,14 +838,32 @@ export const RunCommand = effectCmd({
               }
 
               if (part.type === "step-start") {
-                if (emit("step_start", { part })) continue
+                if (emit("step_start", { part })) {
+                  turnOpen = true
+                  continue
+                }
               }
 
               if (part.type === "step-finish") {
-                if (emit("step_finish", { part })) continue
+                if (!turnOpen && emit("step_start", { part: { type: "step-start" } })) {
+                  turnOpen = true
+                }
+                if (emit("step_finish", { part })) {
+                  if (mechanismTrace) {
+                    trace.turn++
+                    const tokens = (part as { tokens?: Record<string, unknown> }).tokens
+                    emitTrace({ context: { tokens: tokens ?? null } })
+                    probeGraphs(client)
+                  }
+                  turnOpen = false
+                  continue
+                }
               }
 
               if (part.type === "text" && part.time?.end) {
+                if (!turnOpen && emit("step_start", { part: { type: "step-start" } })) {
+                  turnOpen = true
+                }
                 if (emit("text", { part })) continue
                 const text = part.text.trim()
                 if (!text) continue
@@ -802,6 +877,9 @@ export const RunCommand = effectCmd({
               }
 
               if (part.type === "reasoning" && part.time?.end && thinking) {
+                if (!turnOpen && emit("step_start", { part: { type: "step-start" } })) {
+                  turnOpen = true
+                }
                 if (emit("reasoning", { part })) continue
                 const text = part.text.trim()
                 if (!text) continue
@@ -884,6 +962,31 @@ export const RunCommand = effectCmd({
               }
             }
 
+            // V2-only profile: core PermissionV2 asks arrive as permission.v2.asked with the V2
+            // vocabulary (action/resources). Normalize to the legacy request shape (ACP does the
+            // same) and reply through the V2 session route — legacy /permission/:id/reply only
+            // settles app-level Permission requests and cannot see PermissionV2's pending map.
+            if (event.type === "permission.v2.asked") {
+              const asked = event.properties
+              if (!(await sessions.contains(asked.sessionID))) continue
+
+              const reply = permissionReplyFor(permissionMode, asked.action)
+              await client.v2.session.permission.reply({
+                sessionID: asked.sessionID,
+                requestID: asked.id,
+                reply,
+              })
+              const request = { ...asked, permission: asked.action, patterns: asked.resources }
+              if (!emit("permission", { request, reply }) && reply === "reject") {
+                UI.println(
+                  UI.Style.TEXT_WARNING_BOLD + "!",
+                  UI.Style.TEXT_NORMAL +
+                    `permission requested: ${asked.action} (${asked.resources.join(", ")}); auto-rejecting` +
+                    (permissionMode === "read-only" ? " (read-only mode)" : ""),
+                )
+              }
+            }
+
             if (event.type === "question.asked") {
               const question = event.properties
               if (!(await sessions.contains(question.sessionID))) continue
@@ -921,76 +1024,114 @@ export const RunCommand = effectCmd({
             return String(e)
           })
 
-          if (args.command) {
-            const result = await client.session.command({
-              sessionID,
-              agent,
-              model: args.model,
-              command: args.command,
-              arguments: message,
-              variant: args.variant,
+          // RI-110: DEEPAGENT_CODE_RUN_TIMEOUT_MS bounds the whole non-interactive wait. Without a
+          // bound, a wedged provider turn (e.g. a stream that never finishes) leaves every await
+          // below pending forever and the handler never returns — the process then misses main()'s
+          // exit path entirely and has to be SIGKILLed from the outside. On expiry the handler
+          // errors through the normal return path so the runtime unwinds and the process exits on
+          // its own. Unset means unbounded: long agentic runs keep their current behavior.
+          class RunTimedOut extends Error {}
+          const runDeadline = (() => {
+            const ms = Number(process.env.DEEPAGENT_CODE_RUN_TIMEOUT_MS)
+            if (!Number.isFinite(ms) || ms <= 0) return { race: <T>(promise: Promise<T>): Promise<T> => promise }
+            const expired = new Promise<never>((_, reject) => {
+              const timer = setTimeout(
+                () => reject(new RunTimedOut(`Timed out after ${ms}ms waiting for the run to settle`)),
+                ms,
+              )
+              // The timer must not keep the event loop alive after a successful run — main() can
+              // only reach its exit path once the loop drains.
+              timer.unref?.()
             })
+            return { race: <T>(promise: Promise<T>): Promise<T> => Promise.race([promise, expired]) }
+          })()
+
+          try {
+            if (args.command) {
+              const result = await runDeadline.race(
+                client.session.command({
+                  sessionID,
+                  agent,
+                  model: args.model,
+                  command: args.command,
+                  arguments: message,
+                  variant: args.variant,
+                }),
+              )
+              if (result.error) {
+                if (!emit("error", { error: result.error })) UI.error(formatRunError(result.error))
+                process.exitCode = 1
+                return
+              }
+              if (await runDeadline.race(loopTask)) process.exitCode = 1
+              return
+            }
+
+            if (args.goal) {
+              const objective = initialInput?.trim()
+              const result = await runDeadline
+                .race(
+                  client.deepagent.goal.start({
+                    sessionID,
+                    ...(objective ? { objective } : {}),
+                  }),
+                )
+                .catch((error) => ({ data: undefined, error }))
+              if (result.error || !result.data) {
+                const error = result.error ?? "Goal start returned no data"
+                if (!emit("error", { error })) UI.error(formatRunError(error))
+                process.exitCode = 1
+                releaseGoalStart()
+                await events.stream.return?.(undefined).catch(() => undefined)
+                await runDeadline.race(loopTask).catch((error: unknown) => {
+                  if (!(error instanceof RunTimedOut)) throw error
+                  return String(error)
+                })
+                return
+              }
+              emit("goal_start", { goal: result.data })
+              releaseGoalStart()
+              if (await runDeadline.race(loopTask)) process.exitCode = 1
+              return
+            }
+
+            const model = pick(args.model)
+            const result = await runDeadline.race(
+              client.session.prompt({
+                sessionID,
+                agent,
+                model,
+                variant: args.variant,
+                parts: [...files, { type: "text", text: message }],
+              }),
+            )
             if (result.error) {
               if (!emit("error", { error: result.error })) UI.error(formatRunError(result.error))
               process.exitCode = 1
               return
             }
-            if (await loopTask) process.exitCode = 1
-            return
-          }
-
-          if (args.goal) {
-            const objective = initialInput?.trim()
-            const result = await client.deepagent.goal
-              .start({
-                sessionID,
-                ...(objective ? { objective } : {}),
-              })
-              .catch((error) => ({ data: undefined, error }))
-            if (result.error || !result.data) {
-              const error = result.error ?? "Goal start returned no data"
-              if (!emit("error", { error })) UI.error(formatRunError(error))
+            if (result.data?.info.error) {
+              if (!emit("error", { error: result.data.info.error })) UI.error(formatRunError(result.data.info.error))
               process.exitCode = 1
-              releaseGoalStart()
-              await events.stream.return?.(undefined).catch(() => undefined)
-              await loopTask
-              return
             }
-            emit("goal_start", { goal: result.data })
-            releaseGoalStart()
-            if (await loopTask) process.exitCode = 1
+            if (result.data?.info.finish === "unknown") {
+              const incomplete = "Model stream ended without a successful finish reason"
+              if (!emit("error", { error: incomplete })) UI.error(incomplete)
+              process.exitCode = 1
+            }
+            if (await runDeadline.race(loopTask)) process.exitCode = 1
+            const responseError = await persistedAssistantError(client)
+            if (responseError) {
+              if (!emit("error", { error: responseError })) UI.error(formatRunError(responseError))
+              process.exitCode = 1
+            }
+            return
+          } catch (error) {
+            if (!(error instanceof RunTimedOut)) throw error
+            if (!emit("error", { error: error.message })) UI.error(error.message)
+            process.exitCode = 1
             return
           }
-
-          const model = pick(args.model)
-          const result = await client.session.prompt({
-            sessionID,
-            agent,
-            model,
-            variant: args.variant,
-            parts: [...files, { type: "text", text: message }],
-          })
-          if (result.error) {
-            if (!emit("error", { error: result.error })) UI.error(formatRunError(result.error))
-            process.exitCode = 1
-            return
-          }
-          if (result.data?.info.error) {
-            if (!emit("error", { error: result.data.info.error })) UI.error(formatRunError(result.data.info.error))
-            process.exitCode = 1
-          }
-          if (result.data?.info.finish === "unknown") {
-            const incomplete = "Model stream ended without a successful finish reason"
-            if (!emit("error", { error: incomplete })) UI.error(incomplete)
-            process.exitCode = 1
-          }
-          if (await loopTask) process.exitCode = 1
-          const responseError = await persistedAssistantError(client)
-          if (responseError) {
-            if (!emit("error", { error: responseError })) UI.error(formatRunError(responseError))
-            process.exitCode = 1
-          }
-          return
         }
 
         const model = pick(args.model)

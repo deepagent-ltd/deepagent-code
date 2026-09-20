@@ -109,6 +109,81 @@ export class EvidenceIdentityMismatchError extends Schema.TaggedErrorClass<Evide
   { field: Schema.String, expected: Schema.String, actual: Schema.String },
 ) {}
 
+export class EvidenceReleaseGateError extends Schema.TaggedErrorClass<EvidenceReleaseGateError>()(
+  "EvidenceReleaseGateError",
+  { blockers: Schema.Array(Schema.String) },
+) {}
+
+export class EvidenceManifestAuthorityError extends Schema.TaggedErrorClass<EvidenceManifestAuthorityError>()(
+  "EvidenceManifestAuthorityError",
+  { reason: Schema.String },
+) {}
+
+const authoritativeGateOrder = [...GateId.literals]
+
+/** Enforce the RI-51 shape before a manifest can be used as an authoritative ledger. */
+export function assertAuthoritativeManifest(manifest: Readonly<EvidenceManifest>): void {
+  const entries = manifest.gates
+  if (entries.length !== authoritativeGateOrder.length) {
+    throw new EvidenceManifestAuthorityError({ reason: "all_release_gates_are_required" })
+  }
+  for (const [index, gate] of entries.entries()) {
+    if (gate.gate !== authoritativeGateOrder[index]) {
+      throw new EvidenceManifestAuthorityError({ reason: "release_gates_must_use_authoritative_order" })
+    }
+    if (gate.status === "passed" && gate.refs.length === 0) {
+      throw new EvidenceManifestAuthorityError({ reason: `${gate.gate}_passed_without_evidence_refs` })
+    }
+  }
+  if (manifest.acceptedResiduals.some((residual) => residual.candidateId !== manifest.candidateId)) {
+    throw new EvidenceManifestAuthorityError({ reason: "accepted_residual_crosses_candidate" })
+  }
+}
+
+/** Build a canonical, complete ledger. Callers cannot omit a gate or invent a build id. */
+export function makeAuthoritativeManifest(
+  input: Omit<EvidenceManifest, "schemaVersion" | "buildId" | "issuedAt"> & {
+    readonly buildId?: string
+    readonly issuedAt?: string
+  },
+): EvidenceManifest {
+  const base = {
+    schemaVersion: EvidenceManifestVersion.schema,
+    ...input,
+    buildId:
+      input.buildId ??
+      `build:${contentDigest({
+        candidateId: input.candidateId,
+        commit: input.commit,
+        tree: input.tree,
+        packageDigests: input.packageDigests,
+        schemaDigest: input.schemaDigest,
+        migrationRegistryDigest: input.migrationRegistryDigest,
+        openapiDigest: input.openapiDigest,
+        sdkDigest: input.sdkDigest,
+        capabilityManifestDigest: input.capabilityManifestDigest,
+        eventSchemaDigest: input.eventSchemaDigest,
+        providerProfilesDigest: input.providerProfilesDigest,
+        runtimeFlagsDigest: input.runtimeFlagsDigest,
+        testEnvironmentDigest: input.testEnvironmentDigest,
+      })}`,
+    issuedAt: input.issuedAt ?? new Date().toISOString(),
+  }
+  const manifest = decodeEvidenceManifest(base)
+  assertAuthoritativeManifest(manifest)
+  return manifest
+}
+
+/** RI-51 machine gate: an incomplete or non-passed ledger is never RELEASE-GO. */
+export function assertReleaseGo(manifest: Readonly<EvidenceManifest>): void {
+  assertAuthoritativeManifest(manifest)
+  const blockers = [
+    ...manifest.gates.filter((entry) => entry.status !== "passed").map((entry) => `${entry.gate}:${entry.status}`),
+    ...manifest.openFindings.map((finding) => `finding:${finding}`),
+  ]
+  if (blockers.length > 0) throw new EvidenceReleaseGateError({ blockers })
+}
+
 /** Minimal identity struct consumers must provide to validate a manifest. */
 export const CandidateIdentity = Schema.Struct({
   candidateId: Schema.String,

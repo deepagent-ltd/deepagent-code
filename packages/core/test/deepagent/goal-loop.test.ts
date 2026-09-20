@@ -17,9 +17,11 @@ import {
   readGoalTickCursor,
   evaluateForController,
   budgetNotice,
+  enqueueGoalSteer,
   InvalidGoalError,
   type ControllerDeps,
   type GraderPorts,
+  type GoalHandle,
   type StepExecutor,
   type StepExecutorResult,
   type RollbackPort,
@@ -28,6 +30,7 @@ import {
   type GoalLimits,
   type CompletionCriterion,
 } from "../../src/deepagent/goal-loop"
+import { tmpRoot } from "../fixture/tmpdir"
 
 // A deterministic clock the tests advance manually so wallclock accounting + restart recovery are
 // exact (the pure controller never calls Date.now).
@@ -44,7 +47,7 @@ let store: DocumentStore
 const SESSION = "s-goal-1"
 
 beforeEach(() => {
-  root = mkdtempSync(path.join(tmpdir(), "deepagent-goal-"))
+  root = mkdtempSync(tmpRoot())
   store = new DocumentStore(root)
 })
 afterEach(() => rmSync(root, { recursive: true, force: true }))
@@ -451,7 +454,9 @@ describe("V3.9 §D — Controller tick semantics", () => {
     // maxTicks 1, stallThreshold high so stall doesn't fire first.
     const loop = makeGoalLoop(deps({ executor }, clock))
     const handle = await Effect.runPromise(
-      loop.start(spec(planDocId, { limits: { maxTicks: 1, maxTokens: 1_000, maxWallclockMs: 1_000 }, stallThreshold: 99 })),
+      loop.start(
+        spec(planDocId, { limits: { maxTicks: 1, maxTokens: 1_000, maxWallclockMs: 1_000 }, stallThreshold: 99 }),
+      ),
     )
     // Tick 1: ticks=1 (== maxTicks, not over). Tick 2: ticks=2 > maxTicks → needs_human.
     expect(await Effect.runPromise(loop.tick(handle))).toBe("continue")
@@ -474,7 +479,9 @@ describe("V3.9 §D — Controller tick semantics", () => {
       })
     const loop = makeGoalLoop(deps({ executor }, clock))
     const handle = await Effect.runPromise(
-      loop.start(spec(planDocId, { limits: { maxTicks: 99, maxTokens: 50, maxWallclockMs: 100_000 }, stallThreshold: 99 })),
+      loop.start(
+        spec(planDocId, { limits: { maxTicks: 99, maxTokens: 50, maxWallclockMs: 100_000 }, stallThreshold: 99 }),
+      ),
     )
     expect(await Effect.runPromise(loop.tick(handle))).toBe("continue") // token cap no longer halts
     const status = await Effect.runPromise(loop.status(handle))
@@ -493,7 +500,9 @@ describe("V3.9 §D — Controller tick semantics", () => {
       })
     const loop = makeGoalLoop(deps({ executor }, clock))
     const handle = await Effect.runPromise(
-      loop.start(spec(planDocId, { limits: { maxTicks: 99, maxTokens: 1_000, maxWallclockMs: 5_000 }, stallThreshold: 99 })),
+      loop.start(
+        spec(planDocId, { limits: { maxTicks: 99, maxTokens: 1_000, maxWallclockMs: 5_000 }, stallThreshold: 99 }),
+      ),
     )
     expect(await Effect.runPromise(loop.tick(handle))).toBe("needs_human")
   })
@@ -528,8 +537,7 @@ describe("V3.9 §D — Controller tick semantics", () => {
     const planDocId = putPlan([step("a", "pending")])
     const CHILD = "child-session-xyz"
     let rolledBackSession: string | undefined
-    const executor: StepExecutor = () =>
-      Effect.succeed({ tokensUsed: 1, critical: true, executedSessionId: CHILD })
+    const executor: StepExecutor = () => Effect.succeed({ tokensUsed: 1, critical: true, executedSessionId: CHILD })
     const rollback: RollbackPort = (input) =>
       Effect.sync(() => {
         rolledBackSession = input.sessionId
@@ -622,7 +630,9 @@ describe("V3.9 §D — adversarial-review hardening (2026-07-09)", () => {
     // maxTicks=1: the ceiling must let exactly ONE executor run happen, then stop WITHOUT a 2nd run.
     const loop = makeGoalLoop(deps({ executor }, clock))
     const handle = await Effect.runPromise(
-      loop.start(spec(planDocId, { limits: { maxTicks: 1, maxTokens: 1_000, maxWallclockMs: 1_000 }, stallThreshold: 99 })),
+      loop.start(
+        spec(planDocId, { limits: { maxTicks: 1, maxTokens: 1_000, maxWallclockMs: 1_000 }, stallThreshold: 99 }),
+      ),
     )
     expect(await Effect.runPromise(loop.tick(handle))).toBe("continue") // tick1 runs, ticks=1
     expect(await Effect.runPromise(loop.tick(handle))).toBe("needs_human") // ceiling: NO 2nd executor run
@@ -731,7 +741,12 @@ describe("V3.9 §D — adversarial-review hardening (2026-07-09)", () => {
       Effect.sync(() => {
         updatePlan(planDocId, (p) => ({
           ...p,
-          steps: [{ ...p.steps[0], evidence: [...(p.steps[0].evidence ?? []), `ran check ${(p.steps[0].evidence?.length ?? 0) + 1}`] }],
+          steps: [
+            {
+              ...p.steps[0],
+              evidence: [...(p.steps[0].evidence ?? []), `ran check ${(p.steps[0].evidence?.length ?? 0) + 1}`],
+            },
+          ],
         }))
         return { tokensUsed: 1 }
       })
@@ -830,9 +845,7 @@ describe("V3.9 §D — confirmed-bug regressions (2026-07-14)", () => {
       step("a", "done"),
       { ...step("b", "blocked"), note: "dependency unavailable" },
     ])
-    const res = await Effect.runPromise(
-      evaluateForController([{ kind: "plan_complete" }], passingPorts(), blockedPlan),
-    )
+    const res = await Effect.runPromise(evaluateForController([{ kind: "plan_complete" }], passingPorts(), blockedPlan))
     expect(res.result.met).toBe(false) // NOT a clean completion
     expect(res.escalate).toBe(true) // route to a human on the first verdict
   })
@@ -873,7 +886,12 @@ describe("V3.9 §D — confirmed-bug regressions (2026-07-14)", () => {
       })
     const loop = makeGoalLoop(deps({ executor }, clock))
     const handle = await Effect.runPromise(
-      loop.start(spec(planDocId, { limits: { maxTicks: 99, maxTokens: 1_000, maxWallclockMs: 100_000, maxCost: 10 }, stallThreshold: 99 })),
+      loop.start(
+        spec(planDocId, {
+          limits: { maxTicks: 99, maxTokens: 1_000, maxWallclockMs: 100_000, maxCost: 10 },
+          stallThreshold: 99,
+        }),
+      ),
     )
     await Effect.runPromise(loop.tick(handle))
     const status = await Effect.runPromise(loop.status(handle))
@@ -951,7 +969,9 @@ describe("V4.1 §S2 — goal plan hot-edit (applyPlanEdit)", () => {
     const loop = makeGoalLoop(deps({}, clock))
     const handle = await Effect.runPromise(loop.start(spec(planDocId)))
 
-    await Effect.runPromise(loop.applyPlanEdit(handle, edit(planDocId, handle.goalId, [{ title: "revised step", status: "pending" }])))
+    await Effect.runPromise(
+      loop.applyPlanEdit(handle, edit(planDocId, handle.goalId, [{ title: "revised step", status: "pending" }])),
+    )
 
     const doc = store.get(planDocId)!
     expect(doc.version).toBeGreaterThan(v0)
@@ -980,7 +1000,10 @@ describe("V4.1 §S2 — goal plan hot-edit (applyPlanEdit)", () => {
     // any evidence can move to the new work item.
     await expect(
       Effect.runPromise(
-        loop.applyPlanEdit(handle, edit(planDocId, handle.goalId, [{ step_id: "a", title: "renamed", status: "active" }])),
+        loop.applyPlanEdit(
+          handle,
+          edit(planDocId, handle.goalId, [{ step_id: "a", title: "renamed", status: "active" }]),
+        ),
       ),
     ).rejects.toThrow("unsafe_step_identity")
 
@@ -1014,7 +1037,10 @@ describe("V4.1 §S2 — goal plan hot-edit (applyPlanEdit)", () => {
     await Effect.runPromise(
       loop.applyPlanEdit(
         handle,
-        edit(planDocId, handle.goalId, [{ step_id: "a", title: "a", status: "pending" }, { title: "b", status: "pending" }]),
+        edit(planDocId, handle.goalId, [
+          { step_id: "a", title: "a", status: "pending" },
+          { title: "b", status: "pending" },
+        ]),
       ),
     )
     const afterEdit = await Effect.runPromise(loop.status(handle))
@@ -1057,9 +1083,7 @@ describe("V4.1 §S2 — goal plan hot-edit (applyPlanEdit)", () => {
 
     await expect(
       Effect.runPromise(loop.applyPlanEdit(handle, edit(planDocId, handle.goalId, [{ title: "revised" }]))),
-    ).rejects.toThrow(
-      "goal is stopped",
-    )
+    ).rejects.toThrow("goal is stopped")
 
     // Terminal → the edit is ignored; the durable doc is untouched.
     expect(store.get(planDocId)!.version).toBe(vAfterStop)
@@ -1156,13 +1180,20 @@ describe("V4.0.1 P2 — token count is NOT a halting line (§4.3)", () => {
       Effect.sync(() => {
         updatePlan(planDocId, (p) => ({
           ...p,
-          steps: [{ ...p.steps[0], evidence: [...(p.steps[0].evidence ?? []), `progress ${(p.steps[0].evidence?.length ?? 0) + 1}`] }],
+          steps: [
+            {
+              ...p.steps[0],
+              evidence: [...(p.steps[0].evidence ?? []), `progress ${(p.steps[0].evidence?.length ?? 0) + 1}`],
+            },
+          ],
         }))
         return { tokensUsed: 1_000_000 } // 1M tokens/tick, maxTokens is 50
       })
     const loop = makeGoalLoop(deps({ executor }, clock))
     const handle = await Effect.runPromise(
-      loop.start(spec(planDocId, { limits: { maxTicks: 99, maxTokens: 50, maxWallclockMs: 100_000 }, stallThreshold: 99 })),
+      loop.start(
+        spec(planDocId, { limits: { maxTicks: 99, maxTokens: 50, maxWallclockMs: 100_000 }, stallThreshold: 99 }),
+      ),
     )
     const outcomes: string[] = []
     for (let i = 0; i < 5; i++) outcomes.push(await Effect.runPromise(loop.tick(handle)))
@@ -1183,7 +1214,9 @@ describe("V4.0.1 P2 — token count is NOT a halting line (§4.3)", () => {
       })
     const loop = makeGoalLoop(deps({ executor }, clock))
     const handle = await Effect.runPromise(
-      loop.start(spec(planDocId, { limits: { maxTicks: 99, maxTokens: 1_000, maxWallclockMs: 5_000 }, stallThreshold: 99 })),
+      loop.start(
+        spec(planDocId, { limits: { maxTicks: 99, maxTokens: 1_000, maxWallclockMs: 5_000 }, stallThreshold: 99 }),
+      ),
     )
     expect(await Effect.runPromise(loop.tick(handle))).toBe("needs_human")
   })
@@ -1198,7 +1231,12 @@ describe("V4.0.1 P2 — token count is NOT a halting line (§4.3)", () => {
       })
     const loop = makeGoalLoop(deps({ executor }, clock))
     const handle = await Effect.runPromise(
-      loop.start(spec(planDocId, { limits: { maxTicks: 99, maxTokens: 1_000, maxWallclockMs: 100_000, maxCost: 10 }, stallThreshold: 99 })),
+      loop.start(
+        spec(planDocId, {
+          limits: { maxTicks: 99, maxTokens: 1_000, maxWallclockMs: 100_000, maxCost: 10 },
+          stallThreshold: 99,
+        }),
+      ),
     )
     // Tick 1 spends cost 100 > maxCost 10 → the post-gate (overLimit) fires this same tick → needs_human.
     expect(await Effect.runPromise(loop.tick(handle))).toBe("needs_human")
@@ -1214,7 +1252,9 @@ describe("V4.0.1 P2 — token count is NOT a halting line (§4.3)", () => {
       })
     const loop = makeGoalLoop(deps({ executor }, clock))
     const handle = await Effect.runPromise(
-      loop.start(spec(planDocId, { limits: { maxTicks: 1, maxTokens: 1_000, maxWallclockMs: 100_000 }, stallThreshold: 99 })),
+      loop.start(
+        spec(planDocId, { limits: { maxTicks: 1, maxTokens: 1_000, maxWallclockMs: 100_000 }, stallThreshold: 99 }),
+      ),
     )
     expect(await Effect.runPromise(loop.tick(handle))).toBe("continue")
     expect(await Effect.runPromise(loop.tick(handle))).toBe("needs_human") // maxTicks ceiling
@@ -1253,7 +1293,9 @@ describe("V4.0.1 P2 — net-generation token accounting (§4.4/§4.5, budgetToke
     Effect.sync(() => {
       updatePlan(planDocId, (p) => ({
         ...p,
-        steps: [{ ...p.steps[0], evidence: [...(p.steps[0].evidence ?? []), `e${(p.steps[0].evidence?.length ?? 0) + 1}`] }],
+        steps: [
+          { ...p.steps[0], evidence: [...(p.steps[0].evidence ?? []), `e${(p.steps[0].evidence?.length ?? 0) + 1}`] },
+        ],
       }))
       return {
         tokensUsed: 1_050, // gross: input+output = 1000 + 50
@@ -1295,7 +1337,9 @@ describe("V4.0.1 P2 — net-generation token accounting (§4.4/§4.5, budgetToke
       Effect.sync(() => {
         updatePlan(planDocId, (p) => ({
           ...p,
-          steps: [{ ...p.steps[0], evidence: [...(p.steps[0].evidence ?? []), `e${(p.steps[0].evidence?.length ?? 0) + 1}`] }],
+          steps: [
+            { ...p.steps[0], evidence: [...(p.steps[0].evidence ?? []), `e${(p.steps[0].evidence?.length ?? 0) + 1}`] },
+          ],
         }))
         return { tokensUsed: 200 }
       })
@@ -1342,3 +1386,85 @@ describe("V4.0.1 P2 — net-generation token accounting (§4.4/§4.5, budgetToke
     expect(status.ledger.tokens).toBe(2_100) // 2 × 1050 gross — stays gross despite the flag flip
   })
 })
+
+// W1.1 — §S1.3 core-side goal-steer: enqueueGoalSteer writes guidance into the goal's durable runtime
+// state; the next EXECUTING tick threads it into the step executor (steerGuidance) and clears the
+// queue; a short-circuited tick preserves it (no loss).
+describe("V4.1 §S1.3 — goal-steer enqueue + tick delivery (W1.1)", () => {
+  test("enqueueGoalSteer returns no_goal for an unknown handle and enqueues for a running goal", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "pending")])
+    const loop = makeGoalLoop(deps({}, clock))
+    expect(
+      enqueueGoalSteer(store, { goalId: "goal_missing", planDocId, sessionId: SESSION }, { id: "msg_s1", text: "Go" }),
+    ).toBe("no_goal")
+    const handle = await Effect.runPromise(loop.start(spec(planDocId)))
+    expect(enqueueGoalSteer(store, handle, { id: "msg_s1", text: "Weigh the edge case" })).toBe("enqueued")
+    expect(stateBody(handle)?.pendingSteers).toEqual([{ id: "msg_s1", text: "Weigh the edge case" }])
+  })
+
+  test("enqueueGoalSteer is idempotent by steer id and refused for a terminal goal", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "pending")])
+    const loop = makeGoalLoop(deps({}, clock))
+    const handle = await Effect.runPromise(loop.start(spec(planDocId)))
+    expect(enqueueGoalSteer(store, handle, { id: "msg_s1", text: "Once" })).toBe("enqueued")
+    // The same steer id re-enqueued (crash replay) never duplicates the guidance.
+    expect(enqueueGoalSteer(store, handle, { id: "msg_s1", text: "Once" })).toBe("enqueued")
+    expect(stateBody(handle)?.pendingSteers).toEqual([{ id: "msg_s1", text: "Once" }])
+    await Effect.runPromise(loop.stop(handle))
+    // A terminal goal is no longer steerable — the caller keeps the row pending and informs the user.
+    expect(enqueueGoalSteer(store, handle, { id: "msg_s2", text: "Too late" })).toBe("no_goal")
+  })
+
+  test("the next executing tick threads the steer into the executor and clears the queue", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "pending")])
+    const received: string[][] = []
+    const executing = (input: Parameters<StepExecutor>[0]) => {
+      received.push([...(input.steerGuidance ?? [])])
+      updatePlan(planDocId, (plan: PlanDoc) => ({
+        ...plan,
+        steps: plan.steps.map((s) => ({ ...s, status: "done" })),
+      }))
+      return Effect.succeed({ tokensUsed: 100 })
+    }
+    const loop = makeGoalLoop(deps({ executor: executing }, clock))
+    const handle = await Effect.runPromise(loop.start(spec(planDocId)))
+    expect(enqueueGoalSteer(store, handle, { id: "msg_s1", text: "Weigh the edge case first" })).toBe("enqueued")
+
+    const outcome = await Effect.runPromise(loop.tick(handle))
+    expect(outcome).toBe("done")
+    expect(received).toEqual([["Weigh the edge case first"]])
+    // Delivered — the queue is drained; a repeated same-version tick must NOT re-thread the steer.
+    expect(stateBody(handle)?.pendingSteers).toEqual([])
+    await Effect.runPromise(loop.tick(handle))
+    expect(received).toHaveLength(1)
+  })
+
+  test("a short-circuited tick preserves the pending steers (no loss)", async () => {
+    const clock = new FakeClock()
+    const planDocId = putPlan([step("a", "pending")])
+    const loop = makeGoalLoop(deps({}, clock))
+    const handle = await Effect.runPromise(loop.start(spec(planDocId)))
+    expect(enqueueGoalSteer(store, handle, { id: "msg_s1", text: "Do not drop me" })).toBe("enqueued")
+    await Effect.runPromise(loop.stop(handle))
+    // Terminal replay never runs the executor — the steer stays pending for a resumed run.
+    await Effect.runPromise(loop.tick(handle))
+    expect(stateBody(handle)?.pendingSteers).toEqual([{ id: "msg_s1", text: "Do not drop me" }])
+  })
+})
+
+const readGoalState = (handle: GoalHandle) =>
+  store
+    .list({ type: "run_context", scope: planScope(handle.sessionId) })
+    .map((ref) => store.get(ref.id))
+    .find((doc) => doc?.extensions?.goal_id === handle.goalId)
+
+function stateBody(
+  handle: GoalHandle,
+): { readonly pendingSteers: readonly { readonly id: string; readonly text: string }[] } | null {
+  const doc = readGoalState(handle)
+  if (!doc) return null
+  return JSON.parse(doc.body) as { readonly pendingSteers: readonly { readonly id: string; readonly text: string }[] }
+}

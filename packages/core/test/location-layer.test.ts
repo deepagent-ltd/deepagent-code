@@ -1,4 +1,6 @@
 import fs from "fs/promises"
+import { mkdtempSync, rmSync } from "node:fs"
+import os from "os"
 import path from "path"
 import { afterAll, beforeAll, describe, expect } from "bun:test"
 import { Effect, Layer, Schema } from "effect"
@@ -9,7 +11,7 @@ import { LocationServiceMap } from "@deepagent-code/core/location-layer"
 import { PluginBoot } from "@deepagent-code/core/plugin/boot"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { AbsolutePath } from "@deepagent-code/core/schema"
-import { tmpdir } from "./fixture/tmpdir"
+import { tmpRoot, tmpdir, tmpRootShared } from "./fixture/tmpdir"
 import { testEffect } from "./lib/effect"
 import { toolDefinitions } from "./lib/tool"
 import { FSUtil } from "../src/fs-util"
@@ -24,6 +26,7 @@ import { LocationSearch } from "../src/location-search"
 import { ToolRegistry } from "../src/tool/registry"
 import { ApplicationTools } from "../src/tool/application-tools"
 import { Flag } from "../src/flag/flag"
+import { BuiltInTools } from "../src/tool/builtins"
 
 const applicationTools = ApplicationTools.layer
 const it = testEffect(
@@ -52,94 +55,88 @@ describe("LocationServiceMap", () => {
   // boot completes instantly without any network or file-locking. Same pattern as
   // packages/core/test/models.test.ts.
   const ORIGINAL_DISABLE_FETCH = Flag.DEEPAGENT_CODE_DISABLE_MODELS_FETCH
+  const ORIGINAL_DATABASE = Flag.DEEPAGENT_CODE_DB
+  const ORIGINAL_TEST_HOME = process.env.DEEPAGENT_CODE_TEST_HOME
+  const testHome = mkdtempSync(tmpRootShared())
   beforeAll(() => {
     Flag.DEEPAGENT_CODE_DISABLE_MODELS_FETCH = true
+    Flag.DEEPAGENT_CODE_DB = ":memory:"
+    // Isolate the Global roots: the default layer otherwise resolves the real ~/.deepagent/code
+    // and dies on any real user config field the V2 fail-closed contract rejects (config.ts).
+    process.env.DEEPAGENT_CODE_TEST_HOME = testHome
   })
   afterAll(() => {
     Flag.DEEPAGENT_CODE_DISABLE_MODELS_FETCH = ORIGINAL_DISABLE_FETCH
+    Flag.DEEPAGENT_CODE_DB = ORIGINAL_DATABASE
+    if (ORIGINAL_TEST_HOME === undefined) delete process.env.DEEPAGENT_CODE_TEST_HOME
+    if (ORIGINAL_TEST_HOME !== undefined) process.env.DEEPAGENT_CODE_TEST_HOME = ORIGINAL_TEST_HOME
+    rmSync(testHome, { recursive: true, force: true })
   })
 
-  it.live("isolates location state while sharing location policy with catalog", () =>
-    Effect.acquireRelease(
-      Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
-      (dirs) => Effect.promise(() => Promise.all(dirs.map((dir) => dir[Symbol.asyncDispose]())).then(() => undefined)),
-    ).pipe(
-      Effect.flatMap(([blocked, allowed]) =>
-        Effect.gen(function* () {
-          yield* (yield* ApplicationTools.Service).register({
-            application_context: Tool.make({
-              description: "Read application context",
-              input: Schema.Struct({}),
-              output: Schema.Struct({ ok: Schema.Boolean }),
-              execute: () => Effect.succeed({ ok: true }),
-            }),
-          })
-          yield* Effect.promise(() =>
-            fs.writeFile(
-              path.join(blocked.path, "deepagent-code.json"),
-              JSON.stringify({
-                experimental: { policies: [{ effect: "deny", action: "provider.use", resource: "test" }] },
+  it.live(
+    "isolates location state while sharing location policy with catalog",
+    () =>
+      Effect.acquireRelease(
+        Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
+        (dirs) =>
+          Effect.promise(() => Promise.all(dirs.map((dir) => dir[Symbol.asyncDispose]())).then(() => undefined)),
+      ).pipe(
+        Effect.flatMap(([blocked, allowed]) =>
+          Effect.gen(function* () {
+            yield* (yield* ApplicationTools.Service).register({
+              application_context: Tool.make({
+                description: "Read application context",
+                input: Schema.Struct({}),
+                output: Schema.Struct({ ok: Schema.Boolean }),
+                execute: () => Effect.succeed({ ok: true }),
               }),
-            ),
-          )
+            })
+            yield* Effect.promise(() =>
+              fs.writeFile(
+                path.join(blocked.path, "deepagent-code.json"),
+                JSON.stringify({
+                  experimental: { policies: [{ effect: "deny", action: "provider.use", resource: "test" }] },
+                }),
+              ),
+            )
 
-          const update = (directory: string) =>
-            Effect.gen(function* () {
-              yield* PluginBoot.Service.use((boot) => boot.wait())
-              yield* ProjectReference.Service
-              yield* LocationSearch.Service
-              const catalog = yield* Catalog.Service
-              const agents = yield* AgentV2.Service
-              const tools = yield* ToolRegistry.Service
-              const transform = yield* catalog.transform()
-              yield* transform((editor) => editor.provider.update(ProviderV2.ID.make("test"), () => {}))
-              return {
-                providers: yield* catalog.provider.all(),
-                tools: yield* toolDefinitions(tools),
-                researcherTools: yield* tools
-                  .materialize((yield* agents.get(AgentV2.ID.make("researcher")))?.permissions)
-                  .pipe(Effect.map((tools) => tools.definitions.map((tool) => tool.name).sort())),
-              }
-            }).pipe(Effect.scoped, Effect.provide(LocationServiceMap.get({ directory: AbsolutePath.make(directory) })))
+            const update = (directory: string) =>
+              Effect.gen(function* () {
+                yield* PluginBoot.Service.use((boot) => boot.wait())
+                yield* ProjectReference.Service
+                yield* LocationSearch.Service
+                const catalog = yield* Catalog.Service
+                const agents = yield* AgentV2.Service
+                const tools = yield* ToolRegistry.Service
+                const transform = yield* catalog.transform()
+                yield* transform((editor) => editor.provider.update(ProviderV2.ID.make("test"), () => {}))
+                return {
+                  providers: yield* catalog.provider.all(),
+                  tools: yield* toolDefinitions(tools),
+                  researcherTools: yield* tools
+                    .materialize((yield* agents.get(AgentV2.ID.make("researcher")))?.permissions)
+                    .pipe(Effect.map((tools) => tools.definitions.map((tool) => tool.name).sort())),
+                }
+              }).pipe(
+                Effect.scoped,
+                Effect.provide(LocationServiceMap.get({ directory: AbsolutePath.make(directory) })),
+              )
 
-          const blockedState = yield* update(blocked.path)
-          expect(blockedState.providers.some((provider) => provider.id === ProviderV2.ID.make("test"))).toBe(false)
-          expect(blockedState.tools.map((tool) => tool.name).sort()).toEqual([
-            "application_context",
-            "apply_patch",
-            "bash",
-            "capability_search",
-            "edit",
-            "glob",
-            "grep",
-            "question",
-            "read",
-            "skill",
-            "webfetch",
-            "websearch",
-            "write",
-          ])
-          expect(blockedState.researcherTools).toEqual(["glob", "grep", "read", "webfetch", "websearch"])
-          const allowedState = yield* update(allowed.path)
-          expect(allowedState.providers.some((provider) => provider.id === ProviderV2.ID.make("test"))).toBe(true)
-          expect(allowedState.tools.map((tool) => tool.name).sort()).toEqual([
-            "application_context",
-            "apply_patch",
-            "bash",
-            "capability_search",
-            "edit",
-            "glob",
-            "grep",
-            "question",
-            "read",
-            "skill",
-            "webfetch",
-            "websearch",
-            "write",
-          ])
-          expect(allowedState.researcherTools).toEqual(["glob", "grep", "read", "webfetch", "websearch"])
-        }),
+            const blockedState = yield* update(blocked.path)
+            expect(blockedState.providers.some((provider) => provider.id === ProviderV2.ID.make("test"))).toBe(false)
+            const expectedTools = [
+              "application_context",
+              ...[...BuiltInTools.builtinToolNames].filter((name) => name !== "code_intel" && name !== "context_query"),
+            ].sort()
+            expect(blockedState.tools.map((tool) => tool.name).sort()).toEqual(expectedTools)
+            expect(blockedState.researcherTools).toEqual(["glob", "grep", "read", "webfetch", "websearch"])
+            const allowedState = yield* update(allowed.path)
+            expect(allowedState.providers.some((provider) => provider.id === ProviderV2.ID.make("test"))).toBe(true)
+            expect(allowedState.tools.map((tool) => tool.name).sort()).toEqual(expectedTools)
+            expect(allowedState.researcherTools).toEqual(["glob", "grep", "read", "webfetch", "websearch"])
+          }),
+        ),
       ),
-    ),
-  15000)
+    15000,
+  )
 })

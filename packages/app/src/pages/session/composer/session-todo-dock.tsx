@@ -1,4 +1,4 @@
-import type { Todo } from "@deepagent-code/sdk"
+import type { SessionTodoInfo } from "@deepagent-code/sdk"
 import { AnimatedNumber } from "@deepagent-code/ui/animated-number"
 import { Checkbox } from "@deepagent-code/ui/checkbox"
 import { DockTray } from "@deepagent-code/ui/dock-surface"
@@ -14,7 +14,7 @@ import { useLanguage } from "@/context/language"
 const doneToken = "\u0000done\u0000"
 const totalToken = "\u0000total\u0000"
 
-function dot(status: Todo["status"]) {
+function dot(status: SessionTodoInfo["status"]) {
   if (status !== "in_progress") return undefined
   return (
     <svg
@@ -41,7 +41,7 @@ function dot(status: Todo["status"]) {
 
 export function SessionTodoDock(props: {
   sessionID?: string
-  todos: Todo[]
+  todos: SessionTodoInfo[]
   collapsed: boolean
   onToggle: () => void
   collapseLabel: string
@@ -196,7 +196,7 @@ export function SessionTodoDock(props: {
   )
 }
 
-function TodoList(props: { todos: Todo[] }) {
+function TodoList(props: { todos: SessionTodoInfo[] }) {
   const [store, setStore] = createStore({
     stuck: false,
   })

@@ -100,6 +100,7 @@ export class EventPublishError extends Error {
 export type RegisteredEventEnvelope = EventEnvelope & { readonly __registered: unique symbol }
 
 const HEX64 = /^[0-9a-f]{64}$/
+export const MAX_EVENT_TYPE_REGISTRATIONS = 1024
 
 const presentKeys = (causation: EventCausation): ReadonlyArray<CausationKey> => {
   const present: CausationKey[] = []
@@ -112,7 +113,12 @@ const presentKeys = (causation: EventCausation): ReadonlyArray<CausationKey> => 
 /** Create an empty registry, or seed it with one or more registrations. */
 export const createEventRegistry = (seed?: ReadonlyArray<EventTypeRegistration>): EventRegistry => {
   const map = new Map<string, EventTypeRegistration>()
-  for (const registration of seed ?? []) map.set(registration.eventType, registration)
+  for (const registration of seed ?? []) {
+    if (map.has(registration.eventType)) throw new Error(`Duplicate event registration: ${registration.eventType}`)
+    if (map.size >= MAX_EVENT_TYPE_REGISTRATIONS)
+      throw new Error(`Event registration limit exceeded (${MAX_EVENT_TYPE_REGISTRATIONS})`)
+    map.set(registration.eventType, registration)
+  }
   const register = (registration: EventTypeRegistration): EventRegistry =>
     createEventRegistry([...map.values(), registration])
   return {

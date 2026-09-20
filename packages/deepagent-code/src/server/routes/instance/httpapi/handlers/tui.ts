@@ -3,7 +3,6 @@ import { TuiEvent } from "@/server/tui-event"
 import { Session } from "@/session/session"
 import { Effect } from "effect"
 import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi"
-import { nextTuiRequest, submitTuiResponse } from "@/server/shared/tui-control"
 import { InstanceHttpApi } from "../api"
 import { CommandPayload, TuiPublishPayload } from "../groups/tui"
 import * as SessionError from "./session-errors"
@@ -104,15 +103,6 @@ export const tuiHandlers = HttpApiBuilder.group(InstanceHttpApi, "tui", (handler
       return true
     })
 
-    const controlNext = Effect.fn("TuiHttpApi.controlNext")(function* () {
-      return yield* Effect.promise(() => nextTuiRequest())
-    })
-
-    const controlResponse = Effect.fn("TuiHttpApi.controlResponse")(function* (ctx: { payload: unknown }) {
-      submitTuiResponse(ctx.payload)
-      return true
-    })
-
     return handlers
       .handle("appendPrompt", appendPrompt)
       .handle("openHelp", openHelp)
@@ -125,7 +115,5 @@ export const tuiHandlers = HttpApiBuilder.group(InstanceHttpApi, "tui", (handler
       .handle("showToast", showToast)
       .handle("publish", publish)
       .handle("selectSession", selectSession)
-      .handle("controlNext", controlNext)
-      .handle("controlResponse", controlResponse)
   }),
 )

@@ -11,6 +11,7 @@ import { writePinnedPacks } from "../src/deepagent/pinned-packs"
 import { DeepAgentDurableLearning } from "../src/deepagent/durable-learning"
 import * as OpenAIChat from "@deepagent-code/llm/protocols/openai-chat"
 import { releasedUserGlobalSelection } from "./deepagent/released-selection-fixture"
+import { tmpRootAsync, tmpRootSharedAsync } from "./fixture/tmpdir"
 
 const deepagentRunInput = {
   callKind: "session_turn" as const,
@@ -33,7 +34,7 @@ const defaultProviderRunInput = {
   modelID: "gpt-test",
 }
 
-const tempRunsDir = () => mkdtemp(path.join(tmpdir(), "deepagent-runs-"))
+const tempRunsDir = () => tmpRootSharedAsync()
 
 const readOnlyRunDir = async (dir: string) => {
   const runs = await readdir(dir)
@@ -44,12 +45,143 @@ const readOnlyRunDir = async (dir: string) => {
 const readJson = async (dir: string, name: string) => JSON.parse(await readFile(path.join(dir, name), "utf8"))
 
 describe("AgentGateway", () => {
+  test("V2 runtime snapshots stay isolated from legacy configure order", async () => {
+    const read = Effect.gen(function* () {
+      const runtime = yield* AgentGateway.Runtime
+      return {
+        active: runtime.active,
+        mode: runtime.snapshot.agentMode,
+        prompt: runtime.systemPrompt("openai").join("\n"),
+      }
+    })
+    const high = await Effect.runPromise(
+      read.pipe(Effect.provide(AgentGateway.runtimeLayer({ enabled: true, agentMode: "high" }))),
+    )
+    AgentGateway.configure({ enabled: false, agentMode: "general" })
+    const general = await Effect.runPromise(
+      read.pipe(Effect.provide(AgentGateway.runtimeLayer({ enabled: true, agentMode: "general" }))),
+    )
+    AgentGateway.configure({ enabled: true, agentMode: "ultra" })
+
+    expect(high).toMatchObject({ active: true, mode: "high" })
+    expect(high.prompt).toContain("DeepAgent")
+    expect(general).toEqual({ active: false, mode: "general", prompt: "" })
+    AgentGateway.configure({ enabled: false, agentMode: "high" })
+  })
+
+  test("V2 storage runtimes isolate the same Session ID across roots", async () => {
+    const leftRoot = await tempRunsDir()
+    const rightRoot = await tempRunsDir()
+    try {
+      const make = (baseDir: string, agentMode: "high" | "max") =>
+        Effect.runPromise(
+          AgentGateway.Runtime.pipe(Effect.provide(AgentGateway.runtimeLayer({ enabled: true, agentMode, baseDir }))),
+        )
+      const left = await make(leftRoot, "high")
+      const right = await make(rightRoot, "max")
+      const sessionID = "ses_same_identity"
+
+      left.withStorage(() => AgentGateway.DeepAgentSessionState.getOrCreate(sessionID, "high"))
+      right.withStorage(() => AgentGateway.DeepAgentSessionState.getOrCreate(sessionID, "max"))
+      left.withStorage(() => AgentGateway.DeepAgentSessionState.setPanelArmed(sessionID, true))
+      AgentGateway.configure({ enabled: false, agentMode: "general", baseDir: rightRoot })
+
+      expect(left.withStorage(() => AgentGateway.DeepAgentSessionState.get(sessionID)?.mode)).toBe("high")
+      expect(right.withStorage(() => AgentGateway.DeepAgentSessionState.get(sessionID)?.mode)).toBe("max")
+      expect(left.withStorage(() => AgentGateway.DeepAgentSessionState.panelArmedChoice(sessionID))).toBe(true)
+      expect(right.withStorage(() => AgentGateway.DeepAgentSessionState.panelArmedChoice(sessionID))).toBeNull()
+      expect(
+        left.withStorage(() => AgentGateway.DeepAgentPlanStore.planStoreRoot(sessionID)).startsWith(leftRoot),
+      ).toBe(true)
+      expect(
+        right.withStorage(() => AgentGateway.DeepAgentPlanStore.planStoreRoot(sessionID)).startsWith(rightRoot),
+      ).toBe(true)
+      expect(left.withStorage(() => AgentGateway.DeepAgentKnowledgeSource.isConfiguredFor(leftRoot))).toBe(true)
+      expect(right.withStorage(() => AgentGateway.DeepAgentKnowledgeSource.isConfiguredFor(rightRoot))).toBe(true)
+      expect(existsSync(path.join(leftRoot, "state", "sessions.json"))).toBe(true)
+      expect(existsSync(path.join(rightRoot, "state", "sessions.json"))).toBe(true)
+    } finally {
+      // Restore the durable-learning DEFAULT (ON). Leaving `durableLearning: false` here pollutes
+      // the shared legacy config singleton and breaks W7's "default ON" assertion later in the file.
+      AgentGateway.configure({ enabled: false, agentMode: "high", durableLearning: true })
+      await Promise.all([
+        rm(leftRoot, { recursive: true, force: true }),
+        rm(rightRoot, { recursive: true, force: true }),
+      ])
+    }
+  })
+
+  test("V2 storage seeding starts only when its Layer is built and stays root-owned", async () => {
+    const root = await tempRunsDir()
+    try {
+      const layer = AgentGateway.runtimeLayer({ enabled: true, agentMode: "high", baseDir: root })
+      expect(existsSync(path.join(root, "public", "knowledge"))).toBe(false)
+      const runtime = await Effect.runPromise(AgentGateway.Runtime.pipe(Effect.provide(layer)))
+      expect(existsSync(path.join(root, "public", "knowledge"))).toBe(true)
+      expect(runtime.withStorage(() => AgentGateway.DeepAgentKnowledgeSource.isConfiguredFor(root))).toBe(true)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  test("V2 runtime owns and finalizes one non-durable learning queue per Layer root", async () => {
+    const leftRoot = await tempRunsDir()
+    const rightRoot = await tempRunsDir()
+    const prototype = AgentGateway.DeepAgentBackgroundLearning.LearningQueue.prototype
+    const originalDrainNow = prototype.drainNow
+    const finalized = new Set<AgentGateway.DeepAgentBackgroundLearning.LearningQueue>()
+    prototype.drainNow = async function () {
+      finalized.add(this)
+      await originalDrainNow.call(this)
+    }
+    try {
+      for (const baseDir of [leftRoot, rightRoot]) {
+        await Effect.runPromise(
+          AgentGateway.Runtime.pipe(
+            Effect.asVoid,
+            Effect.provide(
+              AgentGateway.runtimeLayer({ enabled: true, agentMode: "high", baseDir, durableLearning: false }),
+            ),
+          ),
+        )
+      }
+
+      expect(finalized.size).toBe(2)
+    } finally {
+      prototype.drainNow = originalDrainNow
+      await Promise.all([
+        rm(leftRoot, { recursive: true, force: true }),
+        rm(rightRoot, { recursive: true, force: true }),
+      ])
+    }
+    // Builds two full runtime layers (migrations included); under a fully parallel suite run the
+    // default 5s budget is consumed by contention rather than by the assertion.
+  }, 30000)
+
+  test("W7: durable learning flag and storage root follow configure() (default ON)", async () => {
+    const root = await tempRunsDir()
+    try {
+      AgentGateway.configure({ enabled: false, agentMode: "high", baseDir: root, runsDir: path.join(root, "runs") })
+      expect(AgentGateway.durableLearningEnabled()).toBe(true)
+      expect(AgentGateway.learningAuthorityConfig()).toEqual({ baseDir: root, runsDir: path.join(root, "runs") })
+      AgentGateway.configure({ durableLearning: false })
+      expect(AgentGateway.durableLearningEnabled()).toBe(false)
+    } finally {
+      AgentGateway.configure({ enabled: false, agentMode: "high", runsDir: undefined, durableLearning: false })
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   test("configuration defers built-in knowledge seeding until after startup", async () => {
     const root = await tempRunsDir()
     try {
       const started = performance.now()
       AgentGateway.configure({ enabled: false, agentMode: "general", baseDir: root, runsDir: undefined })
-      expect(performance.now() - started).toBeLessThan(100)
+      // W15 (flake): the assertion is a budget, not a benchmark — configure() must stay
+      // "deferred seeding" (no knowledge write here), but a 100ms wall-clock bound flaked under
+      // CI/load (fs warmup, GC). 500ms still proves no synchronous seeding happened (seeding is
+      // ~seconds of work), while leaving room for scheduler jitter.
+      expect(performance.now() - started).toBeLessThan(500)
       expect(existsSync(path.join(root, "public", "knowledge"))).toBe(false)
       await AgentGateway.flushKnowledgeSeed()
       expect(existsSync(path.join(root, "public", "knowledge"))).toBe(true)
@@ -1158,7 +1290,7 @@ describe("AgentGateway pinned domain packs (FEAT-001)", () => {
   }
 
   test("a pinned pack appears in active_pack_set and its refs are force-selected", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "deepagent-pin-"))
+    const root = await tmpRootSharedAsync()
     try {
       writePinnedPacks(path.join(root, "memory"), ["code.gpu-kernel"])
       const workPackage = await runMaxTurn(root)
@@ -1172,7 +1304,7 @@ describe("AgentGateway pinned domain packs (FEAT-001)", () => {
   })
 
   test("without pins the pack stays inactive (unpinned behavior unchanged)", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "deepagent-nopin-"))
+    const root = await tmpRootSharedAsync()
     try {
       const workPackage = await runMaxTurn(root)
       expect(workPackage.active_pack_set).not.toContain("code.gpu-kernel")
@@ -1185,7 +1317,7 @@ describe("AgentGateway pinned domain packs (FEAT-001)", () => {
   })
 
   test("a corrupt pinned-packs.json degrades to no pins and still completes the run", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "deepagent-corrupt-pin-"))
+    const root = await tmpRootSharedAsync()
     try {
       await mkdir(path.join(root, "memory"), { recursive: true })
       await writeFile(path.join(root, "memory", "pinned-packs.json"), "{not json")
@@ -1228,7 +1360,7 @@ describe("AgentGateway unified pack activation authority (FEAT-002)", () => {
   }
 
   test("a deterministic query run records code.query in active_pack_set and flips read-only", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "deepagent-feat002-query-"))
+    const root = await tmpRootSharedAsync()
     try {
       const workPackage = await runMaxTurn(root, "请查一下数据库里有多少条用户记录")
       expect(workPackage.active_pack_set).toContain("code.query")
@@ -1243,7 +1375,7 @@ describe("AgentGateway unified pack activation authority (FEAT-002)", () => {
   })
 
   test("a mutation run keeps code.query out of active_pack_set and tools writable", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "deepagent-feat002-mutation-"))
+    const root = await tmpRootSharedAsync()
     try {
       const workPackage = await runMaxTurn(root, "请修复登录逻辑并更新依赖")
       expect(workPackage.active_pack_set).not.toContain("code.query")

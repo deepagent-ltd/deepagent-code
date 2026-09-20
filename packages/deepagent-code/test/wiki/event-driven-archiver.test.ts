@@ -3,6 +3,7 @@ import { rmSync } from "node:fs"
 import path from "node:path"
 import { Effect, Layer, Stream } from "effect"
 import { EventDrivenArchiver } from "../../src/wiki/event-driven-archiver"
+import { ConsumerReceipts } from "@deepagent-code/core/deepagent/consumer-receipts"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
 import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
@@ -139,6 +140,15 @@ describe("EventDrivenArchiver.handle (§L)", () => {
         payload: { goalId: "g1", planDocId: "doc1", phase: "done", gaps: [], sessionID, workspacePath: "/tmp/nonexistent-ws" },
       })
       expect(yield* archiver.handle(ev)).toBe(true)
+      // C5-10: the archive projection left a durable `done` receipt — the once-run authority.
+      const { db } = yield* Database.Service
+      const receipt = yield* ConsumerReceipts.receiptFor(db, "archive", ev.id)
+      expect(receipt?.status).toBe("done")
+      expect(receipt?.receiptRef).toBe(ConsumerReceipts.receiptRefFor("archive", ev.id))
+      // redelivery of the completed trigger is a durable no-op (no re-projection).
+      expect(yield* archiver.handle(ev)).toBe(false)
+      const after = yield* ConsumerReceipts.receiptFor(db, "archive", ev.id)
+      expect(after?.attempts).toBe(1)
     }),
   )
 

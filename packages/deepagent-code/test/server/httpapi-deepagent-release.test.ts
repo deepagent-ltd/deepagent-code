@@ -18,6 +18,7 @@ import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { httpApiLayer } from "./httpapi-layer"
+import { V2RunnerFrame } from "../../src/session/v2-runner-frame"
 
 const noopBootstrap = Layer.succeed(InstanceBootstrap.Service, InstanceBootstrap.Service.of({ run: Effect.void }))
 const testTimeout = 30_000
@@ -27,9 +28,12 @@ const it = testEffect(
     CrossSpawnSpawner.defaultLayer,
     InstanceStore.defaultLayer.pipe(Layer.provide(noopBootstrap)),
     Database.defaultLayer,
+    V2RunnerFrame.gatewayRuntimeLayer,
     httpApiLayer,
   ),
 )
+const withKnowledge = <A>(operation: () => A) =>
+  Effect.map(AgentGateway.Runtime, (runtime) => runtime.withStorage(operation))
 
 type ReleaseResult = {
   readonly active_snapshot_id: string
@@ -132,34 +136,38 @@ function shipGate(
 }
 
 function seedProject(directory: string, id: string, body: string) {
-  return AgentGateway.DeepAgentKnowledgeSource.storesForWorkspace(directory)[1]!.seedActive({
-    type: "knowledge",
-    description: `release test ${id}`,
-    body,
-    domain: "code",
-    scope: "project-shared",
-    projectId: AgentGateway.DeepAgentDurableKnowledgeStore.projectIdForWorkspace(directory),
-    sensitivity: "public",
-    risk: "low",
-    confidence: { evidence_strength: "strong", support_count: 1 },
-    provenance: { source: "runner", run_ref: `run_${id}`, evidence_refs: [`evidence_${id}`] },
-    idSlug: id,
-  })
+  return withKnowledge(() =>
+    AgentGateway.DeepAgentKnowledgeSource.storesForWorkspace(directory)[1]!.seedActive({
+      type: "knowledge",
+      description: `release test ${id}`,
+      body,
+      domain: "code",
+      scope: "project-shared",
+      projectId: AgentGateway.DeepAgentDurableKnowledgeStore.projectIdForWorkspace(directory),
+      sensitivity: "public",
+      risk: "low",
+      confidence: { evidence_strength: "strong", support_count: 1 },
+      provenance: { source: "runner", run_ref: `run_${id}`, evidence_refs: [`evidence_${id}`] },
+      idSlug: id,
+    }),
+  )
 }
 
 function seedUserGlobal(id: string, body: string) {
-  return AgentGateway.DeepAgentKnowledgeSource.storesForWorkspace()[0]!.seedActive({
-    type: "knowledge",
-    description: `release test ${id}`,
-    body,
-    domain: "code",
-    scope: "user-global",
-    sensitivity: "public",
-    risk: "low",
-    confidence: { evidence_strength: "strong", support_count: 1 },
-    provenance: { source: "runner", run_ref: `run_${id}`, evidence_refs: [`evidence_${id}`] },
-    idSlug: id,
-  })
+  return withKnowledge(() =>
+    AgentGateway.DeepAgentKnowledgeSource.storesForWorkspace()[0]!.seedActive({
+      type: "knowledge",
+      description: `release test ${id}`,
+      body,
+      domain: "code",
+      scope: "user-global",
+      sensitivity: "public",
+      risk: "low",
+      confidence: { evidence_strength: "strong", support_count: 1 },
+      provenance: { source: "runner", run_ref: `run_${id}`, evidence_refs: [`evidence_${id}`] },
+      idSlug: id,
+    }),
+  )
 }
 
 afterEach(async () => {
@@ -184,8 +192,9 @@ describe("DeepAgent released knowledge HTTP API", () => {
         provenance: { source: "runner" as const, run_ref: "run_review_exact", evidence_refs: ["evidence_review"] },
         idSlug: "same-review-id",
       }
-      const userGlobalStore = AgentGateway.DeepAgentKnowledgeSource.storesForWorkspace(instance.directory)[0]!
-      const projectStore = AgentGateway.DeepAgentKnowledgeSource.storesForWorkspace(instance.directory)[1]!
+      const [userGlobalStore, projectStore] = yield* withKnowledge(() =>
+        AgentGateway.DeepAgentKnowledgeSource.storesForWorkspace(instance.directory),
+      )
       const userGlobal = userGlobalStore.stageCandidate(
         { ...input, scope: "user-global" },
         { requireExactCandidate: true },
@@ -244,10 +253,12 @@ describe("DeepAgent released knowledge HTTP API", () => {
     Effect.gen(function* () {
       const instance = yield* TestInstance
       expect((yield* get(instance.directory, "/deepagent/knowledge/pending")).status).toBe(200)
-      const project = seedProject(instance.directory, "reject-reconcile", "project rejection authority")
-      const userGlobal = seedUserGlobal("reject-reconcile", "global authority with the same id")
+      const project = yield* seedProject(instance.directory, "reject-reconcile", "project rejection authority")
+      const userGlobal = yield* seedUserGlobal("reject-reconcile", "global authority with the same id")
       expect(project.id).toBe(userGlobal.id)
-      const stores = AgentGateway.DeepAgentKnowledgeSource.storesForWorkspace(instance.directory)
+      const stores = yield* withKnowledge(() =>
+        AgentGateway.DeepAgentKnowledgeSource.storesForWorkspace(instance.directory),
+      )
       const authority = { userGlobal: stores[0]!.documentStore, project: stores[1]!.documentStore }
       const baselineResponse = yield* post(instance.directory, "/deepagent/knowledge/release-baseline", {
         snapshotId: "snapshot_reject_reconcile_baseline",
@@ -281,9 +292,12 @@ describe("DeepAgent released knowledge HTTP API", () => {
         fingerprint: projectRef.fingerprint as string,
         expectedGovernanceRevision: projectRef.governanceRevision as string,
       }
-      const localRef = AgentGateway.DeepAgentKnowledgeSource.listAllForWorkspace(instance.directory).find(
-        (item) => item.sourceStore === "project" && item.id === project.id,
-      )!
+      const localRef = yield* withKnowledge(() =>
+        AgentGateway.DeepAgentKnowledgeSource.listAllForWorkspace(instance.directory).find(
+          (item) => item.sourceStore === "project" && item.id === project.id,
+        ),
+      )
+      if (!localRef) throw new Error("project review item is missing from the shared V2 Gateway runtime")
       expect(localRef.sourceStore).toBe("project")
       expect(payload.id).toBe(localRef.id)
       expect(payload.version).toBe(localRef.version)
@@ -292,11 +306,13 @@ describe("DeepAgent released knowledge HTTP API", () => {
       expect(payload.fingerprint).toBe(localRef.fingerprint)
       expect(payload.expectedGovernanceRevision).toBe(localRef.governanceRevision)
 
-      AgentGateway.DeepAgentKnowledgeSource.commitReviewDecisionForWorkspace(
-        instance.directory,
-        { ...payload, governanceRevision: payload.expectedGovernanceRevision },
-        "reject",
-        { type: "human", id: "server" },
+      yield* withKnowledge(() =>
+        AgentGateway.DeepAgentKnowledgeSource.commitReviewDecisionForWorkspace(
+          instance.directory,
+          { ...payload, governanceRevision: payload.expectedGovernanceRevision },
+          "reject",
+          { type: "human", id: "server" },
+        ),
       )
       const rejectedVersion = stores[1]!.documentStore.get(project.id)!.version
       const competing = (yield* AgentGateway.DeepAgentReleasedSnapshot.publish(
@@ -343,11 +359,13 @@ describe("DeepAgent released knowledge HTTP API", () => {
       })
       expect(stores[1]!.documentStore.get(payload.id, payload.version)).not.toBeNull()
       expect(
-        AgentGateway.DeepAgentKnowledgeSource.commitReviewDecisionForWorkspace(
-          instance.directory,
-          { ...payload, governanceRevision: payload.expectedGovernanceRevision },
-          "reject",
-          { type: "human", id: "server" },
+        yield* withKnowledge(() =>
+          AgentGateway.DeepAgentKnowledgeSource.commitReviewDecisionForWorkspace(
+            instance.directory,
+            { ...payload, governanceRevision: payload.expectedGovernanceRevision },
+            "reject",
+            { type: "human", id: "server" },
+          ),
         ),
       ).toMatchObject({ version: payload.version + 1, approval_status: "rejected" })
 
@@ -365,9 +383,9 @@ describe("DeepAgent released knowledge HTTP API", () => {
       expect(stores[1]!.documentStore.get(project.id)!.version).toBe(rejectedVersion)
       const current = (yield* AgentGateway.DeepAgentReleasedSnapshot.current(database.db, scope))!
       expect(current.documents).toEqual([AgentGateway.DeepAgentReleasedSnapshot.documentRef(userGlobal, "user_global")])
-      expect((yield* AgentGateway.DeepAgentReleasedSnapshot.get(database.db, scope, baseline.snapshotId))?.documents).toEqual(
-        baseline.documents,
-      )
+      expect(
+        (yield* AgentGateway.DeepAgentReleasedSnapshot.get(database.db, scope, baseline.snapshotId))?.documents,
+      ).toEqual(baseline.documents)
 
       const replay = yield* post(instance.directory, "/deepagent/knowledge/reject-ids", payload)
       expect(replay.status).toBe(200)
@@ -409,11 +427,13 @@ describe("DeepAgent released knowledge HTTP API", () => {
     Effect.gen(function* () {
       const instance = yield* TestInstance
       const baseline = yield* releaseBaseline(instance.directory, "historical_revision")
-      const v1 = seedProject(instance.directory, "historical_revision", "evaluated body v1")
+      const v1 = yield* seedProject(instance.directory, "historical_revision", "evaluated body v1")
       const v1Ref = AgentGateway.DeepAgentReleasedSnapshot.documentRef(v1, "project")
-      const v2 = AgentGateway.DeepAgentKnowledgeSource.storesForWorkspace(instance.directory)[1]!.documentStore.update(
-        v1.id,
-        "latest body v2",
+      const v2 = yield* withKnowledge(() =>
+        AgentGateway.DeepAgentKnowledgeSource.storesForWorkspace(instance.directory)[1]!.documentStore.update(
+          v1.id,
+          "latest body v2",
+        ),
       )
 
       expect(v2.id).toBe(v1.id)
@@ -453,8 +473,8 @@ describe("DeepAgent released knowledge HTTP API", () => {
     Effect.gen(function* () {
       const instance = yield* TestInstance
       const baseline = yield* releaseBaseline(instance.directory, "same_id_store")
-      const userGlobal = seedUserGlobal("same_id_store", "user-global body")
-      const project = seedProject(instance.directory, "same_id_store", "project body")
+      const userGlobal = yield* seedUserGlobal("same_id_store", "user-global body")
+      const project = yield* seedProject(instance.directory, "same_id_store", "project body")
 
       expect(project.id).toBe(userGlobal.id)
       expect(project.hash).not.toBe(userGlobal.hash)
@@ -517,7 +537,7 @@ describe("DeepAgent released knowledge HTTP API", () => {
     Effect.gen(function* () {
       const instance = yield* TestInstance
       const baseline = yield* releaseBaseline(instance.directory, "duplicate_candidates")
-      const v1 = seedProject(instance.directory, "duplicate_candidates", "candidate body v1")
+      const v1 = yield* seedProject(instance.directory, "duplicate_candidates", "candidate body v1")
       const v1Ref = AgentGateway.DeepAgentReleasedSnapshot.documentRef(v1, "project")
       const duplicate = yield* shipGate(instance.directory, {
         id: "duplicate_candidate_refs",
@@ -529,9 +549,11 @@ describe("DeepAgent released knowledge HTTP API", () => {
       expect(duplicate.status).toBe(400)
       expect(errorMessage(duplicate.body)).toContain("duplicate document authority")
 
-      const v2 = AgentGateway.DeepAgentKnowledgeSource.storesForWorkspace(instance.directory)[1]!.documentStore.update(
-        v1.id,
-        "candidate body v2",
+      const v2 = yield* withKnowledge(() =>
+        AgentGateway.DeepAgentKnowledgeSource.storesForWorkspace(instance.directory)[1]!.documentStore.update(
+          v1.id,
+          "candidate body v2",
+        ),
       )
       const conflict = yield* shipGate(instance.directory, {
         id: "conflicting_candidate_refs",
@@ -635,7 +657,11 @@ describe("DeepAgent released knowledge HTTP API", () => {
         expect(response.status).toBe(400)
       }
 
-      const candidate = seedProject(instance.directory, "after_invalid_metrics", "candidate after invalid evidence")
+      const candidate = yield* seedProject(
+        instance.directory,
+        "after_invalid_metrics",
+        "candidate after invalid evidence",
+      )
       const passed = yield* shipGate(instance.directory, {
         id: "after_invalid_metrics",
         parent: baseline,
@@ -674,7 +700,7 @@ describe("DeepAgent released knowledge HTTP API", () => {
         membership_hash: baseline.membership_hash,
       })
 
-      const candidate = seedProject(instance.directory, "after_failed_head", "candidate after failed release")
+      const candidate = yield* seedProject(instance.directory, "after_failed_head", "candidate after failed release")
       const passed = yield* shipGate(instance.directory, {
         id: "after_failed_head",
         parent: baseline,

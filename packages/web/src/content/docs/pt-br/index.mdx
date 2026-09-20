@@ -34,7 +34,7 @@ Para usar o deepagent-code no seu terminal, você precisará de:
 A maneira mais fácil de instalar o deepagent-code é através do script de instalação.
 
 ```bash
-curl -fsSL https://deepagent-code.ai/install | bash
+curl -fsSL https://deepagent.ltd/install | bash
 ```
 
 Você também pode instalá-lo com os seguintes comandos:
@@ -75,11 +75,7 @@ Você também pode instalá-lo com os seguintes comandos:
 
 - **Usando Homebrew no macOS e Linux**
 
-  ```bash
-  brew install anomalyco/tap/deepagent-code
-  ```
-
-  > Recomendamos usar o tap do deepagent-code para as versões mais atualizadas. A fórmula oficial `brew install deepagent-code` é mantida pela equipe do Homebrew e é atualizada com menos frequência.
+  > A distribuição via Homebrew ainda não foi publicada — não há fórmula `deepagent-code` no formulae.brew.sh. Use o script de instalação acima; um tap do Homebrew está planejado para uma versão futura.
 
 - **Usando Paru no Arch Linux**
 
@@ -115,18 +111,18 @@ Para a melhor experiência no Windows, recomendamos usar o [Windows Subsystem fo
 - **Usando Mise**
 
   ```bash
-  mise use -g github:lessweb/deepagent-code
+  mise use -g github:deepagent-ltd/deepagent-code
   ```
 
 - **Usando Docker**
 
   ```bash
-  docker run -it --rm ghcr.io/lessweb/deepagent-code
+  docker run -it --rm ghcr.io/deepagent-ltd/deepagent-code
   ```
 
 O suporte para instalar o deepagent-code no Windows usando Bun está atualmente em andamento.
 
-Você também pode baixar o binário na seção [Releases](https://github.com/lessweb/deepagent-code/releases).
+Você também pode baixar o binário na seção [Releases](https://github.com/deepagent-ltd/deepagent-code/releases).
 
 ---
 
@@ -137,7 +133,7 @@ Com o deepagent-code, você pode usar qualquer provedor de LLM configurando suas
 Se você é novo no uso de provedores de LLM, recomendamos usar o [DeepAgent Code Zen](/docs/zen).
 É uma lista selecionada de modelos que foram testados e verificados pela equipe do deepagent-code.
 
-1. Execute o comando `/connect` no TUI, selecione deepagent-code e acesse [deepagent-code.ai/auth](https://deepagent-code.ai/auth).
+1. Execute o comando `/connect` no TUI, selecione deepagent-code e acesse [ai.deepagent.ltd/auth](https://ai.deepagent.ltd/auth).
 
    ```txt
    /connect
@@ -333,7 +329,7 @@ Isso criará um link para a conversa atual e o copiará para sua área de transf
 As conversas não são compartilhadas por padrão.
 :::
 
-Aqui está uma [conversa de exemplo](https://deepagent-code.ai/s/4XP1fce5) com o deepagent-code.
+Aqui está uma [conversa de exemplo](https://ai.deepagent.ltd/s/4XP1fce5) com o deepagent-code.
 
 ---
 

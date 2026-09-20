@@ -25,8 +25,8 @@ describe("buildManifest", () => {
   })
 
   test("is key-insertion-order independent by construction", () => {
-    const m1 = buildManifest({ a: { "x": "d1".repeat(32), "y": "d2".repeat(32) } })
-    const m2 = buildManifest({ a: { "y": "d2".repeat(32), "x": "d1".repeat(32) } })
+    const m1 = buildManifest({ a: { x: "d1".repeat(32), y: "d2".repeat(32) } })
+    const m2 = buildManifest({ a: { y: "d2".repeat(32), x: "d1".repeat(32) } })
     expect(m1.schemaVersion).toBe(ManifestVersion.schema)
     expect(m2.schemaVersion).toBe(ManifestVersion.schema)
     expect(m1.overallDigest).toBe(m2.overallDigest)
@@ -59,9 +59,9 @@ describe("assertManifestShape", () => {
 
   test("rejects a non-object input group with the exact path", () => {
     const m = buildManifest(groupsA) as DeterministicManifest
-    expect(() =>
-      assertManifestShape({ ...m, inputs: { contract: "nope" } }),
-    ).toThrow(/manifest.inputs.contract: expected an object mapping path to digest/)
+    expect(() => assertManifestShape({ ...m, inputs: { contract: "nope" } })).toThrow(
+      /manifest.inputs.contract: expected an object mapping path to digest/,
+    )
   })
 
   test("rejects a non-digest file value with the exact path", () => {
@@ -147,5 +147,40 @@ describe("C0-05 requirement coverage", () => {
       }
     }
     expect(serializeManifest(manifest)).not.toContain("/Users/")
+  })
+})
+
+// C7-10 (a10 R3 close, W14) — the deterministic manifest MUST reproduce at the current HEAD. The
+// values below are the regenerated digests for the Core V2 context-tool cutover tree: any drift in
+// the manifest input groups (contract / migration registry / package versions / runtime flags) fails
+// here, and the pinned value + the record in `beta-rc-evidence-manifest.md` §1 / compliance-matrix
+// C7-10 must be refreshed TOGETHER (the R3 gap was exactly "recorded digests not reproducible at
+// HEAD").
+//
+// SCOPE (fix): the gate digests the COMMITTED tree only (`includeExternalEvidence: false`). The two
+// external-evidence groups hash artifacts under the git-ignored `packages/core/.artifacts/`
+// (caller-inventory report, perf baseline), so with them included the digest is a function of
+// whatever the machine happens to have generated — unreproducible in a clean checkout by
+// construction, and guaranteed to drift the moment any new source file changes the inventory. That
+// is not what "reproducible at HEAD" can mean; the externals are still collected and still perturb
+// the digest (asserted below), they are simply outside the reproducibility claim.
+describe("C7-10 HEAD reproducibility (a10 R3 close)", () => {
+  const TREE_PIN = "7828f565d78df982ff0ba64b653d836f9273550c252c55c59e37ae9d1ce6bd2f"
+  const OVERALL_PIN = "e8cd395d7572fb750ca4765de228812daa2aea1dccb3fa03f78b651692bffb02"
+
+  test("regenerated manifest matches the HEAD-pinned digest", () => {
+    const manifest = generateManifest({ includeExternalEvidence: false })
+    expect(manifest.setTreeDigest).toBe(TREE_PIN)
+    expect(manifest.overallDigest).toBe(OVERALL_PIN)
+  })
+
+  test("external evidence still enters the digest when present", () => {
+    // The reproducibility claim excludes the git-ignored artifacts; it must not silently IGNORE
+    // them. With evidence included the manifest digests them too, so a produced report is a real
+    // input rather than a decoration.
+    const withEvidence = generateManifest()
+    const withoutEvidence = generateManifest({ includeExternalEvidence: false })
+    expect(Object.keys(withEvidence.inputs)).toContain("c0-01-inventory-report")
+    expect(Object.keys(withoutEvidence.inputs)).not.toContain("c0-01-inventory-report")
   })
 })

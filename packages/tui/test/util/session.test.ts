@@ -4,6 +4,7 @@ import {
   acquireForkIntent,
   completeForkIntent,
   contextUsage,
+  FORK_STATE_LIMIT,
   isDefaultTitle,
   requestSessionFork,
 } from "../../src/util/session"
@@ -128,6 +129,15 @@ describe("util.session", () => {
     finish({ data: { id: "ses_single" } })
     expect(await Promise.all([first, second])).toEqual([{ sessionID: "ses_single" }, { sessionID: "ses_single" }])
     expect(calls).toBe(1)
+  })
+
+  test("bounds retained retry intents", () => {
+    const prefix = `session:bounded:${Date.now()}:`
+    const intents = Array.from({ length: FORK_STATE_LIMIT + 1 }, (_, index) => acquireForkIntent(prefix + index))
+
+    expect(acquireForkIntent(`${prefix}0`)).not.toBe(intents[0])
+    intents.forEach((intentID, index) => completeForkIntent(prefix + index, intentID))
+    completeForkIntent(`${prefix}0`, acquireForkIntent(`${prefix}0`))
   })
 
   test("counts only retained provider context", () => {

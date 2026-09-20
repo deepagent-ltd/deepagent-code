@@ -17,7 +17,6 @@ import { SessionV2 } from "@deepagent-code/core/session"
 import { Database } from "@deepagent-code/core/database/database"
 import { Session } from "./session"
 import { Snapshot } from "../snapshot"
-import { SessionPrompt } from "./prompt"
 import { Agent } from "../agent/agent"
 import { Provider } from "../provider/provider"
 import { LSP } from "../lsp/lsp"
@@ -26,18 +25,21 @@ import { InstanceRef, WorkspaceRef } from "@/effect/instance-ref"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { MultiAgentRuntime } from "./multi-agent-runtime"
-import { makeV2AdmissionBridge } from "./v2-admission-bridge"
+import { makeV2AdmissionBridge, makeSessionV2Adapter } from "./v2-admission-bridge"
 import { EventDispatcher, DISPATCH_GROUP } from "./event-dispatcher"
 import { AgentHandoffConsumer, HANDOFF_GROUP } from "./agent-handoff-consumer"
 import { HandoffAdmission } from "@deepagent-code/core/deepagent/handoff-admission"
-import type { SubagentTurnRunner, SubagentTurnResult } from "./goal-loop-wiring"
-import { MessageID, SessionID } from "./schema"
+import { EventSpool } from "@deepagent-code/core/deepagent/event-spool"
+import { EventAdmission } from "@deepagent-code/core/deepagent/event-admission"
+import { ConsumerReceipts } from "@deepagent-code/core/deepagent/consumer-receipts"
+import { Location } from "@deepagent-code/core/location"
+import { AbsolutePath } from "@deepagent-code/core/schema"
+import { makeTaskSubagentRunner } from "./goal-loop-wiring"
 import { SessionCompletedPublisher } from "./session-completed-publisher"
 import { EventDrivenArchiver, ARCHIVE_GROUP } from "@/wiki/event-driven-archiver"
 import { PanelConveneConsumer, CONVENE_GROUP } from "@/panel/panel-convene-consumer"
 import { consultPanel } from "@/panel/consult"
 import type { PanelTurnRunner } from "@/panel/panelist-runner"
-import { GoalLoopWiring, makeTaskSubagentRunner, v2DriveDeps } from "./goal-loop-wiring"
 // §B2/§E4 (P2.8) — proactive push stack.
 import { AgentPush } from "./agent-push"
 import { DigestBuilder } from "./digest-builder"
@@ -56,23 +58,17 @@ import { LocationIndexRuntime } from "@/location-index/runtime"
 import { LocationIndexCoordinator } from "@/location-index/coordinator"
 import * as Log from "@deepagent-code/core/util/log"
 import path from "node:path"
-import { ensureEventParent, make as makeV4PRCollaboration } from "./v4-pr-collaboration"
+import { make as makeV4PRCollaboration } from "./v4-pr-collaboration"
 import { Git } from "@/git"
 import { PRQueue } from "@/agent/pr-queue"
-// §C3.2 (P4.5a) — physical per-agent worktree isolation (git-CLI helper; fail-safe → event dir).
-import {
-  createAgentWorktree,
-  cleanupAgentWorktree,
-  type AgentWorktree,
-  type AgentWorktreeCleanup,
-} from "./agent-worktree"
 
 // V4.0 §A4/§C — the PRODUCTION event-runtime. This is the layer that was missing: every V4 daemon and
 // consumer was built + unit-tested but NEVER STARTED in prod, so published events were durably logged
 // and then ignored. This layer assembles them and starts their scoped fibers with the server:
 //
 //   EventDispatcher   — subscribes the bus, runs the §A4 router, hands routed events to →
-//   MultiAgentRuntime — the DispatchPort; coordinates §C execution via a real turn runner →
+//   MultiAgentRuntime — the DispatchPort; v2w-j4 durable-only: V2 admission only (the §C turn
+//                       runner is deleted; an unavailable admission lane fails closed at dispatch) →
 //   RetentionSweeper  — the §A3 periodic prune loop.
 //
 // Everything is FLAG-GATED at the point of behavior: the dispatcher only dispatches when
@@ -80,23 +76,10 @@ import {
 // change runtime behavior until an operator flips the flag. The daemon fibers are scoped to the layer,
 // so they start with the server and stop when it shuts down.
 //
-// LAYERING: deepagent-code. Depends on the instance session stack (Session/SessionPrompt/Agent/Provider)
-// for the real turn runner, plus the core V4 services.
+// LAYERING: deepagent-code. Depends on the instance session stack (SessionV2 admission via the C5-12
+// bridge) plus the core V4 services.
 
 const log = Log.create({ service: "v4-event-runtime" })
-
-// §G — a per-turn wall-clock ceiling for event-driven agent runs. Generous (event work can be
-// substantial) but finite, so a blocked tool can't stall the sequential dispatch loop forever.
-const EVENT_TURN_TIMEOUT_MS = 10 * 60 * 1000
-
-const failedTurn = (reason?: string): SubagentTurnResult => ({
-  ok: false,
-  ...(reason ? { reason } : {}),
-  structured: undefined,
-  text: "",
-  tokensUsed: 0,
-  cost: 0,
-})
 
 export const resolveCodeGraphSymbols = (input: {
   readonly coordinator: LocationIndexCoordinator.Interface
@@ -126,266 +109,11 @@ export const resolveCodeGraphSymbols = (input: {
     ]
   })
 
-// The production SubagentTurnRunner for event-driven dispatch. Unlike the goal-loop runner (which
-// parents each turn to a fixed goal session), an event has no parent session — so this creates a fresh
-// ROOT session rooted in the triggering event's workspace/directory (mirrors the IM agent executor),
-// then runs one prompt turn. The model is the provider default (event-triggered agents have no
-// inherited session model).
-// Exported for direct testing: the regression lock asserts this runner does NOT silently return
-// failedTurn when invoked with no ambient InstanceRef (the real daemon-fiber environment) — proving
-// every InstanceState-touching call runs inside withContext (a die would pierce orElseSucceed).
-export const makeEventTurnRunner =
-  (deps: {
-    readonly sessions: Session.Interface
-    readonly agents: Agent.Interface
-    readonly sessionPrompt: SessionPrompt.Interface
-    readonly instanceStore: InstanceStore.Interface
-    readonly defaultModel: () => Effect.Effect<{ providerID: ProviderV2.ID; modelID: ModelV2.ID }>
-    // §C3.2 (P4.5a) — physical per-agent worktree isolation. Injectable so a test can drive it without a
-    // real git repo; production defaults to the git-CLI helpers. A read-only turn may fall back when creation
-    // returns null; `requiresWriteIsolation` fails closed. Cleanup proves a durable ref before it is handed
-    // to a dependent DAG turn. Set enableWorktreeIsolation:false to test the unavailable path.
-    readonly enableWorktreeIsolation?: boolean
-    readonly createWorktree?: (input: {
-      readonly eventDirectory: string
-      readonly label: string
-      readonly baseRef?: string
-    }) => Promise<AgentWorktree | null>
-    readonly cleanupWorktree?: (wt: AgentWorktree) => Promise<AgentWorktreeCleanup | null>
-  }): SubagentTurnRunner =>
-  (input) =>
-    Effect.gen(function* () {
-      // §C — the event's workspaceID is a grouping key that may be a genuine "wrk"-id OR a directory
-      // fallback (single-user / directory-routed). Only forward a genuine workspace id to the session.
-      // (This derivation reads NO InstanceState, so it is safe on the bare daemon fiber — do it first.)
-      const workspaceID =
-        input.workspaceID && input.workspaceID.startsWith("wrk") ? WorkspaceV2.ID.make(input.workspaceID) : undefined
-      // The turn must run in a REAL working directory. Prefer an explicit event directory; else, only a
-      // NON-"wrk" workspaceID doubles as a directory. A bare "wrk_"-id is NOT a path → no directory.
-      const eventDirectory =
-        input.directory ?? (input.workspaceID && !input.workspaceID.startsWith("wrk") ? input.workspaceID : undefined)
-      if (!eventDirectory) return failedTurn()
-
-      const parentSessionID = input.parentSessionID ? SessionID.make(input.parentSessionID) : undefined
-      const parent = parentSessionID
-        ? yield* ensureEventParent({
-            sessions: deps.sessions,
-            instanceStore: deps.instanceStore,
-            parentSessionID,
-            directory: eventDirectory,
-            workspaceID,
-            correlationID: input.correlationID,
-          }).pipe(Effect.orElseSucceed(() => undefined))
-        : undefined
-      if (parentSessionID && !parent) return failedTurn("event_parent_unavailable")
-
-      // §C3.2 (P4.5a) — attempt to create a dedicated, isolated git worktree for THIS agent turn. Read-only
-      // turns may fall back to the event directory. A declared write turn must never mutate that shared
-      // directory when isolation is unavailable: it returns `isolation_unavailable` for human handling.
-      const worktreeEnabled = deps.enableWorktreeIsolation !== false
-      const createWt = deps.createWorktree ?? createAgentWorktree
-      const cleanupWt = deps.cleanupWorktree ?? cleanupAgentWorktree
-
-      // §C3.2 (P4.5a) — acquire/use/release BINDS cleanup to creation so there is NO interrupt window
-      // between "worktree created" and "cleanup installed". Effect.acquireUseRelease runs `acquire`
-      // UNINTERRUPTIBLY and GUARANTEES `release` runs once acquire succeeds — even if `use` (the turn) is
-      // interrupted mid-flight (a MultiAgentRuntime concurrency-pool teardown or daemon shutdown). This
-      // closes the leak a plain create-then-Effect.ensuring left open: an EXTERNAL interrupt observed at the
-      // create→ensuring gap (the Effect.promise async boundary) would skip the finalizer install and orphan
-      // the worktree dir + agent/* branch forever. timeout / normal failure / happy path are unaffected
-      // (release also runs on those) — this only additionally covers the external-interrupt timing window.
-      //
-      const cleanupState: {
-        worktree: AgentWorktree | null
-        result: AgentWorktreeCleanup | null | undefined
-      } = { worktree: null, result: undefined }
-
-      // acquire — create the isolated worktree from the upstream dependency ref when one exists.
-      const acquire = worktreeEnabled
-        ? Effect.promise(() =>
-            createWt({
-              eventDirectory,
-              label: input.correlationID ?? input.agentType,
-              ...(input.baseRef ? { baseRef: input.baseRef } : {}),
-            }),
-          ).pipe(Effect.orElseSucceed(() => null))
-        : Effect.succeed<AgentWorktree | null>(null)
-      // release — tear down the worktree, preserving the agent's work on its branch (agent-worktree.ts). A
-      // NO-OP when no worktree was created (fallback path) — it NEVER touches the event directory. Wrapped
-      // in catchCause so a cleanup hiccup can't become a defect during interruption/settle (fail-safe).
-      const release = (worktree: AgentWorktree | null) =>
-        worktree
-          ? Effect.promise(() => cleanupWt(worktree)).pipe(
-              Effect.tap((result) => Effect.sync(() => void (cleanupState.result = result))),
-              Effect.catchCause(() => Effect.sync(() => void (cleanupState.result = null))),
-              Effect.asVoid,
-            )
-          : Effect.void
-
-      const turn = yield* Effect.acquireUseRelease(
-        acquire,
-        (worktree) =>
-          Effect.gen(function* () {
-            cleanupState.worktree = worktree
-            if (!worktree && input.requiresWriteIsolation) return failedTurn("isolation_unavailable")
-            // The directory the rest of the turn runs in: the isolated worktree when we got one, else the
-            // event directory (fallback). Everything below (instance load, session.create) uses THIS.
-            const directory = worktree?.directory ?? eventDirectory
-            // CRITICAL: this runs on a background daemon fiber, which carries NO InstanceRef (that is only set
-            // per-request by the instance-context middleware). EVERY InstanceState-touching call — agents.get,
-            // sessions.create, defaultModel, the prompt calls — reads InstanceRef and `Effect.die`s without it
-            // (instance-state.ts:15-17). A die is a DEFECT that pierces `orElseSucceed` (which only catches the
-            // E channel), so it would hit the outer catchCause → EVERY event-driven turn silently returns
-            // failedTurn — i.e. the whole event-driven execution chain never runs. So we ESTABLISH the instance
-            // context FIRST — load it for the event's directory (load PRODUCES ctx; it does not itself need an
-            // InstanceRef) — then run all four call sites inside withContext (mirrors the instance-context
-            // middleware + the IM executor, which inherit it from the request fiber).
-            const ctx = yield* deps.instanceStore.load({ directory }).pipe(Effect.orElseSucceed(() => undefined))
-            if (!ctx) return failedTurn()
-
-            const withContext = <A, E, R>(eff: Effect.Effect<A, E, R>) =>
-              eff.pipe(Effect.provideService(InstanceRef, ctx), Effect.provideService(WorkspaceRef, workspaceID))
-
-            // agents.get MUST run inside withContext (it resolves through InstanceState → dies without
-            // InstanceRef). With the context provided it no longer dies; a genuine unknown-agent still resolves
-            // to undefined via orElseSucceed → fail-soft failedTurn (semantics preserved).
-            const next = yield* withContext(deps.agents.get(input.agentType)).pipe(
-              Effect.orElseSucceed(() => undefined),
-            )
-            if (!next) return failedTurn()
-
-            const child = yield* withContext(
-              deps.sessions.create({
-                agent: next.name,
-                title: `${input.agentType} (event)`,
-                ...(parent ? { parentID: parent.id } : {}),
-                directory,
-                ...(workspaceID ? { workspaceID } : {}),
-                // §F2 trace back-half — stamp the correlationID onto the child session's metadata; Observability
-                // .trace reads it back (json_extract) and appends this child as a "session" node, so the trace
-                // follows correlationID from the event down into the child session's activity (its message /
-                // tool-call turns). The Multi-Agent Runtime passes event.correlationID ?? event.id.
-                ...(input.correlationID ? { metadata: { correlationID: input.correlationID } } : {}),
-              } as Parameters<Session.Interface["create"]>[0]),
-            ).pipe(Effect.orElseSucceed(() => undefined))
-            if (!child) return failedTurn()
-
-            if (input.prepareSession) {
-              try {
-                input.prepareSession(child.id)
-              } catch {
-                /* best-effort seed; the turn still runs */
-              }
-            }
-
-            // defaultModel resolves through InstanceState too (Provider.defaultModel → InstanceState.get) →
-            // wrap it, else it dies on the daemon fiber exactly like agents.get.
-            const model = yield* withContext(deps.defaultModel())
-            const parts = yield* withContext(deps.sessionPrompt.resolvePromptParts(input.prompt))
-            const result = yield* withContext(
-              deps.sessionPrompt.prompt({
-                messageID: MessageID.ascending(),
-                sessionID: child.id,
-                model,
-                agent: next.name,
-                ...(input.outputSchema
-                  ? { format: { type: "json_schema" as const, schema: input.outputSchema } as never }
-                  : {}),
-                parts,
-              }),
-            ).pipe(
-              // §C1/§G — bound the turn: an event-triggered session has no interactive client, so a tool that
-              // blocks on approval would otherwise hang the whole (sequential) dispatch loop indefinitely. Honor
-              // the agent's DECLARED per-turn ceiling (limits.maxTurnDurationMs, threaded via input) when set +
-              // positive; else fall back to the fixed default. (P3.13 — was a hard-coded constant.)
-              Effect.timeout(
-                typeof input.maxTurnDurationMs === "number" && input.maxTurnDurationMs > 0
-                  ? input.maxTurnDurationMs
-                  : EVENT_TURN_TIMEOUT_MS,
-              ),
-              // The prompt result is a SessionV1.WithParts — its assistant `info` carries the REAL per-turn
-              // token accounting. Keep the full shape (info + parts) so P4.1 can thread usage/cost/text below.
-              Effect.map(
-                (r) =>
-                  r as {
-                    readonly info?: {
-                      readonly role?: string
-                      readonly tokens?: {
-                        readonly input?: number
-                        readonly output?: number
-                        readonly reasoning?: number
-                      }
-                      readonly cost?: number
-                    }
-                    readonly parts?: ReadonlyArray<{ readonly type: string; readonly text?: string }>
-                    // legacy/back-compat: some callers surfaced a flattened top-level `text`.
-                    readonly text?: string
-                  },
-              ),
-              Effect.orElseSucceed(() => undefined),
-            )
-            if (!result) return failedTurn()
-
-            // One SessionPrompt.prompt call may execute several provider turns around tools. Its return value is
-            // only the final assistant, so accounting from result.info under-debits every earlier provider turn.
-            // This child Session is new for exactly this event turn: summing all persisted assistant messages
-            // gives the durable total. Cache read/write stays excluded, matching the goal-loop token budget.
-            const persisted = yield* (
-              typeof deps.sessions.messages === "function"
-                ? withContext(deps.sessions.messages({ sessionID: child.id })).pipe(
-                    Effect.map((messages) =>
-                      messages.flatMap((message) => (message.info.role === "assistant" ? [message.info] : [])),
-                    ),
-                    Effect.catchCause(() => Effect.succeed([])),
-                  )
-                : Effect.succeed([])
-            )
-            const infos =
-              persisted.length > 0
-                ? persisted
-                : result.info?.role === "assistant"
-                  ? [result.info]
-                  : []
-            const tokensUsed = infos.reduce(
-              (total, info) =>
-                total +
-                Math.max(0, (info.tokens?.input ?? 0) + (info.tokens?.output ?? 0) + (info.tokens?.reasoning ?? 0)),
-              0,
-            )
-            const cost = infos.reduce(
-              (total, info) =>
-                total + (typeof info.cost === "number" && Number.isFinite(info.cost) ? info.cost : 0),
-              0,
-            )
-            // Prefer the final text part (real WithParts shape); fall back to a flattened top-level `text`.
-            const text =
-              result.parts?.findLast?.((p) => p.type === "text")?.text ??
-              (typeof result.text === "string" ? result.text : "") ??
-              ""
-
-            return {
-              ok: true,
-              structured: undefined,
-              text,
-              tokensUsed,
-              cost,
-              sessionID: child.id,
-            }
-          }), // end use (the turn body)
-        // release — GUARANTEED once acquire succeeds, on ANY exit (success / failure / timeout / external
-        // interrupt). Preserves the agent's work on its branch; a no-op for the null-fallback (never the
-        // event dir).
-        (worktree) => release(worktree),
-      )
-
-      if (!turn.ok || !cleanupState.worktree) return turn
-      if (!cleanupState.result) return failedTurn("isolation_preservation_failed")
-      return {
-        ...turn,
-        continuationRef: cleanupState.result.continuationRef,
-        artifacts: cleanupState.result.artifacts,
-      }
-    }).pipe(Effect.catchCause(() => Effect.succeed(failedTurn())))
+// v2w-j4 durable-only: the legacy event turn runner (makeEventTurnRunner — fresh V1 Session per
+// event turn through Session.create + SessionPrompt.prompt) is DELETED. The V2 admission switch
+// being ON is the only production execution path (multi-agent-runtime dispatch is V2-admission-only
+// and fails closed with EventV2AdmissionUnavailableError when the lane is not live); the §C
+// coordination library keeps its INJECTED runner seam for deterministic tests only.
 
 // §M — the PRODUCTION PanelConvenePort for the auto-convene daemon. The PanelConveneConsumer never
 // creates sessions itself (it takes an injected port); this builds the real one for the DAEMON context,
@@ -404,11 +132,10 @@ export const makeEventPanelPort =
   (deps: {
     readonly sessions: Session.Interface
     readonly agents: Agent.Interface
-    readonly sessionPrompt: SessionPrompt.Interface
     readonly instanceStore: InstanceStore.Interface
     readonly defaultModel: () => Effect.Effect<{ providerID: ProviderV2.ID; modelID: ModelV2.ID }>
-    /** §16.3 order 3: optional V2 drive seam, resolved by the wiring layer (flag + composition gated). */
-    readonly v2Session?: SessionV2.Interface
+    /** The durable V2 session authority driving every panelist subagent turn (V2-only). */
+    readonly v2Session: SessionV2.Interface
     readonly snapshot?: Snapshot.Interface
   }): PanelConveneConsumer.PanelConvenePort =>
   (input) =>
@@ -457,12 +184,12 @@ export const makeEventPanelPort =
       const baseRunner = makeTaskSubagentRunner({
         sessions: deps.sessions,
         agents: deps.agents,
-        sessionPrompt: deps.sessionPrompt,
         parentSessionID: root.id,
         model: { providerID: model.providerID, modelID: model.modelID },
         allowPlanWriteCapability: false,
         purpose: "panel",
-        ...v2DriveDeps(deps.v2Session, deps.snapshot),
+        v2Session: deps.v2Session,
+        ...(deps.snapshot ? { snapshot: deps.snapshot } : {}),
       })
       const runTurn: PanelTurnRunner = (turnInput) =>
         withContext(
@@ -485,14 +212,12 @@ export const makeEventPanelPort =
       Effect.catchCause((cause) => Effect.fail(cause)),
     )
 
-// The MultiAgentRuntime layer, built with the production event turn runner. Requires the session stack
-// + core V4 services (provided by the app graph). This is the DispatchPort the dispatcher drives.
+// The MultiAgentRuntime layer (v2w-j4 durable-only: V2-admission-only dispatch — no turn runner is
+// wired; the legacy event turn runner is deleted). Requires the session stack + core V4 services
+// (provided by the app graph). This is the DispatchPort the dispatcher drives.
 const runtimeLayer = Layer.unwrap(
   Effect.gen(function* () {
     const sessions = yield* Session.Service
-    const agents = yield* Agent.Service
-    const sessionPrompt = yield* SessionPrompt.Service
-    const provider = yield* Provider.Service
     const instanceStore = yield* InstanceStore.Service
     const concurrency = yield* WorkspaceConcurrency.Service
     const execution = yield* AgentExecution.Service
@@ -517,16 +242,11 @@ const runtimeLayer = Layer.unwrap(
     // closed at dispatch time, matching the default-off discipline). The security namespace is resolved by
     // the bridge (deterministic workspace-scoped default; ContextLocationIdentity upgrade is a follow-on).
     const db = (yield* Database.Service).db
-    const v2Session = Option.getOrUndefined(yield* Effect.serviceOption(SessionV2.Service))
-    const eventV2Admission = makeV2AdmissionBridge({ db, ...(v2Session ? { v2Session } : {}) })
-    const runner = makeEventTurnRunner({
-      sessions,
-      agents,
-      sessionPrompt,
-      instanceStore,
-      // provider default model, resolved per turn; falls back to failedTurn on error via the runner.
-      defaultModel: () => provider.defaultModel().pipe(Effect.orDie),
-    })
+    const v2Session = yield* SessionV2.Service
+    const eventV2Admission = makeV2AdmissionBridge({ db, v2Session })
+    // v2w-j4 durable-only: no `runner` is passed — dispatch is V2-admission-only and an unavailable
+    // admission lane fails closed with MultiAgentRuntime.EventV2AdmissionUnavailableError (the §C
+    // coordination library's runner seam remains for deterministic tests only).
     // §E2 — cap concurrent agent execution per workspace (default 5).
     // §E1 — wire the four-layer gate to real, fail-closed resolvers:
     //   L1 (event_source)  — per-EVENT: the event's workspace trusted-source set (system events must
@@ -536,7 +256,6 @@ const runtimeLayer = Layer.unwrap(
     //   L4 (runtime_operation) — the agent's declared toolWhitelist pre-gate (defense-in-depth; the child
     //                        session's own permission path remains the fine-grained enforcement).
     return MultiAgentRuntime.layerWith({
-      runner,
       concurrency,
       execution,
       fileLock,
@@ -579,7 +298,6 @@ type GoalTickFlags = Pick<RuntimeFlags.Info, "v4MultiAgentRuntime" | "v4GoalTick
 type V4DaemonFlags = Pick<
   RuntimeFlags.Info,
   | "v4MultiAgentRuntime"
-  | "v4EventDrivenIm"
   | "v4PanelAutoConvene"
   | "v4AgentPushEnabled"
   | "v4EventDrivenArchive"
@@ -591,7 +309,6 @@ export const goalTickConsumerEnabled = (flags: GoalTickFlags): boolean =>
 
 export const anyV4DaemonEnabled = (flags: V4DaemonFlags): boolean =>
   flags.v4MultiAgentRuntime ||
-  flags.v4EventDrivenIm ||
   flags.v4PanelAutoConvene ||
   flags.v4AgentPushEnabled ||
   flags.v4EventDrivenArchive ||
@@ -636,16 +353,16 @@ export const consumerRegistrationLayer = Layer.effectDiscard(
     const disabled = runtimeConsumerGroups.filter((group) => !group.enabled(flags))
 
     yield* Effect.forEach(enabled, (group) => bus.registerConsumerGroup(group.id, group.typeFilter), {
-      concurrency: "unbounded",
+      concurrency: 16,
       discard: true,
     })
     yield* Effect.forEach(disabled, (group) => bus.unregisterConsumerGroup(group.id), {
-      concurrency: "unbounded",
+      concurrency: 16,
       discard: true,
     })
     yield* Effect.addFinalizer(() =>
       Effect.forEach(enabled, (group) => bus.unregisterConsumerGroup(group.id), {
-        concurrency: "unbounded",
+        concurrency: 16,
         discard: true,
       }),
     )
@@ -655,6 +372,13 @@ export const consumerRegistrationLayer = Layer.effectDiscard(
 // The EventDispatcher layer whose DispatchPort is the live MultiAgentRuntime. Its subscribe/tick/retry
 // daemons run only when a V4 daemon is enabled (else runLoops:false ⇒ built but dormant). The dispatcher
 // additionally flag-checks v4MultiAgentRuntime per event before dispatching.
+//
+// W0.4 — @mention 路由修复: the mention handler (mention-aware routing + `agent_no_trigger_mention`
+// receipt writing, replacing the `no_match` silent drop) lives in `EventDispatcher.handle` — see
+// event-dispatcher.ts's "W0.4 — @mention 路由修复与默认统一" block and `mentionNamesFor` /
+// `resolveMentioned` / `defaultMentionReceiptPort`. It is already active here: the default receipt
+// port writes the receipt as a durable IM message via IMRepository (provided below by the shared
+// provide stack, see server.ts), with a log-only fallback in isolated contexts.
 const dispatcherLayer = Layer.unwrap(
   Effect.gen(function* () {
     const rt = yield* MultiAgentRuntime.Service
@@ -737,8 +461,9 @@ const retentionLayer = Layer.unwrap(
 // in-memory map that grows one entry per workspace that publishes; without a periodic prune it retains
 // a bucket for every workspace forever (a slow leak). This scoped fiber calls sweepPublishLimiter on a
 // cadence to drop windows that have already elapsed. Same flag coupling as the retention sweeper: the
-// limiter is only populated by V4 publishers (im.message.created / goal.*), so with all V4 flags off
-// nothing publishes → no buckets → nothing to prune, and this daemon stays inert. A failure in one pass
+// limiter is only populated by V4 publishers (goal.* / session.completed / scheduler-fired events), so
+// with all V4 flags off nothing publishes → no buckets → nothing to prune, and this daemon stays inert.
+// A failure in one pass
 // is logged and swallowed so the loop never dies. Provides no service (Layer.effectDiscard) — it exists
 // purely for its scoped daemon fiber, so it merges cleanly alongside the other daemon layers.
 const LIMITER_SWEEP_INTERVAL_MS = 60_000
@@ -910,7 +635,7 @@ export const archiverLayer = Layer.unwrap(
 // §M — the Expert Panel AUTO-CONVENE consumer. Subscribes the shared bus, runs the pure §M policy on
 // each event, and — on "convene" — drives the EXISTING V3.9 panel engine via makeEventPanelPort (which
 // establishes daemon-fiber instance context, creates a root session, and runs consultPanel). Draws the
-// session stack (Session/Agent/SessionPrompt/InstanceStore/Provider) — the SAME set makeEventTurnRunner
+// session stack (Session/Agent/InstanceStore/Provider) — the SAME set makeEventTurnRunner
 // uses in runtimeLayer — plus DeepAgentEventBus + ApprovalQueue + RuntimeFlags from the outer graph.
 //
 // FLAG COUPLING: runLoop = v4PanelAutoConvene. Default OFF ⇒ runLoop false ⇒ NO subscription ⇒ the
@@ -922,18 +647,18 @@ const panelConsumerLayer = Layer.unwrap(
     const flags = yield* RuntimeFlags.Service
     const sessions = yield* Session.Service
     const agents = yield* Agent.Service
-    const sessionPrompt = yield* SessionPrompt.Service
     const provider = yield* Provider.Service
     const instanceStore = yield* InstanceStore.Service
-    // LEGACY-EXECUTION-ZERO: V2 subagent drive resolution (forced under the V2-only profile).
-    const { v2Session, snapshot: v2Snapshot } = yield* GoalLoopWiring.resolveV2SubagentDrive()
+    // LEGACY-EXECUTION-ZERO: the V2 session authority + snapshot drive every panelist turn.
+    const v2Session = yield* SessionV2.Service
+    const snapshot = yield* Snapshot.Service
     const convene = makeEventPanelPort({
       sessions,
       agents,
-      sessionPrompt,
       instanceStore,
       defaultModel: () => provider.defaultModel().pipe(Effect.orDie),
-      ...v2DriveDeps(v2Session, v2Snapshot, flags.coreV2Only),
+      v2Session,
+      snapshot,
     })
     return PanelConveneConsumer.layerWith({ convene, runLoop: flags.v4PanelAutoConvene })
   }),
@@ -956,7 +681,6 @@ const goalTickConsumerLayer = Layer.unwrap(
     const flags = yield* RuntimeFlags.Service
     const sessions = yield* Session.Service
     const agents = yield* Agent.Service
-    const sessionPrompt = yield* SessionPrompt.Service
     const revert = yield* SessionRevert.Service
     const steerBuffer = yield* SessionSteer.Service
     const provider = yield* Provider.Service
@@ -965,12 +689,12 @@ const goalTickConsumerLayer = Layer.unwrap(
     const events = yield* EventV2Bridge.Service
     const eventBus = yield* DeepAgentEventBus.Service
     const approvalQueue = yield* ApprovalQueue.Service
-    // LEGACY-EXECUTION-ZERO: V2 subagent drive resolution for cold tick reconstruction.
-    const { v2Session, snapshot: v2Snapshot } = yield* GoalLoopWiring.resolveV2SubagentDrive()
+    // LEGACY-EXECUTION-ZERO: the V2 session authority + snapshot drive cold tick reconstruction.
+    const v2Session = yield* SessionV2.Service
+    const snapshot = yield* Snapshot.Service
     const runTick = GoalTickPort.makeGoalTickPort({
       sessions,
       agents,
-      sessionPrompt,
       revert,
       steerBuffer,
       provider,
@@ -981,7 +705,8 @@ const goalTickConsumerLayer = Layer.unwrap(
       approvalQueue,
       flags,
       goalStoreRoot,
-      ...v2DriveDeps(v2Session, v2Snapshot, flags.coreV2Only),
+      v2Session,
+      snapshot,
     })
     return GoalTickConsumer.layerWith({
       runTick,
@@ -990,15 +715,187 @@ const goalTickConsumerLayer = Layer.unwrap(
   }),
 )
 
+// ── W5 ③ — DLQ 可见化: the C5 SPOOL DRAIN daemon + `event_consumer_failure` receipt ────────────────
+// design.md §8.6 (durable high/critical + throttled spool: never lost, bounded concurrency, priority
+// order, crash-safe claim/lease) was implemented but had NO production consumer — the spool ledger
+// (`deepagent_event_spool`) only ever ran in tests (audit a4-events §2.6, worklist C5-07). This daemon
+// claims due spool rows and admits each bounded envelope as durable V2 session work
+// (`EventAdmission.admit` with the PRODUCTION SessionV2 adapter — the spool is the high/critical lane
+// of the V2 admission path). A consumption failure NACKS (bounded retry → `dead` = the DLQ) and
+// records an `event_consumer_failure` receipt in `deepagent_consumer_receipt` (`ConsumerReceipts.runOnce`,
+// consumerKind "event_consumer_failure", source_event_id = the spool eventRef) + log.error — the durable,
+// admin-queriable DLQ visibility. (Admin HTTP surface: none exists for the spool today — receipt + log
+// only, per W5 scope.)
+//
+// FLAG COUPLING: the daemon runs only when v4MultiAgentRuntime is ON (the C5 event daemons are live)
+// AND the V2 admission switch is ON (without admission the drain would refuse every row and dead-letter
+// live high/critical work — the drain MUST be inert when the admission path is off; a spool row also
+// never reaches `dead` without the drain, so nothing is lost while it is off).
+export const SPOOL_DRAIN_INTERVAL_MS = 60_000
+export const SPOOL_DRAIN_BATCH = 20
+export const SPOOL_DRAIN_LEASE_MS = 120_000
+
+/** Deterministic admission anchor per spool row (SessionV2 dedupe — a re-drain never double-admits). */
+export const spoolAdmissionAnchor = (eventRef: string, sessionID: string): string =>
+  `spool:${eventRef}:${sessionID}`
+
+// W5 F4 ③ — nack retry backoff. Exponential with a floor of 5s and a cap of 5min, keyed by the ATTEMPT
+// count (1st nack → 5s, 2nd → 10s, 3rd → 20s … past the 5-min cap). Kept small (fixed helper, one
+// min/max): bounded retries must not hammer the spool while still recovering quickly for transient faults.
+export const SPOOL_NACK_BACKOFF_BASE_MS = 5_000
+export const SPOOL_NACK_BACKOFF_CAP_MS = 5 * 60_000
+export const spoolNackBackoffMs = (attempt: number): number =>
+  Math.min(SPOOL_NACK_BACKOFF_CAP_MS, SPOOL_NACK_BACKOFF_BASE_MS * 2 ** Math.max(0, attempt - 1))
+
+/** §C derivation for the spool adapter's get-or-create (a non-"wrk" workspaceID doubles as the directory). */
+export const spoolLocationFor = (workspaceId: string | undefined): Location.Ref | undefined =>
+  workspaceId && !workspaceId.startsWith("wrk")
+    ? Location.Ref.make({ directory: AbsolutePath.make(workspaceId) })
+    : undefined
+
+/**
+ * The admin-queriable consumer-kind for spool consumption failures (W5 ③). Read via
+ * `ConsumerReceipts.receiptFor(db, "event_consumer_failure", eventRef)` / the `deepagent_consumer_receipt`
+ * ledger for a DLQ view; no HTTP surface exists for it yet (W5 scope: receipt + log).
+ */
+export const CONSUMER_FAILURE_KIND = "event_consumer_failure"
+
+/**
+ * ONE spool drain pass: claim a due batch (priority order, bounded per-session concurrency), admit each
+ * bounded envelope as durable V2 session work, commit on success and nack on failure (bounded retry →
+ * `dead` = the DLQ). Exported for direct testing; the daemon repeats it on a cadence.
+ *
+ * INERT when the V2 admission switch is OFF or no SessionV2 stack is present — the drain must not
+ * dead-letter live high/critical work by refusing it because the admission lane is not live.
+ *
+ * W5 honesty (receipts + interruption):
+ *   - a strategic refusal (noise / invalid envelope / digest mismatch / disabled) is recorded as a
+ *     `refused` admission receipt by `EventAdmission.admit` itself — the drain sees the typed refusal
+ *     and NACKs (bounded retry); the receipt row IS the durable record of the refusal.
+ *   - the `event_consumer_failure` receipt is written ONLY when the nack dead-letters the spool row
+ *     (the DLQ terminal state) — intermediate retries stay visible via the spool row's own
+ *     `attempts`/`last_error`; on eventual success a pending failure receipt is CLEARED (F4 ②).
+ *   - an INTERRUPTION (daemon dispose) is not a consumption failure: the row stays claimed and the
+ *     lease expiry revives it — no spurious nack, no attempt inflation, no receipt.
+ */
+export const spoolDrainPass = (input: {
+  readonly db: Database.Interface["db"]
+  readonly v2Session?: SessionV2.Interface
+  readonly now?: () => number
+  readonly runtimeFeatures?: EventAdmission.RuntimeFeatureRegistry
+}): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    const at = input.now?.() ?? Date.now()
+    const v2Session = input.v2Session
+    if (!v2Session || !EventAdmission.isEventV2AdmissionEnabled(input.runtimeFeatures)) return
+    const claimed = yield* EventSpool.claimDue(input.db, {
+      claimantId: "v4-spool-drain",
+      now: at,
+      leaseMs: SPOOL_DRAIN_LEASE_MS,
+      limit: SPOOL_DRAIN_BATCH,
+    })
+    for (const row of claimed.rows) {
+      const workspaceId = row.envelope.actorAndScope.workspaceId
+      // W5 F2 — a re-drive anchors the admission at the row's STORED message id (when the receipt was
+      // previously written by any lane) so SessionV2 reconcile-dedupes against the FIRST admission;
+      // the deterministic spool anchor is only the first-attempt fallback.
+      const priorAdmission = yield* EventAdmission.admissionFor(input.db, row.eventRef)
+      const anchor = priorAdmission?.messageID ?? spoolAdmissionAnchor(row.eventRef, row.sessionID)
+      const outcome = yield* EventAdmission.admit(input.db, {
+        envelope: row.envelope,
+        sessionID: row.sessionID,
+        messageID: anchor,
+        adapter: makeSessionV2Adapter(v2Session, spoolLocationFor, workspaceId),
+        now: at,
+        ...(input.runtimeFeatures ? { runtimeFeatures: input.runtimeFeatures } : {}),
+      }).pipe(Effect.exit)
+      // An INTERRUPTION is not a failure: re-raise it and leave the claimed row for lease revival.
+      if (outcome._tag === "Failure" && Cause.hasInterrupts(outcome.cause)) {
+        return yield* Effect.interrupt
+      }
+      if (outcome._tag === "Success") {
+        // Admitted (or exact-retry re-admitted — the receipt row idempotency key made it a no-op).
+        yield* EventSpool.commitResult(input.db, {
+          eventRef: row.eventRef,
+          claimToken: claimed.claimToken,
+          now: at,
+        }).pipe(Effect.orDie)
+        // W5 F4 ② — the consumption succeeded: a stale PENDING failure receipt is no longer true.
+        yield* ConsumerReceipts.clearPending(input.db, CONSUMER_FAILURE_KIND, row.eventRef).pipe(
+          Effect.catchCause(() => Effect.void),
+        )
+      } else {
+        const reason =
+          (Cause.squash(outcome.cause) as { readonly message?: string } | undefined)?.message ??
+          "spool consumption failed"
+        // W5 F4 ③ — exponential nack backoff (bounded retries do not hammer the spool).
+        const backoffMs = spoolNackBackoffMs(row.attempts + 1)
+        yield* EventSpool.nack(input.db, {
+          eventRef: row.eventRef,
+          claimToken: claimed.claimToken,
+          now: at,
+          reason,
+          backoffMs,
+        }).pipe(Effect.orDie)
+        const settled = yield* EventSpool.getByRef(input.db, row.eventRef)
+        // W5 F4 ① — the DLQ receipt is written ONLY when this nack dead-lettered the row (terminal):
+        // the durable `event_consumer_failure` receipt (last_error = the reason, attempts = the real
+        // count) is the admin view of the DLQ. Intermediate retries keep the spool row as the record.
+        if (settled?.status === "dead") {
+          yield* ConsumerReceipts.runOnce(input.db, {
+            consumerKind: CONSUMER_FAILURE_KIND,
+            sourceEventId: row.eventRef,
+            // The failing side effect carries the consumption error so the durable receipt's `last_error`
+            // is the real reason (the receipt stays `pending` = "a failed consumption is recorded"; the
+            // DLQ terminal state lives on the dead spool row).
+            sideEffect: Effect.fail(new Error(reason)),
+            now: at,
+          }).pipe(
+            Effect.catchCause(() => Effect.void),
+          )
+        }
+        yield* Effect.logError("spool consumption failed (bounded retry → DLQ after cap)", {
+          eventRef: row.eventRef,
+          sessionID: row.sessionID,
+          reason,
+          attempts: settled?.attempts ?? row.attempts + 1,
+        })
+      }
+    }
+  }).pipe(
+    // W5 F5 — interruption must NOT be swallowed: the daemon's dispose interrupts this pass and the
+    // interruption has to stop the `repeat` loop (a swallowed interrupt would keep the daemon alive).
+    // A real failure is logged and the pass completes (the repeat loop retries on its cadence).
+    Effect.catchCauseIf(
+      (cause) => !Cause.hasInterrupts(cause),
+      (cause) => Effect.sync(() => log.error("spool drain pass failed", { cause: Cause.pretty(cause) })),
+    ),
+  )
+
+const spoolDrainLayer = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const flags = yield* RuntimeFlags.Service
+    if (!flags.v4MultiAgentRuntime) return
+    const { db } = yield* Database.Service
+    const v2Session = yield* SessionV2.Service
+    yield* spoolDrainPass({ db, v2Session })
+      .pipe(
+        Effect.repeat(Schedule.spaced(Duration.millis(SPOOL_DRAIN_INTERVAL_MS))),
+        Effect.forkScoped,
+      )
+      .pipe(Effect.asVoid)
+  }),
+)
+
 /**
  * The full V4 event-runtime, ready to merge into the instance app graph. Starts (as scoped daemons):
  * the EventDispatcher (router + scheduler tick + retry pump), the MultiAgentRuntime (DispatchPort),
- * the RetentionSweeper, the §E2 publish-limiter sweep, the §A4/§N schedule bootstrap, and the §L
- * SessionCompletedPublisher (republishes a completed root session's end-of-turn idle as
- * `session.completed` so the archiver has a trigger). All behavior is flag-gated, so providing this
- * layer is inert until the V4 flags are enabled.
+ * the RetentionSweeper, the §E2 publish-limiter sweep, the §A4/§N schedule bootstrap, the spool drain
+ * (W5 ③ — the C5 spool consumer + DLQ receipt), and the §L SessionCompletedPublisher (republishes a
+ * completed root session's end-of-turn idle as `session.completed` so the archiver has a trigger).
+ * All behavior is flag-gated, so providing this layer is inert until the V4 flags are enabled.
  *
- * Requires from the surrounding graph: Session, SessionPrompt, Agent, Provider, RuntimeFlags,
+ * Requires from the surrounding graph: Session, Agent, Provider, RuntimeFlags,
  * EventV2Bridge, and a Database (for the core V4 services this self-provides over it). The core services
  * (DeepAgentEventBus / ApprovalQueue / Scheduler / WorkspaceConfig / WorkspaceConcurrency /
  * AgentListProvider / RetentionSweeper) are provided here so the daemons share one bus + DB.
@@ -1008,6 +905,9 @@ export const layer = Layer.mergeAll(
   retentionLayer,
   limiterSweepLayer,
   scheduleBootstrapLayer,
+  // W5 ③ — the C5 spool drain (high/critical lane of the V2 admission path). Flag-gated ON
+  // v4MultiAgentRuntime + admission switch (see spoolDrainLayer); inert under the defaults.
+  spoolDrainLayer,
   // §L — the session.completed producer. Its subscription/publish is gated on v4EventDrivenArchive
   // (inert when off). It draws DeepAgentEventBus (provided alongside the runtime), plus RuntimeFlags /
   // EventV2Bridge / Session from the shared app graph — so it shares the ONE bus the archiver consumes.

@@ -540,7 +540,7 @@ const intentOverview = (rc: RunCtx, loc: Loc) =>
           })
           .pipe(Effect.catch(() => Effect.succeed([]))),
       ],
-      { concurrency: "unbounded" },
+      { concurrency: 3 },
     )
 
     const definedAt = yield* renderLocations(rc, defs, 1)

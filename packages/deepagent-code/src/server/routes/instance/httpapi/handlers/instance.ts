@@ -3,9 +3,12 @@ import { Command } from "@/command"
 import * as InstanceState from "@/effect/instance-state"
 import { Format } from "@/format"
 import { Global } from "@deepagent-code/core/global"
+import { AbsolutePath } from "@deepagent-code/core/schema"
 import { LSP } from "@/lsp/lsp"
 import { Vcs } from "@/project/vcs"
 import { Skill } from "@/skill"
+import { V2AgentRoster } from "@/session/v2-agent-roster"
+import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
@@ -23,6 +26,7 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
     const skill = yield* Skill.Service
     const vcs = yield* Vcs.Service
     const config = yield* Config.Service
+    const flags = yield* RuntimeFlags.Service
 
     const dispose = Effect.fn("InstanceHttpApi.dispose")(function* () {
       yield* markInstanceForDisposal(yield* InstanceState.context)
@@ -79,7 +83,7 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
 
     const getVcs = Effect.fn("InstanceHttpApi.vcs")(function* () {
       const [branch, default_branch] = yield* Effect.all([vcs.branch(), vcs.defaultBranch()], {
-        concurrency: "unbounded",
+        concurrency: 2,
       })
       return { branch, default_branch }
     })
@@ -132,6 +136,19 @@ export const instanceHandlers = HttpApiBuilder.group(InstanceHttpApi, "instance"
     })
 
     const getAgent = Effect.fn("InstanceHttpApi.agent")(function* () {
+      // RI-26 read-model convergence: under the V2-only profile the list serves the execution
+      // authority (Core Location roster) projected onto the V1 wire shape — the picker must never
+      // offer a mode the V2 runner cannot run. A graph without a LocationServiceMap keeps the V1
+      // read model (same fallback contract as promptV2's validation).
+      if (flags.coreV2Only) {
+        const ctx = yield* InstanceState.context
+        const workspaceID = yield* InstanceState.workspaceID
+        const roster = yield* V2AgentRoster.agentsFor({
+          directory: AbsolutePath.make(ctx.directory),
+          ...(workspaceID ? { workspaceID } : {}),
+        })
+        if (roster) return roster.map(V2AgentRoster.toWireAgent)
+      }
       return yield* agent.list()
     })
 

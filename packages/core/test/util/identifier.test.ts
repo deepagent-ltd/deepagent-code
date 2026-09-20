@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Identifier } from "@deepagent-code/core/util/identifier"
+import { create } from "@deepagent-code/core/id/id"
 
 // The sortable time component lives in the first 12 hex chars of the id (6 bytes). Callers only ever
 // sort ids lexically, so comparing this prefix is exactly the `(created_at, id)` tiebreak the bus uses.
@@ -57,5 +58,14 @@ describe("Identifier same-millisecond ordering", () => {
     // Later descending id sorts BEFORE the earlier one (newest-first), and they never tie.
     expect(timePrefix(d2) < timePrefix(d1)).toBe(true)
     void at
+  })
+
+  test("public domain ids stay ordered after a same-millisecond block overflows", () => {
+    const at = 1_700_000_001_000
+    const burst = Array.from({ length: 5_000 }, () => create("evt", "ascending", at))
+    const next = create("evt", "ascending", at + 1)
+    const prefix = (id: string) => id.slice(4, 16)
+
+    expect(prefix(next) > prefix(burst.at(-1)!)).toBe(true)
   })
 })

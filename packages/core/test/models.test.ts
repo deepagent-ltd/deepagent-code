@@ -6,9 +6,12 @@ import { Flag } from "@deepagent-code/core/flag/flag"
 import { Global } from "@deepagent-code/core/global"
 import { ModelsDev, OFFICIAL_VENDORED_CATALOG } from "@deepagent-code/core/models-dev"
 import { EventV2 } from "@deepagent-code/core/event"
+import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import { it } from "./lib/effect"
-import { readFile, rm, writeFile, utimes, mkdir } from "fs/promises"
+import { readFile, rm, writeFile, utimes, mkdir, mkdtemp } from "fs/promises"
 import path from "path"
+import os from "os"
+import { tmpRootAsync } from "./fixture/tmpdir"
 
 // test/preload.ts pins DEEPAGENT_CODE_MODELS_PATH to a fixture so other tests can
 // resolve providers without network. These tests need to drive the on-disk
@@ -86,15 +89,20 @@ const makeMockClient = (state: Ref.Ref<MockState>) =>
     }),
   )
 
-const buildLayer = (state: Ref.Ref<MockState>) =>
+const buildLayer = (state: Ref.Ref<MockState>, global = Global.layer) => {
+  const fs = FSUtil.defaultLayer
+  const flock = EffectFlock.layer.pipe(Layer.provide(fs), Layer.provide(global))
   // Layer.fresh is required: ModelsDev.layer is a module-level Layer constant,
   // and Effect.provide uses a process-global MemoMap by default — without fresh,
   // every test would reuse the cachedInvalidateWithTTL state from the first run.
-  Layer.fresh(ModelsDev.layer).pipe(
+  return Layer.fresh(ModelsDev.layer).pipe(
     Layer.provide(Layer.succeed(HttpClient.HttpClient, makeMockClient(state))),
-    Layer.provide(FSUtil.defaultLayer),
+    Layer.provide(fs),
     Layer.provide(EventV2.defaultLayer),
+    Layer.provide(global),
+    Layer.provide(flock),
   )
+}
 
 const writeCacheText = (text: string, mtimeMs?: number) =>
   Effect.promise(async () => {
@@ -147,18 +155,20 @@ describe("ModelsDev Service", () => {
     }),
   )
 
-  it.live("get() ships the vendored first-party catalog when disk empty, fetch disabled, and no bundled snapshot is injected", () =>
-    Effect.gen(function* () {
-      const state = yield* Ref.make(initialState)
-      const result = yield* provided(
-        state,
-        ModelsDev.Service.use((s) => s.get()),
-      )
-      expect(result).toEqual(OFFICIAL_VENDORED_CATALOG)
-      expect(result["deepagent"]).toBeDefined()
-      const final = yield* Ref.get(state)
-      expect(final.calls).toEqual([])
-    }),
+  it.live(
+    "get() ships the vendored first-party catalog when disk empty, fetch disabled, and no bundled snapshot is injected",
+    () =>
+      Effect.gen(function* () {
+        const state = yield* Ref.make(initialState)
+        const result = yield* provided(
+          state,
+          ModelsDev.Service.use((s) => s.get()),
+        )
+        expect(result).toEqual(OFFICIAL_VENDORED_CATALOG)
+        expect(result["deepagent"]).toBeDefined()
+        const final = yield* Ref.get(state)
+        expect(final.calls).toEqual([])
+      }),
   )
 
   it.live("get() recovers from a corrupted cache file by fetching a fresh catalog", () =>
@@ -244,6 +254,44 @@ describe("ModelsDev Service", () => {
       expect(final.calls[0].url).toContain("/api.json")
       expect(final.calls[0].userAgent).toContain("/cli")
     }),
+  )
+
+  it.live("uses the injected cache and lock roots for independent embedded runtimes", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpRootAsync()),
+      (testRoot) =>
+        Effect.gen(function* () {
+          const stateA = yield* Ref.make({ ...initialState, body: JSON.stringify(fixture) })
+          const stateB = yield* Ref.make({ ...initialState, body: JSON.stringify(fixture2) })
+          const cacheA = path.join(testRoot, "a", "cache")
+          const cacheB = path.join(testRoot, "b", "cache")
+          const layerA = buildLayer(
+            stateA,
+            Global.layerWith({ cache: cacheA, state: path.join(testRoot, "a", "state") }),
+          )
+          const layerB = buildLayer(
+            stateB,
+            Global.layerWith({ cache: cacheB, state: path.join(testRoot, "b", "state") }),
+          )
+
+          yield* Effect.all(
+            [
+              ModelsDev.Service.use((service) => service.refresh(true)).pipe(Effect.provide(layerA)),
+              ModelsDev.Service.use((service) => service.refresh(true)).pipe(Effect.provide(layerB)),
+            ],
+            { concurrency: "unbounded" },
+          )
+
+          expect(yield* Effect.promise(() => readFile(path.join(cacheA, "models.json"), "utf8"))).toBe(
+            JSON.stringify(fixture),
+          )
+          expect(yield* Effect.promise(() => readFile(path.join(cacheB, "models.json"), "utf8"))).toBe(
+            JSON.stringify(fixture2),
+          )
+          expect(yield* Effect.promise(() => Bun.file(cacheFile).exists())).toBe(false)
+        }),
+      (testRoot) => Effect.promise(() => rm(testRoot, { recursive: true, force: true })),
+    ),
   )
 
   it.live("refresh(false) skips fetch when on-disk file is fresh", () =>

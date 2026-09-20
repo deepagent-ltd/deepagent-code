@@ -389,4 +389,4 @@ export const fileHandlers = HttpApiBuilder.group(InstanceHttpApi, "file", (handl
       .handle("lockRelease", lockRelease)
       .handle("lockStatus", lockStatus)
   }),
-).pipe(Layer.provide(LocationServiceMap.layer), Layer.provide(Search.defaultLayer), Layer.provide(FileMutation.layer), Layer.provide(FileLock.layer))
+).pipe(Layer.provide(Search.defaultLayer), Layer.provide(FileMutation.layer), Layer.provide(FileLock.layer))

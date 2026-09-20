@@ -9,6 +9,7 @@ import { useToast } from "../../ui/toast"
 import { DialogMoveSession, type MoveSessionSelection } from "../dialog-move-session"
 import { DialogWorkspaceFileChanges } from "../dialog-workspace-file-changes"
 import { useHomeSessionDestination } from "../../routes/home/session-destination"
+import { useTuiI18n } from "../../context/i18n"
 
 function moveReminderText(directory: string) {
   return `<system-reminder>The user has changed the current working directory to "${directory}". This is still the same project but at a possibly new location; take this into account when working with any files from now on.</system-reminder>`
@@ -21,6 +22,7 @@ export function usePromptMove(input: { projectID: () => string | undefined; sess
   const toast = useToast()
   const homeDestination = useHomeSessionDestination()
   const paths = useTuiPaths()
+  const i18n = useTuiI18n()
   const [creating, setCreating] = createSignal(false)
   const [creatingDots, setCreatingDots] = createSignal(3)
   const [progress, setProgress] = createSignal<string>()
@@ -53,7 +55,7 @@ export function usePromptMove(input: { projectID: () => string | undefined; sess
       homeDestination?.clear()
       setProgress(undefined)
       setCreating(false)
-      toast.show({ title: "Creating workspace failed", message: errorMessage(err), variant: "error" })
+      toast.show({ title: i18n.t("tui.common.failedCreateWorkspace"), message: errorMessage(err), variant: "error" })
       return
     }
   }

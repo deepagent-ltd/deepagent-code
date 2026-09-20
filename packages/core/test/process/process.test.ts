@@ -7,6 +7,7 @@ import { Effect, Exit, Fiber, Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { AppProcess } from "@deepagent-code/core/process"
 import { testEffect } from "../lib/effect"
+import { tmpRootAsync } from "../fixture/tmpdir"
 
 const it = testEffect(AppProcess.defaultLayer)
 
@@ -137,7 +138,7 @@ describe("AppProcess", () => {
       it.live(
         "timeout cleans up the scoped child process",
         Effect.acquireUseRelease(
-          Effect.promise(() => fs.mkdtemp(path.join(tmpdir(), "deepagent-code-process-timeout-"))),
+          Effect.promise(() => tmpRootAsync()),
           (directory) => {
             const ready = path.join(directory, "ready")
             const settled = path.join(directory, "settled")
@@ -158,7 +159,7 @@ describe("AppProcess", () => {
       it.live(
         "fiber interruption cleans up the scoped child process after readiness",
         Effect.acquireUseRelease(
-          Effect.promise(() => fs.mkdtemp(path.join(tmpdir(), "deepagent-code-process-interrupt-"))),
+          Effect.promise(() => tmpRootAsync()),
           (directory) => {
             const ready = path.join(directory, "ready")
             const settled = path.join(directory, "settled")

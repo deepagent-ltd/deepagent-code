@@ -8,36 +8,51 @@ import { EventTable } from "@deepagent-code/core/event/sql"
 import { PermissionV2 } from "@deepagent-code/core/permission"
 import { AgentV2 } from "@deepagent-code/core/agent"
 import { Config } from "@deepagent-code/core/config"
+import { Catalog } from "@deepagent-code/core/catalog"
+import { ModelV2 } from "@deepagent-code/core/model"
 import { Project } from "@deepagent-code/core/project"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { Prompt } from "@deepagent-code/core/session/prompt"
 import { SessionProjector } from "@deepagent-code/core/session/projector"
-import { SessionExecution } from "@deepagent-code/core/session/execution"
-import { SessionRunCoordinator } from "@deepagent-code/core/session/run-coordinator"
+import { Delegation } from "../src/tool/delegation"
+import { SessionExecutionLocal } from "@deepagent-code/core/session/execution/local"
 import * as SessionRunnerLLM from "@deepagent-code/core/session/runner/llm"
 import { SessionRunnerModel } from "@deepagent-code/core/session/runner/model"
 import { V2ProviderTurn } from "@deepagent-code/core/session/runner/v2-provider-turn"
 import { V2ToolEffect } from "@deepagent-code/core/session/runner/v2-tool-effect"
 import { SessionProviderOwner } from "@deepagent-code/core/context-federation/provider-owner"
 import { SessionContext } from "@deepagent-code/core/context-federation/session-context"
+import { ContextQueryAuthorization } from "@deepagent-code/core/context-federation/query-authorization"
+import { ProductionV2Sources } from "@deepagent-code/core/context-federation/production-adapters"
 import { SessionRunnerCanonical } from "@deepagent-code/core/session/runner/canonical-turn"
 import { ToolRegistry } from "@deepagent-code/core/tool/registry"
 import { SessionTable } from "@deepagent-code/core/session/sql"
 import { SessionStore } from "@deepagent-code/core/session/store"
 import { Location } from "@deepagent-code/core/location"
+import { LocationServiceMap } from "@deepagent-code/core/location-layer"
 import { SystemContextRegistry } from "@deepagent-code/core/system-context/registry"
 import { SystemContext } from "@deepagent-code/core/system-context"
 import { SkillGuidance } from "@deepagent-code/core/skill/guidance"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
+import { FSUtil } from "@deepagent-code/core/fs-util"
+import { Git } from "@deepagent-code/core/git"
 import { describe, expect } from "bun:test"
 import { eq } from "drizzle-orm"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, LayerMap, Option } from "effect"
 import path from "node:path"
+import { CONTEXT_FEDERATION_PRODUCTION_ENV } from "../src/context-federation/production-adapters"
 import { testEffect } from "./lib/effect"
 
 const database = Database.layerFromPath(":memory:")
+// W3.6/W3.8 — the cassette was recorded under the W3 production default (missing sources degrade
+// honestly and the selection evidence tail IS appended — the recorded request literally carries the
+// "Context selection (this turn):" system part). The W3.8 M1 single-point gate is ON by default;
+// this test pins it explicitly so the replayed request deterministically equals the recording even
+// when a caller/process already set the key, and restores the previous value afterwards. The
+// `=false` byte-invariance proof (no evidence part) lives in session-runner.test.ts with a captured
+// request — a replay test cannot exercise it because the recorded fixture differs.
 const events = EventV2.layer.pipe(Layer.provide(database))
 const projector = SessionProjector.layer.pipe(Layer.provide(events), Layer.provide(database))
 const store = SessionStore.layer.pipe(Layer.provide(database))
@@ -77,7 +92,29 @@ const systemContext = SystemContextRegistry.layer
 const location = Location.layer({ directory: AbsolutePath.make("/project") }).pipe(Layer.provide(Project.defaultLayer))
 const skillGuidance = Layer.mock(SkillGuidance.Service, { load: () => Effect.succeed(SystemContext.empty) })
 const config = Layer.succeed(Config.Service, Config.Service.of({ entries: () => Effect.succeed([]) }))
+const catalog = Layer.succeed(
+  Catalog.Service,
+  Catalog.Service.of({
+    transform: () => Effect.die("unexpected catalog.transform"),
+    provider: {
+      get: () => Effect.die("unexpected catalog.provider.get"),
+      all: () => Effect.succeed([]),
+      available: () => Effect.succeed([]),
+    },
+    model: {
+      get: (providerID, modelID) => Effect.fail(new Catalog.ModelNotFoundError({ providerID, modelID })),
+      all: () => Effect.succeed([]),
+      available: () => Effect.succeed([]),
+      default: () => Effect.succeed(Option.none<ModelV2.Info>()),
+      small: () => Effect.succeed(Option.none<ModelV2.Info>()),
+    },
+  }),
+)
 const runner = SessionRunnerLLM.layer.pipe(
+  Layer.provide(ContextQueryAuthorization.defaultLayer),
+  Layer.provide(Layer.succeed(ProductionV2Sources, {})),
+  Layer.provide(FSUtil.defaultLayer),
+  Layer.provide(Git.defaultLayer),
   Layer.provide(
     Layer.succeed(
       V2ProviderTurn.OwnerAuthorization,
@@ -103,22 +140,22 @@ const runner = SessionRunnerLLM.layer.pipe(
   Layer.provide(agents),
   Layer.provide(skillGuidance),
   Layer.provide(config),
+  Layer.provide(Layer.mergeAll(catalog, AgentGateway.runtimeLayer({ enabled: false, agentMode: "high" }))),
 )
-const coordinator = SessionRunCoordinator.layer.pipe(Layer.provide(runner))
-const execution = Layer.effect(
-  SessionExecution.Service,
-  SessionRunCoordinator.Service.pipe(
-    Effect.map((coordinator) =>
-      SessionExecution.Service.of({
-        active: coordinator.active,
-        awaitIdle: coordinator.awaitIdle,
-        resume: coordinator.run,
-        wake: coordinator.wake,
-        interrupt: coordinator.interrupt,
-      }),
-    ),
+const locations = Layer.effect(
+  LocationServiceMap,
+  LayerMap.make(() => runner).pipe(
+    // This harness supplies the recorded runner as the complete keyed Location tree.
+    // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
+    Effect.map((service) => service as unknown as LocationServiceMap["Service"]),
   ),
-).pipe(Layer.provide(coordinator))
+)
+const execution = SessionExecutionLocal.layer.pipe(
+  Layer.provide(events),
+  Layer.provide(store),
+  Layer.provide(locations),
+  Layer.provide(Delegation.delegationSlotLayer),
+)
 const sessions = SessionV2.layer.pipe(
   Layer.provide(events),
   Layer.provide(database),
@@ -143,7 +180,6 @@ const it = testEffect(
     skillGuidance,
     config,
     runner,
-    coordinator,
     execution,
     sessions,
   ),
@@ -158,7 +194,17 @@ describe("SessionRunnerLLM recorded", () => {
       // prior test may have left enabled — which would prepend the DeepAgent system message and break the
       // fixture match. Force it disabled so the replayed request matches the recording deterministically.
       AgentGateway.configure({ enabled: false, agentMode: "high" })
+      // W3.6/W3.8 pin: the recorded request carries the W3 production selection-evidence tail, so the
+      // W3 flag must be ON for the replayed bytes to equal the fixture (see the module comment above).
+      const previousFlag = process.env[CONTEXT_FEDERATION_PRODUCTION_ENV]
+      process.env[CONTEXT_FEDERATION_PRODUCTION_ENV] = "true"
       const { db } = yield* Database.Service
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          if (previousFlag === undefined) delete process.env[CONTEXT_FEDERATION_PRODUCTION_ENV]
+          else process.env[CONTEXT_FEDERATION_PRODUCTION_ENV] = previousFlag
+        }),
+      )
       yield* db
         .insert(ProjectTable)
         .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
@@ -203,11 +249,23 @@ describe("SessionRunnerLLM recorded", () => {
           .all()).map((event) => event.type),
       ).toEqual([
         "session.next.prompt.admitted.1",
+        "session.execution.started.1",
         "session.next.prompt.promoted.1",
+        // W4-6 wire egress: fold boundaries derive V1 wire rows (merge-preserved with any
+        // host-authored fields); the interleaved wire events are the egress output.
+        "message.updated.1",
+        "message.part.updated.1",
         "session.next.step.started.1",
+        "message.updated.1",
         "session.next.text.started.1",
+        "message.part.updated.1",
         "session.next.text.ended.1",
+        "message.part.updated.1",
         "session.next.step.ended.2",
+        "message.updated.1",
+        "message.part.updated.1",
+        "message.part.updated.1",
+        "session.execution.succeeded.1",
       ])
     }),
   )

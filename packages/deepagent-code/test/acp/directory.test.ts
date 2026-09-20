@@ -124,6 +124,21 @@ describe("ACP directory snapshot", () => {
     }).pipe(Effect.provide(fakeLayer(calls)))
   })
 
+  it.effect("evicts the oldest directory at the cache ceiling", () => {
+    const calls: string[] = []
+    return Effect.gen(function* () {
+      const directory = yield* Directory.Service
+      yield* Effect.forEach(
+        Array.from({ length: Directory.MAX_CACHED_DIRECTORIES + 1 }, (_, index) => index),
+        (index) => directory.get(`directory-${index}`),
+      )
+      yield* directory.get("directory-0")
+
+      expect(calls).toHaveLength(Directory.MAX_CACHED_DIRECTORIES + 2)
+      expect(calls.filter((item) => item === "directory-0")).toHaveLength(2)
+    }).pipe(Effect.provide(fakeLayer(calls)))
+  })
+
   it.effect("different directories get different snapshots", () => {
     const calls: string[] = []
     return Effect.gen(function* () {

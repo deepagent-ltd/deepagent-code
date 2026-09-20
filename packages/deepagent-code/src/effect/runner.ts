@@ -9,6 +9,8 @@ export interface Runner<A, E = never> {
   readonly markRunning: Effect.Effect<void>
   readonly startShell: (work: Effect.Effect<A, E>, ready?: Latch.Latch) => Effect.Effect<A, E | Busy>
   readonly cancel: Effect.Effect<void>
+  /** Cancels the lane only while a shell holds it (Shell/ShellThenRun); any other state is a no-op. */
+  readonly cancelShell: Effect.Effect<void>
 }
 
 export class Cancelled extends Schema.TaggedErrorClass<Cancelled>()("RunnerCancelled", {}) {}
@@ -114,6 +116,13 @@ export const make = <A, E = never>(
       if (shell.ready) yield* shell.ready.await.pipe(Effect.exit, Effect.asVoid)
       yield* Deferred.succeed(shell.cancelled, undefined).pipe(Effect.asVoid)
       yield* Fiber.interrupt(shell.fiber)
+    })
+
+  const stopShellLane = (shell: ShellHandle<A, E>, run?: PendingHandle<A, E>) =>
+    Effect.gen(function* () {
+      yield* stopShell(shell)
+      if (run) yield* Deferred.fail(run.done, new Cancelled()).pipe(Effect.asVoid)
+      yield* idleIfCurrent()
     })
 
   const ensureRunning = (work: Effect.Effect<A, E>, onRunning?: Effect.Effect<void>) =>
@@ -223,21 +232,25 @@ export const make = <A, E = never>(
         ] as const
       case "Shell":
         return [
-          Effect.gen(function* () {
-            yield* stopShell(st.shell)
-            yield* idleIfCurrent()
-          }),
+          stopShellLane(st.shell),
           { _tag: "Idle" } as const,
         ] as const
       case "ShellThenRun":
         return [
-          Effect.gen(function* () {
-            yield* stopShell(st.shell)
-            yield* Deferred.fail(st.run.done, new Cancelled()).pipe(Effect.asVoid)
-            yield* idleIfCurrent()
-          }),
+          stopShellLane(st.shell, st.run),
           { _tag: "Idle" } as const,
         ] as const
+    }
+  }).pipe(Effect.flatten)
+
+  const cancelShell = SynchronizedRef.modify(ref, (st) => {
+    switch (st._tag) {
+      case "Shell":
+        return [stopShellLane(st.shell), { _tag: "Idle" } as const] as const
+      case "ShellThenRun":
+        return [stopShellLane(st.shell, st.run), { _tag: "Idle" } as const] as const
+      default:
+        return [Effect.void, st] as const
     }
   }).pipe(Effect.flatten)
 
@@ -254,6 +267,7 @@ export const make = <A, E = never>(
     markRunning,
     startShell,
     cancel,
+    cancelShell,
   }
 }
 

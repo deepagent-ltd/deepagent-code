@@ -6,38 +6,45 @@ import { EventV2 } from "@deepagent-code/core/event"
 import { PermissionV2 } from "@deepagent-code/core/permission"
 import { AgentV2 } from "@deepagent-code/core/agent"
 import { Config } from "@deepagent-code/core/config"
+import { Catalog } from "@deepagent-code/core/catalog"
 import { Project } from "@deepagent-code/core/project"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { Prompt } from "@deepagent-code/core/session/prompt"
 import { SessionProjector } from "@deepagent-code/core/session/projector"
-import { SessionExecution } from "@deepagent-code/core/session/execution"
-import { SessionRunCoordinator } from "@deepagent-code/core/session/run-coordinator"
+import { Delegation } from "../src/tool/delegation"
+import { SessionExecutionLocal } from "@deepagent-code/core/session/execution/local"
 import * as SessionRunnerLLM from "@deepagent-code/core/session/runner/llm"
 import { SessionRunnerModel } from "@deepagent-code/core/session/runner/model"
 import { V2ProviderTurn } from "@deepagent-code/core/session/runner/v2-provider-turn"
 import { V2ProviderTurnReceiptTable } from "@deepagent-code/core/session/runner/v2-provider-turn.sql"
+import { PreparedProviderTurn } from "@deepagent-code/core/session/runner/prepared-provider-turn"
 import { V2ToolEffect } from "@deepagent-code/core/session/runner/v2-tool-effect"
 import { SessionProviderOwner } from "@deepagent-code/core/context-federation/provider-owner"
 import { SessionContext } from "@deepagent-code/core/context-federation/session-context"
+import { ContextQueryAuthorization } from "@deepagent-code/core/context-federation/query-authorization"
+import { ProductionV2Sources } from "@deepagent-code/core/context-federation/production-adapters"
 import { SessionRunnerCanonical } from "@deepagent-code/core/session/runner/canonical-turn"
 import { ToolRegistry } from "@deepagent-code/core/tool/registry"
 import { SessionTable } from "@deepagent-code/core/session/sql"
 import { SessionStore } from "@deepagent-code/core/session/store"
 import { Location } from "@deepagent-code/core/location"
+import { LocationServiceMap } from "@deepagent-code/core/location-layer"
 import { SystemContextRegistry } from "@deepagent-code/core/system-context/registry"
 import { SystemContext } from "@deepagent-code/core/system-context"
 import { SkillGuidance } from "@deepagent-code/core/skill/guidance"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
+import { FSUtil } from "@deepagent-code/core/fs-util"
+import { Git } from "@deepagent-code/core/git"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { ModelProtocol } from "@deepagent-code/core/model-protocol"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { Hash } from "@deepagent-code/core/util/hash"
-import { describe, expect, beforeEach } from "bun:test"
-import { DateTime } from "effect"
+import { describe, expect, beforeEach, test } from "bun:test"
+import { DateTime, Option } from "effect"
 import { eq } from "drizzle-orm"
-import { Effect, Layer, Stream } from "effect"
+import { Effect, Layer, LayerMap, Stream } from "effect"
 import { testEffect } from "./lib/effect"
 
 /**
@@ -138,6 +145,24 @@ const openAIProvider = new ProviderV2.Info({
   api: { type: "aisdk", package: "@ai-sdk/openai", url: "https://api.openai.com/v1" },
   request: { headers: {}, body: {} },
 })
+const catalog = Layer.succeed(
+  Catalog.Service,
+  Catalog.Service.of({
+    transform: () => Effect.die("unexpected catalog.transform"),
+    provider: {
+      get: () => Effect.succeed(openAIProvider),
+      all: () => Effect.succeed([openAIProvider]),
+      available: () => Effect.succeed([openAIProvider]),
+    },
+    model: {
+      get: () => Effect.succeed(openAIInfo),
+      all: () => Effect.succeed([openAIInfo]),
+      available: () => Effect.succeed([openAIInfo]),
+      default: () => Effect.succeed(Option.some(openAIInfo)),
+      small: () => Effect.succeed(Option.some(openAIInfo)),
+    },
+  }),
+)
 const model = OpenAIResponses.route
   .with({ endpoint: { baseURL: "https://api.openai.com/v1" } })
   .with({ auth: Auth.bearer("test") })
@@ -152,6 +177,10 @@ const location = Location.layer({ directory: AbsolutePath.make("/project") }).pi
 const skillGuidance = Layer.mock(SkillGuidance.Service, { load: () => Effect.succeed(SystemContext.empty) })
 const config = Layer.succeed(Config.Service, Config.Service.of({ entries: () => Effect.succeed([]) }))
 const runner = SessionRunnerLLM.layer.pipe(
+  Layer.provide(ContextQueryAuthorization.defaultLayer),
+  Layer.provide(Layer.succeed(ProductionV2Sources, {})),
+  Layer.provide(FSUtil.defaultLayer),
+  Layer.provide(Git.defaultLayer),
   Layer.provide(
     Layer.succeed(
       V2ProviderTurn.OwnerAuthorization,
@@ -177,22 +206,22 @@ const runner = SessionRunnerLLM.layer.pipe(
   Layer.provide(agents),
   Layer.provide(skillGuidance),
   Layer.provide(config),
+  Layer.provide(Layer.mergeAll(catalog, AgentGateway.runtimeLayer({ enabled: false, agentMode: "high" }))),
 )
-const coordinator = SessionRunCoordinator.layer.pipe(Layer.provide(runner))
-const execution = Layer.effect(
-  SessionExecution.Service,
-  SessionRunCoordinator.Service.pipe(
-    Effect.map((coordinator) =>
-      SessionExecution.Service.of({
-        active: coordinator.active,
-        awaitIdle: coordinator.awaitIdle,
-        resume: coordinator.run,
-        wake: coordinator.wake,
-        interrupt: coordinator.interrupt,
-      }),
-    ),
+const locations = Layer.effect(
+  LocationServiceMap,
+  LayerMap.make(() => runner).pipe(
+    // This harness supplies the identity-test runner as the complete keyed Location tree.
+    // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
+    Effect.map((service) => service as unknown as LocationServiceMap["Service"]),
   ),
-).pipe(Layer.provide(coordinator))
+)
+const execution = SessionExecutionLocal.layer.pipe(
+  Layer.provide(events),
+  Layer.provide(store),
+  Layer.provide(locations),
+  Layer.provide(Delegation.delegationSlotLayer),
+)
 const sessions = SessionV2.layer.pipe(
   Layer.provide(events),
   Layer.provide(database),
@@ -217,7 +246,6 @@ const it = testEffect(
     skillGuidance,
     config,
     runner,
-    coordinator,
     execution,
     sessions,
   ),
@@ -292,6 +320,16 @@ describe("SessionRunner identity binding (C2-04/B2 residual)", () => {
       const boundIdentityHash = (receipt.prepared_turn as { protocol_attempt_identity_hash?: string })
         .protocol_attempt_identity_hash
       expect(boundIdentityHash).toMatch(/^[0-9a-f]{64}$/)
+      // W8 — the seal persisted the identity-folded canonical hash: the durable column equals the
+      // record's canonical value and differs from the raw request hash once an identity is bound.
+      // (The transition trigger pins json_extract(prepared_turn, '$.prepared_turn_hash') to the
+      // column, so these two MUST agree or the seal would have been aborted.)
+      const preparedTurn = receipt.prepared_turn
+      expect(preparedTurn).not.toBeNull()
+      if (!preparedTurn) return
+      expect(receipt.prepared_turn_hash).toBe(preparedTurn.prepared_turn_hash)
+      expect(receipt.prepared_turn_hash).toBe(PreparedProviderTurn.preparedTurnHash(preparedTurn))
+      expect(receipt.prepared_turn_hash).not.toBe(preparedTurn.request_hash)
     }),
   )
 
@@ -305,6 +343,21 @@ describe("SessionRunner identity binding (C2-04/B2 residual)", () => {
       })
       const drifted = ModelProtocol.protocolAttemptIdentityFor(driftedInfo, openAIProvider)
       expect(ModelProtocol.configDrift(drifted, ModelProtocol.protocolAttemptIdentityHash(identityA))).toBe(true)
+
+      // W8 audit oracle: an identical payload on a drifted route produces a DIFFERENT canonical
+      // prepared_turn_hash (the durable exact-retry/drift identity now carries route/origin).
+      const payload = "same-payload-on-drifted-route"
+      expect(
+        PreparedProviderTurn.preparedTurnHash({
+          request_hash: payload,
+          protocol_attempt_identity_hash: ModelProtocol.protocolAttemptIdentityHash(drifted),
+        }),
+      ).not.toBe(
+        PreparedProviderTurn.preparedTurnHash({
+          request_hash: payload,
+          protocol_attempt_identity_hash: ModelProtocol.protocolAttemptIdentityHash(identityA),
+        }),
+      )
 
       // Dispatch seam gate: the stale (drifted) attempt never reaches the wire while the rebuilt
       // attempt does; this is the exact seam the runner wires (design §2.3).
@@ -339,4 +392,44 @@ describe("SessionRunner identity binding (C2-04/B2 residual)", () => {
       expect(sent).toContain("stored-attempt")
     }),
   )
+})
+
+// A fenced attempt and a provider rejection bound DIFFERENT things — how many times the host may
+// stall the event loop past the owner lease, vs. how many times the provider may reject — so they
+// must not share one counter. Measured on Docker Desktop: a single long turn rotated the owner
+// generation six times, spent a shared budget of 3, and ended the session; the agent exited 1 and
+// the task scored nothing. Raising the lease only bounds ONE stall; this budget bounds how many
+// stalls a turn may survive.
+test("a fenced attempt spends the fence budget, never the provider-rejection budget", () => {
+  const fenced = SessionRunnerLLM.nextAttemptBudgets({
+    cause: "owner_fenced",
+    retry: 2,
+    providerRetry: 0,
+    ownerFencedRetries: 0,
+  })
+  expect(fenced.providerRetry).toBe(0)
+  expect(fenced.ownerFencedRetries).toBe(1)
+
+  const rejected = SessionRunnerLLM.nextAttemptBudgets({
+    cause: "provider_rejection",
+    retry: 2,
+    providerRetry: 2,
+    ownerFencedRetries: 4,
+  })
+  expect(rejected.providerRetry).toBe(3)
+  expect(rejected.ownerFencedRetries).toBe(4)
+
+  // The fence budget advances monotonically across repeated stalls in one turn, so a host that
+  // never recovers still terminates instead of retrying forever.
+  const fence = Array.from({ length: 8 }).reduce<number>(
+    (spent) =>
+      SessionRunnerLLM.nextAttemptBudgets({
+        cause: "owner_fenced",
+        retry: 0,
+        providerRetry: 0,
+        ownerFencedRetries: spent,
+      }).ownerFencedRetries,
+    0,
+  )
+  expect(fence).toBe(8)
 })

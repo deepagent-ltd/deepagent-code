@@ -12,6 +12,7 @@ import { PluginV2 } from "@deepagent-code/core/plugin"
 import { DynamicProviderPlugin } from "@deepagent-code/core/plugin/provider/dynamic"
 import { testEffect } from "../lib/effect"
 import { fixtureProvider, it, model, npmLayer } from "./provider-helper"
+import { tmpRootAsync, tmpRootSharedAsync } from "../fixture/tmpdir"
 
 const fixtureProviderPath = fileURLToPath(fixtureProvider)
 const itWithAISDK = testEffect(
@@ -36,7 +37,7 @@ function dynamicPlugin(layer = npmLayer) {
 function tempEntrypoint(source: string) {
   return Effect.acquireRelease(
     Effect.promise(async () => {
-      const directory = await fs.mkdtemp(path.join(os.tmpdir(), "deepagent-code-provider-dynamic-"))
+      const directory = await tmpRootSharedAsync()
       const entrypoint = path.join(directory, "provider.mjs")
       await Bun.write(entrypoint, source)
       return { directory, entrypoint }

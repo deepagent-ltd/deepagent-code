@@ -186,6 +186,21 @@ const coordination = (index: number) => ({
 /** Five pending recovery descriptors for the dock pixel state. */
 export const pixelRecoveryDescriptors = [exact(0), exact(1), exact(2), coordination(3), coordination(4)]
 
+/** W9.6 — durable execution-journal rows for the recovery dock pixel state: one settled turn
+ * (started + succeeded at seq 11/12) mirrored through `/context/eventsCursor` + `/context/events`.
+ * The journal pump anchors at the watermark (10) and delivers the two rows, so the dock renders
+ * its execution-summary line — the real payload the production server would serve. */
+export const pixelExecutionJournal: Record<string, { watermark: number; floor: number; rows: { id: string; seq: number; type: string; data: Record<string, unknown> }[] }> = {
+  [recoveryID]: {
+    watermark: 10,
+    floor: 5,
+    rows: [
+      { id: "ev-px-11", seq: 11, type: "session.execution.started.1", data: { sessionID: recoveryID, timestamp: 1700000011000 } },
+      { id: "ev-px-12", seq: 12, type: "session.execution.succeeded.1", data: { sessionID: recoveryID, timestamp: 1700000012000 } },
+    ],
+  },
+}
+
 export const pixelSessions = [
   { id: cnID, slug: "cn", projectID: pixelProjectID, directory: pixelDirectory, title: "中文长标题：跨代码库检索重构方案与依赖分析", version: "dev", time: { created: 1700000000000, updated: 1700000000000 } },
   { id: enID, slug: "en", projectID: pixelProjectID, directory: pixelDirectory, title: "Refactor dependency graph across 3 repositories", version: "dev", time: { created: 1700000001000, updated: 1700000001000 } },

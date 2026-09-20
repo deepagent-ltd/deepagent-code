@@ -46,17 +46,15 @@ describe("V2 provider owner containment", () => {
             .insert(ProjectTable)
             .values({ id: projectID, worktree: AbsolutePath.make(tmp.path), sandboxes: [] })
             .run()
+          // Raw SQL on purpose: the fixture writes a LEGACY-shaped session row into a database
+          // pinned at the pre-V2 migration cut. The current drizzle schema carries columns the
+          // cut schema lacks (e.g. interrupt_seq), so an ORM insert fails there — exactly the
+          // on-disk shape this upgrade test exists to cover.
           yield* db
-            .insert(SessionTable)
-            .values({
-              id: sessionID,
-              project_id: projectID,
-              slug: cut,
-              directory: AbsolutePath.make(tmp.path),
-              title: "V2 cutover upgrade",
-              version: "pre-v2",
-            })
-            .run()
+            .run(
+              sql`INSERT INTO session (id, project_id, slug, directory, title, version, time_created, time_updated)
+                  VALUES (${sessionID}, ${projectID}, ${cut}, ${tmp.path}, ${'V2 cutover upgrade'}, ${'pre-v2'}, 0, 0)`,
+            )
 
           yield* DatabaseMigration.applyOnly(db, migrations)
           expect(

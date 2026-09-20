@@ -8,9 +8,8 @@ import { PermissionV2 } from "../permission"
 import { SessionMessage } from "../session/message"
 import { SessionSchema } from "../session/schema"
 import { ToolOutputStore } from "../tool-output-store"
-import { Wildcard } from "../util/wildcard"
 import { ApplicationTools } from "./application-tools"
-import { definition, permission, settle, validateName, type AnyTool, type RegistrationError } from "./tool"
+import { definition, permission, RegistrationError, settle, validateName, type AnyTool } from "./tool"
 import { Tools } from "./tools"
 
 export type ExecuteInput = {
@@ -21,13 +20,18 @@ export type ExecuteInput = {
 }
 
 export interface Interface {
-  readonly materialize: (permissions?: PermissionV2.Ruleset) => Effect.Effect<Materialization>
+  readonly materialize: (permissions?: PermissionV2.Ruleset | PermissionPolicy) => Effect.Effect<Materialization>
   /** Internal registration capability exposed publicly only through Tools.Service. */
   readonly register: (tools: Readonly<Record<string, AnyTool>>) => Effect.Effect<void, RegistrationError, Scope.Scope>
 }
 
+export type PermissionPolicy = { readonly rulesets: readonly PermissionV2.Ruleset[] }
+
 export interface Materialization {
+  readonly registeredIDs: ReadonlyArray<string>
+  readonly permissionFilteredIDs: ReadonlyArray<string>
   readonly definitions: ReadonlyArray<ToolDefinition>
+  readonly effectKind: (name: string) => "mutating" | "read_only"
   readonly settle: (input: ExecuteInput) => Effect.Effect<Settlement, ToolOutputStore.Error>
 }
 
@@ -36,6 +40,10 @@ export interface Settlement extends ToolSettlement {
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/v2/ToolRegistry") {}
+
+export const MAX_LOCATION_TOOL_NAMES = 256
+export const MAX_TOOL_OVERLAYS_PER_NAME = 32
+export const MAX_MATERIALIZED_TOOL_NAMES = MAX_LOCATION_TOOL_NAMES * 2
 
 const registryLayer = Layer.effect(
   Service,
@@ -87,6 +95,18 @@ const registryLayer = Layer.effect(
         yield* Effect.uninterruptible(
           Effect.gen(function* () {
             const token = {}
+            const newNames = entries.filter(([name]) => !local.has(name)).length
+            if (local.size + newNames > MAX_LOCATION_TOOL_NAMES)
+              return yield* new RegistrationError({
+                name: entries.find(([name]) => !local.has(name))?.[0] ?? "registry",
+                message: `Too many Location tool names (limit ${MAX_LOCATION_TOOL_NAMES})`,
+              })
+            const full = entries.find(([name]) => (local.get(name)?.length ?? 0) >= MAX_TOOL_OVERLAYS_PER_NAME)
+            if (full)
+              return yield* new RegistrationError({
+                name: full[0],
+                message: `Too many registrations for tool ${full[0]} (limit ${MAX_TOOL_OVERLAYS_PER_NAME})`,
+              })
             for (const [name, tool] of entries)
               local.set(name, [...(local.get(name) ?? []), { token, registration: { identity: {}, tool } }])
             yield* Effect.addFinalizer(() =>
@@ -107,10 +127,24 @@ const registryLayer = Layer.effect(
           const registration = entries.at(-1)?.registration
           if (registration) registrations.set(name, registration)
         }
+        if (registrations.size > MAX_MATERIALIZED_TOOL_NAMES)
+          return yield* Effect.die(
+            `Tool registry exceeded materialization limit ${MAX_MATERIALIZED_TOOL_NAMES}; registration bounds were bypassed`,
+          )
+        const registeredIDs = [...registrations.keys()]
         for (const [name, registration] of registrations)
           if (whollyDisabled(permission(registration.tool, name), permissions)) registrations.delete(name)
         return {
+          registeredIDs,
+          permissionFilteredIDs: [...registrations.keys()],
           definitions: Array.from(registrations, ([name, registration]) => definition(name, registration.tool)),
+          // Read-only classification is an explicit allowlist. Unknown/custom actions remain
+          // mutating so durable side-effect evidence never undercounts a newly registered tool.
+          effectKind: (name) => {
+            const registration = registrations.get(name)
+            if (!registration) return "mutating"
+            return readOnlyActions.has(permission(registration.tool, name)) ? "read_only" : "mutating"
+          },
           settle: (input) => {
             const registration = registrations.get(input.call.name)
             if (registration) return settleWith(input, registration.identity)
@@ -127,9 +161,23 @@ export const layer = Layer.effect(
   Service.use((registry) => Effect.succeed(Tools.Service.of({ register: registry.register }))),
 ).pipe(Layer.provideMerge(registryLayer))
 
-function whollyDisabled(action: string, rules: PermissionV2.Ruleset) {
-  const rule = rules.findLast((rule) => Wildcard.match(action, rule.action))
-  return rule?.resource === "*" && rule.effect === "deny"
+const readOnlyActions = new Set([
+  "read",
+  "glob",
+  "grep",
+  "git_read",
+  "webfetch",
+  "websearch",
+  "skill",
+  "code_intel",
+  "context_query",
+  "capability_search",
+  "capability.read",
+])
+
+function whollyDisabled(action: string, policy: PermissionV2.Ruleset | PermissionPolicy) {
+  const rulesets = "rulesets" in policy ? policy.rulesets : [policy]
+  return PermissionV2.isActionWhollyDenied(action, ...rulesets)
 }
 
 export const node = makeLocationNode({

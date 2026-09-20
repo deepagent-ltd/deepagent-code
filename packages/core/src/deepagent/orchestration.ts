@@ -1,4 +1,54 @@
+import { Schema } from "effect"
 import type { AgentMode } from "./mode"
+
+/** Stable structured contracts used by the Core V2 task runtime. */
+export const ReviewSeverity = Schema.Literals(["critical", "high", "medium", "low"])
+export const ReviewCategory = Schema.Literals([
+  "correctness",
+  "security",
+  "edge-case",
+  "convention",
+  "test-gap",
+  "perf",
+])
+export const ReviewFinding = Schema.Struct({
+  severity: ReviewSeverity,
+  category: ReviewCategory,
+  file: Schema.String,
+  line: Schema.optional(Schema.Int),
+  summary: Schema.String,
+  failureScenario: Schema.String,
+  confidence: Schema.Number,
+  suggestion: Schema.optional(Schema.String),
+}).annotate({ identifier: "ReviewFinding" })
+export const ReviewResult = Schema.Struct({
+  findings: Schema.Array(ReviewFinding),
+  verdict: Schema.Literals(["approve", "revise", "block"]),
+}).annotate({ identifier: "ReviewResult" })
+export const ResearchResult = Schema.Struct({
+  module: Schema.String,
+  mechanism: Schema.String,
+  keyFiles: Schema.Array(
+    Schema.Struct({
+      path: Schema.String,
+      role: Schema.String,
+    }).annotate({ identifier: "ResearchKeyFile" }),
+  ),
+  interfaces: Schema.Array(Schema.String),
+  risks: Schema.Array(Schema.String),
+  openQuestions: Schema.Array(Schema.String),
+}).annotate({ identifier: "ResearchResult" })
+
+export const OrchestrationSchemas = {
+  ReviewResult,
+  ResearchResult,
+  ReviewFinding,
+} as const
+export type OrchestrationSchemaName = keyof typeof OrchestrationSchemas
+export const DEFAULT_OUTPUT_SCHEMA_BY_AGENT: Readonly<Record<string, OrchestrationSchemaName>> = {
+  reviewer: "ReviewResult",
+  researcher: "ResearchResult",
+}
 
 /**
  * L2 (v3.8.0 §L2) — multi-agent orchestration fan-out decision, as a PURE function.
@@ -10,10 +60,9 @@ import type { AgentMode } from "./mode"
  * The caps below (`decideFanout` / `capFanout` / `capConcurrency` / `resolveCaps`) are the reusable
  * CODE-LAYER ceiling: any orchestration driver (e.g. the V4.0 orchestrator loop) MUST route its
  * requested counts through them so the model's stated intent cannot exceed the configured maximum —
- * the clamp runs regardless of what the model asks. In Phase 6 fan-out is still prompt-driven (the
- * primary agent issues `task` calls directly), so `buildOrchestrationSection` surfaces these same
- * numbers as advisory self-limiting guidance rather than a runtime gate; the pure functions here are
- * the single source of truth for both.
+ * the clamp runs regardless of what the model asks. Fan-out remains model-initiated (the primary
+ * issues `task` calls), but the Core task runtime independently enforces these default ceilings;
+ * `buildOrchestrationSection` explains the same limits to avoid needless rejected calls.
  *
  * Per the standing user constraint ("速率/长度类字段不要限制的太死") the caps are CONFIGURABLE with
  * LENIENT defaults — a runaway safety net, not a tight leash. Unset ⇒ the lenient default (never a
@@ -94,8 +143,7 @@ export const estimateSignalsFromText = (input: {
 
   // Suppression signals take precedence (mirrors estimateComplexity's hard-floor to 0).
   const trivialMechanical =
-    has("typo", "rename", "格式", "format", "lint", "重命名", "改个名") ||
-    /\bfix (a |the )?typo\b/.test(text)
+    has("typo", "rename", "格式", "format", "lint", "重命名", "改个名") || /\bfix (a |the )?typo\b/.test(text)
   const userRequestedFast = has("quick", "quickly", "just ", "asap", "尽快", "快速", "直接告诉", "简单说")
 
   const userRequestedDepth = has(
@@ -254,7 +302,8 @@ export const decideFanout = (input: {
   // count and the effective level. Reviewers come from the mode's default votes. Both are clamped by
   // the hard cap; researchers take priority, reviewers get the remaining budget.
   const requestedResearchers = Math.max(2, Math.min(input.signals.fileOrModuleCount ?? level + 1, 5))
-  const requestedReviewers = input.forceOrchestrate && reviewerVotesForMode(input.mode) === 0 ? 1 : reviewerVotesForMode(input.mode)
+  const requestedReviewers =
+    input.forceOrchestrate && reviewerVotesForMode(input.mode) === 0 ? 1 : reviewerVotesForMode(input.mode)
 
   const researchers = capFanout(requestedResearchers, input.caps)
   const { maxFanout } = resolveCaps(input.caps)
@@ -270,14 +319,20 @@ export const decideFanout = (input: {
  * OFF and the section only tells the agent to fan out on explicit user request; at higher tiers it
  * gives the full fan-out judgment. Returns `null` when there is nothing worth injecting.
  */
-// PROMPT-CACHE NOTE: this returns the STABLE, generic orchestration guidance only — it is a pure
-// function of `mode`, so it stays byte-identical across a session and can live in the cached system
+// PROMPT-CACHE NOTE: this returns the STABLE, generic orchestration guidance only — it is a
+// pure function of `mode`, so it stays byte-identical across a session and can live in the cached system
 // prefix. The per-turn fan-out VERDICT (concrete researcher/reviewer counts derived from this turn's
 // task complexity) is deliberately NOT rendered here anymore; it changes turn-to-turn and would bust
 // the prefix. The DeepAgent path renders that verdict via prompt-policy.ts `buildVolatileRoundContext`
 // and appends it after the cache breakpoint. The non-DeepAgent path (session/system.ts) may still
 // pass no decision and get just this stable guidance.
-export const buildOrchestrationSection = (mode: AgentMode): string | null => {
+//
+// G3 (gamma plan 阶段四): `complexity` is the runtime's estimate for THIS session's request. When the
+// runtime already knows the task is simple (complexity 0), the full researcher/reviewer tutorial is
+// withheld — a one-line notice replaces it — so simple tasks stop carrying orchestration teaching they
+// will never act on. The estimate is derived from the session's user request (stable within a
+// session), so the section stays byte-stable for the cached prefix.
+export const buildOrchestrationSection = (mode: AgentMode, complexity?: OrchestrationTier): string | null => {
   const tier = tierForMode(mode)
   const votes = reviewerVotesForMode(mode)
   const header = "# 多-Agent 编排 (multi-agent orchestration)"
@@ -289,6 +344,16 @@ export const buildOrchestrationSection = (mode: AgentMode): string | null => {
       "",
       "默认不自动编排。只有当用户明确要求「深入 / 多角度 / review / 彻底」时，才用 `task` 工具扇出 researcher/reviewer 子 agent；否则本体直接完成。",
       "简单任务（单文件、机制清楚、纯机械改动）永远本体做。",
+    ].join("\n")
+  }
+
+  if (complexity === 0) {
+    // G3: runtime-classified simple task — keep only the capability notice. The full fan-out
+    // workflow would be dead weight the model never executes on a single-file task.
+    return [
+      header,
+      "",
+      "系统判定当前任务为简单任务：本体直接完成，不要扇出 researcher/reviewer。仅当任务实质变为跨模块/多方案对比/安全敏感时才重新考虑编排。",
     ].join("\n")
   }
 
@@ -306,7 +371,7 @@ export const buildOrchestrationSection = (mode: AgentMode): string | null => {
     "抑制信号（命中则本体做，禁止过度编排）：单文件；机制已明确；纯机械改动（改名/typo/格式）；用户要求快速/直接。",
     "",
     "关键判定（reviewer 的 verdict、研究结果的合并）走结构化结果：调 `task` 时传 `output_schema`（reviewer→ReviewResult，researcher→ResearchResult），不要依赖散文解析。",
-    `扇出规模自控（宽松上限，非硬性）：单次编排子 agent 总数控制在 ${DEFAULT_MAX_FANOUT} 个以内，单轮并行不超过 ${DEFAULT_MAX_CONCURRENCY} 个；确有必要可分多轮，但不要一次性发起远超此规模的 task。本轮的具体扇出建议数由系统通过 <deepagent-round-context> 提供。`,
+    `扇出规模受系统硬上限保护：单条 assistant 消息最多启动 ${DEFAULT_MAX_FANOUT} 个子 agent，同一父 session 同时运行不超过 ${DEFAULT_MAX_CONCURRENCY} 个；更多工作要分轮。本轮的具体扇出建议数由系统通过 <deepagent-round-context> 提供。`,
   ]
   if (mode === "ultra") {
     lines.push("当前为 ultra：默认倾向编排并可多轮迭代。")

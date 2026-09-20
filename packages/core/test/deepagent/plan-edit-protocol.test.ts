@@ -19,6 +19,7 @@ import {
   settlePlanEditCommand,
 } from "../../src/deepagent/plan-edit-protocol"
 import type { PlanWriteInput } from "../../src/deepagent/plan-controller"
+import { tmpRoot } from "../fixture/tmpdir"
 
 let root: string
 let store: DocumentStore
@@ -37,7 +38,7 @@ const write: PlanWriteInput = {
 }
 
 beforeEach(() => {
-  root = mkdtempSync(path.join(tmpdir(), "deepagent-plan-edit-"))
+  root = mkdtempSync(tmpRoot())
   store = new DocumentStore(root)
 })
 

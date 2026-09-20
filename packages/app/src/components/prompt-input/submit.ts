@@ -323,7 +323,8 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
     // existing confirm surface then shows the prepared prompt for review/edit before send.
     setBusy()
     input.onPromptPrepareStart?.()
-    let prepared: DeepAgentPromptPrepareResult
+    let prepared: DeepAgentPromptPrepareResult | undefined
+    let degradedToDirect = false
     try {
       prepared = await prepareDeepAgentPromptDraft({
         client: input.client,
@@ -343,10 +344,14 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
       setIdle()
       input.onPromptPrepareEnd?.()
       if (input.promptPrepareSignal?.aborted) return false
-      throw err
+      // W1-3 — degrade to the direct path instead of blocking the send: refinement is an
+      // enhancement, not a gate. V2-only servers already degrade server-side (W0-3a); this
+      // covers older servers and transient prepare failures so the raw input still goes out.
+      void err
+      degradedToDirect = true
     }
     input.onPromptPrepareEnd?.()
-    if (prepared.route === "general") {
+    if (degradedToDirect || !prepared || prepared.route === "general") {
       input.onPromptPrepareDiscard?.()
       metadata = {
         deepagent: {
@@ -861,7 +866,11 @@ export function createPromptSubmit(input: PromptSubmitInput) {
 
     const waitForWorktree = async () => {
       const worktree = WorktreeState.get(sdk.scope, sessionDirectory)
-      if (!worktree || worktree.status !== "pending") return true
+      if (!worktree) return true
+      if (worktree.status !== "pending") {
+        WorktreeState.forget(sdk.scope, sessionDirectory)
+        return true
+      }
 
       if (sessionDirectory === projectDirectory) {
         sync.set("session_status", session.id, { type: "busy" })
@@ -909,6 +918,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
           clearTimeout(timer.id)
         },
       )
+      WorktreeState.forget(sdk.scope, sessionDirectory)
       pending.delete(pendingKey(session.id))
       if (controller.signal.aborted) return false
       if (result.status === "failed") throw new Error(result.message)

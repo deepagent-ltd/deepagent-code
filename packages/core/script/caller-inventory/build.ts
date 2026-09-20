@@ -94,8 +94,8 @@ function classifyOne(item: EntryWithHandlers): ClassifiedEntry {
   }
 }
 
-export function buildInventory(): Inventory {
-  const { entries, missingAnchors } = extractAllEntries()
+export async function buildInventory(): Promise<Inventory> {
+  const { entries, missingAnchors } = await extractAllEntries()
   if (missingAnchors.length > 0) {
     throw new Error(`frozen composition anchors missing from the working tree: ${missingAnchors.join(", ")}`)
   }
@@ -233,8 +233,8 @@ export function summarize(inventory: Inventory) {
   }
 }
 
-export function writeReport(outDir: string): { jsonPath: string; summaryPath: string; inventory: Inventory } {
-  const inventory = buildInventory()
+export async function writeReport(outDir: string): Promise<{ jsonPath: string; summaryPath: string; inventory: Inventory }> {
+  const inventory = await buildInventory()
   mkdirSync(outDir, { recursive: true })
   const jsonPath = join(outDir, "report.json")
   const summaryPath = join(outDir, "summary.json")

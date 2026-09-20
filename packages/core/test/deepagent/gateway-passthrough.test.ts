@@ -5,8 +5,9 @@ import { tmpdir } from "node:os"
 import { Effect, Stream } from "effect"
 import { LLMEvent } from "@deepagent-code/llm"
 import { AgentGateway } from "../../src/agent-gateway"
+import { tmpRootAsync, tmpRootSharedAsync } from "../fixture/tmpdir"
 
-const tempRunsDir = () => mkdtemp(path.join(tmpdir(), "deepagent-passthrough-"))
+const tempRunsDir = () => tmpRootSharedAsync()
 
 const readJson = async (dir: string, name: string) => JSON.parse(await readFile(path.join(dir, name), "utf8"))
 

@@ -101,6 +101,12 @@ export const toolFileSourceFromUri = (uri: string): ToolFileSource => {
   throw new Error(`Unsupported tool file URI: ${uri}`)
 }
 
+export type ToolResultValue =
+  | { readonly type: "json"; readonly value: unknown }
+  | { readonly type: "text"; readonly value: unknown }
+  | { readonly type: "error"; readonly value: unknown }
+  | { readonly type: "content"; readonly value: ReadonlyArray<ToolResultContentPart> }
+
 const isToolResultValue = (value: unknown): value is ToolResultValue =>
   isRecord(value) &&
   (value.type === "text" || value.type === "json" || value.type === "error" || value.type === "content") &&
@@ -134,7 +140,6 @@ export const ToolResultValue = Object.assign(
     },
   },
 )
-export type ToolResultValue = Schema.Schema.Type<typeof ToolResultValue>
 
 export interface ToolOutput {
   readonly structured: unknown

@@ -10,8 +10,8 @@
  *   bun run --cwd packages/app build        # static web app -> packages/app/dist
  *
  * Secrets for the backend are read from the environment (see
- * packages/function/src/api.ts): ADMIN_SECRET, GITHUB_APP_ID,
- * GITHUB_APP_PRIVATE_KEY, FEISHU_APP_ID, FEISHU_APP_SECRET,
+ * packages/function/src/api.ts): SHARE_CREATE_TOKEN, ADMIN_SECRET, GITHUB_APP_ID,
+ * GITHUB_APP_PRIVATE_KEY, FEISHU_VERIFICATION_TOKEN,
  * DISCORD_SUPPORT_BOT_TOKEN, DISCORD_SUPPORT_CHANNEL_ID.
  */
 export {}

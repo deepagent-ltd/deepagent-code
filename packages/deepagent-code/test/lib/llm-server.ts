@@ -178,9 +178,9 @@ function responseCompleted(input: { seq: number; usage?: Usage }) {
       service_tier: null,
       usage: {
         input_tokens: input.usage?.input ?? 0,
-        input_tokens_details: { cached_tokens: null },
+        input_tokens_details: { cached_tokens: 0 },
         output_tokens: input.usage?.output ?? 0,
-        output_tokens_details: { reasoning_tokens: null },
+        output_tokens_details: { reasoning_tokens: 0 },
       },
     },
   }

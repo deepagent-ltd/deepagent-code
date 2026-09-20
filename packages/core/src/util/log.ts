@@ -4,7 +4,7 @@ import path from "path"
 import fs from "fs/promises"
 import { createWriteStream } from "fs"
 import * as Global from "../global"
-import { Schema } from "effect"
+import { Cause, Schema } from "effect"
 import { Glob } from "./glob"
 
 export const Level = Schema.Literals(["DEBUG", "INFO", "WARN", "ERROR"]).annotate({
@@ -20,6 +20,7 @@ const levelPriority: Record<Level, number> = {
   ERROR: 3,
 }
 const keep = 10
+export const MAX_LOGGERS = 128
 const initializedRunID = "DEEPAGENT_CODE_LOG_INITIALIZED_RUN_ID"
 
 let level: Level = "INFO"
@@ -61,13 +62,29 @@ export function file() {
 export function getLevel(): Level {
   return level
 }
-let write = (msg: any) => {
+const writeStderr = (msg: any) => {
   process.stderr.write(msg)
   return msg.length
 }
+let write = writeStderr
+let closeWrite: (() => Promise<void>) | undefined
+let initialization = Promise.resolve()
 
-export async function init(options: Options) {
+export function init(options: Options) {
+  const next = initialization.then(() => initialize(options))
+  initialization = next.then(
+    () => undefined,
+    () => undefined,
+  )
+  return next
+}
+
+async function initialize(options: Options) {
   if (options.level) level = options.level
+  await closeWrite?.()
+  closeWrite = undefined
+  write = writeStderr
+  logpath = ""
   void cleanup(Global.Path.log)
   if (options.print) return
   logpath = path.join(
@@ -79,6 +96,7 @@ export async function init(options: Options) {
   if (shouldTruncate) await fs.truncate(logpath).catch(() => {})
   if (options.dev && runID) process.env[initializedRunID] = runID
   const stream = createWriteStream(logpath, { flags: "a" })
+  closeWrite = () => new Promise((resolve) => stream.end(resolve))
   write = async (msg: any) => {
     return new Promise((resolve, reject) => {
       stream.write(msg, (err) => {
@@ -112,14 +130,28 @@ function formatError(error: Error, depth = 0): string {
     : result
 }
 
+// An Effect `Cause` carries a `toJSON` that serializes to `{"_id":"Cause",...,"defect":{}}` — the
+// defect is dropped because an Error has no enumerable own properties. So a logger call like
+// `log.error("share subscriber failed", { cause })` printed a cause with no cause, and the operator
+// could see that something died but never why. Measured in an ablation container: 914 such lines in
+// ten minutes, every one of them empty. `Cause.pretty` renders the defect, its message and its stack.
+export function formatValue(value: object): string {
+  return Cause.isCause(value) ? Cause.pretty(value) : JSON.stringify(value)
+}
+
 let last = Date.now()
 export function create(tags?: Record<string, any>) {
-  tags = tags || {}
+  return createLogger(tags ?? {}, true)
+}
 
+function createLogger(tags: Record<string, any>, cache: boolean) {
   const service = tags["service"]
-  if (service && typeof service === "string") {
+  const cacheable = cache && typeof service === "string" && Object.keys(tags).length === 1
+  if (cacheable) {
     const cached = loggers.get(service)
     if (cached) {
+      loggers.delete(service)
+      loggers.set(service, cached)
       return cached
     }
   }
@@ -133,7 +165,7 @@ export function create(tags?: Record<string, any>) {
       .map(([key, value]) => {
         const prefix = `${key}=`
         if (value instanceof Error) return prefix + formatError(value)
-        if (typeof value === "object") return prefix + JSON.stringify(value)
+        if (typeof value === "object") return prefix + formatValue(value)
         return prefix + value
       })
       .join(" ")
@@ -164,11 +196,10 @@ export function create(tags?: Record<string, any>) {
       }
     },
     tag(key: string, value: string) {
-      if (tags) tags[key] = value
-      return result
+      return createLogger({ ...tags, [key]: value }, false)
     },
     clone() {
-      return create({ ...tags })
+      return createLogger({ ...tags }, false)
     },
     time(message: string, extra?: Record<string, any>) {
       const now = Date.now()
@@ -189,7 +220,8 @@ export function create(tags?: Record<string, any>) {
     },
   }
 
-  if (service && typeof service === "string") {
+  if (cacheable) {
+    if (loggers.size >= MAX_LOGGERS) loggers.delete(loggers.keys().next().value!)
     loggers.set(service, result)
   }
 

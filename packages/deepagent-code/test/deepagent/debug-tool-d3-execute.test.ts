@@ -17,7 +17,7 @@ import * as Truncate from "@/tool/truncate"
 import { Agent } from "@/agent/agent"
 import { Tool } from "@/tool/tool"
 import { DebugTool } from "@/tool/debug"
-import { disposeAllInstances } from "../fixture/fixture"
+import { disposeAllInstances, tmpRootAsync, tmpRootSharedAsync } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { InstanceStore } from "@/project/instance-store"
 import { MessageID, SessionID } from "@/session/schema"
@@ -42,7 +42,7 @@ let fakeBinDir: string
 let originalPath: string | undefined
 
 beforeAll(async () => {
-  fakeBinDir = await fs.mkdtemp(path.join(os.tmpdir(), "deepagent-fakepy-"))
+  fakeBinDir = await tmpRootSharedAsync()
   // A fake `python3` that ignores `-m debugpy.adapter` and just runs the fake DAP
   // adapter over stdio (cross-platform: the runner has no real debugpy).
   const script = `#!/usr/bin/env node
@@ -192,10 +192,7 @@ describe("D3 DebugTool.execute — fail-closed privilege gate (#4)", () => {
         // C/C++/Rust resolve to lldb, which declares the `ptrace` privilege. With
         // denyAllProbe the R0 gate refuses BEFORE the adapter is spawned.
         // (lldb-dap may not be installed either; both paths are graceful, non-Die.)
-        const result = yield* def.execute(
-          { intent: "start", target: "cargo run", session_id: "priv-1" },
-          makeCtx([]),
-        )
+        const result = yield* def.execute({ intent: "start", target: "cargo run", session_id: "priv-1" }, makeCtx([]))
         expect(result.title).toContain("debug:")
         // Either way, no live session was created.
         expect(yield* debug.get("priv-1")).toBeUndefined()

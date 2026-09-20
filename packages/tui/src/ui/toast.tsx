@@ -1,6 +1,7 @@
 import { createContext, useContext, type ParentProps, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useTheme } from "../context/theme"
+import { useTuiI18n } from "../context/i18n"
 import { useTerminalDimensions } from "@opentui/solid"
 import { SplitBorder } from "./border"
 import { TextAttributes } from "@opentui/core"
@@ -51,6 +52,7 @@ export function Toast() {
 }
 
 function init() {
+  const i18n = useTuiI18n()
   const [store, setStore] = createStore({
     currentToast: null as ToastOptions | null,
   })
@@ -74,7 +76,7 @@ function init() {
         })
       toast.show({
         variant: "error",
-        message: "An unknown error has occurred",
+        message: i18n.t("tui.common.unknownError"),
       })
     },
     get currentToast(): ToastOptions | null {

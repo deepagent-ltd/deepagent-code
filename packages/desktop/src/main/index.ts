@@ -27,6 +27,13 @@ import {
   spawnLocalServer,
   type SidecarListener,
 } from "./server"
+import {
+  resolveWslSidecarMode,
+  startPrimarySidecar,
+  waitForWslServerReady,
+  type SidecarReady,
+  type WslSidecarMode,
+} from "./sidecar-routing"
 import { setupAutoUpdater, showUpdaterDialog } from "./updater"
 import {
   createMainWindow,
@@ -37,7 +44,7 @@ import {
   setCloseToTrayEnabled,
   setIsQuitting,
 } from "./windows"
-import { createWslServersController } from "./wsl/servers"
+import { createWslServersController, type WslServersController } from "./wsl/servers"
 import { registerWslIpcHandlers } from "./wsl/ipc"
 import { spawnWslSidecar } from "./wsl/sidecar"
 import { initPowerSaveBlocker, stopPowerSaveBlocker } from "./power"
@@ -371,44 +378,55 @@ const main = Effect.gen(function* () {
     useEnvProxy()
 
     logger.log("spawning sidecar", { url })
-    const { listener, health } = yield* Effect.promise(() =>
-      spawnLocalServer(hostname, port, password, {
+    const connection = yield* Effect.promise(() =>
+      startPrimarySidecar({
+        platform: process.platform,
+        mode: process.platform === "win32" ? resolveWslSidecarMode() : "native",
+        hostname,
+        port,
+        password,
+        spawnLocalServer,
+        startWslPrimary: (wslMode) => startWslPrimary(wslServers, wslMode),
         onStdout: (message) => writeLog("server", "stdout", { message }),
         onStderr: (message) => writeLog("server", "stderr", { message }, "warn"),
         onExit: (code) => writeLog("utility", "sidecar exited", { code }, "warn"),
+        onPlatformFallback: (reason) => {
+          logger.log("sidecar_platform_fallback", { mode: "auto", reason })
+        },
       }),
+    ).pipe(
+      Effect.tapError((error) => Effect.sync(() => logger.error("primary sidecar startup failed", error))),
     )
-    server = listener
+    server = connection.listener
 
-    if (process.platform === "win32") {
+    // Windows keeps the managed WSL server list available next to the local
+    // sidecar. A WSL fallback already ran initialize() while routing, so only
+    // the local-first path re-triggers it.
+    if (process.platform === "win32" && !connection.wslFallback) {
       void wslServers.initialize().catch((error) => logger.error("wsl server initialization failed", error))
     }
 
-    // Wait for the sidecar to be ready for API requests before delivering credentials
-    // to the renderer. Listener-ready ≠ API-ready; delivering credentials too early
-    // causes the renderer to race against an uninitialized sidecar, which can result
-    // in failed bootstrap requests and a "local server disconnected" splash.
-    // Timeout is 15 s (down from the old 30 s). On failure we log and continue.
-    yield* Effect.promise(() => health.wait).pipe(
-      Effect.timeout("15 seconds"),
-      Effect.tapError((e) =>
-        Effect.sync(() => {
-          logger.error("sidecar health check failed", e.toString())
-        }),
-      ),
-      Effect.ignore,
-    )
-
-    yield* Deferred.succeed(serverReady, {
-      url,
-      username: "deepagent-code",
-      password,
-    })
+    // startPrimarySidecar only resolves after the sidecar's API health check
+    // passed (or a ready WSL primary was selected), so the credentials handed
+    // to the renderer are verified — never a listener-only URL.
+    yield* Deferred.succeed(serverReady, connection.ready)
 
     logger.log("loading task finished")
   }).pipe(forwardInitializationFailure(serverReady), Effect.forkChild)
 
   yield* Fiber.await(loadingTask)
 })
+
+function startWslPrimary(wslServers: WslServersController, mode: WslSidecarMode): Promise<SidecarReady> {
+  return waitForWslServerReady(wslServers, { mode }).then((ready) => ({
+    listener: null,
+    ready: {
+      url: ready.url,
+      username: ready.username,
+      password: ready.password,
+    },
+    wslFallback: true,
+  }))
+}
 
 Effect.runFork(main)

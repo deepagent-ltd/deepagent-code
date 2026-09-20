@@ -110,4 +110,19 @@ describe("SystemContextRegistry", () => {
       expect(yield* SystemContext.initialize(yield* registry.load())).toEqual({ baseline: "", snapshot: {} })
     }),
   )
+
+  it.effect("rejects registration beyond the bounded source ceiling", () =>
+    Effect.gen(function* () {
+      const registry = yield* SystemContextRegistry.Service
+      yield* Effect.forEach(
+        Array.from({ length: SystemContextRegistry.MAX_ENTRIES }, (_, index) => index),
+        (index) => registry.register(entry(`test/bounded-${index}`, String(index))),
+      )
+
+      const exit = yield* registry.register(entry("test/overflow", "overflow")).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain("System context registry exceeds")
+    }),
+  )
 })

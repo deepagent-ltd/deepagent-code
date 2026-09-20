@@ -60,6 +60,35 @@ describe("deepagentCode serve (subprocess)", () => {
       }),
     60_000,
   )
+
+  if (process.platform !== "win32")
+    cliIt.live(
+      "pauses and resumes the subprocess, and scope cleanup cannot strand a stopped child",
+      ({ deepagentCode }) =>
+        Effect.gen(function* () {
+          const exitedPromise = yield* Effect.scoped(
+            Effect.gen(function* () {
+              const server = yield* deepagentCode.serve()
+              expect(server.pid).toBeGreaterThan(0)
+              server.pause()
+              yield* Effect.sleep("100 millis")
+              server.resume()
+
+              const healthy = yield* Effect.promise(() => fetch(`${server.url}/global/health`))
+              expect(healthy.status).toBe(200)
+
+              // Leave the child stopped. The ServeHandle scope finalizer must send SIGCONT before
+              // SIGTERM; otherwise awaiting this promise would hang until the test timeout.
+              server.pause()
+              return server.exited
+            }),
+          )
+          const code = yield* Effect.promise(() => exitedPromise)
+          expect(typeof code === "number" || code === null).toBe(true)
+        }),
+      60_000,
+    )
+
   // PARITY-003 (Wave 0): `serve --register` writes the daemon registration
   // protocol (state/server.json + SIGTERM cleanup) so the new CLI daemon can
   // mount this legacy server. Covers the file contents, the authenticated

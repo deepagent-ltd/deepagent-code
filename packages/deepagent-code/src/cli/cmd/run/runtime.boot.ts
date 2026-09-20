@@ -172,7 +172,7 @@ const layer = Layer.effect(
   }),
 )
 
-const runtime = makeRuntime(Service, layer)
+const runtime = makeRuntime(Service, layer, "cli.run.boot")
 
 // Fetches available variants and context limits for every provider/model pair.
 export async function resolveModelInfo(

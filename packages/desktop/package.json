@@ -1,13 +1,13 @@
 {
   "name": "@deepagent-code/desktop",
   "private": true,
-  "version": "2.0.0-beta.0",
+  "version": "2.0.0",
   "type": "module",
   "license": "AGPL-3.0-or-later",
-  "homepage": "https://deepagent-code.ai",
+  "homepage": "https://ai.deepagent.ltd",
   "author": {
     "name": "DeepAgent Code",
-    "email": "hello@deepagent-code.ai"
+    "email": "hello@ai.deepagent.ltd"
   },
   "scripts": {
     "typecheck": "tsgo -b",
@@ -19,6 +19,7 @@
     "test": "bun test ./src",
     "test:ci": "mkdir -p .artifacts/unit && bun test ./src --reporter=junit --reporter-outfile=.artifacts/unit/junit.xml",
     "test:subagents-cold-start": "node --experimental-strip-types ./scripts/subagents-smoke.ts",
+    "test:sidecar-health-smoke": "node --experimental-strip-types ./scripts/sidecar-health-smoke.ts",
     "test:subagents-smoke": "node --experimental-strip-types ./scripts/subagents-live.ts",
     "test:prevent-sleep-smoke": "node --experimental-strip-types ./scripts/prevent-sleep-smoke.ts",
     "test:subagents-sourcemap": "bun ./scripts/verify-subagents-sourcemap.ts",

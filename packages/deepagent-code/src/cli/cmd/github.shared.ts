@@ -1,21 +1,4 @@
-import type { SessionV1 } from "@deepagent-code/core/v1/session"
-
 export { parseGitHubRemote } from "@/util/repository"
-
-/**
- * Extracts displayable text from assistant response parts.
- * Returns null for non-text responses (signals summary needed).
- * Throws only for truly empty responses.
- */
-export function extractResponseText(parts: SessionV1.Part[]): string | null {
-  const textPart = parts.findLast((p) => p.type === "text")
-  if (textPart) return textPart.text
-
-  // Non-text parts (tools, reasoning, step-start/step-finish, etc.) - signal summary needed
-  if (parts.length > 0) return null
-
-  throw new Error("Failed to parse response: no parts returned")
-}
 
 /**
  * Formats a PROMPT_TOO_LARGE error message with details about files in the prompt.

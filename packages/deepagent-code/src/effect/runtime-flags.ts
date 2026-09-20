@@ -1,11 +1,19 @@
 import { Config, ConfigProvider, Context, Effect, Layer, Option } from "effect"
 import { ConfigService } from "@/effect/config-service"
-import { InstallationVersion } from "@deepagent-code/core/installation/version"
+import { flipFlagValueOn } from "@deepagent-code/core/deepagent/flip-flag"
 
 const bool = (name: string) => Config.boolean(name).pipe(Config.withDefault(false))
 // A capability that ships ON by default but can be explicitly disabled with `=false` (U5: background
 // subagents are promoted from experimental to a stable local capability in V3.3).
 const stableOn = (name: string) => Config.boolean(name).pipe(Config.withDefault(true))
+// W0.1/W0.2: default-ON flag using the single repo-wide table (core/deepagent/flip-flag
+// `flipFlagValueOn`) — `""` / `"false"` / `"0"` (case-insensitive, whitespace tolerated) turn it
+// OFF; any other explicit value keeps the default ON.
+const flagDefaultOn = (name: string) =>
+  Config.string(name).pipe(
+    Config.withDefault("true"),
+    Config.map((value) => flipFlagValueOn(value, true)),
+  )
 const positiveInteger = (name: string) =>
   Config.number(name).pipe(
     Config.map((value) => (Number.isInteger(value) && value > 0 ? value : undefined)),
@@ -18,7 +26,6 @@ const positiveIntegerWithDefault = (name: string, fallback: number) =>
   )
 export const DEFAULT_SUBAGENT_TIMEOUT_MS = 30 * 60_000
 export const DEFAULT_SUBAGENT_OUTPUT_MAX_CHARS = 8_000
-export const isCoreV2OnlyVersion = (version: string) => /^(?:1\.4\.8(?:[.-]|$)|2\.0(?:\.0-)?alpha(?:[.-]|$))/.test(version)
 const experimental = bool("DEEPAGENT_CODE_EXPERIMENTAL")
 const enabledByExperimental = (name: string) =>
   Config.all({ experimental, enabled: Config.boolean(name).pipe(Config.option) }).pipe(
@@ -59,28 +66,6 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // Attempt wall limit. Expiry interrupts the same child and preserves partial work for explicit
   // recovery. It never starts a replacement child or replays provider/tool work automatically.
   subagentTimeoutMs: positiveIntegerWithDefault("DEEPAGENT_CODE_SUBAGENT_TIMEOUT_MS", DEFAULT_SUBAGENT_TIMEOUT_MS),
-  // Subagent control plane rollout gate (L0 design, subagent-control-plane-design.zh-CN.md §13.3).
-  //
-  //  "legacy"  — keep the current SessionPrompt execution path without automatic takeover.
-  //  "shadow"  — RESERVED for future use. Legacy lifecycle authority remains; durable coordinator
-  //              records non-authoritative comparison artifacts only. Currently routes identically
-  //              to "legacy". DO NOT use in production until §4 cutover protocol is implemented.
-  //  "durable" — all lifecycle owned by the durable TaskCoordinator (L4+); takeover permanently
-  //              removed; SessionPrompt driven through LegacySubagentExecutor.
-  //              REQUIRES: L1 migration applied, L3 provisioner wired, start/settle fences complete.
-  //
-  // Unknown values fail closed to "legacy". Once set to "durable" it MUST NOT be rolled back to
-  // re-enable takeover (design §13.4). Mode is per-SQLite/Location — mixing modes across processes
-  // sharing the same database is prohibited (design §4.4).
-  subagentControlPlane: Config.string("DEEPAGENT_CODE_SUBAGENT_CONTROL_PLANE").pipe(
-    Config.withDefault("legacy"),
-    Config.map((value): "legacy" | "shadow" | "durable" => {
-      if (value === "legacy" || value === "shadow" || value === "durable") return value
-      throw new Error(
-        `Invalid DEEPAGENT_CODE_SUBAGENT_CONTROL_PLANE="${value}". Must be one of: legacy, shadow, durable. Refusing to start with unknown mode.`,
-      )
-    }),
-  ),
   // Parent injection is bounded by default. The complete result remains durable in the child Session
   // and the truncated envelope carries the task_read recovery pointer.
   subagentOutputMaxChars: positiveIntegerWithDefault(
@@ -102,9 +87,11 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   experimentalQueryLogTool: stableOn("DEEPAGENT_CODE_EXPERIMENTAL_QUERY_LOG"),
   // V3.8 App-A Stage 1: maintain the Session Ledger alongside compaction (parse each compaction
   // summary into structured ledger entries + persist as the `ledger` DocType). Coexists with V1
-  // compaction — does NOT replace the assembly path. Default OFF (gated grey rollout, C6 §1). Enable
-  // with DEEPAGENT_CODE_EXPERIMENTAL_CONTEXT_LEDGER.
-  experimentalContextLedger: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_CONTEXT_LEDGER"),
+  // compaction — does NOT replace the assembly path. W7: the Project Bridge write side is now the
+  // durable-knowledge writeback, so this ships ON by default (kill-switch semantics: the ledger
+  // writer is default-safe); set DEEPAGENT_CODE_EXPERIMENTAL_CONTEXT_LEDGER=false to restore the
+  // pre-W7 OFF posture.
+  experimentalContextLedger: stableOn("DEEPAGENT_CODE_EXPERIMENTAL_CONTEXT_LEDGER"),
   // L6 (V3.4): code_intel (symbol-driven AI IDE entry) ships ON by default and is promoted out of
   // the experimental gate — `=false` disables. grep is never disabled; no-server files fall back.
   codeIntelTool: stableOn("DEEPAGENT_CODE_CODE_INTEL_TOOL"),
@@ -129,15 +116,13 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   locationIndexesV2Shadow: stableOn("DEEPAGENT_CODE_LOCATION_INDEXES_V2_SHADOW"),
   contextProjectionV2: stableOn("DEEPAGENT_CODE_CONTEXT_PROJECTION_V2"),
   contextQueryToolsV2: stableOn("DEEPAGENT_CODE_CONTEXT_QUERY_TOOLS_V2"),
-  // M-1 containment: execution remains closed until a durable M10 cohort authorization exists.
-  coreV2ExecutionOwner: bool("DEEPAGENT_CODE_CORE_V2_EXECUTION_OWNER"),
-  // Core V2 alpha profile: an unavailable/unqualified V2 owner fails closed
-  // instead of entering the legacy SessionPrompt executor. This is a kill switch for admission,
-  // never a legacy fallback selector.
-  coreV2Only: Config.all({
-    forcedByVersion: Config.succeed(isCoreV2OnlyVersion(InstallationVersion)),
-    explicit: bool("DEEPAGENT_CODE_CORE_V2_ONLY"),
-  }).pipe(Config.map((value) => value.forcedByVersion || value.explicit)),
+  // W0.2: the owner flag now ships ON (an explicit =false/=0 restores the contained posture);
+  // unqualified owners still fail closed at the ownerCampaign gate (v2_owner_campaign_not_verified).
+  // W0.1: runtime-defaults.ts 单点化后此处保持语义一致.
+  coreV2ExecutionOwner: flagDefaultOn("DEEPAGENT_CODE_CORE_V2_EXECUTION_OWNER"),
+  // Core V2 is the only production execution authority. This is deliberately not configurable:
+  // an unavailable/unqualified V2 owner fails closed and can never select the legacy executor.
+  coreV2Only: Config.succeed(true),
   contextFederationKillSwitch: bool("DEEPAGENT_CODE_CONTEXT_FEDERATION_KILL_SWITCH"),
   contextFederationRolloutStage: Config.string("DEEPAGENT_CODE_CONTEXT_FEDERATION_ROLLOUT_STAGE").pipe(
     Config.withDefault("all"),
@@ -183,15 +168,11 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // start without objective criteria + hard limits, so it is safe on by default — this is what powers
   // the loop/design collaboration modes). Set DEEPAGENT_CODE_EXPERIMENTAL_GOAL_LOOP=false to disable.
   experimentalGoalLoop: stableOn("DEEPAGENT_CODE_EXPERIMENTAL_GOAL_LOOP"),
-  // §16.3 order 3 caller wiring: drives subagent turn runners (goal loop / panel / facade / HTTP
-  // panel route) through the V2 typed adapter seam — durable admission + explicit drain join,
-  // seam-side structured validation, V2→V1 mirroring, and per-turn revert evidence — instead of
-  // legacy prompt orchestration. OFF by default (rollout gate; the V2 runner checklist still has
-  // open items). When ON, V2 is authoritative: a failed V2 turn fails the turn, there is no legacy
-  // fallback. The production compositions (AppRuntime root graph, instance HTTP route root) export
-  // the shared SessionV2.liveLayer singleton for the seam; compositions without it stay on the
-  // legacy path even with the flag on (the seam resolves via serviceOption).
-  experimentalV2SubagentDrive: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_V2_SUBAGENT_DRIVE"),
+  // W6 (fail-closed write authorization): write-type subagents and mutating tools must be authorized
+  // by a synced plan / isolated worktree. ON by default; `=false` restores the pre-W6 warn-only
+  // posture (stale-plan edits are warned but allowed; a write-type subagent in a non-git project
+  // falls back to the shared parent directory under a serialization lock).
+  strictPlanGate: flagDefaultOn("DEEPAGENT_CODE_STRICT_PLAN_GATE"),
   experimentalIconDiscovery: enabledByExperimental("DEEPAGENT_CODE_EXPERIMENTAL_ICON_DISCOVERY"),
   outputTokenMax: positiveInteger("DEEPAGENT_CODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX"),
   // V4.0.1 P0: three-layer SOFT-LANDING compaction (reminder → fallback "death notes" → hard rollover).
@@ -200,7 +181,8 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // next-step intent into the durable plan doc BEFORE lossy summarization. Pure-additive, strictly safer
   // default (loses less on compaction), no autonomous side effects → SHIPS ON (mirrors v4Steering posture).
   // With `=false`, overflowStatus() collapses to the pre-V4.0.1 single-threshold ok/hard behavior (逐字节
-  // equivalent). Also respects DEEPAGENT_CODE_DISABLE_AUTOCOMPACT (no compaction → no soft-landing).
+  // equivalent). Compaction itself follows the user's `compaction.auto` config; the env escape
+  // hatch that used to force it off was removed so the mechanism ships on.
   softLandingCompaction: stableOn("DEEPAGENT_CODE_SOFT_LANDING_COMPACTION"),
   // V4.0.1 P0b: OUTPUT soft-landing — when a response is cut off at the output-token ceiling
   // (finish === "length") with no pending tool call, instead of ending the turn (the pre-V4.0.1 behavior),
@@ -266,9 +248,6 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // on with `=true`; the `RuntimeFlags.layer({...})` test helper can also force any flag on
   // programmatically (tests opt into the behavior they exercise).
   //
-  // §A/§B: route inbound IM messages through the DeepAgent Event Bus (im.message.created → Router →
-  // Scheduler) alongside the legacy path (double-write). Enable with DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM=true.
-  v4EventDrivenIm: bool("DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM"),
   // §A4: allow the agent to PUSH proactively (monitor/schedule/ci-driven outbound), through the §B2
   // policy gate (rate-limit, quiet-hours, group-membership, workspace-push-permission). PROMOTED ON
   // by default (V4.0.4 3b): the policy's hasWorkspacePushPermission fact defaults to false, so

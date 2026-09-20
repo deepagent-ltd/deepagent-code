@@ -27,6 +27,9 @@ export interface AcquireResult {
   readonly cap: number
 }
 
+/** Process-local ceiling across workspaces; per-workspace policy still applies first. */
+export const AGENT_EXEC_CONCURRENT_GLOBAL = 64
+
 export interface Interface {
   /**
    * §E2 — try to admit one agent run in `workspaceID`. Resolves the cap from
@@ -67,6 +70,7 @@ export const layer = Layer.effect(
         const cap = resolved.rateLimits.agentExecConcurrent ?? RateLimiter.AGENT_EXEC_CONCURRENT_PER_WORKSPACE
         const current = inFlight.get(workspaceID) ?? 0
         if (current >= cap) return { admitted: false, depth: current, cap }
+        if (totalDepth() >= AGENT_EXEC_CONCURRENT_GLOBAL) return { admitted: false, depth: current, cap }
         const next = current + 1
         inFlight.set(workspaceID, next)
         return { admitted: true, depth: next, cap }

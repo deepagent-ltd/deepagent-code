@@ -1,6 +1,6 @@
 import { createEffect, createMemo, on, onCleanup } from "solid-js"
 import { createStore } from "solid-js/store"
-import type { PermissionRequest, QuestionRequest, Todo } from "@deepagent-code/sdk"
+import type { PermissionRequest, QuestionRequest, SessionTodoInfo } from "@deepagent-code/sdk"
 import { useParams } from "@solidjs/router"
 import { showToast } from "@/utils/toast"
 import { useServerSync } from "@/context/server-sync"
@@ -10,6 +10,7 @@ import { useSDK } from "@/context/sdk"
 import { useSync } from "@/context/sync"
 import { sessionPermissionRequest, sessionQuestionRequest } from "./session-request-tree"
 import { planStepTodoStatus, todoState } from "./session-composer-state-model"
+import { replyPermission } from "@/context/global-sync/permission-v2"
 
 export { planStepTodoStatus, todoState }
 
@@ -48,7 +49,7 @@ export function createSessionComposerState(options?: { closeMs?: number | (() =>
     return serverSync.data.session_plan[id]
   })
 
-  const planAsTodos = createMemo((): Todo[] => {
+  const planAsTodos = createMemo((): SessionTodoInfo[] => {
     const p = plan()
     if (!p) return []
     return p.steps.map((s, i) => ({
@@ -56,14 +57,14 @@ export function createSessionComposerState(options?: { closeMs?: number | (() =>
       content: s.title,
       status: planStepTodoStatus(s.status),
       priority: "medium",
-    })) as unknown as Todo[]
+    }))
   })
 
   // Task tracking is unified onto the plan system — the dock renders the plan's steps (mapped to
   // the Todo shape it already knows). The legacy per-turn `todowrite` track was removed because it
   // shadowed the plan here (a plan with >0 steps unconditionally won), so todo-based progress
   // reports were never visible. There is now a single source: the persistent plan.
-  const todos = createMemo((): Todo[] => {
+  const todos = createMemo((): SessionTodoInfo[] => {
     const id = params.id
     if (!id) return []
     return planAsTodos()
@@ -93,14 +94,22 @@ export function createSessionComposerState(options?: { closeMs?: number | (() =>
     return store.responding === perm.id
   })
 
-  const decide = (response: "once" | "always" | "reject") => {
+  const decide = (response: "once" | "always" | "reject", message?: string) => {
     const perm = permissionRequest()
     if (!perm) return
     if (store.responding === perm.id) return
 
     setStore("responding", perm.id)
-    sdk.client.permission
-      .respond({ sessionID: perm.sessionID, permissionID: perm.id, response })
+    // V2 asks (normalized into the store by the event reducer, provenance in permission_v2)
+    // settle through the session-scoped V2 route; the legacy respond route 404s on PermissionV2
+    // request IDs. Reject feedback (`message`) is only carried by the V2 route.
+    replyPermission(sdk.client, {
+      sessionID: perm.sessionID,
+      requestID: perm.id,
+      response,
+      message,
+      v2: sync.data.permission_v2[perm.sessionID]?.[perm.id] === true,
+    })
       .catch((err: unknown) => {
         const description = err instanceof Error ? err.message : String(err)
         showToast({ title: language.t("common.requestFailed"), description })

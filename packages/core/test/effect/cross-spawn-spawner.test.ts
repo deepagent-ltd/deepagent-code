@@ -7,6 +7,7 @@ import type * as PlatformError from "effect/PlatformError"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
 import { testEffect } from "../lib/effect"
+import { tmpRootAsync, tmpRootSharedAsync } from "../fixture/tmpdir"
 
 const live = CrossSpawnSpawner.defaultLayer
 const fx = testEffect(live)
@@ -40,7 +41,7 @@ function alive(pid: number) {
 }
 
 async function tmpdir() {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "deepagent-code-core-test-"))
+  const dir = await tmpRootSharedAsync()
   return {
     path: dir,
     async [Symbol.asyncDispose]() {

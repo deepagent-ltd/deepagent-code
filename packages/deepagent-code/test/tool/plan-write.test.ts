@@ -95,7 +95,106 @@ describe("model plan advance normalization", () => {
     expect(next.active_step_id).toBe(next.steps[1]!.step_id)
   })
 
-  test("rejects an incident-shaped replan that invents an active ID", () => {
+  // F-7 regression (GLM 5.x): the tolerant schema decodes "null"/stringified numbers, and the
+  // normalization layer converts them — but the built payload must carry the CONVERTED values,
+  // not the raw ones. The raw leak made the model's protocol-correct self-correction
+  // (expected_version "0" → "null") still fail create's requirePlanWriteExpected(null-only)
+  // precondition, burning the whole two-attempt budget (wazero c2-fullon-seed1).
+  test("threads GLM-stringified nulls through the built payload, not just the schema", () => {
+    const params = decode({
+      operation: "create",
+      expected_plan_id: "null",
+      expected_version: "null",
+      goal: "ship the provider migration",
+      steps: [{ title: "Inspect the provider boundary", status: "active" }],
+    })
+
+    const normalized = normalizeModelPlanWrite(params, null, null)
+    expect(normalized.expected_version).toBeNull()
+    const next = buildPlanFromWriteInput(previous.session_id, normalized, null, null)
+    expect(next.steps[0]!.status).toBe("active")
+  })
+
+  // F-10 regression (GLM smoke 2026-09-03): GLM omits semantically-meaningless fields — a create
+  // with ONLY goal+steps is legal, absent expected_* reads as null, and must not die on the
+  // required-field schema rejection (that path has no correction payload and burned the budget).
+  test("a create that omits expected_* entirely is a valid plan write", () => {
+    const params = decode({
+      goal: "ship the provider migration",
+      steps: [{ title: "Inspect the provider boundary", status: "active" }],
+    })
+
+    const normalized = normalizeModelPlanWrite(params, null, null)
+    expect(normalized.expected_plan_id).toBeNull()
+    expect(normalized.expected_version).toBeNull()
+    const next = buildPlanFromWriteInput(previous.session_id, normalized, null, null)
+    expect(next.steps).toHaveLength(1)
+  })
+
+  test("a stringified advance version is coerced before the authority CAS precondition", () => {
+    const params = decode({
+      operation: "advance",
+      expected_plan_id: previous.plan_id,
+      expected_version: "2",
+      active_step_id: "null",
+      steps: previous.steps.map((step) => ({ step_id: step.step_id, status: step.status })),
+    })
+
+    const normalized = normalizeModelPlanWrite(params, previous, ref)
+    expect(normalized.expected_version).toBe(ref.version)
+    // F-12: the pointer is advisory — a "null" string drops out and the controller derives
+    // the still-active step from statuses
+    expect("active_step_id" in normalized).toBeFalse()
+    const next = buildPlanFromWriteInput(previous.session_id, normalized, previous, ref)
+    expect(next.active_step_id).toBe(previous.active_step_id)
+  })
+
+  // F-9 regression (wazero smoke 2026-09-03): "omit to retain" resurrected the previous active
+  // pointer when the advance marked the LAST step done, so invalid_active_step burned the whole
+  // two-attempt budget and a completed plan could never be closed. All-done now lands as a legal
+  // terminal state: active_step_id null.
+  test("an advance that completes every step closes the plan with a null active pointer", () => {
+    const params = decode({
+      operation: "advance",
+      expected_plan_id: previous.plan_id,
+      expected_version: ref.version,
+      steps: previous.steps.map((step, index) => ({
+        step_id: step.step_id,
+        status: index === 0 ? "done" : "done",
+      })),
+    })
+
+    const normalized = normalizeModelPlanWrite(params, previous, ref)
+    // the pointer key is ABSENT on omit — the controller derives the terminal null from statuses
+    expect("active_step_id" in normalized).toBeFalse()
+    const next = buildPlanFromWriteInput(previous.session_id, normalized, previous, ref)
+    expect(next.steps.every((step) => step.status === "done")).toBeTrue()
+    expect(next.active_step_id).toBeNull()
+  })
+
+  // F-11 regression (GLM smoke 2026-09-03): an advance whose operation field is omitted but whose
+  // payload is unambiguous (expected precondition + known step IDs) must infer advance, and the
+  // step hand-off (A done, B active, pointer omitted) must derive B — the old retain rule kept A
+  // and died invalid_active_step.
+  test("an operation-less advance with a precondition is inferred and hands off the active step", () => {
+    const params = decode({
+      expected_plan_id: previous.plan_id,
+      expected_version: ref.version,
+      steps: [
+        { step_id: previous.steps[0]!.step_id, status: "done" },
+        { step_id: previous.steps[1]!.step_id, status: "active" },
+      ],
+    })
+
+    const normalized = normalizeModelPlanWrite(params, previous, ref)
+    expect(normalized.operation).toBe("advance")
+    expect("active_step_id" in normalized).toBeFalse()
+    const next = buildPlanFromWriteInput(previous.session_id, normalized, previous, ref)
+    expect(next.steps[0]!.status).toBe("done")
+    expect(next.active_step_id).toBe(previous.steps[1]!.step_id)
+  })
+
+  test("ignores an incident-shaped replan's invented active ID and derives it from the statuses", () => {
     const params = decode({
       operation: "replan",
       expected_plan_id: previous.plan_id,
@@ -114,10 +213,12 @@ describe("model plan advance normalization", () => {
           acceptance: "all supported providers pass schema, semantic, retry, and recovery coverage",
         },
       ],
-      active_step_id: "g5",
+      active_step_id: "step_invented_by_the_model",
     })
 
-    expect(() => normalizeModelPlanWrite(params, previous, ref)).toThrow("unsafe_step_identity")
+    const normalized = normalizeModelPlanWrite(params, previous, ref)
+    expect("active_step_id" in normalized ? normalized.active_step_id : undefined).toBeUndefined()
+    expect(normalized.steps[0]?.status).toBe("active")
   })
 
   test("fills hidden retained-step identity fields from the authoritative replan", () => {
@@ -151,7 +252,10 @@ describe("model plan advance normalization", () => {
     )
   })
 
-  test("rejects an unknown explicit replan step ID instead of treating it as new", () => {
+  // Step ids are a SERVER-OWNED anchor for runtime evidence, so a model-invented one is not a
+  // protocol error: the step is new, and the controller mints its id. Rejecting this ended whole
+  // sessions in the full-roster sweep (a model that named a new step `step_snap_types`).
+  test("treats an unknown explicit replan step ID as a NEW step instead of rejecting it", () => {
     const params = decode({
       operation: "replan",
       expected_plan_id: previous.plan_id,
@@ -161,10 +265,49 @@ describe("model plan advance normalization", () => {
       steps: [{ step_id: "model_chosen_new", title: "new step", status: "active" }],
     })
 
-    expect(() => normalizeModelPlanWrite(params, previous, ref)).toThrow("unsafe_step_identity")
+    const normalized = normalizeModelPlanWrite(params, previous, ref)
+    expect(normalized.steps.map((step) => step.title)).toEqual(["new step"])
+    // The invented id must NOT reach the plan: identity is recovered from content, and an unmatched
+    // step is new, so the controller allocates for it.
+    expect(normalized.steps[0]?.step_id).toBeUndefined()
   })
 
-  test("rejects a replan active pointer even when it matches current authority", () => {
+  // The evidence anchor is the whole point of step identity: a step the model resends with the SAME
+  // wording is the same step and keeps its runtime proof; rewording it makes it a new step, so it
+  // must NOT inherit evidence it did not earn.
+  test("recovers identity by content so evidence survives, and rewording drops it", () => {
+    const retained = decode({
+      operation: "replan",
+      expected_plan_id: previous.plan_id,
+      expected_version: ref.version,
+      replan_reason: "keep the inspected step as it is",
+      goal: previous.goal,
+      steps: previous.steps.map((step) => ({
+        title: step.title,
+        status: step.status,
+        acceptance: step.acceptance ?? undefined,
+      })),
+    })
+    const kept = normalizeModelPlanWrite(retained, previous, ref)
+    expect(kept.steps[0]?.step_id).toBe(previous.steps[0]?.step_id)
+
+    const reworded = decode({
+      operation: "replan",
+      expected_plan_id: previous.plan_id,
+      expected_version: ref.version,
+      replan_reason: "reword the first step",
+      goal: previous.goal,
+      steps: previous.steps.map((step, index) =>
+        index === 0
+          ? { title: "something else entirely", status: step.status, acceptance: step.acceptance ?? undefined }
+          : { title: step.title, status: step.status, acceptance: step.acceptance ?? undefined },
+      ),
+    })
+    const fresh = normalizeModelPlanWrite(reworded, previous, ref)
+    expect(fresh.steps[0]?.step_id).toBeUndefined()
+  })
+
+  test("ignores a replan active pointer — the server derives it from the statuses", () => {
     const params = decode({
       operation: "replan",
       expected_plan_id: previous.plan_id,
@@ -175,7 +318,9 @@ describe("model plan advance normalization", () => {
       active_step_id: previous.active_step_id,
     })
 
-    expect(() => normalizeModelPlanWrite(params, previous, ref)).toThrow("unsafe_step_identity")
+    const normalized = normalizeModelPlanWrite(params, previous, ref)
+    expect("active_step_id" in normalized ? normalized.active_step_id : undefined).toBeUndefined()
+    expect(normalized.steps[0]?.status).toBe("active")
   })
 
   test("rejects model-created IDs on create and keeps replan assumptions when omitted", () => {
@@ -188,7 +333,9 @@ describe("model plan advance normalization", () => {
       steps: [{ step_id: "model_chosen", title: "create step", status: "active" }],
       active_step_id: "model_chosen",
     })
-    expect(() => normalizeModelPlanWrite(create, null, null)).toThrow("unsafe_step_identity")
+    // Accepted and DROPPED: the server owns step identity on create too.
+    const created = normalizeModelPlanWrite(create, null, null)
+    expect(created.steps[0]?.step_id).toBeUndefined()
 
     const replan = decode({
       operation: "replan",
@@ -232,8 +379,8 @@ describe("model plan advance normalization", () => {
     expect(next.assumptions).toEqual(previous.assumptions)
   })
 
-  test("rejects a supplied create active pointer even when it is null", () => {
-    const params = decode({
+  test("F-13: a create active pointer is ignored — null and an invented id behave the same", () => {
+    const nullPointer = decode({
       operation: "create",
       expected_plan_id: null,
       expected_version: null,
@@ -241,11 +388,22 @@ describe("model plan advance normalization", () => {
       steps: [{ title: "create step", status: "pending" }],
       active_step_id: null,
     })
+    expect(() => normalizeModelPlanWrite(nullPointer, null, null)).not.toThrow()
 
-    expect(() => normalizeModelPlanWrite(params, null, null)).toThrow("unsafe_step_identity")
+    const realPointer = decode({
+      operation: "create",
+      expected_plan_id: null,
+      expected_version: null,
+      goal: previous.goal,
+      steps: [{ title: "create step", status: "pending" }],
+      active_step_id: "step_invented",
+    })
+    // Server-owned: whatever pointer the model sends, it is dropped and derived from the statuses.
+    const built = normalizeModelPlanWrite(realPointer, null, null)
+    expect("active_step_id" in built ? built.active_step_id : undefined).toBeUndefined()
   })
 
-  test("rejects an explicit active ID before replan candidate construction", () => {
+  test("ignores an explicit active ID on replan", () => {
     const params = decode({
       operation: "replan",
       expected_plan_id: previous.plan_id,
@@ -262,7 +420,9 @@ describe("model plan advance normalization", () => {
       active_step_id: "g5",
     })
 
-    expect(() => normalizeModelPlanWrite(params, previous, ref)).toThrow("unsafe_step_identity")
+    // The pointer is dropped; identity itself is recovered from the content the model sent.
+    const normalized = normalizeModelPlanWrite(params, previous, ref)
+    expect("active_step_id" in normalized ? normalized.active_step_id : undefined).toBeUndefined()
   })
 
   test("accepts a replan goal change while retaining omitted hidden identity fields", () => {
@@ -333,8 +493,10 @@ describe("model plan advance normalization", () => {
     const normalized = normalizeModelPlanWrite(params, previous, ref)
     const next = buildPlanFromWriteInput(previous.session_id, normalized, previous, ref)
 
-    expect(next.goal).toBe(previous.goal)
-    expect(next.assumptions).toEqual(previous.assumptions)
+    // The goal is EDITABLE now (a long-horizon task may reframe its objective)…
+    expect(next.goal).toBe("finish the provider migration")
+    // …while assumptions stay server-owned on advance unless the payload supplies them.
+    expect(next.assumptions).toEqual(["model supplied a different assumption"])
     expect(next.active_step_id).toBe("s2")
     expect(next.steps).toEqual([
       {
@@ -376,7 +538,7 @@ describe("model plan advance normalization", () => {
     expect(next.steps[1]).toEqual(previous.steps[1])
   })
 
-  test("defaults omitted goal and active step to authoritative values", () => {
+  test("defaults an omitted goal to the authoritative value; an omitted active pointer derives from statuses", () => {
     const params = decode({
       operation: "advance",
       expected_plan_id: previous.plan_id,
@@ -386,10 +548,14 @@ describe("model plan advance normalization", () => {
 
     const normalized = normalizeModelPlanWrite(params, previous, ref)
     expect(normalized.goal).toBe(previous.goal)
-    expect("active_step_id" in normalized && normalized.active_step_id).toBe(previous.active_step_id)
+    // F-11: omit no longer retains the old pointer at the tool layer — the controller derives it
+    // from the built statuses, which keeps s1 active here.
+    expect("active_step_id" in normalized).toBeFalse()
+    const next = buildPlanFromWriteInput(previous.session_id, normalized, previous, ref)
+    expect(next.active_step_id).toBe(previous.active_step_id)
   })
 
-  test("rejects duplicate and unknown step IDs before building a candidate", () => {
+  test("advance tolerates duplicate ids (last write wins) and unmatched ids (not an update)", () => {
     const duplicate = decode({
       operation: "advance",
       expected_plan_id: previous.plan_id,
@@ -401,7 +567,8 @@ describe("model plan advance normalization", () => {
       ],
       active_step_id: "s1",
     })
-    expect(() => normalizeModelPlanWrite(duplicate, previous, ref)).toThrow("duplicate_step_id")
+    // The last instruction for a step wins; nothing is rejected.
+    expect(normalizeModelPlanWrite(duplicate, previous, ref).steps[0]?.status).toBe("active")
 
     const unknown = decode({
       operation: "advance",
@@ -411,7 +578,11 @@ describe("model plan advance normalization", () => {
       steps: [{ step_id: "s3", status: "done" }],
       active_step_id: null,
     })
-    expect(() => normalizeModelPlanWrite(unknown, previous, ref)).toThrow("unsafe_step_identity")
+    // `advance` patches statuses of EXISTING steps, so an unmatched id changes nothing — it cannot
+    // invent a step here (that is what replan is for).
+    expect(normalizeModelPlanWrite(unknown, previous, ref).steps.map((step) => step.status)).toEqual(
+      previous.steps.map((step) => step.status),
+    )
   })
 
   test("reports a stale precondition before validating step IDs against current authority", () => {
@@ -489,16 +660,17 @@ describe("model plan advance normalization", () => {
     const replanRetry = decode(JSON.parse(replan.slice(replan.indexOf("{"))))
 
     expect(createRetry.steps).toEqual([{ title: "implement", status: "active" }])
-    expect(createRetry.active_step_id).toBeUndefined()
+    expect("active_step_id" in createRetry ? createRetry.active_step_id : undefined).toBeUndefined()
     expect(create).toContain("Do not invent a future server ID")
     expect(replanRetry.expected_plan_id).toBe(previous.plan_id)
     expect(replanRetry.expected_version).toBe(ref.version)
-    expect(replanRetry.steps.map((step) => step.step_id)).toEqual(["s1", "s2"])
     expect(replanRetry.steps.map((step) => step.acceptance)).toEqual(
       previous.steps.map((step) => step.acceptance ?? undefined),
     )
-    expect(replan).toContain("for every new step, omit step_id")
-    expect(replanRetry.active_step_id).toBeUndefined()
+    // The example payload must not show ids: the prose says they are ignored, and the model copies
+    // what it is shown.
+    expect(replanRetry.steps.every((step) => !("step_id" in step))).toBe(true)
+    expect(replan).toContain("Do not send step_id or active_step_id")
   })
 
   test("omits nullable hidden identity fields from a schema-valid replan correction", () => {
@@ -520,13 +692,14 @@ describe("model plan advance normalization", () => {
     })
     const retry = decode(JSON.parse(output.slice(output.indexOf("{"))))
 
+    // The correction payload carries content only — never an id, nullable fields omitted.
     expect(retry.steps).toEqual([
       {
-        step_id: authority.steps[0]!.step_id,
         title: authority.steps[0]!.title,
         status: authority.steps[0]!.status,
       },
     ])
+    expect(retry.steps.every((step) => !("step_id" in step))).toBe(true)
   })
 
   test("returns allocated IDs in a schema-valid success payload", () => {

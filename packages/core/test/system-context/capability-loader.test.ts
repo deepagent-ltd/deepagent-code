@@ -4,11 +4,13 @@ import {
   CapabilityBodyHashMismatchError,
   capabilityLoaderIdentity,
   capabilityLoaderIdentityFrom,
+  type CapabilityLoadGrounds,
+} from "@deepagent-code/core/system-context/capability-loader"
+import {
   loadCapabilityBody,
   recordedCapabilityLoads,
   resetCapabilityLoader,
-  type CapabilityLoadGrounds,
-} from "@deepagent-code/core/system-context/capability-loader"
+} from "@deepagent-code/core/system-context/capability-loader-memory"
 
 // C4-04 — durable capability loader kernel: byte-stable identity, exact-retry
 // receipt, fail-closed hash verification, and the typed tagged union.
@@ -26,30 +28,36 @@ beforeEach(() => resetCapabilityLoader())
 
 describe("capabilityLoaderIdentity", () => {
   test("is byte-stable: identical inputs hash identically", () => {
-    const a = capabilityLoaderIdentity("deepagent.code-read", "1.0.0-beta.0", digestOf(bodyA), "rt-1", "perm-1")
-    const b = capabilityLoaderIdentity("deepagent.code-read", "1.0.0-beta.0", digestOf(bodyA), "rt-1", "perm-1")
+    const a = capabilityLoaderIdentity("session-1", "deepagent.code-read", "1.0.0-beta.0", digestOf(bodyA), "rt-1", "perm-1")
+    const b = capabilityLoaderIdentity("session-1", "deepagent.code-read", "1.0.0-beta.0", digestOf(bodyA), "rt-1", "perm-1")
     expect(a).toBe(b)
     expect(a).toMatch(/^capability_load:[0-9a-f]{64}$/)
   })
 
   test("is independent of insertion order and object form", () => {
-    const a = capabilityLoaderIdentityFrom({ capabilityId: "deepagent.code-read", version: "1.0.0-beta.0", bodyHash: digestOf(bodyA), runtimeHash: "rt-1", permissionHash: "perm-1" })
-    const b = capabilityLoaderIdentity("deepagent.code-read", "1.0.0-beta.0", digestOf(bodyA), "rt-1", "perm-1")
+    const a = capabilityLoaderIdentityFrom({ sessionId: "session-1", capabilityId: "deepagent.code-read", version: "1.0.0-beta.0", bodyHash: digestOf(bodyA), runtimeHash: "rt-1", permissionHash: "perm-1" })
+    const b = capabilityLoaderIdentity("session-1", "deepagent.code-read", "1.0.0-beta.0", digestOf(bodyA), "rt-1", "perm-1")
     expect(a).toBe(b)
   })
 
   test("changes when a single identity ground changes", () => {
-    const base = capabilityLoaderIdentity("deepagent.code-read", "1.0.0-beta.0", digestOf(bodyA), "rt-1", "perm-1")
-    const bodyDrift = capabilityLoaderIdentity("deepagent.code-read", "1.0.0-beta.0", digestOf(bodyB), "rt-1", "perm-1")
-    const versionBump = capabilityLoaderIdentity("deepagent.code-read", "2.0.0-beta.0", digestOf(bodyA), "rt-1", "perm-1")
+    const base = capabilityLoaderIdentity("session-1", "deepagent.code-read", "1.0.0-beta.0", digestOf(bodyA), "rt-1", "perm-1")
+    const bodyDrift = capabilityLoaderIdentity("session-1", "deepagent.code-read", "1.0.0-beta.0", digestOf(bodyB), "rt-1", "perm-1")
+    const versionBump = capabilityLoaderIdentity("session-1", "deepagent.code-read", "2.0.0-beta.0", digestOf(bodyA), "rt-1", "perm-1")
     expect(bodyDrift).not.toBe(base)
     expect(versionBump).not.toBe(base)
+  })
+
+  test("is SESSION-SCOPED: the same body loads under different session-ground identities (W4)", () => {
+    const a = capabilityLoaderIdentity("session-1", "deepagent.code-read", "1.0.0-beta.0", digestOf(bodyA), "rt-1", "perm-1")
+    const b = capabilityLoaderIdentity("session-2", "deepagent.code-read", "1.0.0-beta.0", digestOf(bodyA), "rt-1", "perm-1")
+    expect(a).not.toBe(b)
   })
 })
 
 describe("loadCapabilityBody", () => {
   test("loads a body and records a receipt for the identity", () => {
-    const identity = capabilityLoaderIdentity("deepagent.code-read", "1.0.0-beta.0", digestOf(bodyA), "rt-1", "perm-1")
+    const identity = capabilityLoaderIdentity("session-1", "deepagent.code-read", "1.0.0-beta.0", digestOf(bodyA), "rt-1", "perm-1")
     const result = loadCapabilityBody(identity, { body: bodyA, declaredDigest: digestOf(bodyA) }, grounds())
     expect(result.state).toBe("available")
     if (result.state === "available") {
@@ -59,8 +67,8 @@ describe("loadCapabilityBody", () => {
     expect(recordedCapabilityLoads()).toHaveLength(1)
   })
 
-  test("exact retry of an identical identity is an existing no-op (no duplicate receipt)", () => {
-    const identity = capabilityLoaderIdentity("deepagent.code-read", "1.0.0-beta.0", digestOf(bodyA), "rt-1", "perm-1")
+  test("exact retry of an identical identity within the SAME session is an existing no-op that RETURNS THE BODY (W4)", () => {
+    const identity = capabilityLoaderIdentity("session-1", "deepagent.code-read", "1.0.0-beta.0", digestOf(bodyA), "rt-1", "perm-1")
     const first = loadCapabilityBody(identity, { body: bodyA, declaredDigest: digestOf(bodyA) }, grounds())
     expect(first.state).toBe("available")
 
@@ -68,12 +76,33 @@ describe("loadCapabilityBody", () => {
     expect(retry.state).toBe("existing")
     if (retry.state === "existing" && first.state === "available") {
       expect(retry.receipt.identity).toBe(first.receipt.identity)
+      // W4 audit fix: a same-session exact retry is a no-op for the kernel, but the
+      // caller still gets the body (a 2nd session never observes a bodyless existing).
+      expect(retry.body).toBe(bodyA)
+      expect(retry.body).toBe(first.body)
     }
     expect(recordedCapabilityLoads()).toHaveLength(1)
   })
 
+  test("a DIFFERENT session loading the same body is a fresh loaded (never the other session's existing) (W4)", () => {
+    const identityOne = capabilityLoaderIdentity("session-1", "deepagent.code-read", "1.0.0-beta.0", digestOf(bodyA), "rt-1", "perm-1")
+    const identityTwo = capabilityLoaderIdentity("session-2", "deepagent.code-read", "1.0.0-beta.0", digestOf(bodyA), "rt-1", "perm-1")
+    const first = loadCapabilityBody(identityOne, { body: bodyA, declaredDigest: digestOf(bodyA) }, grounds({ sessionId: "session-1" }))
+    expect(first.state).toBe("available")
+
+    const second = loadCapabilityBody(identityTwo, { body: bodyA, declaredDigest: digestOf(bodyA) }, grounds({ sessionId: "session-2" }))
+    expect(second.state).toBe("available")
+    if (first.state === "available" && second.state === "available") {
+      expect(second.body).toBe(bodyA)
+      if (second.state === "available") expect(second.body).toBe(first.body)
+    }
+    // Two session-scoped receipts, each carrying its own sessionId (snapshot filter by session).
+    expect(recordedCapabilityLoads()).toHaveLength(2)
+    expect(recordedCapabilityLoads().map((receipt) => receipt.sessionId)).toEqual(["session-1", "session-2"])
+  })
+
   test("a body hash that drifts from the declared digest is a typed fail-closed mismatch", () => {
-    const identity = capabilityLoaderIdentity("deepagent.code-read", "1.0.0-beta.0", digestOf(bodyA), "rt-1", "perm-1")
+    const identity = capabilityLoaderIdentity("session-1", "deepagent.code-read", "1.0.0-beta.0", digestOf(bodyA), "rt-1", "perm-1")
     expect(() =>
       loadCapabilityBody(identity, { body: bodyA, declaredDigest: digestOf(bodyB) }, grounds()),
     ).toThrow(CapabilityBodyHashMismatchError)
@@ -81,7 +110,7 @@ describe("loadCapabilityBody", () => {
   })
 
   test("a version bump (superseding ref) is a typed superseded result", () => {
-    const identity = capabilityLoaderIdentity("deepagent.code-read", "1.0.0-beta.0", digestOf(bodyA), "rt-1", "perm-1")
+    const identity = capabilityLoaderIdentity("session-1", "deepagent.code-read", "1.0.0-beta.0", digestOf(bodyA), "rt-1", "perm-1")
     const result = loadCapabilityBody(
       identity,
       { body: bodyA, declaredDigest: digestOf(bodyA) },
@@ -93,7 +122,7 @@ describe("loadCapabilityBody", () => {
   })
 
   test("an absent body (no body authored yet) is a typed missing_body result", () => {
-    const identity = capabilityLoaderIdentity("deepagent.code-edit", "1.0.0-beta.0", "", "rt-2", "perm-2")
+    const identity = capabilityLoaderIdentity("session-1", "deepagent.code-edit", "1.0.0-beta.0", "", "rt-2", "perm-2")
     const result = loadCapabilityBody(identity, { body: undefined, declaredDigest: undefined }, grounds({ bodyRef: "capability://deepagent.code-edit@1.0.0-beta.0" }))
     expect(result.state).toBe("missing_body")
     if (result.state === "missing_body") expect(result.bodyRef).toBe("capability://deepagent.code-edit@1.0.0-beta.0")
@@ -101,7 +130,7 @@ describe("loadCapabilityBody", () => {
   })
 
   test("a permission-denied load is a typed denied result and never loads a body", () => {
-    const identity = capabilityLoaderIdentity("deepagent.shell-execute", "1.0.0-beta.0", digestOf(bodyB), "rt-3", "perm-3")
+    const identity = capabilityLoaderIdentity("session-1", "deepagent.shell-execute", "1.0.0-beta.0", digestOf(bodyB), "rt-3", "perm-3")
     const result = loadCapabilityBody(
       identity,
       { body: bodyB, declaredDigest: digestOf(bodyB) },
@@ -114,7 +143,7 @@ describe("loadCapabilityBody", () => {
 
   test("an over-budget L2 body is a typed budget_exceeded result (kernel-level state)", () => {
     const longBody = "x".repeat(5000) // deterministic, > 1200 tokens by char estimate (4 chars/token)
-    const identity = capabilityLoaderIdentity("deepagent.web-research", "1.0.0-beta.0", digestOf(longBody), "rt-4", "perm-4")
+    const identity = capabilityLoaderIdentity("session-1", "deepagent.web-research", "1.0.0-beta.0", digestOf(longBody), "rt-4", "perm-4")
     const result = loadCapabilityBody(
       identity,
       { body: longBody, declaredDigest: digestOf(longBody) },

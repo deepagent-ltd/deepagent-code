@@ -9,7 +9,7 @@ import { Database } from "@deepagent-code/core/database/database"
 import { DeepAgentEventDeliveryTable } from "@deepagent-code/core/deepagent/deepagent-event-sql"
 import { ApprovalQueueTable } from "@deepagent-code/core/deepagent/approval-queue-sql"
 import { AgentPushLogTable } from "@deepagent-code/core/im/push-log-sql"
-import { EventSequenceTable, EventTable } from "@deepagent-code/core/event/sql"
+import { EventAggregateTombstoneTable, EventSequenceTable, EventTable } from "@deepagent-code/core/event/sql"
 import { EventV2 } from "@deepagent-code/core/event"
 import {
   FilePartArtifactChunkTable,
@@ -55,6 +55,39 @@ const publishAt = (bus: DeepAgentEventBus.Interface, at: number, over?: Partial<
 }
 
 describe("RetentionSweeper", () => {
+  it.effect("§EventV2-retention: expires deletion fences only after their explicit TTL", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const s = yield* RetentionSweeper.Service
+      yield* db.insert(EventAggregateTombstoneTable).values([
+        {
+          aggregate_id: "ses_expired_tombstone",
+          deleted_at: 1,
+          retention_until: 100,
+          reason: "test",
+        },
+        {
+          aggregate_id: "ses_live_tombstone",
+          deleted_at: 1,
+          retention_until: 101,
+          reason: "test",
+        },
+      ]).run().pipe(Effect.orDie)
+      yield* db.insert(EventSequenceTable).values({ aggregate_id: "ses_expired_tombstone", seq: 0 }).run().pipe(Effect.orDie)
+
+      const summary = yield* s.sweepOnce(100)
+      expect(summary.deletedEventV2Tombstones).toBe(1)
+      expect(yield* db.select().from(EventAggregateTombstoneTable).all()).toEqual([{
+        aggregate_id: "ses_live_tombstone",
+        deleted_at: 1,
+        retention_until: 101,
+        reason: "test",
+        deletion_event_id: null,
+      }])
+      expect(yield* db.select().from(EventSequenceTable).where(eq(EventSequenceTable.aggregate_id, "ses_expired_tombstone")).all()).toEqual([])
+    }),
+  )
+
   it.effect("§A3 deletes events older than retention, keeps fresh ones", () =>
     Effect.gen(function* () {
       const b = yield* DeepAgentEventBus.Service

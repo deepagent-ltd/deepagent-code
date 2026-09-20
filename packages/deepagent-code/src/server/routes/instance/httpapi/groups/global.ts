@@ -1,6 +1,7 @@
 import { Config } from "@/config/config"
 import { ConfigV1 } from "@deepagent-code/core/v1/config/config"
 import { EventV2 } from "@deepagent-code/core/event"
+import { EventV2Bridge } from "@/event-v2-bridge"
 import { ProjectV2 } from "@deepagent-code/core/project"
 import { InstanceDisposed } from "@/server/event"
 import "@deepagent-code/core/account"
@@ -39,7 +40,6 @@ const GlobalCapabilities = Schema.Struct({
     // V4.0 §H3 — the event-driven Agent-OS feature flags (all default OFF). Advertised so the client
     // can gate V4 UI (Oversight Dashboard / Approval Queue / proactive-push surface / thread + file
     // upload) exactly where the routes fail-close. Optional so older clients tolerate their absence.
-    v4EventDrivenIm: Schema.optional(Schema.Boolean),
     v4AgentPushEnabled: Schema.optional(Schema.Boolean),
     v4MultiAgentRuntime: Schema.optional(Schema.Boolean),
     v4ThreadEnabled: Schema.optional(Schema.Boolean),
@@ -47,36 +47,43 @@ const GlobalCapabilities = Schema.Struct({
   }),
 })
 
-const SyncEventSchemas = EventV2.registry
+// The sync channel emits one wrapper per synced VERSION (the bridge stamps the versioned type
+// on the wire), so declare every registered version — the per-type registry collapses to the
+// latest version and would leave older-version emissions (e.g. legacy session.updated.1 writes,
+// which remain authoritative for the fields V2 does not model yet) undeclared.
+const SyncEventSchemas = EventV2.syncRegistry
   .values()
-  .flatMap((definition) => {
-    if (!definition.sync) return []
-    return [
-      Schema.Struct({
-        type: Schema.Literal("sync"),
+  .map((definition) =>
+    Schema.Struct({
+      type: Schema.Literal("sync"),
+      id: EventV2.ID,
+      syncEvent: Schema.Struct({
+        type: Schema.Literal(EventV2.versionedType(definition.type, definition.sync.version)),
         id: EventV2.ID,
-        syncEvent: Schema.Struct({
-          type: Schema.Literal(EventV2.versionedType(definition.type, definition.sync.version)),
-          id: EventV2.ID,
-          seq: Schema.Finite,
-          aggregateID: Schema.String,
-          data: definition.data,
-        }),
-      }).annotate({ identifier: `SyncEvent.${definition.type}` }),
-    ]
-  })
+        seq: Schema.Finite,
+        aggregateID: Schema.String,
+        data: definition.data,
+      }),
+    }).annotate({
+      identifier: `SyncEvent.${EventV2.versionedType(definition.type, definition.sync.version)}`,
+    }),
+  )
   .toArray()
 
 const GlobalEventSchema = Schema.Struct({
   directory: Schema.String,
   project: Schema.optional(Schema.String),
   workspace: Schema.optional(Schema.String),
+  // The plain payload mirror goes through the EventV2Bridge egress adapter, so declare the V1
+  // compatibility wire shape for the adapted types (see compatibilityEgressTypes), matching the
+  // instance SSE event union.
   payload: Schema.Union([
     ...EventV2.registry
       .values()
-      .map((definition) =>
-        Schema.Struct({ id: EventV2.ID, type: Schema.Literal(definition.type), properties: definition.data }),
-      )
+      .map((definition) => {
+        const wire = EventV2Bridge.compatibilityEgressDefinition(definition.type) ?? definition
+        return Schema.Struct({ id: EventV2.ID, type: Schema.Literal(wire.type), properties: wire.data })
+      })
       .toArray(),
     InstanceDisposed,
     ...SyncEventSchemas,

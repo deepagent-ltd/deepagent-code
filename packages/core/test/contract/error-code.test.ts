@@ -89,7 +89,7 @@ describe("C0-03 error contract", () => {
     const a = registryDigest()
     const b = registryDigest()
     expect(a).toBe(b)
-    expect(ErrorVersion.registry).toBe(1)
+    expect(ErrorVersion.registry).toBe(2)
   })
 
   test("expected/actual optional fields round-trip", () => {

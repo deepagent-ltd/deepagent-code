@@ -11,6 +11,10 @@ const log = Log.create({ service: "acp-permission" })
 
 type PermissionEvent = Extract<Event, { type: "permission.asked" }>
 type Reply = "once" | "always" | "reject"
+// ACPEvent normalizes permission.v2.asked into the legacy request shape, but the reply must go
+// back through the session-scoped V2 route: legacy /permission/:id/reply only settles app-level
+// Permission requests and 404s on PermissionV2's pending map.
+type Version = "v1" | "v2"
 type Connection = Partial<Pick<AgentSideConnection, "requestPermission" | "writeTextFile">>
 
 const permissionOptions: PermissionOption[] = [
@@ -30,11 +34,11 @@ export class Handler {
     },
   ) {}
 
-  handle(event: PermissionEvent) {
+  handle(event: PermissionEvent, version: Version) {
     const permission = event.properties
     const previous = this.queues.get(permission.sessionID) ?? Promise.resolve()
     const next = previous
-      .then(() => this.process(event))
+      .then(() => this.process(event, version))
       .catch((error: unknown) => {
         log.error("failed to handle permission", { error, permissionID: permission.id })
       })
@@ -46,7 +50,7 @@ export class Handler {
     this.queues.set(permission.sessionID, next)
   }
 
-  private async process(event: PermissionEvent) {
+  private async process(event: PermissionEvent, version: Version) {
     const permission = event.properties
     const session = await Effect.runPromise(this.input.session.tryGet(permission.sessionID))
     if (!session) return
@@ -56,7 +60,7 @@ export class Handler {
         permissionID: permission.id,
         sessionID: permission.sessionID,
       })
-      await this.reply(permission.id, "reject", session.cwd)
+      await this.reply(event, "reject", session.cwd, version)
       return
     }
 
@@ -79,7 +83,7 @@ export class Handler {
           permissionID: permission.id,
           sessionID: permission.sessionID,
         })
-        await this.reply(permission.id, "reject", session.cwd)
+        await this.reply(event, "reject", session.cwd, version)
         return undefined
       })
 
@@ -87,7 +91,7 @@ export class Handler {
 
     const reply = selectedReply(result)
     if (reply !== "once" && reply !== "always") {
-      await this.reply(permission.id, "reject", session.cwd)
+      await this.reply(event, "reject", session.cwd, version)
       return
     }
 
@@ -101,12 +105,20 @@ export class Handler {
       })
     }
 
-    await this.reply(permission.id, reply, session.cwd)
+    await this.reply(event, reply, session.cwd, version)
   }
 
-  private async reply(requestID: string, reply: Reply, directory: string) {
+  private async reply(event: PermissionEvent, reply: Reply, directory: string, version: Version) {
+    if (version === "v2") {
+      await this.input.sdk.v2.session.permission.reply({
+        sessionID: event.properties.sessionID,
+        requestID: event.properties.id,
+        reply,
+      })
+      return
+    }
     await this.input.sdk.permission.reply({
-      requestID,
+      requestID: event.properties.id,
       reply,
       directory,
     })

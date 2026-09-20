@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { Effect } from "effect"
 import { Hash } from "@deepagent-code/core/util/hash"
 import {
   assertCapabilityBodiesCoherent,
@@ -9,12 +10,32 @@ import {
   capabilityBodyFor,
   bodyContent,
 } from "@deepagent-code/core/system-context/capability-bodies"
-import { sessionCapabilityLoad, type CapabilityLoadTurnIdentity } from "@deepagent-code/core/system-context/capability-load-adapter"
-import { resetCapabilityLoader } from "@deepagent-code/core/system-context/capability-loader"
+import {
+  sessionCapabilityLoad,
+  type CapabilityLoadTurnIdentity,
+} from "@deepagent-code/core/system-context/capability-load-adapter"
+import { Database } from "@deepagent-code/core/database/database"
+import { resetCapabilityLoader } from "@deepagent-code/core/system-context/capability-loader-memory"
 import { capabilityCatalog, capabilityCatalogSnapshotId } from "@deepagent-code/core/system-context/capability-catalog"
 
 // C4-09 — author the first batch of capability bodies, hash-bound, within the L2
-// budget, with no permission expansion.
+// budget, with no permission expansion. W4: `sessionCapabilityLoad` persists receipts.
+
+/**
+ * Run adapter loads against one in-memory DB.
+ *
+ * The batch runs as a single program on purpose: `Database.layerFromPath` performs its bootstrap
+ * (open, forward-migrate, capability and owner gates) per layer, so building one per load spent ~400ms
+ * each and pushed this test past bun's 5s default under full-suite contention. One layer is also the
+ * honest shape — a real session loads several bodies within one connection, not one connection each.
+ */
+const load = (requests: Parameters<typeof sessionCapabilityLoad>[1][]) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      return yield* Effect.forEach(requests, (args) => sessionCapabilityLoad(db, args))
+    }).pipe(Effect.provide(Database.layerFromPath(":memory:"))),
+  )
 
 describe("first batch = 10 capability bodies", () => {
   test("authors exactly 10 concrete bodies", () => {
@@ -37,31 +58,41 @@ describe("first batch = 10 capability bodies", () => {
 })
 
 describe("each body loads through the kernel (hash matches)", () => {
-  test("every body's body + declared digest load as 'loaded'", () => {
-    const IDENTITY: CapabilityLoadTurnIdentity = { sessionId: "session-bodies", activityId: "activity-bodies", turnId: "turn-bodies" }
-    for (const entry of capabilityBodies) {
-      const { body, declaredDigest } = bodyContent(entry)
-      const out = sessionCapabilityLoad({
-        request: {
-          capabilityId: entry.id,
-          version: entry.version,
-          bodyHash: entry.body_hash!,
-          runtimeHash: "rt-bodies",
-          permissionHash: "perm-bodies",
-          bodyRef: entry.body_ref,
-          body,
-          declaredDigest,
-          catalogSnapshotId: capabilityCatalogSnapshotId,
-          requiredPermissions: entry.required_permissions,
-          grantedPermissions: entry.required_permissions,
-          requiredRuntimeFeatures: entry.required_runtime_features,
-        },
-        identity: { ...IDENTITY, turnId: `turn-${entry.id}` },
-        contextEpoch: "epoch-bodies",
-      })
-      expect(out.state.state).toBe("loaded")
-      expect(out.body).toBe(body)
+  test("every body's body + declared digest load as 'loaded'", async () => {
+    const IDENTITY: CapabilityLoadTurnIdentity = {
+      sessionId: "session-bodies",
+      activityId: "activity-bodies",
+      turnId: "turn-bodies",
     }
+    resetCapabilityLoader()
+    const results = await load(
+      capabilityBodies.map((entry) => {
+        const { body, declaredDigest } = bodyContent(entry)
+        return {
+          request: {
+            capabilityId: entry.id,
+            version: entry.version,
+            bodyHash: entry.body_hash!,
+            runtimeHash: "rt-bodies",
+            permissionHash: "perm-bodies",
+            bodyRef: entry.body_ref,
+            body,
+            declaredDigest,
+            catalogSnapshotId: capabilityCatalogSnapshotId,
+            requiredPermissions: entry.required_permissions,
+            grantedPermissions: entry.required_permissions,
+            requiredRuntimeFeatures: entry.required_runtime_features,
+          },
+          identity: { ...IDENTITY, turnId: `turn-${entry.id}` },
+          contextEpoch: "epoch-bodies",
+        }
+      }),
+    )
+    expect(results).toHaveLength(capabilityBodies.length)
+    results.forEach((out, index) => {
+      expect(out.state.state).toBe("loaded")
+      expect(out.body).toBe(bodyContent(capabilityBodies[index]!).body)
+    })
   })
 
   test("a body lookup by ref and by id/version are consistent", () => {

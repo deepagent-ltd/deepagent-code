@@ -22,7 +22,12 @@ export class ModelNotSelectedError extends Schema.TaggedErrorClass<ModelNotSelec
   {
     sessionID: SessionSchema.ID,
   },
-) {}
+) {
+  constructor(props: { readonly sessionID: SessionSchema.ID }) {
+    super(props)
+    this.message = `no model selected for session ${props.sessionID}`
+  }
+}
 
 export class UnsupportedApiError extends Schema.TaggedErrorClass<UnsupportedApiError>()(
   "SessionRunnerModel.UnsupportedApiError",
@@ -31,7 +36,12 @@ export class UnsupportedApiError extends Schema.TaggedErrorClass<UnsupportedApiE
     modelID: ModelV2.ID,
     api: Schema.String,
   },
-) {}
+) {
+  constructor(props: { readonly providerID: ProviderV2.ID; readonly modelID: ModelV2.ID; readonly api: string }) {
+    super(props)
+    this.message = `api ${props.api} is not supported by ${props.providerID}/${props.modelID}`
+  }
+}
 
 /** A model whose protocol selection is explicitly disabled (unknown/conflict). */
 export class ModelProtocolDisabledError extends Schema.TaggedErrorClass<ModelProtocolDisabledError>()(
@@ -43,7 +53,18 @@ export class ModelProtocolDisabledError extends Schema.TaggedErrorClass<ModelPro
     reason: ModelProtocolDisabledReason,
     selectionState: Schema.String,
   },
-) {}
+) {
+  constructor(props: {
+    readonly providerID: ProviderV2.ID
+    readonly modelID: ModelV2.ID
+    readonly protocol?: string
+    readonly reason: ModelProtocolDisabledReason
+    readonly selectionState: string
+  }) {
+    super(props)
+    this.message = `model protocol disabled for ${props.providerID}/${props.modelID}: ${props.reason} (${props.selectionState})`
+  }
+}
 
 export type Error =
   | Catalog.ProviderNotFoundError
@@ -69,12 +90,19 @@ export interface ResolvedModel {
 
 export interface Interface {
   readonly resolve: (session: SessionSchema.Info) => Effect.Effect<ResolvedModel, Error>
+  /** RI-18: resolve an EXPLICIT provider/model pair (manual compaction fixes its summary model). */
+  readonly resolveRef: (
+    session: SessionSchema.Info,
+    providerID: ProviderV2.ID,
+    modelID: ModelV2.ID,
+  ) => Effect.Effect<ResolvedModel, Error>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/v2/SessionRunnerModel") {}
 
 /** Test or embedding seam for supplying a model resolver directly. */
-export const layerWith = (resolve: Interface["resolve"]) => Layer.succeed(Service, Service.of({ resolve }))
+export const layerWith = (resolve: Interface["resolve"]) =>
+  Layer.succeed(Service, Service.of({ resolve, resolveRef: (session) => resolve(session) }))
 
 const apiKey = (model: ModelV2.Info, provider?: ProviderV2.Info) => {
   const value = model.request.body.apiKey ?? model.api.settings?.apiKey
@@ -204,6 +232,13 @@ export const locationLayer = Layer.effect(
           ? yield* catalog.model.get(session.model.providerID, session.model.id)
           : (Option.getOrUndefined((yield* catalog.model.default()).pipe(Option.filter(supported))) ??
             (yield* catalog.model.available()).find(supported))
+        if (!selected) return yield* new ModelNotSelectedError({ sessionID: session.id })
+        const provider = yield* catalog.provider.get(selected.providerID)
+        return { model: yield* resolve(session, selected, provider), info: selected, provider }
+      }),
+      resolveRef: Effect.fn("SessionRunnerModel.resolveRef")(function* (session, providerID, modelID) {
+        yield* boot.wait()
+        const selected = yield* catalog.model.get(providerID, modelID)
         if (!selected) return yield* new ModelNotSelectedError({ sessionID: session.id })
         const provider = yield* catalog.provider.get(selected.providerID)
         return { model: yield* resolve(session, selected, provider), info: selected, provider }

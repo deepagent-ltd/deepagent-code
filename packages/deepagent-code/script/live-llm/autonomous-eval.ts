@@ -6,7 +6,7 @@ import { evalReport, type EvalFailure, type EvalRun } from "../../../llm/script/
 import { loadLiveLLMConfig, writeLiveArtifact } from "../../../llm/script/live-llm/config"
 import { parseVerifierChecks, pythonVerifier, scoreRubric, verifierMarker, type RubricItem } from "./eval-scoring"
 import { finishLiveScript } from "./lifecycle"
-import { runLegacyLiveCases } from "./runtime"
+import { runLegacyLiveCases, runtimeProviderIDFor } from "./runtime"
 
 const runCount = integerEnvironment("DEEPAGENT_CODE_LIVE_LLM_EVAL_RUNS", 5, 1, 20)
 const baseSeed = integerEnvironment("DEEPAGENT_CODE_LIVE_LLM_EVAL_SEED", 41_003, 0, 2_147_483_647)
@@ -56,7 +56,7 @@ for (const index of Array.from({ length: runCount }, (_, value) => value)) {
     const modelIdentityPassed =
       observation.models.length > 0 &&
       observation.models.every(
-        (model) => model.providerID === "live-deepseek" && model.modelID === artifact.fingerprint.modelID,
+        (model) => model.providerID === artifact.fingerprint.runtimeProviderID && model.modelID === artifact.fingerprint.modelID,
       )
     const score = scoreRubric(
       rubricItems({
@@ -123,7 +123,7 @@ const artifact = {
   status: "reported",
   fingerprint: {
     providerID: config.providerID,
-    runtimeProviderID: "live-deepseek",
+    runtimeProviderID: runtimeProviderIDFor(config),
     modelID: config.modelID,
     modelRevision: config.modelRevision,
     baseURL: config.baseURL,

@@ -56,8 +56,23 @@ const tui: TuiPlugin = async (api) => {
     permissions.delete(event.properties.requestID)
   })
 
+  api.event.on("permission.v2.asked", (event) => {
+    if (permissions.has(event.properties.id)) return
+    permissions.add(event.properties.id)
+    notify(api, event.properties.sessionID, "Permission needs input", "permission")
+  })
+
+  api.event.on("permission.v2.replied", (event) => {
+    permissions.delete(event.properties.requestID)
+  })
+
   api.event.on("session.status", (event) => {
     const sessionID = event.properties.sessionID
+    if (event.properties.status.type === "recovery_required") {
+      active.delete(sessionID)
+      notify(api, sessionID, event.properties.status.message, "error")
+      return
+    }
     if (event.properties.status.type === "busy" || event.properties.status.type === "retry") {
       active.add(sessionID)
       errored.delete(sessionID)

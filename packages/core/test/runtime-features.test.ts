@@ -8,6 +8,16 @@ import {
 import { DeepAgentCodeToolInventory } from "@deepagent-code/core/system-context/capability-manifest"
 import { capabilityCatalog, capabilityCatalogDigestValue } from "@deepagent-code/core/system-context/capability-catalog"
 
+// W4: `enabled()` now returns the feature's REAL runtime value (flip-flag gates). These
+// suite-wide assertions describe the PRODUCTION-enabled state (the W0.1 runtime defaults
+// set these envs in the entrypoints), so the two context gates are preset to ON here; the
+// env-consistency matrix (incl. the OFF side) is covered by
+// system-context/capability-l2-production.test.ts.
+process.env["DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION"] = "true"
+process.env["DEEPAGENT_CODE_CONTEXT_QUERY_TOOLS_V2"] = "true"
+delete process.env["DEEPAGENT_CODE_EVENT_V2_ADMISSION"]
+delete process.env["DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE"]
+
 // C5-05 — the runtime feature registry is DERIVED from the frozen capability catalog, never a
 // hand-duplicated literal. These tests prove the derivation, the fail-closed unknown-feature
 // behavior, the drift gate, and deterministic digest.
@@ -46,6 +56,18 @@ describe("RuntimeFeatures.enabled (fail-closed on unknown feature)", () => {
   test("a known shipped feature is enabled", () => {
     expect(RuntimeFeatures.enabled("context_federation_v2")).toBe(true)
     expect(RuntimeFeatures.enabled("context_query_tools_v2")).toBe(true)
+  })
+
+  test("captures immutable startup values and isolates independent roots", () => {
+    const on = createRuntimeFeatureRegistry(undefined, {
+      DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION: "true",
+    })
+    const offEnv = { DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION: "false" }
+    const off = createRuntimeFeatureRegistry(undefined, offEnv)
+    offEnv.DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION = "true"
+
+    expect(on.enabled("context_federation_v2")).toBe(true)
+    expect(off.enabled("context_federation_v2")).toBe(false)
   })
 
   test("an unknown feature throws a typed UnknownRuntimeFeatureError (never a silent false)", () => {

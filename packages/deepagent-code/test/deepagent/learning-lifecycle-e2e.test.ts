@@ -1,13 +1,11 @@
 /**
  * FEAT-004 — learning closed-loop E2E evidence-chain verification (no real LLM).
  *
- * Covers the cross-run chain that the three lifecycle callers (idle/pause/project_switch)
- * feed into:
+ * Covers the release-safe learning boundary:
  *
  *   Run A finalization artifacts (LEARNING_ADMISSION_RECEIPT.json + DEEPAGENT_RUN_STATE.json)
- *     → runtime observer (same wiring as learning-runtime.ts) → observe(trigger=idle)
- *     → admitted trigger receipt + lifecycle artifact persisted inside the runs directory
- *     → durable learning job enqueued and drained to completion.
+ *     → ordinary idle/pause/project_switch signals remain non-learning
+ *     → no second receipt, lifecycle artifact, or durable learning job is created.
  *
  * Then verifies the released-knowledge binding half of the loop:
  *   Run A's released snapshot binding fingerprint stays stable for Run B resolving the SAME
@@ -46,6 +44,7 @@ import { SessionSchema } from "@deepagent-code/core/session/schema"
 import { SessionTable } from "@deepagent-code/core/session/sql"
 import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
 import { Hash } from "@deepagent-code/core/util/hash"
+import { tmpRoot } from "../fixture/fixture"
 
 const SESSION_ID = "ses_lifecycle_e2e"
 const RUN_A_ID = "run-lifecycle-e2e-a"
@@ -55,16 +54,15 @@ const OBSERVED_PROJECT_ID = "project-observed-lifecycle-e2e"
 let root: string
 
 beforeEach(() => {
-  root = mkdtempSync(path.join(tmpdir(), "deepagent-learning-lifecycle-e2e-"))
+  root = mkdtempSync(tmpRoot())
 })
 
 afterEach(() => {
-  DeepAgentLearningLifecycleTrigger.setRuntimeObserver(undefined)
   rmSync(root, { recursive: true, force: true })
 })
 
 describe("learning lifecycle closed loop (E2E, no LLM)", () => {
-  test("Run A finalization → idle observe → admitted receipt with matching artifact hash persisted in runs dir", async () => {
+  test("Run A finalization is not relearned when the ordinary runner becomes idle", async () => {
     const workspace = path.join(root, "workspace")
     const runsDir = path.join(root, "runs")
     mkdirSync(workspace, { recursive: true })
@@ -75,82 +73,26 @@ describe("learning lifecycle closed loop (E2E, no LLM)", () => {
         const db = (yield* Database.Service).db
         yield* seedProjectAndSession(db, workspace)
 
-        // Mirror learning-runtime.ts:54-62 — the server runtime registers the observer that the
-        // idle caller (SessionRunState Runner.onIdle) reaches via `notify`.
-        DeepAgentLearningLifecycleTrigger.setRuntimeObserver({
-          observe: (input) =>
-            Effect.runPromise(
-              DeepAgentLearningLifecycleTrigger.observe(db, input, { authorityRoot: root, runsDir }),
-            ),
-        })
-
-        const outcome = yield* Effect.promise(() =>
-          DeepAgentLearningLifecycleTrigger.notify({
-            trigger: "idle",
-            boundaryKey: `session-idle:${SESSION_ID}`,
-            sessionID: SESSION_ID,
-            match: "session",
-          }),
-        )
-        expect(outcome).toMatchObject({ state: "admitted", runId: RUN_A_ID })
-
-        const receipt = yield* db.select().from(LearningLifecycleTriggerTable).get()
-        expect(receipt).toMatchObject({
-          trigger: "idle",
-          boundary_key: `session-idle:${SESSION_ID}`,
-          session_id: SESSION_ID,
-          run_id: RUN_A_ID,
-          state: "admitted",
-        })
-
-        // Artifact hash integrity: row hash === hash of persisted artifact === hash of row JSON.
-        const artifactPath = path.join(runsDir, RUN_A_ID, "LEARNING_LIFECYCLE_TRIGGER_IDLE.json")
-        expect(existsSync(artifactPath)).toBe(true)
-        const artifactContent = yield* Effect.promise(() => Bun.file(artifactPath).text())
-        expect(receipt!.artifact_hash).toBe(Hash.sha256(artifactContent))
-        expect(receipt!.artifact_hash).toBe(Hash.sha256(receipt!.artifact_json))
-        expect(artifactContent).toBe(receipt!.artifact_json)
-        expect(receipt!.artifact_path).toBe(artifactPath)
-
-        // Cross-run evidence chain: the lifecycle artifact re-anchors Run A's source receipt,
-        // terminal artifact, and admission fingerprint.
-        const artifact = JSON.parse(artifactContent)
-        expect(artifact).toMatchObject({
-          schema_version: "deepagent-code.learning_lifecycle_trigger_receipt.v1",
-          trigger: "idle",
-          boundary_key: `session-idle:${SESSION_ID}`,
-          session_id: SESSION_ID,
-          run_id: RUN_A_ID,
-          source_session_relation: "session",
-          source_admission_path: path.join(runsDir, RUN_A_ID, "LEARNING_ADMISSION_RECEIPT.json"),
-          source_terminal_path: path.join(runsDir, RUN_A_ID, "DEEPAGENT_RUN_STATE.json"),
-        })
-        expect(artifact.source_admission_sha256).toMatch(/^[0-9a-f]{64}$/)
-        expect(artifact.source_terminal_sha256).toMatch(/^[0-9a-f]{64}$/)
-        expect(artifact.learning_admission_fingerprint).toMatch(/^[0-9a-f]{64}$/)
-
-        // The admitted trigger produced a durable learning job and the worker can drain it.
-        expect(yield* db.select({ count: count() }).from(LearningJobTable).get()).toEqual({ count: 1 })
-        const completed = yield* DeepAgentDurableLearning.drain(db, {
-          owner: "learning-worker-lifecycle-e2e",
-          authorityRoot: root,
-        })
-        expect(completed.length).toBeGreaterThanOrEqual(1)
-        expect(completed[0]).toMatchObject({ state: "completed" })
-
-        // Exact-boundary dedupe: a second idle observe for the same boundary is idempotent.
-        const retry = yield* DeepAgentLearningLifecycleTrigger.observe(
-          db,
-          {
-            trigger: "idle",
-            boundaryKey: `session-idle:${SESSION_ID}`,
-            sessionID: SESSION_ID,
-            match: "session",
+        const observations: DeepAgentLearningLifecycleTrigger.ObserveInput[] = []
+        const observer: DeepAgentLearningLifecycleTrigger.RuntimeObserver = {
+          observe: async (input) => {
+            observations.push(input)
+            return { state: "prepared", receiptId: "unexpected", runId: RUN_A_ID }
           },
-          { authorityRoot: root, runsDir },
-        )
-        expect(retry).toMatchObject({ state: "admitted", runId: RUN_A_ID })
-        expect(yield* db.select({ count: count() }).from(LearningLifecycleTriggerTable).get()).toEqual({ count: 1 })
+        }
+
+        const outcome = yield* DeepAgentLearningLifecycleTrigger.notify({
+          trigger: "idle",
+          boundaryKey: `session-idle:${SESSION_ID}`,
+          sessionID: SESSION_ID,
+          match: "session",
+        }).pipe(Effect.provideService(DeepAgentLearningLifecycleTrigger.CurrentRuntimeObserver, observer))
+        expect(outcome).toEqual({ state: "skipped", reason: "not_learning_boundary" })
+        expect(observations).toEqual([])
+        expect(yield* db.select({ count: count() }).from(LearningLifecycleTriggerTable).get()).toEqual({ count: 0 })
+        expect(yield* db.select({ count: count() }).from(LearningJobTable).get()).toEqual({ count: 0 })
+        const artifactPath = path.join(runsDir, RUN_A_ID, "LEARNING_LIFECYCLE_TRIGGER_IDLE.json")
+        expect(existsSync(artifactPath)).toBe(false)
       }),
     )
   }, 30_000)
@@ -229,8 +171,6 @@ describe("learning lifecycle closed loop (E2E, no LLM)", () => {
   })
 
   test("unregistered observer (pure CLI path) skips silently without a defect", async () => {
-    DeepAgentLearningLifecycleTrigger.setRuntimeObserver(undefined)
-
     await run(
       Effect.gen(function* () {
         const db = (yield* Database.Service).db
@@ -239,23 +179,19 @@ describe("learning lifecycle closed loop (E2E, no LLM)", () => {
         // Effect.ignore, so an unregistered observer must resolve — never reject or defect.
         // FEAT-004: the unregistered-observer skip is its OWN reason code — distinct from an
         // observer that ran but found no matching settled run (`no_exact_settled_run`).
-        const idle = yield* Effect.promise(() =>
-          DeepAgentLearningLifecycleTrigger.notify({
-            trigger: "idle",
-            boundaryKey: `session-idle:${SESSION_ID}`,
-            sessionID: SESSION_ID,
-            match: "session",
-          }),
-        )
+        const idle = yield* DeepAgentLearningLifecycleTrigger.notify({
+          trigger: "idle",
+          boundaryKey: `session-idle:${SESSION_ID}`,
+          sessionID: SESSION_ID,
+          match: "session",
+        })
         expect(idle).toEqual({ state: "skipped", reason: "no_observer_registered" })
 
-        const projectSwitch = yield* Effect.promise(() =>
-          DeepAgentLearningLifecycleTrigger.notify({
-            trigger: "project_switch",
-            boundaryKey: `project-switch:${path.join(root, "workspace")}`,
-            directory: path.join(root, "workspace"),
-          }),
-        ).pipe(Effect.ignore)
+        const projectSwitch = yield* DeepAgentLearningLifecycleTrigger.notify({
+          trigger: "project_switch",
+          boundaryKey: `project-switch:${path.join(root, "workspace")}`,
+          directory: path.join(root, "workspace"),
+        }).pipe(Effect.ignore)
         expect(projectSwitch).toBeUndefined()
 
         expect(yield* db.select({ count: count() }).from(LearningLifecycleTriggerTable).get()).toEqual({ count: 0 })
@@ -329,7 +265,10 @@ function writeRunAFinalization(input: { readonly root: string; readonly workspac
     },
   }
   writeFileSync(terminalPath, terminal)
-  writeFileSync(receiptPath, CanonicalJson.stringify(DeepAgentDurableLearning.localAdmissionReceipt(bound, "submitted")))
+  writeFileSync(
+    receiptPath,
+    CanonicalJson.stringify(DeepAgentDurableLearning.localAdmissionReceipt(bound, "submitted")),
+  )
 }
 
 function seedProjectAndSession(db: Database.Interface["db"], workspace: string) {

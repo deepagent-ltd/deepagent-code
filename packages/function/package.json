@@ -1,16 +1,19 @@
 {
   "name": "@deepagent-code/function",
-  "version": "2.0.0-beta.0",
+  "version": "2.0.0",
   "$schema": "https://json.schemastore.org/package.json",
   "private": true,
   "type": "module",
   "license": "AGPL-3.0-or-later",
   "scripts": {
     "dev": "bun run src/server.ts",
-    "start": "bun run src/server.ts"
+    "start": "bun run src/server.ts",
+    "test": "bun test",
+    "typecheck": "tsgo --noEmit"
   },
   "devDependencies": {
     "@tsconfig/node22": "22.0.2",
+    "@types/bun": "catalog:",
     "@types/node": "catalog:",
     "@types/ws": "8.18.1",
     "typescript": "catalog:"

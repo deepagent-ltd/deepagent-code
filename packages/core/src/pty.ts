@@ -13,6 +13,8 @@ import * as Log from "./util/log"
 const log = Log.create({ service: "pty" })
 const BUFFER_LIMIT = 1024 * 1024 * 2
 const BUFFER_CHUNK = 64 * 1024
+export const MAX_SESSIONS = 64
+export const MAX_SUBSCRIBERS_PER_SESSION = 16
 const encoder = new TextEncoder()
 const pty = lazy(() => import("#pty"))
 
@@ -103,6 +105,11 @@ export class SpawnError extends Schema.TaggedErrorClass<SpawnError>()("Pty.Spawn
   message: Schema.String,
 }) {}
 
+export class CapacityError extends Schema.TaggedErrorClass<CapacityError>()("Pty.CapacityError", {
+  resource: Schema.Literals(["sessions", "subscribers"]),
+  limit: Schema.Number,
+}) {}
+
 export const Event = {
   Created: EventV2.define({ type: "pty.created", schema: { info: Info } }),
   Updated: EventV2.define({ type: "pty.updated", schema: { info: Info } }),
@@ -113,7 +120,7 @@ export const Event = {
 export interface Interface {
   readonly list: () => Effect.Effect<Info[]>
   readonly get: (id: PtyID) => Effect.Effect<Info, NotFoundError>
-  readonly create: (input: PreparedCreate) => Effect.Effect<Info, SpawnError>
+  readonly create: (input: PreparedCreate) => Effect.Effect<Info, SpawnError | CapacityError>
   readonly update: (id: PtyID, input: UpdateInput) => Effect.Effect<Info, NotFoundError>
   readonly remove: (id: PtyID) => Effect.Effect<void, NotFoundError>
   readonly resize: (id: PtyID, cols: number, rows: number) => Effect.Effect<void, NotFoundError>
@@ -138,6 +145,7 @@ export const layer = Layer.effect(
     const context = yield* Effect.context()
     const runFork = Effect.runForkWith(context)
     const sessions = new Map<PtyID, Active>()
+    let creating = 0
 
     function teardown(session: Active) {
       for (const listener of session.listeners) listener.dispose()
@@ -189,11 +197,17 @@ export const layer = Layer.effect(
       return (yield* requireSession(id)).info
     })
 
-    const create = Effect.fn("Pty.create")(function* (input: PreparedCreate) {
+    const create = Effect.fn("Pty.create")((input: PreparedCreate) =>
+      Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          if (sessions.size + creating >= MAX_SESSIONS)
+            return yield* new CapacityError({ resource: "sessions", limit: MAX_SESSIONS })
+          creating++
+          return yield* Effect.gen(function* () {
       const id = PtyID.ascending()
       log.info("creating session", { id, cmd: input.command, args: input.args, cwd: input.cwd })
-      const { spawn } = yield* Effect.promise(() => pty())
-      const proc = yield* Effect.try({
+      const { spawn } = yield* restore(Effect.promise(() => pty()))
+      const proc = yield* restore(Effect.try({
         try: () =>
           spawn(input.command, input.args, {
             name: "xterm-256color",
@@ -207,7 +221,7 @@ export const layer = Layer.effect(
           }),
       }).pipe(
         Effect.tapError((error) => Effect.sync(() => log.warn("spawn failed", { cwd: error.cwd, error: error.message }))),
-      )
+      ))
       const info = {
         id,
         title: input.title || `Terminal ${id.slice(-4)}`,
@@ -259,9 +273,25 @@ export const layer = Layer.effect(
           )
         }),
       )
-      yield* events.publish(Event.Created, { info })
+      yield* events.publish(Event.Created, { info }).pipe(
+        Effect.onError(() =>
+          Effect.sync(() => {
+            sessions.delete(id)
+            teardown(session)
+          }),
+        ),
+      )
       return info
-    })
+          }).pipe(
+            Effect.ensuring(
+              Effect.sync(() => {
+                creating--
+              }),
+            ),
+          )
+        }),
+      ),
+    )
 
     const update = Effect.fn("Pty.update")(function* (id: PtyID, input: UpdateInput) {
       const session = yield* requireSession(id)
@@ -285,6 +315,10 @@ export const layer = Layer.effect(
       const session = yield* requireSession(id).pipe(Effect.tapError(() => Effect.sync(() => ws.close())))
       log.info("client connected to session", { id, directory: location.directory })
       const sub = sock(ws)
+      if (!session.subscribers.has(sub) && session.subscribers.size >= MAX_SUBSCRIBERS_PER_SESSION) {
+        ws.close(4429, `Too many PTY subscribers (limit ${MAX_SUBSCRIBERS_PER_SESSION})`)
+        return
+      }
       session.subscribers.delete(sub)
       session.subscribers.set(sub, ws)
       const cleanup = () => session.subscribers.delete(sub)

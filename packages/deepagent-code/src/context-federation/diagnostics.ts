@@ -23,7 +23,6 @@ import { Cause, Context, Effect, Layer, Ref, Schema } from "effect"
 import { randomUUID } from "node:crypto"
 import { Session } from "../session/session"
 import { SessionFederatedContext } from "./session-context-runtime"
-import { ContextFederationObservability } from "./observability"
 import { ContextFederationProviderOwnerRuntime } from "./provider-owner-runtime"
 
 const StoredSelectedRef = Schema.Struct({
@@ -86,7 +85,10 @@ export interface Interface {
    * observability snapshot), bucketed by readiness so rollout decisions aren't skewed by cold-start
    * indexing noise.
    */
-  readonly cohort: (input: { readonly sinceMs: number; readonly untilMs?: number }) => Effect.Effect<CohortSummary, DiagnosticsError>
+  readonly cohort: (input: {
+    readonly sinceMs: number
+    readonly untilMs?: number
+  }) => Effect.Effect<CohortSummary, DiagnosticsError>
   /**
    * provider lifecycle gap C: recent durable provider-turn stage evidence for a session (optionally
    * narrowed to one activity), newest first. Exposes where a turn got stuck between the legacy
@@ -320,7 +322,12 @@ export const layer = Layer.effect(
             tokenCount: SessionContextSelectionTable.token_count,
           })
           .from(SessionContextSelectionTable)
-          .where(and(gte(SessionContextSelectionTable.created_at, input.sinceMs), lte(SessionContextSelectionTable.created_at, untilMs)))
+          .where(
+            and(
+              gte(SessionContextSelectionTable.created_at, input.sinceMs),
+              lte(SessionContextSelectionTable.created_at, untilMs),
+            ),
+          )
           .all()
           .pipe(Effect.orDie)
         const readiness: Record<ReadinessBucket, number> = { ready: 0, building: 0, degraded: 0, blocked: 0 }
@@ -378,22 +385,15 @@ function dashboard(input: {
   readonly selections: readonly ReturnType<typeof selectionView>[]
   readonly attempts: readonly ReturnType<typeof attemptView>[]
 }) {
-  const metrics = ContextFederationObservability.snapshot()
   const latestStatuses = input.selections[0]?.statuses ?? []
   const graphs = GraphKind.literals.map((graph) => {
-    const metric = metrics.graphs[graph]
+    const latest = input.selections.find((selection) => selection.statuses.some((status) => status.graph === graph))
     return {
       graph,
-      queries: metric.queries,
-      candidates: metric.candidates,
-      selected: metric.selected,
-      rejected: metric.rejected,
-      redacted: metric.redacted,
-      averageLatencyMs: metric.averageLatencyMs,
-      maxLatencyMs: metric.maxLatencyMs,
-      lastLatencyMs: metric.lastLatencyMs,
-      lastObservedAt: metric.lastObservedAt,
-      status: metric.lastStatus ?? latestStatuses.find((status) => status.graph === graph),
+      selected: input.selections.flatMap((selection) => selection.evidence).filter((item) => item.graph === graph)
+        .length,
+      lastObservedAt: latest?.createdAt,
+      status: latestStatuses.find((status) => status.graph === graph),
     }
   })
   return {
@@ -401,9 +401,8 @@ function dashboard(input: {
     selections: input.selections,
     attempts: input.attempts,
     metrics: {
-      selections: metrics.selections,
-      tokens: metrics.tokens,
-      shadow: metrics.shadow,
+      selections: input.selections.length,
+      tokens: input.selections.reduce((total, selection) => total + selection.tokenCount, 0),
       graphs,
       alerts: graphs.flatMap((metric) =>
         metric.status && !(metric.status.kind === "complete" && metric.status.state === "ready")

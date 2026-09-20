@@ -33,7 +33,7 @@ import { InstallationVersion } from "@deepagent-code/core/installation/version"
 import { Identifier } from "@deepagent-code/core/util/identifier"
 import * as Log from "@deepagent-code/core/util/log"
 import type { Message, OpencodeClient, SessionMessageResponse } from "@deepagent-code/sdk"
-import { Context, Effect, Layer, ManagedRuntime } from "effect"
+import { Context, Effect, Layer } from "effect"
 import * as ACPError from "./error"
 import { buildConfigOptions, parseModelSelection } from "./config-option"
 import { promptContentToParts } from "./content"
@@ -49,6 +49,8 @@ import type { Command } from "@/command"
 
 export const AuthMethodID = "deepagent-code-login"
 const log = Log.create({ service: "acp-service" })
+const MAX_FORK_INTENTS = 256
+const MAX_USAGE_LIMITS = 128
 
 export type Error = ACPError.Error
 type ServiceConnection = Pick<AgentSideConnection, "sessionUpdate"> &
@@ -363,6 +365,8 @@ export function make(input: {
   const forkSession = Effect.fn("ACP.forkSession")(function* (params: ForkSessionRequest) {
     const intentKey = `${params.cwd}\0${params.sessionId}`
     const intentID = forkIntents.get(intentKey) ?? `acp-fork:${Identifier.ascending()}`
+    if (!forkIntents.has(intentKey) && forkIntents.size >= MAX_FORK_INTENTS)
+      forkIntents.delete(forkIntents.keys().next().value!)
     forkIntents.set(intentKey, intentID)
     const snapshot = yield* directorySnapshot(params.cwd)
     const forked = yield* request(
@@ -589,24 +593,15 @@ export function make(input: {
 }
 
 function makeSessionService() {
-  return ManagedRuntime.make(ACPSession.defaultLayer).runSync(
-    ACPSession.Service.use((service) => Effect.succeed(service)),
-  )
+  return ACPSession.make()
 }
 
 function makeDirectoryService(sdk: OpencodeClient) {
-  return ManagedRuntime.make(
-    Directory.layer.pipe(
-      Layer.provide(
-        Layer.succeed(
-          Directory.Loader,
-          Directory.Loader.of({
-            load: (directory) => request(() => loadDirectorySnapshot(sdk, directory), "directory"),
-          }),
-        ),
-      ),
-    ),
-  ).runSync(Directory.Service.use((service) => Effect.succeed(service)))
+  return Directory.make(
+    Directory.Loader.of({
+      load: (directory) => request(() => loadDirectorySnapshot(sdk, directory), "directory"),
+    }),
+  )
 }
 
 function makeUsageService(sdk: OpencodeClient) {
@@ -630,6 +625,7 @@ function makeUsageService(sdk: OpencodeClient) {
           return undefined
         })
       limits.set(key, next)
+      if (limits.size > MAX_USAGE_LIMITS) limits.delete(limits.keys().next().value!)
       return yield* Effect.promise(() => next)
     },
   )
@@ -968,7 +964,7 @@ function registerMcpServers(
           Effect.ignore,
         ),
       ),
-    { concurrency: "unbounded" },
+    { concurrency: 16 },
   ).pipe(
     Effect.tap(() =>
       Effect.sync(() =>

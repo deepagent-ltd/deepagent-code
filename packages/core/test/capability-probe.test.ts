@@ -19,7 +19,9 @@ import { ProviderV2 } from "@deepagent-code/core/provider"
 const mkModel = (api: ModelV2.Api, overrides: Partial<ModelV2.Info> = {}) =>
   new ModelV2.Info({
     id: ModelV2.ID.make("test-model"),
-    providerID: ProviderV2.ID.make(api.type === "aisdk" && api.package === "@ai-sdk/openai" ? "openai" : "test-provider"),
+    providerID: ProviderV2.ID.make(
+      api.type === "aisdk" && api.package === "@ai-sdk/openai" ? "openai" : "test-provider",
+    ),
     name: "Test model",
     api: { ...api },
     capabilities: { tools: true, input: ["text"], output: ["text"] },
@@ -74,7 +76,12 @@ describe("C2-03 capability probe: pure, side-effect-free derivation", () => {
 
   test("an unknown source yields an explicit not_applicable selection_required state (never silent compatible)", () => {
     const result = ModelProtocol.probeCapabilities(
-      mkModel({ type: "aisdk", package: "@ai-sdk/google", url: "https://google.example/v1", id: ModelV2.ID.make("api-google") }),
+      mkModel({
+        type: "aisdk",
+        package: "@ai-sdk/google",
+        url: "https://google.example/v1",
+        id: ModelV2.ID.make("api-google"),
+      }),
     )
     expect(result.state).toBe("not_applicable")
     expect(result.protocol).toBeNull()
@@ -84,7 +91,12 @@ describe("C2-03 capability probe: pure, side-effect-free derivation", () => {
 
   test("an unattributed (custom) source with no explicit protocol is not_applicable (never a guessed Chat route)", () => {
     const result = ModelProtocol.probeCapabilities(
-      mkModel({ type: "aisdk", package: "custom-sdk", url: "https://custom.example/v1", id: ModelV2.ID.make("api-custom") }),
+      mkModel({
+        type: "aisdk",
+        package: "custom-sdk",
+        url: "https://custom.example/v1",
+        id: ModelV2.ID.make("api-custom"),
+      }),
     )
     expect(result.state).toBe("not_applicable")
     expect(result.protocol).toBeNull()
@@ -107,7 +119,11 @@ describe("C2-03 persistent config evidence: bind + refresh + invalidate", () => 
   beforeEach(() => ModelProtocol.clearConfigEvidenceCache())
 
   test("builds evidence bound to endpoint/model/origin/version + protocol with a computed identity hash", () => {
-    const provider = mkProvider({ type: "aisdk", package: "@ai-sdk/openai-compatible", url: "https://compat.example/v1" })
+    const provider = mkProvider({
+      type: "aisdk",
+      package: "@ai-sdk/openai-compatible",
+      url: "https://compat.example/v1",
+    })
     const evidence = ModelProtocol.buildCapabilityEvidence(mkModel(compatible), provider)
     expect(evidence.protocol).toBe("openai-compatible.chat")
     expect(evidence.routeId).toBe("openai-compatible-chat")
@@ -119,7 +135,11 @@ describe("C2-03 persistent config evidence: bind + refresh + invalidate", () => 
   })
 
   test("a business turn consumes cached evidence and NEVER invokes the probe hook", () => {
-    const provider = mkProvider({ type: "aisdk", package: "@ai-sdk/openai-compatible", url: "https://compat.example/v1" })
+    const provider = mkProvider({
+      type: "aisdk",
+      package: "@ai-sdk/openai-compatible",
+      url: "https://compat.example/v1",
+    })
     const model = mkModel(compatible)
     let probeCalls = 0
     ModelProtocol.setProbeHook((m, p) => {
@@ -154,7 +174,11 @@ describe("C2-03 persistent config evidence: bind + refresh + invalidate", () => 
   })
 
   test("explicit invalidation drops the evidence for a config identity", () => {
-    const provider = mkProvider({ type: "aisdk", package: "@ai-sdk/openai-compatible", url: "https://compat.example/v1" })
+    const provider = mkProvider({
+      type: "aisdk",
+      package: "@ai-sdk/openai-compatible",
+      url: "https://compat.example/v1",
+    })
     const model = mkModel(compatible)
     ModelProtocol.refreshConfigEvidence(model, provider)
     expect(ModelProtocol.configEvidenceCount()).toBe(1)
@@ -163,8 +187,29 @@ describe("C2-03 persistent config evidence: bind + refresh + invalidate", () => 
     expect(ModelProtocol.configEvidenceForTurn(model, provider)).toBe("no_evidence")
   })
 
+  test("bounds the inspection evidence cache under high-cardinality config refresh", () => {
+    const first = mkModel({ ...compatible, id: ModelV2.ID.make("bounded-0"), url: "https://bounded-0.example/v1" })
+    ModelProtocol.refreshConfigEvidence(first)
+    for (let index = 1; index < 129; index++) {
+      ModelProtocol.refreshConfigEvidence(
+        mkModel({
+          ...compatible,
+          id: ModelV2.ID.make(`bounded-${index}`),
+          url: `https://bounded-${index}.example/v1`,
+        }),
+      )
+    }
+    expect(ModelProtocol.configEvidenceCount()).toBe(128)
+    expect(ModelProtocol.configEvidenceForTurn(first)).toBe("no_evidence")
+  })
+
   test("a refresh for a not_applicable protocol is rejected as a typed error (never caches a compatible guess)", () => {
-    const google = mkModel({ type: "aisdk", package: "@ai-sdk/google", url: "https://google.example/v1", id: ModelV2.ID.make("api-google3") })
+    const google = mkModel({
+      type: "aisdk",
+      package: "@ai-sdk/google",
+      url: "https://google.example/v1",
+      id: ModelV2.ID.make("api-google3"),
+    })
     let caught: unknown
     try {
       ModelProtocol.refreshConfigEvidence(google)

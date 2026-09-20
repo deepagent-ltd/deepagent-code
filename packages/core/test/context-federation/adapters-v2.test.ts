@@ -177,6 +177,32 @@ describe("ContextAdaptersV2 adapter wiring", () => {
     expect(result.observedMutationEpoch).toBe(2)
   })
 
+  test("memory adapter fails closed when no released selection exists", async () => {
+    await using tmp = await tmpdir()
+    const store = new DocumentStore(tmp.path)
+    const memory = store.create({
+      type: "memory",
+      scope: "durable:project:legacy-project",
+      description: "Unreleased learned memory",
+      body: "Must stay outside the next request.",
+      idSlug: "unreleased-memory",
+      provenance: { source: "runner" },
+      confidence: { evidence_strength: "strong", support_count: 1 },
+      extensions: { sensitivity: "public" },
+    })
+    store.setStatus(memory.id, "active", documentRevision(memory))
+    const adapter = ContextAdaptersV2.memory({
+      stores: [store],
+      scope,
+      releasedSelection: undefined,
+      revision: "released:none",
+      observedMutationEpoch: 0,
+    })
+
+    const result = await Effect.runPromise(adapter.resolve(adapterInput({ entityIds: [memory.id] })))
+    expect(result).toMatchObject({ available: true, candidates: [], revision: "released:none" })
+  })
+
   test("documents adapter unions document sources", async () => {
     await using tmp = await tmpdir()
     const store = new DocumentStore(tmp.path)

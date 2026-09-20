@@ -29,13 +29,6 @@ function delAll(targetId: string): EntryRules {
   return result as EntryRules
 }
 
-function portAll(portModule: string): EntryRules {
-  const reqs: readonly Requirement[] = [{ kind: "portBoundTo", portModule }]
-  const result: Record<Dimension, VerdictRule> = {} as Record<Dimension, VerdictRule>
-  for (const dimension of DIMENSIONS) result[dimension] = { verdict: "legacy", requirements: reqs }
-  return result as EntryRules
-}
-
 // All-seven read_only with the given (genuine-positive + absence) requirements.
 function readOnlyWith(reqs: readonly Requirement[]): EntryRules {
   const result: Record<Dimension, VerdictRule> = {} as Record<Dimension, VerdictRule>
@@ -94,15 +87,10 @@ export const DELEGATION_RULE_PACKS: readonly RulePack[] = [
     match: (id) => id === "cli.lildax.migrate",
     rules: readOnlyWith([{ kind: "bodyLogsOnly" }, ...NOT_WRITE]),
   },
-  // ---- IM DI orchestrators bound to their canonical Effect port provider (legacy IM pipeline). ----
-  {
-    match: (id) => id === "im.agent-orchestrator",
-    rules: portAll("packages/core/src/im/agent-executor.ts"),
-  },
-  {
-    match: (id) => id === "im.agent-reply-sink",
-    rules: portAll("packages/core/src/im/agent-reply-sink.ts"),
-  },
+  // ---- v2f-d IM durable-only migration: the IM DI port bindings are gone. No production layer
+  // provides AgentExecutorService/AgentReplySinkService anymore, so no IM entry can inherit a
+  // port provider verdict. (v2f-i residual sweep: the production-dead im.agent-orchestrator
+  // module and its inventory entry are deleted outright.) ----
   // ---- Panel orchestration: the panelist runner (runPanelist) and verdict engine (arbitrate) run
   // within the legacy agent/panel pipeline — proven by the real call-path (bound client invocation).
   {

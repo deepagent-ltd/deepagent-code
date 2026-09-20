@@ -288,6 +288,46 @@ describe("HttpApi Server.listen", () => {
     ).rejects.toThrow()
   })
 
+  testPty("interleaved listeners keep independent sockets and stop scopes", async () => {
+    // RI-111: no "last listen wins" authority — a listener's URL, sockets, and
+    // scope must stay independent while other listeners start and stop.
+    await using tmp = await tmpdir({ git: true, config: { formatter: false, lsp: false } })
+    const first = await startListener()
+    const second = await startListener()
+    try {
+      expect(second.port).not.toBe(first.port)
+      const socket = await openPtySocket(second, tmp.path)
+
+      await withTimeout(first.stop(), 10_000, "timed out stopping first listener")
+      await expect(
+        fetch(new URL(PtyPaths.shells, first.url), { headers: { authorization: authorization() } }),
+      ).rejects.toThrow()
+
+      const message = waitForMessage(socket.ws, (chunk) => chunk.includes("ping-dual"))
+      socket.ws.send("ping-dual\n")
+      expect(await message).toContain("ping-dual")
+
+      const third = await startListener()
+      try {
+        const health = await fetch(new URL("/global/health", third.url), {
+          headers: { authorization: authorization() },
+        })
+        expect(health.status).toBe(200)
+        const stillAlive = waitForMessage(socket.ws, (chunk) => chunk.includes("ping-still-alive"))
+        socket.ws.send("ping-still-alive\n")
+        expect(await stillAlive).toContain("ping-still-alive")
+      } finally {
+        await stop(third, "timed out cleaning up third listener").catch(() => undefined)
+      }
+
+      await stop(second, "timed out stopping second listener")
+      await withTimeout(socket.closed, 5_000, "timed out waiting for second listener websocket close")
+    } finally {
+      await stop(first, "timed out cleaning up first listener").catch(() => undefined)
+      await stop(second, "timed out cleaning up second listener").catch(() => undefined)
+    }
+  })
+
   test("default in-process handler does not emit Effect HTTP response logs", async () => {
     let output = ""
     // oxlint-disable-next-line typescript-eslint/unbound-method -- restored in finally after temporarily capturing stderr.
@@ -366,11 +406,18 @@ describe("HttpApi Server.listen", () => {
       expect((await requestTicket(listener, info.id, tmp.path, { origin: "https://evil.example" })).status).toBe(403)
 
       // Regression for #25698: minting without a directory uses the server cwd
-      // and cannot find a PTY registered in a project directory.
+      // and cannot find a PTY registered in a project directory. The fallback
+      // directory is resolved from process.cwd() at request time, and this
+      // checkout's own .deepagent-code config fails closed under Core V2 config
+      // validation, so point the cwd at a bootable directory for a deterministic
+      // 404 instead of depending on where the test runner was launched from.
+      await using serverCwd = await tmpdir({ config: { formatter: false, lsp: false } })
+      const launchedCwd = process.cwd()
+      process.chdir(serverCwd.path)
       const ambiguous = await fetch(new URL(PtyPaths.connectToken.replace(":ptyID", info.id), listener.url), {
         method: "POST",
         headers: { authorization: authorization(), "x-deepagent-code-ticket": "1" },
-      })
+      }).finally(() => process.chdir(launchedCwd))
       expect(ambiguous.status).toBe(404)
 
       const directoryScoped = await fetch(

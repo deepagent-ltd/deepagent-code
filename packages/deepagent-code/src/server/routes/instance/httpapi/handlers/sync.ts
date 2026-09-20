@@ -51,6 +51,7 @@ import { SessionTable } from "@deepagent-code/core/session/sql"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { ProjectV2 } from "@deepagent-code/core/project"
 import { SessionID } from "@/session/schema"
+import { SessionEvent } from "@deepagent-code/core/session/event"
 import { Flag } from "@deepagent-code/core/flag/flag"
 import { WorkspaceAdapterRuntime } from "@/control-plane/workspace-adapter-runtime"
 import { createHmac, timingSafeEqual } from "node:crypto"
@@ -90,6 +91,50 @@ const historyCursor = (scope: string, generation: string, secret: string, highWa
 const decodeJson = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)
 const record = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
+const legacyCreatedType = EventV2.versionedType(SessionV1.Event.Created.type, 1)
+const nativeCreatedType = EventV2.versionedType(SessionEvent.Created.type, 2)
+const nativeUpdatedType = EventV2.versionedType(SessionEvent.Updated.type, 2)
+const nativeRevertType = EventV2.versionedType(SessionEvent.RevertChanged.type, 1)
+const legacyDeletedType = EventV2.versionedType(SessionV1.Event.Deleted.type, 1)
+const nativeDeletedType = EventV2.versionedType(SessionEvent.Deleted.type, 2)
+const createdTypes = new Set([legacyCreatedType, nativeCreatedType])
+
+function eventPlacement(event: EventV2.SerializedEvent) {
+  if (
+    event.type !== legacyCreatedType &&
+    event.type !== nativeCreatedType &&
+    event.type !== nativeUpdatedType &&
+    event.type !== nativeRevertType &&
+    event.type !== EventV2.versionedType(SessionV1.Event.Updated.type, 1) &&
+    event.type !== legacyDeletedType &&
+    event.type !== nativeDeletedType
+  )
+    return
+  const info = record(event.data.info) ? event.data.info : undefined
+  if (!info || typeof info.projectID !== "string") return "conflict" as const
+  if (
+    event.type === nativeCreatedType ||
+    event.type === nativeUpdatedType ||
+    event.type === nativeDeletedType ||
+    event.type === nativeRevertType
+  ) {
+    const location = record(info.location) ? info.location : undefined
+    if (!location || typeof location.directory !== "string") return "conflict" as const
+    return {
+      id: info.id,
+      projectID: info.projectID,
+      directory: location.directory,
+      ...(typeof location.workspaceID === "string" ? { workspaceID: location.workspaceID } : {}),
+    }
+  }
+  if (typeof info.directory !== "string") return "conflict" as const
+  return {
+    id: info.id,
+    projectID: info.projectID,
+    directory: info.directory,
+    ...(typeof info.workspaceID === "string" ? { workspaceID: info.workspaceID } : {}),
+  }
+}
 const projectedEventData = sql<string>`COALESCE(${FilePartArtifactBindingTable.canonical_data}, ${EventArtifactTable.canonical_data}, CASE
   WHEN ${EventTable.type} = ${EventV2.versionedType(SessionV1.Event.MessageUpdated.type, 1)}
     AND json_valid(${EventTable.data})
@@ -156,20 +201,22 @@ export const syncHandlers = HttpApiBuilder.group(InstanceHttpApi, "sync", (handl
         .pipe(Effect.orDie)
       if (!current && ownerID) {
         const first = payload[0]
-        const info = record(first.data.info) ? first.data.info : undefined
-        const project = info && typeof info.projectID === "string"
-          ? yield* db.select({ id: ProjectTable.id }).from(ProjectTable).where(eq(ProjectTable.id, ProjectV2.ID.make(info.projectID))).get().pipe(Effect.orDie)
+        const placement = eventPlacement(first)
+        const project = placement && placement !== "conflict"
+          ? yield* db.select({ id: ProjectTable.id }).from(ProjectTable).where(eq(ProjectTable.id, ProjectV2.ID.make(placement.projectID))).get().pipe(Effect.orDie)
           : undefined
         if (
           first.seq !== 0 ||
-          first.type !== EventV2.versionedType(SessionV1.Event.Created.type, 1) ||
+          !createdTypes.has(first.type) ||
           first.aggregateID !== source ||
           first.data.sessionID !== source ||
-          info?.id !== source ||
-          info.workspaceID !== ownerID ||
+          !placement ||
+          placement === "conflict" ||
+          placement.id !== source ||
+          placement.workspaceID !== ownerID ||
           ctx.payload.directory !== instance.directory ||
-          info.directory !== instance.directory ||
-          info.projectID !== instance.project.id ||
+          placement.directory !== instance.directory ||
+          placement.projectID !== instance.project.id ||
           !project
         )
           return yield* new ConflictError({
@@ -192,7 +239,7 @@ export const syncHandlers = HttpApiBuilder.group(InstanceHttpApi, "sync", (handl
           message: "Session replay projection does not match the routed project and directory authority",
           resource: `session:${source}`,
         })
-      if (!current && payload[0].type !== EventV2.versionedType(SessionV1.Event.Created.type, 1))
+      if (!current && !createdTypes.has(payload[0].type))
         return yield* new ConflictError({
           message: "Session replay requires an existing projection or its canonical creation event",
           resource: `session:${source}`,
@@ -202,23 +249,13 @@ export const syncHandlers = HttpApiBuilder.group(InstanceHttpApi, "sync", (handl
       >((placement, event) => {
         if (placement === "conflict") return placement
         if (event.type === EventV2.versionedType("session.next.moved", 1)) return "conflict"
-        if (
-          event.type !== EventV2.versionedType(SessionV1.Event.Created.type, 1) &&
-          event.type !== EventV2.versionedType(SessionV1.Event.Updated.type, 1)
-        )
-          return placement
-        const info = record(event.data.info) ? event.data.info : undefined
-        if (
-          !info ||
-          info.id !== source ||
-          typeof info.projectID !== "string" ||
-          typeof info.directory !== "string"
-        )
-          return "conflict"
+        const candidate = eventPlacement(event)
+        if (!candidate) return placement
+        if (candidate === "conflict" || candidate.id !== source) return "conflict"
         const next = {
-          projectID: info.projectID,
-          directory: info.directory,
-          ...(typeof info.workspaceID === "string" ? { workspaceID: info.workspaceID } : {}),
+          projectID: candidate.projectID,
+          directory: candidate.directory,
+          ...(candidate.workspaceID ? { workspaceID: candidate.workspaceID } : {}),
         }
         if (
           placement &&
@@ -247,7 +284,13 @@ export const syncHandlers = HttpApiBuilder.group(InstanceHttpApi, "sync", (handl
         last: payload.at(-1)?.seq,
         directory: ctx.payload.directory,
       })
-      yield* events.replayAll(payload, { ownerID, strictOwner: true })
+      yield* events.replayAll(payload, { ownerID, strictOwner: true }).pipe(
+        Effect.catchDefect((defect) =>
+          Schema.is(EventV2.InvalidSyncEventError)(defect)
+            ? Effect.fail(new ConflictError({ resource: `session:${source}`, message: defect.message }))
+            : Effect.die(defect),
+        ),
+      )
       log.info("sync replay complete", {
         sessionID: source,
         events: payload.length,

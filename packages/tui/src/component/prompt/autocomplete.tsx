@@ -21,6 +21,7 @@ import { useFrecency } from "../../prompt/frecency"
 import { useBindings, useCommandSlashes, useOpencodeModeStack } from "../../keymap"
 import type { ReferenceDescriptor } from "@deepagent-code/sdk"
 import { displayCharAt, mentionTriggerIndex } from "../../prompt/display"
+import { useTuiI18n } from "../../context/i18n"
 
 function removeLineRange(input: string) {
   const hashIndex = input.lastIndexOf("#")
@@ -93,6 +94,7 @@ export function Autocomplete(props: {
   const frecency = useFrecency()
   const tuiConfig = useTuiConfig()
   const paths = useTuiPaths()
+  const i18n = useTuiI18n()
   const [store, setStore] = createStore({
     index: 0,
     selected: 0,
@@ -604,7 +606,7 @@ export function Autocomplete(props: {
     commands: [
       {
         name: "prompt.autocomplete.prev",
-        title: "Previous autocomplete item",
+        title: i18n.t("tui.autocomplete.previousItem"),
         category: "Autocomplete",
         run() {
           setStore("input", "keyboard")
@@ -613,7 +615,7 @@ export function Autocomplete(props: {
       },
       {
         name: "prompt.autocomplete.next",
-        title: "Next autocomplete item",
+        title: i18n.t("tui.autocomplete.nextItem"),
         category: "Autocomplete",
         run() {
           setStore("input", "keyboard")
@@ -622,7 +624,7 @@ export function Autocomplete(props: {
       },
       {
         name: "prompt.autocomplete.hide",
-        title: "Hide autocomplete",
+        title: i18n.t("tui.autocomplete.hide"),
         category: "Autocomplete",
         run() {
           hide()
@@ -630,7 +632,7 @@ export function Autocomplete(props: {
       },
       {
         name: "prompt.autocomplete.select",
-        title: "Select autocomplete item",
+        title: i18n.t("tui.autocomplete.selectItem"),
         category: "Autocomplete",
         run() {
           select()
@@ -638,7 +640,7 @@ export function Autocomplete(props: {
       },
       {
         name: "prompt.autocomplete.complete",
-        title: "Complete autocomplete item",
+        title: i18n.t("tui.autocomplete.completeItem"),
         category: "Autocomplete",
         run() {
           const selected = options()[store.selected]

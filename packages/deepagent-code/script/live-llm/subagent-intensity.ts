@@ -97,7 +97,7 @@ function assertIntensity(
     child.parentID !== observation.sessionID ||
     child.assistants.some(
       (assistant) =>
-        assistant.providerID !== "live-deepseek" ||
+        assistant.providerID !== artifact.fingerprint.runtimeProviderID ||
         assistant.modelID !== artifact.fingerprint.modelID ||
         assistant.error !== undefined ||
         assistant.tools.length > 0,
