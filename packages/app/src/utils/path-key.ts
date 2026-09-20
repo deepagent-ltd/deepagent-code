@@ -16,6 +16,9 @@ const trimTrailingSlashes = (value: string) => {
 const isWindowsPath = (value: string) => value[1] === ":" || value.startsWith("\\\\")
 
 export const pathKey = (path: string) => {
+  // Malformed session payloads can arrive without a directory; a crash here takes down the
+  // whole layout via the error boundary, so degrade to a neutral key instead.
+  if (!path) return "" as PathKey
   const value = isWindowsPath(path) ? path.replaceAll("\\", "/") : path
   const trimmed = trimTrailingSlashes(value)
   if (!trimmed && value.startsWith("/")) return "/" as PathKey
