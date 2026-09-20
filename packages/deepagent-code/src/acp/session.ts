@@ -59,8 +59,8 @@ export type PartMetadataLookupInput = {
 }
 
 export type Interface = {
-  readonly create: (input: StoreInput) => Effect.Effect<Info>
-  readonly load: (input: StoreInput) => Effect.Effect<Info>
+  readonly create: (input: StoreInput) => Effect.Effect<Info, ACPError.ServiceFailureError>
+  readonly load: (input: StoreInput) => Effect.Effect<Info, ACPError.ServiceFailureError>
   readonly list: (cwd?: string) => Effect.Effect<readonly Info[]>
   readonly get: (sessionId: string) => Effect.Effect<Info, ACPError.SessionNotFoundError>
   readonly tryGet: (sessionId: string) => Effect.Effect<Info | undefined>
@@ -92,113 +92,126 @@ export type Interface = {
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/ACP/Session") {}
 
 type State = Map<string, Info>
+export const MAX_SESSIONS = 256
+export const MAX_KNOWN_PARTS = 8_192
 
-export const layer = Layer.effect(
-  Service,
-  Effect.gen(function* () {
-    const sessions = yield* Ref.make<State>(new Map())
+export function make(): Interface {
+  const sessions = Ref.makeUnsafe<State>(new Map())
 
-    const store = Effect.fn("ACP.Session.store")(function* (input: StoreInput) {
-      const session = makeSession(input)
-      yield* Ref.update(sessions, (state) => new Map(state).set(session.id, session))
-      return snapshot(session)
+  const store = Effect.fn("ACP.Session.store")(function* (input: StoreInput) {
+    const session = makeSession(input)
+    const stored = yield* Ref.modify(sessions, (state) => {
+      if (!state.has(session.id) && state.size >= MAX_SESSIONS) return [false, state]
+      return [true, new Map(state).set(session.id, session)]
     })
-
-    const tryGet = Effect.fn("ACP.Session.tryGet")(function* (sessionId: string) {
-      const session = (yield* Ref.get(sessions)).get(sessionId)
-      if (!session) return
-      return snapshot(session)
-    })
-
-    const get = Effect.fn("ACP.Session.get")(function* (sessionId: string) {
-      const session = yield* tryGet(sessionId)
-      if (session) return session
-      return yield* new ACPError.SessionNotFoundError({ sessionId })
-    })
-
-    const update = Effect.fn("ACP.Session.update")(function* (sessionId: string, fn: (session: Info) => Info) {
-      const result = yield* Ref.modify(sessions, (state) => {
-        const session = state.get(sessionId)
-        if (!session) return [undefined, state] as const
-        const next = fn(session)
-        return [snapshot(next), new Map(state).set(sessionId, next)] as const
+    if (!stored)
+      return yield* new ACPError.ServiceFailureError({
+        safeMessage: `ACP active session limit exceeded (${MAX_SESSIONS})`,
       })
-      if (result) return result
-      return yield* new ACPError.SessionNotFoundError({ sessionId })
+    return snapshot(session)
+  })
+
+  const tryGet = Effect.fn("ACP.Session.tryGet")(function* (sessionId: string) {
+    const session = (yield* Ref.get(sessions)).get(sessionId)
+    if (!session) return
+    return snapshot(session)
+  })
+
+  const get = Effect.fn("ACP.Session.get")(function* (sessionId: string) {
+    const session = yield* tryGet(sessionId)
+    if (session) return session
+    return yield* new ACPError.SessionNotFoundError({ sessionId })
+  })
+
+  const update = Effect.fn("ACP.Session.update")(function* (sessionId: string, fn: (session: Info) => Info) {
+    const result = yield* Ref.modify(sessions, (state) => {
+      const session = state.get(sessionId)
+      if (!session) return [undefined, state] as const
+      const next = fn(session)
+      return [snapshot(next), new Map(state).set(sessionId, next)] as const
     })
+    if (result) return result
+    return yield* new ACPError.SessionNotFoundError({ sessionId })
+  })
 
-    const remove = Effect.fn("ACP.Session.remove")(function* (sessionId: string) {
-      return yield* Ref.modify(sessions, (state) => {
-        const session = state.get(sessionId)
-        if (!session) return [undefined, state] as const
-        const next = new Map(state)
-        next.delete(sessionId)
-        return [snapshot(session), next] as const
-      })
+  const remove = Effect.fn("ACP.Session.remove")(function* (sessionId: string) {
+    return yield* Ref.modify(sessions, (state) => {
+      const session = state.get(sessionId)
+      if (!session) return [undefined, state] as const
+      const next = new Map(state)
+      next.delete(sessionId)
+      return [snapshot(session), next] as const
     })
+  })
 
-    const setModel: Interface["setModel"] = Effect.fn("ACP.Session.setModel")((sessionId, model) =>
-      update(sessionId, (session) => ({ ...session, model })),
-    )
+  const setModel: Interface["setModel"] = Effect.fn("ACP.Session.setModel")((sessionId, model) =>
+    update(sessionId, (session) => ({ ...session, model })),
+  )
 
-    const setVariant: Interface["setVariant"] = Effect.fn("ACP.Session.setVariant")((sessionId, variant) =>
-      update(sessionId, (session) => ({ ...session, variant })),
-    )
+  const setVariant: Interface["setVariant"] = Effect.fn("ACP.Session.setVariant")((sessionId, variant) =>
+    update(sessionId, (session) => ({ ...session, variant })),
+  )
 
-    const setMode: Interface["setMode"] = Effect.fn("ACP.Session.setMode")((sessionId, modeId) =>
-      update(sessionId, (session) => ({ ...session, modeId })),
-    )
+  const setMode: Interface["setMode"] = Effect.fn("ACP.Session.setMode")((sessionId, modeId) =>
+    update(sessionId, (session) => ({ ...session, modeId })),
+  )
 
-    const recordPartMetadata: Interface["recordPartMetadata"] = Effect.fn("ACP.Session.recordPartMetadata")((input) => {
-      const metadata = {
-        messageId: input.messageId,
-        partId: input.partId,
-        partType: input.partType,
-        role: input.role,
-        ignored: input.ignored,
-        toolCallId: input.toolCallId,
-        metadata: input.metadata,
-      }
-      return update(input.sessionId, (session) => ({
-        ...session,
-        knownParts: new Map(session.knownParts).set(partMetadataKey(input), metadata),
-      })).pipe(Effect.as(metadata))
-    })
+  const recordPartMetadata: Interface["recordPartMetadata"] = Effect.fn("ACP.Session.recordPartMetadata")((input) => {
+    const metadata = {
+      messageId: input.messageId,
+      partId: input.partId,
+      partType: input.partType,
+      role: input.role,
+      ignored: input.ignored,
+      toolCallId: input.toolCallId,
+      metadata: input.metadata,
+    }
+    return update(input.sessionId, (session) => {
+      const knownParts = new Map(session.knownParts)
+      const key = partMetadataKey(input)
+      if (!knownParts.has(key) && knownParts.size >= MAX_KNOWN_PARTS) knownParts.delete(knownParts.keys().next().value!)
+      knownParts.set(key, metadata)
+      return { ...session, knownParts }
+    }).pipe(Effect.as(metadata))
+  })
 
-    return Service.of({
-      create: store,
-      load: store,
-      list: Effect.fn("ACP.Session.list")(function* (cwd?: string) {
-        return [...(yield* Ref.get(sessions)).values()]
-          .filter((session) => !cwd || session.cwd === cwd)
-          .map(snapshot)
-          .toSorted((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-      }),
-      get,
-      tryGet,
-      remove,
-      setModel,
-      getModel: Effect.fn("ACP.Session.getModel")(function* (sessionId) {
-        return (yield* get(sessionId)).model
-      }),
-      setVariant,
-      getVariant: Effect.fn("ACP.Session.getVariant")(function* (sessionId) {
-        return (yield* get(sessionId)).variant
-      }),
-      setMode,
-      getMode: Effect.fn("ACP.Session.getMode")(function* (sessionId) {
-        return (yield* get(sessionId)).modeId
-      }),
-      recordPartMetadata,
-      getPartMetadata: Effect.fn("ACP.Session.getPartMetadata")(function* (input) {
-        return (yield* get(input.sessionId)).knownParts.get(partMetadataKey(input))
-      }),
-      tryGetPartMetadata: Effect.fn("ACP.Session.tryGetPartMetadata")(function* (input) {
-        return (yield* tryGet(input.sessionId))?.knownParts.get(partMetadataKey(input))
-      }),
-    })
-  }),
-)
+  return Service.of({
+    create: store,
+    load: store,
+    list: Effect.fn("ACP.Session.list")(function* (cwd?: string) {
+      return [...(yield* Ref.get(sessions)).values()]
+        .filter((session) => !cwd || session.cwd === cwd)
+        .map(snapshot)
+        .toSorted((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+    }),
+    get,
+    tryGet,
+    remove,
+    setModel,
+    getModel: Effect.fn("ACP.Session.getModel")(function* (sessionId) {
+      return (yield* get(sessionId)).model
+    }),
+    setVariant,
+    getVariant: Effect.fn("ACP.Session.getVariant")(function* (sessionId) {
+      return (yield* get(sessionId)).variant
+    }),
+    setMode,
+    getMode: Effect.fn("ACP.Session.getMode")(function* (sessionId) {
+      return (yield* get(sessionId)).modeId
+    }),
+    recordPartMetadata,
+    getPartMetadata: Effect.fn("ACP.Session.getPartMetadata")(function* (input) {
+      return (yield* get(input.sessionId)).knownParts.get(partMetadataKey(input))
+    }),
+    tryGetPartMetadata: Effect.fn("ACP.Session.tryGetPartMetadata")(function* (input) {
+      return (yield* tryGet(input.sessionId))?.knownParts.get(partMetadataKey(input))
+    }),
+  })
+}
+
+// Each layer build needs its own state — Layer.succeed(Service, make()) would evaluate make()
+// once at module load and share one session store across every runtime that builds the layer.
+export const layer = Layer.sync(Service, make)
 
 export const defaultLayer = layer
 

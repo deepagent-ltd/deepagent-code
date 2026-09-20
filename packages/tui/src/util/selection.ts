@@ -23,7 +23,9 @@ type SelectionKeyEvent = {
   stopPropagation: () => void
 }
 
-export function copy(renderer: Renderer, toast: Toast, clipboard: ClipboardService): boolean {
+type Translator = (key: "tui.common.copiedToClipboard") => string
+
+export function copy(renderer: Renderer, toast: Toast, clipboard: ClipboardService, t: Translator = () => "Copied to clipboard"): boolean {
   const selection = renderer.getSelection()
   if (!selection) return false
 
@@ -36,7 +38,7 @@ export function copy(renderer: Renderer, toast: Toast, clipboard: ClipboardServi
 
   clipboard
     ?.write?.(clipboardText)
-    .then(() => toast.show({ message: "Copied to clipboard", variant: "info" }))
+    .then(() => toast.show({ message: t("tui.common.copiedToClipboard"), variant: "info" }))
     .catch(toast.error)
 
   renderer.clearSelection()
@@ -48,12 +50,13 @@ export function handleSelectionKey(
   toast: Toast,
   event: SelectionKeyEvent,
   clipboard: ClipboardService,
+  t?: Translator,
 ) {
   const selection = renderer.getSelection()
   if (!selection) return
 
   if (event.ctrl && event.name === "c") {
-    if (!copy(renderer, toast, clipboard)) {
+    if (!copy(renderer, toast, clipboard, t)) {
       renderer.clearSelection()
       return
     }

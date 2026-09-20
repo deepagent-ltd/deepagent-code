@@ -6,6 +6,7 @@ import { useProject } from "../../context/project"
 import { useTheme } from "../../context/theme"
 import { useSDK } from "../../context/sdk"
 import { useLocal } from "../../context/local"
+import { useTuiI18n } from "../../context/i18n"
 import { useToast } from "../../ui/toast"
 import { useCommandShortcut } from "../../keymap"
 import { createEffect, createMemo, createResource, createSignal, on, Show, untrack } from "solid-js"
@@ -31,6 +32,7 @@ export function SessionSwitcherDialog() {
   const { theme } = useTheme()
   const sdk = useSDK()
   const local = useLocal()
+  const i18n = useTuiI18n()
   const toast = useToast()
   const dimensions = useTerminalDimensions()
   const [toDelete, setToDelete] = createSignal<string>()
@@ -89,6 +91,7 @@ export function SessionSwitcherDialog() {
         sync,
         project,
         toast,
+        i18n,
         sourceWorkspaceID: session.workspaceID,
         workspaceID,
         sessionID: session.id,
@@ -108,7 +111,7 @@ export function SessionSwitcherDialog() {
           if (result.error) {
             toast.show({
               variant: "error",
-              title: "Failed to delete workspace",
+              title: i18n.t("tui.common.failedDeleteWorkspace"),
               message: errorMessage(result.error),
             })
             return false
@@ -128,6 +131,7 @@ export function SessionSwitcherDialog() {
             sync,
             project,
             toast,
+            i18n,
             onSelect: (selection) => {
               void warp(selection)
             },
@@ -293,7 +297,7 @@ export function SessionSwitcherDialog() {
                   } else {
                     toast.show({
                       variant: "error",
-                      title: "Failed to delete session",
+                      title: i18n.t("tui.common.failedDeleteSession"),
                       message: errorMessage(result.error),
                     })
                   }
@@ -306,7 +310,7 @@ export function SessionSwitcherDialog() {
                 } else {
                   toast.show({
                     variant: "error",
-                    title: "Failed to delete session",
+                    title: i18n.t("tui.common.failedDeleteSession"),
                     message: errorMessage(err),
                   })
                 }

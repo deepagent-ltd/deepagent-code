@@ -27,8 +27,8 @@ export const SidePanelContext: Component<{ onClose: () => void }> = (props) => {
     async (sessionID) => (await sdk.client.session.contextDiagnostics({ sessionID })).data,
   )
   const latest = createMemo(() => diagnostics()?.selections[0])
-  const indeterminate = createMemo(() =>
-    diagnostics()?.attempts.filter((attempt) => attempt.state === "indeterminate_after_crash") ?? [],
+  const indeterminate = createMemo(
+    () => diagnostics()?.attempts.filter((attempt) => attempt.state === "indeterminate_after_crash") ?? [],
   )
 
   const resolve = async (attempt: Attempt, decision: "abandoned" | "settled" | "replayed") => {
@@ -57,9 +57,7 @@ export const SidePanelContext: Component<{ onClose: () => void }> = (props) => {
     <section class="size-full min-w-0 flex flex-col overflow-hidden bg-background-base">
       <header class="h-10 shrink-0 px-2 flex items-center gap-2 border-b border-border-weaker-base">
         <Icon name="shield" size="small" class="text-icon-base" />
-        <div class="min-w-0 flex-1 text-13-medium text-text-strong truncate">
-          {language.t("session.context.title")}
-        </div>
+        <div class="min-w-0 flex-1 text-13-medium text-text-strong truncate">{language.t("session.context.title")}</div>
         <IconButton
           icon="history"
           variant="ghost"
@@ -79,7 +77,8 @@ export const SidePanelContext: Component<{ onClose: () => void }> = (props) => {
       <div class="flex-1 min-h-0 overflow-y-auto">
         <Show when={diagnostics.loading}>
           <div class="p-3 text-13-regular text-text-weak">
-            {language.t("common.loading")}{language.t("common.loading.ellipsis")}
+            {language.t("common.loading")}
+            {language.t("common.loading.ellipsis")}
           </div>
         </Show>
         <Show when={diagnostics.error}>
@@ -134,7 +133,11 @@ export const SidePanelContext: Component<{ onClose: () => void }> = (props) => {
                 </div>
                 <Show
                   when={selection.evidence.length > 0}
-                  fallback={<div class="px-3 pb-3 text-12-regular text-text-weaker">{language.t("session.context.noEvidence")}</div>}
+                  fallback={
+                    <div class="px-3 pb-3 text-12-regular text-text-weaker">
+                      {language.t("session.context.noEvidence")}
+                    </div>
+                  }
                 >
                   <For each={selection.evidence}>
                     {(evidence) => (
@@ -163,7 +166,8 @@ export const SidePanelContext: Component<{ onClose: () => void }> = (props) => {
                         </div>
                         <Show when={evidence.provenance.length > 0 || evidence.relations.length > 0}>
                           <div class="mt-1 text-10-regular text-text-weaker">
-                            {language.t("session.context.provenance")} {evidence.provenance.length} · {language.t("session.context.relations")} {evidence.relations.length}
+                            {language.t("session.context.provenance")} {evidence.provenance.length} ·{" "}
+                            {language.t("session.context.relations")} {evidence.relations.length}
                             <Show when={evidence.relations.some((relation) => relation.freshness === "broken")}>
                               <span class="ml-2 text-text-critical">{language.t("session.context.state.broken")}</span>
                             </Show>
@@ -251,23 +255,13 @@ export const SidePanelContext: Component<{ onClose: () => void }> = (props) => {
           {(value) => (
             <div class="px-3 py-2.5">
               <div class="text-11-medium text-text-weak uppercase">{language.t("session.context.metrics")}</div>
-              <Show when={value.metrics.shadow.comparisons > 0}>
-                <div class="mt-2 flex items-center gap-2 text-11-regular">
-                  <span class="text-text-strong">{language.t("session.context.shadow")}</span>
-                  <span class="text-text-weaker">{value.metrics.shadow.comparisons}</span>
-                  <span class="ml-auto text-text-weaker font-mono">
-                    {value.metrics.shadow.knowledgeMemoryDelta >= 0 ? "+" : ""}
-                    {value.metrics.shadow.knowledgeMemoryDelta}
-                  </span>
-                </div>
-              </Show>
               <div class="mt-2 divide-y divide-border-weaker-base">
                 <For each={value.metrics.graphs}>
                   {(metric) => (
                     <div class="py-1.5 flex items-center gap-2 text-11-regular">
                       <span class="w-20 text-text-strong">{graphLabel(metric.graph)}</span>
-                      <span class="text-text-weaker">{metric.candidates} / {metric.selected}</span>
-                      <span class="ml-auto text-text-weaker font-mono">{Math.round(metric.lastLatencyMs)} ms</span>
+                      <span class="text-text-weaker">{metric.selected}</span>
+                      <span class="ml-auto text-text-weaker font-mono">{metric.status?.state ?? "-"}</span>
                     </div>
                   )}
                 </For>

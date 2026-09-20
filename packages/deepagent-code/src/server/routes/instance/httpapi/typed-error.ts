@@ -61,7 +61,7 @@ export type ApiTypedError =
   | ApiLockedError
   | ApiUnavailableError
 
-export const ApiTypedError = Schema.Union([
+export const ApiTypedErrors = [
   ApiBadRequestError,
   ApiForbiddenError,
   ApiNotFoundError,
@@ -69,7 +69,9 @@ export const ApiTypedError = Schema.Union([
   ApiGoneError,
   ApiLockedError,
   ApiUnavailableError,
-])
+] as const
+
+export const ApiTypedError = Schema.Union(ApiTypedErrors)
 export type ApiTypedErrorSchema = typeof ApiTypedError
 
 export interface MakeApiErrorInput {

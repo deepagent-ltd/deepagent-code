@@ -8,6 +8,8 @@ import { DatabaseUpgradeRun } from "@deepagent-code/core/database/upgrade-run"
 import type { SqlClient as SqlClientService } from "effect/unstable/sql/SqlClient"
 import { tmpdir } from "./fixture/tmpdir"
 import path from "path"
+import os from "os"
+import { mkdir, utimes } from "fs/promises"
 
 const makeDb = EffectDrizzleSqlite.makeWithDefaults()
 
@@ -20,6 +22,115 @@ const runFile = (filename: string) => <A, E>(effect: Effect.Effect<A, E, SqlClie
   Effect.runPromise(effect.pipe(Effect.provide(SqliteClient.layer({ filename, disableWAL: true })), Effect.scoped))
 
 describe("DatabaseMigrationLease", () => {
+  test("a live local owner cannot be broken solely because its heartbeat is stale", async () => {
+    await using tmp = await tmpdir()
+    const lockDir = path.join(tmp.path, "database.runtime.lock")
+    await mkdir(lockDir)
+    await Bun.write(path.join(lockDir, "heartbeat"), "")
+    await Bun.write(
+      path.join(lockDir, "meta.json"),
+      JSON.stringify({ token: "owner", pid: process.pid, hostname: os.hostname(), createdAt: new Date(0).toISOString() }),
+    )
+    const stale = new Date(0)
+    await utimes(path.join(lockDir, "heartbeat"), stale, stale)
+    await utimes(path.join(lockDir, "meta.json"), stale, stale)
+    await utimes(lockDir, stale, stale)
+
+    expect(await DatabaseMigrationLease.processLockActive(lockDir, { staleMs: 1 })).toBe(true)
+  })
+
+  test("a dead local owner (pid no longer exists) can be broken once its heartbeat is stale", async () => {
+    await using tmp = await tmpdir()
+    const lockDir = path.join(tmp.path, "database.runtime.lock")
+    // A real exited child guarantees an ESRCH pid; a guessed number could collide with a live process.
+    const child = Bun.spawn([process.execPath, "-e", "process.exit(0)"], { stdout: "ignore", stderr: "ignore" })
+    await child.exited
+    await mkdir(lockDir)
+    await Bun.write(path.join(lockDir, "heartbeat"), "")
+    await Bun.write(
+      path.join(lockDir, "meta.json"),
+      JSON.stringify({ token: "dead-owner", pid: child.pid, hostname: os.hostname(), createdAt: new Date(0).toISOString() }),
+    )
+    const stale = new Date(0)
+    await utimes(path.join(lockDir, "heartbeat"), stale, stale)
+    await utimes(path.join(lockDir, "meta.json"), stale, stale)
+    await utimes(lockDir, stale, stale)
+
+    expect(await DatabaseMigrationLease.processLockActive(lockDir, { staleMs: 1 })).toBe(false)
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const lock = yield* DatabaseMigrationLease.acquireProcessLock(lockDir, { staleMs: 1, timeoutMs: 2_000 })
+        yield* lock.release
+      }),
+    )
+  })
+
+  test("an un-signalable owner (EPERM) counts as alive: the lock is never stale, never breakable", async () => {
+    // Root-owned pid 1 raises EPERM from kill(pid, 0) for an unprivileged runner; a root runner can
+    // signal it instead, in which case no EPERM oracle exists on this host.
+    const epermPid = [1].find((pid) => {
+      try {
+        process.kill(pid, 0)
+        return false
+      } catch (error) {
+        return typeof error === "object" && error !== null && "code" in error && error.code === "EPERM"
+      }
+    })
+    if (epermPid === undefined) return
+    await using tmp = await tmpdir()
+    const lockDir = path.join(tmp.path, "database.runtime.lock")
+    await mkdir(lockDir)
+    await Bun.write(path.join(lockDir, "heartbeat"), "")
+    await Bun.write(
+      path.join(lockDir, "meta.json"),
+      JSON.stringify({ token: "eperm-owner", pid: epermPid, hostname: os.hostname(), createdAt: new Date(0).toISOString() }),
+    )
+    const stale = new Date(0)
+    await utimes(path.join(lockDir, "heartbeat"), stale, stale)
+    await utimes(path.join(lockDir, "meta.json"), stale, stale)
+    await utimes(lockDir, stale, stale)
+
+    expect(await DatabaseMigrationLease.processLockActive(lockDir, { staleMs: 1 })).toBe(true)
+    const attempt = await Effect.runPromise(
+      DatabaseMigrationLease.acquireProcessLock(lockDir, { staleMs: 1, timeoutMs: 300 }).pipe(Effect.exit),
+    )
+    expect(attempt._tag).toBe("Failure")
+    expect(String(attempt)).toContain("lease timed out")
+  })
+
+  test("a SIGSTOP-suspended owner still fences preemption: heartbeat frozen but the process is alive", async () => {
+    await using tmp = await tmpdir()
+    const lockDir = path.join(tmp.path, "database.runtime.lock")
+    const child = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], { stdout: "ignore", stderr: "ignore" })
+    try {
+      await mkdir(lockDir)
+      await Bun.write(path.join(lockDir, "heartbeat"), "")
+      await Bun.write(
+        path.join(lockDir, "meta.json"),
+        JSON.stringify({ token: "stopped-owner", pid: child.pid, hostname: os.hostname(), createdAt: new Date(0).toISOString() }),
+      )
+      // A suspended owner's heartbeat timer cannot fire; epoch mtimes reproduce the file state it leaves behind.
+      const stale = new Date(0)
+      await utimes(path.join(lockDir, "heartbeat"), stale, stale)
+      await utimes(path.join(lockDir, "meta.json"), stale, stale)
+      await utimes(lockDir, stale, stale)
+      process.kill(child.pid, "SIGSTOP")
+
+      // kill(pid, 0) succeeds for a suspended process, so it counts as alive despite the frozen heartbeat.
+      expect(await DatabaseMigrationLease.processLockActive(lockDir, { staleMs: 1 })).toBe(true)
+      const attempt = await Effect.runPromise(
+        DatabaseMigrationLease.acquireProcessLock(lockDir, { staleMs: 1, timeoutMs: 300 }).pipe(Effect.exit),
+      )
+      expect(attempt._tag).toBe("Failure")
+      expect(String(attempt)).toContain("lease timed out")
+    } finally {
+      // A suspended process does not handle SIGTERM until it is continued.
+      process.kill(child.pid, "SIGCONT")
+      child.kill()
+      await child.exited
+    }
+  })
+
   test("acquires a DB lease with owner/generation/expiry and releases it", async () => {
     await run(
       Effect.gen(function* () {

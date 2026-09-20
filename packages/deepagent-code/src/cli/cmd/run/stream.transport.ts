@@ -629,7 +629,7 @@ function createLayer(input: StreamInput) {
                 Effect.flatMap((item) => (item.error ? Effect.fail(item.error) : Effect.succeed(item.data ?? []))),
               ),
             ],
-            { concurrency: "unbounded" },
+            { concurrency: 16 },
           )
 
         const markReplayedParts = (data: SessionData) => {
@@ -702,7 +702,7 @@ function createLayer(input: StreamInput) {
               ),
             ],
             {
-              concurrency: "unbounded",
+              concurrency: 16,
             },
           )
 
@@ -1005,7 +1005,7 @@ function createLayer(input: StreamInput) {
           input.trace?.write("replay.resize.start", {
             sessionID: input.sessionID,
           })
-          const source = yield* Effect.all([replayMessages(), replayRequests()], { concurrency: "unbounded" }).pipe(
+          const source = yield* Effect.all([replayMessages(), replayRequests()], { concurrency: 2 }).pipe(
             Effect.exit,
           )
           if (Exit.isFailure(source)) {
@@ -1453,11 +1453,23 @@ function createLayer(input: StreamInput) {
 export async function createSessionTransport(input: StreamInput): Promise<SessionTransport> {
   const runtime = makeRuntime(Service, createLayer(input))
   await runtime.runPromise(() => Effect.void)
+  let closing: Promise<void> | undefined
+  const activeTurns = new Set<Promise<void>>()
 
   return {
-    runPromptTurn: (next) => runtime.runPromise((svc) => svc.runPromptTurn(next)),
+    runPromptTurn: (next) => {
+      const turn = runtime.runPromise((svc) => svc.runPromptTurn(next))
+      activeTurns.add(turn)
+      void turn.finally(() => activeTurns.delete(turn)).catch(() => {})
+      return turn
+    },
     selectSubagent: (sessionID) => runtime.runSync((svc) => svc.selectSubagent(sessionID)),
     replayOnResize: (next) => runtime.runPromise((svc) => svc.replayOnResize(next)),
-    close: () => runtime.runPromise((svc) => svc.close()),
+    close: () =>
+      (closing ??= runtime
+        .runPromise((svc) => svc.close())
+        .then(() => Promise.allSettled([...activeTurns]))
+        .then(() => undefined)
+        .finally(() => runtime.dispose())),
   }
 }

@@ -43,3 +43,30 @@ test("inputBudget subtracts only the input-side compaction buffer", () => {
   expect(SessionCompaction.inputBudget(1_048_576, 20_000)).toBe(1_028_576)
   expect(SessionCompaction.inputBudget(200_000, 20_000)).toBe(180_000)
 })
+
+// Compaction budgets (see the constants in src/session/compaction.ts): the trigger and the verbatim
+// retention both scale with the model's window, because a fixed 20k headroom put the trigger at ~92%
+// of the window — a 133-turn ablation run never reached it and compaction never relieved the replay.
+test("the compaction trigger scales with the window and keeps a floor", () => {
+  const proportional = { buffer: 0, bufferRatio: 0.18 }
+  // 18% of a large window, floored for a small one.
+  expect(SessionCompaction.resolvedBuffer(258_400, proportional)).toBe(Math.floor(258_400 * 0.18))
+  expect(SessionCompaction.resolvedBuffer(1_000_000, proportional)).toBe(180_000)
+  expect(SessionCompaction.resolvedBuffer(5_000, proportional)).toBe(2_000)
+  // An explicit absolute buffer still wins over the ratio.
+  expect(SessionCompaction.resolvedBuffer(258_400, { buffer: 20_000, bufferRatio: 0.18 })).toBe(20_000)
+  // The budget handed to the trigger is window minus headroom.
+  expect(SessionCompaction.inputBudget(200_000, SessionCompaction.resolvedBuffer(200_000, proportional))).toBe(
+    200_000 - 36_000,
+  )
+})
+
+test("verbatim retention scales with the window inside a clamped band", () => {
+  // No ratio configured: the absolute default is used unchanged (existing behaviour).
+  expect(SessionCompaction.resolvedKeepTokens(258_400, { tokens: 8_000 })).toBe(8_000)
+  // 5% of the window, clamped to [8k, 32k]: a small window keeps the old default, a 1M window does
+  // not retain 160k the way a raw 16% policy would.
+  expect(SessionCompaction.resolvedKeepTokens(128_000, { tokens: 8_000, keepRatio: 0.05 })).toBe(8_000)
+  expect(SessionCompaction.resolvedKeepTokens(258_400, { tokens: 8_000, keepRatio: 0.05 })).toBe(12_920)
+  expect(SessionCompaction.resolvedKeepTokens(1_000_000, { tokens: 8_000, keepRatio: 0.05 })).toBe(32_000)
+})

@@ -84,6 +84,15 @@ afterEach(async () => {
     },
   }).catch(() => {})
   SettingsStore.invalidate()
+  if (connectedProviders.size > 0) {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const auth = yield* Auth.Service
+        for (const providerID of connectedProviders) yield* auth.remove(providerID)
+      }).pipe(Effect.provide(Auth.defaultLayer)),
+    ).catch(() => {})
+    connectedProviders.clear()
+  }
   await disposeAllInstances()
 })
 
@@ -118,6 +127,11 @@ const itWithAuth = testEffect(
 )
 const experimentalModels = testEffect(providerLayer({ enableExperimentalModels: true }))
 
+// connect() persists fake keys into the shared test-home auth.json. Track every connected
+// provider so afterEach can scrub them — a leaked entry (e.g. openai) makes later test files in
+// the same process resolve the real provider instead of the test-local one.
+const connectedProviders = new Set<string>()
+
 const connect = (providerID: ProviderV2.ID, key: string) =>
   Effect.gen(function* () {
     const auth = yield* Auth.Service
@@ -125,6 +139,7 @@ const connect = (providerID: ProviderV2.ID, key: string) =>
       type: "api",
       key,
     })
+    connectedProviders.add(providerID)
   })
 
 // A tiny OpenAI-compatible /models endpoint so runtime discovery has something real to fetch. The

@@ -16,6 +16,7 @@ import {
 } from "./tool"
 
 const log = Log.create({ service: "acp-event" })
+const MAX_APPLIED_EVENT_IDS = 4_096
 
 type Connection = Pick<AgentSideConnection, "sessionUpdate"> &
   Partial<Pick<AgentSideConnection, "requestPermission" | "writeTextFile">>
@@ -94,6 +95,7 @@ export class Subscription {
           onEvent: (payload) => {
             if (!payload.id || applied.has(payload.id)) return
             applied.add(payload.id)
+            if (applied.size > MAX_APPLIED_EVENT_IDS) applied.delete(applied.values().next().value!)
             void this.deliver(payload).catch((error: unknown) => {
               log.error("failed to handle journal event", { error, type: payload.type })
             })
@@ -157,9 +159,12 @@ export class Subscription {
 
   // V1 permission.asked and V2 permission.v2.asked share the request/response shape after
   // normalization: id + sessionID + display permission + patterns + optional tool source.
+  // The version is forwarded so the reply settles through the matching route (V2 asks 404 on
+  // the legacy route).
   handlePermission(event: { readonly type: string; readonly properties: Record<string, unknown> }) {
+    const version = event.type === "permission.v2.asked" ? ("v2" as const) : ("v1" as const)
     let properties = event.properties
-    if (event.type === "permission.v2.asked") {
+    if (version === "v2") {
       const source = properties.source as { callID?: string } | undefined
       properties = {
         ...properties,
@@ -168,10 +173,10 @@ export class Subscription {
         ...(source?.callID ? { tool: { callID: source.callID } } : {}),
       }
     }
-    this.permission.handle({ type: "permission.asked", properties } as never)
+    this.permission.handle({ type: "permission.asked", properties } as never, version)
   }
 
-    async deliver(payload: ContextSessionEvent) {
+  async deliver(payload: ContextSessionEvent) {
     const data = payload.data ?? {}
     const sessionID = typeof data.sessionID === "string" ? data.sessionID : undefined
     const assistantMessageID = typeof data.assistantMessageID === "string" ? data.assistantMessageID : undefined
@@ -180,15 +185,18 @@ export class Subscription {
     // Progress/Success/Failed boundaries do not carry the tool name (ToolBase is
     // assistantMessageID + callID only); the name is cached from tool.called.
     const tool =
-      (callID ? this.toolNames.get(callID) : undefined) ??
-      (typeof data.tool === "string" ? data.tool : "tool")
+      (callID ? this.toolNames.get(callID) : undefined) ?? (typeof data.tool === "string" ? data.tool : "tool")
 
     switch (payload.type) {
       case "session.next.text.ended":
         if (sessionID && assistantMessageID && text !== undefined && (await this.isKnownSession(sessionID))) {
           await this.input.connection.sessionUpdate({
             sessionId: sessionID,
-            update: { sessionUpdate: "agent_message_chunk", messageId: assistantMessageID, content: { type: "text", text } },
+            update: {
+              sessionUpdate: "agent_message_chunk",
+              messageId: assistantMessageID,
+              content: { type: "text", text },
+            },
           })
         }
         return
@@ -196,7 +204,11 @@ export class Subscription {
         if (sessionID && assistantMessageID && text !== undefined && (await this.isKnownSession(sessionID))) {
           await this.input.connection.sessionUpdate({
             sessionId: sessionID,
-            update: { sessionUpdate: "agent_thought_chunk", messageId: assistantMessageID, content: { type: "text", text } },
+            update: {
+              sessionUpdate: "agent_thought_chunk",
+              messageId: assistantMessageID,
+              content: { type: "text", text },
+            },
           })
         }
         return
@@ -213,6 +225,7 @@ export class Subscription {
         if (await this.isKnownSession(sessionID)) await this.updateRunningTool(sessionID, data)
         return
       case "session.next.tool.success": {
+        if (callID) this.toolNames.delete(callID)
         if (!sessionID || !callID || !(await this.isKnownSession(sessionID))) return
         const input = journalInput(data)
         const output = toolContentText(data.content)
@@ -236,6 +249,7 @@ export class Subscription {
         return
       }
       case "session.next.tool.failed": {
+        if (callID) this.toolNames.delete(callID)
         if (!sessionID || !callID || !(await this.isKnownSession(sessionID))) return
         const input = journalInput(data)
         const error = data.error as { message?: unknown } | undefined
@@ -267,8 +281,7 @@ export class Subscription {
   private async updateRunningTool(sessionID: string | undefined, data: Record<string, unknown>) {
     const callID = typeof data.callID === "string" ? data.callID : undefined
     const tool =
-      (callID ? this.toolNames.get(callID) : undefined) ??
-      (typeof data.tool === "string" ? data.tool : "tool")
+      (callID ? this.toolNames.get(callID) : undefined) ?? (typeof data.tool === "string" ? data.tool : "tool")
     if (!sessionID || !callID) return
     const input = journalInput(data)
     const output = toolContentText(data.content)
@@ -447,9 +460,7 @@ function toolContentText(content: unknown): string {
   if (!Array.isArray(content)) return ""
   return content
     .map((item) =>
-      typeof item === "object" && item !== null && "text" in item && typeof item.text === "string"
-        ? item.text
-        : "",
+      typeof item === "object" && item !== null && "text" in item && typeof item.text === "string" ? item.text : "",
     )
     .filter((item) => item.trim().length > 0)
     .join("\n")

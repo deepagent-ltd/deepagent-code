@@ -10,11 +10,12 @@ import {
   reviewSummaryForWorkspace,
   userGlobalStoreFor,
 } from "../../src/deepagent/knowledge-source"
+import { tmpRoot, tmpRootShared } from "../fixture/tmpdir"
 
 const roots: string[] = []
 
 const root = () => {
-  const value = mkdtempSync(path.join(tmpdir(), "deepagent-knowledge-cache-"))
+  const value = mkdtempSync(tmpRootShared())
   roots.push(value)
   return value
 }

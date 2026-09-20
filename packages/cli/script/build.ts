@@ -112,7 +112,7 @@ for (const item of targets) {
         name: `@deepagent-code/${name}`,
         version: Script.version,
         license: "MIT",
-        repository: { type: "git", url: "git+https://github.com/lessweb/deepagentCode.git" },
+        repository: { type: "git", url: "git+https://github.com/deepagent-ltd/deepagent-code.git" },
         os: [item.os],
         cpu: [item.arch],
       },

@@ -98,6 +98,7 @@ export function createGatewayClient(options: GatewayClientOptions) {
   const doFetch = options.fetch ?? globalThis.fetch
   const control = (path: string) => `${options.gatewayUrl}/control/v1${path}`
   let accessToken: string | null = null
+  let refreshRequest: Promise<string | null> | undefined
 
   const setAccessToken = (token: string | null) => {
     accessToken = token
@@ -119,19 +120,26 @@ export function createGatewayClient(options: GatewayClientOptions) {
 
   // Refresh the access token from the refresh_token cookie. Returns the new
   // token, or null if the session is gone (401) — the caller should re-login.
-  const refresh = async (): Promise<string | null> => {
-    const response = await doFetch(control("/auth/refresh"), {
+  const refresh = (): Promise<string | null> => {
+    if (refreshRequest) return refreshRequest
+    refreshRequest = doFetch(control("/auth/refresh"), {
       method: "POST",
       credentials: "include",
     })
-    if (response.status === 401) {
-      setAccessToken(null)
-      return null
-    }
-    if (!response.ok) throw await parseError(response)
-    const result = (await response.json()) as { accessToken: string }
-    setAccessToken(result.accessToken)
-    return result.accessToken
+      .then(async (response) => {
+        if (response.status === 401) {
+          setAccessToken(null)
+          return null
+        }
+        if (!response.ok) throw await parseError(response)
+        const result = (await response.json()) as { accessToken: string }
+        setAccessToken(result.accessToken)
+        return result.accessToken
+      })
+      .finally(() => {
+        refreshRequest = undefined
+      })
+    return refreshRequest
   }
 
   const logout = async (): Promise<void> => {
@@ -144,15 +152,15 @@ export function createGatewayClient(options: GatewayClientOptions) {
 
   // Authenticated control-plane request with a single refresh-and-retry on 401.
   const authed = async (path: string, init?: RequestInit): Promise<Response> => {
-    const send = (token: string | null) =>
-      doFetch(control(path), {
+    const send = (token: string | null) => {
+      const headers = new Headers(init?.headers)
+      if (token) headers.set("authorization", `Bearer ${token}`)
+      return doFetch(control(path), {
         ...init,
         credentials: "include",
-        headers: {
-          ...init?.headers,
-          ...(token ? { authorization: `Bearer ${token}` } : {}),
-        },
+        headers,
       })
+    }
     let response = await send(accessToken)
     if (response.status === 401) {
       const refreshed = await refresh()

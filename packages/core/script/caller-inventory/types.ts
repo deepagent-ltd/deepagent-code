@@ -89,6 +89,8 @@ export type HandlerSite = {
   readonly bodyDecl?: string
   /** HTTP group name parsed from the enclosing HttpApiGroup.make/HttpApiBuilder.group chain. */
   readonly group?: string
+  /** Yargs command object identifier for `.command(XxxCommand)` registrations. */
+  readonly commandObject?: string
 }
 
 export type EntryWithHandlers = {
@@ -124,10 +126,9 @@ export type EntryWithHandlers = {
  *   - portBoundTo       : the entry imports an Effect service port whose canonical production provider
  *                        (authority.ts PORTS registry) is a Layer.effect in a provider module wired by a
  *                        production composition; the consumer inherits the provider entry's verdict;
- *   - productionProfile: three-site proof that THIS packaged build force-selects the Core-V2-only
- *                        runtime profile (package.json version matches isCoreV2OnlyVersion, the
- *                        flag wires that predicate to InstallationVersion, and the production
- *                        bundler injects that version string via DEEPAGENT_CODE_VERSION).
+ *   - productionProfile: source proof that THIS build unconditionally selects the Core-V2-only
+ *                        runtime profile (`coreV2Only: Config.succeed(true)`); an env, version, or
+ *                        other runtime selector would fail the proof.
  */
 export type Requirement =
   | { readonly kind: "reach"; readonly pathSuffix: string }
@@ -140,6 +141,19 @@ export type Requirement =
   | { readonly kind: "portBoundTo"; readonly portModule: string }
   | { readonly kind: "bodyLogsOnly" }
   | { readonly kind: "productionProfile" }
+  | {
+      /**
+       * Guard-before-legacy ordering inside this entry's handler-body scope (including bounded
+       * same-file callee expansion): the guard chain's EARLIEST occurrence must precede the legacy
+       * chain's EARLIEST occurrence in the same file. Generator bodies execute statements in
+       * source order, so line order proves statement order for sequential yields. Use with
+       * productionProfile to encode the LEGACY-EXECUTION-ZERO contract: the profile-pinned refusal
+       * runs before any legacy-execution chain becomes reachable in the flow.
+       */
+      readonly kind: "guardBeforeLegacy"
+      readonly guard: string
+      readonly legacy: string
+    }
 
 /** A declared, machine-checked ownership claim for one entry. */
 export type Declaration = {

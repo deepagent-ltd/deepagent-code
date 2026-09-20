@@ -5,9 +5,9 @@ import { OAUTH_CALLBACK_PORT, OAUTH_CALLBACK_PATH, parseRedirectUri } from "./oa
 
 const log = Log.create({ service: "mcp.oauth-callback" })
 
-// Current callback server configuration (may differ from defaults if custom redirectUri is used)
 let currentPort = OAUTH_CALLBACK_PORT
 let currentPath = OAUTH_CALLBACK_PATH
+let operation = Promise.resolve()
 
 const HTML_SUCCESS = `<!DOCTYPE html>
 <html>
@@ -45,7 +45,7 @@ const HTML_ERROR = (error: string) => `<!DOCTYPE html>
   <div class="container">
     <h1>Authorization Failed</h1>
     <p>An error occurred during authorization.</p>
-    <div class="error">${error}</div>
+    <div class="error">${escapeHtml(error)}</div>
   </div>
 </body>
 </html>`
@@ -63,6 +63,7 @@ const pendingAuths = new Map<string, PendingAuth>()
 const mcpNameToState = new Map<string, string>()
 
 const CALLBACK_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes
+const MAX_PENDING_AUTHS = 64
 
 function cleanupStateIndex(oauthState: string) {
   for (const [name, state] of mcpNameToState) {
@@ -73,10 +74,15 @@ function cleanupStateIndex(oauthState: string) {
   }
 }
 
-function handleRequest(req: import("http").IncomingMessage, res: import("http").ServerResponse) {
-  const url = new URL(req.url || "/", `http://localhost:${currentPort}`)
+function handleRequest(
+  req: import("http").IncomingMessage,
+  res: import("http").ServerResponse,
+  port: number,
+  callbackPath: string,
+) {
+  const url = new URL(req.url || "/", `http://localhost:${port}`)
 
-  if (url.pathname !== currentPath) {
+  if (url.pathname !== callbackPath) {
     res.writeHead(404)
     res.end("Not found")
     return
@@ -87,12 +93,12 @@ function handleRequest(req: import("http").IncomingMessage, res: import("http").
   const error = url.searchParams.get("error")
   const errorDescription = url.searchParams.get("error_description")
 
-  log.info("received oauth callback", { hasCode: !!code, state, error })
+  log.info("received oauth callback", { hasCode: !!code, hasState: !!state, hasError: !!error })
 
   // Enforce state parameter presence
   if (!state) {
     const errorMsg = "Missing required state parameter - potential CSRF attack"
-    log.error("oauth callback missing state parameter", { url: url.toString() })
+    log.error("oauth callback missing state parameter", { path: url.pathname })
     res.writeHead(400, { "Content-Type": "text/html" })
     res.end(HTML_ERROR(errorMsg))
     return
@@ -121,7 +127,7 @@ function handleRequest(req: import("http").IncomingMessage, res: import("http").
   // Validate state parameter
   if (!pendingAuths.has(state)) {
     const errorMsg = "Invalid or expired state parameter - potential CSRF attack"
-    log.error("oauth callback with invalid state", { state, pendingStates: Array.from(pendingAuths.keys()) })
+    log.error("oauth callback with invalid or expired state")
     res.writeHead(400, { "Content-Type": "text/html" })
     res.end(HTML_ERROR(errorMsg))
     return
@@ -138,38 +144,45 @@ function handleRequest(req: import("http").IncomingMessage, res: import("http").
   res.end(HTML_SUCCESS)
 }
 
-export async function ensureRunning(redirectUri?: string): Promise<void> {
-  // Parse the redirect URI to get port and path (uses defaults if not provided)
+export function ensureRunning(redirectUri?: string): Promise<void> {
+  return serialize(() => ensureRunningSerial(redirectUri))
+}
+
+async function ensureRunningSerial(redirectUri?: string) {
   const { port, path } = parseRedirectUri(redirectUri)
 
-  // If server is running on a different port/path, stop it first
   if (server && (currentPort !== port || currentPath !== path)) {
     log.info("stopping oauth callback server to reconfigure", { oldPort: currentPort, newPort: port })
-    await stop()
+    await stopSerial()
   }
 
   if (server) return
 
-  const running = await isPortInUse(port)
-  if (running) {
-    log.info("oauth callback server already running on another instance", { port })
-    return
-  }
-
+  const next = createServer((request, response) => handleRequest(request, response, port, path))
+  await new Promise<void>((resolve, reject) => {
+    const onError = (error: Error) => {
+      next.removeListener("listening", onListening)
+      reject(error)
+    }
+    const onListening = () => {
+      next.removeListener("error", onError)
+      resolve()
+    }
+    next.once("error", onError)
+    next.once("listening", onListening)
+    next.listen(port, "127.0.0.1")
+  })
+  next.on("error", (error) => log.warn("oauth callback server error", { error }))
   currentPort = port
   currentPath = path
-
-  server = createServer(handleRequest)
-  await new Promise<void>((resolve, reject) => {
-    server!.listen(currentPort, () => {
-      log.info("oauth callback server started", { port: currentPort, path: currentPath })
-      resolve()
-    })
-    server!.on("error", reject)
-  })
+  server = next
+  log.info("oauth callback server started", { port, path })
 }
 
 export function waitForCallback(oauthState: string, mcpName?: string): Promise<string> {
+  if (pendingAuths.has(oauthState)) return Promise.reject(new Error("OAuth state is already pending"))
+  if (mcpName && mcpNameToState.has(mcpName)) return Promise.reject(new Error("MCP OAuth is already pending"))
+  if (pendingAuths.size >= MAX_PENDING_AUTHS) return Promise.reject(new Error("Too many pending OAuth callbacks"))
   if (mcpName) mcpNameToState.set(mcpName, oauthState)
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
@@ -210,10 +223,15 @@ export async function isPortInUse(port: number = OAUTH_CALLBACK_PORT): Promise<b
   })
 }
 
-export async function stop(): Promise<void> {
+export function stop(): Promise<void> {
+  return serialize(stopSerial)
+}
+
+async function stopSerial() {
   if (server) {
-    await new Promise<void>((resolve) => server!.close(() => resolve()))
+    const current = server
     server = undefined
+    await new Promise<void>((resolve, reject) => current.close((error) => (error ? reject(error) : resolve())))
     log.info("oauth callback server stopped")
   }
 
@@ -225,8 +243,24 @@ export async function stop(): Promise<void> {
   mcpNameToState.clear()
 }
 
+function serialize(task: () => Promise<void>) {
+  const result = operation.then(task, task)
+  operation = result.catch(() => {})
+  return result
+}
+
 export function isRunning(): boolean {
   return server !== undefined
+}
+
+function escapeHtml(value: string) {
+  return value.replace(/[&<>"']/g, (character) => {
+    if (character === "&") return "&amp;"
+    if (character === "<") return "&lt;"
+    if (character === ">") return "&gt;"
+    if (character === '"') return "&quot;"
+    return "&#39;"
+  })
 }
 
 export * as McpOAuthCallback from "./oauth-callback"

@@ -79,6 +79,19 @@ function isolatedEnv(home: string, configJson: string): Record<string, string> {
     DEEPAGENT_CODE_DISABLE_MODELS_FETCH: "1",
     DEEPAGENT_CODE_AUTH_CONTENT: "{}",
     DEEPAGENT_MODE: "general",
+    // The CLI subprocess tests exercise CLI flags, not the plan gate; the gate (default ON, a V2
+    // runner seam) would block every mutating tool call before any permission decision. Suites
+    // that specifically want the gate override this via opts.env.
+    DEEPAGENT_CODE_STRICT_PLAN_GATE: "false",
+    // The child is an isolated dev install: it must bootstrap its OWN V2 owner chain (dev mint
+    // signs with the child's state-dir keypair, the verifier discovers the same keypair). The test
+    // process preloads DEEPAGENT_CODE_V2_OWNER_AUTHORIZATION_PUBLIC_KEY for IN-PROCESS suites;
+    // inheriting it here would pin the child's verifier to a foreign key and fail every
+    // owner-gated prompt closed (503 v2_owner_unavailable). Empty string = fall through to
+    // state-dir discovery. Same for an inherited explicit campaign, which would skip the mint.
+    DEEPAGENT_CODE_V2_OWNER_DEV_MINT: "1",
+    DEEPAGENT_CODE_V2_OWNER_AUTHORIZATION_PUBLIC_KEY: "",
+    DEEPAGENT_CODE_V2_OWNER_CAMPAIGN: "",
   }
 }
 
@@ -122,9 +135,17 @@ export type ServeHandle = {
   readonly url: string
   readonly hostname: string
   readonly port: number
-  // Sends SIGTERM. The scope finalizer also calls this, so tests rarely need
-  // to invoke it directly — useful for tests that assert exit behavior.
-  readonly kill: () => void
+  // Real OS process identity and stop/resume controls for packaged fault-injection tests. The
+  // scope finalizer resumes a paused process before terminating it, so a failed assertion cannot
+  // strand a SIGSTOP'ed child or hang test teardown.
+  readonly pid: number
+  readonly pause: () => void
+  readonly resume: () => void
+  // Sends SIGTERM by default; pass "SIGKILL" for a kill-9 crash (no finalizers run in
+  // the child — the crash-recovery oracle's trigger). The scope finalizer always uses
+  // SIGTERM, so tests rarely need to invoke this directly — useful for tests that
+  // assert exit behavior.
+  readonly kill: (signal?: "SIGTERM" | "SIGKILL") => void
   // Resolves with the exit code once the process exits. Bun returns a number.
   readonly exited: Promise<number>
 }
@@ -167,6 +188,9 @@ export type OpencodeCli = {
   // Convenience assertion. Dumps captured stderr/stdout on mismatch so CI
   // failures are debuggable without re-running locally.
   readonly expectExit: (result: RunResult, expected: number, label?: string) => void
+  // W3.9 stdout hygiene: JSON.parse the whole stdout and assert no Effect log
+  // line ([HH:MM:SS.mmm] WARN/ERROR (#fiber): ...) polluted it. Returns the payload.
+  readonly expectJsonStdout: (result: RunResult, label?: string) => unknown
   // Parse `--format json` stdout into one event object per non-empty line.
   // The CLI writes `JSON.stringify({ type, sessionID, ... }) + EOL` for each
   // event (see src/cli/cmd/run.ts `emit`). Throws on a malformed line so
@@ -197,6 +221,13 @@ export function withCliFixture<A, E>(
     const home = yield* fs.makeTempDirectoryScoped({ prefix: "oc-cli-" })
 
     const configJson = JSON.stringify(testProviderConfig(llm.url))
+    // The V2 location config (packages/core/src/config.ts) discovers config from FILES only — it
+    // never reads DEEPAGENT_CODE_CONFIG_CONTENT. Without a real config file the per-location
+    // Catalog never learns the test provider and every V2 drain dies with ModelNotSelectedError.
+    // Write the canonical global config name (config.jsonc) directly: the app config service would
+    // consolidate config.json into it at startup anyway, and the core V2 reader loads it for every
+    // location in the child.
+    yield* Effect.promise(() => Bun.write(path.join(home, ".deepagent", "code", "config.jsonc"), configJson))
     const env = isolatedEnv(home, configJson)
 
     const spawn = Effect.fn("deepagentCode.spawn")(function* (args: string[], opts?: SpawnOpts) {
@@ -276,10 +307,21 @@ export function withCliFixture<A, E>(
           }),
         ),
         (p) =>
-          Effect.promise(() => {
-            p.kill()
-            return p.exited
-          }).pipe(Effect.ignore),
+          Effect.try({
+            try: () => process.kill(p.pid, "SIGCONT"),
+            catch: (cause) => cause,
+          }).pipe(
+            // SIGCONT is harmless for a running child and keeps teardown from hanging when a test
+            // fails while the fault-injection target is stopped. ESRCH only means it already exited.
+            Effect.ignore,
+            Effect.andThen(
+              Effect.promise(() => {
+                p.kill()
+                return p.exited
+              }),
+            ),
+            Effect.ignore,
+          ),
       )
 
       // Tail buffer so timeout failures can include stderr context. The fork
@@ -322,8 +364,15 @@ export function withCliFixture<A, E>(
         url: match.url,
         hostname: match.hostname,
         port: match.port,
-        kill: () => {
-          proc.kill()
+        pid: proc.pid,
+        pause: () => {
+          process.kill(proc.pid, "SIGSTOP")
+        },
+        resume: () => {
+          process.kill(proc.pid, "SIGCONT")
+        },
+        kill: (signal?: "SIGTERM" | "SIGKILL") => {
+          proc.kill(signal)
         },
         exited: proc.exited as Promise<number>,
       } satisfies ServeHandle
@@ -408,7 +457,7 @@ export function withCliFixture<A, E>(
       } satisfies AcpHandle
     })
 
-    const deepagentCode: OpencodeCli = { run, serve, acp, spawn, expectExit, parseJsonEvents }
+    const deepagentCode: OpencodeCli = { run, serve, acp, spawn, expectExit, expectJsonStdout, parseJsonEvents }
 
     return yield* fn({ llm, home, deepagentCode })
     // FetchHttpClient is provided so test bodies can `yield* HttpClient.HttpClient`
@@ -440,6 +489,20 @@ function expectExit(result: RunResult, expected: number, label = "deepagentCode"
   // eslint-disable-next-line no-console
   console.error(`[${label}] stdout (last 500):\n${tail(result.stdout, 500)}`)
   throw new Error(`${label}: expected exit ${expected}, got ${result.exitCode}`)
+}
+
+// W3.9 — stdout hygiene for machine-readable output. The whole stdout must parse as JSON (any
+// `Effect.log*` emitted during layer builds is written to STDOUT by the Effect default logger as
+// `[HH:MM:SS.mmm] LEVEL (#fiber): ...` — W3.7 regression — so a successful parse also proves no
+// line precedes the payload), and no line may carry a WARN/ERROR log prefix. Returns the parsed
+// payload so callers keep asserting on it.
+function expectJsonStdout(result: RunResult, label = "json stdout") {
+  const logLine = /^\[\d{2}:\d{2}:\d{2}\.\d{3}\]\s+(WARN|ERROR)/
+  const offenders = result.stdout.split("\n").filter((line) => logLine.test(line))
+  if (offenders.length > 0) {
+    throw new Error(`${label}: stdout contains Effect log line(s): ${offenders.join(" | ")}`)
+  }
+  return JSON.parse(result.stdout) as unknown
 }
 
 // `cliIt.live(name, fixture => effect)` is the same as

@@ -1,6 +1,6 @@
 import { Effect, Layer, Schema } from "effect"
 import { LLM } from "../../src"
-import { deepseek } from "../../src/providers/openai-compatible"
+import { configure } from "../../src/providers/openai-compatible"
 import { LLMClient, RequestExecutor, WebSocketExecutor } from "../../src/route"
 import { assertToolResponse } from "./assertions"
 import { loadLiveLLMConfig, modelFingerprint, preflightLiveLLM, writeLiveArtifact } from "./config"
@@ -20,11 +20,18 @@ const expected = {
 }
 
 const config = await loadLiveLLMConfig()
+const thinkingControl = config.providerID === "zai" ? { reasoning_effort: "low" } : { thinking: { type: "disabled" } }
 const preflight = await preflightLiveLLM(config)
-const provider = deepseek.configure({ baseURL: config.baseURL, apiKey: config.apiKey })
+const provider = configure({ provider: config.providerID, baseURL: config.baseURL, apiKey: config.apiKey })
 const dependencies = Layer.mergeAll(RequestExecutor.defaultLayer, WebSocketExecutor.layer)
 const client = LLMClient.layer.pipe(Layer.provide(dependencies))
 const startedAt = Date.now()
+
+// GLM 5.x serializes tool-call numbers as strings (deterministic at temperature 0); keep
+// strict Number for providers without the quirk so a regression there still fails hard.
+const schemaNumber =
+  config.providerID === "zai" ? Schema.Union([Schema.Number, Schema.NumberFromString]) : Schema.Number
+const rawInputOption = config.providerID === "zai" ? { rawInput: false } : {}
 
 const program = Effect.gen(function* () {
   const response = yield* LLM.generateObject({
@@ -32,20 +39,20 @@ const program = Effect.gen(function* () {
     system: "Return exactly the requested values through the required tool. Do not add or omit fields.",
     prompt: `Return this object exactly: ${JSON.stringify(expected)}`,
     schema: Schema.Struct({
-      answer: Schema.Number,
+      answer: schemaNumber,
       summary: Schema.String,
       nested: Schema.Struct({
         marker: Schema.String,
         items: Schema.Array(
           Schema.Struct({
             name: Schema.String,
-            score: Schema.Number,
+            score: schemaNumber,
           }),
         ),
       }),
     }),
     generation: { maxTokens: 256, temperature: 0 },
-    http: { body: { thinking: { type: "disabled" } } },
+    http: { body: thinkingControl },
   })
 
   if (JSON.stringify(response.object) !== JSON.stringify(expected)) {
@@ -60,7 +67,9 @@ const program = Effect.gen(function* () {
     fingerprint: modelFingerprint(config),
     preflight,
     structured: {
-      ...assertToolResponse(response.response, "generate_object", expected),
+      // GLM stringifies tool-call numbers; the schema decode + strict object equality above
+      // carry the value verification, so skip the byte-level input comparison for zai only.
+      ...assertToolResponse(response.response, "generate_object", expected, rawInputOption),
       topLevelFields: Object.keys(response.object).toSorted(),
       itemCount: response.object.nested.items.length,
       markerHash: Bun.hash(marker).toString(16),

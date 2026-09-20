@@ -1,4 +1,4 @@
-import { Cause, Effect, Scope } from "effect"
+import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import nodeFs from "node:fs/promises"
 import { Global } from "@deepagent-code/core/global"
@@ -20,28 +20,17 @@ import {
 } from "../groups/im"
 import { MentionParser } from "@deepagent-code/core/im/mention-parser"
 import { AgentListProviderService } from "@deepagent-code/core/im/agent-list-provider"
-import { executeAgentMentions } from "@deepagent-code/core/im/agent-orchestrator"
-import { isEventV2ImSingleWriteEnabled } from "@deepagent-code/core/deepagent/im-single-write"
+import { SessionV2 } from "@deepagent-code/core/session"
 import type { IMMessage, IMAttachment } from "@deepagent-code/core/im/repository"
 import * as IMID from "@deepagent-code/core/im/id"
 import { getWorkspaceContext } from "../utils/workspace-context"
 import { RuntimeFlags } from "@/effect/runtime-flags"
-import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
-import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
+import { RateLimiter } from "@deepagent-code/core/deepagent/rate-limiter"
+import { defaultMentionReceiptPort, resolveMentioned } from "@/session/event-dispatcher"
+import { IMAgentExecution } from "@/im/im-agent-execution"
+import { boundedPositiveInteger } from "./im-config"
 
 const IMAttachmentID = IMID.AttachmentID
-
-/** C5-12 — the IM single-write gate for the legacy @mention execution path. AUTH-P2-2 close
- * (decoupled switches): the legacy synchronous @mention path is SKIPPED only when BOTH the
- * single-write switch (`DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE`) AND the V4 event-driven IM path
- * (`DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM`, which publishes im.message.created onto the bus that drives the
- * durable V2 admission) are ON — the single-write regime replaces the legacy executor, so it must be
- * paired with the event-driven path that actually carries the mention work. With EITHER switch off the
- * legacy path stays authoritative (fail-open: an @mention is never silently dropped; the legacy
- * double-write tradeoff applies only when v4 is ON and single-write is OFF — none of the switches is
- * stronger than a user's explicit choice). Exported for deterministic testing of the flag-gated branch. */
-export const shouldExecuteLegacyAgentMentions = (mentionCount: number, v4EventDrivenIm: boolean): boolean =>
-  mentionCount > 0 && !(isEventV2ImSingleWriteEnabled() && v4EventDrivenIm)
 
 const IM_MAX_MESSAGE_LENGTH = 100000 // 增加到 100k，更灵活
 
@@ -84,43 +73,6 @@ const toAttachmentResponse = (a: IMAttachment) => ({
 // AttachmentStorage core (@deepagent-code/core/im/attachment-storage) so they are unit-testable without
 // the multipart HTTP transport. The handler just calls into it.
 
-// Simple in-memory rate limiter
-class RateLimiter {
-  private buckets = new Map<string, { count: number; resetAt: number }>()
-  private nextCleanupAt = Date.now() + 5 * 60 * 1000
-
-  check(key: string, limit: number, windowMs: number): boolean {
-    const now = Date.now()
-    if (now >= this.nextCleanupAt) {
-      this.cleanup(now)
-      this.nextCleanupAt = now + 5 * 60 * 1000
-    }
-    const bucket = this.buckets.get(key)
-
-    if (!bucket || now >= bucket.resetAt) {
-      this.buckets.set(key, { count: 1, resetAt: now + windowMs })
-      return true
-    }
-
-    if (bucket.count >= limit) {
-      return false
-    }
-
-    bucket.count++
-    return true
-  }
-
-  private cleanup(now: number) {
-    for (const [key, bucket] of this.buckets.entries()) {
-      if (now >= bucket.resetAt) {
-        this.buckets.delete(key)
-      }
-    }
-  }
-}
-
-const rateLimiter = new RateLimiter()
-
 const mapRepositoryError = <A, E, R>(effect: Effect.Effect<A, E | IMRepositoryError, R>) =>
   effect.pipe(
     Effect.catchIf(
@@ -136,22 +88,20 @@ const mapRepositoryError = <A, E, R>(effect: Effect.Effect<A, E | IMRepositoryEr
   )
 
 // 配置：可以通过环境变量调整
-const getRateLimit = () => parseInt(process.env.IM_RATE_LIMIT_PER_MINUTE || "200", 10) // 默认 200/分钟，更宽松
-const getMaxMessageLength = () => parseInt(process.env.IM_MAX_MESSAGE_LENGTH || "100000", 10) // 默认 100k
+const getRateLimit = () => boundedPositiveInteger(process.env.IM_RATE_LIMIT_PER_MINUTE, 200, 10_000)
+const getMaxMessageLength = () => boundedPositiveInteger(process.env.IM_MAX_MESSAGE_LENGTH, 100_000, 1_000_000)
 
 export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers) =>
   Effect.gen(function* () {
     const repo = yield* IMRepository
     const broadcaster = yield* IMBroadcasterService
     const agentListProvider = yield* AgentListProviderService
-    // V4.0 §B1 — the flag + bus for the double-write (user message persist → publish im.message.created).
+    const rateLimiter = new RateLimiter.Service()
     const flags = yield* RuntimeFlags.Service
-    const eventBus = yield* DeepAgentEventBus.Service
-    // Long-lived scope for detached agent runs. Forking into the SERVER scope (not
-    // the request scope) means the agent keeps running after the HTTP response is
-    // sent, while still inheriting the request fiber's full context — crucially the
-    // InstanceRef/WorkspaceRef that SessionPrompt needs for the worktree/directory.
-    const serverScope = yield* Scope.Scope
+    // V2 IM durable-only: mentions are admitted directly as durable SessionV2 work (one
+    // session_input per (message, agent), stable session per (group, agent)); the terminal reply
+    // returns through the im_reply_outbox daemon, not a fire-and-forget fork.
+    const v2Session = yield* SessionV2.Service
 
     return handlers
       .handle("listGroups", ({ query }) =>
@@ -377,66 +327,6 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
                         updatedAt: msg.updatedAt,
                       },
                     })
-                    // V4.0 §B1 — double-write: publish im.message.created onto the DeepAgent Event Bus
-                    // AFTER the message is durably persisted (so the legacy path stays authoritative and
-                    // the event is never emitted for an un-persisted message). Flag-gated on
-                    // v4EventDrivenIm (default OFF ⇒ no publish, byte-identical to V3.8). Best-effort:
-                    // idempotencyKey = the message id (one event per message), and a bus failure never
-                    // fails the user's send (the message already persisted + broadcast).
-                    //
-                    // §E2 RATE GATE (live): this is the primary workspace-facing, user-driven publisher —
-                    // one event per IM message — so it goes through `tryPublish`, applying the 1000/min
-                    // per-workspace publish ceiling. `im.message.created` is `normal` priority, so a
-                    // workspace flooding messages sheds the excess (`{ dropped: "rate_limited" }` ⇒ NOT
-                    // persisted, NOT dispatched). The legacy IM message + broadcast already succeeded, so
-                    // shedding the derived bus event only pauses V4 event-driven reactions for the burst —
-                    // it never loses the user's message. We record the drop as the §A4 event_dropped signal.
-                    if (flags.v4EventDrivenIm) {
-                      const outcome = yield* eventBus
-                        .tryPublish({
-                          type: LMNEvents.IM_MESSAGE_CREATED,
-                          source: "im",
-                          workspaceID: workspaceID ?? directory,
-                          actorID: userID,
-                          idempotencyKey: `im:${msg.id}`,
-                          priority: "normal",
-                          payload: {
-                            messageID: msg.id,
-                            groupID: msg.groupID,
-                            senderID: msg.senderID,
-                            senderType: msg.senderType,
-                            content: msg.content,
-                            mentions: msg.mentions,
-                            replyToID: msg.replyToID,
-                          },
-                        })
-                        // Best-effort: a bus EXCEPTION must not fail the user's send (the message already
-                        // persisted + broadcast). Catch the cause into a DISTINCT sentinel so a real error
-                        // is logged as an error — never mislabeled as a rate-limit drop (the two are
-                        // different signals: a drop is expected shedding, an exception is a fault).
-                        .pipe(
-                          Effect.catchCause((cause) => Effect.succeed({ busError: cause } as const)),
-                        )
-                      if ("busError" in outcome) {
-                        yield* Effect.logError("im.message.created publish failed").pipe(
-                          Effect.annotateLogs({
-                            reason: "publish_error",
-                            workspaceID: workspaceID ?? directory,
-                            messageID: msg.id,
-                            cause: Cause.pretty(outcome.busError),
-                          }),
-                        )
-                      } else if ("dropped" in outcome) {
-                        yield* Effect.logWarning("im.message.created dropped by publish rate gate").pipe(
-                          Effect.annotateLogs({
-                            reason: "event_dropped",
-                            cause: "rate_limited",
-                            workspaceID: workspaceID ?? directory,
-                            messageID: msg.id,
-                          }),
-                        )
-                      }
-                    }
                   }),
                 ),
                 Effect.catch((error) =>
@@ -455,29 +345,71 @@ export const imHandlers = HttpApiBuilder.group(InstanceHttpApi, "im", (handlers)
                 ),
               )
 
-            // Execute mentioned agents asynchronously (don't block the response).
-            // Fork into the SERVER scope so the run outlives the HTTP response but
-            // still inherits this request fiber's context — including the
-            // InstanceRef/WorkspaceRef that the agent executor (SessionPrompt) needs
-            // to locate the worktree/directory. A detached Effect.runFork would drop
-            // those references and the agent would never actually run.
-            //
-            // C5-12 — IM SINGLE-WRITE: when `isEventV2ImSingleWriteEnabled()` is ON, the legacy
-            // synchronous @mention execution path is SKIPPED (the durable IM single-write receipt is the
-            // single authority). The live WebSocket broadcast of message_created (above) and the agent's
-            // progress/status are the non-authoritative LOW-LATENCY hint surface; the durable receipt is
-            // the authority. When the flag is OFF the legacy double-write path stays authoritative
-            // (unchanged).
-            if (shouldExecuteLegacyAgentMentions(mentionedAgentNames.length, flags.v4EventDrivenIm)) {
-              yield* executeAgentMentions({
-                workspaceID,
-                directory,
-                groupID: groupId,
-                messageID: message.id,
-                userID,
-                content: payload.content,
-                mentionedAgentNames,
-              }).pipe(Effect.forkIn(serverScope, { startImmediately: true }))
+            // ── V2 IM durable-only: mention admission ────────────────────────────────────────────
+            // Exactly ONE durable SessionV2 admission per mentioned agent, performed synchronously in
+            // the request (the durable session_input row IS the execution record — keying by the
+            // deterministic prompt message id makes a duplicate delivery an exact-retry no-op). The
+            // agent runs through SessionExecution's advisory wake; the terminal assistant reply is
+            // delivered by the im_reply_outbox daemon. NOTHING rides a droppable fire-and-forget
+            // channel: a mention that cannot be admitted fails the request (the user sees the send
+            // error) instead of vanishing.
+            if (mentionedAgentNames.length > 0) {
+              const agents = yield* agentListProvider
+                .listAgents({ workspaceID, userID })
+                .pipe(
+                  Effect.catch(() =>
+                    Effect.fail(
+                      new IMInternalServerError({
+                        name: "INTERNAL_SERVER_ERROR",
+                        data: { message: "agent registry unavailable; mention not admitted (retry the send)" },
+                      }),
+                    ),
+                  ),
+                )
+              const resolved = resolveMentioned(agents, mentionedAgentNames)
+              for (const mention of resolved) {
+                // The mention itself is the authorization (W0.4); a mentioned agent that did not
+                // declare the mention trigger — or a name that resolved to nothing — gets the durable
+                // user-visible receipt instead of a silent drop.
+                if (!mention.dispatchable || !mention.agent) {
+                  yield* defaultMentionReceiptPort.receipt({
+                    eventID: message.id,
+                    groupID: groupId,
+                    messageID: message.id,
+                    agentID: mention.agent?.id,
+                    agentNames: [mention.name],
+                    reason: mention.agent ? "agent_no_trigger_mention" : "no_declared_trigger",
+                  }).pipe(
+                    Effect.catch(() => Effect.void),
+                  )
+                  continue
+                }
+                broadcaster.broadcast(groupId, {
+                  type: "agent_status",
+                  data: { messageID: message.id, agentID: mention.agent.id, status: "started" },
+                })
+                yield* IMAgentExecution.admitMention(v2Session, {
+                  groupID: groupId,
+                  messageID: message.id,
+                  agent: mention.agent.name,
+                  senderID: userID,
+                  content: payload.content,
+                  directory,
+                }).pipe(
+                  Effect.catch((error) =>
+                    Effect.fail(
+                      new IMInternalServerError({
+                        name: "INTERNAL_SERVER_ERROR",
+                        data: {
+                          message: `failed to admit @${mention.name} mention as durable session work: ${
+                            error instanceof Error ? error.message : String(error)
+                          }`,
+                        },
+                      }),
+                    ),
+                  ),
+                )
+              }
             }
 
             return {

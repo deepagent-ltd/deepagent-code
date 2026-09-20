@@ -18,7 +18,7 @@ import { currentTreeCounts, mustBeZero, redOracle } from "./gate"
 const mode = process.argv[2] ?? "oracle"
 
 if (mode === "counts") {
-  const inventory = buildInventory()
+  const inventory = await buildInventory()
   const counters = currentTreeCounts(inventory)
   const violations = violationsFor(inventory)
   console.log(JSON.stringify(counters, null, 2))

@@ -1,4 +1,5 @@
 import type { DocumentStore, Doc } from "../document-store"
+import { Identifier } from "../../util/identifier"
 
 // V3.8 Appendix-A C2 — the Session Ledger: the session's structured, incrementally-maintained
 // authoritative fact ledger. It REPLACES the "opaque prose summary rewritten every compaction"
@@ -66,8 +67,7 @@ export type LedgerUpdate = {
   readonly next?: { readonly text: string; readonly refs?: readonly string[]; readonly rationale?: string }
 }
 
-let counter = 0
-const genId = (kind: string, now: number): string => `led_${kind}_${now.toString(36)}_${(counter++).toString(36)}`
+const genId = (kind: string, now: number): string => `led_${kind}_${Identifier.create(false, now)}`
 
 // Apply an incremental update to a ledger, returning a NEW ledger (pure). Ordering: mark existing
 // entries first (done/superseded), then append new, then handle `next` (which supersedes prior active

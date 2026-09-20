@@ -26,7 +26,7 @@ import {
   TextPart,
   ToolPart,
   UserMessage,
-  Todo,
+  SessionTodoInfo,
   QuestionAnswer,
   QuestionInfo,
 } from "@deepagent-code/sdk"
@@ -1150,6 +1150,21 @@ export function UserMessageDisplay(props: { message: UserMessage; parts: PartTyp
       .finally(() => setState("busy", false))
   }
 
+  // Fork from this user message: the branch keeps the conversation up to and including this prompt.
+  const fork = () => {
+    const act = props.actions?.fork
+    if (!act || busy()) return
+    setState("busy", true)
+    void Promise.resolve()
+      .then(() =>
+        act({
+          sessionID: props.message.sessionID,
+          messageID: props.message.id,
+        }),
+      )
+      .finally(() => setState("busy", false))
+  }
+
   return (
     <div data-component="user-message" data-timeline-part-id={textPart()?.id}>
       <Show when={attachments().length > 0}>
@@ -1212,6 +1227,22 @@ export function UserMessageDisplay(props: { message: UserMessage; parts: PartTyp
                   </span>
                 </Show>
               </span>
+            </Show>
+            <Show when={props.actions?.fork}>
+              <Tooltip value={i18n.t("ui.message.forkMessage")} placement="top" gutter={4}>
+                <IconButton
+                  icon="branch"
+                  size="normal"
+                  variant="ghost"
+                  disabled={!!busy()}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    fork()
+                  }}
+                  aria-label={i18n.t("ui.message.forkMessage")}
+                />
+              </Tooltip>
             </Show>
             <Show when={props.actions?.revert}>
               <Tooltip value={i18n.t("ui.message.revertMessage")} placement="top" gutter={4}>
@@ -2418,7 +2449,7 @@ ToolRegistry.register({
     const subtitle = createMemo(() => {
       const list = todos()
       if (list.length === 0) return ""
-      return `${list.filter((t: Todo) => t.status === "completed").length}/${list.length}`
+      return `${list.filter((t: SessionTodoInfo) => t.status === "completed").length}/${list.length}`
     })
 
     return (
@@ -2434,7 +2465,7 @@ ToolRegistry.register({
         <Show when={todos().length}>
           <div data-component="todos">
             <For each={todos()}>
-              {(todo: Todo) => (
+              {(todo: SessionTodoInfo) => (
                 <Checkbox readOnly checked={todo.status === "completed"}>
                   <span
                     data-slot="message-part-todo-content"

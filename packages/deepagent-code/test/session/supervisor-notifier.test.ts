@@ -1,6 +1,7 @@
 import { describe, expect } from "bun:test"
 import { Effect, Layer, Stream } from "effect"
 import { SupervisorNotifier } from "../../src/session/supervisor-notifier"
+import { ConsumerReceipts } from "@deepagent-code/core/deepagent/consumer-receipts"
 import { AgentPush } from "../../src/session/agent-push"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
@@ -197,8 +198,13 @@ describe("SupervisorNotifier (flag ON)", () => {
       const notifier = yield* SupervisorNotifier.Service
       const repo = yield* IMRepository
       const event = yield* publishNeedsHuman({ idempotencyKey: "idem-1" })
-      yield* notifier.handle(event)
-      yield* notifier.handle(event) // re-drive (idempotent via AgentPush notify:<id>:<group> key)
+      expect(yield* notifier.handle(event)).toBe(1)
+      // C5-10: the push side effect left a durable `done` receipt; the re-drive is a no-op.
+      const { db } = yield* Database.Service
+      const receipt = yield* ConsumerReceipts.receiptFor(db, "push", event.id)
+      expect(receipt?.status).toBe("done")
+      expect(receipt?.receiptRef).toBe(ConsumerReceipts.receiptRefFor("push", event.id))
+      expect(yield* notifier.handle(event)).toBe(0) // re-drive (idempotent via the durable receipt)
       const page = yield* repo.listMessages({ groupID, limit: 10 })
       expect(page.messages.length).toBe(1) // exactly one message despite two handles
     }),

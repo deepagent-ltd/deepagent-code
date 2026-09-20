@@ -411,10 +411,18 @@ interface PendingOAuth {
 
 let oauthServer: ReturnType<typeof createServer> | undefined
 let pendingOAuth: PendingOAuth | undefined
+let oauthStart: Promise<{ port: number; redirectUri: string }> | undefined
 
-async function startOAuthServer(): Promise<{ port: number; redirectUri: string }> {
-  if (oauthServer) return { port: OAUTH_PORT, redirectUri: REDIRECT_URI }
+function startOAuthServer(): Promise<{ port: number; redirectUri: string }> {
+  if (oauthStart) return oauthStart
+  if (oauthServer) return Promise.resolve({ port: OAUTH_PORT, redirectUri: REDIRECT_URI })
+  oauthStart = startOAuthServerOnce().finally(() => {
+    oauthStart = undefined
+  })
+  return oauthStart
+}
 
+async function startOAuthServerOnce(): Promise<{ port: number; redirectUri: string }> {
   const server = createServer((req, res) => {
     const reqUrl = req.url || "/"
     const url = new URL(reqUrl, `http://${OAUTH_HOST}:${OAUTH_PORT}`)
@@ -521,10 +529,11 @@ async function startOAuthServer(): Promise<{ port: number; redirectUri: string }
 }
 
 function stopOAuthServer() {
-  if (oauthServer) {
-    oauthServer.close(() => log.info("xai oauth server stopped"))
-    oauthServer = undefined
-  }
+  pendingOAuth?.reject(new Error("OAuth callback server stopped"))
+  pendingOAuth = undefined
+  const current = oauthServer
+  oauthServer = undefined
+  current?.close(() => log.info("xai oauth server stopped"))
 }
 
 function waitForOAuthCallback(pkce: PkceCodes, state: string): Promise<TokenResponse> {
@@ -537,17 +546,7 @@ function waitForOAuthCallback(pkce: PkceCodes, state: string): Promise<TokenResp
     pendingOAuth = undefined
   }
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(
-      () => {
-        if (pendingOAuth) {
-          pendingOAuth = undefined
-          reject(new Error("OAuth callback timeout - authorization took too long"))
-        }
-      },
-      5 * 60 * 1000,
-    )
-
-    pendingOAuth = {
+    const pending: PendingOAuth = {
       pkce,
       state,
       resolve: (tokens) => {
@@ -559,6 +558,16 @@ function waitForOAuthCallback(pkce: PkceCodes, state: string): Promise<TokenResp
         reject(error)
       },
     }
+    const timeout = setTimeout(
+      () => {
+        if (pendingOAuth !== pending) return
+        pendingOAuth = undefined
+        reject(new Error("OAuth callback timeout - authorization took too long"))
+      },
+      5 * 60 * 1000,
+    )
+
+    pendingOAuth = pending
   })
 }
 
@@ -570,6 +579,9 @@ interface RefreshResult {
 
 export async function XaiAuthPlugin(input: PluginInput, options: XaiAuthPluginOptions = {}): Promise<Hooks> {
   return {
+    async dispose() {
+      stopOAuthServer()
+    },
     auth: {
       provider: "xai",
       async loader(getAuth) {

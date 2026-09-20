@@ -21,11 +21,12 @@ import { SessionSchema } from "../../src/session/schema"
 import { SessionTable } from "../../src/session/sql"
 import { CanonicalJson } from "../../src/util/canonical-json"
 import { Hash } from "../../src/util/hash"
+import { tmpRoot } from "../fixture/tmpdir"
 
 let root: string
 
 beforeEach(() => {
-  root = mkdtempSync(path.join(tmpdir(), "deepagent-learning-lifecycle-"))
+  root = mkdtempSync(tmpRoot())
 })
 
 afterEach(async () => {
@@ -36,6 +37,40 @@ afterEach(async () => {
 })
 
 describe("durable learning lifecycle trigger authority", () => {
+  test("ordinary lifecycle signals never reach a registered learning observer", async () => {
+    const observations: DeepAgentLearningLifecycleTrigger.ObserveInput[] = []
+    const oldObserver: DeepAgentLearningLifecycleTrigger.RuntimeObserver = {
+      observe: async (input) => {
+        observations.push(input)
+        return { state: "skipped", reason: "no_exact_settled_run" }
+      },
+    }
+    const newObserver: DeepAgentLearningLifecycleTrigger.RuntimeObserver = {
+      observe: async (input) => {
+        observations.push(input)
+        return { state: "prepared", receiptId: "receipt-new", runId: "run-new" }
+      },
+    }
+    const notification = DeepAgentLearningLifecycleTrigger.notify({
+      trigger: "idle",
+      boundaryKey: "root-isolation",
+      sessionID: "ses_successor",
+      match: "session",
+    })
+
+    expect(
+      await Effect.runPromise(
+        notification.pipe(Effect.provideService(DeepAgentLearningLifecycleTrigger.CurrentRuntimeObserver, newObserver)),
+      ),
+    ).toEqual({ state: "skipped", reason: "not_learning_boundary" })
+    expect(
+      await Effect.runPromise(
+        notification.pipe(Effect.provideService(DeepAgentLearningLifecycleTrigger.CurrentRuntimeObserver, oldObserver)),
+      ),
+    ).toEqual({ state: "skipped", reason: "not_learning_boundary" })
+    expect(observations).toEqual([])
+  })
+
   test("admits and deduplicates an idle trigger from a real settled AgentGateway run", async () => {
     await run(
       Effect.gen(function* () {

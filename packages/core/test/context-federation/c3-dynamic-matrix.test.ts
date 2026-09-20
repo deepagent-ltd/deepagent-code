@@ -4,7 +4,7 @@ import { Effect, Layer } from "effect"
 import { Database } from "../../src/database/database"
 import { SelectionWriter } from "../../src/context-federation/selection-writer"
 import { budgetSelection } from "../../src/context-federation/selection-budget"
-import { SessionContextResolverV2, type QueryEnvelope, type QueryResultV2 } from "../../src/context-federation/resolver-v2"
+import { SessionContextResolverV2, type QueryEnvelope, type QueryResultV2, type GraphStatusRecord } from "../../src/context-federation/resolver-v2"
 import { type V2Adapter } from "../../src/context-federation/adapters-v2"
 import {
   SessionActivityTable,
@@ -90,7 +90,7 @@ function envelope(overrides?: Partial<QueryEnvelope>): QueryEnvelope {
   }
 }
 
-function status(graph: GraphKind, state: GraphStatus["status"], revision: string, candidateCount: number): GraphStatus {
+function status(graph: GraphKind, state: GraphStatus["status"], revision: string, candidateCount: number): GraphStatusRecord {
   return {
     graph,
     status: state,
@@ -100,6 +100,7 @@ function status(graph: GraphKind, state: GraphStatus["status"], revision: string
     latencyMs: 1,
     candidateCount,
     reasonCode: state === "ready" ? "none" : state === "denied" ? "scope_denied" : state === "timeout" ? "source_timeout" : "none",
+    rejectedCount: 0,
   }
 }
 
@@ -112,7 +113,7 @@ function result(candidates: readonly ContextCandidate[], statuses?: Record<Graph
     status: status(graph, statuses?.[graph] ?? (byGraph.get(graph)?.length ? "ready" : "empty"), `${graph}:1`, byGraph.get(graph)?.length ?? 0),
     candidates: byGraph.get(graph) ?? [],
   }))
-  const graphStatuses = Object.fromEntries(results.map((entry) => [entry.graph, entry.status])) as Record<GraphKind, GraphStatus>
+  const graphStatuses = Object.fromEntries(results.map((entry) => [entry.graph, entry.status])) as Record<GraphKind, GraphStatusRecord>
   return {
     queryFingerprint: "qf-c3-dyn",
     authorizationFingerprint: "af-c3-dyn",
@@ -608,7 +609,7 @@ function seedSession() {
       .values({ security_namespace_id: ns, location_key: loc, project_scope_key: proj, canonical_root: "/tmp/c3-dyn", observed_project_id: projectId, created_at: 1_000 })
       .run()
     yield* db.insert(ProjectTable).values({ id: projectId, worktree: AbsolutePath.make("/tmp/c3-dyn"), sandboxes: [] }).run()
-    yield* db.insert(SessionTable).values({ id: sessionId, project_id: projectId, slug: "c3-dyn", directory: "/tmp/c3-dyn", title: "C3 dyn", version: "test" }).run()
+    yield* db.insert(SessionTable).values({ id: sessionId, project_id: projectId, slug: "c3-dyn", directory: "/tmp/c3-dyn", title: "C3 dyn", version: "test", time_suspended: 103 }).run()
     yield* db
       .insert(SessionInputTable)
       .values({ id: triggerId, session_id: sessionId, prompt: new Prompt({ text: "trigger" }), delivery: "steer", admitted_seq: 0, promoted_seq: 0 })

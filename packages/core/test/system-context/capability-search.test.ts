@@ -140,6 +140,13 @@ describe("capability_search output envelope + tool", () => {
     expect(rendered.includes("body_hash") || rendered.includes("body_ref")).toBe(false)
   })
 
+  test("W4.1 P0-2: renders the catalog snapshot id line when the envelope id is supplied (and only then)", () => {
+    const cards = capabilitySearch(capabilityCatalog, { query: "read source" }, fullAuthorization)
+    const rendered = renderSearchCards(cards, "capability_catalog:test")
+    expect(rendered).toContain("Catalog snapshot: capability_catalog:test")
+    expect(renderSearchCards(cards)).not.toContain("Catalog snapshot:")
+  })
+
   test("builds a valid tool definition with a query input schema", () => {
     const tool = makeCapabilitySearchTool({})
     const definition = Tool.definition("capability_search", tool)

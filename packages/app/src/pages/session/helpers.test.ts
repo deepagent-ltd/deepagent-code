@@ -6,6 +6,7 @@ import {
   createOpenReviewFile,
   createOpenSessionFileTab,
   createSessionTabs,
+  FORK_STATE_LIMIT,
   focusTerminalById,
   forkCutoffMessageID,
   getTabReorderIndex,
@@ -131,6 +132,29 @@ describe("createForkAction", () => {
     expect(second).toBe(first)
     complete!({ id: "ses_fork" })
     await Promise.all([first, second])
+  })
+
+  test("bounds retained retry intents after failures", async () => {
+    const intents = new Map<string, string>()
+    const fork = createForkAction({
+      open: () => {},
+      messages: () => [{ id: "msg_1" }],
+      fork: (input) => {
+        intents.set(input.sessionID, input.intentID)
+        return Promise.reject(new Error("response lost"))
+      },
+      navigate: () => {},
+      onError: () => {},
+    })
+
+    for (let index = 0; index <= FORK_STATE_LIMIT; index++) {
+      await fork({ sessionID: `ses_${index}`, messageID: "msg_1" })
+    }
+    const first = intents.get("ses_0")
+    await fork({ sessionID: "ses_0", messageID: "msg_1" })
+
+    expect(first).toBeTruthy()
+    expect(intents.get("ses_0")).not.toBe(first)
   })
 })
 

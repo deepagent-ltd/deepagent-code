@@ -20,22 +20,10 @@ import { canonicalContextRef } from "./reference"
  * transport / tool seam is not invoked (zero Provider/tool side effects) and the recorded dispatched
  * selection is left untouched. No selection rows are written by a shadow run.
  *
- * Shadow switch: module-local typed flag, OFF by default. It is deliberately NOT registered in the
- * `RuntimeFeatures` manifest registry, because that registry is derived from the frozen capability
- * catalog and is fail-closed on any unknown feature — a non-manifested shadow flag would assert a
- * drift. See the F3 report for this divergence.
+ * Shadow configuration is captured by the service layer and is OFF in the default layer. It is
+ * deliberately NOT registered in the `RuntimeFeatures` manifest registry, because that registry is
+ * derived from the frozen capability catalog and is fail-closed on any unknown feature.
  */
-
-// ---------------------------------------------------------------------------
-// shadow switch (module-local, default OFF)
-// ---------------------------------------------------------------------------
-
-export const shadowMode = { enabled: false }
-
-/** Flip the shadow switch for a test run. */
-export function setShadowModeForTest(enabled: boolean) {
-  shadowMode.enabled = enabled
-}
 
 // ---------------------------------------------------------------------------
 // types
@@ -70,9 +58,7 @@ export type RecordedParity = {
   readonly verdict: "match" | "differs"
 }
 
-export type ShadowOutcome =
-  | { readonly mode: "off" }
-  | { readonly mode: "shadow"; readonly parity: RecordedParity }
+export type ShadowOutcome = { readonly mode: "off" } | { readonly mode: "shadow"; readonly parity: RecordedParity }
 
 export type DispatchSeam = {
   /** Provider transport that a real dispatch would call. Suppressed in shadow. */
@@ -152,15 +138,13 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/ParityShadow") {}
 
-export const layer = Layer.succeed(
-  Service,
-  Service.of({ runShadow: shadowRun }),
-)
+export const layerWith = (enabled: boolean) =>
+  Layer.succeed(Service, Service.of({ runShadow: (input) => shadowRun(input, enabled) }))
 
-function shadowRun(input: RunShadowInput): Effect.Effect<ShadowOutcome> {
-  if (!shadowMode.enabled) {
-    return Effect.succeed({ mode: "off" })
-  }
+export const layer = layerWith(false)
+
+function shadowRun(input: RunShadowInput, enabled: boolean): Effect.Effect<ShadowOutcome> {
+  if (!enabled) return Effect.succeed({ mode: "off" })
   return Effect.gen(function* () {
     const result = yield* input.resolve()
     const v2 = snapshotFrom(result)
@@ -188,7 +172,7 @@ function graphStatusMapping(
   recorded: Readonly<Record<GraphKind, GraphStatus>>,
   v2: Readonly<Record<GraphKind, GraphStatus>>,
 ): Record<GraphKind, GraphStatusPair> {
-  const keys = new Set<GraphKind>([...Object.keys(recorded) as GraphKind[], ...Object.keys(v2) as GraphKind[]])
+  const keys = new Set<GraphKind>([...(Object.keys(recorded) as GraphKind[]), ...(Object.keys(v2) as GraphKind[])])
   return Object.fromEntries(
     [...keys].sort().map((graph) => {
       const recordedStatus = recorded[graph]?.status ?? "degraded_unavailable"

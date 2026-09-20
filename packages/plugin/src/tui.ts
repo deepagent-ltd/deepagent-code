@@ -5,7 +5,7 @@ import type {
   FilePart,
   LspStatus,
   McpStatus,
-  Todo,
+  SessionTodoInfo,
   Message,
   Part,
   Provider,
@@ -446,7 +446,7 @@ export type TuiSidebarMcpItem = {
 
 export type TuiSidebarLspItem = Pick<LspStatus, "id" | "root" | "status">
 
-export type TuiSidebarTodoItem = Pick<Todo, "content" | "status">
+export type TuiSidebarTodoItem = Pick<SessionTodoInfo, "content" | "status">
 
 export type TuiSidebarFileItem = {
   file: string

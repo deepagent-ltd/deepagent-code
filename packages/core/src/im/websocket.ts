@@ -151,7 +151,7 @@ export interface IMBroadcaster {
   // 向特定用户发送消息
   sendToUser: (groupID: string, userID: string, event: ServerEvent) => void
   // 注册连接
-  register: (conn: IMWebSocketConnection) => void
+  register: (conn: IMWebSocketConnection, maxConnectionsPerUser?: number) => boolean
   // 注销连接
   unregister: (conn: IMWebSocketConnection) => void
   // 获取群组的连接数

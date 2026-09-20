@@ -14,8 +14,32 @@
 // catalog (the drift gate). A runtime registry that disagrees (added/missing feature) is a build/
 // start-time failure, never something a feature could silently drift past.
 
+import { Context } from "effect"
 import { DeepAgentCodeToolInventory, capabilityCatalogDigest } from "../system-context/capability-manifest"
 import { capabilityCatalog } from "../system-context/capability-catalog"
+import { flipFlagValueOn } from "../deepagent/flip-flag"
+
+/** The runtime gate behind each canonical feature (W4: `enabled()` returns the FEATURE'S
+ * REAL value, not a constant true). All of them use the single explicit-env flag table
+ * (`flipFlagValueOn` — a defined `""`/`false`/`0` is OFF, any other defined value is ON):
+ *
+ * | feature                    | env key                                      | unsetDefault | rationale                                      |
+ * |----------------------------|----------------------------------------------|--------------|------------------------------------------------|
+ * | event.v2.admission         | DEEPAGENT_CODE_EVENT_V2_ADMISSION            | true         | W0.1 default table (production default ON)     |
+ * | event.v2.im_single_write   | DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE      | true         | W0.1 default table (production default ON)     |
+ * | context_federation_v2      | DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION | true         | W3.8 M1 single-point closure: the W3 assembly gate (`productionAdaptersEnabled`) now DELEGATES here (one reader, one default). The W3.7 production wiring is in, so the W4.6 production-default-ON semantics apply; production entries write "true" anyway, and an explicit `=false` kill-switch still turns the staged fallback on. |
+ * | context_query_tools_v2     | DEEPAGENT_CODE_CONTEXT_QUERY_TOOLS_V2        | true         | Core V2 ships both canonical context-query tools; explicit false remains the kill switch |
+ *
+ * A canonical feature without an env binding is a build defect: it is reported OFF
+ * (fail-closed) rather than silently passing. Unknown features keep throwing the typed
+ * `UnknownRuntimeFeatureError`.
+ */
+const featureEnv = new Map<string, { readonly env: string; readonly unsetDefault: boolean }>([
+  ["event.v2.admission", { env: "DEEPAGENT_CODE_EVENT_V2_ADMISSION", unsetDefault: true }],
+  ["event.v2.im_single_write", { env: "DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE", unsetDefault: true }],
+  ["context_federation_v2", { env: "DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION", unsetDefault: true }],
+  ["context_query_tools_v2", { env: "DEEPAGENT_CODE_CONTEXT_QUERY_TOOLS_V2", unsetDefault: true }],
+])
 
 /** The canonical feature set the runtime ships: inventory features ∪ catalog-required features. */
 const canonicalFeatures = (): ReadonlySet<string> => {
@@ -61,7 +85,12 @@ export interface RuntimeFeatureRegistry {
   /**
    * Is a runtime feature enabled? FAIL-CLOSED on an unknown feature: a feature the frozen catalog
    * / inventory does not declare throws a typed `UnknownRuntimeFeatureError` rather than silently
-   * reporting `false`. A canonical feature is a shipped runtime feature, so it is enabled.
+   * reporting `false`. A canonical feature is gated by its real runtime flag (see `featureEnv`:
+   * W4 — event admission / IM single-write default ON per the W0.1 table; `context_federation_v2`
+   * is ON since W3.8 M1 (the W3 assembly gate delegates here — single reader of the W0.1 key, and
+   * the W3.7 production wiring is in); `context_query_tools_v2` is ON now that the canonical
+   * Core tools and host runtime seam are wired). Explicit false values remain kill switches.
+   * Unset/unknown-state features follow the table's `unsetDefault`.
    */
   readonly enabled: (feature: string) => boolean
   /**
@@ -82,13 +111,23 @@ export interface RuntimeFeatureRegistry {
  */
 export const createRuntimeFeatureRegistry = (
   sourceFeatures?: Iterable<string>,
+  env: Readonly<Record<string, string | undefined>> = process.env,
 ): RuntimeFeatureRegistry => {
   const features = new Set<string>(sourceFeatures ?? canonicalFeatures())
+  const enabledFeatures = new Map(
+    [...features].map((feature) => {
+      const gate = featureEnv.get(feature)
+      return [feature, gate ? flipFlagValueOn(env[gate.env], gate.unsetDefault) : false] as const
+    }),
+  )
   return {
     all: () => [...features].sort(),
     enabled: (feature) => {
       if (!features.has(feature)) throw new UnknownRuntimeFeatureError(feature)
-      return true
+      // Values are an immutable startup snapshot. Tool advertisement, capability load and
+      // provider execution must not observe different authorities when process.env changes
+      // after this runtime root has been constructed.
+      return enabledFeatures.get(feature) ?? false
     },
     assertCanonical: () => {
       const expected = canonicalFeatures()
@@ -100,5 +139,20 @@ export const createRuntimeFeatureRegistry = (
   }
 }
 
-/** The canonical, manifest-derived runtime feature registry (module-level singleton). */
+/** The canonical, manifest-derived process-start snapshot. */
 export const RuntimeFeatures = createRuntimeFeatureRegistry()
+
+/**
+ * Injectable seam for the process-start snapshot. Effect layers capture this reference at
+ * construction (the default is the process global), so a host/test composition runs a whole
+ * stack against an explicit registry without mutating `process.env` mid-process — mid-process
+ * mutation is exactly what the startup snapshot forbids (see `enabled`).
+ *
+ * NOTE: the DIRECT `Context.Reference(key, { defaultValue })` form is load-bearing — the curried
+ * `Context.Reference<T>()(key, options)` form silently drops the default at runtime (Effect v4
+ * beta `Reference = Service`; the curried branch only honors `options.make`).
+ */
+export const CurrentRuntimeFeatures = Context.Reference<RuntimeFeatureRegistry>(
+  "@deepagent-code/RuntimeFeatures",
+  { defaultValue: () => RuntimeFeatures },
+)

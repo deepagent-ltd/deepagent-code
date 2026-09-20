@@ -197,4 +197,42 @@ describe("acp session state", () => {
       expect(missingPart).toBeUndefined()
     }),
   )
+
+  sessionTest.effect("rejects an active session beyond the connection ceiling", () =>
+    Effect.gen(function* () {
+      const session = yield* ACPSession.Service
+      yield* Effect.forEach(yield* session.list(), (item) => session.remove(item.id))
+      yield* Effect.forEach(
+        Array.from({ length: ACPSession.MAX_SESSIONS }, (_, index) => index),
+        (index) => session.create({ id: `ses_bounded_${index}`, cwd: "/workspace" }),
+      )
+
+      const error = yield* session.create({ id: "ses_overflow", cwd: "/workspace" }).pipe(Effect.flip)
+
+      expect(error).toBeInstanceOf(ACPError.ServiceFailureError)
+      expect(error.safeMessage).toContain("active session limit exceeded")
+    }),
+  )
+
+  sessionTest.effect("evicts oldest message-part metadata at the cache ceiling", () =>
+    Effect.gen(function* () {
+      const session = yield* ACPSession.Service
+      yield* Effect.forEach(yield* session.list(), (item) => session.remove(item.id))
+      yield* session.create({ id: "ses_bounded_parts", cwd: "/workspace" })
+      yield* Effect.forEach(
+        Array.from({ length: ACPSession.MAX_KNOWN_PARTS + 1 }, (_, index) => index),
+        (index) =>
+          session.recordPartMetadata({
+            sessionId: "ses_bounded_parts",
+            messageId: `msg_${index}`,
+            partId: `part_${index}`,
+          }),
+      )
+
+      const state = yield* session.get("ses_bounded_parts")
+      expect(state.knownParts.size).toBe(ACPSession.MAX_KNOWN_PARTS)
+      expect(state.knownParts.has("msg_0:part_0")).toBeFalse()
+      expect(state.knownParts.has(`msg_${ACPSession.MAX_KNOWN_PARTS}:part_${ACPSession.MAX_KNOWN_PARTS}`)).toBeTrue()
+    }),
+  )
 })

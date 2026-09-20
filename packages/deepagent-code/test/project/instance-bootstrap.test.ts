@@ -133,11 +133,11 @@ it.live("InstanceStore runs registered recovery lifecycle with the resolved inst
     const store = yield* InstanceStore.Service
     const initialized: string[] = []
     const disposed: string[] = []
-    const unregisterInitializer = registerInitializer((ctx) => {
+    const unregisterInitializer = yield* registerInitializer((ctx) => {
       initialized.push(ctx.directory)
       return Promise.resolve()
     })
-    const unregisterDisposer = registerDisposer((directory) => {
+    const unregisterDisposer = yield* registerDisposer((directory) => {
       disposed.push(directory)
       return Promise.resolve()
     })
@@ -156,7 +156,7 @@ it.live("a failed recovery initializer is observable but does not brick workspac
   Effect.gen(function* () {
     const tmp = yield* bootstrapFixture
     const store = yield* InstanceStore.Service
-    const unregister = registerInitializer(() => Promise.reject(new Error("recovery unavailable")))
+    const unregister = yield* registerInitializer(() => Promise.reject(new Error("recovery unavailable")))
 
     const ctx = yield* store.load({ directory: tmp.directory })
     unregister()

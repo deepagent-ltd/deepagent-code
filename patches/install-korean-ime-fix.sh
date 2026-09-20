@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # deepagent-code Korean IME Fix Installer
-# https://github.com/lessweb/deepagent-code/issues/14371
+# https://github.com/deepagent-ltd/deepagent-code/issues/14371
 #
 # Patches deepagent-code to prevent Korean (and other CJK) IME last character
 # truncation when pressing Enter in Kitty and other terminals.
@@ -114,7 +114,7 @@ echo ""
 ok "Done! Korean IME fix is now active."
 echo ""
 info "To uninstall and revert to the official release:"
-echo "  curl -fsSL https://deepagent-code.ai/install | bash"
+echo "  curl -fsSL https://deepagent.ltd/install | bash"
 echo ""
 info "To update (re-pull and rebuild):"
 echo "  $0"

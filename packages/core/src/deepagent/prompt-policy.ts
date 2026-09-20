@@ -8,6 +8,9 @@ import type { DocumentRef } from "./released-snapshot"
 export type PromptContext = {
   readonly mode: AgentMode
   readonly round: number
+  // Session identity for the process-local per-session dedup state (stage rendering). Optional
+  // for legacy callers; anonymous callers share one slot, which is the pre-G3 behavior.
+  readonly sessionID?: string
   readonly activation: ActivationDecision
   readonly roundState: RoundState
   readonly environment: EnvironmentContext
@@ -19,6 +22,10 @@ export type PromptContext = {
   // §5b: the concrete per-turn fan-out verdict (from decideFanout over this turn's ComplexitySignals).
   // Injected as task-specific numbers by buildOrchestrationSection. Undefined ⇒ generic guidance only.
   readonly fanoutDecision?: FanoutDecision
+  // G3 review fix: the session-FROZEN complexity estimate that the STABLE system prefix derives
+  // from (orchestrator freezes it at first computation). The live fanoutDecision above still
+  // tracks the latest request, but the cached prefix must not — see buildSystemPrompt.
+  readonly stableComplexity?: FanoutDecision["complexity"]
   // V3.8 App-A C3: the cross-session Project Bridge handoff, pre-rendered (bridge.renderHandoff) by the
   // orchestrator when the mode gate (shouldLoadBridge) admits it and the project has a non-empty bridge.
   // Undefined/empty ⇒ nothing to hand off, section is omitted. Purely additive; independent of fanout.
@@ -126,7 +133,7 @@ export type PreviousResults = {
 // history after it on every intra-turn call. All such volatile state lives in
 // `buildVolatileRoundContext` instead, which the caller appends as one ephemeral tagged tail. The
 // stable system prompt assigns that tag runtime-control semantics and requires silent application.
-export const buildSystemPrompt = (ctx: PromptContext): string => {
+export const buildSystemPrompt = (ctx: PromptContext, modelConstraint?: string): string => {
   const sections: string[] = []
 
   sections.push(identitySection(ctx.mode))
@@ -142,7 +149,11 @@ export const buildSystemPrompt = (ctx: PromptContext): string => {
   // Tier-gated by mode; buildOrchestrationSection returns null when there is nothing to add. The
   // per-turn fan-out DECISION (concrete counts) is intentionally NOT passed here — it is volatile and
   // rendered by buildVolatileRoundContext; this block keeps only the stable generic guidance.
-  const orchestration = buildOrchestrationSection(ctx.mode)
+  // G3 review fix: the section derives from ctx.stableComplexity — the session-FROZEN first
+  // estimate, never the live per-turn value (which would drift the cached prefix on steer).
+  const orchestration = ctx.tools.availableTools.some((tool) => tool.name === "task")
+    ? buildOrchestrationSection(ctx.mode, ctx.stableComplexity)
+    : null
   if (orchestration) sections.push(orchestration)
 
   // V3.8 App-A C3: cross-session handoff. The orchestrator has already gated (shouldLoadBridge) and
@@ -161,6 +172,12 @@ export const buildSystemPrompt = (ctx: PromptContext): string => {
 
   sections.push(constraintsSection(ctx.mode))
 
+  // G3 model profile (§3.2 channel 1): the profile's stable short constraint. Provider+model
+  // keyed ⇒ constant for the session ⇒ cache-safe; empty (the default profile) adds nothing.
+  if (modelConstraint && modelConstraint.trim().length > 0) {
+    sections.push(modelConstraint)
+  }
+
   if (ctx.userInstructions) {
     sections.push(userInstructionsSection(ctx.userInstructions))
   }
@@ -171,6 +188,25 @@ export const buildSystemPrompt = (ctx: PromptContext): string => {
 // Volatile per-turn state that must NOT enter the cached base system prompt. Rendered into a single
 // `<deepagent-round-context>` block that the caller appends after durable history. The stable system
 // prompt establishes this tag as trusted runtime control. Only buildSystemPrompt must stay stable.
+// G1: the stage whose full guidance was last rendered into a volatile round context. Process-local,
+// mirrors the per-session runner: the teaching prose is repeated only when the stage actually
+// changes. (Continuation contexts never carry the guidance block, so they do not touch this.)
+// Stage-render dedup, SESSION-scoped (review fix: a process-global single value let concurrent
+// sessions overwrite each other's marker — one session would miss its full stage guidance on a
+// stage entry another session had just "used up"). The per-session record intentionally lives in
+// process memory keyed by the PromptContext's session identity rather than durable state: the
+// marker only needs to survive WITHIN one drain process, and the key is stable across turns.
+const lastRenderedStageBySession = new Map<string, ActivationDecision["stage"]>()
+
+/**
+ * REVIEW FIX (leak): drop a session's stage-dedup slot when its drain settles. Without this
+ * the Map grew once per session for the life of the process. Exported for the runner's
+ * drain-exit path; safe to call for unknown sessions.
+ */
+export const forgetSessionStageMarker = (sessionID?: string): void => {
+  if (sessionID !== undefined) lastRenderedStageBySession.delete(sessionID)
+}
+
 export const buildVolatileRoundContext = (ctx: PromptContext, runtimeControl?: string): string => {
   const sections: string[] = []
 
@@ -187,7 +223,18 @@ export const buildVolatileRoundContext = (ctx: PromptContext, runtimeControl?: s
 
   // Activation guidance: the stage-specific how-to-work prose. Stage advances across rounds, so this
   // is round-derived and must not sit in the cached prefix.
-  if (ctx.activation.guidance.trim()) {
+  // G1: the full stage prose (Architect/Editor/Judge etc.) teaches HOW to work in a stage — teaching
+  // it again on every round of the SAME stage is repetition the model does not need. Render the full
+  // guidance only when the stage CHANGES (or on round 1); later rounds in the same stage get the
+  // one-line stage marker that already sits in the round context above. Codex's update-plan pattern
+  // (drop the teaching when the tool context already carries it) is the precedent.
+  // G3 review fix: the dedup marker is per-session — see lastRenderedStageBySession above.
+  const sessionKey = ctx.sessionID ?? "_anonymous"
+  if (
+    ctx.activation.guidance.trim() &&
+    (ctx.round === 1 || lastRenderedStageBySession.get(sessionKey) !== ctx.activation.stage)
+  ) {
+    lastRenderedStageBySession.set(sessionKey, ctx.activation.stage)
     sections.push(activationSection(ctx.activation))
   }
 
@@ -365,6 +412,16 @@ const toolSection = (tools: ToolContext): string => {
   if (builtins.length > 0) {
     lines.push("")
     lines.push("Core tools: " + builtins.map((t) => t.name).join(", "))
+  }
+  const custom = tools.availableTools.filter((tool) => tool.source === "custom")
+  if (custom.length > 0) {
+    lines.push("")
+    lines.push("Application tools: " + custom.map((tool) => tool.name).join(", "))
+  }
+  const mcp = tools.availableTools.filter((tool) => tool.source === "mcp")
+  if (mcp.length > 0) {
+    lines.push("")
+    lines.push("MCP tools: " + mcp.map((tool) => tool.name).join(", "))
   }
   return lines.join("\n")
 }

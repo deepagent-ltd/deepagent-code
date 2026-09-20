@@ -23,8 +23,13 @@ import * as Observability from "@deepagent-code/core/effect/observability"
 import { Ripgrep } from "@deepagent-code/core/filesystem/ripgrep"
 import { Format } from "@/format"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { RuntimeIntegrityIdentity } from "@/effect/runtime-integrity-identity"
 import { LSP } from "@/lsp/lsp"
 import { MCP } from "@/mcp"
+import { V2McpBridge } from "@/session/v2-mcp-bridge"
+import { V2PluginToolsBridge } from "@/session/v2-plugin-tools-bridge"
+import { ApplicationTools } from "@deepagent-code/core/tool/application-tools"
+import { InstanceRegistry } from "@/effect/instance-registry"
 import { Permission } from "@/permission"
 import { Installation } from "@/installation"
 import { InstanceLayer } from "@/project/instance-layer"
@@ -42,10 +47,12 @@ import { Reference } from "@/reference/reference"
 import { Session } from "@/session/session"
 import { SessionCompaction } from "@/session/compaction"
 import { LLM } from "@/session/llm"
-import { SessionPrompt } from "@/session/prompt"
-import { SessionV2 } from "@deepagent-code/core/session"
+import { SessionPromptV2 } from "@/session/prompt-v2"
+import { SessionCommandV2 } from "@/session/command-v2"
 import { PromptEpoch } from "@/session/prompt-epoch"
-import { devCampaignMint } from "@/effect/dev-campaign-mint"
+import { DurableLearningRuntime } from "@/deepagent/learning-runtime"
+import { LearningReviewerRunner } from "@/deepagent/learning-reviewer-runner"
+import { DevCampaignMint, devCampaignMint } from "@/effect/dev-campaign-mint"
 import { GoalManager } from "@/session/goal-manager"
 import { SessionRevert } from "@/session/revert"
 import { SessionSteer } from "@/session/steer"
@@ -72,9 +79,8 @@ import { PRQueue } from "@/agent/pr-queue"
 import { Workspace } from "@/control-plane/workspace"
 import { IMRepository, IMRepositoryLive } from "@deepagent-code/core/im/repository"
 import { IMBroadcasterLive } from "@deepagent-code/core/im/broadcaster"
-import { AgentContextBuilderLive } from "@deepagent-code/core/im/context-builder"
-import { ServerAgentExecutorLive, ServerAgentListProviderLive } from "@/im/agent-executor-server"
-import { ServerAgentReplySinkLive } from "@/im/agent-reply-sink-server"
+import { ServerAgentListProviderLive } from "@/im/agent-executor-server"
+import { IMReplyOutbox } from "@/im/im-reply-outbox"
 import { CorsConfig, isAllowedCorsOrigin, type CorsOptions } from "@/server/cors"
 import { serveUIEffect } from "@/server/shared/ui"
 import { ServerAuth } from "@/server/auth"
@@ -135,20 +141,41 @@ import { workspaceConfigHandlers } from "./handlers/workspace-config"
 import { instanceContextLayer } from "./middleware/instance-context"
 import { workspaceRoutingLayer } from "./middleware/workspace-routing"
 import { disposeMiddleware } from "./lifecycle"
-import { memoMap } from "@deepagent-code/core/effect/memo-map"
+import { makeMemoMap } from "@deepagent-code/core/effect/memo-map"
 import { compressionLayer } from "./middleware/compression"
 import { corsVaryFix } from "./middleware/cors-vary"
 import { errorLayer } from "./middleware/error"
 import { fenceLayer } from "./middleware/fence"
 import { schemaErrorLayer } from "./middleware/schema-error"
 import { syncReplayBodyLimitLayer } from "./middleware/sync-replay-body-limit"
-import { maintenanceHandlers } from "./handlers/maintenance"
+import { maintenanceHandlers, maintenanceOnlyHandlersFor } from "./handlers/maintenance"
+import { MaintenanceApi } from "./groups/maintenance"
+import type { BootstrapState } from "@deepagent-code/core/database/bootstrap"
 import { layer as maintenanceRegistryLayer } from "./maintenance-registry"
+import { RecoveryExecutor } from "@/server/recovery-executor"
 import { capabilityHandlers } from "./handlers/capability"
 import { systemContextHandlers } from "./handlers/system-context"
 import { contextHandlers } from "./handlers/context"
+import { productionSourcesLayer } from "@/context-federation/production-sources"
+import { V2RunnerFrame } from "@/session/v2-runner-frame"
+import { TaskRunDispatcher } from "@deepagent-code/core/session/task-run-dispatcher"
+import { V2OutboxRuntime } from "@/event/v2-outbox-runtime"
+import { V2OwnerSeed } from "@deepagent-code/core/session/runner/v2-owner-seed"
+import { V2OwnerDevMint } from "@deepagent-code/core/session/runner/v2-owner-dev-mint"
+import { SessionRestart } from "@deepagent-code/core/session/execution/restart"
 
-export const context = Context.makeUnsafe<unknown>(new Map())
+export const context = Context.empty() as Context.Context<unknown>
+
+const v2StartupRecovery = Layer.effectDiscard(
+  Effect.gen(function* () {
+    yield* DevCampaignMint
+    yield* V2OwnerSeed.Service
+    yield* V2OwnerDevMint.Service
+    const outcome = yield* (yield* SessionRestart.Service).redriveStartup
+    if (outcome.blocked.length > 0)
+      yield* Effect.logWarning("V2 startup recovery left fenced Sessions", outcome.blocked)
+  }),
+)
 
 const cors = (corsOptions?: CorsOptions) =>
   HttpRouter.middleware(
@@ -163,6 +190,7 @@ const cors = (corsOptions?: CorsOptions) =>
 // - rootApiRoutes: typed /global/* and control routes; auth is declared by RootHttpApi.
 // - eventApiRoutes: typed SSE route with instance routing context and its existing API contract.
 // - ptyConnectApiRoutes: typed WebSocket upgrade route with ticket-aware auth.
+// - maintenanceApiRoutes: process-admin database/recovery routes; never workspace-routed.
 // - instanceApiRoutes: remaining typed instance routes.
 // - uiRoute: raw catch-all fallback; auth is router middleware so public static assets can bypass it.
 const authOnlyRouterLayer = authorizationRouterMiddleware.layer.pipe(Layer.provide(ServerAuth.Config.defaultLayer))
@@ -183,21 +211,18 @@ const oversightServicesLayer = Layer.mergeAll(
   // shared instance runtime graph below (Session.defaultLayer / SessionRevert.defaultLayer).
   RollbackAudit.layer,
 ).pipe(Layer.provide(Database.defaultLayer))
-// IM agent execution is driven by the deepagent-code session stack (Session +
-// SessionPrompt), NOT core SessionV2 (which binds a no-op execution layer and
-// never runs an agent). ServerAgentExecutorLive / ServerAgentListProviderLive
-// require Session/SessionPrompt/Agent, which are provided by the instance
-// runtime graph at the bottom of createRoutes — so these are declared here
-// WITHOUT their session deps and resolved against that shared graph.
+// V2 IM durable-only: @mentions are admitted by the IM handler directly as durable SessionV2
+// work (src/im/im-agent-execution.ts) on the SHARED V2 runtime graph (V2RunnerFrame.sessionRuntimeLayer —
+// the real SessionExecutionLocal owner, not the noop-execution standalone default). The terminal
+// assistant reply returns through the im_reply_outbox daemon (IMReplyOutbox.layer), which draws
+// Database/SessionV2/EventV2Bridge from the shared graph and IMRepository/broadcaster from here.
+// ServerAgentListProviderLive still requires Agent/InstanceStore from the shared instance graph,
+// so it stays declared here WITHOUT those deps and resolved against that graph.
 const imRuntimeLayer = Layer.mergeAll(
   imRepositoryLayer,
   IMBroadcasterLive,
-  ServerAgentExecutorLive,
   ServerAgentListProviderLive,
-  // Server Edition: reports agent outcomes back to the gateway hub. No-op when
-  // GATEWAY_CALLBACK_URL is unset (standalone/desktop), so behavior is unchanged.
-  ServerAgentReplySinkLive,
-  AgentContextBuilderLive.pipe(Layer.provide(imRepositoryLayer)),
+  IMReplyOutbox.layer.pipe(Layer.provide(imRepositoryLayer), Layer.provide(IMBroadcasterLive)),
 )
 // V4.0 §A4/§C — the PRODUCTION event-runtime daemons (EventDispatcher router + tick + retry pump,
 // MultiAgentRuntime DispatchPort, RetentionSweeper). Without this the V4 daemons never start and
@@ -248,12 +273,17 @@ const imWebSocketApiRoutes = HttpApiBuilder.layer(IMWebSocketApi).pipe(
   Layer.provide([httpApiAuthLayer, workspaceRoutingLive, instanceContextLayer]),
   Layer.provide(imRuntimeLayer),
 )
+const maintenanceApiRoutes = HttpApiBuilder.layer(MaintenanceApi).pipe(
+  Layer.provide(maintenanceHandlers),
+  Layer.provide([httpApiAuthLayer, schemaErrorLayer]),
+  Layer.provide(maintenanceRegistryLayer),
+)
 const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
   Layer.provide([
     configHandlers,
     debugHandlers,
     profileHandlers,
-    deepagentHandlers,
+    deepagentHandlers.pipe(Layer.provide(V2RunnerFrame.gatewayRuntimeLayer)),
     oversightHandlers,
     webhookHandlers,
     experimentalHandlers,
@@ -273,7 +303,6 @@ const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
     tuiHandlers,
     workspaceHandlers,
     workspaceConfigHandlers,
-    maintenanceHandlers,
     capabilityHandlers,
     systemContextHandlers,
     contextHandlers,
@@ -284,9 +313,8 @@ const instanceRoutes = instanceApiRoutes.pipe(
   Layer.provide([httpApiAuthLayer, workspaceRoutingLive, instanceContextLayer, schemaErrorLayer]),
   Layer.provide(imRuntimeLayer),
   Layer.provide(oversightServicesLayer),
-  Layer.provide(maintenanceRegistryLayer),
-  // §B1 — the IM handler double-writes im.message.created onto the bus (flag-gated). Provide the bus
-  // service to the instance route graph.
+  // The DeepAgent Event Bus stays provided to the instance route graph for the remaining bus
+  // consumers (oversight/event surfaces); the V2 IM path no longer publishes im.message.created.
   Layer.provide(DeepAgentEventBus.defaultLayer),
   // §E1 — the workspace trusted-sources config handler reads/writes WorkspaceConfig (GET+PUT
   // /workspace/:workspaceID/config/trusted-sources). Provide the default layer (Database-backed) here so
@@ -328,19 +356,28 @@ type RouteRequirements =
   | HttpRouter.Request<"Requires", unknown>
   | HttpRouter.Request<"GlobalRequires", never>
 
-export function createRoutes(corsOptions?: CorsOptions) {
+export function createRoutes(corsOptions?: CorsOptions, runtimeFlagsLayer = RuntimeFlags.defaultLayer) {
   const baseRoutes = Layer.mergeAll(
     rootApiRoutes,
     eventApiRoutes,
     ptyConnectApiRoutes,
     imWebSocketApiRoutes,
+    maintenanceApiRoutes,
     instanceRoutes,
     serverRoutes,
     docRoute,
     uiRoute,
     // §A4/§C — start the V4 event-runtime daemons with the server (inert unless V4 flags are on). Draws
     // the session stack + RuntimeFlags from the provide stack below.
-    v4EventRuntimeLayer,
+    ...([v4EventRuntimeLayer, v2StartupRecovery, V2OutboxRuntime.layer] as const),
+    // The ONE process-global background task runtime: the auto-started Core V2 run dispatcher
+    // (durable background task runs claimed + drained through the authority executor) plus the
+    // notification outbox delivery loop. Database comes from the provide stack below; SessionV2
+    // from the V2RunnerFrame.sessionRuntimeLayer provided into this graph.
+    TaskRunDispatcher.runtimeLayer(),
+    // RI-24: snapshot the root context for the per-root runtime-integrity identity slot; the
+    // identity derives detached on first drain use (RuntimeIntegrityIdentity.slotResolver).
+    RuntimeIntegrityIdentity.captureRootContextLayer,
   ).pipe(
     Layer.provide([
       errorLayer,
@@ -363,29 +400,45 @@ export function createRoutes(corsOptions?: CorsOptions) {
       LLM.defaultLayer,
       Installation.defaultLayer,
       MCP.defaultLayer,
+      // RI-26 W3: the same MCP→ApplicationTools bridge as the app root, so the embedded server's
+      // Location trees (built through this graph's memoized ApplicationTools) expose MCP tools.
+      V2McpBridge.layer.pipe(
+        Layer.provide(ApplicationTools.layer),
+        Layer.provide(InstanceRegistry.layer),
+        Layer.provideMerge(MCP.defaultLayer),
+      ),
+      V2PluginToolsBridge.layer.pipe(
+        Layer.provide(ApplicationTools.layer),
+        Layer.provide(InstanceRegistry.layer),
+        Layer.provideMerge(ToolRegistry.productionLayer),
+      ),
       ModelsDev.defaultLayer,
       Permission.defaultLayer,
       Plugin.defaultLayer,
       Project.defaultLayer,
       ProjectV2.defaultLayer,
       ProjectCopy.defaultLayer,
-      MoveSession.defaultLayer,
+      // Production control-plane reads the same V2 Session authority as prompt/status; the
+      // standalone default closes over a noop Session execution graph and must not enter this root.
+      MoveSession.layer,
       ProviderAuth.defaultLayer,
       Provider.defaultLayer,
       PtyTicket.defaultLayer,
       Question.defaultLayer,
       Reference.defaultLayer,
       Ripgrep.defaultLayer,
-      RuntimeFlags.defaultLayer,
+      runtimeFlagsLayer,
       Session.defaultLayer,
       SessionCompaction.defaultLayer,
-      SessionPrompt.defaultLayer,
-      // §16.3 order 3 caller wiring: the flag-gated subagent V2 drive (HTTP panel route + the
-      // v4-event-runtime consumers + FacadeActivity drawn from this graph) resolves SessionV2 via
-      // serviceOption from THIS root scope. Same memoized liveLayer the SessionPrompt subtree
-      // already builds — providing it here only exports the shared singleton (no split-brain).
-      SessionV2.liveLayer,
-      GoalManager.defaultLayer,
+      // v2w-l2: the routes graph assembles the LEAN V2 prompt surfaces (admission/loop/cancel +
+      // command/shell receipts) instead of the deleted prompt.ts monolith's productionLayer. The
+      // shared services below (Session/Compaction/RunState/Status/Revert/...) keep feeding the
+      // graph's other members; the monolith-only self-provides (SessionProcessor, SystemPrompt,
+      // Image, LLM, SessionSteer, SessionFederatedContext/SessionProviderOwner/Readiness merge,
+      // ToolRegistry) left the composition with it — each remaining consumer self-provides its own.
+      SessionPromptV2.productionLayer,
+      SessionCommandV2.productionLayer,
+      GoalManager.productionLayer,
       SessionRevert.defaultLayer,
       // V4.1 §N — the durable goal-steer buffer, exposed at the graph root so the v4-event-runtime's
       // GoalTickConsumer cold port can drain goal-directed steers (GoalManager self-provides its own for
@@ -400,10 +453,12 @@ export function createRoutes(corsOptions?: CorsOptions) {
       Snapshot.defaultLayer,
       EventV2Bridge.defaultLayer,
       SessionProjection.defaultLayer,
+      LearningReviewerRunner.defaultLayer,
+      DurableLearningRuntime.layer.pipe(Layer.provide(Database.defaultLayer)),
       EventV2.defaultLayer,
       Skill.defaultLayer,
       Todo.defaultLayer,
-      ToolRegistry.defaultLayer,
+      ToolRegistry.productionLayer,
       Vcs.defaultLayer,
       Workspace.defaultLayer,
       Worktree.appLayer,
@@ -421,24 +476,87 @@ export function createRoutes(corsOptions?: CorsOptions) {
   // row) instead of the ContextEpoch revision; read-only seam, absent keeps pre-seam. The seam
   // consumes the module-level Database.defaultLayer constant — memoized per runtime object
   // identity, so it is the SAME connection the route graph builds (no split-brain).
-  return baseRoutes.pipe(
-    Layer.provide(PromptEpoch.v2RunnerSeamLayer.pipe(Layer.provide(Database.defaultLayer))),
-    Layer.provideMerge(devCampaignMint),
-    // 1.4.8.rN: LAST-WINS — the shared @deepagent-code/server handlers graph binds
-    // SessionV2.defaultLayer (no-op execution) inside its own subtree; re-provide the live layer at
-    // the very end so the route graph as a whole runs V2 sessions on the local execution coordinator.
-    Layer.provide(SessionV2.liveLayer),
-  ).pipe(Layer.orDie)
+  return baseRoutes
+    .pipe(
+      // The public Core handlers, legacy adapters, status surface, and every location drain share one
+      // open V2 runtime. Its augmented map captures the production sources supplied immediately below.
+      Layer.provide(V2RunnerFrame.sessionRuntimeLayer),
+      // W3.7 — the ProductionV2Sources VALUE seam (same context-flow mechanism as the PromptEpoch
+      // seam below): the route graph's location-layer runner subtree forwards it into the four-graph
+      // adapters (real code/documents/knowledge/memory sources), and the C6 context-readiness handler
+      // requires it so readiness probes the SAME adapter set the runner serves (W3.7 L5).
+      Layer.provide(productionSourcesLayer({ workspaceDirectory: process.cwd() })),
+      // F-14: the C6 readiness handler resolves LocationIndexRuntime for the probe-time identity —
+      // the runner subtree builds its own per-location runtime, but the bare HTTP composition never
+      // provided the service, so /context/readiness 500'd with "Service not found" in every embedded
+      // (run/serve) process: implemented but production-unreachable, exactly the I381-1 class. The
+      // default runtime degrades honestly (no attached index -> v2:local identity), which is the
+      // documented probe contract.
+      Layer.provide(LocationIndexRuntime.defaultLayer),
+      Layer.provide(DurableLearningRuntime.reviewerRegistryLayer),
+      Layer.provide(DurableLearningRuntime.lifecycleObserverLayer.pipe(Layer.provide(Database.defaultLayer))),
+      Layer.provide(PromptEpoch.v2RunnerSeamLayer.pipe(Layer.provide(Database.defaultLayer))),
+      // W7 — settle-triggered durable learning (same INTO-the-base seam direction as above).
+      Layer.provide(DurableLearningRuntime.onSessionSettledSeamLayer.pipe(Layer.provide(Database.defaultLayer))),
+      // W2.2 — C1B recovery executor production wiring: the executor layer build runs the
+      // startup drain (process boot = post-crash resume: applies committed pending
+      // recovery commands, never fails the boot). It self-provides the module-level
+      // Database.defaultLayer constant — memoized by object identity under the shared
+      // memoMap, the SAME connection the route graph builds (single-instance local
+      // process, one database; no clustering; no split-brain).
+      Layer.provide(RecoveryExecutor.layer.pipe(Layer.provide(Database.defaultLayer))),
+      Layer.provideMerge(devCampaignMint),
+      // W0.5 (blocker-2): the release pipeline ships owner-authorization.json with the install
+      // product; this layer seeds ONE signed row into the local DB when the routes graph is built —
+      // after the database layer initialized, before the HTTP server accepts requests. File absent
+      // => no-op (local dev / mint --dev covers it); file present but unverifiable => REFUSED
+      // (fail-closed, nothing written) and only logged — a seed failure never blocks startup.
+      Layer.provideMerge(
+        Layer.mergeAll(
+          V2OwnerSeed.layer({ env: process.env, appRoot: V2OwnerSeed.defaultOwnerAuthorizationAppRoot() }),
+          // run 模式适配（2026-09-03）：dev 构建自举 owner 授权 — V2-only profile 拒绝 legacy 后，
+          // dev 构建（无发布授权文件）必须能自举，否则每个 dev run 都 fail-closed 在
+          // v2_owner_campaign_not_verified。生产版本不走此路径（fail-closed 合同不变）。
+          // same memoized Database.defaultLayer constant the other INTO-the-base seams use, so the
+          // mint shares the route graph's connection (no split-brain) and adds no requirements.
+          V2OwnerDevMint.defaultLayer,
+        ),
+      ),
+      // RI-123: request fibers must resolve the SAME owner-qualification references the runner
+      // subtree captures (env override, else the persisted state-dir dev keypair, else the pinned
+      // production key). The layer carries its own mint-first ordering, so a fresh-state first
+      // boot qualifies instead of capturing the production key before the mint writes the keypair.
+      Layer.provideMerge(V2RunnerFrame.ownerQualificationReferencesLayer),
+    )
+    .pipe(Layer.orDie)
+}
+
+/**
+ * Pre-business incident shell. It opens the store physically read-only and serves only the
+ * authenticated maintenance contract; no Session/provider/tool/event runtime is constructed.
+ */
+export function createMaintenanceRoutes(filename: string, state: BootstrapState, corsOptions?: CorsOptions) {
+  return HttpApiBuilder.layer(MaintenanceApi).pipe(
+    Layer.provide(maintenanceOnlyHandlersFor(filename, state)),
+    Layer.provide([httpApiAuthLayer, schemaErrorLayer]),
+    Layer.provide([errorLayer, compressionLayer, corsVaryFix, cors(corsOptions)]),
+    Layer.orDie,
+  )
 }
 
 export const routes = createRoutes()
 
-export const webHandler = lazy(() =>
+// Factory, not a singleton: `Server.Default` guards reuse and may dispose then
+// re-create the handler, so every call must build a fresh handler/scope. The caller
+// passes the memo map of the root the handler belongs to — production passes the
+// AppRuntime root map so instances booted over HTTP share that root's InstanceStore /
+// LocationServiceMap / disposal authority instead of forming a second root.
+// Default is a private per-handler root, which keeps test-built handlers isolated.
+export const webHandler = (memoMap: Layer.MemoMap = makeMemoMap()) =>
   HttpRouter.toWebHandler(routes, {
     disableLogger: true,
     memoMap,
     middleware: disposeMiddleware,
-  }),
-)
+  })
 
 export * as HttpApiApp from "./server"

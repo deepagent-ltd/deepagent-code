@@ -4,8 +4,12 @@ import { SystemContext } from "@deepagent-code/core/system-context"
 import { SystemContextRegistry } from "@deepagent-code/core/system-context/registry"
 import {
   assertCapabilityCatalogWithinBudget,
+  capabilityCatalog,
   capabilityCatalogMetrics,
   capabilityCatalogSnapshot,
+  capabilityL0Line,
+  CurrentAvailableToolNames,
+  CurrentGrantedPermissions,
   registerCapabilityCatalog,
   renderCapabilityCatalog,
 } from "@deepagent-code/core/system-context/capability-catalog"
@@ -38,6 +42,34 @@ describe("C4-02 L0 capability catalog", () => {
       expect(Object.keys(snapshot.snapshot)).toContain("deepagent/capability-catalog")
     }),
   )
+
+  itRegistry.effect("renders only capabilities granted to the current Session", () =>
+    Effect.gen(function* () {
+      const registry = yield* SystemContextRegistry.Service
+      const initialized = yield* SystemContext.initialize(yield* registry.load()).pipe(
+        Effect.provideService(CurrentGrantedPermissions, new Set(["read", "glob", "grep"])),
+      )
+
+      expect(initialized.baseline).toContain("deepagent.code-read")
+      expect(initialized.baseline).not.toContain("deepagent.code-edit")
+      expect(initialized.baseline).not.toContain("deepagent.shell-execute")
+    }),
+  )
+
+  itRegistry.effect("does not advertise a capability whose entry tool is absent from this Location", () =>
+    Effect.gen(function* () {
+      const registry = yield* SystemContextRegistry.Service
+      const initialized = yield* SystemContext.initialize(yield* registry.load()).pipe(
+        Effect.provideService(
+          CurrentAvailableToolNames,
+          new Set(["read", "glob", "grep", "edit", "write", "apply_patch", "bash", "websearch", "webfetch", "skill"]),
+        ),
+      )
+
+      expect(initialized.baseline).toContain("deepagent.code-read")
+      expect(initialized.baseline).not.toContain("deepagent.context-query")
+    }),
+  )
 })
 
 describe("C4-02 budget gate", () => {
@@ -67,5 +99,26 @@ describe("C4-02 budget gate", () => {
     expect(capabilityCatalogSnapshot.digest).toMatch(/^sha256:[0-9a-f]{64}$/)
     expect(capabilityCatalogSnapshot.schemaVersion).toBe("capability-catalog.v1")
     expect(capabilityCatalogSnapshot.capabilities.map((m) => m.id).length).toBeGreaterThan(0)
+  })
+})
+
+describe("Core V2 context-query capability availability", () => {
+  test("the stable capability advertises its canonical Core entry vector", () => {
+    const text = renderCapabilityCatalog()
+    expect(text).toContain("deepagent.context-query")
+    expect(text).toContain("Entry: context_query")
+  })
+
+  test("capabilityL0Line renders context_query as stable", () => {
+    const contextQuery = capabilityCatalog.find((manifest) => manifest.id === "deepagent.context-query")!
+    expect(capabilityL0Line(contextQuery)).not.toContain("[")
+    expect(capabilityL0Line(contextQuery)).toContain("Entry: context_query")
+  })
+
+  test("the annotated catalog still fits the frozen L0 budget", () => {
+    const { tokenCount, byteCount } = capabilityCatalogMetrics(renderCapabilityCatalog())
+    expect(tokenCount).toBeLessThanOrEqual(CapabilityBudget.l0MaxTokens)
+    expect(byteCount).toBeLessThanOrEqual(CapabilityBudget.l0MaxBytes)
+    expect(() => assertCapabilityCatalogWithinBudget(renderCapabilityCatalog())).not.toThrow()
   })
 })

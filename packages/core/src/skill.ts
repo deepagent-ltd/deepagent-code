@@ -74,6 +74,9 @@ export type Editor = {
   list: () => readonly Source[]
 }
 
+export const MAX_SOURCES = 256
+export const URL_CACHE_TTL_MS = 5 * 60_000
+
 export interface Interface {
   readonly transform: State.Interface<Data, Editor>["transform"]
   readonly sources: () => Effect.Effect<Source[]>
@@ -93,6 +96,7 @@ export const layer = Layer.effect(
       editor: (draft) => ({
         source: (source) => {
           if (draft.sources.some((item) => Source.equals(item, source))) return
+          if (draft.sources.length >= MAX_SOURCES) throw new RangeError(`Too many skill sources (limit ${MAX_SOURCES})`)
           draft.sources.push(castDraft(source))
         },
         list: () => draft.sources as Source[],
@@ -135,15 +139,20 @@ export const layer = Layer.effect(
       return skills
     })
 
-    // QUESTION(Dax): Should local skill sources invalidate on filesystem watch
-    // events, following the reload policy chosen for other context sources?
-    const cache = new Map<string, Info[]>()
+    const cache = new Map<string, { readonly loadedAt: number; readonly skills: Info[] }>()
     const list = Effect.fn("SkillV2.list")(function* () {
       const skills = new Map<string, Info>()
-      for (const source of state.get().sources) {
+      const sources = state.get().sources
+      const active = new Set(sources.filter((source) => source.type === "url").map(Source.key))
+      for (const key of cache.keys()) if (!active.has(key)) cache.delete(key)
+      for (const source of sources) {
         const key = Source.key(source)
-        const loaded = cache.get(key) ?? (yield* load(source))
-        cache.set(key, loaded)
+        const cached = cache.get(key)
+        const loaded =
+          source.type === "url" && cached && Date.now() - cached.loadedAt < URL_CACHE_TTL_MS
+            ? cached.skills
+            : yield* load(source)
+        if (source.type === "url") cache.set(key, { loadedAt: Date.now(), skills: loaded })
         for (const skill of loaded) skills.set(skill.name, skill)
       }
       return Array.from(skills.values())

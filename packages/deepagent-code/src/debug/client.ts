@@ -24,6 +24,8 @@ import type { AdapterSpec, DapEvent, DapMessage, DapResponse } from "./types"
 
 const REQUEST_TIMEOUT_MS = 15_000
 const INITIALIZE_TIMEOUT_MS = 30_000
+const MAX_PENDING_REQUESTS = 128
+const MAX_EVENT_HANDLERS = 128
 
 const log = Log.create({ service: "debug.client" })
 
@@ -84,8 +86,37 @@ export async function create(input: {
 
   let seq = 1
   let closed = false
+  let streamsDisposed = false
   const pending = new Map<number, { resolve: (r: DapResponse) => void; reject: (e: Error) => void; command: string }>()
   const eventHandlers = new Set<EventHandler>()
+
+  const disposeStreams = () => {
+    if (streamsDisposed) return
+    streamsDisposed = true
+    try {
+      reader.dispose()
+      writer.dispose()
+    } catch {
+      // The adapter can tear both streams down before its process exit arrives.
+    }
+  }
+
+  const rejectPending = (reason: string) => {
+    for (const entry of pending.values()) {
+      entry.reject(new DapRequestError({ command: entry.command, message: reason }))
+    }
+    pending.clear()
+  }
+
+  const fail = (error: unknown) => {
+    if (closed) return
+    closed = true
+    const reason = error instanceof Error ? error.message : String(error)
+    logger.warn("adapter connection closed", { error: reason })
+    rejectPending(reason)
+    eventHandlers.clear()
+    disposeStreams()
+  }
 
   const dispatch = (message: DapMessage) => {
     if (message.type === "response") {
@@ -114,17 +145,29 @@ export async function create(input: {
   }
 
   reader.listen((data) => dispatch(data as unknown as DapMessage))
+  reader.onError((error) => fail(error))
+  reader.onClose(() => fail(new Error("debug adapter output closed")))
+  void proc.exited.then(
+    (code) => fail(new Error(`debug adapter exited with code ${code}`)),
+    (error) => fail(error),
+  )
 
   // --- DAP request primitive ---
 
   const sendRequest = <T = any>(command: string, args?: unknown, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> => {
     if (closed) return Promise.reject(new DapRequestError({ command, message: "client is closed" }))
+    if (pending.size >= MAX_PENDING_REQUESTS) {
+      return Promise.reject(
+        new DapRequestError({ command, message: `pending request limit exceeded (${MAX_PENDING_REQUESTS})` }),
+      )
+    }
     const requestSeq = seq++
     const promise = new Promise<DapResponse>((resolve, reject) => {
       pending.set(requestSeq, { resolve, reject, command })
       writer.write({ seq: requestSeq, type: "request", command, arguments: args } as any).catch((err) => {
         pending.delete(requestSeq)
         reject(err instanceof Error ? err : new Error(String(err)))
+        fail(err)
       })
     })
     return withTimeout(promise, timeoutMs, `DAP request "${command}" timed out after ${timeoutMs}ms`)
@@ -154,8 +197,10 @@ export async function create(input: {
       INITIALIZE_TIMEOUT_MS,
     ),
     INITIALIZE_TIMEOUT_MS,
-  ).catch((err) => {
+  ).catch(async (err) => {
     logger.error("initialize error", { error: err })
+    fail(err)
+    await Process.stop(proc)
     throw new InitializeError({ adapterID: input.spec.id, cause: err })
   })
 
@@ -177,6 +222,10 @@ export async function create(input: {
     request: sendRequest,
     /** Subscribe to DAP events; returns an unsubscribe fn. */
     onEvent(handler: EventHandler) {
+      if (closed) throw new Error("DAP client is closed")
+      if (!eventHandlers.has(handler) && eventHandlers.size >= MAX_EVENT_HANDLERS) {
+        throw new Error(`DAP event handler limit exceeded (${MAX_EVENT_HANDLERS})`)
+      }
       eventHandlers.add(handler)
       return () => eventHandlers.delete(handler)
     },
@@ -204,17 +253,12 @@ export async function create(input: {
       if (closed) return
       closed = true
       logger.info("shutting down")
+      rejectPending("client shutting down")
       // Best-effort polite disconnect; never let it block teardown.
       await withTimeout(sendRequestSilently("disconnect", { terminateDebuggee: true }), 2_000).catch(() => undefined)
-      for (const [, entry] of pending) entry.reject(new DapRequestError({ command: entry.command, message: "client shutting down" }))
-      pending.clear()
+      rejectPending("client shutting down")
       eventHandlers.clear()
-      try {
-        reader.dispose()
-        writer.dispose()
-      } catch {
-        // streams may already be torn down
-      }
+      disposeStreams()
       await Process.stop(proc)
       logger.info("shutdown")
     },

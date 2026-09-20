@@ -16,7 +16,11 @@ describe("deepagentCode goal (non-interactive subprocess)", () => {
 
         const json = yield* deepagentCode.spawn(["goal", "status", "ses_parity000001", "--format", "json"])
         deepagentCode.expectExit(json, 0, "goal status --format json")
-        const parsed = JSON.parse(json.stdout) as { sessionID: string; goal: unknown }
+        // W3.9 stdout hygiene: whole stdout parses as one JSON payload with no log line pollution.
+        const parsed = deepagentCode.expectJsonStdout(json, "goal status --format json") as {
+          sessionID: string
+          goal: unknown
+        }
         expect(parsed.sessionID).toBe("ses_parity000001")
         expect(parsed.goal).toBeNull()
       }),
@@ -48,7 +52,7 @@ describe("deepagentCode worktree (non-interactive subprocess)", () => {
 
         const json = yield* deepagentCode.spawn(["worktree", "list", "--format", "json"])
         deepagentCode.expectExit(json, 0, "worktree list --format json")
-        expect(JSON.parse(json.stdout)).toEqual([])
+        expect(deepagentCode.expectJsonStdout(json, "worktree list --format json")).toEqual([])
       }),
     60_000,
   )

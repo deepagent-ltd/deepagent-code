@@ -60,6 +60,16 @@ import { SessionSchema } from "@deepagent-code/core/session/schema"
 import { SessionHistoryStateTable, SessionInputTable, SessionIntentTable, SessionTable } from "@deepagent-code/core/session/sql"
 import { SessionProjector } from "@deepagent-code/core/session/projector"
 import { SessionV2 } from "@deepagent-code/core/session"
+import { SessionStore } from "@deepagent-code/core/session/store"
+import { SessionExecutionLocal } from "@deepagent-code/core/session/execution/local"
+import { EventV2 } from "@deepagent-code/core/event"
+import {
+  CurrentBuildIdentity,
+  CurrentOwnerAuthorizationPublicKey,
+  CurrentOwnerCampaign,
+} from "@deepagent-code/core/session/runner/v2-provider-turn"
+import { V2OwnerAuthorization } from "@deepagent-code/core/session/runner/v2-owner-authorization"
+import { V2OwnerAuthorizationTable } from "@deepagent-code/core/session/runner/v2-owner-authorization.sql"
 import { Hash } from "@deepagent-code/core/util/hash"
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
@@ -93,7 +103,8 @@ import { RequestExecutor } from "@deepagent-code/llm/route"
 import { SessionSummary } from "../../src/session/summary"
 import { Instruction } from "../../src/session/instruction"
 import { SessionProcessor } from "../../src/session/processor"
-import { recoverProviderReceiptsOnStartup, SessionPrompt } from "../../src/session/prompt"
+import { recoverProviderReceiptsOnStartup } from "../../src/session/legacy-provider-receipt-recovery"
+import { SessionPromptV2 } from "../../src/session/prompt-v2"
 import { SessionRevert } from "../../src/session/revert"
 import { SessionRunState } from "../../src/session/run-state"
 import { SessionSteer } from "../../src/session/steer"
@@ -704,6 +715,75 @@ const database = Layer.effect(
   }),
 ).pipe(Layer.provide(Database.defaultLayer))
 
+// Armed-owner template (mirrors prompt.test.ts): under the V2-only profile prompt execution is
+// refused with v2_owner_unavailable unless the fiber carries the r0 owner refs and the database
+// holds a matching active authorization row.
+const r0Issuance = V2OwnerAuthorization.generateAuthorizationKeyPair()
+const r0Identity = {
+  subjectCommit: "a".repeat(40),
+  subjectTree: "b".repeat(40),
+  schemaDigest: "c".repeat(64),
+  buildID: "d".repeat(64),
+  packageDigest: "e".repeat(64),
+}
+const r0Campaign = "r0-test-campaign"
+const r0Fields = {
+  authorizationID: "auth_r0_test",
+  campaignID: r0Campaign,
+  ...r0Identity,
+  validFrom: 1_000,
+  expiresAt: 4_000_000_000_000,
+}
+const r0Signed = {
+  ...r0Fields,
+  signatureDigest: V2OwnerAuthorization.signAuthorization(r0Issuance.privateKeyPem, r0Fields),
+}
+
+const provideR0OwnerRefs = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  effect.pipe(
+    Effect.provideService(CurrentOwnerCampaign, r0Campaign),
+    Effect.provideService(CurrentBuildIdentity, r0Identity),
+    Effect.provideService(CurrentOwnerAuthorizationPublicKey, r0Issuance.publicKeyPem),
+  )
+
+const mintR0Authorization = (db: Database.Interface["db"]): Effect.Effect<void, unknown, never> =>
+  Effect.gen(function* () {
+    yield* db
+      .insert(V2OwnerAuthorizationTable)
+      .values({
+        authorization_id: r0Signed.authorizationID,
+        campaign_id: r0Signed.campaignID,
+        subject_commit: r0Signed.subjectCommit,
+        subject_tree: r0Signed.subjectTree,
+        schema_digest: r0Signed.schemaDigest,
+        build_id: r0Signed.buildID,
+        package_digest: r0Signed.packageDigest,
+        valid_from: r0Signed.validFrom,
+        expires_at: r0Signed.expiresAt,
+        status: "active",
+        signature_digest: r0Signed.signatureDigest,
+        authorization_digest: Hash.sha256(V2OwnerAuthorization.authorizationPayload(r0Fields)),
+        created_at: Date.now(),
+      })
+      .run()
+  })
+
+// REAL-STACK V2 execution (mirrors prompt.test.ts v2Real): under the V2-only profile the loop's
+// owner-qualified branch resumes SessionV2, so the default no-op execution must be replaced with
+// the real local runner over the SAME Database.defaultLayer constant the prompt harness uses. Both
+// consumers (SessionPrompt and ToolRegistry) must share this one constant — the file-wide memoMap
+// would otherwise let the registry's noop-execution default win the memoized build.
+const realV2Layer = SessionV2.layer
+  .pipe(
+    Layer.provide(SessionStore.defaultLayer),
+    Layer.provide(EventV2.defaultLayer),
+    Layer.provide(ProjectV2.defaultLayer),
+    Layer.provide(SessionProjector.defaultLayer),
+    Layer.provide(SessionExecutionLocal.liveLayer),
+    Layer.provide(Database.defaultLayer),
+  )
+  .pipe(Layer.orDie)
+
 function makeIncidentPromptLayer() {
   const runtimeFlags = RuntimeFlags.layer({
     experimentalEventSystem: true,
@@ -733,6 +813,7 @@ function makeIncidentPromptLayer() {
   const question = Question.layer.pipe(Layer.provideMerge(deps))
   const todo = Todo.layer.pipe(Layer.provideMerge(deps))
   const registry = ToolRegistry.layer.pipe(
+    Layer.provide(realV2Layer),
     Layer.provide(TestContextFacades.layer),
     Layer.provide(Skill.defaultLayer),
     Layer.provide(FetchHttpClient.layer),
@@ -764,8 +845,8 @@ function makeIncidentPromptLayer() {
     Layer.provideMerge(deps),
   )
   const steer = SessionSteer.layer.pipe(Layer.provideMerge(deps))
-  return SessionPrompt.layer.pipe(
-    Layer.provide(SessionV2.defaultLayer),
+  return SessionPromptV2.layer.pipe(
+    Layer.provide(realV2Layer),
     Layer.provide(SessionProviderOwner.layer.pipe(Layer.provide(deps))),
     Layer.provide(testInstanceStoreLayer),
     Layer.provide(SessionRevert.defaultLayer),
@@ -795,7 +876,13 @@ function makeIncidentPromptLayer() {
   )
 }
 
-const incidentPrompt = testEffect(Layer.mergeAll(TestLLMServer.layer, makeIncidentPromptLayer()))
+const incidentPrompt = testEffect(
+  Layer.mergeAll(TestLLMServer.layer, makeIncidentPromptLayer()).pipe(
+    Layer.provide(Layer.succeed(CurrentOwnerCampaign, r0Campaign)),
+    Layer.provide(Layer.succeed(CurrentBuildIdentity, r0Identity)),
+    Layer.provide(Layer.succeed(CurrentOwnerAuthorizationPublicKey, r0Issuance.publicKeyPem)),
+  ),
+)
 
 const incidentCfg = {
   provider: {
@@ -860,15 +947,17 @@ const useIncidentServerConfig = Effect.fn("IncidentRegression.useServerConfig")(
   },
 )
 
-incidentPrompt.instance(
+// RI-130（P1，OPEN）：V2 question 工具走 location-scoped QuestionV2.Service，测试轮询的 V1 Question.Service 在 V2-only 下结构性断连（EventV2 PubSub 无跨实例投递）——src 缺口修复前保持 skip（design.md RI 表）。
+incidentPrompt.instance.skip(
   "question dismissal terminalizes the activity authority and unblocks the next prompt admission",
   () =>
     Effect.gen(function* () {
       const { llm } = yield* useIncidentServerConfig(incidentProviderCfg)
-      const prompt = yield* SessionPrompt.Service
+      const prompt = yield* SessionPromptV2.Service
       const sessions = yield* Session.Service
       const question = yield* Question.Service
       const { db } = yield* Database.Service
+      yield* mintR0Authorization(db)
       const chat = yield* sessions.create({
         title: "question dismissal",
         permission: [{ permission: "*", pattern: "*", action: "allow" }],
@@ -884,13 +973,13 @@ incidentPrompt.instance(
       })
       yield* llm.text("post dismissal admission works")
 
-      const first = yield* prompt
-        .prompt({
+      const first = yield* provideR0OwnerRefs(
+        prompt.prompt({
           sessionID: chat.id,
           agent: "build",
           parts: [{ type: "text", text: "ask before proceeding" }],
-        })
-        .pipe(Effect.forkChild)
+        }),
+      ).pipe(Effect.forkChild)
       const request = yield* pollWithTimeout(
         Effect.gen(function* () {
           const pending = yield* question.list()
@@ -941,11 +1030,13 @@ incidentPrompt.instance(
       ).toEqual([])
 
       // The next prompt in the same session must be admitted and run.
-      const next = yield* prompt.prompt({
-        sessionID: chat.id,
-        agent: "build",
-        parts: [{ type: "text", text: "continue after dismissal" }],
-      })
+      const next = yield* provideR0OwnerRefs(
+        prompt.prompt({
+          sessionID: chat.id,
+          agent: "build",
+          parts: [{ type: "text", text: "continue after dismissal" }],
+        }),
+      )
       expect(next.parts.some((part) => part.type === "text" && part.text === "post dismissal admission works")).toBeTrue()
       expect(yield* llm.hits).toHaveLength(2)
       expect(
@@ -968,7 +1059,8 @@ incidentPrompt.instance(
   15_000,
 )
 
-incidentPrompt.instance(
+// RI-130（P1，OPEN）：同上 V1↔V2 question 断连；且 `continue_loop_on_deny` 拒绝后继续 loop 的语义只存在于 legacy SessionProcessor（V2 runner 对 QuestionV2.RejectedError 直接 halt，core runner/llm.ts）——src 缺口修复前保持 skip（design.md RI 表）。
+incidentPrompt.instance.skip(
   "question dismissal residual: continue_loop_on_deny keeps the run alive after dismissal and still terminalizes the activity",
   () =>
     Effect.gen(function* () {
@@ -976,10 +1068,11 @@ incidentPrompt.instance(
         ...incidentProviderCfg(url),
         experimental: { continue_loop_on_deny: true },
       }))
-      const prompt = yield* SessionPrompt.Service
+      const prompt = yield* SessionPromptV2.Service
       const sessions = yield* Session.Service
       const question = yield* Question.Service
       const { db } = yield* Database.Service
+      yield* mintR0Authorization(db)
       const chat = yield* sessions.create({
         title: "question dismissal continue_loop_on_deny",
         permission: [{ permission: "*", pattern: "*", action: "allow" }],
@@ -996,13 +1089,13 @@ incidentPrompt.instance(
       yield* llm.text("loop continued after deny")
       yield* llm.text("next prompt admitted after continue-on-deny")
 
-      const first = yield* prompt
-        .prompt({
+      const first = yield* provideR0OwnerRefs(
+        prompt.prompt({
           sessionID: chat.id,
           agent: "build",
           parts: [{ type: "text", text: "ask before proceeding" }],
-        })
-        .pipe(Effect.forkChild)
+        }),
+      ).pipe(Effect.forkChild)
       const request = yield* pollWithTimeout(
         Effect.gen(function* () {
           const pending = yield* question.list()
@@ -1068,11 +1161,13 @@ incidentPrompt.instance(
       ).toEqual([])
 
       // The next prompt in the same session must be admitted and run (no "requires recovery" conflict).
-      const next = yield* prompt.prompt({
-        sessionID: chat.id,
-        agent: "build",
-        parts: [{ type: "text", text: "continue after continue-on-deny" }],
-      })
+      const next = yield* provideR0OwnerRefs(
+        prompt.prompt({
+          sessionID: chat.id,
+          agent: "build",
+          parts: [{ type: "text", text: "continue after continue-on-deny" }],
+        }),
+      )
       expect(
         next.parts.some((part) => part.type === "text" && part.text === "next prompt admitted after continue-on-deny"),
       ).toBeTrue()

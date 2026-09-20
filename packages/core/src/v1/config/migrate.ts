@@ -2,7 +2,6 @@ export * as ConfigMigrateV1 from "./migrate"
 
 import { ConfigV1 } from "./config"
 import { ConfigAgentV1 } from "./agent"
-import { ConfigMCPV1 } from "./mcp"
 import { ConfigPermissionV1 } from "./permission"
 import { ConfigProviderV1 } from "./provider"
 import { ConfigProviderOptionsV1 } from "./provider-options"
@@ -39,19 +38,11 @@ export function migrate(info: typeof ConfigV1.Info.Type) {
     shell: info.shell,
     model: info.model,
     default_agent: info.default_agent,
-    autoupdate: info.autoupdate,
-    share: info.share ?? (info.autoshare ? "auto" : undefined),
-    enterprise: info.enterprise,
-    username: info.username,
     permissions: permissions(info.permission, info.tools),
     agents: agents(info),
-    snapshots: info.snapshot,
     watcher: info.watcher,
-    formatter: info.formatter,
-    lsp: info.lsp,
     attachments: info.attachment,
     tool_output: info.tool_output,
-    mcp: mcp(info),
     compaction: info.compaction && {
       auto: info.compaction.auto,
       prune: info.compaction.prune,
@@ -62,11 +53,7 @@ export function migrate(info: typeof ConfigV1.Info.Type) {
     },
     skills: info.skills && [...(info.skills.paths ?? []), ...(info.skills.urls ?? [])],
     commands: info.command,
-    instructions: info.instructions,
     references: info.reference,
-    plugins: info.plugin?.map((plugin) =>
-      typeof plugin === "string" ? plugin : { package: plugin[0], options: plugin[1] },
-    ),
     experimental: info.experimental?.policies && { policies: info.experimental.policies },
     providers: providers(info.provider),
   }
@@ -122,37 +109,6 @@ export function migrateAgent(info: ConfigAgentV1.Info) {
     steps: info.steps,
     disabled: info.disable,
     permissions: permissions(info.permission),
-  }
-}
-
-function mcp(info: typeof ConfigV1.Info.Type) {
-  const servers = Object.fromEntries(
-    Object.entries(info.mcp ?? {}).flatMap(([name, server]) =>
-      "type" in server ? [[name, migrateMcp(server)] as const] : [],
-    ),
-  )
-  const timeout = info.experimental?.mcp_timeout
-  if (!timeout && !Object.keys(servers).length) return undefined
-  return { timeout, servers }
-}
-
-function migrateMcp(info: ConfigMCPV1.Info) {
-  const disabled = info.enabled === undefined ? undefined : !info.enabled
-  if (info.type === "local")
-    return { type: info.type, command: info.command, environment: info.environment, disabled, timeout: info.timeout }
-  return {
-    type: info.type,
-    url: info.url,
-    headers: info.headers,
-    oauth: info.oauth && {
-      client_id: info.oauth.clientId,
-      client_secret: info.oauth.clientSecret,
-      scope: info.oauth.scope,
-      callback_port: info.oauth.callbackPort,
-      redirect_uri: info.oauth.redirectUri,
-    },
-    disabled,
-    timeout: info.timeout,
   }
 }
 

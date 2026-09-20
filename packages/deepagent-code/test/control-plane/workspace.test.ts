@@ -22,6 +22,8 @@ import { SessionToolRequestReceiptTable } from "@/session/tool-request-receipt.s
 import { SessionProviderOwnerLeaseTable } from "@deepagent-code/core/context-federation/session-sql"
 import { ProjectScopeIdentityTable, SecurityNamespaceTable } from "@deepagent-code/core/context-federation/sql"
 import { ContextFederationRollout } from "@deepagent-code/core/context-federation/rollout"
+import { EventAdmission } from "@deepagent-code/core/deepagent/event-admission"
+import { createRuntimeFeatureRegistry, type RuntimeFeatureRegistry } from "@deepagent-code/core/flag/runtime-features"
 import { ProjectScopeKey, SecurityNamespaceID } from "@deepagent-code/core/context-federation/reference"
 import { ContextActivationReceipt } from "@/context-federation/activation-receipt"
 import { resetDatabase } from "../fixture/db"
@@ -35,7 +37,7 @@ import * as Workspace from "../../src/control-plane/workspace"
 import { InstanceStore } from "@/project/instance-store"
 import { InstanceBootstrap } from "@/project/bootstrap"
 import { Auth } from "@/auth"
-import { SessionPrompt } from "@/session/prompt"
+import { SessionCommandV2 } from "@/session/command-v2"
 import { Project } from "@/project/project"
 import { Vcs } from "@/project/vcs"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -56,15 +58,24 @@ const originalEnv = {
   OTEL_RESOURCE_ATTRIBUTES: process.env.OTEL_RESOURCE_ATTRIBUTES,
 }
 
-const workspaceLayer = (experimentalWorkspaces: boolean) =>
+// C5-12 — the legacy GlobalBus mirror is skipped while `event.v2.admission` is ON (the production
+// default), so the history-replay test asserting the mirrored session event pins an admission-off
+// registry (same pattern as test/session/session.test.ts).
+const admissionOff = createRuntimeFeatureRegistry(undefined, {
+  [EventAdmission.EVENT_V2_ADMISSION_ENV]: "false",
+})
+
+const workspaceLayer = (experimentalWorkspaces: boolean, runtimeFeatures?: RuntimeFeatureRegistry) =>
   Workspace.layer.pipe(
     Layer.provide(Auth.defaultLayer),
     Layer.provide(SessionNs.defaultLayer),
-    Layer.provide(SessionPrompt.defaultLayer),
+    Layer.provide(SessionCommandV2.defaultLayer),
     Layer.provide(Project.defaultLayer),
     Layer.provide(Vcs.defaultLayer),
     Layer.provide(Database.defaultLayer),
-    Layer.provide(EventV2Bridge.defaultLayer),
+    Layer.provide(
+      runtimeFeatures ? EventV2Bridge.defaultLayerWithRuntimeFeatures(runtimeFeatures) : EventV2Bridge.defaultLayer,
+    ),
     Layer.provide(FetchHttpClient.layer),
     Layer.provide(FSUtil.defaultLayer),
     Layer.provide(RuntimeFlags.layer({ experimentalWorkspaces })),
@@ -78,6 +89,14 @@ const testServerLayer = Layer.mergeAll(
   Database.defaultLayer,
 )
 const it = testEffect(testServerLayer)
+
+const legacyMirrorServerLayer = Layer.mergeAll(
+  NodeHttpServer.layer(Http.createServer, { host: "127.0.0.1", port: 0 }),
+  workspaceLayer(true, admissionOff),
+  SessionNs.defaultLayer,
+  Database.defaultLayer,
+)
+const itLegacyMirror = testEffect(legacyMirrorServerLayer)
 
 type RecordedCreate = {
   info: WorkspaceInfo
@@ -399,6 +418,9 @@ describe("workspace CRUD", () => {
         expect(yield* workspace.get(WorkspaceV2.ID.ascending("wrk_missing_get"))).toBeUndefined()
       }),
     { git: true },
+    // Full instance boot + git tmpdir: a loaded host exceeded the default 5s
+    // test timeout (full-suite 5000ms boundary; passes isolated ~<1s).
+    { timeout: 30_000 },
   )
 
   it.instance(
@@ -429,6 +451,9 @@ describe("workspace CRUD", () => {
         expect(yield* workspace.list(instance.project)).toEqual([a, b])
       }),
     { git: true },
+    // Full instance boot + git tmpdir: a loaded host exceeded the default 5s
+    // test timeout (full-suite 5000ms boundary; passes isolated ~<1s).
+    { timeout: 30_000 },
   )
 
   it.instance(
@@ -510,6 +535,9 @@ describe("workspace CRUD", () => {
         expect((yield* workspace.status()).find((item) => item.workspaceID === workspaceID)?.status).toBeUndefined()
       }),
     { git: true },
+    // Full instance boot + git tmpdir: a loaded host exceeded the default 5s
+    // test timeout (full-suite 5000ms boundary; passes isolated ~<1s).
+    { timeout: 30_000 },
   )
 
   it.instance(
@@ -539,6 +567,9 @@ describe("workspace CRUD", () => {
         expect(yield* workspace.list(instance.project)).toEqual([])
       }),
     { git: true },
+    // Full instance boot + git tmpdir: a loaded host exceeded the default 5s
+    // test timeout (full-suite 5000ms boundary; passes isolated ~<1s).
+    { timeout: 30_000 },
   )
 
   it.instance(
@@ -572,6 +603,9 @@ describe("workspace CRUD", () => {
         yield* workspace.remove(rows[0].id)
       }),
     { git: true },
+    // Full instance boot + git tmpdir: a loaded host exceeded the default 5s
+    // test timeout (full-suite 5000ms boundary; passes isolated ~<1s).
+    { timeout: 30_000 },
   )
 
   it.instance(
@@ -592,6 +626,9 @@ describe("workspace CRUD", () => {
         yield* workspace.remove(info.id)
       }),
     { git: true },
+    // Full instance boot + git tmpdir: a loaded host exceeded the default 5s
+    // test timeout (full-suite 5000ms boundary; passes isolated ~<1s).
+    { timeout: 30_000 },
   )
 
   it.instance(
@@ -649,6 +686,9 @@ describe("workspace CRUD", () => {
         expect(recorded.calls.target).toHaveLength(1)
       }),
     { git: true },
+    // Full instance boot + git tmpdir: a loaded host exceeded the default 5s
+    // test timeout (full-suite 5000ms boundary; passes isolated ~<1s).
+    { timeout: 30_000 },
   )
 
   it.instance(
@@ -716,6 +756,9 @@ describe("workspace CRUD", () => {
         expect(noList.calls.list).toBe(0)
       }),
     { git: true },
+    // Full instance boot + git tmpdir: a loaded host exceeded the default 5s
+    // test timeout (full-suite 5000ms boundary; passes isolated ~<1s).
+    { timeout: 30_000 },
   )
 
   it.live("remote create connects to routed event and history endpoints", () => {
@@ -766,6 +809,10 @@ describe("workspace CRUD", () => {
         { git: true },
       )
     })
+  }, {
+    // Full instance boot + git tmpdir: a loaded host exceeded the default 5s
+    // test timeout (full-suite 5000ms boundary; passes isolated ~<1s).
+    timeout: 30_000,
   })
 
   it.instance(
@@ -776,6 +823,9 @@ describe("workspace CRUD", () => {
         expect(yield* workspace.remove(WorkspaceV2.ID.ascending("wrk_missing_remove"))).toBeUndefined()
       }),
     { git: true },
+    // Full instance boot + git tmpdir: a loaded host exceeded the default 5s
+    // test timeout (full-suite 5000ms boundary; passes isolated ~<1s).
+    { timeout: 30_000 },
   )
 
   it.instance(
@@ -813,6 +863,9 @@ describe("workspace CRUD", () => {
       })
     },
     { git: true },
+    // Full instance boot + git tmpdir: a loaded host exceeded the default 5s
+    // test timeout (full-suite 5000ms boundary; passes isolated ~<1s).
+    { timeout: 30_000 },
   )
 
   it.instance(
@@ -841,6 +894,9 @@ describe("workspace CRUD", () => {
         expect(yield* workspace.get(info.id)).toBeUndefined()
       }),
     { git: true },
+    // Full instance boot + git tmpdir: a loaded host exceeded the default 5s
+    // test timeout (full-suite 5000ms boundary; passes isolated ~<1s).
+    { timeout: 30_000 },
   )
 
   it.instance(
@@ -873,6 +929,9 @@ describe("workspace CRUD", () => {
       })
     },
     { git: true },
+    // Full instance boot + git tmpdir: a loaded host exceeded the default 5s
+    // test timeout (full-suite 5000ms boundary; passes isolated ~<1s).
+    { timeout: 30_000 },
   )
 
   it.instance(
@@ -929,6 +988,9 @@ describe("workspace CRUD", () => {
         ).toEqual(beforeEvents)
       }),
     { git: true },
+    // Full instance boot + git tmpdir: a loaded host exceeded the default 5s
+    // test timeout (full-suite 5000ms boundary; passes isolated ~<1s).
+    { timeout: 30_000 },
   )
 
   it.instance(
@@ -1207,6 +1269,9 @@ describe("workspace CRUD", () => {
       })
     },
     { git: true },
+    // Full instance boot + git tmpdir: a loaded host exceeded the default 5s
+    // test timeout (full-suite 5000ms boundary; passes isolated ~<1s).
+    { timeout: 30_000 },
   )
 
   const itCrossInstance = process.platform === "win32" ? it.instance.skip : it.instance
@@ -1243,6 +1308,9 @@ describe("workspace CRUD", () => {
         expect(yield* sessionSequenceOwner(session.id)).toBe(owner)
       }),
     { git: true },
+    // Full instance boot + git tmpdir: a loaded host exceeded the default 5s
+    // test timeout (full-suite 5000ms boundary; passes isolated ~<1s).
+    { timeout: 30_000 },
   )
 
   it.live("sessionWarp rejects a remote source before patch, sync, replay, steal, or ownership side effects", () => {
@@ -1322,6 +1390,10 @@ describe("workspace CRUD", () => {
         { git: true },
       )
     })
+  }, {
+    // Full instance boot + git tmpdir: a loaded host exceeded the default 5s
+    // test timeout (full-suite 5000ms boundary; passes isolated ~<1s).
+    timeout: 30_000,
   })
 
   it.live("sessionWarp rejects a remote target before replay, steal, ownership, or workspace side effects", () => {
@@ -1375,6 +1447,10 @@ describe("workspace CRUD", () => {
         { git: true },
       )
     })
+  }, {
+    // Full instance boot + git tmpdir: a loaded host exceeded the default 5s
+    // test timeout (full-suite 5000ms boundary; passes isolated ~<1s).
+    timeout: 30_000,
   })
 
   it.live(
@@ -1533,6 +1609,10 @@ describe("workspace CRUD", () => {
         { git: true },
       )
     })
+  }, {
+    // Full instance boot + git tmpdir: a loaded host exceeded the default 5s
+    // test timeout (full-suite 5000ms boundary; passes isolated ~<1s).
+    timeout: 30_000,
   })
 })
 
@@ -1812,7 +1892,7 @@ describe("workspace sync state", () => {
     }),
   )
 
-  it.live("sync history advances its durable cursor and replays returned events in workspace context", () => {
+  itLegacyMirror.live("sync history advances its durable cursor and replays returned events in workspace context", () => {
     const historyBodies: unknown[] = []
     let historySessionID: SessionID | undefined
     let historySession: SessionNs.Info | undefined
@@ -1979,7 +2059,12 @@ describe("workspace sync state", () => {
           const req = yield* HttpServerRequest.HttpServerRequest
           const url = new URL(req.url, "http://localhost")
           if (url.pathname === "/history-artifact-fail/global/event")
-            return HttpServerResponse.fromWeb(eventStreamResponse())
+            // Keep the SSE stream finite. A never-ending stream is abandoned the moment
+            // the history import fails, and the lingering connection then blocks the
+            // server's graceful close at scope teardown, stretching the test into its
+            // timeout/interrupt window on loaded hosts (the sibling history test above
+            // already uses `eventStreamResponse([], false)` for the same reason).
+            return HttpServerResponse.fromWeb(eventStreamResponse([], false))
           if (url.pathname === "/history-artifact-fail/sync/history")
             return (
               historyRequests++,
@@ -2080,10 +2165,12 @@ describe("workspace sync state", () => {
             }
 
             yield* workspace.startWorkspaceSyncing(instance.project.id)
-            // Under load the chunk download retry backoff stretches; give the failed import a wide
-            // window, then let any in-flight retry wave settle before asserting the negative
-            // guarantees (no cursor advance, no event applied).
-            yield* eventuallyEffect(Effect.sync(() => expect(chunkRequests).toBeGreaterThanOrEqual(1)), 15_000)
+            // The corrupt chunk makes every import attempt fail before the cursor is
+            // committed, so the negatives below hold at any settling point. Under load
+            // the first attempt can arrive late and the retry backoff (1s → 2s → 4s …)
+            // stretches between waves, so poll with a wide window before asserting the
+            // positive requests and the negative guarantees.
+            yield* eventuallyEffect(Effect.sync(() => expect(chunkRequests).toBeGreaterThanOrEqual(1)), 30_000)
             expect(historyRequests).toBeGreaterThanOrEqual(1)
             expect(metadataRequests).toBeGreaterThanOrEqual(1)
             yield* Effect.sleep("500 millis")
@@ -2096,7 +2183,7 @@ describe("workspace sync state", () => {
         { git: true },
       )
     })
-  }, 30_000)
+  }, 60_000)
 
   it.live("resumes from its durable cursor after reconnecting", () => {
     const historyBodies = new Array<{ version: 1; cursor?: string }>()

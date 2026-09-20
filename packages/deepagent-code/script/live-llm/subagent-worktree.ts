@@ -68,11 +68,11 @@ if (
 }
 
 if (
-  child.model?.providerID !== "live-deepseek" ||
+  child.model?.providerID !== artifact.fingerprint.runtimeProviderID ||
   child.model.id !== artifact.fingerprint.modelID ||
   child.assistants.some(
     (assistant) =>
-      assistant.providerID !== "live-deepseek" || assistant.modelID !== artifact.fingerprint.modelID,
+      assistant.providerID !== artifact.fingerprint.runtimeProviderID || assistant.modelID !== artifact.fingerprint.modelID,
   )
 ) {
   throw new Error("Worktree routing child persisted the wrong provider/model identity")
@@ -80,14 +80,24 @@ if (
 
 const childTools = child.assistants.flatMap((assistant) => assistant.tools)
 const completedChildTools = childTools.filter((tool) => tool.status === "completed").map((tool) => tool.name)
-const expectedChildTools = ["bash", "glob", "grep", "read", "StructuredOutput"]
-if (completedChildTools.join("\0") !== expectedChildTools.join("\0")) {
+// Provider-generic child contract: the child completes its investigation with the allowed
+// tool set (bash + a read-family search + StructuredOutput finalize); the exact order is
+// model behavior. The investigation must end with the structured finalize tool.
+const allowedChildTools = new Set(["bash", "glob", "grep", "read", "StructuredOutput"])
+if (
+  completedChildTools.length === 0 ||
+  completedChildTools.some((name) => !allowedChildTools.has(name)) ||
+  completedChildTools.at(-1) !== "StructuredOutput" ||
+  completedChildTools.filter((name) => name === "bash").length < 1 ||
+  completedChildTools.filter((name) => name === "read" || name === "grep" || name === "glob").length < 1
+) {
   throw new Error(`Child tool sequence was ${completedChildTools.join(" -> ")}`)
 }
 if (childTools.some((tool) => tool.status !== "completed")) {
   throw new Error(`Child has non-terminal or failed tools: ${childTools.map((tool) => `${tool.name}:${tool.status}`).join(", ")}`)
 }
-const bash = record(childTools[0]?.input, "bash input")
+const bashTool = childTools.find((tool) => tool.name === "bash")
+const bash = record(bashTool?.input, "bash input")
 if (bash.command !== bashCommand) throw new Error(`Child bash command was ${JSON.stringify(bash.command)}`)
 
 const task = observation.tools.find((tool) => tool.name === "task" && tool.status === "completed")

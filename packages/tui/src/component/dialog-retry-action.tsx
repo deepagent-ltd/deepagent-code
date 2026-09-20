@@ -2,6 +2,7 @@ import { RGBA, TextAttributes } from "@opentui/core"
 import open from "open"
 import { createSignal } from "solid-js"
 import { selectedForeground, useTheme } from "../context/theme"
+import { useTuiI18n } from "../context/i18n"
 import { useDialog, type DialogContext } from "../ui/dialog"
 import { Link } from "../ui/link"
 import { BgPulse } from "./bg-pulse"
@@ -38,6 +39,7 @@ function panelOverlay(color: RGBA) {
 
 export function DialogRetryAction(props: DialogRetryActionProps) {
   const dialog = useDialog()
+  const i18n = useTuiI18n()
   const { theme } = useTheme()
   const fg = selectedForeground(theme)
   const showGoTreatment = () => props.link === GO_URL
@@ -48,26 +50,26 @@ export function DialogRetryAction(props: DialogRetryActionProps) {
     bindings: [
       {
         key: "left",
-        desc: "Previous retry option",
-        group: "Dialog",
+        desc: i18n.t("tui.retryAction.previousOption"),
+        group: i18n.t("tui.category.dialog"),
         cmd: () => setSelected((value) => (value === "action" ? "dismiss" : "action")),
       },
       {
         key: "right",
-        desc: "Next retry option",
-        group: "Dialog",
+        desc: i18n.t("tui.retryAction.nextOption"),
+        group: i18n.t("tui.category.dialog"),
         cmd: () => setSelected((value) => (value === "action" ? "dismiss" : "action")),
       },
       {
         key: "tab",
-        desc: "Next retry option",
-        group: "Dialog",
+        desc: i18n.t("tui.retryAction.nextOption"),
+        group: i18n.t("tui.category.dialog"),
         cmd: () => setSelected((value) => (value === "action" ? "dismiss" : "action")),
       },
       {
         key: "return",
-        desc: "Confirm retry option",
-        group: "Dialog",
+        desc: i18n.t("tui.retryAction.confirmOption"),
+        group: i18n.t("tui.category.dialog"),
         cmd: () => {
           if (selected() === "action") runAction(props, dialog)
           else dismiss(props, dialog)

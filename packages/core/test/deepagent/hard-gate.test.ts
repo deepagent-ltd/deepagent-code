@@ -138,6 +138,22 @@ describe("completion_report + stop gate (high+)", () => {
     expect(d.decision).toBe("block")
     expect(d.blockReason).toContain("completion report")
   })
+  test("the gate names unverified steps so the model knows what to validate", () => {
+    const d = stop({
+      name: "stop",
+      payload: {
+        requiredValidationsRun: true,
+        planStale: false,
+        hardGate: true,
+        planExists: true,
+        hasCompletionReport: false,
+        unverifiedSteps: ["build"],
+      },
+    })
+    expect(d.decision).toBe("block")
+    expect(d.blockReason).toContain("build")
+    expect(d.blockReason).toContain("validation")
+  })
   test("high+ finalize allowed once a completion report exists", () => {
     const d = stop({
       name: "stop",

@@ -24,13 +24,13 @@ import path from "node:path"
 // crash between write and rename can never expose a torn body, and the containing directory is
 // fsync'd AFTER the rename (best-effort) so the rename itself is durable across a power loss. This
 // makes writeFileAtomic the single crash-safe overwrite primitive the DocumentStore relies on.
-export const writeFileAtomic = (file: string, content: string): void => {
+export const writeFileAtomic = (file: string, content: string, mode?: number): void => {
   const dir = path.dirname(file)
   mkdirSync(dir, { recursive: true })
   const tmp = path.join(dir, `.${path.basename(file)}.tmp-${process.pid}-${randomUUID()}`)
   let fd: number | undefined
   try {
-    fd = openSync(tmp, "w")
+    fd = openSync(tmp, "w", mode)
     writeSync(fd, content, null, "utf-8")
     fsyncSync(fd)
     closeSync(fd)

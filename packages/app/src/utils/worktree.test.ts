@@ -55,4 +55,15 @@ describe("Worktree", () => {
     expect(Worktree.get(scope, key)).toEqual({ status: "ready" })
     expect(Worktree.get(remote, key)).toEqual({ status: "failed", message: "remote failed" })
   })
+
+  test("forget settles and removes a pending waiter", async () => {
+    const key = dir("forget")
+    Worktree.pending(scope, key)
+    const waiting = Worktree.wait(scope, key)
+
+    Worktree.forget(scope, key)
+
+    expect(await waiting).toEqual({ status: "failed", message: "worktree wait cancelled" })
+    expect(Worktree.get(scope, key)).toBeUndefined()
+  })
 })

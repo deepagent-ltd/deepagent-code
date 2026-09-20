@@ -192,6 +192,7 @@ export interface AdmitWiringInput {
   readonly adapter: EventAdmission.SessionWorkAdapter
   readonly now: number
   readonly verifiedFacts?: ReadonlyArray<VerifiedFactRef>
+  readonly runtimeFeatures?: EventAdmission.RuntimeFeatureRegistry
 }
 
 /**
@@ -217,6 +218,7 @@ export function admitWork(
       delivery: resolved.delivery,
       adapter: input.adapter,
       now: input.now,
+      ...(input.runtimeFeatures ? { runtimeFeatures: input.runtimeFeatures } : {}),
     })
   })
 }

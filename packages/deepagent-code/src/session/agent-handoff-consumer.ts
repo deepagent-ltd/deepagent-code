@@ -18,6 +18,15 @@ const log = Log.create({ service: "agent-handoff-consumer" })
 export const HANDOFF_GROUP = "agent-handoff"
 export const DEFAULT_RETRY_PUMP_INTERVAL_MS = 30_000
 
+// C5-10 DISPOSITION (W14): this consumer already has its OWN durable side-effect receipt —
+// `HandoffAdmission.begin` stamps the `handoff_admission_receipt` row `processing` BEFORE any
+// side-effecting decision and `settle` writes the terminal `accepted`/`rejected` state; the receipt is
+// keyed by (handoffID, UNIQUE(event_id)) and token-conditioned (FEAT-008), so a redelivery
+// short-circuits on the terminal receipt and a stale claimant can never settle a receipt its successor
+// owns. Wiring the generic `ConsumerReceipts.runOnce` here would DOUBLE-BOOK the same side effect in a
+// second ledger, so the C5-10 requirement for the handoff consumer is met by the dedicated admission
+// receipt, not by the generic consumer-receipt ledger (see compliance-matrix C5-10).
+
 type Outcome = "accepted" | "rejected" | "ignored" | "retrying"
 type Handoff = Extract<DeepAgentEvent.AgentCoordinationEvent, { readonly type: "agent.handoff.requested" }>
 // FEAT-008: when the retry pump drives a redelivery it carries its claim identity — the claimant id

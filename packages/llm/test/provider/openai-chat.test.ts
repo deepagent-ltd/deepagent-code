@@ -92,6 +92,51 @@ describe("OpenAI Chat route", () => {
     }),
   )
 
+  // MEASURED (DeepSeek, thinking mode): an assistant message carrying `tool_calls` with no
+  // `reasoning_content` key is rejected with HTTP 400 — "The `reasoning_content` in the thinking
+  // mode must be passed back to the API" — and the session dies. The check is on the KEY, not its
+  // content: an empty string is accepted. Two trials in the round-11 sweep died this way, scoring
+  // nothing while looking like model failures.
+  it.effect("sends reasoning_content for a tool-call turn even when the model reasoned nothing", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIChat.OpenAIChatBody>(
+        LLM.request({
+          model,
+          messages: [
+            Message.user("Weather?"),
+            Message.assistant([ToolCallPart.make({ id: "call_1", name: "lookup", input: { query: "sf" } })]),
+          ],
+        }),
+      )
+
+      expect(prepared.body.messages[1]).toEqual({
+        role: "assistant",
+        content: null,
+        reasoning_content: "",
+        tool_calls: [{ id: "call_1", type: "function", function: { name: "lookup", arguments: '{"query":"sf"}' } }],
+      })
+    }),
+  )
+
+  it.effect("still prefers the carried reasoning when a tool-call turn has one", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIChat.OpenAIChatBody>(
+        LLM.request({
+          model,
+          messages: [
+            Message.user("Weather?"),
+            Message.assistant([
+              { type: "reasoning", text: "need the tool" },
+              ToolCallPart.make({ id: "call_1", name: "lookup", input: { query: "sf" } }),
+            ]),
+          ],
+        }),
+      )
+
+      expect(prepared.body.messages[1]).toMatchObject({ reasoning_content: "need the tool" })
+    }),
+  )
+
   it.effect("maps OpenAI provider options to Chat options", () =>
     Effect.gen(function* () {
       const prepared = yield* LLMClient.prepare<OpenAIChat.OpenAIChatBody>(
@@ -210,6 +255,7 @@ describe("OpenAI Chat route", () => {
           {
             role: "assistant",
             content: null,
+            reasoning_content: "",
             tool_calls: [
               {
                 id: "call_1",
@@ -270,6 +316,7 @@ describe("OpenAI Chat route", () => {
         {
           role: "assistant",
           content: null,
+          reasoning_content: "",
           tool_calls: [
             {
               id: "call_image",

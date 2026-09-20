@@ -26,51 +26,78 @@ export const AcpCommand = effectCmd({
     process.env.DEEPAGENT_CODE_CLIENT = "acp"
     const opts = yield* resolveNetworkOptions(args)
     const server = yield* Effect.promise(() => ACPProfile.measure("cli.acp.server.listen", () => Server.listen(opts)))
+    let cleanupInput = () => {}
+    let cleanupAgent = () => {}
 
-    const sdk = createOpencodeClient({
-      baseUrl: `http://${server.hostname}:${server.port}`,
-      headers: ServerAuth.headers(),
-    })
+    return yield* Effect.gen(function* () {
+      const sdk = createOpencodeClient({
+        baseUrl: `http://${server.hostname}:${server.port}`,
+        headers: ServerAuth.headers(),
+      })
 
-    const input = new WritableStream<Uint8Array>({
-      write(chunk) {
-        return new Promise<void>((resolve, reject) => {
-          process.stdout.write(chunk, (err) => {
-            if (err) {
-              reject(err)
-            } else {
+      const input = new WritableStream<Uint8Array>({
+        write(chunk) {
+          return new Promise<void>((resolve, reject) => {
+            process.stdout.write(chunk, (err) => {
+              if (err) {
+                reject(err)
+                return
+              }
               resolve()
-            }
+            })
           })
+        },
+      })
+      const output = new ReadableStream<Uint8Array>({
+        start(controller) {
+          const onData = (chunk: Buffer) => controller.enqueue(new Uint8Array(chunk))
+          const onEnd = () => {
+            cleanupInput()
+            controller.close()
+          }
+          const onError = (error: Error) => {
+            cleanupInput()
+            controller.error(error)
+          }
+          cleanupInput = () => {
+            process.stdin.off("data", onData)
+            process.stdin.off("end", onEnd)
+            process.stdin.off("error", onError)
+          }
+          process.stdin.on("data", onData)
+          process.stdin.on("end", onEnd)
+          process.stdin.on("error", onError)
+        },
+        cancel() {
+          cleanupInput()
+        },
+      })
+
+      const stream = ndJsonStream(input, output)
+      const agent = ACP.init({ sdk })
+      cleanupAgent = agent.dispose
+
+      new AgentSideConnection((conn) => {
+        ACPProfile.mark("cli.acp.connection.create")
+        return agent.create(conn)
+      }, stream)
+
+      log.info("setup connection")
+      process.stdin.resume()
+      yield* Effect.callback<void>((resume) => {
+        const onEnd = () => resume(Effect.void)
+        const onError = (error: Error) => resume(Effect.die(error))
+        process.stdin.once("end", onEnd)
+        process.stdin.once("error", onError)
+        return Effect.sync(() => {
+          process.stdin.off("end", onEnd)
+          process.stdin.off("error", onError)
         })
-      },
-    })
-    const output = new ReadableStream<Uint8Array>({
-      start(controller) {
-        process.stdin.on("data", (chunk: Buffer) => {
-          controller.enqueue(new Uint8Array(chunk))
-        })
-        process.stdin.on("end", () => controller.close())
-        process.stdin.on("error", (err) => controller.error(err))
-      },
-    })
-
-    const stream = ndJsonStream(input, output)
-    const agent = ACP.init({ sdk })
-
-    new AgentSideConnection((conn) => {
-      ACPProfile.mark("cli.acp.connection.create")
-      return agent.create(conn)
-    }, stream)
-
-    log.info("setup connection")
-    process.stdin.resume()
-    yield* Effect.promise(
-      () =>
-        new Promise<void>((resolve, reject) => {
-          process.stdin.on("end", () => resolve())
-          process.stdin.on("error", reject)
-        }),
+      })
+    }).pipe(
+      Effect.ensuring(Effect.sync(() => cleanupInput())),
+      Effect.ensuring(Effect.sync(() => cleanupAgent())),
+      Effect.ensuring(Effect.promise(() => server.stop(true))),
     )
   }),
 })

@@ -28004,9 +28004,9 @@
     "id": "deepagent-code-go",
     "env": ["DEEPAGENT_CODE_API_KEY"],
     "npm": "@ai-sdk/openai-compatible",
-    "api": "https://deepagent-code.ai/zen/go/v1",
+    "api": "https://ai.deepagent.ltd/zen/go/v1",
     "name": "DeepAgent Code Go",
-    "doc": "https://deepagent-code.ai/docs/zen",
+    "doc": "https://ai.deepagent.ltd/docs/zen",
     "models": {
       "minimax-m2.7": {
         "id": "minimax-m2.7",
@@ -57814,9 +57814,9 @@
     "id": "deepagent-code",
     "env": ["DEEPAGENT_CODE_API_KEY"],
     "npm": "@ai-sdk/openai-compatible",
-    "api": "https://deepagent-code.ai/zen/v1",
+    "api": "https://ai.deepagent.ltd/zen/v1",
     "name": "DeepAgent Code Zen",
-    "doc": "https://deepagent-code.ai/docs/zen",
+    "doc": "https://ai.deepagent.ltd/docs/zen",
     "models": {
       "minimax-m2.7": {
         "id": "minimax-m2.7",

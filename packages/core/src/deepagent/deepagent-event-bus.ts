@@ -271,16 +271,16 @@ export const layerWith = (options?: LayerOptions) =>
       const maxAttempts = options?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
       const backoffBaseMs = options?.backoffBaseMs ?? DEFAULT_BACKOFF_BASE_MS
       const now = options?.now ?? Date.now
-      const live = yield* PubSub.unbounded<DeepAgentEvent.Event>()
+      const live = yield* PubSub.sliding<DeepAgentEvent.Event>(1024)
       // K40-3 (v4.0.4): separate high-priority PubSub so critical/high events are available on a
       // dedicated channel that subscribers can drain FIRST — implementing true priority preemption.
       // critical/high events go to BOTH `live` AND `highPriorityLive`; normal/low go to `live` only.
       // `subscribe` for grouped consumers merges both channels (highPriorityLive first), so when
       // multiple events are queued, critical/high are processed before normal/low.
-      const highPriorityLive = yield* PubSub.unbounded<DeepAgentEvent.Event>()
+      const highPriorityLive = yield* PubSub.sliding<DeepAgentEvent.Event>(1024)
 
       yield* Effect.addFinalizer(() =>
-        Effect.all([PubSub.shutdown(live), PubSub.shutdown(highPriorityLive)], { concurrency: "unbounded" }).pipe(
+        Effect.all([PubSub.shutdown(live), PubSub.shutdown(highPriorityLive)], { concurrency: 2 }).pipe(
           Effect.asVoid,
         ),
       )
@@ -291,7 +291,10 @@ export const layerWith = (options?: LayerOptions) =>
       const groups = new Map<string, { types: Map<string | null, number> }>()
       const registerGroup = (group: string, type: string | null) =>
         Effect.sync(() => {
+          if (!groups.has(group) && groups.size >= 1024) throw new Error("Event consumer group limit exceeded (1024)")
           const entry = groups.get(group) ?? { types: new Map<string | null, number>() }
+          if (!entry.types.has(type) && entry.types.size >= 128)
+            throw new Error(`Event consumer type-filter limit exceeded for ${group} (128)`)
           entry.types.set(type, (entry.types.get(type) ?? 0) + 1)
           groups.set(group, entry)
         })
@@ -359,6 +362,10 @@ export const layerWith = (options?: LayerOptions) =>
             Effect.orDie,
             Effect.map((rows) => {
               const dbGroups = rows.map((r) => r.group_id)
+              if (!dbGroupsCache.has(cacheKey) && dbGroupsCache.size >= 1024) {
+                const oldest = dbGroupsCache.keys().next().value
+                if (oldest !== undefined) dbGroupsCache.delete(oldest)
+              }
               dbGroupsCache.set(cacheKey, dbGroups)
               const live = liveGroupsFor(eventType)
               // Union: db-registered + live-only (not yet durable-registered), deduplicated.
@@ -607,10 +614,10 @@ export const layerWith = (options?: LayerOptions) =>
 
         return mergedFiltered.pipe(
           Stream.onStart(
-            Effect.all([registerGroup(group, type), touchLastSeen], { concurrency: "unbounded" }).pipe(Effect.asVoid),
+            Effect.all([registerGroup(group, type), touchLastSeen], { concurrency: 2 }).pipe(Effect.asVoid),
           ),
           Stream.ensuring(
-            Effect.all([unregisterGroup(group, type), touchLastSeen], { concurrency: "unbounded" }).pipe(Effect.asVoid),
+            Effect.all([unregisterGroup(group, type), touchLastSeen], { concurrency: 2 }).pipe(Effect.asVoid),
           ),
         )
       }

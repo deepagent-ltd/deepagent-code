@@ -2,7 +2,7 @@ import path from "node:path"
 import os from "node:os"
 import { mkdir, realpath, stat } from "node:fs/promises"
 
-export type LiveLLMProviderID = "deepseek" | "kimi"
+export type LiveLLMProviderID = "deepseek" | "kimi" | "zai" | "zai-coding-plan"
 
 export type LiveLLMConfig = {
   providerID: LiveLLMProviderID
@@ -17,10 +17,17 @@ export type LiveLLMConfig = {
 
 export type ModelFingerprint = Omit<LiveLLMConfig, "apiKey" | "apiKeyFile" | "timeoutMs" | "artifactDirectory">
 
-const providerProfiles = {
+type LiveLLMProviderProfile = {
+  baseURL: string
+  aliases?: readonly string[]
+  modelID: string
+  label: string
+}
+
+const providerProfiles: Record<LiveLLMProviderID, LiveLLMProviderProfile> = {
   deepseek: {
     baseURL: "https://api.deepseek.com",
-    modelID: "deepseek-v4-flash",
+    modelID: "deepseek-flash",
     label: "DeepSeek",
   },
   kimi: {
@@ -28,20 +35,69 @@ const providerProfiles = {
     modelID: "kimi-k3",
     label: "Kimi",
   },
-} satisfies Record<LiveLLMProviderID, { baseURL: string; modelID: string; label: string }>
+  zai: {
+    baseURL: "https://open.bigmodel.cn/api/paas/v4",
+    aliases: ["https://api.z.ai/api/paas/v4"],
+    modelID: "glm-5.3-flash",
+    label: "GLM",
+  },
+  "zai-coding-plan": {
+    baseURL: "https://open.bigmodel.cn/api/coding/paas/v4",
+    aliases: ["https://api.z.ai/api/coding/paas/v4"],
+    modelID: "glm-5.3-flash",
+    label: "GLM Coding Plan",
+  },
+}
+
+/** Environment names accepted for DEEPAGENT_CODE_LIVE_LLM_PROVIDER; moonshotai is the
+ * models.dev-style registry id (script/live-llm/providers.ts) for the kimi profile. */
+const providerEnvironmentAliases: Record<string, LiveLLMProviderID> = {
+  deepseek: "deepseek",
+  kimi: "kimi",
+  moonshotai: "kimi",
+  zai: "zai",
+  "zai-coding-plan": "zai-coding-plan",
+}
+
+/** Registry provider ids (script/live-llm/providers.ts) the live suites can actually drive. */
+export const runnableLiveLLMRegistryProviderIDs = ["deepseek", "moonshotai", "zai", "zai-coding-plan"] as const
+
+export function liveLLMProviderFromEnvironment(
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+): LiveLLMProviderID {
+  const requested = environment.DEEPAGENT_CODE_LIVE_LLM_PROVIDER?.trim() || "deepseek"
+  const providerID = providerEnvironmentAliases[requested]
+  if (!providerID) {
+    throw new Error("DEEPAGENT_CODE_LIVE_LLM_PROVIDER must be deepseek, kimi, zai, or zai-coding-plan")
+  }
+  return providerID
+}
+
+export function liveLLMFingerprintFromEnvironment(
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+): ModelFingerprint {
+  const providerID = liveLLMProviderFromEnvironment(environment)
+  const profile = providerProfiles[providerID]
+  return {
+    providerID,
+    modelID: environment.DEEPAGENT_CODE_LIVE_LLM_MODEL?.trim() || profile.modelID,
+    modelRevision: environment.DEEPAGENT_CODE_LIVE_LLM_REVISION?.trim() || undefined,
+    baseURL: (environment.DEEPAGENT_CODE_LIVE_LLM_BASE_URL?.trim() || profile.baseURL).replace(/\/$/, ""),
+  }
+}
 
 export async function loadLiveLLMConfig(
   environment: Readonly<Record<string, string | undefined>> = process.env,
 ): Promise<LiveLLMConfig> {
-  return loadLiveLLMProviderConfig("deepseek", environment)
+  return loadLiveLLMProviderConfig(liveLLMProviderFromEnvironment(environment), environment)
 }
 
 export async function loadPlanLiveLLMConfig(
   environment: Readonly<Record<string, string | undefined>> = process.env,
 ): Promise<LiveLLMConfig> {
   const providerID = environment.DEEPAGENT_CODE_PLAN_LIVE_LLM_PROVIDER?.trim() || "deepseek"
-  if (providerID !== "deepseek" && providerID !== "kimi") {
-    throw new Error("DEEPAGENT_CODE_PLAN_LIVE_LLM_PROVIDER must be deepseek or kimi")
+  if (providerID !== "deepseek" && providerID !== "kimi" && providerID !== "zai" && providerID !== "zai-coding-plan") {
+    throw new Error("DEEPAGENT_CODE_PLAN_LIVE_LLM_PROVIDER must be deepseek, kimi, zai, or zai-coding-plan")
   }
   return loadLiveLLMProviderConfig(providerID, environment)
 }
@@ -69,8 +125,11 @@ export async function loadLiveLLMProviderConfig(
 
   const profile = providerProfiles[providerID]
   const baseURL = (environment.DEEPAGENT_CODE_LIVE_LLM_BASE_URL?.trim() || profile.baseURL).replace(/\/$/, "")
-  if (baseURL !== profile.baseURL) {
-    throw new Error(`Official ${profile.label} live tests require ${profile.baseURL}, received ${baseURL}`)
+  const officialEndpoints = [profile.baseURL, ...(profile.aliases ?? [])]
+  if (!officialEndpoints.includes(baseURL)) {
+    throw new Error(
+      `Official ${profile.label} live tests require ${officialEndpoints.join(" or ")}, received ${baseURL}`,
+    )
   }
 
   const timeoutMs = Number(environment.DEEPAGENT_CODE_LIVE_LLM_TIMEOUT_MS || 120_000)

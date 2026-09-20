@@ -11,7 +11,6 @@ import type {
 import { budgetNotice } from "@deepagent-code/core/deepagent/goal-loop"
 import type { PlanDoc } from "@deepagent-code/core/deepagent/plan-controller"
 import type { ValidationResult } from "@deepagent-code/core/deepagent/round-state"
-import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import { Prompt } from "@deepagent-code/core/session/prompt"
@@ -24,8 +23,6 @@ import { buildPanelistRunner, parseReviewResult, REVIEWER_SCHEMA } from "../pane
 import { DEFAULT_QUORUM_POLICY, type PanelLens, type PanelVerdict } from "../agent/schema/panel"
 import { ReviewResult } from "../agent/schema/orchestration"
 import { RuntimeFlags } from "../effect/runtime-flags"
-import { SessionPrompt } from "./prompt"
-import { refuseLegacyExecution } from "./legacy-execution-zero"
 import { collectVolatileFacts, refreshWorldState } from "./context-ledger"
 import { SessionRevert } from "./revert"
 import { recordTurnEvidence } from "./v2-turn-evidence"
@@ -33,10 +30,10 @@ import { Snapshot } from "../snapshot"
 import { Session } from "./session"
 import { Agent } from "../agent/agent"
 import { deriveSubagentSessionPermission } from "../agent/subagent-permissions"
-import { MessageID, PartID, SessionID } from "./schema"
+import { MessageID, SessionID } from "./schema"
 import { runValidationCommands } from "../deepagent/validation-exec"
 import type { GoalSteerRelay, PendingGoalSteer } from "./goal-driver"
-import { runSubagentPrompt, type StructuredOutputReceipt } from "../tool/task"
+import type { StructuredOutputReceipt } from "../tool/task-run"
 import { extractStructuredText, validateStructuredOutput } from "../tool/task-structured-output"
 import { boundDegradedRawResult, makeDegradedStructuredOutput } from "../tool/task-structured-output-evidence"
 
@@ -44,7 +41,7 @@ import { boundDegradedRawResult, makeDegradedStructuredOutput } from "../tool/ta
  * V3.9 §D / §F.3 — Goal Loop production WIRING.
  *
  * `goal-loop.ts` (core) is a PURE controller + deterministic Grader over INJECTED ports (§D.3/§D.6):
- * it CANNOT import LSP / panel / reviewer / SessionPrompt (all deepagent-code). This module is the
+ * it CANNOT import LSP / panel / reviewer / subagent drives (all deepagent-code). This module is the
  * missing half — it assembles a real `GraderPorts` + `RollbackPort` + `StepExecutor` from the live
  * services and hands back a `ControllerDeps` so a caller does `makeGoalLoop(deps)`. Everything here is
  * gated by `flags.experimentalGoalLoop` (§F.3): flag OFF ⇒ `makeGoalLoopWiring` yields `null` and the
@@ -61,12 +58,13 @@ import { boundDegradedRawResult, makeDegradedStructuredOutput } from "../tool/ta
  *   panel_approves → `runPanel(...)` with a real lens-prompted panelist runner (§D.7 关键决策点召集
  *                    panel); `decision = verdict.decision`.
  *   rollback       → `SessionRevert.Service`, best-effort (never fatal).
- *   step executor  → ONE `SessionPrompt` turn against the `goal-worker` agent (§D.6 不越权: the turn
- *                    runs through the NORMAL session/tool permission path — the loop never elevates).
+ *   step executor  → ONE durable V2 subagent turn against the `goal-worker` agent (§D.6 不越权: the
+ *                    turn runs through the NORMAL session/tool permission path — the loop never elevates).
  *
  * The subagent turns (panelist / reviewer / step) all funnel through ONE injected `SubagentTurnRunner`
  * port (`makeTaskSubagentRunner` is the real one — it creates a child session with derived permissions
- * and drives one turn via the SAME `SessionPrompt` ops the `task` tool uses). Keeping it a port means
+ * and drives one turn via durable V2 admission + explicit drain join; the legacy SessionPrompt
+ * orchestration fallback is deleted). Keeping it a port means
  * the integration test can stub the leaf LLM I/O while every aggregator (Grader, arbiter, controller)
  * runs for real.
  */
@@ -353,11 +351,13 @@ export const buildStepExecutor =
     runTurn: SubagentTurnRunner,
     planBridgeFor?: (planDocId: string) => PlanBridge,
     /**
-     * V4.1 §S1.3 — the goal-steer RELAY (shared with the driver). At prompt-build time the executor
-     * `drainForPrompt()`s any staged goal-directed guidance and threads it into the step prompt as a
-     * clearly-marked USER GUIDANCE section. Draining here (not in the driver) is what lets the driver
-     * stamp EXACTLY the steers a real tick threaded — a tick that short-circuits before the executor runs
-     * never drains, so nothing is consumed. Omitted ⇒ no goal-tick steering (base behaviour).
+     * V4.1 §S1.3 + W1.1 — the goal-steer RELAY (shared with the driver). At prompt-build time the
+     * executor `drainForPrompt()`s any staged goal-directed guidance and threads it into the step
+     * prompt (merged with the core channel's `steerGuidance`) as ONE clearly-marked USER GUIDANCE
+     * section. Draining here (not in the driver) is what lets the driver stamp EXACTLY the steers a
+     * real tick threaded — a tick that short-circuits before the executor runs never drains, so nothing
+     * is consumed. Omitted ⇒ the core steerGuidance channel alone still weaves (base behaviour when
+     * neither source has guidance).
      */
     steerRelay?: GoalSteerRelay,
     /**
@@ -377,10 +377,17 @@ export const buildStepExecutor =
   ): StepExecutor =>
   (input) => {
     const planBridge = planBridgeFor?.(input.planDocId)
-    // §S1.3: pull the staged goal-steer into THIS tick's prompt (cache-safe — it becomes the child
-    // turn's user-message tail via renderStepPrompt, never a system prefix). Draining marks it as
-    // threaded-this-tick on the relay so the driver stamps exactly these ids consumed after the tick.
-    const steer = steerRelay ? steerRelay.drainForPrompt() : []
+    // §S1.3 + W1.1: pull the staged goal-steer into THIS tick's prompt and merge it with the CORE
+    // channel's `input.steerGuidance` — the same advisory guidance, enqueued between ticks into the
+    // goal's durable runtime state (enqueueGoalSteer) and threaded here by the loop. Both are
+    // "delivered this tick" semantics and both buffers hold DISJOINT rows (the relay drains the
+    // session_steer buffer; the core channel is fed from the V2 session_input buffer), so the executor
+    // is the SINGLE weave point: one USER GUIDANCE section, every steer once, no steer dropped no
+    // matter which channel carried it — and the relay path is byte-identical whenever the core channel
+    // is empty (existing production behaviour unchanged). drainForPrompt marks the staged steers as
+    // threaded-this-tick so the driver stamps exactly these ids consumed after the tick.
+    const relaySteers = steerRelay ? steerRelay.drainForPrompt() : []
+    const steer: ReadonlyArray<PendingGoalSteer | string> = [...relaySteers, ...(input.steerGuidance ?? [])]
     // P2 §4.4: compute the tiered COST soft-notice for this tick (gated by goalBudgetSoftNotify). It rides
     // the step-prompt TAIL (never the prefix), so prompt-cache stability is preserved.
     const notice = budgetSoftNotify === true ? budgetNotice(input.ledger, input.limits) : null
@@ -558,12 +565,13 @@ export const makePlanBridge = (input: {
 })
 
 /**
- * Build the goal-worker's per-tick step prompt. §S1.3: when the driver staged mid-run user guidance
- * (drained from the goal session's steer buffer BETWEEN ticks), it is rendered as a clearly-marked
- * "USER GUIDANCE (mid-run steering)" section at the TAIL of the prompt. This is cache-safe by
- * construction: the step prompt IS the child turn's user message, so the guidance lands in the model
- * INPUT tail — never in any cached system prefix. Placing it FIRST (before the advance instruction)
- * makes the controller/step-selection weigh it when picking the next step.
+ * Build the goal-worker's per-tick step prompt. §S1.3 + W1.1: when the driver staged mid-run user
+ * guidance (drained from the goal session's steer buffer BETWEEN ticks) and/or the core channel
+ * threaded `steerGuidance` this tick (enqueued via enqueueGoalSteer), they are rendered as ONE
+ * clearly-marked "USER GUIDANCE (mid-run steering)" section at the TAIL (top) of the prompt. This is
+ * cache-safe by construction: the step prompt IS the child turn's user message, so the guidance lands
+ * in the model INPUT — never in any cached system prefix. Placing it FIRST (before the advance
+ * instruction) makes the controller/step-selection weigh it when picking the next step.
  */
 export const renderStepPrompt = (input: {
   readonly goalId: string
@@ -579,8 +587,12 @@ export const renderStepPrompt = (input: {
   } | null
   /** Unmet criteria from the previous tick, supplied by the durable Goal Loop state. */
   readonly graderFeedback?: readonly string[]
-  /** §S1.3 — mid-run steering drained from the goal session's steer buffer, threaded into this turn. */
-  readonly steer?: ReadonlyArray<PendingGoalSteer>
+  /**
+   * §S1.3 + W1.1 — mid-run steering threaded into this turn: relay steers (drained from the goal
+   * session's steer buffer, id+text) and/or core `steerGuidance` strings (enqueued via
+   * enqueueGoalSteer). Rendered as ONE section, one bullet each, in this order.
+   */
+  readonly steer?: ReadonlyArray<PendingGoalSteer | string>
   /**
    * V4.0.1 P2 §4.4 — the tiered COST soft-notice for this tick (or null). Appended to the TAIL of the
    * step prompt (never the prefix), so it lands in the model INPUT tail like the steering block and never
@@ -602,7 +614,7 @@ export const renderStepPrompt = (input: {
       ? [
           `USER GUIDANCE (mid-run steering): the user sent the following while this goal was running.`,
           `Weigh it BEFORE deciding the next step; it may add a requirement, skip work, or re-prioritise.`,
-          ...input.steer.map((s) => `- ${s.text}`),
+          ...input.steer.map((steer) => `- ${typeof steer === "string" ? steer : steer.text}`),
           ``,
         ]
       : []
@@ -641,9 +653,9 @@ export const renderStepPrompt = (input: {
 }
 
 // ---------------------------------------------------------------------------------------------------
-// makeTaskSubagentRunner — the REAL turn runner (item 4 live wiring). One call = one SessionPrompt
-// turn against a freshly-created child session whose permissions are derived exactly as the `task`
-// tool derives them (§D.6 不越权: the child runs the normal session/tool permission path; the loop
+// makeTaskSubagentRunner — the REAL turn runner (item 4 live wiring). One call = one durable V2
+// subagent turn against a freshly-created child session whose permissions are derived exactly as the
+// `task` tool derives them (§D.6 不越权: the child runs the normal session/tool permission path; the loop
 // never elevates). No recursion hazard: the loop drives ONE turn and returns — it does not itself run
 // inside a tool, and it never re-enters the goal loop.
 // ---------------------------------------------------------------------------------------------------
@@ -651,10 +663,9 @@ export const renderStepPrompt = (input: {
 export type TaskSubagentRunnerDeps = {
   readonly sessions: Session.Interface
   readonly agents: Agent.Interface
-  readonly sessionPrompt: SessionPrompt.Interface
   /** The parent session; the child is parented here and inherits its deny rules + directory. */
   readonly parentSessionID: SessionID
-  /** The model the child runs on (providerID/modelID) — mirrors the task tool inheriting the model. */
+  /** The model the child runs on (providerID/modelID) — frozen onto the child session for V2 resolution. */
   readonly model: { readonly providerID: string; readonly modelID: string }
   /**
    * Whether this caller may honor the subagent's PLAN_WRITE_OWN_GOAL capability. Defaults to false so
@@ -665,16 +676,16 @@ export type TaskSubagentRunnerDeps = {
   /** Labels the child session by its actual role rather than always calling it a goal-loop turn. */
   readonly purpose?: "goal-loop" | "panel" | "generic"
   /**
-   * §16.3 order 3 typed adapter seam: when provided, subagent turns are driven by V2 durable
-   * admission + explicit drain join instead of legacy prompt orchestration — plain-text turns as a
-   * single admission, structured-output turns as a research turn + bounded finalizer attempts with
-   * seam-side schema validation (the V2 runner has no provider-side format yet). Unwired callers keep
-   * both legacy paths unchanged.
+   * The durable V2 session authority that drives EVERY subagent turn — V2-only by construction: plain
+   * turns are a single admission + explicit drain join, structured-output turns are a research turn plus
+   * bounded finalizer attempts with seam-side schema validation. Required, never optional: the legacy
+   * SessionPrompt fallback is DELETED, so a composition that lacks the SessionV2 stack fails at build
+   * time (yield the service in the layer — a sibling layer is not an input dependency) rather than
+   * silently selecting a legacy executor at turn time.
    */
-  readonly v2Session?: SessionV2.Interface
-  readonly v2Only?: boolean
+  readonly v2Session: SessionV2.Interface
   /**
-   * §16.3 order 3 revert evidence: when provided alongside `v2Session`, each driven V2 turn captures
+   * §16.3 order 3 revert evidence: when provided, each driven V2 turn captures
    * a workspace baseline before admission and attaches the turn's file-change patch part to the last
    * assistant message after the drain settles — on every outcome, since rollbacks fire exactly when
    * turns fail (the core runner does not persist patch parts). Best-effort: evidence failure never
@@ -687,57 +698,18 @@ export type TaskSubagentRunnerDeps = {
 }
 
 /**
- * Production `SubagentTurnRunner`: create a child session (parent = goal session) with the subagent's
- * derived permissions, then drive ONE `SessionPrompt.prompt` turn. Extracts the structured output (when
- * an output schema was requested) or the final text, plus this turn's token/cost accounting. NEVER
- * throws — any failure (unknown agent, prompt defect) resolves to `ok:false` so the Grader / executor
- * degrade safely rather than crashing the loop.
+ * Production `SubagentTurnRunner` (V2-ONLY): create a child session (parent = goal session) with the
+ * subagent's derived permissions, then drive ONE durable V2 admission + drain join — plain turns as a
+ * single admission, structured-output turns as research + bounded finalizer attempts with seam-side
+ * schema validation. Extracts the structured output (when an output schema was requested) or the final
+ * text, plus this turn's token/cost accounting read from the V2 message projection. NEVER throws — any
+ * failure (unknown agent, prompt defect) resolves to `ok:false` so the Grader / executor degrade safely
+ * rather than crashing the loop.
  */
-/**
- * §16.3 order 3 caller wiring: the spread every `makeTaskSubagentRunner` call site uses to hand the
- * optional V2 drive seam over — kept in one place so the snapshot-only-with-v2Session gating cannot
- * drift across the six call sites.
- */
-export const v2DriveDeps = (
-  v2Session: SessionV2.Interface | undefined,
-  snapshot?: Snapshot.Interface,
-  v2Only = false,
-) =>
-  v2Only || v2Session ? { v2Session, ...(snapshot ? { snapshot } : {}), v2Only } : {}
-
-// LEGACY-EXECUTION-ZERO: the single place every subagent-drive call site resolves the V2 seam. Under
-// the V2-only profile the drive is FORCED on (the experimental flag is irrelevant) and a composition
-// without the V2 session stack refuses at layer build instead of falling back to the legacy path.
-// Outside the profile the experimental flag keeps its existing semantics (flag OFF → legacy, ON but
-// stack absent → legacy).
-export const resolveV2SubagentDrive = Effect.fn("GoalLoopWiring.resolveV2SubagentDrive")(function* () {
-  const flags = yield* RuntimeFlags.Service
-  const v2Only = flags.coreV2Only
-  if (!flags.experimentalV2SubagentDrive && !v2Only)
-    return {
-      v2Only: false,
-      v2Session: undefined as SessionV2.Interface | undefined,
-      snapshot: undefined as Snapshot.Interface | undefined,
-    }
-  const v2Session = Option.getOrUndefined(yield* Effect.serviceOption(SessionV2.Service))
-  const snapshot = v2Session
-    ? Option.getOrUndefined(yield* Effect.serviceOption(Snapshot.Service))
-    : undefined
-  // LEGACY-EXECUTION-ZERO / r0: the refusal moves to TURN time (makeTaskSubagentRunner) — some
-  // layered scopes (e.g. HTTP route groups) assemble before the root stack is provided, so a
-  // build-time orDie here is a composition false positive; the execution-time typed refusal keeps
-  // the fail-closed contract at the point that matters.
-  return { v2Only, v2Session, snapshot }
-})
-
 export const makeTaskSubagentRunner =
   (deps: TaskSubagentRunnerDeps): SubagentTurnRunner =>
   (input) =>
     Effect.gen(function* () {
-      // LEGACY-EXECUTION-ZERO / r0 turn-time gate: the V2-only profile demands the V2 stack at
-      // EXECUTION time (some layered scopes assemble before the root stack is provided).
-      if (deps.v2Only && !deps.v2Session)
-        return failedTurn("V2-only profile requires the SessionV2 stack in the composition root")
       const next = yield* deps.agents.get(input.agentType)
       if (!next) return failedTurn(`unknown agent type: ${input.agentType}`)
       const parent = yield* deps.sessions.get(deps.parentSessionID)
@@ -749,11 +721,8 @@ export const makeTaskSubagentRunner =
         parentID: deps.parentSessionID,
         title: `${input.agentType} (${deps.purpose ?? "generic"})`,
         agent: next.name,
-        // V2 execution resolves the model from the session, so the driver model is frozen at create
-        // time; legacy prompts keep passing the model explicitly, so this is inert for them.
-        ...(deps.v2Session
-          ? { model: { id: ModelV2.ID.make(deps.model.modelID), providerID: ProviderV2.ID.make(deps.model.providerID) } }
-          : {}),
+        // V2 execution resolves the model from the session, so the driver model is frozen at create time.
+        model: { id: ModelV2.ID.make(deps.model.modelID), providerID: ProviderV2.ID.make(deps.model.providerID) },
         // §F2 trace back-half — stamp the correlationID onto the child session's metadata; Observability
         // .trace reads it back (json_extract) and appends this child as a "session" node, so the trace
         // joins the child's activity back to the event. Omitted when the caller supplies none (goal-loop
@@ -786,16 +755,23 @@ export const makeTaskSubagentRunner =
         }
       }
 
-      const model = {
-        providerID: ProviderV2.ID.make(deps.model.providerID),
-        modelID: ModelV2.ID.make(deps.model.modelID),
-      }
-      const structuredOutput = { receipt: undefined as StructuredOutputReceipt | undefined }
-      // The V2 seam drives structured turns too: one research admission plus bounded finalizer
-      // attempts on the same child session; the legacy structured-finalizer stays for unwired callers.
-      const structuredV2 =
-        input.outputSchema && deps.v2Session
-          ? yield* driveStructuredTurnV2({
+      // The subagent prompt contract is plain text: the raw prompt template is admitted as-is (the
+      // legacy resolvePromptParts pass already dropped every non-text part at this boundary).
+      const turn = input.outputSchema
+        ? yield* driveStructuredTurnV2({
+            sessions: deps.sessions,
+            session: deps.v2Session,
+            sessionID: child.id,
+            parentSessionID: deps.parentSessionID,
+            agentName: next.name,
+            agentMode: next.mode,
+            model: deps.model,
+            ...(deps.snapshot ? { snapshot: deps.snapshot } : {}),
+            outputSchema: input.outputSchema,
+            text: input.prompt,
+          })
+        : {
+            text: yield* drivePlainTurnV2({
               sessions: deps.sessions,
               session: deps.v2Session,
               sessionID: child.id,
@@ -804,118 +780,43 @@ export const makeTaskSubagentRunner =
               agentMode: next.mode,
               model: deps.model,
               ...(deps.snapshot ? { snapshot: deps.snapshot } : {}),
-              outputSchema: input.outputSchema,
-              // Template resolution is pure text shaping; non-text parts drop at the V2 boundary.
-              text: (yield* deps.sessionPrompt.resolvePromptParts(input.prompt))
-                .filter((part) => part.type === "text")
-                .map((part) => part.text)
-                .join("\n"),
-            })
-          : undefined
-      if (structuredV2) structuredOutput.receipt = structuredV2.receipt
-      const text = structuredV2
-        ? structuredV2.text
-        : input.outputSchema
-          ? yield* runSubagentPrompt({
-              ops: {
-                cancel: (sessionID) => deps.sessionPrompt.cancel(sessionID),
-                resolvePromptParts: (template) => deps.sessionPrompt.resolvePromptParts(template),
-                prompt: (promptInput) => deps.sessionPrompt.prompt(promptInput),
-              },
-              prompt: input.prompt,
-              sessionID: child.id,
-              model,
-              variant: undefined,
-              agent: next.name,
-              agentModeOverride: undefined,
-              outputSchema: input.outputSchema,
-              allowTextFallback: true,
-              runID: `${deps.purpose ?? "generic"}:${child.id}`,
-              onFinalized: (_messageID, receipt) =>
-                Effect.sync(() => {
-                  structuredOutput.receipt = receipt
-                }),
-              tools: {},
-              worktreeInfo: undefined,
-            })
-          : deps.v2Session
-            ? yield* drivePlainTurnV2({
-                sessions: deps.sessions,
-                session: deps.v2Session,
-                sessionID: child.id,
-                parentSessionID: deps.parentSessionID,
-                agentName: next.name,
-                agentMode: next.mode,
-                model: deps.model,
-                ...(deps.snapshot ? { snapshot: deps.snapshot } : {}),
-                // Template resolution is pure text shaping (not orchestration); non-text attachments are
-                // not part of the plain subagent turn contract and are dropped at the V2 boundary.
-                text: (yield* deps.sessionPrompt.resolvePromptParts(input.prompt))
-                  .filter((part) => part.type === "text")
-                  .map((part) => part.text)
-                  .join("\n"),
-              })
-            : yield* Effect.gen(function* () {
-              const result = yield* deps.sessionPrompt.prompt({
-                messageID: MessageID.ascending(),
-                sessionID: child.id,
-                model,
-                agent: next.name,
-                metadata: deps.purpose === "goal-loop" ? { deepagent: { goal_id: input.goalId } } : undefined,
-                parts: yield* deps.sessionPrompt.resolvePromptParts(input.prompt),
-              })
-              return result.parts.findLast((part) => part.type === "text")?.text ?? ""
-            })
-      const assistants = (yield* deps.sessions.messages({ sessionID: child.id })).filter(
-        (message): message is SessionV1.WithParts & { info: SessionV1.Assistant } => message.info.role === "assistant",
+              text: input.prompt,
+            }),
+            receipt: undefined as StructuredOutputReceipt | undefined,
+          }
+      const assistants = (yield* deps.v2Session.messages({ sessionID: child.id, order: "asc" })).filter(
+        (message): message is SessionMessage.Assistant => message.type === "assistant",
       )
       const decoded = input.outputSchema
-        ? Option.getOrUndefined(Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(text))
+        ? Option.getOrUndefined(Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(turn.text))
         : undefined
-      const structured = structuredOutput.receipt?.transport === "degraded_text" ? undefined : decoded
-      // GROSS throughput (input+output+reasoning) — the pre-V4.0.1 figure, always populated.
-      const tokens = assistants.reduce(
-        (total, message) =>
-          total + Math.max(0, message.info.tokens.input + message.info.tokens.output + message.info.tokens.reasoning),
-        0,
-      )
-      // V4.0.1 P2 §4.4 — the granular breakdown for the goal's NET-token ledger (used only under
-      // budgetTokenScope "net"). `info.tokens.input` is already the cache-ADJUSTED (non-cached) input in
-      // this codebase (session.ts:437 subtracts cache.read/write from the SDK's folded inputTokens), and
-      // `cache.read + cache.write` is the provider-reported CACHED prefix — the best cheaply-available
-      // stable-prefix figure for carriedPrefixTokens. The net ledger then accrues
-      // `output(+reasoning) + max(0, (input+cachedPrefix) − cachedPrefix)`, i.e. it charges only the
-      // non-cached input delta above the repeated stable prefix. `inputTokens` is reported as the FULL
-      // billed input (non-cached input + cached prefix) so the core subtraction is symmetric; on a cache
-      // miss (cache.read=0) carriedPrefixTokens is 0 and the full input counts (correct + monotonic).
-      const inputFull = assistants.reduce(
-        (total, message) =>
-          total +
-          Math.max(0, message.info.tokens.input + message.info.tokens.cache.read + message.info.tokens.cache.write),
-        0,
-      )
-      const outputNet = assistants.reduce(
-        (total, message) => total + Math.max(0, message.info.tokens.output + message.info.tokens.reasoning),
-        0,
-      )
-      const carriedPrefix = assistants.reduce(
-        (total, message) => total + Math.max(0, message.info.tokens.cache.read + message.info.tokens.cache.write),
-        0,
-      )
-      const cost = assistants.reduce(
-        (total, message) => total + (Number.isFinite(message.info.cost) ? message.info.cost : 0),
-        0,
+      const structured = turn.receipt?.transport === "degraded_text" ? undefined : decoded
+      // Per-turn usage totals from the V2 assistant projection. `tokens`/`cost` are optional on a V2
+      // assistant message (unknown usage settles without them) — absent fields contribute 0, mirroring
+      // the legacy V1 read this replaced.
+      const usage = assistants.reduce(
+        (acc, message) => {
+          const t = message.tokens
+          return {
+            tokensUsed: acc.tokensUsed + (t ? Math.max(0, t.input + t.output + t.reasoning) : 0),
+            inputTokens: acc.inputTokens + (t ? Math.max(0, t.input + t.cache.read + t.cache.write) : 0),
+            outputTokens: acc.outputTokens + (t ? Math.max(0, t.output + t.reasoning) : 0),
+            carriedPrefixTokens: acc.carriedPrefixTokens + (t ? Math.max(0, t.cache.read + t.cache.write) : 0),
+            cost: acc.cost + (message.cost != null && Number.isFinite(message.cost) ? message.cost : 0),
+          }
+        },
+        { tokensUsed: 0, inputTokens: 0, outputTokens: 0, carriedPrefixTokens: 0, cost: 0 },
       )
       return {
         ok: true,
         structured,
-        structuredOutput: structuredOutput.receipt,
-        text,
-        tokensUsed: tokens,
-        inputTokens: inputFull,
-        outputTokens: outputNet,
-        carriedPrefixTokens: carriedPrefix,
-        cost,
+        structuredOutput: turn.receipt,
+        text: turn.text,
+        tokensUsed: usage.tokensUsed,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        carriedPrefixTokens: usage.carriedPrefixTokens,
+        cost: usage.cost,
         sessionID: child.id,
       } satisfies SubagentTurnResult
     }).pipe(Effect.catchCause(() => Effect.succeed(failedTurn("subagent turn failed"))))
@@ -924,10 +825,11 @@ export const makeTaskSubagentRunner =
  * §16.3 order 3 typed adapter: one plain-text turn = one durable V2 admission plus one explicit drain
  * join. Every driven turn is a fresh admission (new message ID), matching the legacy ascending-ID
  * behavior — there is no idempotent replay identity at this seam. The final assistant text is read
- * from the V2 message projection (ascending) after the drain settles. Known deltas versus the legacy
- * path while the port completes: non-text template parts (file/agent references) are dropped at this
- * boundary, and the per-prompt `deepagent.goal_id` attribution is not projected (the child session
- * still carries the goalID metadata for traces).
+ * from the V2 message projection (ascending) after the drain settles. Known deltas versus the deleted
+ * legacy path: the raw prompt template is admitted as-is (non-text template parts — file/agent
+ * references — were already dropped at this boundary, and the deleted resolvePromptParts pass that
+ * appended invalid-reference notices is gone with it), and the per-prompt `deepagent.goal_id`
+ * attribution is not projected (the child session still carries the goalID metadata for traces).
  */
 const drivePlainTurnV2 = Effect.fn("drivePlainTurnV2")(function* (input: {
   readonly sessions: Session.Interface

@@ -26,7 +26,10 @@ import { SessionHistoryStateTable, SessionInputTable, SessionTable } from "@deep
 import { Hash } from "@deepagent-code/core/util/hash"
 import { eq, inArray, sql } from "drizzle-orm"
 import { Effect, Exit, Layer } from "effect"
-import { recoverProviderReceiptsOnStartup, rejectUndispatchedProviderTurn } from "../../src/session/prompt"
+import {
+  recoverProviderReceiptsOnStartup,
+  rejectUndispatchedProviderTurn,
+} from "../../src/session/legacy-provider-receipt-recovery"
 import { ContextActivationReceipt } from "../../src/context-federation/activation-receipt"
 import { CompactionRunTable } from "../../src/session/compaction-sql"
 import { Session } from "../../src/session/session"

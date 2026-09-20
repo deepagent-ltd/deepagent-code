@@ -108,11 +108,11 @@ if (
     (child) =>
       child.parentID !== observation.sessionID ||
       child.agent !== "reviewer" ||
-      child.model?.providerID !== "live-deepseek" ||
+      child.model?.providerID !== artifact.fingerprint.runtimeProviderID ||
       child.model.id !== artifact.fingerprint.modelID ||
       child.assistants.some(
         (assistant) =>
-          assistant.providerID !== "live-deepseek" || assistant.modelID !== artifact.fingerprint.modelID,
+          assistant.providerID !== artifact.fingerprint.runtimeProviderID || assistant.modelID !== artifact.fingerprint.modelID,
       ),
   )
 ) {

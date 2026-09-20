@@ -1,3 +1,4 @@
+import { pluginTranslator } from "../../i18n/standalone"
 import type { TuiPlugin, TuiPluginApi } from "@deepagent-code/plugin/tui"
 import type { BuiltinTuiPlugin } from "../builtins"
 import { useSyncV2 } from "../../context/sync-v2"
@@ -11,6 +12,7 @@ import { RGBA, TextAttributes, type BoxRenderable, type SyntaxStyle } from "@ope
 import { useBindings } from "../../keymap"
 import { Locale } from "../../util/locale"
 import { useTuiPaths } from "../../context/runtime"
+import { useTuiI18n } from "../../context/i18n"
 import { LANGUAGE_EXTENSIONS } from "../../util/filetype"
 import { toolDisplayMetadata, webSearchProviderLabel } from "../../util/tool-display"
 import path from "path"
@@ -46,6 +48,7 @@ function currentSessionID(api: TuiPluginApi) {
 function View(props: { api: TuiPluginApi; sessionID: string }) {
   const sync = useSyncV2()
   const dimensions = useTerminalDimensions()
+  const i18n = useTuiI18n()
   const { theme, syntax, subtleSyntax } = useTheme()
   const messages = createMemo(() => sync.data.messages[props.sessionID] ?? [])
   const renderedMessages = createMemo(() => messages().toReversed())
@@ -63,7 +66,7 @@ function View(props: { api: TuiPluginApi; sessionID: string }) {
     bindings: [
       {
         key: "escape",
-        desc: "Back to session",
+        desc: i18n.t("tui.sessionV2.backToSession"),
         group: "Session",
         cmd() {
           props.api.route.navigate("session", { sessionID: props.sessionID })
@@ -1156,6 +1159,7 @@ function formatAnswer(answer: unknown) {
 }
 
 const tui: TuiPlugin = async (api) => {
+  const t = pluginTranslator(api.kv)
   api.route.register([
     {
       name: route,
@@ -1173,7 +1177,7 @@ const tui: TuiPlugin = async (api) => {
     commands: [
       {
         name: route,
-        title: "View v2 session messages",
+        title: t("tui.sessionV2.viewMessages"),
         category: "Debug",
         namespace: "palette",
         suggested: () => api.route.current.name === "session",

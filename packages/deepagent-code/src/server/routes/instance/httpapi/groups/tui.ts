@@ -1,5 +1,4 @@
 import { TuiEvent } from "@/server/tui-event"
-import { TuiRequest as TuiRequestPayload } from "@/server/shared/tui-control"
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import { Authorization } from "../middleware/authorization"
@@ -45,8 +44,6 @@ export const TuiPaths = {
   showToast: `${root}/show-toast`,
   publish: `${root}/publish`,
   selectSession: `${root}/select-session`,
-  controlNext: `${root}/control/next`,
-  controlResponse: `${root}/control/response`,
 } as const
 
 export const TuiApi = HttpApi.make("tui")
@@ -170,27 +167,6 @@ export const TuiApi = HttpApi.make("tui")
             identifier: "tui.selectSession",
             summary: "Select session",
             description: "Navigate the TUI to display the specified session.",
-          }),
-        ),
-        HttpApiEndpoint.get("controlNext", TuiPaths.controlNext, {
-          query: WorkspaceRoutingQuery,
-          success: described(TuiRequestPayload, "Next TUI request"),
-        }).annotateMerge(
-          OpenApi.annotations({
-            identifier: "tui.control.next",
-            summary: "Get next TUI request",
-            description: "Retrieve the next TUI request from the queue for processing.",
-          }),
-        ),
-        HttpApiEndpoint.post("controlResponse", TuiPaths.controlResponse, {
-          query: WorkspaceRoutingQuery,
-          payload: Schema.Unknown,
-          success: described(Schema.Boolean, "Response submitted successfully"),
-        }).annotateMerge(
-          OpenApi.annotations({
-            identifier: "tui.control.response",
-            summary: "Submit TUI response",
-            description: "Submit a response to the TUI request queue to complete a pending request.",
           }),
         ),
       )

@@ -251,6 +251,7 @@ const lowerAssistantMessage = Effect.fn("OpenAIChat.lowerAssistantMessage")(func
       continue
     }
   }
+  const carried = openAICompatibleReasoningContent(message.native?.openaiCompatible)
   return {
     role: "assistant" as const,
     content: content.length === 0 ? null : ProviderShared.joinText(content),
@@ -258,7 +259,21 @@ const lowerAssistantMessage = Effect.fn("OpenAIChat.lowerAssistantMessage")(func
     reasoning_content:
       reasoning.length > 0
         ? reasoning.map((part) => part.text).join("")
-        : openAICompatibleReasoningContent(message.native?.openaiCompatible),
+        : // MEASURED (DeepSeek, thinking mode): an assistant message that carries `tool_calls` and
+          // omits `reasoning_content` is rejected outright — HTTP 400 "The `reasoning_content` in
+          // the thinking mode must be passed back to the API." The check is on the FIELD, not on its
+          // content: an empty string is accepted (verified against the endpoint), while the same
+          // message without the key is not. A turn where the model emitted no reasoning before
+          // calling a tool therefore still has to send the key, or the whole session dies with an
+          // `UnknownError` and the task scores nothing.
+          //
+          // Tool-call turns get the key unconditionally. Endpoints that reject an unknown
+          // `reasoning_content` are unaffected in practice because this is only the empty string
+          // when the caller had no reasoning to carry — and opting out entirely is what the
+          // `tool_calls === undefined` branch already does.
+          toolCalls.length > 0
+            ? (carried ?? "")
+            : carried,
   }
 })
 

@@ -34,7 +34,7 @@ permissions:
 jobs:
   version:
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    if: github.repository == 'lessweb/deepagent-code'
+    if: github.repository == 'deepagent-ltd/deepagent-code'
     steps:
       - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
         with:
@@ -61,7 +61,7 @@ jobs:
           DEEPAGENT_CODE_BUMP: ${{ inputs.bump }}
           DEEPAGENT_CODE_VERSION: ${{ inputs.version }}
           DEEPAGENT_CODE_API_KEY: ${{ secrets.DEEPAGENT_CODE_API_KEY }}
-          GH_REPO: ${{ (github.ref_name == 'beta' && 'lessweb/deepagent-code-beta') || github.repository }}
+          GH_REPO: ${{ (github.ref_name == 'beta' && 'deepagent-ltd/deepagent-code-beta') || github.repository }}
     outputs:
       version: ${{ steps.version.outputs.version }}
       release: ${{ steps.version.outputs.release }}
@@ -71,7 +71,7 @@ jobs:
   build-cli:
     needs: version
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    if: github.repository == 'lessweb/deepagent-code'
+    if: github.repository == 'deepagent-ltd/deepagent-code'
     steps:
       - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
         with:
@@ -86,16 +86,47 @@ jobs:
           deepagent-code-app-id: ${{ vars.DEEPAGENT_CODE_APP_ID }}
           deepagent-code-app-secret: ${{ secrets.DEEPAGENT_CODE_APP_SECRET }}
 
-      - name: Build
+      - name: Build (release identity pinned)
         id: build
         run: |
           ./packages/deepagent-code/script/build.ts ${{ (github.ref_name == 'beta' && '--sourcemaps') || '' }}
           ./packages/cli/script/build.ts ${{ (github.ref_name == 'beta' && '--sourcemaps') || '' }}
+          # Ship the authorization row at every binary's appRoot (dirname of the executable —
+          # V2OwnerSeed.defaultOwnerAuthorizationAppRoot) so default installs self-qualify.
+          for dir in packages/deepagent-code/dist/deepagent-code-*/bin packages/cli/dist/*/bin; do
+            [ -d "$dir" ] && cp "$RUNNER_TEMP/owner-authorization.json" "$dir/owner-authorization.json"
+          done
         env:
           DEEPAGENT_CODE_VERSION: ${{ needs.version.outputs.version }}
           DEEPAGENT_CODE_RELEASE: ${{ needs.version.outputs.release }}
+          DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY: ${{ runner.temp }}/release-owner-public-key.pem
           GH_REPO: ${{ needs.version.outputs.repo }}
           GH_TOKEN: ${{ steps.committer.outputs.token }}
+
+      # Owner authorization (2026-09-11 ruling): mint with a ONE-TIME Ed25519 pair BEFORE the
+      # binaries build — the public half is pinned into this exact build via the
+      # DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY define and the private half dies with the mint
+      # process. No signing secret exists anywhere. The row never expires (no forced updates).
+      - name: Mint V2 owner authorization (ephemeral per-release)
+        id: mint-owner
+        working-directory: packages/deepagent-code
+        env:
+          DEEPAGENT_CODE_VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          bun install
+          bun script/mint-owner-campaign.ts --ephemeral \
+            --build-identity "$DEEPAGENT_CODE_VERSION" \
+            --db "$RUNNER_TEMP/mint.db" \
+            --export "$RUNNER_TEMP/owner-authorization.json" \
+            | tee "$RUNNER_TEMP/mint-result.json"
+          jq -r '.public_key_pem' "$RUNNER_TEMP/mint-result.json" > "$RUNNER_TEMP/release-owner-public-key.pem"
+          test -s "$RUNNER_TEMP/release-owner-public-key.pem"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: owner-authorization
+          path: ${{ runner.temp }}/owner-authorization.json
+          if-no-files-found: warn
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -122,7 +153,7 @@ jobs:
       - build-cli
       - version
     runs-on: blacksmith-4vcpu-windows-2025
-    if: github.repository == 'lessweb/deepagent-code'
+    if: github.repository == 'deepagent-ltd/deepagent-code'
     env:
       AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
       AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
@@ -221,7 +252,7 @@ jobs:
     needs:
       - build-cli
       - version
-    if: github.repository == 'lessweb/deepagent-code'
+    if: github.repository == 'deepagent-ltd/deepagent-code'
     continue-on-error: false
     env:
       AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
@@ -456,6 +487,12 @@ jobs:
           path: packages/cli/dist
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        continue-on-error: true
+        with:
+          name: owner-authorization
+          path: /tmp/owner-authorization
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         if: needs.version.outputs.release
         with:
           pattern: latest-yml-*
@@ -494,6 +531,25 @@ jobs:
           git config --global user.name "deepagent-code"
           ssh-keyscan -H aur.archlinux.org >> ~/.ssh/known_hosts || true
 
+      # RI-51 authoritative ledger release gate: regenerate the candidate ledger from THIS tree
+      # (caller inventory, source manifest, runtime-state inventory) and stop every upload on
+      # NO-GO. Gate statuses are explicit evidence (release-evidence inputs); without them all
+      # gates are pending and the release is refused — fail-closed by construction.
+      - name: RI-51 authoritative ledger release gate
+        if: needs.version.outputs.release
+        run: |
+          mkdir -p /tmp/authoritative-ledger
+          (cd packages/core && bun run script/evidence-ledger/release-gate.ts --out /tmp/authoritative-ledger/ledger.json)
+
+      - name: Upload authoritative ledger release asset
+        if: needs.version.outputs.release && !cancelled()
+        env:
+          GH_TOKEN: ${{ steps.committer.outputs.token }}
+        run: |
+          if [ -f /tmp/authoritative-ledger/ledger.json ]; then
+            gh release upload "v${{ needs.version.outputs.version }}" /tmp/authoritative-ledger/ledger.json --clobber --repo "${{ needs.version.outputs.repo }}" || echo "::warning::ledger asset upload skipped"
+          fi
+
       - name: Upload desktop release assets
         if: needs.version.outputs.release
         env:
@@ -506,6 +562,20 @@ jobs:
             exit 1
           fi
           gh release upload "v${{ needs.version.outputs.version }}" "${files[@]}" --clobber --repo "${{ needs.version.outputs.repo }}"
+
+      # W0.5: deliver the signed owner-authorization.json with the release artifacts. The runtime
+      # seed (v2-owner-seed.ts) reads it from the install root; if it is missing the release still
+      # stands and operations must deliver the line for this version.
+      - name: Upload owner authorization release asset
+        if: needs.version.outputs.release
+        env:
+          GH_TOKEN: ${{ steps.committer.outputs.token }}
+        run: |
+          if [ -f /tmp/owner-authorization/owner-authorization.json ]; then
+            gh release upload "v${{ needs.version.outputs.version }}" /tmp/owner-authorization/owner-authorization.json --clobber --repo "${{ needs.version.outputs.repo }}"
+          else
+            echo "::warning::owner-authorization.json was not minted for this release — operations must mint and deliver it before the default install can pass owner qualification"
+          fi
 
       - run: ./script/publish.ts
         env:

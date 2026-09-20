@@ -159,9 +159,10 @@ export const layer = Layer.effect(
               registerAdapter(ctx.project.id, type, adapter as WorkspaceAdapter)
             },
           },
-          get serverUrl(): URL {
-            return Server.url ?? new URL("http://localhost:4096")
-          },
+          // The SDK transport above is in-process and has no listener identity. A process may own
+          // multiple listeners, so using the last listener's module-global URL here would point a
+          // plugin at an unrelated or already-stopped server.
+          serverUrl: new URL("http://deepagent-code.internal"),
           // @ts-expect-error
           $: typeof Bun === "undefined" ? undefined : Bun.$,
         }

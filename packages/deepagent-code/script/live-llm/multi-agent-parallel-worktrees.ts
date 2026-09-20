@@ -107,11 +107,11 @@ for (const child of observation.children) {
   if (
     child.parentID !== observation.sessionID ||
     child.agent !== "worker" ||
-    child.model?.providerID !== "live-deepseek" ||
+    child.model?.providerID !== artifact.fingerprint.runtimeProviderID ||
     child.model.id !== artifact.fingerprint.modelID ||
     child.assistants.some(
       (assistant) =>
-        assistant.providerID !== "live-deepseek" ||
+        assistant.providerID !== artifact.fingerprint.runtimeProviderID ||
         assistant.modelID !== artifact.fingerprint.modelID ||
         assistant.error !== undefined,
     )

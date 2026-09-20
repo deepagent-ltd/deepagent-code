@@ -1,4 +1,5 @@
 import type { LanguageModelV3 } from "@ai-sdk/provider"
+import { readonlySet } from "@deepagent-code/core/util/readonly-collections"
 
 export type BundledSDK = {
   languageModel(modelId: string): LanguageModelV3
@@ -16,13 +17,13 @@ type CompatibilityModel = {
   options?: Record<string, any>
 }
 
-export const SUPPORTED_DEEPAGENT_PROVIDER_IDS = new Set(["openai", "deepseek", "anthropic"])
+export const SUPPORTED_DEEPAGENT_PROVIDER_IDS = readonlySet(new Set(["openai", "deepseek", "anthropic"]))
 
-export const SUPPORTED_DEEPAGENT_PROVIDER_PACKAGES = new Set([
+export const SUPPORTED_DEEPAGENT_PROVIDER_PACKAGES = readonlySet(new Set([
   "@ai-sdk/openai",
   "@ai-sdk/openai-compatible",
   "@ai-sdk/anthropic",
-])
+]))
 
 export function deepagentUpstreamProviderID(model: CompatibilityModel) {
   const configured = model.options?.upstreamProviderID

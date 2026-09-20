@@ -259,6 +259,33 @@ describe("PermissionV2", () => {
     }),
   )
 
+  it.effect("intersects Agent and Session rules so neither scope can widen the other", () =>
+    Effect.gen(function* () {
+      yield* setup([{ action: "read", resource: "*", effect: "allow" }])
+      const db = (yield* Database.Service).db
+      const service = yield* PermissionV2.Service
+      yield* db
+        .update(SessionTable)
+        .set({ permission: [{ action: "read", resource: "*", effect: "deny" }] })
+        .where(eq(SessionTable.id, SessionV2.ID.make("ses_test")))
+        .run()
+        .pipe(Effect.orDie)
+      expect(yield* service.ask(assertion())).toMatchObject({ effect: "deny" })
+
+      yield* setRules([{ action: "read", resource: "*", effect: "deny" }])
+      yield* db
+        .update(SessionTable)
+        .set({ permission: [{ action: "read", resource: "*", effect: "allow" }] })
+        .where(eq(SessionTable.id, SessionV2.ID.make("ses_test")))
+        .run()
+        .pipe(Effect.orDie)
+      expect(yield* service.ask(assertion())).toMatchObject({ effect: "deny" })
+
+      yield* setRules([{ action: "read", resource: "*", effect: "ask" }])
+      expect(yield* service.ask(assertion())).toMatchObject({ effect: "ask" })
+    }),
+  )
+
   it.effect("resolves an asked permission once", () =>
     Effect.gen(function* () {
       yield* setup()
@@ -301,6 +328,26 @@ describe("PermissionV2", () => {
       yield* service.assert(assertion({ id: PermissionV2.ID.create("per_next"), resources: ["src/next.ts"] }))
       yield* saved.remove(id)
       expect(yield* saved.list()).toEqual([])
+    }),
+  )
+
+  it.effect("fails with typed overload at the pending ceiling and reuses replied capacity", () =>
+    Effect.gen(function* () {
+      yield* setup()
+      const service = yield* PermissionV2.Service
+      for (let index = 0; index < PermissionV2.MAX_PENDING_REQUESTS; index++)
+        yield* service.ask(assertion({ id: PermissionV2.ID.create(`per_capacity_${index}`) }))
+
+      expect(
+        yield* service
+          .ask(assertion({ id: PermissionV2.ID.create("per_capacity_overflow") }))
+          .pipe(Effect.flip),
+      ).toEqual(new PermissionV2.CapacityError({ limit: PermissionV2.MAX_PENDING_REQUESTS }))
+
+      yield* service.reply({ requestID: PermissionV2.ID.create("per_capacity_0"), reply: "once" })
+      expect(
+        yield* service.ask(assertion({ id: PermissionV2.ID.create("per_capacity_reused") })),
+      ).toMatchObject({ effect: "ask" })
     }),
   )
 })

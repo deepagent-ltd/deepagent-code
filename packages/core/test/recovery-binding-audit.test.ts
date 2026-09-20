@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
 import { EffectDrizzleSqlite } from "@deepagent-code/effect-drizzle-sqlite"
 import { DatabaseMigration } from "@deepagent-code/core/database/migration"
+import { DatabaseUpgradeRun } from "@deepagent-code/core/database/upgrade-run"
 import { RecoveryBinding } from "@deepagent-code/core/database/recovery-binding"
 import { migrations } from "../src/database/migration.gen"
 import { Effect } from "effect"
@@ -27,6 +28,9 @@ const setup = Effect.gen(function* () {
   // The audit queries join only the binding columns; foreign keys stay OFF so the minimal rows
   // bypass the federation-knowledge insert guards on unrelated parent tables.
   yield* db.run(sql`PRAGMA foreign_keys = OFF`)
+  // applyOnly bypasses apply()'s prelude, so mirror it: the journal content-hash migration
+  // (20260907130000) reads database_migration_receipt, which only ensureTables creates.
+  yield* DatabaseUpgradeRun.ensureTables(db)
   yield* DatabaseMigration.applyOnly(db, migrations)
   const ph = H64("a")
   const rh = H64("b")
@@ -38,6 +42,8 @@ const setup = Effect.gen(function* () {
     ('att-1', 'ses-1', 'act-1', 1, 'sel-1', ${ph}, ${H64("b")}, 'prov', 'lease-1', 'settled', 1)`)
   yield* db.run(sql`INSERT INTO session_v2_provider_turn_receipt(receipt_id, session_id, request_ordinal, activity_id, provider_turn_seq, provider_attempt_id, user_message_id, history_prompt_epoch, request_input_hash, provider_id, model_id, protocol, owner_mode, owner_token, state, created_at) VALUES
     ('rcp-1', 'ses-1', 0, 'act-1', 1, 'att-1', 'inp-1', 42, ${H64("b")}, 'prov', 'model', 'http', 'v2', 'lease-1', 'preparing', 1)`)
+  yield* db.run(sql`INSERT INTO session_v2_tool_effect_admission(admission_id, session_id, provider_attempt_id, receipt_id, tool_call_id, tool_name, effect_kind, owner_token, time_created) VALUES
+    ('adm-1', 'ses-1', 'att-1', 'rcp-1', 'call-1', 'tool', 'mutating', 'lease-1', 1)`)
   yield* db.run(sql`INSERT INTO session_v2_tool_effect(effect_id, session_id, provider_attempt_id, receipt_id, tool_call_id, tool_name, effect_kind, state, outcome_hash, owner_token, time_created) VALUES
     ('eff-1', 'ses-1', 'att-1', 'rcp-1', 'call-1', 'tool', 'mutating', 'settled', ${H64("c")}, 'lease-1', 1)`)
   yield* db.run(sql`INSERT INTO task_run(run_id, root_run_id, request_hash, parent_session_id, parent_message_id, tool_call_id, child_session_id, generation, delivery_mode, phase, state, execution_owner, time_created, time_updated) VALUES
@@ -81,6 +87,8 @@ describe("recovery binding audit", () => {
         // The insert guard rejects partial grants going forward, so the violation is seeded as
         // pre-guard historical data: drop the guard, insert the partial row, then audit.
         yield* db.run(sql`DROP TRIGGER session_v2_tool_effect_insert_guard`)
+        yield* db.run(sql`INSERT INTO session_v2_tool_effect_admission(admission_id, session_id, provider_attempt_id, receipt_id, tool_call_id, tool_name, effect_kind, owner_token, time_created) VALUES
+          ('adm-2', 'ses-1', 'att-1', 'rcp-1', 'call-2', 'tool', 'mutating', 'lease-1', 1)`)
         yield* db.run(sql`INSERT INTO session_v2_tool_effect(effect_id, session_id, provider_attempt_id, receipt_id, tool_call_id, tool_name, effect_kind, state, outcome_hash, owner_token, time_created, grant_owner_id) VALUES
           ('eff-2', 'ses-1', 'att-1', 'rcp-1', 'call-2', 'tool', 'mutating', 'settled', ${H64("c")}, 'lease-1', 1, 'owner-x')`)
         const verdict = yield* RecoveryBinding.audit(db)

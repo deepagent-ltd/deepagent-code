@@ -1,6 +1,7 @@
 import { serve } from "@hono/node-server"
 import { WebSocketServer } from "ws"
-import app, { store, subscribers } from "./api.ts"
+import app, { store, subscribers } from "./api"
+import { isValidShareID } from "./store"
 
 /**
  * Node entrypoint for the share/GitHub/Feishu backend.
@@ -17,24 +18,33 @@ const server = serve({ fetch: app.fetch, port }, (info) => {
 
 const wss = new WebSocketServer({ noServer: true })
 
-server.on("upgrade", (req, socket, head) => {
+server.on("upgrade", async (req, socket, head) => {
   const url = new URL(req.url ?? "/", "http://localhost")
   if (url.pathname !== "/share_poll") {
     socket.destroy()
     return
   }
   const id = url.searchParams.get("id")
-  if (!id) {
+  if (!id || !isValidShareID(id)) {
+    socket.destroy()
+    return
+  }
+  if (!(await store.exists(id).catch(() => false))) {
     socket.destroy()
     return
   }
 
   wss.handleUpgrade(req, socket, head, async (ws) => {
-    subscribers.add(id, ws)
+    if (!subscribers.add(id, ws)) {
+      ws.close(1013, "Subscriber capacity exceeded")
+      return
+    }
     // Replay current state to the freshly-connected viewer.
     try {
       const entries = await store.getData(id)
-      for (const entry of entries) ws.send(JSON.stringify(entry))
+      for (const entry of entries) {
+        if (!subscribers.send(ws, entry)) break
+      }
     } catch (err) {
       console.error("share_poll replay failed", err)
     }

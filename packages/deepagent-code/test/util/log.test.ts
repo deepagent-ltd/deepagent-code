@@ -75,3 +75,20 @@ it.live("local dev log is not truncated twice for the same run", () =>
     expect(yield* Effect.promise(() => fs.readFile(path.join(dir, "dev.log"), "utf8"))).toContain("main startup")
   }),
 )
+
+it.live("serializes concurrent sink reconfiguration and closes the superseded writer", () =>
+  Effect.gen(function* () {
+    const log = Global.Path.log
+    yield* Effect.addFinalizer(() =>
+      Effect.promise(async () => {
+        await Log.init({ print: true })
+        Global.Path.log = log
+      }),
+    )
+    Global.Path.log = yield* tmpdirScoped()
+
+    yield* Effect.promise(() => Promise.all([Log.init({ print: false, dev: true }), Log.init({ print: true })]))
+
+    expect(Log.file()).toBe("")
+  }),
+)

@@ -172,6 +172,7 @@ describe("OpenAI-compatible Chat route", () => {
           {
             role: "assistant",
             content: null,
+            reasoning_content: "",
             tool_calls: [
               {
                 id: "call_1",

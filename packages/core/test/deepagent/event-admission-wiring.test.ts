@@ -4,6 +4,7 @@ import { Database } from "@deepagent-code/core/database/database"
 import { DatabaseMigration } from "@deepagent-code/core/database/migration"
 import { EventAdmission } from "@deepagent-code/core/deepagent/event-admission"
 import { EventAdmissionWiring } from "@deepagent-code/core/deepagent/event-admission-wiring"
+import { createRuntimeFeatureRegistry } from "@deepagent-code/core/flag/runtime-features"
 import { eventAdmissionMigration } from "@deepagent-code/core/deepagent/event-admission-sql"
 import type { RegisteredEventEnvelope } from "@deepagent-code/core/deepagent/event-registry"
 import { assertPublishable } from "@deepagent-code/core/deepagent/event-registry"
@@ -19,6 +20,9 @@ type Db = Database.Interface["db"]
 const registry = makeRegistry()
 const SESSION = "ses_wiring_test"
 const saved = process.env[EventAdmission.EVENT_V2_ADMISSION_ENV]
+const admissionOff = createRuntimeFeatureRegistry(undefined, {
+  [EventAdmission.EVENT_V2_ADMISSION_ENV]: "false",
+})
 
 const verifiedScope = (
   over?: Partial<EventAdmissionWiring.AdmissionScope>,
@@ -247,27 +251,23 @@ describe("C5-04 event→envelope→admit wiring", () => {
   })
 
   test("when the V2 admission switch is OFF, admitWork is a typed admission_disabled refusal", async () => {
-    process.env[EventAdmission.EVENT_V2_ADMISSION_ENV] = "false"
-    try {
-      await run(
-        Effect.gen(function* () {
-          const db = (yield* Database.Service).db
-          const err = yield* wiringFailureOf(
-            EventAdmissionWiring.admitWork(db, {
-              event: verifiedCommand(registry),
-              registration: commandReg,
-              scope: verifiedScope(),
-              adapter: recorder([]),
-              now: 10,
-            }),
-          )
-          expect(err).toBeInstanceOf(EventAdmission.EventAdmissionError)
-          if (!(err instanceof EventAdmission.EventAdmissionError)) return
-          expect(err.reason).toBe("admission_disabled")
-        }),
-      )
-    } finally {
-      process.env[EventAdmission.EVENT_V2_ADMISSION_ENV] = "true"
-    }
+    await run(
+      Effect.gen(function* () {
+        const db = (yield* Database.Service).db
+        const err = yield* wiringFailureOf(
+          EventAdmissionWiring.admitWork(db, {
+            event: verifiedCommand(registry),
+            registration: commandReg,
+            scope: verifiedScope(),
+            adapter: recorder([]),
+            now: 10,
+            runtimeFeatures: admissionOff,
+          }),
+        )
+        expect(err).toBeInstanceOf(EventAdmission.EventAdmissionError)
+        if (!(err instanceof EventAdmission.EventAdmissionError)) return
+        expect(err.reason).toBe("admission_disabled")
+      }),
+    )
   })
 })

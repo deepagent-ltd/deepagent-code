@@ -5,7 +5,7 @@ import os from "os"
 import path from "path"
 import { Effect, Layer } from "effect"
 import { GrepTool } from "../../src/tool/grep"
-import { provideInstance, testInstanceStoreLayer, TestInstance, tmpdirScoped } from "../fixture/fixture"
+import { provideInstance, testInstanceStoreLayer, TestInstance, tmpdirScoped, tmpRootAsync } from "../fixture/fixture"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
 import { Global } from "@deepagent-code/core/global"
@@ -172,7 +172,7 @@ describe("tool.grep", () => {
 
       yield* TestInstance
       const tmp = yield* Effect.acquireRelease(
-        Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "deepagent-code-grep-alias-"))),
+        Effect.promise(() => tmpRootAsync()),
         (dir) => Effect.promise(() => fs.rm(dir, { recursive: true, force: true })),
       )
       const real = path.join(tmp, "real")

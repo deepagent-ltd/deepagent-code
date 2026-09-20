@@ -197,7 +197,14 @@ export const archiveSessionOnCompletion = (input: {
   bus?: WikiEvents.WikiEventPublisher
 }): Effect.Effect<ExecutionArchive | null, never> =>
   Effect.gen(function* () {
-    const graph = openWikiGraph({ workspacePath: input.workspacePath, sessionID: input.sessionID })
+    // RI-144: open the graph through the ambient AgentGateway runtime's configured storage when one
+    // is in scope — a V2 process configures storage per-call (AsyncLocalStorage-scoped), so the
+    // module-level KnowledgeSource facade openWikiGraph reads is NOT configured there and the
+    // durable stores silently drop out of the union. Without the runtime service in scope, keep the
+    // module-level fallback (same identity fallback as learning-runtime).
+    const gateway = Option.getOrUndefined(yield* Effect.serviceOption(AgentGateway.Runtime))
+    const withStorage = gateway?.withStorage ?? (<A>(operation: () => A) => operation())
+    const graph = withStorage(() => openWikiGraph({ workspacePath: input.workspacePath, sessionID: input.sessionID }))
     const archive = buildExecutionArchive(graph, input.sessionID)
     if (archive.entries.length === 0) return null
     // PERSIST the rendered archive as a run-scoped context doc so the aggregation is not wasted work

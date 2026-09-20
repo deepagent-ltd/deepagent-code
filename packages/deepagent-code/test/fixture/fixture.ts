@@ -1,4 +1,6 @@
 import { $ } from "bun"
+import { afterAll } from "bun:test"
+import { mkdtempSync, readdirSync, rmSync, statSync } from "node:fs"
 import { ConfigV1 } from "@deepagent-code/core/v1/config/config"
 import * as fs from "fs/promises"
 import os from "os"
@@ -77,6 +79,10 @@ type TmpDirOptions<T> = {
   init?: (dir: string) => Promise<T>
   dispose?: (dir: string) => Promise<T>
 }
+// Reclaim scratch roots left by earlier runs as soon as a worker starts; see the lifetime note on
+// `tmpRootShared` for why this is a sweep rather than an `afterAll` deletion.
+sweepStaleScratch("deepagent-code-test-")
+
 export async function tmpdir<T>(options?: TmpDirOptions<T>) {
   const dirpath = sanitizePath(path.join(os.tmpdir(), "deepagent-code-test-" + Math.random().toString(36).slice(2)))
   await fs.mkdir(dirpath, { recursive: true })
@@ -112,6 +118,72 @@ export async function tmpdir<T>(options?: TmpDirOptions<T>) {
     extra: extra as T,
   }
   return result
+}
+
+// Which lifetime a scratch directory needs depends on WHEN it is created: inside a test the file's
+// `afterAll` can reclaim it; in `beforeAll` or at module scope it is still in use when the last test
+// ends, so deleting it there removes a live fixture. Shared roots are reclaimed by the next run's
+// startup sweep instead, so nothing accumulates across runs.
+let sessionScratch: string | undefined
+let sessionScratchShared = false
+let ownedScratch = false
+
+/** Scratch root that the file's `afterAll` may delete, for directories created inside a test. */
+export function tmpRoot(): string {
+  return mkdtempSync(path.join(scratchRoot(false), "t-"))
+}
+
+/** Async twin of {@link tmpRoot} for call sites that already `await`. */
+export async function tmpRootAsync(): Promise<string> {
+  return fs.realpath(await fs.mkdtemp(path.join(scratchRoot(false), "t-")))
+}
+
+/** Scratch root for a directory created in `beforeAll` or at module scope; see the lifetime note. */
+export function tmpRootShared(): string {
+  return mkdtempSync(path.join(scratchRoot(true), "t-"))
+}
+
+/** Async twin of {@link tmpRootShared}. */
+export async function tmpRootSharedAsync(): Promise<string> {
+  return fs.realpath(await fs.mkdtemp(path.join(scratchRoot(true), "t-")))
+}
+
+function scratchRoot(shared: boolean): string {
+  if (!sessionScratch || (shared && !sessionScratchShared)) {
+    if (sessionScratch) ownedScratch = true
+    sessionScratch = mkdtempSync(path.join(os.tmpdir(), "deepagent-code-test-"))
+    sessionScratchShared = shared
+    if (shared) sweepAbandonedScratch()
+    if (!shared)
+      afterAll(() => {
+        if (ownedScratch) return
+        const dir = sessionScratch
+        sessionScratch = undefined
+        if (dir) rmSync(dir, { recursive: true, force: true })
+      })
+  }
+  return sessionScratch
+}
+
+function sweepAbandonedScratch(): void {
+  sweepStaleScratch("deepagent-code-test-", 6 * 60 * 60 * 1000)
+}
+
+/**
+ * Remove scratch roots no live run owns; `staleMs` must exceed the longest a live root can go
+ * unwritten.
+ */
+function sweepStaleScratch(prefix: string, staleMs = 30 * 60 * 1000): void {
+  const cutoff = Date.now() - staleMs
+  for (const entry of readdirSync(os.tmpdir())) {
+    if (!entry.startsWith(prefix)) continue
+    const dir = path.join(os.tmpdir(), entry)
+    try {
+      if (statSync(dir).mtimeMs < cutoff) rmSync(dir, { recursive: true, force: true })
+    } catch {
+      /* a root another worker is removing right now is not an error */
+    }
+  }
 }
 
 /** Effectful scoped tmpdir. Cleaned up when the scope closes. Make sure these stay in sync */

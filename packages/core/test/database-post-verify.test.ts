@@ -27,16 +27,39 @@ const makeDb = EffectDrizzleSqlite.makeWithDefaults()
 /** Minimal copies of the recovery tables RecoveryBinding.audit reads (empty => the audit passes). */
 const createRecoveryTables = (db: EffectDrizzleSqlite.EffectSQLiteDatabase) =>
   Effect.gen(function* () {
-    yield* db.run(sql`CREATE TABLE session_provider_attempt (attempt_id TEXT PRIMARY KEY, session_id TEXT, activity_id TEXT, provider_turn_seq INTEGER, owner_token TEXT, state TEXT)`)
-    yield* db.run(sql`CREATE TABLE session_v2_provider_turn_receipt (receipt_id TEXT PRIMARY KEY, session_id TEXT, activity_id TEXT, provider_turn_seq INTEGER, provider_attempt_id TEXT, owner_token TEXT)`)
-    yield* db.run(sql`CREATE TABLE session_v2_tool_effect (effect_id TEXT PRIMARY KEY, session_id TEXT, receipt_id TEXT, provider_attempt_id TEXT, grant_receipt_id TEXT, grant_owner_id TEXT, grant_state TEXT, grant_version TEXT, state TEXT)`)
+    yield* db.run(sql`CREATE TABLE session (id TEXT PRIMARY KEY, time_suspended INTEGER)`)
+    yield* db.run(sql`CREATE TABLE session_provider_attempt (attempt_id TEXT PRIMARY KEY, session_id TEXT, activity_id TEXT, provider_turn_seq INTEGER, attempt_version INTEGER, execution_claim_token INTEGER NOT NULL DEFAULT 1, selection_id TEXT, projection_hash TEXT, request_hash TEXT, provider_id TEXT, owner_token TEXT, state TEXT)`)
+    yield* db.run(sql`CREATE TABLE session_v2_provider_turn_receipt (receipt_id TEXT PRIMARY KEY, session_id TEXT, activity_id TEXT, provider_turn_seq INTEGER, provider_attempt_id TEXT, request_input_hash TEXT, provider_id TEXT, owner_token TEXT, state TEXT)`)
+    yield* db.run(sql`CREATE TABLE session_v2_tool_effect_admission (admission_id TEXT PRIMARY KEY, session_id TEXT, receipt_id TEXT, provider_attempt_id TEXT, tool_call_id TEXT, tool_name TEXT, effect_kind TEXT, owner_token TEXT)`)
+    yield* db.run(sql`CREATE TABLE session_v2_tool_effect (effect_id TEXT PRIMARY KEY, session_id TEXT, receipt_id TEXT, provider_attempt_id TEXT, tool_call_id TEXT, tool_name TEXT, effect_kind TEXT, owner_token TEXT, grant_receipt_id TEXT, grant_owner_id TEXT, grant_state TEXT, grant_version TEXT, state TEXT)`)
     yield* db.run(sql`CREATE TABLE session_v2_task_run_receipt (receipt_id TEXT PRIMARY KEY, run_id TEXT, generation INTEGER, owner_token TEXT, state TEXT)`)
     yield* db.run(sql`CREATE TABLE task_run (run_id TEXT PRIMARY KEY, generation INTEGER, execution_owner TEXT, state TEXT, lease_expires_at INTEGER)`)
-    // C1B-10 startup inventory surfaces (real implementation wired into post-verify): compaction +
-    // session activity — a clean fixture creates the inventory's tables so classifyStartup is total.
+    // C1B-10 startup inventory surfaces (real implementation wired into post-verify): every table
+    // classifyStartup reads, so the clean fixture keeps the inventory total (unclassified = 0).
     yield* db.run(sql`CREATE TABLE event_snapshot_attempt (snapshot_id TEXT PRIMARY KEY, state TEXT)`)
     yield* db.run(sql`CREATE TABLE event_compaction_receipt (aggregate_id TEXT PRIMARY KEY, state TEXT)`)
     yield* db.run(sql`CREATE TABLE session_facade_activity (activity_id TEXT PRIMARY KEY, state TEXT)`)
+    yield* db.run(sql`CREATE TABLE session_activity (activity_id TEXT PRIMARY KEY, state TEXT)`)
+    // W2 C1B recovery descriptor + command surface — created so classifyStartup is total.
+    yield* db.run(sql`CREATE TABLE session_provider_recovery_descriptor
+      (descriptor_id TEXT PRIMARY KEY, session_id TEXT, activity_id TEXT, turn_id TEXT,
+       kind TEXT NOT NULL, payload TEXT, content_hash TEXT, created_at INTEGER)`)
+    yield* db.run(sql`CREATE TABLE recovery_command
+      (command_id TEXT PRIMARY KEY, descriptor_id TEXT, attempt TEXT, state TEXT,
+       expected_owner_token TEXT, result_hash TEXT, actor_type TEXT, actor_id TEXT,
+       created_at INTEGER, updated_at INTEGER)`)
+    yield* db.run(sql`CREATE TABLE session_provider_attempt_resolution (resolution_id TEXT PRIMARY KEY, attempt_id TEXT, decision TEXT)`)
+    yield* db.run(sql`CREATE TABLE session_v2_provider_recovery_bridge (resolution_id TEXT PRIMARY KEY, attempt_id TEXT, receipt_id TEXT, command_id TEXT)`)
+    yield* db.run(sql`CREATE TABLE session_input (id TEXT PRIMARY KEY, delivery TEXT, promoted_seq INTEGER)`)
+    yield* db.run(sql`CREATE TABLE deepagent_event_outbox (outbox_id TEXT PRIMARY KEY, status TEXT, claim_token TEXT, claimant_id TEXT, lease_expires_at INTEGER, published_at INTEGER)`)
+    yield* db.run(sql`CREATE TABLE deepagent_event_consumer (consumer_key TEXT PRIMARY KEY)`)
+    yield* db.run(sql`CREATE TABLE deepagent_event_consumer_delivery (outbox_id TEXT, consumer_key TEXT, status TEXT, claim_token TEXT, claimant_id TEXT, lease_expires_at INTEGER, resolved_at INTEGER, PRIMARY KEY (outbox_id, consumer_key))`)
+    yield* db.run(sql`CREATE TABLE event_sync_backfill (id INTEGER PRIMARY KEY, state TEXT, cursor_rowid INTEGER, high_water_rowid INTEGER, completed_at INTEGER)`)
+    yield* db.run(sql`CREATE TABLE event_sync_sequence (id INTEGER PRIMARY KEY, backfill_complete INTEGER)`)
+    // The sync-projection authority row always classifies: seed the complete state so a clean
+    // fixture is resolved (an absent/corrupt authority is unclassified and blocks ready).
+    yield* db.run(sql`INSERT INTO event_sync_backfill VALUES (1, 'complete', 0, 0, 1)`)
+    yield* db.run(sql`INSERT INTO event_sync_sequence VALUES (1, 1)`)
   })
 
 const setup = Effect.gen(function* () {
@@ -120,6 +143,7 @@ describe("PostVerify post-migration gate (C1A-11)", () => {
         // A provider-turn receipt bound to an attempt id that doesn't exist breaks the binding.
         yield* db.run(sql`
           INSERT INTO session_v2_provider_turn_receipt
+            (receipt_id, session_id, activity_id, provider_turn_seq, provider_attempt_id, owner_token)
           VALUES ('r-1', 's-1', 'a-1', 1, 'missing-attempt', 'owner-1')
         `)
         const code = yield* gateFails(db, { runId: "run-1", registryIds: ["m-1"] })

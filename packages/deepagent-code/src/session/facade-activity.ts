@@ -6,8 +6,9 @@
  * The facade is a THIN delegation layer over the three existing runners — it NEVER duplicates
  * lifecycle state and NEVER builds a parallel runtime:
  *
- *   task  → TaskDispatcher durable queue (admitTaskRun → input projection → enqueueRun),
- *           concurrency through TaskConcurrency's two-layer semaphore.
+ *   task  → the ONE durable V2 owner: TaskRunAuthority.submit (delivery_mode=background); the
+ *           process-global TaskRunDispatcher claims + drains the run and the settle transaction
+ *           enqueues the outbox notification that wakes the parent.
  *   goal  → GoalManager.start / pause / resume / stop; steer via the goal_steer channel.
  *   panel → PanelConsult.consultPanel wrapped in a BackgroundJob owned by THIS service.
  *
@@ -21,35 +22,34 @@
  * A newly-built service recovers active rows owned by another process before admitting work.
  */
 import { and, desc, eq, isNull } from "drizzle-orm"
-import { Cause, Context, Data, Effect, Layer, Option, Schema } from "effect"
+import { Context, Data, Effect, Layer, Option, Schema } from "effect"
 import { Database } from "@deepagent-code/core/database/database"
 import { SessionFacadeActivityTable } from "@deepagent-code/core/deepagent/activity-authority.sql"
 import { DeepAgentActivityAuthority } from "@deepagent-code/core/deepagent/index"
 import { SessionV2 } from "@deepagent-code/core/session"
+import { SessionMessage } from "@deepagent-code/core/session/message"
+import { SessionSchema } from "@deepagent-code/core/session/schema"
 import { Prompt } from "@deepagent-code/core/session/prompt"
+import { TaskRunAuthority } from "@deepagent-code/core/session/task-run"
 import { TaskRunTable } from "@deepagent-code/core/session/sql"
-import { ModelV2 } from "@deepagent-code/core/model"
-import { ProviderV2 } from "@deepagent-code/core/provider"
+import { EventV2 } from "@deepagent-code/core/event"
 import { Agent } from "@/agent/agent"
 import { deriveSubagentSessionPermission } from "@/agent/subagent-permissions"
 import { BackgroundJob } from "@/background/job"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { EventV2Bridge } from "@/event-v2-bridge"
 import { PanelConsult } from "@/panel/consult"
 import { Provider } from "@/provider/provider"
+import { Session } from "@/session/session"
 import { GoalDriver } from "@/session/goal-driver"
 import { GoalManager } from "@/session/goal-manager"
 import { GoalLoopWiring } from "@/session/goal-loop-wiring"
-import { LegacyTaskInput } from "@/session/task-input"
 import { Snapshot } from "@/snapshot"
-import { SessionPrompt } from "@/session/prompt"
 import { SessionSteer } from "@/session/steer"
 import { SessionActivityOwner } from "@/session/activity-owner"
-import { Session } from "@/session/session"
-import { TaskDispatcher } from "@/session/task-dispatcher"
 import { MessageID, SessionID } from "@/session/schema"
 import { Identifier } from "@/id/id"
-import { TaskConcurrency } from "@/tool/task-concurrency"
-import { admitTaskRun, closeTask, failAdmittedTaskRun, getTaskRun, transitionToAdmitting } from "@/tool/task-run"
+import { closeTask } from "@/tool/task-run"
 
 export type FacadeSubkind = "task" | "goal" | "panel"
 
@@ -217,12 +217,17 @@ type FacadeRow = typeof SessionFacadeActivityTable.$inferSelect
 const STATUS_LIMIT_CEILING = 20
 
 /**
- * The dispatcher construction effect. Hard requirements are ONLY Database + RuntimeFlags; every
- * runner dependency (GoalManager, SessionPrompt, BackgroundJob, SessionSteer, Session/Agent/
+ * The dispatcher construction effect. Core V2 execution dependencies are explicit; every legacy
+ * runner dependency (GoalManager, BackgroundJob, SessionSteer, Session/Agent/
  * Provider) is resolved via serviceOption so the registry can build the facade inline from
- * whatever the surrounding graph provides, without adding requirements to ToolRegistry.layer.
+ * whatever the surrounding graph provides. Optional legacy services only control which facade
+ * subkinds are advertised; the V2 owner itself may never disappear behind serviceOption.
  */
-export const build: Effect.Effect<Interface, never, Database.Service | RuntimeFlags.Service> = Effect.gen(function* () {
+export const build: Effect.Effect<
+  Interface,
+  never,
+  Database.Service | RuntimeFlags.Service | SessionV2.Service | Snapshot.Service
+> = Effect.gen(function* () {
   const database = yield* Database.Service
   const { db } = database
   const flags = yield* RuntimeFlags.Service
@@ -231,10 +236,15 @@ export const build: Effect.Effect<Interface, never, Database.Service | RuntimeFl
   const background = Option.getOrUndefined(yield* Effect.serviceOption(BackgroundJob.Service))
   const sessions = Option.getOrUndefined(yield* Effect.serviceOption(Session.Service))
   const agents = Option.getOrUndefined(yield* Effect.serviceOption(Agent.Service))
-  const sessionPrompt = Option.getOrUndefined(yield* Effect.serviceOption(SessionPrompt.Service))
   const provider = Option.getOrUndefined(yield* Effect.serviceOption(Provider.Service))
-  // §16.3 order 3 caller wiring: flag-gated V2 subagent drive for the panel delegation.
-  const { v2Session, snapshot: v2Snapshot } = yield* GoalLoopWiring.resolveV2SubagentDrive()
+  // LEGACY-EXECUTION-ZERO: the V2 session authority + snapshot drive every panel subagent turn.
+  const v2Session = yield* SessionV2.Service
+  const v2Snapshot = yield* Snapshot.Service
+  // The EventV2 authority for durable admissions: the app bridge is the process authority; the
+  // bare core service covers compositions (tests) that provide only the core event layer.
+  const events =
+    Option.getOrUndefined(yield* Effect.serviceOption(EventV2Bridge.Service)) ??
+    Option.getOrUndefined(yield* Effect.serviceOption(EventV2.Service))
 
   // ── facade base-table IO ──────────────────────────────────────────────────────────────────
 
@@ -382,7 +392,17 @@ export const build: Effect.Effect<Interface, never, Database.Service | RuntimeFl
       .pipe(Effect.orDie)
   }
 
-  const TASK_TERMINAL_STATES = new Set(["completed", "error", "failed", "cancelled", "interrupted"])
+  // Terminal + quiescent-resolvable run states: recovery_required (v1 rows flipped by the
+  // recovery migration) resolves the facade row to its own recovery_required state — never to a
+  // fabricated success — so the partial-unique index cannot stay wedged on a dead run.
+  const TASK_TERMINAL_STATES = new Set([
+    "completed",
+    "error",
+    "failed",
+    "cancelled",
+    "interrupted",
+    "recovery_required",
+  ])
   const GOAL_TERMINAL_PHASES = new Set(["done", "needs_human", "rolled_back", "stopped"])
 
   /**
@@ -432,262 +452,98 @@ export const build: Effect.Effect<Interface, never, Database.Service | RuntimeFl
 
   // ── subkind delegation: task ──────────────────────────────────────────────────────────────
 
-  // Domain errors that escape the delegation internals (input-projection conflicts, raw SQL
-  // errors) are folded into RunnerUnavailable so the public ports expose ONLY FacadeError.
-  const toFacadeError = (error: unknown): FacadeError =>
-    error instanceof FacadeActivityConflict ||
-    error instanceof FacadeActivityNotFound ||
-    error instanceof FacadeActivityRunnerUnavailable ||
-    error instanceof FacadeActivityInvalidInput ||
-    error instanceof FacadeActivityUnsupportedControl
-      ? error
-      : new FacadeActivityRunnerUnavailable({
-          subkind: "task",
-          reason: `task delegation failed: ${
-            typeof error === "object" && error !== null && "_tag" in error
-              ? String((error as { _tag: unknown })._tag)
-              : "unknown"
-          }`,
-        })
-
   const startTask = (row: FacadeRow, input: FacadeStartInput): Effect.Effect<Record<string, string>, FacadeError> =>
     Effect.gen(function* () {
-      if (flags.subagentControlPlane !== "durable")
+      if (!agents || !events)
         return yield* Effect.fail(
           new FacadeActivityRunnerUnavailable({
             subkind: "task",
-            reason:
-              "task facade delegates to the durable TaskDispatcher queue; requires DEEPAGENT_CODE_SUBAGENT_CONTROL_PLANE=durable",
-          }),
-        )
-      if (!sessions || !agents || !provider)
-        return yield* Effect.fail(
-          new FacadeActivityRunnerUnavailable({
-            subkind: "task",
-            reason: "session/agent/provider services unavailable",
+            reason: !agents ? "agent service unavailable" : "EventV2 authority unavailable",
           }),
         )
       const subagentType = input.subagentType ?? "explore"
       const agentInfo = yield* agents.get(subagentType)
       if (!agentInfo)
         return yield* Effect.fail(new FacadeActivityInvalidInput({ reason: `unknown subagent_type: ${subagentType}` }))
-      const model = yield* provider
-        .defaultModel()
-        .pipe(
-          Effect.catchCause(() =>
-            Effect.fail(
-              new FacadeActivityRunnerUnavailable({ subkind: "task", reason: "no default model configured" }),
-            ),
-          ),
-        )
       const promptText = input.prompt ?? input.objective
       const toolCallID = row.spawn_tool_call_id ?? `facade:${row.activity_id}`
-      const parentMessageID = input.parentMessageID ? MessageID.make(input.parentMessageID) : MessageID.ascending()
+      const parentMessageID = input.parentMessageID
+        ? SessionMessage.ID.make(input.parentMessageID)
+        : SessionMessage.ID.create()
 
-      // Concurrency: reuse TaskConcurrency's two-layer (session + agent-type) semaphore — the
-      // facade must not bypass the code-layer cap the task tool enforces.
-      return yield* TaskConcurrency.withTaskSlot({
-        parentSessionID: row.parent_session_id,
-        subagentType,
-        effect: Effect.gen(function* () {
-          const parent = yield* sessions.get(SessionID.make(row.parent_session_id)).pipe(Effect.orDie)
-          const parentAgent = parent.agent
-            ? yield* agents.get(parent.agent).pipe(Effect.orElseSucceed(() => undefined))
-            : undefined
-          const childPermission = deriveSubagentSessionPermission({
-            parentSessionPermission: parent.permission ?? [],
-            parentAgent,
-            subagent: agentInfo,
-          })
-          const admission = yield* admitTaskRun({
-            parentSessionID: SessionID.make(row.parent_session_id),
-            parentMessageID,
-            toolCallID,
-            request: {
-              facade: "activity_facade",
-              subagent_type: subagentType,
-              description: input.objective,
-              prompt: promptText,
-            },
-            deliveryMode: "background",
-            // The facade never escalates: delegated tasks start read-only; write worktree
-            // isolation remains the dedicated task tool's explicit surface.
-            mutationCapability: "read_only",
-            toolCapabilityHash: "facade-static",
-            inputState: "pending",
-            workspaceMode: "shared",
-            workspaceOwner: "parent",
-            workspaceVisibility: "live",
-            parentDirtyPolicy: "allow_live",
-            workspacePreflightState: "pending",
-            sessionMode: "new",
-            executionSpec: {
-              description: input.objective,
-              prompt: { text: promptText },
-              agent: agentInfo.name,
-              model: { providerID: model.providerID, modelID: model.modelID },
-              permission: childPermission,
-            },
-          }).pipe(
-            Effect.provideService(Database.Service, database),
-            Effect.mapError(
-              (error) =>
-                new FacadeActivityConflict({
-                  sessionID: row.parent_session_id,
-                  subkind: "task",
-                  reason: `task admission refused: ${error._tag}/${"reason" in error ? error.reason : "unknown"}`,
-                }),
-            ),
-          )
+      const parent = yield* v2Session
+        .get(SessionSchema.ID.make(row.parent_session_id))
+        .pipe(
+          Effect.mapError(
+            () =>
+              new FacadeActivityRunnerUnavailable({
+                subkind: "task",
+                reason: `parent session ${row.parent_session_id} is not visible to the V2 session store`,
+              }),
+          ),
+        )
+      // Permission derivation runs on the V1 wire rules the policy module speaks; a parent not
+      // visible to the legacy store contributes no inherited rules (fail-closed, read-only facade).
+      const parentV1 = sessions
+        ? yield* sessions.get(SessionID.make(row.parent_session_id)).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+        : undefined
+      const parentAgent = parentV1?.agent
+        ? yield* agents.get(parentV1.agent).pipe(Effect.orElseSucceed(() => undefined))
+        : undefined
+      const childPermission = deriveSubagentSessionPermission({
+        parentSessionPermission: parentV1?.permission ?? [],
+        parentAgent,
+        subagent: agentInfo,
+      })
 
-          const continueAdmission = Effect.gen(function* () {
-            if (admission.exactRetry && TASK_TERMINAL_STATES.has(admission.run.state)) {
-              const replayed: Record<string, string> = {
-                runID: admission.run.runID,
-                childSessionID: admission.run.childSessionID,
-                replayed: "true",
-              }
-              return replayed
-            }
-
-            // Child session adoption (mirrors task.ts's durable projection ordering).
-            const existingChild = yield* sessions
-              .get(admission.run.childSessionID)
-              .pipe(Effect.catchCause(() => Effect.succeed(undefined)))
-            if (existingChild) {
-              // 1.4.8.rN: frozen-spec equivalence — a reused child must match the admission's frozen
-              // agent/model; a mismatched child would silently run under the wrong execution config.
-              const specMatches =
-                existingChild.agent === agentInfo.name &&
-                existingChild.model?.providerID === model.providerID &&
-                existingChild.model?.id === ModelV2.ID.make(model.modelID)
-              if (!specMatches)
-                return yield* new FacadeActivityConflict({
-                  sessionID: row.parent_session_id,
-                  subkind: "task",
-                  reason: `child session spec mismatch on adoption: ${admission.run.childSessionID}`,
-                })
-            } else {
-              yield* sessions
-                .create({
-                  id: admission.run.childSessionID,
-                  parentID: SessionID.make(row.parent_session_id),
-                  title: `${input.objective} (@${agentInfo.name} facade task)`,
-                  agent: agentInfo.name,
-                  model: {
-                    id: ModelV2.ID.make(model.modelID),
-                    providerID: ProviderV2.ID.make(model.providerID),
-                  },
-                  permission: childPermission,
-                  directory: parent.directory,
-                })
-                .pipe(Effect.orDie)
-            }
-            // Bind the facade to the actual execution Session before metadata projection and
-            // enqueue. Permission asks in that child can now resolve the facade durably, while a
-            // crash before this point is handled by the existing compensation/start recovery.
-            yield* bindFacadeOwnerSession(row.activity_id, admission.run.childSessionID)
-            // Terminal-projector identity fence (run_id/generation metadata) — minimal replica of
-            // task.ts's private projectSubagentRun, required by the settlement projection path.
-            const childSession = existingChild ?? (yield* sessions.get(admission.run.childSessionID).pipe(Effect.orDie))
-            const meta = (childSession.metadata ?? {}) as Record<string, unknown>
-            const deepagent = (meta.deepagent ?? {}) as Record<string, unknown>
-            yield* sessions
-              .setMetadata({
-                sessionID: admission.run.childSessionID,
-                metadata: {
-                  ...meta,
-                  deepagent: {
-                    ...deepagent,
-                    subagent: {
-                      finished: false,
-                      state: "researching",
-                      phase: "research",
-                      run_id: admission.run.runID,
-                      generation: admission.run.generation,
-                      attempts: 0,
-                      started_at: Date.now(),
-                    },
-                  },
-                },
-              })
-              .pipe(Effect.orDie)
-
-            // Durable input projection: admitted → admitting → input ready → queued. The executor
-            // startup CAS requires input_state="ready", so this sequence is mandatory.
-            const latest = yield* getTaskRun(admission.run.runID).pipe(
-              Effect.provideService(Database.Service, database),
-            )
-            if (!latest)
-              return yield* Effect.fail(
-                new FacadeActivityRunnerUnavailable({
-                  subkind: "task",
-                  reason: `run ${admission.run.runID} disappeared`,
-                }),
-              )
-            if (latest.inputState !== "ready" && latest.inputState !== "legacy") {
-              const admitting = yield* transitionToAdmitting({
-                runID: admission.run.runID,
-                version: latest.version,
-              }).pipe(Effect.provideService(Database.Service, database))
-              if (admitting) {
-                const prepared = yield* LegacyTaskInput.prepare(admitting, undefined).pipe(Effect.orDie)
-                yield* LegacyTaskInput.projectExact({
-                  prepared,
-                  runID: admission.run.runID,
-                  expectedRunVersion: admitting.version,
-                }).pipe(Effect.provideService(Database.Service, database))
-              }
-            }
-            const current = yield* getTaskRun(admission.run.runID).pipe(
-              Effect.provideService(Database.Service, database),
-            )
-            if (current && (current.inputState === "ready" || current.inputState === "legacy")) {
-              yield* TaskDispatcher.enqueueRun({
-                runID: admission.run.runID,
-                runVersion: current.version,
-              }).pipe(Effect.provideService(Database.Service, database))
-            }
-            const admitted: Record<string, string> = {
-              runID: admission.run.runID,
-              childSessionID: admission.run.childSessionID,
-            }
-            return admitted
-          })
-          return yield* continueAdmission.pipe(
-            Effect.catchCause((cause) => {
-              const reason = "facade_task_delegation_failed_after_admission"
-              const detail = `task facade delegation failed after admission: ${Cause.pretty(cause)}`
-              const compensate = Effect.gen(function* () {
-                const latest = yield* getTaskRun(admission.run.runID).pipe(
-                  Effect.provideService(Database.Service, database),
-                  Effect.catchCause(() => Effect.succeed(undefined)),
-                )
-                if (!latest || latest.controlState === "closed") return
-                if (latest.state === "admitted") {
-                  yield* failAdmittedTaskRun({
-                    run: latest,
-                    reason,
-                    error: { code: "facade_task_delegation_failed", message: detail },
-                  }).pipe(Effect.provideService(Database.Service, database))
-                  return
-                }
-                if (latest.state === "queued") {
-                  yield* closeTask({
-                    childSessionID: latest.childSessionID,
-                    parentSessionID: latest.parentSessionID,
-                    reason,
-                  }).pipe(Effect.provideService(Database.Service, database))
-                }
-              })
-              return compensate.pipe(
-                Effect.catchCause(() => Effect.void),
-                Effect.andThen(Effect.fail(new FacadeActivityRunnerUnavailable({ subkind: "task", reason: detail }))),
-              )
+      // ONE durable submission onto the V2 authority: the ledger transaction precedes every
+      // external side effect, the child session identity is deterministic, and the single first
+      // input lands atomically with the run's input_state pending→ready CAS. Background delivery
+      // means the process-global TaskRunDispatcher claims + drains the run and the settle
+      // transaction enqueues the outbox notification that wakes this parent session.
+      const submission = yield* TaskRunAuthority.submit(db, events, v2Session, {
+        parentSessionID: SessionSchema.ID.make(row.parent_session_id),
+        parentMessageID,
+        toolCallID,
+        deliveryMode: "background",
+        prompt: new Prompt({ text: promptText }),
+        agent: agentInfo.name,
+        child: {
+          title: `task: ${input.objective} (@${agentInfo.name} facade task)`,
+          location: parent.location,
+          // The facade never escalates: delegated tasks start read-only; write isolation remains
+          // the dedicated task tool's explicit surface.
+          permissions: SessionV2.permissionsFromLegacy(childPermission),
+        },
+      }).pipe(
+        Effect.mapError(
+          (error) =>
+            new FacadeActivityConflict({
+              sessionID: row.parent_session_id,
+              subkind: "task",
+              reason: `task admission refused: ${error._tag}${"reason" in error ? `/${error.reason}` : ""}`,
             }),
-          )
-        }),
-      }).pipe(Effect.mapError(toFacadeError))
+        ),
+      )
+
+      // Bind the facade to the deterministic execution session. The run is already durable and
+      // self-healing (the dispatcher claims it regardless), so a bind failure settles only the
+      // facade row — never the run.
+      yield* bindFacadeOwnerSession(row.activity_id, SessionID.make(submission.run.childSessionID)).pipe(
+        Effect.mapError(
+          (error) =>
+            new FacadeActivityConflict({
+              sessionID: row.parent_session_id,
+              subkind: "task",
+              reason: error.reason,
+            }),
+        ),
+      )
+      return {
+        runID: submission.run.runID,
+        childSessionID: submission.run.childSessionID,
+        ...(submission.exactRetry ? { replayed: "true" } : {}),
+      }
     })
 
   // ── subkind delegation: goal ──────────────────────────────────────────────────────────────
@@ -719,11 +575,11 @@ export const build: Effect.Effect<Interface, never, Database.Service | RuntimeFl
 
   const startPanel = (row: FacadeRow, input: FacadeStartInput): Effect.Effect<Record<string, string>, FacadeError> =>
     Effect.gen(function* () {
-      if (!background || !sessions || !agents || !sessionPrompt || !provider)
+      if (!background || !sessions || !agents || !provider)
         return yield* Effect.fail(
           new FacadeActivityRunnerUnavailable({
             subkind: "panel",
-            reason: "panel runner dependencies (session/agent/prompt/provider/background-job) unavailable",
+            reason: "panel runner dependencies (session/agent/provider/background-job) unavailable",
           }),
         )
       const model = yield* provider
@@ -739,11 +595,11 @@ export const build: Effect.Effect<Interface, never, Database.Service | RuntimeFl
       const runTurn = GoalLoopWiring.makeTaskSubagentRunner({
         sessions,
         agents,
-        sessionPrompt,
         parentSessionID: SessionID.make(row.parent_session_id),
         model: { providerID: model.providerID, modelID: model.modelID },
         purpose: "panel",
-        ...GoalLoopWiring.v2DriveDeps(v2Session, v2Snapshot, flags.coreV2Only),
+        v2Session,
+        snapshot: v2Snapshot,
       })
       const panelTurnRunner = (turnInput: Parameters<typeof runTurn>[0]) =>
         runTurn(turnInput).pipe(Effect.map((r) => ({ structured: r.structured })))

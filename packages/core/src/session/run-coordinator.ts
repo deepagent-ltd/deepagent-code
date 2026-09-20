@@ -23,8 +23,8 @@ type Demand = { readonly _tag: "run" } | { readonly _tag: "wake"; readonly seq?:
  * `wake` reports that durable work may now be available. It starts a chain while idle or
  * requests one coalesced follow-up while draining. Repeated wakes collapse together.
  *
- * `interrupt` stops the current ownership chain. Advisory wakes from before the interrupt
- * boundary are suppressed; advisory wakes after the boundary run after cleanup.
+ * `interrupt` stops the current ownership chain. Advisory wakes received by that chain from before
+ * the interrupt boundary are suppressed; durable admission owns idle/restart boundary filtering.
  */
 export interface Coordinator<Key, A, E, Reason = never> {
   /** Snapshots keys with an ownership chain active in this process. */
@@ -41,11 +41,14 @@ export interface Coordinator<Key, A, E, Reason = never> {
 
 /** One Session's process-local execution lane: one active demand and at most one coalesced follow-up. */
 type Entry<A, E, Reason> = {
-  readonly done: Deferred.Deferred<A, E>
+  // `done`/`explicitWaiter` carry their Exit on the SUCCESS channel (same as `settled`): a Deferred
+  // completed with an interrupt-only cause wakes only ONE awaiter under the v4 runtime, so a second
+  // joined caller would strand here on interrupt. Each awaiter re-raises the Exit in its own fiber.
+  readonly done: Deferred.Deferred<Exit.Exit<A, E>>
   readonly settled: Deferred.Deferred<Exit.Exit<A, E>>
   current: Demand
   pending?: Demand
-  explicitWaiter?: Deferred.Deferred<A, E>
+  explicitWaiter?: Deferred.Deferred<Exit.Exit<A, E>>
   interruptSeq?: number
   owner?: Fiber.Fiber<void, never>
   stopping: boolean
@@ -71,13 +74,12 @@ export const make = <Key, A, E, Reason = never>(options: {
   readonly drain: (key: Key, mode: Mode) => Effect.Effect<A, E>
   readonly onFailure?: (key: Key, cause: Cause.Cause<E>) => Effect.Effect<void>
   /** Runs once before the first drain in one process-local ownership chain. */
-  readonly started?: (key: Key) => Effect.Effect<void>
+  readonly started?: (key: Key) => Effect.Effect<void, E>
   /** Runs once after the final drain in one process-local ownership chain. */
   readonly settled?: (key: Key, exit: Exit.Exit<A, E>, reason?: Reason) => Effect.Effect<void>
 }): Effect.Effect<Coordinator<Key, A, E, Reason>, never, Scope.Scope> =>
   Effect.gen(function* () {
     const active = new Map<Key, Entry<A, E, Reason>>()
-    const interruptSeq = new Map<Key, number>()
     const report = yield* FiberSet.makeRuntime<never, void, never>()
     const fork = yield* FiberSet.makeRuntime<never, void, never>()
     const shutdown = Deferred.makeUnsafe<void>()
@@ -87,12 +89,11 @@ export const make = <Key, A, E, Reason = never>(options: {
         closed = true
         Deferred.doneUnsafe(shutdown, Effect.void)
         active.clear()
-        interruptSeq.clear()
       }),
     )
 
-    const makeEntry = (current: Demand, explicitWaiter?: Deferred.Deferred<A, E>): Entry<A, E, Reason> => ({
-      done: Deferred.makeUnsafe<A, E>(),
+    const makeEntry = (current: Demand, explicitWaiter?: Deferred.Deferred<Exit.Exit<A, E>>): Entry<A, E, Reason> => ({
+      done: Deferred.makeUnsafe<Exit.Exit<A, E>>(),
       settled: Deferred.makeUnsafe<Exit.Exit<A, E>>(),
       current,
       explicitWaiter,
@@ -134,20 +135,20 @@ export const make = <Key, A, E, Reason = never>(options: {
 
     const settle = (key: Key, entry: Entry<A, E, Reason>, demand: Demand, exit: Exit.Exit<A, E>) => {
       if (closed) {
-        Deferred.doneUnsafe(entry.done, exit)
+        Deferred.doneUnsafe(entry.done, Effect.succeed(exit))
         Deferred.doneUnsafe(entry.settled, Effect.succeed(exit))
         return
       }
       if (demand._tag === "run" && entry.explicitWaiter !== undefined) {
-        Deferred.doneUnsafe(entry.explicitWaiter, exit)
+        Deferred.doneUnsafe(entry.explicitWaiter, Effect.succeed(exit))
         entry.explicitWaiter = undefined
       }
       if (entry.stopping && demand._tag === "wake" && entry.explicitWaiter !== undefined) {
-        Deferred.doneUnsafe(entry.explicitWaiter, exit)
+        Deferred.doneUnsafe(entry.explicitWaiter, Effect.succeed(exit))
         entry.explicitWaiter = undefined
       }
       if (active.get(key) !== entry) {
-        Deferred.doneUnsafe(entry.done, exit)
+        Deferred.doneUnsafe(entry.done, Effect.succeed(exit))
         Deferred.doneUnsafe(entry.settled, Effect.succeed(exit))
         return
       }
@@ -160,7 +161,7 @@ export const make = <Key, A, E, Reason = never>(options: {
           return
         }
         active.delete(key)
-        Deferred.doneUnsafe(entry.done, exit)
+        Deferred.doneUnsafe(entry.done, Effect.succeed(exit))
         Deferred.doneUnsafe(entry.settled, Effect.succeed(exit))
         return
       }
@@ -169,7 +170,7 @@ export const make = <Key, A, E, Reason = never>(options: {
       if (successor === undefined) active.delete(key)
       else active.set(key, successor)
       if (successor !== undefined) start(key, successor, successor.current, true)
-      Deferred.doneUnsafe(entry.done, exit)
+      Deferred.doneUnsafe(entry.done, Effect.succeed(exit))
       Deferred.doneUnsafe(entry.settled, Effect.succeed(exit))
       if (
         exit._tag === "Failure" &&
@@ -184,7 +185,6 @@ export const make = <Key, A, E, Reason = never>(options: {
     const wake = (key: Key, seq?: number) =>
       Effect.sync(() => {
         if (closed) return
-        if (!isAfterInterrupt(key, seq)) return
         const entry = active.get(key)
         if (entry !== undefined) {
           if (!acceptsWake(entry, seq)) return
@@ -216,10 +216,9 @@ export const make = <Key, A, E, Reason = never>(options: {
     const interrupt = (key: Key, seq?: number, reason?: Reason): Effect.Effect<void> =>
       Effect.suspend(() => {
         const entry = active.get(key)
-        const latest = interruptSeq.get(key)
+        const latest = entry?.interruptSeq
         if (seq !== undefined && latest !== undefined && seq <= latest)
           return entry?.stopping && entry.owner !== undefined ? Fiber.interrupt(entry.owner) : Effect.void
-        if (seq !== undefined) interruptSeq.set(key, seq)
         if (entry?.owner === undefined) return Effect.void
         if (
           seq !== undefined &&
@@ -259,7 +258,7 @@ export const make = <Key, A, E, Reason = never>(options: {
           }
           if (entry.current._tag === "wake") {
             entry.pending = coalesce(entry.pending, { _tag: "run" })
-            entry.explicitWaiter ??= Deferred.makeUnsafe<A, E>()
+            entry.explicitWaiter ??= Deferred.makeUnsafe<Exit.Exit<A, E>>()
             return restore(awaitRun(entry.explicitWaiter))
           }
           return restore(awaitRun(entry.done))
@@ -272,17 +271,15 @@ export const make = <Key, A, E, Reason = never>(options: {
       })
     }
 
-    function awaitRun(done: Deferred.Deferred<A, E>): Effect.Effect<A, E> {
-      return Effect.raceFirst(Deferred.await(done), Deferred.await(shutdown).pipe(Effect.andThen(Effect.interrupt)))
+    function awaitRun(done: Deferred.Deferred<Exit.Exit<A, E>>): Effect.Effect<A, E> {
+      return Effect.raceFirst(
+        Deferred.await(done).pipe(Effect.flatMap((exit) => exit)),
+        Deferred.await(shutdown).pipe(Effect.andThen(Effect.interrupt)),
+      )
     }
 
     function acceptsWake(entry: Entry<A, E, Reason>, seq: number | undefined) {
       return !entry.stopping || (entry.interruptSeq !== undefined && seq !== undefined && seq > entry.interruptSeq)
-    }
-
-    function isAfterInterrupt(key: Key, seq: number | undefined) {
-      const latest = interruptSeq.get(key)
-      return latest === undefined || (seq !== undefined && seq > latest)
     }
 
     function suppressPendingAtOrBefore(entry: Entry<A, E, Reason>, seq: number | undefined) {

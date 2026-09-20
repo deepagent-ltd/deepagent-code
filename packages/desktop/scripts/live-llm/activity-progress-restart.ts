@@ -23,8 +23,8 @@ import {
 
 const suite = "activity-progress-restart"
 const config = await loadLiveConfig()
-if (config.modelID !== "deepseek-v4-flash") {
-  throw new Error("Activity progress restart test requires DeepSeek deepseek-v4-flash")
+if (config.modelID !== "deepseek-flash") {
+  throw new Error("Activity progress restart test requires DeepSeek deepseek-flash")
 }
 const preflightResult = await preflight(config)
 const startedAt = Date.now()
@@ -368,8 +368,8 @@ try {
     stack: "desktop-sidecar-process-restart",
     status: "passed",
     fingerprint: {
-      providerID: "deepseek",
-      runtimeProviderID: "live-deepseek",
+      providerID: config.providerID,
+      runtimeProviderID: process.env.DEEPAGENT_CODE_LIVE_LLM_PROVIDER?.trim() || "live-deepseek",
       modelID: config.modelID,
       modelRevision: config.modelRevision,
       baseURL: config.baseURL,
@@ -438,7 +438,7 @@ function promptBody(messageID: string, intentID: string, text: string) {
   return {
     messageID,
     intentID,
-    model: { providerID: "live-deepseek", modelID: config.modelID },
+    model: { providerID: process.env.DEEPAGENT_CODE_LIVE_LLM_PROVIDER?.trim() || "live-deepseek", modelID: config.modelID },
     agent: "live-ui",
     parts: [{ type: "text", text }],
   }

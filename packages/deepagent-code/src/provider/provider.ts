@@ -51,9 +51,6 @@ import { RequestExecutor } from "@deepagent-code/llm/route"
 
 const log = Log.create({ service: "provider" })
 
-// Tracks whether InstanceState.make has been called at least once in this process.
-// First call is cold start (no cached state); subsequent calls (per-directory re-init) are hot.
-let providerStateInitialized = false
 const OPENAI_HEADER_TIMEOUT_DEFAULT = 10_000
 const THIRD_PARTY_PROVIDER_CONFLICT_MESSAGE =
   "Provider id conflicts with an official provider. Rename this third-party provider in your config."
@@ -1296,12 +1293,14 @@ export const layer = Layer.effect(
     const modelsDevSvc = yield* ModelsDev.Service
     const runtimeFlags = yield* RuntimeFlags.Service
     const flock = yield* EffectFlock.Service
+    // Telemetry belongs to this Provider root. Another embedded/server runtime must not make this
+    // root look warm merely because it initialized first in the same process.
+    let stateInitialized = false
 
     const state = yield* InstanceState.make<State>(() =>
       Effect.gen(function* () {
-        // provider.state_init — structured telemetry: first call per process is cold start.
-        const isFirstProviderInit = !providerStateInitialized
-        providerStateInitialized = true
+        const isFirstProviderInit = !stateInitialized
+        stateInitialized = true
         using _ = log.time("provider.state_init", { cold: isFirstProviderInit })
         const bridge = yield* EffectBridge.make()
         const cfg = yield* config.get()

@@ -14,6 +14,8 @@ export * as DatabasePreflight from "./preflight"
 
 import { Database as BunDatabase } from "#sqlite-native"
 import { promises as fs } from "fs"
+import { DatabaseMigrationLease } from "./migration-lease"
+import { contentDigest } from "../contract/digest"
 
 export interface CapabilityRow {
   capability: string
@@ -30,6 +32,18 @@ export interface JournalRow {
 export interface UpgradeRunRow {
   run_id: string
   state: string
+}
+
+export interface MigrationReceiptIdentityRow {
+  receipt_id: string
+  migration_id: string
+  content_hash: string
+  ordinal: number
+  run_id: string
+  build_identity: string
+  package_version: string
+  body_hash: string
+  result: string
 }
 
 export type PreflightIssueCode =
@@ -64,8 +78,10 @@ export interface PreflightOptions {
   knownMigrationIds: readonly string[]
   historicalAliases: Readonly<Record<string, string>>
   knownContentHashes?: Readonly<Record<string, string>>
+  /** Last migration allowed to carry the pre-sealed Function.toString identity. */
+  legacyContentIdentityBoundary?: string
   mergedHistoryAnchor?: string
-  mergedHistoryInsertions?: Readonly<Set<string>>
+  mergedHistoryInsertions?: ReadonlySet<string>
   requiredFreeSpaceBytes?: number
   buildDigest: string
   buildVersion: string
@@ -84,6 +100,8 @@ export interface PreflightObservations {
   journalRows: JournalRow[]
   capabilities: CapabilityRow[]
   upgradeRuns: UpgradeRunRow[]
+  /** Present when the receipt table exists; omitted by older injected probes. */
+  migrationReceipts?: MigrationReceiptIdentityRow[]
   walExists: boolean
   walSize: number
   shmExists: boolean
@@ -104,6 +122,7 @@ export interface PreflightProbes {
   readJournalRows: (filename: string) => Promise<JournalRow[] | null>
   readCapabilities: (filename: string) => Promise<CapabilityRow[] | null>
   readUpgradeRuns: (filename: string) => Promise<UpgradeRunRow[] | null>
+  readMigrationReceipts?: (filename: string) => Promise<MigrationReceiptIdentityRow[] | null>
   walShm: (filename: string) => Promise<{ walExists: boolean; walSize: number; shmExists: boolean; shmSize: number }>
   freeSpace: (filename: string) => Promise<number>
   localFilesystem: (filename: string) => Promise<boolean>
@@ -114,20 +133,30 @@ const SQLITE_HEADER_MAGIC = "SQLite format 3\x00"
 const HEADER_MAGIC_BYTES = Uint8Array.from([0x53, 0x51, 0x4c, 0x69, 0x74, 0x65, 0x20, 0x66, 0x6f, 0x72, 0x6d, 0x61, 0x74, 0x20, 0x33, 0x00])
 
 const readConnection = (filename: string): BunDatabase | null => {
-  // Open with read-write + `query_only` so a freshly created empty WAL DB can be
-  // inspected (a pure read-only open cannot create the shared-memory file and
-  // returns SQLITE_CANTOPEN). `query_only` fences every write at the SQLite level,
-  // so the preflight never mutates user data.
+  // Physical read-only is part of the preflight authority boundary. If a WAL database cannot be
+  // inspected without creating SHM or otherwise opening writable, the preflight must fail closed;
+  // silently upgrading this connection to read-write would mutate the store before compatibility
+  // and process ownership have been established.
   try {
-    const db = new BunDatabase(filename, { readwrite: true, create: false })
+    const db = new BunDatabase(filename, { readonly: true, create: false })
     db.run("PRAGMA query_only = ON")
-    // Design §10.6: a recovery/read-only inspection connection must not be at NORMAL. bun:sqlite
-    // defaults a fresh connection to synchronous=NORMAL, so force FULL (query_only fences all writes,
-    // so this is purely the durability posture, never a write path).
-    db.run("PRAGMA synchronous = FULL")
     return db
   } catch {
     return null
+  }
+}
+
+const inspectReadOnly = <T>(filename: string, inspect: (db: BunDatabase) => T): T | null => {
+  const db = readConnection(filename)
+  if (!db) return null
+  try {
+    return inspect(db)
+  } catch {
+    // Opening a corrupt file can succeed even though its first statement fails.
+    // Preflight reports that state as unreadable; it must not crash the incident shell.
+    return null
+  } finally {
+    db.close()
   }
 }
 
@@ -156,38 +185,30 @@ const defaultProbes: PreflightProbes = {
       const raw = buffer[16]! | (buffer[17]! << 8)
       const pageSize = raw === 1 ? 65536 : raw
       return { headerValid, pageSize }
+    } catch {
+      return { headerValid: false, pageSize: 0 }
     } finally {
       await handle.close()
     }
   },
   async readJournalMode(filename) {
-    const db = readConnection(filename)
-    if (!db) return null
-    try {
+    return inspectReadOnly(filename, (db) => {
       const journal = db.query("PRAGMA journal_mode").get() as { journal_mode?: string } | undefined
       const count = db.query("PRAGMA page_count").get() as { page_count?: number } | undefined
       return { journalMode: journal?.journal_mode ?? null, pageCount: count?.page_count ?? 0 }
-    } finally {
-      db.close()
-    }
+    })
   },
   async readJournalRows(filename) {
-    const db = readConnection(filename)
-    if (!db) return null
-    try {
+    return inspectReadOnly(filename, (db) => {
       const exists = db
         .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'migration'")
         .get() as { name?: string } | undefined
       if (!exists) return []
       return db.query("SELECT * FROM migration").all() as unknown as JournalRow[]
-    } finally {
-      db.close()
-    }
+    })
   },
   async readCapabilities(filename) {
-    const db = readConnection(filename)
-    if (!db) return null
-    try {
+    return inspectReadOnly(filename, (db) => {
       const exists = db
         .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'database_capability'")
         .get() as { name?: string } | undefined
@@ -195,22 +216,29 @@ const defaultProbes: PreflightProbes = {
       return db
         .query("SELECT capability, minimum_reader_protocol, minimum_writer_protocol FROM database_capability")
         .all() as unknown as CapabilityRow[]
-    } finally {
-      db.close()
-    }
+    })
   },
   async readUpgradeRuns(filename) {
-    const db = readConnection(filename)
-    if (!db) return null
-    try {
+    return inspectReadOnly(filename, (db) => {
       const exists = db
         .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'database_upgrade_run'")
         .get() as { name?: string } | undefined
       if (!exists) return []
       return db.query("SELECT run_id, state FROM database_upgrade_run").all() as unknown as UpgradeRunRow[]
-    } finally {
-      db.close()
-    }
+    })
+  },
+  async readMigrationReceipts(filename) {
+    return inspectReadOnly(filename, (db) => {
+      const exists = db
+        .query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'database_migration_receipt'")
+        .get() as { name?: string } | undefined
+      if (!exists) return []
+      return db
+        .query(
+          "SELECT receipt_id, migration_id, content_hash, ordinal, run_id, build_identity, package_version, body_hash, result FROM database_migration_receipt",
+        )
+        .all() as unknown as MigrationReceiptIdentityRow[]
+    })
   },
   async walShm(filename) {
     const wal = await fs.stat(filename + "-wal").catch(() => null)
@@ -240,12 +268,8 @@ const defaultProbes: PreflightProbes = {
       return true
     }
   },
-  async activeProcess() {
-    // C1A-05 provides the fenced OS lock + DB lease. Until that lands, a read-only
-    // preflight cannot prove a second window, so it returns false and never
-    // false-positives a boot. Two-window race determinism is exercised in tests
-    // with an injected probe.
-    return false
+  async activeProcess(filename) {
+    return DatabaseMigrationLease.processLockActive(`${filename}.runtime.lock`, { staleMs: 15_000 })
   },
 }
 
@@ -263,6 +287,7 @@ const gatherObservations = async (
   const journalRows = readStat ? (await probes.readJournalRows(options.filename)) ?? [] : []
   const capabilities = readStat ? (await probes.readCapabilities(options.filename)) ?? [] : []
   const upgradeRuns = readStat ? (await probes.readUpgradeRuns(options.filename)) ?? [] : []
+  const migrationReceipts = readStat ? (await probes.readMigrationReceipts?.(options.filename)) ?? [] : []
   const walShm = await probes.walShm(options.filename)
   const freeSpaceBytes = await probes.freeSpace(options.filename)
   const localFilesystem = await probes.localFilesystem(options.filename)
@@ -281,6 +306,7 @@ const gatherObservations = async (
     journalRows,
     capabilities,
     upgradeRuns,
+    migrationReceipts,
     walExists: walShm.walExists,
     walSize: walShm.walSize,
     shmExists: walShm.shmExists,
@@ -351,10 +377,38 @@ export const analyzePreflight = (
     })
 
   const contentHashes = options.knownContentHashes ?? {}
+  const legacyBoundary = options.legacyContentIdentityBoundary
+  const legacyBoundaryIndex = legacyBoundary ? options.knownMigrationIds.indexOf(legacyBoundary) : -1
+  const legacyReceiptHashes = new Set(
+    (observations.migrationReceipts ?? [])
+      .filter(
+        (receipt) =>
+          (receipt.result === "applied" || receipt.result === "backfilled") &&
+          receipt.receipt_id ===
+            contentDigest({
+              migrationId: receipt.migration_id,
+              contentHash: receipt.content_hash,
+              ordinal: receipt.ordinal,
+              runId: receipt.run_id,
+              buildIdentity: receipt.build_identity,
+              packageVersion: receipt.package_version,
+              bodyHash: receipt.body_hash,
+            }),
+      )
+      .map((receipt) => `${canonicalize(receipt.migration_id)}:${receipt.content_hash}`),
+  )
   for (const row of observations.journalRows) {
     const canonical = canonicalize(row.id)
     const expected = contentHashes[canonical]
-    if (expected && row.content_hash && row.content_hash !== expected)
+    const ordinal = options.knownMigrationIds.indexOf(canonical)
+    const receiptBackedLegacyIdentity =
+      row.content_hash !== null &&
+      row.content_hash !== undefined &&
+      legacyBoundaryIndex >= 0 &&
+      ordinal >= 0 &&
+      ordinal <= legacyBoundaryIndex &&
+      legacyReceiptHashes.has(`${canonical}:${row.content_hash}`)
+    if (expected && row.content_hash && row.content_hash !== expected && !receiptBackedLegacyIdentity)
       issues.push({
         code: "migration_journal_content_mismatch",
         message: "migration " + row.id + " content hash " + row.content_hash + " does not match registry " + expected,

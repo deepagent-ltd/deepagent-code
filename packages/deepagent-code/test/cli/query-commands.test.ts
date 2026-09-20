@@ -16,7 +16,7 @@ describe("deepagentCode query commands (non-interactive subprocess)", () => {
 
         const json = yield* deepagentCode.spawn(["oversight", "list", "--format", "json"])
         deepagentCode.expectExit(json, 0, "oversight list --format json")
-        expect(JSON.parse(json.stdout)).toEqual([])
+        expect(deepagentCode.expectJsonStdout(json, "oversight list --format json")).toEqual([])
       }),
     60_000,
   )
@@ -27,7 +27,13 @@ describe("deepagentCode query commands (non-interactive subprocess)", () => {
       Effect.gen(function* () {
         const json = yield* deepagentCode.spawn(["panel", "status", "ses_parity000003", "--format", "json"])
         deepagentCode.expectExit(json, 0, "panel status --format json")
-        const parsed = JSON.parse(json.stdout) as { sessionID: string; armed: boolean; explicit: boolean; rounds: string }
+        // W3.9 stdout hygiene: whole stdout parses as one JSON payload with no log line pollution.
+        const parsed = deepagentCode.expectJsonStdout(json, "panel status --format json") as {
+          sessionID: string
+          armed: boolean
+          explicit: boolean
+          rounds: string
+        }
         expect(parsed.sessionID).toBe("ses_parity000003")
         expect(typeof parsed.armed).toBe("boolean")
         expect(parsed.explicit).toBe(false)
@@ -41,7 +47,7 @@ describe("deepagentCode query commands (non-interactive subprocess)", () => {
       Effect.gen(function* () {
         const json = yield* deepagentCode.spawn(["review", "list", "--format", "json"])
         deepagentCode.expectExit(json, 0, "review list --format json")
-        expect(JSON.parse(json.stdout)).toEqual([])
+        expect(deepagentCode.expectJsonStdout(json, "review list --format json")).toEqual([])
       }),
     60_000,
   )
@@ -52,7 +58,11 @@ describe("deepagentCode query commands (non-interactive subprocess)", () => {
       Effect.gen(function* () {
         const list = yield* deepagentCode.spawn(["wiki", "list", "--format", "json"])
         deepagentCode.expectExit(list, 0, "wiki list --format json")
-        const pages = JSON.parse(list.stdout) as Array<{ docId: string; type: string; title: string }>
+        const pages = deepagentCode.expectJsonStdout(list, "wiki list --format json") as Array<{
+          docId: string
+          type: string
+          title: string
+        }>
         expect(Array.isArray(pages)).toBe(true)
         // The builtin skill pack projects durable skill pages even on a fresh home.
         expect(pages.length).toBeGreaterThan(0)
@@ -60,7 +70,10 @@ describe("deepagentCode query commands (non-interactive subprocess)", () => {
 
         const search = yield* deepagentCode.spawn(["wiki", "search", "query", "--format", "json"])
         deepagentCode.expectExit(search, 0, "wiki search --format json")
-        const hits = JSON.parse(search.stdout) as Array<{ docId: string; score: number }>
+        const hits = deepagentCode.expectJsonStdout(search, "wiki search --format json") as Array<{
+          docId: string
+          score: number
+        }>
         expect(Array.isArray(hits)).toBe(true)
       }),
     90_000,
@@ -72,13 +85,18 @@ describe("deepagentCode query commands (non-interactive subprocess)", () => {
       Effect.gen(function* () {
         const json = yield* deepagentCode.spawn(["packs", "list", "--format", "json"])
         deepagentCode.expectExit(json, 0, "packs list --format json")
-        const parsed = JSON.parse(json.stdout) as { packs: Array<{ id: string }>; snapshotId: string }
+        const parsed = deepagentCode.expectJsonStdout(json, "packs list --format json") as {
+          packs: Array<{ id: string }>
+          snapshotId: string
+        }
         expect(Array.isArray(parsed.packs)).toBe(true)
         expect(parsed.snapshotId).toBeString()
 
         const all = yield* deepagentCode.spawn(["packs", "list", "--all", "--format", "json"])
         deepagentCode.expectExit(all, 0, "packs list --all --format json")
-        const catalog = JSON.parse(all.stdout) as { packs: Array<{ id: string; builtin: boolean }> }
+        const catalog = deepagentCode.expectJsonStdout(all, "packs list --all --format json") as {
+          packs: Array<{ id: string; builtin: boolean }>
+        }
         expect(catalog.packs.length).toBeGreaterThan(0)
       }),
     60_000,

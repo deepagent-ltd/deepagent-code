@@ -3,10 +3,12 @@ import { Hash } from "@deepagent-code/core/util/hash"
 import {
   CapabilityL2BudgetExceededError,
   CapabilityTurnBudgetExceededError,
+} from "@deepagent-code/core/system-context/capability-loader"
+import {
   capabilityLoad,
   resetCapabilityLoader,
   turnBudgetView,
-} from "@deepagent-code/core/system-context/capability-loader"
+} from "@deepagent-code/core/system-context/capability-loader-memory"
 
 // C4-05 — `capability_load` L2 + bounded per-turn budget: the frozen L2
 // single-body ceiling (1200 tokens) and the per-turn ≤2 bodies / ≤2400 new tokens

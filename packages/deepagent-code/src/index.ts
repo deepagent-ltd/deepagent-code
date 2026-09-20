@@ -38,11 +38,67 @@ import { PanelCommand } from "./cli/cmd/panel"
 import { ReviewCommand } from "./cli/cmd/review"
 import { WikiCommand } from "./cli/cmd/wiki"
 import { PacksCommand } from "./cli/cmd/packs"
+import { DocsCommand } from "./cli/cmd/docs"
 import { errorMessage } from "./util/error"
 import { PluginCommand } from "./cli/cmd/plug"
 import { Heap } from "./cli/heap"
 import { ensureProcessMetadata } from "@deepagent-code/core/util/deepagent-code-process"
 import { isRecord } from "@/util/record"
+import { applyRuntimeDefaults, RUNTIME_DEFAULTS_SNAPSHOT_ENV, runtimeDefaultsEnvSnapshot } from "./runtime-defaults"
+import { ProxyEnv } from "@/util/proxy-env"
+
+// Bun's fetch does not honor HTTP(S)_PROXY environment variables (plugin/openai/ws.ts documents
+// the same gap for WebSockets), so behind a corporate or harness proxy every outbound request
+// must pass the proxy explicitly. Wrap the global fetch once: the LLM transport, model-catalog
+// fetches, and background installs all resolve the proxy through ProxyEnv (which also honors
+// no_proxy).
+const nativeFetch = globalThis.fetch
+globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+  const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url
+  const proxy = ProxyEnv.getProxyForUrl(url)
+  if (!proxy || (init as RequestInit & { proxy?: string } | undefined)?.proxy !== undefined) {
+    return nativeFetch(input, init)
+  }
+  return nativeFetch(input, { ...init, proxy })
+}) as typeof globalThis.fetch
+import { ProcessLifecycle } from "./effect/process-lifecycle"
+import * as mechanismBeacon from "@deepagent-code/core/deepagent/mechanism-beacon"
+
+// Bun's fetch treats a set-but-empty HTTP(S)_PROXY value as a proxy with an empty URL and
+// fails every request ("proxy.url must be a non-empty string"), killing the first provider
+// turn and background installs. Drop empties so an unset-in-spirit variable cannot do that.
+for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"]) {
+  if (process.env[key] === "") delete process.env[key]
+}
+
+// Normalize the environment inherited by subprocesses and compatibility readers. Core V2 feature
+// registries capture their own immutable value at construction; their canonical unset defaults are
+// identical to this table, so static ESM evaluation order cannot change feature authority.
+applyRuntimeDefaults()
+
+// Info-printing invocations (--help/--version/completion) run no mechanism, so the ablation
+// ledger has nothing to record — and yargs writes --help to stderr, where beacon lines would
+// corrupt both the user's terminal and the CLI help-text snapshots.
+const infoInvocation = process.argv.some(
+  (arg) => arg === "--help" || arg === "-h" || arg === "--version" || arg === "-v" || arg === "completion",
+)
+
+if (process.env[RUNTIME_DEFAULTS_SNAPSHOT_ENV] === "1") {
+  // Test-only backdoor (W0.1 verification case 4): print the canonical defaults vector and exit
+  // without starting the CLI — test/runtime-defaults.test.ts compares both entries' vectors. Any
+  // process (or inherited child env) carrying this key exits here, so never set it in production
+  // shells, packaging, or service managers.
+  console.log(JSON.stringify(runtimeDefaultsEnvSnapshot(process.env)))
+  process.exit(0)
+}
+
+// Mechanism beacon: emit the resolved on/off state of every ablable mechanism once, before any
+// turn runs, plus an engagement summary at exit. This is the ablation-correctness ledger — it
+// distinguishes "flag set" from "mechanism actually ran" for every arm of the matrix.
+if (!infoInvocation) {
+  mechanismBeacon.emitStartupBeacon()
+  process.once("exit", () => mechanismBeacon.emitSummaryBeacon())
+}
 
 const processMetadata = ensureProcessMetadata("main")
 
@@ -118,14 +174,12 @@ const cli = yargs(args)
     }
     process.env.DEEPAGENT_CODE = "1"
     process.env.DEEPAGENT_CODE_PID = String(process.pid)
-    // C7-05: the production runtime ships with the V2 event-admission + IM single-write
-    // authorities ON (the switches stay explicit-env so isolated test/daemon contexts keep
-    // their own behavior; `=false`/`=0` in this process restores the legacy authorities).
-    // The IM single-write suppression is only safe together with the V2 event-driven IM path
-    // (im.message.created → admission → dispatchV2); without it @mention work would be dropped.
-    process.env.DEEPAGENT_CODE_EVENT_V2_ADMISSION ??= "true"
-    process.env.DEEPAGENT_CODE_EVENT_V2_IM_SINGLE_WRITE ??= "true"
-    process.env.DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM ??= "true"
+    // C7-05/W0.1: the V2 event-admission defaults live in src/runtime-defaults.ts (applied at the top
+    // of this module). The former DEEPAGENT_CODE_V4_EVENT_DRIVEN_IM pairing default is removed with
+    // the V2 IM durable-only migration: @mentions are admitted directly as durable SessionV2 work by
+    // the IM handler (src/im/im-agent-execution.ts) and replies return through the im_reply_outbox
+    // daemon — there is no bus-mediated IM path left to pair with, and the v4EventDrivenIm flag itself
+    // is deleted from runtime-flags.ts.
 
     Log.Default.info(scriptName, {
       version: InstallationVersion,
@@ -167,6 +221,7 @@ const cli = yargs(args)
   .command(ReviewCommand)
   .command(WikiCommand)
   .command(PacksCommand)
+  .command(DocsCommand)
   .fail((msg, err) => {
     if (
       msg?.startsWith("Unknown argument") ||
@@ -177,7 +232,7 @@ const cli = yargs(args)
       cli.showHelp(show)
     }
     if (err) throw err
-    process.exit(1)
+    process.exitCode = 1
   })
   .strict()
 
@@ -232,9 +287,20 @@ try {
   }
   process.exitCode = 1
 } finally {
-  // Some subprocesses don't react properly to SIGTERM and similar signals.
-  // Most notably, some docker-container-based MCP servers don't handle such signals unless
-  // run using `docker run --init`.
-  // Explicitly exit to avoid any hanging subprocesses.
+  const { AppRuntime } = await import("./effect/app-runtime")
+  const cleanup = await Promise.race([
+    Promise.allSettled([AppRuntime.dispose(), ProcessLifecycle.disposeAll()]),
+    Bun.sleep(2_000).then(() => undefined),
+  ])
+  if (cleanup) {
+    cleanup
+      .flatMap((result) => (result.status === "rejected" ? [result.reason] : []))
+      .forEach((error) => Log.Default.error("process resource cleanup failed", { error: errorMessage(error) }))
+  } else {
+    Log.Default.warn("process resource cleanup exceeded shutdown budget", { budgetMs: 2_000 })
+  }
+  Heap.stop()
+  // Some external subprocesses do not react to scope interruption. Exit only after the application
+  // runtime has had a bounded opportunity to run every registered finalizer.
   process.exit()
 }

@@ -2,7 +2,9 @@ import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import { SelectionContract } from "@deepagent-code/core/contract/selection"
 import { Authorization } from "../middleware/authorization"
-import { ApiTypedError } from "../typed-error"
+import { InstanceContextMiddleware } from "../middleware/instance-context"
+import { WorkspaceRoutingMiddleware, WorkspaceRoutingQueryFields } from "../middleware/workspace-routing"
+import { ApiTypedErrors } from "../typed-error"
 import { described } from "./metadata"
 
 // C6-03 (design §11.1 + §11.2): context readiness + the snapshot-at-watermark
@@ -33,12 +35,14 @@ export const ContextPaths = {
 
 export const ContextSessionQuery = Schema.Struct({
   session_id: Schema.String,
+  ...WorkspaceRoutingQueryFields,
 }).annotate({ identifier: "ContextSessionQuery" })
 
 export const ContextEventsQuery = Schema.Struct({
   session_id: Schema.String,
   after: Schema.optional(Schema.NumberFromString),
   limit: Schema.optional(Schema.NumberFromString),
+  ...WorkspaceRoutingQueryFields,
 }).annotate({ identifier: "ContextEventsQuery" })
 
 /** Per-graph readiness (the C3 GraphStatus shape). */
@@ -76,7 +80,7 @@ export const ContextApi = HttpApi.make("context").add(
       HttpApiEndpoint.get("readiness", ContextPaths.readiness, {
         query: ContextSessionQuery,
         success: described(ContextReadinessSchema, "Four-graph context readiness"),
-        error: ApiTypedError,
+        error: ApiTypedErrors,
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "context.readiness",
@@ -88,7 +92,7 @@ export const ContextApi = HttpApi.make("context").add(
       HttpApiEndpoint.get("eventsCursor", ContextPaths.eventsCursor, {
         query: ContextSessionQuery,
         success: described(EventsCursorSchema, "Event cursor (snapshot-at-watermark)"),
-        error: ApiTypedError,
+        error: ApiTypedErrors,
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "context.eventsCursor",
@@ -100,7 +104,7 @@ export const ContextApi = HttpApi.make("context").add(
       HttpApiEndpoint.get("events", ContextPaths.events, {
         query: ContextEventsQuery,
         success: described(SessionEventsSchema, "Durable session events drained after a cursor"),
-        error: ApiTypedError,
+        error: ApiTypedErrors,
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "context.events",
@@ -116,5 +120,7 @@ export const ContextApi = HttpApi.make("context").add(
         description: "Context readiness + event cursor HttpApi surface (C6-03).",
       }),
     )
+    .middleware(InstanceContextMiddleware)
+    .middleware(WorkspaceRoutingMiddleware)
     .middleware(Authorization),
 )

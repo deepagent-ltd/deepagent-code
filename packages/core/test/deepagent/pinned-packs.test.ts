@@ -3,9 +3,10 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { PINNED_PACKS_FILE, pinnedPacksFile, readPinnedPacks, writePinnedPacks } from "../../src/deepagent/pinned-packs"
+import { tmpRoot, tmpRootShared } from "../fixture/tmpdir"
 
 const withTempMemoryDir = (fn: (memoryDir: string) => void) => {
-  const dir = mkdtempSync(path.join(tmpdir(), "deepagent-pinned-packs-"))
+  const dir = mkdtempSync(tmpRootShared())
   try {
     fn(path.join(dir, "memory"))
   } finally {

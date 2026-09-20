@@ -18,6 +18,9 @@ import { DatabaseBootstrap, DatabaseBootstrapError, type BootstrapInput, type Bo
 import { Backup } from "./backup"
 import { BackupVerify } from "./backup-verify"
 import { createHash } from "node:crypto"
+import { StartupInventory } from "../session/runner/startup-inventory"
+import { DatabaseMigrationLease } from "./migration-lease"
+import { DatabaseUpgradeRun } from "./upgrade-run"
 
 const makeDatabase = EffectDrizzleSqlite.makeWithDefaults()
 type DatabaseShape = Effect.Success<typeof makeDatabase>
@@ -32,6 +35,11 @@ export const SupportedWriterProtocol = 3
 /** The database file path used to derive the OS migration lock (skipped for in-memory databases). */
 export const CurrentDatabaseFile = Context.Reference<{ filename?: string }>(
   "@deepagent-code/v2/storage/CurrentDatabaseFile",
+  { defaultValue: () => ({}) },
+)
+
+const CurrentPreflightState = Context.Reference<{ state?: BootstrapState }>(
+  "@deepagent-code/v2/storage/CurrentPreflightState",
   { defaultValue: () => ({}) },
 )
 
@@ -53,16 +61,44 @@ const knownMigrationIds = migrations.map((migration) => migration.id)
 const registryDigest = (ids: readonly string[]): string =>
   createHash("sha256").update(ids.join("\n")).digest("hex")
 
+const backupFailure = (message: string) =>
+  new DatabaseBootstrapError(
+    DatabaseBootstrap.backupFailureState({ buildDigest: registryDigest(knownMigrationIds) }, message),
+  )
+
 const preflightOptionsFor = (filename: string, buildVersion: string): DatabasePreflight.PreflightOptions => ({
   filename,
   readerProtocol: SupportedReaderProtocol,
   writerProtocol: SupportedWriterProtocol,
   knownMigrationIds,
   historicalAliases: Object.fromEntries(DatabaseMigration.historicalAliases),
+  knownContentHashes: Object.fromEntries(
+    migrations.map((migration) => [migration.id, DatabaseUpgradeRun.migrationContentHash(migration)]),
+  ),
+  legacyContentIdentityBoundary: DatabaseMigration.legacyContentIdentityBoundary,
   mergedHistoryAnchor: DatabaseMigration.mergedHistoryAnchor,
   mergedHistoryInsertions: DatabaseMigration.mergedHistoryInsertions,
   buildDigest: registryDigest(knownMigrationIds),
   buildVersion,
+})
+
+const verifyStartupInventory = Effect.fn("Database.verifyStartupInventory")(function* (db: DatabaseShape) {
+  const verdict = yield* StartupInventory.verifyStartupInventory(db)
+  if (verdict.ok) return
+  const first = verdict.unclassifiedItems[0]
+  return yield* Effect.fail(
+    new DatabaseBootstrapError(
+      DatabaseBootstrap.startupRecoveryState(
+        { buildDigest: registryDigest(knownMigrationIds) },
+        {
+          stableCode: "startup_inventory_unclassified",
+          message: `${verdict.unclassifiedItems.length} durable startup item(s) could not be classified`,
+          table: first?.category,
+          key: first?.id,
+        },
+      ),
+    ),
+  )
 })
 
 const toBootstrapInput = (preflightResult: DatabasePreflight.PreflightResult): BootstrapInput => {
@@ -85,7 +121,7 @@ const toBootstrapInput = (preflightResult: DatabasePreflight.PreflightResult): B
     needsBackup,
     backupReady: false,
     recoveryRequired,
-    recoveryComplete: true,
+    recoveryComplete: !recoveryRequired,
     postVerifyPassed: false,
   }
 }
@@ -99,7 +135,35 @@ const toBootstrapInput = (preflightResult: DatabasePreflight.PreflightResult): B
 export const bootstrap = async (filename: string, buildVersion = InstallationVersion): Promise<BootstrapState> => {
   const buildDigest = registryDigest(knownMigrationIds)
   const preflightResult = await DatabasePreflight.preflight(preflightOptionsFor(filename, buildVersion))
-  return DatabaseBootstrap.describeBootstrap(toBootstrapInput(preflightResult), { buildDigest })
+  const input = toBootstrapInput(preflightResult)
+  const state = DatabaseBootstrap.describeBootstrap(input, { buildDigest })
+  if (!state.ready || !input.hasExistingDatabase || input.pendingMigrationIds.length > 0) return state
+
+  const inventory = await Effect.runPromise(
+    Effect.gen(function* () {
+      const db = yield* makeDatabase
+      yield* db.run("PRAGMA query_only = ON")
+      return yield* StartupInventory.verifyStartupInventory(db)
+    }).pipe(Effect.provide(sqliteLayer({ filename, readonly: true })), Effect.scoped, Effect.exit),
+  )
+  if (inventory._tag === "Failure")
+    return DatabaseBootstrap.startupRecoveryState(
+      { buildDigest },
+      {
+        stableCode: "startup_inventory_check_failed",
+        message: "durable startup inventory could not be read safely",
+      },
+    )
+  if (inventory.value.ok) return state
+  return DatabaseBootstrap.startupRecoveryState(
+    { buildDigest },
+    {
+      stableCode: "startup_inventory_unclassified",
+      message: `${inventory.value.unclassifiedItems.length} durable startup item(s) could not be classified`,
+      table: inventory.value.unclassifiedItems[0]?.category,
+      key: inventory.value.unclassifiedItems[0]?.id,
+    },
+  )
 }
 
 /** Open the business DB and apply forward migrations. Failures are defects (existing semantics). */
@@ -117,7 +181,13 @@ const openAndMigrate = Effect.gen(function* () {
   // Tune WAL autocheckpoint: default 1000 pages (~4MB) causes large infrequent merges that spike
   // write-lock hold time. 200 pages (~800KB) keeps each merge cheap while still amortizing I/O.
   yield* db.run("PRAGMA wal_autocheckpoint = 200")
-  yield* DatabaseMigration.apply(db)
+  const file = yield* CurrentDatabaseFile
+  yield* DatabaseMigration.apply(db, {
+    filename: file.filename,
+    readerProtocol: String(SupportedReaderProtocol),
+    writerProtocol: String(SupportedWriterProtocol),
+  })
+  yield* verifyStartupInventory(db)
 
   const capabilities = yield* db.all<{
     capability: string
@@ -133,7 +203,7 @@ const openAndMigrate = Effect.gen(function* () {
       )
   }
 
-  return { db } satisfies Interface
+  return { db, mode: DatabaseBootstrap.readyState({ buildDigest: registryDigest(knownMigrationIds) }) } satisfies Interface
 }).pipe(Effect.orDie)
 
 /**
@@ -150,7 +220,8 @@ export const layer = Layer.effect(
     const filename = native?.filename ?? ""
     let mode: BootstrapState | undefined
     if (filename !== "" && filename !== ":memory:") {
-      const bootState = yield* Effect.tryPromise(() => bootstrap(filename))
+      const preflight = yield* CurrentPreflightState
+      const bootState = preflight.state ?? (yield* Effect.tryPromise(() => bootstrap(filename)))
       mode = bootState
       if (!bootState.ready) return yield* Effect.fail(new DatabaseBootstrapError(bootState))
       // §10.4 executor (DATA-P2-3 close): the state machine reports an existing DB with
@@ -161,13 +232,42 @@ export const layer = Layer.effect(
       // the shell surfaces backup_failed/upgrade guidance with the retained previous backup).
       if (bootState.phase === "backup_required") {
         const destDir = join(dirname(filename), "backups")
-        yield* Effect.promise(() => fs.mkdir(destDir, { recursive: true })).pipe(Effect.orDie)
+        yield* Effect.tryPromise({
+          try: () => fs.mkdir(destDir, { recursive: true }),
+          catch: () => backupFailure("could not create the consistency backup directory"),
+        })
         // Any backup failure blocks the open (fail-closed per §10.4: the previous
         // known-good backup + incident set are retained; the shell surfaces guidance).
-        const manifest = yield* Backup.create({ sourcePath: filename, destDir, buildId: InstallationVersion })
+        const manifest = yield* Backup.create({ sourcePath: filename, destDir, buildId: InstallationVersion }).pipe(
+          Effect.mapError(() => backupFailure("could not create the required consistency backup")),
+        )
         const outcome = yield* BackupVerify.verify(manifest)
-        if (!outcome.ok) return yield* Effect.fail(new DatabaseBootstrapError(bootState))
+        if (!outcome.ok)
+          return yield* Effect.fail(backupFailure(`consistency backup verification failed: ${outcome.reason}`))
       }
+      // Close the preflight→writable-open TOCTOU window. The read-only probe can only report the
+      // owner state it observed; this exact process must acquire the lifetime owner before SQLite
+      // is opened read-write, WAL is selected, or migrations are considered.
+      yield* Effect.acquireRelease(
+        DatabaseMigrationLease.acquireProcessLock(`${filename}.runtime.lock`, {
+          staleMs: 15_000,
+          timeoutMs: 5_000,
+        }).pipe(
+          Effect.mapError(
+            () =>
+              new DatabaseBootstrapError(
+                DatabaseBootstrap.startupRecoveryState(
+                  { buildDigest: registryDigest(knownMigrationIds) },
+                  {
+                    stableCode: "another_process_active",
+                    message: "another process acquired the database runtime owner lock",
+                  },
+                ),
+              ),
+          ),
+        ),
+        (runtimeLock) => runtimeLock.release,
+      )
     }
     const db = yield* makeDatabase
 
@@ -190,10 +290,9 @@ export const layer = Layer.effect(
       readerProtocol: String(SupportedReaderProtocol),
       writerProtocol: String(SupportedWriterProtocol),
     })
-    // The layer's published mode must match the POST-open authority: a
-    // backup_required/migration_applying pre-state is stale once apply is done.
-    mode = yield* Effect.tryPromise(() => bootstrap(filename))
-
+    // Post-migration verification only runs while a migration is pending. Startup recovery
+    // classification is a separate admission gate and must run on every ordinary restart too.
+    yield* verifyStartupInventory(db)
     const capabilities = yield* db.all<{
       capability: string
       minimum_reader_protocol: number
@@ -208,13 +307,41 @@ export const layer = Layer.effect(
         )
     }
 
+    // The owning process has now completed every writable admission gate. Do not re-run the
+    // external-process preflight here: its lifetime lock is intentionally visible and would be
+    // mistaken for a second process. Publish the terminal state from the gates just completed.
+    mode = DatabaseBootstrap.readyState({ buildDigest: registryDigest(knownMigrationIds) })
+
     return { db, mode }
   }),
 )
 
 export function layerFromPath(filename: string) {
-  return layer.pipe(
-    Layer.provide(Layer.effect(CurrentDatabaseFile, Effect.succeed({ filename }))),
+  // Resolve the physical read-only preflight before the SQLite business dependency is even built.
+  // This ordering prevents a fresh store from being created/opened writable before compatibility
+  // and process-owner checks have completed.
+  return Layer.unwrap(
+    Effect.promise(() => bootstrap(filename)).pipe(
+      Effect.map((state) =>
+        layer.pipe(
+          Layer.provide(Layer.succeed(CurrentPreflightState, { state })),
+          Layer.provide(Layer.succeed(CurrentDatabaseFile, { filename })),
+          Layer.provide(sqliteLayer({ filename })),
+        ),
+      ),
+    ),
+  )
+}
+
+/**
+ * Open and forward-migrate a database while the caller already owns the lifetime runtime lock.
+ * This narrow layer exists for verified restore only: it deliberately skips external-owner
+ * preflight so the caller is not mistaken for a competing process, while preserving migration,
+ * inventory, capability, WAL and durability gates.
+ */
+export function ownedLayerFromPath(filename: string) {
+  return Layer.effect(Service, openAndMigrate).pipe(
+    Layer.provide(Layer.succeed(CurrentDatabaseFile, { filename })),
     Layer.provide(sqliteLayer({ filename })),
   )
 }
@@ -246,6 +373,52 @@ export function readOnlyLayerFromPath(filename: string) {
   ).pipe(
     Layer.provide(Layer.effect(CurrentDatabaseFile, Effect.succeed({ filename }))),
     Layer.provide(sqliteLayer({ filename, readonly: true })),
+  )
+}
+
+/**
+ * Short-lived maintenance writer for exact recovery commands. It is intentionally unavailable to
+ * the ordinary route graph: callers must already be in read_only_recovery, acquire the same
+ * lifetime owner as the business runtime, and close the scope after one maintenance operation.
+ * It never runs migrations or admits provider/tool work.
+ */
+export function maintenanceLayerFromPath(filename: string) {
+  return Layer.effect(
+    Service,
+    Effect.gen(function* () {
+      const bootState = yield* Effect.tryPromise(() => bootstrap(filename))
+      if (bootState.mode !== "read_only_recovery")
+        return yield* Effect.fail(new DatabaseBootstrapError(bootState))
+      yield* Effect.acquireRelease(
+        DatabaseMigrationLease.acquireProcessLock(`${filename}.runtime.lock`, {
+          staleMs: 15_000,
+          timeoutMs: 1_000,
+        }).pipe(
+          Effect.mapError(
+            () =>
+              new DatabaseBootstrapError(
+                DatabaseBootstrap.startupRecoveryState(
+                  { buildDigest: registryDigest(knownMigrationIds) },
+                  {
+                    stableCode: "another_process_active",
+                    message: "another process owns the database maintenance target",
+                  },
+                ),
+              ),
+          ),
+        ),
+        (runtimeLock) => runtimeLock.release,
+      )
+      const db = yield* makeDatabase
+      yield* db.run("PRAGMA journal_mode = WAL")
+      yield* db.run("PRAGMA synchronous = FULL")
+      yield* db.run("PRAGMA busy_timeout = 5000")
+      yield* db.run("PRAGMA foreign_keys = ON")
+      return { db, mode: bootState }
+    }),
+  ).pipe(
+    Layer.provide(Layer.succeed(CurrentDatabaseFile, { filename })),
+    Layer.provide(sqliteLayer({ filename })),
   )
 }
 

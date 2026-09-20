@@ -10,14 +10,14 @@ import { InstanceStore } from "../../src/project/instance-store"
 import { Project } from "../../src/project/project"
 import { Vcs } from "../../src/project/vcs"
 import { Session } from "../../src/session/session"
-import { SessionPrompt } from "../../src/session/prompt"
+import { SessionCommandV2 } from "../../src/session/command-v2"
 import { EventV2Bridge } from "../../src/event-v2-bridge"
 
 export const workspaceLayerWithRuntimeFlags = (overrides: Partial<RuntimeFlags.Info>) =>
   Workspace.layer.pipe(
     Layer.provide(Auth.defaultLayer),
     Layer.provide(Session.defaultLayer),
-    Layer.provide(SessionPrompt.defaultLayer),
+    Layer.provide(SessionCommandV2.defaultLayer),
     Layer.provide(Project.defaultLayer),
     Layer.provide(Vcs.defaultLayer),
     Layer.provide(Database.defaultLayer),

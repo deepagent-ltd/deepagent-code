@@ -4,10 +4,11 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { buildRunReview, listRunIds } from "../../src/deepagent/run-review"
+import { tmpRoot } from "../fixture/fixture"
 
 let runsDir: string
 beforeEach(() => {
-  runsDir = mkdtempSync(path.join(tmpdir(), "deepagent-review-"))
+  runsDir = mkdtempSync(tmpRoot())
 })
 afterEach(() => rmSync(runsDir, { recursive: true, force: true }))
 

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect } from "bun:test"
-import { mkdirSync } from "node:fs"
+import { mkdirSync, readdirSync, rmSync } from "node:fs"
 import { ConfigV1 } from "@deepagent-code/core/v1/config/config"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { Deferred, Effect, Layer } from "effect"
@@ -15,6 +15,7 @@ import { InstanceStore } from "../../src/project/instance-store"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { MessageV2 } from "../../src/session/message-v2"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
+import { Global } from "@deepagent-code/core/global"
 
 import type { Config } from "@/config/config"
 import { Session as SessionNs } from "@/session/session"
@@ -363,6 +364,12 @@ function seedMessage(directory: string, sessionID: string) {
   )
 }
 
+// The runtime is unconditionally V2-only (RuntimeFlags.coreV2Only), so every prompt route qualifies
+// the Core V2 execution owner before admission. The dev V2-owner chain (mint keypair + verifier
+// env) is armed process-wide by test/preload.ts — Reference defaults cache on first access, so
+// arming must precede every test file; see test/lib/v2-owner.ts for why the keypair is a
+// process-wide singleton. Each test builds its routes layer inside the test body, after the mint
+// has already armed.
 afterEach(async () => {
   await disposeAllInstances()
   await resetDatabase()
@@ -460,15 +467,17 @@ describe("HttpApi SDK", () => {
     { serverPath: "raw", git: false, setup: writeStandardFiles },
     ({ sdk, directory }) =>
       Effect.gen(function* () {
-        // gatewayConfig always reads Global.Path.agent.runs = path.join(dataPath(), "runs").
-        // Since DEEPAGENT_CODE_TEST_HOME is set by the test preload, setting DEEPAGENT_CODE_HOME
-        // redirects dataPath() to our temp dir, so the server reads our review fixture.
-        const fakeHome = yield* tmpdirScoped({ git: false })
-        const runsDir = path.join(fakeHome, "runs")
+        // The route reads runsDir from the AgentGateway.Runtime captured when this test's routes
+        // layer was built (immutable V2 gateway storage root) — per-request env redirection no
+        // longer reaches it. The captured root is the canonical Global.Path.agent.runs under the
+        // preload's DEEPAGENT_CODE_TEST_HOME, so write the fixture there. Clear stale entries first:
+        // the runs dir is shared per test process and the assertion pins the exact list.
+        const runsDir = Global.Path.agent.runs
+        for (const entry of readdirSync(runsDir)) {
+          rmSync(path.join(runsDir, entry), { recursive: true, force: true })
+        }
         mkdirSync(runsDir, { recursive: true })
-        const previousHome = process.env.DEEPAGENT_CODE_HOME
         try {
-          process.env.DEEPAGENT_CODE_HOME = fakeHome
           writeReviewRun(runsDir)
 
           const reviews = yield* call(() => sdk.deepagent.reviews({ directory }))
@@ -487,8 +496,7 @@ describe("HttpApi SDK", () => {
             ],
           })
         } finally {
-          if (previousHome === undefined) delete process.env.DEEPAGENT_CODE_HOME
-          else process.env.DEEPAGENT_CODE_HOME = previousHome
+          rmSync(path.join(runsDir, "run_review_route"), { recursive: true, force: true })
         }
       }),
   )
@@ -701,7 +709,16 @@ describe("HttpApi SDK", () => {
         )
         expect(continuationResolutions.status).toBe(200)
         expect(array(continuationResolutions.data)).toEqual([])
-        expect(rejectedContinuationResolution.status).toBe(409)
+        // V2-only contract: the legacy continuation-resolution mutation is fail-closed under the
+        // Core V2-only profile (refuseLegacyRecoveryMutation) — the exact durable maintenance
+        // recovery command surface owns this authority now. Assert the typed refusal, not a 409
+        // from the retired legacy state machine.
+        expect(rejectedContinuationResolution.status).toBe(503)
+        expect(rejectedContinuationResolution.error).toMatchObject({
+          _tag: "ServiceUnavailableError",
+          service: "session.continuation-resolution",
+          message: expect.stringContaining("legacy recovery state machine"),
+        })
         const status = yield* capture(() => sdk.session.status())
         const messages = yield* capture(() => sdk.session.messages({ sessionID: parentID }))
         const missingGet = yield* capture(() => sdk.session.get({ sessionID: "ses_missing" }))
@@ -862,8 +879,10 @@ describe("HttpApi SDK", () => {
   )
 
   serverPathParity("matches generated SDK prompt no-reply routes", (serverPath) =>
-    withStandardProject(serverPath, ({ sdk }) =>
+    withFakeLlmProject(serverPath, {}, ({ sdk, llm }) =>
       Effect.gen(function* () {
+        // Safety net only: the no-reply contract is that NOTHING reaches the model (asserted below).
+        yield* llm.text("no-reply must not dispatch")
         const session = yield* capture(() => sdk.session.create({ title: "prompt" }))
         const sessionID = String(record(session.data).id)
         const prompt = yield* capture(() =>
@@ -883,28 +902,51 @@ describe("HttpApi SDK", () => {
             intentSource: "composer",
             intentVariant: "original",
             agent: "build",
+            model: { providerID: "test", modelID: "test-model" },
             noReply: true,
             parts: [{ type: "text", text: "async hello" }],
           }),
         )
-        const messages = yield* capture(() => sdk.session.messages({ sessionID }))
-        const asyncMessages = yield* capture(() => sdk.session.messages({ sessionID: asyncSessionID }))
-        const messageTexts = [...array(messages.data), ...array(asyncMessages.data)]
-          .flatMap((item) => array(record(item).parts))
+
+        // V2-only contract, sync leg (RI-124 adjudicated: mirror-after-admission): the sync
+        // noReply prompt admits durably and mirrors the user row straight from the admission
+        // receipt, so the route returns the created user message immediately — no provider
+        // dispatch, and the next drain's promotion publish is a no-op against the mirrored row.
+        expect(prompt.status).toBe(200)
+        const syncMessage = record(prompt.data)
+        expect(record(syncMessage.info)).toMatchObject({ role: "user" })
+        const syncTexts = array(syncMessage.parts)
           .map((part) => record(part).text)
           .filter((text): text is string => typeof text === "string")
-          .sort()
+        expect(syncTexts).toContain("hello")
+        const syncList = yield* capture(() => sdk.session.messages({ sessionID }))
+        expect(JSON.stringify(syncList.data)).toContain("hello")
 
+        // V2-only contract, async leg: admission is acknowledged with the V2 delivery vocabulary
+        // ("steer"; the retired legacy intent claim reported "turn"), then the forked drain promotes
+        // and mirrors the user message WITHOUT a provider dispatch — transcript visibility is
+        // eventual, not synchronous.
         expect(asyncPrompt.status).toBe(200)
-        expect(asyncPrompt.data).toMatchObject({ delivery: "turn" })
+        expect(asyncPrompt.data).toMatchObject({ delivery: "steer" })
         expect(typeof record(asyncPrompt.data).messageID).toBe("string")
-        expect(messageTexts).toEqual(["async hello", "hello"])
+        const asyncTexts = yield* pollWithTimeout(
+          capture(() => sdk.session.messages({ sessionID: asyncSessionID })).pipe(
+            Effect.map((response) => {
+              const texts = array(response.data)
+                .flatMap((item) => array(record(item).parts))
+                .map((part) => record(part).text)
+                .filter((text): text is string => typeof text === "string")
+              return texts.includes("async hello") ? texts : undefined
+            }),
+          ),
+          "no-reply async prompt was never promoted into the transcript",
+          "15 seconds",
+        )
+        expect(yield* llm.calls).toBe(0)
 
         return {
-          statuses: statuses({ session, prompt, asyncSession, asyncPrompt, messages, asyncMessages }),
-          promptRole: record(record(prompt.data).info).role,
-          messageCount: array(messages.data).length,
-          messageTexts,
+          statuses: statuses({ session, prompt, asyncSession, asyncPrompt }),
+          asyncTexts,
         }
       }),
     ),
@@ -936,12 +978,26 @@ describe("HttpApi SDK", () => {
               parts: [{ type: "text", text: "persist before acknowledging" }],
             }),
           ).pipe(Effect.timeout("2 seconds"))
-          const messages = yield* capture(() => sdk.session.messages({ sessionID }))
+          // V2 admission contract: the acknowledgement crosses the durable admission boundary, but
+          // transcript visibility is eventual — the forked drain promotes the input and the egress
+          // mirrors it. It must land while the held model response is still pending.
+          const messages = yield* pollWithTimeout(
+            capture(() => sdk.session.messages({ sessionID })).pipe(
+              Effect.map((response) =>
+                JSON.stringify(response.data).includes("persist before acknowledging")
+                  ? response.data
+                  : undefined,
+              ),
+            ),
+            "async prompt was not promoted into the transcript before the model responded",
+            "5 seconds",
+          )
           yield* llm.wait(1).pipe(Effect.timeout("2 seconds"))
 
           expect(prompt.status).toBe(200)
-          expect(prompt.data).toMatchObject({ delivery: "turn" })
-          expect(JSON.stringify(messages.data)).toContain("persist before acknowledging")
+          // V2 admission vocabulary: prompts admit on the "steer" channel by default.
+          expect(prompt.data).toMatchObject({ delivery: "steer" })
+          expect(JSON.stringify(messages)).toContain("persist before acknowledging")
           expect(responseReleased).toBe(false)
           yield* Effect.promise(() => responseDelay)
           yield* pollWithTimeout(

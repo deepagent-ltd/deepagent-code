@@ -15,7 +15,7 @@ import { MessageV2 } from "../../src/session/message-v2"
 import { MessageID, PartID, type SessionID } from "../../src/session/schema"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
 import { provideInstance, testInstanceStoreLayer, tmpdirScoped } from "../fixture/fixture"
-import { testEffect } from "../lib/effect"
+import { awaitWithTimeout, testEffect } from "../lib/effect"
 import { Storage } from "@/storage/storage"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { BackgroundJob } from "@/background/job"
@@ -25,18 +25,28 @@ import { InstanceState } from "@/effect/instance-state"
 import { Worktree } from "@/worktree"
 import { Git } from "../../src/git"
 import { DeepAgentContext, DeepAgentDocumentStore } from "@deepagent-code/core/deepagent/index"
+import { EventAdmission } from "@deepagent-code/core/deepagent/event-admission"
+import { createRuntimeFeatureRegistry, type RuntimeFeatureRegistry } from "@deepagent-code/core/flag/runtime-features"
 import { contextStoreRoot, loadForkOrigin, forwardLedgerOnFork } from "@/session/context-ledger"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 import { eq } from "drizzle-orm"
 
 void Log.init({ print: false })
 
-const it = testEffect(
+// C5-12 — the legacy GlobalBus mirror + sync emission are skipped while `event.v2.admission` is ON
+// (the production default), so the legacy sync-payload test pins an admission-off registry.
+const admissionOff = createRuntimeFeatureRegistry(undefined, {
+  [EventAdmission.EVENT_V2_ADMISSION_ENV]: "false",
+})
+
+const makeLayer = (runtimeFeatures?: RuntimeFeatureRegistry) =>
   Layer.mergeAll(
     SessionNs.layer.pipe(
       Layer.provide(Storage.defaultLayer),
       Layer.provide(Database.defaultLayer),
-      Layer.provideMerge(EventV2Bridge.defaultLayer),
+      Layer.provideMerge(
+        runtimeFeatures ? EventV2Bridge.defaultLayerWithRuntimeFeatures(runtimeFeatures) : EventV2Bridge.defaultLayer,
+      ),
       Layer.provide(SessionProjector.defaultLayer),
       Layer.provide(RuntimeFlags.layer({ experimentalWorkspaces: false })),
       Layer.provide(BackgroundJob.defaultLayer),
@@ -44,14 +54,13 @@ const it = testEffect(
     Database.defaultLayer,
     CrossSpawnSpawner.defaultLayer,
     testInstanceStoreLayer,
-  ),
-)
+  )
+
+const it = testEffect(makeLayer())
+const itLegacy = testEffect(makeLayer(admissionOff))
 
 const awaitDeferred = <T>(deferred: Deferred.Deferred<T>, message: string) =>
-  Effect.race(
-    Deferred.await(deferred),
-    Effect.sleep("2 seconds").pipe(Effect.flatMap(() => Effect.fail(new Error(message)))),
-  )
+  awaitWithTimeout(Deferred.await(deferred), message)
 
 const remove = (id: SessionID) => SessionNs.use.remove(id)
 
@@ -117,7 +126,7 @@ describe("session.created event", () => {
     }),
   )
 
-  it.instance("emits legacy global sync payload", () =>
+  itLegacy.instance("emits legacy global sync payload", () =>
     Effect.gen(function* () {
       const session = yield* SessionNs.Service
       const received = yield* Deferred.make<{ syncEvent: EventV2.SerializedEvent }>()

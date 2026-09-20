@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { createEffect, createMemo, onCleanup } from "solid-js"
 import { createStore } from "solid-js/store"
-import type { Todo } from "@deepagent-code/sdk"
+import type { SessionTodoInfo } from "@deepagent-code/sdk"
 import { useServerSync } from "@/context/global-sync"
 import { SessionComposerRegion, createSessionComposerState } from "@/pages/session/composer"
 
@@ -173,7 +173,7 @@ export const Playground = {
     let composerRef
     let scrollRef
 
-    const todos = createMemo<Todo[]>(() => {
+    const todos = createMemo<SessionTodoInfo[]>(() => {
       const done = Math.max(0, Math.min(3, step()))
       return pool.slice(0, 3).map((content, i) => ({
         id: `todo-${i + 1}`,

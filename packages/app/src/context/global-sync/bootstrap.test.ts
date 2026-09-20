@@ -68,6 +68,7 @@ describe("bootstrapDirectory", () => {
       session_diff: {},
       todo: {},
       permission: {},
+      permission_v2: {},
       question: {},
       mcp_ready: true,
       mcp: {},
@@ -125,6 +126,88 @@ describe("bootstrapDirectory", () => {
 
     expect(store.status).toBe("complete")
     expect(mcpReads).toEqual([])
+  })
+
+  test("preserves v2-provenanced permission entries the legacy list cannot see", async () => {
+    const legacySession = { id: "ses_legacy", time: { created: 1, updated: 1 } } as State["session"][number]
+    const v2Permission = {
+      id: "per_v2",
+      sessionID: "ses_v2",
+      permission: "bash",
+      patterns: ["git status"],
+      metadata: {},
+      always: [],
+    } as State["permission"][string][number]
+    const stalePermission = { ...v2Permission, id: "per_stale", sessionID: "ses_stale" }
+    const legacyPermission = { ...v2Permission, id: "per_legacy", sessionID: "ses_legacy" }
+    const [store, setStore] = createStore<State>({
+      status: "loading",
+      agent: [],
+      command: [],
+      project: "",
+      projectMeta: undefined,
+      icon: undefined,
+      provider_ready: true,
+      provider,
+      config: {},
+      path: pathFixture(),
+      session: [legacySession],
+      sessionTotal: 0,
+      session_status: {},
+      session_working(id: string) {
+        return this.session_status[id]?.type !== "idle"
+      },
+      session_diff: {},
+      todo: {},
+      permission: { ses_v2: [v2Permission], ses_stale: [stalePermission] },
+      permission_v2: { ses_v2: { per_v2: true } },
+      question: {},
+      mcp_ready: true,
+      mcp: {},
+      lsp_ready: true,
+      lsp: [],
+      vcs: undefined,
+      limit: 5,
+      message: {},
+      part: {},
+      part_text_accum_delta: {},
+    })
+
+    await bootstrapDirectory({
+      directory: "/project",
+      scope: ServerScope.local,
+      mcp: false,
+      global: {
+        config: {} satisfies Config,
+        path: pathFixture(),
+        project: [{ id: "project", worktree: "/project" } as Project],
+        provider,
+      },
+      sdk: {
+        app: { agents: async () => ({ data: [{ name: "build", mode: "primary" }] }) },
+        config: { get: async () => ({ data: {} }) },
+        session: { status: async () => ({ data: {} }) },
+        vcs: { get: async () => ({ data: undefined }) },
+        command: { list: async () => ({ data: [] }) },
+        permission: { list: async () => ({ data: [legacyPermission] }) },
+        question: { list: async () => ({ data: [] }) },
+        provider: { list: async () => ({ data: { all: [], connected: [], default: {} } }) },
+      } as unknown as DeepAgentCodeClient,
+      store,
+      setStore,
+      vcsCache: { setStore() {} } as unknown as VcsCache,
+      loadSessions() {},
+      translate: (key) => key,
+      queryClient: new QueryClient(),
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 80))
+
+    expect(store.status).toBe("complete")
+    expect(store.permission.ses_v2?.map((x) => x.id)).toEqual(["per_v2"])
+    expect(store.permission.ses_legacy?.map((x) => x.id)).toEqual(["per_legacy"])
+    expect(store.permission.ses_stale).toEqual([])
+    expect(store.permission_v2.ses_v2).toEqual({ per_v2: true })
   })
 })
 

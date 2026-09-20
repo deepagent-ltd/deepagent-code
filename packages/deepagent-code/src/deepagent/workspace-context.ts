@@ -2,6 +2,8 @@ export * as DeepAgentWorkspace from "./workspace-context"
 
 import { readFile, stat } from "node:fs/promises"
 import path from "node:path"
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import type { ValidationCommand } from "@deepagent-code/core/deepagent/validation"
 
@@ -10,32 +12,56 @@ export type WorkspaceInfo = {
   validationPlan: ValidationCommand[]
   hasTypeScript: boolean
   hasPython: boolean
-  packageJson: { scripts?: Record<string, string> } | null
+  hasGo: boolean
+  packageJson: { scripts?: Record<string, string>; packageManager?: string } | null
   agentsMdContent: string | null
   gitBranch: string | null
   gitRoot: string | null
 }
 
-const cache = new Map<string, WorkspaceInfo>()
+const CACHE_TTL_MS = 30_000
+const MAX_CACHE_ENTRIES = 128
+const cache = new Map<string, { value: WorkspaceInfo; expiresAt: number }>()
 const pending = new Map<string, Promise<WorkspaceInfo>>()
 
 export function getCached(cwd: string): WorkspaceInfo | null {
-  return cache.get(cwd) ?? null
+  const key = path.resolve(cwd)
+  const cached = cache.get(key)
+  if (!cached) return null
+  if (cached.expiresAt <= Date.now()) {
+    cache.delete(key)
+    return null
+  }
+  cache.delete(key)
+  cache.set(key, cached)
+  return cached.value
 }
 
 export async function detect(cwd: string): Promise<WorkspaceInfo> {
-  const cached = cache.get(cwd)
+  const key = path.resolve(cwd)
+  const cached = getCached(key)
   if (cached) return cached
 
-  const inflight = pending.get(cwd)
+  const inflight = pending.get(key)
   if (inflight) return inflight
 
-  const p = detectImpl(cwd)
-  pending.set(cwd, p)
-  const result = await p
-  cache.set(cwd, result)
-  pending.delete(cwd)
-  return result
+  const task = detectImpl(key).then((value) => {
+    if (pending.get(key) !== task) return value
+    cache.delete(key)
+    while (cache.size >= MAX_CACHE_ENTRIES) cache.delete(cache.keys().next().value!)
+    cache.set(key, { value, expiresAt: Date.now() + CACHE_TTL_MS })
+    return value
+  })
+  pending.set(key, task)
+  return task.finally(() => {
+    if (pending.get(key) === task) pending.delete(key)
+  })
+}
+
+export function invalidate(cwd: string): void {
+  const key = path.resolve(cwd)
+  cache.delete(key)
+  pending.delete(key)
 }
 
 async function detectImpl(cwd: string): Promise<WorkspaceInfo> {
@@ -44,6 +70,7 @@ async function detectImpl(cwd: string): Promise<WorkspaceInfo> {
     validationPlan: [],
     hasTypeScript: false,
     hasPython: false,
+    hasGo: false,
     packageJson: null,
     agentsMdContent: null,
     gitBranch: null,
@@ -58,12 +85,37 @@ async function detectImpl(cwd: string): Promise<WorkspaceInfo> {
   }
 
   info.hasTypeScript = (await exists(path.join(cwd, "tsconfig.json"))) || Boolean(info.packageJson?.scripts?.typecheck)
-  info.hasPython = await exists(path.join(cwd, "requirements.txt"))
+  info.hasPython = await Promise.all(
+    ["pyproject.toml", "requirements.txt", "setup.py", "setup.cfg", "Pipfile"].map((file) =>
+      exists(path.join(cwd, file)),
+    ),
+  ).then((results) => results.some(Boolean))
+  info.hasGo = await exists(path.join(cwd, "go.mod"))
   info.agentsMdContent = await readFileSafe(path.join(cwd, "AGENTS.md"))
+  const git = await gitInfo(cwd)
+  info.gitBranch = git.branch
+  info.gitRoot = git.root
   info.validationPlan = inferCommands(info)
   info.validationCommands = info.validationPlan.map((command) => command.display)
 
   return info
+}
+
+async function gitInfo(cwd: string) {
+  // node:child_process (not Bun.spawn): this module ships in the desktop main-process bundle,
+  // which runs on Node and forbids Bun-only APIs.
+  const run = async (args: string[]) => {
+    try {
+      const { stdout } = await promisify(execFile)("git", args, { cwd })
+      return stdout.trim() || null
+    } catch {
+      return null
+    }
+  }
+  return {
+    branch: await run(["branch", "--show-current"]).catch(() => null),
+    root: await run(["rev-parse", "--show-toplevel"]).catch(() => null),
+  }
 }
 
 async function readFileSafe(filePath: string): Promise<string | null> {
@@ -88,12 +140,16 @@ function inferCommands(info: WorkspaceInfo): ValidationCommand[] {
   // (includes test/build/python + the AGENTS.md extractor). This bun-based workspace passes the
   // "bun run" runner so emitted commands use the workspace package manager. The validation
   // executor runs them through the host's accepted shell (PowerShell/cmd on Windows, POSIX elsewhere).
-  return AgentGateway.DeepAgentValidation.inferValidationPlan({
-    cwd: "",
-    packageJson: info.packageJson ?? undefined,
-    agentsMd: info.agentsMdContent ?? undefined,
-    hasTypeScript: info.hasTypeScript,
-    hasPython: info.hasPython,
-    runner: "bun run",
-  })
+  return AgentGateway.DeepAgentValidation.inferValidationPlan(
+    AgentGateway.DeepAgentValidation.withPackageScriptRunner(
+      {
+        packageJson: info.packageJson ?? undefined,
+        agentsMd: info.agentsMdContent ?? undefined,
+        hasTypeScript: info.hasTypeScript,
+        hasPython: info.hasPython,
+        hasGo: info.hasGo,
+      },
+      "bun run",
+    ),
+  )
 }

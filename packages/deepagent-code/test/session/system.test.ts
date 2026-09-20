@@ -1,4 +1,4 @@
-import { describe, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { Effect, Layer } from "effect"
 import type { Agent } from "../../src/agent/agent"
 import { NamedError } from "@deepagent-code/core/util/error"
@@ -62,6 +62,35 @@ const it = testEffect(
 )
 
 describe("session.system", () => {
+  // W1 gap repair: the workflow discipline section (understand → plan → execute → verify → deliver)
+  // must reach every provider baseline EXCEPT anthropic (which carries its own strong plan section —
+  // appending it again would double-bill the same discipline).
+  describe("workflow discipline distribution", () => {
+    const model = (id: string) =>
+      ({ api: { id }, providerID: "test" }) as unknown as Parameters<typeof SystemPrompt.provider>[0]
+
+    test("appends the discipline section to the unlisted-provider fallback (GLM et al.)", () => {
+      const sections = SystemPrompt.provider(model("glm-5.3-flash"))
+      expect(sections).toHaveLength(2)
+      expect(sections[1]).toContain("Task Workflow Discipline")
+      expect(sections[1]).toContain("plan")
+    })
+
+    test("appends the discipline section to every listed non-anthropic provider", () => {
+      for (const id of ["gpt-5", "gpt-4.1", "o3-mini", "gpt-5-codex", "gemini-3-pro", "trinity-2", "kimi-k3"]) {
+        const sections = SystemPrompt.provider(model(id))
+        expect(sections.some((s) => s.includes("Task Workflow Discipline"))).toBeTrue()
+      }
+    })
+
+    test("keeps anthropic on its own plan discipline without the shared section", () => {
+      const sections = SystemPrompt.provider(model("claude-opus-4"))
+      expect(sections).toHaveLength(1)
+      expect(sections[0]).toContain("plan")
+      expect(sections[0]).not.toContain("Task Workflow Discipline")
+    })
+  })
+
   it.effect("skills output is sorted by name and stable across calls", () =>
     Effect.gen(function* () {
       const prompt = yield* SystemPrompt.Service

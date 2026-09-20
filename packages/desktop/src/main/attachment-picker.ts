@@ -2,20 +2,44 @@ import { randomUUID } from "node:crypto"
 import { open } from "node:fs/promises"
 
 export const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+export const MAX_ATTACHMENT_FILES = 64
+export const MAX_PICKER_AUTHORIZATIONS = 128
+export const PICKER_AUTHORIZATION_TTL_MS = 10 * 60 * 1000
 
 export function createPickedFileAuthorizations(
   read: (path: string, maxBytes: number) => Promise<ArrayBuffer> = readAttachment,
   budget = MAX_ATTACHMENT_BYTES,
 ) {
-  const selections = new Map<string, { sender: number; paths: Set<string>; remaining: number }>()
+  const selections = new Map<
+    string,
+    { sender: number; paths: Set<string>; remaining: number; expiresAt: number }
+  >()
+
+  const sweep = () => {
+    const now = Date.now()
+    for (const [token, selection] of selections) if (selection.expiresAt <= now) selections.delete(token)
+  }
 
   return {
     add(sender: number, paths: string[]) {
+      sweep()
+      if (paths.length === 0 || paths.length > MAX_ATTACHMENT_FILES) {
+        throw new Error(`Select between 1 and ${MAX_ATTACHMENT_FILES} attachment files`)
+      }
+      if (selections.size >= MAX_PICKER_AUTHORIZATIONS) {
+        throw new Error(`Too many active file picker authorizations (limit ${MAX_PICKER_AUTHORIZATIONS})`)
+      }
       const token = randomUUID()
-      selections.set(token, { sender, paths: new Set(paths), remaining: budget })
+      selections.set(token, {
+        sender,
+        paths: new Set(paths),
+        remaining: budget,
+        expiresAt: Date.now() + PICKER_AUTHORIZATION_TTL_MS,
+      })
       return token
     },
     async read(sender: number, token: string, path: string) {
+      sweep()
       const selection = selections.get(token)
       if (selection?.sender !== sender || !selection.paths.delete(path))
         throw new Error("File was not selected by the picker")
@@ -26,6 +50,13 @@ export function createPickedFileAuthorizations(
     },
     release(sender: number, token: string) {
       if (selections.get(token)?.sender === sender) selections.delete(token)
+    },
+    releaseSender(sender: number) {
+      for (const [token, selection] of selections) if (selection.sender === sender) selections.delete(token)
+    },
+    active() {
+      sweep()
+      return selections.size
     },
   }
 }

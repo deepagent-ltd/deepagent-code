@@ -18,6 +18,7 @@ import path from "node:path"
 import { createHash } from "node:crypto"
 import type { DocumentRef as ReleasedDocumentRef } from "./released-snapshot"
 import { CanonicalJson } from "../util/canonical-json"
+import { readonlySet } from "../util/readonly-collections"
 
 // V3.2.1 decision B (docs/34 §7-§8): the SINGLE durable-knowledge body is the DocumentStore.
 // This facade is the ONLY durable read/write entry for domain knowledge — it replaces the retired
@@ -32,13 +33,13 @@ import { CanonicalJson } from "../util/canonical-json"
 // #4): they are non-knowledge derived data, so retrieve()'s whitelist (line ~212) must keep filtering
 // them out — the shared GraphQuery service (Phase 1) reaches them via the documentStore getter, not
 // retrieve(). Adding them here would leak derived data into knowledge retrieval; do not add.
-export const KNOWLEDGE_DOC_TYPES: ReadonlySet<DocType> = new Set<DocType>([
+export const KNOWLEDGE_DOC_TYPES = readonlySet(new Set<DocType>([
   "knowledge",
   "strategy",
   "methodology",
   "memory",
   "skill",
-])
+]))
 
 export type KnowledgeScope = "user-global" | "project-shared" | "session-private"
 export type Sensitivity = "public" | "source_code" | "pii" | "secret_adjacent" | "secret"

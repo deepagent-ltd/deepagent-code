@@ -17,7 +17,7 @@
     "outDir": "node_modules/.ts-dist",
     "types": ["vite/client", "node", "electron"]
   },
-  "references": [{ "path": "../app" }],
+  "references": [{ "path": "../app" }, { "path": "./scripts" }],
   "include": ["src", "package.json"],
   "exclude": ["src/**/*.test.ts"]
 }

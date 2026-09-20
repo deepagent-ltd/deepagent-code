@@ -5,6 +5,7 @@ import { existsSync } from "node:fs"
 import { readFile, realpath } from "node:fs/promises"
 import { eq } from "drizzle-orm"
 import { Cause, Effect, Option, Schema } from "effect"
+import * as mechanismBeacon from "./mechanism-beacon"
 import { Database } from "../database/database"
 import { SessionSchema } from "../session/schema"
 import { SessionTable } from "../session/sql"
@@ -71,6 +72,21 @@ const Diagnosis = Schema.Struct({
     Schema.Literal("block"),
   ]),
 })
+const LearningEvidence = Schema.Struct({
+  schema_version: Schema.Literal("deepagent-code.learning_evidence.v1"),
+  activity_id: Schema.String,
+  plan_goal: Schema.NullOr(Schema.String),
+  document_refs: Schema.Array(Schema.String),
+  changed_paths: Schema.Array(Schema.String),
+  validations: Schema.Array(
+    Schema.Struct({
+      command_hash: Schema.String,
+      passed: Schema.Boolean,
+      kind: Schema.String,
+      exit_code: Schema.Number,
+    }),
+  ),
+})
 const ArtifactRef = Schema.Struct({
   schema_version: Schema.Literal("deepagent-code.learning_artifact_ref.v1"),
   authority_root: Schema.String,
@@ -119,6 +135,7 @@ const AdmissionManifest = Schema.Struct({
   final_status: Schema.Union([Schema.Literal("completed"), Schema.Literal("failed")]),
   trigger: Trigger,
   policy: Policy,
+  evidence: Schema.optional(LearningEvidence),
   terminal_artifact: LearningTerminalArtifact,
 })
 const AdmissionIntent = Schema.Struct({
@@ -135,6 +152,7 @@ const AdmissionIntent = Schema.Struct({
   final_status: Schema.Union([Schema.Literal("completed"), Schema.Literal("failed")]),
   trigger: Trigger,
   policy: Policy,
+  evidence: Schema.optional(LearningEvidence),
   terminal_artifact: LearningTerminalArtifact,
 })
 const LocalAdmissionReceipt = Schema.Struct({
@@ -159,6 +177,7 @@ const ExtractionManifest = Schema.Struct({
   run_id: Schema.String,
   phase: Schema.Literal("extraction"),
   source_input_ref: Schema.String,
+  source_evidence: Schema.optional(LearningEvidence),
   candidates: Schema.Array(Candidate),
   promotion_decision: Schema.Union([
     Schema.Literal("staged"),
@@ -179,7 +198,11 @@ const ReviewManifest = Schema.Struct({
   provider_id: Schema.optional(Schema.String),
   model_id: Schema.optional(Schema.String),
   policy_hash: Schema.optional(Schema.String),
-  disposition: Schema.Union([Schema.Literal("isolated_reviewer"), Schema.Literal("reviewer_unavailable_fail_closed")]),
+  disposition: Schema.Union([
+    Schema.Literal("isolated_reviewer"),
+    Schema.Literal("reviewer_unavailable_fail_closed"),
+    Schema.Literal("not_required_no_candidates"),
+  ]),
   verdict: Schema.optional(
     Schema.Union([Schema.Literal("approve"), Schema.Literal("reject"), Schema.Literal("manual_review")]),
   ),
@@ -253,6 +276,7 @@ export const admissionFingerprint = (admission: Admission): string =>
       final_status: admission.input.finalStatus,
       trigger: admission.input.trigger,
       policy: admission.input.policy ?? "auto_merge_safe_project",
+      ...(admission.input.evidence ? { evidence: admission.input.evidence } : {}),
       terminal_schema_version: admission.terminalArtifact.schema_version,
       terminal_path: path.resolve(admission.terminalArtifact.path),
       ...(admission.terminalArtifact.schema_version === "deepagent-code.learning_lifecycle_trigger_artifact.v1"
@@ -400,6 +424,7 @@ export const admit = Effect.fn("DeepAgentDurableLearning.admit")(function* (
   admission: Admission,
   input: { readonly authorityRoot: string },
 ) {
+  mechanismBeacon.recordEngagement("learning", `workspace=${admission.workspacePath}`)
   const intent = yield* record(db, admission)
   return yield* reconcileIntent(db, intent.intent, path.resolve(input.authorityRoot))
 })
@@ -498,10 +523,16 @@ export const drain = Effect.fn("DeepAgentDurableLearning.drain")(function* (db: 
   const authorityRoot = path.resolve(input.authorityRoot)
   yield* reconcile(db, { limit, authorityRoot })
   yield* DeepAgentLearningReviewerAttempt.recoverStaleDispatching(db)
-  const preparedReview = yield* DeepAgentLearningReviewerAttempt.takeoverPrepared(db, {
-    owner: input.owner,
-    leaseMs,
-  })
+  // A disabled reviewer must not take ownership of a prepared provider dispatch. Leaving the
+  // receipt untouched lets the artifact recovery path quarantine it after lease expiry without
+  // replaying provider work, while unrelated queued learning jobs can continue fail-closed.
+  const preparedReview =
+    input.reviewer || input.reviewerForWorkspace
+      ? yield* DeepAgentLearningReviewerAttempt.takeoverPrepared(db, {
+          owner: input.owner,
+          leaseMs,
+        })
+      : undefined
   if (preparedReview) {
     const job = yield* DeepAgentLearningJob.get(db, preparedReview.jobId)
     if (!job) {
@@ -760,9 +791,16 @@ const expectedArtifact = Effect.fn("DeepAgentDurableLearning.expectedArtifact")(
   if (
     job.state === "reviewing" &&
     job.sideEffectKind === "reviewer" &&
-    job.reviewJobId === `review-unavailable:${job.jobId}`
+    (job.reviewJobId === `review-unavailable:${job.jobId}` || job.reviewJobId === `review-not-required:${job.jobId}`)
   ) {
     const extraction = yield* readBoundExtraction(job, admission)
+    const noCandidates = extraction.candidates.length === 0 || extraction.promotion_decision === "rejected"
+    if (noCandidates !== (job.reviewJobId === `review-not-required:${job.jobId}`)) {
+      return yield* new DeepAgentLearningJob.FenceError({
+        jobId: job.jobId,
+        reason: "stale learning reviewer disposition does not match extraction eligibility",
+      })
+    }
     return artifactPlan(admission.base_dir, artifactDirectory(admission), "learning-review", {
       schema_version: "deepagent-code.learning_review.v1",
       job_id: job.jobId,
@@ -770,7 +808,7 @@ const expectedArtifact = Effect.fn("DeepAgentDurableLearning.expectedArtifact")(
       phase: "reviewer",
       review_job_id: job.reviewJobId,
       source_extraction_ref: job.resultRef!,
-      disposition: "reviewer_unavailable_fail_closed",
+      disposition: noCandidates ? "not_required_no_candidates" : "reviewer_unavailable_fail_closed",
       candidates: extraction.candidates,
     } satisfies ReviewManifest)
   }
@@ -820,8 +858,13 @@ const reviewPhase = Effect.fn("DeepAgentDurableLearning.reviewPhase")(function* 
   reviewer?: ReviewerPort,
 ) {
   const extraction = yield* readBoundExtraction(job, admission)
-  const reviewJobId = reviewer ? `review:${job.jobId}` : `review-unavailable:${job.jobId}`
-  if (reviewer) {
+  const reviewRequired = extraction.candidates.length > 0 && extraction.promotion_decision === "needs_review"
+  const reviewJobId = !reviewRequired
+    ? `review-not-required:${job.jobId}`
+    : reviewer
+      ? `review:${job.jobId}`
+      : `review-unavailable:${job.jobId}`
+  if (reviewRequired && reviewer) {
     const request = CanonicalJson.stringify({
       schema_version: "deepagent-code.learning_review_request.v1",
       candidates: extraction.candidates.map((candidate) => ({
@@ -875,7 +918,7 @@ const reviewPhase = Effect.fn("DeepAgentDurableLearning.reviewPhase")(function* 
     phase: "reviewer",
     review_job_id: reviewJobId,
     source_extraction_ref: job.resultRef!,
-    disposition: "reviewer_unavailable_fail_closed",
+    disposition: reviewRequired ? "reviewer_unavailable_fail_closed" : "not_required_no_candidates",
     candidates: extraction.candidates,
   } satisfies ReviewManifest)
   const started = yield* DeepAgentLearningJob.beginSideEffect(db, {
@@ -1359,6 +1402,7 @@ function admissionManifest(
     final_status: admission.input.finalStatus,
     trigger: admission.input.trigger,
     policy: admission.input.policy ?? "auto_merge_safe_project",
+    ...(admission.input.evidence ? { evidence: admission.input.evidence } : {}),
     terminal_artifact: admission.terminalArtifact,
   }
 }
@@ -1378,6 +1422,7 @@ function admissionIntent(admission: Admission): AdmissionIntent {
     final_status: admission.input.finalStatus,
     trigger: admission.input.trigger,
     policy: admission.input.policy ?? "auto_merge_safe_project",
+    ...(admission.input.evidence ? { evidence: admission.input.evidence } : {}),
     terminal_artifact: {
       ...admission.terminalArtifact,
       path: path.resolve(admission.terminalArtifact.path),
@@ -1410,6 +1455,7 @@ function fromIntent(intent: AdmissionIntent): Admission {
       finalStatus: intent.final_status,
       trigger: intent.trigger,
       policy: intent.policy,
+      ...(intent.evidence ? { evidence: intent.evidence } : {}),
     },
   }
 }
@@ -1580,7 +1626,8 @@ function sameSourceAdmission(source: AdmissionIntent, lifecycle: AdmissionIntent
     CanonicalJson.stringify(source.diagnoses) === CanonicalJson.stringify(lifecycle.diagnoses) &&
     source.total_rounds === lifecycle.total_rounds &&
     source.final_status === lifecycle.final_status &&
-    source.policy === lifecycle.policy
+    source.policy === lifecycle.policy &&
+    CanonicalJson.stringify(source.evidence ?? null) === CanonicalJson.stringify(lifecycle.evidence ?? null)
   )
 }
 
@@ -1619,6 +1666,7 @@ function governanceInput(manifest: AdmissionManifest): LearningGovernanceInput {
     finalStatus: manifest.final_status,
     trigger: manifest.trigger,
     policy: manifest.policy,
+    ...(manifest.evidence ? { evidence: manifest.evidence } : {}),
   }
 }
 
@@ -1764,13 +1812,18 @@ const readBoundReview = Effect.fn("DeepAgentDurableLearning.readBoundReview")(fu
 ) {
   const manifest = yield* requireArtifact(job.resultRef, admission.base_dir, decodeReviewManifest)
   if (
-    manifest.disposition === "reviewer_unavailable_fail_closed" &&
+    (manifest.disposition === "reviewer_unavailable_fail_closed" ||
+      manifest.disposition === "not_required_no_candidates") &&
     manifest.job_id === job.jobId &&
     manifest.run_id === admission.run_id &&
     manifest.phase === "reviewer" &&
-    manifest.review_job_id === `review-unavailable:${job.jobId}` &&
+    manifest.review_job_id ===
+      (manifest.disposition === "not_required_no_candidates"
+        ? `review-not-required:${job.jobId}`
+        : `review-unavailable:${job.jobId}`) &&
     job.reviewJobId === manifest.review_job_id &&
-    manifest.source_extraction_ref === extractionArtifact(job, admission).ref
+    manifest.source_extraction_ref === extractionArtifact(job, admission).ref &&
+    (manifest.disposition !== "not_required_no_candidates" || manifest.candidates.length === 0)
   ) {
     return manifest
   }
@@ -1828,6 +1881,7 @@ function extractionArtifact(job: DeepAgentLearningJob.Record, admission: Admissi
     roundState: roundStateFrom(admission),
     totalRounds: admission.total_rounds,
     finalStatus: admission.final_status,
+    ...(admission.evidence ? { evidence: admission.evidence } : {}),
   })
   return artifactPlan(admission.base_dir, artifactDirectory(admission), "learning-extraction", {
     schema_version: "deepagent-code.learning_extraction.v1",
@@ -1835,6 +1889,7 @@ function extractionArtifact(job: DeepAgentLearningJob.Record, admission: Admissi
     run_id: admission.run_id,
     phase: "extraction",
     source_input_ref: job.candidateInputRef,
+    ...(admission.evidence ? { source_evidence: admission.evidence } : {}),
     candidates: extraction.candidates,
     promotion_decision: extraction.promotion_decision,
     rejection_reasons: extraction.rejection_reasons,

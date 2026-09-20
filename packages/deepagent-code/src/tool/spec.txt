@@ -1,0 +1,7 @@
+Write or list this session's durable run documents — the requirements and design records of the task workflow.
+
+During UNDERSTAND, distill what the task actually demands into a requirements document (contracts, constraints, edge cases, acceptance criteria — from what you read, not guesses). During DESIGN, record how you will build it (structure, approach, key tradeoffs). Write them BEFORE implementing; refine them when understanding changes by re-writing the same title.
+
+Documents are durable for the whole run: list them to recall earlier decisions instead of re-reading everything.
+
+Parameters: operation (write|list, default write), kind (requirements|design), title, body (markdown).

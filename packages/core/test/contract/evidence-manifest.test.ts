@@ -9,6 +9,8 @@ import {
   type EvidenceManifest,
   type CandidateIdentity,
   EvidenceManifestVersion,
+  makeAuthoritativeManifest,
+  assertReleaseGo,
 } from "../../src/contract/evidence-manifest"
 
 const base: EvidenceManifest = {
@@ -32,6 +34,13 @@ const base: EvidenceManifest = {
   gates: [
     { gate: "G0", status: "passed", refs: ["ref-1"] },
     { gate: "G1", status: "pending", refs: [] },
+    { gate: "G2", status: "pending", refs: [] },
+    { gate: "G3", status: "pending", refs: [] },
+    { gate: "G4", status: "pending", refs: [] },
+    { gate: "G5", status: "pending", refs: [] },
+    { gate: "G6", status: "pending", refs: [] },
+    { gate: "G7", status: "pending", refs: [] },
+    { gate: "G8", status: "pending", refs: [] },
   ],
   openFindings: ["P3-hygiene-1"],
   acceptedResiduals: [
@@ -128,5 +137,30 @@ describe("C0-07 evidence manifest contract", () => {
     expect(EvidenceManifestVersion.schema).toBe("evidence-manifest.v1")
     const bad = { ...base, schemaVersion: "evidence-manifest.v2" }
     expect(() => decodeEvidenceManifest(bad)).toThrow(EvidenceManifestDecodeError)
+  })
+
+  test("release gate refuses any non-passed gate or open finding", () => {
+    expect(() => assertReleaseGo(base)).toThrow()
+    expect(() =>
+      assertReleaseGo({
+        ...base,
+        gates: base.gates.map((entry) => ({ ...entry, status: "passed" as const, refs: [entry.gate] })),
+        openFindings: [],
+      }),
+    ).not.toThrow()
+  })
+
+  test("authoritative manifest requires ordered complete gates and derives a stable build id", () => {
+    const manifest = makeAuthoritativeManifest({ ...base, buildId: undefined, gates: base.gates })
+    expect(manifest.buildId).toMatch(/^build:[0-9a-f]{64}$/)
+    expect(manifest.gates.map((entry) => entry.gate)).toEqual(["G0", "G1", "G2", "G3", "G4", "G5", "G6", "G7", "G8"])
+    expect(() => assertReleaseGo(manifest)).toThrow()
+    expect(() =>
+      assertReleaseGo({
+        ...manifest,
+        gates: manifest.gates.map((entry) => ({ ...entry, status: "passed" as const, refs: [entry.gate] })),
+        openFindings: [],
+      }),
+    ).not.toThrow()
   })
 })

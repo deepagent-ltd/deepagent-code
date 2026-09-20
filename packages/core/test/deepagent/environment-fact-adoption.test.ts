@@ -6,6 +6,7 @@ import { DeepAgentCodeHome } from "../../src/deepagent/workspace"
 import { openUserGlobalStore, projectIdForWorkspace } from "../../src/deepagent/durable-knowledge-store"
 import { EnvironmentFactAdoption } from "../../src/deepagent/environment-fact-adoption"
 import { matchStaleFacts } from "../../src/deepagent/environment-fact"
+import { tmpRoot } from "../fixture/tmpdir"
 
 let root: string
 let home: DeepAgentCodeHome
@@ -13,7 +14,7 @@ const WORKSPACE = "/work/milvus"
 const NOW = "2026-07-09T00:00:00Z"
 
 beforeEach(() => {
-  root = mkdtempSync(path.join(tmpdir(), "envfact-adopt-"))
+  root = mkdtempSync(tmpRoot())
   home = new DeepAgentCodeHome(root)
 })
 afterEach(() => rmSync(root, { recursive: true, force: true }))

@@ -7,6 +7,7 @@ import { SessionMessage } from "@deepagent-code/core/session/message"
 import { AgentAttachment, FileAttachment, ReferenceAttachment } from "@deepagent-code/core/session/prompt"
 import { toLLMMessages } from "@deepagent-code/core/session/runner/to-llm-message"
 import { SessionV2 } from "@deepagent-code/core/session"
+import { LegacyWire } from "@deepagent-code/core/session/legacy-wire"
 import { ToolOutput } from "@deepagent-code/core/tool-output"
 import { DateTime } from "effect"
 
@@ -395,5 +396,41 @@ Recent work
         providerMetadata: undefined,
       },
     ])
+  })
+})
+
+describe("LegacyWire.legacyAssistant tool output", () => {
+  test("derives the display output from content when the local tool persisted no result", () => {
+    const withParts = LegacyWire.legacyAssistant({
+      sessionID: SessionV2.ID.make("ses_wire_display"),
+      parentMessageID: "msg_parent" as never,
+      directory: "/project",
+      root: "/project",
+      message: new SessionMessage.Assistant({
+        id: id("assistant"),
+        type: "assistant",
+        agent: "build",
+        model: { id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") },
+        content: [
+          new SessionMessage.AssistantTool({
+            type: "tool",
+            id: "bash-local",
+            name: "bash",
+            state: new SessionMessage.ToolStateCompleted({
+              status: "completed",
+              input: { command: "pwd" },
+              content: [new ToolOutput.TextContent({ type: "text", text: "/app" })],
+              structured: {},
+            }),
+            time: { created, completed: created },
+          }),
+        ],
+        time: { created },
+      }),
+    })
+    const toolPart = withParts.parts.find((part) => part.type === "tool") as {
+      state: { output?: string }
+    }
+    expect(toolPart.state.output).toBe("/app")
   })
 })

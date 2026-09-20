@@ -23,6 +23,13 @@ export default [
         resolve: {
           alias: {
             "@": fileURLToPath(new URL("./src", import.meta.url)),
+            // node builtins that reach the renderer bundle through core/session/legacy-wire
+            // (see polyfills/) — declared here so BOTH standalone dev and the electron-vite
+            // renderer (which consumes only this plugin, not vite.config.ts) inherit them.
+            "node:crypto": fileURLToPath(new URL("./polyfills/crypto.ts", import.meta.url)),
+            "node:buffer": fileURLToPath(new URL("./polyfills/buffer.ts", import.meta.url)),
+            crypto: fileURLToPath(new URL("./polyfills/crypto.ts", import.meta.url)),
+            buffer: fileURLToPath(new URL("./polyfills/buffer.ts", import.meta.url)),
           },
         },
         define: {

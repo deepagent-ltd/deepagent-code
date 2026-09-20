@@ -5,6 +5,7 @@ import { contentDigest } from "./contract/digest"
 import * as Contract from "./contract/model-protocol"
 import { ModelV2 } from "./model"
 import { ProviderV2 } from "./provider"
+import { readonlySet } from "./util/readonly-collections"
 
 /**
  * Explicit provider protocol resolution (design §5.1-5.2, C2-01/C2-02).
@@ -50,7 +51,7 @@ export interface ModelProtocolResolution {
  * constant, not evidence: a model is only routed to Responses when it explicitly
  * selects the protocol (the capability probe that produces evidence is C2-03).
  */
-export const RESPONSES_ALLOWLIST: ReadonlySet<string> = new Set(["deepseek", "deepagent"])
+export const RESPONSES_ALLOWLIST = readonlySet(new Set(["deepseek", "deepagent"]))
 
 type SourceClass = {
   readonly kind: ModelProtocolSelectionKind
@@ -218,7 +219,11 @@ function availabilityOf(model: ModelV2.Info, provider?: ProviderV2.Info): Contra
   return "stable"
 }
 
-function routeOriginOf(model: ModelV2.Info, protocol: ModelProtocol, provider?: ProviderV2.Info): Contract.ProviderRouteOrigin {
+function routeOriginOf(
+  model: ModelV2.Info,
+  protocol: ModelProtocol,
+  provider?: ProviderV2.Info,
+): Contract.ProviderRouteOrigin {
   return {
     routeId: protocolRouteId(protocol),
     originId: provider ? provider.id : model.providerID,
@@ -227,7 +232,11 @@ function routeOriginOf(model: ModelV2.Info, protocol: ModelProtocol, provider?: 
   }
 }
 
-function versionBindingsOf(model: ModelV2.Info, capabilities: ModelProtocolCapabilities, provider?: ProviderV2.Info): Contract.ModelVersionBindings {
+function versionBindingsOf(
+  model: ModelV2.Info,
+  capabilities: ModelProtocolCapabilities,
+  provider?: ProviderV2.Info,
+): Contract.ModelVersionBindings {
   return {
     endpointVersion: contentDigest(endpointUrl(model, provider) ?? model.providerID),
     originVersion: contentDigest({ provider: provider ? provider.id : model.providerID, model: model.id }),
@@ -409,14 +418,26 @@ export function configIdentityHash(model: ModelV2.Info, provider?: ProviderV2.In
     endpoint: endpointUrl(model, provider) ?? model.providerID,
     originId: provider ? provider.id : model.providerID,
     protocol: selection.protocol ?? "disabled",
-    originVersion: contentDigest({ providerId: model.providerID, modelId: model.id, endpoint: endpointUrl(model, provider) ?? model.providerID }),
+    originVersion: contentDigest({
+      providerId: model.providerID,
+      modelId: model.id,
+      endpoint: endpointUrl(model, provider) ?? model.providerID,
+    }),
   })
 }
 
-function evidenceFromProbe(model: ModelV2.Info, provider: ProviderV2.Info | undefined, probe: CapabilityProbeResult): CapabilityConfigEvidence {
+function evidenceFromProbe(
+  model: ModelV2.Info,
+  provider: ProviderV2.Info | undefined,
+  probe: CapabilityProbeResult,
+): CapabilityConfigEvidence {
   if (probe.state === "not_applicable" || !probe.protocol || !probe.capabilities) {
     const reason = probe.disabledReason ?? "model_protocol_selection_required"
-    throw new CapabilityProbeNotApplicableError({ providerId: model.providerID, modelId: model.id, disabledReason: reason })
+    throw new CapabilityProbeNotApplicableError({
+      providerId: model.providerID,
+      modelId: model.id,
+      disabledReason: reason,
+    })
   }
   const protocol = probe.protocol
   const capabilities = probe.capabilities
@@ -450,6 +471,7 @@ export function buildCapabilityEvidence(model: ModelV2.Info, provider?: Provider
 // in-process persistence home for the evidence; durable DB persistence in a
 // `session_*` table is a C1A/other-lane integration decision (see boundary note).
 const evidenceCache = new Map<string, CapabilityConfigEvidence>()
+const maxEvidenceCacheEntries = 128
 
 export function getConfigEvidence(configIdentity: string): CapabilityConfigEvidence | undefined {
   return evidenceCache.get(configIdentity)
@@ -494,6 +516,10 @@ export function refreshConfigEvidence(model: ModelV2.Info, provider?: ProviderV2
   configProbeCallCount += 1
   const evidence = evidenceFromProbe(model, provider, probeHook(model, provider))
   evidenceCache.set(evidence.configIdentityHash, evidence)
+  if (evidenceCache.size > maxEvidenceCacheEntries) {
+    const oldest = evidenceCache.keys().next().value
+    if (oldest !== undefined) evidenceCache.delete(oldest)
+  }
   return evidence
 }
 
@@ -545,18 +571,29 @@ export function protocolAttemptIdentityFor(
   const selection = resolveModelProtocol(model, provider)
   if (!selection.protocol || selection.selectionState === "disabled") {
     const reason = selection.disabledReason ?? "model_protocol_selection_required"
-    throw new CapabilityProbeNotApplicableError({ providerId: model.providerID, modelId: model.id, disabledReason: reason })
+    throw new CapabilityProbeNotApplicableError({
+      providerId: model.providerID,
+      modelId: model.id,
+      disabledReason: reason,
+    })
   }
   const protocol = selection.protocol
   const routeId = protocolRouteId(protocol)
   const originId = provider ? provider.id : model.providerID
   const endpoint = endpointUrl(model, provider) ?? model.providerID
-  const capabilityFingerprint = evidence?.capabilityFingerprint ?? contentDigest({ hashed: contentDigest(selection.capabilities), protocol })
+  const capabilityFingerprint =
+    evidence?.capabilityFingerprint ?? contentDigest({ hashed: contentDigest(selection.capabilities), protocol })
   return {
     protocol,
     routeId,
     originId,
-    endpointOriginHash: contentDigest({ endpoint, originId, routeId, protocol, protocolVersion: String(Contract.ModelProtocolVersion.protocol) }),
+    endpointOriginHash: contentDigest({
+      endpoint,
+      originId,
+      routeId,
+      protocol,
+      protocolVersion: String(Contract.ModelProtocolVersion.protocol),
+    }),
     capabilityFingerprint,
     loweringVersion: evidence?.loweringVersion ?? 1,
     protocolRevision: Contract.ModelProtocolVersion.protocol,
@@ -569,10 +606,9 @@ export function protocolAttemptIdentityHash(identity: Contract.ProtocolAttemptId
 }
 
 /** Typed failure: config drifted after the attempt identity was bound (design §2.3). */
-export class ConfigDriftError extends Schema.TaggedErrorClass<ConfigDriftError>()(
-  "ModelProtocol.ConfigDriftError",
-  { reason: Schema.Literal("config_drift_rebuild_required") },
-) {}
+export class ConfigDriftError extends Schema.TaggedErrorClass<ConfigDriftError>()("ModelProtocol.ConfigDriftError", {
+  reason: Schema.Literal("config_drift_rebuild_required"),
+}) {}
 
 /** Whether the current identity drifts from a previously bound identity hash. */
 export function configDrift(current: Contract.ProtocolAttemptIdentity, boundIdentityHash: string): boolean {

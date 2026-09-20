@@ -17,18 +17,36 @@ Options:
     -h, --help              Display this help message
     -v, --version <version> Install a specific version (e.g., 2.0.0-beta.0)
     -b, --binary <path>     Install from a local binary instead of downloading
+    -m, --mirror <url>      Download mirror base (default: \$DEEPAGENT_MIRROR or https://ai.deepagent.ltd/download)
         --no-modify-path    Don't modify shell config files (.zshrc, .bashrc, etc.)
 
 Examples:
-    curl -fsSL https://deepagent.ltd/install | bash
-    curl -fsSL https://deepagent.ltd/install | bash -s -- --version 2.0.0-beta.0
+    curl -fsSL https://ai.deepagent.ltd/download/install | bash
+    curl -fsSL https://ai.deepagent.ltd/download/install | bash -s -- --version 2.0.0-beta.0
+    curl -fsSL https://ai.deepagent.ltd/download/install | bash -s -- --mirror https://your-mirror.example.com/download
     ./install --binary /path/to/deepagent-code
 EOF
+}
+
+print_message() {
+    local level=$1
+    local message=$2
+    local color=""
+
+    case $level in
+        info) color="${NC}" ;;
+        warning) color="${NC}" ;;
+        error) color="${RED}" ;;
+    esac
+
+    echo -e "${color}${message}${NC}"
 }
 
 requested_version=${VERSION:-}
 no_modify_path=false
 binary_path=""
+mirror=${DEEPAGENT_MIRROR:-https://ai.deepagent.ltd/download}
+mirror="${mirror%/}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -42,6 +60,15 @@ while [[ $# -gt 0 ]]; do
                 shift 2
             else
                 echo -e "${RED}Error: --version requires a version argument${NC}"
+                exit 1
+            fi
+            ;;
+        -m|--mirror)
+            if [[ -n "${2:-}" ]]; then
+                mirror="${2%/}"
+                shift 2
+            else
+                echo -e "${RED}Error: --mirror requires a URL argument${NC}"
                 exit 1
             fi
             ;;
@@ -167,7 +194,6 @@ else
 
     filename="$APP-$target$archive_ext"
 
-
     if [ "$os" = "linux" ]; then
         if ! command -v tar >/dev/null 2>&1; then
              echo -e "${RED}Error: 'tar' is required but not installed.${NC}"
@@ -180,43 +206,48 @@ else
         fi
     fi
 
-    if [ -z "$requested_version" ]; then
-        url="https://github.com/deepagent-ltd/deepagent-code/releases/latest/download/$filename"
-        specific_version=$(curl -s https://api.github.com/repos/deepagent-ltd/deepagent-code/releases/latest | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p')
-
-        if [[ $? -ne 0 || -z "$specific_version" ]]; then
-            echo -e "${RED}Failed to fetch version information${NC}"
-            exit 1
-        fi
-    else
-        # Strip leading 'v' if present
+    # Download source resolution: the self-hosted mirror first (flat layout, sha256 sidecars —
+    # no jq dependency), GitHub Releases as fallback for when the mirror is unreachable.
+    # Mirror layout (produced by script/publish-mirror.ts):
+    #   {mirror}/stable.version                          -> "2.0.0-beta.0"
+    #   {mirror}/{version}/deepagent-code-{target}.zip   -> archive
+    #   {mirror}/{version}/deepagent-code-{target}.zip.sha256 -> "<hash>  <filename>"
+    expected_sha256=""
+    resolved_from_mirror=false
+    if [ -n "$requested_version" ]; then
         requested_version="${requested_version#v}"
-        url="https://github.com/deepagent-ltd/deepagent-code/releases/download/v${requested_version}/$filename"
         specific_version=$requested_version
+    else
+        specific_version=$(curl -fsSL -m 15 "$mirror/stable.version" 2>/dev/null | tr -d '[:space:]' || true)
+    fi
 
-        # Verify the release exists before downloading
-        http_status=$(curl -sI -o /dev/null -w "%{http_code}" "https://github.com/deepagent-ltd/deepagent-code/releases/tag/v${requested_version}")
-        if [ "$http_status" = "404" ]; then
-            echo -e "${RED}Error: Release v${requested_version} not found${NC}"
-            echo -e "${MUTED}Available releases: https://github.com/deepagent-ltd/deepagent-code/releases${NC}"
-            exit 1
+    if [ -n "$specific_version" ] && curl -fsI -m 15 -o /dev/null "$mirror/$specific_version/$filename" 2>/dev/null; then
+        url="$mirror/$specific_version/$filename"
+        expected_sha256=$(curl -fsSL -m 15 "$url.sha256" 2>/dev/null | awk '{print $1}' || true)
+        resolved_from_mirror=true
+    else
+        print_message warning "Mirror unreachable or missing ($mirror), falling back to GitHub Releases"
+        if [ -z "$requested_version" ]; then
+            url="https://github.com/deepagent-ltd/deepagent-code/releases/latest/download/$filename"
+            specific_version=$(curl -s https://api.github.com/repos/deepagent-ltd/deepagent-code/releases/latest | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p')
+
+            if [[ $? -ne 0 || -z "$specific_version" ]]; then
+                echo -e "${RED}Failed to fetch version information${NC}"
+                exit 1
+            fi
+        else
+            url="https://github.com/deepagent-ltd/deepagent-code/releases/download/v${requested_version}/$filename"
+
+            # Verify the release exists before downloading
+            http_status=$(curl -sI -o /dev/null -w "%{http_code}" "https://github.com/deepagent-ltd/deepagent-code/releases/tag/v${requested_version}")
+            if [ "$http_status" = "404" ]; then
+                echo -e "${RED}Error: Release v${requested_version} not found${NC}"
+                echo -e "${MUTED}Available releases: https://github.com/deepagent-ltd/deepagent-code/releases${NC}"
+                exit 1
+            fi
         fi
     fi
 fi
-
-print_message() {
-    local level=$1
-    local message=$2
-    local color=""
-
-    case $level in
-        info) color="${NC}" ;;
-        warning) color="${NC}" ;;
-        error) color="${RED}" ;;
-    esac
-
-    echo -e "${color}${message}${NC}"
-}
 
 check_version() {
     if command -v deepagent-code >/dev/null 2>&1; then
@@ -325,8 +356,31 @@ download_with_progress() {
     return $ret
 }
 
+verify_checksum() {
+    local file=$1
+    local expected=$2
+    [ -n "$expected" ] || return 0
+
+    local actual=""
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual=$(sha256sum "$file" | awk '{print $1}')
+    elif command -v shasum >/dev/null 2>&1; then
+        actual=$(shasum -a 256 "$file" | awk '{print $1}')
+    else
+        print_message warning "No sha256 tool found (sha256sum/shasum); skipping integrity check"
+        return 0
+    fi
+
+    if [ "$actual" != "$expected" ]; then
+        echo -e "${RED}Error: checksum mismatch for $file${NC}"
+        echo -e "${MUTED}expected $expected${NC}"
+        echo -e "${MUTED}actual   $actual${NC}"
+        exit 1
+    fi
+}
+
 download_and_install() {
-    print_message info "\n${MUTED}Installing ${NC}deepagent-code ${MUTED}version: ${NC}$specific_version"
+    print_message info "\n${MUTED}Installing ${NC}deepagent-code ${MUTED}version: ${NC}$specific_version${MUTED} from: ${NC}$url"
     local tmp_dir="$HOME/.deepagent/code/tmp/deepagent_code_install_$$"
     mkdir -p "$tmp_dir"
 
@@ -334,6 +388,8 @@ download_and_install() {
         # Fallback to standard curl on Windows, non-TTY environments, or if custom progress fails
         curl -# -L -o "$tmp_dir/$filename" "$url"
     fi
+
+    verify_checksum "$tmp_dir/$filename" "$expected_sha256"
 
     if [ "$os" = "linux" ]; then
         tar -xzf "$tmp_dir/$filename" -C "$tmp_dir"

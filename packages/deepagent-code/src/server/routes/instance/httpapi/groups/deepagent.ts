@@ -547,6 +547,16 @@ export const DeepAgentGoalStartableResult = Schema.Struct({
   source: Schema.Literals(["plan", "file", "none"]),
 })
 
+// W2-3 — pending FIFO `queue` inputs still awaiting promotion (V2 session_input read face).
+export const DeepAgentQueuedInput = Schema.Struct({
+  id: Schema.String,
+  admittedSeq: Schema.Number,
+  text: Schema.String,
+  files: Schema.optional(Schema.Array(Schema.String)),
+  timeCreated: Schema.Number,
+})
+export const DeepAgentQueuedInputsResult = Schema.Struct({ items: Schema.Array(DeepAgentQueuedInput) })
+
 // ── V3.9 §B Repo & Wiki ────────────────────────────────────────────────────
 // The human-facing projection of the four graphs. Read-only browse + governed knowledge edit +
 // full-text search. All gated by the wiki flag (the handler fail-closes). sealed docs NEVER surface.
@@ -947,6 +957,23 @@ export const DeepAgentApi = HttpApi.make("deepagent").add(
         success: described(DeepAgentGoalStartableResult, "Whether a goal can be started + plan source"),
         error: DeepAgentPromotionError,
       }),
+    )
+    .add(
+      HttpApiEndpoint.get("queuedInputs", `${root}/queue`, {
+        query: Schema.Struct({ ...WorkspaceRoutingQueryFields, sessionID: Schema.String }),
+        success: described(
+          DeepAgentQueuedInputsResult,
+          "Pending FIFO queue inputs in admit order (V2 session_input delivery=queue)",
+        ),
+        error: DeepAgentPromotionError,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "deepagent.queue.list",
+          summary: "List the session's pending queued inputs",
+          description:
+            "W2-3: non-consuming read of durable `queue` inputs awaiting promotion. Mirrors promoteNextQueued ordering; the TUI /queue view renders this.",
+        }),
+      ),
     )
     .add(
       HttpApiEndpoint.get("wikiPages", `${root}/wiki/pages`, {

@@ -274,7 +274,7 @@ const TIPS: Tip[] = [
     shortcuts.commandList()
       ? `Toggle username display in chat via the command palette (${shortcutText(shortcuts.commandList())})`
       : "Toggle username display in chat via the command palette",
-  "Run {highlight}docker run -it --rm ghcr.io/lessweb/deepagent-code{/highlight} for containerized use",
+  "Run {highlight}docker run -it --rm ghcr.io/deepagent-ltd/deepagent-code{/highlight} for containerized use",
   "Use {highlight}/connect{/highlight} with DeepAgent Code Zen for curated, tested models",
   "Commit your project's {highlight}AGENTS.md{/highlight} file to Git for team sharing",
   "Use {highlight}/review{/highlight} to review uncommitted changes, branches, or PRs",

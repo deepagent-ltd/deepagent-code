@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { createFollowupSubmissionRegistry } from "./followup-submission"
+import { createFollowupSubmissionRegistry, FOLLOWUP_SUBMISSION_LIMIT } from "./followup-submission"
 
 const deferred = () => {
   let resolve!: (value: boolean) => void
@@ -14,18 +14,25 @@ describe("follow-up submission registry", () => {
     const registry = createFollowupSubmissionRegistry()
     const first = deferred()
     const second = deferred()
-    const firstController = new AbortController()
-    const secondController = new AbortController()
-    registry.register({ sessionID: "session-a", id: "a", controller: firstController, promise: first.promise })
-    registry.register({ sessionID: "session-b", id: "b", controller: secondController, promise: second.promise })
+    let firstAborted = false
+    let secondAborted = false
+    registry.run({ sessionID: "session-a", id: "a" }, (signal) => {
+      signal.addEventListener("abort", () => (firstAborted = true))
+      return first.promise
+    })
+    registry.run({ sessionID: "session-b", id: "b" }, (signal) => {
+      signal.addEventListener("abort", () => (secondAborted = true))
+      return second.promise
+    })
+    await Promise.resolve()
 
     let joined = false
     const cancel = registry.cancel("session-a").then(() => {
       joined = true
     })
     await Promise.resolve()
-    expect(firstController.signal.aborted).toBe(true)
-    expect(secondController.signal.aborted).toBe(false)
+    expect(firstAborted).toBe(true)
+    expect(secondAborted).toBe(false)
     expect(joined).toBe(false)
     first.resolve(false)
     await cancel
@@ -33,21 +40,40 @@ describe("follow-up submission registry", () => {
     second.resolve(true)
   })
 
-  test("an old completion cannot clear a replacement submission", async () => {
+  test("coalesces the same follow-up while it is active", async () => {
     const registry = createFollowupSubmissionRegistry()
     const current = deferred()
-    const controller = new AbortController()
-    registry.register({
-      sessionID: "session-a",
-      id: "replacement",
-      controller,
-      promise: current.promise,
+    let calls = 0
+    const first = registry.run({ sessionID: "session-a", id: "same" }, () => {
+      calls++
+      return current.promise
     })
-    registry.clear("session-a", "old")
+    const second = registry.run({ sessionID: "session-a", id: "same" }, () => {
+      calls++
+      return Promise.resolve(true)
+    })
 
     const cancel = registry.cancel("session-a")
-    expect(controller.signal.aborted).toBe(true)
     current.resolve(false)
     await cancel
+    expect(first).toBe(second)
+    expect(calls).toBe(1)
+    expect(registry.active()).toBe(0)
+  })
+
+  test("rejects new work at the global active limit", async () => {
+    const registry = createFollowupSubmissionRegistry()
+    const pending = deferred()
+    for (let index = 0; index < FOLLOWUP_SUBMISSION_LIMIT; index++) {
+      registry.run({ sessionID: `session-${index}`, id: "one" }, () => pending.promise)
+    }
+    await Promise.resolve()
+
+    expect(registry.active()).toBe(FOLLOWUP_SUBMISSION_LIMIT)
+    await expect(registry.run({ sessionID: "overflow", id: "one" }, () => Promise.resolve(true))).rejects.toThrow(
+      "Too many active follow-up submissions",
+    )
+
+    pending.resolve(false)
   })
 })

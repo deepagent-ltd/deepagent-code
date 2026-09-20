@@ -16,7 +16,7 @@
           {
             "group": "Getting started",
             "pages": ["index", "quickstart", "development"],
-            "openapi": "https://deepagent-code.ai/openapi.json"
+            "openapi": "https://ai.deepagent.ltd/openapi.json"
           }
         ]
       }

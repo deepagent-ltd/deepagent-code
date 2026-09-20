@@ -1,11 +1,11 @@
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import type { PlanDoc } from "@deepagent-code/core/deepagent/plan-controller"
-import { loadPlanLiveLLMConfig, writeLiveArtifact } from "../../../llm/script/live-llm/config"
+import { loadLiveLLMConfig, writeLiveArtifact } from "../../../llm/script/live-llm/config"
 import { finishLiveScript } from "./lifecycle"
 import { assertPlanAdvanceObservation } from "./plan-advance-oracle"
 import { runLegacyLiveCases } from "./runtime"
 
-const config = await loadPlanLiveLLMConfig()
+const config = await loadLiveLLMConfig()
 const conflictCase = "retry-after-authority-race"
 const concurrentNote = "concurrent authority update"
 let immutable: PlanDoc | undefined
@@ -30,7 +30,7 @@ const artifact = await runLegacyLiveCases({
     "Never send goal, assumptions, replan_reason, title, acceptance, or assigned_agent on advance.",
     "If the tool returns plan_protocol conflict, retry the same requested transition exactly once from the authoritative parameters in that result.",
   ].join(" "),
-  modelMaxTokens: config.providerID === "kimi" ? 1536 : 768,
+  modelMaxTokens: config.providerID === "deepseek" ? 768 : 1536,
   maxProviderTurns: 5,
   cases: [
     {

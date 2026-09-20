@@ -22,8 +22,8 @@ import {
 
 const suite = "activity-progress-package"
 const config = await loadLiveConfig()
-if (config.modelID !== "deepseek-v4-flash") {
-  throw new Error("Packaged activity progress test requires the DeepSeek deepseek-v4-flash configuration")
+if (config.modelID !== "deepseek-flash") {
+  throw new Error("Packaged activity progress test requires the DeepSeek deepseek-flash configuration")
 }
 if (process.platform !== "darwin") throw new Error("Packaged activity progress test currently requires macOS")
 
@@ -143,8 +143,8 @@ try {
     stack: "packaged-renderer-ui",
     status: "passed",
     fingerprint: {
-      providerID: "deepseek",
-      runtimeProviderID: "live-deepseek",
+      providerID: config.providerID,
+      runtimeProviderID: process.env.DEEPAGENT_CODE_LIVE_LLM_PROVIDER?.trim() || "live-deepseek",
       modelID: config.modelID,
       modelRevision: config.modelRevision,
       baseURL: config.baseURL,

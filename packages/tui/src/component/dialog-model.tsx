@@ -1,6 +1,7 @@
 import { createMemo, createSignal } from "solid-js"
 import { useLocal } from "../context/local"
 import { useSync } from "../context/sync"
+import { useTuiI18n } from "../context/i18n"
 import { map, pipe, flatMap, entries, filter, sortBy, take } from "remeda"
 import { DialogSelect } from "../ui/dialog-select"
 import { useDialog } from "../ui/dialog"
@@ -13,6 +14,7 @@ export function DialogModel(props: { providerID?: string }) {
   const local = useLocal()
   const sync = useSync()
   const dialog = useDialog()
+  const i18n = useTuiI18n()
   const [query, setQuery] = createSignal("")
 
   const connected = useConnected()
@@ -156,7 +158,7 @@ export function DialogModel(props: { providerID?: string }) {
         },
         {
           command: "model.dialog.favorite",
-          title: "Favorite",
+          title: i18n.t("tui.model.favorite"),
           hidden: !connected(),
           onTrigger: (option) => {
             local.model.toggleFavorite(option.value as { providerID: string; modelID: string })

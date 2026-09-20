@@ -12,6 +12,20 @@ export type LearningCandidate = {
   readonly confidence: number
 }
 
+export type LearningEvidenceSnapshot = {
+  readonly schema_version: "deepagent-code.learning_evidence.v1"
+  readonly activity_id: string
+  readonly plan_goal: string | null
+  readonly document_refs: readonly string[]
+  readonly changed_paths: readonly string[]
+  readonly validations: readonly {
+    readonly command_hash: string
+    readonly passed: boolean
+    readonly kind: string
+    readonly exit_code: number
+  }[]
+}
+
 export type LearningExtraction = {
   readonly candidates: readonly LearningCandidate[]
   readonly promotion_decision: "staged" | "rejected" | "needs_review"
@@ -24,11 +38,46 @@ export const extract = (input: {
   readonly roundState: RoundState
   readonly totalRounds: number
   readonly finalStatus: "completed" | "failed"
+  readonly evidence?: LearningEvidenceSnapshot
 }): LearningExtraction => {
   const candidates: LearningCandidate[] = []
   const rejectionReasons: string[] = []
+  const evidence = input.evidence
 
-  if (input.finalStatus === "completed" && input.totalRounds === 1) {
+  const completedEvidence = evidence
+    ? evidence.changed_paths.length > 0 &&
+      evidence.validations.length > 0 &&
+      evidence.validations.every((validation) => validation.passed)
+    : undefined
+
+  if (input.finalStatus === "completed" && completedEvidence && evidence) {
+    const goal = evidence.plan_goal?.replace(/\s+/g, " ").trim().slice(0, 240)
+    candidates.push({
+      candidate_id: `memory:${input.runId}:validated-completion`,
+      type: "memory",
+      status: "staged",
+      source_run_id: input.runId,
+      source_round: input.totalRounds,
+      summary:
+        `${goal ? `Validated completion of "${goal}"` : "Validated task completion"}: ` +
+        `${evidence.changed_paths.length} attributed file(s) changed and ` +
+        `${evidence.validations.length} activity-bound check(s) passed.`,
+      evidence_refs: [
+        `activity:${evidence.activity_id}`,
+        ...evidence.document_refs,
+        ...evidence.changed_paths.map((file) => `path:${file}`),
+        ...evidence.validations.map(
+          (validation) => `validation:${validation.command_hash}:exit=${validation.exit_code}`,
+        ),
+      ],
+      confidence: 0.85,
+    })
+  }
+
+  // Older callers do not carry the immutable evidence snapshot. Preserve their extraction shape
+  // for receipt compatibility, but every new V2 admission supplies evidence and therefore cannot
+  // turn a bare "completed" signal into generic first-pass knowledge.
+  if (input.finalStatus === "completed" && evidence === undefined && input.totalRounds === 1) {
     candidates.push({
       candidate_id: `memory:${input.runId}:first-pass-success`,
       type: "memory",
@@ -41,7 +90,7 @@ export const extract = (input: {
     })
   }
 
-  if (input.finalStatus === "completed" && input.totalRounds > 1) {
+  if (input.finalStatus === "completed" && input.totalRounds > 1 && completedEvidence !== false) {
     const successfulDiagnoses = input.roundState.diagnoses.filter((d) => d.root_cause && d.next_action === "revise")
     for (const diag of successfulDiagnoses) {
       candidates.push({
@@ -74,6 +123,12 @@ export const extract = (input: {
   }
 
   if (candidates.length === 0) {
+    if (input.finalStatus === "completed" && evidence && evidence.changed_paths.length === 0)
+      rejectionReasons.push("Completed run has no activity-attributed changed paths.")
+    if (input.finalStatus === "completed" && evidence && evidence.validations.length === 0)
+      rejectionReasons.push("Completed run has no activity-bound validation evidence.")
+    if (input.finalStatus === "completed" && evidence?.validations.some((validation) => !validation.passed))
+      rejectionReasons.push("Completed run contains failing activity-bound validation evidence.")
     rejectionReasons.push("No actionable learning candidates identified from this run.")
     return { candidates: [], promotion_decision: "rejected", rejection_reasons: rejectionReasons }
   }

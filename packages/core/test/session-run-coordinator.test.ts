@@ -140,7 +140,7 @@ describe("SessionRunCoordinator", () => {
     ),
   )
 
-  it.effect("suppresses stale wakes after an idle interrupt boundary", () =>
+  it.effect("does not retain interrupt history for idle keys", () =>
     Effect.scoped(
       Effect.gen(function* () {
         let runs = 0
@@ -149,11 +149,11 @@ describe("SessionRunCoordinator", () => {
         yield* coordinator.interrupt("session", 2)
         yield* coordinator.wake("session", 1)
         yield* coordinator.awaitIdle("session")
-        expect(runs).toBe(0)
+        expect(runs).toBe(1)
 
         yield* coordinator.wake("session", 3)
         yield* coordinator.awaitIdle("session")
-        expect(runs).toBe(1)
+        expect(runs).toBe(2)
       }),
     ),
   )
@@ -271,6 +271,31 @@ describe("SessionRunCoordinator", () => {
         expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBeTrue()
         expect(runs).toBe(1)
         yield* coordinator.interrupt("session")
+      }),
+    ),
+  )
+
+  it.effect("releases every joined explicit caller on interrupt", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>()
+        const coordinator = yield* SessionRunCoordinator.make<string, void, never, string>({
+          drain: () => Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
+        })
+
+        const first = yield* coordinator.run("session").pipe(Effect.forkChild)
+        yield* Deferred.await(started)
+        const second = yield* coordinator.run("session").pipe(Effect.forkChild)
+        yield* Effect.yieldNow
+
+        yield* coordinator.interrupt("session", undefined, "user")
+        const firstExit = yield* Fiber.await(first)
+        const secondExit = yield* Fiber.await(second)
+        // RI-129: an interrupt-only Exit must reach EVERY joined awaiter, not just the first
+        // (a Deferred completed with an interrupt-only cause wakes only one awaiter; the
+        // coordinator hands the Exit over the success channel and each awaiter re-raises it).
+        expect(Exit.isFailure(firstExit) && Cause.hasInterruptsOnly(firstExit.cause)).toBeTrue()
+        expect(secondExit).toEqual(firstExit)
       }),
     ),
   )

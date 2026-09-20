@@ -1,6 +1,7 @@
 import { Schema } from "effect"
 import { HttpApi } from "effect/unstable/httpapi"
 import { EventV2 } from "@deepagent-code/core/event"
+import { EventV2Bridge } from "@/event-v2-bridge"
 import { InstanceDisposed } from "@/server/event"
 import { Question } from "@/question"
 import { ConfigApi } from "./groups/config"
@@ -40,16 +41,21 @@ import { SystemContextApi } from "./groups/system-context"
 import { Authorization } from "./middleware/authorization"
 import { SchemaErrorMiddleware } from "./middleware/schema-error"
 
+// The client-facing event stream is delivered through the EventV2Bridge egress adapter, which
+// rewrites native higher-version facts to their V1 compatibility wire shape for the adapted
+// types (see compatibilityEgressTypes). Declare that wire shape for those types — every other
+// type is delivered raw at its published version and stays at the registry's latest version.
 const EventSchema = Schema.Union([
   ...EventV2.registry
     .values()
-    .map((definition) =>
-      Schema.Struct({
+    .map((definition) => {
+      const wire = EventV2Bridge.compatibilityEgressDefinition(definition.type) ?? definition
+      return Schema.Struct({
         id: EventV2.ID,
-        type: Schema.Literal(definition.type),
-        properties: definition.data,
-      }).annotate({ identifier: `Event.${definition.type}` }),
-    )
+        type: Schema.Literal(wire.type),
+        properties: wire.data,
+      }).annotate({ identifier: `Event.${wire.type}` })
+    })
     .toArray(),
   InstanceDisposed,
 ]).annotate({ identifier: "Event" })
@@ -72,7 +78,6 @@ export const InstanceHttpApi = HttpApi.make("deepagent-code-instance")
   .addHttpApi(FileApi)
   .addHttpApi(IMApi)
   .addHttpApi(InstanceApi)
-  .addHttpApi(MaintenanceApi)
   .addHttpApi(CapabilityApi)
   .addHttpApi(ContextApi)
   .addHttpApi(SystemContextApi)
@@ -94,6 +99,7 @@ export const InstanceHttpApi = HttpApi.make("deepagent-code-instance")
 export const DeepAgentCodeHttpApi = HttpApi.make("deepagent-code")
   .addHttpApi(RootHttpApi)
   .addHttpApi(EventApi)
+  .addHttpApi(MaintenanceApi)
   .addHttpApi(InstanceHttpApi)
   .addHttpApi(IMWebSocketApi)
   .addHttpApi(Api)

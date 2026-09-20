@@ -901,9 +901,6 @@ export const layer = Layer.effect(
           result.share = "auto"
         }
 
-        if (Flag.DEEPAGENT_CODE_DISABLE_AUTOCOMPACT) {
-          result.compaction = { ...result.compaction, auto: false }
-        }
         if (Flag.DEEPAGENT_CODE_DISABLE_PRUNE) {
           result.compaction = { ...result.compaction, prune: false }
         }
@@ -953,7 +950,7 @@ export const layer = Layer.effect(
 
     const waitForDependencies = Effect.fn("Config.waitForDependencies")(function* () {
       yield* InstanceState.useEffect(state, (s) =>
-        Effect.forEach(s.deps, Fiber.join, { concurrency: "unbounded" }).pipe(Effect.asVoid),
+        Effect.forEach(s.deps, Fiber.join, { concurrency: 16 }).pipe(Effect.asVoid),
       )
     })
 
@@ -1021,14 +1018,30 @@ export const layer = Layer.effect(
   }),
 )
 
-export const defaultLayer = layer.pipe(
-  Layer.provide(EffectFlock.defaultLayer),
-  Layer.provide(FSUtil.defaultLayer),
-  Layer.provide(Env.defaultLayer),
-  Layer.provide(Auth.defaultLayer),
-  Layer.provide(Account.defaultLayer),
-  Layer.provide(Npm.defaultLayer),
-  Layer.provide(FetchHttpClient.layer),
+const withAuthorities = (account: Layer.Layer<Account.Service, unknown>) =>
+  layer.pipe(
+    Layer.provide(EffectFlock.defaultLayer),
+    Layer.provide(FSUtil.defaultLayer),
+    Layer.provide(Env.defaultLayer),
+    Layer.provide(Auth.defaultLayer),
+    Layer.provide(account),
+    Layer.provide(Npm.defaultLayer),
+    Layer.provide(FetchHttpClient.layer),
+  )
+
+export const defaultLayer = withAuthorities(Account.defaultLayer)
+
+/**
+ * DB-free boot variant for standalone server-listening commands (`serve`, `web`). The real
+ * Account authority opens the Database (AccountRepo -> Database.defaultLayer: preflight,
+ * migrate, lifetime runtime lock), and a process whose Server.listen must remain the SOLE
+ * database owner cannot build it before listen. The Account surface is stubbed to "no active
+ * account" (any other method defects via Layer.mock): that only skips the console
+ * remote-config pull at THIS layer — the route graph Server.listen builds constructs the full
+ * `defaultLayer` and performs it there.
+ */
+export const standaloneLayer = withAuthorities(
+  Layer.mock(Account.Service, { active: () => Effect.succeed(Option.none()) }),
 )
 
 export * as Config from "./config"

@@ -308,7 +308,7 @@ describe("EditTool", () => {
                 ).toEqual({
                   type: "error",
                   value:
-                    "Found multiple exact matches for oldString. Provide more surrounding context or set replaceAll to true.",
+                    "Found multiple matches for oldString. Provide more surrounding context or set replaceAll to true.",
                 })
                 expect(writes).toEqual([])
               }),
@@ -410,7 +410,6 @@ test("keeps the locked edit schema, semantics docstring, and deferred TODOs visi
     "Named project references\n * are read-oriented and deliberately are not accepted by mutation tools.",
   )
   for (const todo of [
-    "Port V1 fuzzy correction strategies only after exact-edit behavior is established: line-trimmed matching, block-anchor fallback, indentation correction, and similarity-threshold review.",
     "Add formatter integration after V2 formatter runtime exists.",
     "Publish watcher/file-edit events after V2 watcher integration exists.",
     "Add snapshots / undo after design exists.",

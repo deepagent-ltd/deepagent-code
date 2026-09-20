@@ -43,7 +43,7 @@ export const GenerateCommand = {
       printWidth: 120,
     })
 
-    // Wait for stdout to finish writing before process.exit() is called
+    // Wait for stdout to finish writing before the command returns to the process owner.
     await new Promise<void>((resolve, reject) => {
       process.stdout.write(json, (err) => {
         if (err) reject(err)

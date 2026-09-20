@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { execFileSync } from "node:child_process"
 import { hardenedGitArgs } from "../../src/worktree/index"
+import { tmpRoot } from "../fixture/fixture"
 
 // I33-5: safeGit runs read-only git (diff/status/rev-list) inside a worktree that may check out an
 // ATTACKER-CONTROLLED repo. git has content-driven code paths that execute on ordinary reads —
@@ -49,8 +50,8 @@ describe("I33-5 hardenedGitArgs — end-to-end against a hostile repo", () => {
   const pwned = (name: string) => existsSync(path.join(sentinelDir, name))
 
   beforeEach(() => {
-    repo = mkdtempSync(path.join(tmpdir(), "i335-repo-"))
-    sentinelDir = mkdtempSync(path.join(tmpdir(), "i335-sentinel-"))
+    repo = mkdtempSync(tmpRoot())
+    sentinelDir = mkdtempSync(tmpRoot())
     git(["init", "-q"])
     git(["config", "user.email", "t@t.t"])
     git(["config", "user.name", "t"])

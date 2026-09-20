@@ -6,6 +6,7 @@ import { tmpdir } from "node:os"
 import { Effect, Stream } from "effect"
 import { LLMEvent, type LLMEvent as LLMEventType } from "@deepagent-code/llm"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
+import { tmpRootAsync, tmpRootSharedAsync } from "../fixture/fixture"
 
 export const deepagentRunInput = {
   callKind: "session_turn" as const,
@@ -22,7 +23,7 @@ export const deepagentRunInput = {
   },
 }
 
-export const tempRunsDir = () => mkdtemp(path.join(tmpdir(), "deepagent-code-"))
+export const tempRunsDir = () => tmpRootSharedAsync()
 
 export const cleanupRunsDir = async (dir: string) => {
   AgentGateway.configure({
@@ -64,8 +65,19 @@ export const runDeepAgentStream = async (
   ),
   mode: "high" | "max" = "high",
   input: AgentGateway.RunInput = deepagentRunInput,
+  // `configure` merges with `config.durableLearning ?? current.durableLearning`, so an unset value
+  // NEVER re-reads the environment: the module default (ON) sticks for the whole process. A test that
+  // needs the legacy writeback queue must say so explicitly here; flipping DEEPAGENT_DURABLE_LEARNING
+  // in `process.env` is silently ignored once anything has configured the gateway.
+  options: { readonly durableLearning?: boolean } = {},
 ) => {
-  AgentGateway.configure({ enabled: true, agentMode: mode, runsDir: dir, allowProviderExecutedTools: false })
+  AgentGateway.configure({
+    enabled: true,
+    agentMode: mode,
+    runsDir: dir,
+    allowProviderExecutedTools: false,
+    ...(options.durableLearning === undefined ? {} : { durableLearning: options.durableLearning }),
+  })
   await Effect.runPromise(AgentGateway.manageStream(input, events).pipe(Stream.runCollect))
   // E1: background learning is now queued off the main thread; flush it so tests observe a
   // deterministic post-finalization state (project memory / inbox written).

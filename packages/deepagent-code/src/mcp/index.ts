@@ -1,4 +1,4 @@
-import { dynamicTool, type Tool, jsonSchema, type JSONSchema7 } from "ai"
+import { dynamicTool, type Tool, type ToolExecutionOptions, jsonSchema, type JSONSchema7 } from "ai"
 import { ConfigV1 } from "@deepagent-code/core/v1/config/config"
 import { serviceUse } from "@deepagent-code/core/effect/service-use"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
@@ -173,7 +173,9 @@ function convertMcpTool(mcpTool: MCPToolDef, client: MCPClient, timeout?: number
   return dynamicTool({
     description: mcpTool.description ?? "",
     inputSchema: jsonSchema(schema),
-    execute: async (args: unknown) => {
+    // Forward the caller's abortSignal into the MCP request so cancelling the tool call (V2
+    // settle-fiber interruption, or the V1 stream's abortSignal) cancels the remote call.
+    execute: async (args: unknown, options: ToolExecutionOptions) => {
       return client.callTool(
         {
           name: mcpTool.name,
@@ -183,6 +185,7 @@ function convertMcpTool(mcpTool: MCPToolDef, client: MCPClient, timeout?: number
         {
           resetTimeoutOnProgress: true,
           timeout,
+          ...(options.abortSignal ? { signal: options.abortSignal } : {}),
         },
       )
     },
@@ -631,7 +634,7 @@ export const layer = Layer.effect(
                 watch(s, key, result.mcpClient, bridge, mcp.timeout)
               }
             }),
-          { concurrency: "unbounded" },
+          { concurrency: 16 },
         )
 
         yield* Effect.addFinalizer(() =>
@@ -651,7 +654,7 @@ export const layer = Layer.effect(
                   }
                   yield* Effect.tryPromise(() => client.close()).pipe(Effect.ignore)
                 }),
-              { concurrency: "unbounded" },
+              { concurrency: 16 },
             )
             pendingOAuthTransports.clear()
           }),
@@ -824,7 +827,7 @@ export const layer = Layer.effect(
               result[sanitize(clientName) + "_" + sanitize(mcpTool.name)] = converted
             }
           }),
-        { concurrency: "unbounded" },
+        { concurrency: 16 },
       )
       return result
     })
@@ -838,7 +841,7 @@ export const layer = Layer.effect(
         Object.entries(s.clients).filter(([name]) => s.status[name]?.status === "connected"),
         ([clientName, client]) =>
           fetchFromClient(clientName, client, listFn, label).pipe(Effect.map((items) => Object.entries(items ?? {}))),
-        { concurrency: "unbounded" },
+        { concurrency: 16 },
       ).pipe(Effect.map((results) => Object.fromEntries<T & { client: string }>(results.flat())))
     }
 

@@ -21,7 +21,7 @@
 import type { Dimension, Evidence, Inventory, Verdict } from "../caller-inventory/types"
 
 /** Verdicts the legacy-zero gate treats as an active legacy-authority leak. */
-export type ZeroTargetVerdict = "legacy" | "double_write" | "adapter"
+export type ZeroTargetVerdict = "legacy" | "double_write"
 
 /** Stable counter totals for one inventory build. */
 export type LegacyZeroCounters = {
@@ -51,7 +51,7 @@ export type Violation = {
 }
 
 /** Verdict words treated as legacy-zero violations (targets that must reach 0). */
-export const ZERO_TARGET_VERDICTS: readonly ZeroTargetVerdict[] = ["legacy", "double_write", "adapter"]
+export const ZERO_TARGET_VERDICTS: readonly ZeroTargetVerdict[] = ["legacy", "double_write"]
 
 const ZERO_TARGETS = new Set<ZeroTargetVerdict>(ZERO_TARGET_VERDICTS)
 

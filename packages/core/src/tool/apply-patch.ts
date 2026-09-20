@@ -45,33 +45,33 @@ type Prepared =
       readonly content: string
     })
 
-export const layer = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const tools = yield* Tools.Service
-    const mutation = yield* LocationMutation.Service
-    const files = yield* FileMutation.Service
-    const fs = yield* FSUtil.Service
-    const permission = yield* PermissionV2.Service
+/** Service bundle the patch application pipeline needs; shared by apply_patch and apply_patch_chunk. */
+export interface ApplyServices {
+  readonly mutation: LocationMutation.Interface
+  readonly files: FileMutation.Interface
+  readonly fs: FSUtil.Interface
+  readonly permission: PermissionV2.Interface
+}
 
-    yield* tools
-      .register({
-        [name]: Tool.withPermission(
-          Tool.make({
-            description:
-              "Apply one patch containing add, update, and delete file operations. All targets are resolved and approved before target contents are read. Operations apply sequentially; if a later operation fails, earlier operations remain applied and the failure reports them explicitly. Moves and atomic rollback are not supported yet.",
-            input: Input,
-            output: Output,
-            toModelOutput: ({ output }) => [toolText({ type: "text", text: toModelOutput(output) })],
-            execute: (input, context) => {
-              const applied: Array<typeof Applied.Type> = []
-              const fail = (path: string) => {
-                const prefix =
-                  applied.length === 0
-                    ? `Unable to apply patch at ${path}`
-                    : `Patch partially applied before failing at ${path}. Applied: ${applied.map((item) => item.resource).join(", ")}`
-                return new ToolFailure({ message: prefix })
-              }
-              return Effect.gen(function* () {
+/**
+ * The full apply_patch pipeline as an effect factory: parse → resolve targets → external/edit
+ * approvals → prepare contents → sequential apply with explicit partial-failure reporting.
+ * Extracted so `apply_patch_chunk` can commit its assembled patch through the SAME path (RI-26
+ * W2 port); behavior is byte-identical to the pre-extraction closure.
+ */
+export const makeApply =
+  (services: ApplyServices) =>
+  (input: { readonly patchText: string }, context: Tool.Context) => {
+    const { mutation, files, fs, permission } = services
+    const applied: Array<typeof Applied.Type> = []
+    const fail = (path: string) => {
+      const prefix =
+        applied.length === 0
+          ? `Unable to apply patch at ${path}`
+          : `Patch partially applied before failing at ${path}. Applied: ${applied.map((item) => item.resource).join(", ")}`
+      return new ToolFailure({ message: prefix })
+    }
+    return Effect.gen(function* () {
                 const source = {
                   type: "tool" as const,
                   messageID: context.assistantMessageID,
@@ -167,9 +167,30 @@ export const layer = Layer.effectDiscard(
                     }).pipe(Effect.mapError(() => fail(change.path))),
                   { discard: true },
                 )
-                return { applied }
-              }).pipe(Effect.mapError((error) => (error instanceof ToolFailure ? error : fail("patch"))))
-            },
+      return { applied }
+    }).pipe(Effect.mapError((error) => (error instanceof ToolFailure ? error : fail("patch"))))
+  }
+
+export const layer = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const tools = yield* Tools.Service
+    const apply = makeApply({
+      mutation: yield* LocationMutation.Service,
+      files: yield* FileMutation.Service,
+      fs: yield* FSUtil.Service,
+      permission: yield* PermissionV2.Service,
+    })
+
+    yield* tools
+      .register({
+        [name]: Tool.withPermission(
+          Tool.make({
+            description:
+              "Apply one patch containing add, update, and delete file operations. All targets are resolved and approved before target contents are read. Operations apply sequentially; if a later operation fails, earlier operations remain applied and the failure reports them explicitly. Moves and atomic rollback are not supported yet.",
+            input: Input,
+            output: Output,
+            toModelOutput: ({ output }) => [toolText({ type: "text", text: toModelOutput(output) })],
+            execute: apply,
           }),
           "edit",
         ),

@@ -77,7 +77,16 @@ export const layer = Layer.effectDiscard(
                       questions: input.questions,
                       tool: { messageID: context.assistantMessageID, callID: context.toolCallID },
                     })
-                    .pipe(Effect.orDie),
+                    .pipe(
+                      Effect.mapError((error) =>
+                        new ToolFailure({
+                          message:
+                            error._tag === "QuestionV2.CapacityError"
+                              ? `Too many pending questions (limit ${error.limit})`
+                              : "Question dismissed",
+                        }),
+                      ),
+                    ),
                 ),
                 Effect.map((answers) => ({ answers })),
               ),

@@ -9,6 +9,7 @@ import type {
   PackManifest,
   DomainPackIndexEntry,
 } from "../../src/deepagent/domain-pack-registry"
+import { tmpRoot } from "../fixture/tmpdir"
 
 let dir: string
 
@@ -50,7 +51,7 @@ const writePack = (id: string, manifest: Partial<PackManifest>, index: DomainPac
 }
 
 beforeEach(() => {
-  dir = mkdtempSync(path.join(tmpdir(), "deepagent-packreg-"))
+  dir = mkdtempSync(tmpRoot())
   Registry.configureRegistry(dir)
 })
 afterEach(() => rmSync(dir, { recursive: true, force: true }))

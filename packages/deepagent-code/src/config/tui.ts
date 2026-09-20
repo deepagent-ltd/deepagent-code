@@ -259,7 +259,7 @@ export const layer = Layer.effect(
           })
           .pipe(Effect.forkScoped),
       {
-        concurrency: "unbounded",
+        concurrency: 16,
       },
     )
 
@@ -267,7 +267,7 @@ export const layer = Layer.effect(
     const pluginOrigins = Effect.fn("TuiConfig.pluginOrigins")(() => Effect.succeed(data.pluginOrigins))
 
     const waitForDependencies = Effect.fn("TuiConfig.waitForDependencies")(() =>
-      Effect.forEach(deps, Fiber.join, { concurrency: "unbounded" }).pipe(Effect.ignore(), Effect.asVoid),
+      Effect.forEach(deps, Fiber.join, { concurrency: 16 }).pipe(Effect.ignore(), Effect.asVoid),
     )
     return Service.of({ get, pluginOrigins, waitForDependencies })
   }).pipe(Effect.withSpan("TuiConfig.layer")),
@@ -275,7 +275,7 @@ export const layer = Layer.effect(
 
 export const defaultLayer = layer.pipe(Layer.provide(Npm.defaultLayer), Layer.provide(FSUtil.defaultLayer))
 
-const { runPromise } = makeRuntime(Service, defaultLayer)
+const { runPromise } = makeRuntime(Service, defaultLayer, "deepagent.tui-config")
 
 export async function waitForDependencies() {
   await runPromise((svc) => svc.waitForDependencies())

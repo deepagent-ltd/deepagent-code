@@ -140,8 +140,11 @@ export type ReceiptRow = {
   completed_at: number
 }
 
-/** Byte-stable content/body hash of a migration, computed from its body source. */
+/** Byte-stable content/body hash of a migration, sealed from source by the registry generator. */
 export function migrationBodyHash(migration: Migration): string {
+  if (migration.bodyHash) return migration.bodyHash
+  // Test-only/ad-hoc migrations are not generated. Keep their identity deterministic within one
+  // runtime without pretending Function.toString() is a production artifact identity.
   return contentDigest({ kind: "migration-body", id: migration.id, source: migration.up.toString() })
 }
 

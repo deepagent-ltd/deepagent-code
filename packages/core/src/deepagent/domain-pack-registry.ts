@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync, mkdirSync, writeFileSync } from 
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { createHash } from "node:crypto"
+import { AsyncLocalStorage } from "node:async_hooks"
 import type { EvidenceStrength } from "./document-store"
 
 // docs/34 §3.1/§4 — DomainPackRegistry: discover manifests on disk, score them against a
@@ -134,19 +135,32 @@ const builtinPackDir = (): string | null => resolveBuiltinPackDirForMetaUrl(impo
 // the app) are always appended automatically so the 9 seed packs in packages/domain-packs/ are
 // discoverable without requiring the caller to set DEEPAGENT_PACK_DIR. Later entries with the same
 // pack id are silently skipped (first-write wins, so user dirs can override built-ins).
-const registryDirs: string[] = []
+export type RuntimeState = { readonly registryDirs: readonly string[] }
 
-export const configureRegistry = (userDir?: string): void => {
-  registryDirs.length = 0 // reset on each configure() call
-  if (userDir) registryDirs.push(userDir)
+const runtime = new AsyncLocalStorage<RuntimeState>()
+let defaultRegistryDirs: readonly string[] = []
+
+const resolvedRegistryDirs = (userDir?: string): readonly string[] => {
   const builtin = builtinPackDir()
-  if (builtin && builtin !== userDir) registryDirs.push(builtin)
+  return [userDir, builtin && builtin !== userDir ? builtin : undefined].filter(
+    (dir): dir is string => dir !== undefined,
+  )
 }
 
-export const isRegistryConfigured = (): boolean => registryDirs.length > 0
+export const createRuntime = (userDir?: string): RuntimeState => ({ registryDirs: resolvedRegistryDirs(userDir) })
+
+export const withRuntime = <A>(state: RuntimeState, operation: () => A): A => runtime.run(state, operation)
+
+export const configureRegistry = (userDir?: string): void => {
+  defaultRegistryDirs = resolvedRegistryDirs(userDir)
+}
+
+const configuredRegistryDirs = (): readonly string[] => runtime.getStore()?.registryDirs ?? defaultRegistryDirs
+
+export const isRegistryConfigured = (): boolean => configuredRegistryDirs().length > 0
 
 const dirsToScan = (): readonly string[] =>
-  registryDirs.length > 0 ? registryDirs : ([builtinPackDir()].filter(Boolean) as string[])
+  configuredRegistryDirs().length > 0 ? configuredRegistryDirs() : ([builtinPackDir()].filter(Boolean) as string[])
 
 // TEMP DEBUG: expose the resolved scan dirs + builtin dir so the server can log why discover() is
 // empty in the desktop/dist runtime. Remove once the packs-empty issue is diagnosed.

@@ -490,6 +490,46 @@ describe("C1A-16 dynamic matrix", () => {
       }
     }, 60_000)
 
+    test("two-process: a live runtime-lock owner fences the boot path Server.listen builds (423/read_only_recovery, no preemption)", async () => {
+      await using tmp = await tmpdir()
+      const filename = path.join(tmp.path, "runtime-lock.db")
+      // An existing, fully-migrated store: the scenario is a second process booting the same store,
+      // not a fresh install racing its own schema creation.
+      await makeGoodDb(filename)
+      const spawned = spawnHarnessChild({
+        run: path.join(import.meta.dir, "../script/crash-harness/fixture-child-runtime-lock-holder.ts"),
+        childArgs: [filename],
+        cwd: process.cwd(),
+        env: { CRASH_SLEEP_MS: "10000" },
+      })
+      try {
+        await spawned.ready
+        // The child owns <db>.runtime.lock. The read-only preflight (run first by Server.listen and by
+        // the writable layer) must classify the store read_only_recovery / another_process_active, which
+        // the maintenance surface renders as 423 — never a writable open over a live owner.
+        const bootState = await Database.bootstrap(filename)
+        expect(bootState.mode).toBe("read_only_recovery")
+        expect(bootState.ready).toBe(false)
+        expect(bootState.diagnostics.stableCode).toBe("another_process_active")
+
+        const writable = await topLevelRun(
+          Effect.gen(function* () {
+            const { db } = yield* Database.Service
+            return db
+          }).pipe(Effect.provide(Database.layerFromPath(filename)), Effect.scoped, Effect.flip),
+        )
+        expect(writable).toBeInstanceOf(DatabaseBootstrapError)
+        expect((writable as DatabaseBootstrapError).state.mode).toBe("read_only_recovery")
+        expect((writable as DatabaseBootstrapError).state.diagnostics.stableCode).toBe("another_process_active")
+
+        // No preemption happened on either path: the child's lifetime owner lock is still live and held.
+        expect(await DatabaseMigrationLease.processLockActive(`${filename}.runtime.lock`, { staleMs: 15_000 })).toBe(true)
+        expect(spawned.child.exitCode).toBeNull()
+      } finally {
+        killHard(spawned.child)
+      }
+    }, 60_000)
+
     test("preflight activeProcess probe -> read_only_recovery (two-window race)", () => {
       const pre = DatabasePreflight.analyzePreflight(
         basePreflight,

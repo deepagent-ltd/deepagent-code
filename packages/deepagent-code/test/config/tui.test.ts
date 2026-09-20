@@ -14,9 +14,18 @@ import { testEffect } from "../lib/effect"
 const it = testEffect(Layer.mergeAll(Config.defaultLayer, FSUtil.defaultLayer))
 const winIt = process.platform === "win32" ? it.instance : it.instance.skip
 
-const globalConfigFiles = ["deepagent-code.json", "deepagent-code.jsonc", "tui.json", "tui.jsonc"].map((file) =>
-  path.join(Global.Path.config, file),
-)
+// Includes the canonical config.jsonc/config.json names: the V1 startup convergence folds the
+// legacy files into config.jsonc and deletes them, so cleaning only the legacy names would leave a
+// converged global config (e.g. with `plugin`) behind — and the Core V2 loader rejects such fields
+// fail-closed for every later V2 session boot in this shared-home process.
+const globalConfigFiles = [
+  "config.jsonc",
+  "config.json",
+  "deepagent-code.json",
+  "deepagent-code.jsonc",
+  "tui.json",
+  "tui.jsonc",
+].map((file) => path.join(Global.Path.config, file))
 
 const cleanState = Effect.gen(function* () {
   const fs = yield* FSUtil.Service

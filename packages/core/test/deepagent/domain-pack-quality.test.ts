@@ -7,6 +7,7 @@ import * as Registry from "../../src/deepagent/domain-pack-registry"
 import { openUserGlobalStore } from "../../src/deepagent/durable-knowledge-store"
 import { seedCoreKnowledge } from "../../src/deepagent/knowledge-seed"
 import type { ExtendedProblemProfile } from "../../src/deepagent/domain-pack-registry"
+import { tmpRoot, tmpRootShared } from "../fixture/tmpdir"
 
 type Pack = {
   readonly id: string
@@ -223,7 +224,7 @@ describe("domain pack quality", () => {
   test("every L3 pack has activation and pack-scoped retrieval smoke", () => {
     Registry.configureRegistry(undefined)
     const manifests = Registry.discover()
-    const base = mkdtempSync(path.join(tmpdir(), "deepagent-pack-l3-smoke-"))
+    const base = mkdtempSync(tmpRootShared())
     try {
       const store = openUserGlobalStore(base)
       seedCoreKnowledge(store)

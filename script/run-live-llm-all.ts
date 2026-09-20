@@ -4,7 +4,7 @@ import { mkdir } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { parseArgs } from "node:util"
-import { validateLiveLLMKeyFile } from "../packages/llm/script/live-llm/config"
+import { runnableLiveLLMRegistryProviderIDs, validateLiveLLMKeyFile } from "../packages/llm/script/live-llm/config"
 import {
   matchRegisteredLiveLLMProvider,
   recommendedLiveLLMKeyFile,
@@ -487,6 +487,7 @@ export function runnerEnvironment(
   config: RunnerConfig,
   hostEnvironment: Readonly<Record<string, string | undefined>> = process.env,
   includeCredential = false,
+  packageName?: Suite["package"],
 ): Record<string, string | undefined> {
   return {
     ...Object.fromEntries(
@@ -518,6 +519,11 @@ export function runnerEnvironment(
     ...(includeCredential
       ? {
           DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE: config.apiKeyFile,
+          // Desktop's live harness parses this same variable with "live-*" runtime-id
+          // semantics; the unprefixed registry id is only meaningful to llm/core/dc suites.
+          ...(packageName !== "desktop"
+            ? { DEEPAGENT_CODE_LIVE_LLM_PROVIDER: runnerProvider(config).id }
+            : {}),
           DEEPAGENT_CODE_LIVE_LLM_BASE_URL: config.baseURL,
           DEEPAGENT_CODE_LIVE_LLM_MODEL: config.model,
           DEEPAGENT_CODE_LIVE_LLM_TIMEOUT_MS: String(config.requestTimeoutMs),
@@ -672,6 +678,15 @@ async function main() {
   }
   const config = validateRunnerConfig(await Bun.file(configFile).json(), path.dirname(configFile))
   const provider = runnerProvider(config)
+  // The llm/core/deepagent-code live suites resolve the provider through
+  // DEEPAGENT_CODE_LIVE_LLM_PROVIDER, which only understands deepseek / moonshotai (kimi)
+  // / zai — fail closed up front instead of letting every child suite die on an
+  // endpoint the registry accepts but no suite can drive.
+  if (!runnableLiveLLMRegistryProviderIDs.includes(provider.id as (typeof runnableLiveLLMRegistryProviderIDs)[number])) {
+    throw new Error(
+      `provider ${provider.id} (${config.baseURL}) cannot drive the live suites; supported: ${runnableLiveLLMRegistryProviderIDs.join(", ")}`,
+    )
+  }
   await validateSuiteManifest()
   await validateRegistryScripts()
   if (!options["dry-run"]) await validateLiveLLMKeyFile(config.apiKeyFile)
@@ -721,7 +736,7 @@ async function main() {
     const startedAt = Date.now()
     const subprocess = Bun.spawn(suite.command, {
       cwd: suiteDirectory(suite),
-      env: runnerEnvironment(config, process.env, suite.realLLM),
+      env: runnerEnvironment(config, process.env, suite.realLLM, suite.package),
       stdin: "inherit",
       stdout: "inherit",
       stderr: "inherit",

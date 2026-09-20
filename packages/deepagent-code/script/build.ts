@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
 import { $ } from "bun"
-import fs from "fs"
+import fs, { readFileSync } from "fs"
 import path from "path"
 import { fileURLToPath } from "url"
 import { createSolidTransformPlugin } from "@opentui/solid/bun-plugin"
@@ -24,12 +24,27 @@ const sourceDirty = sourceCommit
 
 process.chdir(dir)
 
+
+function releaseOwnerPublicKeyDefine(): Record<string, string> {
+  const raw = process.env.DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY?.trim()
+  if (!raw) return {}
+  const pem = raw.includes("-----BEGIN") ? raw : readFileSync(raw, "utf8")
+  if (!pem.includes("-----BEGIN PUBLIC KEY-----")) {
+    throw new Error("DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY is neither an inline PEM nor a path to one")
+  }
+  return { DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY: JSON.stringify(pem) }
+}
+
 const generated = await import("./generate.ts")
 
 import { Script } from "@deepagent-code/script"
 import pkg from "../package.json"
 
 const singleFlag = process.argv.includes("--single")
+// --arch <a> narrows any build mode to one architecture (cross-compile; bun compile targets
+// are cross-platform). Used for the ablation x64 artifact on an arm64 host.
+const archFlagIndex = process.argv.indexOf("--arch")
+const archFlag = archFlagIndex > 0 ? process.argv[archFlagIndex + 1] : undefined
 const baselineFlag = process.argv.includes("--baseline")
 const skipInstall = process.argv.includes("--skip-install")
 const sourcemapsFlag = process.argv.includes("--sourcemaps")
@@ -127,7 +142,7 @@ const allTargets: {
 
 const targets = singleFlag
   ? allTargets.filter((item) => {
-      if (item.os !== process.platform || item.arch !== process.arch) {
+      if (archFlag ? item.arch !== archFlag || item.abi !== undefined || item.avx2 === false : item.os !== process.platform || item.arch !== process.arch) {
         return false
       }
 
@@ -182,7 +197,7 @@ for (const item of targets) {
     plugins: [plugin],
     external: ["node-gyp"],
     format: "esm",
-    minify: true,
+    minify: process.env.DEEPAGENT_BUILD_NO_MINIFY === "1" ? false : true,
     sourcemap: sourcemapsFlag ? "linked" : "none",
     splitting: true,
     compile: {
@@ -204,6 +219,11 @@ for (const item of targets) {
     ],
     define: {
       DEEPAGENT_CODE_VERSION: `'${Script.version}'`,
+      // Per-release owner issuance key (2026-09-11 ruling): mint --ephemeral prints the public
+      // half; the release pipeline pins it here (inline PEM or a path to one). Absent
+      // (dev/local builds) the runtime resolves the empty pin and dev builds self-bootstrap
+      // through V2OwnerDevMint.
+      ...(releaseOwnerPublicKeyDefine() as Record<string, string>),
       DEEPAGENT_CODE_MODELS_DEV: generated.modelsData,
       OTUI_TREE_SITTER_WORKER_PATH: bunfsRoot + workerRelativePath,
       DEEPAGENT_CODE_WORKER_PATH: workerPath,

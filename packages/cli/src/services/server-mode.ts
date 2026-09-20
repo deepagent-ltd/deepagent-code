@@ -67,7 +67,7 @@ export const layer = Layer.effect(
       if (gatewayUrl === undefined) return Option.none<{ gatewayUrl: string; state: State }>()
       if (Option.isNone(stored) || stored.value.gatewayUrl !== gatewayUrl) {
         return yield* Effect.fail(
-          new Error(`Not logged in to ${gatewayUrl}. Run \`dacode login ${gatewayUrl}\` first.`),
+          new Error(`Not logged in to ${gatewayUrl}. Run \`lildax login ${gatewayUrl}\` first.`),
         )
       }
       return Option.some({ gatewayUrl, state: stored.value })
@@ -91,10 +91,10 @@ export const layer = Layer.effect(
     let refreshing: Promise<State> | undefined
     const refresh = Effect.fn("cli.server-mode.refresh")(function* () {
       const current = yield* read().pipe(
-        Effect.mapError(() => new Error("Session expired. Run `dacode login` again.")),
+        Effect.mapError(() => new Error("Session expired. Run `lildax login` again.")),
       )
       if (!current.refreshToken)
-        return yield* Effect.fail(new Error("Session expired. Run `dacode login` again."))
+        return yield* Effect.fail(new Error("Session expired. Run `lildax login` again."))
       const response = yield* post(`${current.gatewayUrl}/control/v1/auth/refresh`, {
         method: "POST",
         headers: {
@@ -103,7 +103,7 @@ export const layer = Layer.effect(
         },
       })
       if (!response.ok)
-        return yield* Effect.fail(new Error("Session expired. Run `dacode login` again."))
+        return yield* Effect.fail(new Error("Session expired. Run `lildax login` again."))
       const body = yield* Effect.tryPromise({
         try: () => response.json() as Promise<Record<string, unknown>>,
         catch: () => new Error("Gateway returned an invalid refresh response"),
@@ -252,7 +252,7 @@ export const layer = Layer.effect(
       const found = list.find((workspace) => workspace.id === id)
       if (!found)
         return yield* Effect.fail(
-          new Error(`Workspace ${id} not found. Run \`dacode workspace list\` to see available workspaces.`),
+          new Error(`Workspace ${id} not found. Run \`lildax workspace list\` to see available workspaces.`),
         )
       const current = yield* read().pipe(Effect.mapError(() => new Error("Not logged in")))
       yield* write({ ...current, workspaceId: id })
@@ -275,7 +275,7 @@ export const layer = Layer.effect(
       if (!resolved.value.state.workspaceId)
         return yield* Effect.fail(
           new Error(
-            "No workspace selected. Run `dacode workspace list` and `dacode workspace use <id>` first.",
+            "No workspace selected. Run `lildax workspace list` and `lildax workspace use <id>` first.",
           ),
         )
       const remote = async (input: RequestInfo | URL, init?: RequestInit) => {

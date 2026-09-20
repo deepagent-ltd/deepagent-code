@@ -5,6 +5,7 @@ import { and, desc, eq, exists, gt, inArray, isNull, max, sql } from "drizzle-or
 import { Context, Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
 import { SessionSchema } from "../session/schema"
+import { SessionTable } from "../session/sql"
 import {
   SessionContextSelectionTable,
   SessionContextValidationTable,
@@ -21,6 +22,8 @@ export type Attempt = {
   readonly sessionId: SessionSchema.ID
   readonly activityId: string
   readonly providerTurnSeq: number
+  readonly attemptVersion: number
+  readonly executionClaimToken: number
   readonly selectionId: string
   readonly projectionHash: string
   readonly requestHash: string
@@ -41,13 +44,25 @@ export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()(
   "SessionProviderAttempt.NotFoundError",
   {},
 ) {}
+// R3 — each class carries its diagnosis in Error.message (TaggedErrorClass would otherwise
+// render an empty message on every log/SSE surface that prints `error.message`).
 export class ConflictError extends Schema.TaggedErrorClass<ConflictError>()("SessionProviderAttempt.ConflictError", {
   reason: Schema.String.pipe(Schema.optional),
-}) {}
+}) {
+  constructor(props: { readonly reason?: string } = {}) {
+    super(props)
+    this.message = props.reason ?? "provider attempt conflict"
+  }
+}
 export class InvalidStateError extends Schema.TaggedErrorClass<InvalidStateError>()(
   "SessionProviderAttempt.InvalidStateError",
   { state: Schema.String },
-) {}
+) {
+  constructor(props: { readonly state: string }) {
+    super(props)
+    this.message = `invalid provider attempt state: ${props.state}`
+  }
+}
 export class ValidationRequiredError extends Schema.TaggedErrorClass<ValidationRequiredError>()(
   "SessionProviderAttempt.ValidationRequiredError",
   {},
@@ -55,7 +70,12 @@ export class ValidationRequiredError extends Schema.TaggedErrorClass<ValidationR
 export class UnsafeRetryError extends Schema.TaggedErrorClass<UnsafeRetryError>()(
   "SessionProviderAttempt.UnsafeRetryError",
   { state: Schema.String },
-) {}
+) {
+  constructor(props: { readonly state: string }) {
+    super(props)
+    this.message = `unsafe retry: provider attempt is ${props.state}`
+  }
+}
 export class ResolutionDeniedError extends Schema.TaggedErrorClass<ResolutionDeniedError>()(
   "SessionProviderAttempt.ResolutionDeniedError",
   {},
@@ -308,6 +328,7 @@ export const layer = Layer.effect(
               .update(SessionProviderAttemptTable)
               .set({
                 state: "failed",
+                attempt_version: sql`${SessionProviderAttemptTable.attempt_version} + 1`,
                 settled_at: input.now ?? Date.now(),
                 error_code: "owner_lease_lost_before_dispatch",
               })
@@ -325,7 +346,11 @@ export const layer = Layer.effect(
               .all()
             const started = yield* tx
               .update(SessionProviderAttemptTable)
-              .set({ state: "indeterminate_after_crash", error_code: "process_recovery" })
+              .set({
+                state: "indeterminate_after_crash",
+                attempt_version: sql`${SessionProviderAttemptTable.attempt_version} + 1`,
+                error_code: "process_recovery",
+              })
               .where(
                 and(
                   eq(SessionProviderAttemptTable.session_id, input.sessionId),
@@ -402,7 +427,11 @@ export const layer = Layer.effect(
             const settledAt = input.now ?? Date.now()
             const resolved = yield* tx
               .update(SessionProviderAttemptTable)
-              .set({ state: nextState, settled_at: settledAt })
+              .set({
+                state: nextState,
+                attempt_version: sql`${SessionProviderAttemptTable.attempt_version} + 1`,
+                settled_at: settledAt,
+              })
               .where(
                 and(
                   eq(SessionProviderAttemptTable.attempt_id, row.attempt_id),
@@ -441,7 +470,12 @@ export const layer = Layer.effect(
               : undefined
             return {
               resolutionId,
-              attempt: attempt({ ...row, state: nextState, settled_at: settledAt }),
+              attempt: attempt({
+                ...row,
+                state: nextState,
+                attempt_version: row.attempt_version + 1,
+                settled_at: settledAt,
+              }),
               ...(replay ? { replay } : {}),
             }
           }),
@@ -560,6 +594,14 @@ export function prepareInTransaction(
       .orderBy(desc(SessionContextValidationTable.validated_at))
       .get()
     yield* requireLiveOwner(tx, input.ownerToken)
+    const session = yield* tx
+      .select({ executionClaimToken: SessionTable.time_suspended })
+      .from(SessionTable)
+      .where(eq(SessionTable.id, input.sessionId))
+      .get()
+    if (session?.executionClaimToken === null || session?.executionClaimToken === undefined) {
+      return yield* new ConflictError({ reason: "session_execution_claim_missing" })
+    }
     if (
       !validation ||
       validation.outcome !== "valid" ||
@@ -590,6 +632,7 @@ export function prepareInTransaction(
         existing.request_hash !== input.requestHash ||
         existing.provider_id !== input.providerId ||
         existing.owner_token !== input.ownerToken ||
+        existing.execution_claim_token !== session.executionClaimToken ||
         (existing.parent_attempt_id ?? undefined) !== input.parentAttemptId ||
         (existing.idempotency_key ?? undefined) !== input.idempotencyKey
       ) {
@@ -632,6 +675,8 @@ export function prepareInTransaction(
       session_id: input.sessionId,
       activity_id: input.activityId,
       provider_turn_seq: input.providerTurnSeq,
+      attempt_version: 0,
+      execution_claim_token: session.executionClaimToken,
       selection_id: input.selectionId,
       projection_hash: input.projectionHash,
       request_hash: input.requestHash,
@@ -645,6 +690,8 @@ export function prepareInTransaction(
     yield* tx.insert(SessionProviderAttemptTable).values(row).run()
     return attempt({
       ...row,
+      attempt_version: row.attempt_version ?? 0,
+      execution_claim_token: row.execution_claim_token ?? 0,
       parent_attempt_id: row.parent_attempt_id ?? null,
       idempotency_key: row.idempotency_key ?? null,
       owner_token: row.owner_token ?? null,
@@ -704,6 +751,7 @@ export function transitionInTransaction(
       .update(SessionProviderAttemptTable)
       .set({
         state: input.to,
+        attempt_version: sql`${SessionProviderAttemptTable.attempt_version} + 1`,
         ...(input.firstEvent && row.first_event_at === null ? { first_event_at: input.now } : {}),
         ...(terminal ? { settled_at: input.now } : {}),
         ...(input.errorCode ? { error_code: input.errorCode } : {}),
@@ -725,6 +773,7 @@ export function transitionInTransaction(
     return attempt({
       ...row,
       state: input.to,
+      attempt_version: row.attempt_version + 1,
       ...(input.firstEvent && row.first_event_at === null ? { first_event_at: input.now } : {}),
       ...(terminal ? { settled_at: input.now } : {}),
       ...(input.errorCode ? { error_code: input.errorCode } : {}),
@@ -754,6 +803,7 @@ export function recoverExactInTransaction(
           .update(SessionProviderAttemptTable)
           .set({
             state: "failed",
+            attempt_version: sql`${SessionProviderAttemptTable.attempt_version} + 1`,
             settled_at: input.now ?? Date.now(),
             error_code: "owner_lease_lost_before_dispatch",
           })
@@ -772,7 +822,11 @@ export function recoverExactInTransaction(
     const started = input.startedAttemptIds.length
       ? yield* tx
           .update(SessionProviderAttemptTable)
-          .set({ state: "indeterminate_after_crash", error_code: "process_recovery" })
+          .set({
+            state: "indeterminate_after_crash",
+            attempt_version: sql`${SessionProviderAttemptTable.attempt_version} + 1`,
+            error_code: "process_recovery",
+          })
           .where(
             and(
               eq(SessionProviderAttemptTable.session_id, input.sessionId),
@@ -798,6 +852,8 @@ function attempt(row: typeof SessionProviderAttemptTable.$inferSelect): Attempt 
     sessionId: SessionSchema.ID.make(row.session_id),
     activityId: row.activity_id,
     providerTurnSeq: row.provider_turn_seq,
+    attemptVersion: row.attempt_version,
+    executionClaimToken: row.execution_claim_token,
     selectionId: row.selection_id,
     projectionHash: row.projection_hash,
     requestHash: row.request_hash,

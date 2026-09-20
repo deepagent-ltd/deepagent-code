@@ -4,12 +4,13 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { mkdtempSync } from "node:fs"
 import { DeepAgentCodeHome, PROJECT_SCHEMA_VERSION, SESSION_SCHEMA_VERSION } from "../../src/deepagent/workspace"
+import { tmpRoot } from "../fixture/tmpdir"
 
 let root: string
 let home: DeepAgentCodeHome
 
 beforeEach(() => {
-  root = mkdtempSync(path.join(tmpdir(), "deepagent-code-home-"))
+  root = mkdtempSync(tmpRoot())
   home = new DeepAgentCodeHome(root)
 })
 

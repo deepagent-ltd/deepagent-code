@@ -19,6 +19,7 @@ import {
   SessionContextSelectionTable,
   SessionContextValidationTable,
   SessionProviderAttemptTable,
+  SessionProviderOwnerLeaseTable,
 } from "@deepagent-code/core/context-federation/session-sql"
 import { ContextTokenCodec } from "@deepagent-code/core/context-federation/token-codec"
 import { Database } from "@deepagent-code/core/database/database"
@@ -28,7 +29,7 @@ import { DeepAgentReleasedSnapshot } from "@deepagent-code/core/deepagent/releas
 import { projectIdForWorkspace } from "@deepagent-code/core/deepagent/durable-knowledge-store"
 import { SessionSchema } from "@deepagent-code/core/session/schema"
 import { Context, Effect, Layer, Schema } from "effect"
-import { and, desc, eq } from "drizzle-orm"
+import { and, desc, eq, sql } from "drizzle-orm"
 import type { Agent } from "../agent/agent"
 import { Permission } from "../permission"
 import type { Provider } from "../provider/provider"
@@ -38,7 +39,6 @@ import { LiveContextArtifactStore } from "./artifact-service"
 import { LiveFederatedContextQuery } from "./federated-query-service"
 import { LiveContextQueryAuthorization } from "./query-authorization"
 import { LiveContextTokenCodec } from "./token-service"
-import { ContextFederationObservability } from "./observability"
 
 const ValidationMs = 60_000
 const SelectionLifetimeMs = 14 * 60_000
@@ -413,60 +413,52 @@ export const layer = Layer.effect(
         statuses: input.statuses,
       })
       const selectedSourceFingerprint = sourceFingerprint(fitted.map((item) => item.hit))
-      return contexts
-        .commitSelection({
-          securityNamespaceId: input.identity.securityNamespaceId,
-          projectScopeKey: input.identity.projectScopeKey,
-          sessionId: SessionSchema.ID.make(input.sessionId),
-          activityId: input.activityId,
-          revision: input.revision,
-          triggerInputId: input.triggerInputId,
-          locationKey: input.identity.locationKey,
-          promotedInputIds: input.inputIds,
-          queryFingerprint: input.queryFingerprint,
-          authorizationFingerprint: input.authorizationFingerprint,
-          authorizationEpoch: input.envelope.principal.authorizationEpoch,
-          executionFingerprint: input.executionFingerprint,
-          selectedSourceFingerprint,
-          observedLocationMutationEpoch: input.mutationEpoch,
-          nextRevalidationAt: input.now + SelectionLifetimeMs,
-          releasedKnowledgeBinding: DeepAgentReleasedSnapshot.binding(input.releasedKnowledgeSelection),
-          graphRevisions: graphRevisions(
-            input.sourceStatuses,
-            fitted.map((item) => item.hit),
+      return contexts.commitSelection({
+        securityNamespaceId: input.identity.securityNamespaceId,
+        projectScopeKey: input.identity.projectScopeKey,
+        sessionId: SessionSchema.ID.make(input.sessionId),
+        activityId: input.activityId,
+        revision: input.revision,
+        triggerInputId: input.triggerInputId,
+        locationKey: input.identity.locationKey,
+        promotedInputIds: input.inputIds,
+        queryFingerprint: input.queryFingerprint,
+        authorizationFingerprint: input.authorizationFingerprint,
+        authorizationEpoch: input.envelope.principal.authorizationEpoch,
+        executionFingerprint: input.executionFingerprint,
+        selectedSourceFingerprint,
+        observedLocationMutationEpoch: input.mutationEpoch,
+        nextRevalidationAt: input.now + SelectionLifetimeMs,
+        releasedKnowledgeBinding: DeepAgentReleasedSnapshot.binding(input.releasedKnowledgeSelection),
+        graphRevisions: graphRevisions(
+          input.sourceStatuses,
+          fitted.map((item) => item.hit),
+        ),
+        graphStatuses: input.sourceStatuses,
+        selectedRefs: fitted.map(({ hit, token, provenanceTokens, relations }) => ({
+          ref: hit.ref,
+          token,
+          provenanceTokens,
+          relations,
+          freshness: hit.validity?.state ?? "unknown",
+          sensitivity: hit.sensitivity,
+          score: hit.score,
+          reason: hit.relationPath?.map((item) => item.relation).join(" > ") || "federated_rank",
+          excerpt: (hit.excerpt ?? hit.title).slice(0, 1_000),
+          projectionStart: rendered.offsets[token]!.start,
+          projectionEnd: rendered.offsets[token]!.end,
+        })),
+        rendered,
+        artifact: {
+          rankingVersion: "federated-rrf-v1",
+          rejected: input.sourceStatuses.flatMap((status) =>
+            status.kind === "blocked" || status.kind === "partial"
+              ? [{ graph: status.graph, reasonCode: status.reasonCode }]
+              : [],
           ),
-          graphStatuses: input.sourceStatuses,
-          selectedRefs: fitted.map(({ hit, token, provenanceTokens, relations }) => ({
-            ref: hit.ref,
-            token,
-            provenanceTokens,
-            relations,
-            freshness: hit.validity?.state ?? "unknown",
-            sensitivity: hit.sensitivity,
-            score: hit.score,
-            reason: hit.relationPath?.map((item) => item.relation).join(" > ") || "federated_rank",
-            excerpt: (hit.excerpt ?? hit.title).slice(0, 1_000),
-            projectionStart: rendered.offsets[token]!.start,
-            projectionEnd: rendered.offsets[token]!.end,
-          })),
-          rendered,
-          artifact: {
-            rankingVersion: "federated-rrf-v1",
-            rejected: input.sourceStatuses.flatMap((status) =>
-              status.kind === "blocked" || status.kind === "partial"
-                ? [{ graph: status.graph, reasonCode: status.reasonCode }]
-                : [],
-            ),
-          },
-          now: input.now,
-        })
-        .pipe(
-          Effect.tap((selection) =>
-            Effect.sync(() =>
-              ContextFederationObservability.observeSelection(selection.selectionId, selection.tokenCount),
-            ),
-          ),
-        )
+        },
+        now: input.now,
+      })
     }
 
     const prepareProviderTurn: Interface["prepareProviderTurn"] = (input) =>
@@ -525,27 +517,83 @@ export const layer = Layer.effect(
         Effect.mapError((error) => runtimeError(error)),
       )
 
+    const leaseClockNow = sql`CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)`
+
     const settleOrphanedActivities: Interface["settleOrphanedActivities"] = () =>
       Effect.gen(function* () {
-        // Restart recovery (BUG-003), mirroring the global semantics of the legacy
-        // SessionPromptIntent.recoverActiveActivities: an activity still `active` at startup
-        // belongs to a dead run loop (the previous process died or was killed mid-turn) and would
-        // otherwise lock the session's partial unique index forever. Best-effort per row; real DB
-        // failures surface through the error channel.
+        // Restart recovery (BUG-003): an activity still `active` at startup belongs to a dead run
+        // loop (the previous process died or was killed mid-turn) and would otherwise lock the
+        // session's partial unique index forever.
+        // R5 — prove the orphan before settling: an unconditionally sweep would also interrupt
+        // activities a CONCURRENT process sharing this database is still running (server + run CLI
+        // + desktop). Proof: the session's latest provider attempt's owner lease is dead, or (no
+        // attempt yet) no lease registered before the activity existed is still alive. Best-effort
+        // per row; real DB failures surface through the error channel.
         const active = yield* database.db
-          .select({ activityId: SessionActivityTable.activity_id, sessionId: SessionActivityTable.session_id })
+          .select({
+            activityId: SessionActivityTable.activity_id,
+            sessionId: SessionActivityTable.session_id,
+            createdAt: SessionActivityTable.created_at,
+          })
           .from(SessionActivityTable)
           .where(eq(SessionActivityTable.state, "active"))
           .all()
           .pipe(Effect.mapError(runtimeError))
-        yield* Effect.forEach(active, (row) =>
-          Effect.gen(function* () {
-            yield* contexts.settleActivity({ activityId: row.activityId, state: "interrupted" }).pipe(Effect.ignore)
-            yield* authorization.remove(row.sessionId).pipe(Effect.ignore)
-          }),
-        )
-        return active.length
+        const settled: typeof active = []
+        for (const row of active) {
+          const attempt = yield* database.db
+            .select({ ownerToken: SessionProviderAttemptTable.owner_token })
+            .from(SessionProviderAttemptTable)
+            .where(eq(SessionProviderAttemptTable.session_id, row.sessionId))
+            .orderBy(desc(SessionProviderAttemptTable.provider_turn_seq))
+            .limit(1)
+            .get()
+            .pipe(Effect.mapError(runtimeError))
+          const orphaned = attempt
+            ? yield* attemptLeaseDead(attempt.ownerToken)
+            : yield* noPreexistingLeaseAlive(row.createdAt)
+          if (!orphaned) continue
+          yield* contexts.settleActivity({ activityId: row.activityId, state: "interrupted" }).pipe(Effect.ignore)
+          yield* authorization.remove(row.sessionId).pipe(Effect.ignore)
+          settled.push(row)
+        }
+        return settled.length
       })
+
+    const attemptLeaseDead = (ownerToken: string | null) =>
+      ownerToken === null
+        ? Effect.succeed(true)
+        : database.db
+            .select({ ownerToken: SessionProviderOwnerLeaseTable.owner_token })
+            .from(SessionProviderOwnerLeaseTable)
+            .where(
+              and(
+                eq(SessionProviderOwnerLeaseTable.owner_token, ownerToken),
+                sql`(${SessionProviderOwnerLeaseTable.released_at} IS NULL AND ${SessionProviderOwnerLeaseTable.lease_expires_at} > ${leaseClockNow})`,
+              ),
+            )
+            .get()
+            .pipe(
+              Effect.mapError(runtimeError),
+              Effect.map((live) => !live),
+            )
+
+    const noPreexistingLeaseAlive = (activityCreatedAt: number) =>
+      database.db
+        .select({ ownerToken: SessionProviderOwnerLeaseTable.owner_token })
+        .from(SessionProviderOwnerLeaseTable)
+        .where(
+          and(
+            sql`${SessionProviderOwnerLeaseTable.registered_at} <= ${activityCreatedAt}`,
+            sql`${SessionProviderOwnerLeaseTable.released_at} IS NULL`,
+            sql`${SessionProviderOwnerLeaseTable.lease_expires_at} > ${leaseClockNow}`,
+          ),
+        )
+        .get()
+        .pipe(
+          Effect.mapError(runtimeError),
+          Effect.map((alive) => !alive),
+        )
 
     const replayIndeterminate: Interface["replayIndeterminate"] = (input) =>
       Effect.gen(function* () {
@@ -742,20 +790,22 @@ const contextLayer = SessionContext.layer.pipe(Layer.provide(Layer.merge(databas
 const attemptLayer = SessionProviderAttempt.layer.pipe(Layer.provide(databaseLayer))
 const queryLayer = LiveFederatedContextQuery.productionLayer.pipe(Layer.provide(LocationIndexRuntime.defaultLayer))
 
-export const defaultLayer: Layer.Layer<Service> = layer.pipe(
-  Layer.provide(
-    Layer.mergeAll(
-      databaseLayer,
-      LocationIndexRuntime.defaultLayer,
-      LiveContextQueryAuthorization.defaultLayer,
-      tokenLayer,
-      artifactLayer,
-      contextLayer,
-      attemptLayer,
-      queryLayer,
+export const defaultLayer: Layer.Layer<Service> = layer
+  .pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        databaseLayer,
+        LocationIndexRuntime.defaultLayer,
+        LiveContextQueryAuthorization.defaultLayer,
+        tokenLayer,
+        artifactLayer,
+        contextLayer,
+        attemptLayer,
+        queryLayer,
+      ),
     ),
-  ),
-).pipe(Layer.orDie)
+  )
+  .pipe(Layer.orDie)
 
 function envelopeFor(input: {
   readonly session: Session.Info

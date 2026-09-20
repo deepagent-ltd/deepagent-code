@@ -7,6 +7,7 @@ import {
   assertGoalCliVerifierEvidence,
   requirePostFeedbackMutations,
 } from "../../script/live-llm/goal-cli-oracle"
+import { tmpRootAsync, tmpRootSharedAsync } from "../fixture/fixture"
 
 const order = {
   goalStartIndex: 0,
@@ -75,7 +76,7 @@ describe("D2/E1 Goal CLI hard Oracle", () => {
   })
 
   test("canonicalizes workspace aliases before matching absolute tool paths", async () => {
-    const root = await mkdtemp(path.join(os.tmpdir(), "goal-cli-oracle-"))
+    const root = await tmpRootSharedAsync()
     const workspace = path.join(root, "workspace")
     try {
       await mkdir(workspace)
@@ -113,8 +114,8 @@ describe("D2/E1 Goal CLI hard Oracle", () => {
     expect(() => assertGoalCliVerifierEvidence({ ...evidence, initialExitCode: 0 })).toThrow("passed before")
     expect(() => assertGoalCliVerifierEvidence({ ...evidence, finalExitCode: 1 })).toThrow("failed after")
     expect(() => assertGoalCliVerifierEvidence({ ...evidence, freshCopyExitCode: 1 })).toThrow("fresh-copy")
-    expect(() => assertGoalCliVerifierEvidence({ ...evidence, changedPaths: [...evidence.changedPaths, "extra.txt"] })).toThrow(
-      "unexpected paths",
-    )
+    expect(() =>
+      assertGoalCliVerifierEvidence({ ...evidence, changedPaths: [...evidence.changedPaths, "extra.txt"] }),
+    ).toThrow("unexpected paths")
   })
 })

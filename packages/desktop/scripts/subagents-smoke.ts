@@ -68,8 +68,10 @@ async function launch() {
   await page.waitForFunction(() => Boolean((window as unknown as { api?: DesktopAPI }).api))
   const server = await api(page)
   const startupMs = Math.round(performance.now() - started)
+  const childPID = app.process().pid
+  if (childPID === undefined) throw new Error("electron app process pid unavailable")
   const resources = packagedExecutable
-    ? await new Promise((resolve) => setTimeout(resolve, 5_000)).then(() => processTreeResources(app.process().pid))
+    ? await new Promise((resolve) => setTimeout(resolve, 5_000)).then(() => processTreeResources(childPID))
     : undefined
   console.log("Electron startup ready", { packaged: Boolean(packagedExecutable), startupMs, resources })
   if (packagedExecutable) assert.equal(startupMs < 20_000, true, `packaged startup took ${startupMs}ms`)

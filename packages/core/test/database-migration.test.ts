@@ -4,7 +4,7 @@ import { fileURLToPath } from "url"
 import path from "path"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
 import { EffectDrizzleSqlite } from "@deepagent-code/effect-drizzle-sqlite"
-import { Effect, Exit, Layer } from "effect"
+import { Effect, Exit, Layer, Logger } from "effect"
 import { eq, inArray, sql } from "drizzle-orm"
 import { DatabaseMigration } from "@deepagent-code/core/database/migration"
 import { MigrationIdentity } from "@deepagent-code/core/database/migration-identity"
@@ -19,6 +19,8 @@ import timeSuspendedMigration from "@deepagent-code/core/database/migration/2026
 import taskRunDeliveryMigration from "@deepagent-code/core/database/migration/20260724134000_task_run_delivery"
 import subagentControlPlaneMigration from "@deepagent-code/core/database/migration/20260803000001_subagent_control_plane_l1"
 import taskAdmissionRepairMigration from "@deepagent-code/core/database/migration/20260805000000_repair_task_admission"
+import taskRunExecutionRuntimeMigration from "@deepagent-code/core/database/migration/20260918101443_v2_task_run_execution_runtime"
+import taskRunV1RecoveryMigration from "@deepagent-code/core/database/migration/20260918143000_task_run_v1_recovery_required"
 import { ProjectV2 } from "@deepagent-code/core/project"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { AbsolutePath } from "@deepagent-code/core/schema"
@@ -46,6 +48,7 @@ import taskStructuredOutputReceiptMigration from "@deepagent-code/core/database/
 import taskExecutionSpecAuthorityMigration from "@deepagent-code/core/database/migration/20260812210000_task_execution_spec_authority"
 import taskStructuredOutputEvidenceAuthorityMigration from "@deepagent-code/core/database/migration/20260812220000_task_structured_output_evidence_authority"
 import providerCrossStateRecoveryMigration from "@deepagent-code/core/database/migration/20260812061000_provider_cross_state_recovery"
+import recoveryProviderMigration from "@deepagent-code/core/database/migration/20260830000000_session_provider_recovery"
 import type { SqlClient as SqlClientService } from "effect/unstable/sql/SqlClient"
 import { Database } from "@deepagent-code/core/database/database"
 import { tmpdir } from "./fixture/tmpdir"
@@ -113,6 +116,32 @@ describe("DatabaseMigration", () => {
         expect(
           yield* db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'migration'`),
         ).toBeUndefined()
+      }),
+    )
+  })
+
+  test("C1A-14: a migration-defect failure emits the structured diagnostics log (stable code + migration id)", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        const failing = {
+          id: "w14-diagnostics-failure",
+          up: () => Effect.die("w14 boom"),
+        }
+        const captured: Array<unknown> = []
+        const loggerLayer = Logger.layer([
+          Logger.make((options) => {
+            captured.push(options)
+          }),
+        ])
+        const result = yield* DatabaseMigration.applyOnly(db, [failing])
+          .pipe(Effect.provide(loggerLayer), Effect.exit)
+        expect(result).toMatchObject({ _tag: "Failure" })
+        // the diagnostics carry the stable code, the migration id and the failure fact — payload-free.
+        const logged = captured.map((options) => JSON.stringify(options)).join("\n")
+        expect(logged).toContain("database migration failed")
+        expect(logged).toContain("migration_apply_failed")
+        expect(logged).toContain("w14-diagnostics-failure")
       }),
     )
   })
@@ -717,6 +746,20 @@ describe("DatabaseMigration", () => {
             sql`SELECT name, dflt_value FROM pragma_table_info('session_tool_argument_receipt') WHERE name = 'validation_outcome'`,
           ),
         ).toEqual({ name: "validation_outcome", dflt_value: "'not_evaluated'" })
+        expect(
+          yield* db.get(
+            sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_v2_structured_output_evidence'`,
+          ),
+        ).toEqual({ name: "session_v2_structured_output_evidence" })
+        expect(
+          yield* db.all(
+            sql`SELECT name FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'session_v2_structured_output_evidence' ORDER BY name`,
+          ),
+        ).toEqual([
+          { name: "session_v2_structured_output_evidence_delete_guard" },
+          { name: "session_v2_structured_output_evidence_insert_guard" },
+          { name: "session_v2_structured_output_evidence_update_guard" },
+        ])
         yield* db.run(sql`
           INSERT INTO session_provider_owner_lease (
             owner_token, registered_at, heartbeat_at, lease_expires_at
@@ -4892,6 +4935,99 @@ describe("DatabaseMigration", () => {
           { session_id: "session-a", authority_state: "recovery_required" },
           { session_id: "session-b", authority_state: "recovery_required" },
         ])
+      }),
+    )
+  })
+
+  test("20260830000000_session_provider_recovery enforces the state CHECK and descriptor immutability triggers", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* DatabaseMigration.applyOnly(db, [recoveryProviderMigration])
+        // state CHECK: only the closed state vocabulary is storable.
+        yield* db.run(sql`
+          INSERT INTO recovery_command (command_id, attempt, state, created_at, updated_at)
+          VALUES ('cmd-pending', '{"sessionId":"s","attemptId":"a"}', 'pending', 1, 1)
+        `)
+        const rejected = yield* Effect.exit(
+          db.run(sql`
+            INSERT INTO recovery_command (command_id, attempt, state, created_at, updated_at)
+            VALUES ('cmd-weird', '{"sessionId":"s","attemptId":"a"}', 'teleported', 1, 1)
+          `),
+        )
+        expect(Exit.isFailure(rejected)).toBe(true)
+        // descriptor immutability: a stored recovery fact may be neither updated nor deleted.
+        yield* db.run(sql`
+          INSERT INTO session_provider_recovery_descriptor
+            (descriptor_id, session_id, activity_id, turn_id, kind, payload, content_hash, created_at)
+          VALUES ('desc-immutable', 's', 'a', '1', 'resolved', '{}', 'hash', 1)
+        `)
+        const updated = yield* Effect.exit(
+          db.run(sql`UPDATE session_provider_recovery_descriptor SET created_at = 2 WHERE descriptor_id = 'desc-immutable'`),
+        )
+        expect(Exit.isFailure(updated)).toBe(true)
+        const deleted = yield* Effect.exit(
+          db.run(sql`DELETE FROM session_provider_recovery_descriptor WHERE descriptor_id = 'desc-immutable'`),
+        )
+        expect(Exit.isFailure(deleted)).toBe(true)
+        // The row is still there, untouched.
+        expect(
+          yield* db.get(sql`SELECT created_at FROM session_provider_recovery_descriptor WHERE descriptor_id = 'desc-immutable'`),
+        ).toEqual({ created_at: 1 })
+      }),
+    )
+  })
+
+  test("flips only non-terminal v1 task runs to recovery_required when the v1 chain is removed", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`CREATE TABLE session (id TEXT PRIMARY KEY)`)
+        yield* db.run(sql`INSERT INTO session (id) VALUES ('ses_parent')`)
+        yield* DatabaseMigration.applyOnly(db, [taskRunDeliveryMigration, subagentControlPlaneMigration, taskRunExecutionRuntimeMigration])
+        const insert = (runID: string, state: string, runtime: string) =>
+          db.run(sql`
+            INSERT INTO task_run (
+              run_id, root_run_id, request_hash, parent_session_id, parent_message_id,
+              tool_call_id, child_session_id, generation, delivery_mode, phase, state,
+              attempts, time_created, time_updated, execution_runtime
+            ) VALUES (
+              ${runID}, ${runID}, 'request', 'ses_parent', 'msg_parent',
+              'call', ${"ses_child_" + runID}, 1, 'foreground', 'research', ${state},
+              1, 100, 200, ${runtime}
+            )
+          `)
+        yield* insert("run_v1_running", "running", "v1")
+        yield* insert("run_v1_admitted", "admitted", "v1")
+        yield* insert("run_v1_completed", "completed", "v1")
+        yield* insert("run_v1_failed", "failed", "v1")
+        yield* insert("run_v1_already_recovery", "recovery_required", "v1")
+        yield* insert("run_v2_running", "running", "v2")
+
+        yield* DatabaseMigration.applyOnly(db, [taskRunV1RecoveryMigration])
+
+        const row = (runID: string) =>
+          db.get(sql`SELECT state, control_state, reason FROM task_run WHERE run_id = ${runID}`)
+        expect(yield* row("run_v1_running")).toEqual({
+          state: "recovery_required",
+          control_state: "closed",
+          reason: "v1 execution chain removed",
+        })
+        expect(yield* row("run_v1_admitted")).toEqual({
+          state: "recovery_required",
+          control_state: "closed",
+          reason: "v1 execution chain removed",
+        })
+        // Terminal v1 rows stay immutable history; already-recovery rows keep their prior reason.
+        expect(yield* row("run_v1_completed")).toEqual({ state: "completed", control_state: "open", reason: null })
+        expect(yield* row("run_v1_failed")).toEqual({ state: "failed", control_state: "open", reason: null })
+        expect(yield* row("run_v1_already_recovery")).toEqual({
+          state: "recovery_required",
+          control_state: "open",
+          reason: null,
+        })
+        // The Core V2 authority owns v2 rows exclusively; the migration never touches them.
+        expect(yield* row("run_v2_running")).toEqual({ state: "running", control_state: "open", reason: null })
       }),
     )
   })

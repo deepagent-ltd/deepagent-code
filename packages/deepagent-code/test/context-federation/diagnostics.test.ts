@@ -31,7 +31,6 @@ import { AbsolutePath } from "@deepagent-code/core/schema"
 import { Effect, Layer } from "effect"
 import { eq, sql } from "drizzle-orm"
 import { ContextFederationDiagnostics } from "../../src/context-federation/diagnostics"
-import { ContextFederationObservability } from "../../src/context-federation/observability"
 import { SessionFederatedContext } from "../../src/context-federation/session-context-runtime"
 import { Session } from "../../src/session/session"
 
@@ -85,7 +84,6 @@ const fixtureActivation: ContextActivationReceipt.Receipt = {
 
 describe("ContextFederationDiagnostics", () => {
   test("returns opaque evidence and requires durable terminal evidence before settle", async () => {
-    ContextFederationObservability.reset()
     const database = Database.layerFromPath(":memory:")
     const attemptLayer = SessionProviderAttempt.layer.pipe(Layer.provide(database))
     const ownerLayer = SessionProviderOwner.layer.pipe(Layer.provide(database))
@@ -276,13 +274,7 @@ describe("ContextFederationDiagnostics", () => {
           state: "degraded",
           reasonCode: "source_error",
         })
-        expect(first.metrics.shadow).toMatchObject({
-          comparisons: 1,
-          legacyKnowledgeRefs: 2,
-          legacyMemoryRefs: 1,
-          federated: { code: 1, knowledge: 1, memory: 0, documents: 1 },
-          knowledgeMemoryDelta: -2,
-        })
+        expect(first.metrics).toMatchObject({ selections: 1, tokens: 8 })
 
         const missingEvidence = yield* service
           .resolveAttempt({
@@ -315,7 +307,6 @@ describe("ContextFederationDiagnostics", () => {
   })
 
   test("cohort aggregates durable selections by readiness bucket over a window (FEAT-005)", async () => {
-    ContextFederationObservability.reset()
     const database = Database.layerFromPath(":memory:")
     const attemptLayer = SessionProviderAttempt.layer.pipe(Layer.provide(database))
     const ownerLayer = SessionProviderOwner.layer.pipe(Layer.provide(database))
@@ -374,19 +365,6 @@ function seed(db: Database.Interface["db"]) {
       revisions: [{ source: "repo_documents", state: "degraded", reasonCode: "source_error" }],
     }),
   ]
-  ContextFederationObservability.observeQuery({
-    statuses,
-    candidates: { code: 2 },
-    selected: { code: 1 },
-    rejected: { code: 1 },
-    latencyMs: 12,
-    observedAt: 40,
-  })
-  ContextFederationObservability.observeShadowComparison({
-    legacyKnowledgeRefs: 2,
-    legacyMemoryRefs: 1,
-    federated: { code: 1, knowledge: 1, memory: 0, documents: 1 },
-  })
   return Effect.gen(function* () {
     yield* db
       .insert(SecurityNamespaceTable)

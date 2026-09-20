@@ -4,7 +4,8 @@ import { SessionV1 } from "@deepagent-code/core/v1/session"
 
 import { Session } from "@/session/session"
 import { MessageV2 } from "@/session/message-v2"
-import { SessionPrompt } from "@/session/prompt"
+import { SessionPromptV2 } from "@/session/prompt-v2"
+import { SessionCommandV2 } from "@/session/command-v2"
 import { SessionRevert } from "@/session/revert"
 import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
@@ -37,7 +38,11 @@ import { GraphQueryStatus } from "@deepagent-code/core/context-federation/federa
 import { Sensitivity } from "@deepagent-code/core/context-federation/authorization"
 import { SessionLegacyProviderResolution } from "@/session/legacy-provider-resolution"
 import { SessionCompaction } from "@/session/compaction"
-import { File as DiffArtifactFile, Limits as DiffArtifactLimits, Manifest as DiffArtifactManifest } from "@/session/diff-artifact-schema"
+import {
+  File as DiffArtifactFile,
+  Limits as DiffArtifactLimits,
+  Manifest as DiffArtifactManifest,
+} from "@/session/diff-artifact-schema"
 
 const root = "/session"
 export const ListQuery = Schema.Struct({
@@ -102,7 +107,7 @@ export const DiffArtifactFileQuery = Schema.Struct({
 export const StatusMap = Schema.Record(Schema.String, SessionStatus.Info)
 export const UpdatePayload = Schema.Struct({
   title: Schema.optional(Schema.String),
-  metadata: Schema.optional(Session.Metadata),
+  metadata: Schema.optional(Schema.NullOr(Session.Metadata)),
   permission: Schema.optional(PermissionV1.Ruleset),
   time: Schema.optional(
     Schema.Struct({
@@ -125,7 +130,7 @@ export const SummarizePayload = Schema.Struct({
   modelID: ModelV2.ID,
   auto: Schema.optional(Schema.Boolean),
 })
-export const PromptPayload = Schema.Struct(Struct.omit(SessionPrompt.PromptInput.fields, ["sessionID"]))
+export const PromptPayload = Schema.Struct(Struct.omit(SessionPromptV2.PromptInput.fields, ["sessionID"]))
 export const PromptAsyncAccepted = Schema.Struct({
   messageID: MessageID,
   delivery: Schema.Literals(["turn", "steer", "queue", "goal_steer"]),
@@ -138,7 +143,7 @@ export const PromptPreparePayload = Schema.Struct({
   output_language: Schema.optional(Schema.Literals(["chinese", "english"])),
   intent_id: Schema.optional(Schema.String),
   intent_source: Schema.optional(Schema.Literals(["composer", "intelligence", "followup", "rewrite"])),
-  parts: SessionPrompt.PromptInput.fields.parts,
+  parts: SessionPromptV2.PromptInput.fields.parts,
 })
 export const PromptPrepareResult = Schema.Struct({
   prompt_draft_id: Schema.String,
@@ -181,8 +186,8 @@ export const PlanSnapshotResult = Schema.Struct({
   doc_id: Schema.NullOr(Schema.String),
   plan_version: Schema.NullOr(Schema.Number),
 })
-export const CommandPayload = Schema.Struct(Struct.omit(SessionPrompt.CommandInput.fields, ["sessionID"]))
-export const ShellPayload = Schema.Struct(Struct.omit(SessionPrompt.ShellInput.fields, ["sessionID"]))
+export const CommandPayload = Schema.Struct(Struct.omit(SessionCommandV2.CommandInput.fields, ["sessionID"]))
+export const ShellPayload = Schema.Struct(Struct.omit(SessionCommandV2.ShellInput.fields, ["sessionID"]))
 export const RevertPayload = Schema.Struct(Struct.omit(SessionRevert.RevertInput.fields, ["sessionID"]))
 export const PermissionResponsePayload = Schema.Struct({
   response: PermissionV1.Reply,
@@ -264,14 +269,7 @@ export const ContextAttemptResult = Schema.Struct({
 })
 export const ContextGraphMetricResult = Schema.Struct({
   graph: GraphKind,
-  queries: Schema.Int,
-  candidates: Schema.Int,
   selected: Schema.Int,
-  rejected: Schema.Int,
-  redacted: Schema.Int,
-  averageLatencyMs: Schema.Finite,
-  maxLatencyMs: Schema.Finite,
-  lastLatencyMs: Schema.Finite,
   lastObservedAt: Schema.optional(Schema.Int),
   status: Schema.optional(GraphQueryStatus),
 })
@@ -282,18 +280,6 @@ export const ContextDiagnosticsResult = Schema.Struct({
   metrics: Schema.Struct({
     selections: Schema.Int,
     tokens: Schema.Int,
-    shadow: Schema.Struct({
-      comparisons: Schema.Int,
-      legacyKnowledgeRefs: Schema.Int,
-      legacyMemoryRefs: Schema.Int,
-      federated: Schema.Struct({
-        code: Schema.Int,
-        knowledge: Schema.Int,
-        memory: Schema.Int,
-        documents: Schema.Int,
-      }),
-      knowledgeMemoryDelta: Schema.Int,
-    }),
     graphs: Schema.Array(ContextGraphMetricResult),
     alerts: Schema.Array(
       Schema.Struct({
@@ -695,7 +681,13 @@ export const SessionApi = HttpApi.make("session")
           query: WorkspaceRoutingQuery,
           payload: PromptPreparePayload,
           success: described(PromptPrepareResult, "Prepared prompt draft"),
-          error: [HttpApiError.BadRequest, ConflictError, InvalidRequestError, ApiNotFoundError, ServiceUnavailableError],
+          error: [
+            HttpApiError.BadRequest,
+            ConflictError,
+            InvalidRequestError,
+            ApiNotFoundError,
+            ServiceUnavailableError,
+          ],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.prompt_prepare",
@@ -936,7 +928,8 @@ export const SessionApi = HttpApi.make("session")
           OpenApi.annotations({
             identifier: "session.continuationResolutionResolve",
             summary: "Resolve a failed compaction continuation",
-            description: "Replay only proven undispatched continuations, or abandon with explicit risk acknowledgement.",
+            description:
+              "Replay only proven undispatched continuations, or abandon with explicit risk acknowledgement.",
           }),
         ),
         HttpApiEndpoint.get("exportSnapshot", SessionPaths.exportSnapshot, {

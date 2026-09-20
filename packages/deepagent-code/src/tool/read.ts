@@ -114,7 +114,7 @@ export const ReadTool = Tool.define<
           if (target?.type === "Directory") return item.name + "/"
           return item.name
         }),
-        { concurrency: "unbounded" },
+        { concurrency: 16 },
       ).pipe(Effect.map((items: string[]) => items.sort((a, b) => a.localeCompare(b))))
     })
 

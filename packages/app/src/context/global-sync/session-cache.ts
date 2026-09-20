@@ -5,7 +5,7 @@ import type {
   QuestionRequest,
   SessionStatus,
   SnapshotFileDiff,
-  Todo,
+  SessionTodoInfo,
 } from "@deepagent-code/sdk/client"
 
 export const SESSION_CACHE_LIMIT = 40
@@ -13,10 +13,11 @@ export const SESSION_CACHE_LIMIT = 40
 type SessionCache = {
   session_status: Record<string, SessionStatus | undefined>
   session_diff: Record<string, SnapshotFileDiff[] | undefined>
-  todo: Record<string, Todo[] | undefined>
+  todo: Record<string, SessionTodoInfo[] | undefined>
   message: Record<string, Message[] | undefined>
   part: Record<string, Part[] | undefined>
   permission: Record<string, PermissionRequest[] | undefined>
+  permission_v2?: Record<string, Record<string, true | undefined> | undefined>
   question: Record<string, QuestionRequest[] | undefined>
   part_text_accum_delta: Record<string, string | undefined>
 }
@@ -40,6 +41,7 @@ export function dropSessionCaches(store: SessionCache, sessionIDs: Iterable<stri
     delete store.session_diff[sessionID]
     delete store.session_status[sessionID]
     delete store.permission[sessionID]
+    if (store.permission_v2) delete store.permission_v2[sessionID]
     delete store.question[sessionID]
   }
 }

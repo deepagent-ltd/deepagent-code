@@ -86,7 +86,7 @@ describe("login handler", () => {
   it("logs in with flag-provided credentials and points at workspace selection next", async () => {
     const { output } = await capture(() => run(login(credentials)))
     expect(output).toContain(`Logged in to ${base} as a@b.c.`)
-    expect(output).toContain("dacode workspace list")
+    expect(output).toContain("lildax workspace list")
     expect(JSON.parse(await readFile(stateFile(), "utf8")).accessToken).toBe("tok")
   })
 
@@ -139,7 +139,7 @@ describe("workspace handlers", () => {
     expect(Result.isFailure(result)).toBe(true)
     if (Result.isFailure(result)) {
       expect(String(result.failure)).toContain("ctr-bad")
-      expect(String(result.failure)).toContain("dacode workspace list")
+      expect(String(result.failure)).toContain("lildax workspace list")
     }
   })
 })

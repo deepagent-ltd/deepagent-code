@@ -3,32 +3,18 @@
 // service now only backs the `session.todo` REST read path for historical sessions; no builtin tool
 // writes to it. Do not add new writers — use the `plan` tool / PlanController instead.
 import { SessionID } from "./schema"
-import { Effect, Layer, Context, Schema } from "effect"
+import { Effect, Layer, Context } from "effect"
 import { Database } from "@deepagent-code/core/database/database"
+import { SessionTodo } from "@deepagent-code/core/session/todo"
 import { eq } from "drizzle-orm"
 import { asc } from "drizzle-orm"
 import { TodoTable } from "@deepagent-code/core/session/sql"
 import { EventV2Bridge } from "@/event-v2-bridge"
-import { EventV2 } from "@deepagent-code/core/event"
 
-export const Info = Schema.Struct({
-  content: Schema.String.annotate({ description: "Brief description of the task" }),
-  status: Schema.String.annotate({
-    description: "Current status of the task: pending, in_progress, completed, cancelled",
-  }),
-  priority: Schema.String.annotate({ description: "Priority level of the task: high, medium, low" }),
-}).annotate({ identifier: "Todo" })
-export type Info = Schema.Schema.Type<typeof Info>
+export const Info = SessionTodo.Info
+export type Info = SessionTodo.Info
 
-export const Event = {
-  Updated: EventV2.define({
-    type: "todo.updated",
-    schema: {
-      sessionID: SessionID,
-      todos: Schema.Array(Info),
-    },
-  }),
-}
+export const Event = SessionTodo.Event
 
 export interface Interface {
   readonly update: (input: { sessionID: SessionID; todos: Info[] }) => Effect.Effect<void>

@@ -11,6 +11,7 @@ import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { SessionEvent } from "@deepagent-code/core/session/event"
 import { SessionExecution } from "@deepagent-code/core/session/execution"
+import { Delegation } from "../src/tool/delegation"
 import { SessionExecutionLocal } from "@deepagent-code/core/session/execution/local"
 import {
   SessionRestart,
@@ -19,9 +20,24 @@ import {
   classifyTurn,
 } from "@deepagent-code/core/session/execution/restart"
 import { SessionRunner } from "@deepagent-code/core/session/runner"
+import { SessionMessage } from "@deepagent-code/core/session/message"
+import { Prompt } from "@deepagent-code/core/session/prompt"
 import { SessionSchema } from "@deepagent-code/core/session/schema"
-import { SessionTable } from "@deepagent-code/core/session/sql"
+import { SessionInputTable, SessionTable } from "@deepagent-code/core/session/sql"
 import { SessionStore } from "@deepagent-code/core/session/store"
+import {
+  SessionActivityTable,
+  SessionContextSelectionTable,
+  SessionProviderAttemptTable,
+  SessionProviderOwnerLeaseTable,
+} from "@deepagent-code/core/context-federation/session-sql"
+import {
+  LocationIdentityTable,
+  ProjectScopeIdentityTable,
+  SecurityNamespaceTable,
+} from "@deepagent-code/core/context-federation/sql"
+import { LocationKey, ProjectScopeKey, SecurityNamespaceID } from "@deepagent-code/core/context-federation/reference"
+import { Hash } from "@deepagent-code/core/util/hash"
 import { V2ProviderTurnReceiptTable } from "@deepagent-code/core/session/runner/v2-provider-turn.sql"
 import { testEffect } from "./lib/effect"
 
@@ -101,6 +117,11 @@ describe("SessionExecution lifecycle", () => {
     expect(SessionExecution.terminal(interrupted, "user")).toEqual({ type: "interrupted", reason: "user" })
   })
 
+  test("does not classify interruption mixed with a defect as a user stop", () => {
+    const exit = Effect.runSyncExit(Effect.interrupt.pipe(Effect.ensuring(Effect.die(new Error("cleanup failed")))))
+    expect(SessionExecution.terminal(exit, "user")).toMatchObject({ type: "failed" })
+  })
+
   it.effect("claims and releases execution without changing user-visible update time", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
@@ -109,37 +130,36 @@ describe("SessionExecution lifecycle", () => {
       yield* seedSessions(database, [sessionID])
       const updated = yield* sessionUpdated(database, sessionID)
 
-      yield* store.claim(sessionID)
-      yield* store.claim(sessionID)
+      const token = yield* store.claim(sessionID)
+      expect(token).toBeNumber()
+      expect(yield* store.claim(sessionID)).toBeUndefined()
       expect(yield* suspensions(database)).toEqual({ [sessionID]: true })
       expect(yield* sessionUpdated(database, sessionID)).toBe(updated)
 
-      yield* store.release(sessionID)
-      yield* store.release(sessionID)
+      expect(yield* store.release(sessionID, token! + 1)).toBe(false)
+      expect(yield* store.release(sessionID, token!)).toBe(true)
       expect(yield* suspensions(database)).toEqual({ [sessionID]: false })
       expect(yield* sessionUpdated(database, sessionID)).toBe(updated)
     }),
   )
 
-  it.effect("clears suspension and records one lifecycle when execution succeeds", () =>
+  it.effect("refuses to drain a suspended Session until explicit recovery resolves its claim", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
       const sessionID = SessionSchema.ID.make("ses_suspend_completed")
       yield* seedSessions(database, [sessionID], { time_suspended: Date.now() })
 
+      let runs = 0
       const scope = yield* Scope.make()
       yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
-      const context = yield* buildExecution(scope, () => Effect.void)
+      const context = yield* buildExecution(scope, () => Effect.sync(() => runs++))
       const execution = Context.get(context, SessionExecution.Service)
 
-      yield* execution.resume(sessionID)
-      yield* execution.awaitIdle(sessionID)
-
-      expect(yield* suspensions(database)).toEqual({ [sessionID]: false })
-      expect(yield* eventTypes(database, sessionID)).toEqual([
-        EventV2.versionedType(SessionEvent.Execution.Started.type, 1),
-        EventV2.versionedType(SessionEvent.Execution.Succeeded.type, 1),
-      ])
+      const result = yield* execution.resume(sessionID).pipe(Effect.flip)
+      expect(result).toBeInstanceOf(SessionRunner.ExecutionRecoveryRequiredError)
+      expect(runs).toBe(0)
+      expect(yield* suspensions(database)).toEqual({ [sessionID]: true })
+      expect(yield* eventTypes(database, sessionID)).toEqual([])
     }),
   )
 
@@ -206,7 +226,8 @@ describe("SessionExecution lifecycle", () => {
       const database = yield* Database.Service
       const first = SessionSchema.ID.make("ses_recovery_first")
       const second = SessionSchema.ID.make("ses_recovery_second")
-      yield* seedSessions(database, [first, second], { time_suspended: Date.now() })
+      const claimToken = Date.now()
+      yield* seedSessions(database, [first, second], { time_suspended: claimToken })
       const now = Date.now()
       yield* (yield* SessionProviderOwner.Service).register({ ownerToken: "recovery-owner", leaseMs: 60_000 })
       yield* database.db
@@ -247,6 +268,7 @@ describe("SessionExecution lifecycle", () => {
         [
           {
             sessionID: first,
+            claimToken,
             turns: [
               {
                 receipt: {
@@ -266,7 +288,15 @@ describe("SessionExecution lifecycle", () => {
             effects: [],
             disposition: "owned_elsewhere" as const,
           },
-          { sessionID: second, turns: [], tools: [], tasks: [], effects: [], disposition: "claim_only" as const },
+          {
+            sessionID: second,
+            claimToken,
+            turns: [],
+            tools: [],
+            tasks: [],
+            effects: [],
+            disposition: "claim_only" as const,
+          },
         ].toSorted((left, right) => left.sessionID.localeCompare(right.sessionID)),
       )
       expect(providerCalls).toEqual([])
@@ -274,14 +304,227 @@ describe("SessionExecution lifecycle", () => {
     }),
   )
 
-  it.effect("surfaces terminal V2 tool effects as recovery evidence without moving disposition", () =>
+  it.effect("startup redrive exact-releases safe claims and wakes pending durable inputs once", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const claimed = SessionSchema.ID.make("ses_redrive_claimed")
+      const unclaimed = SessionSchema.ID.make("ses_redrive_unclaimed")
+      const claimToken = Date.now()
+      yield* seedSessions(database, [claimed], { time_suspended: claimToken })
+      yield* seedSessions(database, [unclaimed])
+      yield* database.db
+        .insert(SessionInputTable)
+        .values([
+          {
+            id: SessionMessage.ID.make("msg_redrive_claimed"),
+            session_id: claimed,
+            prompt: new Prompt({ text: "claimed" }),
+            delivery: "steer",
+            admitted_seq: 1,
+          },
+          {
+            id: SessionMessage.ID.make("msg_redrive_unclaimed"),
+            session_id: unclaimed,
+            prompt: new Prompt({ text: "unclaimed" }),
+            delivery: "queue",
+            admitted_seq: 1,
+          },
+        ])
+        .run()
+        .pipe(Effect.orDie)
+
+      const providerCalls: SessionSchema.ID[] = []
+      const scope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+      const context = yield* buildExecution(scope, ({ sessionID }) =>
+        Effect.sync(() => {
+          providerCalls.push(sessionID)
+        }),
+      )
+      const restart = Context.get(context, SessionRestart.Service)
+      const execution = Context.get(context, SessionExecution.Service)
+
+      expect(yield* restart.redriveStartup).toEqual({
+        released: [claimed],
+        woken: [claimed, unclaimed],
+        blocked: [],
+      })
+      yield* Effect.forEach([claimed, unclaimed], execution.awaitIdle, { discard: true })
+      expect(providerCalls.toSorted()).toEqual([claimed, unclaimed].toSorted())
+      expect(yield* suspensions(database)).toEqual({ [claimed]: false, [unclaimed]: false })
+    }),
+  )
+
+  // Durable shape of the packaged "kill-9 before wake" window: a turn dispatched under claim
+  // token-1 that reached a TERMINAL receipt state (failed / settled / indeterminate_after_crash —
+  // in the packaged scenario a user interrupt classified it indeterminate_after_crash), the
+  // chain released, and a later idle drain claimed token-2 before the process was killed
+  // mid-window. The token-2 claim must exact-release: the foreign-token terminal row is settled
+  // history, not an ownership conflict.
+  it.effect("releases a claim whose only turns are terminal history under an older claim token", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const sessionID = SessionSchema.ID.make("ses_foreign_terminal")
+      const foreignToken = Date.now() - 10_000
+      const claimToken = Date.now()
+      yield* seedForeignClaimTurn(database, sessionID, {
+        attemptToken: foreignToken,
+        claimToken,
+        terminal: true,
+      })
+
+      const scope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+      const context = yield* buildExecution(scope, () => Effect.void)
+      const restart = Context.get(context, SessionRestart.Service)
+
+      const pending = yield* restart.pendingRecovery
+      expect(pending[0]?.turns[0]?.classification).toBe("terminal_consistent")
+      expect(pending[0]?.disposition).toBe("terminal_consistent")
+      expect(yield* restart.redriveStartup).toEqual({ released: [sessionID], woken: [], blocked: [] })
+      expect(yield* suspensions(database)).toEqual({ [sessionID]: false })
+    }),
+  )
+
+  // A mid-drain recovery escalation (e.g. the runner refusing to replay an indeterminate receipt)
+  // owns its execution claim; the settled callback must release it instead of leaving the claim
+  // lingering — the recovery fence lives in the receipt state machine, not the execution claim.
+  it.effect("releases the execution claim when a drain escalates to recovery_required mid-flight", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const store = yield* SessionStore.Service
+      const sessionID = SessionSchema.ID.make("ses_escalation_release")
+      yield* seedSessions(database, [sessionID])
+
+      const scope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+      const context = yield* buildExecution(scope, () =>
+        Effect.fail(new SessionRunner.ExecutionRecoveryRequiredError({ sessionID })),
+      )
+      const execution = Context.get(context, SessionExecution.Service)
+
+      const exit = yield* execution.resume(sessionID).pipe(Effect.exit)
+      expect(exit._tag).toBe("Failure")
+      yield* execution.awaitIdle(sessionID)
+      expect(yield* suspensions(database)).toEqual({ [sessionID]: false })
+      expect(yield* store.claimToken(sessionID)).toBeUndefined()
+    }),
+  )
+
+  // The fence is preserved when the foreign-token turn is still in flight: a non-terminal row
+  // under another claim means unknown ownership and must block the exact-release.
+  it.effect("fences a claim when a foreign-token turn is still in flight", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const sessionID = SessionSchema.ID.make("ses_foreign_inflight")
+      yield* seedForeignClaimTurn(database, sessionID, {
+        attemptToken: Date.now() - 10_000,
+        claimToken: Date.now(),
+        terminal: false,
+      })
+
+      const scope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+      const context = yield* buildExecution(scope, () => Effect.void)
+      const restart = Context.get(context, SessionRestart.Service)
+
+      const pending = yield* restart.pendingRecovery
+      expect(pending[0]?.turns[0]?.classification).toBe("authority_conflict")
+      expect(pending[0]?.disposition).toBe("authority_conflict")
+      expect(yield* restart.redriveStartup).toEqual({
+        released: [],
+        woken: [],
+        blocked: [{ sessionID, disposition: "authority_conflict" }],
+      })
+      expect(yield* suspensions(database)).toEqual({ [sessionID]: true })
+    }),
+  )
+
+  it.effect("keeps stale advisory wakes stopped across an execution-layer restart", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const sessionID = SessionSchema.ID.make("ses_restart_interrupt_barrier")
+      yield* seedSessions(database, [sessionID])
+      yield* database.db
+        .update(SessionTable)
+        .set({ interrupt_seq: 2 })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
+
+      let runs = 0
+      const scope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+      const context = yield* buildExecution(scope, () => Effect.sync(() => runs++))
+      const execution = Context.get(context, SessionExecution.Service)
+
+      yield* execution.wake(sessionID, 2)
+      expect(yield* execution.active).toEqual(new Set())
+      expect(runs).toBe(0)
+
+      yield* execution.wake(sessionID, 3)
+      yield* execution.awaitIdle(sessionID)
+      expect(runs).toBe(1)
+
+      yield* execution.resume(sessionID)
+      expect(runs).toBe(2)
+    }),
+  )
+
+  it.effect("does not auto-redrive pending inputs admitted before a durable interrupt", () =>
+    Effect.gen(function* () {
+      const database = yield* Database.Service
+      const sessionID = SessionSchema.ID.make("ses_redrive_interrupt_barrier")
+      yield* seedSessions(database, [sessionID], { time_suspended: 1 })
+      yield* database.db
+        .update(SessionTable)
+        .set({ interrupt_seq: 2 })
+        .where(eq(SessionTable.id, sessionID))
+        .run()
+        .pipe(Effect.orDie)
+      yield* database.db
+        .insert(SessionInputTable)
+        .values({
+          id: SessionMessage.ID.make("msg_redrive_interrupted"),
+          session_id: sessionID,
+          prompt: new Prompt({ text: "stay stopped" }),
+          delivery: "queue",
+          admitted_seq: 1,
+        })
+        .run()
+        .pipe(Effect.orDie)
+
+      let runs = 0
+      const scope = yield* Scope.make()
+      yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void))
+      const context = yield* buildExecution(scope, () => Effect.sync(() => runs++))
+      const restart = Context.get(context, SessionRestart.Service)
+
+      expect(yield* restart.redriveStartup).toEqual({ released: [sessionID], woken: [], blocked: [] })
+      expect(runs).toBe(0)
+      expect(yield* suspensions(database)).toEqual({ [sessionID]: false })
+    }),
+  )
+
+  it.effect("surfaces admitted and terminal V2 tool effects as recovery classification inputs", () =>
     Effect.gen(function* () {
       const database = yield* Database.Service
       const sessionID = SessionSchema.ID.make("ses_recovery_effects")
       yield* seedSessions(database, [sessionID], { time_suspended: Date.now() })
       const now = Date.now()
-      // Two terminal effects: one bound to a permission grant, one grant-less. Both are evidence
-      // of what already executed; they never move the disposition vocabulary.
+      yield* database.db
+        .run(sql`
+        INSERT INTO session_v2_tool_effect_admission (
+          admission_id, session_id, provider_attempt_id, receipt_id, tool_call_id,
+          tool_name, effect_kind, owner_token, time_created
+        ) VALUES
+          ('adm_1', ${sessionID}, 'attempt_eff', 'receipt_eff', 'call_1', 'write', 'mutating', 'owner_eff', ${now}),
+          ('adm_2', ${sessionID}, 'attempt_eff', 'receipt_eff', 'call_2', 'read', 'read_only', 'owner_eff', ${now}),
+          ('adm_3', ${sessionID}, 'attempt_eff', 'receipt_eff', 'call_3', 'bash', 'mutating', 'owner_eff', ${now})
+      `)
+        .pipe(Effect.orDie)
+      // Two terminal effects: one bound to a permission grant and one grant-less. The third
+      // admission intentionally has no terminal row and therefore has an unknown outcome.
       yield* database.db
         .run(sql`
         INSERT INTO session_v2_tool_effect (
@@ -316,6 +559,7 @@ describe("SessionExecution lifecycle", () => {
           effectKind: "mutating",
           state: "settled",
           grantBound: true,
+          classification: "terminal_consistent",
         },
         {
           effectId: "eff_2",
@@ -326,11 +570,21 @@ describe("SessionExecution lifecycle", () => {
           effectKind: "read_only",
           state: "failed",
           grantBound: false,
+          classification: "recovery_required",
+        },
+        {
+          effectId: "adm_3",
+          receiptId: "receipt_eff",
+          providerAttemptId: "attempt_eff",
+          toolCallId: "call_3",
+          toolName: "bash",
+          effectKind: "mutating",
+          state: "admitted",
+          grantBound: false,
+          classification: "recovery_required",
         },
       ])
-      // Terminal effects are evidence only: with no other recovery input the session stays
-      // claim_only.
-      expect(entry.disposition).toBe("claim_only")
+      expect(entry.disposition).toBe("recovery_required")
     }),
   )
 
@@ -562,8 +816,176 @@ function buildExecution(scope: Scope.Closeable, run: SessionRunner.Interface["ru
         Layer.provide(Layer.succeed(EventV2.Service, events)),
         Layer.provide(Layer.succeed(SessionStore.Service, store)),
         Layer.provide(locations),
+        Layer.provide(Delegation.delegationSlotLayer),
       ),
       scope,
     )
+  })
+}
+
+function seedForeignClaimTurn(
+  database: Database.Interface,
+  sessionID: SessionSchema.ID,
+  input: {
+    readonly attemptToken: number
+    readonly claimToken: number
+    readonly terminal: boolean
+  },
+) {
+  return Effect.gen(function* () {
+    yield* seedSessions(database, [sessionID], { time_suspended: input.claimToken })
+    const userMessageId = "msg_foreign_turn"
+    yield* database.db
+      .insert(SessionInputTable)
+      .values({
+        id: SessionMessage.ID.make(userMessageId),
+        session_id: sessionID,
+        prompt: new Prompt({ text: "foreign claim turn" }),
+        delivery: "steer",
+        admitted_seq: 0,
+        promoted_seq: 0,
+        time_created: 1,
+      })
+      .onConflictDoNothing()
+      .run()
+      .pipe(Effect.orDie)
+    yield* database.db
+      .insert(SessionActivityTable)
+      .values({
+        activity_id: "activity_foreign_turn",
+        session_id: sessionID,
+        ordinal: 0,
+        trigger_input_id: SessionMessage.ID.make(userMessageId),
+        delivery: "steer",
+        state: "active",
+        created_at: 1,
+      })
+      .onConflictDoNothing()
+      .run()
+      .pipe(Effect.orDie)
+    yield* database.db
+      .insert(SecurityNamespaceTable)
+      .values({
+        id: "security_foreign_turn",
+        kind: "implicit_local",
+        binding_hash: Hash.sha256("security_foreign_turn"),
+        created_at: 1,
+      })
+      .onConflictDoNothing()
+      .run()
+      .pipe(Effect.orDie)
+    yield* database.db
+      .insert(ProjectScopeIdentityTable)
+      .values({
+        security_namespace_id: SecurityNamespaceID.make("security_foreign_turn"),
+        project_scope_key: ProjectScopeKey.make("project_scope_foreign_turn"),
+        project_kind: "registered_root",
+        project_identity_hash: Hash.sha256("project_foreign_turn"),
+        created_at: 1,
+      })
+      .onConflictDoNothing()
+      .run()
+      .pipe(Effect.orDie)
+    yield* database.db
+      .insert(LocationIdentityTable)
+      .values({
+        security_namespace_id: SecurityNamespaceID.make("security_foreign_turn"),
+        location_key: LocationKey.make("location_foreign_turn"),
+        project_scope_key: ProjectScopeKey.make("project_scope_foreign_turn"),
+        canonical_root: "/tmp/foreign-turn",
+        created_at: 1,
+      })
+      .onConflictDoNothing()
+      .run()
+      .pipe(Effect.orDie)
+    yield* database.db
+      .insert(SessionContextSelectionTable)
+      .values({
+        selection_id: "selection_foreign_turn",
+        session_id: sessionID,
+        activity_id: "activity_foreign_turn",
+        revision: 0,
+        trigger_input_id: SessionMessage.ID.make(userMessageId),
+        location_key: LocationKey.make("location_foreign_turn"),
+        security_namespace_id: SecurityNamespaceID.make("security_foreign_turn"),
+        project_scope_key: ProjectScopeKey.make("project_scope_foreign_turn"),
+        query_fingerprint: "query_foreign_turn",
+        authorization_fingerprint: "authorization_foreign_turn",
+        authorization_epoch: 1,
+        execution_fingerprint: "execution_foreign_turn",
+        selected_source_fingerprint: "source_foreign_turn",
+        observed_location_mutation_epoch: 0,
+        next_revalidation_at: 2_000_000_000_000,
+        released_knowledge_binding_state: "unavailable",
+        released_knowledge_exact_refs: [],
+        released_knowledge_exact_refs_fingerprint: Hash.sha256("[]"),
+        graph_revisions: "{}",
+        graph_statuses: "{}",
+        selected_refs: "[]",
+        projection: "{}",
+        projection_hash: "projection_foreign_turn",
+        token_count: 0,
+        artifact_write_status: "degraded_unavailable",
+        inline_audit: "{}",
+        created_at: 1,
+      })
+      .onConflictDoNothing()
+      .run()
+      .pipe(Effect.orDie)
+    const ownerService = yield* SessionProviderOwner.Service
+    yield* ownerService.register({ ownerToken: "owner_foreign_turn", leaseMs: 60_000 })
+    yield* database.db
+      .insert(SessionProviderAttemptTable)
+      .values({
+        attempt_id: "attempt_foreign_turn",
+        session_id: sessionID,
+        activity_id: "activity_foreign_turn",
+        provider_turn_seq: 1,
+        selection_id: "selection_foreign_turn",
+        projection_hash: "projection_foreign_turn",
+        request_hash: "b".repeat(64),
+        provider_id: "provider-test",
+        owner_token: "owner_foreign_turn",
+        execution_claim_token: input.attemptToken,
+        state: "prepared",
+        created_at: 1,
+      })
+      .run()
+      .pipe(Effect.orDie)
+    yield* database.db
+      .insert(V2ProviderTurnReceiptTable)
+      .values({
+        receipt_id: "receipt_foreign_turn",
+        session_id: sessionID,
+        request_ordinal: 1,
+        provider_attempt_id: "attempt_foreign_turn",
+        activity_id: "activity_foreign_turn",
+        provider_turn_seq: 1,
+        user_message_id: userMessageId,
+        history_prompt_epoch: 1,
+        request_input_hash: "b".repeat(64),
+        provider_id: "provider-test",
+        model_id: "model-test",
+        protocol: "openai-chat",
+        owner_mode: "v2",
+        owner_token: "owner_foreign_turn",
+        state: "preparing",
+        created_at: 1,
+      })
+      .run()
+      .pipe(Effect.orDie)
+    if (input.terminal) {
+      // The legal preparing->failed terminal transition (any non-owner_lost error code); the
+      // packaged indeterminate_after_crash variant rides the same terminal set in the fix.
+      yield* database.db
+        .update(V2ProviderTurnReceiptTable)
+        .set({ state: "failed", error_code: "consumer_stream_failed", terminal_at: 2 })
+        .where(eq(V2ProviderTurnReceiptTable.receipt_id, "receipt_foreign_turn"))
+        .run()
+        .pipe(Effect.orDie)
+    }
+    // The foreign chain is dead: release its owner lease only AFTER the rows exist ( the attempt
+    // insert trigger requires a live lease), so recovery reads ownedElsewhere=false.
+    yield* ownerService.release({ ownerToken: "owner_foreign_turn" }).pipe(Effect.orDie)
   })
 }

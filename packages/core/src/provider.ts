@@ -4,24 +4,8 @@ import { ModelProtocol } from "./contract/model-protocol"
 import { withStatics } from "./schema"
 import { Schema } from "effect"
 
-export const ID = Schema.String.pipe(
-  Schema.brand("ProviderV2.ID"),
-  withStatics((schema) => ({
-    // Well-known providers
-    "deepagent-code": schema.make("deepagent-code"),
-    anthropic: schema.make("anthropic"),
-    openai: schema.make("openai"),
-    google: schema.make("google"),
-    googleVertex: schema.make("google-vertex"),
-    githubCopilot: schema.make("github-copilot"),
-    amazonBedrock: schema.make("amazon-bedrock"),
-    azure: schema.make("azure"),
-    openrouter: schema.make("openrouter"),
-    mistral: schema.make("mistral"),
-    gitlab: schema.make("gitlab"),
-  })),
-)
-export type ID = typeof ID.Type
+import { ID } from "./provider-id"
+export { ID }
 
 // The closed set of first-party "official" providers. These are the only ids whose credentials come
 // from the auth key store and whose identity/protocol is fixed by the catalog. Every other provider

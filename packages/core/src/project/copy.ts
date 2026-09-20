@@ -230,7 +230,7 @@ export const layer = Layer.effect(
         .all()
         .pipe(Effect.orDie)
       const sourceDirectories = yield* Effect.forEach(roots, (item) => canonical(AbsolutePath.make(item.directory)), {
-        concurrency: "unbounded",
+        concurrency: 8,
       })
       const discovered = yield* Effect.forEach(
         sourceDirectories,
@@ -240,7 +240,7 @@ export const layer = Layer.effect(
               .list(sourceDirectory)
               .pipe(Effect.map((items) => items.map((item) => ({ ...item, type: strategy.id })))),
           ),
-        { concurrency: "unbounded" },
+        { concurrency: 8 },
       ).pipe(
         Effect.map((sets) => new Map(sets.flat(2).map((item) => [item.directory, item] as const)).values().toArray()),
       )

@@ -112,4 +112,25 @@ describe("QuestionV2", () => {
       yield* Scope.close(secondScope, Exit.void)
     }),
   )
+
+  it.effect("fails with typed overload at the pending ceiling and reuses rejected capacity", () =>
+    Effect.gen(function* () {
+      const service = yield* QuestionV2.Service
+      yield* Effect.forEach(
+        Array.from({ length: QuestionV2.MAX_PENDING_REQUESTS }),
+        () => service.ask({ sessionID, questions: [question] }).pipe(Effect.forkScoped),
+        { discard: true },
+      )
+      yield* Effect.yieldNow
+      expect((yield* service.list()).length).toBe(QuestionV2.MAX_PENDING_REQUESTS)
+      expect(
+        yield* service.ask({ sessionID, questions: [question] }).pipe(Effect.flip),
+      ).toEqual(new QuestionV2.CapacityError({ limit: QuestionV2.MAX_PENDING_REQUESTS }))
+
+      yield* service.reject((yield* service.list())[0]!.id)
+      yield* service.ask({ sessionID, questions: [question] }).pipe(Effect.forkScoped)
+      yield* Effect.yieldNow
+      expect((yield* service.list()).length).toBe(QuestionV2.MAX_PENDING_REQUESTS)
+    }),
+  )
 })

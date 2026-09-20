@@ -5,6 +5,7 @@ import { useProject } from "../context/project"
 import { useRoute } from "../context/route"
 import { useSync } from "../context/sync"
 import { useTheme } from "../context/theme"
+import { useTuiI18n } from "../context/i18n"
 import { createMemo, createSignal, onMount } from "solid-js"
 import { createStore } from "solid-js/store"
 import { errorMessage } from "../util/error"
@@ -20,6 +21,7 @@ export function DialogWorkspaceList() {
   const sdk = useSDK()
   const toast = useToast()
   const project = useProject()
+  const i18n = useTuiI18n()
   const { theme } = useTheme()
   const [deleting, setDeleting] = createSignal<string>()
   const [removing, setRemoving] = createSignal<string>()
@@ -71,7 +73,7 @@ export function DialogWorkspaceList() {
       setRemoving(undefined)
       toast.show({
         variant: "error",
-        title: "Failed to delete workspace",
+        title: i18n.t("tui.common.failedDeleteWorkspace"),
         message: errorMessage(result.error),
       })
       return

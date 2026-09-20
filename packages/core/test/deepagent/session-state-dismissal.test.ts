@@ -3,13 +3,14 @@ import { mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import * as SessionState from "../../src/deepagent/session-state"
+import { tmpRoot, tmpRootShared } from "../fixture/tmpdir"
 
 // v4.0.5 PR-3 (observeUserAdmission) + PR-4 (structured validation dismissal). Pure session-state
 // seams the live request-prep loop calls; no running instance required.
 
 describe("PR-3 observeUserAdmission", () => {
   beforeEach(() => {
-    SessionState.configure(mkdtempSync(path.join(tmpdir(), "observe-admission-")))
+    SessionState.configure(mkdtempSync(tmpRoot()))
   })
 
   test("first observation on a fresh session is 'initial' and records the baseline (no stale)", () => {
@@ -41,7 +42,7 @@ describe("PR-3 observeUserAdmission", () => {
 
 describe("PR-4 structured validation dismissal", () => {
   beforeEach(() => {
-    SessionState.configure(mkdtempSync(path.join(tmpdir(), "dismissal-")))
+    SessionState.configure(mkdtempSync(tmpRoot()))
   })
 
   test("suppressValidation stores a structured record keyed by command+exitCode fingerprint", () => {
@@ -93,7 +94,7 @@ describe("PR-4 structured validation dismissal", () => {
   })
 
   test("legacy on-disk suppressedFingerprints (string[]) migrate to SuppressedValidation[] on load", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "dismissal-migrate-"))
+    const dir = mkdtempSync(tmpRootShared())
     // Seed a pre-PR-4 sessions.json carrying the OLD flat string[] format. Command contains a space,
     // so the migration must split on the LAST space to recover command + exit code.
     const legacy = {

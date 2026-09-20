@@ -9,6 +9,7 @@ import type { TaskContext, ToolContext } from "../../src/deepagent/prompt-policy
 import { DeepAgentReleasedSnapshot, type Selection } from "../../src/deepagent/released-snapshot"
 import { CanonicalJson } from "../../src/util/canonical-json"
 import { Hash } from "../../src/util/hash"
+import { tmpRoot } from "../fixture/tmpdir"
 
 // docs/34 §7.3 approval model: accessibility is the DocStatus flag (candidate/active/rejected),
 // recorded as immutable revisions by the durable store. Only "active" docs are retrievable;
@@ -47,7 +48,7 @@ const retrievedRefIds = (releasedSelection?: Selection): string[] => {
 }
 
 beforeEach(() => {
-  base = mkdtempSync(path.join(tmpdir(), "deepagent-approval-"))
+  base = mkdtempSync(tmpRoot())
   knowledgeSource.configure(base)
 })
 afterEach(() => {
