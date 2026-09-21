@@ -165,8 +165,8 @@ describe("C0-05 requirement coverage", () => {
 // is not what "reproducible at HEAD" can mean; the externals are still collected and still perturb
 // the digest (asserted below), they are simply outside the reproducibility claim.
 describe("C7-10 HEAD reproducibility (a10 R3 close)", () => {
-  const TREE_PIN = "7828f565d78df982ff0ba64b653d836f9273550c252c55c59e37ae9d1ce6bd2f"
-  const OVERALL_PIN = "e8cd395d7572fb750ca4765de228812daa2aea1dccb3fa03f78b651692bffb02"
+  const TREE_PIN = "05ba0a0ee114b091c284dbddd9f8b7fb9a5869d24ced0a9d33d78ef159f865e2"
+  const OVERALL_PIN = "44942888571242ddf5d9577c0258b36ffdd77accc9dc3326e3ede9de387bfa79"
 
   test("regenerated manifest matches the HEAD-pinned digest", () => {
     const manifest = generateManifest({ includeExternalEvidence: false })
