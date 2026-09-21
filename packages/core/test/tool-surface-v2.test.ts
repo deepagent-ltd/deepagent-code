@@ -116,4 +116,15 @@ describe("RI-113 V1→V2 tool surface guard", () => {
       expect(DeepAgentCodeToolInventory.toolNames.has(name)).toBe(true)
     }
   })
+
+  test("the V2.0.1 WS7 knowledge-propose and IM-send tools are present", () => {
+    // V2.0.1 WS7 (design §8): knowledge_propose is the model's write path into the human review
+    // queue; im_send is the model's policy-gated proactive IM send. Both are mutating and neither
+    // belongs to readOnlyActions.
+    for (const name of ["knowledge_propose", "im_send"]) {
+      expect(builtinToolNames.has(name)).toBe(true)
+      expect(DeepAgentCodeToolInventory.toolNames.has(name)).toBe(true)
+      expect(DeepAgentCodeToolInventory.permissionActions.has(name)).toBe(true)
+    }
+  })
 })

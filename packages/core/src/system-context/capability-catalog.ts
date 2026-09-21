@@ -22,7 +22,8 @@ import { makeLocationNode } from "../effect/app-node"
 // (design §7.3), expanded by the V2.0.1-001 system-manual wave (§4.3): the P2 tool
 // surface (task family, pr_finalize, pack_search/domain_pack_load, plan, question)
 // joins the catalog, plus two concept-shaped rows (permission-denial,
-// context-survival) that carry behavioral guidance instead of an entry tool.
+// context-survival) that carry behavioral guidance instead of an entry tool, plus
+// the P3 WS7 tool-shaped rows (knowledge-propose, im-send, §8).
 // Bodies (procedure guidance) are authored per manifest: a manifest carries
 // `body_ref` and, once a body is written, a `body_hash`. Until then the capability
 // is discoverable at L0/L1 but is not body-loadable.
@@ -189,6 +190,30 @@ export const capabilityCatalog: ReadonlyArray<CapabilityManifest> = sortManifest
       required_runtime_features: [],
       entry_tools: ["pack_search", "domain_pack_load"],
       body_ref: "capability://deepagent.pack-manual@1.0.0-beta.0",
+      max_body_tokens: CapabilityBudget.l2SingleMaxTokens,
+    },
+    {
+      id: "deepagent.knowledge-propose",
+      version: "1.0.0-beta.0",
+      summary: "Propose a durable memory or knowledge entry into the human review queue",
+      use_when: ["the user says remember this", "a durable cross-session fact emerges"],
+      availability: "stable",
+      required_permissions: ["knowledge_propose"],
+      required_runtime_features: [],
+      entry_tools: ["knowledge_propose"],
+      body_ref: "capability://deepagent.knowledge-propose@1.0.0-beta.0",
+      max_body_tokens: CapabilityBudget.l2SingleMaxTokens,
+    },
+    {
+      id: "deepagent.im-send",
+      version: "1.0.0-beta.0",
+      summary: "Send a message to the user's IM group; asks the user first, rate-limited and scrubbed",
+      use_when: ["post an update to the IM group", "deliver a long-running result to IM"],
+      availability: "stable",
+      required_permissions: ["im_send"],
+      required_runtime_features: [],
+      entry_tools: ["im_send"],
+      body_ref: "capability://deepagent.im-send@1.0.0-beta.0",
       max_body_tokens: CapabilityBudget.l2SingleMaxTokens,
     },
     {

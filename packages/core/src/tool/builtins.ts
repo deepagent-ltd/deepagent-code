@@ -17,6 +17,8 @@ import { TaskReadTool } from "./task-read"
 import { TaskCloseTool } from "./task-close"
 import { TaskRecoveryTool } from "./task-recovery"
 import { PRFinalizeTool } from "./pr-finalize"
+import { KnowledgeProposeTool } from "./knowledge-propose"
+import { IMSendTool } from "./im-send"
 import { WebFetchTool } from "./webfetch"
 import { WebSearchTool } from "./websearch"
 import { WriteTool } from "./write"
@@ -53,6 +55,8 @@ export const builtinToolNames = readonlySet(new Set([
   TaskCloseTool.name,
   TaskRecoveryTool.name,
   PRFinalizeTool.name,
+  KnowledgeProposeTool.name,
+  IMSendTool.name,
   WebFetchTool.name,
   WebSearchTool.name,
   WriteTool.name,
@@ -102,6 +106,8 @@ export const locationLayer = Layer.mergeAll(
   TaskCloseTool.layer,
   TaskRecoveryTool.layer,
   PRFinalizeTool.layer,
+  KnowledgeProposeTool.layer,
+  IMSendTool.layer,
   WebFetchTool.layer,
   WebSearchTool.layer.pipe(Layer.provide(WebSearchTool.defaultConfigLayer)),
   WriteTool.layer,

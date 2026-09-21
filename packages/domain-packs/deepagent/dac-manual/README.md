@@ -6,7 +6,7 @@ This pack is the operator's manual for DeepAgent Code itself, written for the mo
 
 ## Out of Scope
 
-It does not cover general software domains (the other built-in packs do), model-provider configuration, or UI operation. Unshipped surfaces are never documented here: there is no knowledge write tool today, so the manual describes the read path (capability_search, pack_search, domain_pack_load) and the human review queue concept only.
+It does not cover general software domains (the other built-in packs do), model-provider configuration, or UI operation. Unshipped surfaces are never documented here: the knowledge write path exists only as the review-queue proposal (knowledge_propose), and the IM write path only as the policy-gated im_send; both are documented alongside the read path (capability_search, pack_search, domain_pack_load) and the human review queue concept.
 
 ## Default Posture
 

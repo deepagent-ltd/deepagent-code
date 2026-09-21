@@ -264,5 +264,33 @@
     "sensitivity": "source_code",
     "allowed_strengths": ["high", "max", "ultra"],
     "pack_id": "deepagent.dac-manual"
+  },
+  {
+    "ref_id": "knowledge:dac-manual:knowledge-propose-tool",
+    "type": "knowledge",
+    "title": "knowledge_propose: the remember-this write path",
+    "summary": "Stage durable facts into the human review queue with knowledge_propose; candidates stay invisible to retrieval until a human approves them.",
+    "domains": ["orchestration", "code_intel", "context_engineering", "permissions", "reliability", "knowledge", "platform"],
+    "triggers": ["knowledge_propose", "remember", "durable", "memory", "review queue", "candidate"],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": ["max", "ultra"],
+    "pack_id": "deepagent.dac-manual"
+  },
+  {
+    "ref_id": "knowledge:dac-manual:im-send-tool",
+    "type": "knowledge",
+    "title": "im_send: proactive IM messages through the push gate",
+    "summary": "Send a message to a user's IM group with im_send; every send asks first, then passes the authorization, rate-limit, content-scrub and quiet-hours gates.",
+    "domains": ["orchestration", "code_intel", "context_engineering", "permissions", "reliability", "knowledge", "platform"],
+    "triggers": ["im_send", "IM", "group", "message", "push", "quiet hours", "rate limit"],
+    "scope": "system",
+    "evidence_strength": "strong",
+    "risk": "low",
+    "sensitivity": "source_code",
+    "allowed_strengths": ["max", "ultra"],
+    "pack_id": "deepagent.dac-manual"
   }
 ]

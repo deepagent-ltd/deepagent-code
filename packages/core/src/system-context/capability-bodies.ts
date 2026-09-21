@@ -24,7 +24,7 @@ import { capabilityCatalog } from "./capability-catalog"
 // The bodies live in a NEW module (the frozen catalog is not edited): this is the
 // body store a runtime bundle supplies. Each body is hash-verifiable — `body_hash` is
 // the sha256:<hex> content digest of `body`, so the K2 kernel's fail-closed binding
-// (declared digest must equal the actual body digest) holds. The 15 bodies whose id/
+// (declared digest must equal the actual body digest) holds. The 17 bodies whose id/
 // version match the catalog are the discoverable ones; the 2 additional bodies
 // (workspace-search, evidence-report) are product capabilities within the tool
 // inventory whose manifests belong to a future catalog successor. A capability
@@ -66,7 +66,7 @@ function bodyEntry(raw: BodyInput): CapabilityBodyEntry {
 
 /**
  * The capability bodies. Deterministic and hash-bound: re-deriving the digest from
- * `body` yields the exact `body_hash`. The 15 catalog bodies match the catalog
+ * `body` yields the exact `body_hash`. The 17 catalog bodies match the catalog
  * manifest's id/version; the 2 `deepagent.*` bodies below (workspace-search,
  * evidence-report) are within the tool inventory (a manifest for them belongs to a
  * future catalog successor).
@@ -329,6 +329,38 @@ export const capabilityBodies: ReadonlyArray<CapabilityBodyEntry> = [
     ].join("\n"),
   }),
   bodyEntry({
+    id: "deepagent.knowledge-propose",
+    version: "1.0.0-beta.0",
+    summary: "Propose a durable memory or knowledge entry into the human review queue",
+    use_when: ["the user says remember this", "a durable cross-session fact emerges"],
+    availability: "stable",
+    required_permissions: ["knowledge_propose"],
+    required_runtime_features: [],
+    entry_tools: ["knowledge_propose"],
+    body: [
+      "Stage a durable fact into the human review queue. The entry is a review candidate only: invisible to knowledge retrieval until a human approves it, and a near-duplicate of an existing entry merges into that entry instead of creating a new one.",
+      "When to use: the user says 'remember this', or a fact emerges that outlives this session — a project convention, an environment fact, a durable preference. Never for task-local scratch; that belongs in the conversation or a file.",
+      "Entry point: knowledge_propose (type memory|knowledge, description, body, optional domain, tags, scope). Scope defaults to project (this workspace's store); pass global only for facts that apply to every project.",
+      "Risks: content matching a credential or secret pattern is rejected outright — restate the fact without the sensitive value. A session stages at most 10 proposals, so propose only what genuinely matters. Staging is a queue write, not retrieval access: approval is a human decision the tool cannot make.",
+    ].join("\n"),
+  }),
+  bodyEntry({
+    id: "deepagent.im-send",
+    version: "1.0.0-beta.0",
+    summary: "Send a message to the user's IM group; asks the user first, rate-limited and scrubbed",
+    use_when: ["post an update to the IM group", "deliver a long-running result to IM"],
+    availability: "stable",
+    required_permissions: ["im_send"],
+    required_runtime_features: [],
+    entry_tools: ["im_send"],
+    body: [
+      "Deliver a message to one of the user's IM groups through the push policy gate: the user approves each send (default ask), then authorization, a 20-per-hour per-group rate limit, and secret/link/out-of-workspace-path scrubbing run before the message lands. During workspace quiet hours a normal message is held for the digest instead.",
+      "When to use: the user asked you to post to the group, or a long-running result they wanted delivered there is ready. An IM-originated session sends to its bound group by default; any other session must pass group_id explicitly and fails with an explanation when it omits it.",
+      "Entry point: im_send (text, optional group_id). The session's agent sends as itself when it is a group member; otherwise the runtime's system-pusher identity delivers under its workspace push permission.",
+      "Risks: a blocked outcome is the gate working — rate_limited means wait or report in-conversation, not retry. Never use im_send to mass-message, to reach anyone outside an existing group, or to move workspace content out; the scrub strips secrets and foreign paths, and every attempt writes an audit row. The send is mutating, not read-only — it grants no further capability.",
+    ].join("\n"),
+  }),
+  bodyEntry({
     id: "deepagent.context-survival",
     version: "1.0.0-beta.0",
     summary: "Compaction summaries, budget warnings, and revert/rollback notices change what you may trust",
@@ -373,7 +405,7 @@ export const bodyMetrics = (entry: CapabilityBodyEntry): { readonly tokenCount: 
  * inventory, and the body must stay inside the frozen L2 single-body budget. This
  * is the design §7.6 "no permission expansion" gate: a body whose own declared
  * permissions would exceed its manifest's is a violation, and a body over budget is
- * rejected — it never loads. The 15 bodies matching the catalog are cross-checked
+ * rejected — it never loads. The 17 bodies matching the catalog are cross-checked
  * against the catalog manifest so a body cannot silently claim more permission.
  */
 export function assertCapabilityBodiesCoherent(inventory: CapabilityInventory = DeepAgentCodeToolInventory): ReadonlyArray<string> {

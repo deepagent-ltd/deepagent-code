@@ -37,10 +37,10 @@ const load = (requests: Parameters<typeof sessionCapabilityLoad>[1][]) =>
     }).pipe(Effect.provide(Database.layerFromPath(":memory:"))),
   )
 
-describe("capability bodies = 17 (15 catalog + 2 future-successor)", () => {
-  test("authors exactly 17 concrete bodies", () => {
-    expect(capabilityBodies).toHaveLength(17)
-    expect(new Set(capabilityBodies.map((entry) => entry.id)).size).toBe(17)
+describe("capability bodies = 19 (17 catalog + 2 future-successor)", () => {
+  test("authors exactly 19 concrete bodies", () => {
+    expect(capabilityBodies).toHaveLength(19)
+    expect(new Set(capabilityBodies.map((entry) => entry.id)).size).toBe(19)
   })
 
   test("every body uses the capability://<id>@<version> scheme", () => {
