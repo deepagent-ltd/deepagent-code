@@ -7,7 +7,6 @@ import path from "path"
 import { Script } from "@deepagent-code/script"
 import { createSolidTransformPlugin } from "@opentui/solid/bun-plugin"
 import pkg from "../package.json"
-import { modelsData } from "./generate"
 
 const dir = path.resolve(import.meta.dirname, "..")
 const binary = "lildax"
@@ -89,7 +88,6 @@ for (const item of targets) {
     define: {
       DEEPAGENT_CODE_VERSION: `'${Script.version}'`,
       DEEPAGENT_CODE_CLI_NAME: `'${binary}'`,
-      DEEPAGENT_CODE_MODELS_DEV: modelsData,
       DEEPAGENT_CODE_CHANNEL: `'${Script.channel}'`,
       DEEPAGENT_CODE_LIBC: item.os === "linux" ? `'${item.abi ?? "glibc"}'` : "undefined",
       OTUI_TREE_SITTER_WORKER_PATH:

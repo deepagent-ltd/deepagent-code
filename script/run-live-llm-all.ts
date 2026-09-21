@@ -515,7 +515,7 @@ export function runnerEnvironment(
         "PATHEXT",
       ].flatMap((key) => (hostEnvironment[key] === undefined ? [] : ([[key, hostEnvironment[key]]] as const))),
     ),
-    MODELS_DEV_API_JSON: hostEnvironment.MODELS_DEV_API_JSON ?? defaultModelsSnapshotFile,
+    DEEPAGENT_CODE_MODELS_PATH: hostEnvironment.DEEPAGENT_CODE_MODELS_PATH ?? defaultModelsSnapshotFile,
     ...(includeCredential
       ? {
           DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE: config.apiKeyFile,

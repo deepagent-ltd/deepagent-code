@@ -18,11 +18,13 @@ export const CORE_V2_EXECUTION_OWNER_ENV = "DEEPAGENT_CODE_CORE_V2_EXECUTION_OWN
 export const V2_OWNER_CAMPAIGN_ENV = "DEEPAGENT_CODE_V2_OWNER_CAMPAIGN"
 export const V2_BUILD_IDENTITY_ENV = "DEEPAGENT_CODE_V2_BUILD_IDENTITY"
 export const CONTEXT_FEDERATION_PRODUCTION_ENV = "DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION"
-/** Self-hosted models.dev-compatible catalog (updated every 6h). An explicit value — including
- * "https://models.dev" — always survives; offline installs fall back to the vendored snapshot
- * because ModelsDev merges fetched data OVER the vendored catalog (never replaces it). */
+/** Ordered models.dev catalog fetch chain: the self-hosted aly mirror (hourly-synced from
+ * models.dev, reachable from CN networks), then models.dev itself. Comma-separated; entries may
+ * be base URLs or full /api.json URLs. An explicit value always survives. There is no build-time
+ * snapshot fallback — offline first runs serve the vendored deepagent catalog until the hourly
+ * refresh heals the disk cache. */
 export const MODELS_URL_ENV = "DEEPAGENT_CODE_MODELS_URL"
-export const DEFAULT_MODELS_URL = "https://ai.deepagent.ltd/api.json"
+export const DEFAULT_MODELS_URL = "https://ai.deepagent.ltd,https://models.dev"
 /** Test-only affordance used by the two entries to print their canonical defaults vector and exit
  * without starting the CLI/server (W0.1 automated-verification case 4). */
 export const RUNTIME_DEFAULTS_SNAPSHOT_ENV = "DEEPAGENT_CODE_RUNTIME_DEFAULTS_SNAPSHOT"

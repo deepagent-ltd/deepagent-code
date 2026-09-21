@@ -35,8 +35,6 @@ function releaseOwnerPublicKeyDefine(): Record<string, string> {
   return { DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY: JSON.stringify(pem) }
 }
 
-const generated = await import("./generate.ts")
-
 import { Script } from "@deepagent-code/script"
 import pkg from "../package.json"
 
@@ -224,7 +222,6 @@ for (const item of targets) {
       // (dev/local builds) the runtime resolves the empty pin and dev builds self-bootstrap
       // through V2OwnerDevMint.
       ...(releaseOwnerPublicKeyDefine() as Record<string, string>),
-      DEEPAGENT_CODE_MODELS_DEV: generated.modelsData,
       OTUI_TREE_SITTER_WORKER_PATH: bunfsRoot + workerRelativePath,
       DEEPAGENT_CODE_WORKER_PATH: workerPath,
       DEEPAGENT_CODE_CHANNEL: `'${Script.channel}'`,
@@ -273,10 +270,6 @@ for (const item of targets) {
           ...(sourceCommit ? { sourceCommit } : {}),
           ...(sourceDirty !== undefined ? { sourceDirty } : {}),
           binarySha256,
-          modelsDev: {
-            source: generated.modelsSource,
-            sha256: generated.modelsSha256,
-          },
         },
       },
       null,
