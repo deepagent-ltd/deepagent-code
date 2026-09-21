@@ -1,7 +1,7 @@
 /**
  * SidePanelDebug — V3.7 Phase 4.3/4.5 DAP 调试可视化面板
  *
- * 挂载到右侧工作面板 "debug" 模式。状态来自共享 DebugContext（Phase 4.5）：
+ * 挂载到右侧工作面板 "dev" 模式的 Debug 标签页（WS1 三合一）。状态来自共享 DebugContext（Phase 4.5）：
  *   - 无会话时显示"启动调试"表单（P1-3）
  *   - 有会话时：SessionBar → ControlBar → StackView → VariableTree → WatchInput
  *

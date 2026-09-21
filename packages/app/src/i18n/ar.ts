@@ -915,6 +915,8 @@ export const dict = {
   "settings.about.attribution.title": "مبني على deepagent-code",
   "settings.about.attribution.description": "تم بناء DeepAgent Code على deepagent-code المستخدم بموجب ترخيص MIT.",
   "settings.about.license.title": "الترخيص",
+  "settings.about.help.title": "مساعدة",
+  "settings.about.help.description": "الوثائق والأدلة والدعم.",
   "settings.general.section.advanced": "متقدم",
   "settings.general.section.deepagent": "DeepAgent",
   "settings.general.deepagent.mode.title": "الوكيل",

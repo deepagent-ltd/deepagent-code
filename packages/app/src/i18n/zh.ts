@@ -587,6 +587,10 @@ export const dict = {
   "session.turn.tokens.spend": "本轮消耗",
   "session.turn.tokens.total": "总计（含缓存）",
 
+  "knowledge.title": "知识",
+  "knowledge.tab.review": "审核",
+  "knowledge.tab.wiki": "Wiki",
+
   "language.en": "English",
   "language.zh": "简体中文",
   "language.zht": "繁體中文",
@@ -758,6 +762,7 @@ export const dict = {
   "session.panel.oversight": "监督",
   "session.panel.debug": "调试",
   "session.panel.profile": "性能剖析",
+  "session.panel.dev": "开发",
   "session.panel.terminal": "终端",
   "session.panel.debugConsole": "调试控制台",
   "session.panel.problems": "问题",
@@ -1479,6 +1484,8 @@ export const dict = {
   "settings.about.attribution.description":
     "DeepAgent Code 基于 MIT 许可的上游项目派生，并以 AGPL-3.0-or-later 发布。详见 NOTICE。",
   "settings.about.license.title": "许可证",
+  "settings.about.help.title": "帮助",
+  "settings.about.help.description": "文档、指南与支持。",
   "settings.general.section.advanced": "高级",
   "settings.general.row.shell.title": "终端 Shell",
   "settings.general.row.shell.description": "选择终端使用的 shell。兼容的 shell 也会用于智能体工具调用。",
@@ -1596,6 +1603,8 @@ export const dict = {
   "session.context.provenance": "来源",
   "session.context.relations": "关联",
   "session.stats.title": "用量与成本",
+  "session.stats.currentSession": "当前会话",
+  "session.stats.allSessions": "全部会话",
   "session.stats.overview": "概览",
   "session.stats.sessions": "会话数",
   "session.stats.days": "天数",

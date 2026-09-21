@@ -1008,6 +1008,8 @@ export const dict = {
   "settings.about.attribution.title": "Создано на базе deepagent-code",
   "settings.about.attribution.description": "DeepAgent Code создан на базе deepagent-code, используемого по лицензии MIT.",
   "settings.about.license.title": "Лицензия",
+  "settings.about.help.title": "Справка",
+  "settings.about.help.description": "Документация, руководства и поддержка.",
   "settings.general.section.advanced": "Дополнительно",
   "settings.general.section.deepagent": "DeepAgent",
   "settings.general.deepagent.mode.title": "Агент",

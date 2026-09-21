@@ -999,6 +999,8 @@ export const dict = {
   "settings.about.attribution.title": "Bygget på deepagent-code",
   "settings.about.attribution.description": "DeepAgent Code er bygget på deepagent-code, brugt under MIT-licensen.",
   "settings.about.license.title": "Licens",
+  "settings.about.help.title": "Hjælp",
+  "settings.about.help.description": "Dokumentation, guider og support.",
   "settings.general.section.advanced": "Avanceret",
   "settings.general.section.deepagent": "DeepAgent",
   "settings.general.deepagent.mode.title": "Agent",

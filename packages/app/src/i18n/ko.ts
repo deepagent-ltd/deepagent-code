@@ -918,6 +918,8 @@ export const dict = {
   "settings.about.attribution.title": "deepagent-code 기반",
   "settings.about.attribution.description": "DeepAgent Code는 MIT 라이선스에 따라 deepagent-code를 기반으로 구축되었습니다.",
   "settings.about.license.title": "라이선스",
+  "settings.about.help.title": "도움말",
+  "settings.about.help.description": "문서, 가이드 및 지원.",
   "settings.general.section.advanced": "고급",
   "settings.general.section.deepagent": "DeepAgent",
   "settings.general.deepagent.mode.title": "에이전트",

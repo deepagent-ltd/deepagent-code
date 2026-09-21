@@ -1,23 +1,19 @@
 // PARITY-001: GUI cross-session cost/token overview.
 //
 // The CLI `stats` command aggregates the whole database in-process; the GUI only had per-session
-// context diagnostics (side-panel-context.tsx). This panel aggregates the sessions already synced
+// context diagnostics (side-panel-context.tsx). This view aggregates the sessions already synced
 // into the directory store (sync.data.session — the same list the session drawer renders) into a
 // per-session cost/token/model overview. Zero new API endpoints: the SDK Session type carries
 // `cost`, `tokens` and `model` rollups.
-import { Icon } from "@deepagent-code/ui/icon"
-import { IconButton } from "@deepagent-code/ui/icon-button"
+//
+// WS1: no longer a right-rail panel of its own — hosted as the "全部会话/All sessions" tab of the
+// SessionContextUsage dialog (components/session-context-usage.tsx).
 import { For, Show, createMemo, type Component, type JSX } from "solid-js"
 import { useLanguage } from "@/context/language"
 import { useSync } from "@/context/sync"
-import {
-  aggregateSessionStats,
-  formatCost,
-  formatTokenCount,
-  sortModelUsage,
-} from "@/utils/session-stats"
+import { aggregateSessionStats, formatCost, formatTokenCount, sortModelUsage } from "@/utils/session-stats"
 
-export const SidePanelStats: Component<{ onClose: () => void }> = (props) => {
+export const SessionStatsContent: Component = () => {
   const sync = useSync()
   const language = useLanguage()
 
@@ -42,20 +38,6 @@ export const SidePanelStats: Component<{ onClose: () => void }> = (props) => {
 
   return (
     <section class="size-full min-w-0 flex flex-col overflow-hidden bg-background-base" data-testid="side-panel-stats">
-      <header class="h-10 shrink-0 px-2 flex items-center gap-2 border-b border-border-weaker-base">
-        <Icon name="dollar" size="small" class="text-icon-base" />
-        <div class="min-w-0 flex-1 text-13-medium text-text-strong truncate">
-          {language.t("session.stats.title")}
-        </div>
-        <IconButton
-          icon="close-small"
-          variant="ghost"
-          class="h-7 w-7 rounded-md"
-          onClick={props.onClose}
-          aria-label={language.t("common.close")}
-        />
-      </header>
-
       <div class="flex-1 min-h-0 overflow-y-auto">
         <Show
           when={stats().totalSessions > 0}

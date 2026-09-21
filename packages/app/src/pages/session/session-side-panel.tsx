@@ -23,7 +23,6 @@ import { useTerminalHosts } from "@/context/terminal"
 import { usePlatform } from "@/context/platform"
 
 import FileTree from "@/components/file-tree"
-import { SidePanelPlugins } from "@/pages/session/side-panel-plugins"
 import { useCommand } from "@/context/command"
 import { useDebug } from "@/context/debug"
 import { useFile, type SelectedLineRange } from "@/context/file"
@@ -38,11 +37,8 @@ import { SidePanelSubagents } from "@/pages/session/side-panel-subagents"
 import { isSubagentInterrupted } from "@/pages/session/subagent-state"
 import { SidePanelBrowser } from "@/pages/session/side-panel-browser"
 import { SidePanelWorktree } from "@/pages/session/side-panel-worktree"
-import { SidePanelDebug } from "@/pages/session/side-panel-debug"
-import { SidePanelProfile } from "@/pages/session/side-panel-profile"
+import { SidePanelDev } from "@/pages/session/side-panel-dev"
 import { SidePanelIM } from "@/pages/session/side-panel-im"
-import { SidePanelContext } from "@/pages/session/side-panel-context"
-import { SidePanelStats } from "@/pages/session/side-panel-stats"
 import { SidePanelDockHeader, SidePanelTerminal, SidePanelDebugConsole } from "@/pages/session/side-panel-terminal"
 import { ProblemsPanel } from "@/pages/session/problems-panel"
 import { PanelErrorBoundary } from "@/pages/session/panel-error-boundary"
@@ -56,15 +52,11 @@ type RenderDiff = (SnapshotFileDiff & { file: string }) | VcsFileDiff
 type PanelMode =
   | "review"
   | "files"
-  | "context"
   | "subagents"
   | "im"
   | "browser"
   | "worktree"
-  | "plugins"
-  | "debug"
-  | "profile"
-  | "stats"
+  | "dev"
   | "terminal"
   | "debug-console"
   | "problems"
@@ -105,19 +97,15 @@ const PANELS: readonly PanelDef[] = [
     bucket: "wide",
     keybind: "fileTree.toggle",
   },
-  { mode: "context", icon: "shield", titleKey: "session.context.title", group: "code", bucket: "narrow" },
   // Agents — subagents is now the unified "子Agent监督" entry (Phase 2: oversight merged in).
   { mode: "subagents", icon: "agent-tree", titleKey: "session.subagents.title", group: "agents", bucket: "narrow" },
   { mode: "im", icon: "bubble-5", titleKey: "session.tab.im", group: "agents", bucket: "narrow" },
-  // Env
+  // Env — browser is registered on the desktop build only (see `panels()` below).
   { mode: "browser", icon: "window-cursor", titleKey: "browser.title", group: "env", bucket: "narrow" },
   { mode: "worktree", icon: "branch", titleKey: "worktree.title", group: "env", bucket: "narrow" },
-  // Dev
-  { mode: "plugins", icon: "plugin", titleKey: "status.popover.tab.plugins", group: "dev", bucket: "narrow" },
-  { mode: "debug", icon: "debug", titleKey: "session.panel.debug", group: "dev", bucket: "narrow" },
-  { mode: "profile", icon: "profile", titleKey: "session.panel.profile", group: "dev", bucket: "narrow" },
-  // PARITY-001: cross-session cost/token overview aggregated from the synced session store.
-  { mode: "stats", icon: "dollar", titleKey: "session.stats.title", group: "dev", bucket: "narrow" },
+  // Dev — WS1: debug + profiler + context-evidence merged into one tabbed panel. Plugins moved
+  // to a Settings tab; Usage & cost moved into the SessionContextUsage dialog.
+  { mode: "dev", icon: "debug", titleKey: "session.panel.dev", group: "dev", bucket: "narrow" },
   // Dock — the movable panels; only surface here when docked to the side (see gating below).
   {
     mode: "terminal",
@@ -174,6 +162,10 @@ export function SessionSidePanel(props: {
 
   const isDesktop = createMediaQuery("(min-width: 768px)")
 
+  // WS1: the browser rail entry is registered on the desktop build only — its content is an
+  // Electron WebContentsView bridge (platform.browser), so on web there is nothing to show.
+  const panels = createMemo(() => PANELS.filter((p) => p.mode !== "browser" || platform.platform === "desktop"))
+
   // Subagents = child sessions (parentID === current). Surface a live count on the sidebar icon so
   // the user sees a spawn happened without opening the panel.
   // Phase 2 (§3.5): badge covers running + interrupted so the user notices any subagent that needs
@@ -194,13 +186,13 @@ export function SessionSidePanel(props: {
   const activeMode = createMemo<PanelMode | undefined>(() => {
     if (!isDesktop()) return undefined
     const mode = view().rightPanel.mode()
-    return mode && PANELS.some((p) => p.mode === mode) ? (mode as PanelMode) : undefined
+    return mode && panels().some((p) => p.mode === mode) ? (mode as PanelMode) : undefined
   })
   const isActive = (mode: PanelMode) => activeMode() === mode
   const open = createMemo(() => activeMode() !== undefined)
   // Per-panel remembered width (T3.3): the wide bucket for diff/files, the narrow bucket for the rest.
   const activeBucket = createMemo<RightPanelWidthBucket>(
-    () => PANELS.find((p) => p.mode === activeMode())?.bucket ?? "wide",
+    () => panels().find((p) => p.mode === activeMode())?.bucket ?? "wide",
   )
   const contentWidth = createMemo(() => layout.rightPanel.width(activeBucket()))
   const panelWidth = createMemo(() => (open() ? `${contentWidth()}px` : "0px"))
@@ -399,7 +391,7 @@ export function SessionSidePanel(props: {
     return undefined
   }
   const railItems = createMemo(() =>
-    PANELS
+    panels()
       // Phase 3: terminal is side-native — always show in the rail.
       // Other movable dock panels (debug-console, problems) only appear when docked to the side.
       .filter((p) =>
@@ -673,26 +665,14 @@ export function SessionSidePanel(props: {
                     )}
                   />
                 </Match>
-                <Match when={isActive("context")}>
-                  <SidePanelContext onClose={closePanel} />
-                </Match>
                 <Match when={isActive("browser")}>
                   <SidePanelBrowser onClose={closePanel} />
                 </Match>
                 <Match when={isActive("worktree")}>
                   <SidePanelWorktree onClose={closePanel} />
                 </Match>
-                <Match when={isActive("plugins")}>
-                  <SidePanelPlugins onClose={closePanel} />
-                </Match>
-                <Match when={isActive("debug")}>
-                  <SidePanelDebug onClose={closePanel} onNavigate={openFileAt} />
-                </Match>
-                <Match when={isActive("profile")}>
-                  <SidePanelProfile onClose={closePanel} />
-                </Match>
-                <Match when={isActive("stats")}>
-                  <SidePanelStats onClose={closePanel} />
+                <Match when={isActive("dev")}>
+                  <SidePanelDev onClose={closePanel} onNavigate={openFileAt} />
                 </Match>
                 <Match when={isActive("im")}>
                   <SidePanelIM onClose={closePanel} />

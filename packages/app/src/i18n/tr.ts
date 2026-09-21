@@ -1019,6 +1019,8 @@ export const dict = {
   "settings.about.attribution.description":
     "DeepAgent Code, MIT Lisansı altında kullanılan deepagent-code üzerine kuruludur.",
   "settings.about.license.title": "Lisans",
+  "settings.about.help.title": "Yardım",
+  "settings.about.help.description": "Belgeler, kılavuzlar ve destek.",
   "settings.general.section.advanced": "Gelişmiş",
   "settings.general.section.deepagent": "DeepAgent",
   "settings.general.deepagent.mode.title": "Ajan",

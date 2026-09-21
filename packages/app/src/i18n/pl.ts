@@ -928,6 +928,8 @@ export const dict = {
   "settings.about.attribution.title": "Zbudowane na deepagent-code",
   "settings.about.attribution.description": "DeepAgent Code jest zbudowany na deepagent-code, używanym na licencji MIT.",
   "settings.about.license.title": "Licencja",
+  "settings.about.help.title": "Pomoc",
+  "settings.about.help.description": "Dokumentacja, przewodniki i wsparcie.",
   "settings.general.section.advanced": "Zaawansowane",
   "settings.general.section.deepagent": "DeepAgent",
   "settings.general.deepagent.mode.title": "Agent",
