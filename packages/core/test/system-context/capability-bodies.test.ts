@@ -37,10 +37,10 @@ const load = (requests: Parameters<typeof sessionCapabilityLoad>[1][]) =>
     }).pipe(Effect.provide(Database.layerFromPath(":memory:"))),
   )
 
-describe("first batch = 10 capability bodies", () => {
-  test("authors exactly 10 concrete bodies", () => {
-    expect(capabilityBodies).toHaveLength(10)
-    expect(new Set(capabilityBodies.map((entry) => entry.id)).size).toBe(10)
+describe("capability bodies = 17 (15 catalog + 2 future-successor)", () => {
+  test("authors exactly 17 concrete bodies", () => {
+    expect(capabilityBodies).toHaveLength(17)
+    expect(new Set(capabilityBodies.map((entry) => entry.id)).size).toBe(17)
   })
 
   test("every body uses the capability://<id>@<version> scheme", () => {
@@ -127,7 +127,7 @@ describe("no permission expansion (design §7.6)", () => {
     }
   })
 
-  test("the 6 catalog bodies share the frozen manifest's id/version", () => {
+  test("every catalog capability has a body sharing the manifest's id/version", () => {
     const frozenIds = new Set(capabilityCatalog.map((manifest) => manifest.id))
     const matching = capabilityBodies.filter((entry) => frozenIds.has(entry.id))
     expect(matching).toHaveLength(capabilityCatalog.length)

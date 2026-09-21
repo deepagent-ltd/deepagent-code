@@ -180,4 +180,32 @@ describe("pack_search + domain_pack_load over the real seeded corpus", () => {
         expect(loaded.token_count).toBeLessThanOrEqual(620)
       }),
     ))
+
+  test("the dac-manual system manual pack is seeded, searchable, and loadable", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        // P2-c (V2.0.1-001 §4.4): the deepagent.dac-manual pack ships with the built-in corpus, so
+        // the same boot seed must surface it through pack_search (pack-filtered) and disclose a
+        // body through domain_pack_load within the ~600-token bound.
+        const baseDir = tmpRoot()
+        const report = seedCoreKnowledgeAt(baseDir)
+        expect(report.byPack["deepagent.dac-manual"] ?? 0).toBeGreaterThan(0)
+        const store = openUserGlobalStore(baseDir)
+        const searchTool = makePackSearchTool({ store: () => store })
+        const loadTool = makeDomainPackLoadTool({ store: () => store })
+        const found = structured(
+          yield* search(searchTool, { query: "worktree subagent", pack: "deepagent.dac-manual" }, "call-manual-search"),
+        )
+        expect(found.count).toBeGreaterThan(0)
+        for (const entry of found.entries) expect(entry.pack).toBe("deepagent.dac-manual")
+        const entry = found.entries.find((candidate) => candidate.name.includes("worktree-merge-loop"))
+        expect(entry).toBeDefined()
+        const loaded = loadStructured(yield* settleLoad(loadTool, entry!.ref, "call-manual-load"))
+        expect(loaded.state).toBe("loaded")
+        expect(loaded.pack).toBe("deepagent.dac-manual")
+        expect(loaded.body).toContain("pr_finalize")
+        expect(loaded.truncated).toBe(false)
+        expect(loaded.token_count).toBeLessThanOrEqual(620)
+      }),
+    ))
 })

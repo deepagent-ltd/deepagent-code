@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:dac-manual:delegate-with-task",
+  "type": "methodology",
+  "title": "Delegate self-contained work with the task tool",
+  "description": "Delegate an independent, self-contained chunk of work to a specialist subagent with the task tool instead of doing everything inline.",
+  "body": "The task tool launches a subagent session that works autonomously and returns one final message. Use when a chunk of work is independent and self-contained: parallel codebase exploration, an isolated feature edit, an adversarial review, or evidence-backed research. Do not use it to read a specific file, to grep one definition, or for work of 2-3 known files — direct tools are faster; and do not duplicate delegated work yourself while it runs.\n\nHow to invoke: call task with description (3-5 words), prompt (a highly detailed autonomous brief: what to do, what to verify, and exactly what to return in its final message), and subagent_type. Pass file_scope when the task will touch files, and output_schema when you need a strict JSON verdict (reviewer and researcher receive their named default automatically). Launch several independent tasks in one message to run them concurrently.\n\nInput/output: the result carries task_id (the child session id — reuse it to resume), the final text, and for write-type agents a run block with the worktree branch. A fresh invocation starts with fresh context; only a task_id resume continues prior turns.\n\nCaveats: hard guardrails — at most 8 new subagents per assistant message, 4 concurrent per session, delegation depth 3, 30-minute timeout. Validation signal: the returned text answers the brief you wrote; inspect it before merging anything. Risk boundary: the result is not visible to the user — summarize it back yourself, and never forward claims you have not verified.",
+  "domain": "orchestration",
+  "scope_hint": "deepagent.dac-manual:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:deepagent.dac-manual",
+  "pack_id": "deepagent.dac-manual"
+}

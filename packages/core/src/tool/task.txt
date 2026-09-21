@@ -1,18 +1,45 @@
-Launch a new agent to handle complex, multistep tasks autonomously.
+Launch a subagent to handle an independent, self-contained chunk of work autonomously.
 
-When using the Task tool, you must specify a subagent_type parameter to select which agent type to use.
+When to delegate:
+- The chunk is self-contained and you can write a complete brief for it: parallel codebase exploration, an isolated feature edit, evidence-backed research, an adversarial review.
+- Launch several independent tasks in one message so they run concurrently.
 
-When NOT to use the Task tool:
-- If you want to read a specific file path, use the Read or Glob tool instead of the Task tool, to find the match more quickly
-- If you are searching for a specific class definition like "class Foo", use the Grep tool instead of the Task tool, to find the match more quickly
-- If you are searching for code within a specific file or set of 2-3 files, use the Read tool instead of the Task tool, to find the match more quickly
-- If no available agent is a good fit for the task, use other tools directly
+When NOT to delegate:
+- Reading a specific file — use read; finding one definition — use grep; work confined to 2-3 known files — do it directly.
+- No available agent type fits the work — use other tools yourself.
+- Never duplicate delegated work yourself while it runs; continue with non-overlapping work or wait for the result.
 
-Usage notes:
-1. Launch multiple agents concurrently whenever possible, to maximize performance; to do that, use a single message with multiple tool uses
-2. Once you have delegated work to an agent, do not duplicate that work yourself. Continue with non-overlapping tasks, or wait for the result.
-3. When the agent is done, it will return a single message back to you. The result returned by the agent is not visible to the user. To show the user the result, you should send a text message back to the user with a concise summary of the result. The output includes a task_id you can reuse later to continue the same subagent session.
-4. Each agent invocation starts with a fresh context unless you provide task_id to resume the same subagent session (which continues with its previous messages and tool outputs). When starting fresh, your prompt should contain a highly detailed task description for the agent to perform autonomously and you should specify exactly what information the agent should return back to you in its final and only message to you.
-5. Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, web fetches, etc.), since it is not aware of the user's intent. Tell it how to verify its work if possible (e.g. relevant test commands).
-6. Agents have their own permission rulesets: read-only agents (explore, researcher, reviewer) cannot edit files; working agents (general) can.
-7. When an output_schema is provided, the agent's final answer is returned as strict JSON validated against that schema; otherwise the raw final text is returned.
+You must specify subagent_type. The roster:
+- general (write-capable): multi-step tasks and complex questions; runs in an isolated worktree.
+- explore (read-only): fast file/codebase search and questions; state the thoroughness — quick, medium, or very thorough.
+- researcher (read-only): evidence-backed research into one subsystem, with code_intel and context_query access; defaults to the ResearchResult schema.
+- reviewer (read-only): adversarial review of a plan or diff — hunts correctness bugs, security issues, edge cases, convention conflicts, missing tests; defaults to the ReviewResult schema; cannot delegate.
+- senior-reviewer (write-capable): stage-level reviewer; may apply ordinary file fixes; returns a commit-bound verdict; cannot delegate or merge.
+Read-only agents share your workspace and cannot edit. Write-capable agents get their own worktree.
+
+Worktree semantics:
+- A write-capable subagent's changes live ONLY on its deepagent-code/task-* branch, never in your workspace.
+- Do not assume its edits are in your checkout, and do not redo them locally.
+- When the task finishes, inspect with task_read, then integrate with pr_finalize (review + merge; a changes-requested verdict keeps the branch for another round).
+
+Parameters:
+- description: 3-5 words, user-visible.
+- prompt: a highly detailed autonomous brief — what to do, how to verify, and exactly what to return in the final message. A fresh start has no memory of prior turns.
+- file_scope (optional): globs/directory prefixes the task expects to touch. Declare disjoint scopes for concurrent write-type tasks. A "Scope overlaps with active task ..." warning is non-blocking: two active sibling write tasks claimed intersecting scopes — sequence them, re-scope, or confirm the overlap is intentional. Real conflicts surface at pr_finalize merge time.
+- output_schema (optional): the final answer is validated strict JSON (reviewer/researcher get their named default). A schema that never validates fails the call; the raw turns stay in the child session.
+- task_id (optional): resume a prior subagent session — it must be a direct child of THIS session with the same agent type. Omit for a fresh start.
+
+Guardrails (hard limits):
+- At most 8 new subagents per assistant message — split larger rounds across messages.
+- At most 4 subagents running concurrently per session.
+- Delegation depth 3; 30-minute timeout per run.
+
+Timeout and failure:
+- A timed-out task is NOT lost: its worktree and branch are retained, and the result says so.
+- Resume with the same task_id and a follow-up prompt, or abandon with task_close.
+- If task_status shows recovery_required, the old run cannot continue: call task_recovery (resolution "failed" or "closed" plus the user's reason — it asks the user for approval), then start a new run with the same task_id.
+
+Results:
+- The returned text is capped at the last 8000 characters; on truncation the notice carries a task_read pointer — call task_read(task_id) for the full transcript and durable result instead of re-running the task.
+- The result is not visible to the user: send a concise summary back yourself.
+- Every result includes a task_id you can reuse to continue the same subagent session.

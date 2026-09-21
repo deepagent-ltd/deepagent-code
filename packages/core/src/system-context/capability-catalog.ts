@@ -19,14 +19,16 @@ import { Layer, Effect } from "effect"
 import { makeLocationNode } from "../effect/app-node"
 
 // C4-01 first batch of capability IDs (design §7.1-7.2) + C4-02 L0 catalog
-// (design §7.3). The first batch is the machine-readable inventory the model uses
-// to discover DeepAgentCode features. Bodies (procedure guidance) are authored by
-// the C4-09 body lane: a first-batch manifest carries `body_ref` and, once a body
-// is written, a `body_hash`. Until then the capability is discoverable at L0/L1
-// but is not body-loadable.
+// (design §7.3), expanded by the V2.0.1-001 system-manual wave (§4.3): the P2 tool
+// surface (task family, pr_finalize, pack_search/domain_pack_load, plan, question)
+// joins the catalog, plus two concept-shaped rows (permission-denial,
+// context-survival) that carry behavioral guidance instead of an entry tool.
+// Bodies (procedure guidance) are authored per manifest: a manifest carries
+// `body_ref` and, once a body is written, a `body_hash`. Until then the capability
+// is discoverable at L0/L1 but is not body-loadable.
 
 /**
- * The first batch of DeepAgentCode capabilities. Each maps to shipped entry tools
+ * The shipped DeepAgentCode capabilities. Each maps to shipped entry tools
  * and permission actions (validated by `assertCapabilityCatalogConsistent` against
  * the product tool inventory), and consumes the frozen capability-load budget for
  * its body ceiling. README is not authority — this catalog is.
@@ -103,6 +105,114 @@ export const capabilityCatalog: ReadonlyArray<CapabilityManifest> = sortManifest
       required_runtime_features: [],
       entry_tools: ["skill"],
       body_ref: "capability://deepagent.skill-guidance@1.0.0-beta.0",
+      max_body_tokens: CapabilityBudget.l2SingleMaxTokens,
+    },
+    {
+      id: "deepagent.question-clarify",
+      version: "1.0.0-beta.0",
+      summary: "Ask the user a concise clarifying question when the task is ambiguous",
+      use_when: ["ambiguous request", "missing decision"],
+      availability: "stable",
+      required_permissions: ["question"],
+      required_runtime_features: [],
+      entry_tools: ["question"],
+      body_ref: "capability://deepagent.question-clarify@1.0.0-beta.0",
+      max_body_tokens: CapabilityBudget.l2SingleMaxTokens,
+    },
+    {
+      id: "deepagent.code-intel",
+      version: "1.0.0-beta.0",
+      summary: "Structural code queries (callers, dependencies, symbols) over the code graph",
+      use_when: ["who calls X", "what depends on Y", "before cross-file edits"],
+      availability: "stable",
+      required_permissions: ["code_intel", "read", "glob", "grep"],
+      required_runtime_features: ["context_query_tools_v2"],
+      entry_tools: ["code_intel"],
+      body_ref: "capability://deepagent.code-intel@1.0.0-beta.0",
+      max_body_tokens: CapabilityBudget.l2SingleMaxTokens,
+    },
+    {
+      id: "deepagent.plan-mode",
+      version: "1.0.0-beta.0",
+      summary: "Maintain the session's compare-and-swap work plan",
+      use_when: ["non-trivial multi-step work", "tracking step progress", "replanning after drift"],
+      availability: "stable",
+      required_permissions: ["plan"],
+      required_runtime_features: [],
+      entry_tools: ["plan"],
+      body_ref: "capability://deepagent.plan-mode@1.0.0-beta.0",
+      max_body_tokens: CapabilityBudget.l2SingleMaxTokens,
+    },
+    {
+      id: "deepagent.task-orchestration",
+      version: "1.0.0-beta.0",
+      summary: "Delegate a self-contained subtask to a specialist subagent (general, explore, researcher, reviewer, senior-reviewer)",
+      use_when: ["independent chunk of work", "parallel exploration", "adversarial review"],
+      availability: "stable",
+      required_permissions: ["task"],
+      required_runtime_features: [],
+      entry_tools: ["task"],
+      body_ref: "capability://deepagent.task-orchestration@1.0.0-beta.0",
+      max_body_tokens: CapabilityBudget.l2SingleMaxTokens,
+    },
+    {
+      id: "deepagent.task-oversight",
+      version: "1.0.0-beta.0",
+      summary: "Monitor, inspect, close, or resolve subagent tasks this session dispatched",
+      use_when: ["checking subagent progress", "recovering partial work", "cancelling a task"],
+      availability: "stable",
+      required_permissions: ["task_status", "task_read", "task_close", "task_recovery"],
+      required_runtime_features: [],
+      entry_tools: ["task_status", "task_read", "task_close", "task_recovery"],
+      body_ref: "capability://deepagent.task-oversight@1.0.0-beta.0",
+      max_body_tokens: CapabilityBudget.l2SingleMaxTokens,
+    },
+    {
+      id: "deepagent.worktree-merge",
+      version: "1.0.0-beta.0",
+      summary: "Write-type subagents work on isolated deepagent-code/task-* branches; review and merge them",
+      use_when: ["integrating subagent output", "after write-type tasks finish"],
+      availability: "stable",
+      required_permissions: ["pr_finalize"],
+      required_runtime_features: [],
+      entry_tools: ["pr_finalize"],
+      body_ref: "capability://deepagent.worktree-merge@1.0.0-beta.0",
+      max_body_tokens: CapabilityBudget.l2SingleMaxTokens,
+    },
+    {
+      id: "deepagent.pack-manual",
+      version: "1.0.0-beta.0",
+      summary: "Search and load the built-in domain pack manual (the system manual and curated domain guidance)",
+      use_when: ["how this system works", "domain question", "before answering from priors"],
+      availability: "stable",
+      required_permissions: ["capability.read"],
+      required_runtime_features: [],
+      entry_tools: ["pack_search", "domain_pack_load"],
+      body_ref: "capability://deepagent.pack-manual@1.0.0-beta.0",
+      max_body_tokens: CapabilityBudget.l2SingleMaxTokens,
+    },
+    {
+      id: "deepagent.permission-denial",
+      version: "1.0.0-beta.0",
+      summary: "A tool error may be a user denial, not a failure — never retry a denied call unchanged",
+      use_when: ["a tool call was refused", "deciding whether to retry"],
+      availability: "stable",
+      required_permissions: [],
+      required_runtime_features: [],
+      entry_tools: [],
+      body_ref: "capability://deepagent.permission-denial@1.0.0-beta.0",
+      max_body_tokens: CapabilityBudget.l2SingleMaxTokens,
+    },
+    {
+      id: "deepagent.context-survival",
+      version: "1.0.0-beta.0",
+      summary: "Compaction summaries, budget warnings, and revert/rollback notices change what you may trust",
+      use_when: ["after a checkpoint summary", "a budget or revert notice appears"],
+      availability: "stable",
+      required_permissions: [],
+      required_runtime_features: [],
+      entry_tools: [],
+      body_ref: "capability://deepagent.context-survival@1.0.0-beta.0",
       max_body_tokens: CapabilityBudget.l2SingleMaxTokens,
     },
   ].map((manifest) => decodeCapabilityManifest(manifest)),
@@ -201,17 +311,21 @@ function l0AvailabilityLabel(availability: CapabilityManifest["availability"]): 
  * The L0 entry vector: stable capabilities advertise their executable entry
  * tools; a non-stable capability never advertises an executable vector (design
  * §7.6 — never promise an unusable capability), so the model sees an explicit
- * not-yet-available marker instead of a tool list.
+ * not-yet-available marker instead of a tool list. A stable CONCEPT capability
+ * (V2.0.1-001 §4.2 概念形: permission-denial, context-survival) has no entry
+ * tool by design — the row changes behavior expectations — and says so.
  */
 function l0EntryVector(manifest: CapabilityManifest): string {
-  return manifest.availability === "stable" ? manifest.entry_tools.join(", ") : "(not yet available)"
+  if (manifest.availability !== "stable") return "(not yet available)"
+  return manifest.entry_tools.length === 0 ? "(behavioral guidance)" : manifest.entry_tools.join(", ")
 }
 
 /**
- * Build/start gate: the rendered L0 catalog must stay within the frozen budget
- * (design §7.3 target 150-300 tokens; hard cap 700 tokens / 4096 bytes). On
- * overflow the gate throws `BudgetExceededError` from the frozen contract — it
- * never silently truncates a core entry.
+ * Build/start gate: the rendered L0 catalog must stay within the budget
+ * (V2.0.1-001 §4.6, decision ④: hard cap 1000 tokens / 4096 bytes for the
+ * expanded ~12-15 row catalog). On overflow the gate throws
+ * `BudgetExceededError` from the frozen contract — it never silently truncates
+ * a core entry.
  */
 export function assertCapabilityCatalogWithinBudget(text: string): void {
   const { tokenCount, byteCount } = capabilityCatalogMetrics(text)

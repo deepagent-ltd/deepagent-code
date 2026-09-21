@@ -7,7 +7,8 @@ import { contentDigest } from "./digest"
 // Design authority: docs/core-v2.0-beta/design.md §7.2-7.3 (manifest shape & the
 // three-level disclosure budgets), §7.4 (loader input & tagged union) and §7.5
 // (durable receipt + exact retry). Plus design §13 hard budgets: L0 <=4096
-// bytes/700 tokens, L2 single <=1200 tokens, per turn <=2 new / 2400 tokens.
+// bytes/1000 tokens (raised from 700 by the approved V2.0.1-001 §4.6 decision ④),
+// L2 single <=1200 tokens, per turn <=2 new / 2400 tokens.
 // Pure-new contract module: not imported by any production module this wave.
 //
 // Cross-field coherence: this contract freezes the shape and the versioned enums,
@@ -50,14 +51,15 @@ export const CapabilityLevel = Schema.Literals(["L0", "L1", "L2"] as const)
 export type CapabilityLevel = typeof CapabilityLevel.Type
 
 /**
- * Frozen budget limits (design §7.3, §13). L0 is capped at 4096 bytes / 700
- * tokens; a single L2 body at 1200 tokens; and a provider turn may load at most
- * 2 new L2 bodies / 2400 new L2 tokens. Encoded as exact literals so a contract
- * that drifts from the freeze fails to decode.
+ * Budget limits (design §7.3, §13; L0 raised 700 → 1000 tokens by the approved
+ * V2.0.1-001 §4.6 decision ④ for the expanded ~12-15 row catalog). L0 is capped
+ * at 4096 bytes / 1000 tokens; a single L2 body at 1200 tokens; and a provider
+ * turn may load at most 2 new L2 bodies / 2400 new L2 tokens. Encoded as exact
+ * literals so a contract that drifts from the freeze fails to decode.
  */
 export const CapabilityBudgetLimits = Schema.Struct({
   l0MaxBytes: Schema.Literal(4096),
-  l0MaxTokens: Schema.Literal(700),
+  l0MaxTokens: Schema.Literal(1000),
   l2SingleMaxTokens: Schema.Literal(1200),
   l2PerTurnMaxNew: Schema.Literal(2),
   l2PerTurnMaxNewTokens: Schema.Literal(2400),
@@ -444,10 +446,11 @@ export const assertCapabilityNotSuperseded = (capabilityId: string, supersedingR
 }
 
 /**
- * Assert a content load is within the frozen budget limits (design §7.3, §13):
- * L0 <= 4096 bytes / 700 tokens, a single L2 body <= 1200 tokens, and per turn
- * at most 2 new L2 bodies / 2400 new L2 tokens. Throws `BudgetExceededError`
- * with the exceeded discipline.
+ * Assert a content load is within the budget limits (design §7.3, §13; L0 token
+ * cap 700 → 1000 per the approved V2.0.1-001 §4.6 decision ④): L0 <= 4096 bytes /
+ * 1000 tokens, a single L2 body <= 1200 tokens, and per turn at most 2 new L2
+ * bodies / 2400 new L2 tokens. Throws `BudgetExceededError` with the exceeded
+ * discipline.
  */
 export const assertContentLoadBudget = (
   level: CapabilityLevel,
@@ -456,8 +459,8 @@ export const assertContentLoadBudget = (
   newThisTurn: number,
   newTokensThisTurn: number,
 ): void => {
-  if (level === "L0" && (requestedBytes > 4096 || requestedTokens > 700)) {
-    throw new BudgetExceededError({ level, limitTokens: 700, requestedTokens })
+  if (level === "L0" && (requestedBytes > 4096 || requestedTokens > 1000)) {
+    throw new BudgetExceededError({ level, limitTokens: 1000, requestedTokens })
   }
   if (level === "L2") {
     if (requestedTokens > 1200) throw new BudgetExceededError({ level, limitTokens: 1200, requestedTokens })
