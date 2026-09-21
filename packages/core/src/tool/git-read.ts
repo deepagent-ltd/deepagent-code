@@ -199,8 +199,8 @@ export const layer = Layer.effectDiscard(
                   source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
                 }).pipe(
                   Effect.mapError((error) => {
-                    const refusal = PermissionV2.permissionFailureMessage(error)
-                    if (refusal !== null) return new ToolFailure({ message: refusal, error })
+                    const refusal = PermissionV2.permissionToolFailure(error)
+                    if (refusal !== null) return refusal
                     return new ToolFailure({ message: String(error) })
                   }),
                 )

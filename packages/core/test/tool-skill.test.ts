@@ -136,6 +136,7 @@ describe("SkillTool", () => {
               type: "error",
               value:
                 "The user has specified a rule which prevents you from using this specific tool call. Here are some of the relevant rules []",
+              metadata: { failureCode: "permission_denied_rule" },
             })
             deny = false
             const flat = new SkillV2.Info({

@@ -235,9 +235,9 @@ export const layer = Layer.effectDiscard(
               Effect.mapError((error) => {
                 // Preserve deliberate ToolFailure messages (e.g. capability denials);
                 // only opaque runtime errors get the generic fallback.
-                const refusal = PermissionV2.permissionFailureMessage(error)
+                const refusal = PermissionV2.permissionToolFailure(error)
                 if (error instanceof ToolFailure) return error
-                if (refusal !== null) return new ToolFailure({ message: refusal, error })
+                if (refusal !== null) return refusal
                 return new ToolFailure({ message: `Unable to execute command: ${input.command}` })
               }),
             ),

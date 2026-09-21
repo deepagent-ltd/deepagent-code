@@ -163,7 +163,11 @@ export function makeCapabilityLoadTool(options: CapabilityLoadToolOptions): Tool
             )
           }
           return renderLoadOutput(out.state, out.body, out.receipt)
-        }).pipe(Effect.mapError((error) => new ToolFailure({ message: messageOf(error) })))
+        }).pipe(
+          Effect.mapError(
+            (error) => PermissionV2.permissionToolFailure(error) ?? new ToolFailure({ message: messageOf(error) }),
+          ),
+        )
       },
       toModelOutput: ({ output }) => [{ type: "text", text: renderLoadText(output, catalog) }],
     }),
@@ -264,8 +268,6 @@ function cardLine(catalog: ReadonlyArray<CapabilityManifest>, bodyRef: string): 
 }
 
 function messageOf(error: unknown): string {
-  const refusal = PermissionV2.permissionFailureMessage(error)
-  if (refusal !== null) return refusal
   if (error instanceof ToolFailure) return error.message
   if (error instanceof Error) return error.message
   return String(error)

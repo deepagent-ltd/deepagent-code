@@ -311,6 +311,29 @@ Recent work
               }),
               time: { created, completed: created },
             }),
+            new SessionMessage.AssistantTool({
+              type: "tool",
+              id: "local-failed-classified",
+              name: "edit",
+              state: new SessionMessage.ToolStateError({
+                status: "error",
+                input: { path: "README.md" },
+                content: [],
+                structured: {},
+                error: {
+                  type: "permission_corrected",
+                  message:
+                    "The user rejected permission to use this specific tool call with the following feedback: use write",
+                },
+                result: {
+                  type: "error",
+                  value:
+                    "The user rejected permission to use this specific tool call with the following feedback: use write",
+                  metadata: { failureCode: "user_corrected_permission" },
+                },
+              }),
+              time: { created, completed: created },
+            }),
           ],
           time: { created, completed: created },
         }),
@@ -318,7 +341,7 @@ Recent work
       model,
     )
 
-    expect(messages.map((message) => message.role)).toEqual(["assistant", "tool", "tool"])
+    expect(messages.map((message) => message.role)).toEqual(["assistant", "tool", "tool", "tool"])
     expect(messages[1]?.content).toEqual([
       {
         type: "tool-result",
@@ -338,6 +361,21 @@ Recent work
         result: {
           type: "error",
           value: { error: { type: "unknown", message: "boom" }, content: [], structured: {} },
+        },
+      },
+    ])
+    // The classified refusal keeps its exact wording text on rebuild; the structured failureCode
+    // rides the persisted result metadata without altering the model-visible content.
+    expect(messages[3]?.content).toEqual([
+      {
+        type: "tool-result",
+        id: "local-failed-classified",
+        name: "edit",
+        result: {
+          type: "error",
+          value:
+            "The user rejected permission to use this specific tool call with the following feedback: use write",
+          metadata: { failureCode: "user_corrected_permission" },
         },
       },
     ])

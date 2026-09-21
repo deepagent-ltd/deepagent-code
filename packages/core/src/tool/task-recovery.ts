@@ -115,8 +115,8 @@ export const layer = Layer.effectDiscard(
                 })
                 .pipe(
                   Effect.mapError((error) => {
-                    const refusal = PermissionV2.permissionFailureMessage(error)
-                    if (refusal !== null) return new ToolFailure({ message: refusal, error })
+                    const refusal = PermissionV2.permissionToolFailure(error)
+                    if (refusal !== null) return refusal
                     return new ToolFailure({ message: `task_recovery: permission check failed (${String(error)})` })
                   }),
                 )

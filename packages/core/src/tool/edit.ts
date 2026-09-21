@@ -104,8 +104,8 @@ export const layer = Layer.effectDiscard(
               const unableToEdit = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
                 effect.pipe(
                   Effect.mapError((error) => {
-                    const refusal = PermissionV2.permissionFailureMessage(error)
-                    if (refusal !== null) return new ToolFailure({ message: refusal, error })
+                    const refusal = PermissionV2.permissionToolFailure(error)
+                    if (refusal !== null) return refusal
                     if (error instanceof FileMutation.StaleContentError)
                       return new ToolFailure({
                         message: "File changed after permission approval. Read it again before editing.",

@@ -32,6 +32,7 @@ const runs: Array<{
 let denyAction: string | undefined
 let denyRules: PermissionV2.Ruleset = []
 let rejectFeedback: string | undefined
+let rejectPlain = false
 let result: AppProcess.RunResult = {
   command: "mock",
   exitCode: 0,
@@ -49,6 +50,9 @@ const permission = Layer.succeed(
     assert: (input) =>
       Effect.sync(() => assertions.push(input)).pipe(
         Effect.andThen(Effect.suspend(() => afterPermission(input))),
+        Effect.andThen(
+          rejectPlain ? Effect.fail(new PermissionV2.RejectedError()) : Effect.void,
+        ),
         Effect.andThen(
           rejectFeedback === undefined
             ? Effect.void
@@ -108,6 +112,7 @@ const reset = () => {
   denyAction = undefined
   denyRules = []
   rejectFeedback = undefined
+  rejectPlain = false
   runFailure = undefined
   policyStatements = []
   afterPermission = () => Effect.void
@@ -339,6 +344,30 @@ describe("BashTool", () => {
                 type: "error",
                 value:
                   "The user rejected permission to use this specific tool call with the following feedback: run ls instead of pwd",
+                metadata: { failureCode: "user_corrected_permission" },
+              })
+              expect(runs).toEqual([])
+            }),
+          ),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("surfaces a plain user rejection with its structured failure code", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        rejectPlain = true
+        return withTool(tmp.path, (registry) => settleTool(registry, call({ command: "pwd" }))).pipe(
+          Effect.andThen((settled) =>
+            Effect.sync(() => {
+              expect(settled.result).toEqual({
+                type: "error",
+                value: "The user rejected permission to use this specific tool call.",
+                metadata: { failureCode: "user_rejected_permission" },
               })
               expect(runs).toEqual([])
             }),
@@ -362,6 +391,7 @@ describe("BashTool", () => {
               expect(settled.result).toEqual({
                 type: "error",
                 value: `The user has specified a rule which prevents you from using this specific tool call. Here are some of the relevant rules ${JSON.stringify(denyRules)}`,
+                metadata: { failureCode: "permission_denied_rule" },
               })
               expect(runs).toEqual([])
             }),

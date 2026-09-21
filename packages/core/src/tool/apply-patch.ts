@@ -170,9 +170,9 @@ export const makeApply =
       return { applied }
     }).pipe(
       Effect.mapError((error) => {
-        const refusal = PermissionV2.permissionFailureMessage(error)
+        const refusal = PermissionV2.permissionToolFailure(error)
         if (error instanceof ToolFailure) return error
-        if (refusal !== null) return new ToolFailure({ message: refusal, error })
+        if (refusal !== null) return refusal
         return fail("patch")
       }),
     )

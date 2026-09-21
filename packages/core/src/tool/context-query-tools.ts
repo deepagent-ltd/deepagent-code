@@ -45,8 +45,8 @@ export const layer = Layer.effectDiscard(
               })
               .pipe(
                 Effect.mapError((error) => {
-                  const refusal = PermissionV2.permissionFailureMessage(error)
-                  if (refusal !== null) return new ToolFailure({ message: refusal, error })
+                  const refusal = PermissionV2.permissionToolFailure(error)
+                  if (refusal !== null) return refusal
                   return new ToolFailure({ message: `Permission denied: ${codeIntelName}` })
                 }),
                 Effect.andThen(runtime.codeIntel({ request, sessionID: context.sessionID, agent: context.agent })),
@@ -71,8 +71,8 @@ export const layer = Layer.effectDiscard(
               })
               .pipe(
                 Effect.mapError((error) => {
-                  const refusal = PermissionV2.permissionFailureMessage(error)
-                  if (refusal !== null) return new ToolFailure({ message: refusal, error })
+                  const refusal = PermissionV2.permissionToolFailure(error)
+                  if (refusal !== null) return refusal
                   return new ToolFailure({ message: `Permission denied: ${contextQueryName}` })
                 }),
                 Effect.andThen(runtime.contextQuery({ request, sessionID: context.sessionID, agent: context.agent })),

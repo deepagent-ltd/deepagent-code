@@ -202,6 +202,7 @@ describe("GrepTool", () => {
         type: "error",
         value:
           "The user has specified a rule which prevents you from using this specific tool call. Here are some of the relevant rules []",
+        metadata: { failureCode: "permission_denied_rule" },
       })
       expect(assertions).toHaveLength(1)
       expect(searches).toEqual([])

@@ -73,7 +73,13 @@ const registryLayer = Layer.effect(
       }).pipe(
         Effect.map((output) => ({ output })),
         Effect.catchTag("LLM.ToolFailure", (failure) =>
-          Effect.succeed({ result: { type: "error" as const, value: failure.message } }),
+          Effect.succeed({
+            result: {
+              type: "error" as const,
+              value: failure.message,
+              ...(failure.metadata === undefined ? {} : { metadata: failure.metadata }),
+            },
+          }),
         ),
       )
       if ("result" in pending) return pending

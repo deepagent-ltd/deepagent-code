@@ -1,5 +1,6 @@
 export * as PermissionV2 from "./permission"
 
+import { ToolFailure } from "@deepagent-code/llm"
 import { Context, Deferred, Effect as EffectRuntime, Layer, Schema } from "effect"
 import { makeLocationNode } from "./effect/app-node"
 import { EventV2 } from "./event"
@@ -109,8 +110,28 @@ export class DeniedError extends Schema.TaggedErrorClass<DeniedError>()("Permiss
 
 /** Model-visible wording for a permission refusal, or null when the error is not one. */
 export function permissionFailureMessage(error: unknown): string | null {
-  if (error instanceof RejectedError || error instanceof CorrectedError || error instanceof DeniedError)
-    return error.message
+  return classifyRefusal(error)?.message ?? null
+}
+
+/** Machine-readable refusal classification, aligned with the V1 `failureCode` vocabulary. */
+export type FailureCode = "user_rejected_permission" | "user_corrected_permission" | "permission_denied_rule"
+
+/** Structured code for a permission refusal, or null when the error is not one. */
+export function permissionFailureCode(error: unknown): FailureCode | null {
+  return classifyRefusal(error)?.code ?? null
+}
+
+/** ToolFailure for a permission refusal, carrying the refusal wording plus a structured failureCode. */
+export function permissionToolFailure(error: unknown): ToolFailure | null {
+  const refusal = classifyRefusal(error)
+  if (refusal === null) return null
+  return new ToolFailure({ message: refusal.message, error, metadata: { failureCode: refusal.code } })
+}
+
+function classifyRefusal(error: unknown): { readonly code: FailureCode; readonly message: string } | null {
+  if (error instanceof RejectedError) return { code: "user_rejected_permission", message: error.message }
+  if (error instanceof CorrectedError) return { code: "user_corrected_permission", message: error.message }
+  if (error instanceof DeniedError) return { code: "permission_denied_rule", message: error.message }
   return null
 }
 

@@ -100,8 +100,8 @@ export const layer = Layer.effectDiscard(
               return content
             }).pipe(
               Effect.mapError((error) => {
-                const refusal = PermissionV2.permissionFailureMessage(error)
-                if (refusal !== null) return new ToolFailure({ message: refusal, error })
+                const refusal = PermissionV2.permissionToolFailure(error)
+                if (refusal !== null) return refusal
                 const message =
                   error instanceof FileSystem.BinaryFileError ||
                   error instanceof FileSystem.MediaIngestLimitError ||

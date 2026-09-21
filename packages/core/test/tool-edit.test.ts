@@ -214,6 +214,7 @@ describe("EditTool", () => {
             type: "error",
             value:
               "The user has specified a rule which prevents you from using this specific tool call. Here are some of the relevant rules []",
+            metadata: { failureCode: "permission_denied_rule" },
           })
           expect(assertions.map((input) => input.action)).toEqual(["external_directory"])
           expect(reads).toBe(0)
@@ -229,6 +230,7 @@ describe("EditTool", () => {
             type: "error",
             value:
               "The user has specified a rule which prevents you from using this specific tool call. Here are some of the relevant rules []",
+            metadata: { failureCode: "permission_denied_rule" },
           })
           expect(assertions.map((input) => input.action)).toEqual(["external_directory", "edit"])
           expect(reads).toBe(0)
@@ -266,6 +268,7 @@ describe("EditTool", () => {
                   type: "error",
                   value:
                     "The user has specified a rule which prevents you from using this specific tool call. Here are some of the relevant rules []",
+                  metadata: { failureCode: "permission_denied_rule" },
                 })
                 expect(missing).toEqual(matching)
                 expect(assertions.map((input) => input.action)).toEqual(["edit", "edit"])
