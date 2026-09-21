@@ -341,7 +341,8 @@ describe("WriteTool", () => {
             ),
           ).toEqual({
             type: "error",
-            value: `Unable to write ${external}`,
+            value:
+              "The user has specified a rule which prevents you from using this specific tool call. Here are some of the relevant rules []",
           })
           expect(assertions.map((input) => input.action)).toEqual(["external_directory"])
           expect(writes).toEqual([])
@@ -354,7 +355,8 @@ describe("WriteTool", () => {
             ),
           ).toEqual({
             type: "error",
-            value: "Unable to write denied.txt",
+            value:
+              "The user has specified a rule which prevents you from using this specific tool call. Here are some of the relevant rules []",
           })
           expect(assertions.map((input) => input.action)).toEqual(["edit"])
           expect(writes).toEqual([])

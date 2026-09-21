@@ -30,6 +30,8 @@ const runs: Array<{
   readonly options?: AppProcess.RunOptions
 }> = []
 let denyAction: string | undefined
+let denyRules: PermissionV2.Ruleset = []
+let rejectFeedback: string | undefined
 let result: AppProcess.RunResult = {
   command: "mock",
   exitCode: 0,
@@ -48,7 +50,12 @@ const permission = Layer.succeed(
       Effect.sync(() => assertions.push(input)).pipe(
         Effect.andThen(Effect.suspend(() => afterPermission(input))),
         Effect.andThen(
-          input.action === denyAction ? Effect.fail(new PermissionV2.DeniedError({ rules: [] })) : Effect.void,
+          rejectFeedback === undefined
+            ? Effect.void
+            : Effect.fail(new PermissionV2.CorrectedError({ feedback: rejectFeedback })),
+        ),
+        Effect.andThen(
+          input.action === denyAction ? Effect.fail(new PermissionV2.DeniedError({ rules: denyRules })) : Effect.void,
         ),
       ),
     ask: () => Effect.die("unused"),
@@ -99,6 +106,8 @@ const reset = () => {
   assertions.length = 0
   runs.length = 0
   denyAction = undefined
+  denyRules = []
+  rejectFeedback = undefined
   runFailure = undefined
   policyStatements = []
   afterPermission = () => Effect.void
@@ -314,6 +323,52 @@ describe("BashTool", () => {
         Effect.promise(() =>
           Promise.all([active[Symbol.asyncDispose](), outside[Symbol.asyncDispose]()]).then(() => undefined),
         ),
+    ),
+  )
+
+  it.live("surfaces the user's rejection feedback as the model-visible failure", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        rejectFeedback = "run ls instead of pwd"
+        return withTool(tmp.path, (registry) => settleTool(registry, call({ command: "pwd" }))).pipe(
+          Effect.andThen((settled) =>
+            Effect.sync(() => {
+              expect(settled.result).toEqual({
+                type: "error",
+                value:
+                  "The user rejected permission to use this specific tool call with the following feedback: run ls instead of pwd",
+              })
+              expect(runs).toEqual([])
+            }),
+          ),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("surfaces a rule-based denial with its rules as the model-visible failure", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        denyAction = "bash"
+        denyRules = [{ action: "bash", resource: "pwd", effect: "deny" }]
+        return withTool(tmp.path, (registry) => settleTool(registry, call({ command: "pwd" }))).pipe(
+          Effect.andThen((settled) =>
+            Effect.sync(() => {
+              expect(settled.result).toEqual({
+                type: "error",
+                value: `The user has specified a rule which prevents you from using this specific tool call. Here are some of the relevant rules ${JSON.stringify(denyRules)}`,
+              })
+              expect(runs).toEqual([])
+            }),
+          ),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
     ),
   )
 

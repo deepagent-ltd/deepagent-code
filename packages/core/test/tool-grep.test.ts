@@ -198,7 +198,11 @@ describe("GrepTool", () => {
       reset()
       allow = false
 
-      expect(yield* execute({ pattern: "secret" })).toEqual({ type: "error", value: "Unable to grep for secret" })
+      expect(yield* execute({ pattern: "secret" })).toEqual({
+        type: "error",
+        value:
+          "The user has specified a rule which prevents you from using this specific tool call. Here are some of the relevant rules []",
+      })
       expect(assertions).toHaveLength(1)
       expect(searches).toEqual([])
     }),

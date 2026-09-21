@@ -85,15 +85,34 @@ export const Event = {
   }),
 }
 
-export class RejectedError extends Schema.TaggedErrorClass<RejectedError>()("PermissionV2.RejectedError", {}) {}
+export class RejectedError extends Schema.TaggedErrorClass<RejectedError>()("PermissionV2.RejectedError", {}) {
+  override get message() {
+    return "The user rejected permission to use this specific tool call."
+  }
+}
 
 export class CorrectedError extends Schema.TaggedErrorClass<CorrectedError>()("PermissionV2.CorrectedError", {
   feedback: Schema.String,
-}) {}
+}) {
+  override get message() {
+    return `The user rejected permission to use this specific tool call with the following feedback: ${this.feedback}`
+  }
+}
 
 export class DeniedError extends Schema.TaggedErrorClass<DeniedError>()("PermissionV2.DeniedError", {
   rules: PermissionSchema.Ruleset,
-}) {}
+}) {
+  override get message() {
+    return `The user has specified a rule which prevents you from using this specific tool call. Here are some of the relevant rules ${JSON.stringify(this.rules)}`
+  }
+}
+
+/** Model-visible wording for a permission refusal, or null when the error is not one. */
+export function permissionFailureMessage(error: unknown): string | null {
+  if (error instanceof RejectedError || error instanceof CorrectedError || error instanceof DeniedError)
+    return error.message
+  return null
+}
 
 export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("PermissionV2.NotFoundError", {
   requestID: ID,

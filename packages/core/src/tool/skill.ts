@@ -96,7 +96,13 @@ export const layer = Layer.effectDiscard(
                   directory,
                   output: toModelOutput(skill, files),
                 }
-              }).pipe(Effect.mapError((error) => unableToLoad(input.name, error)))
+              }).pipe(
+                Effect.mapError((error) => {
+                  const refusal = PermissionV2.permissionFailureMessage(error)
+                  if (refusal !== null) return new ToolFailure({ message: refusal, error })
+                  return unableToLoad(input.name, error)
+                }),
+              )
             }),
         }),
       })

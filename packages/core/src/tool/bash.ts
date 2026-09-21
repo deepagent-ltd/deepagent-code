@@ -232,11 +232,14 @@ export const layer = Layer.effectDiscard(
                 ...(result.stderrTruncated ? { stderrTruncated: true } : {}),
               }
             }).pipe(
-              Effect.mapError((error) =>
+              Effect.mapError((error) => {
                 // Preserve deliberate ToolFailure messages (e.g. capability denials);
                 // only opaque runtime errors get the generic fallback.
-                error instanceof ToolFailure ? error : new ToolFailure({ message: `Unable to execute command: ${input.command}` }),
-              ),
+                const refusal = PermissionV2.permissionFailureMessage(error)
+                if (error instanceof ToolFailure) return error
+                if (refusal !== null) return new ToolFailure({ message: refusal, error })
+                return new ToolFailure({ message: `Unable to execute command: ${input.command}` })
+              }),
             ),
         }),
       })

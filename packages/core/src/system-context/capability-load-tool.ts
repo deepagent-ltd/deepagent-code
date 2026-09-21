@@ -18,6 +18,7 @@ import { Database } from "../database/database"
 import { SessionSchema } from "../session/schema"
 import { V2ProviderTurnReceiptTable } from "../session/runner/v2-provider-turn.sql"
 import { RuntimeFeatures } from "../flag/runtime-features"
+import { PermissionV2 } from "../permission"
 import { capabilityBodyFor } from "./capability-bodies"
 import { capabilityCatalog, capabilityCatalogSnapshotId } from "./capability-catalog"
 import { catalogPermissionHash, catalogRuntimeHash } from "./capability-snapshot"
@@ -283,6 +284,8 @@ function cardLine(catalog: ReadonlyArray<CapabilityManifest>, bodyRef: string): 
 }
 
 function messageOf(error: unknown): string {
+  const refusal = PermissionV2.permissionFailureMessage(error)
+  if (refusal !== null) return refusal
   if (error instanceof ToolFailure) return error.message
   if (error instanceof Error) return error.message
   return String(error)

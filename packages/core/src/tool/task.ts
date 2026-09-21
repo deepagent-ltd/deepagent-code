@@ -178,9 +178,13 @@ export const layer = Layer.effectDiscard(
                       source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
                     })
                     .pipe(
-                      Effect.mapError(() =>
-                        toolFailure(`Permission denied: task cannot launch agent type "${params.subagent_type}".`),
-                      ),
+                      Effect.mapError((error) => {
+                        const refusal = PermissionV2.permissionFailureMessage(error)
+                        if (refusal !== null) return new ToolFailure({ message: refusal, error })
+                        return toolFailure(
+                          `Permission denied: task cannot launch agent type "${params.subagent_type}".`,
+                        )
+                      }),
                     )
                   if (!admitTaskCall(context.sessionID, context.assistantMessageID, context.toolCallID))
                     return yield* toolFailure(

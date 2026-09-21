@@ -58,7 +58,13 @@ describe("QuestionTool", () => {
           ...toolIdentity,
           call: { type: "tool-call", id: "call-question-denied", name: "question", input: { questions: [] } },
         }),
-      ).toEqual({ result: { type: "error", value: "Permission denied: question" } })
+      ).toEqual({
+        result: {
+          type: "error",
+          value:
+            "The user has specified a rule which prevents you from using this specific tool call. Here are some of the relevant rules []",
+        },
+      })
       expect(capturedInput()).toBeUndefined()
       deny = false
     }),

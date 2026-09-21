@@ -181,7 +181,13 @@ export const layer = Layer.effectDiscard(
                 format: input.format,
                 output: content,
               }
-            }).pipe(Effect.mapError(() => new ToolFailure({ message: `Unable to fetch ${input.url}` }))),
+            }).pipe(
+              Effect.mapError((error) => {
+                const refusal = PermissionV2.permissionFailureMessage(error)
+                if (refusal !== null) return new ToolFailure({ message: refusal, error })
+                return new ToolFailure({ message: `Unable to fetch ${input.url}` })
+              }),
+            ),
         }),
       })
       .pipe(Effect.orDie)

@@ -156,9 +156,12 @@ export const layer = Layer.effectDiscard(
               }).pipe(
                 // Preserve the freshness precondition's own message (it names the recovery step);
                 // everything else keeps the generic shape, exactly like the edit leaf.
-                Effect.mapError((error) =>
-                  error instanceof ToolFailure ? error : new ToolFailure({ message: `Unable to write ${input.path}` }),
-                ),
+                Effect.mapError((error) => {
+                  const refusal = PermissionV2.permissionFailureMessage(error)
+                  if (error instanceof ToolFailure) return error
+                  if (refusal !== null) return new ToolFailure({ message: refusal, error })
+                  return new ToolFailure({ message: `Unable to write ${input.path}` })
+                }),
               ),
           }),
           "edit",

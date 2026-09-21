@@ -246,7 +246,13 @@ export const layer = Layer.effectDiscard(
                 provider,
                 text: text ?? NO_RESULTS,
               }
-            }).pipe(Effect.mapError(() => new ToolFailure({ message: `Unable to search the web for ${input.query}` })))
+            }).pipe(
+              Effect.mapError((error) => {
+                const refusal = PermissionV2.permissionFailureMessage(error)
+                if (refusal !== null) return new ToolFailure({ message: refusal, error })
+                return new ToolFailure({ message: `Unable to search the web for ${input.query}` })
+              }),
+            )
           },
         }),
       })
