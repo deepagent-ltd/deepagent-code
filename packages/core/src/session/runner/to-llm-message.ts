@@ -57,10 +57,15 @@ const toolResult = (tool: SessionMessage.AssistantTool, providerMetadata: Provid
     return ToolResultPart.make({
       id: tool.id,
       name: tool.name,
+      // The durable fold persists the settled ToolResultValue on failure, so reuse it: the
+      // synthesized fallback (for failures settled without one, e.g. tool-error events) stringifies
+      // to "[object Object]" when lowered into provider history.
       result:
-        tool.provider?.executed === true && tool.state.result !== undefined
-          ? tool.state.result
-          : { error: tool.state.error, content: tool.state.content, structured: tool.state.structured },
+        tool.state.result ?? {
+          error: tool.state.error,
+          content: tool.state.content,
+          structured: tool.state.structured,
+        },
       resultType: "error",
       providerExecuted: tool.provider?.executed,
       providerMetadata,

@@ -193,6 +193,7 @@ Recent work
                 content: [],
                 structured: {},
                 error: { type: "unknown", message: "Denied" },
+                result: { type: "error", value: "Denied" },
               }),
               time: { created, completed: created },
             }),
@@ -245,10 +246,7 @@ Recent work
         name: "write",
         providerExecuted: true,
         providerMetadata: { fake: { continuation: "failed" } },
-        result: {
-          type: "error",
-          value: { error: { type: "unknown", message: "Denied" }, content: [], structured: {} },
-        },
+        result: { type: "error", value: "Denied" },
       },
     ])
     expect(messages[1]?.content).toEqual([
@@ -262,6 +260,82 @@ Recent work
             { type: "text", text: "Hello" },
             { type: "media", mediaType: "image/png", data: "aGVsbG8=", filename: "hello.png" },
           ],
+        },
+      },
+    ])
+  })
+
+  // BUG-V2.0-003: a failed local tool's durable fold already stores the settled ToolResultValue;
+  // rebuilding history must reuse it so the model reads the error text instead of "[object Object]".
+  test("reuses the persisted result of a failed local tool, falling back only when it is absent", () => {
+    const messages = toLLMMessages(
+      [
+        new SessionMessage.Assistant({
+          id: id("assistant-local-failure"),
+          type: "assistant",
+          agent: "build",
+          model: { id: ModelV2.ID.make("model"), providerID: ProviderV2.ID.make("provider") },
+          content: [
+            new SessionMessage.AssistantTool({
+              type: "tool",
+              id: "local-failed",
+              name: "edit",
+              state: new SessionMessage.ToolStateError({
+                status: "error",
+                input: { path: "README.md" },
+                content: [],
+                structured: {},
+                error: {
+                  type: "unknown",
+                  message: "The user rejected permission to use this specific tool call.",
+                },
+                result: {
+                  type: "error",
+                  value: "The user rejected permission to use this specific tool call.",
+                },
+              }),
+              time: { created, completed: created },
+            }),
+            new SessionMessage.AssistantTool({
+              type: "tool",
+              id: "local-failed-unpersisted",
+              name: "bash",
+              state: new SessionMessage.ToolStateError({
+                status: "error",
+                input: { command: "pwd" },
+                content: [],
+                structured: {},
+                error: { type: "unknown", message: "boom" },
+              }),
+              time: { created, completed: created },
+            }),
+          ],
+          time: { created, completed: created },
+        }),
+      ],
+      model,
+    )
+
+    expect(messages.map((message) => message.role)).toEqual(["assistant", "tool", "tool"])
+    expect(messages[1]?.content).toEqual([
+      {
+        type: "tool-result",
+        id: "local-failed",
+        name: "edit",
+        result: {
+          type: "error",
+          value: "The user rejected permission to use this specific tool call.",
+        },
+      },
+    ])
+    expect(messages[2]?.content).toEqual([
+      {
+        type: "tool-result",
+        id: "local-failed-unpersisted",
+        name: "bash",
+        result: {
+          type: "error",
+          value: { error: { type: "unknown", message: "boom" }, content: [], structured: {} },
         },
       },
     ])
