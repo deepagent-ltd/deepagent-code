@@ -6,7 +6,10 @@ import { effectCmd, fail } from "../effect-cmd"
 import { UI } from "../ui"
 import * as prompts from "@clack/prompts"
 import { EOL } from "os"
+import path from "path"
 import { Effect } from "effect"
+import { formatTranscript, transcriptFilename } from "@deepagent-code/sdk/transcript"
+import { uniqueExportPath } from "@deepagent-code/sdk/transcript-file"
 
 function redact(kind: string, id: string, value: string) {
   return value.trim() ? `[redacted:${kind}:${id}]` : value
@@ -221,15 +224,21 @@ function sanitize(data: { info: Session.Info; messages: SessionV1.WithParts[] })
 
 export const ExportCommand = effectCmd({
   command: "export [sessionID]",
-  describe: "export session data as JSON",
+  describe: "export session data as JSON or Markdown",
   builder: (yargs) =>
     yargs
       .positional("sessionID", {
         describe: "session id to export",
         type: "string",
       })
+      .option("format", {
+        describe: "export format: json prints to stdout, md writes a titled .md file in the current directory",
+        type: "string" as const,
+        choices: ["json", "md"] as const,
+        default: "json" as const,
+      })
       .option("sanitize", {
-        describe: "redact sensitive transcript and file data",
+        describe: "redact sensitive transcript and file data (json format only)",
         type: "boolean",
       }),
   handler: Effect.fn("Cli.export")(function* (args) {
@@ -237,7 +246,7 @@ export const ExportCommand = effectCmd({
   }),
 })
 
-const run = Effect.fn("Cli.export.body")(function* (args: { sessionID?: string; sanitize?: boolean }) {
+const run = Effect.fn("Cli.export.body")(function* (args: { sessionID?: string; format?: "json" | "md"; sanitize?: boolean }) {
   const svc = yield* Session.Service
   let sessionID = args.sessionID ? SessionID.make(args.sessionID) : undefined
   process.stderr.write(`Exporting session: ${sessionID ?? "latest"}\n`)
@@ -283,6 +292,22 @@ const run = Effect.fn("Cli.export.body")(function* (args: { sessionID?: string; 
   return yield* Effect.gen(function* () {
     const sessionInfo = yield* svc.get(sessionID!)
     const messages = yield* svc.messages({ sessionID: sessionInfo.id })
+
+    if (args.format === "md") {
+      // Same canonical formatter as the TUI /export and GUI session.export surfaces.
+      const markdown = formatTranscript(
+        { id: sessionInfo.id, title: sessionInfo.title, time: sessionInfo.time },
+        messages,
+        { thinking: true, toolDetails: true, assistantMetadata: true },
+      )
+      const filepath = yield* Effect.promise(() =>
+        uniqueExportPath(path.join(process.cwd(), transcriptFilename(sessionInfo))),
+      )
+      yield* Effect.promise(() => Bun.write(filepath, markdown))
+      process.stdout.write(filepath)
+      process.stdout.write(EOL)
+      return
+    }
 
     const exportData = { info: sessionInfo, messages }
 
