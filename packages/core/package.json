@@ -102,7 +102,7 @@
     "@effect/opentelemetry": "catalog:",
     "@effect/platform-node": "catalog:",
     "@effect/sql-sqlite-bun": "catalog:",
-    "@ff-labs/fff-bun": "0.9.3",
+    "@ff-labs/fff-bun": "0.10.6",
     "@lydell/node-pty": "catalog:",
     "@npmcli/arborist": "9.4.0",
     "@npmcli/config": "10.8.1",
