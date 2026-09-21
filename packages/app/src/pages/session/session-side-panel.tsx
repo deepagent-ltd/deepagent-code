@@ -23,7 +23,6 @@ import { useTerminalHosts } from "@/context/terminal"
 import { usePlatform } from "@/context/platform"
 
 import FileTree from "@/components/file-tree"
-import { SidePanelMcp } from "@/pages/session/side-panel-mcp"
 import { SidePanelPlugins } from "@/pages/session/side-panel-plugins"
 import { useCommand } from "@/context/command"
 import { useDebug } from "@/context/debug"
@@ -62,7 +61,6 @@ type PanelMode =
   | "im"
   | "browser"
   | "worktree"
-  | "mcp"
   | "plugins"
   | "debug"
   | "profile"
@@ -115,7 +113,6 @@ const PANELS: readonly PanelDef[] = [
   { mode: "browser", icon: "window-cursor", titleKey: "browser.title", group: "env", bucket: "narrow" },
   { mode: "worktree", icon: "branch", titleKey: "worktree.title", group: "env", bucket: "narrow" },
   // Dev
-  { mode: "mcp", icon: "mcp", titleKey: "status.popover.tab.mcp", group: "dev", bucket: "narrow" },
   { mode: "plugins", icon: "plugin", titleKey: "status.popover.tab.plugins", group: "dev", bucket: "narrow" },
   { mode: "debug", icon: "debug", titleKey: "session.panel.debug", group: "dev", bucket: "narrow" },
   { mode: "profile", icon: "profile", titleKey: "session.panel.profile", group: "dev", bucket: "narrow" },
@@ -684,9 +681,6 @@ export function SessionSidePanel(props: {
                 </Match>
                 <Match when={isActive("worktree")}>
                   <SidePanelWorktree onClose={closePanel} />
-                </Match>
-                <Match when={isActive("mcp")}>
-                  <SidePanelMcp onClose={closePanel} />
                 </Match>
                 <Match when={isActive("plugins")}>
                   <SidePanelPlugins onClose={closePanel} />

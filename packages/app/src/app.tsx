@@ -58,8 +58,6 @@ import { startupViewReady } from "@/utils/startup-ready"
 
 const HomeRoute = lazy(() => import("@/pages/home"))
 const Session = lazy(() => import("@/pages/session"))
-const AgentSystemRoute = lazy(() => import("@/pages/agent-system"))
-const ReviewRoute = lazy(() => import("@/pages/review"))
 
 const SessionRoute = Object.assign(
   () => (
@@ -415,8 +413,6 @@ export function AppInterface(props: {
                 <Route path="/" component={HomeRoute} />
                 <Route path="/:dir" component={DirectoryLayout}>
                   <Route path="/" component={() => <Navigate href="session" />} />
-                  <Route path="/agent" component={AgentSystemRoute} />
-                  <Route path="/review" component={ReviewRoute} />
                   <Route path="/session/:id?" component={SessionRoute} />
                 </Route>
               </Dynamic>
