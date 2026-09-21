@@ -217,6 +217,8 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | Ripgrep.Service
     // the scan does not finish within the budget the picker is destroyed and
     // dropped from the cache so callers fall back to ripgrep (and the next
     // request recreates a fresh picker).
+    // No explicit refreshGitStatus: fff's own git-status worker runs a full
+    // rescan after scan and on .git changes, and search never reads gitStatus.
     const scanReady = (dir: string, pick: Fff.Picker) =>
       Effect.gen(function* () {
         const scanned = yield* Effect.tryPromise({
@@ -229,9 +231,6 @@ export const layer: Layer.Layer<Service, never, FSUtil.Service | Ripgrep.Service
           log.warn("fff scan not ready", { dir })
           return yield* Effect.fail(new Error(scanned.ok ? "fff scan timed out" : scanned.error))
         }
-
-        const git = yield* fffSync("refresh git status", () => pick.refreshGitStatus())
-        if (!git.ok) log.warn("fff git refresh failed", { dir, error: git.error })
       })
 
     // Create (or return) the picker for a directory. Creation is synchronous
