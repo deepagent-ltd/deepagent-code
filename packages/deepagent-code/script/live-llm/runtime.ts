@@ -4,6 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import type { ConfigV1 } from "@deepagent-code/core/v1/config/config"
 import type { PermissionV1 } from "@deepagent-code/core/v1/permission"
+import type { PermissionV2 } from "@deepagent-code/core/permission"
 import type { SessionV1 } from "@deepagent-code/core/v1/session"
 import { GlobalBus, type GlobalEvent } from "../../src/bus/global"
 import type { QuestionID } from "../../src/question/schema"
@@ -16,6 +17,7 @@ import {
   type LiveLLMConfig,
 } from "../../../llm/script/live-llm/config"
 import { prepareToolSandbox, type ToolSandbox } from "../../../core/script/live-llm/sandbox"
+import { prepareHarnessOwner } from "../../../core/script/live-llm/runtime"
 
 export const runtimeProviderID = "live-deepseek"
 
@@ -235,12 +237,25 @@ export async function runLegacyLiveCases(input: {
 
   try {
     await prepareIsolation(testRoot, isolatedHome, isolatedData, config, input.environment)
+    // The V2 owner gate is default-on (prompt-v2 refuses with v2_owner_unavailable otherwise). Arm a
+    // harness-owned campaign before any layer boots (Reference defaults cache env) and seed the row
+    // before the program boots, mirroring the core harness (core/script/live-llm/runtime.ts:15-23).
+    const ownerSetup = await prepareHarnessOwner()
+    await ownerSetup.seedRow()
     const { ModelV2 } = await import("@deepagent-code/core/model")
     const { ProviderV2 } = await import("@deepagent-code/core/provider")
     const { AgentGateway } = await import("@deepagent-code/core/agent-gateway")
+    const { Global } = await import("@deepagent-code/core/global")
+    // The domain-pack manual store and the knowledge_propose stores are process-global handles the
+    // gateway configures (production: every configureGateway call passes Global.Path.agent.data).
+    // The harness drives the V2 prompt path without the gateway boot, so configure + seed against
+    // the isolated DEEPAGENT_CODE_HOME or pack_search/domain_pack_load/knowledge_propose report
+    // "unavailable". Idempotent across suites sharing this process.
+    AgentGateway.configure({ baseDir: Global.Path.agent.data })
+    await AgentGateway.flushKnowledgeSeed()
     const { CrossSpawnSpawner } = await import("@deepagent-code/core/cross-spawn-spawner")
     const { EffectFlock } = await import("@deepagent-code/core/util/effect-flock")
-    const { Context, Deferred, Effect, Fiber, Layer, Schedule, Schema } = await import("effect")
+    const { Context, Deferred, Effect, Fiber, Layer, Option, Schedule, Schema } = await import("effect")
     const { eq } = await import("drizzle-orm")
     const { AgentExecution } = await import("@deepagent-code/core/deepagent/agent-execution")
     const { ApprovalQueue } = await import("@deepagent-code/core/deepagent/approval-queue")
@@ -249,6 +264,14 @@ export async function runLegacyLiveCases(input: {
     const { TaskPartitioner } = await import("@deepagent-code/core/deepagent/task-partitioner")
     const { BUILTIN_AGENT_DESCRIPTORS } = await import("@deepagent-code/core/im/builtin-agents")
     const { AgentListProviderService } = await import("@deepagent-code/core/im/agent-list-provider")
+    const { PermissionV2 } = await import("@deepagent-code/core/permission")
+    const { Location } = await import("@deepagent-code/core/location")
+    const { LocationServiceMap } = await import("@deepagent-code/core/location-layer")
+    const { AbsolutePath } = await import("@deepagent-code/core/schema")
+    const { SessionRuntime } = await import("@deepagent-code/core/session/runtime")
+    const { TaskTool } = await import("@deepagent-code/core/tool/task")
+    const { EventV2 } = await import("@deepagent-code/core/event")
+    const { ProjectV2 } = await import("@deepagent-code/core/project")
     const { Database } = await import("@deepagent-code/core/database/database")
     const globalBus = GlobalBus as unknown as EventEmitter
     const { EventV2Bridge } = await import("../../src/event-v2-bridge")
@@ -311,6 +334,25 @@ export async function runLegacyLiveCases(input: {
     const { makeTaskSubagentRunner } = await import("../../src/session/goal-loop-wiring")
     const { TestInstance, testInstanceStoreLayer, tmpdirScoped } = await import("../../test/fixture/fixture")
 
+    // Mirror production (src/session/v2-runner-frame.ts): SessionRuntime.layer threads ONE shared
+    // delegation slot into every drain fiber, and the capture wires that holder to the SessionV2
+    // service built by the same memoized graph. SessionV2.liveLayer would instead build a private
+    // EMPTY slot per drain (SessionExecutionLocal.defaultLayer), so task delegation fails with
+    // "root composition did not capture the V2 session service for delegation".
+    const coreSessionRuntime = SessionRuntime.layer.pipe(
+      Layer.provide(Database.defaultLayer),
+      Layer.provide(EventV2.defaultLayer),
+      Layer.provide(LocationServiceMap.layer),
+      Layer.provide(ProjectV2.defaultLayer),
+      Layer.provide(TaskTool.delegationSlotLayer),
+    )
+    const sessionRuntimeLayer = Layer.mergeAll(
+      coreSessionRuntime,
+      TaskTool.captureDelegationServiceLayer.pipe(
+        Layer.provide(TaskTool.delegationSlotLayer),
+        Layer.provide(coreSessionRuntime),
+      ),
+    )
     const providerID = ProviderV2.ID.make(liveProviderID)
     const modelID = ModelV2.ID.make(config.modelID)
     const startedAt = Date.now()
@@ -362,7 +404,51 @@ export async function runLegacyLiveCases(input: {
         latch?: { type: "abort" | "background" | "hold"; parentSessionID?: string; taskRunning?: boolean }
       }> = []
       const events = yield* EventV2Bridge.Service
+      const locationServices = yield* Effect.serviceOption(LocationServiceMap)
       const unsubscribe = yield* events.listen((event) => {
+        // Core V2 asks (permission.v2.asked) settle ONLY through PermissionV2.reply — the legacy
+        // Permission.reply below settles app-level (V1) asks and would leave a V2 assert parked
+        // until the suite timeout. Reply through the asking Location's own PermissionV2 service.
+        if (event.type === PermissionV2.Event.Asked.type) {
+          const asked = event.data as PermissionV2.Request
+          const request = {
+            id: asked.id as unknown as PermissionV1.ID,
+            sessionID: asked.sessionID,
+            permission: asked.action,
+            patterns: [...asked.resources],
+            metadata: asked.metadata ?? {},
+            always: [...(asked.save ?? [])],
+          } as PermissionV1.Request
+          permissionRequests.push(request)
+          permissionLocations.set(request.id, {
+            directory: event.location?.directory,
+            workspaceID: event.location?.workspaceID,
+          })
+          return Effect.gen(function* () {
+            if (input.beforePermissionReply) {
+              yield* Effect.promise(() =>
+                input.beforePermissionReply!({
+                  caseName: activeCaseName,
+                  directory: instance.directory,
+                  request,
+                }),
+              )
+            }
+            if (Option.isNone(locationServices))
+              return yield* Effect.die(new Error("Live LLM harness has no LocationServiceMap for PermissionV2 reply"))
+            const ref = event.location ?? Location.Ref.make({ directory: AbsolutePath.make(instance.directory) })
+            const service = yield* Effect.serviceOption(PermissionV2.Service).pipe(
+              Effect.provide(locationServices.value.get(ref)),
+            )
+            if (Option.isNone(service))
+              return yield* Effect.die(new Error("PermissionV2 service is missing from the asking Location"))
+            yield* service.value.reply({
+              requestID: asked.id,
+              reply: input.permissionReply?.reply ?? "reject",
+              message: input.permissionReply?.message,
+            })
+          }).pipe(Effect.orDie)
+        }
         if (event.type !== Permission.Event.Asked.type) return Effect.void
         const request = event.data as PermissionV1.Request
         permissionRequests.push(request)
@@ -1630,16 +1716,25 @@ export async function runLegacyLiveCases(input: {
                 ToolRegistry.productionLayer,
                 RuntimeFlags.defaultLayer,
                 InstanceRegistry.layer,
-                SessionV2.liveLayer,
+                // Ambient shared placement: the session runtime below references this SAME layer
+                // object, so the runner and the program share ONE LocationServiceMap instance
+                // (Effect memoizes identical layer objects in one build). Without it ambient, the
+                // prompt path cannot resolve the V2 roster (agent never switches off the default)
+                // and the program cannot reach the asking Location's PermissionV2 to auto-reply.
+                LocationServiceMap.layer,
+                sessionRuntimeLayer,
               ),
             ),
-            Layer.provide(SessionV2.liveLayer),
+            Layer.provide(sessionRuntimeLayer),
             Layer.provide(InstanceRegistry.layer),
             // Same layer objects as the provideMerges above — the shared memoMap keeps ONE
             // instance; the explicit provides only close the type-level requirements.
             Layer.provide(testInstanceStoreLayer),
           ),
         ),
+        // Harness-owned V2 owner qualification (identity + verifier public key); outermost so every
+        // request fiber and drain resolves the armed campaign values.
+        Effect.provide(ownerSetup.ownerLayer),
         Effect.timeout(
           Math.min(config.timeoutMs, input.timeoutMs ?? config.timeoutMs) * Math.max(1, input.cases.length),
         ),
