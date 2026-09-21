@@ -188,7 +188,9 @@ export const PlanSnapshotResult = Schema.Struct({
 })
 export const CommandPayload = Schema.Struct(Struct.omit(SessionCommandV2.CommandInput.fields, ["sessionID"]))
 export const ShellPayload = Schema.Struct(Struct.omit(SessionCommandV2.ShellInput.fields, ["sessionID"]))
-export const RevertPayload = Schema.Struct(Struct.omit(SessionRevert.RevertInput.fields, ["sessionID"]))
+// `notice` stays out of the wire payload: it is an internal C2-notice suppression knob for
+// autonomous rollback paths, not a client-facing option.
+export const RevertPayload = Schema.Struct(Struct.omit(SessionRevert.RevertInput.fields, ["sessionID", "notice"]))
 export const PermissionResponsePayload = Schema.Struct({
   response: PermissionV1.Reply,
 })
