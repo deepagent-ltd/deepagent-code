@@ -1,6 +1,6 @@
 export * as TaskRunAuthority from "./task-run"
 
-import { and, eq, gt, isNull, lte, or, sql } from "drizzle-orm"
+import { and, desc, eq, gt, inArray, isNull, lte, ne, or, sql } from "drizzle-orm"
 import { Cause, Data, Duration, Effect, Exit, Option, Schedule, Schema } from "effect"
 import type { Database } from "../database/database"
 import type { EventV2 } from "../event"
@@ -42,6 +42,8 @@ export type ExecutionSpec = {
   readonly permissions: PermissionSchema.Ruleset
   /** Frozen workspace intent: `worktree` runs execute write-isolated in a run-owned worktree. */
   readonly workspace?: { readonly mode: "worktree" }
+  /** Declared file scope (globs/prefixes) for overlap warnings; omitted means undisclosed. */
+  readonly fileScope?: readonly string[]
 }
 
 export type SubmitSpec = {
@@ -52,6 +54,7 @@ export type SubmitSpec = {
   readonly prompt: Prompt
   readonly agent: string
   readonly outputSchema?: Record<string, unknown>
+  readonly fileScope?: readonly string[]
   readonly child: {
     readonly title: string
     /**
@@ -822,6 +825,410 @@ function fromEvidenceRow(row: typeof V2StructuredOutputEvidenceTable.$inferSelec
   }
 }
 
+// ── Control plane: close subtree + recovery resolution (host actions on the ledger) ───────────
+// Ported from the legacy app-side tool/task-run.ts control surface (design WS4b-S1). Execution
+// ownership (admit → claim → settle) stays with the authority above; these are the explicit
+// user/host resolutions: close a run subtree and resolve a recovery_required run. Control-plane
+// settlements have no execution owner; a fixed sentinel identifies the source in receipt evidence.
+
+export const CONTROL_PLANE_OWNER = "control-plane"
+
+export class RecoveryNotRequired extends Data.TaggedError("TaskRunAuthority.RecoveryNotRequired")<{
+  readonly runID: string
+  readonly actualState: RunState | "absent"
+}> {}
+
+// Every terminal settlement path records the durable outcome inside its own settlement
+// transaction. Terminal-only; the raw `error` state folds into `failed` while staying pinned
+// inside the outcome hash.
+const recordTerminalReceiptInTransaction = (
+  tx: Transaction,
+  input: {
+    readonly run: {
+      readonly run_id: string
+      readonly parent_session_id: string
+      readonly child_session_id: string
+      readonly generation: number
+    }
+    readonly state: "completed" | "failed" | "interrupted" | "closed" | "error"
+    readonly reason: string
+    readonly output?: string | null
+    readonly error?: { readonly code: string; readonly message: string; readonly data?: Record<string, unknown> } | null
+    readonly ownerToken: string
+    readonly now: number
+  },
+) =>
+  V2TaskRunReceipt.recordInTransaction(tx, {
+    sessionId: input.run.parent_session_id,
+    runId: input.run.run_id,
+    childSessionId: input.run.child_session_id,
+    generation: input.run.generation,
+    state: input.state === "error" ? "failed" : input.state,
+    reason: input.reason,
+    outcomeHash: Hash.sha256(
+      canonicalJson({
+        state: input.state,
+        reason: input.reason,
+        output: input.output ?? null,
+        error: input.error ?? null,
+      }),
+    ),
+    ownerToken: input.ownerToken,
+    now: input.now,
+  }).pipe(Effect.asVoid)
+
+/**
+ * Atomically close a run subtree in a single IMMEDIATE transaction.
+ *
+ * Collects rootRunID + all descendants (via parent_run_id BFS) + any same-child
+ * higher-generation queued continuations, then for each:
+ *   admitted / queued / recovery_required  →  state = "closed" (terminal)
+ *   provisioning / running / researching / finalizing  →  control_state = "close_requested"
+ *   already closed                         →  skip
+ */
+export const requestClose = Effect.fn("TaskRunAuthority.requestClose")(function* (
+  db: DatabaseService,
+  input: { readonly rootRunID: string; readonly reason: string; readonly now?: number },
+) {
+  const now = input.now ?? Date.now()
+  return yield* Effect.uninterruptible(
+    db.transaction(
+      (tx) =>
+        Effect.gen(function* () {
+          // Iterative BFS to collect all runs in the subtree (depth is bounded by MAX_SUBAGENT_DEPTH).
+          const visited = new Set<string>([input.rootRunID])
+          const queue = [input.rootRunID]
+          while (queue.length > 0) {
+            const batch = queue.splice(0)
+            const children = yield* tx
+              .select({ run_id: TaskRunTable.run_id })
+              .from(TaskRunTable)
+              .where(inArray(TaskRunTable.parent_run_id, batch))
+              .all()
+              .pipe(Effect.orDie)
+            for (const child of children) {
+              if (!visited.has(child.run_id)) {
+                visited.add(child.run_id)
+                queue.push(child.run_id)
+              }
+            }
+          }
+
+          const columns = {
+            run_id: TaskRunTable.run_id,
+            parent_session_id: TaskRunTable.parent_session_id,
+            child_session_id: TaskRunTable.child_session_id,
+            generation: TaskRunTable.generation,
+            state: TaskRunTable.state,
+            control_state: TaskRunTable.control_state,
+            version: TaskRunTable.version,
+          } as const
+          const rows = yield* tx
+            .select(columns)
+            .from(TaskRunTable)
+            .where(inArray(TaskRunTable.run_id, [...visited]))
+            .all()
+            .pipe(Effect.orDie)
+
+          // Also find same-child higher-generation queued continuations.
+          const sessionIDs = [...new Set(rows.map((row) => row.child_session_id))]
+          const continuations = yield* tx
+            .select(columns)
+            .from(TaskRunTable)
+            .where(
+              and(
+                inArray(TaskRunTable.child_session_id, sessionIDs),
+                inArray(TaskRunTable.state, ["admitted", "queued"]),
+              ),
+            )
+            .all()
+            .pipe(Effect.orDie)
+          for (const continuation of continuations) {
+            if (!visited.has(continuation.run_id)) rows.push(continuation)
+          }
+
+          const changed: Array<{ runID: string; oldState: RunState; newState: RunState }> = []
+          const immediateTerminal: readonly RunState[] = ["admitted", "queued", "recovery_required"]
+          const activeStates: readonly RunState[] = ["provisioning", "running", "researching", "finalizing"]
+
+          for (const row of rows) {
+            if (row.control_state === "closed") continue
+            const oldState = row.state
+
+            if (immediateTerminal.includes(oldState)) {
+              const updated = yield* tx
+                .update(TaskRunTable)
+                .set({
+                  control_state: "closed",
+                  state: "closed",
+                  phase: "settled",
+                  close_requested_at: now,
+                  close_reason: input.reason,
+                  version: row.version + 1,
+                  time_updated: now,
+                  time_settled: now,
+                })
+                .where(and(eq(TaskRunTable.run_id, row.run_id), eq(TaskRunTable.version, row.version)))
+                .returning({ run_id: TaskRunTable.run_id, version: TaskRunTable.version })
+                .get()
+                .pipe(Effect.orDie)
+              if (updated) {
+                yield* appendEvent(tx, { ...row, run_id: updated.run_id, version: updated.version }, "run_closed", oldState, "closed", input.reason, now)
+                yield* recordTerminalReceiptInTransaction(tx, {
+                  run: row,
+                  state: "closed",
+                  reason: input.reason,
+                  ownerToken: CONTROL_PLANE_OWNER,
+                  now,
+                })
+                changed.push({ runID: row.run_id, oldState, newState: "closed" })
+              }
+              continue
+            }
+            if (activeStates.includes(oldState)) {
+              // Mark close intent; the authority executor settles when its drain finishes.
+              const updated = yield* tx
+                .update(TaskRunTable)
+                .set({
+                  control_state: "close_requested",
+                  close_requested_at: now,
+                  close_reason: input.reason,
+                  version: row.version + 1,
+                  time_updated: now,
+                })
+                .where(
+                  and(
+                    eq(TaskRunTable.run_id, row.run_id),
+                    eq(TaskRunTable.version, row.version),
+                    ne(TaskRunTable.control_state, "closed"),
+                  ),
+                )
+                .returning({ run_id: TaskRunTable.run_id, version: TaskRunTable.version })
+                .get()
+                .pipe(Effect.orDie)
+              if (updated) {
+                yield* appendEvent(
+                  tx,
+                  { ...row, run_id: updated.run_id, version: updated.version },
+                  "close_requested",
+                  oldState,
+                  oldState,
+                  input.reason,
+                  now,
+                )
+                changed.push({ runID: row.run_id, oldState, newState: oldState })
+              }
+            }
+          }
+
+          return changed as ReadonlyArray<{ runID: string; oldState: RunState; newState: RunState }>
+        }),
+      { behavior: "immediate" },
+    ),
+  )
+})
+
+/**
+ * Close a task run by child session ID (task_close semantics): validates the run belongs to the
+ * given parent session before closing. The most recent OPEN run for the child is the target.
+ */
+export const closeTask = Effect.fn("TaskRunAuthority.closeTask")(function* (
+  db: DatabaseService,
+  input: {
+    readonly childSessionID: SessionSchema.ID
+    readonly parentSessionID: SessionSchema.ID
+    readonly reason: string
+    readonly now?: number
+  },
+) {
+  // Ownership is validated against the latest generation of ANY control state so a foreign parent
+  // is refused even after a close is already in flight (control_state 'close_requested').
+  const latest = yield* db
+    .select({ run_id: TaskRunTable.run_id, parent_session_id: TaskRunTable.parent_session_id })
+    .from(TaskRunTable)
+    .where(eq(TaskRunTable.child_session_id, input.childSessionID))
+    .orderBy(desc(TaskRunTable.generation))
+    .get()
+    .pipe(Effect.orDie)
+
+  if (latest && latest.parent_session_id !== input.parentSessionID)
+    return yield* new AdmissionConflict({ reason: "child" })
+
+  const run = yield* db
+    .select({ run_id: TaskRunTable.run_id })
+    .from(TaskRunTable)
+    .where(and(eq(TaskRunTable.child_session_id, input.childSessionID), eq(TaskRunTable.control_state, "open")))
+    .orderBy(desc(TaskRunTable.generation))
+    .get()
+    .pipe(Effect.orDie)
+
+  if (!run) return { closed: false, reason: "no_open_run" } as const
+
+  yield* requestClose(db, { rootRunID: run.run_id, reason: input.reason, ...(input.now === undefined ? {} : { now: input.now }) })
+  return { closed: true, runID: run.run_id } as const
+})
+
+/**
+ * Resolve a recovery_required run via explicit host/user action (task_recovery semantics). The
+ * only two valid resolutions are "failed" and "closed"; the old run is never resumed. All
+ * descendants close in the SAME IMMEDIATE transaction so a crash between the root settlement and
+ * the descendant close is impossible.
+ */
+export const resolveRecovery = Effect.fn("TaskRunAuthority.resolveRecovery")(function* (
+  db: DatabaseService,
+  input: { readonly runID: string; readonly resolution: "failed" | "closed"; readonly reason: string; readonly now?: number },
+) {
+  const now = input.now ?? Date.now()
+  return yield* Effect.uninterruptible(
+    db.transaction(
+      (tx) =>
+        Effect.gen(function* () {
+          const current = yield* tx
+            .select()
+            .from(TaskRunTable)
+            .where(eq(TaskRunTable.run_id, input.runID))
+            .get()
+            .pipe(Effect.orDie)
+          if (!current || current.state !== "recovery_required")
+            return yield* new RecoveryNotRequired({ runID: input.runID, actualState: current?.state ?? "absent" })
+
+          const updated = yield* tx
+            .update(TaskRunTable)
+            .set({
+              state: input.resolution,
+              phase: "settled",
+              control_state: "closed",
+              close_requested_at: now,
+              close_reason: input.reason,
+              execution_owner: null,
+              lease_expires_at: null,
+              version: current.version + 1,
+              time_updated: now,
+              time_settled: now,
+            })
+            .where(and(eq(TaskRunTable.run_id, input.runID), eq(TaskRunTable.version, current.version)))
+            .returning()
+            .get()
+            .pipe(Effect.orDie)
+          if (!updated) return yield* Effect.die(`resolveRecovery CAS lost for run ${input.runID} — concurrent mutation won the version race`)
+
+          yield* appendEvent(tx, updated, "recovery_resolved", "recovery_required", input.resolution, input.reason, now)
+          yield* recordTerminalReceiptInTransaction(tx, {
+            run: updated,
+            state: input.resolution,
+            reason: input.reason,
+            ownerToken: CONTROL_PLANE_OWNER,
+            now,
+          })
+
+          // Close descendants (and later same-child generations) in the same transaction.
+          const closeReason = `parent_resolved:${input.reason}`
+          const visited = new Set<string>([updated.run_id])
+          const bfsQueue = [updated.run_id]
+          const laterGenerations = yield* tx
+            .select({ run_id: TaskRunTable.run_id })
+            .from(TaskRunTable)
+            .where(
+              and(
+                eq(TaskRunTable.child_session_id, current.child_session_id),
+                gt(TaskRunTable.generation, current.generation),
+              ),
+            )
+            .all()
+            .pipe(Effect.orDie)
+          for (const later of laterGenerations) {
+            visited.add(later.run_id)
+            bfsQueue.push(later.run_id)
+          }
+          while (bfsQueue.length > 0) {
+            const batch = bfsQueue.splice(0)
+            const children = yield* tx
+              .select({ run_id: TaskRunTable.run_id })
+              .from(TaskRunTable)
+              .where(inArray(TaskRunTable.parent_run_id, batch))
+              .all()
+              .pipe(Effect.orDie)
+            for (const child of children) {
+              if (!visited.has(child.run_id)) {
+                visited.add(child.run_id)
+                bfsQueue.push(child.run_id)
+              }
+            }
+          }
+          const descendantIDs = [...visited].filter((id) => id !== updated.run_id)
+          if (descendantIDs.length > 0) {
+            const descendants = yield* tx
+              .select({
+                run_id: TaskRunTable.run_id,
+                parent_session_id: TaskRunTable.parent_session_id,
+                child_session_id: TaskRunTable.child_session_id,
+                generation: TaskRunTable.generation,
+                state: TaskRunTable.state,
+                control_state: TaskRunTable.control_state,
+                version: TaskRunTable.version,
+              })
+              .from(TaskRunTable)
+              .where(inArray(TaskRunTable.run_id, descendantIDs))
+              .all()
+              .pipe(Effect.orDie)
+            const closable: readonly RunState[] = [
+              "admitted",
+              "queued",
+              "provisioning",
+              "running",
+              "researching",
+              "finalizing",
+              "recovery_required",
+            ]
+            for (const descendant of descendants) {
+              if (descendant.control_state === "closed") continue
+              if (!closable.includes(descendant.state)) continue
+              const closed = yield* tx
+                .update(TaskRunTable)
+                .set({
+                  state: "closed",
+                  phase: "settled",
+                  control_state: "closed",
+                  close_requested_at: now,
+                  close_reason: closeReason,
+                  execution_owner: null,
+                  lease_expires_at: null,
+                  version: descendant.version + 1,
+                  time_updated: now,
+                  time_settled: now,
+                })
+                .where(and(eq(TaskRunTable.run_id, descendant.run_id), eq(TaskRunTable.version, descendant.version)))
+                .returning({ run_id: TaskRunTable.run_id, version: TaskRunTable.version })
+                .get()
+                .pipe(Effect.orDie)
+              if (closed) {
+                yield* appendEvent(
+                  tx,
+                  { ...descendant, run_id: closed.run_id, version: closed.version },
+                  "run_closed",
+                  descendant.state,
+                  "closed",
+                  closeReason,
+                  now,
+                )
+                yield* recordTerminalReceiptInTransaction(tx, {
+                  run: descendant,
+                  state: "closed",
+                  reason: closeReason,
+                  ownerToken: CONTROL_PLANE_OWNER,
+                  now,
+                })
+              }
+            }
+          }
+
+          return fromRow(updated)
+        }),
+      { behavior: "immediate" },
+    ),
+  )
+})
+
 // ── Executor: claim → resume → join → settle ──────────────────────────────────────────────────
 // The executor NEVER admits another prompt: the first input is durable (admitChildInput) and
 // follow-up turns stay with the tool layer. Execution is SessionExecution.resume by Session ID.
@@ -898,10 +1305,20 @@ const drainAndSettle = (
     // Terminal settle is the workspace release fence: after the run is durably terminal the
     // run-owned worktree is pruned best-effort (the receipt keeps the branch for the later PR
     // flow). An interrupted parent turn settles separately below and deliberately KEEPS the
-    // workspace — the child stays resumable by task_id.
+    // workspace — the child stays resumable by task_id. A TIMEOUT keeps it too (WS4b-S2): the
+    // settle text tells the parent to resume by task_id, which requires the child session's
+    // worktree directory to still exist; pruning it made that resume pointer dead. The retained
+    // worktree's cleanup is owned by the later task_close / pr_finalize / explicit release path.
     const releaseWorkspace = TaskWorkspace.release(input.db, { runID: input.run.runID }).pipe(
       Effect.catchTag("TaskWorkspace.Error", (error) =>
         Effect.logWarning(`workspace release deferred (${error.code}): ${error.message}`).pipe(
+          Effect.annotateLogs("runID", error.runID),
+        ),
+      ),
+    )
+    const retainWorkspace = TaskWorkspace.retain(input.db, { runID: input.run.runID }).pipe(
+      Effect.catchTag("TaskWorkspace.Error", (error) =>
+        Effect.logWarning(`workspace retain deferred (${error.code}): ${error.message}`).pipe(
           Effect.annotateLogs("runID", error.runID),
         ),
       ),
@@ -929,7 +1346,7 @@ const drainAndSettle = (
         reason: "task_timeout",
         error: { code: "task_timeout", message: `Subagent timed out after ${input.timeoutMs}ms.` },
       })
-      yield* releaseWorkspace
+      yield* retainWorkspace
       return { outcome: result.outcome, research: result.research } as const
     }
     yield* settle(input.db, {
@@ -1022,7 +1439,7 @@ const enqueueNotification = (tx: Transaction, row: typeof TaskRunTable.$inferSel
 
 const appendEvent = (
   db: Writer,
-  row: typeof TaskRunTable.$inferSelect,
+  row: Pick<typeof TaskRunTable.$inferSelect, "run_id" | "version">,
   type: string,
   fromState: string | null,
   toState: string | null,
@@ -1050,6 +1467,7 @@ const executionSpec = (spec: SubmitSpec): ExecutionSpec => ({
   ...(spec.outputSchema === undefined ? {} : { outputSchema: spec.outputSchema }),
   permissions: spec.child.permissions,
   ...(spec.child.workspace === undefined ? {} : { workspace: spec.child.workspace }),
+  ...(spec.fileScope === undefined ? {} : { fileScope: spec.fileScope }),
 })
 
 const requestFingerprint = (spec: SubmitSpec) => ({
@@ -1059,6 +1477,7 @@ const requestFingerprint = (spec: SubmitSpec) => ({
   deliveryMode: spec.deliveryMode,
   permissions: spec.child.permissions,
   workspace: spec.child.workspace ?? null,
+  fileScope: spec.fileScope ?? null,
 })
 
 const outcomeHash = (input: SettleInput) =>

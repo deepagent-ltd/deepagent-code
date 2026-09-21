@@ -173,6 +173,8 @@ const readOnlyActions = new Set([
   "context_query",
   "capability_search",
   "capability.read",
+  "task_status",
+  "task_read",
 ])
 
 function whollyDisabled(action: string, policy: PermissionV2.Ruleset | PermissionPolicy) {

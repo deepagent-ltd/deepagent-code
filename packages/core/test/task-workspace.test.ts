@@ -1,5 +1,5 @@
 import { afterAll, describe, expect } from "bun:test"
-import { count, eq } from "drizzle-orm"
+import { and, count, eq } from "drizzle-orm"
 import { Effect, Layer } from "effect"
 import fs from "fs/promises"
 import { realpathSync } from "node:fs"
@@ -18,7 +18,7 @@ import { SessionMessage } from "@deepagent-code/core/session/message"
 import { Prompt } from "@deepagent-code/core/session/prompt"
 import { SessionProjector } from "@deepagent-code/core/session/projector"
 import { SessionSchema } from "@deepagent-code/core/session/schema"
-import { SessionInputTable, SessionTable, TaskRunTable } from "@deepagent-code/core/session/sql"
+import { SessionInputTable, SessionTable, TaskRunEventTable, TaskRunTable } from "@deepagent-code/core/session/sql"
 import { SessionStore } from "@deepagent-code/core/session/store"
 import { TaskRunAuthority } from "@deepagent-code/core/session/task-run"
 import { TaskWorkspace } from "@deepagent-code/core/session/task-workspace"
@@ -438,6 +438,49 @@ describe("Core V2 TaskWorkspace", () => {
       expect(settled.state).toBe("completed")
       expect(settled.worktree_state).toBe("removed")
       expect(worktreePaths(repo)).not.toContain(childDirectory)
+    }),
+  )
+
+  // Live clock: the executor's timeout is wall-clock; under TestClock it would never fire.
+  it.live("timeout retains the isolated worktree instead of releasing it (WS4b-S2)", () =>
+    Effect.gen(function* () {
+      const repo = yield* Effect.promise(() => makeRepo(path.join(tmpRoot(), "repo")))
+      const { db, events, sessions } = yield* services
+      const parent = yield* sessions.create({ location: { directory: AbsolutePath.make(repo) } })
+      const submitted = yield* TaskRunAuthority.submit(
+        db,
+        events,
+        sessions,
+        specFor(parent.id, "call-ws-timeout-1", repo, "worktree"),
+      )
+      const worktreeDirectory = (yield* runRow(db, submitted.run.runID)).worktree_directory!
+
+      // A child whose drain never finishes forces the timeout path.
+      const result = yield* TaskRunAuthority.execute({
+        db,
+        run: submitted.run,
+        sessions: { ...sessions, resume: () => Effect.never },
+        timeoutMs: 50,
+      })
+      expect(result.outcome).toBe("timeout")
+
+      const settled = yield* runRow(db, submitted.run.runID)
+      expect(settled.state).toBe("failed")
+      expect(settled.reason).toBe("task_timeout")
+      expect(settled.worktree_state).toBe("retained")
+
+      // The child stays resumable by task_id: the worktree directory and branch survive on disk.
+      yield* Effect.promise(() => fs.access(worktreeDirectory))
+      expect(worktreePaths(repo)).toContain(worktreeDirectory)
+      expect(gitIn(repo, ["show-ref", "--verify", `refs/heads/${settled.worktree_branch!}`]).exitCode).toBe(0)
+
+      const retained = yield* db
+        .select({ total: count() })
+        .from(TaskRunEventTable)
+        .where(and(eq(TaskRunEventTable.run_id, submitted.run.runID), eq(TaskRunEventTable.type, "worktree_retained")))
+        .get()
+        .pipe(Effect.orDie)
+      expect(retained?.total).toBe(1)
     }),
   )
 })

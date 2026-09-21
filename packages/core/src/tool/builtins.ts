@@ -12,12 +12,19 @@ import { QuestionTool } from "./question"
 import { ReadTool } from "./read"
 import { SkillTool } from "./skill"
 import { TaskTool } from "./task"
+import { TaskStatusTool } from "./task-status"
+import { TaskReadTool } from "./task-read"
+import { TaskCloseTool } from "./task-close"
+import { TaskRecoveryTool } from "./task-recovery"
+import { PRFinalizeTool } from "./pr-finalize"
 import { WebFetchTool } from "./webfetch"
 import { WebSearchTool } from "./websearch"
 import { WriteTool } from "./write"
 import { PlanWriteTool } from "./plan"
 import { CapabilityRuntimeSearch } from "../system-context/capability-runtime-search"
 import { CapabilityLoadTool } from "../system-context/capability-load-tool"
+import { DomainPackLoadTool } from "../system-context/domain-pack-load-tool"
+import { PackSearchTool } from "../system-context/pack-search-tool"
 import { ContextQueryTools } from "./context-query-tools"
 import { readonlySet } from "../util/readonly-collections"
 
@@ -41,11 +48,18 @@ export const builtinToolNames = readonlySet(new Set([
   ReadTool.name,
   SkillTool.name,
   TaskTool.name,
+  TaskStatusTool.name,
+  TaskReadTool.name,
+  TaskCloseTool.name,
+  TaskRecoveryTool.name,
+  PRFinalizeTool.name,
   WebFetchTool.name,
   WebSearchTool.name,
   WriteTool.name,
   CapabilityRuntimeSearch.name,
   CapabilityLoadTool.capabilityLoadName,
+  DomainPackLoadTool.name,
+  PackSearchTool.name,
   ContextQueryTools.codeIntelName,
   ContextQueryTools.contextQueryName,
 ]))
@@ -83,11 +97,18 @@ export const locationLayer = Layer.mergeAll(
   ReadTool.layer,
   SkillTool.layer,
   TaskTool.layer,
+  TaskStatusTool.layer,
+  TaskReadTool.layer,
+  TaskCloseTool.layer,
+  TaskRecoveryTool.layer,
+  PRFinalizeTool.layer,
   WebFetchTool.layer,
   WebSearchTool.layer.pipe(Layer.provide(WebSearchTool.defaultConfigLayer)),
   WriteTool.layer,
   PlanWriteTool.layer,
   CapabilityRuntimeSearch.layer,
   CapabilityLoadTool.layer,
+  DomainPackLoadTool.layer,
+  PackSearchTool.layer,
   ContextQueryTools.layer,
 )

@@ -172,30 +172,10 @@ export function makeCapabilityLoadTool(options: CapabilityLoadToolOptions): Tool
 }
 
 /**
- * An inactive `domain_pack_load` prototype (same shape as `capability_load`). Domain
- * packs are not active in this runtime wave, so this is intentionally NOT registered in
- * the production layer. Tests may exercise the typed unavailable result while the pack
- * lane is being built, but the model must never be offered a tool that always fails.
+ * The production `domain_pack_load` tool lives in `domain-pack-load-tool.ts` (registered
+ * from `tool/builtins.ts`); this module only owns the shared `domainPackLoadName` wire
+ * constant. The inactive prototype was removed in the V2.0.1 WS3 chain repair.
  */
-export function makeDomainPackLoadTool(options: CapabilityLoadToolOptions): Tool.AnyTool {
-  const turnIdentity = options.turnIdentity ?? makeDefaultCapabilityLoadTurnIdentity(options.db)
-  return Tool.withPermission(
-    Tool.make({
-      description:
-        "Load an active domain pack's L2 procedure body. Domain packs are not active in this build; the tool reports the typed not_found(domain_pack_not_active) state.",
-      input: CapabilityLoadToolInput,
-      output: CapabilityLoadToolOutput,
-      execute: (input, context) => {
-        return Effect.gen(function* () {
-          yield* turnIdentity(context.sessionID)
-          return notFound("domain_pack_not_active")
-        }).pipe(Effect.mapError((error) => new ToolFailure({ message: messageOf(error) })))
-      },
-      toModelOutput: ({ output }) => [{ type: "text", text: renderLoadText(output) }],
-    }),
-    "capability.read",
-  )
-}
 
 /** Typed not-found outputs (frozen NotFoundReason union). */
 function notFound(

@@ -1,16 +1,19 @@
 export * as TaskTool from "./task"
 
-import { ToolFailure } from "@deepagent-code/llm"
+import { ToolFailure, toolText } from "@deepagent-code/llm"
 import Ajv from "ajv"
+import { and, desc, eq, inArray } from "drizzle-orm"
 import { Cause, Effect, Exit, Option } from "effect"
 import { Context, Layer, Schema } from "effect"
 import { AgentV2 } from "../agent"
 import { Database } from "../database/database"
+import { ConflictArbiter } from "../deepagent/conflict-arbiter"
 import { EventV2 } from "../event"
 import { PermissionV2 } from "../permission"
 import { SessionSchema, SessionV2 } from "../session"
 import { SessionMessage } from "../session/message"
 import { Prompt } from "../session/prompt"
+import { TaskRunTable } from "../session/sql"
 import { TaskRunAuthority } from "../session/task-run"
 import { Delegation } from "./delegation"
 import {
@@ -67,11 +70,24 @@ const Input = Schema.Struct({
     description:
       "Resume a prior subagent session (it continues with its previous messages and tool outputs). Must be a task_id returned by a task launched in THIS session; omit to start a fresh subagent.",
   }),
+  file_scope: Schema.optional(Schema.Array(Schema.String)).annotate({
+    description:
+      "Optional declared file scope (globs or directory prefixes) this task expects to touch. Recorded on the durable run; overlapping scopes across active sibling write tasks raise a non-blocking warning.",
+  }),
+})
+
+const RunInfo = Schema.Struct({
+  agent_type: Schema.String,
+  workspace_mode: Schema.Literals(["shared", "worktree"]),
+  branch: Schema.optional(Schema.String),
+  worktree_state: Schema.optional(Schema.String),
 })
 
 const Output = Schema.Struct({
   task_id: Schema.String,
   text: Schema.String,
+  run: Schema.optional(RunInfo),
+  warnings: Schema.optional(Schema.Array(Schema.String)),
 })
 export type Output = typeof Output.Type
 
@@ -151,6 +167,115 @@ const drainMessage = (error: unknown) => {
   return message.slice(0, 300)
 }
 
+// WS4b-S3: task-specific bound for the injected child final text. Core has no RuntimeFlags
+// service (that is an app-side module), so the bound is a module constant with the legacy env
+// override, read at access time so tests and operators can tune it without a rebuild.
+const DEFAULT_SUBAGENT_OUTPUT_MAX_CHARS = 8_000
+const subagentOutputMaxChars = () => {
+  const raw = process.env["DEEPAGENT_CODE_SUBAGENT_OUTPUT_MAX_CHARS"]
+  const parsed = raw === undefined ? Number.NaN : Number.parseInt(raw, 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_SUBAGENT_OUTPUT_MAX_CHARS
+}
+
+/**
+ * The honest timeout notice (WS4b-S2): the timeout settle RETAINS the worktree, so the resume
+ * pointer is real — the child's worktree directory and branch still exist; task_close owns the
+ * cleanup path. Exported for the tool tests.
+ */
+export const timeoutNoticeText = (input: { readonly timeoutMs: number; readonly childID: string; readonly branch?: string }) =>
+  `[task ended before completion: timed out after ${input.timeoutMs}ms — ${
+    input.branch !== undefined ? `worktree retained on branch ${input.branch}` : "partial work retained"
+  }; resume with task_id "${input.childID}" to continue, or close it with task_close.]`
+
+/**
+ * Tail-biased bound: the conclusion of a subagent result lives at the end, so the kept window is
+ * the LAST maxChars codepoints (codepoint-safe — a multibyte character is never cut mid-unit). The
+ * truncation notice ALWAYS survives, carrying the task_read pointer and branch so the full result
+ * stays reachable.
+ */
+const boundResultText = (text: string, input: { maxChars: number; taskID: string; branch?: string }) => {
+  const cps = Array.from(text)
+  if (cps.length <= input.maxChars) return text
+  const kept = cps.slice(cps.length - input.maxChars).join("")
+  return (
+    `${kept}\n\nOutput truncated (${cps.length} chars). Full transcript: task_read(task_id="${input.taskID}"). ` +
+    `Branch: ${input.branch ?? "n/a"}`
+  )
+}
+
+type RunRow = {
+  readonly workspace_mode: "shared" | "worktree"
+  readonly worktree_branch: string | null
+  readonly worktree_state: string
+}
+
+const runInfoOf = (row: RunRow | undefined, agentType: string): typeof RunInfo.Type | undefined =>
+  row === undefined
+    ? undefined
+    : {
+        agent_type: agentType,
+        workspace_mode: row.workspace_mode,
+        ...(row.worktree_branch === null ? {} : { branch: row.worktree_branch }),
+        worktree_state: row.worktree_state,
+      }
+
+const ACTIVE_RUN_STATES = ["admitted", "provisioning", "running", "researching", "finalizing"] as const
+
+/**
+ * WS4b-S4 declare-warn-merge arbitration, warn layer: a fresh write-type run whose declared
+ * file_scope intersects an ACTIVE sibling run's declared scope earns a non-blocking warning (the
+ * physical isolation is the worktree; semantic conflicts land at pr_finalize's typed
+ * merge_conflict). Empty/undisclosed scopes are "cannot judge" here — NO warning (the ConflictArbiter
+ * module's conservative empty-is-broad rule applies to lock arbitration, not to advisory warnings).
+ */
+const scopeOverlapWarnings = Effect.fn("task.scopeOverlapWarnings")(function* (
+  db: Database.Interface["db"],
+  input: {
+    readonly parentSessionID: SessionSchema.ID
+    readonly fileScope: readonly string[]
+    readonly selfChildSessionID: SessionSchema.ID
+  },
+) {
+  const siblings = yield* db
+    .select({
+      run_id: TaskRunTable.run_id,
+      child_session_id: TaskRunTable.child_session_id,
+      execution_spec: TaskRunTable.execution_spec,
+    })
+    .from(TaskRunTable)
+    .where(
+      and(
+        eq(TaskRunTable.parent_session_id, input.parentSessionID),
+        eq(TaskRunTable.execution_runtime, "v2"),
+        eq(TaskRunTable.mutation_capability, "write"),
+        eq(TaskRunTable.control_state, "open"),
+        inArray(TaskRunTable.state, [...ACTIVE_RUN_STATES]),
+      ),
+    )
+    .all()
+    .pipe(Effect.orDie)
+
+  const claim = (taskID: string, files: readonly string[]): ConflictArbiter.Claim => ({
+    taskID,
+    agentID: taskID,
+    files: [...files],
+    symbols: [],
+    priority: "normal",
+    origin: "human",
+  })
+  return siblings.flatMap((sibling) => {
+    if (sibling.child_session_id === input.selfChildSessionID) return []
+    const declared = sibling.execution_spec?.["fileScope"]
+    const siblingScope = Array.isArray(declared) ? declared.filter((item): item is string => typeof item === "string") : []
+    if (siblingScope.length === 0) return []
+    if (!ConflictArbiter.conflicts(claim("incoming", input.fileScope), claim(sibling.run_id, siblingScope))) return []
+    const common = input.fileScope.filter((file) => siblingScope.includes(file))
+    return [
+      `Scope overlaps with active task ${sibling.child_session_id} (${common.join(", ")}); consider sequencing or disjoint scopes.`,
+    ]
+  })
+})
+
 export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const tools = yield* Tools.Service
@@ -164,6 +289,16 @@ export const layer = Layer.effectDiscard(
             description: DESCRIPTION,
             input: Input,
             output: Output,
+            toModelOutput: ({ output }) => {
+              const lines = [output.text]
+              if (output.warnings !== undefined) lines.push(...output.warnings)
+              if (output.run?.branch !== undefined)
+                lines.push(
+                  `Write-type subagent output is on branch \`${output.run.branch}\`; finalize with pr_finalize, inspect with task_read.`,
+                )
+              lines.push(`task_id: "${output.task_id}"`)
+              return [toolText({ type: "text", text: lines.join("\n") })]
+            },
             execute: (params, context) =>
               withTaskConcurrency(
                 String(context.sessionID),
@@ -285,12 +420,58 @@ export const layer = Layer.effectDiscard(
                   // with the run's input_state pending→ready CAS. The executor only claims and
                   // resumes the child; it NEVER admits another first prompt.
                   const database = Option.getOrUndefined(yield* Effect.serviceOption(Database.Service))
+                  const runRowByID = (runID: string) =>
+                    database === undefined
+                      ? Effect.succeed(undefined)
+                      : database.db
+                          .select({
+                            workspace_mode: TaskRunTable.workspace_mode,
+                            worktree_branch: TaskRunTable.worktree_branch,
+                            worktree_state: TaskRunTable.worktree_state,
+                          })
+                          .from(TaskRunTable)
+                          .where(eq(TaskRunTable.run_id, runID))
+                          .get()
+                          .pipe(Effect.orDie)
+                  const latestRunRow = (childID: SessionSchema.ID) =>
+                    database === undefined
+                      ? Effect.succeed(undefined)
+                      : database.db
+                          .select({
+                            workspace_mode: TaskRunTable.workspace_mode,
+                            worktree_branch: TaskRunTable.worktree_branch,
+                            worktree_state: TaskRunTable.worktree_state,
+                          })
+                          .from(TaskRunTable)
+                          .where(
+                            and(
+                              eq(TaskRunTable.parent_session_id, context.sessionID),
+                              eq(TaskRunTable.child_session_id, childID),
+                            ),
+                          )
+                          .orderBy(desc(TaskRunTable.generation))
+                          .get()
+                          .pipe(Effect.orDie)
                   const durableLaunch = Effect.gen(function* () {
                     const events = Option.getOrUndefined(yield* Effect.serviceOption(EventV2.Service))
                     if (!database || !events)
                       return yield* toolFailure(
                         `task is unavailable: durable authority services missing from the runner context (database: ${database ? "ok" : "missing"}, events: ${events ? "ok" : "missing"})`,
                       )
+                    // S4 warn layer (fresh launches only): declared-scope overlap with ACTIVE
+                    // write-type siblings. Computed BEFORE admission; advisory only, never blocks.
+                    const warnings =
+                      workspaceMode === "worktree" && params.file_scope !== undefined && params.file_scope.length > 0
+                        ? yield* scopeOverlapWarnings(database.db, {
+                            parentSessionID: context.sessionID,
+                            fileScope: params.file_scope,
+                            selfChildSessionID: TaskRunAuthority.deterministicChildSessionID({
+                              parentSessionID: context.sessionID,
+                              parentMessageID: context.assistantMessageID,
+                              toolCallID: context.toolCallID,
+                            }),
+                          })
+                        : []
                     const admitted = yield* TaskRunAuthority.submit(database.db, events, sessions, {
                       parentSessionID: context.sessionID,
                       parentMessageID: context.assistantMessageID,
@@ -299,6 +480,7 @@ export const layer = Layer.effectDiscard(
                       prompt: new Prompt({ text: params.prompt }),
                       agent: resolved.id,
                       ...(outputSchema === undefined ? {} : { outputSchema }),
+                      ...(params.file_scope === undefined ? {} : { fileScope: params.file_scope }),
                       child: {
                         title: `task: ${params.description}`,
                         location: parent.location,
@@ -327,23 +509,51 @@ export const layer = Layer.effectDiscard(
                       ),
                     ))
                     if (result.outcome === "timeout") timedOut = true
+                    const run = runInfoOf(yield* runRowByID(admitted.run.runID), params.subagent_type)
                     return {
                       childID: admitted.run.childSessionID,
                       runID: admitted.run.runID,
+                      warnings,
+                      run,
                       text:
                         result.outcome === "completed"
                           ? result.research
-                          : `${result.research}\n\n[task ended before completion: ${result.outcome === "timeout" ? `timed out after ${DEFAULT_SUBAGENT_TIMEOUT_MS}ms` : result.failureMessage} — resume with task_id "${admitted.run.childSessionID}" to continue.]`,
+                          : result.outcome === "timeout"
+                            ? `${result.research}\n\n${timeoutNoticeText({
+                                timeoutMs: DEFAULT_SUBAGENT_TIMEOUT_MS,
+                                childID: admitted.run.childSessionID,
+                                ...(run?.branch === undefined ? {} : { branch: run.branch }),
+                              })}`
+                            : `${result.research}\n\n[task ended before completion: ${result.failureMessage} — resume with task_id "${admitted.run.childSessionID}" to continue.]`,
                     }
                   })
                   const resumeLaunch = Effect.gen(function* () {
                     const childID = SessionSchema.ID.make(params.task_id!)
-                    return { childID, runID: undefined, text: yield* drive(childID, params.prompt) }
+                    const text = yield* drive(childID, params.prompt)
+                    return {
+                      childID,
+                      runID: undefined,
+                      warnings: [] as string[],
+                      run: runInfoOf(yield* latestRunRow(childID), params.subagent_type),
+                      text,
+                    }
                   })
                   const launch = yield* (params.task_id === undefined ? durableLaunch : resumeLaunch)
                   const childID = launch.childID
                   const research = launch.text
-                  if (!outputSchema) return { task_id: childID, text: research }
+                  const warnings = launch.warnings
+                  const runInfo = launch.run
+                  if (!outputSchema)
+                    return {
+                      task_id: childID,
+                      text: boundResultText(research, {
+                        maxChars: subagentOutputMaxChars(),
+                        taskID: childID,
+                        ...(runInfo?.branch === undefined ? {} : { branch: runInfo.branch }),
+                      }),
+                      ...(runInfo === undefined ? {} : { run: runInfo }),
+                      ...(warnings.length === 0 ? {} : { warnings }),
+                    }
                   // `prompt` is a durable admission. Once the shared deadline wins, never enqueue
                   // one or two doomed 1ms finalizer prompts into the child inbox.
                   if (timedOut)
@@ -428,7 +638,12 @@ export const layer = Layer.effectDiscard(
                           ),
                         ),
                       )
-                      return { task_id: childID, text: JSON.stringify(candidate) }
+                      return {
+                        task_id: childID,
+                        text: JSON.stringify(candidate),
+                        ...(runInfo === undefined ? {} : { run: runInfo }),
+                        ...(warnings.length === 0 ? {} : { warnings }),
+                      }
                     }
                     correction = error.slice(0, 1_000)
                   }

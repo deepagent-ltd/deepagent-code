@@ -56,14 +56,16 @@ describe("production runtime integrity", () => {
     expect(runner).not.toContain("registerToolSettleGate")
   })
 
-  test("production built-ins cannot advertise the inactive domain pack prototype", async () => {
+  test("production built-ins register the real domain_pack_load implementation", async () => {
+    // V2.0.1 WS3 chain repair: the inactive prototype in capability-load-tool.ts is gone;
+    // the production tool lives in domain-pack-load-tool.ts and is registered by builtins.
     const loads = await Bun.file(
       path.join(repository, "packages/core/src/system-context/capability-load-tool.ts"),
     ).text()
     const builtins = await Bun.file(path.join(repository, "packages/core/src/tool/builtins.ts")).text()
-    expect(loads).toContain("export function makeDomainPackLoadTool")
-    expect(loads.slice(loads.indexOf("export const layer"))).not.toContain("[domainPackLoadName]")
-    expect(builtins).not.toContain("CapabilityLoadTool.domainPackLoadName")
+    expect(loads).not.toContain("export function makeDomainPackLoadTool")
+    expect(builtins).toContain("DomainPackLoadTool.layer")
+    expect(builtins).toContain("DomainPackLoadTool.name")
   })
 
   test("the DeepAgent V2 frame composes Core's canonical Session runtime", async () => {

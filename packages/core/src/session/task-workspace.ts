@@ -30,7 +30,7 @@ export * as TaskWorkspace from "./task-workspace"
 import fs from "fs/promises"
 import path from "path"
 import { spawnSync } from "node:child_process"
-import { and, eq, isNull, or, sql } from "drizzle-orm"
+import { and, eq, inArray, isNull, or, sql } from "drizzle-orm"
 import { Data, Effect } from "effect"
 import type { Database } from "../database/database"
 import { Global } from "../global"
@@ -77,6 +77,12 @@ export type WorkspaceReceipt = {
 export type ReleaseOutcome = {
   readonly runID: string
   readonly released: boolean
+  readonly state: string
+}
+
+export type RetainOutcome = {
+  readonly runID: string
+  readonly retained: boolean
   readonly state: string
 }
 
@@ -531,6 +537,60 @@ export const release = Effect.fn("TaskWorkspace.release")(function* (
     )
     .pipe(Effect.orDie)
   return { runID: row.run_id, released: true, state: row.state } satisfies ReleaseOutcome
+})
+
+// ── retain: terminal-fenced worktree keep (timeout/interrupt survival) ────────────────────────
+
+/**
+ * Mark the run-owned worktree RETAINED instead of pruning it: the directory and branch stay on
+ * disk so the child session (rooted at the worktree directory) remains resumable by task_id, and
+ * a later task_close / pr_finalize / explicit release owns the cleanup. Fenced by durable run
+ * state exactly like {@link release} — an in-flight run refuses (typed). Idempotent: an already
+ * retained (or already released/submitted) row converges without a second event. Best-effort by
+ * contract — callers treat a retain failure as cleanup debt, never as a run failure.
+ */
+export const retain = Effect.fn("TaskWorkspace.retain")(function* (
+  db: DatabaseService,
+  input: { readonly runID: string; readonly now?: number },
+) {
+  const now = input.now ?? Date.now()
+  const loaded = yield* loadRunRow(db, input.runID)
+  const row = yield* requireIsolatedRun(loaded, input.runID)
+  if (!TERMINAL_STATES.has(row.state))
+    return yield* new WorkspaceError({
+      runID: input.runID,
+      code: "not_terminal",
+      message: `workspace retain refused: run '${row.state}' is in flight`,
+    })
+  if (row.worktree_state !== "ready" && row.worktree_state !== "admitting" && row.worktree_state !== "conflict")
+    return { runID: row.run_id, retained: row.worktree_state === "retained", state: row.worktree_state } satisfies RetainOutcome
+
+  const updated = yield* db
+    .update(TaskRunTable)
+    .set({
+      worktree_state: "retained",
+      version: sql`${TaskRunTable.version} + 1`,
+      time_updated: now,
+    })
+    .where(
+      and(
+        eq(TaskRunTable.run_id, row.run_id),
+        eq(TaskRunTable.execution_runtime, "v2"),
+        inArray(TaskRunTable.worktree_state, ["ready", "admitting", "conflict"]),
+      ),
+    )
+    .returning({ version: TaskRunTable.version })
+    .get()
+    .pipe(Effect.orDie)
+  if (updated)
+    yield* appendEvent(db, {
+      runID: row.run_id,
+      version: updated.version,
+      type: "worktree_retained",
+      reason: `${row.worktree_branch ?? ""}:${row.worktree_directory ?? ""}`,
+      now,
+    })
+  return { runID: row.run_id, retained: true, state: "retained" } satisfies RetainOutcome
 })
 
 // ── Physical git (spawned git; the parent repository is read-only here) ────────────────────────
