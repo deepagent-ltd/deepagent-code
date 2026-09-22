@@ -5,7 +5,7 @@ import { Context, Effect, Layer, Option, Schema } from "effect"
 import { FileSystem } from "./filesystem"
 import { FSUtil } from "./fs-util"
 import { Ripgrep } from "./ripgrep"
-import { NonNegativeInt, PositiveInt, RelativePath } from "./schema"
+import { NonNegativeInt, PositiveInt, RelativePath, tolerantInt } from "./schema"
 
 /**
  * Location-scoped raw search substrate. Search authority is selected only by
@@ -22,7 +22,9 @@ export const DEFAULT_RESULT_LIMIT = 100
 export const MAX_RESULT_LIMIT = 100
 export const MAX_LINE_PREVIEW_LENGTH = 2_000
 
-export const ResultLimit = PositiveInt.check(Schema.isLessThanOrEqualTo(MAX_RESULT_LIMIT))
+// Tolerant int arm (F-1): ResultLimit backs the model-facing glob/grep tool `limit` inputs,
+// where GLM-class providers send stringified numbers.
+export const ResultLimit = tolerantInt(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(MAX_RESULT_LIMIT))
 
 export const FilesInput = Schema.Struct({
   pattern: Schema.String,

@@ -22,7 +22,7 @@ const LocationInput = Schema.Struct({
     description: "The maximum number of directory entries or text lines to read",
   }),
 })
-const Input = LocationInput
+export const Input = LocationInput
 const Output = Schema.Union([FileSystem.Content, FileSystem.TextPage, FileSystem.ListPage])
 
 export const layer = Layer.effectDiscard(
