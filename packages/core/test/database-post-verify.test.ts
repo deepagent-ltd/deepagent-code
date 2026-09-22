@@ -38,6 +38,7 @@ const createRecoveryTables = (db: EffectDrizzleSqlite.EffectSQLiteDatabase) =>
     // classifyStartup reads, so the clean fixture keeps the inventory total (unclassified = 0).
     yield* db.run(sql`CREATE TABLE event_snapshot_attempt (snapshot_id TEXT PRIMARY KEY, state TEXT)`)
     yield* db.run(sql`CREATE TABLE event_compaction_receipt (aggregate_id TEXT PRIMARY KEY, state TEXT)`)
+    yield* db.run(sql`CREATE TABLE session_v2_compaction_request (request_id TEXT PRIMARY KEY, status TEXT)`)
     yield* db.run(sql`CREATE TABLE session_facade_activity (activity_id TEXT PRIMARY KEY, state TEXT)`)
     yield* db.run(sql`CREATE TABLE session_activity (activity_id TEXT PRIMARY KEY, state TEXT)`)
     // W2 C1B recovery descriptor + command surface — created so classifyStartup is total.
