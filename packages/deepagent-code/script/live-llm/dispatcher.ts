@@ -294,6 +294,10 @@ const modelCommands = new Map<string, DispatcherCommand>([
     command("packages/deepagent-code", "bun", "run", "test:llm-ext:context-authority"),
   ],
   ["ext:legacy-session:code-intel", command("packages/deepagent-code", "bun", "run", "test:llm-ext:code-intel")],
+  [
+    "ext:legacy-session:v2-01-acceptance",
+    command("packages/deepagent-code", "bun", "run", "test:llm-ext:v2-01-acceptance"),
+  ],
   ["ext:legacy-session:expert-panel", command("packages/deepagent-code", "bun", "run", "test:llm-ext:expert-panel")],
   [
     "ext:legacy-session:intelligence-draft-confirmation",

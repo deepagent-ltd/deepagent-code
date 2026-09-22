@@ -56,6 +56,7 @@ export const modelSuites = [
   "subagent-control-plane",
   "plan-advance-contract",
   "plan-create-replan-contract",
+  "v2-01-acceptance",
 ] as const
 
 export type ExecutionStack = (typeof executionStacks)[number]
@@ -137,6 +138,7 @@ const promptIntentFencing = modelRun("ext", "legacy-session", "prompt-intent-fen
 const subagentControlPlane = modelRun("live", "legacy-session", "subagent-control-plane")
 const planAdvanceContract = modelRun("live", "legacy-session", "plan-advance-contract")
 const planCreateReplanContract = modelRun("live", "legacy-session", "plan-create-replan-contract")
+const v201Acceptance = modelRun("ext", "legacy-session", "v2-01-acceptance")
 const allHarnessRuns = [
   adapterProvider,
   cliHeadless,
@@ -1210,6 +1212,21 @@ export const routeManifest = [
     ],
     checks: ["session-v2", "permission"],
     runs: [codeIntelContextTools],
+  },
+  {
+    id: "v2-01-acceptance-suite",
+    paths: [
+      "packages/core/src/permission.ts",
+      "packages/core/src/deepagent/plan-controller.ts",
+      "packages/core/src/system-context/capability-bodies.ts",
+      "packages/core/src/tool/knowledge-propose.ts",
+      "packages/core/src/tool/task.ts",
+      "packages/core/src/tool/task.txt",
+      "packages/deepagent-code/script/live-llm/v2-01-acceptance.ts",
+      "packages/domain-packs/deepagent/dac-manual/**",
+    ],
+    checks: ["session-v2", "permission"],
+    runs: [v201Acceptance],
   },
   {
     id: "goal-loop-production",
