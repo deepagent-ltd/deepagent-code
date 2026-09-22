@@ -94,9 +94,8 @@ export type Event =
   | EventQuestionRejected
   | EventSessionStatus
   | EventSessionIdle
-  | EventSessionCompacted
-  | EventPlanUpdated
   | EventGoalUpdated
+  | EventPlanUpdated
   | EventDebugStopped
   | EventDebugOutput
   | EventDebugTerminated
@@ -105,6 +104,7 @@ export type Event =
   | EventWorkspaceReady
   | EventWorkspaceFailed
   | EventWorkspaceStatus
+  | EventSessionCompacted
   | EventSessionProviderResolutionCompleted
   | EventServerConnected
   | EventGlobalDisposed
@@ -1347,7 +1347,7 @@ export type GlobalEvent = {
           sessionID: string
           assistantMessageID: string
           callID: string
-          error: SessionErrorUnknown
+          error: SessionErrorToolCall
           result?: unknown
           provider: {
             executed: boolean
@@ -1808,9 +1808,20 @@ export type GlobalEvent = {
       }
     | {
         id: string
-        type: "session.compacted"
+        type: "goal.updated"
         properties: {
           sessionID: string
+          goalId: string
+          planDocId: string
+          phase: string
+          ledger: {
+            ticks: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            tokens: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            cost: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            wallclockMs: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          }
+          stallCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          gaps: Array<string>
         }
       }
     | {
@@ -1835,24 +1846,6 @@ export type GlobalEvent = {
           done: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
           total: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
           changes?: Array<string>
-        }
-      }
-    | {
-        id: string
-        type: "goal.updated"
-        properties: {
-          sessionID: string
-          goalId: string
-          planDocId: string
-          phase: string
-          ledger: {
-            ticks: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-            tokens: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-            cost: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-            wallclockMs: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          }
-          stallCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          gaps: Array<string>
         }
       }
     | {
@@ -1915,6 +1908,13 @@ export type GlobalEvent = {
         properties: {
           workspaceID: string
           status: "connected" | "connecting" | "disconnected" | "error"
+        }
+      }
+    | {
+        id: string
+        type: "session.compacted"
+        properties: {
+          sessionID: string
         }
       }
     | {
@@ -5188,6 +5188,11 @@ export type ToolFileContent = {
   name?: string
 }
 
+export type SessionErrorToolCall = {
+  type: "unknown" | "permission_rejected" | "permission_corrected" | "permission_denied"
+  message: string
+}
+
 export type SessionNextRetryError = {
   message: string
   statusCode?: number
@@ -6325,7 +6330,7 @@ export type SyncEventSessionNextToolFailed1 = {
       sessionID: string
       assistantMessageID: string
       callID: string
-      error: SessionErrorUnknown
+      error: SessionErrorToolCall
       result?: unknown
       provider: {
         executed: boolean
@@ -6902,7 +6907,7 @@ export type SessionMessageToolStateError = {
   structured: {
     [key: string]: unknown
   }
-  error: SessionErrorUnknown
+  error: SessionErrorToolCall
   result?: unknown
 }
 
@@ -7660,7 +7665,7 @@ export type EventSessionNextToolFailed = {
     sessionID: string
     assistantMessageID: string
     callID: string
-    error: SessionErrorUnknown
+    error: SessionErrorToolCall
     result?: unknown
     provider: {
       executed: boolean
@@ -8227,11 +8232,22 @@ export type EventSessionIdle = {
   }
 }
 
-export type EventSessionCompacted = {
+export type EventGoalUpdated = {
   id: string
-  type: "session.compacted"
+  type: "goal.updated"
   properties: {
     sessionID: string
+    goalId: string
+    planDocId: string
+    phase: string
+    ledger: {
+      ticks: number | "NaN" | "Infinity" | "-Infinity"
+      tokens: number | "NaN" | "Infinity" | "-Infinity"
+      cost: number | "NaN" | "Infinity" | "-Infinity"
+      wallclockMs: number | "NaN" | "Infinity" | "-Infinity"
+    }
+    stallCount: number | "NaN" | "Infinity" | "-Infinity"
+    gaps: Array<string>
   }
 }
 
@@ -8257,25 +8273,6 @@ export type EventPlanUpdated = {
     done: number | "NaN" | "Infinity" | "-Infinity"
     total: number | "NaN" | "Infinity" | "-Infinity"
     changes?: Array<string>
-  }
-}
-
-export type EventGoalUpdated = {
-  id: string
-  type: "goal.updated"
-  properties: {
-    sessionID: string
-    goalId: string
-    planDocId: string
-    phase: string
-    ledger: {
-      ticks: number | "NaN" | "Infinity" | "-Infinity"
-      tokens: number | "NaN" | "Infinity" | "-Infinity"
-      cost: number | "NaN" | "Infinity" | "-Infinity"
-      wallclockMs: number | "NaN" | "Infinity" | "-Infinity"
-    }
-    stallCount: number | "NaN" | "Infinity" | "-Infinity"
-    gaps: Array<string>
   }
 }
 
@@ -8346,6 +8343,14 @@ export type EventWorkspaceStatus = {
   properties: {
     workspaceID: string
     status: "connected" | "connecting" | "disconnected" | "error"
+  }
+}
+
+export type EventSessionCompacted = {
+  id: string
+  type: "session.compacted"
+  properties: {
+    sessionID: string
   }
 }
 
@@ -19186,7 +19191,10 @@ export type V2SessionPromptResponses = {
 export type V2SessionPromptResponse = V2SessionPromptResponses[keyof V2SessionPromptResponses]
 
 export type V2SessionCompactData = {
-  body?: never
+  body: {
+    providerID: string
+    modelID: string
+  }
   path: {
     sessionID: string
   }
