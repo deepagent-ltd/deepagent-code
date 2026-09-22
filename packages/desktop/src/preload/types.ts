@@ -1,19 +1,5 @@
 import type { DesktopMenuAction } from "@deepagent-code/app/desktop-menu"
-import type { WslServersPlatform } from "@deepagent-code/app/wsl/types"
 import type { UpdaterState } from "@deepagent-code/app/updater"
-export type {
-  WslDistroProbe,
-  WslInstalledDistro,
-  WslJob,
-  WslOnlineDistro,
-  WslDeepagentCodeCheck,
-  WslRuntimeCheck,
-  WslServerConfig,
-  WslServerItem,
-  WslServerRuntime,
-  WslServersEvent,
-  WslServersState,
-} from "@deepagent-code/app/wsl/types"
 
 export type ServerReadyData = {
   url: string
@@ -21,7 +7,6 @@ export type ServerReadyData = {
   password: string | null
 }
 
-export type WslServersAPI = WslServersPlatform
 export type UpdaterAPI = {
   subscribe: (cb: (state: UpdaterState) => void) => Promise<() => void>
   check: () => Promise<UpdaterState>
@@ -75,7 +60,6 @@ export type ElectronAPI = {
   installCli: () => Promise<string>
   awaitInitialization: () => Promise<ServerReadyData>
   browser: BrowserAPI
-  wslServers: WslServersAPI
   updater: UpdaterAPI
   consumeInitialDeepLinks: () => Promise<string[]>
   getDefaultServerUrl: () => Promise<string | null>

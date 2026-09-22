@@ -12,7 +12,6 @@ import {
   PlatformProvider,
   ServerConnection,
   useCommand,
-  useWslServers,
 } from "@deepagent-code/app"
 import type { UpdaterState } from "@deepagent-code/app/updater"
 import * as Sentry from "@sentry/solid"
@@ -24,7 +23,6 @@ import pkg from "../../package.json"
 import { initI18n, t } from "./i18n"
 import { initializationData, initializationReady } from "./initialization"
 import { resetZoom, setPinchZoomEnabled, setZoom, webviewZoom, zoomIn, zoomOut } from "./webview-zoom"
-import { availableStartupServer, readyWslConnections } from "./wsl/connections"
 import "./styles.css"
 import { Splash } from "@deepagent-code/ui/logo"
 import { useTheme } from "@deepagent-code/ui/theme/context"
@@ -144,8 +142,6 @@ const createPlatform = (): Platform => {
     }
   })()
 
-  const wslServersApi = os === "windows" ? window.api.wslServers : undefined
-
   return {
     platform: "desktop",
     os,
@@ -249,8 +245,6 @@ const createPlatform = (): Platform => {
       await window.api.setDefaultServerUrl(url)
     },
 
-    wslServers: wslServersApi,
-
     browser: window.api.browser,
 
     getDisplayBackend: async () => {
@@ -347,7 +341,6 @@ render(() => {
   }
 
   function App() {
-    const wslServers = useWslServers()
     const splash = (
       <div class="h-dvh w-screen flex flex-col items-center justify-center bg-background-base">
         <Splash class="w-16 h-20 opacity-50 animate-pulse" />
@@ -384,12 +377,9 @@ render(() => {
           },
         })
       }
-      list.push(...readyWslConnections(wslServers.data))
       return list
     })
-    const effectiveDefaultServer = createMemo(() =>
-      ServerConnection.Key.make(availableStartupServer(defaultServer.latest, wslServers.data)),
-    )
+    const effectiveDefaultServer = createMemo(() => ServerConnection.Key.make(defaultServer.latest ?? "sidecar"))
 
     function RoutedApp(props: { serverKey: ServerConnection.Key }) {
       const history = createMemoryHistory()
