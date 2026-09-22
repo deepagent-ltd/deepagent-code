@@ -1062,11 +1062,13 @@ export const layer = Layer.effect(
           ? {
               costOf: (stepTokens: { input: number; output: number; cache: { read: number; write: number } }) => {
                 const per = (count: number, rate: number) => (Math.max(0, count) / 1e6) * rate
+                // Unknown cache rates stay unaccounted (typed unavailable in the
+                // catalog entry — never a fabricated 0 rate; K-04 / 405-007).
                 return (
                   per(stepTokens.input, pricing.input) +
                   per(stepTokens.output, pricing.output) +
-                  per(stepTokens.cache.read, pricing.cache.read) +
-                  per(stepTokens.cache.write, pricing.cache.write)
+                  (pricing.cache?.read === undefined ? 0 : per(stepTokens.cache.read, pricing.cache.read)) +
+                  (pricing.cache?.write === undefined ? 0 : per(stepTokens.cache.write, pricing.cache.write))
                 )
               },
             }

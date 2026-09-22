@@ -29,6 +29,9 @@ export const Plugin = PluginV2.define({
           catalog.provider.update(providerID, (provider) => {
             if (item.name !== undefined) provider.name = item.name
             if (item.env !== undefined) provider.env = [...item.env]
+            // K-04 contract: config-ingressed providers carry a dedicated origin
+            // provenance; `enabled.via: "custom"` stays an availability fact only.
+            provider.origin = "config"
             provider.enabled = { via: "custom", data: {} }
             if (item.api !== undefined) provider.api = { ...item.api }
             if (item.request !== undefined) {
@@ -79,14 +82,21 @@ export const Plugin = PluginV2.define({
                 }
               }
               if (config.cost !== undefined) {
+                // Unknown pricing stays typed-unavailable (absent), never coerced
+                // to 0 — a fabricated 0 cache rate reads as "cache is free" to
+                // the runner's cost accounting (405-007).
                 model.cost = (Array.isArray(config.cost) ? config.cost : [config.cost]).map((cost) => ({
-                  tier: cost.tier && { ...cost.tier },
+                  ...(cost.tier === undefined ? {} : { tier: { ...cost.tier } }),
                   input: cost.input,
                   output: cost.output,
-                  cache: {
-                    read: cost.cache?.read ?? 0,
-                    write: cost.cache?.write ?? 0,
-                  },
+                  ...(cost.cache === undefined
+                    ? {}
+                    : {
+                        cache: {
+                          ...(cost.cache.read === undefined ? {} : { read: cost.cache.read }),
+                          ...(cost.cache.write === undefined ? {} : { write: cost.cache.write }),
+                        },
+                      }),
                 }))
               }
               if (config.disabled !== undefined) model.enabled = !config.disabled

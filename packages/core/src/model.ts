@@ -26,10 +26,12 @@ export const Cost = Schema.Struct({
   }).pipe(Schema.optional),
   input: Schema.Finite,
   output: Schema.Finite,
+  // Cache rates unknown stay absent — typed unavailable, never coerced to 0
+  // (405-007: a fabricated 0 reads as "cache is free" to every consumer).
   cache: Schema.Struct({
-    read: Schema.Finite,
-    write: Schema.Finite,
-  }),
+    read: Schema.Finite.pipe(Schema.optional),
+    write: Schema.Finite.pipe(Schema.optional),
+  }).pipe(Schema.optional),
 })
 
 
@@ -70,10 +72,13 @@ export class Info extends Schema.Class<Info>("ModelV2.Info")({
   cost: Cost.pipe(Schema.Array),
   status: Schema.Literals(["alpha", "beta", "deprecated", "active"]),
   enabled: Schema.Boolean,
+  // Unknown limits stay absent — typed unavailable, never coerced to 0 (K-04 /
+  // 405-007: a fabricated 0 reads as a real window to consumers that sum or
+  // display it). Models.dev and config ingression write only declared values.
   limit: Schema.Struct({
-    context: Schema.Int,
+    context: Schema.Int.pipe(Schema.optional),
     input: Schema.Int.pipe(Schema.optional),
-    output: Schema.Int,
+    output: Schema.Int.pipe(Schema.optional),
   }),
 }) {
   static empty(providerID: ProviderV2.ID, modelID: ID): Info {
@@ -104,10 +109,8 @@ export class Info extends Schema.Class<Info>("ModelV2.Info")({
       cost: [],
       status: "active",
       enabled: true,
-      limit: {
-        context: 0,
-        output: 0,
-      },
+      // No fabricated zeros: every limit field starts typed-unavailable (absent).
+      limit: {},
     })
   }
 }

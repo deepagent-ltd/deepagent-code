@@ -13,7 +13,11 @@
  */
 export const HeadPin = {
   /** Commit whose tree the digests were pinned on. Informational; the digests are the gate. */
-  commit: "0832dd0ed3a4b315c91c012bd8c519c8fdb9c99e",
-  setTreeDigest: "6b89138f13b43dca0a95e5bd5fa1c3b257b8e263855fff22cb51ad317a4d2283",
-  overallDigest: "89e02f613fa1d30bede86dcda35c7be838e689aba9fcc81dc916aadb1a093e5b",
+  // Re-pinned on the K-04 branch (wip/k04-provider-ingression) after the config
+  // ingression + contract edits changed digest inputs under src/config and
+  // src/contract; a commit cannot contain its own hash, so the field records the
+  // branch base the tree derives from.
+  commit: "fa6668352fc92d4350e37e5a533eb3eb35df029c",
+  setTreeDigest: "a38ebe8fe005ab4589a336c549db75747f6ed1c1b8c3e059577134529e991523",
+  overallDigest: "bcfcd46eed83d2863103e96786c674bb41b6a8a441761dc111506b280b7401cc",
 } as const
