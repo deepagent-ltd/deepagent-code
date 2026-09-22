@@ -117,6 +117,9 @@ const createTables = (db: Db) =>
       CREATE TABLE event_compaction_receipt (aggregate_id TEXT PRIMARY KEY, state TEXT NOT NULL)
     `)
     yield* db.run(sql`
+      CREATE TABLE session_v2_compaction_request (request_id TEXT PRIMARY KEY, status TEXT NOT NULL)
+    `)
+    yield* db.run(sql`
       CREATE TABLE session_facade_activity (activity_id TEXT PRIMARY KEY, state TEXT NOT NULL)
     `)
     yield* db.run(sql`
@@ -201,6 +204,9 @@ describe("StartupInventory.classifyStartup (C1B-10)", () => {
           VALUES ('task-a', 'completed', NULL, NULL), ('task-b', 'running', NULL, NULL)`)
         yield* db.run(sql`INSERT INTO event_snapshot_attempt VALUES ('snap-a', 'complete'), ('snap-b', 'staged')`)
         yield* db.run(sql`INSERT INTO event_compaction_receipt VALUES ('agg-a', 'complete'), ('agg-b', 'running')`)
+        yield* db.run(sql`INSERT INTO session_v2_compaction_request
+          VALUES ('cr-pending', 'pending'), ('cr-dispatched', 'dispatched'), ('cr-settled', 'settled'),
+                 ('cr-recovery', 'recovery_required'), ('cr-failed', 'failed')`)
         yield* db.run(sql`INSERT INTO session_facade_activity VALUES ('act-a', 'settled'), ('act-b', 'active')`)
 
         const inventory = yield* StartupInventory.classifyStartup(db)
@@ -217,13 +223,13 @@ describe("StartupInventory.classifyStartup (C1B-10)", () => {
         expect(inventory.byCategory.tool_effect.recovery).toBe(1)
         expect(inventory.byCategory.task_run.resolved).toBe(1)
         expect(inventory.byCategory.task_run.recovery).toBe(1)
-        expect(inventory.byCategory.compaction.resolved).toBe(2)
-        expect(inventory.byCategory.compaction.safe_before_dispatch).toBe(1)
-        expect(inventory.byCategory.compaction.recovery).toBe(1)
+        expect(inventory.byCategory.compaction.resolved).toBe(4)
+        expect(inventory.byCategory.compaction.safe_before_dispatch).toBe(2)
+        expect(inventory.byCategory.compaction.recovery).toBe(3)
         expect(inventory.byCategory.session_activity.resolved).toBe(1)
         expect(inventory.byCategory.session_activity.recovery).toBe(1)
         expect(inventory.byCategory.sync_projection.resolved).toBe(1)
-        expect(inventory.total).toBe(14)
+        expect(inventory.total).toBe(19)
         expect(inventory.ready).toBe(true)
         expect(inventory.unclassifiedItems).toHaveLength(0)
       }),
@@ -283,6 +289,31 @@ describe("StartupInventory.classifyStartup (C1B-10)", () => {
           classification: "unclassified",
           state: "indeterminate_after_crash",
           reason: "provider attempt lacks its exact current Session execution claim",
+        })
+      }),
+    )
+  })
+
+  test("an unknown compaction-request status is unclassified; known request states map to their buckets", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* createTables(db)
+        yield* db.run(sql`
+          INSERT INTO session_v2_compaction_request
+          VALUES ('cr-pending', 'pending'), ('cr-orphaned', 'dispatched'), ('cr-weird', 'teleported')
+        `)
+
+        const inventory = yield* StartupInventory.classifyStartup(db)
+        expect(inventory.ready).toBe(false)
+        expect(inventory.byCategory.compaction.safe_before_dispatch).toBe(1)
+        expect(inventory.byCategory.compaction.recovery).toBe(1)
+        expect(inventory.unclassifiedItems).toContainEqual({
+          category: "compaction",
+          id: "request:cr-weird",
+          classification: "unclassified",
+          state: "teleported",
+          reason: "unknown request_compaction state 'teleported'",
         })
       }),
     )
