@@ -15,6 +15,7 @@
     "lint": "oxlint",
     "typecheck": "bun turbo typecheck",
     "upgrade-opentui": "bun run script/upgrade-opentui.ts",
+    "assert:docs-claims": "bun run script/assert-docs-claims.ts",
     "postinstall": "bun run --cwd packages/core fix-node-pty",
     "prepare": "husky",
     "test": "bun turbo test",
