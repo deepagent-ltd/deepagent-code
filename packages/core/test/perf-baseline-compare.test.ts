@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import * as fs from "node:fs"
 import * as path from "node:path"
-import { compareSummaries, writeCompareReport, type CompareThresholds } from "../script/perf-baseline/compare"
+import { compareSummaries, writeCompareReport, type CompareThresholds, type Finding } from "../script/perf-baseline/compare"
 import type { SummaryRow } from "../script/perf-baseline/samples"
 import { tmpRoot } from "./fixture/tmpdir"
 
@@ -63,7 +63,7 @@ describe("perf baseline compare (C7-06 / K-07 B-12)", () => {
     const candidate = [row("startup", "cold", { p50: 20 }), row("startup", "warm", { p50: 14 }), row("journal", "hydration", { p50: 16 })]
     const report = compareSummaries(baseline, candidate, thresholds)
     expect(report.regressions).toBe(1)
-    const journal = report.findings.find((finding) => finding.kind === "compared" && finding.scenario === "journal")
+    const journal = report.findings.find((finding): finding is Extract<Finding, { kind: "compared" }> => finding.kind === "compared" && finding.scenario === "journal")
     expect(journal?.verdict).toBe("regression")
   })
 
