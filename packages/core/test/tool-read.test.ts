@@ -136,6 +136,40 @@ describe("ReadTool", () => {
     }),
   )
 
+  it.effect("threads stringified paging numbers through decode into the filesystem page", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+
+      expect(
+        yield* executeTool(registry, {
+          sessionID,
+          ...toolIdentity,
+          call: {
+            type: "tool-call",
+            id: "call-read-string-paging",
+            name: "read",
+            input: { path: "README.md", offset: "10", limit: "100" },
+          },
+        }),
+      ).toEqual({ type: "text", value: "hello" })
+      expect(readCalls).toEqual([{ input: { path: "README.md", offset: 10, limit: 100 }, page: { offset: 10, limit: 100 } }])
+
+      readCalls.length = 0
+      const rejected = yield* settleTool(registry, {
+        sessionID,
+        ...toolIdentity,
+        call: {
+          type: "tool-call",
+          id: "call-read-bad-offset",
+          name: "read",
+          input: { path: "README.md", offset: "abc" },
+        },
+      })
+      expect(rejected.result).toMatchObject({ type: "error", value: expect.stringContaining("Invalid tool input") })
+      expect(readCalls).toEqual([])
+    }),
+  )
+
   it.effect("returns a small PNG as native media instead of durable base64 text", () =>
     Effect.gen(function* () {
       const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="

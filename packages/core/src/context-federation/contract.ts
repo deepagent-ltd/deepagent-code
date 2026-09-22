@@ -1,6 +1,7 @@
 export * as ContextFederationContract from "./contract"
 
 import { Schema } from "effect"
+import { tolerantInt } from "../schema"
 
 export const Version = {
   contextRefToken: 1,
@@ -39,8 +40,10 @@ export const CodeIntelInput = Schema.Struct({
   kind: Schema.Literals(["file", "module", "package", "class", "interface", "type", "function", "method"]).pipe(
     Schema.optional,
   ),
-  depth: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 3 })).pipe(Schema.optional),
-  limit: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 })).pipe(Schema.optional),
+  // Tolerant int arms (F-1): these fields face the model through the code_intel tool, where
+  // GLM-class providers send stringified numbers; the same ranges apply to both arms.
+  depth: tolerantInt(Schema.isBetween({ minimum: 1, maximum: 3 })).pipe(Schema.optional),
+  limit: tolerantInt(Schema.isBetween({ minimum: 1, maximum: 100 })).pipe(Schema.optional),
   consistency: Schema.Literals(["stale_ok", "fresh"]).pipe(Schema.optional),
   cursor: Schema.String.pipe(Schema.optional),
 })
@@ -63,7 +66,7 @@ export const ContextQueryInput = Schema.Struct({
   sources: Schema.Array(GraphKind).pipe(Schema.optional),
   ref: Schema.String.pipe(Schema.optional),
   relation: Schema.String.pipe(Schema.optional),
-  limit: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 100 })).pipe(Schema.optional),
+  limit: tolerantInt(Schema.isBetween({ minimum: 1, maximum: 100 })).pipe(Schema.optional),
   consistency: Schema.Literals(["stale_ok", "fresh"]).pipe(Schema.optional),
   cursor: Schema.String.pipe(Schema.optional),
 })

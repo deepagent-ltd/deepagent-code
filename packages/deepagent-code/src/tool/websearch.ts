@@ -1,5 +1,6 @@
 import { Effect, Schema } from "effect"
 import { HttpClient } from "effect/unstable/http"
+import { tolerantNumber } from "@deepagent-code/core/schema"
 import * as Tool from "./tool"
 import * as McpWebSearch from "./mcp-websearch"
 import DESCRIPTION from "./websearch.txt"
@@ -9,7 +10,8 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 
 export const Parameters = Schema.Struct({
   query: Schema.String.annotate({ description: "Websearch query" }),
-  numResults: Schema.optional(Schema.Number).annotate({
+  // Tolerant number arms (F-1): GLM-class providers send stringified numbers.
+  numResults: Schema.optional(tolerantNumber()).annotate({
     description: "Number of search results to return (default: 8)",
   }),
   livecrawl: Schema.optional(Schema.Literals(["fallback", "preferred"])).annotate({
@@ -19,7 +21,7 @@ export const Parameters = Schema.Struct({
   type: Schema.optional(Schema.Literals(["auto", "fast", "deep"])).annotate({
     description: "Search type - 'auto': balanced search (default), 'fast': quick results, 'deep': comprehensive search",
   }),
-  contextMaxCharacters: Schema.optional(Schema.Number).annotate({
+  contextMaxCharacters: Schema.optional(tolerantNumber()).annotate({
     description: "Maximum characters for context string optimized for LLMs (default: 10000)",
   }),
 })

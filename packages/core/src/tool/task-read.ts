@@ -9,6 +9,7 @@ import { SessionMessage } from "../session/message"
 import { V2StructuredOutputEvidenceTable } from "../session/runner/v2-structured-output-evidence.sql"
 import { SessionSchema } from "../session/schema"
 import { TaskRunTable } from "../session/sql"
+import { tolerantNumber } from "../schema"
 import { Delegation } from "./delegation"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
@@ -25,9 +26,11 @@ const DESCRIPTION = [
   "Never returns hidden reasoning content.",
 ].join(" ")
 
-const Input = Schema.Struct({
+export const Input = Schema.Struct({
   task_id: Schema.String.annotate({ description: "The subagent session ID (from task_status output)" }),
-  limit: Schema.optional(Schema.Number).annotate({
+  // Tolerant number arm (F-1): GLM-class providers send stringified numbers; a malformed or
+  // "null" string rejects at the schema instead of poisoning the Math.min clamp with NaN.
+  limit: Schema.optional(tolerantNumber()).annotate({
     description: "Max messages to return (default 20, max 100)",
   }),
   before: Schema.optional(Schema.String).annotate({

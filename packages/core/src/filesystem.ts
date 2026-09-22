@@ -10,7 +10,7 @@ import { FSUtil } from "./fs-util"
 import { Global } from "./global"
 import { Location } from "./location"
 import { ProjectReference } from "./project-reference"
-import { NonNegativeInt, PositiveInt, RelativePath } from "./schema"
+import { NonNegativeInt, PositiveInt, RelativePath, tolerantInt } from "./schema"
 import { Protected } from "./filesystem/protected"
 import { Ripgrep } from "./filesystem/ripgrep"
 import { ToolOutputStore } from "./tool-output-store"
@@ -140,8 +140,10 @@ export type ListInput = typeof ListInput.Type
 
 export const ListPageInput = Schema.Struct({
   ...ListInput.fields,
-  offset: PositiveInt.pipe(Schema.optional),
-  limit: PositiveInt.check(Schema.isLessThanOrEqualTo(2_000)).pipe(Schema.optional),
+  // Tolerant int arms (F-1): these fields are re-exported as the V2 read tool's model-facing
+  // input, where GLM-class providers send stringified numbers.
+  offset: tolerantInt(Schema.isGreaterThan(0)).pipe(Schema.optional),
+  limit: tolerantInt(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(2_000)).pipe(Schema.optional),
 })
 export type ListPageInput = typeof ListPageInput.Type
 

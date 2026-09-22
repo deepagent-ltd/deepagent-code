@@ -1,4 +1,5 @@
 import { Effect, Schema } from "effect"
+import { tolerantInt } from "@deepagent-code/core/schema"
 import * as Tool from "./tool"
 import path from "path"
 import { LSP } from "@/lsp/lsp"
@@ -34,10 +35,11 @@ const intents = [
 
 export type Intent = (typeof intents)[number]
 
+// Tolerant int arms (F-1): GLM-class providers send coordinates as stringified numbers.
 const Position = Schema.Struct({
   file: Schema.String,
-  line: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
-  character: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
+  line: tolerantInt(Schema.isGreaterThanOrEqualTo(1)),
+  character: tolerantInt(Schema.isGreaterThanOrEqualTo(1)),
 })
 
 export const Parameters = Schema.Struct({
@@ -54,10 +56,10 @@ export const Parameters = Schema.Struct({
   kind: Schema.optional(
     Schema.Literals(["function", "class", "method", "interface", "variable", "constant", "struct", "enum"]),
   ).annotate({ description: "Optional: disambiguate symbols of the same name by kind." }),
-  limit: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))).annotate({
+  limit: Schema.optional(tolerantInt(Schema.isGreaterThanOrEqualTo(1))).annotate({
     description: "Max items in lists (references/calls). Bounded.",
   }),
-  depth: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))).annotate({
+  depth: Schema.optional(tolerantInt(Schema.isGreaterThanOrEqualTo(1))).annotate({
     description: "Expansion depth for calls_in/calls_out/supertypes/subtypes (default 1, max 3).",
   }),
   scope: Schema.optional(Schema.Literals(["file", "symbol", "workspace"])).annotate({

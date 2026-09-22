@@ -11,7 +11,7 @@ import { AppProcess } from "../process"
 import { PermissionV2 } from "../permission"
 import { Policy } from "../policy"
 import { ServerCapabilities } from "../server-capabilities"
-import { PositiveInt } from "../schema"
+import { tolerantInt } from "../schema"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 
@@ -25,7 +25,7 @@ export const Input = Schema.Struct({
   workdir: Schema.String.pipe(Schema.optional).annotate({
     description: "Working directory. Defaults to the active Location; relative paths resolve from that Location.",
   }),
-  timeout: PositiveInt.check(Schema.isLessThanOrEqualTo(MAX_TIMEOUT_MS))
+  timeout: tolerantInt(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(MAX_TIMEOUT_MS))
     .pipe(Schema.optional)
     .annotate({
       description: `Timeout in milliseconds. Defaults to ${DEFAULT_TIMEOUT_MS} and may not exceed ${MAX_TIMEOUT_MS}.`,
