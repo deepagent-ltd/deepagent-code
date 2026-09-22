@@ -50,7 +50,10 @@ describe("C0-01 caller inventory gate", () => {
     // v2w-j4 GitHub durable-only ingress (2026-09-19): the GitHub Action's durable V2 admission
     // module (src/github/github-agent-execution.ts) gets its own declared entry with a v2
     // admission/execution pin (403→404).
-    expect(inventory.entries.length).toBe(404)
+    // K-01 R-1/R-4 unified provider-resolution facade (2026-09-23): the provider-resolution
+    // command surface (session.providerResolutionCommand) and the maintenance redriveBlocked
+    // listing (maintenance.recoveryRedriveBlocked) are declared entries (404→406).
+    expect(inventory.entries.length).toBe(406)
     const lildax = inventory.entries
       .filter((entry) => entry.entry.surface === "cli-lildax")
       .map((entry) => entry.entry.id)

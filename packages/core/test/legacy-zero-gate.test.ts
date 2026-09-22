@@ -197,9 +197,13 @@ describe("C0-08 legacy-zero gate real inventory (actual frozen numbers)", () => 
     // deleted, removing its read_only-on-all-7 entry — read-only 2178→2171.
     // v2w-j4 GitHub durable-only ingress (2026-09-19): the new github.agent-execution declared
     // entry carries v2 on admission/execution (+2) and read_only on its other five dims (+5).
+    // K-01 R-1/R-4 facade + redrive-blocked surfaces (2026-09-23): the unified
+    // provider-resolution command surface and the maintenance redriveBlocked listing are
+    // declared (+2 entries); the recovery resolve surfaces re-classify onto the facade —
+    // adapter 432→439, read-only 2176→2183, entries 404→406, roles 2828→2842.
     expect(counters.v2Dims).toBe(220)
-    expect(counters.adapterDims).toBe(432)
-    expect(counters.readOnlyDims).toBe(2176)
+    expect(counters.adapterDims).toBe(439)
+    expect(counters.readOnlyDims).toBe(2183)
     expect(counters.unclassifiedDims).toBe(0)
   })
 
@@ -243,7 +247,7 @@ describe("C0-08 legacy-zero gate real inventory (actual frozen numbers)", () => 
     const counters = await currentTreeCounts(inventory)
     expect(counters.legacyDims).toBe(0)
     expect(counters.doubleWrite).toBe(0)
-    expect(counters.adapterDims).toBe(432)
+    expect(counters.adapterDims).toBe(439)
   })
 })
 
@@ -276,7 +280,7 @@ describe("C0-08 legacy-zero gate snapshot (byte-stable)", () => {
     const snapshot = buildSnapshot(inventory, bridgeSites)
     expect(snapshot.counters.legacyDims).toBe(0)
     expect(snapshot.counters.doubleWrite).toBe(0)
-    expect(snapshot.counters.adapterDims).toBe(432)
+    expect(snapshot.counters.adapterDims).toBe(439)
     // v2w-j4 (2026-09-19): +2 v2 dims (github.agent-execution admission/execution).
     expect(snapshot.counters.v2Dims).toBe(220)
     // 2026-09-08 step 5c 重钉:同批漂移(402→401)。v2f-d (2026-09-18): entries net-zero
@@ -284,9 +288,9 @@ describe("C0-08 legacy-zero gate snapshot (byte-stable)", () => {
     // v2f-i (2026-09-18): the dead core agent-orchestrator entry is deleted (404→403, roles −7).
     // v2w-j4 (2026-09-19): github.agent-execution is declared (+1 entry, +7 roles — v2 on
     // admission/execution, read_only on the rest).
-    expect(snapshot.entries).toBe(404)
+    expect(snapshot.entries).toBe(406)
     // 2026-09-08 step 5c 重钉:同批漂移(2814→2807)。
-    expect(snapshot.roles).toBe(2828)
+    expect(snapshot.roles).toBe(2842)
     expect(snapshot.selectionBridgeUsages).toBe(0)
   })
 
