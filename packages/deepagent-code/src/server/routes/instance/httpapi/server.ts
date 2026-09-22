@@ -61,6 +61,7 @@ import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
 import { SessionProjection } from "@/session/session-projector"
 import { SessionLegacyProviderResolution } from "@/session/legacy-provider-resolution"
+import { SessionProviderResolution } from "@/session/provider-resolution"
 import { Todo } from "@/session/todo"
 import { SessionShare } from "@/share/session"
 import { ShareNext } from "@/share/share-next"
@@ -450,6 +451,7 @@ export function createRoutes(corsOptions?: CorsOptions, runtimeFlagsLayer = Runt
       SessionStatus.defaultLayer,
       SessionSummary.defaultLayer,
       SessionLegacyProviderResolution.defaultLayer,
+      SessionProviderResolution.defaultLayer,
       ShareNext.defaultLayer,
       Snapshot.defaultLayer,
       EventV2Bridge.defaultLayer,

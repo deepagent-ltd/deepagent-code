@@ -19,6 +19,7 @@ import { InstanceStore } from "../../src/project/instance-store"
 import { Project } from "../../src/project/project"
 import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
 import * as HttpSessionError from "../../src/server/routes/instance/httpapi/handlers/session-errors"
+import { MaintenancePaths } from "../../src/server/routes/instance/httpapi/groups/maintenance"
 import { SessionPaths } from "../../src/server/routes/instance/httpapi/groups/session"
 import { Session } from "@/session/session"
 import { MessageID, PartID, SessionID, type SessionID as SessionIDType } from "../../src/session/schema"
@@ -49,6 +50,7 @@ import * as DateTime from "effect/DateTime"
 import * as Log from "@deepagent-code/core/util/log"
 import { eq } from "drizzle-orm"
 import { resetDatabase } from "../fixture/db"
+import { seedIndeterminateProviderAuthority } from "../fixture/provider-recovery"
 import { disposeAllInstances, provideInstanceEffect, TestInstance, tmpdirScoped } from "../fixture/fixture"
 import { TestLLMServer } from "../lib/llm-server"
 import { testProviderConfig } from "../lib/test-provider"
@@ -745,6 +747,43 @@ describe("session HttpApi", () => {
     { git: true, config: { formatter: false, lsp: false } },
     15_000,
   )
+  it.instance(
+    "status and the maintenance listing surface the typed redrive-blocked reason",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-deepagent-code-directory": test.directory }
+        const { db } = yield* Database.Service
+        yield* seedIndeterminateProviderAuthority(db, {
+          sessionId: "ses_redrive_blocked",
+          attemptId: "att_redrive_blocked",
+          activityId: "act_redrive_blocked",
+          requestHash: "d".repeat(64),
+        })
+
+        // The killed Session surfaces recovery_required WITH the typed blocked reason.
+        expect(yield* requestJson<Record<string, unknown>>(SessionPaths.status, { headers })).toMatchObject({
+          ses_redrive_blocked: {
+            type: "recovery_required",
+            blockedReason: "recovery_required",
+            message: expect.any(String),
+          },
+        })
+        // The maintenance listing carries the same fenced Session with its reason code.
+        expect(
+          yield* requestJson<{ blocked: { sessionID: string; blockedReason: string }[]; count: number }>(
+            MaintenancePaths.recoveryRedriveBlocked,
+            { headers },
+          ),
+        ).toEqual({
+          blocked: [{ sessionID: "ses_redrive_blocked", blockedReason: "recovery_required" }],
+          count: 1,
+        })
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+    30_000,
+  )
+
 
   it.live("uses the persisted session directory for prompt requests", () =>
     Effect.gen(function* () {

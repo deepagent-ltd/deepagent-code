@@ -159,6 +159,17 @@ const EvidenceExportManifestSchema = Schema.Struct({
   contentHash: Schema.String,
 }).annotate({ identifier: "EvidenceExportManifest" })
 
+/** One Session the startup redrive left fenced, with its typed blocked reason (K-01 R-4). */
+const RecoveryRedriveBlockedSchema = Schema.Struct({
+  sessionID: Schema.String,
+  blockedReason: Schema.Literals(["recovery_required", "owned_elsewhere", "authority_conflict"]),
+}).annotate({ identifier: "RecoveryRedriveBlocked" })
+
+const RecoveryRedriveBlockedResultSchema = Schema.Struct({
+  blocked: Schema.Array(RecoveryRedriveBlockedSchema),
+  count: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+}).annotate({ identifier: "RecoveryRedriveBlockedResult" })
+
 const CommandGetQuery = Schema.Struct({
   command_id: Schema.String,
 })
@@ -437,6 +448,7 @@ export const MaintenancePaths = {
   backupRestore: `${root}/backup/restore`,
   upgradeStatus: `${root}/upgrade/status`,
   recoveryList: `${root}/recovery/list`,
+  recoveryRedriveBlocked: `${root}/recovery/redriveBlocked`,
   recoveryCommand: `${root}/recovery/command`,
   recoveryCommandGet: `${root}/recovery/commandGet`,
   recoveryEvidenceExport: `${root}/recovery/evidenceExport`,
@@ -528,6 +540,19 @@ export const MaintenanceApi = HttpApi.make("maintenance").add(
           identifier: "maintenance.recovery.command",
           summary: "Classify + record a recovery command",
           description: "Classifies an attempt into the frozen RecoveryDescriptor and records the command.",
+        }),
+      ),
+      HttpApiEndpoint.get("recoveryRedriveBlocked", MaintenancePaths.recoveryRedriveBlocked, {
+        success: described(RecoveryRedriveBlockedResultSchema, "Redrive-blocked Sessions"),
+        error: ApiTypedErrors,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "maintenance.recovery.redriveBlocked",
+          summary: "List Sessions the startup redrive left fenced",
+          description:
+            "The structured surfacing of the startup redrive `blocked` outcome: every Session " +
+            "whose durable claim cannot exact-release, with its typed blocked reason. The " +
+            "incident-only maintenance shell constructs no business runtime and answers a typed 503.",
         }),
       ),
       HttpApiEndpoint.get("recoveryCommandGet", MaintenancePaths.recoveryCommandGet, {

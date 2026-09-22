@@ -85,6 +85,15 @@ test("a non-ready store starts only the authenticated read-only maintenance shel
     expect(recovered.status).toBe(200)
     expect(await recovered.json()).toMatchObject({ descriptor: { descriptorKind: "resolvable_exact" } })
 
+    // The redrive-blocked listing is a business-runtime projection: the incident shell owns no
+    // Session runtime, so it answers an honest typed 503 instead of a fabricated empty list.
+    const redriveBlocked = await fetch(new URL(MaintenancePaths.recoveryRedriveBlocked, listener.url), { headers })
+    expect(redriveBlocked.status).toBe(503)
+    expect(await redriveBlocked.json()).toMatchObject({
+      name: "ApiUnavailable",
+      data: { code: "service_unavailable" },
+    })
+
     const business = await fetch(new URL("/session", listener.url), { headers })
     expect(business.status).toBe(404)
   } finally {

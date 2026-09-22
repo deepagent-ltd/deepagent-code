@@ -24,6 +24,7 @@ import { SessionRevert } from "@/session/revert"
 import { SessionRunState } from "@/session/run-state"
 import { SessionSummary } from "@/session/summary"
 import { SessionLegacyProviderResolution } from "@/session/legacy-provider-resolution"
+import { SessionProviderResolution } from "@/session/provider-resolution"
 import { DevCampaignMint } from "@/effect/dev-campaign-mint"
 import { Todo } from "@/session/todo"
 import { MessageID, PartID, SessionID } from "@/session/schema"
@@ -52,6 +53,7 @@ import {
   PermissionResponsePayload,
   PromptPreparePayload,
   PromptPayload,
+  ProviderResolutionCommandPayload,
   ProviderResolutionPayload,
   RevertPayload,
   ShellPayload,
@@ -88,6 +90,16 @@ const promptPrepareEvent = (data: unknown): Sse.Event => ({
 const isPromptPrepareTerminal = (event: unknown) =>
   typeof event === "object" && event !== null && "type" in event && (event.type === "result" || event.type === "error")
 
+/** Map the unified facade's typed refusals onto the provider-resolution HTTP errors. */
+const mapProviderResolutionError =
+  (service: string) =>
+  (error: SessionProviderResolution.Error): HttpApiError.BadRequest | ApiNotFoundError | ConflictError | ServiceUnavailableError =>
+    error instanceof SessionProviderResolution.NotFound
+      ? notFound(error.reason)
+      : error instanceof SessionProviderResolution.Conflict
+        ? new ConflictError({ message: error.reason, resource: error.code })
+        : new ServiceUnavailableError({ service, message: error.reason })
+
 export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", (handlers) =>
   Effect.gen(function* () {
     const session = yield* Session.Service
@@ -107,6 +119,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const events = yield* EventV2Bridge.Service
     const contextDiagnosticsSvc = yield* ContextFederationDiagnostics.Service
     const providerResolutionSvc = yield* SessionLegacyProviderResolution.Service
+    const providerResolutionFacade = yield* SessionProviderResolution.Service
     const flags = yield* RuntimeFlags.Service
     const scope = yield* Scope.Scope
     // 1.4.8.rN dev campaign mint (env-gated): consume the seam so the merged layer is a real
@@ -148,11 +161,12 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       return Object.fromEntries(
         [...(yield* runtimeStatus.list)].map(([sessionID, state]) => [
           sessionID,
-          state === "busy"
+          state.status === "busy"
             ? { type: "busy" as const }
             : {
                 type: "recovery_required" as const,
                 message: "Execution stopped with an unresolved durable claim; inspect recovery before resuming",
+                ...(state.blockedReason ? { blockedReason: state.blockedReason } : {}),
               },
         ]),
       )
@@ -866,52 +880,61 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
         .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
     })
 
-    // RI-71 zero wave: under the production profile the surface refuses BEFORE any legacy
-    // resolution machinery — the refusal is a structural early return, and the legacy state
-    // machine lives in the legacy-profile helper below so the handler body itself cannot reach
-    // the legacy execution chain.
+    // K-01 R-1/R-2: the unified provider-resolution facade owns this surface. The `abandoned`
+    // decision is a durable-only transaction on both authorities (no legacy execution, no
+    // provider call), so it is no longer fenced under the V2-only runtime. The exits that
+    // genuinely need unavailable machinery stay structural refusals: `replayed` would wake the
+    // legacy execution loop (post-dispatch ambiguity is NEVER auto-replayed), and `settled`
+    // requires typed external evidence this payload cannot carry (use the
+    // provider-resolution command surface's confirm_settled).
     const contextAttemptResolve = Effect.fn("SessionHttpApi.contextAttemptResolve")(function* (ctx: {
       params: { sessionID: SessionID; attemptID: string }
       payload: typeof ContextAttemptResolvePayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
-      yield* refuseLegacyRecoveryMutation(ctx.params.sessionID, "session.context-attempt-resolution")
-      return yield* legacyContextAttemptResolve(ctx)
-    })
-
-    // Legacy-profile path only (unreachable under coreV2Only — see the refusal above): creates a
-    // provider-attempt successor without the Core V2 receipt/Session-claim transaction. V2 uses
-    // the exact durable maintenance recovery command authority.
-    const legacyContextAttemptResolve = Effect.fn("SessionHttpApi.legacyContextAttemptResolve")(function* (ctx: {
-      params: { sessionID: SessionID; attemptID: string }
-      payload: typeof ContextAttemptResolvePayload.Type
-    }) {
-      const current = yield* requireSession(ctx.params.sessionID)
-      const resolved = yield* contextDiagnosticsSvc
-        .resolveAttempt({
-          session: current,
-          attemptId: ctx.params.attemptID,
-          decision: ctx.payload.decision,
-          reason: ctx.payload.reason,
-          riskAcknowledged: ctx.payload.riskAcknowledged ?? false,
-          actorId: "local-user",
+      if (ctx.payload.decision === "replayed")
+        return yield* new ServiceUnavailableError({
+          service: "session.context-attempt-resolution",
+          message:
+            "explicit replay is never automatic; the replayed exit stays behind the risk-acknowledged " +
+            "maintenance authority and never wakes an execution loop from this surface",
         })
-        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
-      if (ctx.payload.decision === "replayed") {
-        yield* promptSvc.loop({ sessionID: ctx.params.sessionID }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.logError("context provider replay failed").pipe(
-              Effect.annotateLogs({
-                sessionID: ctx.params.sessionID,
-                attemptID: resolved.attemptId,
-                cause,
-              }),
-            ),
+      if (ctx.payload.decision === "settled")
+        return yield* new ServiceUnavailableError({
+          service: "session.context-attempt-resolution",
+          message:
+            "settling requires typed external provider evidence; use session.providerResolutionCommand " +
+            "with the confirm_settled command",
+        })
+      const actor = yield* getWorkspaceContext()
+      const outcome = yield* providerResolutionFacade
+        .execute({
+          commandKind: "abandon_exact",
+          sessionID: ctx.params.sessionID,
+          attemptID: ctx.params.attemptID,
+          actorID: actor.userID,
+        })
+        .pipe(
+          Effect.mapError((error) =>
+            error instanceof SessionProviderResolution.NotFound
+              ? new HttpApiError.BadRequest({})
+              : error instanceof SessionProviderResolution.Conflict
+                ? new HttpApiError.BadRequest({})
+                : new HttpApiError.BadRequest({}),
           ),
-          Effect.forkIn(scope, { startImmediately: true }),
         )
-      }
-      return resolved
+      if (outcome.commandKind !== "abandon_exact")
+        return yield* Effect.die(new Error(`facade returned an unexpected command: ${outcome.commandKind}`))
+      if (outcome.authority !== "context_federation_attempt")
+        return yield* Effect.die(new Error("facade routed the attempt abandon to the legacy authority"))
+      // The response view is the SAME projection the GET context diagnostics serve, re-read
+      // after the durable apply — no parallel state machine in the handler.
+      const diagnostics = yield* contextDiagnosticsSvc
+        .get(ctx.params.sessionID)
+        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+      const attempt = diagnostics.attempts.find((row) => row.attemptId === ctx.params.attemptID)
+      if (!attempt) return yield* Effect.die(new Error(`resolved attempt disappeared: ${ctx.params.attemptID}`))
+      return attempt
     })
 
     const contextCohort = Effect.fn("SessionHttpApi.contextCohort")(function* (ctx: {
@@ -931,31 +954,80 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
         .pipe(Effect.mapError((error) => notFound(error.reason)))
     })
 
+    // K-01 R-2: the legacy-receipt abandon is admitted under the V2-only runtime through the
+    // unified facade — the legacy resolution is an append-only durable transaction (no legacy
+    // execution), so the blanket V2-only fence is gone. The payload keeps the SDK shape; the
+    // facade is the single execution path.
     const providerResolutionResolve = Effect.fn("SessionHttpApi.providerResolutionResolve")(function* (ctx: {
       params: { sessionID: SessionID }
       payload: typeof ProviderResolutionPayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
-      yield* refuseLegacyRecoveryMutation(ctx.params.sessionID, "session.provider-resolution")
-      return yield* legacyProviderResolutionResolve(ctx)
+      const actor = yield* getWorkspaceContext()
+      const outcome = yield* providerResolutionFacade
+        .execute({
+          commandKind: "abandon_exact",
+          sessionID: ctx.params.sessionID,
+          receiptID: ctx.payload.receiptID,
+          commandID: ctx.payload.commandID,
+          expected: ctx.payload.expected,
+          ...(ctx.payload.reason ? { reason: ctx.payload.reason } : {}),
+          actorID: actor.userID,
+        })
+        .pipe(Effect.mapError(mapProviderResolutionError("session.provider-resolution")))
+      if (outcome.commandKind !== "abandon_exact")
+        return yield* Effect.die(new Error(`facade returned an unexpected command: ${outcome.commandKind}`))
+      if (outcome.authority !== "legacy_provider_receipt")
+        return yield* Effect.die(new Error("facade routed the legacy abandon to another authority"))
+      return outcome.resolution
     })
 
-    // Legacy-profile path only (unreachable under coreV2Only — see the refusal above): applies
-    // the legacy provider-resolution state machine.
-    const legacyProviderResolutionResolve = Effect.fn("SessionHttpApi.legacyProviderResolutionResolve")(function* (ctx: {
+    /** The ONE facade command entry — the frozen RecoveryCommand vocabulary over the wire. */
+    const providerResolutionCommand = Effect.fn("SessionHttpApi.providerResolutionCommand")(function* (ctx: {
       params: { sessionID: SessionID }
-      payload: typeof ProviderResolutionPayload.Type
+      payload: typeof ProviderResolutionCommandPayload.Type
     }) {
+      yield* requireSession(ctx.params.sessionID)
       const actor = yield* getWorkspaceContext()
-      return yield* providerResolutionSvc
-        .resolve({ ...ctx.payload, sessionID: ctx.params.sessionID, actorID: actor.userID })
-        .pipe(
-          Effect.mapError((error) =>
-            error instanceof SessionLegacyProviderResolution.NotFound
-              ? notFound(error.reason)
-              : new ConflictError({ message: error.reason, resource: error.code }),
-          ),
-        )
+      const outcome = yield* providerResolutionFacade
+        .execute({ ...ctx.payload, sessionID: ctx.params.sessionID, actorID: actor.userID })
+        .pipe(Effect.mapError(mapProviderResolutionError("session.provider-resolution-command")))
+      if (outcome.commandKind === "recover")
+        return {
+          commandKind: "recover" as const,
+          legacyReceiptDescriptors: outcome.legacyReceiptDescriptors,
+          federationAttemptDescriptors: outcome.federationAttemptDescriptors.map((row) => ({
+            descriptorID: row.descriptorId,
+            sessionID: row.sessionId,
+            activityID: row.activityId,
+            turnID: row.turnId,
+            kind: row.kind,
+            payload: row.payload,
+            createdAt: row.createdAt,
+          })),
+        }
+      if (outcome.commandKind === "query_command")
+        return {
+          commandKind: "query_command" as const,
+          authority: outcome.authority,
+          ...(outcome.authority === "context_federation_attempt"
+            ? {
+              command: {
+                commandID: outcome.command.commandId,
+                attemptID: outcome.command.attempt.attemptId,
+                requestHash: outcome.command.requestHash,
+                state: outcome.command.state,
+                ...(outcome.command.commandKind ? { commandKind: outcome.command.commandKind } : {}),
+                createdAt: outcome.command.createdAt,
+                updatedAt: outcome.command.updatedAt,
+              },
+            }
+            : {}),
+          ...(outcome.authority === "legacy_provider_receipt" && outcome.resolution !== undefined
+            ? { resolution: outcome.resolution }
+            : {}),
+        }
+      return outcome
     })
 
     const continuationResolutionList = Effect.fn("SessionHttpApi.continuationResolutionList")(function* (ctx: {
@@ -1077,6 +1149,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("contextCohort", contextCohort)
       .handle("providerResolutionList", providerResolutionList)
       .handle("providerResolutionResolve", providerResolutionResolve)
+      .handle("providerResolutionCommand", providerResolutionCommand)
       .handle("continuationResolutionList", continuationResolutionList)
       .handle("continuationResolutionResolve", continuationResolutionResolve)
       .handle("exportSnapshot", exportSnapshot)

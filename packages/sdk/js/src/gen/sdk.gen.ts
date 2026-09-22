@@ -318,6 +318,8 @@ import type {
   MaintenanceRecoveryEvidenceExportResponses,
   MaintenanceRecoveryListErrors,
   MaintenanceRecoveryListResponses,
+  MaintenanceRecoveryRedriveBlockedErrors,
+  MaintenanceRecoveryRedriveBlockedResponses,
   MaintenanceUpgradeStatusErrors,
   MaintenanceUpgradeStatusResponses,
   McpAddErrors,
@@ -431,6 +433,7 @@ import type {
   QuestionReplyResponses,
   QuestionV2Reply,
   RecoveryCommandInput,
+  RecoveryEvidence,
   ReferenceListErrors,
   ReferenceListResponses,
   RestoreInput,
@@ -490,6 +493,8 @@ import type {
   SessionPromptResponses,
   SessionPromptSuggestionErrors,
   SessionPromptSuggestionResponses,
+  SessionProviderResolutionCommandErrors,
+  SessionProviderResolutionCommandResponses,
   SessionProviderResolutionListErrors,
   SessionProviderResolutionListResponses,
   SessionProviderResolutionResolveErrors,
@@ -1953,6 +1958,19 @@ export class Recovery extends HeyApiClient {
         ...params.headers,
       },
     })
+  }
+
+  /**
+   * List Sessions the startup redrive left fenced
+   *
+   * The structured surfacing of the startup redrive `blocked` outcome: every Session whose durable claim cannot exact-release, with its typed blocked reason. The incident-only maintenance shell constructs no business runtime and answers a typed 503.
+   */
+  public redriveBlocked<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<
+      MaintenanceRecoveryRedriveBlockedResponses,
+      MaintenanceRecoveryRedriveBlockedErrors,
+      ThrowOnError
+    >({ url: "/recovery/redriveBlocked", ...options })
   }
 
   /**
@@ -9505,6 +9523,93 @@ export class Session2 extends HeyApiClient {
       ThrowOnError
     >({
       url: "/session/{sessionID}/provider-resolution",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Execute a unified provider-resolution command
+   *
+   * The ONE recovery command entry (frozen RecoveryCommand vocabulary). Routes internally by receipt source: legacy provider receipts to the legacy resolution authority, Context Federation attempts to the durable recovery-command authority. Never replays a post-dispatch outcome and never dispatches a provider request.
+   */
+  public providerResolutionCommand<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      body?:
+        | {
+            receiptID?: string
+            attemptID?: string
+            commandKind: "recover"
+            intent: "inspect"
+          }
+        | {
+            receiptID?: string
+            attemptID?: string
+            commandKind: "abandon_exact"
+            commandID?: string
+            expected?: {
+              providerState: "indeterminate_after_crash"
+              promptEpoch: number
+              sessionMutationEpoch: number
+              requestHash: string
+              historyHash: string
+              worldStateBaselineHash: string
+            }
+            reason?: string
+          }
+        | {
+            receiptID?: string
+            attemptID?: string
+            commandKind: "repair_baseline_and_abandon"
+          }
+        | {
+            receiptID?: string
+            attemptID?: string
+            commandKind: "fork_from_safe_boundary"
+            commandID?: string
+          }
+        | {
+            receiptID?: string
+            attemptID?: string
+            commandKind: "confirm_settled"
+            evidence: RecoveryEvidence
+          }
+        | {
+            receiptID?: string
+            attemptID?: string
+            commandKind: "query_command"
+            commandRef: string
+          }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "body", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      SessionProviderResolutionCommandResponses,
+      SessionProviderResolutionCommandErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/provider-resolution/command",
       ...options,
       ...params,
       headers: {

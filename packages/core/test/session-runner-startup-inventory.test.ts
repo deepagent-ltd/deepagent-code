@@ -133,7 +133,7 @@ const createTables = (db: Db) =>
     yield* db.run(sql`
       CREATE TABLE recovery_command (
         command_id TEXT PRIMARY KEY, descriptor_id TEXT, attempt TEXT NOT NULL, state TEXT NOT NULL,
-        expected_owner_token TEXT, result_hash TEXT, actor_type TEXT, actor_id TEXT,
+        expected_owner_token TEXT, result_hash TEXT, actor_type TEXT, actor_id TEXT, command_kind TEXT, evidence TEXT,
         created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
       )
     `)
@@ -413,7 +413,7 @@ describe("StartupInventory.classifyStartup (C1B-10)", () => {
         yield* db.run(sql`
           INSERT INTO recovery_command VALUES (
             'command-exact', ${descriptorId}, ${JSON.stringify(attempt)}, 'pending',
-            'owner_inv', NULL, 'user', 'operator', 1, 1
+            'owner_inv', NULL, 'user', 'operator', NULL, NULL, 1, 1
           )
         `)
 
@@ -474,7 +474,7 @@ describe("StartupInventory.classifyStartup (C1B-10)", () => {
         yield* db.run(sql`
           INSERT INTO recovery_command VALUES (
             'command-orphan', NULL, ${JSON.stringify(identity())}, 'pending',
-            'owner_inv', NULL, 'user', 'operator', 1, 1
+            'owner_inv', NULL, 'user', 'operator', NULL, NULL, 1, 1
           )
         `)
 

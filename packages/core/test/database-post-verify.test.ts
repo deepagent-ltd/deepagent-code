@@ -40,6 +40,7 @@ const createRecoveryTables = (db: EffectDrizzleSqlite.EffectSQLiteDatabase) =>
     yield* db.run(sql`CREATE TABLE event_compaction_receipt (aggregate_id TEXT PRIMARY KEY, state TEXT)`)
     yield* db.run(sql`CREATE TABLE session_v2_compaction_request (request_id TEXT PRIMARY KEY, status TEXT)`)
     yield* db.run(sql`CREATE TABLE session_facade_activity (activity_id TEXT PRIMARY KEY, state TEXT)`)
+    yield* db.run(sql`CREATE TABLE session_v2_compaction_request (request_id TEXT PRIMARY KEY, status TEXT)`)
     yield* db.run(sql`CREATE TABLE session_activity (activity_id TEXT PRIMARY KEY, state TEXT)`)
     // W2 C1B recovery descriptor + command surface — created so classifyStartup is total.
     yield* db.run(sql`CREATE TABLE session_provider_recovery_descriptor
@@ -47,7 +48,7 @@ const createRecoveryTables = (db: EffectDrizzleSqlite.EffectSQLiteDatabase) =>
        kind TEXT NOT NULL, payload TEXT, content_hash TEXT, created_at INTEGER)`)
     yield* db.run(sql`CREATE TABLE recovery_command
       (command_id TEXT PRIMARY KEY, descriptor_id TEXT, attempt TEXT, state TEXT,
-       expected_owner_token TEXT, result_hash TEXT, actor_type TEXT, actor_id TEXT,
+       expected_owner_token TEXT, result_hash TEXT, actor_type TEXT, actor_id TEXT, command_kind TEXT, evidence TEXT,
        created_at INTEGER, updated_at INTEGER)`)
     yield* db.run(sql`CREATE TABLE session_provider_attempt_resolution (resolution_id TEXT PRIMARY KEY, attempt_id TEXT, decision TEXT)`)
     yield* db.run(sql`CREATE TABLE session_v2_provider_recovery_bridge (resolution_id TEXT PRIMARY KEY, attempt_id TEXT, receipt_id TEXT, command_id TEXT)`)

@@ -835,6 +835,7 @@ export type SessionStatus =
   | {
       type: "recovery_required"
       message: string
+      blockedReason?: "recovery_required" | "owned_elsewhere" | "authority_conflict"
     }
 
 export type GlobalEvent = {
@@ -2891,6 +2892,16 @@ export type RecoveryCommandResult = {
     | RecoveryForkDescriptor
     | RecoveryCoordinationDescriptor
     | RecoveryResolvedDescriptor
+}
+
+export type RecoveryRedriveBlocked = {
+  sessionID: string
+  blockedReason: "recovery_required" | "owned_elsewhere" | "authority_conflict"
+}
+
+export type RecoveryRedriveBlockedResult = {
+  blocked: Array<RecoveryRedriveBlocked>
+  count: number
 }
 
 export type RecoveryDescriptorRecord = {
@@ -6936,6 +6947,83 @@ export type SessionLegacyProviderResolutionDescriptor =
       worldStateBaselineHash?: string
     }
 
+export type RecoveryEvidence = {
+  schemaVersion: "recovery-evidence.v1"
+  providerId: string
+  externalRequestId: string
+  idempotencyKey: string
+  terminalState: "settled" | "rejected" | "unknown"
+  payloadHash: string
+  responseFingerprint: string
+  retrievalRef: string
+  attestationRef?: string
+  metadata: {
+    provider_lookup_ref?:
+      | string
+      | number
+      | "NaN"
+      | "Infinity"
+      | "-Infinity"
+      | "Infinity"
+      | "-Infinity"
+      | "NaN"
+      | boolean
+    baseline_reconstruction_ref?:
+      | string
+      | number
+      | "NaN"
+      | "Infinity"
+      | "-Infinity"
+      | "Infinity"
+      | "-Infinity"
+      | "NaN"
+      | boolean
+    safe_boundary_ref?: string | number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN" | boolean
+    provider_region?: string | number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN" | boolean
+    provider_response_status?:
+      | string
+      | number
+      | "NaN"
+      | "Infinity"
+      | "-Infinity"
+      | "Infinity"
+      | "-Infinity"
+      | "NaN"
+      | boolean
+    provider_attempt_count?:
+      | string
+      | number
+      | "NaN"
+      | "Infinity"
+      | "-Infinity"
+      | "Infinity"
+      | "-Infinity"
+      | "NaN"
+      | boolean
+    provider_latency_ms?:
+      | string
+      | number
+      | "NaN"
+      | "Infinity"
+      | "-Infinity"
+      | "Infinity"
+      | "-Infinity"
+      | "NaN"
+      | boolean
+    terminal_reason_code?:
+      | string
+      | number
+      | "NaN"
+      | "Infinity"
+      | "-Infinity"
+      | "Infinity"
+      | "-Infinity"
+      | "NaN"
+      | boolean
+  }
+  verifiedAt: number
+}
+
 export type FilePartArtifactDescriptor = {
   codec: "file-part.v1"
   id: string
@@ -9417,6 +9505,57 @@ export type MaintenanceRecoveryCommandResponses = {
 
 export type MaintenanceRecoveryCommandResponse =
   MaintenanceRecoveryCommandResponses[keyof MaintenanceRecoveryCommandResponses]
+
+export type MaintenanceRecoveryRedriveBlockedData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/recovery/redriveBlocked"
+}
+
+export type MaintenanceRecoveryRedriveBlockedErrors = {
+  /**
+   * ApiBadRequest
+   */
+  400: ApiBadRequest
+  /**
+   * ApiForbidden
+   */
+  403: ApiForbidden
+  /**
+   * ApiNotFound
+   */
+  404: ApiNotFound
+  /**
+   * ApiConflict
+   */
+  409: ApiConflict
+  /**
+   * ApiGone
+   */
+  410: ApiGone
+  /**
+   * ApiLocked
+   */
+  423: ApiLocked
+  /**
+   * ApiUnavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceRecoveryRedriveBlockedError =
+  MaintenanceRecoveryRedriveBlockedErrors[keyof MaintenanceRecoveryRedriveBlockedErrors]
+
+export type MaintenanceRecoveryRedriveBlockedResponses = {
+  /**
+   * Redrive-blocked Sessions
+   */
+  200: RecoveryRedriveBlockedResult
+}
+
+export type MaintenanceRecoveryRedriveBlockedResponse =
+  MaintenanceRecoveryRedriveBlockedResponses[keyof MaintenanceRecoveryRedriveBlockedResponses]
 
 export type MaintenanceRecoveryCommandGetData = {
   body?: never
@@ -18473,6 +18612,184 @@ export type SessionProviderResolutionResolveResponses = {
 
 export type SessionProviderResolutionResolveResponse =
   SessionProviderResolutionResolveResponses[keyof SessionProviderResolutionResolveResponses]
+
+export type SessionProviderResolutionCommandData = {
+  body?:
+    | {
+        receiptID?: string
+        attemptID?: string
+        commandKind: "recover"
+        intent: "inspect"
+      }
+    | {
+        receiptID?: string
+        attemptID?: string
+        commandKind: "abandon_exact"
+        commandID?: string
+        expected?: {
+          providerState: "indeterminate_after_crash"
+          promptEpoch: number
+          sessionMutationEpoch: number
+          requestHash: string
+          historyHash: string
+          worldStateBaselineHash: string
+        }
+        reason?: string
+      }
+    | {
+        receiptID?: string
+        attemptID?: string
+        commandKind: "repair_baseline_and_abandon"
+      }
+    | {
+        receiptID?: string
+        attemptID?: string
+        commandKind: "fork_from_safe_boundary"
+        commandID?: string
+      }
+    | {
+        receiptID?: string
+        attemptID?: string
+        commandKind: "confirm_settled"
+        evidence: RecoveryEvidence
+      }
+    | {
+        receiptID?: string
+        attemptID?: string
+        commandKind: "query_command"
+        commandRef: string
+      }
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/provider-resolution/command"
+}
+
+export type SessionProviderResolutionCommandErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type SessionProviderResolutionCommandError =
+  SessionProviderResolutionCommandErrors[keyof SessionProviderResolutionCommandErrors]
+
+export type SessionProviderResolutionCommandResponses = {
+  /**
+   * Unified provider-resolution command outcome
+   */
+  200:
+    | {
+        commandKind: "recover"
+        legacyReceiptDescriptors: Array<SessionLegacyProviderResolutionDescriptor>
+        federationAttemptDescriptors: Array<{
+          descriptorID: string
+          sessionID: string
+          activityID: string
+          turnID: string
+          kind: string
+          payload:
+            | RecoveryExactDescriptor
+            | RecoveryRepairableDescriptor
+            | RecoveryForkDescriptor
+            | RecoveryCoordinationDescriptor
+            | RecoveryResolvedDescriptor
+          createdAt: number
+        }>
+      }
+    | {
+        commandKind: "abandon_exact"
+        authority: "legacy_provider_receipt"
+        resolution: {
+          resolutionID: string
+          commandID: string
+          receiptID: string
+          sessionID: string
+          decision: "abandoned"
+          sourcePromptEpoch: number
+          successorPromptEpoch: number
+          sourceMutationEpoch: number
+          successorMutationEpoch: number
+          safeEndMessageID?: string
+          safeHistoryHash: string
+          successorWindowID: string
+          successorHistoryHash: string
+          createdAt: number
+        }
+      }
+    | {
+        commandKind: "abandon_exact"
+        authority: "context_federation_attempt"
+        commandID: string
+        commandState: "abandoned"
+        attemptState: "resolved_abandoned"
+        resolutionID: string
+      }
+    | {
+        commandKind: "confirm_settled"
+        authority: "context_federation_attempt"
+        commandID: string
+        commandState: "settled"
+        attemptState: "resolved_settled"
+        resolutionID: string
+        evidenceDigest: string
+      }
+    | {
+        commandKind: "fork_from_safe_boundary"
+        authority: "legacy_provider_receipt"
+        forkSessionID: string
+        forkCutoffMessageID: string
+      }
+    | {
+        commandKind: "query_command"
+        authority: "legacy_provider_receipt" | "context_federation_attempt"
+        command?: {
+          commandID: string
+          attemptID: string
+          requestHash: string
+          state: string
+          commandKind?: string
+          createdAt: number
+          updatedAt: number
+        }
+        resolution?: {
+          resolutionID: string
+          commandID: string
+          receiptID: string
+          sessionID: string
+          decision: "abandoned"
+          sourcePromptEpoch: number
+          successorPromptEpoch: number
+          sourceMutationEpoch: number
+          successorMutationEpoch: number
+          safeEndMessageID?: string
+          safeHistoryHash: string
+          successorWindowID: string
+          successorHistoryHash: string
+          createdAt: number
+        }
+      }
+}
+
+export type SessionProviderResolutionCommandResponse =
+  SessionProviderResolutionCommandResponses[keyof SessionProviderResolutionCommandResponses]
 
 export type SessionContinuationResolutionListData = {
   body?: never

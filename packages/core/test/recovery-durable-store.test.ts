@@ -43,7 +43,8 @@ const createTables = (db: Db) =>
         command_id TEXT PRIMARY KEY,
         descriptor_id TEXT REFERENCES session_provider_recovery_descriptor(descriptor_id) ON DELETE CASCADE,
         attempt TEXT NOT NULL, state TEXT NOT NULL, expected_owner_token TEXT, result_hash TEXT,
-        actor_type TEXT, actor_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+        actor_type TEXT, actor_id TEXT, command_kind TEXT, evidence TEXT,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
       )
     `)
     yield* db.run(sql`
@@ -598,6 +599,7 @@ describe("SessionProviderRecoveryDurable store (W2)", () => {
         yield* db.run(sql`CREATE TABLE event_compaction_receipt (aggregate_id TEXT PRIMARY KEY, state TEXT NOT NULL)`)
         yield* db.run(sql`CREATE TABLE session_v2_compaction_request (request_id TEXT PRIMARY KEY, status TEXT NOT NULL)`)
         yield* db.run(sql`CREATE TABLE session_facade_activity (activity_id TEXT PRIMARY KEY, state TEXT NOT NULL)`)
+        yield* db.run(sql`CREATE TABLE session_v2_compaction_request (request_id TEXT PRIMARY KEY, status TEXT NOT NULL)`)
         yield* db.run(sql`CREATE TABLE session_activity (activity_id TEXT PRIMARY KEY, state TEXT NOT NULL)`)
         yield* db.run(sql`CREATE TABLE session_provider_attempt_resolution (resolution_id TEXT PRIMARY KEY, attempt_id TEXT NOT NULL, decision TEXT NOT NULL)`)
         yield* db.run(sql`CREATE TABLE session_v2_provider_recovery_bridge (resolution_id TEXT PRIMARY KEY, attempt_id TEXT NOT NULL, receipt_id TEXT NOT NULL, command_id TEXT NOT NULL)`)
