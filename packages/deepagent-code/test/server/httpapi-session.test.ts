@@ -635,7 +635,7 @@ describe("session HttpApi", () => {
         const { db } = yield* Database.Service
         yield* db
           .update(SessionTable)
-          .set({ time_suspended: 1 })
+          .set({ execution_claim_token: 1 })
           .where(eq(SessionTable.id, parent.id))
           .run()
           .pipe(Effect.orDie)
@@ -644,7 +644,7 @@ describe("session HttpApi", () => {
         })
         yield* db
           .update(SessionTable)
-          .set({ time_suspended: null })
+          .set({ execution_claim_token: null })
           .where(eq(SessionTable.id, parent.id))
           .run()
           .pipe(Effect.orDie)

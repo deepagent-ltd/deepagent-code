@@ -72,7 +72,7 @@ export const SessionTable = sqliteTable(
     ...Timestamps,
     time_compacting: integer(),
     time_archived: integer(),
-    time_suspended: integer(),
+    execution_claim_token: integer(),
     // Snapshot of the session's first user message (truncated, single-lined). Lets an archived-sessions
     // list render a content preview per row without loading the full conversation. Set once, never
     // overwritten. Mirrors Codex's `threads.preview`.
@@ -82,9 +82,9 @@ export const SessionTable = sqliteTable(
     index("session_project_idx").on(table.project_id),
     index("session_workspace_idx").on(table.workspace_id),
     index("session_parent_idx").on(table.parent_id),
-    index("session_time_suspended_idx")
-      .on(table.time_suspended)
-      .where(sql`${table.time_suspended} is not null`),
+    index("session_execution_claim_token_idx")
+      .on(table.execution_claim_token)
+      .where(sql`${table.execution_claim_token} is not null`),
   ],
 )
 

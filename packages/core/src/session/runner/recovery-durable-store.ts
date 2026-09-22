@@ -690,7 +690,7 @@ export const makeDurableRecoveryStore = (db: Database): DurableRecoveryStore => 
           if (!staleOwner || (staleOwner.released_at === null && staleOwner.lease_expires_at > now))
             return "authority_conflict" as const
           const session = yield* tx
-            .select({ claimToken: SessionTable.time_suspended })
+            .select({ claimToken: SessionTable.execution_claim_token })
             .from(SessionTable)
             .where(eq(SessionTable.id, SessionSchema.ID.make(attempt.session_id)))
             .get()
@@ -807,11 +807,11 @@ export const makeDurableRecoveryStore = (db: Database): DurableRecoveryStore => 
           if (!settledCommand) return yield* Effect.fail("recovery command CAS lost")
           const released = yield* tx
             .update(SessionTable)
-            .set({ time_suspended: null, time_updated: sql`${SessionTable.time_updated}` })
+            .set({ execution_claim_token: null, time_updated: sql`${SessionTable.time_updated}` })
             .where(
               and(
                 eq(SessionTable.id, SessionSchema.ID.make(attempt.session_id)),
-                eq(SessionTable.time_suspended, attempt.execution_claim_token),
+                eq(SessionTable.execution_claim_token, attempt.execution_claim_token),
               ),
             )
             .returning({ id: SessionTable.id })

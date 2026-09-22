@@ -27,7 +27,7 @@ const makeDb = EffectDrizzleSqlite.makeWithDefaults()
 /** Minimal copies of the recovery tables RecoveryBinding.audit reads (empty => the audit passes). */
 const createRecoveryTables = (db: EffectDrizzleSqlite.EffectSQLiteDatabase) =>
   Effect.gen(function* () {
-    yield* db.run(sql`CREATE TABLE session (id TEXT PRIMARY KEY, time_suspended INTEGER)`)
+    yield* db.run(sql`CREATE TABLE session (id TEXT PRIMARY KEY, execution_claim_token INTEGER)`)
     yield* db.run(sql`CREATE TABLE session_provider_attempt (attempt_id TEXT PRIMARY KEY, session_id TEXT, activity_id TEXT, provider_turn_seq INTEGER, attempt_version INTEGER, execution_claim_token INTEGER NOT NULL DEFAULT 1, selection_id TEXT, projection_hash TEXT, request_hash TEXT, provider_id TEXT, owner_token TEXT, state TEXT)`)
     yield* db.run(sql`CREATE TABLE session_v2_provider_turn_receipt (receipt_id TEXT PRIMARY KEY, session_id TEXT, activity_id TEXT, provider_turn_seq INTEGER, provider_attempt_id TEXT, request_input_hash TEXT, provider_id TEXT, owner_token TEXT, state TEXT)`)
     yield* db.run(sql`CREATE TABLE session_v2_tool_effect_admission (admission_id TEXT PRIMARY KEY, session_id TEXT, receipt_id TEXT, provider_attempt_id TEXT, tool_call_id TEXT, tool_name TEXT, effect_kind TEXT, owner_token TEXT)`)

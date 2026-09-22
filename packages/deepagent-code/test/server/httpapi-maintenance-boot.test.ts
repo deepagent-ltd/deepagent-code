@@ -164,7 +164,7 @@ test("the ready runtime abandons one exact indeterminate provider attempt throug
       activity: database.query("SELECT state FROM session_activity WHERE activity_id = ?").get(authority.attempt.activityId),
       command: database.query("SELECT state, actor_type, actor_id FROM recovery_command WHERE command_id = ?").get(commandId),
       bridge: database.query("SELECT attempt_id, receipt_id FROM session_v2_provider_recovery_bridge WHERE command_id = ?").get(commandId),
-      session: database.query("SELECT time_suspended FROM session WHERE id = ?").get(authority.attempt.sessionId),
+      session: database.query("SELECT execution_claim_token FROM session WHERE id = ?").get(authority.attempt.sessionId),
     }).toEqual({
       attempt: { state: "resolved_abandoned", attempt_version: 4 },
       // The original receipt remains immutable evidence of the unknown provider outcome;
@@ -173,7 +173,7 @@ test("the ready runtime abandons one exact indeterminate provider attempt throug
       activity: { state: "interrupted" },
       command: { state: "abandoned", actor_type: "user", actor_id: "http-operator" },
       bridge: { attempt_id: authority.attempt.attemptId, receipt_id: authority.receiptId },
-      session: { time_suspended: null },
+      session: { execution_claim_token: null },
     })
   } finally {
     database.close()
