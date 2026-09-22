@@ -57,6 +57,8 @@ export interface CompareReport {
   readonly findings: readonly Finding[]
   readonly regressions: number
   readonly missing: number
+  /** Scenarios the baseline measured but this run could not (status != ok): failing, not skipping. */
+  readonly unavailable: number
   readonly passed: boolean
 }
 
@@ -126,7 +128,12 @@ export const compareSummaries = (
 
   const regressions = findings.filter((finding) => finding.kind === "compared" && finding.verdict === "regression").length
   const missing = findings.filter((finding) => finding.kind === "missing").length
-  return { findings, regressions, missing, passed: regressions === 0 && missing === 0 }
+  // Cross-review P2-11: a scenario the baseline measured but this run could not is a
+  // measurement failure of THIS run — the gate fails rather than silently narrowing coverage.
+  const unavailable = findings.filter(
+    (finding) => finding.kind === "skipped" && finding.reason === "candidate_unavailable",
+  ).length
+  return { findings, regressions, missing, unavailable, passed: regressions === 0 && missing === 0 && unavailable === 0 }
 }
 
 export const compareRunDirectories = (baselineDir: string, candidateDir: string, thresholds?: CompareThresholds): CompareReport =>

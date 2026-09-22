@@ -158,7 +158,10 @@ export const layer = Layer.effectDiscard(
 
               // Parser-based approval scan (D-W2), same source as the V1 ShellTool. Fail-soft: a
               // command the grammar cannot parse still gets whole-command approval plus an
-              // advisory warning rather than failing the tool call.
+              // advisory warning rather than failing the tool call. This is a DELIBERATE
+              // divergence from V1 (which fails hard on unparseable commands): whole-command
+              // approval is stricter in the permission sense (fail-closed), so refusing the
+              // call would only remove safety, not add it. Do not align V2 to V1 here.
               const root = yield* fs
                 .realPath(location.directory)
                 .pipe(Effect.catch(() => Effect.succeed(location.directory)))

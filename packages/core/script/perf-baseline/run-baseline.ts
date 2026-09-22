@@ -226,7 +226,9 @@ const main = async () => {
       }
       if (finding.kind === "missing") console.error(`[perf-compare] MISSING in candidate run: ${finding.scenario}/${finding.group}`)
     }
-    console.log(`[perf-compare] ${report.passed ? "PASS" : "FAIL"} regressions=${report.regressions} missing=${report.missing}: ${comparePath}`)
+    console.log(
+      `[perf-compare] ${report.passed ? "PASS" : "FAIL"} regressions=${report.regressions} missing=${report.missing} unavailable=${report.unavailable}: ${comparePath}`,
+    )
     if (!report.passed) process.exitCode = 1
   }
 }

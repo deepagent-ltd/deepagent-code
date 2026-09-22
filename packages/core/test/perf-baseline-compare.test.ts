@@ -75,6 +75,7 @@ describe("perf baseline compare (C7-06 / K-07 B-12)", () => {
     )
     expect(skipped.passed).toBe(false)
     expect(skipped.missing).toBe(1)
+    expect(skipped.unavailable).toBe(1)
     expect(skipped.findings.some((finding) => finding.kind === "skipped" && finding.reason === "candidate_unavailable")).toBe(true)
     expect(skipped.findings.some((finding) => finding.kind === "missing" && finding.group === "open")).toBe(true)
   })
