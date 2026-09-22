@@ -1,4 +1,5 @@
 import { Effect, Schema } from "effect"
+import { tolerantInt } from "@deepagent-code/core/schema"
 import * as Tool from "./tool"
 import path from "path"
 import { LSP } from "@/lsp/lsp"
@@ -23,10 +24,11 @@ const operations = [
 export const Parameters = Schema.Struct({
   operation: Schema.Literals(operations).annotate({ description: "The LSP operation to perform" }),
   filePath: Schema.String.annotate({ description: "The absolute or relative path to the file" }),
-  line: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)).annotate({
+  // Tolerant int arms (F-1): GLM-class providers send coordinates as stringified numbers.
+  line: tolerantInt(Schema.isGreaterThanOrEqualTo(1)).annotate({
     description: "The line number (1-based, as shown in editors)",
   }),
-  character: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)).annotate({
+  character: tolerantInt(Schema.isGreaterThanOrEqualTo(1)).annotate({
     description: "The character offset (1-based, as shown in editors)",
   }),
   query: Schema.optional(Schema.String).annotate({

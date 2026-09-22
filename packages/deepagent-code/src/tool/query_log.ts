@@ -2,6 +2,7 @@ import { Effect, Schema } from "effect"
 import path from "node:path"
 import { Global } from "@deepagent-code/core/global"
 import { DeepAgentContext } from "@deepagent-code/core/deepagent/index"
+import { tolerantNumber } from "@deepagent-code/core/schema"
 import * as Tool from "./tool"
 import DESCRIPTION from "./query_log.txt"
 
@@ -40,9 +41,11 @@ export const Parameters = Schema.Struct({
       "bridge_handoff",
     ]),
   ).annotate({ description: "Filter by a single event type (e.g. 'reasoning' to recall past thinking)." }),
-  since: Schema.optional(Schema.Number).annotate({ description: "Only entries at/after this epoch-ms timestamp." }),
-  until: Schema.optional(Schema.Number).annotate({ description: "Only entries at/before this epoch-ms timestamp." }),
-  limit: Schema.optional(Schema.Number).annotate({
+  // Tolerant number arms (F-1): GLM-class providers send stringified numbers; a malformed or
+  // "null" string rejects at the schema instead of poisoning timestamp comparisons with NaN.
+  since: Schema.optional(tolerantNumber()).annotate({ description: "Only entries at/after this epoch-ms timestamp." }),
+  until: Schema.optional(tolerantNumber()).annotate({ description: "Only entries at/before this epoch-ms timestamp." }),
+  limit: Schema.optional(tolerantNumber()).annotate({
     description: `Max entries to return, most-recent first (default ${config.queryLogDefaultLimit}, max ${config.queryLogMaxLimit}).`,
   }),
 })

@@ -1,5 +1,5 @@
 import { Effect, Option, Schema, Scope, Stream } from "effect"
-import { NonNegativeInt } from "@deepagent-code/core/schema"
+import { tolerantInt } from "@deepagent-code/core/schema"
 import * as path from "path"
 import * as Tool from "./tool"
 import { FSUtil } from "@deepagent-code/core/fs-util"
@@ -22,17 +22,16 @@ const SUPPORTED_IMAGE_MIMES = new Set(["image/jpeg", "image/png", "image/gif", "
 
 class ReadStop extends Schema.TaggedErrorClass<ReadStop>()("ReadStop", {}) {}
 
-// `offset` and `limit` were originally `z.coerce.number()` — the runtime
-// coercion was useful when the tool was called from a shell but serves no
-// purpose in the LLM tool-call path (the model emits typed JSON). The JSON
-// Schema output is identical (`type: "number"`), so the LLM view is
-// unchanged; purely CLI-facing uses must now send numbers rather than strings.
+// `offset` and `limit` were originally `z.coerce.number()`, then strict integers. The strict
+// form hard-failed GLM-class providers that serialize JSON numbers as strings (ablation F-1):
+// the tolerant int arm decodes value-equivalent strings through the same checks, while
+// fractional, malformed, or literal "null" strings still reject instead of decoding to NaN.
 export const Parameters = Schema.Struct({
   filePath: Schema.String.annotate({ description: "The absolute path to the file or directory to read" }),
-  offset: Schema.optional(NonNegativeInt).annotate({
+  offset: Schema.optional(tolerantInt(Schema.isGreaterThanOrEqualTo(0))).annotate({
     description: "The line number to start reading from (1-indexed)",
   }),
-  limit: Schema.optional(NonNegativeInt).annotate({
+  limit: Schema.optional(tolerantInt(Schema.isGreaterThanOrEqualTo(0))).annotate({
     description: "The maximum number of lines to read (defaults to 2000)",
   }),
 })
