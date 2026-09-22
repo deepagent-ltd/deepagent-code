@@ -142,24 +142,32 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
       .handle(
         "session.compact",
         Effect.fn(function* (ctx) {
-          yield* session.compact({ sessionID: ctx.params.sessionID }).pipe(
-            Effect.catchTag("Session.NotFoundError", (error) =>
-              Effect.fail(
-                new SessionNotFoundError({
-                  sessionID: error.sessionID,
-                  message: `Session not found: ${error.sessionID}`,
-                }),
+          yield* session
+            .compact({
+              sessionID: ctx.params.sessionID,
+              model: { providerID: ctx.payload.providerID, modelID: ctx.payload.modelID },
+            })
+            .pipe(
+              Effect.catchTag("Session.NotFoundError", (error) =>
+                Effect.fail(
+                  new SessionNotFoundError({
+                    sessionID: error.sessionID,
+                    message: `Session not found: ${error.sessionID}`,
+                  }),
+                ),
               ),
-            ),
-            Effect.catchTag("Session.OperationUnavailableError", (error) =>
-              Effect.fail(
-                new ServiceUnavailableError({
-                  message: `Session ${error.operation} is not available yet`,
-                  service: `session.${error.operation}`,
-                }),
+              // Surface the concrete refusal reason (empty history, unsettled budget, terminal
+              // outcome) — the explicit-model guard itself can no longer fire here because the
+              // contract requires providerID/modelID.
+              Effect.catchTag("Session.OperationUnavailableError", (error) =>
+                Effect.fail(
+                  new ServiceUnavailableError({
+                    message: error.reason,
+                    service: `session.${error.operation}`,
+                  }),
+                ),
               ),
-            ),
-          )
+            )
           return HttpApiSchema.NoContent.make()
         }),
       )

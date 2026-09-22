@@ -1,5 +1,6 @@
 import { AgentV2 } from "@deepagent-code/core/agent"
 import { ModelV2 } from "@deepagent-code/core/model"
+import { ProviderV2 } from "@deepagent-code/core/provider"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import { SessionInput } from "@deepagent-code/core/session/input"
 import { Prompt } from "@deepagent-code/core/session/prompt"
@@ -154,6 +155,12 @@ export const SessionGroup = HttpApiGroup.make("server.session")
   .add(
     HttpApiEndpoint.post("session.compact", "/api/session/:sessionID/compact", {
       params: { sessionID: SessionV2.ID },
+      // The summary model identity is explicit in the contract — Core refuses a compact call that
+      // cannot name one, so the public API must require it instead of ever defaulting it.
+      payload: Schema.Struct({
+        providerID: ProviderV2.ID,
+        modelID: ModelV2.ID,
+      }),
       success: HttpApiSchema.NoContent,
       error: [SessionNotFoundError, ServiceUnavailableError],
     })
@@ -162,7 +169,8 @@ export const SessionGroup = HttpApiGroup.make("server.session")
         OpenApi.annotations({
           identifier: "v2.session.compact",
           summary: "Compact session",
-          description: "Compact a session conversation.",
+          description:
+            "Compact a session conversation. The summary model identity (providerID/modelID) is required — it is never defaulted by the server.",
         }),
       ),
   )
