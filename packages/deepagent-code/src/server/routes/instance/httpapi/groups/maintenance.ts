@@ -277,6 +277,51 @@ const MigrationStatusSchema = Schema.Struct({
   journal: Schema.optional(MigrationJournalSchema),
 }).annotate({ identifier: "MigrationStatus" })
 
+// W-02 M-3 — post-migration compliance report surface. Aggregates Preflight + DataIntegrity +
+// PostVerify + BackupVerify + the M-2 journal phase outcomes + the md-manifest↔library and
+// session/message row reconciliation oracles into one three-state (success/warning/failure)
+// user-readable document persisted under the backups root.
+
+const MigrationReportStatusLiteral = Schema.Literals(["success", "warning", "failure"])
+
+const MigrationReportEntrySchema = Schema.Struct({
+  check: Schema.String,
+  status: MigrationReportStatusLiteral,
+  summary: Schema.String,
+  detail: Schema.optional(Schema.String),
+}).annotate({ identifier: "MigrationReportEntry" })
+
+const MigrationRowReconciliationSchema = Schema.Struct({
+  sessionsInLibrary: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  sessionsInManifest: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  messagesInLibrary: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  messagesInManifest: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  reconciled: Schema.Boolean,
+}).annotate({ identifier: "MigrationRowReconciliation" })
+
+const MigrationReportSchema = Schema.Struct({
+  version: Schema.Literal(1),
+  kind: Schema.Literal("migration-compliance-report"),
+  dbPath: Schema.String,
+  backupDir: Schema.String,
+  orchestrationId: Schema.optional(Schema.String),
+  generatedAt: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  overall: MigrationReportStatusLiteral,
+  entries: Schema.Array(MigrationReportEntrySchema),
+  mdReconciliation: MdExportReconciliationSchema,
+  rowReconciliation: MigrationRowReconciliationSchema,
+}).annotate({ identifier: "MigrationReport" })
+
+const MigrationReportInput = Schema.Struct({
+  dir: Schema.optional(Schema.String),
+}).annotate({ identifier: "MigrationReportInput" })
+
+const MigrationReportStoredSchema = Schema.Struct({
+  exists: Schema.Boolean,
+  reportPath: Schema.String,
+  report: Schema.optional(MigrationReportSchema),
+}).annotate({ identifier: "MigrationReportStored" })
+
 const BackupQuery = Schema.Struct({
   dir: Schema.optional(Schema.String),
 })
@@ -306,6 +351,7 @@ export const MaintenancePaths = {
   mdExportStatus: `${root}/md/export/status`,
   migrationRun: `${root}/migration/run`,
   migrationStatus: `${root}/migration/status`,
+  migrationReport: `${root}/migration/report`,
 } as const
 
 export const MaintenanceApi = HttpApi.make("maintenance").add(
@@ -480,6 +526,30 @@ export const MaintenanceApi = HttpApi.make("maintenance").add(
           summary: "Read the migration orchestration journal",
           description:
             "Reads the persisted phase journal — after a restart this shows exactly which phase the chain stopped at. Also served by the incident-only maintenance shell.",
+        }),
+      ),
+      HttpApiEndpoint.post("migrationReport", MaintenancePaths.migrationReport, {
+        payload: MigrationReportInput,
+        success: described(MigrationReportSchema, "Migration compliance report"),
+        error: ApiTypedErrors,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "maintenance.migration.report.generate",
+          summary: "Generate the post-migration compliance report",
+          description:
+            "W-02 M-3: aggregates preflight + data integrity + post-verify + backup verify + the orchestration journal phase outcomes + the md/row reconciliation oracles into a three-state report persisted to <backupDir>/migration-report.json. Every check runs read-only, so the incident maintenance shell serves it too.",
+        }),
+      ),
+      HttpApiEndpoint.get("migrationReportStatus", MaintenancePaths.migrationReport, {
+        query: BackupQuery,
+        success: described(MigrationReportStoredSchema, "Persisted migration compliance report"),
+        error: ApiTypedErrors,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "maintenance.migration.report.status",
+          summary: "Read the persisted migration compliance report",
+          description:
+            "Reads the last generated migration-report.json without re-running any oracle. Also served by the incident-only maintenance shell.",
         }),
       ),
     )

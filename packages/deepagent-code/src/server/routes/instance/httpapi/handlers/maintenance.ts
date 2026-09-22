@@ -16,6 +16,7 @@ import { InstanceHttpApi } from "../api"
 import { MaintenanceApi, MaintenancePaths } from "../groups/maintenance"
 import { MdExport } from "@/server/md-export"
 import { MigrationOrchestrator } from "@/server/migration-orchestrator"
+import { MigrationReport } from "@/server/migration-report"
 import { CompositionDigest } from "@/effect/composition-digest"
 import { makeApiError, type ApiTypedError } from "../typed-error"
 import { Service as MaintenanceRegistryService, layer } from "../maintenance-registry"
@@ -634,6 +635,65 @@ const maintenanceOperations = (
       return { active: journal !== undefined && journal.status !== "completed", journal }
     })
 
+    // W-02 M-3 — the compliance report runs read-only oracles only (preflight opens its own
+    // read-only connections; DataIntegrity issues PRAGMAs), so a read-only recovery store can
+    // generate it too. The only write is the report JSON under the backups root.
+    const generateMigrationReport = Effect.fn("MaintenanceHttpApi.migrationReport")(function* (ctx: {
+      payload: { dir?: string }
+    }) {
+      const dir = withinBackups(ctx.payload.dir ?? backupsRoot())
+      if (dir === undefined) {
+        return yield* Effect.fail(
+          makeApiError("validation_failed", {
+            resource: ctx.payload.dir ?? backupsRoot(),
+            expected: "path under the backups root",
+            actual: ctx.payload.dir ?? backupsRoot(),
+          }),
+        )
+      }
+      return yield* MigrationReport.generate({
+        db: database.db,
+        dbPath: path.resolve(Database.path()),
+        backupDir: dir,
+      }).pipe(
+        Effect.mapError((error) =>
+          makeApiError("internal_error", {
+            resource: MigrationReport.reportPathFor(dir),
+            expected: "compliance report generated",
+            // The error channel is widened by readJournal's plain Error; only the typed error
+            // carries a stable code.
+            actual: error instanceof MigrationReport.MigrationReportError ? `${error.code}: ${error.detail}` : String(error),
+          }),
+        ),
+      )
+    })
+
+    const migrationReportStatus = Effect.fn("MaintenanceHttpApi.migrationReportStatus")(function* (ctx: {
+      query: { dir?: string }
+    }) {
+      const dir = withinBackups(ctx.query.dir ?? backupsRoot())
+      if (dir === undefined) {
+        return yield* Effect.fail(
+          makeApiError("validation_failed", {
+            resource: ctx.query.dir ?? backupsRoot(),
+            expected: "path under the backups root",
+            actual: ctx.query.dir ?? backupsRoot(),
+          }),
+        )
+      }
+      const reportPath = MigrationReport.reportPathFor(dir)
+      const report = yield* MigrationReport.read(reportPath).pipe(
+        Effect.mapError((error) =>
+          makeApiError("internal_error", {
+            resource: reportPath,
+            expected: "read the persisted compliance report",
+            actual: `${error.code}: ${error.detail}`,
+          }),
+        ),
+      )
+      return { exists: report !== undefined, reportPath, ...(report === undefined ? {} : { report }) }
+    })
+
     return {
       getBootstrapStatus,
       listBackups,
@@ -649,6 +709,8 @@ const maintenanceOperations = (
       mdExportStatus,
       runMigration,
       migrationStatus,
+      generateMigrationReport,
+      migrationReportStatus,
     }
   })
 
@@ -669,6 +731,8 @@ export const maintenanceHandlers = HttpApiBuilder.group(MaintenanceApi, "mainten
       .handle("mdExportStatus", operations.mdExportStatus)
       .handle("migrationRun", operations.runMigration)
       .handle("migrationStatus", operations.migrationStatus)
+      .handle("migrationReport", operations.generateMigrationReport)
+      .handle("migrationReportStatus", operations.migrationReportStatus)
       // The digest effect's requirements resolve from the shared route-graph context at request
       // time (same open V2 runtime the instance routes run on), not from this group's own layer.
       .handle("compositionDigest", () => CompositionDigest.current),
@@ -896,6 +960,14 @@ export function maintenanceOnlyHandlersFor(filename: string, state: BootstrapSta
         .handle("migrationRun", () => Effect.fail(mapBootstrapStateToError(state, "migration")!))
         .handle("migrationStatus", (ctx) =>
           readOnlyOperation(filename, state, (operations) => operations.migrationStatus(ctx)),
+        )
+        // W-02 M-3 — the compliance report is read-only against the store; a recovering library
+        // can still be audited (and the report lands under the backups root, not the store).
+        .handle("migrationReport", (ctx) =>
+          readOnlyOperation(filename, state, (operations) => operations.generateMigrationReport(ctx)),
+        )
+        .handle("migrationReportStatus", (ctx) =>
+          readOnlyOperation(filename, state, (operations) => operations.migrationReportStatus(ctx)),
         )
         .handle("compositionDigest", compositionDigest)
     }),
