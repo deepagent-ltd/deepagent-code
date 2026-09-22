@@ -622,9 +622,6 @@ export const dict = {
   "settings.section.server": "Server",
   "settings.tab.general": "Generelt",
   "settings.tab.shortcuts": "Snarveier",
-  "settings.desktop.section.wsl": "WSL",
-  "settings.desktop.wsl.title": "WSL-integrasjon",
-  "settings.desktop.wsl.description": "Kjør DeepAgent Code-serveren i WSL på Windows.",
 
   "settings.general.section.appearance": "Utseende",
   "settings.general.section.notifications": "Systemvarsler",

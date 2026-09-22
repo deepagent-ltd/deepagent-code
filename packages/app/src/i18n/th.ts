@@ -613,9 +613,6 @@ export const dict = {
   "settings.section.server": "เซิร์ฟเวอร์",
   "settings.tab.general": "ทั่วไป",
   "settings.tab.shortcuts": "ทางลัด",
-  "settings.desktop.section.wsl": "WSL",
-  "settings.desktop.wsl.title": "การรวม WSL",
-  "settings.desktop.wsl.description": "เรียกใช้เซิร์ฟเวอร์ DeepAgent Code ภายใน WSL บน Windows",
 
   "settings.general.section.appearance": "รูปลักษณ์",
   "settings.general.section.notifications": "การแจ้งเตือนระบบ",

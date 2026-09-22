@@ -624,9 +624,6 @@ export const dict = {
   "settings.section.server": "Sunucu",
   "settings.tab.general": "Genel",
   "settings.tab.shortcuts": "Kısayollar",
-  "settings.desktop.section.wsl": "WSL",
-  "settings.desktop.wsl.title": "WSL entegrasyonu",
-  "settings.desktop.wsl.description": "DeepAgent Code sunucusunu Windows'ta WSL içinde çalıştırın.",
 
   "settings.general.section.appearance": "Görünüm",
   "settings.general.section.notifications": "Sistem bildirimleri",
