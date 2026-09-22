@@ -13,10 +13,12 @@
  *
  * C-P2-08 re-pin (2026-09-23): the migration registry gained the durable task-call
  * fan-out admission migration (20260922182048_v2_task_call_admission).
+ * Post-merge re-pin (2026-09-23): the c-p2-08 branch pinned without the concurrently
+ * merged k04 contract changes in its tree; regenerated over the combined merge tree.
  */
 export const HeadPin = {
   /** Commit whose tree the digests were pinned on. Informational; the digests are the gate. */
-  commit: "da001699c15a583128f4a460a1e3f39145efc18c",
-  setTreeDigest: "d83bf358c8c314538cecc942e9f3ad9e1a74f0f39250dcad938d22a62eed2608",
-  overallDigest: "6ec128d8e4686d37ac25ee8e323eeaa5c84bc06511a6aabfa76269907a5badc4",
+  commit: "27db3e301b736def102ad77eecb773aa9b51b8ad",
+  setTreeDigest: "5ae69e7535e16fee22cffaa57006d2735320690f55a6a63094e1d64c0c37441f",
+  overallDigest: "45492c271ced6d96eac14abdcd14fa9781370bb01382746fcb1c54091b917649",
 } as const
