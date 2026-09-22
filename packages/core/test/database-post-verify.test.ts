@@ -39,6 +39,7 @@ const createRecoveryTables = (db: EffectDrizzleSqlite.EffectSQLiteDatabase) =>
     yield* db.run(sql`CREATE TABLE event_snapshot_attempt (snapshot_id TEXT PRIMARY KEY, state TEXT)`)
     yield* db.run(sql`CREATE TABLE event_compaction_receipt (aggregate_id TEXT PRIMARY KEY, state TEXT)`)
     yield* db.run(sql`CREATE TABLE session_facade_activity (activity_id TEXT PRIMARY KEY, state TEXT)`)
+    yield* db.run(sql`CREATE TABLE session_v2_compaction_request (request_id TEXT PRIMARY KEY, status TEXT)`)
     yield* db.run(sql`CREATE TABLE session_activity (activity_id TEXT PRIMARY KEY, state TEXT)`)
     // W2 C1B recovery descriptor + command surface — created so classifyStartup is total.
     yield* db.run(sql`CREATE TABLE session_provider_recovery_descriptor
