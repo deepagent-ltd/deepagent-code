@@ -166,6 +166,50 @@ describe("DiskReclaim (W-02 M-5)", () => {
     )
   })
 
+  // Cross-review F-2 regression: a tampered/corrupted advisory must never widen the delete
+  // set — advisory-sourced paths are re-validated against the live-scan containment rules.
+  test("a tampered advisory listing an arbitrary outside path is refused", async () => {
+    await using tmp = await tmpdir()
+    const filename = path.join(tmp.path, "store", "deepagent-code.db")
+    await fs.mkdir(path.dirname(filename), { recursive: true })
+    await Effect.runPromise(Effect.gen(function* () {
+      yield* Database.Service
+    }).pipe(Effect.provide(Database.layerFromPath(filename)), Effect.ignore))
+    const backupDir = path.join(tmp.path, "store", "backups")
+    await fs.mkdir(backupDir, { recursive: true })
+    const victim = path.join(tmp.path, "precious.txt")
+    await Bun.write(victim, "must survive")
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        // Stage a real chain through disk_advisory, then TAMPER the advisory it produced:
+        // a corrupted or hand-edited advisory listing an arbitrary outside path.
+        yield* MigrationOrchestrator.run({
+          db,
+          dbPath: filename,
+          backupDir,
+          backupFileName: "tampered",
+          stopAfter: "disk_advisory",
+        })
+        const journal = yield* MigrationOrchestrator.readJournal(MigrationOrchestrator.journalPathFor(backupDir))
+        const advisoryPath = journal?.phases.findLast(
+          (record) => record.phase === "disk_advisory" && record.state === "completed",
+        )?.outcome
+        if (advisoryPath?.kind !== "disk_advisory") throw new Error("advisory not staged")
+        const advisory = (yield* Effect.promise(() => Bun.file(advisoryPath.advisoryPath).json())) as {
+          entries: { category?: string; path?: string }[]
+        }
+        advisory.entries.push({ category: "residue_candidate", path: victim })
+        yield* Effect.promise(() => Bun.write(advisoryPath.advisoryPath, JSON.stringify(advisory)))
+
+        const report = yield* DiskReclaim.reclaim({ db, dbPath: filename, backupDir, dataRoot: tmp.path, confirm: true })
+        expect(report.candidates.find((item) => item.path === victim)).toBeUndefined()
+        expect(yield* Effect.promise(() => Bun.file(victim).text())).toBe("must survive")
+      }).pipe(Effect.provide(Database.layerFromPath(filename)), Effect.scoped),
+    )
+  })
+
   test("VACUUM: runs only with confirm and is recorded", async () => {
     await using tmp = await tmpdir()
     const filename = path.join(tmp.path, "store", "deepagent-code.db")

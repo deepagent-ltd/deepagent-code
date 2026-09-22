@@ -599,7 +599,6 @@ describe("SessionProviderRecoveryDurable store (W2)", () => {
         yield* db.run(sql`CREATE TABLE event_compaction_receipt (aggregate_id TEXT PRIMARY KEY, state TEXT NOT NULL)`)
         yield* db.run(sql`CREATE TABLE session_v2_compaction_request (request_id TEXT PRIMARY KEY, status TEXT NOT NULL)`)
         yield* db.run(sql`CREATE TABLE session_facade_activity (activity_id TEXT PRIMARY KEY, state TEXT NOT NULL)`)
-        yield* db.run(sql`CREATE TABLE session_v2_compaction_request (request_id TEXT PRIMARY KEY, status TEXT NOT NULL)`)
         yield* db.run(sql`CREATE TABLE session_activity (activity_id TEXT PRIMARY KEY, state TEXT NOT NULL)`)
         yield* db.run(sql`CREATE TABLE session_provider_attempt_resolution (resolution_id TEXT PRIMARY KEY, attempt_id TEXT NOT NULL, decision TEXT NOT NULL)`)
         yield* db.run(sql`CREATE TABLE session_v2_provider_recovery_bridge (resolution_id TEXT PRIMARY KEY, attempt_id TEXT NOT NULL, receipt_id TEXT NOT NULL, command_id TEXT NOT NULL)`)

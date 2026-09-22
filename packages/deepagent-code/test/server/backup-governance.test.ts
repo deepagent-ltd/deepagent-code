@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { gunzipSync } from "node:zlib"
-import { Effect } from "effect"
+import { Cause, Effect, Exit } from "effect"
 import { Backup } from "@deepagent-code/core/database/backup"
 import { BackupGovernor } from "../../src/server/backup-governor"
 import { MigrationOrchestrator } from "../../src/server/migration-orchestrator"
@@ -163,6 +163,26 @@ describe("BackupGovernor (W-02 M-4)", () => {
       "b.db.gz",
       "b.db.manifest.json",
     ])
+  })
+
+  // Cross-review F-3 regression: a mid-stream archive failure (unreadable source) surfaces as
+  // the typed archive_failed error instead of an unhandled stream 'error' event crashing the
+  // maintenance process; the original backup is left in place.
+  test("an unreadable archive source fails typed, never crashes, and keeps the original", async () => {
+    await using tmp = await tmpdir()
+    const backupDir = path.join(tmp.path, "backups")
+    await makeBackup(backupDir, "kept", "newest", 0)
+    await makeBackup(backupDir, "broken", "older", -10 * 60_000)
+    // Corrupt the source: replace the over-aged backup FILE with a directory — the read stream
+    // cannot open it and errors mid-chain.
+    await fs.rm(path.join(backupDir, "broken.db"))
+    await fs.mkdir(path.join(backupDir, "broken.db"))
+
+    const outcome = await Effect.runPromiseExit(BackupGovernor.govern({ backupDir, keep: 1 }))
+    expect(Exit.isFailure(outcome)).toBe(true)
+    if (Exit.isFailure(outcome)) expect(Cause.pretty(outcome.cause)).toContain("BackupGovernorError")
+    // The original (as a directory now) was not moved into archive/.
+    expect(await fs.stat(path.join(backupDir, "archive", "broken.db.gz")).catch(() => undefined)).toBeUndefined()
   })
 
   test("invalid policy: keep < 1 is refused", async () => {

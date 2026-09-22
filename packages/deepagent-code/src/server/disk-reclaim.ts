@@ -244,7 +244,16 @@ export const reclaim = Effect.fn("DiskReclaim.reclaim")(function* (input: Reclai
   const liveScan = (yield* Effect.promise(() => fs.readdir(path.dirname(dbPath)).catch(() => [] as string[])))
     .map((name) => path.join(path.dirname(dbPath), name))
     .filter((file) => classify({ file, dataRoot, dbPath, backupDir }) === "residue_candidate")
-  const candidatePaths = [...new Set([...fromAdvisory, ...liveScan])]
+  // Cross-review F-2: an advisory JSON is a FILE input, not authority — a corrupted or tampered
+  // advisory must never widen the delete set beyond what the live re-scan would justify. Every
+  // advisory-sourced path is re-validated against the same containment and residue-shape rules
+  // the live scan enforces before it may enter the plan.
+  const trustedAdvisory = [...fromAdvisory].filter(
+    (candidate) =>
+      path.resolve(candidate) === path.resolve(input.dbPath) ||
+      (within(candidate, path.dirname(path.resolve(input.dbPath))) && isResidue(path.basename(candidate), path.resolve(input.dbPath))),
+  )
+  const candidatePaths = [...new Set([...trustedAdvisory, ...liveScan])]
 
   const plan = yield* Effect.forEach(candidatePaths.sort(), (candidate) =>
     Effect.gen(function* () {

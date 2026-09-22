@@ -85,11 +85,15 @@ const gzipInto = (source: string, destination: string) =>
   Effect.promise(
     () =>
       new Promise<void>((resolve, reject) => {
-        createReadStream(source)
-          .pipe(createGzip())
-          .pipe(createWriteStream(destination))
-          .on("finish", () => resolve())
-          .on("error", reject)
+        // Cross-review F-3: pipe() does not forward errors between stages — every stream in
+        // the chain needs a listener or a mid-stream failure (source vanished, IO error)
+        // becomes an unhandled 'error' event that crashes the maintenance process instead of
+        // surfacing as the typed archive_failed below.
+        const fail = (stage: string) => (error: Error) => reject(new Error(`${stage}: ${error.message}`))
+        const read = createReadStream(source).on("error", fail("read"))
+        const gz = createGzip().on("error", fail("gzip"))
+        const write = createWriteStream(destination).on("error", fail("write"))
+        read.pipe(gz).pipe(write).on("finish", () => resolve())
       }),
   ).pipe(
     Effect.catchCause(
