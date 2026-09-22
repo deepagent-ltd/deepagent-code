@@ -142,6 +142,7 @@ const withTool = <A, E, R>(
     Layer.provide(registry),
     Layer.provide(permission),
     Layer.provide(mutation),
+    Layer.provide(activeLocation),
     Layer.provide(filesystem),
     Layer.provide(processLayer),
     Layer.provide(config),
@@ -195,7 +196,7 @@ describe("BashTool", () => {
               maxOutputBytes: BashTool.MAX_CAPTURE_BYTES,
               maxErrorBytes: BashTool.MAX_CAPTURE_BYTES,
             })
-            expect(assertions).toMatchObject([{ sessionID, action: "bash", resources: ["pwd"], save: ["pwd"] }])
+            expect(assertions).toMatchObject([{ sessionID, action: "bash", resources: ["pwd"], save: ["pwd *"] }])
           }),
         )
       },
@@ -402,24 +403,21 @@ describe("BashTool", () => {
     ),
   )
 
-  it.live("reports external command arguments as advisory warnings without enforcing approval", () =>
+  it.live("enforces external_directory approval for command file arguments outside the Location", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
       ([active, outside]) => {
         reset()
-        denyAction = "external_directory"
         const target = path.join(outside.path, "secret.txt")
         return withTool(active.path, (registry) => settleTool(registry, call({ command: `cat ${target}` }))).pipe(
           Effect.andThen((settled) =>
             Effect.sync(() => {
-              expect(assertions.map((item) => item.action)).toEqual(["bash"])
+              const glob = path.join(realpathSync(outside.path), "*").replaceAll("\\", "/")
+              expect(assertions.map((item) => item.action)).toEqual(["external_directory", "bash"])
+              expect(assertions[0]).toMatchObject({ resources: [glob], save: [glob] })
+              expect(assertions[1]).toMatchObject({ resources: [`cat ${target}`], save: ["cat *"] })
+              expect(settled.output?.structured).not.toHaveProperty("warnings")
               expect(runs).toHaveLength(1)
-              expect(settled.output?.structured).toMatchObject({
-                warnings: [
-                  `Command argument references external directory ${path.join(realpathSync(outside.path), "*").replaceAll("\\", "/")}. Bash runs with host-user filesystem, process, and network authority; this scan is advisory only.`,
-                ],
-              })
-              expect(settled.result).toMatchObject({ type: "text", value: expect.stringContaining("Warnings:") })
             }),
           ),
         )
@@ -428,6 +426,76 @@ describe("BashTool", () => {
         Effect.promise(() =>
           Promise.all([active[Symbol.asyncDispose](), outside[Symbol.asyncDispose]()]).then(() => undefined),
         ),
+    ),
+  )
+
+  it.live("does not execute when an external command file argument is denied", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
+      ([active, outside]) => {
+        reset()
+        denyAction = "external_directory"
+        denyRules = [{ action: "external_directory", resource: "*", effect: "deny" }]
+        const target = path.join(outside.path, "secret.txt")
+        return withTool(active.path, (registry) => settleTool(registry, call({ command: `cat ${target}` }))).pipe(
+          Effect.andThen((settled) =>
+            Effect.sync(() => {
+              expect(settled.result).toMatchObject({
+                type: "error",
+                metadata: { failureCode: "permission_denied_rule" },
+              })
+              expect(assertions.map((item) => item.action)).toEqual(["external_directory"])
+              expect(runs).toEqual([])
+            }),
+          ),
+        )
+      },
+      ([active, outside]) =>
+        Effect.promise(() =>
+          Promise.all([active[Symbol.asyncDispose](), outside[Symbol.asyncDispose]()]).then(() => undefined),
+        ),
+    ),
+  )
+
+  it.live("approves each parsed command in a chain with BashArity prefix saves", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        return withTool(tmp.path, (registry) =>
+          settleTool(registry, call({ command: "echo foo && echo bar" })),
+        ).pipe(
+          Effect.andThen(() =>
+            Effect.sync(() => {
+              expect(assertions).toMatchObject([
+                { action: "bash", resources: ["echo foo", "echo bar"], save: ["echo *"] },
+              ])
+              expect(runs).toHaveLength(1)
+            }),
+          ),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("keeps redirect text in the permission pattern and skips bash approval for cd-only commands", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) =>
+        Effect.gen(function* () {
+          reset()
+          yield* withTool(tmp.path, (registry) =>
+            settleTool(registry, call({ command: "echo test > output.txt" })),
+          )
+          expect(assertions).toMatchObject([{ action: "bash", resources: ["echo test > output.txt"] }])
+
+          reset()
+          yield* withTool(tmp.path, (registry) => settleTool(registry, call({ command: "cd ." })))
+          expect(assertions).toEqual([])
+          expect(runs).toHaveLength(1)
+        }),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
     ),
   )
 
@@ -623,10 +691,6 @@ describe("BashTool", () => {
 test("keeps locked deferred parity TODOs visible", async () => {
   const source = await fs.readFile(new URL("../src/tool/bash.ts", import.meta.url), "utf8")
   for (const todo of [
-    "Port tree-sitter bash / PowerShell parser-based approval reduction.",
-    "Port BashArity reusable command-prefix approvals.",
-    "Replace token-based command-argument external-directory advisories with parser-based detection.",
-    "Restore PowerShell and cmd-specific invocation/path handling on Windows.",
     "Add plugin shell.env environment augmentation once V2 plugin hooks exist.",
     "Add durable/live progress metadata streaming for long-running commands once V2 tool invocation progress context is wired.",
     "Persist background job status and define restart recovery before exposing remote observation.",

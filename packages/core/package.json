@@ -134,8 +134,11 @@
     "minimatch": "10.2.5",
     "npm-package-arg": "13.0.2",
     "semver": "^7.6.3",
+    "tree-sitter-bash": "0.25.0",
+    "tree-sitter-powershell": "0.25.10",
     "turndown": "7.2.0",
     "venice-ai-sdk-provider": "2.0.2",
+    "web-tree-sitter": "0.25.10",
     "which": "6.0.1",
     "zod": "catalog:"
   },

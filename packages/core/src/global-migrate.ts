@@ -26,7 +26,12 @@ const CONFIG_ENTRIES = [
   "mcp-auth.json",
   "mcp-secrets.json",
   "settings.json",
+  // Config-root directories: themes, agent definitions (cli `agents`), and the global plugin
+  // patch targets written under <config>/deepagent-code and <config>/tui.
   "themes",
+  "agents",
+  "deepagent-code",
+  "tui",
 ]
 
 export const NOTE = "MIGRATED.txt"

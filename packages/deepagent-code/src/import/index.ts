@@ -5,7 +5,7 @@ import { SessionProjector } from "@deepagent-code/core/session/projector"
 import { ProjectV2 } from "@deepagent-code/core/project"
 import { Git } from "@deepagent-code/core/git"
 import { FSUtil } from "@deepagent-code/core/fs-util"
-import { resolveDataPath } from "@deepagent-code/core/global-path"
+import { resolveConfigPath, resolveDataPath } from "@deepagent-code/core/global-path"
 import { copyFileSync, existsSync, mkdirSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
@@ -20,7 +20,9 @@ import type { SourceSession } from "./ir"
 
 const DEFAULT_DATA_ROOT = resolveDataPath(process.env)
 const DEFAULT_DB_PATH = join(DEFAULT_DATA_ROOT, "deepagent-code-local.db")
-const DEFAULT_CONFIG_DIR = DEFAULT_DATA_ROOT
+// Imported skills/config are config-class output (D-W1): they follow the roaming config home
+// (%APPDATA%\deepagent-code on Windows; identical to the data root elsewhere).
+const DEFAULT_CONFIG_DIR = resolveConfigPath(process.env)
 
 function defaultSourcePath(source: ImportSource): string {
   return join(homedir(), source === "codex" ? ".codex" : ".claude")

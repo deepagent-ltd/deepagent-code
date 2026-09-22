@@ -2,6 +2,7 @@ import { Flag } from "@deepagent-code/core/flag/flag"
 import { lazy } from "@/util/lazy"
 import { Filesystem } from "@/util/filesystem"
 import { which } from "@deepagent-code/core/util/which"
+import { ShellScan } from "@deepagent-code/core/shell/scan"
 import path from "path"
 import { spawn, type ChildProcess } from "child_process"
 import { setTimeout as sleep } from "node:timers/promises"
@@ -126,7 +127,17 @@ function select(file: string | undefined, opts?: { acceptable?: boolean }) {
     const shell = resolve(file)
     if (shell) return shell
   }
-  if (process.platform === "win32") return win()[0]!
+  // D-W2 strict default chain: pwsh → powershell → cmd (COMSPEC). Git Bash stays selectable via
+  // configuration and remains in winChain for validation's POSIX-faithful iteration, but never
+  // becomes the silent default (same source as the V2 core bash tool).
+  if (process.platform === "win32")
+    return full(
+      ShellScan.defaultWindowsChain({
+        pwsh: which("pwsh") ?? undefined,
+        powershell: which("powershell") ?? undefined,
+        comspec: process.env.COMSPEC,
+      }),
+    )
   return fallback()
 }
 
