@@ -842,7 +842,7 @@ export const classifyStartup = Effect.fn("StartupInventory.classifyStartup")(fun
   // Provider attempts.
   const attempts = yield* db.all<ProviderAttemptRow>(sql`
     SELECT attempt.attempt_id AS id, attempt.state, attempt.execution_claim_token,
-           session.time_suspended AS current_session_claim_token,
+           session.execution_claim_token AS current_session_claim_token,
            resolution.decision AS resolution_decision,
            bridge.attempt_id AS bridge_attempt_id,
            bridge.receipt_id AS bridge_receipt_id,
@@ -942,7 +942,7 @@ export const classifyStartup = Effect.fn("StartupInventory.classifyStartup")(fun
            attempt.provider_id AS attempt_provider_id,
            attempt.owner_token AS attempt_owner_token,
            attempt.execution_claim_token AS attempt_execution_claim_token,
-           session.time_suspended AS current_session_claim_token,
+           session.execution_claim_token AS current_session_claim_token,
            resolution.decision AS resolution_decision,
            bridge.command_id AS bridge_command_id
     FROM recovery_command command

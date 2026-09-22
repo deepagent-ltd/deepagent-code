@@ -125,7 +125,7 @@ const seedIndeterminateAuthority = (
     `).pipe(Effect.orDie)
     yield* db.run(sql`
       INSERT INTO session
-        (id, project_id, slug, directory, title, version, time_suspended, time_created, time_updated)
+        (id, project_id, slug, directory, title, version, execution_claim_token, time_created, time_updated)
       VALUES (
         ${attempt.sessionId}, ${projectId}, 'recovery', '/tmp/recovery-executor', 'recovery',
         'test', ${claimToken}, ${dbNow}, ${dbNow}
@@ -379,8 +379,8 @@ describe("C1B recovery executor production wiring (W2.2)", () => {
               receipt_id: authority.receiptId,
             })
             expect(yield* database.db.get(sql`
-              SELECT time_suspended FROM session WHERE id = ${attempt.sessionId}
-            `)).toEqual({ time_suspended: null })
+              SELECT execution_claim_token FROM session WHERE id = ${attempt.sessionId}
+            `)).toEqual({ execution_claim_token: null })
             // Idempotence: a re-run drains nothing (the slot is terminal), and a direct
             // store re-apply reports "already" without writing new rows.
             const report = yield* executor.drain
@@ -445,8 +445,8 @@ describe("C1B recovery executor production wiring (W2.2)", () => {
               execution_claim_token: 918_273,
             })
             expect(yield* database.db.get(sql`
-              SELECT time_suspended FROM session WHERE id = ${attempt.sessionId}
-            `)).toEqual({ time_suspended: 918_273 })
+              SELECT execution_claim_token FROM session WHERE id = ${attempt.sessionId}
+            `)).toEqual({ execution_claim_token: 918_273 })
             expect(yield* database.db.get(sql`
               SELECT state, owner_token, provider_attempt_id FROM session_v2_provider_turn_receipt
               WHERE provider_attempt_id = ${attempt.attemptId}
@@ -494,7 +494,7 @@ describe("C1B recovery executor production wiring (W2.2)", () => {
               expectedVersion: 3,
             })
             yield* database.db.run(sql`
-              UPDATE session SET time_suspended = 918274 WHERE id = ${authority.attempt.sessionId}
+              UPDATE session SET execution_claim_token = 918274 WHERE id = ${authority.attempt.sessionId}
             `).pipe(Effect.orDie)
 
             const executor = yield* bootExecutor(database)
@@ -523,8 +523,8 @@ describe("C1B recovery executor production wiring (W2.2)", () => {
               WHERE attempt_id = ${authority.attempt.attemptId}
             `)).toEqual({ count: 0 })
             expect(yield* database.db.get(sql`
-              SELECT time_suspended FROM session WHERE id = ${authority.attempt.sessionId}
-            `)).toEqual({ time_suspended: 918_274 })
+              SELECT execution_claim_token FROM session WHERE id = ${authority.attempt.sessionId}
+            `)).toEqual({ execution_claim_token: 918_274 })
           }),
         ),
       )

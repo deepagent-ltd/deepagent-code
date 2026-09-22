@@ -50,7 +50,7 @@ describe("SessionRuntimeStatus", () => {
             directory: AbsolutePath.make("/project"),
             title: id,
             version: "test",
-            time_suspended: id === idleID ? null : 1,
+            execution_claim_token: id === idleID ? null : 1,
           })),
         )
         .run()

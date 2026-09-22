@@ -30,7 +30,7 @@ export interface Interface {
   readonly interruptSeq: (sessionID: SessionSchema.ID) => Effect.Effect<number | undefined>
   /**
    * Records write-ahead intent before a process-local execution starts. AUTH-P2-4 close: this is a
-   * CONDITIONAL UPDATE (CAS — `WHERE time_suspended IS NULL`), and the effect reports whether the
+   * CONDITIONAL UPDATE (CAS — `WHERE execution_claim_token IS NULL`), and the effect reports whether the
    * claim won (`true`) or the session was already suspended (`false`). The CAS itself is the fence
    * (SQLite serializes writers); cross-process handoff is a future design — the boundary is
    * process-local coordination.
@@ -77,7 +77,7 @@ export const layer = Layer.effect(
         return yield* db
           .select({ sessionID: SessionTable.id })
           .from(SessionTable)
-          .where(isNotNull(SessionTable.time_suspended))
+          .where(isNotNull(SessionTable.execution_claim_token))
           .all()
           .pipe(
             Effect.orDie,
@@ -86,9 +86,9 @@ export const layer = Layer.effect(
       }),
       listSuspendedClaims: Effect.fn("SessionStore.listSuspendedClaims")(function* () {
         return yield* db
-          .select({ sessionID: SessionTable.id, token: SessionTable.time_suspended })
+          .select({ sessionID: SessionTable.id, token: SessionTable.execution_claim_token })
           .from(SessionTable)
-          .where(isNotNull(SessionTable.time_suspended))
+          .where(isNotNull(SessionTable.execution_claim_token))
           .all()
           .pipe(
             Effect.orDie,
@@ -101,7 +101,7 @@ export const layer = Layer.effect(
       }),
       claimToken: Effect.fn("SessionStore.claimToken")(function* (sessionID) {
         return yield* db
-          .select({ token: SessionTable.time_suspended })
+          .select({ token: SessionTable.execution_claim_token })
           .from(SessionTable)
           .where(eq(SessionTable.id, sessionID))
           .get()
@@ -122,7 +122,7 @@ export const layer = Layer.effect(
           )
       }),
       claim: Effect.fn("SessionStore.claim")(function* (sessionID) {
-        // CAS: the conditional UPDATE (WHERE time_suspended IS NULL) is the fence — SQLite
+        // CAS: the conditional UPDATE (WHERE execution_claim_token IS NULL) is the fence — SQLite
         // serializes writers, so exactly one claimant transitions null -> <our token>. The
         // wrapped .run() discards changes, so we write a per-call UNIQUE token and read it
         // back: matching our token => this call won; anything else => already claimed.
@@ -130,9 +130,9 @@ export const layer = Layer.effect(
         const token = (random[0]! & 0x1fffff) * 0x1_0000_0000 + random[1]! || 1
         const claimed = yield* db
           .update(SessionTable)
-          .set({ time_suspended: token, time_updated: sql`${SessionTable.time_updated}` })
-          .where(and(eq(SessionTable.id, sessionID), isNull(SessionTable.time_suspended)))
-          .returning({ token: SessionTable.time_suspended })
+          .set({ execution_claim_token: token, time_updated: sql`${SessionTable.time_updated}` })
+          .where(and(eq(SessionTable.id, sessionID), isNull(SessionTable.execution_claim_token)))
+          .returning({ token: SessionTable.execution_claim_token })
           .get()
           .pipe(Effect.orDie)
         return claimed?.token === token ? token : undefined
@@ -140,8 +140,8 @@ export const layer = Layer.effect(
       release: Effect.fn("SessionStore.release")(function* (sessionID, token) {
         const released = yield* db
           .update(SessionTable)
-          .set({ time_suspended: null, time_updated: sql`${SessionTable.time_updated}` })
-          .where(and(eq(SessionTable.id, sessionID), eq(SessionTable.time_suspended, token)))
+          .set({ execution_claim_token: null, time_updated: sql`${SessionTable.time_updated}` })
+          .where(and(eq(SessionTable.id, sessionID), eq(SessionTable.execution_claim_token, token)))
           .returning({ id: SessionTable.id })
           .get()
           .pipe(Effect.orDie)

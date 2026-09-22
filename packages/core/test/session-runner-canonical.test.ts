@@ -50,7 +50,7 @@ const seed = Effect.gen(function* () {
       version: "test",
       // The runner holds the Session execution claim; prepareInTransaction refuses
       // (session_execution_claim_missing) without it.
-      time_suspended: 104,
+      execution_claim_token: 104,
     })
     .onConflictDoNothing()
     .run()
@@ -281,7 +281,7 @@ const seamSeed = Effect.gen(function* () {
       directory: "/project",
       title: "canonical seam",
       version: "test",
-      time_suspended: 104,
+      execution_claim_token: 104,
     })
     .onConflictDoNothing()
     .run()
@@ -385,7 +385,7 @@ const staleSeed = Effect.gen(function* () {
       directory: "/project",
       title: "canonical stale",
       version: "test",
-      time_suspended: 104,
+      execution_claim_token: 104,
     })
     .onConflictDoNothing()
     .run()
@@ -655,7 +655,7 @@ it.effect("refuses new turns once the consecutive crash-resume budget is exhaust
         directory: "/project",
         title: "canonical budget",
         version: "test",
-        time_suspended: 104,
+        execution_claim_token: 104,
       })
       .onConflictDoNothing()
       .run()

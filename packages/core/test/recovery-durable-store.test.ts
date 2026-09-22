@@ -580,7 +580,7 @@ describe("SessionProviderRecoveryDurable store (W2)", () => {
         // Crash-left durable state: one indeterminate attempt + its recovery descriptors.
         // The startup-inventory read surface mirrors the tracked schema's columns; empty tables
         // classify to no items and the seeded sync authority keeps the inventory total.
-        yield* db.run(sql`CREATE TABLE session (id TEXT PRIMARY KEY, time_suspended INTEGER)`)
+        yield* db.run(sql`CREATE TABLE session (id TEXT PRIMARY KEY, execution_claim_token INTEGER)`)
         yield* db.run(sql`
           CREATE TABLE session_provider_attempt (
             attempt_id TEXT PRIMARY KEY, state TEXT NOT NULL, session_id TEXT, activity_id TEXT,

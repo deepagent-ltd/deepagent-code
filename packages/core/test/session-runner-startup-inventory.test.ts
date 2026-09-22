@@ -88,7 +88,7 @@ const fiveDescriptorRows = (): readonly {
 // on the classification logic.
 const createTables = (db: Db) =>
   Effect.gen(function* () {
-    yield* db.run(sql`CREATE TABLE session (id TEXT PRIMARY KEY, time_suspended INTEGER)`)
+    yield* db.run(sql`CREATE TABLE session (id TEXT PRIMARY KEY, execution_claim_token INTEGER)`)
     yield* db.run(sql`INSERT INTO session VALUES ('fixture-session', 1), ('sess-1', 1), ('sess_inv', 1)`)
     yield* db.run(sql`
       CREATE TABLE session_provider_attempt (
@@ -390,11 +390,11 @@ describe("StartupInventory.classifyStartup (C1B-10)", () => {
         expect(pending.byCategory.recovery_command.recovery).toBe(1)
         expect(pending.byCategory.recovery_command.unclassified).toBe(0)
 
-        yield* db.run(sql`UPDATE session SET time_suspended = 2 WHERE id = ${attempt.sessionId}`)
+        yield* db.run(sql`UPDATE session SET execution_claim_token = 2 WHERE id = ${attempt.sessionId}`)
         const successorClaim = yield* StartupInventory.classifyStartup(db)
         expect(successorClaim.byCategory.recovery_command.unclassified).toBe(1)
         expect(successorClaim.ready).toBe(false)
-        yield* db.run(sql`UPDATE session SET time_suspended = 1 WHERE id = ${attempt.sessionId}`)
+        yield* db.run(sql`UPDATE session SET execution_claim_token = 1 WHERE id = ${attempt.sessionId}`)
 
         yield* db.run(sql`
           UPDATE recovery_command SET state = 'abandoned', result_hash = ${"x".repeat(64)}
@@ -426,7 +426,7 @@ describe("StartupInventory.classifyStartup (C1B-10)", () => {
         const staleTerminalClaim = yield* StartupInventory.classifyStartup(db)
         expect(staleTerminalClaim.byCategory.recovery_command.unclassified).toBe(1)
         expect(staleTerminalClaim.ready).toBe(false)
-        yield* db.run(sql`UPDATE session SET time_suspended = NULL WHERE id = ${attempt.sessionId}`)
+        yield* db.run(sql`UPDATE session SET execution_claim_token = NULL WHERE id = ${attempt.sessionId}`)
         const resolved = yield* StartupInventory.classifyStartup(db)
         expect(resolved.byCategory.recovery_command.resolved).toBe(1)
         expect(resolved.byCategory.recovery_command.unclassified).toBe(0)
