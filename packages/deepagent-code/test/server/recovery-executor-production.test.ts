@@ -679,13 +679,15 @@ describe("C1B recovery executor production wiring (W2.2)", () => {
             const terminal = (yield* allDescriptors(database.db, attempt.sessionId)).find(
               (row) => row.payload.descriptorKind === "resolved",
             )
-            expect(terminal?.payload.resolved.terminal).toBe("settled")
-            expect(terminal?.payload.casTokens).toEqual({
+            if (!terminal || terminal.payload.descriptorKind !== "resolved")
+              throw new Error("expected the resolved terminal descriptor")
+            expect(terminal.payload.resolved.terminal).toBe("settled")
+            expect(terminal.payload.casTokens).toEqual({
               expectedState: "resolved_settled",
               expectedVersion: 4,
               ownerToken: authority.ownerToken,
             })
-            expect(terminal?.contentHash).toBe(RecoveryCommandContract.recoveryDescriptorDigest(terminal!.payload))
+            expect(terminal.contentHash).toBe(RecoveryCommandContract.recoveryDescriptorDigest(terminal.payload))
             expect(yield* database.db.get(sql`
               SELECT execution_claim_token FROM session WHERE id = ${attempt.sessionId}
             `)).toEqual({ execution_claim_token: null })
