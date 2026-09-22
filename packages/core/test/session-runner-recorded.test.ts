@@ -48,11 +48,12 @@ import { testEffect } from "./lib/effect"
 const database = Database.layerFromPath(":memory:")
 // W3.6/W3.8 — the cassette was recorded under the W3 production default (missing sources degrade
 // honestly and the selection evidence tail IS appended — the recorded request literally carries the
-// "Context selection (this turn):" system part). The W3.8 M1 single-point gate is ON by default;
-// this test pins it explicitly so the replayed request deterministically equals the recording even
-// when a caller/process already set the key, and restores the previous value afterwards. The
-// `=false` byte-invariance proof (no evidence part) lives in session-runner.test.ts with a captured
-// request — a replay test cannot exercise it because the recorded fixture differs.
+// "Context selection (this turn):" system-update block folded into the user message). The W3.8 M1
+// single-point gate is ON by default; this test pins it explicitly so the replayed request
+// deterministically equals the recording even when a caller/process already set the key, and
+// restores the previous value afterwards. The `=false` byte-invariance proof (no evidence part)
+// lives in session-runner.test.ts with a captured request — a replay test cannot exercise it
+// because the recorded fixture differs.
 const events = EventV2.layer.pipe(Layer.provide(database))
 const projector = SessionProjector.layer.pipe(Layer.provide(events), Layer.provide(database))
 const store = SessionStore.layer.pipe(Layer.provide(database))
@@ -80,13 +81,21 @@ const permission = Layer.succeed(
 )
 const registry = ToolRegistry.defaultLayer.pipe(Layer.provide(permission))
 const agents = AgentV2.layer
+// Recorded against DeepSeek's OpenAI-compatible chat endpoint (this repo has no OpenAI key):
+// the wire protocol is the same openai-chat route, so the cassette still pins the OpenAI Chat
+// streaming contract. Re-record with:
+//   RECORD=true DEEPSEEK_API_KEY=... bun test test/session-runner-recorded.test.ts
+// `reasoningEffort: "none"` keeps deepseek-flash (thinking-on by default) on the plain
+// text-streaming path this cassette is about; the request-auth header never reaches the
+// cassette (the recorder redacts it), so replay works keyless and offline.
 const model = OpenAIChat.route
   .with({
-    endpoint: { baseURL: "https://api.openai.com/v1" },
-    auth: Auth.bearer(process.env.OPENAI_API_KEY ?? "fixture"),
+    endpoint: { baseURL: "https://api.deepseek.com/v1" },
+    auth: Auth.bearer(process.env.DEEPSEEK_API_KEY ?? "fixture"),
     generation: { maxTokens: 20, temperature: 0 },
+    providerOptions: { openai: { reasoningEffort: "none" } },
   })
-  .model({ id: "gpt-4o-mini" })
+  .model({ id: "deepseek-flash" })
 const models = SessionRunnerModel.layerWith(() => Effect.succeed({ model }))
 const systemContext = SystemContextRegistry.layer
 const location = Location.layer({ directory: AbsolutePath.make("/project") }).pipe(Layer.provide(Project.defaultLayer))
