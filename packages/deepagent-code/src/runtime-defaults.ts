@@ -4,9 +4,15 @@
 // defaults and the default values are queryable in exactly one module.
 //
 // REPO-WIDE SEMANTICS: one flag table lives in `@deepagent-code/core/deepagent/flip-flag`
-// (`flipFlagValueOn`). Every boolean below and its Core gate ships ON by default
-// (`unsetDefault = true`). For every DEFINED value both sides agree exactly: trim + lowercase,
-// `""` / `"false"` / `"0"` → OFF, any other value → ON.
+// (`flipFlagValueOn`). Every boolean below ships ON by default (`unsetDefault = true`) on both
+// sides of the repo boundary — this entry table and its gates. Since the W3.8 M1 single-point
+// closure the core gates no longer parse these keys themselves: admission / IM single-write /
+// federation resolve through the manifest-derived `RuntimeFeatures` registry
+// (`core/flag/runtime-features.ts`, all `unsetDefault = true`), and `productionAdaptersEnabled`
+// delegates to it. The owner flag is consumed app-side (`RuntimeFlags.coreV2ExecutionOwner`) with
+// the same table and default; core's ablation beacon (`deepagent/mechanism-beacon.ts`) mirrors
+// the same values for observability only. For every DEFINED value all readers agree exactly:
+// trim + lowercase, `""` / `"false"` / `"0"` → OFF, any other value → ON.
 // `applyRuntimeDefaults` is strictly set-if-unset: an explicit value — including `=false`/`=0` —
 // is never overwritten, so a kill-switch set by the operator survives.
 

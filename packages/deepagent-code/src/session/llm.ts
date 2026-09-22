@@ -1084,40 +1084,59 @@ const live: Layer.Layer<
 
             const result = yield* run({ ...input, abort: ctrl.signal })
 
+            // G31-1 (bug-V2.0-004): both runtimes settle through the same AgentGateway
+            // lifecycle — one RunInput shape, so a native turn gets the same audit record,
+            // budget-exhaustion check, and kill switch as the AI SDK path.
+            const runInput = {
+              callKind: "session_turn" as const,
+              feature: input.small ? "session_small_model" : "session_chat",
+              providerID: input.model.providerID,
+              modelID: input.model.id,
+              sessionID: input.sessionID,
+              messageID: input.user.id,
+              parentSessionID: input.parentSessionID,
+              agent: input.agent.name,
+              metadata: result.metadata,
+              releasedKnowledgeSelection: input.releasedKnowledgeSelection,
+            }
+
             if (result.type === "native") {
               let adapterOrdinal = 0
               const validatedCallIDs = new Set<string>()
-              return result.stream.pipe(
-                Stream.tap((event) => {
-                  if (!input.requestReceipt) return Effect.void
-                  const details = adapterReceiptDetails(event)
-                  if (!details) return Effect.void
-                  return input.requestReceipt.adapterAssembly({
-                    ordinal: adapterOrdinal++,
-                    eventType: event.type,
-                    callID: details.callID,
-                    toolName: details.toolName,
-                    validationOutcome: adapterValidationOutcome(event, validatedCallIDs),
-                    ...(details.payload === undefined
-                      ? {
-                          payloadHash: undefined,
-                          payloadLength: undefined,
+              return AgentGateway.manageStream(
+                runInput,
+                result.stream.pipe(
+                  Stream.tap((event) => {
+                    if (!input.requestReceipt) return Effect.void
+                    const details = adapterReceiptDetails(event)
+                    if (!details) return Effect.void
+                    return input.requestReceipt.adapterAssembly({
+                      ordinal: adapterOrdinal++,
+                      eventType: event.type,
+                      callID: details.callID,
+                      toolName: details.toolName,
+                      validationOutcome: adapterValidationOutcome(event, validatedCallIDs),
+                      ...(details.payload === undefined
+                        ? {
+                            payloadHash: undefined,
+                            payloadLength: undefined,
+                            payloadKeys: [],
+                            unavailableReason: details.unavailableReason,
+                          }
+                        : boundedReceiptPayload(details.payload)),
+                    })
+                  }),
+                  Stream.ensuring(
+                    input.requestReceipt
+                      ? input.requestReceipt.rawFrame({
+                          ordinal: 0,
+                          eventType: "native-runtime",
                           payloadKeys: [],
-                          unavailableReason: details.unavailableReason,
-                        }
-                      : boundedReceiptPayload(details.payload)),
-                  })
-                }),
-                Stream.ensuring(
-                  input.requestReceipt
-                    ? input.requestReceipt.rawFrame({
-                        ordinal: 0,
-                        eventType: "native-runtime",
-                        payloadKeys: [],
-                        unavailableReason: "native_runtime_did_not_expose_raw_frame",
-                        validationOutcome: "not_evaluated",
-                      })
-                    : Effect.void,
+                          unavailableReason: "native_runtime_did_not_expose_raw_frame",
+                          validationOutcome: "not_evaluated",
+                        })
+                      : Effect.void,
+                  ),
                 ),
               )
             }
@@ -1178,21 +1197,7 @@ const live: Layer.Layer<
               ),
               Stream.flatMap((events) => Stream.fromIterable(events)),
               (events) =>
-                AgentGateway.manageStream(
-                  {
-                    callKind: "session_turn",
-                    feature: input.small ? "session_small_model" : "session_chat",
-                    providerID: input.model.providerID,
-                    modelID: input.model.id,
-                    sessionID: input.sessionID,
-                    messageID: input.user.id,
-                    parentSessionID: input.parentSessionID,
-                    agent: input.agent.name,
-                    metadata: result.metadata,
-                    releasedKnowledgeSelection: input.releasedKnowledgeSelection,
-                  },
-                  events,
-                ).pipe(
+                AgentGateway.manageStream(runInput, events).pipe(
                   Stream.ensuring(
                     Effect.suspend(() =>
                       input.requestReceipt

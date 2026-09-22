@@ -3,6 +3,7 @@ import { ConfigV1 } from "@deepagent-code/core/v1/config/config"
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import path from "path"
+import { readdir, readFile } from "fs/promises"
 import { InvalidToolInputError, tool, type ModelMessage } from "ai"
 import { Cause, Effect, Exit, Fiber, Layer, Stream } from "effect"
 import { InstanceRef } from "../../src/effect/instance-ref"
@@ -31,6 +32,7 @@ import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
+import { Global } from "@deepagent-code/core/global"
 import { Env } from "@/env"
 
 const it = testEffect(Layer.mergeAll(LLM.defaultLayer, Provider.defaultLayer, Auth.defaultLayer))
@@ -1472,6 +1474,93 @@ describe("session.llm.stream", () => {
         expect(capture.body.input).toContainEqual({ role: "user", content: [{ type: "input_text", text: "Hello" }] })
       }),
     { config: () => officialGatewayOffConfig },
+  )
+
+  // bug-V2.0-004 (G31-1): with the gateway ACTIVE (no agentMode override), a native-runtime turn
+  // must settle through AgentGateway.manageStream — audit record / budget check / kill switch —
+  // exactly like the AI SDK path. The pre-fix native branch returned the raw stream and sealed no
+  // run record at all.
+  it.instance("seals an AgentGateway run record for a native-runtime turn", () =>
+    Effect.gen(function* () {
+      const model = loadFixture("openai", "gpt-5.2").model
+      const chunks = [
+        { type: "response.created", response: { id: "resp-native-gateway" } },
+        {
+          type: "response.output_item.added",
+          item: { type: "message", id: "item-native-gateway", status: "in_progress" },
+        },
+        { type: "response.output_text.delta", item_id: "item-native-gateway", delta: "Hello native" },
+        {
+          type: "response.completed",
+          response: {
+            incomplete_details: null,
+            usage: {
+              input_tokens: 1,
+              input_tokens_details: null,
+              output_tokens: 1,
+              output_tokens_details: null,
+            },
+          },
+        },
+      ]
+      const request = waitRequest("/responses", createEventResponse(chunks, true))
+      const sessionID = SessionID.make("session-test-native-gateway")
+      const agent = {
+        name: "test",
+        mode: "primary",
+        options: {},
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      } satisfies Agent.Info
+
+      yield* officialProviderRun(
+        "openai",
+        "test-openai-key",
+        `${state.server!.url.origin}/v1`,
+        (provider) =>
+          Effect.gen(function* () {
+            const resolved = yield* provider.getModel(ProviderV2.ID.openai, ModelV2.ID.make(model.id))
+            yield* drain({
+              user: {
+                id: MessageID.make("msg_user-native-gateway"),
+                sessionID,
+                role: "user",
+                time: { created: Date.now() },
+                agent: agent.name,
+                model: { providerID: ProviderV2.ID.make("openai"), modelID: resolved.id },
+              } satisfies SessionV1.User,
+              sessionID,
+              model: resolved,
+              agent,
+              system: ["You are a helpful assistant."],
+              messages: [{ role: "user", content: "Hello" }],
+              tools: {},
+            })
+          }),
+        { experimentalNativeLlm: true },
+      )
+
+      // The native transport served the turn (Responses wire)...
+      const capture = yield* Effect.promise(() => request)
+      expect(capture.url.pathname.endsWith("/responses")).toBe(true)
+      // ...and the gateway sealed THIS session's run record as completed.
+      const runsDir = Global.Path.agent.runs
+      const runs = yield* Effect.promise(() => readdir(runsDir))
+      const records = yield* Effect.forEach(runs, (run) =>
+        Effect.promise(() =>
+          readFile(path.join(runsDir, run, "DEEPAGENT_RUN_STATE.json"), "utf8")
+            .then((text) => JSON.parse(text) as Record<string, unknown>)
+            .catch(() => undefined),
+        ),
+      )
+      const record = records.find((entry) => entry?.generic_agent_session_id === String(sessionID))
+      expect(record).toMatchObject({
+        schema_version: "deepagent_global_run_state.v1",
+        state: "completed",
+        call_kind: "session_turn",
+        provider_id: "openai",
+        model_id: model.id,
+      })
+    }),
   )
 
   it.instance(

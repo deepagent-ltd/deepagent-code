@@ -13,7 +13,7 @@ import { PermissionV2 } from "../permission"
 import { SessionSchema, SessionV2 } from "../session"
 import { SessionMessage } from "../session/message"
 import { Prompt } from "../session/prompt"
-import { TaskRunTable } from "../session/sql"
+import { TaskRunTable, type TaskStructuredOutputReceipt } from "../session/sql"
 import { TaskRunAuthority } from "../session/task-run"
 import { Delegation } from "./delegation"
 import {
@@ -50,6 +50,9 @@ export const captureDelegationServiceLayer = Layer.effectDiscard(
 
 /** V1 parity (deepagent-code subagent-permissions): hard delegation depth ceiling. */
 export const MAX_SUBAGENT_DEPTH = 3
+
+/** Bounded structured-output finalizer budget: one conversion prompt + one correction attempt. */
+const FINALIZER_ATTEMPTS = [1, 2] as const
 
 const Input = Schema.Struct({
   description: Schema.String.annotate({
@@ -122,6 +125,24 @@ function validateStructuredOutput(schema: Record<string, unknown>, value: unknow
     validate.errors?.map((error) => `${error.instancePath || "/"} ${error.message ?? "is invalid"}`).join("; ") ??
     "schema validation failed"
   )
+}
+
+/**
+ * Port of deepagent-code's degraded structured-output settlement (task-structured-output-evidence):
+ * same payload shape (`_degraded`/`_reason`/`_attempts`/`_raw`) so both frontends read one
+ * contract. `_raw` is codepoint-safe bounded.
+ */
+const DEGRADED_RAW_RESULT_MAX_CHARS = 80_000
+function makeDegradedStructuredOutput(
+  raw: string,
+  receipt: Extract<TaskStructuredOutputReceipt, { readonly transport: "degraded_text" }>,
+) {
+  return JSON.stringify({
+    _degraded: true,
+    _reason: receipt.reason,
+    _attempts: receipt.attempt,
+    _raw: Array.from(raw).slice(0, DEGRADED_RAW_RESULT_MAX_CHARS).join(""),
+  })
 }
 
 /**
@@ -562,7 +583,10 @@ export const layer = Layer.effectDiscard(
                     )
 
                   // Structured contract (V1 finalizer parity): the schema rides the prompt text — V2
-                  // has no provider-side format — with one bounded correction attempt.
+                  // has no provider-side format — with one bounded correction attempt. Budget
+                  // exhaustion settles DEGRADED (bug-V2.0-003, e829ebf5a parity): a receipt-stamped
+                  // {_degraded,_reason,_attempts,_raw} payload, never a hard failure of the parent
+                  // turn. A shared-deadline timeout stays a hard failure.
                   //
                   // Structured evidence authority: a durable run that settled COMPLETED records its
                   // finalizer verdict exactly once through the V2 authority (fail-closed — a
@@ -591,7 +615,7 @@ export const layer = Layer.effectDiscard(
                         schemaName,
                         schema: outputSchema,
                         validationOutcome,
-                        rawOutput: rawOutput.slice(0, 24_000),
+                        rawOutput,
                         ...(outputMessageID === undefined ? {} : { outputMessageID }),
                         ownerToken: `core-v2-finalizer:${childID}`,
                       })
@@ -599,8 +623,10 @@ export const layer = Layer.effectDiscard(
 
                   const boundedRaw = research.slice(0, 24_000)
                   let correction: string | undefined
-                  let lastMaterial = boundedRaw
-                  for (const attempt of [1, 2] as const) {
+                  // The last attempt's failure kind becomes the degraded receipt's reason. The
+                  // timeout break below leaves it unset: only an exhausted schema budget degrades.
+                  let exhausted: "structured_output_missing" | "structured_output_invalid" | undefined
+                  for (const attempt of FINALIZER_ATTEMPTS) {
                     const finalizerText = [
                       attempt === 1
                         ? "Convert the persisted research result below into the requested StructuredOutput schema."
@@ -613,7 +639,6 @@ export const layer = Layer.effectDiscard(
                       "</research_result>",
                     ].join("\n")
                     const response = yield* drive(childID, finalizerText)
-                    lastMaterial = response.slice(0, 24_000)
                     if (timedOut) {
                       correction = "Subagent timed out while finalizing structured output."
                       break
@@ -621,6 +646,7 @@ export const layer = Layer.effectDiscard(
                     const candidate = extractStructuredText(response)
                     if (candidate === undefined) {
                       correction = "Model did not return a JSON value."
+                      exhausted = "structured_output_missing"
                       continue
                     }
                     const error = validateStructuredOutput(outputSchema, candidate)
@@ -631,7 +657,7 @@ export const layer = Layer.effectDiscard(
                       const transcript = yield* sessions
                         .messages({ sessionID: childID, order: "asc" })
                         .pipe(Effect.orDie)
-                      yield* recordEvidence("validated", JSON.stringify(candidate), lastAssistantMessageID(transcript)).pipe(
+                      yield* recordEvidence("validated", JSON.stringify(candidate).slice(0, 24_000), lastAssistantMessageID(transcript)).pipe(
                         Effect.mapError((failure) =>
                           toolFailure(
                             `Task ${childID} produced a schema-valid structured output, but recording its durable evidence failed (${failure._tag}); retry the task call to seal the result.`,
@@ -646,20 +672,29 @@ export const layer = Layer.effectDiscard(
                       }
                     }
                     correction = error.slice(0, 1_000)
+                    exhausted = "structured_output_invalid"
                   }
-                  const transcript = yield* sessions.messages({ sessionID: childID, order: "asc" }).pipe(Effect.orDie)
-                  const failureEvidence = yield* recordEvidence(
-                    "validation_failed",
-                    lastMaterial,
-                    lastAssistantMessageID(transcript),
-                  ).pipe(Effect.exit)
-                  return yield* toolFailure(
-                    `Subagent completed but its final answer never validated against the output schema${correction ? `: ${correction}` : ""}. Task id ${childID} holds the raw turns.${
-                      Exit.isFailure(failureEvidence)
-                        ? ` Additionally, recording the validation-failure evidence failed; the durable evidence record for this run is missing — retry the task call.`
-                        : ""
-                    }`,
+                  if (exhausted === undefined)
+                    return yield* toolFailure(
+                      `Subagent completed but its final answer never validated against the output schema${correction ? `: ${correction}` : ""}. Task id ${childID} holds the raw turns.`,
+                    )
+                  const degraded = makeDegradedStructuredOutput(boundedRaw, {
+                    attempt: FINALIZER_ATTEMPTS.length,
+                    transport: "degraded_text",
+                    reason: exhausted,
+                  })
+                  const exhaustedTranscript = yield* sessions.messages({ sessionID: childID, order: "asc" }).pipe(Effect.orDie)
+                  yield* recordEvidence("validation_failed", degraded, lastAssistantMessageID(exhaustedTranscript)).pipe(
+                    // Evidence is best-effort (e829ebf5a parity): the degraded payload is the
+                    // settlement, and a missing row reads as explicit-recovery on status surfaces.
+                    Effect.ignoreCause({ log: "Warn", message: "task finalizer degraded evidence unavailable" }),
                   )
+                  return {
+                    task_id: childID,
+                    text: degraded,
+                    ...(runInfo === undefined ? {} : { run: runInfo }),
+                    ...(warnings.length === 0 ? {} : { warnings }),
+                  }
                 }),
               ),
           }),
