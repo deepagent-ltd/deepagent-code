@@ -202,7 +202,9 @@ export class ModelCatalogEntry extends Schema.Class<ModelCatalogEntry>("ModelPro
   routeOrigin: ProviderRouteOrigin,
   versionBindings: ModelVersionBindings,
   capabilities: ModelProtocolCapabilities,
-  contextWindow: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
+  // Absent = window unknown (e.g. a config-defined custom provider that declares
+  // no limits) — typed unavailable, never a fabricated 0 (K-04 / 405-007).
+  contextWindow: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
 }) {}
 
 /**
