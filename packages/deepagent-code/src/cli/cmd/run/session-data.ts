@@ -24,10 +24,10 @@
 //   `data.questions`. The footer shows whichever is first. When a reply
 //   event arrives, the queue entry is removed and the footer falls back
 //   to the next pending request or to the prompt view.
-import type { Event, Part, PermissionRequest, QuestionRequest, ToolPart } from "@deepagent-code/sdk"
+import type { Event, Part, QuestionRequest, ToolPart } from "@deepagent-code/sdk"
 import * as Locale from "@/util/locale"
 import { toolView } from "./tool"
-import type { FooterOutput, FooterPatch, FooterView, StreamCommit } from "./types"
+import type { FooterOutput, FooterPatch, FooterView, RunPermissionRequest, StreamCommit } from "./types"
 
 const money = new Intl.NumberFormat("en-US", {
   style: "currency",
@@ -76,7 +76,7 @@ export type SessionData = {
   tools: Set<string>
   call: Map<string, Dict>
   shell: Map<string, ShellCall>
-  permissions: PermissionRequest[]
+  permissions: RunPermissionRequest[]
   questions: QuestionRequest[]
   role: Map<string, MessageRole>
   msg: Map<string, string>
@@ -217,7 +217,7 @@ function out(data: SessionData, commits: SessionCommit[], footer?: FooterOutput)
   }
 }
 
-export function pickBlockerView(input: { permission?: PermissionRequest; question?: QuestionRequest }): FooterView {
+export function pickBlockerView(input: { permission?: RunPermissionRequest; question?: QuestionRequest }): FooterView {
   if (input.permission) {
     return { type: "permission", request: input.permission }
   }
@@ -286,7 +286,7 @@ export function bootstrapSessionData(input: {
   messages: Array<{
     parts: Part[]
   }>
-  permissions: PermissionRequest[]
+  permissions: RunPermissionRequest[]
   questions: QuestionRequest[]
 }) {
   for (const message of input.messages) {
@@ -312,7 +312,27 @@ function key(msg: string, call: string): string {
   return `${msg}:${call}`
 }
 
-function enrichPermission(data: SessionData, request: PermissionRequest): PermissionRequest {
+// V2 asks carry the PermissionV2 vocabulary (action/resources/save); normalize to the legacy
+// PermissionRequest shape the footer renders and mark provenance so the reply settles through
+// the session-scoped V2 route — the legacy /permission/:id/reply route 404s on PermissionV2.
+function permissionRequestFromV2(
+  properties: Extract<Event, { type: "permission.v2.asked" }>["properties"],
+): RunPermissionRequest {
+  return {
+    id: properties.id,
+    sessionID: properties.sessionID,
+    permission: properties.action,
+    patterns: properties.resources,
+    metadata: properties.metadata ?? {},
+    always: properties.save ?? [],
+    v2: true,
+    ...(properties.source
+      ? { tool: { messageID: properties.source.messageID, callID: properties.source.callID } }
+      : {}),
+  }
+}
+
+function enrichPermission(data: SessionData, request: RunPermissionRequest): RunPermissionRequest {
   if (!request.tool) {
     return request
   }
@@ -1064,6 +1084,27 @@ export function reduceSessionData(input: SessionDataInput): SessionDataOutput {
   }
 
   if (event.type === "permission.replied") {
+    if (event.properties.sessionID !== input.sessionID) {
+      return out(data, commits)
+    }
+
+    if (!remove(data.permissions, event.properties.requestID)) {
+      return out(data, commits)
+    }
+
+    return queueOut(data, commits)
+  }
+
+  if (event.type === "permission.v2.asked") {
+    if (event.properties.sessionID !== input.sessionID) {
+      return out(data, commits)
+    }
+
+    upsert(data.permissions, enrichPermission(data, permissionRequestFromV2(event.properties)))
+    return queueOut(data, commits)
+  }
+
+  if (event.type === "permission.v2.replied") {
     if (event.properties.sessionID !== input.sessionID) {
       return out(data, commits)
     }

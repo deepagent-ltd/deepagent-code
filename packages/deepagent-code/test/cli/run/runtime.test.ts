@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test"
 import { createOpencodeClient, type OpencodeClient } from "@deepagent-code/sdk"
 import { runInteractiveMode } from "@/cli/cmd/run/runtime"
-import type { FooterApi, RunProvider } from "@/cli/cmd/run/types"
+import type { FooterApi, PermissionReply, RunProvider } from "@/cli/cmd/run/types"
 
 type SessionMessage = NonNullable<Awaited<ReturnType<OpencodeClient["session"]["messages"]>>["data"]>[number]
 
@@ -234,5 +234,87 @@ describe("run interactive runtime", () => {
     await task
 
     expect(transportProviders).toEqual([[provider]])
+  })
+
+  // RI-140: V2 asks (marked by the session-data reducer) must reply through the session-scoped
+  // V2 route; the legacy /permission/:id/reply route 404s on PermissionV2's pending map.
+  test("routes permission replies by ask provenance", async () => {
+    let onPermissionReply: ((input: PermissionReply) => void | Promise<void>) | undefined
+    const lifecycleReady = defer<void>()
+    const legacyReplies: unknown[] = []
+    const v2Replies: unknown[] = []
+
+    const sdk = createOpencodeClient()
+    spyOn(sdk.permission, "reply").mockImplementation(async (params) => {
+      legacyReplies.push(params)
+      return ok(true)
+    })
+    spyOn(sdk.v2.session.permission, "reply").mockImplementation(async (params) => {
+      v2Replies.push(params)
+      return ok(undefined)
+    })
+    spyOn(sdk.config, "providers").mockImplementation(() => ok({ providers: [provider], default: {} }))
+    spyOn(sdk.app, "agents").mockImplementation(() => ok([]))
+    spyOn(sdk.experimental.resource, "list").mockImplementation(() => ok({}))
+    spyOn(sdk.command, "list").mockImplementation(() => ok([]))
+    spyOn(sdk.session, "get").mockRejectedValue(new Error("not needed"))
+
+    const task = runInteractiveMode(
+      {
+        sdk,
+        directory: "/tmp",
+        sessionID: "ses-1",
+        sessionTitle: "Session",
+        resume: false,
+        agent: "build",
+        model: {
+          providerID: "openai",
+          modelID: "gpt-5",
+        },
+        variant: undefined,
+        files: [],
+        thinking: true,
+        backgroundSubagents: false,
+      },
+      {
+        createRuntimeLifecycle: async (input) => {
+          onPermissionReply = input.onPermissionReply
+          lifecycleReady.resolve()
+          return {
+            footer: footer(),
+            onResize: () => () => {},
+            refreshTheme: () => {},
+            resetForReplay: () => Promise.resolve(),
+            close: () => Promise.resolve(),
+          }
+        },
+        streamTransport: Promise.resolve({
+          createSessionTransport: async (input: { footer: FooterApi }) => {
+            setTimeout(() => {
+              input.footer.close()
+            }, 0)
+            return {
+              runPromptTurn: async () => {},
+              selectSubagent: () => {},
+              replayOnResize: async () => false,
+              close: async () => {},
+            }
+          },
+          formatUnknownError: (error: unknown) => (error instanceof Error ? error.message : String(error)),
+        }),
+      },
+    )
+
+    await lifecycleReady.promise
+
+    await onPermissionReply!({ requestID: "per_v2_1", reply: "reject", message: "do not run this", sessionID: "ses-1", v2: true })
+    await onPermissionReply!({ requestID: "perm_legacy_1", reply: "once" })
+
+    await task
+
+    expect(v2Replies).toEqual([
+      { sessionID: "ses-1", requestID: "per_v2_1", reply: "reject", message: "do not run this" },
+    ])
+    expect(legacyReplies).toEqual([{ requestID: "perm_legacy_1", reply: "once" }])
   })
 })
