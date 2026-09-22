@@ -150,11 +150,12 @@ jobs:
           test -n "$executable"
           DEEPAGENT_CODE_DESKTOP_EXECUTABLE="$executable" bun run test:subagents-cold-start
 
-      # W9.3: first real Windows run of the local-first + WSL-fallback routing.
-      # Launches the packaged app and asserts GET /global/health with Basic auth
-      # (the desktop sidecar always configures a password, so the typed API route
-      # answers 401 to a credential-less curl — the auth'd fetch proves the full
-      # sidecar bootstrap path, not just a listening port).
+      # W9.3: first real Windows run of the native-only sidecar routing (local
+      # spawn, no platform fallback). Launches the packaged app and asserts
+      # GET /global/health with Basic auth (the desktop sidecar always
+      # configures a password, so the typed API route answers 401 to a
+      # credential-less curl — the auth'd fetch proves the full sidecar
+      # bootstrap path, not just a listening port).
       - name: Smoke test packaged Windows sidecar health
         if: matrix.group == 'win'
         working-directory: packages/desktop
