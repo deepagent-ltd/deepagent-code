@@ -188,7 +188,7 @@ function source(node: Node) {
 }
 
 function commands(node: Node) {
-  return node.descendantsOfType("command").filter((child): child is Node => Boolean(child))
+  return node.descendantsOfType("command").filter((child: Node | null): child is Node => child !== null)
 }
 
 function unquote(text: string) {

@@ -197,9 +197,13 @@ describe("C0-08 legacy-zero gate real inventory (actual frozen numbers)", () => 
     // deleted, removing its read_only-on-all-7 entry — read-only 2178→2171.
     // v2w-j4 GitHub durable-only ingress (2026-09-19): the new github.agent-execution declared
     // entry carries v2 on admission/execution (+2) and read_only on its other five dims (+5).
-    expect(counters.v2Dims).toBe(220)
+    // V2.0.1 merge-wave re-pin (2026-09-23): w-c-desktop removed the desktop.wsl-sidecar
+    // entry (-7 v2 dims) and the merged W-b/K-04/M-b/C-P2-08 waves added read-only surfaces
+    // (shell scan/arity, migration orchestrator + md-export endpoints, provider config
+    // provenance, task admission/reclamation) — v2 220->213, read-only 2176->2204.
+    expect(counters.v2Dims).toBe(213)
     expect(counters.adapterDims).toBe(432)
-    expect(counters.readOnlyDims).toBe(2176)
+    expect(counters.readOnlyDims).toBe(2204)
     expect(counters.unclassifiedDims).toBe(0)
   })
 
@@ -278,15 +282,17 @@ describe("C0-08 legacy-zero gate snapshot (byte-stable)", () => {
     expect(snapshot.counters.doubleWrite).toBe(0)
     expect(snapshot.counters.adapterDims).toBe(432)
     // v2w-j4 (2026-09-19): +2 v2 dims (github.agent-execution admission/execution).
-    expect(snapshot.counters.v2Dims).toBe(220)
+    // V2.0.1 merge-wave re-pin (2026-09-23): w-c removed desktop.wsl-sidecar (-7 v2 dims);
+    // merged W-b/K-04/M-b/C-P2-08 waves added read-only surfaces — v2 220->213, read-only ->2204.
+    expect(snapshot.counters.v2Dims).toBe(213)
     // 2026-09-08 step 5c 重钉:同批漂移(402→401)。v2f-d (2026-09-18): entries net-zero
     // (deleted reply-sink/progress-stream faces replaced by durable admission + reply outbox).
     // v2f-i (2026-09-18): the dead core agent-orchestrator entry is deleted (404→403, roles −7).
     // v2w-j4 (2026-09-19): github.agent-execution is declared (+1 entry, +7 roles — v2 on
     // admission/execution, read_only on the rest).
-    expect(snapshot.entries).toBe(404)
+    expect(snapshot.entries).toBe(407)
     // 2026-09-08 step 5c 重钉:同批漂移(2814→2807)。
-    expect(snapshot.roles).toBe(2828)
+    expect(snapshot.roles).toBe(2849)
     expect(snapshot.selectionBridgeUsages).toBe(0)
   })
 
