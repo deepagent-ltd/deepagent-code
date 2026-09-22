@@ -82,7 +82,11 @@ const modelOutput = (output: Output) => {
     ? `\n\nWarnings:\n${output.warnings.map((warning) => `- ${warning}`).join("\n")}`
     : ""
   if (output.timedOut) return `${output.output}${warnings}\n\nCommand timed out before completion.`
-  return `${output.output}${warnings}\n\nCommand exited with code ${output.exitCode}.`
+  // GROUND-TRUTH EXIT TRAILER (V1 shell.ts parity): the canonical `exit code: N` as the LAST
+  // line — validation classifiers regex on /exit\s*code[:=]\s*(\d+)/, which the previous
+  // "Command exited with code N." phrasing did not match; `null` renders explicitly so a
+  // terminated command is never mistaken for exit 0.
+  return `${output.output}${warnings}\n\nexit code: ${output.exitCode === null ? "null (terminated)" : output.exitCode}`
 }
 
 const isTimeout = (error: AppProcess.AppProcessError) =>
