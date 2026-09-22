@@ -45,6 +45,7 @@
     "test:llm-ext:mcp-marker": "bun run script/live-llm/mcp-marker.ts",
     "test:llm-ext:permissions-deny": "bun run script/live-llm/permissions-deny.ts",
     "test:llm-ext:long-session": "bun run script/live-llm/long-session.ts",
+    "test:llm-ext:code-intel": "bun run script/live-llm/code-intel.ts",
     "test:llm-ext:compaction-retention": "bun run script/live-llm/compaction-retention.ts",
     "test:llm-ext:context-authority": "bun run script/live-llm/context-authority.ts",
     "test:llm-ext:expert-panel": "bun run script/live-llm/expert-panel.ts",

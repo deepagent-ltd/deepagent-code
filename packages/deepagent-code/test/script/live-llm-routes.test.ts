@@ -143,6 +143,7 @@ describe("live LLM route manifest", () => {
         runs: [
           "ext:cli-subprocess:context-authority",
           "ext:cli-subprocess:goal-grader-cli-entry",
+          "ext:legacy-session:code-intel",
           "ext:legacy-session:compaction-retention",
           "ext:legacy-session:expert-panel",
           "ext:legacy-session:intelligence-draft-confirmation",
@@ -833,6 +834,26 @@ describe("pre-push dispatcher", () => {
       expect(run && commandForModelRun(run)).toEqual({
         cwd: "packages/deepagent-code",
         args: ["bun", "run", "test:llm-ext:prompt-intent-fencing"],
+      })
+    }
+  })
+
+  test("keeps the code-intel V2 context tools reachable from every owning seam", () => {
+    for (const path of [
+      "packages/core/src/context-federation/tool-runtime.ts",
+      "packages/core/src/tool/context-query-tools.ts",
+      "packages/deepagent-code/src/context-federation/v2-tool-runtime.ts",
+      "packages/deepagent-code/src/session/v2-runner-frame.ts",
+      "packages/deepagent-code/script/live-llm/code-intel.ts",
+      "packages/deepagent-code/script/live-llm/runner-frame.ts",
+    ]) {
+      const selected = selectRoutes([path])
+      const run = selected.runs.find((item) => modelRunKey(item) === "ext:legacy-session:code-intel")
+      expect(run).toBeDefined()
+      expect(selected.checks).toContain("session-v2")
+      expect(run && commandForModelRun(run)).toEqual({
+        cwd: "packages/deepagent-code",
+        args: ["bun", "run", "test:llm-ext:code-intel"],
       })
     }
   })

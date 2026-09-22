@@ -48,6 +48,7 @@ export const modelSuites = [
   "subagent-takeover",
   "compaction-retention",
   "context-authority",
+  "code-intel",
   "expert-panel",
   "goal-grader-cli-entry",
   "intelligence-draft-confirmation",
@@ -128,6 +129,7 @@ const subagentResume = modelRun("ext", "legacy-session", "subagent-resume")
 const subagentTakeover = modelRun("ext", "legacy-session", "subagent-takeover")
 const compactionRetention = modelRun("ext", "legacy-session", "compaction-retention")
 const contextAuthority = modelRun("ext", "cli-subprocess", "context-authority")
+const codeIntelContextTools = modelRun("ext", "legacy-session", "code-intel")
 const expertPanel = modelRun("ext", "legacy-session", "expert-panel")
 const goalGraderCliEntry = modelRun("ext", "cli-subprocess", "goal-grader-cli-entry")
 const intelligenceDraft = modelRun("ext", "legacy-session", "intelligence-draft-confirmation")
@@ -173,6 +175,7 @@ const allHarnessRuns = [
   mcpMarker,
   compactionRetention,
   contextAuthority,
+  codeIntelContextTools,
   expertPanel,
   goalGraderCliEntry,
   intelligenceDraft,
@@ -635,8 +638,15 @@ export const routeManifest = [
       "packages/core/src/tool/code-intel.txt",
       "packages/core/src/tool/context-query-tools.ts",
       "packages/core/src/tool/context-query.txt",
+      "packages/core/src/tool/im-send.ts",
+      "packages/core/src/tool/knowledge-propose.ts",
+      "packages/core/src/tool/pr-finalize.ts",
       "packages/core/src/tool/question.ts",
       "packages/core/src/tool/skill.ts",
+      "packages/core/src/tool/task-close.ts",
+      "packages/core/src/tool/task-read.ts",
+      "packages/core/src/tool/task-recovery.ts",
+      "packages/core/src/tool/task-status.ts",
       "packages/core/src/tool/todowrite.ts",
       "packages/core/src/tool/webfetch.ts",
       "packages/core/src/tool/websearch.ts",
@@ -1181,6 +1191,25 @@ export const routeManifest = [
     ],
     checks: ["live-llm-routes", "session-continuation"],
     runs: [contextAuthority],
+  },
+  {
+    id: "code-intel-context-tools-suite",
+    paths: [
+      "packages/core/src/context-federation/contract.ts",
+      "packages/core/src/context-federation/tool-runtime.ts",
+      "packages/core/src/tool/code-intel.txt",
+      "packages/core/src/tool/context-query-tools.ts",
+      "packages/core/src/tool/context-query.txt",
+      "packages/deepagent-code/script/live-llm/code-intel.ts",
+      "packages/deepagent-code/script/live-llm/runner-frame.ts",
+      "packages/deepagent-code/src/code-intelligence/**",
+      "packages/deepagent-code/src/context-federation/context-query-facade.ts",
+      "packages/deepagent-code/src/context-federation/v2-tool-runtime.ts",
+      "packages/deepagent-code/src/location-index/**",
+      "packages/deepagent-code/src/session/v2-runner-frame.ts",
+    ],
+    checks: ["session-v2", "permission"],
+    runs: [codeIntelContextTools],
   },
   {
     id: "goal-loop-production",
