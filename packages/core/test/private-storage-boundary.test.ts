@@ -51,7 +51,7 @@ describe("private storage boundary", () => {
       { name: "system tmp API", pattern: /\b(?:os\.)?tmpdir\(\)/ },
       { name: "hard-coded system tmp", pattern: /[\"'`]\/tmp(?:\/|[\"'`])/ },
       { name: "legacy install root", pattern: /\.deepagent-code\/bin/ },
-      { name: "legacy WSL state", pattern: /\$HOME\/\.local\/state/ },
+      { name: "legacy state root", pattern: /\$HOME\/\.local\/state/ },
       { name: "legacy XDG package", pattern: /from [\"']xdg-basedir[\"']/ },
       { name: "legacy data root", pattern: /[\"']\.local[\"']\s*,\s*[\"']share[\"']\s*,\s*[\"']deepagent-code[\"']/ },
       { name: "legacy config root", pattern: /[\"']\.config[\"']\s*,\s*[\"']deepagent-code[\"']/ },

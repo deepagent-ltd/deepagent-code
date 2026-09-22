@@ -200,13 +200,14 @@ function win32PosixInvocation(
   }
 }
 
-// WSL1 stays rejected; native Windows is served by the win32 dialect chain above (D-W2).
+// WSL1 Linux sessions stay rejected (broken interop semantics); native Windows
+// is served by the win32 dialect chain above (D-W2).
 function unsupportedPlatform(platform: NodeJS.Platform, kernelRelease: string, env: NodeJS.ProcessEnv) {
   if (platform !== "linux") return
   const version = kernelRelease.toLowerCase()
   const wsl = Boolean(env.WSL_DISTRO_NAME || env.WSL_INTEROP || version.includes("microsoft"))
   if (wsl && !version.includes("microsoft-standard") && !version.includes("wsl2"))
-    return "WSL1 validation is unsupported. Upgrade the distribution to WSL2 and reconnect the WSL server."
+    return "WSL1 validation is unsupported. Upgrade the distribution to WSL2."
 }
 
 function result(

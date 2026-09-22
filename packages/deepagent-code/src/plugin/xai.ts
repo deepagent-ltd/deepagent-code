@@ -713,7 +713,7 @@ export async function XaiAuthPlugin(input: PluginInput, options: XaiAuthPluginOp
           // RFC 8628 device-code flow. The CLI prints a verification URL
           // and a short user_code that the user enters in a browser on
           // any device. No loopback callback server runs on the CLI host,
-          // so this works on VPS / SSH / Docker / CI / WSL / any
+          // so this works on VPS / SSH / Docker / CI / any
           // environment where 127.0.0.1:56121 isn't reachable from the
           // user's browser. Defends the only attack surface (the polling
           // loop) with the standard authorization_pending / slow_down

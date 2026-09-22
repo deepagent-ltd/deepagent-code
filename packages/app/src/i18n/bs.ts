@@ -619,9 +619,6 @@ export const dict = {
   "settings.section.server": "Server",
   "settings.tab.general": "Opšte",
   "settings.tab.shortcuts": "Prečice",
-  "settings.desktop.section.wsl": "WSL",
-  "settings.desktop.wsl.title": "WSL integracija",
-  "settings.desktop.wsl.description": "Pokreni DeepAgent Code server unutar WSL-a na Windowsu.",
 
   "settings.general.section.appearance": "Izgled",
   "settings.general.section.notifications": "Sistemske obavijesti",

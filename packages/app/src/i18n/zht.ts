@@ -800,9 +800,6 @@ export const dict = {
   "settings.section.server": "伺服器",
   "settings.tab.general": "一般",
   "settings.tab.shortcuts": "快速鍵",
-  "settings.desktop.section.wsl": "WSL",
-  "settings.desktop.wsl.title": "WSL 整合",
-  "settings.desktop.wsl.description": "在 Windows 上的 WSL 中執行 DeepAgent Code 伺服器。",
 
   "settings.general.section.appearance": "外觀",
   "settings.general.section.notifications": "系統通知",

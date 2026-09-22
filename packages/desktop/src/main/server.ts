@@ -7,6 +7,7 @@ import { SIDECAR_SPAWN_FAILED, sidecarSpawnFailure } from "./sidecar-routing"
 import { getUserShell, loadShellEnv, shouldLoadShellEnv } from "./shell-env"
 import { getStore } from "./store"
 import { DEFAULT_SERVER_URL_KEY } from "./store-keys"
+import { loadWindowsEnv } from "./win-env"
 
 // Counts how many times a local sidecar has been spawned in this process.
 // spawnIndex === 1 means cold start; > 1 means a hot restart.
@@ -46,9 +47,18 @@ export function setDefaultServerUrl(url: string | null) {
 }
 
 export function preferAppEnv(dataRoot: string) {
-  const shell = process.platform === "win32" || !shouldLoadShellEnv() ? null : getUserShell()
+  // Windows GUI processes can launch with a stale or minimal environment; the
+  // registry (user + system hives) is the durable source of truth and only
+  // fills variables the process env is missing (D-W3). Unix keeps the
+  // login-shell probe.
+  const inherited =
+    process.platform === "win32"
+      ? loadWindowsEnv({ logger: getLogger() })
+      : shouldLoadShellEnv()
+        ? loadShellEnv(getUserShell(), getLogger())
+        : null
   Object.assign(process.env, {
-    ...(shell ? loadShellEnv(shell, getLogger()) : null),
+    ...(inherited ?? null),
     DEEPAGENT_CODE_EXPERIMENTAL_ICON_DISCOVERY: "true",
     DEEPAGENT_CODE_EXPERIMENTAL_FILEWATCHER: "true",
     DEEPAGENT_CODE_CLIENT: "desktop",

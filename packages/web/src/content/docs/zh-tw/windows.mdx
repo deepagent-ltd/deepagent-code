@@ -1,0 +1,92 @@
+---
+title: Windows
+description: 在 Windows 上原生安裝並執行 DeepAgent Code。
+---
+
+import { Steps } from "@astrojs/starlight/components"
+
+DeepAgent Code 可在 Windows 上原生執行，無需 WSL。CLI 與桌面應用程式都提供 Windows 版本，會自動讀取你的使用者層級環境變數，並將資料儲存在 Windows 標準目錄中。
+
+---
+
+## 安裝桌面應用程式
+
+<Steps>
+
+1. **下載安裝程式**
+
+   從最新的 [GitHub 發行版本](https://github.com/deepagent-ltd/deepagent-code/releases)下載 `deepagent-code-desktop-win-x64.exe`。
+
+2. **執行安裝程式**
+
+   安裝程式以使用者為單位安裝（無需管理員權限），會將應用程式目錄加入你的**使用者** PATH（絕不修改系統 PATH），並讓你選擇安裝位置。
+
+3. **啟動 DeepAgent Code**
+
+   你在 Windows 中設定的環境變數（例如在「編輯系統環境變數」中設定的 API 金鑰）會在啟動時從登錄檔讀取，因此無需額外設定 PATH。
+
+</Steps>
+
+---
+
+## 安裝 CLI
+
+- **Chocolatey**
+
+  ```bash
+  choco install deepagent-code
+  ```
+
+- **Scoop**
+
+  ```bash
+  scoop install deepagent-code
+  ```
+
+- **NPM**
+
+  ```bash
+  npm install -g deepagent-code
+  ```
+
+- **直接下載**
+
+  Windows 單檔二進位（`windows-x64`、`windows-arm64`）發布於 [Releases](https://github.com/deepagent-ltd/deepagent-code/releases) 頁面。請將二進位檔放入 PATH 中的目錄。
+
+接著啟動 TUI：
+
+```powershell
+deepagent-code
+```
+
+命令預設透過 PowerShell 執行（`pwsh` → `powershell` → `cmd` 降級鏈），同時也支援 Git Bash。
+
+---
+
+## 資料位置
+
+在 Windows 上，DeepAgent Code 將設定與資料分開存放：
+
+| 內容                            | 位置                       |
+| ------------------------------------------ | -------------------------------------- |
+| 設定與憑證                                  | `%APPDATA%\deepagent-code\` (roaming) |
+| 資料、快取、worktree、快照 | `%LOCALAPPDATA%\deepagent-code\`      |
+
+如果早期預覽版（或舊的 WSL 安裝）在 `%USERPROFILE%\.deepagent\code` 留下了資料，DeepAgent Code 會在首次執行時自動遷移到新位置。
+
+---
+
+## 從 WSL 遷移
+
+如果你之前在 WSL 中使用 DeepAgent Code：
+
+- `/mnt/c/...` 下的專案本來就位於 Windows 檔案系統上，可直接用原生應用程式或 CLI 開啟。
+- WSL 檔案系統內的資料（`~/.deepagent`）不會與 Windows 共享。請將需要的內容（例如設定與憑證）從發行版本中複製出來，或者重新開始並再次執行 `/connect`。
+- 確認原生安裝可用後，解除安裝 WSL 端的副本。
+
+---
+
+## 更新
+
+- **桌面版** — 更新透過內建更新器發布，安裝程式皆經過程式碼簽署。
+- **CLI** — 使用相同的套件管理器重新安裝，或從 [Releases](https://github.com/deepagent-ltd/deepagent-code/releases) 頁面下載最新二進位檔。

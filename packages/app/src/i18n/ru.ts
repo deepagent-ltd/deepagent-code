@@ -618,9 +618,6 @@ export const dict = {
   "settings.section.server": "Сервер",
   "settings.tab.general": "Основные",
   "settings.tab.shortcuts": "Горячие клавиши",
-  "settings.desktop.section.wsl": "WSL",
-  "settings.desktop.wsl.title": "Интеграция с WSL",
-  "settings.desktop.wsl.description": "Запускать сервер DeepAgent Code внутри WSL на Windows.",
 
   "settings.general.section.appearance": "Внешний вид",
   "settings.general.section.notifications": "Системные уведомления",

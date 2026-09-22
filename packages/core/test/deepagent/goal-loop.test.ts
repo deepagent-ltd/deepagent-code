@@ -185,7 +185,7 @@ describe("V3.9 §D — Grader per-criterion evaluation (§D.3)", () => {
               passed: false,
               kind: "unsupported_platform",
               exit_code: -1,
-              output: "run in WSL2",
+              output: "run in a legacy environment",
               duration_ms: 1,
             },
           ],

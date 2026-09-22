@@ -41,7 +41,7 @@ export const DELEGATION_RULE_PACKS: readonly RulePack[] = [
   {
     match: (id) =>
       id === "desktop.spawn-local-server" || id === "desktop.sidecar-server-listen" ||
-      id === "desktop.wsl-sidecar" || id === "composition.desktop-sidecar-start",
+      id === "composition.desktop-sidecar-start",
     rules: delAll("composition.dacode-cli-entry"),
   },
   {
