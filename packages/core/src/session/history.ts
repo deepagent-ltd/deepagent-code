@@ -79,6 +79,23 @@ export const load = Effect.fn("SessionHistory.load")(function* (db: DatabaseServ
   return yield* Effect.forEach(yield* messageRows(db, sessionID, compaction, epoch?.baselineSeq), decodeMessageRow)
 })
 
+/**
+ * W-02 M-1 — the FULL-history variant of the loader. `load` returns the active context (rows from
+ * the latest compaction onward); a batch MD export must read every durable message of the session
+ * instead, so this walks the whole ordered journal with the same decode path. Compaction rows are
+ * included so the exporter can render checkpoint markers.
+ */
+export const loadAll = Effect.fn("SessionHistory.loadAll")(function* (db: DatabaseService, sessionID: SessionSchema.ID) {
+  const rows = yield* db
+    .select()
+    .from(SessionMessageTable)
+    .where(eq(SessionMessageTable.session_id, sessionID))
+    .orderBy(asc(SessionMessageTable.seq))
+    .all()
+    .pipe(Effect.orDie)
+  return yield* Effect.forEach(rows, decodeMessageRow)
+})
+
 export const loadForRunner = Effect.fn("SessionHistory.loadForRunner")(function* (
   db: DatabaseService,
   sessionID: SessionSchema.ID,

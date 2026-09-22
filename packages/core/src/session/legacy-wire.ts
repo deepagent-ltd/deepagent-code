@@ -4,6 +4,8 @@ import { DateTime } from "effect"
 import { SessionMessage } from "./message"
 import { SessionSchema } from "./schema"
 import { SessionV1 } from "../v1/session"
+import { ModelV2 } from "../model"
+import { ProviderV2 } from "../provider"
 
 // W4-6 — the canonical SessionMessage → SessionV1.WithParts converter, shared by the journal→
 // wire projection egress (core projector) and re-exported from SessionV2 for the host callers.
@@ -164,5 +166,62 @@ function legacyAssistantToolState(
     error: part.state.error.message,
     metadata: part.provider?.resultMetadata,
     time: { start, end: DateTime.toEpochMillis(part.time.completed ?? part.time.created) },
+  }
+}
+
+/**
+ * The canonical user/synthetic converter (W4-6; moved from the projector beside
+ * {@link legacyAssistant} so the W-02 M-1 batch MD exporter shares the exact wire shape).
+ * The wire user row feeds next-turn model resolution (currentModel falls back to the last user
+ * message's model); it carries the session's model so the fallback never resolves empty.
+ */
+export function legacyUser(input: {
+  readonly sessionID: SessionSchema.ID
+  readonly message: SessionMessage.User | SessionMessage.Synthetic
+  readonly agent: string | null
+  readonly model: { id: string; providerID: string; variant?: string } | null
+  readonly synthetic?: boolean
+}): SessionV1.WithParts {
+  const created = DateTime.toEpochMillis(input.message.time.created)
+  const messageID = SessionV1.MessageID.ascending(input.message.id)
+  const parts: SessionV1.Part[] = []
+  if (input.message.text) {
+    parts.push({
+      id: SessionV1.PartID.ascending(`prt_${input.message.id.slice("msg_".length)}_0`),
+      sessionID: input.sessionID,
+      messageID,
+      type: "text",
+      text: input.message.text,
+      ...(input.synthetic === true ? { synthetic: true } : {}),
+      time: { start: created, end: created },
+    })
+  }
+  const files = input.message.type === "user" ? (input.message.files ?? []) : []
+  for (const [index, file] of files.entries()) {
+    parts.push({
+      id: SessionV1.PartID.ascending(`prt_${input.message.id.slice("msg_".length)}_f${index}`),
+      sessionID: input.sessionID,
+      messageID,
+      type: "file",
+      url: file.uri,
+      mime: file.mime,
+      ...(file.name === undefined ? {} : { filename: file.name }),
+      time: { start: created, end: created },
+    } as SessionV1.Part)
+  }
+  return {
+    info: {
+      id: messageID,
+      sessionID: input.sessionID,
+      role: "user",
+      time: { created },
+      agent: input.agent ?? "",
+      model: {
+        providerID: (input.model?.providerID ?? "") as ProviderV2.ID,
+        modelID: (input.model?.id ?? "") as ModelV2.ID,
+        ...(input.model?.variant === undefined ? {} : { variant: input.model.variant }),
+      },
+    },
+    parts,
   }
 }

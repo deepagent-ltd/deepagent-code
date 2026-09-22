@@ -171,6 +171,112 @@ const EvidenceExportQuery = Schema.Struct({
   export_id: Schema.String,
 })
 
+// W-02 M-1 — batch full-transcript Markdown export surface. The result body doubles as the
+// reconciliation report (manifest entries vs the durable session list), so M-3/M-6 consumers can
+// render progress without re-deriving it.
+
+const MdExportReconciliationSchema = Schema.Struct({
+  reconciled: Schema.Boolean,
+  exportedCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  sessionCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  missing: Schema.Array(Schema.String),
+  extra: Schema.Array(Schema.String),
+}).annotate({ identifier: "MdExportReconciliation" })
+
+const MdExportRunSchema = Schema.Struct({
+  exported: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  skipped: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  sessionCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  manifestPath: Schema.String,
+  reconciliation: MdExportReconciliationSchema,
+}).annotate({ identifier: "MdExportRun" })
+
+const MdExportStatusSchema = Schema.Struct({
+  exists: Schema.Boolean,
+  manifestPath: Schema.String,
+  exportedCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  entries: Schema.Array(
+    Schema.Struct({
+      sessionId: Schema.String,
+      fileName: Schema.String,
+      sizeBytes: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+      sha256: Schema.String,
+      messageCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+      exportedAt: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+    }),
+  ),
+}).annotate({ identifier: "MdExportStatus" })
+
+const MdExportInput = Schema.Struct({
+  dir: Schema.optional(Schema.String),
+  limit: Schema.optional(
+    Schema.NumberFromString.pipe(Schema.decodeTo(Schema.Int.check(Schema.isGreaterThan(0)))),
+  ).annotate({ description: "Export at most this many NEW sessions; omitted means all." }),
+  page_size: Schema.optional(
+    Schema.NumberFromString.pipe(Schema.decodeTo(Schema.Int.check(Schema.isGreaterThan(0)))),
+  ).annotate({ description: "Keyset page size for the session traversal." }),
+}).annotate({ identifier: "MdExportInput" })
+
+// W-02 M-2 — migration flow orchestration surface. The journal is the persisted phase record; a
+// restart (or the status endpoint) shows exactly which phase the chain stopped at.
+
+const MigrationPhaseLiteral = Schema.Literals([
+  "md_export",
+  "backup_create",
+  "backup_verify",
+  "migration_apply",
+  "post_verify",
+  "archive",
+  "disk_advisory",
+])
+
+const MigrationPhaseRecordSchema = Schema.Struct({
+  phase: MigrationPhaseLiteral,
+  state: Schema.Literals(["completed", "failed"]),
+  startedAt: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  completedAt: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  outcome: Schema.optional(Schema.Unknown),
+  failure: Schema.optional(Schema.Struct({ code: Schema.String, detail: Schema.String })),
+}).annotate({ identifier: "MigrationPhaseRecord" })
+
+const MigrationJournalSchema = Schema.Struct({
+  version: Schema.Literal(1),
+  kind: Schema.Literal("migration-orchestration-journal"),
+  orchestrationId: Schema.String,
+  dbPath: Schema.String,
+  startedAt: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  updatedAt: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  status: Schema.Literals(["in_progress", "completed", "failed"]),
+  currentPhase: Schema.optional(MigrationPhaseLiteral),
+  phases: Schema.Array(MigrationPhaseRecordSchema),
+  failure: Schema.optional(
+    Schema.Struct({
+      phase: MigrationPhaseLiteral,
+      code: Schema.String,
+      detail: Schema.String,
+      recoveryGuidance: Schema.String,
+    }),
+  ),
+}).annotate({ identifier: "MigrationJournal" })
+
+const MigrationRunInput = Schema.Struct({
+  dir: Schema.optional(Schema.String),
+  stop_after: Schema.optional(MigrationPhaseLiteral).annotate({
+    description: "Stop after this phase completes (staged invocation / interruption drill); a later call resumes.",
+  }),
+}).annotate({ identifier: "MigrationRunInput" })
+
+const MigrationRunSchema = Schema.Struct({
+  status: Schema.Literals(["in_progress", "completed", "failed"]),
+  journal: MigrationJournalSchema,
+  diskAdvisoryPath: Schema.optional(Schema.String),
+}).annotate({ identifier: "MigrationRun" })
+
+const MigrationStatusSchema = Schema.Struct({
+  active: Schema.Boolean,
+  journal: Schema.optional(MigrationJournalSchema),
+}).annotate({ identifier: "MigrationStatus" })
+
 const BackupQuery = Schema.Struct({
   dir: Schema.optional(Schema.String),
 })
@@ -196,6 +302,10 @@ export const MaintenancePaths = {
   recoveryCommandGet: `${root}/recovery/commandGet`,
   recoveryEvidenceExport: `${root}/recovery/evidenceExport`,
   compositionDigest: `${root}/composition/digest`,
+  mdExport: `${root}/md/export`,
+  mdExportStatus: `${root}/md/export/status`,
+  migrationRun: `${root}/migration/run`,
+  migrationStatus: `${root}/migration/status`,
 } as const
 
 export const MaintenanceApi = HttpApi.make("maintenance").add(
@@ -322,6 +432,54 @@ export const MaintenanceApi = HttpApi.make("maintenance").add(
           summary: "Root composition digest",
           description:
             "Reports the stable composition digest of this process root (session owner, tool registry, database, Location host). The incident-only maintenance shell constructs no business runtime and answers a typed 503 instead.",
+        }),
+      ),
+      HttpApiEndpoint.post("mdExport", MaintenancePaths.mdExport, {
+        payload: MdExportInput,
+        success: described(MdExportRunSchema, "Batch MD export result"),
+        error: ApiTypedErrors,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "maintenance.md.export.run",
+          summary: "Batch-export every session transcript as Markdown",
+          description:
+            "W-02 M-1: paginates every durable session, reads it through the V2 history loader, and writes <backupDir>/md/<slug>-<date>.md with a per-file sha256 manifest. Interruptible and resumable: re-invocation skips sessions whose manifest entry still matches the file on disk. limit exports at most that many NEW sessions this call.",
+        }),
+      ),
+      HttpApiEndpoint.get("mdExportStatus", MaintenancePaths.mdExportStatus, {
+        query: BackupQuery,
+        success: described(MdExportStatusSchema, "MD export manifest status"),
+        error: ApiTypedErrors,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "maintenance.md.export.status",
+          summary: "Read the MD export manifest",
+          description:
+            "Reads the md/manifest.json summary (entry list) without exporting. Also served by the incident-only maintenance shell against a read-only store.",
+        }),
+      ),
+      HttpApiEndpoint.post("migrationRun", MaintenancePaths.migrationRun, {
+        payload: MigrationRunInput,
+        success: described(MigrationRunSchema, "Migration orchestration result"),
+        error: ApiTypedErrors,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "maintenance.migration.run",
+          summary: "Run or resume the V1→V2 migration flow",
+          description:
+            "W-02 M-2: chains md_export → backup_create → backup_verify → migration_apply → post_verify → archive → disk_advisory. Idempotent phases with a persisted journal; any failure stops the chain with a structured phase failure + recovery guidance; re-running resumes. The upgrade-run state machine itself is untouched (external orchestration).",
+        }),
+      ),
+      HttpApiEndpoint.get("migrationStatus", MaintenancePaths.migrationStatus, {
+        query: BackupQuery,
+        success: described(MigrationStatusSchema, "Migration orchestration journal"),
+        error: ApiTypedErrors,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "maintenance.migration.status",
+          summary: "Read the migration orchestration journal",
+          description:
+            "Reads the persisted phase journal — after a restart this shows exactly which phase the chain stopped at. Also served by the incident-only maintenance shell.",
         }),
       ),
     )
