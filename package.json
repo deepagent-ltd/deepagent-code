@@ -30,6 +30,8 @@
       "packages/slack"
     ],
     "catalog": {
+      "@ai-sdk/provider": "3.0.12",
+      "@ai-sdk/provider-utils": "4.0.33",
       "@effect/opentelemetry": "4.0.0-beta.74",
       "@effect/platform-node": "4.0.0-beta.74",
       "@effect/sql-sqlite-bun": "4.0.0-beta.74",
@@ -56,7 +58,7 @@
       "@solid-primitives/storage": "4.3.3",
       "@tailwindcss/vite": "4.1.11",
       "diff": "8.0.2",
-      "dompurify": "3.4.11",
+      "dompurify": "3.4.13",
       "drizzle-kit": "1.0.0-rc.2",
       "drizzle-orm": "1.0.0-rc.2",
       "effect": "4.0.0-beta.74",
@@ -134,6 +136,8 @@
     "electron"
   ],
   "overrides": {
+    "@ai-sdk/provider": "catalog:",
+    "@ai-sdk/provider-utils": "catalog:",
     "@opentui/core": "catalog:",
     "@opentui/keymap": "catalog:",
     "@opentui/solid": "catalog:",
