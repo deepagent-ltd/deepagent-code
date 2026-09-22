@@ -1665,4 +1665,8 @@ export const dict = {
   "session.providerRecovery.maintenanceUnsupported": "该恢复记录不完整或属于其他恢复权威；维护修复完成前，发送将保持锁定。",
   "recovery.execution.running": "智能体执行中…（第 {{number}} 轮）",
   "recovery.execution.last": "最近一次智能体执行：{{state}}（第 {{number}} 轮）",
+
+  "maintenance.degraded.banner.title": "维护状态未知",
+  "maintenance.degraded.banner.description": "无法连接维护端点，部分保护未生效。",
+  "maintenance.degraded.banner.dismiss": "关闭",
 } satisfies Partial<Record<Keys, string>>
