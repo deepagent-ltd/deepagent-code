@@ -10,14 +10,13 @@
  * Re-pin only together with an intentional input-set change: regenerate with
  * `bun run script/manifest-digest/generate-manifest.ts` and update both digests
  * here.
+ *
+ * C-P2-08 re-pin (2026-09-23): the migration registry gained the durable task-call
+ * fan-out admission migration (20260922182048_v2_task_call_admission).
  */
 export const HeadPin = {
   /** Commit whose tree the digests were pinned on. Informational; the digests are the gate. */
-  // Re-pinned on the K-04 branch (wip/k04-provider-ingression) after the config
-  // ingression + contract edits changed digest inputs under src/config and
-  // src/contract; a commit cannot contain its own hash, so the field records the
-  // branch base the tree derives from.
-  commit: "fa6668352fc92d4350e37e5a533eb3eb35df029c",
-  setTreeDigest: "a38ebe8fe005ab4589a336c549db75747f6ed1c1b8c3e059577134529e991523",
-  overallDigest: "bcfcd46eed83d2863103e96786c674bb41b6a8a441761dc111506b280b7401cc",
+  commit: "da001699c15a583128f4a460a1e3f39145efc18c",
+  setTreeDigest: "d83bf358c8c314538cecc942e9f3ad9e1a74f0f39250dcad938d22a62eed2608",
+  overallDigest: "6ec128d8e4686d37ac25ee8e323eeaa5c84bc06511a6aabfa76269907a5badc4",
 } as const

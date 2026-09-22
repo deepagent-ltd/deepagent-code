@@ -342,7 +342,20 @@ export const layer = Layer.effectDiscard(
                         )
                       }),
                     )
-                  if (!admitTaskCall(context.sessionID, context.assistantMessageID, context.toolCallID))
+                  // Durable fan-out admission (C-P2-08): the ledger lives in the database, so the
+                  // service is required BEFORE the cap decision — missing authority is an honest
+                  // refusal, never a silent bypass of the cap.
+                  const database = Option.getOrUndefined(yield* Effect.serviceOption(Database.Service))
+                  if (!database)
+                    return yield* toolFailure(
+                      "task is unavailable: the database service is missing from the runner context (durable fan-out admission)",
+                    )
+                  const admittedCall = yield* admitTaskCall(database.db, {
+                    sessionID: context.sessionID,
+                    assistantMessageID: context.assistantMessageID,
+                    toolCallID: context.toolCallID,
+                  })
+                  if (!admittedCall)
                     return yield* toolFailure(
                       `Cannot launch task: one assistant message may start at most ${MAX_SUBAGENT_FANOUT} subagents. Split additional work into a later round.`,
                     )
@@ -440,7 +453,6 @@ export const layer = Layer.effectDiscard(
                   // create converges by adoption), and the single first input lands atomically
                   // with the run's input_state pending→ready CAS. The executor only claims and
                   // resumes the child; it NEVER admits another first prompt.
-                  const database = Option.getOrUndefined(yield* Effect.serviceOption(Database.Service))
                   const runRowByID = (runID: string) =>
                     database === undefined
                       ? Effect.succeed(undefined)
@@ -550,6 +562,17 @@ export const layer = Layer.effectDiscard(
                   })
                   const resumeLaunch = Effect.gen(function* () {
                     const childID = SessionSchema.ID.make(params.task_id!)
+                    // Honest resume fence (C-P2-08): a write-isolated child lives IN its run-owned
+                    // worktree, so resuming after that worktree was removed (post-settle release) or
+                    // reclaimed (retention grace expired) would run the child against a dead root.
+                    // Refuse with the real reason instead of surfacing fs-level tool breakage.
+                    const latest = yield* latestRunRow(childID)
+                    if (latest?.workspace_mode === "worktree" && (latest.worktree_state === "removed" || latest.worktree_state === "reclaimed"))
+                      return yield* toolFailure(
+                        latest.worktree_state === "reclaimed"
+                          ? `Cannot resume task "${params.task_id}": its retained worktree was reclaimed after the retention grace period (${latest.worktree_branch ?? "branch"}). Start a fresh task instead.`
+                          : `Cannot resume task "${params.task_id}": its isolated worktree was already removed when the run settled (${latest.worktree_branch ?? "branch"}). Start a fresh task instead.`,
+                      )
                     const text = yield* drive(childID, params.prompt)
                     return {
                       childID,

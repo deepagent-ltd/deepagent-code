@@ -30,7 +30,7 @@ export * as TaskWorkspace from "./task-workspace"
 import fs from "fs/promises"
 import path from "path"
 import { spawnSync } from "node:child_process"
-import { and, eq, inArray, isNull, or, sql } from "drizzle-orm"
+import { and, eq, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm"
 import { Data, Effect } from "effect"
 import type { Database } from "../database/database"
 import { Global } from "../global"
@@ -86,8 +86,9 @@ export type RetainOutcome = {
   readonly state: string
 }
 
-/** Terminal run states after which the workspace may be released. */
-const TERMINAL_STATES = new Set(["completed", "failed", "error", "cancelled", "interrupted", "closed"])
+/** Terminal run states after which the workspace may be released or reclaimed. */
+const TERMINAL_RUN_STATES = ["completed", "failed", "error", "cancelled", "interrupted", "closed"] as const
+const TERMINAL_STATES = new Set<string>(TERMINAL_RUN_STATES)
 
 // ── Deterministic derivation ──────────────────────────────────────────────────────────────────
 
@@ -592,6 +593,139 @@ export const retain = Effect.fn("TaskWorkspace.retain")(function* (
     })
   return { runID: row.run_id, retained: true, state: "retained" } satisfies RetainOutcome
 })
+
+// ── reclaimStale: startup sweep for timed-out retained worktrees (C-P2-08) ─────────────────────
+
+/**
+ * Default grace a retained run-owned worktree stays resumable before the startup sweep may
+ * reclaim it: 7 days. Env `DEEPAGENT_CODE_TASK_WORKTREE_RETENTION_MS` (positive milliseconds)
+ * overrides; read at access time so tests and operators can tune it without a rebuild.
+ */
+export const DEFAULT_WORKTREE_RETENTION_MS = 7 * 24 * 60 * 60_000
+
+const worktreeRetentionMs = () => {
+  const raw = process.env["DEEPAGENT_CODE_TASK_WORKTREE_RETENTION_MS"]
+  const parsed = raw === undefined ? Number.NaN : Number.parseInt(raw, 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_WORKTREE_RETENTION_MS
+}
+
+export type ReclaimStaleReport = {
+  readonly scanned: number
+  readonly reclaimed: number
+  readonly failed: ReadonlyArray<{ readonly runID: string; readonly error: string }>
+}
+
+/**
+ * Reclaim run-owned worktrees whose retention outlived the resume grace (C-P2-08): WS4b-S2 made
+ * timeouts RETAIN the worktree so `resume with task_id` stays real, but nothing ever reclaimed
+ * that debt. The sweep reclaims ONLY the precise population that owes nothing anymore — a V2,
+ * write-isolated, RUN-owned run whose worktree receipt is `retained`, whose run state is terminal
+ * (`recovery_required` is not terminal, so a recoverable run is never reclaimed), and whose
+ * terminal settle is older than the grace period. Inside the grace the worktree and branch are
+ * untouchable (resume and task_recovery need the branch); past it the reclaim deletes the
+ * worktree AND its `deepagent-code/task-*` branch (`-D`: the commits are unmerged by design) and
+ * settles the receipt to `reclaimed` so resume paths can answer honestly. Best-effort per row
+ * like release: a row that fails stays `retained` and the next boot retries.
+ */
+export const reclaimStale = Effect.fn("TaskWorkspace.reclaimStale")(function* (
+  db: DatabaseService,
+  input?: {
+    readonly now?: number
+    readonly retentionMs?: number
+  },
+) {
+  const now = input?.now ?? Date.now()
+  const cutoff = now - (input?.retentionMs ?? worktreeRetentionMs())
+  const stale = yield* db
+    .select({
+      run_id: TaskRunTable.run_id,
+      workspace_repository_root: TaskRunTable.workspace_repository_root,
+      worktree_directory: TaskRunTable.worktree_directory,
+      worktree_branch: TaskRunTable.worktree_branch,
+    })
+    .from(TaskRunTable)
+    .where(
+      and(
+        eq(TaskRunTable.execution_runtime, "v2"),
+        eq(TaskRunTable.workspace_mode, "worktree"),
+        eq(TaskRunTable.workspace_owner, "run"),
+        eq(TaskRunTable.worktree_state, "retained"),
+        inArray(TaskRunTable.state, [...TERMINAL_RUN_STATES]),
+        isNotNull(TaskRunTable.time_settled),
+        lte(TaskRunTable.time_settled, cutoff),
+      ),
+    )
+    .all()
+    .pipe(Effect.orDie)
+
+  const failed: { runID: string; error: string }[] = []
+  let reclaimed = 0
+  for (const row of stale) {
+    const error = yield* reclaimOne(db, row, now)
+    if (error === undefined) reclaimed++
+    else failed.push({ runID: row.run_id, error })
+  }
+  return { scanned: stale.length, reclaimed, failed } satisfies ReclaimStaleReport
+})
+
+/** Physical reclaim + receipt CAS; `undefined` on success, an error string on a kept row. */
+const reclaimOne = (
+  db: DatabaseService,
+  row: {
+    readonly run_id: string
+    readonly workspace_repository_root: string | null
+    readonly worktree_directory: string | null
+    readonly worktree_branch: string | null
+  },
+  now: number,
+): Effect.Effect<string | undefined> =>
+  Effect.gen(function* () {
+    if (!row.workspace_repository_root || !row.worktree_directory || !row.worktree_branch)
+      return `retained run ${row.run_id} is missing its receipt columns (root/directory/branch)`
+    const pruned = yield* pruneWorktree(row.workspace_repository_root, row.worktree_directory)
+    if (!pruned.ok) return `worktree prune failed for ${row.run_id}: ${pruned.message}`
+    // -D: the task branch holds intentionally unmerged commits — once the grace expired the
+    // resume/PR pointers are dead, and the run row keeps base commit + branch name for audit.
+    const deleted = yield* git(row.workspace_repository_root, ["branch", "-D", row.worktree_branch])
+    if (deleted.exitCode !== 0) {
+      const stillThere = yield* git(row.workspace_repository_root, [
+        "show-ref",
+        "--verify",
+        "--quiet",
+        `refs/heads/${row.worktree_branch}`,
+      ])
+      // A branch already gone (crash between worktree removal and receipt) is success, not debt.
+      if (stillThere.exitCode === 0) return `branch delete failed for ${row.run_id}: ${text(deleted.stderr)}`
+    }
+    yield* db
+      .transaction(
+        (tx) =>
+          Effect.gen(function* () {
+            const updated = yield* tx
+              .update(TaskRunTable)
+              .set({
+                worktree_state: "reclaimed",
+                version: sql`${TaskRunTable.version} + 1`,
+                time_updated: now,
+              })
+              .where(and(eq(TaskRunTable.run_id, row.run_id), eq(TaskRunTable.worktree_state, "retained")))
+              .returning({ version: TaskRunTable.version })
+              .get()
+              .pipe(Effect.orDie)
+            if (!updated) return
+            yield* appendEvent(tx, {
+              runID: row.run_id,
+              version: updated.version,
+              type: "worktree_reclaimed",
+              reason: `grace_expired ${row.worktree_branch}:${row.worktree_directory}`,
+              now,
+            })
+          }),
+        { behavior: "immediate" },
+      )
+      .pipe(Effect.orDie)
+    return undefined
+  })
 
 // ── Physical git (spawned git; the parent repository is read-only here) ────────────────────────
 
