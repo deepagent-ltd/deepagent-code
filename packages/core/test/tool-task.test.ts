@@ -15,7 +15,8 @@ import { SessionMessage } from "@deepagent-code/core/session/message"
 import { Prompt } from "@deepagent-code/core/session/prompt"
 import { SessionProjector } from "@deepagent-code/core/session/projector"
 import { SessionSchema } from "@deepagent-code/core/session/schema"
-import { SessionMessageTable, TaskRunTable } from "@deepagent-code/core/session/sql"
+import { SessionMessageTable, SessionInputTable, TaskRunTable } from "@deepagent-code/core/session/sql"
+import { V2StructuredOutputEvidenceTable } from "@deepagent-code/core/session/runner/v2-structured-output-evidence.sql"
 import { SessionStore } from "@deepagent-code/core/session/store"
 import { TaskRunAuthority } from "@deepagent-code/core/session/task-run"
 import { Delegation } from "@deepagent-code/core/tool/delegation"
@@ -403,6 +404,110 @@ describe("task tool file_scope overlap warnings (WS4b-S4)", () => {
         .get()
         .pipe(Effect.orDie)
       expect(row?.execution_spec).toMatchObject({ fileScope: ["src/c.ts", "src/d.ts"] })
+    }),
+  )
+})
+
+describe("task tool structured-output degraded settlement (bug-V2.0-003)", () => {
+  // Exhausting BOTH bounded finalizer attempts must settle DEGRADED (e829ebf5a parity) — a
+  // receipt-stamped {_degraded,_reason,_attempts,_raw} payload to the parent plus a durable
+  // validation_failed evidence row — never a tool failure that strands the parent turn.
+  const fabricateTurns = (db: Database.Interface["db"], text: string) => {
+    let seq = 0
+    resumeHook = (sessionID) =>
+      insertMessage(db, sessionID, ++seq, {
+        id: `msg_degraded_turn_${seq}`,
+        type: "assistant",
+        agent: "explore",
+        model: { id: "m", providerID: "p" },
+        content: [{ type: "text", id: `part_degraded_turn_${seq}`, text }],
+        time: { created: 1_000 },
+      }).pipe(Effect.asVoid)
+  }
+
+  const schemaCall = (sessionID: SessionSchema.ID) =>
+    taskCall(
+      {
+        description: "degraded structured output",
+        prompt: "research the module",
+        subagent_type: "explore",
+        output_schema: { type: "object", properties: { answer: { type: "number" } }, required: ["answer"] },
+      },
+      sessionID,
+    )
+
+  const evidenceOf = (db: Database.Interface["db"], runID: string) =>
+    db
+      .select()
+      .from(V2StructuredOutputEvidenceTable)
+      .where(eq(V2StructuredOutputEvidenceTable.run_id, runID))
+      .get()
+      .pipe(Effect.orDie)
+
+  it.effect("two schema-invalid finalizer attempts degrade with a receipt-stamped payload and durable evidence", () =>
+    Effect.gen(function* () {
+      const { db, sessions, registry } = yield* services
+      yield* registerAgents
+      const parent = yield* sessions.create({ location: { directory: AbsolutePath.make("/tmp") } })
+
+      fabricateTurns(db, `{"answer":"not-a-number"}`)
+      const settlement = yield* settleTool(registry, schemaCall(parent.id))
+
+      expect(settlement.result.type).toBe("text")
+      const output = outputOf(settlement)
+      const payload = JSON.parse(output.text)
+      expect(payload).toMatchObject({ _degraded: true, _reason: "structured_output_invalid", _attempts: 2 })
+      expect(payload._raw).toBe(`{"answer":"not-a-number"}`)
+
+      const run = yield* db
+        .select()
+        .from(TaskRunTable)
+        .where(eq(TaskRunTable.child_session_id, SessionSchema.ID.make(output.task_id)))
+        .get()
+        .pipe(Effect.orDie)
+      expect(run?.state).toBe("completed")
+
+      // Attempt budget unchanged: one durable first input plus exactly two finalizer follow-ups.
+      const childInputs = yield* db
+        .select()
+        .from(SessionInputTable)
+        .where(eq(SessionInputTable.session_id, SessionSchema.ID.make(output.task_id)))
+        .all()
+        .pipe(Effect.orDie)
+      expect(childInputs).toHaveLength(3)
+
+      const evidence = yield* evidenceOf(db, run!.run_id)
+      expect(evidence?.validation_outcome).toBe("validation_failed")
+      expect(evidence?.schema_name).toBe("inline")
+      expect(evidence?.raw_output).toBe(output.text)
+      expect(evidence?.owner_token).toBe(`core-v2-finalizer:${run!.child_session_id}`)
+    }),
+  )
+
+  it.effect("finalizer turns without any JSON value degrade with structured_output_missing", () =>
+    Effect.gen(function* () {
+      const { db, sessions, registry } = yield* services
+      yield* registerAgents
+      const parent = yield* sessions.create({ location: { directory: AbsolutePath.make("/tmp") } })
+
+      fabricateTurns(db, "Prose only, no JSON value.")
+      const settlement = yield* settleTool(registry, schemaCall(parent.id))
+
+      expect(settlement.result.type).toBe("text")
+      const output = outputOf(settlement)
+      const payload = JSON.parse(output.text)
+      expect(payload).toMatchObject({ _degraded: true, _reason: "structured_output_missing", _attempts: 2 })
+      expect(payload._raw).toBe("Prose only, no JSON value.")
+
+      const run = yield* db
+        .select()
+        .from(TaskRunTable)
+        .where(eq(TaskRunTable.child_session_id, SessionSchema.ID.make(output.task_id)))
+        .get()
+        .pipe(Effect.orDie)
+      const evidence = yield* evidenceOf(db, run!.run_id)
+      expect(evidence?.validation_outcome).toBe("validation_failed")
+      expect(evidence?.raw_output).toBe(output.text)
     }),
   )
 })
