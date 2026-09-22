@@ -194,9 +194,15 @@ describe("Session V2-native update authority (RI-16)", () => {
       expect(row).toMatchObject({ additions: 2, deletions: 1, files: 1, mutationEpoch: 1 })
       expect(row?.diffs).toEqual([{ file: "src/a.ts", additions: 2, deletions: 1, status: "modified" }])
       expect(row?.revert).toMatchObject({ messageID: target })
+      // An EXPLICIT revert also publishes the V2.0.1-001 WS5/C2 user-facing synthetic notice
+      // (deterministic id; c36595290) — one synthetic next-message plus its durable wire
+      // updates — alongside the authority events this test exists to keep independent.
       expect(yield* eventTypes(info.id)).toEqual([
+        "message.part.updated.1",
+        "message.updated.1",
         "session.created.1",
         "session.diff.2",
+        "session.next.synthetic.1",
         "session.revert.1",
       ])
     }),
