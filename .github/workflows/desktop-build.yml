@@ -98,6 +98,11 @@ jobs:
       # needs the Apple ID + app-specific password + team id. electron-builder.config.ts treats
       # mac signing as available when all three are set.
       HAS_APPLE_NOTARY: ${{ secrets.APPLE_ID != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD != '' && secrets.APPLE_TEAM_ID != '' }}
+      # Windows signing uses Azure Trusted Signing (script/sign-windows.ps1, wired through
+      # electron-builder's per-file sign hook). The script authenticates with the Azure CLI,
+      # so the pipeline needs a federated service principal in addition to the endpoint /
+      # account / profile names. When any piece is missing the build proceeds unsigned.
+      HAS_TRUSTED_SIGNING: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT != '' && secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME != '' && secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE != '' && secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID != '' && secrets.AZURE_TRUSTED_SIGNING_TENANT_ID != '' && secrets.AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -115,6 +120,17 @@ jobs:
         with:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
+      # Trusted Signing authenticates through the Azure CLI credential chain
+      # (sign-windows.ps1 keeps only AzureCliCredential enabled), so log in with
+      # a federated workload identity before packaging.
+      - name: Azure login for Trusted Signing
+        if: matrix.group == 'win' && env.HAS_TRUSTED_SIGNING == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TRUSTED_SIGNING_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID }}
 
       # bun run build invokes the package prebuild lifecycle before electron-vite.
       - name: Build renderer
@@ -140,6 +156,11 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Azure Trusted Signing (Windows). sign-windows.ps1 skips silently when
+          # these are unset, matching the opt-in unsigned behavior of the mac path.
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
         run: npx electron-builder ${{ matrix.platform_flag }} --publish never --config electron-builder.config.ts
 
       - name: Smoke test packaged macOS app
