@@ -505,8 +505,13 @@ export function runnerEnvironment(
     ...Object.fromEntries(
       [
         "PATH",
+        "HOME",
         "TMPDIR",
         "SHELL",
+        // Operational registry override (e.g. a local mirror when the default npm registry is
+        // unreachable): without HOME the child also loses ~/.bunfig.toml and the global bun
+        // cache, which turns a warm no-op install into a full cold download.
+        "BUN_CONFIG_REGISTRY",
         "LANG",
         "LC_ALL",
         "TERM",

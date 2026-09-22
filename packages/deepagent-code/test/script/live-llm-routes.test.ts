@@ -759,13 +759,19 @@ describe("pre-push dispatcher", () => {
       PATH: "/usr/bin:/bin",
       LANG: "C.UTF-8",
       HOME: "/host/home",
+      BUN_CONFIG_REGISTRY: "https://mirror.example",
       SSH_AUTH_SOCK: "/host/agent.sock",
       AWS_SECRET_ACCESS_KEY: "host-secret",
       HTTPS_PROXY: "http://host-proxy.invalid",
       DATABASE_URL: "postgres://host-secret",
       DEEPSEEK_API_KEY: "ambient-key",
     }
-    expect(prePushEnvironment(hostEnvironment)).toEqual({ PATH: "/usr/bin:/bin", LANG: "C.UTF-8" })
+    expect(prePushEnvironment(hostEnvironment)).toEqual({
+      PATH: "/usr/bin:/bin",
+      LANG: "C.UTF-8",
+      HOME: "/host/home",
+      BUN_CONFIG_REGISTRY: "https://mirror.example",
+    })
     const live = prePushEnvironment(hostEnvironment, {
       providerID: "deepseek",
       modelID: "deepseek-v4-flash",
