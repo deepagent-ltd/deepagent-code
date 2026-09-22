@@ -11,6 +11,8 @@
     "evidence:ledger": "bun run script/evidence-ledger/generate-ledger.ts",
     "evidence:packaged-report": "bun run script/evidence-ledger/generate-packaged-report.ts",
     "evidence:candidate": "bun run script/evidence-ledger/generate-candidate-ledger.ts",
+    "manifest:generate": "bun run script/manifest-digest/generate-manifest.ts",
+    "manifest:assert-reproducible": "bun run script/manifest-digest/assert-reproducible.ts",
     "baseline:context-federation": "bun run script/context-federation-baseline.ts",
     "test:llm-live:v2-provider-loop": "bun run script/live-llm/v2-provider-loop.ts",
     "test:llm-live:file-read": "bun run script/live-llm/file-tools.ts read",
