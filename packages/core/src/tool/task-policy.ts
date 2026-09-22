@@ -1,5 +1,7 @@
+import { and, count, eq } from "drizzle-orm"
 import { Effect, Schema, Semaphore } from "effect"
 import type { AgentV2 } from "../agent"
+import type { Database } from "../database/database"
 import {
   DEFAULT_MAX_CONCURRENCY,
   DEFAULT_MAX_FANOUT,
@@ -8,29 +10,84 @@ import {
   type OrchestrationSchemaName,
 } from "../deepagent/orchestration"
 import type { PermissionSchema } from "../permission/schema"
+import type { SessionMessage } from "../session/message"
+import { SessionSchema } from "../session/schema"
+import { SessionV2TaskCallAdmissionTable } from "../session/sql"
+import { SessionV1 } from "../v1/session"
 import { Wildcard } from "../util/wildcard"
 
 export const MAX_SUBAGENT_FANOUT = DEFAULT_MAX_FANOUT
 export const MAX_SUBAGENT_CONCURRENCY = DEFAULT_MAX_CONCURRENCY
 export const DEFAULT_SUBAGENT_TIMEOUT_MS = 30 * 60_000
 
-const taskBatches = new Map<string, Set<string>>()
 const taskSlots = new Map<string, { readonly semaphore: Semaphore.Semaphore; users: number }>()
-const MAX_TRACKED_TASK_BATCHES = 1_024
 
-/** Exact tool-call retries do not consume another fan-out slot. */
-export function admitTaskCall(sessionID: string, assistantMessageID: string, toolCallID: string) {
-  const key = `${sessionID}:${assistantMessageID}`
-  const calls = taskBatches.get(key) ?? new Set<string>()
-  if (calls.has(toolCallID)) return true
-  if (calls.size >= MAX_SUBAGENT_FANOUT) return false
-  if (!taskBatches.has(key)) {
-    if (taskBatches.size >= MAX_TRACKED_TASK_BATCHES) taskBatches.delete(taskBatches.keys().next().value!)
-    taskBatches.set(key, calls)
-  }
-  calls.add(toolCallID)
-  return true
-}
+/**
+ * C-P2-08 durable fan-out admission: one assistant message may start at most MAX_SUBAGENT_FANOUT
+ * subagents, enforced against the `session_v2_task_call_admission` ledger so the count survives
+ * process restarts and concurrent admissions. Exact tool-call retries do not consume another slot
+ * (the globally unique tool_call_id row is the retry identity); a tool call id already recorded
+ * against a DIFFERENT (session, message) batch is a conflicting reuse and refuses. The
+ * check-then-insert runs inside one IMMEDIATE transaction, so racing admissions of the same batch
+ * serialize and can never both fit under the cap.
+ */
+export const admitTaskCall = Effect.fn("TaskPolicy.admitTaskCall")(function* (
+  db: Database.Interface["db"],
+  input: {
+    readonly sessionID: SessionSchema.ID
+    readonly assistantMessageID: SessionMessage.ID
+    readonly toolCallID: string
+  },
+) {
+  // The ledger column speaks the V1 wire MessageID brand; both are `msg`-prefixed strings, so
+  // conversion is a checked make() (task-run.ts wireMessageID convention).
+  const wireMessageID = SessionV1.MessageID.make(input.assistantMessageID)
+  return yield* db
+    .transaction(
+      (tx) =>
+        Effect.gen(function* () {
+          const admitted = yield* tx
+            .select({
+              session_id: SessionV2TaskCallAdmissionTable.session_id,
+              assistant_message_id: SessionV2TaskCallAdmissionTable.assistant_message_id,
+            })
+            .from(SessionV2TaskCallAdmissionTable)
+            .where(eq(SessionV2TaskCallAdmissionTable.tool_call_id, input.toolCallID))
+            .get()
+            .pipe(Effect.orDie)
+          if (admitted !== undefined)
+            return (
+              String(admitted.session_id) === String(input.sessionID) &&
+              String(admitted.assistant_message_id) === String(wireMessageID)
+            )
+          const batch = yield* tx
+            .select({ total: count() })
+            .from(SessionV2TaskCallAdmissionTable)
+            .where(
+              and(
+                eq(SessionV2TaskCallAdmissionTable.session_id, input.sessionID),
+                eq(SessionV2TaskCallAdmissionTable.assistant_message_id, wireMessageID),
+              ),
+            )
+            .get()
+            .pipe(Effect.orDie)
+          if ((batch?.total ?? 0) >= MAX_SUBAGENT_FANOUT) return false
+          yield* tx
+            .insert(SessionV2TaskCallAdmissionTable)
+            .values({
+              session_id: input.sessionID,
+              assistant_message_id: wireMessageID,
+              tool_call_id: input.toolCallID,
+              created_at: Date.now(),
+            })
+            .run()
+            .pipe(Effect.orDie)
+          return true
+        }),
+      { behavior: "immediate" },
+    )
+    .pipe(Effect.orDie)
+})
 
 /** Parent restrictions become child denies; delegation can never turn ask/deny into allow. */
 export const inheritedTaskPermissions = (...rulesets: readonly PermissionSchema.Ruleset[]): PermissionSchema.Ruleset =>

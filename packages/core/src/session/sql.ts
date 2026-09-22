@@ -788,6 +788,32 @@ export const TaskAdmissionTable = sqliteTable(
   (table) => [index("task_admission_run_idx").on(table.run_id)],
 )
 
+/**
+ * C-P2-08 durable fan-out admission ledger: ONE row per admitted task tool call, keyed by the
+ * (session, assistant message) batch so the per-message MAX_SUBAGENT_FANOUT cap survives process
+ * restarts and concurrent admissions. `tool_call_id` is globally unique (provider-issued ids), so
+ * an exact retry of the same call converges on its existing row instead of consuming a new slot;
+ * a same id against a different batch is a conflicting reuse and refuses. Rows are pure counting
+ * evidence — the run ledger lives in `task_run`/`task_admission` — and follow the Session on
+ * delete via cascade.
+ */
+export const SessionV2TaskCallAdmissionTable = sqliteTable(
+  "session_v2_task_call_admission",
+  {
+    session_id: text()
+      .$type<SessionSchema.ID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    assistant_message_id: text().$type<MessageID>().notNull(),
+    tool_call_id: text().notNull(),
+    created_at: integer().notNull(),
+  },
+  (table) => [
+    uniqueIndex("session_v2_task_call_admission_tool_call_idx").on(table.tool_call_id),
+    index("session_v2_task_call_admission_batch_idx").on(table.session_id, table.assistant_message_id),
+  ],
+)
+
 export const TaskNotificationOutboxTable = sqliteTable(
   "task_notification_outbox",
   {

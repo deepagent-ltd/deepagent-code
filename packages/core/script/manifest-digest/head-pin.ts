@@ -10,10 +10,13 @@
  * Re-pin only together with an intentional input-set change: regenerate with
  * `bun run script/manifest-digest/generate-manifest.ts` and update both digests
  * here.
+ *
+ * C-P2-08 re-pin (2026-09-23): the migration registry gained the durable task-call
+ * fan-out admission migration (20260922182048_v2_task_call_admission).
  */
 export const HeadPin = {
   /** Commit whose tree the digests were pinned on. Informational; the digests are the gate. */
-  commit: "0832dd0ed3a4b315c91c012bd8c519c8fdb9c99e",
-  setTreeDigest: "6b89138f13b43dca0a95e5bd5fa1c3b257b8e263855fff22cb51ad317a4d2283",
-  overallDigest: "89e02f613fa1d30bede86dcda35c7be838e689aba9fcc81dc916aadb1a093e5b",
+  commit: "da001699c15a583128f4a460a1e3f39145efc18c",
+  setTreeDigest: "d83bf358c8c314538cecc942e9f3ad9e1a74f0f39250dcad938d22a62eed2608",
+  overallDigest: "6ec128d8e4686d37ac25ee8e323eeaa5c84bc06511a6aabfa76269907a5badc4",
 } as const

@@ -342,7 +342,20 @@ export const layer = Layer.effectDiscard(
                         )
                       }),
                     )
-                  if (!admitTaskCall(context.sessionID, context.assistantMessageID, context.toolCallID))
+                  // Durable fan-out admission (C-P2-08): the ledger lives in the database, so the
+                  // service is required BEFORE the cap decision — missing authority is an honest
+                  // refusal, never a silent bypass of the cap.
+                  const database = Option.getOrUndefined(yield* Effect.serviceOption(Database.Service))
+                  if (!database)
+                    return yield* toolFailure(
+                      "task is unavailable: the database service is missing from the runner context (durable fan-out admission)",
+                    )
+                  const admittedCall = yield* admitTaskCall(database.db, {
+                    sessionID: context.sessionID,
+                    assistantMessageID: context.assistantMessageID,
+                    toolCallID: context.toolCallID,
+                  })
+                  if (!admittedCall)
                     return yield* toolFailure(
                       `Cannot launch task: one assistant message may start at most ${MAX_SUBAGENT_FANOUT} subagents. Split additional work into a later round.`,
                     )
@@ -440,7 +453,6 @@ export const layer = Layer.effectDiscard(
                   // create converges by adoption), and the single first input lands atomically
                   // with the run's input_state pending→ready CAS. The executor only claims and
                   // resumes the child; it NEVER admits another first prompt.
-                  const database = Option.getOrUndefined(yield* Effect.serviceOption(Database.Service))
                   const runRowByID = (runID: string) =>
                     database === undefined
                       ? Effect.succeed(undefined)
