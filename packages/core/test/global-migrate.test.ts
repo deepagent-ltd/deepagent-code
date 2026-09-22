@@ -88,6 +88,38 @@ describe("legacy home migration", () => {
     expect(await fs.stat(config).catch(() => undefined)).toBeUndefined()
   })
 
+  // Cross-review P0 regression: installers/bootstrap legitimately scaffold tmp/ and desktop/
+  // inside a FRESH data home before the first process that can migrate runs — that data home
+  // is not user data, and refusing forever strands preview-era users' legacy tree.
+  test("merges into a scaffold-only data home (tmp/desktop) instead of skipping forever", async () => {
+    await using tmp = await tmpdir()
+    const { legacy, data, config } = await seedLegacy(tmp.path)
+    await fs.mkdir(path.join(data, "tmp", "install"), { recursive: true })
+    await fs.writeFile(path.join(data, "tmp", "install", "staged.txt"), "staged")
+    await fs.mkdir(path.join(data, "desktop", "ai.deepagent-code.desktop"), { recursive: true })
+
+    const report = await GlobalMigrate.migrateLegacyHome({ legacy, data, config })
+    expect(report).toMatchObject({ migrated: true })
+
+    // User data landed in the existing (scaffolded) data home; the desktop scaffold survived.
+    expect(await fs.readFile(path.join(data, "deepagent-code-local.db"), "utf8")).toBe("db-bytes")
+    expect(await fs.readFile(path.join(data, "cache", "blob"), "utf8")).toBe("cached")
+    expect(await fs.stat(path.join(data, "desktop", "ai.deepagent-code.desktop")).then(() => true)).toBe(true)
+    expect(await fs.readFile(path.join(config, "auth.json"), "utf8")).toBe("{}")
+    expect(await fs.readdir(legacy)).toEqual([GlobalMigrate.NOTE])
+  })
+
+  test("a data home holding anything beyond the scaffold still refuses honestly", async () => {
+    await using tmp = await tmpdir()
+    const { legacy, data, config } = await seedLegacy(tmp.path)
+    await fs.mkdir(path.join(data, "tmp"), { recursive: true })
+    await fs.mkdir(path.join(data, "state"), { recursive: true })
+
+    const report = await GlobalMigrate.migrateLegacyHome({ legacy, data, config })
+    expect(report).toMatchObject({ migrated: false, skipped: "data-home-exists" })
+    expect(await fs.readFile(path.join(legacy, "auth.json"), "utf8")).toBe("{}")
+  })
+
   test("no legacy home is a clean no-op", async () => {
     await using tmp = await tmpdir()
     const report = await GlobalMigrate.migrateLegacyHome({

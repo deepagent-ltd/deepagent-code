@@ -190,4 +190,25 @@ describe("loadWindowsEnv", () => {
   test("a throwing query never propagates", () => {
     expect(loadWindowsEnv({ env: {}, runRegQuery: () => { throw new Error("boom") } })).toEqual({})
   })
+
+  // Real-wiring regression (cross-review P1): circular REG_EXPAND_SZ references (A=%A%,
+  // B/C mutual) must resolve as unknown — like Windows itself — instead of recursing until
+  // the stack overflows and crashing every startup.
+  test("circular registry references resolve as unknown, never recurse to death", () => {
+    const runRegQuery = (key: string) =>
+      key === USER_ENV_KEY
+        ? hive(
+            USER_ENV_KEY,
+            "    SELF    REG_EXPAND_SZ    %SELF%\\bin\r\n" +
+              "    B    REG_EXPAND_SZ    %C%\\b\r\n" +
+              "    C    REG_EXPAND_SZ    %B%\\c\r\n" +
+              "    GOOD    REG_EXPAND_SZ    %SystemRoot%\\good\r\n",
+          )
+        : hive(SYSTEM_ENV_KEY, "    SystemRoot    REG_SZ    C:\\Windows\r\n")
+
+    const merged = loadWindowsEnv({ env: {}, runRegQuery })
+    expect(merged.SELF).toBe("%SELF%\\bin")
+    expect(merged.B).toBe("%B%\\c\\b")
+    expect(merged.GOOD).toBe("C:\\Windows\\good")
+  })
 })

@@ -2,6 +2,7 @@ import path from "path"
 import fs from "fs/promises"
 import { Context, Effect, Layer } from "effect"
 import { Flock } from "./util/flock"
+import { Log } from "./util/log"
 import { platformConfigHome, platformDataHome, resolveHomeBase } from "./global-path"
 import { migrateLegacyHomeIfNeeded } from "./global-migrate"
 import { makeGlobalNode } from "./effect/app-node"
@@ -73,7 +74,16 @@ export const Path = paths
 
 // One-time win32 move of the pre-split unified root (~/.deepagent/code) into the platform homes.
 // No-op elsewhere; must run before the mkdir block below so a migrated tree is not recreated.
-await migrateLegacyHomeIfNeeded(process.env)
+// The report is surfaced (never silently dropped): a skipped/failed migration on a machine that
+// still carries a legacy home is a support-relevant fact.
+const migrationReport = await migrateLegacyHomeIfNeeded(process.env)
+if (migrationReport && (!migrationReport.migrated || migrationReport.error)) {
+  Log.Default.warn("global.migration", {
+    migrated: migrationReport.migrated,
+    skipped: migrationReport.skipped,
+    error: migrationReport.error,
+  })
+}
 
 Flock.setGlobal({ state: Path.state })
 

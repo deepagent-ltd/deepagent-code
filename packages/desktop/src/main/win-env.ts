@@ -150,15 +150,30 @@ export function loadWindowsEnv(options: WindowsEnvOptions = {}) {
   const live = lookupTable(liveEnv)
   const user = lookupTable(rawUser)
   const system = lookupTable(rawSystem)
-  const resolveVar = (name: string): string | undefined => {
+  // Circular registry references (A=%A%, or A/B referencing each other) must resolve as
+  // unknown — Windows treats them the same way — never as unbounded recursion. The depth
+  // bound is the second guard for pathological chains the in-progress set cannot see.
+  const resolveVarTracked = (name: string, resolving: ReadonlySet<string>, depth = 0): string | undefined => {
+    if (depth > 8) return undefined
+    if (resolving.has(name.toUpperCase())) return undefined
     if (live(name) !== undefined) return live(name)
-    if (user(name) !== undefined) return expandRegValue(user(name)!, resolveVar)
-    if (system(name) !== undefined) return expandRegValue(system(name)!, resolveVar)
+    const enter = () => new Set(resolving).add(name.toUpperCase())
+    if (user(name) !== undefined) return expandRegValue(user(name)!, (next) => resolveVarTracked(next, enter(), depth + 1))
+    if (system(name) !== undefined)
+      return expandRegValue(system(name)!, (next) => resolveVarTracked(next, enter(), depth + 1))
     return undefined
   }
 
+  // Each entry expands with ITS OWN name pre-seeded in the in-progress set: a value that
+  // references its own name (directly or through a chain) keeps the literal reference instead
+  // of re-substituting its own partially-expanded value once per iterative pass.
   const expanded = (raw: Record<string, string>) =>
-    Object.fromEntries(Object.entries(raw).map(([name, data]) => [name, expandRegValue(data, resolveVar)]))
+    Object.fromEntries(
+      Object.entries(raw).map(([name, data]) => [
+        name,
+        expandRegValue(data, (next) => resolveVarTracked(next, new Set([name.toUpperCase()]))),
+      ]),
+    )
 
   return mergeRegistryEnv(env, expanded(rawUser), expanded(rawSystem))
 }

@@ -8,6 +8,7 @@ import { getCACertificates, setDefaultCACertificates } from "node:tls"
 import type { Event } from "electron"
 import { app, BrowserWindow } from "electron"
 import { resolveDataPath } from "@deepagent-code/core/global-path"
+import { migrateLegacyHomeIfNeeded } from "@deepagent-code/core/global-migrate"
 
 import { Deferred, Effect, Fiber } from "effect"
 import contextMenu from "electron-context-menu"
@@ -125,6 +126,12 @@ const main = Effect.gen(function* () {
     return root
   })()
   if (!onboardingTestRoot) delete process.env.DEEPAGENT_CODE_TEST_HOME
+  // D-W1 one-shot migration must run BEFORE the mkdir block below scaffolds the data home:
+  // creating it first flips the migration's freshness check into a permanent skip and strands a
+  // preview-era ~/.deepagent/code (no-op off win32 / under the test-home boundary).
+  const legacyMigration = yield* Effect.promise(() => migrateLegacyHomeIfNeeded(process.env))
+  if (legacyMigration && (!legacyMigration.migrated || legacyMigration.error))
+    console.warn("[global-migrate]", JSON.stringify(legacyMigration))
   const dataRoot = resolveDataPath(process.env)
   const storage = desktopStoragePaths(dataRoot, appId)
   ;[

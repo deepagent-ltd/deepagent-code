@@ -53,6 +53,14 @@ const note = (data: string, config: string) =>
     "This directory (~/.deepagent/code) is no longer used and can be deleted.",
   ].join("\n")
 
+// App-managed scaffold entries that may legitimately exist inside a FRESH data home before the
+// first process able to migrate runs: the npm postinstall stages package installs under tmp/,
+// and the desktop main bootstraps its Electron storage under desktop/ BEFORE the sidecar (the
+// only process that loads the global module and its top-level migration hook) ever starts.
+// A data home holding only these is not user data — the migration merges into it instead of
+// refusing forever (the original data-home-exists refusal stranded preview-era users' data).
+const SCAFFOLD_ENTRIES = new Set(["tmp", "desktop"])
+
 const isDirectory = (value: string) =>
   fs
     .stat(value)
@@ -81,10 +89,30 @@ export async function migrateLegacyHome(input: {
     if (!(await isDirectory(input.legacy))) return { migrated: false, skipped: "no-legacy-home", movedToConfig: [] }
     const entries = await fs.readdir(input.legacy)
     if (entries.every((entry) => entry === NOTE)) return { migrated: false, skipped: "already-migrated", movedToConfig: [] }
-    if (await isDirectory(input.data)) return { migrated: false, skipped: "data-home-exists", movedToConfig: [] }
+    const dataExists = await isDirectory(input.data)
+    if (dataExists) {
+      // Only an app-scaffold-only data home is migratable (merge); anything else the user put
+      // there is real data the migration must never overwrite.
+      const dataEntries = await fs.readdir(input.data)
+      if (!dataEntries.every((entry) => SCAFFOLD_ENTRIES.has(entry)))
+        return { migrated: false, skipped: "data-home-exists", movedToConfig: [] }
+    }
 
-    await fs.mkdir(path.dirname(input.data), { recursive: true })
-    await move(input.legacy, input.data)
+    if (dataExists) {
+      // Merge mode: the legacy tree moves entry by entry into the scaffolded data home. A
+      // scaffold dir colliding with a legacy entry is app-generated and disposable — drop the
+      // scaffold copy so the user's entry lands; any other failure leaves that entry behind
+      // (best-effort contract) and the MIGRATED.txt note still points at the new home.
+      for (const entry of entries.filter((entry) => entry !== NOTE)) {
+        const source = path.join(input.legacy, entry)
+        const target = path.join(input.data, entry)
+        if (SCAFFOLD_ENTRIES.has(entry)) await fs.rm(target, { recursive: true, force: true }).catch(() => {})
+        await move(source, target).catch(() => {})
+      }
+    } else {
+      await fs.mkdir(path.dirname(input.data), { recursive: true })
+      await move(input.legacy, input.data)
+    }
 
     const movedToConfig: string[] = []
     await fs.mkdir(input.config, { recursive: true })
