@@ -55,6 +55,11 @@ describe("private storage boundary", () => {
       { name: "legacy XDG package", pattern: /from [\"']xdg-basedir[\"']/ },
       { name: "legacy data root", pattern: /[\"']\.local[\"']\s*,\s*[\"']share[\"']\s*,\s*[\"']deepagent-code[\"']/ },
       { name: "legacy config root", pattern: /[\"']\.config[\"']\s*,\s*[\"']deepagent-code[\"']/ },
+      // D-W1: credential/config stores must land in the roaming config home, never the data home.
+      {
+        name: "credential store outside the roaming config home",
+        pattern: /Path\.data,\s*[\"'`](?:auth|account|mcp-auth|mcp-secrets|settings)\.json[\"'`]/,
+      },
     ]
     const violations = (
       await Promise.all(

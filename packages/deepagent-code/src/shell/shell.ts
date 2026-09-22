@@ -88,12 +88,29 @@ function resolve(file: string) {
   return which(shell) ?? undefined
 }
 
-function win() {
+// Pure win32 fallback chain (D-W2), highest priority first: PowerShell 7 (pwsh) → Windows
+// PowerShell (5.1) → Git Bash → cmd (COMSPEC). Probe results are injected so the ordering is
+// pinned by tests on any host; win() performs the real probes.
+export function winChain(probe: {
+  pwsh?: string
+  powershell?: string
+  gitbash?: string
+  comspec?: string
+}): string[] {
+  return [probe.pwsh, probe.powershell, probe.gitbash, probe.comspec || "cmd.exe"].filter(
+    (item): item is string => Boolean(item),
+  )
+}
+
+export function win() {
   return Array.from(
     new Set(
-      [which("pwsh"), which("powershell"), gitbash(), process.env.COMSPEC || "cmd.exe"]
-        .filter((item): item is string => Boolean(item))
-        .map(full),
+      winChain({
+        pwsh: which("pwsh") ?? undefined,
+        powershell: which("powershell") ?? undefined,
+        gitbash: gitbash(),
+        comspec: process.env.COMSPEC,
+      }).map(full),
     ),
   )
 }

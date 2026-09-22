@@ -2,12 +2,15 @@ import path from "path"
 import fs from "fs/promises"
 import { Context, Effect, Layer } from "effect"
 import { Flock } from "./util/flock"
-import { resolveDataPath, resolveHomeBase } from "./global-path"
+import { platformConfigHome, platformDataHome, resolveHomeBase } from "./global-path"
+import { migrateLegacyHomeIfNeeded } from "./global-migrate"
 import { makeGlobalNode } from "./effect/app-node"
 
 const homePath = () => resolveHomeBase(process.env)
-const dataPath = () => resolveDataPath(process.env)
-const configPath = () => dataPath()
+// D-W1 split: data/cache/worktree/snapshot stay machine-local; config + credentials roam. The two
+// homes coincide on every non-win32 platform (both are ~/.deepagent/code), so POSIX is unchanged.
+const dataPath = () => path.resolve(platformDataHome(process.env))
+const configPath = () => path.resolve(platformConfigHome(process.env))
 const cachePath = () => path.join(dataPath(), "cache")
 const statePath = () => path.join(dataPath(), "state")
 const tmpPath = () => path.join(dataPath(), "tmp")
@@ -68,6 +71,10 @@ const paths = {
 
 export const Path = paths
 
+// One-time win32 move of the pre-split unified root (~/.deepagent/code) into the platform homes.
+// No-op elsewhere; must run before the mkdir block below so a migrated tree is not recreated.
+await migrateLegacyHomeIfNeeded(process.env)
+
 Flock.setGlobal({ state: Path.state })
 
 await Promise.all([
@@ -92,8 +99,10 @@ export class Service extends Context.Service<Service, Interface>()("@deepagent-c
 
 export interface Interface {
   readonly home: string
+  /** Machine-local data home (win32: %LOCALAPPDATA%\deepagent-code; elsewhere ~/.deepagent/code). */
   readonly data: string
   readonly cache: string
+  /** Roaming config home (win32: %APPDATA%\deepagent-code; elsewhere identical to `data`). Holds user config files and credential stores. */
   readonly config: string
   readonly state: string
   readonly tmp: string

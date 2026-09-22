@@ -79,7 +79,8 @@ export type RunManifest = {
 
 export const DEEPAGENT_CODE_TEST_HOME_ENV = "DEEPAGENT_CODE_TEST_HOME"
 
-// Delegate to the same resolver as Global.Path.data. Production is fixed to ~/.deepagent/code;
+// Delegate to the same resolver as Global.Path.data. Production is fixed to the machine-local data
+// home (%LOCALAPPDATA%\deepagent-code on Windows, ~/.deepagent/code elsewhere);
 // DEEPAGENT_CODE_HOME is accepted only alongside the explicit test-home boundary.
 export const resolveDeepAgentCodeHome = (env: NodeJS.ProcessEnv = process.env): string => resolveDataPath(env)
 

@@ -195,7 +195,8 @@ function globalConfigFile() {
 // (loadGlobal merges all of them), but users should only ever have to edit ONE file. This
 // consolidates any legacy config.json / deepagent-code.json / deepagent-code.jsonc into the single
 // canonical config.jsonc at startup and removes the old files, so plugins and providers no longer end
-// up split across files. config.jsonc lives at the data root (~/.deepagent/code) after unification.
+// up split across files. config.jsonc lives in the roaming config home (%APPDATA%\deepagent-code on
+// Windows, ~/.deepagent/code elsewhere).
 const CANONICAL_GLOBAL_CONFIG = "config.jsonc"
 const LEGACY_GLOBAL_CONFIGS = ["config.json", "deepagent-code.json", "deepagent-code.jsonc"]
 

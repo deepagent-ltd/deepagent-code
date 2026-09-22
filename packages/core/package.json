@@ -137,7 +137,6 @@
     "turndown": "7.2.0",
     "venice-ai-sdk-provider": "2.0.2",
     "which": "6.0.1",
-    "xdg-basedir": "5.1.0",
     "zod": "catalog:"
   },
   "overrides": {
