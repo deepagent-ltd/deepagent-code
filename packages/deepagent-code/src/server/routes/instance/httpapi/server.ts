@@ -153,6 +153,7 @@ import { MaintenanceApi } from "./groups/maintenance"
 import type { BootstrapState } from "@deepagent-code/core/database/bootstrap"
 import { layer as maintenanceRegistryLayer } from "./maintenance-registry"
 import { RecoveryExecutor } from "@/server/recovery-executor"
+import { TaskWorktreeReclamation } from "@/effect/task-worktree-reclamation"
 import { capabilityHandlers } from "./handlers/capability"
 import { systemContextHandlers } from "./handlers/system-context"
 import { contextHandlers } from "./handlers/context"
@@ -499,12 +500,20 @@ export function createRoutes(corsOptions?: CorsOptions, runtimeFlagsLayer = Runt
       // W7 — settle-triggered durable learning (same INTO-the-base seam direction as above).
       Layer.provide(DurableLearningRuntime.onSessionSettledSeamLayer.pipe(Layer.provide(Database.defaultLayer))),
       // W2.2 — C1B recovery executor production wiring: the executor layer build runs the
-      // startup drain (process boot = post-crash resume: applies committed pending
-      // recovery commands, never fails the boot). It self-provides the module-level
+      // startup drain (process boot = post-crash resume: applies committed pending recovery
+      // commands, never fails the boot). It self-provides the module-level
       // Database.defaultLayer constant — memoized by object identity under the shared
       // memoMap, the SAME connection the route graph builds (single-instance local
       // process, one database; no clustering; no split-brain).
       Layer.provide(RecoveryExecutor.layer.pipe(Layer.provide(Database.defaultLayer))),
+      // C-P2-08 — startup reclamation of stale retained run-owned worktrees (same
+      // layer-build-means-boot drain and shared Database.defaultLayer connection as the
+      // recovery executor above; never fails the boot).
+      Layer.provide(TaskWorktreeReclamation.layer.pipe(Layer.provide(Database.defaultLayer))),
+      // C-P2-08 — startup reclamation of stale retained run-owned worktrees (same
+      // layer-build-means-boot drain and shared Database.defaultLayer connection as the
+      // recovery executor above; never fails the boot).
+      Layer.provide(TaskWorktreeReclamation.layer.pipe(Layer.provide(Database.defaultLayer))),
       Layer.provideMerge(devCampaignMint),
       // W0.5 (blocker-2): the release pipeline ships owner-authorization.json with the install
       // product; this layer seeds ONE signed row into the local DB when the routes graph is built —

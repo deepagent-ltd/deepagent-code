@@ -485,6 +485,153 @@ describe("Core V2 TaskWorkspace", () => {
   )
 })
 
+// ── C-P2-08 startup reclamation of stale retained worktrees ───────────────────────────────────
+
+/** One terminal retained worktree run at a settled epoch, in a real repo: the sweep's input. */
+const retainedRun = (
+  db: testDb,
+  events: EventV2.Interface,
+  sessions: SessionV2.Interface,
+  repo: string,
+  toolCallID: string,
+) =>
+  Effect.gen(function* () {
+    const parent = yield* sessions.create({ location: { directory: AbsolutePath.make(repo) } })
+    const submitted = yield* TaskRunAuthority.submit(db, events, sessions, specFor(parent.id, toolCallID, repo, "worktree"))
+    const claimed = yield* TaskRunAuthority.claim(db, {
+      runID: submitted.run.runID,
+      ownerToken: `owner-${toolCallID}`,
+      leaseMs: 60_000,
+      now: 1_000,
+    })
+    yield* TaskRunAuthority.settle(db, {
+      runID: submitted.run.runID,
+      ownerToken: `owner-${toolCallID}`,
+      claimGeneration: claimed.claimGeneration,
+      state: "failed",
+      reason: "task_timeout",
+      error: { code: "task_timeout", message: "timed out" },
+      now: 2_000,
+    })
+    yield* TaskWorkspace.retain(db, { runID: submitted.run.runID })
+    return yield* runRow(db, submitted.run.runID)
+  })
+
+describe("Core V2 TaskWorkspace stale-worktree reclamation (C-P2-08)", () => {
+  it.effect("terminal retention past the grace reclaims worktree AND branch; within the grace nothing is touched", () =>
+    Effect.gen(function* () {
+      const repo = yield* Effect.promise(() => makeRepo(path.join(tmpRoot(), "repo")))
+      const { db, events, sessions } = yield* services
+      const settled = yield* retainedRun(db, events, sessions, repo, "call-ws-rc-1")
+      const directory = settled.worktree_directory!
+      const branch = settled.worktree_branch!
+
+      // One millisecond before the grace expires: not even scanned.
+      const within = yield* TaskWorkspace.reclaimStale(db, {
+        now: 2_000 + TaskWorkspace.DEFAULT_WORKTREE_RETENTION_MS - 1,
+      })
+      expect(within.scanned).toBe(0)
+      yield* Effect.promise(() => fs.access(directory))
+      expect(worktreePaths(repo)).toContain(directory)
+      expect(gitIn(repo, ["show-ref", "--verify", `refs/heads/${branch}`]).exitCode).toBe(0)
+
+      // At and past the grace boundary: reclaimed (directory + branch deleted, receipt settled).
+      const report = yield* TaskWorkspace.reclaimStale(db, { now: 2_000 + TaskWorkspace.DEFAULT_WORKTREE_RETENTION_MS })
+      expect(report).toMatchObject({ scanned: 1, reclaimed: 1, failed: [] })
+      const reclaimed = yield* runRow(db, settled.run_id)
+      expect(reclaimed.worktree_state).toBe("reclaimed")
+      expect(worktreePaths(repo)).not.toContain(directory)
+      yield* Effect.promise(() =>
+        fs.stat(directory).then(
+          () => {
+            throw new Error("worktree directory survived reclamation")
+          },
+          () => undefined,
+        ),
+      )
+      expect(gitIn(repo, ["show-ref", "--verify", `refs/heads/${branch}`]).exitCode).not.toBe(0)
+      const reclaimedEvents = yield* db
+        .select({ total: count() })
+        .from(TaskRunEventTable)
+        .where(and(eq(TaskRunEventTable.run_id, settled.run_id), eq(TaskRunEventTable.type, "worktree_reclaimed")))
+        .get()
+        .pipe(Effect.orDie)
+      expect(reclaimedEvents?.total).toBe(1)
+
+      // Idempotent: a second sweep finds nothing (the receipt is terminal).
+      const again = yield* TaskWorkspace.reclaimStale(db, { now: 2_000 + TaskWorkspace.DEFAULT_WORKTREE_RETENTION_MS })
+      expect(again.scanned).toBe(0)
+    }),
+  )
+
+  it.effect("recovery_required runs are never reclaimed, however old", () =>
+    Effect.gen(function* () {
+      const repo = yield* Effect.promise(() => makeRepo(path.join(tmpRoot(), "repo")))
+      const { db, events, sessions } = yield* services
+      const settled = yield* retainedRun(db, events, sessions, repo, "call-ws-rc-2")
+      yield* db
+        .update(TaskRunTable)
+        .set({ state: "recovery_required" })
+        .where(eq(TaskRunTable.run_id, settled.run_id))
+        .run()
+        .pipe(Effect.orDie)
+
+      const report = yield* TaskWorkspace.reclaimStale(db, {
+        now: 2_000 + TaskWorkspace.DEFAULT_WORKTREE_RETENTION_MS * 10,
+      })
+      expect(report.scanned).toBe(0)
+      const untouched = yield* runRow(db, settled.run_id)
+      expect(untouched.worktree_state).toBe("retained")
+      yield* Effect.promise(() => fs.access(untouched.worktree_directory!))
+      expect(gitIn(repo, ["show-ref", "--verify", `refs/heads/${untouched.worktree_branch!}`]).exitCode).toBe(0)
+    }),
+  )
+
+  it.effect("non-run-owned, non-isolated, and v1 rows are never touched", () =>
+    Effect.gen(function* () {
+      const repo = yield* Effect.promise(() => makeRepo(path.join(tmpRoot(), "repo")))
+      const { db, events, sessions } = yield* services
+      // Three debt shapes that LOOK like retention but are not run-owned V2 isolation: a
+      // caller-owned worktree receipt, a shared-workspace row, and a v1 runtime row.
+      const owner = yield* retainedRun(db, events, sessions, repo, "call-ws-rc-3a")
+      yield* db
+        .update(TaskRunTable)
+        .set({ workspace_owner: "caller" })
+        .where(eq(TaskRunTable.run_id, owner.run_id))
+        .run()
+        .pipe(Effect.orDie)
+      const shared = yield* retainedRun(db, events, sessions, repo, "call-ws-rc-3b")
+      yield* db
+        .update(TaskRunTable)
+        .set({ workspace_mode: "shared" })
+        .where(eq(TaskRunTable.run_id, shared.run_id))
+        .run()
+        .pipe(Effect.orDie)
+      const legacy = yield* retainedRun(db, events, sessions, repo, "call-ws-rc-3c")
+      yield* db
+        .update(TaskRunTable)
+        .set({ execution_runtime: "v1" })
+        .where(eq(TaskRunTable.run_id, legacy.run_id))
+        .run()
+        .pipe(Effect.orDie)
+
+      const report = yield* TaskWorkspace.reclaimStale(db, { now: 2_000 + TaskWorkspace.DEFAULT_WORKTREE_RETENTION_MS })
+      expect(report.scanned).toBe(0)
+      for (const row of [owner, shared, legacy]) {
+        const kept = yield* runRow(db, row.run_id)
+        expect(kept.worktree_state).toBe("retained")
+        const directory = kept.worktree_directory
+        if (directory !== null) yield* Effect.promise(() => fs.access(directory))
+      }
+      // The one run-owned V2 worktree in the same repo IS reclaimed — the predicates select.
+      const eligible = yield* retainedRun(db, events, sessions, repo, "call-ws-rc-3d")
+      const selected = yield* TaskWorkspace.reclaimStale(db, { now: 2_000 + TaskWorkspace.DEFAULT_WORKTREE_RETENTION_MS })
+      expect(selected.reclaimed).toBe(1)
+      expect((yield* runRow(db, eligible.run_id)).worktree_state).toBe("reclaimed")
+    }),
+  )
+})
+
 // ── Child-Location write stack (real built-in write tool against a Location root) ─────────────
 
 const allowPermission = Layer.succeed(

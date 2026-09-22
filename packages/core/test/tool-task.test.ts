@@ -23,7 +23,7 @@ import { Delegation } from "@deepagent-code/core/tool/delegation"
 import { ToolRegistry } from "@deepagent-code/core/tool/registry"
 import { TaskTool } from "@deepagent-code/core/tool/task"
 import { testEffect } from "./lib/effect"
-import { settleTool, toolIdentity } from "./lib/tool"
+import { executeTool, settleTool, toolIdentity } from "./lib/tool"
 import { tmpRoot, tmpRootShared } from "./fixture/tmpdir"
 
 // WS4b task tool surface: S2.1 run visibility (branch/worktree state on the tool result), S3
@@ -240,6 +240,49 @@ describe("task tool run visibility (WS4b-S2.1)", () => {
       expect(rows).toHaveLength(1)
       expect(rows[0]!.state).toBe("completed")
       expect(rows[0]!.worktree_branch).toBe(output.run!.branch ?? null)
+    }),
+  )
+
+  // C-P2-08 honest resume fence: a write-isolated child lives in its run-owned worktree, so a
+  // resume-by-task_id after that worktree was removed or reclaimed must refuse with the real
+  // reason instead of running the child against a dead root.
+  it.effect("resume-by-task_id refuses honestly when the isolated worktree is gone (removed / reclaimed)", () =>
+    Effect.gen(function* () {
+      const repo = yield* Effect.promise(() => makeRepo(path.join(tmpRoot(), "repo")))
+      const { db, sessions, registry } = yield* services
+      yield* registerAgents
+      const parent = yield* sessions.create({ location: { directory: AbsolutePath.make(repo) } })
+
+      const settlement = yield* settleTool(
+        registry,
+        taskCall(
+          { description: "isolated write", prompt: "do the write work", subagent_type: "general" },
+          parent.id,
+        ),
+      )
+      const childID = outputOf(settlement).task_id
+
+      // After the completed run's release the worktree is gone: the resume names the removal.
+      const removed = yield* executeTool(
+        registry,
+        taskCall({ description: "resume", prompt: "continue", subagent_type: "general", task_id: childID }, parent.id),
+      )
+      expect(removed.type).toBe("error")
+      expect(String(removed.value)).toContain(`Cannot resume task "${childID}": its isolated worktree was already removed`)
+
+      // After a stale-retention reclaim (C-P2-08) the resume names the reclaim.
+      yield* db
+        .update(TaskRunTable)
+        .set({ worktree_state: "reclaimed" })
+        .where(eq(TaskRunTable.child_session_id, SessionSchema.ID.make(childID)))
+        .run()
+        .pipe(Effect.orDie)
+      const reclaimed = yield* executeTool(
+        registry,
+        taskCall({ description: "resume", prompt: "continue", subagent_type: "general", task_id: childID }, parent.id, "call-resume-reclaimed"),
+      )
+      expect(reclaimed.type).toBe("error")
+      expect(String(reclaimed.value)).toContain(`its retained worktree was reclaimed after the retention grace period`)
     }),
   )
 })

@@ -658,7 +658,7 @@ export const TaskRunTable = sqliteTable(
     worktree_directory: text(),
     worktree_branch: text(),
     worktree_state: text()
-      .$type<"none" | "admitting" | "ready" | "conflict" | "retained" | "submitted" | "removed">()
+      .$type<"none" | "admitting" | "ready" | "conflict" | "retained" | "submitted" | "removed" | "reclaimed">()
       .notNull()
       .default("none"),
     worktree_started_at: integer(),

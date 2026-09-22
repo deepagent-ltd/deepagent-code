@@ -562,6 +562,17 @@ export const layer = Layer.effectDiscard(
                   })
                   const resumeLaunch = Effect.gen(function* () {
                     const childID = SessionSchema.ID.make(params.task_id!)
+                    // Honest resume fence (C-P2-08): a write-isolated child lives IN its run-owned
+                    // worktree, so resuming after that worktree was removed (post-settle release) or
+                    // reclaimed (retention grace expired) would run the child against a dead root.
+                    // Refuse with the real reason instead of surfacing fs-level tool breakage.
+                    const latest = yield* latestRunRow(childID)
+                    if (latest?.workspace_mode === "worktree" && (latest.worktree_state === "removed" || latest.worktree_state === "reclaimed"))
+                      return yield* toolFailure(
+                        latest.worktree_state === "reclaimed"
+                          ? `Cannot resume task "${params.task_id}": its retained worktree was reclaimed after the retention grace period (${latest.worktree_branch ?? "branch"}). Start a fresh task instead.`
+                          : `Cannot resume task "${params.task_id}": its isolated worktree was already removed when the run settled (${latest.worktree_branch ?? "branch"}). Start a fresh task instead.`,
+                      )
                     const text = yield* drive(childID, params.prompt)
                     return {
                       childID,
