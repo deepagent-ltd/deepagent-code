@@ -444,6 +444,8 @@ type RecoveryCommandInventoryRow = {
   readonly result_hash: string | null
   readonly actor_type: string | null
   readonly actor_id: string | null
+  readonly command_kind: string | null
+  readonly evidence: string | null
   readonly created_at: number
   readonly updated_at: number
   readonly descriptor_session_id: string | null
@@ -953,7 +955,8 @@ export const classifyStartup = Effect.fn("StartupInventory.classifyStartup")(fun
   const commands = yield* db.all<RecoveryCommandInventoryRow>(sql`
     SELECT command.command_id, command.descriptor_id, command.attempt, command.state,
            command.expected_owner_token, command.result_hash, command.actor_type,
-           command.actor_id, command.created_at, command.updated_at,
+           command.actor_id, command.command_kind, command.evidence,
+           command.created_at, command.updated_at,
            descriptor.session_id AS descriptor_session_id,
            descriptor.activity_id AS descriptor_activity_id,
            descriptor.turn_id AS descriptor_turn_id,

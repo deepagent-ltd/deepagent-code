@@ -66,6 +66,8 @@ const seedPending = (
     readonly withDescriptor?: boolean
     readonly expectedOwnerToken?: string
     readonly expectedVersion?: number
+    readonly commandKind?: "abandon_exact" | "confirm_settled"
+    readonly evidence?: RecoveryCommandContract.RecoveryEvidence
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -90,10 +92,26 @@ const seedPending = (
       ...(command.actorType ? { actorType: command.actorType } : {}),
       ...(command.actorId ? { actorId: command.actorId } : {}),
       ...(command.expectedOwnerToken ? { expectedOwnerToken: command.expectedOwnerToken } : {}),
+      ...(command.commandKind ? { commandKind: command.commandKind } : {}),
+      ...(command.evidence ? { evidence: command.evidence } : {}),
       createdAt: 1,
     })
     return { commandId: cas.commandId }
   })
+
+/** A typed provider-settled evidence body bound to a seeded attempt (frozen contract shape). */
+const settledEvidence = (providerId: string): RecoveryCommandContract.RecoveryEvidence => ({
+  schemaVersion: "recovery-evidence.v1",
+  providerId,
+  externalRequestId: `ext_${H64("x")}`,
+  idempotencyKey: `idem_${H64("i")}`,
+  terminalState: "settled",
+  payloadHash: H64("p"),
+  responseFingerprint: H64("f"),
+  retrievalRef: `lookup:${H64("r")}`,
+  metadata: { provider_response_status: 200 },
+  verifiedAt: 1,
+})
 
 /**
  * Seed the complete provider authority that a kill-9 leaves behind. This deliberately
@@ -588,6 +606,187 @@ describe("C1B recovery executor production wiring (W2.2)", () => {
             const executor = yield* bootExecutor(database)
             const report = yield* executor.drain
             expect(report).toEqual({ scanned: 0, applied: 0, keptPending: [], failed: [] })
+          }),
+        ),
+      )
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("startup drain applies a pending confirm_settled command with typed evidence — the settled exit", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "deepagent-recovery-executor-settled-"))
+    const file = join(dir, "recovery-executor.sqlite")
+    try {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const database = yield* openDatabase(file)
+            const authority = yield* seedIndeterminateAuthority(database.db, {
+              attemptId: "att_settled",
+              requestHash: H64("t"),
+            })
+            const attempt = authority.attempt
+            const evidence = settledEvidence(attempt.providerId)
+            const seeded = yield* seedPending(database.db, attempt, "exact", {
+              actorType: "user",
+              actorId: "operator",
+              expectedOwnerToken: authority.ownerToken,
+              expectedVersion: 3,
+              commandKind: "confirm_settled",
+              evidence,
+            })
+            const executor = yield* bootExecutor(database)
+            expect(yield* commandState(database.db, seeded.commandId)).toBe("settled")
+            // The settled resolution carries the command's typed evidence verbatim.
+            const resolution = yield* database.db.get<
+              | { resolution_id: string; decision: string; provider_evidence: string | null; actor_type: string; actor_id: string }
+              | undefined
+            >(sql`
+              SELECT resolution_id, decision, provider_evidence, actor_type, actor_id
+              FROM session_provider_attempt_resolution WHERE attempt_id = ${attempt.attemptId}
+            `)
+            expect(resolution).toMatchObject({
+              decision: "settled",
+              actor_type: "user",
+              actor_id: "operator",
+            })
+            expect(JSON.parse(resolution!.provider_evidence!)).toEqual(evidence)
+            // Attempt → resolved_settled (the DB trigger allows exactly this terminal move);
+            // activity → settled (the CF authority's settled coordination record).
+            expect(yield* database.db.get(sql`
+              SELECT state, attempt_version FROM session_provider_attempt
+              WHERE attempt_id = ${attempt.attemptId}
+            `)).toEqual({ state: "resolved_settled", attempt_version: 4 })
+            expect(yield* database.db.get(sql`
+              SELECT state FROM session_activity WHERE activity_id = ${attempt.activityId}
+            `)).toEqual({ state: "settled" })
+            // Zero-provider property: the receipt keeps its incident evidence — the settle
+            // path never fabricates a provider terminal and never dispatches anything.
+            expect(yield* database.db.get(sql`
+              SELECT state, outcome_hash, outcome_artifact FROM session_v2_provider_turn_receipt
+              WHERE provider_attempt_id = ${attempt.attemptId}
+            `)).toEqual({ state: "indeterminate_after_crash", outcome_hash: null, outcome_artifact: null })
+            expect(yield* database.db.get(sql`
+              SELECT resolution_id, attempt_id, receipt_id FROM session_v2_provider_recovery_bridge
+              WHERE command_id = ${seeded.commandId}
+            `)).toEqual({
+              resolution_id: resolution!.resolution_id,
+              attempt_id: attempt.attemptId,
+              receipt_id: authority.receiptId,
+            })
+            // The terminal descriptor records terminal:"settled" with the post-CAS authority.
+            const terminal = (yield* allDescriptors(database.db, attempt.sessionId)).find(
+              (row) => row.payload.descriptorKind === "resolved",
+            )
+            expect(terminal?.payload.resolved.terminal).toBe("settled")
+            expect(terminal?.payload.casTokens).toEqual({
+              expectedState: "resolved_settled",
+              expectedVersion: 4,
+              ownerToken: authority.ownerToken,
+            })
+            expect(terminal?.contentHash).toBe(RecoveryCommandContract.recoveryDescriptorDigest(terminal!.payload))
+            expect(yield* database.db.get(sql`
+              SELECT execution_claim_token FROM session WHERE id = ${attempt.sessionId}
+            `)).toEqual({ execution_claim_token: null })
+            // Idempotence: a re-run drains nothing; a direct store re-apply reports "already".
+            const report = yield* executor.drain
+            expect(report).toEqual({ scanned: 0, applied: 0, keptPending: [], failed: [] })
+            const store = SessionProviderRecoveryDurable.makeDurableRecoveryStore(database.db)
+            expect(yield* store.applyExactSettled({ commandId: seeded.commandId })).toBe("already")
+            expect(yield* database.db.get(sql`
+              SELECT count(*) AS count FROM session_provider_attempt_resolution
+              WHERE attempt_id = ${attempt.attemptId}
+            `)).toEqual({ count: 1 })
+          }),
+        ),
+      )
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a confirm_settled command without a decodable evidence body stays pending (typed reason)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "deepagent-recovery-executor-settled-evidence-"))
+    const file = join(dir, "recovery-executor.sqlite")
+    try {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const database = yield* openDatabase(file)
+            const authority = yield* seedIndeterminateAuthority(database.db, {
+              attemptId: "att_settled_no_evidence",
+              requestHash: H64("v"),
+            })
+            const seeded = yield* seedPending(database.db, authority.attempt, "exact", {
+              actorType: "user",
+              actorId: "operator",
+              expectedOwnerToken: authority.ownerToken,
+              expectedVersion: 3,
+              commandKind: "confirm_settled",
+            })
+            const executor = yield* bootExecutor(database)
+            const report = yield* executor.drain
+            expect(report).toEqual({
+              scanned: 1,
+              applied: 0,
+              keptPending: [{ commandId: seeded.commandId, reason: "confirm_settled_evidence_missing" }],
+              failed: [],
+            })
+            expect(yield* commandState(database.db, seeded.commandId)).toBe("pending")
+            expect(yield* database.db.get(sql`
+              SELECT state FROM session_provider_attempt WHERE attempt_id = ${authority.attempt.attemptId}
+            `)).toEqual({ state: "indeterminate_after_crash" })
+            expect(yield* database.db.get(sql`
+              SELECT count(*) AS count FROM session_provider_attempt_resolution
+              WHERE attempt_id = ${authority.attempt.attemptId}
+            `)).toEqual({ count: 0 })
+            expect(yield* database.db.get(sql`
+              SELECT execution_claim_token FROM session WHERE id = ${authority.attempt.sessionId}
+            `)).toEqual({ execution_claim_token: 918_273 })
+          }),
+        ),
+      )
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a confirm_settled evidence bound to a different provider is refused without any write", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "deepagent-recovery-executor-settled-binding-"))
+    const file = join(dir, "recovery-executor.sqlite")
+    try {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const database = yield* openDatabase(file)
+            const authority = yield* seedIndeterminateAuthority(database.db, {
+              attemptId: "att_settled_misbound",
+              requestHash: H64("w"),
+            })
+            const seeded = yield* seedPending(database.db, authority.attempt, "exact", {
+              actorType: "user",
+              actorId: "operator",
+              expectedOwnerToken: authority.ownerToken,
+              expectedVersion: 3,
+              commandKind: "confirm_settled",
+              evidence: settledEvidence("provider-someone-else"),
+            })
+            const executor = yield* bootExecutor(database)
+            const report = yield* executor.drain
+            expect(report).toEqual({
+              scanned: 1,
+              applied: 0,
+              keptPending: [{ commandId: seeded.commandId, reason: "confirm_settled_evidence_missing" }],
+              failed: [],
+            })
+            expect(yield* database.db.get(sql`
+              SELECT state FROM session_provider_attempt WHERE attempt_id = ${authority.attempt.attemptId}
+            `)).toEqual({ state: "indeterminate_after_crash" })
+            expect(yield* database.db.get(sql`
+              SELECT count(*) AS count FROM session_provider_attempt_resolution
+              WHERE attempt_id = ${authority.attempt.attemptId}
+            `)).toEqual({ count: 0 })
           }),
         ),
       )

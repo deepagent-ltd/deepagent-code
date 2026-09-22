@@ -62,7 +62,11 @@ import { migrations } from "../src/database/migration.gen"
 // (20260922152631_execution_claim_token) joined the registry (session.time_suspended column
 // renamed to execution_claim_token + partial index rename); explicit re-pin of the release
 // candidate.
-const PINNED_DIGEST = "b84714e3aef3b932288413f3c5a5ad7194e5f69b1c7c55a91a4f42722550a1ca"
+// Successor pin (2026-09-23, K-01 R-3): the recovery_command exit-vocabulary migration
+// (20260922182457_recovery_command_exit) joined the registry (recovery_command gained the
+// nullable command_kind + evidence columns for the confirm_settled durable exit);
+// `migration --check` green at re-pin time.
+const PINNED_DIGEST = "052cf28c74369a8765d56143a28248fedaa81821f901f4cbffcfe3cf934eedf7"
 
 const digest = (entries: readonly { readonly id: string; readonly hash: string }[]) =>
   createHash("sha256").update(JSON.stringify(entries)).digest("hex")
