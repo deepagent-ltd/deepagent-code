@@ -2959,6 +2959,240 @@ export type CompositionDigestRecord = {
   locationHost: CompositionLocationHostDigest
 }
 
+export type MdExportInput = {
+  dir?: string
+  limit?: string
+  page_size?: string
+}
+
+export type MdExportReconciliation = {
+  reconciled: boolean
+  exportedCount: number
+  sessionCount: number
+  missing: Array<string>
+  extra: Array<string>
+}
+
+export type MdExportRun = {
+  exported: number
+  skipped: number
+  sessionCount: number
+  manifestPath: string
+  reconciliation: MdExportReconciliation
+}
+
+export type MdExportStatus = {
+  exists: boolean
+  manifestPath: string
+  exportedCount: number
+  entries: Array<{
+    sessionId: string
+    fileName: string
+    sizeBytes: number
+    sha256: string
+    messageCount: number
+    exportedAt: number
+  }>
+}
+
+export type MigrationRunInput = {
+  dir?: string
+  stop_after?:
+    | "md_export"
+    | "backup_create"
+    | "backup_verify"
+    | "migration_apply"
+    | "post_verify"
+    | "archive"
+    | "disk_advisory"
+}
+
+export type MigrationPhaseRecord = {
+  phase:
+    | "md_export"
+    | "backup_create"
+    | "backup_verify"
+    | "migration_apply"
+    | "post_verify"
+    | "archive"
+    | "disk_advisory"
+  state: "completed" | "failed"
+  startedAt: number
+  completedAt: number
+  outcome?: unknown
+  failure?: {
+    code: string
+    detail: string
+  }
+}
+
+export type MigrationJournal = {
+  version: 1
+  kind: "migration-orchestration-journal"
+  orchestrationId: string
+  dbPath: string
+  startedAt: number
+  updatedAt: number
+  status: "in_progress" | "completed" | "failed"
+  currentPhase?:
+    | "md_export"
+    | "backup_create"
+    | "backup_verify"
+    | "migration_apply"
+    | "post_verify"
+    | "archive"
+    | "disk_advisory"
+  phases: Array<MigrationPhaseRecord>
+  failure?: {
+    phase:
+      | "md_export"
+      | "backup_create"
+      | "backup_verify"
+      | "migration_apply"
+      | "post_verify"
+      | "archive"
+      | "disk_advisory"
+    code: string
+    detail: string
+    recoveryGuidance: string
+  }
+}
+
+export type MigrationRun = {
+  status: "in_progress" | "completed" | "failed"
+  journal: MigrationJournal
+  diskAdvisoryPath?: string
+}
+
+export type MigrationStatus = {
+  active: boolean
+  journal?: MigrationJournal
+}
+
+export type MigrationReportInput = {
+  dir?: string
+}
+
+export type MigrationReportEntry = {
+  check: string
+  status: "success" | "warning" | "failure"
+  summary: string
+  detail?: string
+}
+
+export type MigrationRowReconciliation = {
+  sessionsInLibrary: number
+  sessionsInManifest: number
+  messagesInLibrary: number
+  messagesInManifest: number
+  reconciled: boolean
+}
+
+export type MigrationReport = {
+  version: 1
+  kind: "migration-compliance-report"
+  dbPath: string
+  backupDir: string
+  orchestrationId?: string
+  generatedAt: number
+  overall: "success" | "warning" | "failure"
+  entries: Array<MigrationReportEntry>
+  mdReconciliation: MdExportReconciliation
+  rowReconciliation: MigrationRowReconciliation
+}
+
+export type MigrationReportStored = {
+  exists: boolean
+  reportPath: string
+  report?: MigrationReport
+}
+
+export type BackupGovernInput = {
+  dir?: string
+  keep?: string
+}
+
+export type BackupGoverned = {
+  fileName: string
+  manifestPath: string
+  createdAt: number
+  sizeBytes: number
+  milestone: boolean
+  action: "kept" | "archived"
+}
+
+export type BackupGovernanceReport = {
+  version: 1
+  kind: "backup-governance-report"
+  backupDir: string
+  generatedAt: number
+  policy: {
+    keep: number
+    milestoneRule: string
+  }
+  backups: Array<BackupGoverned>
+  archivedCount: number
+  archivedBytes: number
+  mdExports: Array<string>
+  skipped: Array<{
+    manifestPath: string
+    reason: string
+  }>
+}
+
+export type DiskReclaimInput = {
+  dir?: string
+  confirm?: boolean
+  vacuum?: boolean
+}
+
+export type DiskInventoryEntry = {
+  path: string
+  sizeBytes: number
+  category:
+    | "main_db"
+    | "wal_sidecar"
+    | "backup"
+    | "backup_archived"
+    | "md_export"
+    | "migration_archive"
+    | "restore_incident"
+    | "operational"
+    | "residue_candidate"
+    | "other_data"
+  note: string
+}
+
+export type DiskReclaimCandidate = {
+  path: string
+  sizeBytes: number
+  fromAdvisory: boolean
+  safe: boolean
+  blockedReason?: string
+  deleted: boolean
+}
+
+export type DiskReclaimReport = {
+  version: 1
+  kind: "disk-reclaim-report"
+  dataRoot: string
+  dbPath: string
+  backupDir: string
+  generatedAt: number
+  executed: boolean
+  vacuumed: boolean
+  inventory: Array<DiskInventoryEntry>
+  totalBytesBefore: number
+  totalBytesAfter: number
+  reclaimedBytes: number
+  beforeMiB: string
+  afterMiB: string
+  reclaimedMiB: string
+  candidates: Array<DiskReclaimCandidate>
+  restoreIncidentsBytes: number
+  restoreIncidentsNeverDeleted: true
+}
+
 export type Model = {
   id: string
   providerID: string
@@ -5308,17 +5542,17 @@ export type ModelV2Info = {
     }
     input: number
     output: number
-    cache: {
-      read: number
-      write: number
+    cache?: {
+      read?: number
+      write?: number
     }
   }>
   status: "alpha" | "beta" | "deprecated" | "active"
   enabled: boolean
   limit: {
-    context: number
+    context?: number
     input?: number
-    output: number
+    output?: number
   }
 }
 
@@ -7004,6 +7238,7 @@ export type SessionMessage =
 export type ProviderV2Info = {
   id: string
   name: string
+  origin?: "config"
   enabled:
     | false
     | {
@@ -7842,17 +8077,17 @@ export type ModelV2Info1 = {
     }
     input: number
     output: number
-    cache: {
-      read: number
-      write: number
+    cache?: {
+      read?: number
+      write?: number
     }
   }>
   status: "alpha" | "beta" | "deprecated" | "active"
   enabled: boolean
   limit: {
-    context: number
+    context?: number
     input?: number
-    output: number
+    output?: number
   }
 }
 
@@ -9390,6 +9625,411 @@ export type MaintenanceCompositionDigestResponses = {
 
 export type MaintenanceCompositionDigestResponse =
   MaintenanceCompositionDigestResponses[keyof MaintenanceCompositionDigestResponses]
+
+export type MaintenanceMdExportRunData = {
+  body?: MdExportInput
+  path?: never
+  query?: never
+  url: "/md/export"
+}
+
+export type MaintenanceMdExportRunErrors = {
+  /**
+   * ApiBadRequest
+   */
+  400: ApiBadRequest
+  /**
+   * ApiForbidden
+   */
+  403: ApiForbidden
+  /**
+   * ApiNotFound
+   */
+  404: ApiNotFound
+  /**
+   * ApiConflict
+   */
+  409: ApiConflict
+  /**
+   * ApiGone
+   */
+  410: ApiGone
+  /**
+   * ApiLocked
+   */
+  423: ApiLocked
+  /**
+   * ApiUnavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceMdExportRunError = MaintenanceMdExportRunErrors[keyof MaintenanceMdExportRunErrors]
+
+export type MaintenanceMdExportRunResponses = {
+  /**
+   * Batch MD export result
+   */
+  200: MdExportRun
+}
+
+export type MaintenanceMdExportRunResponse = MaintenanceMdExportRunResponses[keyof MaintenanceMdExportRunResponses]
+
+export type MaintenanceMdExportStatusData = {
+  body?: never
+  path?: never
+  query?: {
+    dir?: string
+  }
+  url: "/md/export/status"
+}
+
+export type MaintenanceMdExportStatusErrors = {
+  /**
+   * ApiBadRequest
+   */
+  400: ApiBadRequest
+  /**
+   * ApiForbidden
+   */
+  403: ApiForbidden
+  /**
+   * ApiNotFound
+   */
+  404: ApiNotFound
+  /**
+   * ApiConflict
+   */
+  409: ApiConflict
+  /**
+   * ApiGone
+   */
+  410: ApiGone
+  /**
+   * ApiLocked
+   */
+  423: ApiLocked
+  /**
+   * ApiUnavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceMdExportStatusError = MaintenanceMdExportStatusErrors[keyof MaintenanceMdExportStatusErrors]
+
+export type MaintenanceMdExportStatusResponses = {
+  /**
+   * MD export manifest status
+   */
+  200: MdExportStatus
+}
+
+export type MaintenanceMdExportStatusResponse =
+  MaintenanceMdExportStatusResponses[keyof MaintenanceMdExportStatusResponses]
+
+export type MaintenanceMigrationRunData = {
+  body?: MigrationRunInput
+  path?: never
+  query?: never
+  url: "/migration/run"
+}
+
+export type MaintenanceMigrationRunErrors = {
+  /**
+   * ApiBadRequest
+   */
+  400: ApiBadRequest
+  /**
+   * ApiForbidden
+   */
+  403: ApiForbidden
+  /**
+   * ApiNotFound
+   */
+  404: ApiNotFound
+  /**
+   * ApiConflict
+   */
+  409: ApiConflict
+  /**
+   * ApiGone
+   */
+  410: ApiGone
+  /**
+   * ApiLocked
+   */
+  423: ApiLocked
+  /**
+   * ApiUnavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceMigrationRunError = MaintenanceMigrationRunErrors[keyof MaintenanceMigrationRunErrors]
+
+export type MaintenanceMigrationRunResponses = {
+  /**
+   * Migration orchestration result
+   */
+  200: MigrationRun
+}
+
+export type MaintenanceMigrationRunResponse = MaintenanceMigrationRunResponses[keyof MaintenanceMigrationRunResponses]
+
+export type MaintenanceMigrationStatusData = {
+  body?: never
+  path?: never
+  query?: {
+    dir?: string
+  }
+  url: "/migration/status"
+}
+
+export type MaintenanceMigrationStatusErrors = {
+  /**
+   * ApiBadRequest
+   */
+  400: ApiBadRequest
+  /**
+   * ApiForbidden
+   */
+  403: ApiForbidden
+  /**
+   * ApiNotFound
+   */
+  404: ApiNotFound
+  /**
+   * ApiConflict
+   */
+  409: ApiConflict
+  /**
+   * ApiGone
+   */
+  410: ApiGone
+  /**
+   * ApiLocked
+   */
+  423: ApiLocked
+  /**
+   * ApiUnavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceMigrationStatusError = MaintenanceMigrationStatusErrors[keyof MaintenanceMigrationStatusErrors]
+
+export type MaintenanceMigrationStatusResponses = {
+  /**
+   * Migration orchestration journal
+   */
+  200: MigrationStatus
+}
+
+export type MaintenanceMigrationStatusResponse =
+  MaintenanceMigrationStatusResponses[keyof MaintenanceMigrationStatusResponses]
+
+export type MaintenanceMigrationReportStatusData = {
+  body?: never
+  path?: never
+  query?: {
+    dir?: string
+  }
+  url: "/migration/report"
+}
+
+export type MaintenanceMigrationReportStatusErrors = {
+  /**
+   * ApiBadRequest
+   */
+  400: ApiBadRequest
+  /**
+   * ApiForbidden
+   */
+  403: ApiForbidden
+  /**
+   * ApiNotFound
+   */
+  404: ApiNotFound
+  /**
+   * ApiConflict
+   */
+  409: ApiConflict
+  /**
+   * ApiGone
+   */
+  410: ApiGone
+  /**
+   * ApiLocked
+   */
+  423: ApiLocked
+  /**
+   * ApiUnavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceMigrationReportStatusError =
+  MaintenanceMigrationReportStatusErrors[keyof MaintenanceMigrationReportStatusErrors]
+
+export type MaintenanceMigrationReportStatusResponses = {
+  /**
+   * Persisted migration compliance report
+   */
+  200: MigrationReportStored
+}
+
+export type MaintenanceMigrationReportStatusResponse =
+  MaintenanceMigrationReportStatusResponses[keyof MaintenanceMigrationReportStatusResponses]
+
+export type MaintenanceMigrationReportGenerateData = {
+  body?: MigrationReportInput
+  path?: never
+  query?: never
+  url: "/migration/report"
+}
+
+export type MaintenanceMigrationReportGenerateErrors = {
+  /**
+   * ApiBadRequest
+   */
+  400: ApiBadRequest
+  /**
+   * ApiForbidden
+   */
+  403: ApiForbidden
+  /**
+   * ApiNotFound
+   */
+  404: ApiNotFound
+  /**
+   * ApiConflict
+   */
+  409: ApiConflict
+  /**
+   * ApiGone
+   */
+  410: ApiGone
+  /**
+   * ApiLocked
+   */
+  423: ApiLocked
+  /**
+   * ApiUnavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceMigrationReportGenerateError =
+  MaintenanceMigrationReportGenerateErrors[keyof MaintenanceMigrationReportGenerateErrors]
+
+export type MaintenanceMigrationReportGenerateResponses = {
+  /**
+   * Migration compliance report
+   */
+  200: MigrationReport
+}
+
+export type MaintenanceMigrationReportGenerateResponse =
+  MaintenanceMigrationReportGenerateResponses[keyof MaintenanceMigrationReportGenerateResponses]
+
+export type MaintenanceBackupsGovernData = {
+  body?: BackupGovernInput
+  path?: never
+  query?: never
+  url: "/backups/govern"
+}
+
+export type MaintenanceBackupsGovernErrors = {
+  /**
+   * ApiBadRequest
+   */
+  400: ApiBadRequest
+  /**
+   * ApiForbidden
+   */
+  403: ApiForbidden
+  /**
+   * ApiNotFound
+   */
+  404: ApiNotFound
+  /**
+   * ApiConflict
+   */
+  409: ApiConflict
+  /**
+   * ApiGone
+   */
+  410: ApiGone
+  /**
+   * ApiLocked
+   */
+  423: ApiLocked
+  /**
+   * ApiUnavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceBackupsGovernError = MaintenanceBackupsGovernErrors[keyof MaintenanceBackupsGovernErrors]
+
+export type MaintenanceBackupsGovernResponses = {
+  /**
+   * Backups governance report
+   */
+  200: BackupGovernanceReport
+}
+
+export type MaintenanceBackupsGovernResponse =
+  MaintenanceBackupsGovernResponses[keyof MaintenanceBackupsGovernResponses]
+
+export type MaintenanceDiskReclaimData = {
+  body?: DiskReclaimInput
+  path?: never
+  query?: never
+  url: "/disk/reclaim"
+}
+
+export type MaintenanceDiskReclaimErrors = {
+  /**
+   * ApiBadRequest
+   */
+  400: ApiBadRequest
+  /**
+   * ApiForbidden
+   */
+  403: ApiForbidden
+  /**
+   * ApiNotFound
+   */
+  404: ApiNotFound
+  /**
+   * ApiConflict
+   */
+  409: ApiConflict
+  /**
+   * ApiGone
+   */
+  410: ApiGone
+  /**
+   * ApiLocked
+   */
+  423: ApiLocked
+  /**
+   * ApiUnavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceDiskReclaimError = MaintenanceDiskReclaimErrors[keyof MaintenanceDiskReclaimErrors]
+
+export type MaintenanceDiskReclaimResponses = {
+  /**
+   * Disk reclaim report
+   */
+  200: DiskReclaimReport
+}
+
+export type MaintenanceDiskReclaimResponse = MaintenanceDiskReclaimResponses[keyof MaintenanceDiskReclaimResponses]
 
 export type ConfigGetData = {
   body?: never

@@ -1,4 +1,5 @@
-import type { BootstrapDiagnostics, BackupVerify, RestoreStatus } from "./types"
+import type { BootstrapDiagnostics, BackupVerify, MigrationJournal, MigrationPhase, RestoreStatus } from "./types"
+import { MIGRATION_PHASES } from "./types"
 import { type DiagnosticEntry, diagnosticEntries, containsSensitiveValue } from "./maintenance-diagnostics"
 
 // C6-05: the desktop maintenance shell is a small, pure state machine that maps a
@@ -8,7 +9,10 @@ import { type DiagnosticEntry, diagnosticEntries, containsSensitiveValue } from 
 //   - no double restore submit (a restore already in-progress/busy is rejected);
 //   - sensitive diagnostics never reach the renderable state (see diagnostics.ts).
 
-export type ShellViewMode = "ready" | "read_only_recovery" | "blocked_schema"
+// W-02 M-6: a fourth view mode — an orchestrated V1→V2 migration chain is running (or stopped
+// with a failure) on the otherwise-ready store; the shell renders its phase progress instead of
+// letting a large library look like a frozen startup.
+export type ShellViewMode = "ready" | "read_only_recovery" | "blocked_schema" | "migration_in_progress"
 
 export interface ShellBackupItem {
   fileName: string
@@ -43,6 +47,14 @@ export type RestoreStatusState =
   | { status: "completed"; result: RestoreStatus }
   | { status: "error"; stableCode: string }
 
+/** The migration orchestration view state (W-02 M-6): polled journal + render-ready phases. */
+export type MigrationStatusState =
+  | { status: "idle" }
+  | { status: "unavailable"; stableCode: string }
+  | { status: "active"; journal: MigrationJournal }
+  | { status: "failed"; journal: MigrationJournal }
+  | { status: "completed"; journal: MigrationJournal }
+
 export interface ShellState {
   mode: ShellViewMode | null
   bootError: string | null
@@ -51,6 +63,7 @@ export interface ShellState {
   backupListError: string | null
   verify: VerifyStatus
   restore: RestoreStatusState
+  migration: MigrationStatusState
 }
 
 export const initialShellState: ShellState = {
@@ -61,6 +74,7 @@ export const initialShellState: ShellState = {
   backupListError: null,
   verify: { status: "idle" },
   restore: { status: "idle" },
+  migration: { status: "idle" },
 }
 
 export type ShellAction =
@@ -77,6 +91,8 @@ export type ShellAction =
   | { type: "restoreBusy"; result: RestoreStatus }
   | { type: "restoreCompleted"; result: RestoreStatus }
   | { type: "restoreFailed"; stableCode: string }
+  | { type: "migrationLoaded"; journal: MigrationJournal | undefined }
+  | { type: "migrationFailed"; stableCode: string }
   | { type: "reset" }
 
 /**
@@ -103,6 +119,10 @@ export function operationsForMode(mode: ShellViewMode | null): ShellOperations {
   switch (mode) {
     case "ready":
       return { browse: true, search: true, export: true, backup: true, descriptors: true, restore: true, write: true, live: true }
+    case "migration_in_progress":
+      // The migration chain owns the store; the view is progress + guidance only. Restoring
+      // mid-migration would race the chain, so every operation (including restore) is disabled.
+      return { browse: false, search: false, export: false, backup: false, descriptors: false, restore: false, write: false, live: false }
     case "read_only_recovery":
       // Read-only recovery allows copy/export/backup/descriptors; write/live are disabled.
       return { browse: true, search: true, export: true, backup: true, descriptors: true, restore: true, write: false, live: false }
@@ -167,7 +187,54 @@ export function reduceShell(state: ShellState, action: ShellAction): ShellState 
       return { ...state, restore: { status: "completed", result: action.result } }
     case "restoreFailed":
       return { ...state, restore: { status: "error", stableCode: action.stableCode } }
+    case "migrationLoaded": {
+      // A missing journal means no chain is running (or it never started): the view goes idle and
+      // the SHELL notifies its gate (onMigrationSettled) so the app renders instead of holding a
+      // stale progress panel. Mode switching stays with the gate — the reducer never mutates it.
+      if (action.journal === undefined) return { ...state, migration: { status: "idle" } }
+      const journal = action.journal
+      const migration: MigrationStatusState =
+        journal.status === "failed"
+          ? { status: "failed", journal }
+          : journal.status === "completed"
+            ? { status: "completed", journal }
+            : { status: "active", journal }
+      return { ...state, migration }
+    }
+    case "migrationFailed":
+      // The status endpoint itself is unreachable/refused — surface the stable code; the shell
+      // must never deadlock on an unreadable journal.
+      return { ...state, migration: { status: "unavailable", stableCode: action.stableCode } }
     case "reset":
       return initialShellState
+  }
+}
+
+// -- migration progress derivation (W-02 M-6) ----------------------------------------------------------
+
+export interface MigrationPhaseView {
+  readonly phase: MigrationPhase
+  readonly state: "completed" | "failed" | "running" | "pending"
+}
+
+/**
+ * Ordered per-phase view states: the LAST record per phase decides completed/failed; a phase with
+ * no record that the journal marks current renders as running; everything later is pending. This
+ * is what makes `stop_after` staged invocations render as step-by-step progress.
+ */
+export function migrationPhaseViews(journal: MigrationJournal): readonly MigrationPhaseView[] {
+  return MIGRATION_PHASES.map((phase) => {
+    const record = journal.phases.findLast((item) => item.phase === phase)
+    if (record !== undefined) return { phase, state: record.state } as const
+    if (journal.status !== "completed" && journal.currentPhase === phase) return { phase, state: "running" } as const
+    return { phase, state: "pending" } as const
+  })
+}
+
+/** Completed phases over the whole chain — the progress fraction numerator/denominator. */
+export function migrationProgress(journal: MigrationJournal): { done: number; total: number } {
+  return {
+    done: migrationPhaseViews(journal).filter((view) => view.state === "completed").length,
+    total: MIGRATION_PHASES.length,
   }
 }

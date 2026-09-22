@@ -1744,4 +1744,25 @@ export const dict = {
   "maintenance.degraded.banner.description":
     "The maintenance endpoint is unreachable; some protections are inactive.",
   "maintenance.degraded.banner.dismiss": "Dismiss",
+  // W-02 M-6 — migration-in-progress shell view (phase progress + recovery guidance).
+  "maintenance.migration.title": "Data migration in progress",
+  "maintenance.migration.progress": "{{done}}/{{total}} phases complete",
+  "maintenance.migration.pending": "Waiting for the migration status…",
+  "maintenance.migration.completed.title": "Migration completed",
+  "maintenance.migration.failed.title": "Migration stopped — action needed",
+  "maintenance.migration.unavailable": "Migration status unknown",
+  "maintenance.migration.resume": "Resume migration",
+  "maintenance.migration.resuming": "Resuming…",
+  "maintenance.migration.phase.md_export": "Export transcripts (Markdown)",
+  "maintenance.migration.phase.backup_create": "Create consistency backup",
+  "maintenance.migration.phase.backup_verify": "Verify backup",
+  "maintenance.migration.phase.migration_apply": "Apply database migration",
+  "maintenance.migration.phase.post_verify": "Post-migration verification",
+  "maintenance.migration.phase.archive": "Write archive record",
+  "maintenance.migration.phase.disk_advisory": "Disk usage advisory",
+  "maintenance.migration.state.pending": "Pending",
+  "maintenance.migration.state.running": "Running…",
+  "maintenance.migration.state.completed": "Done",
+  "maintenance.migration.state.failed": "Failed",
+
 }

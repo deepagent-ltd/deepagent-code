@@ -1,4 +1,4 @@
-import { createMemo, createResource, createSignal, Show, untrack, type ParentProps } from "solid-js"
+import { createEffect, createMemo, createResource, createSignal, onCleanup, Show, untrack, type ParentProps } from "solid-js"
 import { Splash } from "@deepagent-code/ui/logo"
 import { ServerConnection, useServer } from "@/context/server"
 import { useLanguage } from "@/context/language"
@@ -13,10 +13,15 @@ import { MaintenanceShell } from "./MaintenanceShell"
 // (network/decode) the gate degrades to the normal app rather than dead-locking the
 // user on an unreachable maintenance page — and shows a dismissible banner so the
 // incident state (maintenance protections inactive) is visible.
+//
+// W-02 M-6: a READY store with an orchestrated migration chain active (in_progress
+// or failed) renders the maintenance shell in its migration-progress mode instead —
+// a large-library migration shows phase progress instead of a frozen-looking boot.
 
 type GateState =
   | { kind: "ready" }
   | { kind: "maintenance"; client: MaintenanceClient }
+  | { kind: "migration"; client: MaintenanceClient }
   | { kind: "degraded" }
 
 export function BootstrapGate(props: ParentProps) {
@@ -25,34 +30,56 @@ export function BootstrapGate(props: ParentProps) {
   // Dismissal is scoped to the active server key: switching servers re-arms the banner.
   const [dismissed, setDismissed] = createSignal<ServerConnection.Key>()
 
-  const [bootstrap] = createResource(() => server.key, async (key) => {
+  const [bootstrap, { refetch }] = createResource(() => server.key, async (key) => {
     if (!key) return { kind: "degraded" } as GateState
     const conn = untrack(() => server.current)
     const activeClient = conn ? createMaintenanceClientForServer(conn.http) : undefined
     if (!activeClient) return { kind: "degraded" } as GateState
-    return activeClient.bootstrapStatus()
+    const outcome = await activeClient.bootstrapStatus()
+    // W-02 M-6: a READY store with an orchestrated migration chain running (or stopped with a
+    // failure) renders the migration-progress shell instead of the app — a large library no
+    // longer looks like a frozen startup. A completed/absent journal stays "ready"; an
+    // unreachable migration status NEVER blocks (the app renders, degraded banner applies).
+    if (outcome.kind === "ready") {
+      const migration = await activeClient.migrationStatus()
+      if ("data" in migration && (migration.data.journal?.status === "in_progress" || migration.data.journal?.status === "failed"))
+        return { kind: "migration", client: activeClient } as GateState
+    }
+    return outcome.kind === "ready"
+      ? ({ kind: "ready" } as GateState)
+      : outcome.kind === "unreachable"
+        ? ({ kind: "degraded" } as GateState)
+        : { kind: "maintenance", client: activeClient } as GateState
   })
 
   // Derive through an ACCESSOR (memo), never through a captured body constant:
   // the compiler emits lazy `get when()` props, so a body-level `const g =
   // gate()` snapshot is frozen forever and the Show never switches (the known
-  // startup-splash deadlock). Accessor reads are reactive.
-  const maintenanceClient = createMemo(() => {
-    const conn = untrack(() => server.current)
-    return conn ? createMaintenanceClientForServer(conn.http) : undefined
-  })
+  // startup-splash deadlock). Accessor reads are reactive. The resource already maps
+  // every outcome to a GateState (maintenance/migration modes carry their live client).
   const state = createMemo<GateState | undefined>(() => {
     const latest = bootstrap.latest
-    if (!latest) return undefined
-    if (latest.kind === "ready") return { kind: "ready" }
-    if (latest.kind === "read_only_recovery" || latest.kind === "blocked_schema") {
-      const client = maintenanceClient()
-      return client ? { kind: "maintenance", client } : { kind: "degraded" }
-    }
-    return { kind: "degraded" }
+    return latest?.kind === undefined ? undefined : latest
+  })
+
+  // While the migration shell is up, keep re-probing: the shell reports settlement (chain
+  // completed / journal gone) through the callback, which flips the gate back to the app.
+  const migrationSettled = () => void refetch()
+  createEffect(() => {
+    if (state()?.kind !== "migration") return
+    const timer = setInterval(() => void refetch(), 4000)
+    onCleanup(() => clearInterval(timer))
   })
 
   if (state()?.kind === "maintenance") return <MaintenanceShell client={(state() as { client: MaintenanceClient }).client} />
+  if (state()?.kind === "migration")
+    return (
+      <MaintenanceShell
+        client={(state() as { client: MaintenanceClient }).client}
+        mode="migration_in_progress"
+        onMigrationSettled={migrationSettled}
+      />
+    )
 
   return (
     <Show
