@@ -15,6 +15,7 @@ import { and, eq } from "drizzle-orm"
 import { InstanceHttpApi } from "../api"
 import { MaintenanceApi, MaintenancePaths } from "../groups/maintenance"
 import { MdExport } from "@/server/md-export"
+import { MigrationOrchestrator } from "@/server/migration-orchestrator"
 import { CompositionDigest } from "@/effect/composition-digest"
 import { makeApiError, type ApiTypedError } from "../typed-error"
 import { Service as MaintenanceRegistryService, layer } from "../maintenance-registry"
@@ -573,6 +574,66 @@ const maintenanceOperations = (
       }
     })
 
+    // W-02 M-2 — the migration flow orchestrator runs on the LIVE maintenance runtime only: the
+    // incident shell serves a read-only store in recovery, where driving migrations is refused.
+    const runMigration = Effect.fn("MaintenanceHttpApi.migrationRun")(function* (ctx: {
+      payload: { dir?: string; stop_after?: MigrationOrchestrator.Phase }
+    }) {
+      const dir = withinBackups(ctx.payload.dir ?? backupsRoot())
+      if (dir === undefined) {
+        return yield* Effect.fail(
+          makeApiError("validation_failed", {
+            resource: ctx.payload.dir ?? backupsRoot(),
+            expected: "path under the backups root",
+            actual: ctx.payload.dir ?? backupsRoot(),
+          }),
+        )
+      }
+      const state = readState()
+      if (state !== undefined && state.mode !== "ready") {
+        return yield* Effect.fail(mapBootstrapStateToError(state, "migration")!)
+      }
+      return yield* MigrationOrchestrator.run({
+        db: database.db,
+        dbPath: path.resolve(Database.path()),
+        backupDir: dir,
+        ...(ctx.payload.stop_after === undefined ? {} : { stopAfter: ctx.payload.stop_after }),
+      }).pipe(
+        Effect.mapError((error) =>
+          makeApiError("internal_error", {
+            resource: MigrationOrchestrator.journalPathFor(dir),
+            expected: "migration orchestration ran",
+            actual: String(error),
+          }),
+        ),
+      )
+    })
+
+    const migrationStatus = Effect.fn("MaintenanceHttpApi.migrationStatus")(function* (ctx: {
+      query: { dir?: string }
+    }) {
+      const dir = withinBackups(ctx.query.dir ?? backupsRoot())
+      if (dir === undefined) {
+        return yield* Effect.fail(
+          makeApiError("validation_failed", {
+            resource: ctx.query.dir ?? backupsRoot(),
+            expected: "path under the backups root",
+            actual: ctx.query.dir ?? backupsRoot(),
+          }),
+        )
+      }
+      const journal = yield* MigrationOrchestrator.readJournal(MigrationOrchestrator.journalPathFor(dir)).pipe(
+        Effect.mapError((error) =>
+          makeApiError("internal_error", {
+            resource: MigrationOrchestrator.journalPathFor(dir),
+            expected: "read the migration-orchestration journal",
+            actual: String(error),
+          }),
+        ),
+      )
+      return { active: journal !== undefined && journal.status !== "completed", journal }
+    })
+
     return {
       getBootstrapStatus,
       listBackups,
@@ -586,6 +647,8 @@ const maintenanceOperations = (
       recoveryEvidenceExportGet,
       runMdExport,
       mdExportStatus,
+      runMigration,
+      migrationStatus,
     }
   })
 
@@ -604,6 +667,8 @@ export const maintenanceHandlers = HttpApiBuilder.group(MaintenanceApi, "mainten
       .handle("recoveryEvidenceExport", operations.recoveryEvidenceExportGet)
       .handle("mdExport", operations.runMdExport)
       .handle("mdExportStatus", operations.mdExportStatus)
+      .handle("migrationRun", operations.runMigration)
+      .handle("migrationStatus", operations.migrationStatus)
       // The digest effect's requirements resolve from the shared route-graph context at request
       // time (same open V2 runtime the instance routes run on), not from this group's own layer.
       .handle("compositionDigest", () => CompositionDigest.current),
@@ -824,6 +889,13 @@ export function maintenanceOnlyHandlersFor(filename: string, state: BootstrapSta
         )
         .handle("mdExportStatus", (ctx) =>
           readOnlyOperation(filename, state, (operations) => operations.mdExportStatus(ctx)),
+        )
+        // W-02 M-2 — the incident shell never drives migrations: an in-recovery store must go
+        // through the recovery descriptors, not the orchestration chain. Reading the journal is
+        // still allowed (it shows where a chain broke before the store entered recovery).
+        .handle("migrationRun", () => Effect.fail(mapBootstrapStateToError(state, "migration")!))
+        .handle("migrationStatus", (ctx) =>
+          readOnlyOperation(filename, state, (operations) => operations.migrationStatus(ctx)),
         )
         .handle("compositionDigest", compositionDigest)
     }),

@@ -217,6 +217,66 @@ const MdExportInput = Schema.Struct({
   ).annotate({ description: "Keyset page size for the session traversal." }),
 }).annotate({ identifier: "MdExportInput" })
 
+// W-02 M-2 — migration flow orchestration surface. The journal is the persisted phase record; a
+// restart (or the status endpoint) shows exactly which phase the chain stopped at.
+
+const MigrationPhaseLiteral = Schema.Literals([
+  "md_export",
+  "backup_create",
+  "backup_verify",
+  "migration_apply",
+  "post_verify",
+  "archive",
+  "disk_advisory",
+])
+
+const MigrationPhaseRecordSchema = Schema.Struct({
+  phase: MigrationPhaseLiteral,
+  state: Schema.Literals(["completed", "failed"]),
+  startedAt: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  completedAt: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  outcome: Schema.optional(Schema.Unknown),
+  failure: Schema.optional(Schema.Struct({ code: Schema.String, detail: Schema.String })),
+}).annotate({ identifier: "MigrationPhaseRecord" })
+
+const MigrationJournalSchema = Schema.Struct({
+  version: Schema.Literal(1),
+  kind: Schema.Literal("migration-orchestration-journal"),
+  orchestrationId: Schema.String,
+  dbPath: Schema.String,
+  startedAt: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  updatedAt: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  status: Schema.Literals(["in_progress", "completed", "failed"]),
+  currentPhase: Schema.optional(MigrationPhaseLiteral),
+  phases: Schema.Array(MigrationPhaseRecordSchema),
+  failure: Schema.optional(
+    Schema.Struct({
+      phase: MigrationPhaseLiteral,
+      code: Schema.String,
+      detail: Schema.String,
+      recoveryGuidance: Schema.String,
+    }),
+  ),
+}).annotate({ identifier: "MigrationJournal" })
+
+const MigrationRunInput = Schema.Struct({
+  dir: Schema.optional(Schema.String),
+  stop_after: Schema.optional(MigrationPhaseLiteral).annotate({
+    description: "Stop after this phase completes (staged invocation / interruption drill); a later call resumes.",
+  }),
+}).annotate({ identifier: "MigrationRunInput" })
+
+const MigrationRunSchema = Schema.Struct({
+  status: Schema.Literals(["in_progress", "completed", "failed"]),
+  journal: MigrationJournalSchema,
+  diskAdvisoryPath: Schema.optional(Schema.String),
+}).annotate({ identifier: "MigrationRun" })
+
+const MigrationStatusSchema = Schema.Struct({
+  active: Schema.Boolean,
+  journal: Schema.optional(MigrationJournalSchema),
+}).annotate({ identifier: "MigrationStatus" })
+
 const BackupQuery = Schema.Struct({
   dir: Schema.optional(Schema.String),
 })
@@ -244,6 +304,8 @@ export const MaintenancePaths = {
   compositionDigest: `${root}/composition/digest`,
   mdExport: `${root}/md/export`,
   mdExportStatus: `${root}/md/export/status`,
+  migrationRun: `${root}/migration/run`,
+  migrationStatus: `${root}/migration/status`,
 } as const
 
 export const MaintenanceApi = HttpApi.make("maintenance").add(
@@ -394,6 +456,30 @@ export const MaintenanceApi = HttpApi.make("maintenance").add(
           summary: "Read the MD export manifest",
           description:
             "Reads the md/manifest.json summary (entry list) without exporting. Also served by the incident-only maintenance shell against a read-only store.",
+        }),
+      ),
+      HttpApiEndpoint.post("migrationRun", MaintenancePaths.migrationRun, {
+        payload: MigrationRunInput,
+        success: described(MigrationRunSchema, "Migration orchestration result"),
+        error: ApiTypedErrors,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "maintenance.migration.run",
+          summary: "Run or resume the V1→V2 migration flow",
+          description:
+            "W-02 M-2: chains md_export → backup_create → backup_verify → migration_apply → post_verify → archive → disk_advisory. Idempotent phases with a persisted journal; any failure stops the chain with a structured phase failure + recovery guidance; re-running resumes. The upgrade-run state machine itself is untouched (external orchestration).",
+        }),
+      ),
+      HttpApiEndpoint.get("migrationStatus", MaintenancePaths.migrationStatus, {
+        query: BackupQuery,
+        success: described(MigrationStatusSchema, "Migration orchestration journal"),
+        error: ApiTypedErrors,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "maintenance.migration.status",
+          summary: "Read the migration orchestration journal",
+          description:
+            "Reads the persisted phase journal — after a restart this shows exactly which phase the chain stopped at. Also served by the incident-only maintenance shell.",
         }),
       ),
     )
