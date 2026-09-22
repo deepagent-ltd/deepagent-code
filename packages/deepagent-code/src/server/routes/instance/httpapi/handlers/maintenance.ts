@@ -19,6 +19,7 @@ import { makeApiError, type ApiTypedError } from "../typed-error"
 import { Service as MaintenanceRegistryService, layer } from "../maintenance-registry"
 import type { MaintenanceRegistry } from "../maintenance-registry"
 import { RecoveryExecutor } from "@/server/recovery-executor"
+import { SessionRuntimeStatus } from "@deepagent-code/core/session/runtime-status"
 
 // C6-01 maintenance handlers (design §11.1). Domain services stay free of HttpApi
 // types: expected domain outcomes are translated at the handler boundary into the
@@ -524,8 +525,12 @@ const maintenanceOperations = (
   })
 
 export const maintenanceHandlers = HttpApiBuilder.group(MaintenanceApi, "maintenance", (handlers) =>
-  Effect.map(maintenanceOperations({ executeRecovery: true }), (operations) =>
-    handlers
+  Effect.gen(function* () {
+    // The redrive-blocked listing projects the business runtime's durable recovery
+    // classification — its requirement resolves from the shared route-graph context.
+    const runtimeStatus = yield* SessionRuntimeStatus.Service
+    return yield* Effect.map(maintenanceOperations({ executeRecovery: true }), (operations) =>
+      handlers
       .handle("bootstrapStatus", operations.getBootstrapStatus)
       .handle("backupList", operations.listBackups)
       .handle("backupVerify", operations.verifyBackup)
@@ -534,12 +539,19 @@ export const maintenanceHandlers = HttpApiBuilder.group(MaintenanceApi, "mainten
       .handle("recoveryList", operations.recoveryList)
       .handle("recoveryCommand", operations.recoveryCommand)
       .handle("recoveryCommandGet", operations.recoveryCommandGet)
+      .handle("recoveryRedriveBlocked", () =>
+        Effect.map(runtimeStatus.blockedRedrives, (blocked) => ({
+          blocked: blocked.map((item) => ({ sessionID: item.sessionID, blockedReason: item.blockedReason })),
+          count: blocked.length,
+        })),
+      )
       .handle("recoveryEvidenceExportCreate", operations.recoveryEvidenceExportCreate)
       .handle("recoveryEvidenceExport", operations.recoveryEvidenceExportGet)
       // The digest effect's requirements resolve from the shared route-graph context at request
       // time (same open V2 runtime the instance routes run on), not from this group's own layer.
       .handle("compositionDigest", () => CompositionDigest.current),
-  ),
+    )
+  }),
 )
 
 type Operations = Effect.Success<ReturnType<typeof maintenanceOperations>>
@@ -721,6 +733,18 @@ export function maintenanceOnlyHandlersFor(filename: string, state: BootstrapSta
             actual: "manifest-only export disabled",
           }),
         )
+      // The incident shell owns no Session/tool/event runtime: the redrive-blocked listing is a
+      // business-runtime projection, so the shell answers an honest typed 503 instead of a
+      // fabricated empty list.
+      const recoveryRedriveBlocked = () =>
+        Effect.fail(
+          makeApiError("service_unavailable", {
+            resource: MaintenancePaths.recoveryRedriveBlocked,
+            expected: "ready business runtime recovery projection",
+            actual: state.mode,
+          }),
+        )
+
       // The incident shell owns no Session/tool/event runtime, so there is no composition to
       // digest — an honest typed 503, never a fabricated fingerprint of the read-only shell.
       const compositionDigest = () =>
@@ -747,6 +771,7 @@ export function maintenanceOnlyHandlersFor(filename: string, state: BootstrapSta
         .handle("recoveryCommandGet", (ctx) =>
           readOnlyOperation(filename, state, (operations) => operations.recoveryCommandGet(ctx)),
         )
+        .handle("recoveryRedriveBlocked", recoveryRedriveBlocked)
         .handle("recoveryEvidenceExportCreate", evidenceCreate)
         .handle("recoveryEvidenceExport", evidenceGet)
         .handle("compositionDigest", compositionDigest)

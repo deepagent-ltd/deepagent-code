@@ -161,11 +161,12 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       return Object.fromEntries(
         [...(yield* runtimeStatus.list)].map(([sessionID, state]) => [
           sessionID,
-          state === "busy"
+          state.status === "busy"
             ? { type: "busy" as const }
             : {
                 type: "recovery_required" as const,
                 message: "Execution stopped with an unresolved durable claim; inspect recovery before resuming",
+                ...(state.blockedReason ? { blockedReason: state.blockedReason } : {}),
               },
         ]),
       )
