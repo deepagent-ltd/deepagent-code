@@ -12,16 +12,16 @@
     "astro": "astro"
   },
   "dependencies": {
-    "@astrojs/markdown-remark": "6.3.11",
-    "@astrojs/node": "10.1.4",
+    "@astrojs/markdown-remark": "7.3.1",
+    "@astrojs/node": "11.1.6",
     "@astrojs/solid-js": "6.0.1",
-    "@astrojs/starlight": "0.40.0",
+    "@astrojs/starlight": "0.42.2",
     "@fontsource/ibm-plex-mono": "5.2.5",
     "@shikijs/transformers": "3.20.0",
     "@solid-primitives/resize-observer": "2.1.5",
     "@types/luxon": "catalog:",
     "ai": "catalog:",
-    "astro": "6.4.8",
+    "astro": "7.3.3",
     "diff": "catalog:",
     "js-base64": "3.7.7",
     "lang-map": "0.4.0",
@@ -36,7 +36,7 @@
   },
   "devDependencies": {
     "@types/node": "catalog:",
-    "@astrojs/check": "0.9.9",
+    "@astrojs/check": "0.9.10",
     "typescript": "catalog:",
     "deepagent-code": "workspace:*"
   }
