@@ -234,6 +234,80 @@ describe("run session data", () => {
     })
   })
 
+  // RI-140: V2 asks (permission.v2.asked) must enter the footer queue in normalized form with
+  // their provenance marked, so the reply settles through the session-scoped V2 route instead
+  // of 404ing on the legacy /permission/:id/reply route.
+  test("normalizes permission.v2.asked into the footer queue with provenance", () => {
+    const out = reduce(createSessionData(), {
+      type: "permission.v2.asked",
+      properties: {
+        id: "per_v2_1",
+        sessionID: "session-1",
+        action: "bash",
+        resources: ["*"],
+        save: ["*"],
+        metadata: { command: "printf hello" },
+        source: { type: "tool", messageID: "msg-1", callID: "call-1" },
+      },
+    })
+
+    expect(out.footer).toEqual({
+      patch: { status: "awaiting permission" },
+      view: {
+        type: "permission",
+        request: {
+          id: "per_v2_1",
+          sessionID: "session-1",
+          permission: "bash",
+          patterns: ["*"],
+          metadata: { command: "printf hello" },
+          always: ["*"],
+          v2: true,
+          tool: { messageID: "msg-1", callID: "call-1" },
+        },
+      },
+    })
+  })
+
+  test("drops v2 asks for other sessions and settles the queue on permission.v2.replied", () => {
+    let data = createSessionData()
+    data = reduce(data, {
+      type: "permission.v2.asked",
+      properties: {
+        id: "per_other",
+        sessionID: "session-2",
+        action: "bash",
+        resources: ["*"],
+      },
+    }).data
+    expect(data.permissions).toEqual([])
+
+    data = reduce(data, {
+      type: "permission.v2.asked",
+      properties: {
+        id: "per_v2_1",
+        sessionID: "session-1",
+        action: "edit",
+        resources: ["/tmp/file.ts"],
+      },
+    }).data
+
+    const out = reduce(data, {
+      type: "permission.v2.replied",
+      properties: {
+        sessionID: "session-1",
+        requestID: "per_v2_1",
+        reply: "once",
+      },
+    })
+
+    expect(out.data.permissions).toEqual([])
+    expect(out.footer).toEqual({
+      patch: { status: "" },
+      view: { type: "prompt" },
+    })
+  })
+
   test("refreshes the active permission view when tool input arrives later", () => {
     const data = reduce(createSessionData(), {
       type: "permission.asked",

@@ -1,4 +1,4 @@
-import type { Event, Message, Part, PermissionRequest, QuestionRequest, ToolPart } from "@deepagent-code/sdk"
+import type { Event, Message, Part, QuestionRequest, ToolPart } from "@deepagent-code/sdk"
 import * as Locale from "@/util/locale"
 import {
   bootstrapSessionData,
@@ -7,7 +7,7 @@ import {
   reduceSessionData,
   type SessionData,
 } from "./session-data"
-import type { FooterSubagentState, FooterSubagentTab, StreamCommit } from "./types"
+import type { FooterSubagentState, FooterSubagentTab, RunPermissionRequest, StreamCommit } from "./types"
 
 export const SUBAGENT_BOOTSTRAP_LIMIT = 200
 export const SUBAGENT_CALL_BOOTSTRAP_LIMIT = 80
@@ -46,7 +46,7 @@ export type BootstrapSubagentInput = {
   data: SubagentData
   messages: SessionMessage[]
   children: Array<{ id: string; title?: string }>
-  permissions: PermissionRequest[]
+  permissions: RunPermissionRequest[]
   questions: QuestionRequest[]
 }
 
@@ -814,6 +814,8 @@ export function reduceSubagentData(input: {
     event.type === "message.part.delta" ||
     event.type === "permission.asked" ||
     event.type === "permission.replied" ||
+    event.type === "permission.v2.asked" ||
+    event.type === "permission.v2.replied" ||
     event.type === "question.asked" ||
     event.type === "question.replied" ||
     event.type === "question.rejected" ||
