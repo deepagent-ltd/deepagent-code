@@ -168,10 +168,10 @@ export type Error =
   | AgentNotSelectableError
   | AgentV2.NotFoundError
 
-// W4-6 — the canonical V2→V1 wire converter now lives in session/legacy-wire.ts (extracted so
-// the core projector can import it without a module cycle; this re-export keeps the host
-// call sites' SessionV2.legacyAssistant spelling).
-export { legacyAssistant } from "./session/legacy-wire"
+// W4-6 — the canonical V2→V1 wire converters now live in session/legacy-wire.ts (extracted so
+// the core projector can import them without a module cycle; these re-exports keep the host
+// call sites' SessionV2.legacyAssistant / SessionV2.legacyUser spelling).
+export { legacyAssistant, legacyUser } from "./session/legacy-wire"
 
 const V2ConversationTypes = ["user", "synthetic", "system", "shell", "assistant", "compaction"] as const
 

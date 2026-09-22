@@ -171,6 +171,52 @@ const EvidenceExportQuery = Schema.Struct({
   export_id: Schema.String,
 })
 
+// W-02 M-1 — batch full-transcript Markdown export surface. The result body doubles as the
+// reconciliation report (manifest entries vs the durable session list), so M-3/M-6 consumers can
+// render progress without re-deriving it.
+
+const MdExportReconciliationSchema = Schema.Struct({
+  reconciled: Schema.Boolean,
+  exportedCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  sessionCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  missing: Schema.Array(Schema.String),
+  extra: Schema.Array(Schema.String),
+}).annotate({ identifier: "MdExportReconciliation" })
+
+const MdExportRunSchema = Schema.Struct({
+  exported: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  skipped: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  sessionCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  manifestPath: Schema.String,
+  reconciliation: MdExportReconciliationSchema,
+}).annotate({ identifier: "MdExportRun" })
+
+const MdExportStatusSchema = Schema.Struct({
+  exists: Schema.Boolean,
+  manifestPath: Schema.String,
+  exportedCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  entries: Schema.Array(
+    Schema.Struct({
+      sessionId: Schema.String,
+      fileName: Schema.String,
+      sizeBytes: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+      sha256: Schema.String,
+      messageCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+      exportedAt: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+    }),
+  ),
+}).annotate({ identifier: "MdExportStatus" })
+
+const MdExportInput = Schema.Struct({
+  dir: Schema.optional(Schema.String),
+  limit: Schema.optional(
+    Schema.NumberFromString.pipe(Schema.decodeTo(Schema.Int.check(Schema.isGreaterThan(0)))),
+  ).annotate({ description: "Export at most this many NEW sessions; omitted means all." }),
+  page_size: Schema.optional(
+    Schema.NumberFromString.pipe(Schema.decodeTo(Schema.Int.check(Schema.isGreaterThan(0)))),
+  ).annotate({ description: "Keyset page size for the session traversal." }),
+}).annotate({ identifier: "MdExportInput" })
+
 const BackupQuery = Schema.Struct({
   dir: Schema.optional(Schema.String),
 })
@@ -196,6 +242,8 @@ export const MaintenancePaths = {
   recoveryCommandGet: `${root}/recovery/commandGet`,
   recoveryEvidenceExport: `${root}/recovery/evidenceExport`,
   compositionDigest: `${root}/composition/digest`,
+  mdExport: `${root}/md/export`,
+  mdExportStatus: `${root}/md/export/status`,
 } as const
 
 export const MaintenanceApi = HttpApi.make("maintenance").add(
@@ -322,6 +370,30 @@ export const MaintenanceApi = HttpApi.make("maintenance").add(
           summary: "Root composition digest",
           description:
             "Reports the stable composition digest of this process root (session owner, tool registry, database, Location host). The incident-only maintenance shell constructs no business runtime and answers a typed 503 instead.",
+        }),
+      ),
+      HttpApiEndpoint.post("mdExport", MaintenancePaths.mdExport, {
+        payload: MdExportInput,
+        success: described(MdExportRunSchema, "Batch MD export result"),
+        error: ApiTypedErrors,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "maintenance.md.export.run",
+          summary: "Batch-export every session transcript as Markdown",
+          description:
+            "W-02 M-1: paginates every durable session, reads it through the V2 history loader, and writes <backupDir>/md/<slug>-<date>.md with a per-file sha256 manifest. Interruptible and resumable: re-invocation skips sessions whose manifest entry still matches the file on disk. limit exports at most that many NEW sessions this call.",
+        }),
+      ),
+      HttpApiEndpoint.get("mdExportStatus", MaintenancePaths.mdExportStatus, {
+        query: BackupQuery,
+        success: described(MdExportStatusSchema, "MD export manifest status"),
+        error: ApiTypedErrors,
+      }).annotateMerge(
+        OpenApi.annotations({
+          identifier: "maintenance.md.export.status",
+          summary: "Read the MD export manifest",
+          description:
+            "Reads the md/manifest.json summary (entry list) without exporting. Also served by the incident-only maintenance shell against a read-only store.",
         }),
       ),
     )

@@ -14,6 +14,7 @@ import { V2ProviderTurnReceiptTable } from "@deepagent-code/core/session/runner/
 import { and, eq } from "drizzle-orm"
 import { InstanceHttpApi } from "../api"
 import { MaintenanceApi, MaintenancePaths } from "../groups/maintenance"
+import { MdExport } from "@/server/md-export"
 import { CompositionDigest } from "@/effect/composition-digest"
 import { makeApiError, type ApiTypedError } from "../typed-error"
 import { Service as MaintenanceRegistryService, layer } from "../maintenance-registry"
@@ -509,6 +510,69 @@ const maintenanceOperations = (
       )
     })
 
+    // W-02 M-1 — batch MD export. Same G7i F2 fence as the backup surface: the export directory
+    // must live under the instance backups root; the manifest is the resume source of truth.
+    const runMdExport = Effect.fn("MaintenanceHttpApi.mdExport")(function* (ctx: {
+      payload: { dir?: string; limit?: number; page_size?: number }
+    }) {
+      const dir = withinBackups(ctx.payload.dir ?? backupsRoot())
+      if (dir === undefined) {
+        return yield* Effect.fail(
+          makeApiError("validation_failed", {
+            resource: ctx.payload.dir ?? backupsRoot(),
+            expected: "path under the backups root",
+            actual: ctx.payload.dir ?? backupsRoot(),
+          }),
+        )
+      }
+      return yield* MdExport.run({
+        db: database.db,
+        backupDir: dir,
+        sourcePath: path.resolve(Database.path()),
+        ...(ctx.payload.limit === undefined ? {} : { limit: ctx.payload.limit }),
+        ...(ctx.payload.page_size === undefined ? {} : { pageSize: ctx.payload.page_size }),
+      }).pipe(
+        Effect.mapError((error) =>
+          makeApiError("internal_error", {
+            resource: MdExport.manifestPathFor(dir),
+            expected: "batch transcript export completed",
+            actual: `${error.code}: ${error.detail}`,
+          }),
+        ),
+      )
+    })
+
+    const mdExportStatus = Effect.fn("MaintenanceHttpApi.mdExportStatus")(function* (ctx: {
+      query: { dir?: string }
+    }) {
+      const dir = withinBackups(ctx.query.dir ?? backupsRoot())
+      if (dir === undefined) {
+        return yield* Effect.fail(
+          makeApiError("validation_failed", {
+            resource: ctx.query.dir ?? backupsRoot(),
+            expected: "path under the backups root",
+            actual: ctx.query.dir ?? backupsRoot(),
+          }),
+        )
+      }
+      const manifestPath = MdExport.manifestPathFor(dir)
+      const manifest = yield* MdExport.readManifest(manifestPath).pipe(
+        Effect.mapError((error) =>
+          makeApiError("internal_error", {
+            resource: manifestPath,
+            expected: "read the md-export manifest",
+            actual: `${error.code}: ${error.detail}`,
+          }),
+        ),
+      )
+      return {
+        exists: manifest !== undefined,
+        manifestPath,
+        exportedCount: manifest?.entries.length ?? 0,
+        entries: manifest?.entries ?? [],
+      }
+    })
+
     return {
       getBootstrapStatus,
       listBackups,
@@ -520,6 +584,8 @@ const maintenanceOperations = (
       recoveryCommandGet,
       recoveryEvidenceExportCreate,
       recoveryEvidenceExportGet,
+      runMdExport,
+      mdExportStatus,
     }
   })
 
@@ -536,6 +602,8 @@ export const maintenanceHandlers = HttpApiBuilder.group(MaintenanceApi, "mainten
       .handle("recoveryCommandGet", operations.recoveryCommandGet)
       .handle("recoveryEvidenceExportCreate", operations.recoveryEvidenceExportCreate)
       .handle("recoveryEvidenceExport", operations.recoveryEvidenceExportGet)
+      .handle("mdExport", operations.runMdExport)
+      .handle("mdExportStatus", operations.mdExportStatus)
       // The digest effect's requirements resolve from the shared route-graph context at request
       // time (same open V2 runtime the instance routes run on), not from this group's own layer.
       .handle("compositionDigest", () => CompositionDigest.current),
@@ -749,6 +817,14 @@ export function maintenanceOnlyHandlersFor(filename: string, state: BootstrapSta
         )
         .handle("recoveryEvidenceExportCreate", evidenceCreate)
         .handle("recoveryEvidenceExport", evidenceGet)
+        // W-02 M-1 — a read-only recovery store still allows the full MD export (browse/export is
+        // part of the C1A-12 read-only maintenance surface); the run never writes the database.
+        .handle("mdExport", (ctx) =>
+          readOnlyOperation(filename, state, (operations) => operations.runMdExport(ctx)),
+        )
+        .handle("mdExportStatus", (ctx) =>
+          readOnlyOperation(filename, state, (operations) => operations.mdExportStatus(ctx)),
+        )
         .handle("compositionDigest", compositionDigest)
     }),
   )
