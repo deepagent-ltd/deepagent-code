@@ -5,7 +5,6 @@ import { ToolFailure, toolText } from "@deepagent-code/llm"
 import { Duration, Effect, Layer, Option, Schema } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { Config } from "../config"
-import { Flag } from "../flag/flag"
 import { FSUtil } from "../fs-util"
 import { Location } from "../location"
 import { LocationMutation } from "../location-mutation"
@@ -54,22 +53,16 @@ const Output = Schema.Struct({
 
 type Output = typeof Output.Type
 
-// D-W2 win32 fallback chain, mirroring the V1 Shell.win() ordering: PowerShell 7 (pwsh) →
-// Windows PowerShell → Git Bash (DEEPAGENT_CODE_GIT_BASH_PATH or the Git install's bash.exe) →
-// COMSPEC/cmd.exe. POSIX keeps the existing /bin/sh default.
-const gitbash = Effect.fnUntraced(function* (fs: FSUtil.Interface) {
-  if (Flag.DEEPAGENT_CODE_GIT_BASH_PATH) return Flag.DEEPAGENT_CODE_GIT_BASH_PATH
-  const git = which("git")
-  if (!git) return
-  const file = path.join(git, "..", "..", "bin", "bash.exe")
-  const info = yield* fs.stat(file).pipe(Effect.option)
-  if (Option.isSome(info) && info.value.size > 0) return file
-})
-
-const defaultShell = Effect.fnUntraced(function* (fs: FSUtil.Interface) {
+// D-W2 win32 default shell chain, strict: pwsh → powershell → cmd (COMSPEC). Git Bash stays
+// selectable through shell configuration and is preferred for POSIX validation scripts, but is
+// never the silent default. POSIX keeps the existing /bin/sh default.
+const defaultShell = Effect.fnUntraced(function* () {
   if (process.platform !== "win32") return "/bin/sh"
-  const detected = which("pwsh") ?? which("powershell") ?? (yield* gitbash(fs))
-  return detected ?? process.env.COMSPEC ?? "cmd.exe"
+  return ShellScan.defaultWindowsChain({
+    pwsh: which("pwsh") ?? undefined,
+    powershell: which("powershell") ?? undefined,
+    comspec: process.env.COMSPEC,
+  })
 })
 
 const compactOutput = (stdout: string, stderr: string) => {
@@ -135,7 +128,7 @@ export const layer = Layer.effectDiscard(
     yield* tools
       .register({
         [name]: Tool.make({
-          description: `Execute one shell command string with the host user's filesystem, process, and network authority. The active Location is the default working directory. Relative workdir values resolve from that Location. External workdir values and command file arguments outside the Location require external_directory approval. Timeout values are milliseconds (default: ${DEFAULT_TIMEOUT_MS}; maximum: ${MAX_TIMEOUT_MS}). Uses the configured shell when set; otherwise uses /bin/sh on POSIX and the first available of pwsh, powershell, Git Bash, or cmd.exe on Windows.`,
+          description: `Execute one shell command string with the host user's filesystem, process, and network authority. The active Location is the default working directory. Relative workdir values resolve from that Location. External workdir values and command file arguments outside the Location require external_directory approval. Timeout values are milliseconds (default: ${DEFAULT_TIMEOUT_MS}; maximum: ${MAX_TIMEOUT_MS}). Uses the configured shell when set; otherwise uses /bin/sh on POSIX and the first available of pwsh, powershell, or cmd.exe on Windows.`,
           input: Input,
           output: Output,
           toModelOutput: ({ output }) => [toolText({ type: "text", text: modelOutput(output) })],
@@ -160,7 +153,7 @@ export const layer = Layer.effectDiscard(
                 {},
                 ...entries.flatMap((entry) => (entry.type === "document" ? [entry.info] : [])),
               ).shell
-              const shell = configured ?? (yield* defaultShell(fs))
+              const shell = configured ?? (yield* defaultShell())
               const ps = ShellScan.isPs(shell)
 
               // Parser-based approval scan (D-W2), same source as the V1 ShellTool. Fail-soft: a

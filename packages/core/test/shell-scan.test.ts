@@ -63,6 +63,21 @@ describe("ShellScan names", () => {
       }
     }),
   )
+
+  // D-W2 strict default chain: pwsh → powershell → cmd (COMSPEC floor). Git Bash has no slot in
+  // the default — it stays a configuration choice and a validation-dialect candidate.
+  it.effect("defaultWindowsChain probes pwsh, then powershell, then COMSPEC/cmd, never Git Bash", () =>
+    Effect.sync(() => {
+      expect(ShellScan.defaultWindowsChain({})).toBe("cmd.exe")
+      expect(ShellScan.defaultWindowsChain({ comspec: "C:\\Windows\\System32\\cmd.exe" })).toBe(
+        "C:\\Windows\\System32\\cmd.exe",
+      )
+      expect(ShellScan.defaultWindowsChain({ powershell: "C:\\ps5\\powershell.exe" })).toBe("C:\\ps5\\powershell.exe")
+      expect(ShellScan.defaultWindowsChain({ pwsh: "C:\\ps7\\pwsh.exe", powershell: "C:\\ps5\\powershell.exe" })).toBe(
+        "C:\\ps7\\pwsh.exe",
+      )
+    }),
+  )
 })
 
 describe("ShellScan collect (bash grammar)", () => {

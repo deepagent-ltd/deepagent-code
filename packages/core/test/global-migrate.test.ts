@@ -15,6 +15,10 @@ describe("legacy home migration", () => {
     await fs.writeFile(path.join(legacy, "settings.json"), "{}")
     await fs.mkdir(path.join(legacy, "themes"), { recursive: true })
     await fs.writeFile(path.join(legacy, "themes", "mine.json"), "{}")
+    await fs.mkdir(path.join(legacy, "agents"), { recursive: true })
+    await fs.writeFile(path.join(legacy, "agents", "reviewer.md"), "agent")
+    await fs.mkdir(path.join(legacy, "deepagent-code", "plugin"), { recursive: true })
+    await fs.writeFile(path.join(legacy, "deepagent-code", "plugin", "patch.json"), "{}")
     await fs.writeFile(path.join(legacy, "deepagent-code-local.db"), "db-bytes")
     await fs.writeFile(path.join(legacy, "cache", "blob"), "cached")
     return {
@@ -31,13 +35,22 @@ describe("legacy home migration", () => {
     const report = await GlobalMigrate.migrateLegacyHome({ legacy, data, config })
 
     expect(report).toMatchObject({ migrated: true })
-    expect(report.movedToConfig).toEqual(["config.jsonc", "auth.json", "settings.json", "themes"])
+    expect(report.movedToConfig).toEqual([
+      "config.jsonc",
+      "auth.json",
+      "settings.json",
+      "themes",
+      "agents",
+      "deepagent-code",
+    ])
 
     // Config-class entries landed in the roaming home with content intact.
     expect(await fs.readFile(path.join(config, "config.jsonc"), "utf8")).toBe("{ /* user config */ }")
     expect(await fs.readFile(path.join(config, "auth.json"), "utf8")).toBe("{}")
     expect(await fs.readFile(path.join(config, "settings.json"), "utf8")).toBe("{}")
     expect(await fs.readFile(path.join(config, "themes", "mine.json"), "utf8")).toBe("{}")
+    expect(await fs.readFile(path.join(config, "agents", "reviewer.md"), "utf8")).toBe("agent")
+    expect(await fs.readFile(path.join(config, "deepagent-code", "plugin", "patch.json"), "utf8")).toBe("{}")
 
     // Everything else lives under the machine-local data home.
     expect(await fs.readFile(path.join(data, "deepagent-code-local.db"), "utf8")).toBe("db-bytes")

@@ -98,6 +98,14 @@ export function isPs(file: string) {
   return name === "pwsh" || name === "powershell"
 }
 
+// D-W2 default Windows shell chain, strict: pwsh → powershell → cmd (COMSPEC), with cmd.exe as
+// the guaranteed-present floor. Git Bash deliberately stays OUT of the silent default — it remains
+// selectable per configuration and stays in the full winChain enumeration that validation uses to
+// find a faithful POSIX interpreter. Probes are injected so the order is pinnable on any host.
+export function defaultWindowsChain(probe: { pwsh?: string; powershell?: string; comspec?: string }): string {
+  return probe.pwsh ?? probe.powershell ?? (probe.comspec || "cmd.exe")
+}
+
 function kindOf(file: string): "bash" | "pwsh" | "powershell" | "cmd" {
   const name = nameOf(file)
   if (name === "pwsh" || name === "powershell" || name === "cmd") return name
