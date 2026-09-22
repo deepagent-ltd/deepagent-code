@@ -81,6 +81,11 @@
       "node": "./src/storage/db.node.ts",
       "default": "./src/storage/db.bun.ts"
     },
+    "#dpapi": {
+      "bun": "./src/mcp/dpapi.bun.ts",
+      "node": "./src/mcp/dpapi.node.ts",
+      "default": "./src/mcp/dpapi.bun.ts"
+    },
     "#wiki-fts-db": {
       "bun": "./src/wiki/wiki-fts-db.bun.ts",
       "node": "./src/wiki/wiki-fts-db.node.ts",

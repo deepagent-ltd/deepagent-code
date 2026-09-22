@@ -165,6 +165,14 @@ const binaries: Record<string, string> = {}
 if (!skipInstall) {
   await $`bun install --os="*" --cpu="*" @opentui/core@${pkg.dependencies["@opentui/core"]}`
   await $`bun install --os="*" --cpu="*" @parcel/watcher@${pkg.dependencies["@parcel/watcher"]}`
+  // fff embeds its native lib per compile target through a `with { type: "file" }` import
+  // (@ff-labs/fff-bun src/embedded.ts). The bundler folds process.platform/arch to the
+  // compile target, so every cross target (win32 included) hard-fails resolution with
+  // "Could not resolve @ff-labs/fff-bin-<target>/..." unless that platform's bin package
+  // is installed. fff-bun is a dependency of core, not this package, so force the install
+  // from core's directory to pull every @ff-labs/fff-bin-* variant without touching manifests.
+  const corePkg = JSON.parse(readFileSync(path.resolve(dir, "../core/package.json"), "utf8"))
+  await $`bun install --cwd ${path.resolve(dir, "../core")} --os="*" --cpu="*" @ff-labs/fff-bun@${corePkg.dependencies["@ff-labs/fff-bun"]}`
 }
 for (const item of targets) {
   const name = [
