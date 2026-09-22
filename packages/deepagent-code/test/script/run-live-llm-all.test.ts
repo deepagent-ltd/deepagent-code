@@ -93,6 +93,7 @@ describe("all real LLM test runner", () => {
       DISPLAY: ":99",
       DEEPAGENT_CODE_MODELS_PATH: "/isolated/models.json",
       HOME: "/host/home",
+      BUN_CONFIG_REGISTRY: "https://mirror.example",
       SSH_AUTH_SOCK: "/host/agent.sock",
       AWS_SECRET_ACCESS_KEY: "host-secret",
       HTTPS_PROXY: "http://host-proxy.invalid",
@@ -106,6 +107,8 @@ describe("all real LLM test runner", () => {
       LOGNAME: "test-user",
       DISPLAY: ":99",
       DEEPAGENT_CODE_MODELS_PATH: "/isolated/models.json",
+      HOME: "/host/home",
+      BUN_CONFIG_REGISTRY: "https://mirror.example",
     })
     expect(runnerEnvironment(config, hostEnvironment, true)).toEqual({
       PATH: "/usr/bin:/bin",
@@ -114,6 +117,8 @@ describe("all real LLM test runner", () => {
       LOGNAME: "test-user",
       DISPLAY: ":99",
       DEEPAGENT_CODE_MODELS_PATH: "/isolated/models.json",
+      HOME: "/host/home",
+      BUN_CONFIG_REGISTRY: "https://mirror.example",
       DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE: config.apiKeyFile,
       DEEPAGENT_CODE_LIVE_LLM_PROVIDER: "deepseek",
       DEEPAGENT_CODE_LIVE_LLM_BASE_URL: config.baseURL,
