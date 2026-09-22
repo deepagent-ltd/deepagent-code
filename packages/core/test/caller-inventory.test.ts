@@ -54,7 +54,9 @@ describe("C0-01 caller inventory gate", () => {
     // 408 by then (four entries added without a comment line).
     // W-01 WSL removal (2026-09-23): the desktop wsl sidecar launcher entry is deleted with its
     // module (408→407).
-    expect(inventory.entries.length).toBe(407)
+    // V2.0.1 merge-wave re-pin (2026-09-23, +6): the m3-m6 maintenance surfaces (report/
+    // govern/reclaim) and the k01 provider-resolution facade + blocked surfacing joined.
+    expect(inventory.entries.length).toBe(413)
     const lildax = inventory.entries
       .filter((entry) => entry.entry.surface === "cli-lildax")
       .map((entry) => entry.entry.id)

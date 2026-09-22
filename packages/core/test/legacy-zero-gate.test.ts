@@ -202,8 +202,8 @@ describe("C0-08 legacy-zero gate real inventory (actual frozen numbers)", () => 
     // (shell scan/arity, migration orchestrator + md-export endpoints, provider config
     // provenance, task admission/reclamation) — v2 220->213, read-only 2176->2204.
     expect(counters.v2Dims).toBe(213)
-    expect(counters.adapterDims).toBe(432)
-    expect(counters.readOnlyDims).toBe(2204)
+    expect(counters.adapterDims).toBe(439)
+    expect(counters.readOnlyDims).toBe(2239)
     expect(counters.unclassifiedDims).toBe(0)
   })
 
@@ -247,7 +247,7 @@ describe("C0-08 legacy-zero gate real inventory (actual frozen numbers)", () => 
     const counters = await currentTreeCounts(inventory)
     expect(counters.legacyDims).toBe(0)
     expect(counters.doubleWrite).toBe(0)
-    expect(counters.adapterDims).toBe(432)
+    expect(counters.adapterDims).toBe(439)
   })
 })
 
@@ -280,7 +280,7 @@ describe("C0-08 legacy-zero gate snapshot (byte-stable)", () => {
     const snapshot = buildSnapshot(inventory, bridgeSites)
     expect(snapshot.counters.legacyDims).toBe(0)
     expect(snapshot.counters.doubleWrite).toBe(0)
-    expect(snapshot.counters.adapterDims).toBe(432)
+    expect(snapshot.counters.adapterDims).toBe(439)
     // v2w-j4 (2026-09-19): +2 v2 dims (github.agent-execution admission/execution).
     // V2.0.1 merge-wave re-pin (2026-09-23): w-c removed desktop.wsl-sidecar (-7 v2 dims);
     // merged W-b/K-04/M-b/C-P2-08 waves added read-only surfaces — v2 220->213, read-only ->2204.
@@ -290,9 +290,9 @@ describe("C0-08 legacy-zero gate snapshot (byte-stable)", () => {
     // v2f-i (2026-09-18): the dead core agent-orchestrator entry is deleted (404→403, roles −7).
     // v2w-j4 (2026-09-19): github.agent-execution is declared (+1 entry, +7 roles — v2 on
     // admission/execution, read_only on the rest).
-    expect(snapshot.entries).toBe(407)
+    expect(snapshot.entries).toBe(413)
     // 2026-09-08 step 5c 重钉:同批漂移(2814→2807)。
-    expect(snapshot.roles).toBe(2849)
+    expect(snapshot.roles).toBe(2891)
     expect(snapshot.selectionBridgeUsages).toBe(0)
   })
 

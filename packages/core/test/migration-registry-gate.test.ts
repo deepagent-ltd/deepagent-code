@@ -67,7 +67,11 @@ import { migrations } from "../src/database/migration.gen"
 // fan-out cap ledger: session_v2_task_call_admission with a globally unique tool_call_id
 // plus the (session_id, assistant_message_id) batch index); explicit re-pin of the release
 // candidate.
-const PINNED_DIGEST = "a289d171a1b6c48504ba281339ac2b8ab077a15fc90bd554ed256e54e89d7bf2"
+// Successor pin (2026-09-23, K-01 R-3): the recovery_command_exit migration
+// (20260922182457_recovery_command_exit) joined the registry (command_kind/evidence columns
+// for the confirm-settled durable exit) alongside the merged v2_task_call_admission entry;
+// explicit re-pin over the merged tree.
+const PINNED_DIGEST = "d060e26dd41e2ea9018e7803d73eb4bc280b6506045463e6fb269b2e2e3aeeb2"
 
 const digest = (entries: readonly { readonly id: string; readonly hash: string }[]) =>
   createHash("sha256").update(JSON.stringify(entries)).digest("hex")
