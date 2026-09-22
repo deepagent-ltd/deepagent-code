@@ -138,6 +138,9 @@ export const layer = Layer.effect(
     // roaming config home (%APPDATA%\deepagent-code on Windows; identical to data elsewhere).
     const file = path.join(global.config, "account.json")
     const legacyFile = path.join(global.config, "auth.json")
+    // The config home may not exist yet (a Global.layerWith test override, or a freshly
+    // provisioned roaming profile) — the global layer mkdir only runs for the default path.
+    yield* fsys.ensureDir(global.config).pipe(Effect.orDie)
 
     const writeMigrated = Effect.fnUntraced(function* (raw: Record<string, unknown>) {
       const migrated = migrate(raw)
