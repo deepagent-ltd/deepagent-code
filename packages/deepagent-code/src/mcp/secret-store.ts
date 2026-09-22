@@ -157,8 +157,8 @@ export namespace SecretStore {
     }
   }
 
-  /** Default location for the fail-safe credentials file: under the data dir, NOT the repo. */
-  export const defaultFilePath = (): string => path.join(Global.Path.data, "mcp-secrets.json")
+  /** Default location for the fail-safe credentials file: the roaming config home, NOT the repo. */
+  export const defaultFilePath = (): string => path.join(Global.Path.config, "mcp-secrets.json")
 
   const KEYCHAIN_SERVICE = "deepagent-code-mcp"
 
