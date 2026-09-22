@@ -30,6 +30,8 @@
       "packages/slack"
     ],
     "catalog": {
+      "@ai-sdk/provider": "3.0.12",
+      "@ai-sdk/provider-utils": "4.0.33",
       "@effect/opentelemetry": "4.0.0-beta.74",
       "@effect/platform-node": "4.0.0-beta.74",
       "@effect/sql-sqlite-bun": "4.0.0-beta.74",
@@ -134,6 +136,8 @@
     "electron"
   ],
   "overrides": {
+    "@ai-sdk/provider": "catalog:",
+    "@ai-sdk/provider-utils": "catalog:",
     "@opentui/core": "catalog:",
     "@opentui/keymap": "catalog:",
     "@opentui/solid": "catalog:",
