@@ -21,6 +21,7 @@ import type {
   AuthRemoveResponses,
   AuthSetErrors,
   AuthSetResponses,
+  BackupGovernInput,
   CapabilityCatalogErrors,
   CapabilityCatalogResponses,
   CapabilityLoadReceiptsErrors,
@@ -135,6 +136,7 @@ import type {
   DeepagentWikiPagesResponses,
   DeepagentWikiSearchErrors,
   DeepagentWikiSearchResponses,
+  DiskReclaimInput,
   EventSubscribeResponse,
   EventSubscribeResponses,
   EventTuiCommandExecute,
@@ -284,12 +286,28 @@ import type {
   MaintenanceBackupListResponses,
   MaintenanceBackupRestoreErrors,
   MaintenanceBackupRestoreResponses,
+  MaintenanceBackupsGovernErrors,
+  MaintenanceBackupsGovernResponses,
   MaintenanceBackupVerifyErrors,
   MaintenanceBackupVerifyResponses,
   MaintenanceBootstrapStatusErrors,
   MaintenanceBootstrapStatusResponses,
   MaintenanceCompositionDigestErrors,
   MaintenanceCompositionDigestResponses,
+  MaintenanceDiskReclaimErrors,
+  MaintenanceDiskReclaimResponses,
+  MaintenanceMdExportRunErrors,
+  MaintenanceMdExportRunResponses,
+  MaintenanceMdExportStatusErrors,
+  MaintenanceMdExportStatusResponses,
+  MaintenanceMigrationReportGenerateErrors,
+  MaintenanceMigrationReportGenerateResponses,
+  MaintenanceMigrationReportStatusErrors,
+  MaintenanceMigrationReportStatusResponses,
+  MaintenanceMigrationRunErrors,
+  MaintenanceMigrationRunResponses,
+  MaintenanceMigrationStatusErrors,
+  MaintenanceMigrationStatusResponses,
   MaintenanceRecoveryCommandErrors,
   MaintenanceRecoveryCommandGetErrors,
   MaintenanceRecoveryCommandGetResponses,
@@ -324,6 +342,9 @@ import type {
   McpRemoteConfig,
   McpStatusErrors,
   McpStatusResponses,
+  MdExportInput,
+  MigrationReportInput,
+  MigrationRunInput,
   MoveSessionDestination,
   OutputFormat,
   OversightApprovalsErrors,
@@ -2001,6 +2022,237 @@ export class Composition extends HeyApiClient {
   }
 }
 
+export class Export extends HeyApiClient {
+  /**
+   * Batch-export every session transcript as Markdown
+   *
+   * W-02 M-1: paginates every durable session, reads it through the V2 history loader, and writes <backupDir>/md/<slug>-<date>.md with a per-file sha256 manifest. Interruptible and resumable: re-invocation skips sessions whose manifest entry still matches the file on disk. limit exports at most that many NEW sessions this call.
+   */
+  public run<ThrowOnError extends boolean = false>(
+    parameters?: {
+      mdExportInput?: MdExportInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "mdExportInput", map: "body" }] }])
+    return (options?.client ?? this.client).post<
+      MaintenanceMdExportRunResponses,
+      MaintenanceMdExportRunErrors,
+      ThrowOnError
+    >({
+      url: "/md/export",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Read the MD export manifest
+   *
+   * Reads the md/manifest.json summary (entry list) without exporting. Also served by the incident-only maintenance shell against a read-only store.
+   */
+  public status<ThrowOnError extends boolean = false>(
+    parameters?: {
+      dir?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "dir" }] }])
+    return (options?.client ?? this.client).get<
+      MaintenanceMdExportStatusResponses,
+      MaintenanceMdExportStatusErrors,
+      ThrowOnError
+    >({
+      url: "/md/export/status",
+      ...options,
+      ...params,
+    })
+  }
+}
+
+export class Md extends HeyApiClient {
+  private _export?: Export
+  get export(): Export {
+    return (this._export ??= new Export({ client: this.client }))
+  }
+}
+
+export class Report extends HeyApiClient {
+  /**
+   * Read the persisted migration compliance report
+   *
+   * Reads the last generated migration-report.json without re-running any oracle. Also served by the incident-only maintenance shell.
+   */
+  public status<ThrowOnError extends boolean = false>(
+    parameters?: {
+      dir?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "dir" }] }])
+    return (options?.client ?? this.client).get<
+      MaintenanceMigrationReportStatusResponses,
+      MaintenanceMigrationReportStatusErrors,
+      ThrowOnError
+    >({
+      url: "/migration/report",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Generate the post-migration compliance report
+   *
+   * W-02 M-3: aggregates preflight + data integrity + post-verify + backup verify + the orchestration journal phase outcomes + the md/row reconciliation oracles into a three-state report persisted to <backupDir>/migration-report.json. Every check runs read-only, so the incident maintenance shell serves it too.
+   */
+  public generate<ThrowOnError extends boolean = false>(
+    parameters?: {
+      migrationReportInput?: MigrationReportInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "migrationReportInput", map: "body" }] }])
+    return (options?.client ?? this.client).post<
+      MaintenanceMigrationReportGenerateResponses,
+      MaintenanceMigrationReportGenerateErrors,
+      ThrowOnError
+    >({
+      url: "/migration/report",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class Migration extends HeyApiClient {
+  /**
+   * Run or resume the V1→V2 migration flow
+   *
+   * W-02 M-2: chains md_export → backup_create → backup_verify → migration_apply → post_verify → archive → disk_advisory. Idempotent phases with a persisted journal; any failure stops the chain with a structured phase failure + recovery guidance; re-running resumes. The upgrade-run state machine itself is untouched (external orchestration).
+   */
+  public run<ThrowOnError extends boolean = false>(
+    parameters?: {
+      migrationRunInput?: MigrationRunInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "migrationRunInput", map: "body" }] }])
+    return (options?.client ?? this.client).post<
+      MaintenanceMigrationRunResponses,
+      MaintenanceMigrationRunErrors,
+      ThrowOnError
+    >({
+      url: "/migration/run",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Read the migration orchestration journal
+   *
+   * Reads the persisted phase journal — after a restart this shows exactly which phase the chain stopped at. Also served by the incident-only maintenance shell.
+   */
+  public status<ThrowOnError extends boolean = false>(
+    parameters?: {
+      dir?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "dir" }] }])
+    return (options?.client ?? this.client).get<
+      MaintenanceMigrationStatusResponses,
+      MaintenanceMigrationStatusErrors,
+      ThrowOnError
+    >({
+      url: "/migration/status",
+      ...options,
+      ...params,
+    })
+  }
+
+  private _report?: Report
+  get report(): Report {
+    return (this._report ??= new Report({ client: this.client }))
+  }
+}
+
+export class Backups extends HeyApiClient {
+  /**
+   * Run backups retention governance
+   *
+   * W-02 M-4: keeps the newest N (default 3) backups plus every migration-milestone backup; over-aged backups are gzip-compressed and MOVED into <backupDir>/archive/ (never silently deleted). Retained manifests are stamped with the md-export pairing (BackupManifest.mdExports). Produces and persists a governance report.
+   */
+  public govern<ThrowOnError extends boolean = false>(
+    parameters?: {
+      backupGovernInput?: BackupGovernInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "backupGovernInput", map: "body" }] }])
+    return (options?.client ?? this.client).post<
+      MaintenanceBackupsGovernResponses,
+      MaintenanceBackupsGovernErrors,
+      ThrowOnError
+    >({
+      url: "/backups/govern",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class Disk extends HeyApiClient {
+  /**
+   * Inventory and reclaim operational residue
+   *
+   * W-02 M-5: measures the whole data root (Global.Path), classifies deletion candidates (multi-channel DBs, manual .bak, repro DBs, orphaned tmp), safety-checks them against every manifest reference, and — ONLY with confirm:true — deletes them and optionally VACUUMs the main database. restore-incidents/ is NEVER deleted (design §3.1 ruling); the report carries exact before/after byte counts.
+   */
+  public reclaim<ThrowOnError extends boolean = false>(
+    parameters?: {
+      diskReclaimInput?: DiskReclaimInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "diskReclaimInput", map: "body" }] }])
+    return (options?.client ?? this.client).post<
+      MaintenanceDiskReclaimResponses,
+      MaintenanceDiskReclaimErrors,
+      ThrowOnError
+    >({
+      url: "/disk/reclaim",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class Maintenance extends HeyApiClient {
   private _bootstrap?: Bootstrap
   get bootstrap(): Bootstrap {
@@ -2025,6 +2277,26 @@ export class Maintenance extends HeyApiClient {
   private _composition?: Composition
   get composition(): Composition {
     return (this._composition ??= new Composition({ client: this.client }))
+  }
+
+  private _md?: Md
+  get md(): Md {
+    return (this._md ??= new Md({ client: this.client }))
+  }
+
+  private _migration?: Migration
+  get migration(): Migration {
+    return (this._migration ??= new Migration({ client: this.client }))
+  }
+
+  private _backups?: Backups
+  get backups(): Backups {
+    return (this._backups ??= new Backups({ client: this.client }))
+  }
+
+  private _disk?: Disk
+  get disk(): Disk {
+    return (this._disk ??= new Disk({ client: this.client }))
   }
 }
 

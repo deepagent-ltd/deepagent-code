@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import type { BootstrapDiagnostics } from "./types"
+import { MIGRATION_PHASES } from "./types"
 import {
   initialShellState,
   isRestoreBusy,
+  migrationPhaseViews,
+  migrationProgress,
   operationsForMode,
   reduceShell,
   restoreCanSubmit,
@@ -200,5 +203,100 @@ describe("diagnostics stay stable-code only", () => {
   test("diagnosticEntries drops a whitelisted value that trips a sensitive pattern", () => {
     const entries = diagnosticEntries(diagnostics({ runId: "/var/lib/sqlite/run" }))
     expect(entries.find((entry) => entry.key === "run.id")).toBeUndefined()
+  })
+})
+
+// W-02 M-6 — the migration-in-progress view: phase progress derivation, guidance rendering,
+// and the no-operation guarantee while the chain owns the store.
+
+const journal = (overrides: Partial<import("./types").MigrationJournal> = {}): import("./types").MigrationJournal => ({
+  version: 1,
+  kind: "migration-orchestration-journal",
+  orchestrationId: "mo_test",
+  dbPath: "/store/deepagent-code.db",
+  startedAt: 1,
+  updatedAt: 2,
+  status: "in_progress",
+  currentPhase: "backup_create",
+  phases: [
+    { phase: "md_export", state: "completed", startedAt: 1, completedAt: 2, outcome: { kind: "md_export" } },
+  ],
+  ...overrides,
+})
+
+describe("migration progress view (W-02 M-6)", () => {
+  test("migrationPhaseViews renders completed/running/pending from a staged journal (stop_after steps)", () => {
+    const views = migrationPhaseViews(journal())
+    expect(views.map((view) => [view.phase, view.state])).toEqual([
+      ["md_export", "completed"],
+      ["backup_create", "running"],
+      ["backup_verify", "pending"],
+      ["migration_apply", "pending"],
+      ["post_verify", "pending"],
+      ["archive", "pending"],
+      ["disk_advisory", "pending"],
+    ])
+    expect(migrationProgress(journal())).toEqual({ done: 1, total: 7 })
+  })
+
+  test("a failed phase marks itself failed and later phases pending (no fabricated progress)", () => {
+    const failed = journal({
+      status: "failed",
+      currentPhase: "backup_verify",
+      phases: [
+        { phase: "md_export", state: "completed", startedAt: 1, completedAt: 2 },
+        { phase: "backup_create", state: "completed", startedAt: 2, completedAt: 3 },
+        { phase: "backup_verify", state: "failed", startedAt: 3, completedAt: 4, failure: { code: "backup_verify_hash_mismatch", detail: "digest drift" } },
+      ],
+      failure: {
+        phase: "backup_verify",
+        code: "backup_verify_hash_mismatch",
+        detail: "digest drift",
+        recoveryGuidance: "The newly created backup did not pass verification. It is retained for inspection.",
+      },
+    })
+    const views = migrationPhaseViews(failed)
+    expect(views.find((view) => view.phase === "backup_verify")?.state).toBe("failed")
+    expect(views.find((view) => view.phase === "migration_apply")?.state).toBe("pending")
+    // A completed journal renders every RECORDED phase completed (records are the truth);
+    // with all phases recorded the whole chain shows done.
+    const allDone = MIGRATION_PHASES.map((phase, index) => ({ phase, state: "completed" as const, startedAt: index, completedAt: index + 1 }))
+    const done = migrationPhaseViews(journal({ status: "completed", currentPhase: undefined, phases: allDone }))
+    expect(done.every((view) => view.state === "completed")).toBe(true)
+  })
+
+  test("migrationLoaded maps journal status to the migration view state, guidance intact", () => {
+    let state = reduceShell(initialShellState, { type: "migrationLoaded", journal: journal() })
+    expect(state.migration.status).toBe("active")
+    state = reduceShell(state, { type: "migrationLoaded", journal: journal({ status: "completed" }) })
+    expect(state.migration.status).toBe("completed")
+    const failedJournal = journal({
+      status: "failed",
+      failure: { phase: "backup_verify", code: "backup_verify_hash_mismatch", detail: "d", recoveryGuidance: "Re-run after resolving the cause." },
+    })
+    state = reduceShell(state, { type: "migrationLoaded", journal: failedJournal })
+    expect(state.migration.status).toBe("failed")
+    if (state.migration.status === "failed")
+      expect(state.migration.journal.failure?.recoveryGuidance).toBe("Re-run after resolving the cause.")
+    // A vanished journal idles the view (the gate falls back to the app).
+    state = reduceShell(state, { type: "migrationLoaded", journal: undefined })
+    expect(state.migration.status).toBe("idle")
+    // An unreachable status endpoint degrades to a stable code, never a deadlock.
+    state = reduceShell(state, { type: "migrationFailed", stableCode: "service_unavailable" })
+    expect(state.migration.status).toBe("unavailable")
+  })
+
+  test("migration_in_progress exposes no operations (the chain owns the store)", () => {
+    const ops = operationsForMode("migration_in_progress")
+    expect(ops).toEqual({
+      browse: false,
+      search: false,
+      export: false,
+      backup: false,
+      descriptors: false,
+      restore: false,
+      write: false,
+      live: false,
+    })
   })
 })
