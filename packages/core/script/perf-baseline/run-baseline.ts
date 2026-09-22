@@ -12,6 +12,7 @@ import { runJournalHydration } from "./scenarios/journal"
 import { runMemoryGrowth } from "./scenarios/memory"
 import { runFourMapStatus } from "./scenarios/four-map"
 import { PerfStats } from "./stats"
+import { PerfCompare } from "./compare"
 import { captureInterference } from "./run-env"
 import { setTempBase } from "./lib"
 import type { ScenarioOutcome } from "./lib"
@@ -21,15 +22,27 @@ const FROZEN_TREE = "f19b63e9e90f75da5086a4e35b2d6feff0f2e94a"
 
 interface Args {
   readonly out: string
+  /** Optional baseline run directory: after the run, compare against its summaries.jsonl (C7-06/B-12 gate). */
+  readonly baseline?: string
+  /** Regression budget ratio for --baseline comparison; default 0.25 (+25%). */
+  readonly budget?: number
 }
 
 const parseArgs = (): Args => {
   const index = process.argv.indexOf("--out")
   if (index === -1 || process.argv[index + 1] === undefined) {
-    console.error("usage: bun run script/perf-baseline/run-baseline.ts --out .artifacts/perf-baseline/<run-id>")
+    console.error(
+      "usage: bun run script/perf-baseline/run-baseline.ts --out .artifacts/perf-baseline/<run-id> [--baseline <baseline-run-dir>] [--budget 0.25]",
+    )
     process.exit(2)
   }
-  return { out: process.argv[index + 1]! }
+  const baselineIndex = process.argv.indexOf("--baseline")
+  const budgetIndex = process.argv.indexOf("--budget")
+  return {
+    out: process.argv[index + 1]!,
+    ...(baselineIndex !== -1 && process.argv[baselineIndex + 1] !== undefined ? { baseline: process.argv[baselineIndex + 1]! } : {}),
+    ...(budgetIndex !== -1 && process.argv[budgetIndex + 1] !== undefined ? { budget: Number(process.argv[budgetIndex + 1]!) } : {}),
+  }
 }
 
 const guard = async (name: string, body: () => Promise<ScenarioOutcome>): Promise<ScenarioOutcome> => {
@@ -195,6 +208,27 @@ const main = async () => {
   // legitimate measured-at-zero result, not a crash).
   if (outcomes.some((outcome) => outcome.status === "error")) process.exitCode = 1
   console.log(`[perf-baseline] manifest: ${manifestPath}`)
+
+  // C7-06/B-12: with --baseline, the run self-asserts against the baseline under the declared
+  // budget; a regression or a dropped scenario fails the command (compare.json holds the rows).
+  if (args.baseline) {
+    const report = PerfCompare.compareRunDirectories(
+      path.resolve(process.cwd(), args.baseline),
+      outputDir,
+      args.budget === undefined ? undefined : { ...PerfCompare.DEFAULT_THRESHOLDS, defaultBudgetRatio: args.budget },
+    )
+    const comparePath = PerfCompare.writeCompareReport(outputDir, report)
+    for (const finding of report.findings) {
+      if (finding.kind === "compared" && finding.verdict === "regression") {
+        console.error(
+          `[perf-compare] REGRESSION ${finding.scenario}/${finding.group} ${finding.statistic}: ${finding.baseline.toFixed(3)} -> ${finding.candidate.toFixed(3)} (budget +${Math.round(finding.budget * 100)}%)`,
+        )
+      }
+      if (finding.kind === "missing") console.error(`[perf-compare] MISSING in candidate run: ${finding.scenario}/${finding.group}`)
+    }
+    console.log(`[perf-compare] ${report.passed ? "PASS" : "FAIL"} regressions=${report.regressions} missing=${report.missing}: ${comparePath}`)
+    if (!report.passed) process.exitCode = 1
+  }
 }
 
 await main()
