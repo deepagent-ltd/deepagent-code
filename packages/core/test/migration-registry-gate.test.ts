@@ -58,7 +58,11 @@ import { migrations } from "../src/database/migration.gen"
 // evidence authority migration (20260919073750_v2_structured_output_evidence) joined the
 // registry (session_v2_structured_output_evidence + insert/update/delete guards);
 // `migration --check` green at re-pin time.
-const PINNED_DIGEST = "9f97f646a1612275ac711ba623caf5b4837af18335e83c28f9ccc4c01b953587"
+// Successor pin (2026-09-23, A1-09/B-17): the execution_claim_token rename migration
+// (20260922152631_execution_claim_token) joined the registry (session.time_suspended column
+// renamed to execution_claim_token + partial index rename); explicit re-pin of the release
+// candidate.
+const PINNED_DIGEST = "b84714e3aef3b932288413f3c5a5ad7194e5f69b1c7c55a91a4f42722550a1ca"
 
 const digest = (entries: readonly { readonly id: string; readonly hash: string }[]) =>
   createHash("sha256").update(JSON.stringify(entries)).digest("hex")
