@@ -1,0 +1,92 @@
+---
+title: Windows
+description: Instale e execute o deepagent-code nativamente no Windows.
+---
+
+import { Steps } from "@astrojs/starlight/components"
+
+O deepagent-code roda nativamente no Windows — não é necessário WSL. Tanto a CLI quanto o aplicativo Desktop têm builds para Windows, leem automaticamente as variáveis de ambiente do usuário e armazenam dados nos diretórios padrão do Windows.
+
+---
+
+## Instalar o aplicativo Desktop
+
+<Steps>
+
+1. **Baixe o instalador**
+
+   Baixe `deepagent-code-desktop-windows-x64.exe` do último [lançamento no GitHub](https://github.com/deepagent-ltd/deepagent-code/releases).
+
+2. **Execute o instalador**
+
+   O instalador faz uma instalação por usuário (sem privilégios de administrador), adiciona a pasta do aplicativo ao PATH do **usuário** (nunca ao PATH do sistema) e permite escolher o local de instalação.
+
+3. **Inicie o deepagent-code**
+
+   As variáveis de ambiente configuradas no Windows (por exemplo, chaves de API em "Editar as variáveis de ambiente do sistema") são lidas do registro na inicialização, então nenhuma configuração extra de PATH é necessária.
+
+</Steps>
+
+---
+
+## Instalar a CLI
+
+- **Chocolatey**
+
+  ```bash
+  choco install deepagent-code
+  ```
+
+- **Scoop**
+
+  ```bash
+  scoop install deepagent-code
+  ```
+
+- **NPM**
+
+  ```bash
+  npm install -g deepagent-code
+  ```
+
+- **Download direto**
+
+  Binários autônomos do Windows (`windows-x64`, `windows-arm64`) são publicados na página de [Releases](https://github.com/deepagent-ltd/deepagent-code/releases). Coloque o binário em um diretório listado no seu PATH.
+
+Depois inicie o TUI:
+
+```powershell
+deepagent-code
+```
+
+Os comandos rodam por padrão pelo PowerShell (`pwsh` → `powershell` → `cmd`); o Git Bash também é suportado.
+
+---
+
+## Locais dos dados
+
+O deepagent-code separa configuração de dados no Windows:
+
+| Conteúdo                            | Local                       |
+| ------------------------------------------ | -------------------------------------- |
+| Configuração e credenciais                                  | `%APPDATA%\deepagent-code\` (roaming) |
+| Dados, caches, worktrees, snapshots | `%LOCALAPPDATA%\deepagent-code\`      |
+
+Se uma versão prévia anterior (ou uma instalação anterior via WSL) deixou dados em `%USERPROFILE%\.deepagent\code`, o deepagent-code os migra automaticamente para os novos locais no primeiro início.
+
+---
+
+## Migrando do WSL
+
+Se você usava o deepagent-code dentro do WSL:
+
+- Projetos em `/mnt/c/...` já estão no sistema de arquivos do Windows — abra-os diretamente com o app ou a CLI nativa.
+- Os dados dentro do sistema de arquivos do WSL (`~/.deepagent`) não são compartilhados com o Windows. Copie o que precisar (por exemplo, configuração e credenciais) para fora da distribuição, ou comece de novo e execute `/connect` novamente.
+- Desinstale a cópia no WSL quando a instalação nativa estiver funcionando.
+
+---
+
+## Atualização
+
+- **Desktop** — as atualizações chegam pelo atualizador integrado; os instaladores são assinados.
+- **CLI** — reinstale com o mesmo gerenciador de pacotes ou baixe o binário mais recente da página de [Releases](https://github.com/deepagent-ltd/deepagent-code/releases).

@@ -1,0 +1,92 @@
+---
+title: Windows
+description: Instalirajte i pokrenite DeepAgent Code nativno na Windows-u.
+---
+
+import { Steps } from "@astrojs/starlight/components"
+
+DeepAgent Code radi nativno na Windows-u — WSL nije potreban. I CLI i Desktop aplikacija dolaze s Windows verzijama, automatski preuzimaju vaše korisničke varijable okoline i pohranjuju podatke u standardne Windows direktorije.
+
+---
+
+## Instalacija Desktop aplikacije
+
+<Steps>
+
+1. **Preuzmite instalacijski program**
+
+   Preuzmite `deepagent-code-desktop-windows-x64.exe` iz najnovijeg [GitHub izdanja](https://github.com/deepagent-ltd/deepagent-code/releases).
+
+2. **Pokrenite instalacijski program**
+
+   Instalater instalira po korisniku (bez administratorskih prava), dodaje direktorij aplikacije u vaš **korisnički** PATH (nikad u sistemski) i omogućuje vam da odaberete lokaciju instalacije.
+
+3. **Pokrenite DeepAgent Code**
+
+   Varijable okoline koje ste konfigurisali u Windows-u (npr. API ključevi u "Uredi varijable okoline sustava") čitaju se iz registra pri pokretanju, pa dodatno podešavanje PATH-a nije potrebno.
+
+</Steps>
+
+---
+
+## Instalacija CLI-a
+
+- **Chocolatey**
+
+  ```bash
+  choco install deepagent-code
+  ```
+
+- **Scoop**
+
+  ```bash
+  scoop install deepagent-code
+  ```
+
+- **NPM**
+
+  ```bash
+  npm install -g deepagent-code
+  ```
+
+- **Direktno preuzimanje**
+
+  Samostalne Windows binarne datoteke (`windows-x64`, `windows-arm64`) objavljuju se na stranici [Izdavanja](https://github.com/deepagent-ltd/deepagent-code/releases). Smjestite binarnu datoteku u direktorij iz vašeg PATH-a.
+
+Zatim pokrenite TUI:
+
+```powershell
+deepagent-code
+```
+
+Naredbe se prema zadanim postavkama izvršavaju kroz PowerShell (padajući redoslijed `pwsh` → `powershell` → `cmd`); Git Bash je također podržan.
+
+---
+
+## Lokacije podataka
+
+DeepAgent Code na Windows-u odvaja konfiguraciju od podataka:
+
+| Sadržaj                            | Lokacija                       |
+| ------------------------------------------ | -------------------------------------- |
+| Konfiguracija i pristupni podaci                                  | `%APPDATA%\deepagent-code\` (roaming) |
+| Podaci, predmemorija, worktree-evi, snimke | `%LOCALAPPDATA%\deepagent-code\`      |
+
+Ako je ranija verzija za pretpregled (ili prethodna WSL instalacija) ostavila podatke u `%USERPROFILE%\.deepagent\code`, DeepAgent Code ih automatski premješta nove lokacije pri prvom pokretanju.
+
+---
+
+## Prelazak s WSL-a
+
+Ako ste prethodno koristili DeepAgent Code unutar WSL-a:
+
+- Projekti pod `/mnt/c/...` već su na Windows datotečnom sustavu — otvorite ih izravno s nativnom aplikacijom ili CLI-om.
+- Podaci unutar WSL datotečnog sustava (`~/.deepagent`) ne dijele se s Windows-om. Kopirajte što vam treba (npr. konfiguraciju i pristupne podatke) iz distribucije ili počnite iznova i ponovno pokrenite `/connect`.
+- Deinstalirajte WSL kopiju kada vam nativna instalacija radi.
+
+---
+
+## Ažuriranje
+
+- **Desktop** — ažuriranja dolaze ugrađenim ažuraterom; instalacijski programi su digitalno potpisani.
+- **CLI** — ponovno instalirajte istim upraviteljem paketa ili preuzmite najnoviju binarnu datoteku sa stranice [Izdavanja](https://github.com/deepagent-ltd/deepagent-code/releases).

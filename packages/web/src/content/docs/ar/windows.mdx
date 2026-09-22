@@ -1,0 +1,92 @@
+---
+title: Windows
+description: ثبّت DeepAgent Code وشغّله بشكل أصلي على Windows.
+---
+
+import { Steps } from "@astrojs/starlight/components"
+
+يعمل DeepAgent Code بشكل أصلي على Windows — لا حاجة إلى WSL. يوفر كل من الـ CLI وتطبيق Desktop إصدارات لنظام Windows، ويقرأ متغيرات البيئة على مستوى المستخدم تلقائيًا، ويخزن البيانات في أدلة Windows القياسية.
+
+---
+
+## تثبيت تطبيق Desktop
+
+<Steps>
+
+1. **نزّل المثبّت**
+
+   نزّل `deepagent-code-desktop-windows-x64.exe` من أحدث [إصدار على GitHub](https://github.com/deepagent-ltd/deepagent-code/releases).
+
+2. **شغّل المثبّت**
+
+   يثبّت المثبّت البرنامج للمستخدم الحالي (دون صلاحيات مسؤول)، ويضيف مجلد التطبيق إلى PATH الخاص بـ **المستخدم** فقط (وليس PATH الخاص بالنظام)، ويتيح لك اختيار موقع التثبيت.
+
+3. **شغّل DeepAgent Code**
+
+   تُقرأ متغيرات البيئة التي ضبطتها في Windows (مثل مفاتيح API من "تحرير متغيرات بيئة النظام") من سجل النظام عند الإقلاع، فلا تحتاج إلى أي إعداد إضافي لـ PATH.
+
+</Steps>
+
+---
+
+## تثبيت الـ CLI
+
+- **Chocolatey**
+
+  ```bash
+  choco install deepagent-code
+  ```
+
+- **Scoop**
+
+  ```bash
+  scoop install deepagent-code
+  ```
+
+- **NPM**
+
+  ```bash
+  npm install -g deepagent-code
+  ```
+
+- **تنزيل مباشر**
+
+  تُنشر ملفات ثنائية جاهزة لـ Windows‏ (`windows-x64` و`windows-arm64`) في صفحة [الإصدارات](https://github.com/deepagent-ltd/deepagent-code/releases). ضع الملف في مجلد مدرج في PATH.
+
+ثم ابدأ واجهة TUI:
+
+```powershell
+deepagent-code
+```
+
+تُنفَّذ الأوامر عبر PowerShell افتراضيًا (بترتيب بديل `pwsh` ثم `powershell` ثم `cmd`)؛ ويدعم Git Bash أيضًا.
+
+---
+
+## مواقع البيانات
+
+يفصل DeepAgent Code الإعدادات عن البيانات على Windows:
+
+| المحتوى                            | الموقع                       |
+| ------------------------------------------ | -------------------------------------- |
+| الإعدادات وبيانات الاعتماد                                  | `%APPDATA%\deepagent-code\` (roaming) |
+| البيانات وذاكرة التخزين المؤقت وworktrees واللقطات | `%LOCALAPPDATA%\deepagent-code\`      |
+
+إذا ترك إصدار معاينة سابق (أو تثبيت WSL قديم) بيانات في `%USERPROFILE%\.deepagent\code`، فسينقلها DeepAgent Code تلقائيًا إلى المواقع الجديدة عند أول تشغيل.
+
+---
+
+## الانتقال من WSL
+
+إذا كنت تستخدم DeepAgent Code داخل WSL سابقًا:
+
+- المشاريع ضمن `/mnt/c/...` موجودة أصلًا على نظام ملفات Windows — افتحها مباشرة بالتطبيق أو الـ CLI الأصلي.
+- البيانات داخل نظام ملفات WSL‏ (`~/.deepagent`) لا تُشارك مع Windows. انسخ ما تحتاجه (مثل الإعدادات وبيانات الاعتماد) خارج التوزيعة، أو ابدأ من جديد ونفّذ `/connect` مرة أخرى.
+- أزل النسخة داخل WSL عندما يعمل التثبيت الأصلي لديك.
+
+---
+
+## التحديث
+
+- **Desktop** — تصل التحديثات عبر المحدّث المدمج؛ والمثبّتات موقّعة رقميًا.
+- **CLI** — أعد التثبيت بنفس مدير الحزم، أو نزّل أحدث ملف ثنائي من صفحة [الإصدارات](https://github.com/deepagent-ltd/deepagent-code/releases).

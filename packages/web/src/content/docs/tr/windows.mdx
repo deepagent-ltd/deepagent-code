@@ -1,0 +1,92 @@
+---
+title: Windows
+description: DeepAgent Code'u Windows'ta yerel olarak yükleyin ve çalıştırın.
+---
+
+import { Steps } from "@astrojs/starlight/components"
+
+DeepAgent Code Windows'ta yerel olarak çalışır — WSL gerekmez. Hem CLI hem de masaüstü uygulaması Windows derlemeleri sunar, kullanıcı ortam değişkenlerinizi otomatik olarak okur ve verileri standart Windows dizinlerinde saklar.
+
+---
+
+## Masaüstü uygulamasını yükleme
+
+<Steps>
+
+1. **Yükleyiciyi indirin**
+
+   `deepagent-code-desktop-windows-x64.exe` dosyasını en son [GitHub sürümünden](https://github.com/deepagent-ltd/deepagent-code/releases) indirin.
+
+2. **Yükleyiciyi çalıştırın**
+
+   Yükleyici kullanıcı başına kurulum yapar (yönetici hakası gerekmez), uygulama klasörünü **kullanıcı** PATH'ine ekler (asla sistem PATH'ine değil) ve kurulum konumunu seçmenize izin verir.
+
+3. **DeepAgent Code'u başlatın**
+
+   Windows'ta yapılandırdığınız ortam değişkenleri (örneğin "Sistem ortam değişkenlerini düzenle" altındaki API anahtarları) başlangıçta kayıt defterinden okunur, bu yüzden ek PATH ayarı gerekmez.
+
+</Steps>
+
+---
+
+## CLI'yı yükleme
+
+- **Chocolatey**
+
+  ```bash
+  choco install deepagent-code
+  ```
+
+- **Scoop**
+
+  ```bash
+  scoop install deepagent-code
+  ```
+
+- **NPM**
+
+  ```bash
+  npm install -g deepagent-code
+  ```
+
+- **Doğrudan indirme**
+
+  Tek dosyalık Windows ikili dosyaları (`windows-x64`, `windows-arm64`) [Releases](https://github.com/deepagent-ltd/deepagent-code/releases) sayfasında yayımlanır. İkili dosyayı PATH'inizde yer alan bir klasöre koyun.
+
+Ardından TUI'yi başlatın:
+
+```powershell
+deepagent-code
+```
+
+Komutlar varsayılan olarak PowerShell üzerinden çalışır (`pwsh` → `powershell` → `cmd` geri düşüşü); Git Bash de desteklenir.
+
+---
+
+## Veri konumları
+
+DeepAgent Code, Windows'ta yapılandırmayı veriden ayırır:
+
+| İçerik                            | Konum                       |
+| ------------------------------------------ | -------------------------------------- |
+| Yapılandırma ve kimlik bilgileri                                  | `%APPDATA%\deepagent-code\` (roaming) |
+| Veriler, önbellekler, worktree'ler, anlık görüntüler | `%LOCALAPPDATA%\deepagent-code\`      |
+
+Önceki bir önizme (veya eski bir WSL kurulumu) `%USERPROFILE%\.deepagent\code` içinde veri bıraktıysa, DeepAgent Code bunları ilk çalıştırmada yeni konumlara otomatik olarak taşır.
+
+---
+
+## WSL'den geçiş
+
+Daha önce DeepAgent Code'u WSL içinde kullanıyorsanız:
+
+- `/mnt/c/...` altındaki projeler zaten Windows dosya sisteminde — yerel uygulama veya CLI ile doğrudan açın.
+- WSL dosya sistemi içindeki veriler (`~/.deepagent`) Windows ile paylaşılmaz. İhtiyacınız olanları (örneğin yapılandırma ve kimlik bilgileri) dağıtımdan dışarı kopyalayın ya da sıfırdan başlayıp `/connect` komutunu yeniden çalıştırın.
+- Yerel kurulum sizde çalıştığında WSL tarafındaki kopyayı kaldırın.
+
+---
+
+## Güncelleme
+
+- **Masaüstü** — güncellemeler yerleşik güncelleyici üzerinden gelir; yükleyiciler kod imzalıdır.
+- **CLI** — aynı paket yöneticisiyle yeniden yükleyin veya [Releases](https://github.com/deepagent-ltd/deepagent-code/releases) sayfasından en son ikili dosyayı indirin.

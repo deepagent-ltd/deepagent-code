@@ -1,0 +1,92 @@
+---
+title: Windows
+description: Windows에서 DeepAgent Code를 네이티브로 설치하고 실행하세요.
+---
+
+import { Steps } from "@astrojs/starlight/components"
+
+DeepAgent Code는 Windows에서 네이티브로 실행됩니다. WSL이 필요 없습니다. CLI와 데스크톱 앱 모두 Windows 빌드를 제공하며, 사용자 환경 변수를 자동으로 읽고 데이터를 Windows 표준 디렉터리에 저장합니다.
+
+---
+
+## 데스크톱 앱 설치
+
+<Steps>
+
+1. **설치 프로그램 다운로드**
+
+   최신 [GitHub 릴리스](https://github.com/deepagent-ltd/deepagent-code/releases)에서 `deepagent-code-desktop-windows-x64.exe`를 다운로드하세요.
+
+2. **설치 프로그램 실행**
+
+   설치 프로그램은 사용자 단위로 설치되고(관리자 권한 불필요), 앱 폴더를 **사용자** PATH에 추가하며(시스템 PATH는 건드리지 않음) 설치 위치를 직접 선택할 수 있습니다.
+
+3. **DeepAgent Code 실행**
+
+   Windows에서 설정한 환경 변수(예: "시스템 환경 변수 편집"의 API 키)는 시작 시 레지스트리에서 자동으로 읽히므로 PATH를 추가로 설정할 필요가 없습니다.
+
+</Steps>
+
+---
+
+## CLI 설치
+
+- **Chocolatey**
+
+  ```bash
+  choco install deepagent-code
+  ```
+
+- **Scoop**
+
+  ```bash
+  scoop install deepagent-code
+  ```
+
+- **NPM**
+
+  ```bash
+  npm install -g deepagent-code
+  ```
+
+- **직접 다운로드**
+
+  단일 파일 Windows 바이너리(`windows-x64`, `windows-arm64`)는 [Releases](https://github.com/deepagent-ltd/deepagent-code/releases) 페이지에 게시됩니다. PATH에 포함된 디렉터리에 배치하세요.
+
+그런 다음 TUI를 시작합니다:
+
+```powershell
+deepagent-code
+```
+
+명령은 기본적으로 PowerShell로 실행됩니다(`pwsh` → `powershell` → `cmd` 폴백). Git Bash도 지원됩니다.
+
+---
+
+## 데이터 위치
+
+Windows에서 DeepAgent Code는 설정과 데이터를 분리합니다:
+
+| 내용                            | 위치                       |
+| ------------------------------------------ | -------------------------------------- |
+| 설정 및 자격 증명                                  | `%APPDATA%\deepagent-code\` (roaming) |
+| 데이터, 캐시, worktree, 스냅샷 | `%LOCALAPPDATA%\deepagent-code\`      |
+
+이전 프리뷰(또는 이전 WSL 설치)가 `%USERPROFILE%\.deepagent\code`에 데이터를 남긴 경우, 첫 실행 때 새 위치로 자동 마이그레이션됩니다.
+
+---
+
+## WSL에서 마이그레이션
+
+이전에 WSL 안에서 DeepAgent Code를 사용했다면:
+
+- `/mnt/c/...` 아래의 프로젝트는 이미 Windows 파일 시스템에 있습니다. 네이티브 앱이나 CLI로 직접 열 수 있습니다.
+- WSL 파일 시스템 안의 데이터(`~/.deepagent`)는 Windows와 공유되지 않습니다. 필요한 것(예: 설정, 자격 증명)을 배포판 밖으로 복사하거나, 새로 시작하고 `/connect`를 다시 실행하세요.
+- 네이티브 설치가 정상 동작하면 WSL 쪽 복사본을 제거하세요.
+
+---
+
+## 업데이트
+
+- **데스크톱** — 업데이트는 내장 업데이터를 통해 제공되며, 설치 프로그램은 코드 서명되어 있습니다.
+- **CLI** — 동일한 패키지 매니저로 재설치하거나 [Releases](https://github.com/deepagent-ltd/deepagent-code/releases) 페이지에서 최신 바이너리를 다운로드하세요.

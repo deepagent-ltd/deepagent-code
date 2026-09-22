@@ -1,0 +1,92 @@
+---
+title: Windows
+description: Installer og kør DeepAgent Code nativt på Windows.
+---
+
+import { Steps } from "@astrojs/starlight/components"
+
+DeepAgent Code kører nativt på Windows — WSL er ikke nødvendigt. Både CLI'en og Desktop-appen leverer Windows-byg, aflæser dine brugermiljøvariabler automatisk og gemmer data i de standard Windows-mapper.
+
+---
+
+## Installér Desktop-appen
+
+<Steps>
+
+1. **Download installationsprogrammet**
+
+   Hent `deepagent-code-desktop-windows-x64.exe` fra den nyeste [GitHub-release](https://github.com/deepagent-ltd/deepagent-code/releases).
+
+2. **Kør installationsprogrammet**
+
+   Installationsprogrammet installerer pr. bruger (ingen administratorrettigheder nødvendige), tilføjer programmappen til din **bruger**-PATH (aldrig system-PATH) og lader dig vælge installationsplaceringen.
+
+3. **Start DeepAgent Code**
+
+   Miljøvariabler, du har konfigureret i Windows (f.eks. API-nøgler under "Rediger systemets miljøvariabler"), aflæses fra registreringsdatabasen ved opstart, så der kræves ingen ekstra PATH-opsætning.
+
+</Steps>
+
+---
+
+## Installér CLI'en
+
+- **Chocolatey**
+
+  ```bash
+  choco install deepagent-code
+  ```
+
+- **Scoop**
+
+  ```bash
+  scoop install deepagent-code
+  ```
+
+- **NPM**
+
+  ```bash
+  npm install -g deepagent-code
+  ```
+
+- **Direkte download**
+
+  Frittstående Windows-binærfiler (`windows-x64`, `windows-arm64`) offentliggøres på siden [Releases](https://github.com/deepagent-ltd/deepagent-code/releases). Placér binærfilen i en mappe på din PATH.
+
+Start derefter TUI'en:
+
+```powershell
+deepagent-code
+```
+
+Kommandoer køres som standard gennem PowerShell (`pwsh` → `powershell` → `cmd`-fallback); Git Bash understøttes også.
+
+---
+
+## Datalokationer
+
+DeepAgent Code adskiller konfiguration fra data på Windows:
+
+| Indhold                            | Placering                       |
+| ------------------------------------------ | -------------------------------------- |
+| Konfiguration og loginoplysninger                                  | `%APPDATA%\deepagent-code\` (roaming) |
+| Data, caches, worktrees, snapshots | `%LOCALAPPDATA%\deepagent-code\`      |
+
+Hvis en tidligere preview (eller en tidligere WSL-installation) efterlod data i `%USERPROFILE%\.deepagent\code`, flytter DeepAgent Code dem automatisk til de nye placeringer ved første kørsel.
+
+---
+
+## Migrering fra WSL
+
+Hvis du tidligere kørte DeepAgent Code i WSL:
+
+- Projekter under `/mnt/c/...` ligger allerede på Windows-filsystemet — åbn dem direkte med den native app eller CLI.
+- Data inde i WSL-filsystemet (`~/.deepagent`) deles ikke med Windows. Kopiér det, du skal bruge (f.eks. konfiguration og loginoplysninger), ud af distroen, eller start forfra og kør `/connect` igen.
+- Afinstallér WSL-kopien, når den native installation virker for dig.
+
+---
+
+## Opdatering
+
+- **Desktop** — opdateringer leveres via den indbyggede opdatering; installativerne er kode signeret.
+- **CLI** — geninstallér med den samme pakkemanager, eller hent den nyeste binærfil fra siden [Releases](https://github.com/deepagent-ltd/deepagent-code/releases).

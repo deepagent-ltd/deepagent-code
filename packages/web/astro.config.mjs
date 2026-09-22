@@ -204,7 +204,7 @@ export default defineConfig({
             "zh-CN": "Windows",
             "zh-TW": "Windows",
           },
-          link: "windows-wsl",
+          link: "windows",
         },
         {
           label: "Usage",
