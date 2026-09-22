@@ -359,11 +359,13 @@ const runArchivePhase = (input: RunInput, journal: Journal) =>
 
 const ResiduePatterns = [/\.bak$/i, /repro\.db$/i, /^\..*\.tmp-/] as const
 
-const isResidue = (name: string, dbPath: string) =>
+/** Operational-residue classifier, shared with the M-4/M-5 governance modules. */
+export const isResidue = (name: string, dbPath: string) =>
   ResiduePatterns.some((pattern) => pattern.test(name)) ||
   (name.endsWith(".db") && path.resolve(path.dirname(dbPath), name) !== path.resolve(dbPath))
 
-const walk = async (dir: string): Promise<string[]> => {
+/** Recursive file walk, shared with the M-4/M-5 governance modules. */
+export const walk = async (dir: string): Promise<string[]> => {
   const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => [])
   const files: string[] = []
   for (const entry of entries) {
@@ -373,7 +375,7 @@ const walk = async (dir: string): Promise<string[]> => {
   return files
 }
 
-const sizeOf = async (filePath: string) => (await fs.stat(filePath).catch(() => null))?.size ?? 0
+export const sizeOf = async (filePath: string) => (await fs.stat(filePath).catch(() => null))?.size ?? 0
 
 const computeDiskAdvisory = async (input: RunInput, orchestrationId: string): Promise<DiskAdvisory> => {
   const dbDir = path.dirname(path.resolve(input.dbPath))

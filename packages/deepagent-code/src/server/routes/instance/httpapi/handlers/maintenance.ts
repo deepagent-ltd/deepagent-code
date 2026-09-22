@@ -17,6 +17,8 @@ import { MaintenanceApi, MaintenancePaths } from "../groups/maintenance"
 import { MdExport } from "@/server/md-export"
 import { MigrationOrchestrator } from "@/server/migration-orchestrator"
 import { MigrationReport } from "@/server/migration-report"
+import { BackupGovernor } from "@/server/backup-governor"
+import { DiskReclaim } from "@/server/disk-reclaim"
 import { CompositionDigest } from "@/effect/composition-digest"
 import { makeApiError, type ApiTypedError } from "../typed-error"
 import { Service as MaintenanceRegistryService, layer } from "../maintenance-registry"
@@ -694,6 +696,75 @@ const maintenanceOperations = (
       return { exists: report !== undefined, reportPath, ...(report === undefined ? {} : { report }) }
     })
 
+    // W-02 M-4 — backups governance. LIVE runtime only: the action mutates the backups root, and
+    // an incident shell must not rearrange the restore surface it depends on.
+    const governBackups = Effect.fn("MaintenanceHttpApi.backupsGovern")(function* (ctx: {
+      payload: { dir?: string; keep?: number }
+    }) {
+      const dir = withinBackups(ctx.payload.dir ?? backupsRoot())
+      if (dir === undefined) {
+        return yield* Effect.fail(
+          makeApiError("validation_failed", {
+            resource: ctx.payload.dir ?? backupsRoot(),
+            expected: "path under the backups root",
+            actual: ctx.payload.dir ?? backupsRoot(),
+          }),
+        )
+      }
+      const state = readState()
+      if (state !== undefined && state.mode !== "ready") {
+        return yield* Effect.fail(mapBootstrapStateToError(state, "backups.govern")!)
+      }
+      return yield* BackupGovernor.govern({
+        backupDir: dir,
+        ...(ctx.payload.keep === undefined ? {} : { keep: ctx.payload.keep }),
+      }).pipe(
+        Effect.mapError((error) =>
+          makeApiError("internal_error", {
+            resource: BackupGovernor.reportPathFor(dir),
+            expected: "backups governance completed",
+            actual: `${error.code}: ${error.detail}`,
+          }),
+        ),
+      )
+    })
+
+    // W-02 M-5 — disk reclaim. LIVE runtime only (deletion + an optional main-db VACUUM). Without
+    // confirm:true the call is an inventory/candidate report and nothing is removed.
+    const reclaimDisk = Effect.fn("MaintenanceHttpApi.diskReclaim")(function* (ctx: {
+      payload: { dir?: string; confirm?: boolean; vacuum?: boolean }
+    }) {
+      const dir = withinBackups(ctx.payload.dir ?? backupsRoot())
+      if (dir === undefined) {
+        return yield* Effect.fail(
+          makeApiError("validation_failed", {
+            resource: ctx.payload.dir ?? backupsRoot(),
+            expected: "path under the backups root",
+            actual: ctx.payload.dir ?? backupsRoot(),
+          }),
+        )
+      }
+      const state = readState()
+      if (state !== undefined && state.mode !== "ready") {
+        return yield* Effect.fail(mapBootstrapStateToError(state, "disk.reclaim")!)
+      }
+      return yield* DiskReclaim.reclaim({
+        db: database.db,
+        dbPath: path.resolve(Database.path()),
+        backupDir: dir,
+        ...(ctx.payload.confirm === undefined ? {} : { confirm: ctx.payload.confirm }),
+        ...(ctx.payload.vacuum === undefined ? {} : { vacuum: ctx.payload.vacuum }),
+      }).pipe(
+        Effect.mapError((error) =>
+          makeApiError("internal_error", {
+            resource: DiskReclaim.reportPathFor(dir),
+            expected: "disk reclaim completed",
+            actual: `${error.code}: ${error.detail}`,
+          }),
+        ),
+      )
+    })
+
     return {
       getBootstrapStatus,
       listBackups,
@@ -711,6 +782,8 @@ const maintenanceOperations = (
       migrationStatus,
       generateMigrationReport,
       migrationReportStatus,
+      governBackups,
+      reclaimDisk,
     }
   })
 
@@ -733,6 +806,8 @@ export const maintenanceHandlers = HttpApiBuilder.group(MaintenanceApi, "mainten
       .handle("migrationStatus", operations.migrationStatus)
       .handle("migrationReport", operations.generateMigrationReport)
       .handle("migrationReportStatus", operations.migrationReportStatus)
+      .handle("backupsGovern", operations.governBackups)
+      .handle("diskReclaim", operations.reclaimDisk)
       // The digest effect's requirements resolve from the shared route-graph context at request
       // time (same open V2 runtime the instance routes run on), not from this group's own layer.
       .handle("compositionDigest", () => CompositionDigest.current),
@@ -969,6 +1044,11 @@ export function maintenanceOnlyHandlersFor(filename: string, state: BootstrapSta
         .handle("migrationReportStatus", (ctx) =>
           readOnlyOperation(filename, state, (operations) => operations.migrationReportStatus(ctx)),
         )
+        // W-02 M-4/M-5 — governance and reclaim are live-runtime actions: an incident shell must
+        // not rearrange the restore surface it depends on, and never deletes residue from a store
+        // it does not own.
+        .handle("backupsGovern", () => Effect.fail(mapBootstrapStateToError(state, "backups.govern")!))
+        .handle("diskReclaim", () => Effect.fail(mapBootstrapStateToError(state, "disk.reclaim")!))
         .handle("compositionDigest", compositionDigest)
     }),
   )
