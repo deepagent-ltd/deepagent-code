@@ -1739,4 +1739,9 @@ export const dict = {
 
   "recovery.execution.running": "Agent execution running… (turn {{number}})",
   "recovery.execution.last": "Last agent execution: {{state}} (turn {{number}})",
+
+  "maintenance.degraded.banner.title": "Maintenance status unknown",
+  "maintenance.degraded.banner.description":
+    "The maintenance endpoint is unreachable; some protections are inactive.",
+  "maintenance.degraded.banner.dismiss": "Dismiss",
 }

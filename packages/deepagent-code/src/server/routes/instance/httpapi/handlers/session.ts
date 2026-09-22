@@ -480,9 +480,11 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof SummarizePayload.Type
     }) {
       yield* requireSession(ctx.params.sessionID)
-      // W0-1 — under the V2-only profile manual compaction routes through SessionV2.compact, which
-      // delegates to the host CurrentManualCompaction seam (the same SessionCompaction.create state
-      // machine below) after awaiting an idle session. Legacy profiles keep the direct path.
+      // RI-18 — under the V2-only profile manual compaction routes through SessionV2.compact, which
+      // admits a durable CompactionRequest (fixing the summary model identity and the history fence),
+      // wakes the drain, and awaits the request's terminal state; the summary provider turn runs
+      // inside the Core SessionCompaction chain with the full receipt contract. Legacy profiles keep
+      // the direct path.
       if (flags.coreV2Only) {
         const currentSession = yield* requireSession(ctx.params.sessionID)
         yield* coreV2Session.compact({

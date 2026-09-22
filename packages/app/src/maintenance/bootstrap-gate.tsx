@@ -1,6 +1,7 @@
-import { createMemo, createResource, Show, untrack, type ParentProps } from "solid-js"
+import { createMemo, createResource, createSignal, Show, untrack, type ParentProps } from "solid-js"
 import { Splash } from "@deepagent-code/ui/logo"
-import { useServer } from "@/context/server"
+import { ServerConnection, useServer } from "@/context/server"
+import { useLanguage } from "@/context/language"
 import type { MaintenanceClient } from "./maintenance-client"
 import { createMaintenanceClientForServer } from "./maintenance-client-server"
 import { MaintenanceShell } from "./MaintenanceShell"
@@ -10,7 +11,8 @@ import { MaintenanceShell } from "./MaintenanceShell"
 // the store is writable (`mode === "ready"`). A read-only or schema-blocked store
 // renders the maintenance shell. When the bootstrap endpoint cannot even be read
 // (network/decode) the gate degrades to the normal app rather than dead-locking the
-// user on an unreachable maintenance page.
+// user on an unreachable maintenance page — and shows a dismissible banner so the
+// incident state (maintenance protections inactive) is visible.
 
 type GateState =
   | { kind: "ready" }
@@ -19,6 +21,9 @@ type GateState =
 
 export function BootstrapGate(props: ParentProps) {
   const server = useServer()
+  const language = useLanguage()
+  // Dismissal is scoped to the active server key: switching servers re-arms the banner.
+  const [dismissed, setDismissed] = createSignal<ServerConnection.Key>()
 
   const [bootstrap] = createResource(() => server.key, async (key) => {
     if (!key) return { kind: "degraded" } as GateState
@@ -58,6 +63,28 @@ export function BootstrapGate(props: ParentProps) {
         </div>
       }
     >
+      {/* Degraded still renders the normal app (never blocks); the banner only warns that the
+          maintenance endpoint is unreachable, so its protections are not in effect. */}
+      <Show when={state()?.kind === "degraded" && dismissed() !== server.key}>
+        <div class="pointer-events-none fixed inset-x-0 top-0 z-50 flex justify-center px-4 pt-3">
+          <div
+            role="alert"
+            class="pointer-events-auto flex items-center gap-4 rounded-md border border-border-warning-base bg-surface-raised-base px-4 py-2 shadow-[var(--shadow-lg-border-base)]"
+          >
+            <div>
+              <div class="text-12-medium text-text-warning">{language.t("maintenance.degraded.banner.title")}</div>
+              <div class="text-11-regular text-text-weak">{language.t("maintenance.degraded.banner.description")}</div>
+            </div>
+            <button
+              type="button"
+              class="shrink-0 text-12-regular text-text-weak underline"
+              onClick={() => setDismissed(server.key)}
+            >
+              {language.t("maintenance.degraded.banner.dismiss")}
+            </button>
+          </div>
+        </div>
+      </Show>
       {props.children}
     </Show>
   )
