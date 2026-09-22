@@ -111,6 +111,35 @@ function toolDisplayOutput(state: SessionMessage.ToolStateCompleted): string {
   return json === "{}" || json === undefined ? "" : json
 }
 
+/**
+ * The V1 wire part metadata. Before the V2 projection this field carried the tool's own result
+ * metadata (bash exit/truncated/outputPath, plugin metadata, ...); the provider channel carried
+ * only protocol riders like plan outcomes. Projecting ONLY provider.resultMetadata therefore
+ * emptied the field for every locally-executed tool — the CLI lost bash exit codes and the live
+ * battery lost every truncation/exit assertion. The durable structured output is the metadata
+ * authority now: spread it, alias the bash exit vocabulary (`exitCode` → the legacy `exit` every
+ * V1 consumer reads), surface ToolOutputStore truncation through the legacy truncated/outputPath
+ * keys, and let the provider channel override on explicit key collisions (plan protocol riders).
+ */
+function legacyCompletedMetadata(
+  state: SessionMessage.ToolStateCompleted,
+  resultMetadata: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  const structured =
+    typeof state.structured === "object" && state.structured !== null && !Array.isArray(state.structured)
+      ? state.structured
+      : {}
+  const outputPaths = state.outputPaths ?? []
+  return {
+    ...structured,
+    ...(typeof structured.exitCode === "number" && structured.exit === undefined
+      ? { exit: structured.exitCode }
+      : {}),
+    ...(outputPaths.length > 0 ? { truncated: true, outputPath: outputPaths[0] } : {}),
+    ...(resultMetadata ?? {}),
+  }
+}
+
 function legacyAssistantToolState(
   part: SessionMessage.AssistantTool,
   identity: { readonly sessionID: SessionSchema.ID; readonly messageID: SessionV1.MessageID },
@@ -140,7 +169,7 @@ function legacyAssistantToolState(
       input: part.state.input,
       output: result,
       title: part.name,
-      metadata: part.provider?.resultMetadata ?? {},
+      metadata: legacyCompletedMetadata(part.state, part.provider?.resultMetadata),
       time: { start, end: DateTime.toEpochMillis(part.time.completed ?? part.time.created) },
       attachments: part.state.attachments?.map((file, index) => ({
         id: SessionV1.PartID.ascending(`prt_${part.id}_${index}`),

@@ -26,9 +26,19 @@ try {
     mkdir(home, { recursive: true }),
     mkdir(path.join(data, "node_modules"), { recursive: true }),
   ])
+  const workspaceConfig = liveWorkspaceConfig(
+    config,
+    { "*": "deny", read: { "*": "deny", "private.txt": "ask" } },
+    { "*": "deny", read: { "*": "deny", "private.txt": "ask" } },
+  )
   await Promise.all([
     Bun.write(path.join(workspace, "attachment.txt"), `${attachmentMarker}\n`),
     Bun.write(path.join(workspace, "private.txt"), `${readMarker}\n`),
+    // The Core V2 Location config (which owns the AgentV2 roster prompt admission resolves through)
+    // reads only config FILES — DEEPAGENT_CODE_CONFIG_CONTENT reaches the V1 app config alone, so
+    // without this file `--agent live-test` fails agent resolution with an empty roster. The
+    // in-process legacy harness gets the same effect via its fixture's deepagent-code.json.
+    Bun.write(path.join(workspace, "deepagent-code.json"), JSON.stringify(workspaceConfig)),
     Bun.write(
       path.join(data, "package.json"),
       JSON.stringify({ private: true, dependencies: { "@deepagent-code/plugin": "workspace:*" } }),
@@ -50,13 +60,7 @@ try {
     XDG_CACHE_HOME: path.join(root, "cache"),
     DEEPAGENT_CODE_TEST_HOME: home,
     DEEPAGENT_CODE_HOME: data,
-    DEEPAGENT_CODE_CONFIG_CONTENT: JSON.stringify(
-      liveWorkspaceConfig(
-        config,
-        { "*": "deny", read: { "*": "deny", "private.txt": "ask" } },
-        { "*": "deny", read: { "*": "deny", "private.txt": "ask" } },
-      ),
-    ),
+    DEEPAGENT_CODE_CONFIG_CONTENT: JSON.stringify(workspaceConfig),
     DEEPAGENT_CODE_DISABLE_PROJECT_CONFIG: "1",
     DEEPAGENT_CODE_PURE: "1",
     DEEPAGENT_CODE_DISABLE_AUTOUPDATE: "1",
@@ -65,6 +69,11 @@ try {
     DEEPAGENT_CODE_DISABLE_DEFAULT_PLUGINS: "1",
     DEEPAGENT_CODE_AUTH_CONTENT: "{}",
     DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE: config.apiKeyFile,
+    // The V2 owner gate is default-on and the CLI runs from source here (InstallationVersion
+    // "local" is not a 0.0.0- dev stamp), so without this pin the entry dev-mint is skipped
+    // ("not_dev_build") and the first prompt refuses with v2_owner_unavailable. Same pin as
+    // test/lib/cli-process.ts for every from-source CLI subprocess.
+    DEEPAGENT_CODE_V2_OWNER_DEV_MINT: "1",
     DEEPAGENT_ENABLED: "false",
     DEEPAGENT_MODE: "general",
   })
@@ -131,9 +140,17 @@ try {
       : [],
   )
   const toolInputPaths = await Promise.all(
-    toolInputs.map((input) =>
-      typeof input.filePath === "string" ? realpath(input.filePath).catch(() => undefined) : undefined,
-    ),
+    toolInputs.flatMap((input) => {
+      // V1 read took an absolute `filePath`; the V2 core read tool takes `path`, which may be
+      // workspace-relative. Resolve either against the workspace before the realpath check.
+      const raw =
+        typeof input.filePath === "string"
+          ? input.filePath
+          : typeof input.path === "string"
+            ? input.path
+            : undefined
+      return raw ? [realpath(path.isAbsolute(raw) ? raw : path.join(workspace, raw)).catch(() => undefined)] : []
+    }),
   )
   const expectedReadPath = await realpath(path.join(workspace, "private.txt"))
   const markerPresence = {
