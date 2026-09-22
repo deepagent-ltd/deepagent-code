@@ -739,6 +739,7 @@ export const routeManifest = [
       "packages/deepagent-code/src/tool/activity_facade.ts",
       "packages/deepagent-code/src/session/legacy-provider-resolution.ts",
       "packages/deepagent-code/src/session/legacy-provider-receipt-recovery.ts",
+      "packages/deepagent-code/src/session/provider-resolution.ts",
       "packages/deepagent-code/src/session/processor.ts",
       "packages/deepagent-code/src/session/recovery-transfer-guard.ts",
       "packages/deepagent-code/src/session/run-state.ts",

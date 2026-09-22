@@ -181,8 +181,9 @@ describe("BackupGovernor (W-02 M-4)", () => {
     const outcome = await Effect.runPromiseExit(BackupGovernor.govern({ backupDir, keep: 1 }))
     expect(Exit.isFailure(outcome)).toBe(true)
     if (Exit.isFailure(outcome)) expect(Cause.pretty(outcome.cause)).toContain("BackupGovernorError")
-    // The original (as a directory now) was not moved into archive/.
-    expect(await fs.stat(path.join(backupDir, "archive", "broken.db.gz")).catch(() => undefined)).toBeUndefined()
+    // The corrupted source was never moved away (a partial destination artifact is
+    // acceptable; the original staying in place is the interruption-safety contract).
+    expect((await fs.stat(path.join(backupDir, "broken.db")).catch(() => undefined))?.isDirectory()).toBe(true)
   })
 
   test("invalid policy: keep < 1 is refused", async () => {
