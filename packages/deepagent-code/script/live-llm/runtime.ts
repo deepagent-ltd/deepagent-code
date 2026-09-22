@@ -333,16 +333,22 @@ export async function runLegacyLiveCases(input: {
     const { consultPanel } = await import("../../src/panel/consult")
     const { makeTaskSubagentRunner } = await import("../../src/session/goal-loop-wiring")
     const { TestInstance, testInstanceStoreLayer, tmpdirScoped } = await import("../../test/fixture/fixture")
+    const { liveLocationServiceMap } = await import("./runner-frame")
 
     // Mirror production (src/session/v2-runner-frame.ts): SessionRuntime.layer threads ONE shared
     // delegation slot into every drain fiber, and the capture wires that holder to the SessionV2
     // service built by the same memoized graph. SessionV2.liveLayer would instead build a private
     // EMPTY slot per drain (SessionExecutionLocal.defaultLayer), so task delegation fails with
     // "root composition did not capture the V2 session service for delegation".
+    // A1-06: ONE harness runner-frame map (script/live-llm/runner-frame.ts) replaces Core's default
+    // LocationServiceMap at both reference sites below, so the memoized build shares a single map
+    // instance whose per-Location trees carry the production ContextToolRuntime seam (code_intel /
+    // context_query) instead of Core's unavailable stub.
+    const liveLocationMap = liveLocationServiceMap()
     const coreSessionRuntime = SessionRuntime.layer.pipe(
       Layer.provide(Database.defaultLayer),
       Layer.provide(EventV2.defaultLayer),
-      Layer.provide(LocationServiceMap.layer),
+      Layer.provide(liveLocationMap),
       Layer.provide(ProjectV2.defaultLayer),
       Layer.provide(TaskTool.delegationSlotLayer),
     )
@@ -1716,12 +1722,13 @@ export async function runLegacyLiveCases(input: {
                 ToolRegistry.productionLayer,
                 RuntimeFlags.defaultLayer,
                 InstanceRegistry.layer,
-                // Ambient shared placement: the session runtime below references this SAME layer
-                // object, so the runner and the program share ONE LocationServiceMap instance
-                // (Effect memoizes identical layer objects in one build). Without it ambient, the
-                // prompt path cannot resolve the V2 roster (agent never switches off the default)
-                // and the program cannot reach the asking Location's PermissionV2 to auto-reply.
-                LocationServiceMap.layer,
+                // Ambient shared placement: the session runtime below references this SAME
+                // harness runner-frame map instance, so the runner and the program share ONE
+                // LocationServiceMap instance (Effect memoizes identical layer objects in one
+                // build). Without it ambient, the prompt path cannot resolve the V2 roster (agent
+                // never switches off the default) and the program cannot reach the asking
+                // Location's PermissionV2 to auto-reply.
+                liveLocationMap,
                 sessionRuntimeLayer,
               ),
             ),
