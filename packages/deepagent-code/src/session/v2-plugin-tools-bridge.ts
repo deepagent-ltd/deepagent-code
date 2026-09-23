@@ -30,7 +30,12 @@ export const layer = Layer.effectDiscard(
             Effect.gen(function* () {
               if (disposed) return
               const custom = yield* registry.custom().pipe(Effect.provideService(InstanceRef, context))
-              const adapted = custom.map((def) => ({
+              // query_log is a host-owned filesystem tool, not a Core built-in. It shares the
+              // process ApplicationTools authority with plugin definitions while retaining its
+              // instance-bound archive path and the RuntimeFlags roster switch.
+              const host = (yield* registry.all().pipe(Effect.provideService(InstanceRef, context)))
+                .filter((def) => def.id === "query_log")
+              const adapted = [...custom.filter((def) => def.id !== "query_log"), ...host].map((def) => ({
                 id: def.id,
                 name: customToolName(def.id),
                 // The Core settle fiber has no V1 InstanceRef; preserve the defining instance.
