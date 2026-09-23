@@ -104,18 +104,6 @@ const promptPrepareEvent = (data: unknown): Sse.Event => ({
 const isPromptPrepareTerminal = (event: unknown) =>
   typeof event === "object" && event !== null && "type" in event && (event.type === "result" || event.type === "error")
 
-/** Map the unified facade's typed refusals onto the provider-resolution HTTP errors. */
-const mapProviderResolutionError =
-  (service: string) =>
-  (
-    error: SessionProviderResolution.Error,
-  ): HttpApiError.BadRequest | ApiNotFoundError | ConflictError | ServiceUnavailableError =>
-    error instanceof SessionProviderResolution.NotFound
-      ? notFound(error.reason)
-      : error instanceof SessionProviderResolution.Conflict
-        ? new ConflictError({ message: error.reason, resource: error.code })
-        : new ServiceUnavailableError({ service, message: error.reason })
-
 export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", (handlers) =>
   Effect.gen(function* () {
     const session = yield* Session.Service
@@ -1020,7 +1008,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           ...(ctx.payload.reason ? { reason: ctx.payload.reason } : {}),
           actorID: actor.userID,
         })
-        .pipe(Effect.mapError(mapProviderResolutionError("session.provider-resolution")))
+        .pipe(Effect.mapError(SessionError.mapProviderResolutionError("session.provider-resolution")))
       if (outcome.commandKind !== "abandon_exact")
         return yield* Effect.die(new Error(`facade returned an unexpected command: ${outcome.commandKind}`))
       if (outcome.authority !== "legacy_provider_receipt")
@@ -1037,7 +1025,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       const actor = yield* getWorkspaceContext()
       const outcome = yield* providerResolutionFacade
         .execute({ ...ctx.payload, sessionID: ctx.params.sessionID, actorID: actor.userID })
-        .pipe(Effect.mapError(mapProviderResolutionError("session.provider-resolution-command")))
+        .pipe(Effect.mapError(SessionError.mapProviderResolutionError("session.provider-resolution-command")))
       if (outcome.commandKind === "recover")
         return {
           commandKind: "recover" as const,

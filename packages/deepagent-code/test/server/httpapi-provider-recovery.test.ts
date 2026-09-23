@@ -832,7 +832,7 @@ describe("provider recovery HttpApi", () => {
 
         // A target-less abandon is a typed refusal, never an implicit default.
         const targetless = yield* run(seeded.session.id, { commandKind: "abandon_exact" })
-        expect(targetless.status).toBe(503)
+        expect(targetless.status).toBe(400)
 
         // The maintenance-grade exits are honest typed refusals (kept pending by the executor).
         const repair = yield* run(seeded.session.id, {
