@@ -563,9 +563,9 @@ export function createRoutes(corsOptions?: CorsOptions, runtimeFlagsLayer = Runt
  * Pre-business incident shell. It opens the store physically read-only and serves only the
  * authenticated maintenance contract; no Session/provider/tool/event runtime is constructed.
  */
-export function createMaintenanceRoutes(filename: string, state: BootstrapState, corsOptions?: CorsOptions) {
+export function createMaintenanceRoutes(filename: string, state: BootstrapState, corsOptions?: CorsOptions, onRestored?: () => void) {
   return HttpApiBuilder.layer(MaintenanceApi).pipe(
-    Layer.provide(maintenanceOnlyHandlersFor(filename, state)),
+    Layer.provide(maintenanceOnlyHandlersFor(filename, state, onRestored)),
     Layer.provide([httpApiAuthLayer, schemaErrorLayer]),
     Layer.provide([errorLayer, compressionLayer, corsVaryFix, cors(corsOptions)]),
     Layer.orDie,

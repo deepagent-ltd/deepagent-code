@@ -509,7 +509,7 @@ export const MaintenanceApi = HttpApi.make("maintenance").add(
           identifier: "maintenance.backup.restore",
           summary: "Verify or restore a backup",
           description:
-            "Verifies the selected backup. In the incident-only maintenance shell, dry_run:false acquires the exclusive database owner, quarantines the current DB/WAL/SHM, restores and forward-migrates, then requires a process restart. A live business runtime refuses installation.",
+            "Verifies the selected backup. In the incident-only maintenance shell, dry_run:false acquires the exclusive database owner, quarantines the current DB/WAL/SHM, restores and forward-migrates, then reopens the business runtime in the same process. A live business runtime refuses installation.",
         }),
       ),
       HttpApiEndpoint.get("upgradeStatus", MaintenancePaths.upgradeStatus, {
