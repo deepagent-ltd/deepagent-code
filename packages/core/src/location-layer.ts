@@ -179,7 +179,6 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()(
         Catalog.locationLayer,
         CommandV2.locationLayer,
         AgentV2.locationLayer,
-        PluginBoot.locationLayer,
         FileSystem.locationLayer,
         Watcher.locationLayer,
         Pty.locationLayer,
@@ -193,10 +192,13 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()(
         Layer.provide(resources),
         Layer.provide(base),
       )
+      // Boot plugins receive the canonical Location registration capability. Construct the
+      // registry first: placing PluginBoot in `base` would make this provide graph cyclic.
+      const pluginBoot = PluginBoot.locationLayer.pipe(Layer.provide(permissionsAndTools), Layer.provide(base))
       // The query-authority store is NOT self-provided here: the runner's session binds must land
       // in the store the host's graph facades resolve from, so it travels through the
       // LocationRuntimeHost seam (provided by `runtimeHost` below).
-      const services = Layer.mergeAll(base, resources, permissionsAndTools)
+      const services = Layer.mergeAll(base, resources, permissionsAndTools, pluginBoot)
       const image = Image.layer.pipe(Layer.provide(services))
       const mutation = FileMutation.locationLayer.pipe(Layer.provide(services))
       const searches = LocationSearch.layer.pipe(Layer.provide(Ripgrep.layer), Layer.provide(services))
