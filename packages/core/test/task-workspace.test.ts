@@ -6,6 +6,8 @@ import { realpathSync } from "node:fs"
 import path from "path"
 import { AgentV2 } from "@deepagent-code/core/agent"
 import { Database } from "@deepagent-code/core/database/database"
+import { AgentExecutionTable } from "@deepagent-code/core/deepagent/agent-execution-sql"
+import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
 import { EventV2 } from "@deepagent-code/core/event"
 import { FileMutation } from "@deepagent-code/core/file-mutation"
 import { FSUtil } from "@deepagent-code/core/fs-util"
@@ -635,6 +637,28 @@ describe("Core V2 TaskWorkspace stale-worktree reclamation (C-P2-08)", () => {
 // ── Child-Location write stack (real built-in write tool against a Location root) ─────────────
 
 describe("event subtask TaskWorkspace receipts", () => {
+  it.effect("does not reclaim a ready workspace during a live lease, then reclaims its orphan", () =>
+    Effect.gen(function* () {
+      const repo = yield* Effect.promise(() => makeRepo(path.join(tmpRoot(), "event-ready-orphan")))
+      const { db } = yield* services
+      const identity = {
+        eventID: DeepAgentEvent.ID.create(1_000), taskID: "event-ready-orphan:fix", generation: 1,
+      }
+      const receipt = yield* TaskWorkspace.prepareEvent(db, { ...identity, parentDirectory: repo, now: 1_000 })
+      yield* db.insert(AgentExecutionTable).values({
+        workspace_id: "wrk_event_orphan", event_id: identity.eventID, task_id: identity.taskID,
+        status: "running", owner_id: "owner-one", generation: 1, lease_expires_at: 10_000,
+        artifacts: [], tokens_used: 0, created_at: 1_000, updated_at: 1_000,
+      }).run().pipe(Effect.orDie)
+      expect((yield* TaskWorkspace.reclaimStale(db, { now: 5_000, retentionMs: 3_000 })).scanned).toBe(0)
+      expect((yield* db.select().from(EventTaskWorkspaceTable).all())[0]?.state).toBe("ready")
+      yield* Effect.promise(() => fs.access(receipt.directory))
+      expect((yield* TaskWorkspace.reclaimStale(db, { now: 10_001, retentionMs: 3_000 })).reclaimed).toBe(1)
+      expect((yield* db.select().from(EventTaskWorkspaceTable).all())[0]?.state).toBe("reclaimed")
+      expect(worktreePaths(repo)).not.toContain(receipt.directory)
+    }),
+  )
+
   it.effect("settlement failure becomes reclaimable without claiming preserved work succeeded", () =>
     Effect.gen(function* () {
       const repo = yield* Effect.promise(() => makeRepo(path.join(tmpRoot(), "event-failed-settle")))

@@ -33,6 +33,8 @@ import { spawnSync } from "node:child_process"
 import { and, eq, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm"
 import { Data, Effect } from "effect"
 import type { Database } from "../database/database"
+import { AgentExecutionTable } from "../deepagent/agent-execution-sql"
+import type { DeepAgentEvent } from "../deepagent/deepagent-event"
 import { Global } from "../global"
 import { Identifier } from "../id/id"
 import type { LocationRef } from "../location/ref"
@@ -839,6 +841,32 @@ export const reclaimStale = Effect.fn("TaskWorkspace.reclaimStale")(function* (
     const error = yield* reclaimOne(db, row, now)
     if (error === undefined) reclaimed++
     else failed.push({ runID: row.run_id, error })
+  }
+  // A process can die after ready preflight and before the runner settles. The old generation
+  // cannot be resumed automatically; after the grace period it is debt only if no live execution
+  // lease still owns that exact generation. CAS to failed before pruning so a concurrent settle
+  // cannot have its freshly retained worktree removed by the sweep.
+  const abandoned = yield* db.select().from(EventTaskWorkspaceTable)
+    .where(and(eq(EventTaskWorkspaceTable.state, "ready"), lte(EventTaskWorkspaceTable.time_created, cutoff)))
+    .all().pipe(Effect.orDie)
+  for (const row of abandoned) {
+    const owners = yield* db.select({
+      generation: AgentExecutionTable.generation,
+      status: AgentExecutionTable.status,
+      lease_expires_at: AgentExecutionTable.lease_expires_at,
+    }).from(AgentExecutionTable)
+      .where(and(
+        eq(AgentExecutionTable.event_id, row.event_id as DeepAgentEvent.ID),
+        eq(AgentExecutionTable.task_id, row.task_id),
+      ))
+      .all().pipe(Effect.orDie)
+    if (owners.some((owner) => owner.generation === row.generation && owner.status === "running" &&
+      owner.lease_expires_at !== null && owner.lease_expires_at > now)) continue
+    yield* db.update(EventTaskWorkspaceTable)
+      .set({ state: "failed", error: "stale_ready_without_live_execution", time_settled: row.time_created })
+      .where(and(eventIdentity({ eventID: row.event_id, taskID: row.task_id, generation: row.generation }),
+        eq(EventTaskWorkspaceTable.state, "ready")))
+      .pipe(Effect.orDie)
   }
   const eventStale = yield* db
     .select()
