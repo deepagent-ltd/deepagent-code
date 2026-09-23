@@ -23,6 +23,7 @@ try {
   const pluginTool = pathToFileURL(path.resolve(import.meta.dir, "../../../plugin/src/tool.ts")).href
   const toolsArtifact = await runLegacyLiveCases({
     suite: "tool-ecosystem-tools-legacy",
+    expectedApplicationToolIDs: [customToolName],
     permission: { "*": "deny" },
     primaryPermission: {
       "*": "deny",
@@ -100,6 +101,7 @@ try {
   })
   const codeIntelArtifact = await runLegacyLiveCases({
     suite: "tool-ecosystem-code-intel-legacy",
+    expectedApplicationToolIDs: [],
     permission: { "*": "deny" },
     primaryPermission: { "*": "deny", code_intel: "allow", lsp: "allow" },
     files: { "src/evidence.ts": "export const ecosystemSentinel = 'code-intel-evidence'\n" },
@@ -115,6 +117,7 @@ try {
   })
   const logsArtifact = await runLegacyLiveCases({
     suite: "tool-ecosystem-logs-legacy",
+    expectedApplicationToolIDs: [],
     permission: { "*": "deny" },
     primaryPermission: { "*": "deny", query_log: "allow" },
     sharedSession: true,

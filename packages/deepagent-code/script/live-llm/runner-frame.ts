@@ -14,11 +14,33 @@ import { SessionRunner } from "@deepagent-code/core/session/runner"
 import { V2ProviderTurn } from "@deepagent-code/core/session/runner/v2-provider-turn"
 import { Effect, Layer } from "effect"
 import { CodeIntelFacade } from "../../src/code-intelligence/facade"
+import { CompositionDigest } from "../../src/effect/composition-digest"
 import { ContextQueryFacade } from "../../src/context-federation/context-query-facade"
 import { LocationIndexRuntime } from "../../src/location-index/runtime"
 import { InstanceStore } from "../../src/project/instance-store"
 import { V2RunnerFrame } from "../../src/session/v2-runner-frame"
 import { testInstanceStoreLayer } from "../../test/fixture/fixture"
+
+// The harness runs the same process-local Session owner as production, but installs its own
+// Location host for isolated fixtures. Declare that frame instead of inheriting the unqualified
+// Core fallback; G3 checks the exact deviations below against the production frame.
+export const liveFrameIdentity: CompositionDigest.FrameIdentityShape = {
+  sessionOwner: V2RunnerFrame.frameIdentity.sessionOwner,
+  locationHost: {
+    host: "deepagent-code/script/live-llm:runnerFrameHost",
+    idleTimeToLive: V2RunnerFrame.frameIdentity.locationHost.idleTimeToLive,
+    seams: [
+      "core/ContextToolRuntime:instance-scoped",
+      "core/ProductionV2Sources:empty",
+      "core/IMExternalDelivery:unavailable",
+      "core/ContextQueryAuthorization:process-local-store",
+      "core/SessionRunner.CurrentOnSessionSettled:none",
+      "core/SessionRunner.CurrentToolSettleGate:none",
+      "core/V2ProviderTurn.CurrentBuildIdentity",
+      "core/V2ProviderTurn.CurrentOwnerAuthorizationPublicKey",
+    ],
+  },
+}
 
 // A1-06: the live harness used Core's `defaultLocationRuntimeHost`, whose ContextToolRuntime seam is
 // the honest-unavailable stub — so V2 live runs could never call the canonical code_intel /

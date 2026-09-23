@@ -198,6 +198,8 @@ export async function runLegacyLiveCases(input: {
   inspectPlan?: boolean
   subagentIntensity?: "inherit" | "downgrade"
   environment?: Readonly<Record<string, string>>
+  /** G3: exact process-scoped tools the fixture expects the live bridge to register. */
+  expectedApplicationToolIDs?: ReadonlyArray<string>
   panel?: LegacyPanelCase
   v4Event?: V4LiveEventCase
 }) {
@@ -346,8 +348,10 @@ export async function runLegacyLiveCases(input: {
     const { consultPanel } = await import("../../src/panel/consult")
     const { makeTaskSubagentRunner } = await import("../../src/session/goal-loop-wiring")
     const { TestInstance, testInstanceStoreLayer, tmpdirScoped } = await import("../../test/fixture/fixture")
-    const { liveLocationServiceMap } = await import("./runner-frame")
+    const { liveFrameIdentity, liveLocationServiceMap } = await import("./runner-frame")
+    const { assertHarnessComposition } = await import("./composition-gate")
     const { Root } = await import("../../src/effect/root")
+    const { CompositionDigest } = await import("../../src/effect/composition-digest")
 
     // Mirror production (src/session/v2-runner-frame.ts): SessionRuntime.layer threads ONE shared
     // delegation slot into every drain fiber, and the capture wires that holder to the SessionV2
@@ -368,6 +372,7 @@ export async function runLegacyLiveCases(input: {
     )
     const sessionRuntimeLayer = Layer.mergeAll(
       coreSessionRuntime,
+      Layer.succeed(CompositionDigest.FrameIdentity, liveFrameIdentity),
       TaskTool.captureDelegationServiceLayer.pipe(
         Layer.provide(TaskTool.delegationSlotLayer),
         Layer.provide(coreSessionRuntime),
@@ -395,6 +400,7 @@ export async function runLegacyLiveCases(input: {
       const instance = yield* TestInstance
       const parentInstance = yield* InstanceRef
       if (!parentInstance) return yield* Effect.die(new Error("Live LLM harness has no parent InstanceRef"))
+      const composition = yield* CompositionDigest.current
       const permissions = yield* Permission.Service
       const questions = yield* Question.Service
       const agents = input.panel || input.v4Event ? yield* Agent.Service : undefined
@@ -1750,6 +1756,7 @@ export async function runLegacyLiveCases(input: {
         }),
       )
       return {
+        composition,
         observations,
         workspace: {
           directory: instance.directory,
@@ -1936,6 +1943,7 @@ export async function runLegacyLiveCases(input: {
         ),
       ),
     )
+    assertHarnessComposition(result.composition, input.expectedApplicationToolIDs)
     const providerErrors = result.observations.flatMap((observation) => observation.providerErrors)
     const v4Errors = result.v4
       ? [
@@ -1957,6 +1965,7 @@ export async function runLegacyLiveCases(input: {
       status: errors.length > 0 ? ("failed" as const) : ("passed" as const),
       error: errors.length > 0 ? errors : undefined,
       fingerprint: { ...modelFingerprint(config), runtimeProviderID: liveProviderID },
+      composition: result.composition,
       preflight: { durationMs: preflight.durationMs },
       sandbox: sandbox?.evidence,
       initialVerifier,
