@@ -38,6 +38,8 @@ export const collectEnhanced = (input: {
   providerID: string
   modelID: string
   onDelta?: (text: string) => Effect.Effect<void>
+  /** Clock for provider deadline checks; callers normally use wall time. */
+  now?: () => number
 }) =>
   Effect.gen(function* () {
     let emitted = ""
@@ -121,21 +123,22 @@ export const collectEnhanced = (input: {
     if ("error" in admitted)
       return { ok: false as const, status: 409, code: "request_conflict", message: "Request ID conflicts with an admitted prompt" }
 
-    const deadline = Date.now() + input.tenant.deadline_ms
+    const now = input.now ?? Date.now
+    const deadline = now() + input.tenant.deadline_ms
     const timeout = { ok: false as const, status: 504, code: "enhancement_timeout", message: "Enhanced response timed out" }
     while (true) {
       const activity = yield* input.db.select().from(SessionActivityTable)
         .where(and(eq(SessionActivityTable.session_id, input.sessionID), eq(SessionActivityTable.trigger_input_id, admitted.value.id)))
         .get()
       if (!activity) {
-        if (Date.now() >= deadline) return timeout
+        if (now() >= deadline) return timeout
         yield* Effect.sleep("50 millis")
         continue
       }
       const trigger = yield* input.db.select({ promoted_seq: SessionInputTable.promoted_seq }).from(SessionInputTable)
         .where(eq(SessionInputTable.id, admitted.value.id)).get()
       if (trigger?.promoted_seq === null || trigger?.promoted_seq === undefined) {
-        if (Date.now() >= deadline) return timeout
+        if (now() >= deadline) return timeout
         yield* Effect.sleep("50 millis")
         continue
       }
@@ -175,7 +178,7 @@ export const collectEnhanced = (input: {
       }
       if (activity.state === "failed" || activity.state === "interrupted" || message?.type === "assistant" && message.error)
         return { ok: false as const, status: 502, code: "enhancement_failed", message: "Enhanced execution failed" }
-      if ((Date.now() >= settlementDeadline && activity.state !== "settled") ||
+      if ((now() >= settlementDeadline && activity.state !== "settled") ||
         (activity.state === "settled" && (activity.settled_at ?? 0) > settlementDeadline))
         return timeout
       if (activity.state !== "settled") {
