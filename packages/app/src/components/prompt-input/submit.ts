@@ -1,4 +1,5 @@
 import type { Message, Part, Session } from "@deepagent-code/sdk/client"
+import { toV2Prompt } from "@deepagent-code/sdk/client"
 import { showToast } from "@/utils/toast"
 import { base64Encode } from "@deepagent-code/core/util/encode"
 import { Binary } from "@deepagent-code/core/util/binary"
@@ -440,11 +441,15 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
       metadata,
     }
     input.onPromptInput?.({ promptInput, optimisticParts: submittedParts.optimisticParts })
-    const admission = await input.client.session.promptAsync(promptInput)
-    if (!admission.data?.messageID) throw new Error("Prompt admission returned no durable receipt")
+    const admission = await input.client.v2.session.prompt({
+      sessionID: promptInput.sessionID,
+      id: promptInput.messageID,
+      prompt: toV2Prompt(promptInput),
+    })
+    if (!admission.data?.data.id) throw new Error("Prompt admission returned no durable receipt")
     // A chat steer is only projected into canonical history at the next provider boundary. Keep the
     // client-keyed placeholder visible until that correlated message.updated event replaces it.
-    if (admission.data.messageID !== messageID && admission.data.delivery !== "steer") remove()
+    if (admission.data.data.id !== messageID && admission.data.data.delivery !== "steer") remove()
     return true
   } catch (err) {
     batch(() => {

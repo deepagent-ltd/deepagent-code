@@ -425,6 +425,15 @@ export const ContinuationResolutionPayload = Schema.Struct(
 export const ImportSnapshotPayload = Schema.Struct({
   bundle: Schema.String,
 })
+export const ExportBundlePayload = Schema.Struct({
+  tier: Schema.Literals(["conversation", "conversation_metadata", "session_logs"]),
+  archive: Schema.optional(Schema.Literal("zip")),
+  redact: Schema.optional(Schema.Boolean),
+})
+export const ImportBundlePayload = Schema.Struct({ bundle: Schema.String })
+export const ShareBundlePayload = Schema.Struct({ tier: Schema.Literals(["conversation", "conversation_metadata", "session_logs"]) })
+export const ImportBundleSharePayload = Schema.Struct({ url: Schema.String })
+export const RevokeBundleSharePayload = Schema.Struct({ url: Schema.String, revokeToken: Schema.String })
 export const ImportSnapshotResult = Schema.Struct({
   sessionID: Schema.String,
   messages: Schema.Number,
@@ -473,6 +482,12 @@ export const SessionPaths = {
   continuationResolution: `${root}/:sessionID/continuation-resolution`,
   exportSnapshot: `${root}/:sessionID/export`,
   importSnapshot: `${root}/import-snapshot`,
+  exportBundle: `${root}/:sessionID/export-bundle`,
+  exportBundleStream: `${root}/:sessionID/export-bundle-stream`,
+  importBundle: `${root}/import-bundle`,
+  shareBundle: `${root}/:sessionID/share-bundle`,
+  importBundleShare: `${root}/import-bundle-share`,
+  revokeBundleShare: `${root}/revoke-bundle-share`,
 } as const
 
 export const SessionApi = HttpApi.make("session")
@@ -756,6 +771,7 @@ export const SessionApi = HttpApi.make("session")
             identifier: "session.prompt",
             summary: "Send message",
             description: "Create and send a new message to a session, streaming the AI response.",
+            deprecated: true,
           }),
         ),
         HttpApiEndpoint.post("promptPrepare", SessionPaths.promptPrepare, {
@@ -816,6 +832,7 @@ export const SessionApi = HttpApi.make("session")
             summary: "Send async message",
             description:
               "Durably admit a new message or steer, start session execution if needed, and return without waiting for model completion.",
+            deprecated: true,
           }),
         ),
         HttpApiEndpoint.post("command", SessionPaths.command, {
@@ -1041,7 +1058,7 @@ export const SessionApi = HttpApi.make("session")
             summary: "Export a session snapshot",
             description:
               "Export the session's conversation (session + messages + parts) as a self-describing " +
-              "snapshot bundle (JSON). The bundle re-imports on another device as a fresh, continuable session.",
+              "snapshot bundle (JSON). The bundle re-imports on another device as a fresh, read-only archive.",
           }),
         ),
         HttpApiEndpoint.post("importSnapshot", SessionPaths.importSnapshot, {
@@ -1054,8 +1071,53 @@ export const SessionApi = HttpApi.make("session")
             summary: "Import a session snapshot",
             description:
               "Import a previously exported session bundle into the current instance as a fresh, " +
-              "continuable session (new IDs, re-rooted to the current project/directory).",
+              "read-only archive (new IDs, re-rooted to the current project/directory).",
           }),
+        ),
+        HttpApiEndpoint.post("exportBundle", SessionPaths.exportBundle, {
+          params: { sessionID: SessionID },
+          payload: ExportBundlePayload,
+          success: Schema.Struct({ bundle: Schema.String, archive: Schema.Literal("zip") }),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({ identifier: "session.exportBundle", summary: "Export a verified read-only session ZIP" }),
+        ),
+        HttpApiEndpoint.post("exportBundleStream", SessionPaths.exportBundleStream, {
+          params: { sessionID: SessionID },
+          payload: ExportBundlePayload,
+          success: Schema.String.pipe(HttpApiSchema.asText({ contentType: "text/event-stream" })),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({ identifier: "session.exportBundleStream", summary: "Stream ZIP export progress and result" }),
+        ),
+        HttpApiEndpoint.post("importBundle", SessionPaths.importBundle, {
+          payload: ImportBundlePayload,
+          success: ImportSnapshotResult,
+          error: [HttpApiError.BadRequest],
+        }).annotateMerge(
+          OpenApi.annotations({ identifier: "session.importBundle", summary: "Import a verified read-only session ZIP" }),
+        ),
+        HttpApiEndpoint.post("shareBundle", SessionPaths.shareBundle, {
+          params: { sessionID: SessionID },
+          payload: ShareBundlePayload,
+          success: Schema.Struct({ id: Schema.String, url: Schema.String, revokeToken: Schema.String, expiresAt: Schema.Number }),
+          error: [HttpApiError.BadRequest, ApiNotFoundError, ServiceUnavailableError],
+        }).annotateMerge(
+          OpenApi.annotations({ identifier: "session.shareBundle", summary: "Upload a redacted session ZIP to the configured share host" }),
+        ),
+        HttpApiEndpoint.post("importBundleShare", SessionPaths.importBundleShare, {
+          payload: ImportBundleSharePayload,
+          success: ImportSnapshotResult,
+          error: [HttpApiError.BadRequest, ServiceUnavailableError],
+        }).annotateMerge(
+          OpenApi.annotations({ identifier: "session.importBundleShare", summary: "Import a verified ZIP from a share link" }),
+        ),
+        HttpApiEndpoint.post("revokeBundleShare", SessionPaths.revokeBundleShare, {
+          payload: RevokeBundleSharePayload,
+          success: Schema.Struct({ revoked: Schema.Boolean }),
+          error: [HttpApiError.BadRequest, ServiceUnavailableError],
+        }).annotateMerge(
+          OpenApi.annotations({ identifier: "session.revokeBundleShare", summary: "Revoke a session ZIP share" }),
         ),
       )
       .annotateMerge(

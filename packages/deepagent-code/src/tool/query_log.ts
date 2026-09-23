@@ -5,6 +5,8 @@ import { DeepAgentContext } from "@deepagent-code/core/deepagent/index"
 import { tolerantNumber } from "@deepagent-code/core/schema"
 import * as Tool from "./tool"
 import DESCRIPTION from "./query_log.txt"
+import { Session } from "@/session/session"
+import { ConversationLogWriter } from "@/session/conversation-log-writer"
 
 // V3.8 Appendix-A C2.5 (Stage 5) — the query_log tool. The Conversation Log is the complete,
 // append-only archive of EVERYTHING (messages incl. edited/withdrawn originals, full reasoning, full
@@ -61,12 +63,21 @@ const logFileFor = (sessionID: string): string =>
 export const QueryLogTool = Tool.define(
   "query_log",
   Effect.gen(function* () {
+    const sessions = yield* Session.Service
     return {
       description: DESCRIPTION,
       parameters: Parameters,
       execute: (params: Params, ctx: Tool.Context) =>
         Effect.gen(function* () {
           yield* ctx.ask({ permission: "query_log", patterns: ["*"], always: ["*"], metadata: {} })
+
+          // V2 turns project into the compatibility message store without driving the old
+          // SessionPrompt loop. Reconcile that durable projection into the append-only archive
+          // before reading it, so a freshly promoted V2 conversation is queryable on demand.
+          const projected = yield* sessions.messages({ sessionID: ctx.sessionID }).pipe(
+            Effect.orElseSucceed(() => []),
+          )
+          yield* ConversationLogWriter.record(yield* ConversationLogWriter.make(ctx.sessionID), projected)
 
           const limit = Math.min(params.limit ?? config.queryLogDefaultLimit, config.queryLogMaxLimit)
           const file = logFileFor(ctx.sessionID)

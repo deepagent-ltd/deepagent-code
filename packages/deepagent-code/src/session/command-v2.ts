@@ -479,7 +479,7 @@ export const productionLayer = Layer.suspend(() =>
 )
 
 /** Standalone default. Production roots must provide one shared SessionV2 runtime to productionLayer. */
-export const defaultLayer = productionLayer.pipe(Layer.provide(SessionV2.liveLayer))
+export const testLayer = productionLayer.pipe(Layer.provide(SessionV2.liveLayer))
 
 const ModelRef = Schema.Struct({
   providerID: ProviderV2.ID,

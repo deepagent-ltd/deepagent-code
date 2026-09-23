@@ -76,6 +76,7 @@ const setup = Effect.gen(function* () {
       directory: "/project",
       title: "test",
       version: "test",
+      v2_authority: true,
     })
     .onConflictDoNothing()
     .run()
@@ -591,6 +592,7 @@ describe("SessionV2.prompt", () => {
           directory: "/project",
           title: "other",
           version: "test",
+          v2_authority: true,
         })
         .onConflictDoNothing()
         .run()

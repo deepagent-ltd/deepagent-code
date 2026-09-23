@@ -21,7 +21,7 @@ import { SessionProjector } from "@deepagent-code/core/session/projector"
 import { SessionExecution } from "@deepagent-code/core/session/execution"
 import { SessionInput } from "@deepagent-code/core/session/input"
 import { SessionEvent } from "@deepagent-code/core/session/event"
-import { SessionTable } from "@deepagent-code/core/session/sql"
+import { MessageTable, SessionTable } from "@deepagent-code/core/session/sql"
 import { SessionStore } from "@deepagent-code/core/session/store"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 import { testEffect } from "./lib/effect"
@@ -314,6 +314,44 @@ describe("SessionV2.create", () => {
         { cursor: 0, event: { type: "session.created", version: 2 } },
         { cursor: 1, event: { type: "session.next.prompt.admitted", data: { prompt: { text: "Hello" } } } },
         { cursor: 2, event: { type: "session.next.prompt.promoted" } },
+      ])
+    }),
+  )
+
+  it.effect("keeps prompt metadata and model selection durable across an exact retry", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const created = yield* session.create({ location })
+      const prompt = new Prompt({
+        text: "Selected turn",
+        metadata: { deepagent: { prompt_pipeline: { mode: "intelligence" } } },
+        model: { providerID: "provider", id: "selected", variant: "fast" },
+      })
+      const admitted = yield* session.prompt({ sessionID: created.id, prompt, resume: false })
+      yield* session.switchModel({
+        sessionID: created.id,
+        model: { providerID: ProviderV2.ID.make("provider"), id: ModelV2.ID.make("later") },
+      })
+      expect((yield* session.prompt({ sessionID: created.id, id: admitted.id, prompt, resume: false })).id).toBe(admitted.id)
+      expect((yield* session.get(created.id)).model?.id).toBe(ModelV2.ID.make("later"))
+      yield* SessionInput.promoteSteers(db, events, created.id, Number.MAX_SAFE_INTEGER)
+      const user = (yield* session.messages({ sessionID: created.id })).find((message) => message.type === "user")
+      expect(user?.metadata).toEqual(prompt.metadata)
+      expect(user?.type === "user" ? user.model?.id : undefined).toBe("selected")
+      const legacy = yield* db.select().from(MessageTable).where(eq(MessageTable.id, SessionV1.MessageID.ascending(admitted.id))).get()
+      expect(legacy?.data).toMatchObject({ metadata: prompt.metadata, model: { modelID: "selected", variant: "fast" } })
+      expect(
+        (yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id)).all())
+          .slice(0, 5)
+          .map((event) => event.type),
+      ).toEqual([
+        "session.created.2",
+        "session.next.model.switched.1",
+        "session.next.prompt.admitted.1",
+        "session.next.model.switched.1",
+        "session.next.prompt.promoted.1",
       ])
     }),
   )

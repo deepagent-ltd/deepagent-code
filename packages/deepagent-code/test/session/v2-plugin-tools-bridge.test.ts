@@ -195,6 +195,37 @@ describe("V2PluginToolsBridge native execution semantics", () => {
     expect(adaptCustomTool({ ...metadataTool, id: "1-invalid!" })).toBeUndefined()
   })
 
+  test("registers the host query_log tool from the instance roster and removes it on disposal", async () => {
+    const hostInstance = { ...instance }
+    const hostRt = ManagedRuntime.make(
+      Layer.mergeAll(
+        ApplicationTools.layer,
+        InstanceRegistry.layer,
+        V2PluginToolsBridge.layer.pipe(
+          Layer.provide(ApplicationTools.layer),
+          Layer.provide(InstanceRegistry.layer),
+          Layer.provide(Layer.succeed(ToolRegistry.Service, ToolRegistry.Service.of({
+            ids: () => Effect.succeed(["query_log"]),
+            all: () => Effect.succeed([{ ...metadataTool, id: "query_log" }]),
+            custom: () => Effect.succeed([]),
+            named: () => Effect.die("unused"),
+            tools: () => Effect.die("unused"),
+          }))),
+        ),
+      ),
+    )
+    try {
+      await hostRt.runPromise(InstanceRegistry.initializeInstance(hostInstance))
+      expect(await hostRt.runPromise(Effect.map(ApplicationTools.Service, (service) =>
+        service.entries().has("query_log")))).toBe(true)
+      await hostRt.runPromise(InstanceRegistry.disposeInstanceState(hostInstance))
+      expect(await hostRt.runPromise(Effect.map(ApplicationTools.Service, (service) =>
+        service.entries().has("query_log")))).toBe(false)
+    } finally {
+      await hostRt.dispose()
+    }
+  })
+
   const rt = ManagedRuntime.make(
     Layer.mergeAll(
       ApplicationTools.layer,

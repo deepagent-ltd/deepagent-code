@@ -986,8 +986,8 @@ export const layer = Layer.effect(
 
     const invalidate = Effect.fn("Config.invalidate")(function* () {
       yield* invalidateGlobal
-      const instance = yield* Effect.serviceOption(InstanceRef)
-      if (Option.isSome(instance)) yield* InstanceState.invalidate(state)
+      const instance = yield* InstanceRef
+      if (instance) yield* InstanceState.invalidate(state)
     })
 
     const watchChanges = Effect.fn("Config.watch")(function* (changed: () => Effect.Effect<void>) {

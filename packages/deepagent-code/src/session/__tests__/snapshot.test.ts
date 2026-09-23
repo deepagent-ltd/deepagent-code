@@ -256,7 +256,7 @@ const progressOf = (db: any, activityID: string) =>
     .all()
     .pipe(Effect.orDie)
 
-describe("session snapshot export/import (complete scene + continue)", () => {
+describe("legacy five-table session snapshot archive", () => {
   it("round-trips conversation + activity markers with fresh IDs and consistent ownership", async () => {
     const dbPath = join(tmpdir(), `snap-rt-${Date.now()}.sqlite`)
     await withDb(
@@ -266,6 +266,7 @@ describe("session snapshot export/import (complete scene + continue)", () => {
         const srcID = "ses_src_rt"
         yield* seedAuthority(db)
         const { userMsg, asstMsg } = yield* seedConversation(db, srcID)
+        yield* db.update(SessionTable).set({ v2_authority: true }).where(eq(SessionTable.id, srcID as never)).run()
         const srcActivityID = yield* seedActivity(db, srcID, asstMsg, userMsg)
 
         const snapshot = yield* exportSessionSnapshot(srcID)
@@ -279,6 +280,7 @@ describe("session snapshot export/import (complete scene + continue)", () => {
         const imported = yield* importSessionSnapshot({ snapshot: parsed, projectID: PROJECT_ID, directory: DIRECTORY })
         const newID = imported.sessionID
         expect(newID).not.toBe(srcID)
+        expect((yield* sessionRow(db, newID))?.v2_authority).toBe(false)
 
         // conversation reconstructed with fresh IDs
         const msgs = yield* messagesOf(db, newID)
@@ -300,13 +302,13 @@ describe("session snapshot export/import (complete scene + continue)", () => {
         expect(prog[0].assistant_message_id).toBe(msgs[1].id)
         // ownership consistency required by message-v2.ts:419
         expect(acts[0].session_id).toBe(msgs[1].session_id)
-        // no active activity remains -> continuable
+        // No active legacy activity remains; V2 authority is still absent.
         expect(acts.some((a: any) => a.state === "active")).toBe(false)
       }),
     )
   })
 
-  it("guarantees continue: a mid-run (active) source is terminalized, no active activity remains", async () => {
+  it("terminalizes a mid-run legacy source without granting V2 authority", async () => {
     const dbPath = join(tmpdir(), `snap-cont-${Date.now()}.sqlite`)
     await withDb(
       dbPath,

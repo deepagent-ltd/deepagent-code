@@ -1,5 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, mock, test } from "bun:test"
 import type { ContextItem, Prompt } from "@/context/prompt"
+import { toV2Prompt } from "@deepagent-code/sdk/client"
 
 let createPromptSubmit: typeof import("./submit").createPromptSubmit
 
@@ -33,7 +34,7 @@ const sentPromptAsync: Array<{
   directory: string
   metadata?: unknown
   text?: string
-  parts?: Array<{ id?: string; type: string; text?: string }>
+  parts?: unknown[]
   messageID?: string
   intentID?: string
   intentSource?: string
@@ -74,30 +75,31 @@ const clientFor = (directory: string) => {
         return { data: undefined }
       },
       prompt: async () => ({ data: undefined }),
-      promptAsync: async (payload?: {
-        metadata?: unknown
-        parts?: Array<{ type: string; text?: string }>
-        messageID?: string
-        intentID?: string
-        intentSource?: string
-        intentVariant?: string
+      promptAsync: async () => { throw new Error("legacy prompt path") },
+      command: async () => ({ data: undefined }),
+      abort: async () => ({ data: undefined }),
+    },
+    v2: { session: {
+      prompt: async (payload: {
+        id?: string
+        prompt: { text: string; metadata?: unknown; files?: unknown[]; agents?: unknown[]; intent?: { id?: string; source?: string; variant?: string } }
       }) => {
         const sent = {
           directory,
-          metadata: payload?.metadata,
-          text: payload?.parts?.find((part) => part.type === "text")?.text,
-          parts: payload?.parts,
-          messageID: payload?.messageID,
-          intentID: payload?.intentID,
-          intentSource: payload?.intentSource,
-          intentVariant: payload?.intentVariant,
+          metadata: payload.prompt.metadata,
+          text: payload.prompt.text,
+          parts: [{ type: "text", text: payload.prompt.text }, ...(payload.prompt.files ?? []), ...(payload.prompt.agents ?? [])],
+          messageID: payload.id,
+          intentID: payload.prompt.intent?.id,
+          intentSource: payload.prompt.intent?.source,
+          intentVariant: payload.prompt.intent?.variant,
         }
         sentPromptAsync.push(sent)
         if (
-          (sent.text === "receipt lost" || sent.text === "Edited retry goal") &&
-          !rejectedAdmissionReceipts.has(sent.text)
+          (sent.text?.includes("receipt lost") || sent.text?.includes("Edited retry goal")) &&
+          !rejectedAdmissionReceipts.has(sent.text ?? "")
         ) {
-          rejectedAdmissionReceipts.add(sent.text)
+          rejectedAdmissionReceipts.add(sent.text ?? "")
           throw new Error("connection closed after durable admission")
         }
         if (sent.text === "prompt waits after admission") {
@@ -105,11 +107,9 @@ const clientFor = (directory: string) => {
             releaseDelayedPrompt = resolve
           })
         }
-        return { data: { messageID: "msg_server_admitted", delivery: "steer" } }
+        return { data: { data: { id: "msg_server_admitted", delivery: "steer" } } }
       },
-      command: async () => ({ data: undefined }),
-      abort: async () => ({ data: undefined }),
-    },
+    } },
     client: {
       request: async (payload: {
         url?: string
@@ -196,6 +196,7 @@ beforeAll(async () => {
   }))
 
   mock.module("@deepagent-code/sdk/client", () => ({
+    toV2Prompt,
     createDeepAgentCodeClient: (input: { directory: string }) => {
       createdClients.push(input.directory)
       return clientFor(input.directory)

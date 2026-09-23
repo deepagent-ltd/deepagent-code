@@ -459,7 +459,17 @@ const v2Created = (info: Info) => ({
     }),
     subpath: info.path === undefined ? undefined : RelativePath.make(info.path),
     title: info.title,
+    summary: info.summary
+      ? {
+          additions: info.summary.additions,
+          deletions: info.summary.deletions,
+          files: info.summary.files,
+          diffManifest: info.summary.diffManifest,
+        }
+      : undefined,
     metadata: info.metadata,
+    share: info.share,
+    preview: info.preview,
     agent: info.agent ? AgentV2.ID.make(info.agent) : undefined,
     model: info.model
       ? { id: ModelV2.ID.make(info.model.id), providerID: ProviderV2.ID.make(info.model.providerID) }
@@ -781,7 +791,6 @@ export interface Interface {
   readonly setPreview: (input: { sessionID: SessionID; preview: string }) => Effect.Effect<void>
   readonly setArchived: (input: { sessionID: SessionID; time?: number | null }) => Effect.Effect<void>
   readonly setMetadata: (input: typeof SetMetadataInput.Type) => Effect.Effect<void>
-  readonly setPermission: (input: { sessionID: SessionID; permission: PermissionV1.Ruleset }) => Effect.Effect<void>
   readonly setRevert: (input: {
     sessionID: SessionID
     revert: Info["revert"]
@@ -863,14 +872,6 @@ export interface Interface {
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/Session") {}
 
 export const use = serviceUse(Service)
-
-export type Patch = Omit<Partial<Info>, "time" | "share" | "summary" | "revert" | "permission"> & {
-  time?: Partial<Info["time"]>
-  share?: Partial<NonNullable<Info["share"]>> | null
-  summary?: Info["summary"] | null
-  revert?: Info["revert"] | null
-  permission?: Info["permission"] | null
-}
 
 export const layer: Layer.Layer<
   Service,
@@ -1508,8 +1509,8 @@ export const layer: Layer.Layer<
         const completeEventID = EventV2.ID.make(`evt_${Hash.sha256(`fork-event:v1:${intentID}:complete`).slice(0, 26)}`)
         yield* publishOnce((commit) =>
           events.publish(
-            SessionV1.Event.Updated,
-            { sessionID: target.id, info: complete },
+            SessionEvent.Updated,
+            v2Created(complete),
             { id: completeEventID, idempotent: true, commit },
           ),
         )
@@ -3160,32 +3161,6 @@ export const layer: Layer.Layer<
       })
     })
 
-    const patch = (sessionID: SessionID, info: Patch) =>
-      Effect.gen(function* () {
-        const current = yield* get(sessionID)
-        const next = {
-          ...current,
-          ...info,
-          time: info.time ? { ...current.time, ...info.time } : current.time,
-          share: info.share === null ? undefined : info.share ? { ...current.share, ...info.share } : current.share,
-          summary: info.summary === null ? undefined : (info.summary ?? current.summary),
-          revert: info.revert === null ? undefined : (info.revert ?? current.revert),
-          permission: info.permission === null ? undefined : (info.permission ?? current.permission),
-        } as Info
-        if (next.summary?.diffs !== undefined) {
-          next.summary = {
-            ...next.summary,
-            diffs: next.summary.diffs.slice(0, MessageV2.ClientDiffLimits.files).map((item) => ({
-              ...(item.file === undefined ? {} : { file: item.file }),
-              additions: item.additions,
-              deletions: item.deletions,
-              ...(item.status === undefined ? {} : { status: item.status }),
-            })),
-          }
-        }
-        yield* events.publish(SessionV1.Event.Updated, { sessionID, info: next })
-      })
-
     // RI-16 — native V2 update authority reads the stored row, applies the change onto the full
     // `SessionSchema.Info` mirror, and publishes `session.updated.2`; the legacy client shape is
     // rebuilt by the EventV2Bridge egress adapter. Summary/diff and revert use their independent
@@ -3269,15 +3244,6 @@ export const layer: Layer.Layer<
         }),
         timestamp: yield* DateTime.now,
       })
-    })
-
-    const setPermission = Effect.fn("Session.setPermission")(function* (input: {
-      sessionID: SessionID
-      permission: PermissionV1.Ruleset
-    }) {
-      yield* patch(input.sessionID, { permission: [...input.permission], time: { updated: Date.now() } }).pipe(
-        Effect.orDie,
-      )
     })
 
     const setRevert = Effect.fn("Session.setRevert")(function* (input: {
@@ -3660,7 +3626,6 @@ export const layer: Layer.Layer<
       setPreview,
       setArchived,
       setMetadata,
-      setPermission,
       setRevert,
       commitRevert,
       commitUnrevert,

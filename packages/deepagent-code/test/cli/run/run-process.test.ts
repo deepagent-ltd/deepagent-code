@@ -177,10 +177,13 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
       Effect.gen(function* () {
         const result = yield* deepagentCode.run("say hi", {
           model: "test/nonexistent-model",
+          format: "json",
           timeoutMs: 15_000,
         })
         expect(result.exitCode).not.toBe(0)
         expect(result.durationMs).toBeLessThan(20_000)
+        expect(deepagentCode.parseJsonEvents(result.stdout).some((event) =>
+          event.type === "error" && typeof event.error === "string" && event.error.length > 0)).toBe(true)
       }),
     30_000,
   )

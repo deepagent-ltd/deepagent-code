@@ -698,6 +698,7 @@ const insertSession = (id: SessionV2.ID) =>
         directory: "/project",
         title: "test",
         version: "test",
+        v2_authority: true,
       })
       .onConflictDoNothing()
       .run()

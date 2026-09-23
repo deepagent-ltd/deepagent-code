@@ -269,6 +269,7 @@ const seedSession = Effect.gen(function* () {
       directory: "/project",
       title: "test",
       version: "test",
+      v2_authority: true,
     })
     .onConflictDoNothing()
     .run()

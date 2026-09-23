@@ -163,6 +163,20 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                     }),
                   ),
                 ),
+                Effect.catchTags({
+                  "AgentV2.NotFoundError": (error) =>
+                    Effect.fail(new InvalidRequestError({
+                      message: `Unknown agent: ${error.id}`,
+                      kind: "unknown_agent",
+                      field: "prompt.agent",
+                    })),
+                  "Session.AgentNotSelectableError": (error) =>
+                    Effect.fail(new InvalidRequestError({
+                      message: `Agent is not selectable for a Session: ${error.id}`,
+                      kind: "agent_not_selectable",
+                      field: "prompt.agent",
+                    })),
+                }),
                 Effect.catchTag("SessionInput.StaleRevertEpoch", (error) =>
                   Effect.fail(
                     new StaleRevertEpochError({

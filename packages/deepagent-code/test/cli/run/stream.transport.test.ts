@@ -443,7 +443,28 @@ function sdk(
 
   spyOn(client.event, "subscribe").mockImplementation(subscribe)
   spyOn(client.global, "event").mockImplementation(globalEvent)
-  spyOn(client.session, "promptAsync").mockImplementation(promptAsync)
+  spyOn(client.v2.session, "prompt").mockImplementation(async (request, options) => {
+    const result = await promptAsync({
+      sessionID: request.sessionID,
+      messageID: request.id,
+      agent: request.prompt.agent,
+      model: request.prompt.model
+        ? { providerID: request.prompt.model.providerID, modelID: request.prompt.model.id }
+        : undefined,
+      variant: request.prompt.model?.variant,
+      metadata: request.prompt.metadata,
+      parts: [
+        ...(request.prompt.files ?? []).map((file) => ({
+          type: "file" as const,
+          url: file.uri,
+          mime: file.mime,
+          filename: file.name,
+        })),
+        { type: "text" as const, text: request.prompt.text },
+      ],
+    }, options)
+    return { ...result, data: { data: { id: result.data?.messageID ?? "msg-test-admitted", delivery: "steer" } } } as never
+  })
   spyOn(client.session, "status").mockImplementation(status)
   spyOn(client.session, "messages").mockImplementation(messages)
   spyOn(client.session, "children").mockImplementation(children)

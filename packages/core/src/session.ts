@@ -437,7 +437,12 @@ export interface Interface {
     revertEpoch?: number
   }) => Effect.Effect<
     SessionInput.Admitted,
-    NotFoundError | LegacySessionRequiresAdoption | PromptConflictError | SessionInput.StaleRevertEpoch
+    | NotFoundError
+    | LegacySessionRequiresAdoption
+    | PromptConflictError
+    | SessionInput.StaleRevertEpoch
+    | AgentV2.NotFoundError
+    | AgentNotSelectableError
   >
   readonly shell: (input: {
     id?: EventV2.ID
@@ -838,6 +843,27 @@ export const layer = Layer.effect(
               delivery,
               revertEpoch: input.revertEpoch,
             }
+            // Selection belongs to the exact durable prompt request. An exact retry must not
+            // change a Session whose agent/model may have moved on since the original admission.
+            const prior = yield* SessionInput.find(db, messageID)
+            if (prior !== undefined) {
+              if (!SessionInput.equivalent(prior, expected))
+                return yield* new PromptConflictError({ sessionID: input.sessionID, messageID })
+              return yield* returnPrompt(prior)
+            }
+            if (input.prompt.agent !== undefined)
+              yield* result.switchAgent({ sessionID: input.sessionID, agent: input.prompt.agent })
+            if (input.prompt.model !== undefined)
+              yield* result.switchModel({
+                sessionID: input.sessionID,
+                model: {
+                  id: ModelV2.ID.make(input.prompt.model.id),
+                  providerID: ProviderV2.ID.make(input.prompt.model.providerID),
+                  ...(input.prompt.model.variant === undefined
+                    ? {}
+                    : { variant: ModelV2.VariantID.make(input.prompt.model.variant) }),
+                },
+              })
             const admitted = yield* SessionInput.admit(db, events, {
               id: messageID,
               sessionID: input.sessionID,
