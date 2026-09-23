@@ -298,6 +298,10 @@ describe("gateway release gate", () => {
         expect(events.map((event) => event.type)).toContain("proxy.request.admitted.1")
         expect(events.map((event) => event.type)).toContain("proxy.response.completed.1")
         expect(reader.query("SELECT count(*) AS count FROM deepagent_event_outbox WHERE event_type LIKE 'proxy.%'").get()).toMatchObject({ count: 8 })
+        const delivered = reader.query("SELECT count(*) AS count FROM deepagent_event_consumer_delivery AS delivery JOIN deepagent_event_outbox AS outbox ON outbox.outbox_id = delivery.outbox_id WHERE outbox.event_type LIKE 'proxy.%' AND delivery.consumer_key = 'runtime' AND delivery.status = 'resolved'")
+        const deadline = Date.now() + 5_000
+        while ((delivered.get() as { count: number }).count < 8 && Date.now() < deadline) await Bun.sleep(100)
+        expect(delivered.get()).toMatchObject({ count: 8 })
         expect(reader.query("SELECT count(*) AS count FROM session").get()).toMatchObject({ count: 0 })
       } finally {
         reader.close()
