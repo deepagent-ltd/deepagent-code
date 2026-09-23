@@ -272,7 +272,8 @@ export const loadIdentityFor = (bound: CapabilityLoadRequest & CapabilityLoadTur
  * The persistence is a transaction over budget read, validation and receipt insert
  * (insert-or-reread by the exact-retry key) and only records states that represent an actually-loaded body
  * (`loaded` / `already_loaded`): a denied/not_found/budget_exceeded attempt loaded
- * nothing, so it leaves no durable fact. Mapped/lookup failures are typed defects.
+ * nothing, so it leaves no durable fact. Database failures remain typed so the tool boundary
+ * can report a ToolFailure instead of turning an expected storage outage into a defect.
  *
  * The database handle is passed in (not required as a service): the tool layer resolves
  * `Database.Service` once at build time and closes over the `db`, so the execute effects
@@ -289,7 +290,7 @@ export function sessionCapabilityLoad(
   },
 ): Effect.Effect<
   { readonly state: ContentLoadState; readonly receipt: ContractLoadReceipt; readonly body: string | undefined },
-  never
+  Error
 > {
   return db
     .transaction((tx) =>
@@ -306,7 +307,6 @@ export function sessionCapabilityLoad(
             ),
           )
           .get()
-          .pipe(Effect.orDie)
         const rows = yield* tx
           .select({
             loadId: SessionCapabilityLoadTable.load_id,
@@ -320,7 +320,6 @@ export function sessionCapabilityLoad(
             ),
           )
           .all()
-          .pipe(Effect.orDie)
         const out = computeDurableCapabilityLoad(
           args,
           {
@@ -336,7 +335,6 @@ export function sessionCapabilityLoad(
           .onConflictDoNothing()
           .returning()
           .get()
-          .pipe(Effect.orDie)
         if (inserted) return out
         const winner = yield* tx
           .select()
@@ -350,12 +348,12 @@ export function sessionCapabilityLoad(
             ),
           )
           .get()
-          .pipe(Effect.orDie)
         if (!winner) return yield* Effect.die(new Error("capability load insert lost without a durable winner"))
         return existingLoad(winner, args.request.body)
       }),
+    ).pipe(
+      Effect.catchDefect(() => Effect.fail(new Error("Capability load storage is unavailable"))),
     )
-    .pipe(Effect.orDie)
 }
 
 /** Pure validation + durable-budget computation. It never consults the process-local kernel maps. */

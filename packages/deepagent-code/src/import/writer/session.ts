@@ -1,7 +1,7 @@
 import { Effect } from "effect"
 import { eq } from "drizzle-orm"
 import { Database } from "@deepagent-code/core/database/database"
-import { EventV2 } from "@deepagent-code/core/event"
+import { EventV2Bridge } from "@/event-v2-bridge"
 import { SessionTable } from "@deepagent-code/core/session/sql"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { AbsolutePath } from "@deepagent-code/core/schema"
@@ -42,7 +42,7 @@ function isFilesystemRootPath(dir: string): boolean {
 
 export const importSession = Effect.fn("Import.session")(function* (session: SourceSession) {
   const { db } = yield* Database.Service
-  const events = yield* EventV2.Service
+  const events = yield* EventV2Bridge.Service
   const projectService = yield* ProjectV2.Service
 
   const aggregateID = sessionID(session.source, session.sourceId)
