@@ -622,9 +622,6 @@ export const dict = {
   "settings.section.server": "Servidor",
   "settings.tab.general": "General",
   "settings.tab.shortcuts": "Atajos",
-  "settings.desktop.section.wsl": "WSL",
-  "settings.desktop.wsl.title": "Integración con WSL",
-  "settings.desktop.wsl.description": "Ejecutar el servidor DeepAgent Code dentro de WSL en Windows.",
 
   "settings.general.section.appearance": "Apariencia",
   "settings.general.section.notifications": "Notificaciones del sistema",
@@ -1012,6 +1009,8 @@ export const dict = {
   "settings.about.attribution.title": "Basado en deepagent-code",
   "settings.about.attribution.description": "DeepAgent Code está basado en deepagent-code, usado bajo la licencia MIT.",
   "settings.about.license.title": "Licencia",
+  "settings.about.help.title": "Ayuda",
+  "settings.about.help.description": "Documentación, guías y soporte.",
   "settings.general.section.advanced": "Avanzado",
   "settings.general.section.deepagent": "DeepAgent",
   "settings.general.deepagent.mode.title": "Agente",

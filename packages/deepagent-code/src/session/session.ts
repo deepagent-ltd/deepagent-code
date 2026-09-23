@@ -74,6 +74,7 @@ import { ModelV2 } from "@deepagent-code/core/model"
 import { Location } from "@deepagent-code/core/location"
 import { SessionEvent } from "@deepagent-code/core/session/event"
 import { SessionInfo } from "@deepagent-code/core/session/info"
+import { SessionInput } from "@deepagent-code/core/session/input"
 import { Hash } from "@deepagent-code/core/util/hash"
 import { CanonicalJson } from "@deepagent-code/core/util/canonical-json"
 import { SessionPromptEpochTable } from "./prompt-epoch.sql"
@@ -751,8 +752,14 @@ export interface Interface {
     sessionID: SessionID
     revert: Info["revert"]
     summary: Info["summary"]
+    /** C2 notice gate (default on); autonomous rollback paths pass false — their own notice covers it. */
+    notice?: boolean
   }) => Effect.Effect<void>
-  readonly commitUnrevert: (sessionID: SessionID) => Effect.Effect<void>
+  readonly commitUnrevert: (input: {
+    sessionID: SessionID
+    /** C2 notice gate (default on); autonomous rollback paths pass false — their own notice covers it. */
+    notice?: boolean
+  }) => Effect.Effect<void>
   readonly clearRevert: (sessionID: SessionID) => Effect.Effect<void>
   readonly setSummary: (input: {
     sessionID: SessionID
@@ -3258,6 +3265,11 @@ export const layer: Layer.Layer<
       sessionID: SessionID
       revert: Info["revert"] | null
       summary?: Info["summary"]
+      /**
+       * C2 notice gate (default on). SessionRevert.cleanup discards the reverted branch PERMANENTLY —
+       * nothing is restored — so it passes false to avoid landing a false "restored" notice.
+       */
+      notice?: boolean
     }) {
       const now = Date.now()
       const row = yield* db
@@ -3368,22 +3380,45 @@ export const layer: Layer.Layer<
             }),
         },
       )
+      // C2 (WS6 §7.5) — one-shot model-facing revert notice. This runs only after the RevertChanged
+      // publish (and therefore its commit hook) succeeded. The deterministic message id keyed on
+      // (sessionID, mutationEpoch) makes a re-publish / event-log replay a no-op instead of a
+      // duplicate (same discipline as SessionInput.publishGoalSteerPendingNotice). Best-effort: the
+      // revert is already durable, so a notice defect is logged, never propagated as a revert failure.
+      if (input.notice !== false)
+        yield* SessionInput.publishSyntheticNoticeOnce(db, events, {
+          sessionID: input.sessionID,
+          messageID: SessionMessage.ID.make(
+            `msg_${Hash.sha256(`revert-notice:${input.sessionID}:${mutationEpoch}`).slice(0, 40)}`,
+          ),
+          text: revert
+            ? `The user reverted the conversation to message ${revert.messageID}; all later messages and file changes were undone.`
+            : "The user restored the previously reverted conversation.",
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.logError("Session.mutateRevert: revert notice publish failed after a successful revert commit", cause),
+          ),
+        )
     })
 
     const commitRevert = Effect.fn("Session.commitRevert")(function* (input: {
       sessionID: SessionID
       revert: Info["revert"]
       summary: Info["summary"]
+      notice?: boolean
     }) {
       yield* mutateRevert(input)
     })
 
-    const commitUnrevert = Effect.fn("Session.commitUnrevert")(function* (sessionID: SessionID) {
-      yield* mutateRevert({ sessionID, revert: null })
+    const commitUnrevert = Effect.fn("Session.commitUnrevert")(function* (input: {
+      sessionID: SessionID
+      notice?: boolean
+    }) {
+      yield* mutateRevert({ sessionID: input.sessionID, revert: null, ...(input.notice === undefined ? {} : { notice: input.notice }) })
     })
 
     const clearRevert = Effect.fn("Session.clearRevert")(function* (sessionID: SessionID) {
-      yield* mutateRevert({ sessionID, revert: null })
+      yield* mutateRevert({ sessionID, revert: null, notice: false })
     })
 
     const setSummary = Effect.fn("Session.setSummary")(function* (input: {

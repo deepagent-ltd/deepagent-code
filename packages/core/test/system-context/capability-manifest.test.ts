@@ -221,9 +221,9 @@ describe("C4-01 first batch", () => {
     expect(capabilityCatalogDigestValue).toMatch(/^sha256:[0-9a-f]{64}$/)
   })
 
-  test("keeps the first batch under the frozen L0 budget", () => {
-    // The manifest ids/summaries are the source; the rendered L0 stays small.
-    expect(CapabilityBudget.l0MaxTokens).toBe(700)
+  test("keeps the L0 budget at the raised cap (V2.0.1-001 §4.6 decision ④: 700 → 1000)", () => {
+    // The manifest ids/summaries are the source; the rendered L0 stays within the cap.
+    expect(CapabilityBudget.l0MaxTokens).toBe(1000)
     expect(CapabilityBudget.l0MaxBytes).toBe(4096)
   })
 })

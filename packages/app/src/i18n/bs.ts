@@ -619,9 +619,6 @@ export const dict = {
   "settings.section.server": "Server",
   "settings.tab.general": "Opšte",
   "settings.tab.shortcuts": "Prečice",
-  "settings.desktop.section.wsl": "WSL",
-  "settings.desktop.wsl.title": "WSL integracija",
-  "settings.desktop.wsl.description": "Pokreni DeepAgent Code server unutar WSL-a na Windowsu.",
 
   "settings.general.section.appearance": "Izgled",
   "settings.general.section.notifications": "Sistemske obavijesti",
@@ -1006,6 +1003,8 @@ export const dict = {
   "settings.about.attribution.title": "Zbudowane na deepagent-code",
   "settings.about.attribution.description": "DeepAgent Code jest zbudowany na deepagent-code, używanym na licencji MIT.",
   "settings.about.license.title": "Licencja",
+  "settings.about.help.title": "Pomoć",
+  "settings.about.help.description": "Dokumentacija, vodiči i podrška.",
   "settings.general.section.advanced": "Napredno",
   "settings.general.section.deepagent": "DeepAgent",
   "settings.general.deepagent.mode.title": "Agent",

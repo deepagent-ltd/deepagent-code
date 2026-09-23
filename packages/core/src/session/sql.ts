@@ -72,7 +72,7 @@ export const SessionTable = sqliteTable(
     ...Timestamps,
     time_compacting: integer(),
     time_archived: integer(),
-    time_suspended: integer(),
+    execution_claim_token: integer(),
     // Snapshot of the session's first user message (truncated, single-lined). Lets an archived-sessions
     // list render a content preview per row without loading the full conversation. Set once, never
     // overwritten. Mirrors Codex's `threads.preview`.
@@ -82,9 +82,9 @@ export const SessionTable = sqliteTable(
     index("session_project_idx").on(table.project_id),
     index("session_workspace_idx").on(table.workspace_id),
     index("session_parent_idx").on(table.parent_id),
-    index("session_time_suspended_idx")
-      .on(table.time_suspended)
-      .where(sql`${table.time_suspended} is not null`),
+    index("session_execution_claim_token_idx")
+      .on(table.execution_claim_token)
+      .where(sql`${table.execution_claim_token} is not null`),
   ],
 )
 
@@ -658,7 +658,7 @@ export const TaskRunTable = sqliteTable(
     worktree_directory: text(),
     worktree_branch: text(),
     worktree_state: text()
-      .$type<"none" | "admitting" | "ready" | "conflict" | "retained" | "submitted" | "removed">()
+      .$type<"none" | "admitting" | "ready" | "conflict" | "retained" | "submitted" | "removed" | "reclaimed">()
       .notNull()
       .default("none"),
     worktree_started_at: integer(),
@@ -786,6 +786,32 @@ export const TaskAdmissionTable = sqliteTable(
     time_created: integer().notNull(),
   },
   (table) => [index("task_admission_run_idx").on(table.run_id)],
+)
+
+/**
+ * C-P2-08 durable fan-out admission ledger: ONE row per admitted task tool call, keyed by the
+ * (session, assistant message) batch so the per-message MAX_SUBAGENT_FANOUT cap survives process
+ * restarts and concurrent admissions. `tool_call_id` is globally unique (provider-issued ids), so
+ * an exact retry of the same call converges on its existing row instead of consuming a new slot;
+ * a same id against a different batch is a conflicting reuse and refuses. Rows are pure counting
+ * evidence — the run ledger lives in `task_run`/`task_admission` — and follow the Session on
+ * delete via cascade.
+ */
+export const SessionV2TaskCallAdmissionTable = sqliteTable(
+  "session_v2_task_call_admission",
+  {
+    session_id: text()
+      .$type<SessionSchema.ID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    assistant_message_id: text().$type<MessageID>().notNull(),
+    tool_call_id: text().notNull(),
+    created_at: integer().notNull(),
+  },
+  (table) => [
+    uniqueIndex("session_v2_task_call_admission_tool_call_idx").on(table.tool_call_id),
+    index("session_v2_task_call_admission_batch_idx").on(table.session_id, table.assistant_message_id),
+  ],
 )
 
 export const TaskNotificationOutboxTable = sqliteTable(

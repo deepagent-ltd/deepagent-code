@@ -108,20 +108,18 @@ type SessionView = {
   // T3.2: the "menu" mode is gone — an always-on icon rail replaced the full-panel menu list.
   // Phase 2: "oversight" removed as standalone panel; kept in union only for backward-compat
   // migration — any stored "oversight" is silently mapped to "subagents" at read time.
+  // WS1: "debug"/"profile"/"context" merged into the tabbed "dev" panel (stored values migrate
+  // to "dev" at read time); "plugins" moved to Settings, "stats" into the SessionContextUsage
+  // dialog, "mcp" dropped in P0 — stored values for those fall back to a closed panel.
   rightPanelMode?:
     | "review"
     | "files"
-    | "context"
     | "worktree"
     | "subagents"
     | "browser"
     | "mcp"
-    | "plugins"
-    | "profile"
-    | "debug"
     | "im"
-    // PARITY-001: cross-session cost/token overview panel.
-    | "stats"
+    | "dev"
     | "oversight"
     // Movable panel views can also live in the side panel.
     | "terminal"

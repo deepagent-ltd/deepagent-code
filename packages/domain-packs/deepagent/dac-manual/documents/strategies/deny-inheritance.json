@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:dac-manual:deny-inheritance",
+  "type": "strategy",
+  "title": "Deny inheritance: a subagent never exceeds its parent",
+  "description": "Subagents inherit parent restrictions as hard denies; delegation can never turn an ask or a deny into an allow.",
+  "body": "When you launch a subagent, its permission ruleset is derived from yours: every non-allow rule the parent carries becomes a deny in the child. Delegation is strictly privilege-shrinking — a subagent can never gain a capability you do not have, and an \"ask\" you would have faced becomes the child's \"no\". On top of that, read-only agent types (explore, researcher, reviewer) deny every mutation action by construction, and reviewer/senior-reviewer cannot delegate further.\n\nUse this strategy when planning delegation. Actions: check the child's feasible action set BEFORE writing its brief — do not ask a researcher to apply a fix, and do not ask a read-only type to run a mutating command; the child will hit a deny and burn its turn. If the parent's own permissions are narrow, assume the child's are narrower. Do not treat a child's denial as a bug to retry; it is the inheritance working.\n\nHow to invoke: no tool — the inheritance applies automatically at launch.\n\nCaveats: allow rules are NOT inherited as allows; only restrictions propagate, so a permissive parent does not create a permissive child beyond the type's own template. Risk boundary: planning work that depends on a capability the child cannot have forces a wasted round-trip — verify the roster's read/write class against the work first. Validation signal: the brief you write for a subagent names only actions its type and your own ruleset both permit.",
+  "domain": "permissions",
+  "scope_hint": "deepagent.dac-manual:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:deepagent.dac-manual",
+  "pack_id": "deepagent.dac-manual"
+}

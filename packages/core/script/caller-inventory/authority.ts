@@ -96,7 +96,6 @@ export const DELEGATION_SPAWN_BINDINGS: Readonly<Record<string, string>> = {
   "sidecar.js": "composition.dacode-cli-entry",
   "deepagent-code": "composition.dacode-cli-entry",
   "virtual:deepagent-code-server": "composition.dacode-cli-entry",
-  "wsl": "composition.dacode-cli-entry",
   // lildax daemon: DEEPAGENT_CODE_DAEMON_BACKEND=legacy mounts the legacy deepagent-code server;
   // the daemon (composition.lildax-runtime) is the authority receiver for client/daemon commands.
 }
@@ -105,7 +104,6 @@ export const DELEGATION_REFERENCE_MODULE: Readonly<Record<string, string>> = {
   // lildax CLI commands drive the daemon through the Daemon service, which manages the daemon runtime.
   "packages/cli/src/services/daemon.ts": "composition.lildax-runtime",
   "packages/desktop/src/main/server.ts": "desktop.spawn-local-server",
-  "packages/desktop/src/main/wsl/runtime.ts": "composition.dacode-cli-entry",
 }
 /**
  * Effect service-layer port bindings (DI resolution, static code). Each port module's service

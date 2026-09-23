@@ -31,6 +31,7 @@ import { Log } from "@deepagent-code/core/util/log"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Identifier } from "@/id/id"
 import { extractStructuredText, validateStructuredOutput } from "./task-structured-output"
+import { makeDegradedStructuredOutput } from "./task-structured-output-evidence"
 
 const taskLog = Log.create({ service: "tool.task" })
 
@@ -452,7 +453,11 @@ export const TaskTool = Tool.define(
 
       // Structured contract (finalizer parity): the schema rides the prompt text — V2 has no
       // provider-side format — with one bounded correction attempt through the same V2 drive path.
-      const finalizeStructured = (childID: SessionID, research: string, outputSchema: Record<string, unknown>) =>
+      // Budget exhaustion settles DEGRADED (1.0 finalizer port): a receipt-stamped _degraded
+      // payload plus a durable validation_failed evidence row, never a hard failure of the parent
+      // turn. runID is present only for a fresh durable launch; a resume-by-task_id continuation
+      // owns no run row, so it degrades without an evidence write.
+      const finalizeStructured = (childID: SessionID, research: string, outputSchema: Record<string, unknown>, runID?: string) =>
         Effect.gen(function* () {
           // Once the shared deadline wins, never enqueue doomed finalizer prompts into the child.
           if (timedOut)
@@ -463,6 +468,8 @@ export const TaskTool = Tool.define(
             )
           const boundedRaw = research.slice(0, 24_000)
           let correction: string | undefined
+          // The last attempt's failure kind becomes the degraded receipt's reason.
+          let exhausted: "structured_output_missing" | "structured_output_invalid" | undefined
           for (const attempt of [1, 2] as const) {
             const finalizerText = [
               attempt === 1
@@ -482,6 +489,7 @@ export const TaskTool = Tool.define(
             }
             if (candidate === undefined) {
               correction = "Model did not return a JSON value."
+              exhausted = "structured_output_missing"
               continue
             }
             const error = validateStructuredOutput(outputSchema, candidate)
@@ -498,12 +506,48 @@ export const TaskTool = Tool.define(
                 }),
               }
             correction = error.slice(0, 1_000)
+            exhausted = "structured_output_invalid"
           }
-          return yield* Effect.fail(
-            new Error(
-              `Subagent completed but its final answer never validated against the output schema${correction ? `: ${correction}` : ""}. Task id ${childID} holds the raw turns.`,
-            ),
-          )
+          // The timeout break above leaves exhausted unset: a shared-deadline timeout stays a hard
+          // failure. Only an exhausted schema budget degrades.
+          if (exhausted === undefined)
+            return yield* Effect.fail(
+              new Error(
+                `Subagent completed but its final answer never validated against the output schema${correction ? `: ${correction}` : ""}. Task id ${childID} holds the raw turns.`,
+              ),
+            )
+          const receipt = { attempt: FINALIZER_ATTEMPTS, transport: "degraded_text", reason: exhausted } as const
+          const output = makeDegradedStructuredOutput(boundedRaw, receipt)
+          taskLog.warn("task.finalize.degraded", {
+            run_id: runID,
+            child_session_id: childID,
+            attempt: receipt.attempt,
+            reason: receipt.reason,
+          })
+          if (runID !== undefined)
+            yield* TaskRunAuthority.recordStructuredEvidence(database.db, {
+              runId: runID,
+              schemaName: typeof params.output_schema === "string" ? params.output_schema.trim() : "inline",
+              schema: outputSchema,
+              validationOutcome: "validation_failed",
+              rawOutput: output,
+              ownerToken: `core-v2-task-finalizer:${runID}`,
+            }).pipe(
+              // Evidence is best-effort by contract (goal-loop-wiring parity): the degraded output
+              // is the settlement, and a missing row reads as explicit-recovery on status surfaces.
+              Effect.ignoreCause({ log: "Warn", message: "task finalizer degraded evidence unavailable" }),
+            )
+          return {
+            title: params.description,
+            metadata: taskMetadata(childID),
+            output: renderOutput({
+              sessionID: childID,
+              state: "completed",
+              summary: params.description,
+              text: output,
+              maxChars: flags.subagentOutputMaxChars,
+            }),
+          }
         })
 
       // Resume contract: continue an existing child with one more admitted turn. No new durable
@@ -672,7 +716,7 @@ export const TaskTool = Tool.define(
           }),
         }
       }
-      return yield* finalizeStructured(childID, result.research, resolvedOutputSchema)
+      return yield* finalizeStructured(childID, result.research, resolvedOutputSchema, submission.run.runID)
     })
 
     return {

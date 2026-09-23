@@ -9,7 +9,14 @@ import { ToolJsonSchema } from "../../src/tool/json-schema"
 // prompt.ts` uses to emit tool schemas to the LLM, so the snapshots stay
 // provider-compatible while tools use Effect Schema internally.
 
+import { StartParameters as ActivityStart, StatusParameters as ActivityStatus } from "../../src/tool/activity_facade"
 import { Parameters as ApplyPatch } from "../../src/tool/apply_patch"
+import { Parameters as ApplyPatchChunk } from "../../src/tool/apply_patch_chunk"
+import { Parameters as CodeIntel } from "../../src/tool/code_intel"
+import { CodeIntelV2Parameters } from "../../src/tool/code_intel_v2"
+import { ContextQueryParameters } from "../../src/tool/context_query"
+import { Parameters as Debug } from "../../src/tool/debug"
+import { Parameters as DismissValidation } from "../../src/tool/dismiss_validation"
 import { Parameters as Edit } from "../../src/tool/edit"
 import { Parameters as Glob } from "../../src/tool/glob"
 import { Parameters as Grep } from "../../src/tool/grep"
@@ -18,10 +25,12 @@ import { Parameters as Lsp } from "../../src/tool/lsp"
 import { Parameters as Plan } from "../../src/tool/plan"
 import { PlanWriteParameters } from "../../src/tool/plan-write"
 import { Parameters as Question } from "../../src/tool/question"
+import { Parameters as QueryLog } from "../../src/tool/query_log"
 import { Parameters as Read } from "../../src/tool/read"
 import { Parameters as Shell } from "../../src/tool/shell"
 import { Parameters as Skill } from "../../src/tool/skill"
 import { Parameters as Task } from "../../src/tool/task"
+import { Parameters as TaskRead } from "../../src/tool/task_read"
 import { Parameters as WebFetch } from "../../src/tool/webfetch"
 import { Parameters as WebSearch } from "../../src/tool/websearch"
 import { Parameters as Write } from "../../src/tool/write"
@@ -350,6 +359,125 @@ describe("tool parameters", () => {
     })
     test("rejects missing filePath", () => {
       expect(accepts(Write, { content: "hi" })).toBe(false)
+    })
+  })
+
+  // Ablation F-1 family: GLM-class omission providers serialize JSON numbers as strings. Every
+  // model-facing number field below once REJECTED a value-equivalent stringified number at the
+  // decode boundary; the tolerant arms decode them through the same checks as the numeric arm,
+  // while malformed or "null" strings still reject instead of decoding to NaN (the F-7 poison).
+  describe("stringified-number tolerance (F-1 family)", () => {
+    test("read offset/limit", () => {
+      expect(parse(Read, { filePath: "/a", offset: "10", limit: "100" })).toEqual({
+        filePath: "/a",
+        offset: 10,
+        limit: 100,
+      })
+      for (const bad of ["null", "abc", "", "1.5", "-1"])
+        expect(accepts(Read, { filePath: "/a", offset: bad })).toBe(false)
+    })
+
+    test("lsp line/character", () => {
+      const parsed = parse(Lsp, { operation: "hover", filePath: "/a.ts", line: "3", character: "5" })
+      expect(parsed.line).toBe(3)
+      expect(parsed.character).toBe(5)
+      for (const bad of ["null", "abc", "0", "1.5"])
+        expect(accepts(Lsp, { operation: "hover", filePath: "/a.ts", line: bad, character: 1 })).toBe(false)
+    })
+
+    test("shell timeout", () => {
+      expect(parse(Shell, { command: "ls", description: "list", timeout: "5000" }).timeout).toBe(5000)
+      for (const bad of ["null", "abc", "0", "1.5", "-1"])
+        expect(accepts(Shell, { command: "ls", description: "list", timeout: bad })).toBe(false)
+    })
+
+    test("webfetch timeout keeps decimal parity", () => {
+      expect(parse(WebFetch, { url: "https://example.com", timeout: "30" }).timeout).toBe(30)
+      expect(parse(WebFetch, { url: "https://example.com", timeout: "1.5" }).timeout).toBe(1.5)
+      for (const bad of ["null", "abc", ""])
+        expect(accepts(WebFetch, { url: "https://example.com", timeout: bad })).toBe(false)
+    })
+
+    test("websearch numResults/contextMaxCharacters", () => {
+      const parsed = parse(WebSearch, { query: "q", numResults: "5", contextMaxCharacters: "1000" })
+      expect(parsed.numResults).toBe(5)
+      expect(parsed.contextMaxCharacters).toBe(1000)
+      for (const bad of ["null", "abc"])
+        expect(accepts(WebSearch, { query: "q", numResults: bad })).toBe(false)
+    })
+
+    test("code_intel position/limit/depth", () => {
+      const parsed = parse(CodeIntel, {
+        intent: "references",
+        symbol: "resolveTools",
+        position: { file: "/a.ts", line: "2", character: "3" },
+        limit: "10",
+        depth: "2",
+      })
+      expect(parsed.position).toEqual({ file: "/a.ts", line: 2, character: 3 })
+      expect(parsed.limit).toBe(10)
+      expect(parsed.depth).toBe(2)
+      for (const bad of ["null", "abc", "0"])
+        expect(accepts(CodeIntel, { intent: "references", limit: bad })).toBe(false)
+    })
+
+    test("query_log since/until/limit", () => {
+      const parsed = parse(QueryLog, { since: "1000", until: "2000", limit: "50" })
+      expect(parsed.since).toBe(1000)
+      expect(parsed.until).toBe(2000)
+      expect(parsed.limit).toBe(50)
+      for (const bad of ["null", "abc"]) expect(accepts(QueryLog, { since: bad })).toBe(false)
+    })
+
+    test("debug frame", () => {
+      expect(parse(Debug, { intent: "inspect", frame: "1" }).frame).toBe(1)
+      for (const bad of ["null", "abc", "-1"]) expect(accepts(Debug, { intent: "inspect", frame: bad })).toBe(false)
+    })
+
+    test("apply_patch_chunk offset", () => {
+      expect(parse(ApplyPatchChunk, { action: "append", transactionID: "tx", offset: "12000" }).offset).toBe(12000)
+      for (const bad of ["null", "abc", "-1", "1.5"])
+        expect(accepts(ApplyPatchChunk, { action: "append", offset: bad })).toBe(false)
+    })
+
+    test("dismiss_validation exit_code", () => {
+      expect(parse(DismissValidation, { command: "bun test", exit_code: "1", reason: "safe" }).exit_code).toBe(1)
+      for (const bad of ["null", "abc"])
+        expect(accepts(DismissValidation, { command: "bun test", exit_code: bad, reason: "safe" })).toBe(false)
+    })
+
+    test("task_read limit", () => {
+      expect(parse(TaskRead, { task_id: "ses_x", limit: "50" }).limit).toBe(50)
+      for (const bad of ["null", "abc", ""]) expect(accepts(TaskRead, { task_id: "ses_x", limit: bad })).toBe(false)
+    })
+
+    test("activity_start budget fields", () => {
+      const parsed = parse(ActivityStart, {
+        subkind: "task",
+        objective: "ship it",
+        budget: { maxTicks: "10", maxTokens: "1000", maxWallclockMs: "60000" },
+      })
+      expect(parsed.budget).toEqual({ maxTicks: 10, maxTokens: 1000, maxWallclockMs: 60000 })
+      for (const bad of ["null", "abc", "0", "1.5"])
+        expect(accepts(ActivityStart, { subkind: "task", objective: "x", budget: { maxTicks: bad } })).toBe(false)
+    })
+
+    test("activity_status limit", () => {
+      expect(parse(ActivityStatus, { limit: "5" }).limit).toBe(5)
+      for (const bad of ["null", "0", "21"]) expect(accepts(ActivityStatus, { limit: bad })).toBe(false)
+    })
+
+    test("context_query limit (core contract)", () => {
+      expect(parse(ContextQueryParameters, { intent: "search", limit: "7" }).limit).toBe(7)
+      for (const bad of ["null", "abc", "0", "101"])
+        expect(accepts(ContextQueryParameters, { intent: "search", limit: bad })).toBe(false)
+    })
+
+    test("code_intel_v2 depth/limit (core contract)", () => {
+      const parsed = parse(CodeIntelV2Parameters, { intent: "search", depth: "2", limit: "100" })
+      expect(parsed.depth).toBe(2)
+      expect(parsed.limit).toBe(100)
+      expect(accepts(CodeIntelV2Parameters, { intent: "search", depth: "4" })).toBe(false)
     })
   })
 })

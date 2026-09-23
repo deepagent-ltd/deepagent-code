@@ -1,5 +1,4 @@
 import { Component, createMemo, createResource, createSignal, For, Show } from "solid-js"
-import { Dialog } from "@deepagent-code/ui/v2/dialog-v2"
 import { Button } from "@deepagent-code/ui/button"
 import { TextField } from "@deepagent-code/ui/text-field"
 import { Icon } from "@deepagent-code/ui/icon"
@@ -35,7 +34,9 @@ export {
   type EnvFactModifyInput,
 } from "./dialog-review.api"
 
-export const DialogReview: Component<{ client: ReviewClient }> = (props) => {
+// WS1: the review body is hosted as a tab inside the merged Knowledge dialog
+// (components/knowledge/dialog-knowledge), so this is a panel, not a standalone dialog.
+export const ReviewPanel: Component<{ client: ReviewClient }> = (props) => {
   const language = useLanguage()
   const [selected, setSelected] = createSignal<ReadonlySet<string>>(new Set())
   const [busy, setBusy] = createSignal(false)
@@ -450,100 +451,98 @@ export const DialogReview: Component<{ client: ReviewClient }> = (props) => {
   )
 
   return (
-    <Dialog size="x-large" variant="settings" title={language.t("review.title")}>
-      <div class="settings-v2-panel" data-component="review-dialog">
-        <div class="settings-v2-tab-body deepagent-dialog-body">
-          <p class="text-12-regular text-v2-text-text-faint">{language.t("review.description")}</p>
+    <div class="settings-v2-panel" data-component="review-dialog">
+      <div class="settings-v2-tab-body deepagent-dialog-body">
+        <p class="text-12-regular text-v2-text-text-faint">{language.t("review.description")}</p>
 
-          {/* Top bar: search on the left, batch actions on the right. */}
-          <div class="flex flex-wrap items-center justify-between gap-2">
-            <div class="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-v2-border-border-muted px-3 py-2">
-              <Icon name="magnifying-glass" size="small" class="text-v2-text-text-faint" />
-              <input
-                type="text"
-                data-action="review-search"
-                value={query()}
-                onInput={(e) => setQuery(e.currentTarget.value)}
-                placeholder={language.t("review.search")}
-                aria-label={language.t("review.search")}
-                class="min-w-0 flex-1 bg-transparent text-13-regular text-v2-text-text-base outline-none placeholder:text-v2-text-text-faint"
-              />
-            </div>
-            <div class="flex flex-wrap items-center gap-2">
-              <Button variant="secondary" size="small" onClick={selectAll} disabled={pending().length === 0}>
-                {language.t("review.selectAll")}
-              </Button>
-              <Button variant="secondary" size="small" onClick={invert} disabled={pending().length === 0}>
-                {language.t("review.invertSelection")}
-              </Button>
-              <Show when={selected().size > 0}>
-                <span class="text-11-regular text-v2-text-text-faint">
-                  {language.t("review.selected", { count: selected().size })}
-                </span>
-              </Show>
-              <Button
-                variant="secondary"
-                size="small"
-                data-action="review-reject"
-                onClick={() => void apply("reject-ids")}
-                disabled={selected().size === 0 || busy()}
-              >
-                {language.t("review.reject")}
-              </Button>
-              <Button
-                variant="primary"
-                size="small"
-                data-action="review-approve"
-                onClick={() => void apply("approve")}
-                disabled={selected().size === 0 || busy()}
-              >
-                {language.t("review.approve")}
-              </Button>
-            </div>
+        {/* Top bar: search on the left, batch actions on the right. */}
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div class="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-v2-border-border-muted px-3 py-2">
+            <Icon name="magnifying-glass" size="small" class="text-v2-text-text-faint" />
+            <input
+              type="text"
+              data-action="review-search"
+              value={query()}
+              onInput={(e) => setQuery(e.currentTarget.value)}
+              placeholder={language.t("review.search")}
+              aria-label={language.t("review.search")}
+              class="min-w-0 flex-1 bg-transparent text-13-regular text-v2-text-text-base outline-none placeholder:text-v2-text-text-faint"
+            />
           </div>
+          <div class="flex flex-wrap items-center gap-2">
+            <Button variant="secondary" size="small" onClick={selectAll} disabled={pending().length === 0}>
+              {language.t("review.selectAll")}
+            </Button>
+            <Button variant="secondary" size="small" onClick={invert} disabled={pending().length === 0}>
+              {language.t("review.invertSelection")}
+            </Button>
+            <Show when={selected().size > 0}>
+              <span class="text-11-regular text-v2-text-text-faint">
+                {language.t("review.selected", { count: selected().size })}
+              </span>
+            </Show>
+            <Button
+              variant="secondary"
+              size="small"
+              data-action="review-reject"
+              onClick={() => void apply("reject-ids")}
+              disabled={selected().size === 0 || busy()}
+            >
+              {language.t("review.reject")}
+            </Button>
+            <Button
+              variant="primary"
+              size="small"
+              data-action="review-approve"
+              onClick={() => void apply("approve")}
+              disabled={selected().size === 0 || busy()}
+            >
+              {language.t("review.approve")}
+            </Button>
+          </div>
+        </div>
 
-          {/* §G use-gate: provisional environment facts awaiting this project's decision. Only shown
+        {/* §G use-gate: provisional environment facts awaiting this project's decision. Only shown
               when there is something pending or already adopted, so it stays out of the way. */}
-          <Show when={(envFacts()?.pending.length ?? 0) > 0 || (envFacts()?.adopted.length ?? 0) > 0}>
-            <div class="flex flex-col gap-1">
-              <span class="text-12-medium text-v2-text-text-base">{language.t("review.envFacts.title")}</span>
-              <span class="text-11-regular text-v2-text-text-faint">{language.t("review.envFacts.description")}</span>
-            </div>
-            <div class="deepagent-dialog-scroll rounded-lg border border-v2-border-border-muted">
-              <For each={envFacts()?.pending ?? []}>{(fact) => EnvFactCard(fact, "pending")}</For>
-              <For each={envFacts()?.adopted ?? []}>{(fact) => EnvFactCard(fact, "adopted")}</For>
-            </div>
-          </Show>
+        <Show when={(envFacts()?.pending.length ?? 0) > 0 || (envFacts()?.adopted.length ?? 0) > 0}>
+          <div class="flex flex-col gap-1">
+            <span class="text-12-medium text-v2-text-text-base">{language.t("review.envFacts.title")}</span>
+            <span class="text-11-regular text-v2-text-text-faint">{language.t("review.envFacts.description")}</span>
+          </div>
+          <div class="deepagent-dialog-scroll rounded-lg border border-v2-border-border-muted">
+            <For each={envFacts()?.pending ?? []}>{(fact) => EnvFactCard(fact, "pending")}</For>
+            <For each={envFacts()?.adopted ?? []}>{(fact) => EnvFactCard(fact, "adopted")}</For>
+          </div>
+        </Show>
 
-          {/* Single scroll container holds the type boxes; each box hugs its own content. */}
-          <div class="deepagent-dialog-scroll flex flex-col gap-2">
+        {/* Single scroll container holds the type boxes; each box hugs its own content. */}
+        <div class="deepagent-dialog-scroll flex flex-col gap-2">
+          <Show
+            when={!items.loading}
+            fallback={
+              <div class="rounded-lg border border-v2-border-border-muted p-4 text-13-regular text-v2-text-text-faint">
+                {language.t("review.loading")}
+              </div>
+            }
+          >
             <Show
-              when={!items.loading}
+              when={pendingGroups().length > 0 || approved().length > 0}
               fallback={
                 <div class="rounded-lg border border-v2-border-border-muted p-4 text-13-regular text-v2-text-text-faint">
-                  {language.t("review.loading")}
+                  {query().trim() ? language.t("review.searchEmpty") : language.t("review.empty")}
                 </div>
               }
             >
-              <Show
-                when={pendingGroups().length > 0 || approved().length > 0}
-                fallback={
-                  <div class="rounded-lg border border-v2-border-border-muted p-4 text-13-regular text-v2-text-text-faint">
-                    {query().trim() ? language.t("review.searchEmpty") : language.t("review.empty")}
-                  </div>
-                }
-              >
-                <For each={pendingGroups()}>
-                  {(group) => GroupBox({ boxKey: group.scope, label: scopeLabel(group.scope), items: group.items })}
-                </For>
-                <Show when={approved().length > 0}>
-                  {GroupBox({ boxKey: "approved", label: language.t("review.status.approved"), items: approved() })}
-                </Show>
+              <For each={pendingGroups()}>
+                {(group) => GroupBox({ boxKey: group.scope, label: scopeLabel(group.scope), items: group.items })}
+              </For>
+              <Show when={approved().length > 0}>
+                {GroupBox({ boxKey: "approved", label: language.t("review.status.approved"), items: approved() })}
               </Show>
             </Show>
-          </div>
+          </Show>
         </div>
       </div>
-    </Dialog>
+    </div>
   )
 }

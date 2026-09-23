@@ -94,9 +94,8 @@ export type Event =
   | EventQuestionRejected
   | EventSessionStatus
   | EventSessionIdle
-  | EventSessionCompacted
-  | EventPlanUpdated
   | EventGoalUpdated
+  | EventPlanUpdated
   | EventDebugStopped
   | EventDebugOutput
   | EventDebugTerminated
@@ -105,6 +104,7 @@ export type Event =
   | EventWorkspaceReady
   | EventWorkspaceFailed
   | EventWorkspaceStatus
+  | EventSessionCompacted
   | EventSessionProviderResolutionCompleted
   | EventServerConnected
   | EventGlobalDisposed
@@ -835,6 +835,7 @@ export type SessionStatus =
   | {
       type: "recovery_required"
       message: string
+      blockedReason?: "recovery_required" | "owned_elsewhere" | "authority_conflict"
     }
 
 export type GlobalEvent = {
@@ -1347,7 +1348,7 @@ export type GlobalEvent = {
           sessionID: string
           assistantMessageID: string
           callID: string
-          error: SessionErrorUnknown
+          error: SessionErrorToolCall
           result?: unknown
           provider: {
             executed: boolean
@@ -1808,9 +1809,20 @@ export type GlobalEvent = {
       }
     | {
         id: string
-        type: "session.compacted"
+        type: "goal.updated"
         properties: {
           sessionID: string
+          goalId: string
+          planDocId: string
+          phase: string
+          ledger: {
+            ticks: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            tokens: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            cost: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            wallclockMs: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          }
+          stallCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          gaps: Array<string>
         }
       }
     | {
@@ -1835,24 +1847,6 @@ export type GlobalEvent = {
           done: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
           total: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
           changes?: Array<string>
-        }
-      }
-    | {
-        id: string
-        type: "goal.updated"
-        properties: {
-          sessionID: string
-          goalId: string
-          planDocId: string
-          phase: string
-          ledger: {
-            ticks: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-            tokens: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-            cost: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-            wallclockMs: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          }
-          stallCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-          gaps: Array<string>
         }
       }
     | {
@@ -1915,6 +1909,13 @@ export type GlobalEvent = {
         properties: {
           workspaceID: string
           status: "connected" | "connecting" | "disconnected" | "error"
+        }
+      }
+    | {
+        id: string
+        type: "session.compacted"
+        properties: {
+          sessionID: string
         }
       }
     | {
@@ -2893,6 +2894,16 @@ export type RecoveryCommandResult = {
     | RecoveryResolvedDescriptor
 }
 
+export type RecoveryRedriveBlocked = {
+  sessionID: string
+  blockedReason: "recovery_required" | "owned_elsewhere" | "authority_conflict"
+}
+
+export type RecoveryRedriveBlockedResult = {
+  blocked: Array<RecoveryRedriveBlocked>
+  count: number
+}
+
 export type RecoveryDescriptorRecord = {
   commandId: string
   sessionId: string
@@ -2957,6 +2968,240 @@ export type CompositionDigestRecord = {
   toolRegistry: CompositionToolRegistryDigest
   database: CompositionDatabaseDigest
   locationHost: CompositionLocationHostDigest
+}
+
+export type MdExportInput = {
+  dir?: string
+  limit?: string
+  page_size?: string
+}
+
+export type MdExportReconciliation = {
+  reconciled: boolean
+  exportedCount: number
+  sessionCount: number
+  missing: Array<string>
+  extra: Array<string>
+}
+
+export type MdExportRun = {
+  exported: number
+  skipped: number
+  sessionCount: number
+  manifestPath: string
+  reconciliation: MdExportReconciliation
+}
+
+export type MdExportStatus = {
+  exists: boolean
+  manifestPath: string
+  exportedCount: number
+  entries: Array<{
+    sessionId: string
+    fileName: string
+    sizeBytes: number
+    sha256: string
+    messageCount: number
+    exportedAt: number
+  }>
+}
+
+export type MigrationRunInput = {
+  dir?: string
+  stop_after?:
+    | "md_export"
+    | "backup_create"
+    | "backup_verify"
+    | "migration_apply"
+    | "post_verify"
+    | "archive"
+    | "disk_advisory"
+}
+
+export type MigrationPhaseRecord = {
+  phase:
+    | "md_export"
+    | "backup_create"
+    | "backup_verify"
+    | "migration_apply"
+    | "post_verify"
+    | "archive"
+    | "disk_advisory"
+  state: "completed" | "failed"
+  startedAt: number
+  completedAt: number
+  outcome?: unknown
+  failure?: {
+    code: string
+    detail: string
+  }
+}
+
+export type MigrationJournal = {
+  version: 1
+  kind: "migration-orchestration-journal"
+  orchestrationId: string
+  dbPath: string
+  startedAt: number
+  updatedAt: number
+  status: "in_progress" | "completed" | "failed"
+  currentPhase?:
+    | "md_export"
+    | "backup_create"
+    | "backup_verify"
+    | "migration_apply"
+    | "post_verify"
+    | "archive"
+    | "disk_advisory"
+  phases: Array<MigrationPhaseRecord>
+  failure?: {
+    phase:
+      | "md_export"
+      | "backup_create"
+      | "backup_verify"
+      | "migration_apply"
+      | "post_verify"
+      | "archive"
+      | "disk_advisory"
+    code: string
+    detail: string
+    recoveryGuidance: string
+  }
+}
+
+export type MigrationRun = {
+  status: "in_progress" | "completed" | "failed"
+  journal: MigrationJournal
+  diskAdvisoryPath?: string
+}
+
+export type MigrationStatus = {
+  active: boolean
+  journal?: MigrationJournal
+}
+
+export type MigrationReportInput = {
+  dir?: string
+}
+
+export type MigrationReportEntry = {
+  check: string
+  status: "success" | "warning" | "failure"
+  summary: string
+  detail?: string
+}
+
+export type MigrationRowReconciliation = {
+  sessionsInLibrary: number
+  sessionsInManifest: number
+  messagesInLibrary: number
+  messagesInManifest: number
+  reconciled: boolean
+}
+
+export type MigrationReport = {
+  version: 1
+  kind: "migration-compliance-report"
+  dbPath: string
+  backupDir: string
+  orchestrationId?: string
+  generatedAt: number
+  overall: "success" | "warning" | "failure"
+  entries: Array<MigrationReportEntry>
+  mdReconciliation: MdExportReconciliation
+  rowReconciliation: MigrationRowReconciliation
+}
+
+export type MigrationReportStored = {
+  exists: boolean
+  reportPath: string
+  report?: MigrationReport
+}
+
+export type BackupGovernInput = {
+  dir?: string
+  keep?: string
+}
+
+export type BackupGoverned = {
+  fileName: string
+  manifestPath: string
+  createdAt: number
+  sizeBytes: number
+  milestone: boolean
+  action: "kept" | "archived"
+}
+
+export type BackupGovernanceReport = {
+  version: 1
+  kind: "backup-governance-report"
+  backupDir: string
+  generatedAt: number
+  policy: {
+    keep: number
+    milestoneRule: string
+  }
+  backups: Array<BackupGoverned>
+  archivedCount: number
+  archivedBytes: number
+  mdExports: Array<string>
+  skipped: Array<{
+    manifestPath: string
+    reason: string
+  }>
+}
+
+export type DiskReclaimInput = {
+  dir?: string
+  confirm?: boolean
+  vacuum?: boolean
+}
+
+export type DiskInventoryEntry = {
+  path: string
+  sizeBytes: number
+  category:
+    | "main_db"
+    | "wal_sidecar"
+    | "backup"
+    | "backup_archived"
+    | "md_export"
+    | "migration_archive"
+    | "restore_incident"
+    | "operational"
+    | "residue_candidate"
+    | "other_data"
+  note: string
+}
+
+export type DiskReclaimCandidate = {
+  path: string
+  sizeBytes: number
+  fromAdvisory: boolean
+  safe: boolean
+  blockedReason?: string
+  deleted: boolean
+}
+
+export type DiskReclaimReport = {
+  version: 1
+  kind: "disk-reclaim-report"
+  dataRoot: string
+  dbPath: string
+  backupDir: string
+  generatedAt: number
+  executed: boolean
+  vacuumed: boolean
+  inventory: Array<DiskInventoryEntry>
+  totalBytesBefore: number
+  totalBytesAfter: number
+  reclaimedBytes: number
+  beforeMiB: string
+  afterMiB: string
+  reclaimedMiB: string
+  candidates: Array<DiskReclaimCandidate>
+  restoreIncidentsBytes: number
+  restoreIncidentsNeverDeleted: true
 }
 
 export type Model = {
@@ -5188,6 +5433,11 @@ export type ToolFileContent = {
   name?: string
 }
 
+export type SessionErrorToolCall = {
+  type: "unknown" | "permission_rejected" | "permission_corrected" | "permission_denied"
+  message: string
+}
+
 export type SessionNextRetryError = {
   message: string
   statusCode?: number
@@ -5303,17 +5553,17 @@ export type ModelV2Info = {
     }
     input: number
     output: number
-    cache: {
-      read: number
-      write: number
+    cache?: {
+      read?: number
+      write?: number
     }
   }>
   status: "alpha" | "beta" | "deprecated" | "active"
   enabled: boolean
   limit: {
-    context: number
+    context?: number
     input?: number
-    output: number
+    output?: number
   }
 }
 
@@ -6325,7 +6575,7 @@ export type SyncEventSessionNextToolFailed1 = {
       sessionID: string
       assistantMessageID: string
       callID: string
-      error: SessionErrorUnknown
+      error: SessionErrorToolCall
       result?: unknown
       provider: {
         executed: boolean
@@ -6697,6 +6947,83 @@ export type SessionLegacyProviderResolutionDescriptor =
       worldStateBaselineHash?: string
     }
 
+export type RecoveryEvidence = {
+  schemaVersion: "recovery-evidence.v1"
+  providerId: string
+  externalRequestId: string
+  idempotencyKey: string
+  terminalState: "settled" | "rejected" | "unknown"
+  payloadHash: string
+  responseFingerprint: string
+  retrievalRef: string
+  attestationRef?: string
+  metadata: {
+    provider_lookup_ref?:
+      | string
+      | number
+      | "NaN"
+      | "Infinity"
+      | "-Infinity"
+      | "Infinity"
+      | "-Infinity"
+      | "NaN"
+      | boolean
+    baseline_reconstruction_ref?:
+      | string
+      | number
+      | "NaN"
+      | "Infinity"
+      | "-Infinity"
+      | "Infinity"
+      | "-Infinity"
+      | "NaN"
+      | boolean
+    safe_boundary_ref?: string | number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN" | boolean
+    provider_region?: string | number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN" | boolean
+    provider_response_status?:
+      | string
+      | number
+      | "NaN"
+      | "Infinity"
+      | "-Infinity"
+      | "Infinity"
+      | "-Infinity"
+      | "NaN"
+      | boolean
+    provider_attempt_count?:
+      | string
+      | number
+      | "NaN"
+      | "Infinity"
+      | "-Infinity"
+      | "Infinity"
+      | "-Infinity"
+      | "NaN"
+      | boolean
+    provider_latency_ms?:
+      | string
+      | number
+      | "NaN"
+      | "Infinity"
+      | "-Infinity"
+      | "Infinity"
+      | "-Infinity"
+      | "NaN"
+      | boolean
+    terminal_reason_code?:
+      | string
+      | number
+      | "NaN"
+      | "Infinity"
+      | "-Infinity"
+      | "Infinity"
+      | "-Infinity"
+      | "NaN"
+      | boolean
+  }
+  verifiedAt: number
+}
+
 export type FilePartArtifactDescriptor = {
   codec: "file-part.v1"
   id: string
@@ -6902,7 +7229,7 @@ export type SessionMessageToolStateError = {
   structured: {
     [key: string]: unknown
   }
-  error: SessionErrorUnknown
+  error: SessionErrorToolCall
   result?: unknown
 }
 
@@ -6999,6 +7326,7 @@ export type SessionMessage =
 export type ProviderV2Info = {
   id: string
   name: string
+  origin?: "config"
   enabled:
     | false
     | {
@@ -7660,7 +7988,7 @@ export type EventSessionNextToolFailed = {
     sessionID: string
     assistantMessageID: string
     callID: string
-    error: SessionErrorUnknown
+    error: SessionErrorToolCall
     result?: unknown
     provider: {
       executed: boolean
@@ -7837,17 +8165,17 @@ export type ModelV2Info1 = {
     }
     input: number
     output: number
-    cache: {
-      read: number
-      write: number
+    cache?: {
+      read?: number
+      write?: number
     }
   }>
   status: "alpha" | "beta" | "deprecated" | "active"
   enabled: boolean
   limit: {
-    context: number
+    context?: number
     input?: number
-    output: number
+    output?: number
   }
 }
 
@@ -8227,11 +8555,22 @@ export type EventSessionIdle = {
   }
 }
 
-export type EventSessionCompacted = {
+export type EventGoalUpdated = {
   id: string
-  type: "session.compacted"
+  type: "goal.updated"
   properties: {
     sessionID: string
+    goalId: string
+    planDocId: string
+    phase: string
+    ledger: {
+      ticks: number | "NaN" | "Infinity" | "-Infinity"
+      tokens: number | "NaN" | "Infinity" | "-Infinity"
+      cost: number | "NaN" | "Infinity" | "-Infinity"
+      wallclockMs: number | "NaN" | "Infinity" | "-Infinity"
+    }
+    stallCount: number | "NaN" | "Infinity" | "-Infinity"
+    gaps: Array<string>
   }
 }
 
@@ -8257,25 +8596,6 @@ export type EventPlanUpdated = {
     done: number | "NaN" | "Infinity" | "-Infinity"
     total: number | "NaN" | "Infinity" | "-Infinity"
     changes?: Array<string>
-  }
-}
-
-export type EventGoalUpdated = {
-  id: string
-  type: "goal.updated"
-  properties: {
-    sessionID: string
-    goalId: string
-    planDocId: string
-    phase: string
-    ledger: {
-      ticks: number | "NaN" | "Infinity" | "-Infinity"
-      tokens: number | "NaN" | "Infinity" | "-Infinity"
-      cost: number | "NaN" | "Infinity" | "-Infinity"
-      wallclockMs: number | "NaN" | "Infinity" | "-Infinity"
-    }
-    stallCount: number | "NaN" | "Infinity" | "-Infinity"
-    gaps: Array<string>
   }
 }
 
@@ -8346,6 +8666,14 @@ export type EventWorkspaceStatus = {
   properties: {
     workspaceID: string
     status: "connected" | "connecting" | "disconnected" | "error"
+  }
+}
+
+export type EventSessionCompacted = {
+  id: string
+  type: "session.compacted"
+  properties: {
+    sessionID: string
   }
 }
 
@@ -9178,6 +9506,57 @@ export type MaintenanceRecoveryCommandResponses = {
 export type MaintenanceRecoveryCommandResponse =
   MaintenanceRecoveryCommandResponses[keyof MaintenanceRecoveryCommandResponses]
 
+export type MaintenanceRecoveryRedriveBlockedData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/recovery/redriveBlocked"
+}
+
+export type MaintenanceRecoveryRedriveBlockedErrors = {
+  /**
+   * ApiBadRequest
+   */
+  400: ApiBadRequest
+  /**
+   * ApiForbidden
+   */
+  403: ApiForbidden
+  /**
+   * ApiNotFound
+   */
+  404: ApiNotFound
+  /**
+   * ApiConflict
+   */
+  409: ApiConflict
+  /**
+   * ApiGone
+   */
+  410: ApiGone
+  /**
+   * ApiLocked
+   */
+  423: ApiLocked
+  /**
+   * ApiUnavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceRecoveryRedriveBlockedError =
+  MaintenanceRecoveryRedriveBlockedErrors[keyof MaintenanceRecoveryRedriveBlockedErrors]
+
+export type MaintenanceRecoveryRedriveBlockedResponses = {
+  /**
+   * Redrive-blocked Sessions
+   */
+  200: RecoveryRedriveBlockedResult
+}
+
+export type MaintenanceRecoveryRedriveBlockedResponse =
+  MaintenanceRecoveryRedriveBlockedResponses[keyof MaintenanceRecoveryRedriveBlockedResponses]
+
 export type MaintenanceRecoveryCommandGetData = {
   body?: never
   path?: never
@@ -9385,6 +9764,411 @@ export type MaintenanceCompositionDigestResponses = {
 
 export type MaintenanceCompositionDigestResponse =
   MaintenanceCompositionDigestResponses[keyof MaintenanceCompositionDigestResponses]
+
+export type MaintenanceMdExportRunData = {
+  body?: MdExportInput
+  path?: never
+  query?: never
+  url: "/md/export"
+}
+
+export type MaintenanceMdExportRunErrors = {
+  /**
+   * ApiBadRequest
+   */
+  400: ApiBadRequest
+  /**
+   * ApiForbidden
+   */
+  403: ApiForbidden
+  /**
+   * ApiNotFound
+   */
+  404: ApiNotFound
+  /**
+   * ApiConflict
+   */
+  409: ApiConflict
+  /**
+   * ApiGone
+   */
+  410: ApiGone
+  /**
+   * ApiLocked
+   */
+  423: ApiLocked
+  /**
+   * ApiUnavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceMdExportRunError = MaintenanceMdExportRunErrors[keyof MaintenanceMdExportRunErrors]
+
+export type MaintenanceMdExportRunResponses = {
+  /**
+   * Batch MD export result
+   */
+  200: MdExportRun
+}
+
+export type MaintenanceMdExportRunResponse = MaintenanceMdExportRunResponses[keyof MaintenanceMdExportRunResponses]
+
+export type MaintenanceMdExportStatusData = {
+  body?: never
+  path?: never
+  query?: {
+    dir?: string
+  }
+  url: "/md/export/status"
+}
+
+export type MaintenanceMdExportStatusErrors = {
+  /**
+   * ApiBadRequest
+   */
+  400: ApiBadRequest
+  /**
+   * ApiForbidden
+   */
+  403: ApiForbidden
+  /**
+   * ApiNotFound
+   */
+  404: ApiNotFound
+  /**
+   * ApiConflict
+   */
+  409: ApiConflict
+  /**
+   * ApiGone
+   */
+  410: ApiGone
+  /**
+   * ApiLocked
+   */
+  423: ApiLocked
+  /**
+   * ApiUnavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceMdExportStatusError = MaintenanceMdExportStatusErrors[keyof MaintenanceMdExportStatusErrors]
+
+export type MaintenanceMdExportStatusResponses = {
+  /**
+   * MD export manifest status
+   */
+  200: MdExportStatus
+}
+
+export type MaintenanceMdExportStatusResponse =
+  MaintenanceMdExportStatusResponses[keyof MaintenanceMdExportStatusResponses]
+
+export type MaintenanceMigrationRunData = {
+  body?: MigrationRunInput
+  path?: never
+  query?: never
+  url: "/migration/run"
+}
+
+export type MaintenanceMigrationRunErrors = {
+  /**
+   * ApiBadRequest
+   */
+  400: ApiBadRequest
+  /**
+   * ApiForbidden
+   */
+  403: ApiForbidden
+  /**
+   * ApiNotFound
+   */
+  404: ApiNotFound
+  /**
+   * ApiConflict
+   */
+  409: ApiConflict
+  /**
+   * ApiGone
+   */
+  410: ApiGone
+  /**
+   * ApiLocked
+   */
+  423: ApiLocked
+  /**
+   * ApiUnavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceMigrationRunError = MaintenanceMigrationRunErrors[keyof MaintenanceMigrationRunErrors]
+
+export type MaintenanceMigrationRunResponses = {
+  /**
+   * Migration orchestration result
+   */
+  200: MigrationRun
+}
+
+export type MaintenanceMigrationRunResponse = MaintenanceMigrationRunResponses[keyof MaintenanceMigrationRunResponses]
+
+export type MaintenanceMigrationStatusData = {
+  body?: never
+  path?: never
+  query?: {
+    dir?: string
+  }
+  url: "/migration/status"
+}
+
+export type MaintenanceMigrationStatusErrors = {
+  /**
+   * ApiBadRequest
+   */
+  400: ApiBadRequest
+  /**
+   * ApiForbidden
+   */
+  403: ApiForbidden
+  /**
+   * ApiNotFound
+   */
+  404: ApiNotFound
+  /**
+   * ApiConflict
+   */
+  409: ApiConflict
+  /**
+   * ApiGone
+   */
+  410: ApiGone
+  /**
+   * ApiLocked
+   */
+  423: ApiLocked
+  /**
+   * ApiUnavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceMigrationStatusError = MaintenanceMigrationStatusErrors[keyof MaintenanceMigrationStatusErrors]
+
+export type MaintenanceMigrationStatusResponses = {
+  /**
+   * Migration orchestration journal
+   */
+  200: MigrationStatus
+}
+
+export type MaintenanceMigrationStatusResponse =
+  MaintenanceMigrationStatusResponses[keyof MaintenanceMigrationStatusResponses]
+
+export type MaintenanceMigrationReportStatusData = {
+  body?: never
+  path?: never
+  query?: {
+    dir?: string
+  }
+  url: "/migration/report"
+}
+
+export type MaintenanceMigrationReportStatusErrors = {
+  /**
+   * ApiBadRequest
+   */
+  400: ApiBadRequest
+  /**
+   * ApiForbidden
+   */
+  403: ApiForbidden
+  /**
+   * ApiNotFound
+   */
+  404: ApiNotFound
+  /**
+   * ApiConflict
+   */
+  409: ApiConflict
+  /**
+   * ApiGone
+   */
+  410: ApiGone
+  /**
+   * ApiLocked
+   */
+  423: ApiLocked
+  /**
+   * ApiUnavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceMigrationReportStatusError =
+  MaintenanceMigrationReportStatusErrors[keyof MaintenanceMigrationReportStatusErrors]
+
+export type MaintenanceMigrationReportStatusResponses = {
+  /**
+   * Persisted migration compliance report
+   */
+  200: MigrationReportStored
+}
+
+export type MaintenanceMigrationReportStatusResponse =
+  MaintenanceMigrationReportStatusResponses[keyof MaintenanceMigrationReportStatusResponses]
+
+export type MaintenanceMigrationReportGenerateData = {
+  body?: MigrationReportInput
+  path?: never
+  query?: never
+  url: "/migration/report"
+}
+
+export type MaintenanceMigrationReportGenerateErrors = {
+  /**
+   * ApiBadRequest
+   */
+  400: ApiBadRequest
+  /**
+   * ApiForbidden
+   */
+  403: ApiForbidden
+  /**
+   * ApiNotFound
+   */
+  404: ApiNotFound
+  /**
+   * ApiConflict
+   */
+  409: ApiConflict
+  /**
+   * ApiGone
+   */
+  410: ApiGone
+  /**
+   * ApiLocked
+   */
+  423: ApiLocked
+  /**
+   * ApiUnavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceMigrationReportGenerateError =
+  MaintenanceMigrationReportGenerateErrors[keyof MaintenanceMigrationReportGenerateErrors]
+
+export type MaintenanceMigrationReportGenerateResponses = {
+  /**
+   * Migration compliance report
+   */
+  200: MigrationReport
+}
+
+export type MaintenanceMigrationReportGenerateResponse =
+  MaintenanceMigrationReportGenerateResponses[keyof MaintenanceMigrationReportGenerateResponses]
+
+export type MaintenanceBackupsGovernData = {
+  body?: BackupGovernInput
+  path?: never
+  query?: never
+  url: "/backups/govern"
+}
+
+export type MaintenanceBackupsGovernErrors = {
+  /**
+   * ApiBadRequest
+   */
+  400: ApiBadRequest
+  /**
+   * ApiForbidden
+   */
+  403: ApiForbidden
+  /**
+   * ApiNotFound
+   */
+  404: ApiNotFound
+  /**
+   * ApiConflict
+   */
+  409: ApiConflict
+  /**
+   * ApiGone
+   */
+  410: ApiGone
+  /**
+   * ApiLocked
+   */
+  423: ApiLocked
+  /**
+   * ApiUnavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceBackupsGovernError = MaintenanceBackupsGovernErrors[keyof MaintenanceBackupsGovernErrors]
+
+export type MaintenanceBackupsGovernResponses = {
+  /**
+   * Backups governance report
+   */
+  200: BackupGovernanceReport
+}
+
+export type MaintenanceBackupsGovernResponse =
+  MaintenanceBackupsGovernResponses[keyof MaintenanceBackupsGovernResponses]
+
+export type MaintenanceDiskReclaimData = {
+  body?: DiskReclaimInput
+  path?: never
+  query?: never
+  url: "/disk/reclaim"
+}
+
+export type MaintenanceDiskReclaimErrors = {
+  /**
+   * ApiBadRequest
+   */
+  400: ApiBadRequest
+  /**
+   * ApiForbidden
+   */
+  403: ApiForbidden
+  /**
+   * ApiNotFound
+   */
+  404: ApiNotFound
+  /**
+   * ApiConflict
+   */
+  409: ApiConflict
+  /**
+   * ApiGone
+   */
+  410: ApiGone
+  /**
+   * ApiLocked
+   */
+  423: ApiLocked
+  /**
+   * ApiUnavailable
+   */
+  503: ApiUnavailable
+}
+
+export type MaintenanceDiskReclaimError = MaintenanceDiskReclaimErrors[keyof MaintenanceDiskReclaimErrors]
+
+export type MaintenanceDiskReclaimResponses = {
+  /**
+   * Disk reclaim report
+   */
+  200: DiskReclaimReport
+}
+
+export type MaintenanceDiskReclaimResponse = MaintenanceDiskReclaimResponses[keyof MaintenanceDiskReclaimResponses]
 
 export type ConfigGetData = {
   body?: never
@@ -17829,6 +18613,184 @@ export type SessionProviderResolutionResolveResponses = {
 export type SessionProviderResolutionResolveResponse =
   SessionProviderResolutionResolveResponses[keyof SessionProviderResolutionResolveResponses]
 
+export type SessionProviderResolutionCommandData = {
+  body?:
+    | {
+        receiptID?: string
+        attemptID?: string
+        commandKind: "recover"
+        intent: "inspect"
+      }
+    | {
+        receiptID?: string
+        attemptID?: string
+        commandKind: "abandon_exact"
+        commandID?: string
+        expected?: {
+          providerState: "indeterminate_after_crash"
+          promptEpoch: number
+          sessionMutationEpoch: number
+          requestHash: string
+          historyHash: string
+          worldStateBaselineHash: string
+        }
+        reason?: string
+      }
+    | {
+        receiptID?: string
+        attemptID?: string
+        commandKind: "repair_baseline_and_abandon"
+      }
+    | {
+        receiptID?: string
+        attemptID?: string
+        commandKind: "fork_from_safe_boundary"
+        commandID?: string
+      }
+    | {
+        receiptID?: string
+        attemptID?: string
+        commandKind: "confirm_settled"
+        evidence: RecoveryEvidence
+      }
+    | {
+        receiptID?: string
+        attemptID?: string
+        commandKind: "query_command"
+        commandRef: string
+      }
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/provider-resolution/command"
+}
+
+export type SessionProviderResolutionCommandErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type SessionProviderResolutionCommandError =
+  SessionProviderResolutionCommandErrors[keyof SessionProviderResolutionCommandErrors]
+
+export type SessionProviderResolutionCommandResponses = {
+  /**
+   * Unified provider-resolution command outcome
+   */
+  200:
+    | {
+        commandKind: "recover"
+        legacyReceiptDescriptors: Array<SessionLegacyProviderResolutionDescriptor>
+        federationAttemptDescriptors: Array<{
+          descriptorID: string
+          sessionID: string
+          activityID: string
+          turnID: string
+          kind: string
+          payload:
+            | RecoveryExactDescriptor
+            | RecoveryRepairableDescriptor
+            | RecoveryForkDescriptor
+            | RecoveryCoordinationDescriptor
+            | RecoveryResolvedDescriptor
+          createdAt: number
+        }>
+      }
+    | {
+        commandKind: "abandon_exact"
+        authority: "legacy_provider_receipt"
+        resolution: {
+          resolutionID: string
+          commandID: string
+          receiptID: string
+          sessionID: string
+          decision: "abandoned"
+          sourcePromptEpoch: number
+          successorPromptEpoch: number
+          sourceMutationEpoch: number
+          successorMutationEpoch: number
+          safeEndMessageID?: string
+          safeHistoryHash: string
+          successorWindowID: string
+          successorHistoryHash: string
+          createdAt: number
+        }
+      }
+    | {
+        commandKind: "abandon_exact"
+        authority: "context_federation_attempt"
+        commandID: string
+        commandState: "abandoned"
+        attemptState: "resolved_abandoned"
+        resolutionID: string
+      }
+    | {
+        commandKind: "confirm_settled"
+        authority: "context_federation_attempt"
+        commandID: string
+        commandState: "settled"
+        attemptState: "resolved_settled"
+        resolutionID: string
+        evidenceDigest: string
+      }
+    | {
+        commandKind: "fork_from_safe_boundary"
+        authority: "legacy_provider_receipt"
+        forkSessionID: string
+        forkCutoffMessageID: string
+      }
+    | {
+        commandKind: "query_command"
+        authority: "legacy_provider_receipt" | "context_federation_attempt"
+        command?: {
+          commandID: string
+          attemptID: string
+          requestHash: string
+          state: string
+          commandKind?: string
+          createdAt: number
+          updatedAt: number
+        }
+        resolution?: {
+          resolutionID: string
+          commandID: string
+          receiptID: string
+          sessionID: string
+          decision: "abandoned"
+          sourcePromptEpoch: number
+          successorPromptEpoch: number
+          sourceMutationEpoch: number
+          successorMutationEpoch: number
+          safeEndMessageID?: string
+          safeHistoryHash: string
+          successorWindowID: string
+          successorHistoryHash: string
+          createdAt: number
+        }
+      }
+}
+
+export type SessionProviderResolutionCommandResponse =
+  SessionProviderResolutionCommandResponses[keyof SessionProviderResolutionCommandResponses]
+
 export type SessionContinuationResolutionListData = {
   body?: never
   path: {
@@ -19186,7 +20148,10 @@ export type V2SessionPromptResponses = {
 export type V2SessionPromptResponse = V2SessionPromptResponses[keyof V2SessionPromptResponses]
 
 export type V2SessionCompactData = {
-  body?: never
+  body: {
+    providerID: string
+    modelID: string
+  }
   path: {
     sessionID: string
   }

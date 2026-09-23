@@ -95,11 +95,21 @@ const getBase = (): Configuration => ({
       sign: signWindows,
     },
     target: ["nsis"],
+    // electron-updater's default Windows signature verification compares the
+    // update publisher against a Windows cert-store identity, which never
+    // matches Azure Trusted Signing certificates — the installer signature is
+    // still enforced by the SHA512 in latest.yml.
     verifyUpdateCodeSignature: false,
   },
   nsis: {
-    oneClick: true,
+    // Guided (assisted) installer per D-W3/§2.2.6: welcome → install dir →
+    // install → finish (with launch checkbox). Per-user install, no elevation;
+    // installer.nsh adds the app dir to the USER Path only (VSCode behavior).
+    oneClick: false,
     perMachine: false,
+    allowElevation: false,
+    allowToChangeInstallationDirectory: true,
+    include: "resources/installer.nsh",
     installerIcon: `resources/icons/icon.ico`,
     installerHeaderIcon: `resources/icons/icon.ico`,
   },

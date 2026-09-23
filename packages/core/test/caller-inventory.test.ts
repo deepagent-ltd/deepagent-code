@@ -50,7 +50,13 @@ describe("C0-01 caller inventory gate", () => {
     // v2w-j4 GitHub durable-only ingress (2026-09-19): the GitHub Action's durable V2 admission
     // module (src/github/github-agent-execution.ts) gets its own declared entry with a v2
     // admission/execution pin (403→404).
-    expect(inventory.entries.length).toBe(404)
+    // The w-b merge (c8e104afc, 2026-09-23) landed with this pin stale: the measured universe was
+    // 408 by then (four entries added without a comment line).
+    // W-01 WSL removal (2026-09-23): the desktop wsl sidecar launcher entry is deleted with its
+    // module (408→407).
+    // V2.0.1 merge-wave re-pin (2026-09-23, +6): the m3-m6 maintenance surfaces (report/
+    // govern/reclaim) and the k01 provider-resolution facade + blocked surfacing joined.
+    expect(inventory.entries.length).toBe(413)
     const lildax = inventory.entries
       .filter((entry) => entry.entry.surface === "cli-lildax")
       .map((entry) => entry.entry.id)

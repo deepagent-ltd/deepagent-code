@@ -2,6 +2,41 @@
 
 This changelog contains public, user-facing product changes. Internal incident identifiers, local paths, private environment topology, test credentials, release-gate evidence, and operational measurements are intentionally excluded.
 
+## Core 2.0.1 / Desktop 2.0.1
+
+Release labels: `core-v2.0.1` and `desktop-v2.0.1` (`2.0.1`).
+
+### Windows native support
+
+- Native Windows is now a first-class platform: data, caches and worktrees live under `%LOCALAPPDATA%`, config and credentials roam under `%APPDATA%`, and a one-time migration moves the legacy unified home on first start.
+- Shell validation understands PowerShell semantics: commands run through a pwsh → powershell → cmd resolution chain, POSIX scripts resolve through Git Bash when present, and unrepresentable commands fail with typed guidance instead of a blanket platform refusal.
+- The Windows desktop installer is a guided NSIS setup that adds the app to the user PATH (no system changes), and the desktop imports user/system environment variables from the registry at startup. The WSL requirement is removed across app, docs and packaging.
+- Secrets on Windows are stored through DPAPI-backed encryption instead of plaintext fallbacks.
+
+### Session migration and backup tooling
+
+- Full-transcript Markdown export for every session, with a resumable batch exporter and a per-run content manifest.
+- A guided V1→V2 migration flow: staged phases with progress in the maintenance shell, verified backups, a post-migration compliance report, backup retention governance, and an explicitly confirmed disk-reclaim step that never touches incident copies.
+
+### Providers and models
+
+- Custom config-defined providers now run on the V2 runtime end to end; undeclared pricing and limits surface as honestly unavailable instead of zero.
+- Fixed custom providers being unresolvable in V2 sessions (origin-tracked catalog entries).
+
+### Subagents and recovery
+
+- Subagent permission inheritance keeps a restrictive parent from silently stripping child agents of every tool.
+- Task fan-out accounting survives restarts; worktrees left by timed-out runs are reclaimed after a grace period while recovery-required runs are never touched.
+- Provider recovery exposes one command surface across legacy and V2 receipts, including an evidence-bound confirm-settled exit; sessions blocked from redrive surface with explicit reasons.
+
+### Fixes
+
+- Tool result metadata (exit codes, truncation markers, output paths) is visible again on projected sessions.
+- Bash results always end with a canonical `exit code: N` trailer; registry environment expansion cannot crash startup on circular values.
+- Structured-output evidence from subagents is bound to the answer message as designed.
+- Updated dependencies covering 14 published advisories (including a critical template RCE).
+- `deepagent export --format md` writes a titled Markdown transcript next to the session.
+
 ## Core 2.0 / Desktop 2.0
 
 Release labels: `core-v2.0` and `desktop-v2.0` (`2.0.0`).

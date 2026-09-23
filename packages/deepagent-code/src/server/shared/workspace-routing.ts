@@ -8,6 +8,11 @@ const RULES: Array<Rule> = [
   { method: "POST", path: "/sync/steal", exact: true, action: "local" },
   { path: "/session/status", action: "forward" },
   { method: "GET", path: "/session", action: "local" },
+  // PTY sessions are owned by the control-plane process. Proxying /pty WebSocket
+  // upgrades to a workspace server drops the connection — the workspace has no PTY
+  // handler — which surfaces as "Terminal creation timed out" with no server-side
+  // error beyond a silent proxy failure.
+  { path: "/pty", action: "local" },
 ]
 
 export function isLocalWorkspaceRoute(method: string, path: string) {

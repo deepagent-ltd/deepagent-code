@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { runValidationCommands, validationInvocation } from "../../src/deepagent/validation-exec"
+import { runValidationCommands, validationInvocation, type ShellProbe } from "../../src/deepagent/validation-exec"
 
 // V3.2 P2-5 regression guard: a validation command that never exits must NOT hang the runner.
 // The timeout sentinel must kill the process and resolve to a failed ValidationResult within
@@ -69,14 +69,73 @@ describe("V3.2 validation-exec timeout", () => {
     expect(results[0]).toMatchObject({ passed: false, kind: "command_exit", exit_code: 127 })
   })
 
-  test("native Windows fails closed before spawning validation", async () => {
-    const results = await runValidationCommands(["exit 0"], "C:\\repo", 5000, {
-      platform: "win32",
-      release: "10.0.26100",
-      env: {},
+  // D-W2 win32 shell selection is pinned on any host by injecting the platform and shell probes;
+  // validationInvocation is pure selection logic and never spawns.
+  describe("win32 posix-script shell selection (D-W2)", () => {
+    const win32 = { platform: "win32" as const, release: "10.0.26100", env: {} }
+    const probe = (over: Partial<ShellProbe>): ShellProbe => ({
+      gitbash: () => undefined,
+      win: () => [],
+      acceptable: () => "/bin/sh",
+      ...over,
     })
-    expect(results[0]).toMatchObject({ passed: false, kind: "unsupported_platform", exit_code: -1 })
-    expect(results[0]!.output).toContain("running in WSL2")
+
+    test("Git Bash runs POSIX scripts verbatim", () => {
+      const invocation = validationInvocation("bun test", "C:\\repo", {
+        ...win32,
+        probe: probe({ gitbash: () => "C:\\Program Files\\Git\\bin\\bash.exe" }),
+      })
+      expect(invocation).toEqual({
+        argv: expect.arrayContaining(["C:\\Program Files\\Git\\bin\\bash.exe"]),
+      })
+      expect("argv" in invocation && invocation.argv[0]).toBe("C:\\Program Files\\Git\\bin\\bash.exe")
+    })
+
+    test("a posix shell inside the win() chain accepts the script verbatim", () => {
+      const invocation = validationInvocation("bun test", "C:\\repo", {
+        ...win32,
+        probe: probe({ win: () => ["C:\\Program Files\\Git\\bin\\bash.exe", "C:\\Windows\\System32\\cmd.exe"] }),
+      })
+      expect("argv" in invocation && invocation.argv[0]).toBe("C:\\Program Files\\Git\\bin\\bash.exe")
+    })
+
+    test("pwsh runs a dialect-compatible script", () => {
+      const invocation = validationInvocation("bun test", "C:\\repo", {
+        ...win32,
+        probe: probe({ win: () => ["C:\\Program Files\\PowerShell\\7\\pwsh.exe"] }),
+      })
+      expect("argv" in invocation && invocation.argv[0]).toBe("C:\\Program Files\\PowerShell\\7\\pwsh.exe")
+    })
+
+    test("Windows PowerShell rejects && so the chain falls through to cmd", () => {
+      const invocation = validationInvocation("bun run build && bun test", "C:\\repo", {
+        ...win32,
+        probe: probe({
+          win: () => ["C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", "C:\\Windows\\System32\\cmd.exe"],
+        }),
+      })
+      expect("argv" in invocation && invocation.argv[0]).toBe("C:\\Windows\\System32\\cmd.exe")
+    })
+
+    test("a script no available shell can express fails closed as unsupported_dialect", () => {
+      const invocation = validationInvocation("grep 'foo bar' -r .", "C:\\repo", {
+        ...win32,
+        probe: probe({ win: () => ["C:\\Windows\\System32\\cmd.exe"] }),
+      })
+      expect(invocation).toMatchObject({ kind: "unsupported_dialect" })
+      expect("detail" in invocation && invocation.detail).toContain("Install Git Bash")
+    })
+
+    test("an explicitly configured shell still has to express the script's dialect", () => {
+      const rejected = validationInvocation("echo $HOME", "C:\\repo", {
+        ...win32,
+        shell: "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+      })
+      expect(rejected).toMatchObject({ kind: "unsupported_dialect" })
+
+      const accepted = validationInvocation("echo $HOME", "C:\\repo", { ...win32, shell: "C:\\Program Files\\Git\\bin\\bash.exe" })
+      expect("argv" in accepted && accepted.argv[0]).toBe("C:\\Program Files\\Git\\bin\\bash.exe")
+    })
   })
 
   test("WSL1 is rejected while WSL2 uses the normal Linux runner", async () => {

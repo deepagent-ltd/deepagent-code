@@ -69,6 +69,7 @@ import { useDialog } from "@deepagent-code/ui/context/dialog"
 import { Tooltip } from "@deepagent-code/ui/tooltip"
 import { createResizeObserver } from "@solid-primitives/resize-observer"
 import { useLanguage } from "@/context/language"
+import { useCommand } from "@/context/command"
 import { useSessionKey } from "@/pages/session/session-layout"
 import { useServerSDK } from "@/context/server-sdk"
 import { usePlatform } from "@/context/platform"
@@ -529,6 +530,7 @@ export function MessageTimeline(props: {
   const settings = useSettings()
   const dialog = useDialog()
   const language = useLanguage()
+  const command = useCommand()
   const { params, sessionKey } = useSessionKey()
   const platform = usePlatform()
 
@@ -1923,6 +1925,9 @@ export function MessageTimeline(props: {
                             </Show>
                             <DropdownMenu.Item onSelect={() => void exportSession(id)}>
                               <DropdownMenu.ItemLabel>{language.t("session.export.action")}</DropdownMenu.ItemLabel>
+                            </DropdownMenu.Item>
+                            <DropdownMenu.Item onSelect={() => command.trigger("session.export")}>
+                              <DropdownMenu.ItemLabel>{language.t("session.export.markdown")}</DropdownMenu.ItemLabel>
                             </DropdownMenu.Item>
                             <DropdownMenu.Item onSelect={() => void archiveSession(id)}>
                               <DropdownMenu.ItemLabel>{language.t("common.archive")}</DropdownMenu.ItemLabel>

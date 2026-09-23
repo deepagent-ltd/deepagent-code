@@ -148,16 +148,41 @@ export function assertManifestMatches(actual: unknown, expected: unknown): void 
 
 // ---- deterministic input source collection ----
 
+/**
+ * The closed digest input set, itemized as repo-relative paths: four `.ts` source
+ * directories (walked recursively), the migration registry file, and the four
+ * distribution package manifests (name + version only). Every entry is a
+ * committed, git-tracked path — anything outside this list, including the
+ * git-ignored `.artifacts/` tree, is invisible to the digest by
+ * construction (K-05/B-11: same commit ⇒ same digest on any machine). The
+ * reproducibility gate asserts that no untracked file exists under these roots.
+ */
+export const ManifestInputRoots = {
+  contractDir: "packages/core/src/contract",
+  migrationRegistryFile: "packages/core/src/database/migration.gen.ts",
+  migrationBodiesDir: "packages/core/src/database/migration",
+  runtimeFlagDir: "packages/core/src/flag",
+  runtimeConfigDir: "packages/core/src/config",
+  packageManifests: [
+    "packages/core/package.json",
+    "packages/deepagent-code/package.json",
+    "packages/app/package.json",
+    "packages/desktop/package.json",
+  ],
+} as const
+
 /** Options for the runnable/live generator. */
 export interface GenerateManifestOptions {
   /** Override the repository root (defaults to the git checkout containing this module). */
   readonly repoRoot?: string
-  /** Include the C0-01 inventory report and C0-06 perf manifest as external evidence. Default true. */
-  readonly includeExternalEvidence?: boolean
   /**
    * Extra/replacement inputs, `group -> repo-path -> content`, hashed and merged
    * over the discovered tree so a caller can inject or substitute an input
-   * without touching the working tree (used by the drift/sensitivty tests).
+   * without touching the working tree. This is the ONLY way external evidence
+   * enters the manifest: the caller passes the exact bytes it wants bound
+   * (content-addressed under a documented repo-relative key), so the default
+   * manifest stays a pure function of the committed tree. Used by the
+   * drift/sensitivity tests and by the candidate-ledger generator.
    */
   readonly extraInputs?: Record<string, Record<string, string>>
 }
@@ -196,37 +221,30 @@ function absentDigest(): string {
   return contentDigest({ present: false })
 }
 
-/** Contract sources under `packages/core/src/contract/**` (all files). */
+/** Contract sources under `ManifestInputRoots.contractDir` (all files). */
 function collectContract(repoRoot: string): Record<string, string> {
-  return collectTsDir(path.join(repoRoot, "packages/core/src/contract"), repoRoot)
+  return collectTsDir(path.join(repoRoot, ManifestInputRoots.contractDir), repoRoot)
 }
 
 /**
  * Migration registry. Authoritative source = the generated registry listing every
- * applied migration: `packages/core/src/database/migration.gen.ts` (written by the
+ * applied migration (`ManifestInputRoots.migrationRegistryFile`, written by the
  * migration generator, owned by the main Agent per worklist §2; do not edit).
- * The group also captures every migration body under `packages/core/src/database/migration/**`
+ * The group also captures every migration body under `ManifestInputRoots.migrationBodiesDir`
  * so a body-only edit (which leaves the registry import id unchanged) is still drift.
  */
 function collectMigrationRegistry(repoRoot: string): Record<string, string> {
   // The registry (apply order) plus every migration body. Collapsing the
   // migration.gen.ts import list into a single digest would miss a body-only edit
   // (the import id is unchanged), so the executable sources are captured too.
-  const registryRel = "packages/core/src/database/migration.gen.ts"
+  const registryRel = ManifestInputRoots.migrationRegistryFile
   const registryAbs = path.join(repoRoot, registryRel)
   const out: Record<string, string> = {
     [registryRel]: fs.existsSync(registryAbs) ? digestFileContent(fs.readFileSync(registryAbs, "utf8")) : absentDigest(),
   }
-  Object.assign(out, collectTsDir(path.join(repoRoot, "packages/core/src/database/migration"), repoRoot))
+  Object.assign(out, collectTsDir(path.join(repoRoot, ManifestInputRoots.migrationBodiesDir), repoRoot))
   return out
 }
-
-const PACKAGE_MANIFESTS = [
-  "packages/core/package.json",
-  "packages/deepagent-code/package.json",
-  "packages/app/package.json",
-  "packages/desktop/package.json",
-]
 
 /**
  * Package identities (name + version) for the distribution stack
@@ -236,7 +254,7 @@ const PACKAGE_MANIFESTS = [
  */
 function collectPackageVersions(repoRoot: string): Record<string, string> {
   const out: Record<string, string> = {}
-  for (const relPath of PACKAGE_MANIFESTS) {
+  for (const relPath of ManifestInputRoots.packageManifests) {
     const abs = path.join(repoRoot, relPath)
     if (!fs.existsSync(abs)) {
       out[relPath] = absentDigest()
@@ -250,77 +268,39 @@ function collectPackageVersions(repoRoot: string): Record<string, string> {
 
 /**
  * Runtime flag/config sources: the feature flags and the runtime configuration
- * modules under `packages/core/src/flag/**` and `packages/core/src/config/**`.
+ * modules under `ManifestInputRoots.runtimeFlagDir` and `ManifestInputRoots.runtimeConfigDir`.
  */
 function collectRuntimeFlagConfig(repoRoot: string): Record<string, string> {
   const out: Record<string, string> = {
-    ...collectTsDir(path.join(repoRoot, "packages/core/src/flag"), repoRoot),
-    ...collectTsDir(path.join(repoRoot, "packages/core/src/config"), repoRoot),
+    ...collectTsDir(path.join(repoRoot, ManifestInputRoots.runtimeFlagDir), repoRoot),
+    ...collectTsDir(path.join(repoRoot, ManifestInputRoots.runtimeConfigDir), repoRoot),
   }
   return out
 }
 
-const INVENTORY_REPORT_KEY = "packages/core/.artifacts/caller-inventory/report.json"
-const PERF_BASELINE_KEY = "packages/core/.artifacts/perf-baseline"
-
-/**
- * External evidence inputs (documented paths):
- *  - C0-01 inventory report: `packages/core/.artifacts/caller-inventory/report.json`
- *    (written by `script/caller-inventory/run-inventory.ts`, default output).
- *  - C0-06 perf manifest: `packages/core/.artifacts/perf-baseline/<run-id>/manifest.json`
- *    (written by `script/perf-baseline/run-baseline.ts` via `--out`).
- * Both live under the git-ignored `.artifacts/` and are absent in a clean source
- * checkout; each group still yields a stable `{ present: false }` marker digest so
- * the manifest is deterministic in the source tree and only changes when the
- * evidence is actually produced or changed.
- */
-function collectExternalEvidence(repoRoot: string): Record<string, Record<string, string>> {
-  const inventoryAbs = path.join(repoRoot, INVENTORY_REPORT_KEY)
-  const inventoryDigest = fs.existsSync(inventoryAbs)
-    ? digestFileContent(fs.readFileSync(inventoryAbs, "utf8"))
-    : absentDigest()
-
-  const perfDir = path.join(repoRoot, PERF_BASELINE_KEY)
-  let perfDigest = absentDigest()
-  if (fs.existsSync(perfDir)) {
-    const manifests: Record<string, string> = {}
-    for (const file of walkJsonFiles(perfDir)) {
-      manifests[path.relative(repoRoot, file)] = digestFileContent(fs.readFileSync(file, "utf8"))
-    }
-    if (Object.keys(manifests).length > 0) perfDigest = contentDigest(manifests)
-  }
-
-  return {
-    "c0-01-inventory-report": { [INVENTORY_REPORT_KEY]: inventoryDigest },
-    "c0-06-perf-manifest": { [PERF_BASELINE_KEY]: perfDigest },
-  }
-}
-
-function walkJsonFiles(dir: string): string[] {
-  const out: string[] = []
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name)
-    if (entry.isDirectory()) out.push(...walkJsonFiles(full))
-    else if (entry.name.endsWith(".json")) out.push(full)
-  }
-  return out.sort()
-}
-
 /**
  * Produce the single deterministic manifest from the live tree, covering the
- * contract sources, the migration registry, the package identity versions, the
- * runtime flag/config sources and (by default) the C0-01/C0-06 evidence.
+ * contract sources, the migration registry, the package identity versions and the
+ * runtime flag/config sources. Every input is a committed, git-tracked file, so
+ * the same commit yields the same manifest bytes on any machine.
+ *
+ * External evidence under `packages/core/.artifacts/` (the C0-01 caller-inventory
+ * report, the C0-06 perf-baseline manifests) is deliberately NOT read here:
+ * `.artifacts/` is git-ignored, so whatever a machine happens to have generated
+ * locally would perturb the digest and make it unreproducible from the committed
+ * tree (O-TEST-3 / O-W12-3). A caller that must bind produced evidence passes its
+ * exact bytes via `GenerateManifestOptions.extraInputs` — content-addressed under
+ * the documented repo-relative key — as the candidate-ledger generator does for
+ * the freshly produced inventory report.
  */
 export function generateManifest(options: GenerateManifestOptions = {}): DeterministicManifest {
   const repoRoot = options.repoRoot ?? resolveRepoRoot()
-  const includeEvidence = options.includeExternalEvidence ?? true
 
   const inputs: ManifestInputGroups = {
     contract: collectContract(repoRoot),
     "migration-registry": collectMigrationRegistry(repoRoot),
     "package-versions": collectPackageVersions(repoRoot),
     "runtime-flag-config": collectRuntimeFlagConfig(repoRoot),
-    ...(includeEvidence ? collectExternalEvidence(repoRoot) : {}),
   }
 
   if (options.extraInputs) {

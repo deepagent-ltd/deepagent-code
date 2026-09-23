@@ -165,17 +165,17 @@ describe("capability load negative shapes", () => {
   })
 })
 
-describe("capability load budget freeze (design §7.3, §13)", () => {
+describe("capability load budget freeze (design §7.3, §13; L0 700 → 1000 per V2.0.1-001 §4.6 decision ④)", () => {
   test("frozen budget limits decode", () => {
     const decoded = Schema.decodeUnknownSync(CapabilityBudgetLimits)({
       l0MaxBytes: 4096,
-      l0MaxTokens: 700,
+      l0MaxTokens: 1000,
       l2SingleMaxTokens: 1200,
       l2PerTurnMaxNew: 2,
       l2PerTurnMaxNewTokens: 2400,
     })
     expect(decoded.l0MaxBytes).toEqual(4096)
-    expect(decoded.l0MaxTokens).toEqual(700)
+    expect(decoded.l0MaxTokens).toEqual(1000)
     expect(decoded.l2SingleMaxTokens).toEqual(1200)
     expect(decoded.l2PerTurnMaxNew).toEqual(2)
     expect(decoded.l2PerTurnMaxNewTokens).toEqual(2400)
@@ -183,12 +183,12 @@ describe("capability load budget freeze (design §7.3, §13)", () => {
 
   test("a drift from the frozen budget is rejected", () => {
     expect(() =>
-      Schema.decodeUnknownSync(CapabilityBudgetLimits)({ l0MaxBytes: 5000, l0MaxTokens: 700, l2SingleMaxTokens: 1200, l2PerTurnMaxNew: 2, l2PerTurnMaxNewTokens: 2400 }),
+      Schema.decodeUnknownSync(CapabilityBudgetLimits)({ l0MaxBytes: 5000, l0MaxTokens: 1000, l2SingleMaxTokens: 1200, l2PerTurnMaxNew: 2, l2PerTurnMaxNewTokens: 2400 }),
     ).toThrow()
   })
 
-  test("L0 over budget throws BudgetExceededError", () => {
-    expect(() => assertContentLoadBudget("L0", 800, 5000, 0, 0)).toThrow(BudgetExceededError)
+  test("L0 over budget throws BudgetExceededError (token and byte legs)", () => {
+    expect(() => assertContentLoadBudget("L0", 1100, 5000, 0, 0)).toThrow(BudgetExceededError)
   })
 
   test("L2 single body over budget throws BudgetExceededError", () => {

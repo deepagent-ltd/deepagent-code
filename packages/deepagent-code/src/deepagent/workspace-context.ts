@@ -138,8 +138,10 @@ async function exists(filePath: string): Promise<boolean> {
 function inferCommands(info: WorkspaceInfo): ValidationCommand[] {
   // P2-7 / P1-3: single source of validation-command inference lives in core's validation.ts
   // (includes test/build/python + the AGENTS.md extractor). This bun-based workspace passes the
-  // "bun run" runner so emitted commands use the workspace package manager. The validation
-  // executor runs them through the host's accepted shell (PowerShell/cmd on Windows, POSIX elsewhere).
+  // "bun run" runner so emitted commands use the workspace package manager. Execution is NOT
+  // contractually `sh -c` (405-002 RC-2): argv commands spawn directly, and posix scripts run under
+  // the host shell chain — Git Bash first on Windows, then the first pwsh/powershell/cmd whose
+  // dialect can express the script, failing closed as `unsupported_dialect` otherwise.
   return AgentGateway.DeepAgentValidation.inferValidationPlan(
     AgentGateway.DeepAgentValidation.withPackageScriptRunner(
       {

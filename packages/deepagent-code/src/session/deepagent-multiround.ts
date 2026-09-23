@@ -253,10 +253,11 @@ export const maybeRunRounds = <T>(ops: MultiRoundOps<T>): Effect.Effect<T> =>
       lastResults = results
       // 🟡 → "narrow" (carry the triage reason as a narrowing constraint); 🟢 → "revise".
       const action: MicroRoundAction = triage.tier === "needs_narrowing" ? "narrow" : "revise"
+      const rollbackNote = best ? "\n\nThe workspace was rolled back to the best checkpoint before this turn." : ""
       const turnText =
         triage.tier === "needs_narrowing"
-          ? `${Validation.summarizeResults(results)}\n\nNarrowing guidance (${triage.substate}): ${triage.reason}. Focus on the specific failing file/symbol; do not widen the change surface.`
-          : Validation.summarizeResults(results)
+          ? `${Validation.summarizeResults(results)}\n\nNarrowing guidance (${triage.substate}): ${triage.reason}. Focus on the specific failing file/symbol; do not widen the change surface.${rollbackNote}`
+          : `${Validation.summarizeResults(results)}${rollbackNote}`
       result = yield* ops.reviseTurn(turnText, action)
     }
 

@@ -33,6 +33,7 @@ import { SessionRunnerCanonical } from "@deepagent-code/core/session/runner/cano
 import { SessionRunnerModel } from "@deepagent-code/core/session/runner/model"
 import { V2ProviderTurn } from "@deepagent-code/core/session/runner/v2-provider-turn"
 import { V2ToolEffect } from "@deepagent-code/core/session/runner/v2-tool-effect"
+import { V2StructuredOutputEvidenceTable } from "@deepagent-code/core/session/runner/v2-structured-output-evidence.sql"
 import { V2TaskRunReceiptTable } from "@deepagent-code/core/session/runner/v2-task-run-receipt.sql"
 import { SessionSchema } from "@deepagent-code/core/session/schema"
 import { SessionInputTable, SessionTable, TaskRunTable } from "@deepagent-code/core/session/sql"
@@ -452,6 +453,100 @@ describe("tool.task V2 authority E2E", () => {
       const { db } = yield* Database.Service
       const run = yield* db.select().from(TaskRunTable).where(eq(TaskRunTable.parent_session_id, chat.id)).get().pipe(Effect.orDie)
       expect(run?.state).toBe("completed")
+      // The validated success path seals no failure evidence.
+      const evidence = yield* db
+        .select()
+        .from(V2StructuredOutputEvidenceTable)
+        .where(eq(V2StructuredOutputEvidenceTable.run_id, run!.run_id))
+        .get()
+        .pipe(Effect.orDie)
+      expect(evidence).toBeUndefined()
+    }),
+  )
+
+  // bug-V2.0-003: exhausting BOTH bounded finalizer attempts must settle DEGRADED (1.0 port) —
+  // a receipt-stamped _degraded payload to the parent plus a durable validation_failed evidence
+  // row — never a hard tool failure that strands the parent turn.
+  it.instance("finalizer exhaustion degrades to a receipt-stamped payload with durable evidence", () =>
+    Effect.gen(function* () {
+      yield* ensureProject
+      const { chat, assistant } = yield* seedParent()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      // Every turn (research + BOTH finalizer attempts) returns schema-INVALID JSON.
+      payloadJson = '{"answer":"not-a-number"}'
+      const result = yield* def.execute(
+        {
+          description: "probe module",
+          prompt: "explain the module",
+          subagent_type: "researcher",
+          output_schema: { type: "object", properties: { answer: { type: "number" } }, required: ["answer"] },
+        },
+        execCtx({ sessionID: chat.id, messageID: assistant, callID: "tool_v2_degraded_invalid" }),
+      )
+
+      expect(result.output).toContain(`state="completed"`)
+      const payload = JSON.parse(result.output.match(/<task_result>\s*([\s\S]*?)\s*<\/task_result>/)?.[1] ?? "null")
+      expect(payload).toMatchObject({ _degraded: true, _reason: "structured_output_invalid", _attempts: 2 })
+      expect(typeof payload._raw).toBe("string")
+
+      const { db } = yield* Database.Service
+      const run = yield* db.select().from(TaskRunTable).where(eq(TaskRunTable.parent_session_id, chat.id)).get().pipe(Effect.orDie)
+      expect(run?.state).toBe("completed")
+
+      // Attempt budget unchanged: the durable first input plus exactly two finalizer follow-ups.
+      const childInputs = yield* db
+        .select()
+        .from(SessionInputTable)
+        .where(eq(SessionInputTable.session_id, SessionID.make(run!.child_session_id)))
+        .all()
+        .pipe(Effect.orDie)
+      expect(childInputs).toHaveLength(3)
+
+      const evidence = yield* db
+        .select()
+        .from(V2StructuredOutputEvidenceTable)
+        .where(eq(V2StructuredOutputEvidenceTable.run_id, run!.run_id))
+        .get()
+        .pipe(Effect.orDie)
+      expect(evidence?.validation_outcome).toBe("validation_failed")
+      expect(evidence?.schema_name).toBe("inline")
+      expect(evidence?.raw_output).toContain(`"_degraded":true`)
+      expect(evidence?.owner_token).toBe(`core-v2-task-finalizer:${run!.run_id}`)
+    }),
+  )
+
+  it.instance("finalizer turns without any JSON value degrade with structured_output_missing", () =>
+    Effect.gen(function* () {
+      yield* ensureProject
+      const { chat, assistant } = yield* seedParent()
+      const tool = yield* TaskTool
+      const def = yield* tool.init()
+      // Prose-only turns: neither finalizer attempt yields an extractable JSON value.
+      payloadJson = ""
+      const result = yield* def.execute(
+        {
+          description: "probe module",
+          prompt: "explain the module",
+          subagent_type: "researcher",
+          output_schema: { type: "object", properties: { answer: { type: "number" } }, required: ["answer"] },
+        },
+        execCtx({ sessionID: chat.id, messageID: assistant, callID: "tool_v2_degraded_missing" }),
+      )
+
+      expect(result.output).toContain(`state="completed"`)
+      const payload = JSON.parse(result.output.match(/<task_result>\s*([\s\S]*?)\s*<\/task_result>/)?.[1] ?? "null")
+      expect(payload).toMatchObject({ _degraded: true, _reason: "structured_output_missing", _attempts: 2 })
+
+      const { db } = yield* Database.Service
+      const run = yield* db.select().from(TaskRunTable).where(eq(TaskRunTable.parent_session_id, chat.id)).get().pipe(Effect.orDie)
+      const evidence = yield* db
+        .select({ outcome: V2StructuredOutputEvidenceTable.validation_outcome })
+        .from(V2StructuredOutputEvidenceTable)
+        .where(eq(V2StructuredOutputEvidenceTable.run_id, run!.run_id))
+        .get()
+        .pipe(Effect.orDie)
+      expect(evidence?.outcome).toBe("validation_failed")
     }),
   )
 

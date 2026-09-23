@@ -17,7 +17,8 @@ import { Flock } from "@deepagent-code/core/util/flock"
  *                     so their transport settings can only be edited here (via the connect
  *                     dialog's advanced section) — never through the config file.
  *
- * Stored at `~/.deepagent/code/settings.json` (same root as `account.json`), mode 0600,
+ * Stored in the roaming config home (`%APPDATA%\deepagent-code\settings.json` on Windows,
+ * `~/.deepagent/code/settings.json` elsewhere — same root as `account.json`), mode 0600,
  * atomic write. Read is cached in-memory and invalidated on write. This module is
  * backend-only; the renderer never imports it (it reads/writes through the config overlay).
  */
@@ -65,7 +66,7 @@ export namespace SettingsStore {
     providers?: Record<string, TransportSettings>
   }
 
-  const FILE = () => path.join(Global.Path.data, "settings.json")
+  const FILE = () => path.join(Global.Path.config, "settings.json")
 
   // Cache is keyed by resolved file path so a mid-process test-root switch doesn't serve a stale
   // other-home cache.

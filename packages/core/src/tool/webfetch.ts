@@ -6,6 +6,7 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstab
 import { Parser } from "htmlparser2"
 import TurndownService from "turndown"
 import { PermissionV2 } from "../permission"
+import { tolerantNumber } from "../schema"
 import { makeLocationNode } from "../effect/app-node"
 import { LayerNodePlatform } from "../effect/app-node-platform"
 import { ToolRegistry } from "./registry"
@@ -21,7 +22,9 @@ export const description = `Fetch content from an HTTP or HTTPS URL and return i
 
 Use a more targeted tool when one is available. This tool is read-only. Large text results may be replaced with a preview while the complete output is retained in managed storage.`
 
-const Timeout = Schema.Number.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(MAX_TIMEOUT_SECONDS))
+// Tolerant number arm (F-1): GLM-class providers send the timeout as a string; decimals stay
+// legal (parity with the previous plain-Number field), malformed/"null" strings reject.
+const Timeout = tolerantNumber(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(MAX_TIMEOUT_SECONDS))
 
 export const Input = Schema.Struct({
   url: Schema.String.annotate({ description: "The HTTP or HTTPS URL to fetch content from" }),
@@ -181,7 +184,13 @@ export const layer = Layer.effectDiscard(
                 format: input.format,
                 output: content,
               }
-            }).pipe(Effect.mapError(() => new ToolFailure({ message: `Unable to fetch ${input.url}` }))),
+            }).pipe(
+              Effect.mapError((error) => {
+                const refusal = PermissionV2.permissionToolFailure(error)
+                if (refusal !== null) return refusal
+                return new ToolFailure({ message: `Unable to fetch ${input.url}` })
+              }),
+            ),
         }),
       })
       .pipe(Effect.orDie)

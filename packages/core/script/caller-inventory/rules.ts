@@ -40,6 +40,11 @@ const RECOVERY_BINDING: Requirement = { kind: "reach", pathSuffix: AUTHORITY.REC
 const GOAL_MANAGER: Requirement = { kind: "reach", pathSuffix: AUTHORITY.GOAL_MANAGER }
 const LEGACY_CANONICALIZER: Requirement = { kind: "reach", pathSuffix: AUTHORITY.LEGACY_CANONICALIZER }
 const LEGACY_PROVIDER_RESOLUTION: Requirement = { kind: "reach", pathSuffix: AUTHORITY.LEGACY_PROVIDER_RESOLUTION }
+/** K-01 R-1: the unified provider-resolution command facade (routes by receipt source). */
+const PROVIDER_RESOLUTION_FACADE: Requirement = {
+  kind: "reach",
+  pathSuffix: "packages/deepagent-code/src/session/provider-resolution.ts",
+}
 const LEGACY_SESSION_CORE: Requirement = { kind: "reach", pathSuffix: AUTHORITY.LEGACY_SESSION_CORE }
 const V2_SESSION_CORE: Requirement = { kind: "reach", pathSuffix: AUTHORITY.V2_SESSION_CORE }
 const V2_SESSION_RUNTIME: Requirement = { kind: "reach", pathSuffix: AUTHORITY.V2_SESSION_RUNTIME }
@@ -434,18 +439,26 @@ export const RULE_PACKS: readonly RulePack[] = [
     rules: legacyAll7([PROMPT_SURFACE, body("promptSvc")]),
   },
   {
-    // RI-71 zero wave: the recovery-resolution surfaces refuse BEFORE any legacy machinery under
-    // the production profile (structural early return; the resolution state machines and the
-    // replay fork live in the legacy-profile helpers), so the handler bodies themselves cannot
-    // reach the legacy session execution chain.
-    match: (id) =>
-      id === "http.instance.session.contextAttemptResolve" ||
-      id === "http.instance.session.continuationResolutionResolve",
+    // K-01 R-1/R-2 (2026-09-23): the context-attempt abandon routes through the unified
+    // provider-resolution facade's durable CF exit (the recovery-command store's
+    // single-transaction CAS); replayed and evidence-less settle are structural refusals —
+    // post-dispatch ambiguity is never auto-replayed, so no execution chain is reachable.
+    match: (id) => id === "http.instance.session.contextAttemptResolve",
     rules: all7(adapter([
       { kind: "productionProfile" },
-      // LEGACY-EXECUTION-ZERO contract, now machine-verified: the profile-pinned refusal runs
-      // BEFORE any legacy-execution chain in the handler flow (line order = statement order in
-      // the generator body, including same-file helper expansion).
+      body("providerResolutionFacade"),
+      PROVIDER_RESOLUTION_FACADE,
+      notBody("promptSvc"),
+      notBody("SessionV2.prompt"),
+    ])),
+  },
+  {
+    // RI-71 zero wave (unchanged): the continuation-resolution surface still refuses BEFORE any
+    // legacy machinery under the production profile — the compaction continuation protocol stays
+    // behind the durable maintenance authority and its replay is never automatic.
+    match: (id) => id === "http.instance.session.continuationResolutionResolve",
+    rules: all7(adapter([
+      { kind: "productionProfile" },
       guardBeforeLegacy("refuseLegacyRecoveryMutation", "promptSvc"),
       PROMPT_SURFACE,
       V2_SESSION_CORE,
@@ -526,14 +539,21 @@ export const RULE_PACKS: readonly RulePack[] = [
     ])),
   },
   {
-    // RI-71 zero wave: RESOLVE refuses BEFORE any legacy machinery under the production profile
-    // (structural early return; the legacy state machine lives in the legacy-profile helper), and
-    // the handler body itself never touches the session execution chain.
-    match: (id) => id === "http.instance.session.providerResolutionResolve",
+    // K-01 R-1/R-2 (2026-09-23): the unified facade owns both resolve surfaces. The wire shapes
+    // (the SDK legacy payload and the frozen RecoveryCommand vocabulary) translate to
+    // facade.execute; the legacy-receipt abandon is the legacy authority's append-only durable
+    // transaction and the CF exit is the recovery-command store's single-transaction CAS — no
+    // execution chain is reachable, and replay is not in the vocabulary at all.
+    match: (id) =>
+      id === "http.instance.session.providerResolutionResolve" ||
+      id === "http.instance.session.providerResolutionCommand",
     rules: all7(adapter([
       { kind: "productionProfile" },
-      guardBeforeLegacy("refuseLegacyRecoveryMutation", "providerResolutionSvc"),
+      body("providerResolutionFacade"),
+      PROVIDER_RESOLUTION_FACADE,
       LEGACY_PROVIDER_RESOLUTION,
+      notBody("promptSvc"),
+      notBody("SessionV2.prompt"),
     ])),
   },
 

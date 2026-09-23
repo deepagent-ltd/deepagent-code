@@ -102,7 +102,7 @@ export class ToolStateError extends Schema.Class<ToolStateError>("Session.Messag
   input: Schema.Record(Schema.String, Schema.Unknown),
   content: ToolOutput.Content.pipe(Schema.Array),
   structured: ToolOutput.Structured,
-  error: SessionEvent.UnknownError,
+  error: SessionEvent.ToolCallError,
   result: SessionEvent.Tool.Failed.data.fields.result,
 }) {}
 

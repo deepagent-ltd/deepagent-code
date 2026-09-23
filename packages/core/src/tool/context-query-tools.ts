@@ -44,7 +44,11 @@ export const layer = Layer.effectDiscard(
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
               .pipe(
-                Effect.mapError(() => new ToolFailure({ message: `Permission denied: ${codeIntelName}` })),
+                Effect.mapError((error) => {
+                  const refusal = PermissionV2.permissionToolFailure(error)
+                  if (refusal !== null) return refusal
+                  return new ToolFailure({ message: `Permission denied: ${codeIntelName}` })
+                }),
                 Effect.andThen(runtime.codeIntel({ request, sessionID: context.sessionID, agent: context.agent })),
                 Effect.map((output) => ({ output })),
               ),
@@ -66,7 +70,11 @@ export const layer = Layer.effectDiscard(
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
               .pipe(
-                Effect.mapError(() => new ToolFailure({ message: `Permission denied: ${contextQueryName}` })),
+                Effect.mapError((error) => {
+                  const refusal = PermissionV2.permissionToolFailure(error)
+                  if (refusal !== null) return refusal
+                  return new ToolFailure({ message: `Permission denied: ${contextQueryName}` })
+                }),
                 Effect.andThen(runtime.contextQuery({ request, sessionID: context.sessionID, agent: context.agent })),
                 Effect.map((output) => ({ output })),
               ),

@@ -614,9 +614,6 @@ export const dict = {
   "settings.section.server": "Server",
   "settings.tab.general": "Generelt",
   "settings.tab.shortcuts": "Genveje",
-  "settings.desktop.section.wsl": "WSL",
-  "settings.desktop.wsl.title": "WSL integration",
-  "settings.desktop.wsl.description": "Kør DeepAgent Code-serveren inde i WSL på Windows.",
 
   "settings.general.section.appearance": "Udseende",
   "settings.general.section.notifications": "Systemmeddelelser",
@@ -999,6 +996,8 @@ export const dict = {
   "settings.about.attribution.title": "Bygget på deepagent-code",
   "settings.about.attribution.description": "DeepAgent Code er bygget på deepagent-code, brugt under MIT-licensen.",
   "settings.about.license.title": "Licens",
+  "settings.about.help.title": "Hjælp",
+  "settings.about.help.description": "Dokumentation, guider og support.",
   "settings.general.section.advanced": "Avanceret",
   "settings.general.section.deepagent": "DeepAgent",
   "settings.general.deepagent.mode.title": "Agent",

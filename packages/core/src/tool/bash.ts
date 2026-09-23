@@ -2,16 +2,19 @@ export * as BashTool from "./bash"
 
 import path from "path"
 import { ToolFailure, toolText } from "@deepagent-code/llm"
-import { Duration, Effect, Layer, Schema } from "effect"
+import { Duration, Effect, Layer, Option, Schema } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { Config } from "../config"
 import { FSUtil } from "../fs-util"
+import { Location } from "../location"
 import { LocationMutation } from "../location-mutation"
 import { AppProcess } from "../process"
 import { PermissionV2 } from "../permission"
 import { Policy } from "../policy"
 import { ServerCapabilities } from "../server-capabilities"
-import { PositiveInt } from "../schema"
+import { tolerantInt } from "../schema"
+import { ShellScan } from "../shell/scan"
+import { which } from "../util/which"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 
@@ -25,7 +28,7 @@ export const Input = Schema.Struct({
   workdir: Schema.String.pipe(Schema.optional).annotate({
     description: "Working directory. Defaults to the active Location; relative paths resolve from that Location.",
   }),
-  timeout: PositiveInt.check(Schema.isLessThanOrEqualTo(MAX_TIMEOUT_MS))
+  timeout: tolerantInt(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(MAX_TIMEOUT_MS))
     .pipe(Schema.optional)
     .annotate({
       description: `Timeout in milliseconds. Defaults to ${DEFAULT_TIMEOUT_MS} and may not exceed ${MAX_TIMEOUT_MS}.`,
@@ -50,7 +53,17 @@ const Output = Schema.Struct({
 
 type Output = typeof Output.Type
 
-const defaultShell = () => (process.platform === "win32" ? (process.env.COMSPEC ?? "cmd.exe") : "/bin/sh")
+// D-W2 win32 default shell chain, strict: pwsh → powershell → cmd (COMSPEC). Git Bash stays
+// selectable through shell configuration and is preferred for POSIX validation scripts, but is
+// never the silent default. POSIX keeps the existing /bin/sh default.
+const defaultShell = Effect.fnUntraced(function* () {
+  if (process.platform !== "win32") return "/bin/sh"
+  return ShellScan.defaultWindowsChain({
+    pwsh: which("pwsh") ?? undefined,
+    powershell: which("powershell") ?? undefined,
+    comspec: process.env.COMSPEC,
+  })
+})
 
 const compactOutput = (stdout: string, stderr: string) => {
   const output = stdout && stderr ? `${stdout}\n\nstderr:\n${stderr}` : stderr ? `stderr:\n${stderr}` : stdout
@@ -69,20 +82,23 @@ const modelOutput = (output: Output) => {
     ? `\n\nWarnings:\n${output.warnings.map((warning) => `- ${warning}`).join("\n")}`
     : ""
   if (output.timedOut) return `${output.output}${warnings}\n\nCommand timed out before completion.`
-  return `${output.output}${warnings}\n\nCommand exited with code ${output.exitCode}.`
+  // GROUND-TRUTH EXIT TRAILER (V1 shell.ts parity): the canonical `exit code: N` as the LAST
+  // line — validation classifiers regex on /exit\s*code[:=]\s*(\d+)/, which the previous
+  // "Command exited with code N." phrasing did not match; `null` renders explicitly so a
+  // terminated command is never mistaken for exit 0.
+  return `${output.output}${warnings}\n\nexit code: ${output.exitCode === null ? "null (terminated)" : output.exitCode}`
 }
 
 const isTimeout = (error: AppProcess.AppProcessError) =>
   error.cause instanceof Error && error.cause.message === "Timed out"
 
 /**
- * Minimal V2 core shell boundary. Keep parity debt visible without pulling the
- * legacy shell runtime into core.
+ * V2 core shell boundary. Approval reduction parses each command with the shared tree-sitter
+ * scan (../shell/scan.ts, same source as the V1 ShellTool): per-command permission patterns,
+ * BashArity prefix approvals, and cmd/PowerShell path handling. A command that cannot be parsed
+ * fails soft to whole-command approval with an advisory warning instead of failing the call.
+ * Keep the remaining parity debt visible below without pulling the legacy shell runtime into core.
  */
-// TODO: Port tree-sitter bash / PowerShell parser-based approval reduction.
-// TODO: Port BashArity reusable command-prefix approvals.
-// TODO: Replace token-based command-argument external-directory advisories with parser-based detection.
-// TODO: Restore PowerShell and cmd-specific invocation/path handling on Windows.
 // TODO: Add plugin shell.env environment augmentation once V2 plugin hooks exist.
 // TODO: Add durable/live progress metadata streaming for long-running commands once V2 tool invocation progress context is wired.
 // TODO: Persist background job status and define restart recovery before exposing remote observation.
@@ -93,31 +109,20 @@ const isTimeout = (error: AppProcess.AppProcessError) =>
 // TODO: Stream full shell output into managed storage while retaining only a bounded in-memory preview.
 
 const shellTokens = (command: string) => command.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? []
-// Best-effort `git push` detection for the git.push capability gate. Advisory
-// like externalCommandDirectories: catches the direct form, not shell tricks.
+// Best-effort `git push` detection for the git.push capability gate. Advisory:
+// catches the direct form, not shell tricks.
 const isGitPush = (command: string) => {
   const tokens = shellTokens(command).map((token) => token.replace(/^(['"])(.*)\1$/, "$2"))
   const git = tokens.indexOf("git")
   if (git === -1) return false
   return tokens.slice(git + 1).some((token) => token === "push")
 }
-const unquote = (value: string) => value.replace(/^(['"])(.*)\1$/, "$2")
-const externalCommandDirectories = (command: string, cwd: string) => {
-  const directories = new Set<string>()
-  for (const token of shellTokens(command)) {
-    const value = unquote(token).replace(/[;,|&]+$/, "")
-    if (!path.isAbsolute(value)) continue
-    const resolved = FSUtil.resolve(value)
-    if (FSUtil.contains(cwd, resolved)) continue
-    directories.add(FSUtil.resolve(path.dirname(resolved)))
-  }
-  return [...directories]
-}
 
 export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const tools = yield* Tools.Service
     const mutation = yield* LocationMutation.Service
+    const location = yield* Location.Service
     const fs = yield* FSUtil.Service
     const appProcess = yield* AppProcess.Service
     const config = yield* Config.Service
@@ -127,7 +132,7 @@ export const layer = Layer.effectDiscard(
     yield* tools
       .register({
         [name]: Tool.make({
-          description: `Execute one shell command string with the host user's filesystem, process, and network authority. The active Location is the default working directory. Relative workdir values resolve from that Location. External workdir values require external_directory approval; best-effort command-argument path warnings are advisory only. Timeout values are milliseconds (default: ${DEFAULT_TIMEOUT_MS}; maximum: ${MAX_TIMEOUT_MS}). Uses the configured shell when set; otherwise uses /bin/sh on POSIX and COMSPEC or cmd.exe on Windows.`,
+          description: `Execute one shell command string with the host user's filesystem, process, and network authority. The active Location is the default working directory. Relative workdir values resolve from that Location. External workdir values and command file arguments outside the Location require external_directory approval. Timeout values are milliseconds (default: ${DEFAULT_TIMEOUT_MS}; maximum: ${MAX_TIMEOUT_MS}). Uses the configured shell when set; otherwise uses /bin/sh on POSIX and the first available of pwsh, powershell, or cmd.exe on Windows.`,
           input: Input,
           output: Output,
           toModelOutput: ({ output }) => [toolText({ type: "text", text: modelOutput(output) })],
@@ -147,18 +152,68 @@ export const layer = Layer.effectDiscard(
                   agent: context.agent,
                   source,
                 })
-              const warnings = externalCommandDirectories(input.command, target.canonical).map(
-                (directory) =>
-                  `Command argument references external directory ${path.join(directory, "*").replaceAll("\\", "/")}. Bash runs with host-user filesystem, process, and network authority; this scan is advisory only.`,
-              )
-              yield* permission.assert({
-                action: name,
-                resources: [input.command],
-                save: [input.command],
-                sessionID: context.sessionID,
-                agent: context.agent,
-                source,
-              })
+              const entries = yield* config.entries()
+              const configured = Object.assign(
+                {},
+                ...entries.flatMap((entry) => (entry.type === "document" ? [entry.info] : [])),
+              ).shell
+              const shell = configured ?? (yield* defaultShell())
+              const ps = ShellScan.isPs(shell)
+
+              // Parser-based approval scan (D-W2), same source as the V1 ShellTool. Fail-soft: a
+              // command the grammar cannot parse still gets whole-command approval plus an
+              // advisory warning rather than failing the tool call. This is a DELIBERATE
+              // divergence from V1 (which fails hard on unparseable commands): whole-command
+              // approval is stricter in the permission sense (fail-closed), so refusing the
+              // call would only remove safety, not add it. Do not align V2 to V1 here.
+              const root = yield* fs
+                .realPath(location.directory)
+                .pipe(Effect.catch(() => Effect.succeed(location.directory)))
+              const io: ShellScan.IO = {
+                lines: (command) => appProcess.lines(command),
+                isDir: (file) => fs.isDir(file),
+              }
+              const scanned = yield* Effect.scoped(
+                Effect.gen(function* () {
+                  const tree = yield* Effect.acquireRelease(ShellScan.parse(input.command, ps), (tree) =>
+                    Effect.sync(() => tree.delete()),
+                  )
+                  return yield* ShellScan.collect(io, tree.rootNode, target.canonical, ps, shell, (candidate) =>
+                    FSUtil.contains(root, candidate),
+                  )
+                }),
+              ).pipe(Effect.option)
+
+              const warnings: string[] = []
+              if (Option.isNone(scanned))
+                warnings.push(
+                  "Command could not be parsed for per-command approval; approval covered the full command text instead.",
+                )
+
+              const externalGlobs = (Option.isSome(scanned) ? [...scanned.value.dirs] : [])
+                .map((directory) => path.join(directory, "*").replaceAll("\\", "/"))
+                .filter((glob) => glob !== external?.resource)
+              if (externalGlobs.length > 0)
+                yield* permission.assert({
+                  action: "external_directory",
+                  resources: externalGlobs,
+                  save: externalGlobs,
+                  sessionID: context.sessionID,
+                  agent: context.agent,
+                  source,
+                })
+
+              const patterns = Option.isSome(scanned) ? [...scanned.value.patterns] : [input.command]
+              const always = Option.isSome(scanned) ? [...scanned.value.always] : [input.command]
+              if (patterns.length > 0)
+                yield* permission.assert({
+                  action: name,
+                  resources: patterns,
+                  save: always,
+                  sessionID: context.sessionID,
+                  agent: context.agent,
+                  source,
+                })
 
               // Admin-controlled ServerCapabilities gate. Evaluated AFTER the
               // user permission prompt so an admin deny is a hard override that
@@ -185,17 +240,23 @@ export const layer = Layer.effectDiscard(
               if ((yield* fs.stat(target.canonical)).type !== "Directory")
                 return yield* Effect.fail(new Error(`Working directory is not a directory: ${target.canonical}`))
 
-              const entries = yield* config.entries()
-              const shell =
-                Object.assign({}, ...entries.flatMap((entry) => (entry.type === "document" ? [entry.info] : [])))
-                  .shell ?? defaultShell()
-              const command = ChildProcess.make(input.command, [], {
-                cwd: target.canonical,
-                shell,
-                stdin: "ignore",
-                detached: process.platform !== "win32",
-                forceKillAfter: Duration.seconds(3),
-              })
+              // PowerShell dialects take the script as a -Command argument (D-W2); every other
+              // shell goes through the platform shell transport.
+              const command =
+                process.platform === "win32" && ps
+                  ? ChildProcess.make(shell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", input.command], {
+                      cwd: target.canonical,
+                      stdin: "ignore",
+                      detached: false,
+                      forceKillAfter: Duration.seconds(3),
+                    })
+                  : ChildProcess.make(input.command, [], {
+                      cwd: target.canonical,
+                      shell,
+                      stdin: "ignore",
+                      detached: process.platform !== "win32",
+                      forceKillAfter: Duration.seconds(3),
+                    })
               const timeout = input.timeout ?? DEFAULT_TIMEOUT_MS
               const result = yield* appProcess
                 .run(command, {
@@ -232,11 +293,14 @@ export const layer = Layer.effectDiscard(
                 ...(result.stderrTruncated ? { stderrTruncated: true } : {}),
               }
             }).pipe(
-              Effect.mapError((error) =>
+              Effect.mapError((error) => {
                 // Preserve deliberate ToolFailure messages (e.g. capability denials);
                 // only opaque runtime errors get the generic fallback.
-                error instanceof ToolFailure ? error : new ToolFailure({ message: `Unable to execute command: ${input.command}` }),
-              ),
+                const refusal = PermissionV2.permissionToolFailure(error)
+                if (error instanceof ToolFailure) return error
+                if (refusal !== null) return refusal
+                return new ToolFailure({ message: `Unable to execute command: ${input.command}` })
+              }),
             ),
         }),
       })

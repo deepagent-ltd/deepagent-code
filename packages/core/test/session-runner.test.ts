@@ -216,6 +216,13 @@ const responsesRecoveryModel = Model.make({
   provider: "fake",
   route: OpenAIResponses.route.with({ limits: { context: 20_000, output: 1_000 } }),
 })
+// B4 budget-warning tests: a window large enough that the harness compaction buffer (3_000) puts
+// the trigger at 95%, leaving the ≥90% warning tier reachable without provoking compaction.
+const budgetModel = Model.make({
+  id: "budget",
+  provider: "fake",
+  route: OpenAIChat.route.with({ limits: { context: 60_000, output: 1_000 } }),
+})
 const authorizations: Tool.Context[] = []
 const permissionAssertions: PermissionV2.AssertInput[] = []
 const executions: string[] = []
@@ -830,6 +837,35 @@ const userTexts = (request: LLMRequest) =>
       ? message.content.flatMap((content) => (content.type === "text" ? [content.text] : []))
       : [],
   )
+
+// B4: the volatile budget notice/warning rides as a chronological system message whose text starts
+// with "BUDGET ".
+const budgetNotices = (request: LLMRequest) =>
+  request.messages.flatMap((message) =>
+    message.role === "system"
+      ? message.content.flatMap((content) =>
+          content.type === "text" && content.text.startsWith("BUDGET ") ? [content.text] : [],
+        )
+      : [],
+  )
+
+// The percentage the runner measured for THIS request: same estimateInputUsage the turn
+// preparation used, over the request minus the notice itself (the notice never feeds back into
+// the percentage that produced it).
+const measuredBudgetPercent = (request: LLMRequest, notice: string, model: Model) => {
+  const usage = SessionCompaction.estimateInputUsage(model, {
+    system: request.system,
+    messages: request.messages.filter(
+      (message) =>
+        !(
+          message.role === "system" && message.content.some((content) => content.type === "text" && content.text === notice)
+        ),
+    ),
+    tools: request.tools,
+  })
+  if (usage === undefined) throw new Error("expected the model to declare an input limit")
+  return Math.round((usage.tokens / usage.context) * 100)
+}
 
 const replaySessionProjection = (id: SessionV2.ID) =>
   Effect.gen(function* () {
@@ -2624,6 +2660,85 @@ describe("SessionRunnerLLM", () => {
         type: "compaction",
         summary: "## Goal\n- Preserve the updated task",
       })
+    }),
+  )
+
+  it.effect(
+    "injects one volatile budget notice at ≥70% occupancy and drops it after compaction relieves the window",
+    () =>
+      Effect.gen(function* () {
+        yield* setup
+        const session = yield* SessionV2.Service
+        // recoveryModel (context 20_000) with the harness buffer 3_000 ⇒ the compaction trigger
+        // sits at 17_000 estimated tokens (85%), so a ~75% turn notices without compacting.
+        currentModel = recoveryModel
+        requests.length = 0
+        response = fragmentFixture("text", "text-answer", ["Done"]).completeEvents
+        yield* session.prompt({ sessionID, prompt: new Prompt({ text: "x".repeat(58_000) }), resume: false })
+        yield* session.resume(sessionID)
+
+        expect(requests).toHaveLength(1)
+        const notices = budgetNotices(requests[0]!)
+        expect(notices).toHaveLength(1)
+        const notice = notices[0]!
+        expect(notice).toMatch(
+          /^BUDGET NOTICE: context window ~\d+% full\. Prefer completing the current subtask; avoid starting new large explorations\.$/,
+        )
+        const percent = Number(notice.match(/~(\d+)% full/)![1])
+        expect(percent).toBeGreaterThanOrEqual(70)
+        expect(percent).toBeLessThan(85)
+        expect(percent).toBe(measuredBudgetPercent(requests[0]!, notice, recoveryModel))
+        // Volatile only: nothing budget-shaped lands in durable history.
+        expect(JSON.stringify(yield* session.context(sessionID))).not.toContain("BUDGET")
+
+        // Grow past the 85% trigger: the turn compacts, the rebuilt request rides the compacted
+        // history, and the notice is gone because occupancy fell below 70%.
+        requests.length = 0
+        responses = [
+          fragmentFixture("text", "text-summary", ["## Goal\n- Preserve the task"]).completeEvents,
+          fragmentFixture("text", "text-final", ["Continued"]).completeEvents,
+        ]
+        yield* session.prompt({ sessionID, prompt: new Prompt({ text: "y".repeat(10_000) }), resume: false })
+        yield* session.resume(sessionID)
+
+        expect(requests).toHaveLength(2)
+        // The summary dispatch never carries a budget part (it is built inside SessionCompaction,
+        // not the turn-preparation path).
+        expect(budgetNotices(requests[0]!)).toEqual([])
+        expect(userTexts(requests[1]!)[0]).toContain("<conversation-checkpoint>")
+        expect(userTexts(requests[1]!)[0]).toContain("Survival rules: this summary is notes, not proof.")
+        expect(budgetNotices(requests[1]!)).toEqual([])
+        expect(yield* session.context(sessionID)).toMatchObject([
+          { type: "compaction", summary: "## Goal\n- Preserve the task" },
+          { type: "assistant", finish: "stop" },
+        ])
+      }),
+  )
+
+  it.effect("escalates to one volatile budget warning at ≥90% occupancy when compaction is not yet due", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      // budgetModel (context 60_000) with the harness buffer 3_000 ⇒ the trigger sits at 57_000
+      // estimated tokens (95%), so a ~92% turn warns WITHOUT provoking compaction.
+      currentModel = budgetModel
+      requests.length = 0
+      response = fragmentFixture("text", "text-answer", ["Done"]).completeEvents
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "x".repeat(219_000) }), resume: false })
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(1)
+      const warnings = budgetNotices(requests[0]!)
+      expect(warnings).toHaveLength(1)
+      const warning = warnings[0]!
+      expect(warning).toMatch(
+        /^BUDGET WARNING: context window ~\d+% full; compaction is imminent\. Wrap up: record key state in durable form \(files\/plan\), avoid new tool-heavy detours\.$/,
+      )
+      const percent = Number(warning.match(/~(\d+)% full/)![1])
+      expect(percent).toBeGreaterThanOrEqual(90)
+      expect(percent).toBeLessThan(95)
+      expect(percent).toBe(measuredBudgetPercent(requests[0]!, warning, budgetModel))
+      expect(JSON.stringify(yield* session.context(sessionID))).not.toContain("BUDGET")
     }),
   )
 

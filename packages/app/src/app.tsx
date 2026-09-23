@@ -49,7 +49,6 @@ import { ServerConnection, ServerProvider, serverName, useServer } from "@/conte
 import { SettingsProvider } from "@/context/settings"
 import { TerminalProvider } from "@/context/terminal"
 import { TabsProvider } from "@/context/tabs"
-import { WslServersProvider } from "@/wsl/context"
 import DirectoryLayout, { decodeDirectory } from "@/pages/directory-layout"
 import Layout from "@/pages/layout"
 import { ErrorPage } from "./pages/error"
@@ -58,8 +57,6 @@ import { startupViewReady } from "@/utils/startup-ready"
 
 const HomeRoute = lazy(() => import("@/pages/home"))
 const Session = lazy(() => import("@/pages/session"))
-const AgentSystemRoute = lazy(() => import("@/pages/agent-system"))
-const ReviewRoute = lazy(() => import("@/pages/review"))
 
 const SessionRoute = Object.assign(
   () => (
@@ -239,13 +236,11 @@ export function AppBaseProviders(props: ParentProps<{ locale?: Locale }>) {
               }}
             >
               <QueryProvider>
-                <WslServersProvider>
-                  <DialogProvider>
-                    <MarkedProvider>
-                      <FileComponentProvider component={File}>{props.children}</FileComponentProvider>
-                    </MarkedProvider>
-                  </DialogProvider>
-                </WslServersProvider>
+                <DialogProvider>
+                  <MarkedProvider>
+                    <FileComponentProvider component={File}>{props.children}</FileComponentProvider>
+                  </MarkedProvider>
+                </DialogProvider>
               </QueryProvider>
             </ErrorBoundary>
           </UiI18nBridge>
@@ -415,8 +410,6 @@ export function AppInterface(props: {
                 <Route path="/" component={HomeRoute} />
                 <Route path="/:dir" component={DirectoryLayout}>
                   <Route path="/" component={() => <Navigate href="session" />} />
-                  <Route path="/agent" component={AgentSystemRoute} />
-                  <Route path="/review" component={ReviewRoute} />
                   <Route path="/session/:id?" component={SessionRoute} />
                 </Route>
               </Dynamic>

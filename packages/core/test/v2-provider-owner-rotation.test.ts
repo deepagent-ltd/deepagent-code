@@ -41,7 +41,7 @@ const seedSession = Effect.gen(function* () {
       directory: "/project",
       title: "owner rotation",
       version: "test",
-      time_suspended: 104,
+      execution_claim_token: 104,
     })
     .onConflictDoNothing()
     .run()

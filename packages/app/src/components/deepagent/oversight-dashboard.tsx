@@ -22,7 +22,7 @@ import {
 //   2. Approval Queue — §D2 pending human-decision items + a resolve action.
 //   3. Event Trace — §F2 causal event chain for a correlationID.
 // Plus a §D2 human-takeover control (activates once P3.10's endpoint lands; tolerated absent here).
-// Rendered inside the session right-side-panel (see side-panel-oversight.tsx), so it owns only its
+// Rendered inside the session right-side-panel (see side-panel-subagents.tsx), so it owns only its
 // body + section chrome, matching SidePanelIM.
 
 const pct = (v: number | null | undefined) => (v == null ? "—" : `${Math.round(v * 100)}%`)

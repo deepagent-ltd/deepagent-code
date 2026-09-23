@@ -1,6 +1,6 @@
 {
   "name": "@deepagent-code/ui",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "type": "module",
   "license": "AGPL-3.0-or-later",
   "exports": {
@@ -61,7 +61,7 @@
     "@solidjs/meta": "catalog:",
     "@solidjs/router": "catalog:",
     "diff": "catalog:",
-    "dompurify": "3.4.11",
+    "dompurify": "catalog:",
     "fuzzysort": "catalog:",
     "katex": "0.16.27",
     "luxon": "catalog:",

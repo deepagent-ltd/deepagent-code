@@ -117,6 +117,69 @@ test("binary failure emits no success event", async () => {
   expect(published.some((event) => event.type === "session.next.tool.failed.1")).toBe(true)
 })
 
+test("a settlement failureCode classifies the durable tool failure error", async () => {
+  const wording =
+    "The user rejected permission to use this specific tool call with the following feedback: use write instead"
+  const { published, publisher } = capture()
+  await Effect.runPromise(publisher.publish(LLMEvent.toolCall({ id: "call-refused", name: "edit", input: {} })))
+  await Effect.runPromise(
+    publisher.publish(
+      LLMEvent.toolResult({
+        id: "call-refused",
+        name: "edit",
+        result: { type: "error", value: wording, metadata: { failureCode: "user_corrected_permission" } },
+      }),
+    ),
+  )
+
+  const failed = published.find((event) => event.type === "session.next.tool.failed.1")
+  expect(failed?.data).toMatchObject({
+    error: { type: "permission_corrected", message: wording },
+    result: { type: "error", value: wording, metadata: { failureCode: "user_corrected_permission" } },
+  })
+})
+
+test("each refusal failureCode maps to its durable error type", async () => {
+  const cases = [
+    ["user_rejected_permission", "permission_rejected"],
+    ["user_corrected_permission", "permission_corrected"],
+    ["permission_denied_rule", "permission_denied"],
+  ] as const
+  for (const [failureCode, type] of cases) {
+    const { published, publisher } = capture()
+    await Effect.runPromise(
+      publisher.publish(LLMEvent.toolCall({ id: `call-${failureCode}`, name: "bash", input: {} })),
+    )
+    await Effect.runPromise(
+      publisher.publish(
+        LLMEvent.toolResult({
+          id: `call-${failureCode}`,
+          name: "bash",
+          result: { type: "error", value: "refused", metadata: { failureCode } },
+        }),
+      ),
+    )
+    const failed = published.find((event) => event.type === "session.next.tool.failed.1")
+    expect(failed?.data).toMatchObject({ error: { type, message: "refused" } })
+  }
+})
+
+test("an unclassified settlement failure keeps the unknown error type", async () => {
+  const { published, publisher } = capture()
+  await Effect.runPromise(publisher.publish(LLMEvent.toolCall({ id: "call-plain", name: "read", input: {} })))
+  await Effect.runPromise(
+    publisher.publish(
+      LLMEvent.toolResult({
+        id: "call-plain",
+        name: "read",
+        result: { type: "error", value: "plain failure", metadata: { unrelated: true } },
+      }),
+    ),
+  )
+  const failed = published.find((event) => event.type === "session.next.tool.failed.1")
+  expect(failed?.data).toMatchObject({ error: { type: "unknown", message: "plain failure" } })
+})
+
 test("old success event data containing result still decodes", () => {
   const decoded = Schema.decodeUnknownSync(SessionEvent.Tool.Success.data)({
     sessionID,

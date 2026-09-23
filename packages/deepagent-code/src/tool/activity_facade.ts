@@ -13,27 +13,29 @@
  * and primary-agent-only in the registry projection (mirrors pr_finalize).
  */
 import { readonlySet } from "@deepagent-code/core/util/readonly-collections"
+import { tolerantInt } from "@deepagent-code/core/schema"
 import { Effect, Schema } from "effect"
 import * as Tool from "./tool"
 import { FacadeActivity } from "@/session/facade-activity"
 
 const FacadeSubkind = Schema.Literals(["task", "goal", "panel"])
 
-const FacadeBudgetSchema = Schema.Struct({
-  maxTicks: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))).annotate({
+// Tolerant int arms (F-1): GLM-class providers send budget limits as stringified numbers.
+export const FacadeBudgetSchema = Schema.Struct({
+  maxTicks: Schema.optional(tolerantInt(Schema.isGreaterThan(0))).annotate({
     description: "Max goal-loop ticks (clamped to the host policy ceiling).",
   }),
-  maxTokens: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))).annotate({
+  maxTokens: Schema.optional(tolerantInt(Schema.isGreaterThan(0))).annotate({
     description: "Max tokens across the activity (clamped to the host policy ceiling).",
   }),
-  maxWallclockMs: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))).annotate({
+  maxWallclockMs: Schema.optional(tolerantInt(Schema.isGreaterThan(0))).annotate({
     description: "Max wall-clock milliseconds (clamped to the host policy ceiling).",
   }),
 })
 
 // ── activity_start ────────────────────────────────────────────────────────────────────────────
 
-const StartParameters = Schema.Struct({
+export const StartParameters = Schema.Struct({
   subkind: FacadeSubkind.annotate({
     description: "Which runner backs this activity: task (durable subagent queue), goal (long-run goal loop), panel (expert panel consult).",
   }),
@@ -107,11 +109,11 @@ export const ActivityStartTool = Tool.define(
 
 // ── activity_status ───────────────────────────────────────────────────────────────────────────
 
-const StatusParameters = Schema.Struct({
+export const StatusParameters = Schema.Struct({
   subkind: Schema.optional(FacadeSubkind).annotate({
     description: "Filter to one subkind; omit to list all facade activities for this session.",
   }),
-  limit: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(20))).annotate({
+  limit: Schema.optional(tolerantInt(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(20))).annotate({
     description: "Max entries to return (hard ceiling 20, newest first).",
   }),
 })

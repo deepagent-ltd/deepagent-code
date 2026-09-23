@@ -419,6 +419,8 @@ export type RollbackPort = (input: {
   readonly goalId: string
   readonly sessionId: string
   readonly reason: string
+  /** The ledger tick whose critical failure triggered the rollback — the "round" half of the deterministic rollback-notice id (goalId, tick). */
+  readonly tick: number
 }) => Effect.Effect<void>
 
 /**
@@ -1061,6 +1063,7 @@ export const makeGoalLoop = (deps: ControllerDeps): GoalLoop => {
             goalId: state.goalId,
             sessionId: execResult.executedSessionId ?? state.sessionId,
             reason: `critical failure at tick ${ledger.ticks}`,
+            tick: ledger.ticks,
           })
           .pipe(Effect.catchCause(() => Effect.void))
       }

@@ -6,6 +6,7 @@ import { FileMutation } from "../file-mutation"
 import { FSUtil } from "../fs-util"
 import { LocationMutation } from "../location-mutation"
 import { PermissionV2 } from "../permission"
+import { tolerantInt } from "../schema"
 import { ApplyPatchTool } from "./apply-patch"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
@@ -18,14 +19,17 @@ const MAX_TRANSACTIONS_PER_SESSION = 8
 const TRANSACTION_TTL_MS = 30 * 60 * 1000
 const encoder = new TextEncoder()
 
-const Input = Schema.Struct({
+export const Input = Schema.Struct({
   action: Schema.Literals(["begin", "append", "commit", "abort"]).annotate({
     description: "begin starts a transaction; append adds text; commit validates and applies; abort discards it",
   }),
   transactionID: Schema.optional(Schema.String).annotate({
     description: "The transaction ID returned by begin; required for append, commit, and abort",
   }),
-  offset: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))).annotate({
+  // Tolerant int arm (F-1): the offset is copied from the previous result's nextOffset, which
+  // GLM-class providers echo back stringified; a mismatch against the transaction still fails
+  // in execute with the expected offset spelled out.
+  offset: Schema.optional(tolerantInt(Schema.isGreaterThanOrEqualTo(0))).annotate({
     description: "UTF-8 byte offset for append or commit; must equal nextOffset from the previous result",
   }),
   patchText: Schema.optional(Schema.String).annotate({

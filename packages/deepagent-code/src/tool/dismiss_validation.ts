@@ -1,4 +1,5 @@
 import { Effect, Schema } from "effect"
+import { tolerantNumber } from "@deepagent-code/core/schema"
 import * as Tool from "./tool"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 
@@ -30,12 +31,15 @@ const DISMISS_BLACKLIST_PATTERNS: RegExp[] = [
   /\bcritical\b/i,
 ]
 
-const Parameters = Schema.Struct({
+export const Parameters = Schema.Struct({
   command: Schema.String.annotate({
     description:
       "The exact failing command to dismiss — must match an entry in the current lastValidationResults with passed=false.",
   }),
-  exit_code: Schema.Number.annotate({
+  // Tolerant number arm (F-1): the exit code is copied from the validation results the model
+  // just read, which GLM-class providers echo back stringified; the exact-match check in
+  // execute still rejects a wrong value with the live results spelled out.
+  exit_code: tolerantNumber().annotate({
     description:
       "The exit code of the failing run. Double-confirms the target: if the command is present but with a different exit code, the dismissal is rejected.",
   }),

@@ -62,6 +62,12 @@ export const planStoreRoot = (sessionId: string): string => {
   return path.join(stateDir, "goal", sessionId, "graph")
 }
 
+// True when a root is resolvable in this scope (ALS runtime or configureRoot). Read-only renderers
+// (e.g. the plan-status reminder in a session whose host never configured the gateway) probe this
+// to skip instead of throwing from planStoreRoot; the throw stays for writes, where an unconfigured
+// root is a wiring bug.
+export const hasRoot = (): boolean => (runtime.getStore()?.stateDir ?? defaultStateDir) !== null
+
 // The shared authority handle for a session's plan doc. Shared registry keyed by resolved root, so the
 // tool path, the goal driver, and the UI/archive readers all see one coherent in-memory index.
 const store = (sessionId: string): DocumentStore => DocumentStore.shared(planStoreRoot(sessionId))

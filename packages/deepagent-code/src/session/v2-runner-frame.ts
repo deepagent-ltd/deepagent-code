@@ -24,6 +24,7 @@ import {
   ProductionV2Sources,
   type ProductionV2AdapterInput,
 } from "@deepagent-code/core/context-federation/production-adapters"
+import { ContextQueryAuthorization } from "@deepagent-code/core/context-federation/query-authorization"
 import { ContextToolRuntime } from "@deepagent-code/core/context-federation/tool-runtime"
 import { Effect, Layer } from "effect"
 import { currentIdentity } from "@/context-federation/production-sources"
@@ -136,6 +137,13 @@ const runnerFrameHost = Layer.effect(
     const runtime = yield* LocationIndexRuntime.Service
     const codeIntel = yield* CodeIntelFacade.Service
     const contextQuery = yield* ContextQueryFacade.Service
+    // The process-local query-authority store. Captured HERE so every keyed Location tree binds
+    // session envelopes into the very store the captured facades resolve from (the memoized
+    // shared build of ContextQueryAuthorization.defaultLayer in runnerFrameLocationMapLayer).
+    // A tree-private store would make every runner bind invisible to the facades and
+    // code_intel / context_query would always answer `authorization_unavailable`.
+    const queryAuthorizationService = yield* ContextQueryAuthorization.Service
+    const queryAuthorizationController = yield* ContextQueryAuthorization.Controller
     const onSessionSettled = yield* SessionRunner.CurrentOnSessionSettled
     const flags = yield* RuntimeFlags.Service
     const parityCampaign = yield* V2ProviderTurn.CurrentCampaign
@@ -154,6 +162,8 @@ const runnerFrameHost = Layer.effect(
       Layer.succeed(LocationIndexRuntime.Service, runtime),
       Layer.succeed(CodeIntelFacade.Service, codeIntel),
       Layer.succeed(ContextQueryFacade.Service, contextQuery),
+      Layer.succeed(ContextQueryAuthorization.Service, queryAuthorizationService),
+      Layer.succeed(ContextQueryAuthorization.Controller, queryAuthorizationController),
     )
     return LocationRuntimeHost.of({
       layer: (ref) =>
@@ -170,6 +180,8 @@ const runnerFrameHost = Layer.effect(
           Layer.succeed(V2ProviderTurn.CurrentHistoryEpochLookup, historyEpochLookup),
           Layer.succeed(V2ToolEffect.CurrentPermissionGrantLookup, permissionGrantLookup),
           Layer.succeed(SessionCompaction.CurrentRemoteCompaction, remoteCompaction),
+          Layer.succeed(ContextQueryAuthorization.Service, queryAuthorizationService),
+          Layer.succeed(ContextQueryAuthorization.Controller, queryAuthorizationController),
         ).pipe(Layer.provide(dependencies)),
     })
   }),
@@ -202,6 +214,7 @@ export const frameIdentity: CompositionDigest.FrameIdentityShape = {
     seams: [
       "core/ContextToolRuntime:instance-scoped",
       "core/ProductionV2Sources:instance-identity",
+      "core/ContextQueryAuthorization:process-local-store",
       "core/SessionCompaction.CurrentRemoteCompaction",
       "core/SessionRunner.CurrentOnSessionSettled",
       "core/V2ProviderTurn.CurrentBuildIdentity",
@@ -261,7 +274,12 @@ export const runnerFrameLocationMapLayer = LocationServiceMap.layerNoDeps.pipe(
   Layer.provide([
     ...locationServiceMapDependencies(runnerFrameHostLayer, Database.defaultLayer, eventLayer, gatewayRuntimeLayer),
   ]),
-  Layer.provide(Layer.mergeAll(CodeIntelFacade.defaultLayer, ContextQueryFacade.defaultLayer)),
+  // ContextQueryAuthorization.defaultLayer is the ONE process-local authority store for the whole
+  // frame: the same layer object feeds the facades' internal requirements and the host capture
+  // (one memoized build), so runner binds and facade resolves can never diverge.
+  Layer.provide(
+    Layer.mergeAll(CodeIntelFacade.defaultLayer, ContextQueryFacade.defaultLayer, ContextQueryAuthorization.defaultLayer),
+  ),
   Layer.provide(LocationIndexRuntime.defaultLayer),
   Layer.provide(InstanceLayer.layer),
   Layer.provide(RuntimeFlags.defaultLayer),

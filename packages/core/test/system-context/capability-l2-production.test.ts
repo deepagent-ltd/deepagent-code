@@ -30,8 +30,8 @@ import {
   type CapabilityLoadToolOutput,
   makeCapabilityLoadTool,
   makeDefaultCapabilityLoadTurnIdentity,
-  makeDomainPackLoadTool,
 } from "@deepagent-code/core/system-context/capability-load-tool"
+import { makeDomainPackLoadTool } from "@deepagent-code/core/system-context/domain-pack-load-tool"
 import {
   capabilityLoadFactOf,
   recordedCapabilityLoadsForSession,
@@ -105,7 +105,6 @@ function registerLoadTools(db: Database.Interface["db"]) {
     yield* tools
       .register({
         capability_load: makeCapabilityLoadTool({ db, turnIdentity: () => Effect.succeed(IDENTITY) }),
-        domain_pack_load: makeDomainPackLoadTool({ db, turnIdentity: () => Effect.succeed(IDENTITY) }),
       })
       .pipe(Effect.orDie)
   })
@@ -518,39 +517,10 @@ describe("capability_load tool settle: budget gate + audit receipt + snapshot ch
       Effect.gen(function* () {
         const { db } = yield* Database.Service
         const loadTool = makeCapabilityLoadTool({ db, turnIdentity: () => Effect.succeed(IDENTITY) })
-        const packTool = makeDomainPackLoadTool({ db, turnIdentity: () => Effect.succeed(IDENTITY) })
+        const packTool = makeDomainPackLoadTool({ store: () => null })
         expect(Tool.permission(loadTool, "capability_load")).toBe("capability.read")
         expect(Tool.permission(packTool, "domain_pack_load")).toBe("capability.read")
       }).pipe(Effect.provide(Database.layerFromPath(":memory:"))),
-    ))
-
-  test("domain_pack_load settles as the typed not_found(domain_pack_not_active)", () =>
-    Effect.runPromise(
-      Effect.gen(function* () {
-        const { db } = yield* Database.Service
-        yield* registerLoadTools(db)
-        const registry = yield* ToolRegistry.Service
-        const materialized = yield* registry.materialize()
-        const settlement = yield* materialized.settle({
-          sessionID: SESSION,
-          agent: AGENT,
-          assistantMessageID: SessionMessage.ID.make("msg_l2_production"),
-          call: {
-            type: "tool-call",
-            id: "call-pack",
-            name: "domain_pack_load",
-            input: {
-              schemaVersion: "capability-load-request.v1",
-              capabilityId: "deepagent.skill-guidance",
-              catalogSnapshotId: capabilityCatalogSnapshotId,
-              reason: "domain_knowledge_required",
-              expectedActions: ["skill"],
-            },
-          },
-        })
-        expect(settlement.result.type).toBe("text")
-        expect(String(settlement.result.value)).toContain("domain_pack_not_active")
-      }).pipe(Effect.provide(toolLayer), Effect.scoped),
     ))
 })
 
