@@ -57,7 +57,9 @@ export const chat = Effect.gen(function* () {
       const requestHash = createHash("sha256").update(JSON.stringify(parsed.value)).digest("hex")
       const existing = yield* db
         .select({ request_hash: ProxyRequestLedgerTable.request_hash, completed_at: ProxyRequestLedgerTable.completed_at,
-          finish_reason: ProxyRequestLedgerTable.finish_reason })
+          finish_reason: ProxyRequestLedgerTable.finish_reason, tier: ProxyRequestLedgerTable.tier,
+          provider_id: ProxyRequestLedgerTable.provider_id, model_id: ProxyRequestLedgerTable.model_id,
+          lane_session_id: ProxyRequestLedgerTable.lane_session_id })
         .from(ProxyRequestLedgerTable)
         .where(eq(ProxyRequestLedgerTable.request_id, ledgerID))
         .get()
@@ -89,6 +91,13 @@ export const chat = Effect.gen(function* () {
       if (tenant.tier !== "passthrough" && (hint.length > 128 || hint.length === 0))
         return proxyError(400, "invalid_session_hint", "Invalid session hint")
       const laneSessionID = tenant.tier === "passthrough" ? undefined : proxyLaneID(tenant, hint)
+      // An exact body retry must retain its original execution lane and provider binding. The
+      // session hint is a header, and tenant settings can change after admission; neither is in
+      // requestHash. Refuse before collectEnhanced can create or archive a different lane.
+      if (exactReplay && (existing?.tier !== tenant.tier ||
+          existing?.provider_id !== String(selected.entry.id) || existing?.model_id !== String(selected.model.id) ||
+          existing?.lane_session_id !== laneSessionID))
+        return proxyError(409, "request_replay_unavailable", "Request execution binding changed since admission")
 
       const admittedAt = Date.now()
       const eventData = {

@@ -363,8 +363,9 @@ describe("gateway release gate", () => {
         Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DEEPAGENT_CODE_GATEWAY: true }))),
       ), { disableLogger: true })
       const handler = web.handler
-      const send = (requestID: string, content: string, stream = false) => handler(new Request("http://localhost/v1/chat/completions", {
-        method: "POST", headers: { authorization: "Bearer sk-context", "content-type": "application/json", "x-request-id": requestID },
+      const send = (requestID: string, content: string, stream = false, hint?: string) => handler(new Request("http://localhost/v1/chat/completions", {
+        method: "POST", headers: { authorization: "Bearer sk-context", "content-type": "application/json", "x-request-id": requestID,
+          ...(hint ? { "x-deepagent-session": hint } : {}) },
         body: JSON.stringify({ model: "test-model", messages: [{ role: "user", content }], stream, stream_options: { include_usage: true } }),
       }), HttpApiApp.context)
       const [first, second] = await Promise.all([send("context-1", "First question"), send("context-2", "Second question")])
@@ -379,6 +380,17 @@ describe("gateway release gate", () => {
       const replay = await send("context-1", "First question")
       expect(replay.status).toBe(200)
       expect((await replay.json()).choices[0].message.content).toBe("first durable answer")
+      const reroutedReplay = await send("context-1", "First question", false, "different-lane")
+      expect(reroutedReplay.status).toBe(409)
+      expect((await reroutedReplay.json()).error.code).toBe("request_replay_unavailable")
+      const sqlite = await import("bun:sqlite")
+      const replayReader = new sqlite.Database(Flag.DEEPAGENT_CODE_DB, { readonly: true })
+      try {
+        expect(replayReader.query("SELECT count(*) AS count FROM session WHERE json_extract(metadata, '$.proxy.tenant') = 'tenant-context'").get())
+          .toMatchObject({ count: 1 })
+      } finally {
+        replayReader.close()
+      }
       const conflict = await send("context-1", "Changed question")
       expect(conflict.status).toBe(409)
       expect((await conflict.json()).error.code).toBe("request_conflict")
@@ -405,7 +417,6 @@ describe("gateway release gate", () => {
       expect([...sse.matchAll(/^data: (\{.*\})$/gm)].map((match) => JSON.parse(match[1]!).choices?.[0]?.delta?.content ?? "").join("")).toBe("first durable answer")
       expect(sse).toContain('"prompt_tokens":11')
       expect(sse).toContain("data: [DONE]")
-      const sqlite = await import("bun:sqlite")
       const reader = new sqlite.Database(Flag.DEEPAGENT_CODE_DB, { readonly: true })
       try {
         const activities = reader.query("SELECT activity_id, ordinal, state FROM session_activity ORDER BY ordinal").all() as { activity_id: string; ordinal: number; state: string }[]
