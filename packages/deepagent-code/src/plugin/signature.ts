@@ -87,7 +87,9 @@ export async function hash(root: string, selected?: string[]) {
   const files: string[] = []
   const visit = async (dir: string): Promise<void> => {
     for (const entry of await readdir(dir, { withFileTypes: true })) {
-      if (entry.name === manifestName || entry.name.endsWith(`.${manifestName.slice(1)}`)) continue
+      // Only the package root manifest signs itself. Nested lookalikes and standalone-file
+      // signature sidecars are ordinary package files and must be covered by the package digest.
+      if (dir === root && entry.name === manifestName) continue
       const file = path.join(dir, entry.name)
       if (entry.isSymbolicLink()) throw new Error(`Plugin package contains a symbolic link: ${file}`)
       if (entry.isDirectory()) {

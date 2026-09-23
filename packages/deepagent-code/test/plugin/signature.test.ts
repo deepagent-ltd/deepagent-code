@@ -47,15 +47,17 @@ test("a pinned Ed25519 signature gates external plugin import and detects tamper
         signature: sign(null, Buffer.from(packageDigest, "hex"), keys.privateKey).toString("base64"),
       }),
     )
-    await PluginSignature.check(
-      {
-        ...row,
-        spec: "signed-plugin@1.0.0",
-        source: "npm",
-        pkg: { dir, pkg: "signed-plugin", json: {} },
-      },
-      trust,
-    )
+    const packageRow: PluginLoader.Resolved = {
+      ...row,
+      spec: "signed-plugin@1.0.0",
+      source: "npm",
+      pkg: { dir, pkg: "signed-plugin", json: {} },
+    }
+    await PluginSignature.check(packageRow, trust)
+    // A package can load JSON/configuration from a file with a signature-like name. That file
+    // must not be exempt from the signed package content merely because of its suffix.
+    await Bun.write(path.join(dir, "runtime.deepagent-code-signature.json"), '{"mode":"changed"}')
+    await expect(PluginSignature.check(packageRow, trust)).rejects.toBeInstanceOf(PluginSignature.SignatureError)
     await expect(
       PluginSignature.check(row, JSON.stringify({ other: keys.publicKey.export({ type: "spki", format: "pem" }) })),
     ).rejects.toBeInstanceOf(PluginSignature.SignatureError)
