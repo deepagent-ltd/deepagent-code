@@ -30,6 +30,7 @@ export const TenantUpdate = Schema.Struct({
 
 const TenantParams = Schema.Struct({ tenantID: Schema.String })
 const TenantQuery = Schema.Struct({ tenant: Schema.optional(Schema.String), limit: Schema.optional(Schema.Int) })
+const AuditQuery = Schema.Struct({ tenant: Schema.optional(Schema.String), limit: Schema.optional(Schema.Int), after: Schema.optional(Schema.Int) })
 
 export const GatewayAdminApi = HttpApi.make("gateway-admin").add(
   HttpApiGroup.make("proxyAdmin")
@@ -48,6 +49,9 @@ export const GatewayAdminApi = HttpApi.make("gateway-admin").add(
     .add(HttpApiEndpoint.get("ledgerList", "/proxy/admin/ledger", {
       query: TenantQuery, success: Schema.Unknown,
     }).annotateMerge(OpenApi.annotations({ summary: "Export proxy request ledger" })))
+    .add(HttpApiEndpoint.get("auditList", "/proxy/admin/audit", {
+      query: AuditQuery, success: Schema.Unknown,
+    }).annotateMerge(OpenApi.annotations({ summary: "Export durable proxy audit events" })))
     .add(HttpApiEndpoint.get("laneList", "/proxy/admin/lanes", {
       query: TenantQuery, success: Schema.Unknown,
     }).annotateMerge(OpenApi.annotations({ summary: "List proxy conversation lanes" }))),

@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto"
 import path from "node:path"
-import { and, desc, eq, like, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gt, like, sql } from "drizzle-orm"
 import { Effect, Option, Schema } from "effect"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { Database } from "@deepagent-code/core/database/database"
+import { EventTable } from "@deepagent-code/core/event/sql"
 import { ProxyRequestLedgerTable, ProxyTenantTable } from "@deepagent-code/core/proxy/sql"
 import { SessionTable } from "@deepagent-code/core/session/sql"
 import { GatewayAdminApi, TenantCreate, TenantUpdate } from "../groups/gateway-admin"
@@ -103,6 +104,33 @@ export const gatewayAdminHandlers = HttpApiBuilder.group(GatewayAdminApi, "proxy
         .limit(Math.min(Math.max(input.query.limit ?? 100, 1), 1000)).all()
         .pipe(Effect.map((data) => ({ object: "list", data })), Effect.orDie)
 
+    const auditList = (input: { query: { tenant?: string; limit?: number; after?: number } }) => Effect.gen(function* () {
+      const limit = input.query.limit ?? 100
+      const after = input.query.after ?? 0
+      if (limit < 1 || limit > 1000 || after < 0)
+        return proxyError(400, "invalid_audit_cursor", "Audit limit or cursor is invalid")
+      const rows = yield* db.select({
+        id: EventTable.id,
+        aggregate_id: EventTable.aggregate_id,
+        seq: EventTable.seq,
+        sync_seq: EventTable.sync_seq,
+        type: EventTable.type,
+        data: EventTable.data,
+      }).from(EventTable)
+        .where(and(
+          like(EventTable.type, "proxy.%"),
+          input.query.tenant ? eq(sql<string>`json_extract(${EventTable.data}, '$.tenantID')`, input.query.tenant) : undefined,
+          gt(EventTable.sync_seq, after),
+        ))
+        .orderBy(asc(EventTable.sync_seq))
+        .limit(limit + 1).all()
+      const data = rows.slice(0, limit)
+      if (data.some((row) => row.sync_seq === null))
+        return proxyError(503, "audit_unavailable", "Proxy audit sequence is unavailable")
+      return HttpServerResponse.jsonUnsafe({ object: "list", data,
+        next_cursor: rows.length > limit ? data.at(-1)?.sync_seq : null })
+    }).pipe(Effect.catchCause(() => Effect.succeed(proxyError(503, "audit_unavailable", "Proxy audit is unavailable"))))
+
     const laneList = (input: { query: { tenant?: string; limit?: number } }) =>
       db.select({ id: SessionTable.id, title: SessionTable.title, metadata: SessionTable.metadata,
         time_archived: SessionTable.time_archived, time_updated: SessionTable.time_updated })
@@ -131,6 +159,7 @@ export const gatewayAdminHandlers = HttpApiBuilder.group(GatewayAdminApi, "proxy
         }).pipe(Effect.catchCause(() => Effect.succeed(proxyError(503, "admin_unavailable", "Proxy admin is unavailable")))),
       )
       .handle("ledgerList", ledgerList)
+      .handleRaw("auditList", auditList)
       .handle("laneList", laneList)
   }),
 )

@@ -387,6 +387,23 @@ describe("gateway release gate", () => {
       expect(unknown.status).toBe(503)
       expect((await unknown.json()).error.code).toBe("quota_usage_unknown")
       expect(hits).toHaveLength(2)
+      const auditPage = await web.handler(new Request("http://localhost/proxy/admin/audit?tenant=tenant-quota&limit=1"), HttpApiApp.context)
+      expect(auditPage.status).toBe(200)
+      const firstAudit = await auditPage.json()
+      expect(firstAudit.data).toHaveLength(1)
+      expect(firstAudit.data[0].data.tenantID).toBe("tenant-quota")
+      expect(firstAudit.next_cursor).toBeGreaterThan(0)
+      const nextAudit = await web.handler(new Request(`http://localhost/proxy/admin/audit?tenant=tenant-quota&limit=1&after=${firstAudit.next_cursor}`), HttpApiApp.context)
+      expect(nextAudit.status).toBe(200)
+      const secondAudit = await nextAudit.json()
+      expect(secondAudit.data).toHaveLength(1)
+      expect(secondAudit.data[0].data.tenantID).toBe("tenant-quota")
+      expect(secondAudit.data[0].id).not.toBe(firstAudit.data[0].id)
+      expect(secondAudit.next_cursor).toBeNull()
+      const otherAudit = await web.handler(new Request("http://localhost/proxy/admin/audit?tenant=tenant-unknown"), HttpApiApp.context)
+      expect(otherAudit.status).toBe(200)
+      expect((await otherAudit.json()).data.map((event: { data: { tenantID: string } }) => event.data.tenantID))
+        .toEqual(["tenant-unknown", "tenant-unknown"])
       const unsupportedDirectory = join(directory, "unsupported")
       await mkdir(unsupportedDirectory)
       const unsupportedProvider = testProviderConfig(`http://127.0.0.1:${upstream.port}/v1`)
@@ -403,6 +420,18 @@ describe("gateway release gate", () => {
       expect((await send("unsupported-2", "Retry after unsupported provider", "sk-test-unsupported-tenant")).status).toBe(501)
       expect(hits).toHaveLength(2)
       await web.dispose()
+      const protectedWeb = HttpRouter.toWebHandler(HttpApiApp.createRoutes().pipe(
+        Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DEEPAGENT_CODE_GATEWAY: true,
+          DEEPAGENT_CODE_SERVER_PASSWORD: "test-admin-password" }))),
+      ), { disableLogger: true })
+      const auditURL = "http://localhost/proxy/admin/audit?tenant=tenant-quota"
+      expect((await protectedWeb.handler(new Request(auditURL, { headers: { authorization: "Bearer sk-quota" } }), HttpApiApp.context)).status).toBe(401)
+      const authorizedAudit = await protectedWeb.handler(new Request(auditURL, {
+        headers: { authorization: `Basic ${Buffer.from("deepagent-code:test-admin-password").toString("base64")}` },
+      }), HttpApiApp.context)
+      expect(authorizedAudit.status).toBe(200)
+      expect((await authorizedAudit.json()).data.every((event: { data: { tenantID: string } }) => event.data.tenantID === "tenant-quota")).toBe(true)
+      await protectedWeb.dispose()
     } finally {
       releaseFirst.resolve()
       upstream.stop(true)
@@ -564,6 +593,13 @@ describe("gateway release gate", () => {
       const exported = await handler(new Request("http://localhost/proxy/admin/ledger?tenant=tenant-context"), HttpApiApp.context)
       expect(exported.status).toBe(200)
       expect((await exported.json()).data).toHaveLength(4)
+      const audited = await handler(new Request("http://localhost/proxy/admin/audit?tenant=tenant-context"), HttpApiApp.context)
+      expect(audited.status).toBe(200)
+      const auditEvents = (await audited.json()).data as { type: string; data: { tenantID: string } }[]
+      expect(auditEvents.every((event) => event.data.tenantID === "tenant-context")).toBe(true)
+      expect(auditEvents.map((event) => event.type)).toEqual(expect.arrayContaining([
+        "proxy.request.admitted.1", "proxy.response.completed.1", "proxy.mechanism.traced.1",
+      ]))
       const lanes = await handler(new Request("http://localhost/proxy/admin/lanes?tenant=tenant-context"), HttpApiApp.context)
       expect(lanes.status).toBe(200)
       expect((await lanes.json()).data.map((lane: { hint: string }) => lane.hint).sort()).toEqual(["default", "default"])
