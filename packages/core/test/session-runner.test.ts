@@ -4782,6 +4782,38 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("uses each queued prompt's model when future queue inputs were already admitted", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      yield* session.prompt({
+        sessionID,
+        prompt: new Prompt({ text: "First model", model: { providerID: "fake", id: "fake-model" } }),
+        delivery: "queue",
+        resume: false,
+      })
+      yield* session.prompt({
+        sessionID,
+        prompt: new Prompt({ text: "Second model", model: { providerID: "fake", id: "replacement" } }),
+        delivery: "queue",
+        resume: false,
+      })
+      expect((yield* session.get(sessionID)).model).toBeUndefined()
+
+      requests.length = 0
+      responses = Array.from({ length: 2 }, () => [
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+        LLMEvent.finish({ reason: "stop" }),
+      ])
+      yield* session.resume(sessionID)
+
+      expect(requests.map((request) => request.model)).toEqual([model, replacementModel])
+      expect(requests.map(userTexts)).toEqual([["First model"], ["First model", "Second model"]])
+      expect((yield* session.get(sessionID)).model?.id).toBe(ModelV2.ID.make("replacement"))
+    }),
+  )
+
   it.effect("does not spend one activity step budget across queued activities", () =>
     Effect.gen(function* () {
       yield* setup

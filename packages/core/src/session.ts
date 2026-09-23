@@ -829,7 +829,7 @@ export const layer = Layer.effect(
       prompt: Effect.fn("V2Session.prompt")((input) =>
         Effect.uninterruptible(
           Effect.gen(function* () {
-            yield* result.requireWritable(input.sessionID)
+            const writable = yield* result.requireWritable(input.sessionID)
             const returnPrompt = Effect.fnUntraced(function* (admitted: SessionInput.Admitted) {
               if (input.resume !== false) yield* enqueueWake(admitted)
               return admitted
@@ -843,27 +843,18 @@ export const layer = Layer.effect(
               delivery,
               revertEpoch: input.revertEpoch,
             }
-            // Selection belongs to the exact durable prompt request. An exact retry must not
-            // change a Session whose agent/model may have moved on since the original admission.
+            // Selection belongs to the exact durable prompt request and is applied only when
+            // that input is promoted. An exact retry must not reselect a later Session state.
             const prior = yield* SessionInput.find(db, messageID)
             if (prior !== undefined) {
               if (!SessionInput.equivalent(prior, expected))
                 return yield* new PromptConflictError({ sessionID: input.sessionID, messageID })
               return yield* returnPrompt(prior)
             }
+            // The admitted event projects selection in the same transaction as the inbox row.
+            // Validate first so an invalid agent cannot leave a durable, unrunnable input.
             if (input.prompt.agent !== undefined)
-              yield* result.switchAgent({ sessionID: input.sessionID, agent: input.prompt.agent })
-            if (input.prompt.model !== undefined)
-              yield* result.switchModel({
-                sessionID: input.sessionID,
-                model: {
-                  id: ModelV2.ID.make(input.prompt.model.id),
-                  providerID: ProviderV2.ID.make(input.prompt.model.providerID),
-                  ...(input.prompt.model.variant === undefined
-                    ? {}
-                    : { variant: ModelV2.VariantID.make(input.prompt.model.variant) }),
-                },
-              })
+              yield* requireAdmissionAgent(writable.location, AgentV2.ID.make(input.prompt.agent), true)
             const admitted = yield* SessionInput.admit(db, events, {
               id: messageID,
               sessionID: input.sessionID,

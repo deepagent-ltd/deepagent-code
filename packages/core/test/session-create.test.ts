@@ -20,6 +20,7 @@ import { Prompt } from "@deepagent-code/core/session/prompt"
 import { SessionProjector } from "@deepagent-code/core/session/projector"
 import { SessionExecution } from "@deepagent-code/core/session/execution"
 import { SessionInput } from "@deepagent-code/core/session/input"
+import { SessionMessage } from "@deepagent-code/core/session/message"
 import { SessionEvent } from "@deepagent-code/core/session/event"
 import { MessageTable, SessionTable } from "@deepagent-code/core/session/sql"
 import { SessionStore } from "@deepagent-code/core/session/store"
@@ -330,13 +331,15 @@ describe("SessionV2.create", () => {
         model: { providerID: "provider", id: "selected", variant: "fast" },
       })
       const admitted = yield* session.prompt({ sessionID: created.id, prompt, resume: false })
+      expect((yield* session.get(created.id)).model).toBeUndefined()
+      yield* SessionInput.promoteSteers(db, events, created.id, Number.MAX_SAFE_INTEGER)
+      expect((yield* session.get(created.id)).model?.id).toBe(ModelV2.ID.make("selected"))
       yield* session.switchModel({
         sessionID: created.id,
         model: { providerID: ProviderV2.ID.make("provider"), id: ModelV2.ID.make("later") },
       })
       expect((yield* session.prompt({ sessionID: created.id, id: admitted.id, prompt, resume: false })).id).toBe(admitted.id)
       expect((yield* session.get(created.id)).model?.id).toBe(ModelV2.ID.make("later"))
-      yield* SessionInput.promoteSteers(db, events, created.id, Number.MAX_SAFE_INTEGER)
       const user = (yield* session.messages({ sessionID: created.id })).find((message) => message.type === "user")
       expect(user?.metadata).toEqual(prompt.metadata)
       expect(user?.type === "user" ? user.model?.id : undefined).toBe("selected")
@@ -344,15 +347,76 @@ describe("SessionV2.create", () => {
       expect(legacy?.data).toMatchObject({ metadata: prompt.metadata, model: { modelID: "selected", variant: "fast" } })
       expect(
         (yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id)).all())
-          .slice(0, 5)
+          .slice(0, 3)
           .map((event) => event.type),
       ).toEqual([
         "session.created.2",
-        "session.next.model.switched.1",
         "session.next.prompt.admitted.1",
-        "session.next.model.switched.1",
         "session.next.prompt.promoted.1",
       ])
+      expect(
+        (yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id)).all())
+          .filter((event) => event.type === "session.next.model.switched.1"),
+      ).toHaveLength(1)
+    }),
+  )
+
+  it.effect("does not switch agent or model when prompt admission rejects a stale revert epoch", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const { db } = yield* Database.Service
+      const created = yield* session.create({ location })
+      const messageID = SessionMessage.ID.create()
+      yield* db.update(SessionTable).set({ mutation_epoch: 1 }).where(eq(SessionTable.id, created.id)).run()
+
+      const failure = yield* session.prompt({
+        sessionID: created.id,
+        id: messageID,
+        prompt: new Prompt({
+          text: "Stale selection",
+          agent: "plan",
+          model: { providerID: "provider", id: "selected" },
+        }),
+        revertEpoch: 0,
+        resume: false,
+      }).pipe(Effect.flip)
+
+      expect(failure._tag).toBe("SessionInput.StaleRevertEpoch")
+      expect((yield* session.get(created.id)).agent).toBeUndefined()
+      expect((yield* session.get(created.id)).model).toBeUndefined()
+      expect(yield* SessionInput.find(db, messageID)).toBeUndefined()
+      expect(
+        (yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id)).all())
+          .map((event) => event.type),
+      ).toEqual(["session.created.2"])
+    }),
+  )
+
+  it.effect("concurrent exact prompt retries project one selection with the admitted input", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const { db } = yield* Database.Service
+      const created = yield* session.create({ location })
+      const input = {
+        sessionID: created.id,
+        id: SessionMessage.ID.create(),
+        prompt: new Prompt({ text: "Select once", model: { providerID: "provider", id: "selected" } }),
+        resume: false,
+      }
+
+      const receipts = yield* Effect.all([session.prompt(input), session.prompt(input)], { concurrency: "unbounded" })
+      expect(receipts[0]).toEqual(receipts[1])
+      expect((yield* session.get(created.id)).model).toBeUndefined()
+      expect(
+        (yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id)).all())
+          .map((event) => event.type),
+      ).toEqual(["session.created.2", "session.next.prompt.admitted.1"])
+      expect(
+        (yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id)).all())
+          .filter((event) => event.type === "session.next.model.switched.1"),
+      ).toHaveLength(0)
+      yield* SessionInput.promoteSteers(db, yield* EventV2.Service, created.id, Number.MAX_SAFE_INTEGER)
+      expect((yield* session.get(created.id)).model?.id).toBe(ModelV2.ID.make("selected"))
     }),
   )
 
@@ -364,7 +428,11 @@ describe("SessionV2.create", () => {
       const created = yield* session.create({ id: SessionV2.ID.make("ses_fresh_target_replay"), location })
       const admitted = yield* session.prompt({
         sessionID: created.id,
-        prompt: new Prompt({ text: "Replay lifecycle" }),
+        prompt: new Prompt({
+          text: "Replay lifecycle",
+          agent: "plan",
+          model: { providerID: "provider", id: "selected" },
+        }),
         resume: false,
       })
       yield* SessionInput.promoteSteers(sourceDb, sourceEvents, created.id, Number.MAX_SAFE_INTEGER)
@@ -403,6 +471,7 @@ describe("SessionV2.create", () => {
 
         expect(yield* store.get(created.id)).toBeUndefined()
         expect(yield* events.replayAll(serialized.slice(0, 2))).toBe(created.id)
+        expect(yield* store.get(created.id)).toMatchObject({ agent: undefined, model: undefined })
         expect(yield* SessionInput.find(db, admitted.id)).toMatchObject({
           id: admitted.id,
           sessionID: created.id,
@@ -413,6 +482,7 @@ describe("SessionV2.create", () => {
         expect(yield* store.context(created.id)).toEqual([])
 
         expect(yield* events.replayAll(serialized.slice(2))).toBe(created.id)
+        expect(yield* store.get(created.id)).toMatchObject({ agent: "plan", model: { id: "selected" } })
         expect(yield* SessionInput.find(db, admitted.id)).toMatchObject({
           id: admitted.id,
           sessionID: created.id,
