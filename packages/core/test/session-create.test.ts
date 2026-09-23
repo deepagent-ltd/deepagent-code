@@ -331,6 +331,8 @@ describe("SessionV2.create", () => {
         model: { providerID: "provider", id: "selected", variant: "fast" },
       })
       const admitted = yield* session.prompt({ sessionID: created.id, prompt, resume: false })
+      expect((yield* session.get(created.id)).model).toBeUndefined()
+      yield* SessionInput.promoteSteers(db, events, created.id, Number.MAX_SAFE_INTEGER)
       expect((yield* session.get(created.id)).model?.id).toBe(ModelV2.ID.make("selected"))
       yield* session.switchModel({
         sessionID: created.id,
@@ -338,7 +340,6 @@ describe("SessionV2.create", () => {
       })
       expect((yield* session.prompt({ sessionID: created.id, id: admitted.id, prompt, resume: false })).id).toBe(admitted.id)
       expect((yield* session.get(created.id)).model?.id).toBe(ModelV2.ID.make("later"))
-      yield* SessionInput.promoteSteers(db, events, created.id, Number.MAX_SAFE_INTEGER)
       const user = (yield* session.messages({ sessionID: created.id })).find((message) => message.type === "user")
       expect(user?.metadata).toEqual(prompt.metadata)
       expect(user?.type === "user" ? user.model?.id : undefined).toBe("selected")
@@ -346,14 +347,17 @@ describe("SessionV2.create", () => {
       expect(legacy?.data).toMatchObject({ metadata: prompt.metadata, model: { modelID: "selected", variant: "fast" } })
       expect(
         (yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id)).all())
-          .slice(0, 4)
+          .slice(0, 3)
           .map((event) => event.type),
       ).toEqual([
         "session.created.2",
         "session.next.prompt.admitted.1",
-        "session.next.model.switched.1",
         "session.next.prompt.promoted.1",
       ])
+      expect(
+        (yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id)).all())
+          .filter((event) => event.type === "session.next.model.switched.1"),
+      ).toHaveLength(1)
     }),
   )
 
@@ -402,7 +406,7 @@ describe("SessionV2.create", () => {
 
       const receipts = yield* Effect.all([session.prompt(input), session.prompt(input)], { concurrency: "unbounded" })
       expect(receipts[0]).toEqual(receipts[1])
-      expect((yield* session.get(created.id)).model?.id).toBe(ModelV2.ID.make("selected"))
+      expect((yield* session.get(created.id)).model).toBeUndefined()
       expect(
         (yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id)).all())
           .map((event) => event.type),
@@ -411,6 +415,8 @@ describe("SessionV2.create", () => {
         (yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id)).all())
           .filter((event) => event.type === "session.next.model.switched.1"),
       ).toHaveLength(0)
+      yield* SessionInput.promoteSteers(db, yield* EventV2.Service, created.id, Number.MAX_SAFE_INTEGER)
+      expect((yield* session.get(created.id)).model?.id).toBe(ModelV2.ID.make("selected"))
     }),
   )
 
@@ -465,7 +471,7 @@ describe("SessionV2.create", () => {
 
         expect(yield* store.get(created.id)).toBeUndefined()
         expect(yield* events.replayAll(serialized.slice(0, 2))).toBe(created.id)
-        expect(yield* store.get(created.id)).toMatchObject({ agent: "plan", model: { id: "selected" } })
+        expect(yield* store.get(created.id)).toMatchObject({ agent: undefined, model: undefined })
         expect(yield* SessionInput.find(db, admitted.id)).toMatchObject({
           id: admitted.id,
           sessionID: created.id,
@@ -476,6 +482,7 @@ describe("SessionV2.create", () => {
         expect(yield* store.context(created.id)).toEqual([])
 
         expect(yield* events.replayAll(serialized.slice(2))).toBe(created.id)
+        expect(yield* store.get(created.id)).toMatchObject({ agent: "plan", model: { id: "selected" } })
         expect(yield* SessionInput.find(db, admitted.id)).toMatchObject({
           id: admitted.id,
           sessionID: created.id,

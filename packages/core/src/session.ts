@@ -843,8 +843,8 @@ export const layer = Layer.effect(
               delivery,
               revertEpoch: input.revertEpoch,
             }
-            // Selection belongs to the exact durable prompt request. An exact retry must not
-            // change a Session whose agent/model may have moved on since the original admission.
+            // Selection belongs to the exact durable prompt request and is applied only when
+            // that input is promoted. An exact retry must not reselect a later Session state.
             const prior = yield* SessionInput.find(db, messageID)
             if (prior !== undefined) {
               if (!SessionInput.equivalent(prior, expected))
