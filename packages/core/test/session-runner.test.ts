@@ -15,7 +15,7 @@ import {
   type LLMRequest,
 } from "@deepagent-code/llm"
 import { AgentGateway } from "../src/agent-gateway"
-import { DeepAgentPlanStore } from "../src/deepagent"
+import { DeepAgentActivityAuthority, DeepAgentPlanStore } from "../src/deepagent"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { Git } from "@deepagent-code/core/git"
 import * as OpenAIChat from "@deepagent-code/llm/protocols/openai-chat"
@@ -26,6 +26,8 @@ import { SessionContextCheckpointTable, SessionModelPolicyReceiptTable } from ".
 import { EventV2 } from "@deepagent-code/core/event"
 import { Hash } from "@deepagent-code/core/util/hash"
 import { PermissionV2 } from "@deepagent-code/core/permission"
+import { PermissionSaved } from "@deepagent-code/core/permission/saved"
+import { PermissionTable } from "@deepagent-code/core/permission/sql"
 import { EventTable } from "@deepagent-code/core/event/sql"
 import { Project } from "@deepagent-code/core/project"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
@@ -101,6 +103,7 @@ import {
   SessionTable,
 } from "@deepagent-code/core/session/sql"
 import { SessionActivityTable, SessionContextSelectionTable } from "@deepagent-code/core/context-federation/session-sql"
+import { SessionActivityProgressObservationTable } from "@deepagent-code/core/deepagent/activity-authority.sql"
 import { SessionStore } from "@deepagent-code/core/session/store"
 import { SystemContext } from "@deepagent-code/core/system-context"
 import { SystemContextRegistry } from "@deepagent-code/core/system-context/registry"
@@ -518,14 +521,14 @@ const gateway = Layer.succeed(
 // The runner stack is a function of the runtime-feature registry so a test can run the WHOLE
 // composition against an explicit registry (e.g. the `=false` staged fallback) — the process
 // global is an immutable startup snapshot, so flipping env mid-test is intentionally unobservable.
-const runnerStack = (features?: RuntimeFeatureRegistry) => {
+const runnerStack = (features?: RuntimeFeatureRegistry, gitLayer = Git.defaultLayer) => {
   const base =
     features === undefined
       ? SessionRunnerLLM.layer
       : SessionRunnerLLM.layer.pipe(Layer.provide(Layer.succeed(CurrentRuntimeFeatures, features)))
   return base.pipe(
     Layer.provide(FSUtil.defaultLayer),
-    Layer.provide(Git.defaultLayer),
+    Layer.provide(gitLayer),
     Layer.provide(providerTurns),
     Layer.provide(V2ToolEffect.layer.pipe(Layer.provide(database))),
     Layer.provide(grantLookupLayer),
@@ -709,6 +712,47 @@ const staged = testEffect(
     skillGuidance,
     config,
     Layer.mergeAll(stagedRunner, locationsFor(stagedRunner), executionFor(stagedRunner), sessionsFor(stagedRunner)),
+  ),
+)
+// Hold the observable workspace revision steady while exercising the real runner, authority,
+// permission service, projector, and execution coordinator across multiple provider turns.
+const unchangedGit = Layer.effect(
+  Git.Service,
+  Effect.gen(function* () {
+    const git = yield* Git.Service
+    return Git.Service.of({ ...git, patch: () => Effect.succeed(""), head: () => Effect.succeed("test-head") })
+  }),
+).pipe(Layer.provide(Git.defaultLayer))
+const governedRunner = runnerStack(undefined, unchangedGit).pipe(Layer.provideMerge(database))
+const governed = testEffect(
+  Layer.mergeAll(
+    database,
+    providerTurns,
+    events,
+    projector,
+    store,
+    client,
+    agents,
+    registry,
+    models,
+    systemContext,
+    location,
+    skillGuidance,
+    config,
+    PermissionV2.layer.pipe(
+      Layer.provide(events),
+      Layer.provide(location),
+      Layer.provide(agents),
+      Layer.provide(store),
+      Layer.provide(PermissionSaved.layer.pipe(Layer.provide(database))),
+      Layer.provide(database),
+    ),
+    Layer.mergeAll(
+      governedRunner,
+      locationsFor(governedRunner),
+      executionFor(governedRunner),
+      sessionsFor(governedRunner),
+    ),
   ),
 )
 const sessionID = SessionV2.ID.make("ses_runner_test")
@@ -1085,6 +1129,77 @@ const verifyPartialFlushOnInterruption = (kind: FragmentKind) =>
   })
 
 describe("SessionRunnerLLM", () => {
+  for (const reply of ["once", "always", "reject"] as const) {
+    governed.effect(`V2 no-progress ${reply} reply resumes or ends the same activity`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        const session = yield* SessionV2.Service
+        const permission = yield* PermissionV2.Service
+        const { db } = yield* Database.Service
+        const truncated = [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.stepFinish({ index: 0, reason: "length" }),
+          LLMEvent.finish({ reason: "length" }),
+        ]
+        responseStreams = [
+          sealedResponse(truncated, "no-progress-1"),
+          sealedResponse(truncated, "no-progress-2"),
+          sealedResponse(truncated, "no-progress-3"),
+          sealedResponse(fragmentFixture("text", "after-approval", ["Done"]).completeEvents, "approved"),
+        ]
+        requests.length = 0
+        yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Finish the unchanged task" }), resume: false })
+        yield* session.resume(sessionID)
+
+        const [activity] = yield* db
+          .select()
+          .from(SessionActivityTable)
+          .where(eq(SessionActivityTable.session_id, sessionID))
+          .all()
+          .pipe(Effect.orDie)
+        expect(activity).toBeDefined()
+        const ref = { activityKind: "v2" as const, activityID: activity!.activity_id }
+        const stalled = yield* DeepAgentActivityAuthority.reconstruct(ref)
+        const observations = yield* db
+          .select()
+          .from(SessionActivityProgressObservationTable)
+          .where(eq(SessionActivityProgressObservationTable.activity_id, activity!.activity_id))
+          .orderBy(asc(SessionActivityProgressObservationTable.revision))
+          .all()
+          .pipe(Effect.orDie)
+        expect(observations.map((row) => row.no_progress_count)).toEqual([0, 1, 2])
+        expect(requests).toHaveLength(3)
+        expect(stalled.objective).toMatchObject({ state: "needs_human", terminalReason: "no_progress" })
+        const [challenge] = yield* permission.forSession(sessionID)
+        expect(challenge).toMatchObject({ action: "doom_loop", metadata: { kind: "no_progress" } })
+        expect((yield* DeepAgentActivityAuthority.permissionRequestForRequest(challenge!.id))?.state).toBe("pending")
+
+        yield* session.resume(sessionID)
+        expect(requests).toHaveLength(3)
+        yield* permission.reply({ requestID: challenge!.id, reply })
+        expect(yield* permission.forSession(sessionID)).toEqual([])
+        expect((yield* DeepAgentActivityAuthority.permissionDecisionForRequest(challenge!.id))?.decision).toBe(
+          reply === "once" ? "approved_once" : reply === "always" ? "approved_always" : "interrupted",
+        )
+        if (reply === "reject") {
+          expect((yield* DeepAgentActivityAuthority.reconstruct(ref)).objective.state).toBe("interrupted")
+          yield* session.resume(sessionID)
+          expect(requests).toHaveLength(3)
+          expect((yield* db.select().from(SessionActivityTable).where(eq(SessionActivityTable.activity_id, activity!.activity_id)).get().pipe(Effect.orDie))?.state).toBe("interrupted")
+          return
+        }
+
+        expect((yield* DeepAgentActivityAuthority.reconstruct(ref)).objective.state).toBe("active")
+        yield* session.resume(sessionID)
+        expect(requests).toHaveLength(4)
+        expect((yield* db.select().from(SessionActivityTable).where(eq(SessionActivityTable.activity_id, activity!.activity_id)).get().pipe(Effect.orDie))?.state).toBe("settled")
+        expect((yield* session.context(sessionID)).at(-1)).toMatchObject({ type: "assistant", finish: "stop" })
+        if (reply === "always")
+          expect(yield* db.select().from(PermissionTable).where(eq(PermissionTable.action, "doom_loop")).all().pipe(Effect.orDie)).toMatchObject([{ resource: "activity" }])
+      }),
+    )
+  }
+
   it.effect("blocks a managed over-budget request before any provider attempt", () =>
     Effect.gen(function* () {
       yield* setup

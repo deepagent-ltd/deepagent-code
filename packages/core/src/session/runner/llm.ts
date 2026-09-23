@@ -48,7 +48,10 @@ import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
 import { GoalLoop } from "../../deepagent/goal-loop"
 import { DeepAgentActivityAuthority } from "../../deepagent/activity-authority"
-import { SessionActivityProgressObservationTable } from "../../deepagent/activity-authority.sql"
+import {
+  SessionActivityObjectiveTable,
+  SessionActivityProgressObservationTable,
+} from "../../deepagent/activity-authority.sql"
 import { getActiveGoal } from "../../deepagent/session-state"
 import { DocumentStore } from "../../deepagent/document-store"
 import { planDocRef, planStoreRoot } from "../../deepagent/plan-store"
@@ -2569,6 +2572,31 @@ export const layer = Layer.effect(
         !hasGoalSteer &&
         (yield* CompactionRequest.pendingForSession(db, input.sessionID)) !== undefined
       if (input.force !== true && !hasSteer && !hasQueue && !hasGoalSteer && !hasManualCompaction) return
+      if (input.force === true && !hasSteer && !hasQueue && !hasGoalSteer && !hasManualCompaction) {
+        const latest = yield* db
+          .select({ activityID: SessionActivityTable.activity_id, state: SessionActivityTable.state })
+          .from(SessionActivityTable)
+          .where(eq(SessionActivityTable.session_id, input.sessionID))
+          .orderBy(desc(SessionActivityTable.ordinal))
+          .get()
+          .pipe(Effect.orDie)
+        // A rejected no-progress challenge is terminal for its activity. A later explicit resume
+        // without a new input must not dispatch a provider turn from the rejected prompt.
+        if (latest?.state === "interrupted") {
+          const objective = yield* db
+            .select({ terminalReason: SessionActivityObjectiveTable.terminal_reason })
+            .from(SessionActivityObjectiveTable)
+            .where(
+              and(
+                eq(SessionActivityObjectiveTable.activity_kind, "v2"),
+                eq(SessionActivityObjectiveTable.activity_id, latest.activityID),
+              ),
+            )
+            .get()
+            .pipe(Effect.orDie)
+          if (objective?.terminalReason === "permission_interrupted") return
+        }
+      }
       const parityCampaign = (yield* V2ProviderTurn.CurrentCampaign) ?? V2ProviderTurn.campaignFromEnv()
       const ownerCampaign = (yield* V2ProviderTurn.CurrentOwnerCampaign) ?? V2ProviderTurn.ownerCampaignFromEnv()
       if (!(yield* ownerAuthorization.authorize(db, ownerCampaign)))
