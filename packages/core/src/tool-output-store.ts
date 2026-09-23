@@ -45,7 +45,6 @@ export interface Interface {
   readonly rehydrate: (input: {
     readonly sessionID: SessionSchema.ID
     readonly file: ToolFileContent
-    readonly location?: Location.Ref
   }) => Effect.Effect<ToolContent, ToolArtifact.Error>
   readonly cleanup: () => Effect.Effect<void>
 }
@@ -121,17 +120,15 @@ export const layer = Layer.effect(
     const global = yield* Global.Service
     const config = yield* Effect.serviceOption(Config.Service)
     const directory = path.join(global.data, MANAGED_DIRECTORY)
-    // The production runner supplies the immutable Session placement. Keep the Session ID beneath
-    // the Location digest so neither another workspace nor another Session can reuse a ref.
+    // Retain by origin Location and Session. The ref pins the origin digest, so a later Session
+    // move can replay its own old media without looking in the destination Location.
+    const artifactDirectory = path.join(global.data, "tool-artifacts")
+    const artifactScope = (location?: Location.Ref) =>
+      location === undefined
+        ? "unplaced"
+        : Hash.sha256(`${location.directory}\0${location.workspaceID ?? "implicit-local"}`)
     const artifactRoot = (sessionID: SessionSchema.ID, location?: Location.Ref) =>
-      path.join(
-        global.data,
-        "tool-artifacts",
-        location === undefined
-          ? "unplaced"
-          : Hash.sha256(`${location.directory}\0${location.workspaceID ?? "implicit-local"}`),
-        sessionID,
-      )
+      path.join(artifactDirectory, artifactScope(location), sessionID)
     const limits = Effect.fn("ToolOutputStore.limits")(function* () {
       if (Option.isNone(config)) return { maxLines: MAX_LINES, maxBytes: MAX_BYTES }
       const entries = yield* config.value.entries().pipe(Effect.catch(() => Effect.succeed([] as Config.Entry[])))
@@ -159,6 +156,7 @@ export const layer = Layer.effect(
           : ToolArtifact.materialize({
               file: item,
               root: artifactRoot(input.sessionID, input.location),
+              scopeID: artifactScope(input.location),
               managedRoot: directory,
             }),
       )
@@ -214,8 +212,7 @@ export const layer = Layer.effect(
     return Service.of({
       limits,
       bound,
-      rehydrate: ({ sessionID, file, location }) =>
-        ToolArtifact.rehydrate({ file, root: artifactRoot(sessionID, location) }),
+      rehydrate: ({ sessionID, file }) => ToolArtifact.rehydrate({ file, root: artifactDirectory, sessionID }),
       cleanup,
     })
   }),

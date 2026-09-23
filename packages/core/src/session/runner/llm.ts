@@ -846,7 +846,7 @@ export const layer = Layer.effect(
         reasoningKeep: openaiFamilyProtocol ? 0 : undefined,
       })
       const historyRequestMessages = yield* normalizeAttachments(
-        yield* rehydrateToolArtifacts(projection.messages, session.id, location, toolMaterialization.rehydrateArtifact),
+        yield* rehydrateToolArtifacts(projection.messages, session.id, toolMaterialization.rehydrateArtifact),
         modelInfo?.capabilities.input,
       ).pipe(Effect.provideService(FSUtil.Service, fs))
       const historyMessages = toLLMMessages(historyRequestMessages, model)

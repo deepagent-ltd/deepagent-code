@@ -9,7 +9,7 @@ import { toolFile, toolText, type ToolContent, type ToolFileContent } from "@dee
 import { ContentSafety } from "./deepagent/content-safety"
 
 export const MAX_BYTES = 8 * 1024 * 1024
-const REF = /^artifact:sha256:([a-f0-9]{64}):(0|[1-9][0-9]*)$/
+const REF = /^artifact:sha256:(unplaced|[a-f0-9]{64}):([a-f0-9]{64}):(0|[1-9][0-9]*)$/
 const MEDIA = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf"])
 const TEXT = new Set(["text/plain", "application/json"])
 
@@ -87,7 +87,7 @@ const checkedBytes = (bytes: Uint8Array, mime: string): Effect.Effect<Uint8Array
 }
 
 /** Store a remote or managed source behind a Location-scoped, content-addressed reference. */
-export const materialize = (input: { file: ToolFileContent; root: string; managedRoot: string }) =>
+export const materialize = (input: { file: ToolFileContent; root: string; scopeID: string; managedRoot: string }) =>
   Effect.gen(function* () {
     const mime = mimeOf(input.file.mime)
     if (!TEXT.has(mime) && !MEDIA.has(mime)) return yield* fail("unsupported_content_type")
@@ -122,28 +122,32 @@ export const materialize = (input: { file: ToolFileContent; root: string; manage
     })
     return toolFile({
       type: "file",
-      source: { type: "file" as const, uri: `artifact:sha256:${digest}:${bytes.byteLength}` },
+      source: { type: "file" as const, uri: `artifact:sha256:${input.scopeID}:${digest}:${bytes.byteLength}` },
       mime,
       name: input.file.name,
     })
   })
 
 /** Rehydrate only a persisted artifact ref; historical remote URLs are never fetched on replay. */
-export const rehydrate = (input: { file: ToolFileContent; root: string }): Effect.Effect<ToolContent, Error> =>
+export const rehydrate = (input: {
+  file: ToolFileContent
+  root: string
+  sessionID: string
+}): Effect.Effect<ToolContent, Error> =>
   Effect.gen(function* () {
     if (input.file.source.type === "data")
-      return yield* materialize({ file: input.file, root: input.root, managedRoot: input.root })
+      return yield* materialize({ file: input.file, root: input.root, scopeID: "unplaced", managedRoot: input.root })
     if (input.file.source.type !== "file") return yield* fail("invalid_source")
     const match = REF.exec(input.file.source.uri)
     if (!match) return yield* fail("invalid_source")
-    const digest = match[1]
-    const expectedBytes = Number(match[2])
+    const digest = match[2]
+    const expectedBytes = Number(match[3])
     if (!Number.isSafeInteger(expectedBytes) || expectedBytes > MAX_BYTES) return yield* fail("too_large")
     const mime = mimeOf(input.file.mime)
     if (!TEXT.has(mime) && !MEDIA.has(mime)) return yield* fail("unsupported_content_type")
     const bytes = yield* Effect.tryPromise({
       try: async () => {
-        const file = Bun.file(artifactPath(input.root, digest))
+        const file = Bun.file(artifactPath(path.join(input.root, match[1], input.sessionID), digest))
         if (file.size > MAX_BYTES) throw fail("too_large")
         return new Uint8Array(await file.arrayBuffer())
       },

@@ -93,7 +93,7 @@ describe("ToolOutputStore", () => {
     ),
   )
 
-  it.live("preserves native media and structured metadata without applying a settlement media limit", () =>
+  it.live("preserves native media and structured metadata within the artifact egress limit", () =>
     withStore(({ store }) =>
       Effect.gen(function* () {
         const data = "a".repeat(6 * 1024 * 1024)
@@ -181,15 +181,8 @@ describe("ToolOutputStore", () => {
             })
             const retainedFile = retained.output.content[0]
             if (retainedFile?.type !== "file") throw new Error("expected retained file")
-            expect(
-              (yield* store
-                .rehydrate({
-                  sessionID,
-                  file: retainedFile,
-                  location: { directory: AbsolutePath.make(`${root}-other`) },
-                })
-                .pipe(Effect.flip)).reason,
-            ).toBe("unavailable")
+            if (retainedFile.source.type !== "file") throw new Error("expected retained ref")
+            expect(retainedFile.source.uri).toMatch(/^artifact:sha256:[a-f0-9]{64}:/)
             server.stop(true)
             for (const route of [
               OpenAIChat.route.with({ endpoint: { baseURL: "https://openai.test/v1/" }, auth: Auth.bearer("test") }),
@@ -223,7 +216,7 @@ describe("ToolOutputStore", () => {
                 ],
                 time: { created: DateTime.makeUnsafe(0) },
               })
-              const history = yield* rehydrateToolArtifacts([assistant], sessionID, location, store.rehydrate)
+              const history = yield* rehydrateToolArtifacts([assistant], sessionID, store.rehydrate)
               const prepared = yield* LLMClient.prepare(
                 LLM.request({ id: "req_artifact", model, messages: toLLMMessages(history, model) }),
               )
@@ -305,7 +298,7 @@ describe("ToolOutputStore", () => {
             const file = result.output.content[0]
             if (file?.type !== "file" || file.source.type !== "file") throw new Error("expected retained text")
             expect(yield* store.rehydrate({ sessionID, file })).toEqual({ type: "text", text: "«redacted»" })
-            const digest = file.source.uri.split(":")[2]
+            const digest = file.source.uri.split(":")[3]
             yield* Effect.promise(() =>
               Bun.write(path.join(root, "tool-artifacts", "unplaced", sessionID, `${digest}.bin`), "tampered"),
             )

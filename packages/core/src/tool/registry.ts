@@ -45,7 +45,6 @@ export interface Materialization {
   readonly rehydrateArtifact: (input: {
     readonly sessionID: SessionSchema.ID
     readonly file: ToolFileContent
-    readonly location?: Location.Ref
   }) => Effect.Effect<ToolContent, ToolOutputStore.Error>
 }
 
