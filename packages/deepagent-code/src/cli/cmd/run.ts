@@ -21,7 +21,7 @@ import { UI } from "../ui"
 import { CliError, effectCmd } from "../effect-cmd"
 import { EOL } from "os"
 import { Filesystem } from "@/util/filesystem"
-import { createOpencodeClient, type OpencodeClient, type ToolPart } from "@deepagent-code/sdk"
+import { createOpencodeClient, toV2Prompt, waitForV2PromptTerminal, type OpencodeClient, type ToolPart } from "@deepagent-code/sdk"
 import { FormatError, FormatUnknownError } from "../error"
 import { LegacyExecutionUnavailable } from "@/session/legacy-execution-zero"
 import { INTERACTIVE_INPUT_ERROR, resolveInteractiveStdin } from "./run/runtime.stdin"
@@ -1125,28 +1125,33 @@ export const RunCommand = effectCmd({
 
             const model = pick(args.model)
             const result = await runDeadline.race(
-              client.session.prompt({
+              client.v2.session.prompt({
                 sessionID,
-                agent,
-                model,
-                variant: args.variant,
-                parts: [...files, { type: "text", text: message }],
-              }),
-            )
-            if (result.error) {
+                prompt: toV2Prompt({
+                  agent,
+                  model,
+                  variant: args.variant,
+                  parts: [...files, { type: "text", text: message }],
+                }),
+              }, { throwOnError: true }).then((admitted) =>
+                waitForV2PromptTerminal(client, { sessionID, messageID: admitted.data.data.id })),
+            ).then((data) => ({ data }), (error: unknown) => ({ error }))
+            if ("error" in result) {
+              if (result.error instanceof RunTimedOut) throw result.error
               if (!emit("error", { error: result.error })) UI.error(formatRunError(result.error))
               process.exitCode = 1
               return
             }
-            if (result.data?.info.error) {
-              if (!emit("error", { error: result.data.info.error })) UI.error(formatRunError(result.data.info.error))
+            if (result.data.error) {
+              if (!emit("error", { error: result.data.error })) UI.error(formatRunError(result.data.error))
               process.exitCode = 1
             }
-            if (result.data?.info.finish === "unknown") {
+            if (result.data.finish === "unknown") {
               const incomplete = "Model stream ended without a successful finish reason"
               if (!emit("error", { error: incomplete })) UI.error(incomplete)
               process.exitCode = 1
             }
+            await events.stream.return?.(undefined)
             if (await runDeadline.race(loopTask)) process.exitCode = 1
             const responseError = await persistedAssistantError(client)
             if (responseError) {

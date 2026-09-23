@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { toV2Prompt } from "../src/v2-prompt.js"
+import type { DeepAgentCodeClient } from "../src/gen/sdk.gen.js"
+import { toV2Prompt, waitForV2PromptTerminal } from "../src/v2-prompt.js"
 
 describe("V2 prompt compatibility conversion", () => {
   test("retains text, file and agent attachments plus selected execution context", () => {
@@ -32,5 +33,30 @@ describe("V2 prompt compatibility conversion", () => {
   test("refuses a subtask part instead of silently dropping it", () => {
     expect(() => toV2Prompt({ parts: [{ type: "subtask", prompt: "do it", description: "task", agent: "auto" }] }))
       .toThrow("Subtask prompt parts")
+  })
+
+  test("reads the completed assistant across pages after V2 wait", async () => {
+    const calls: string[] = []
+    const client = { v2: { session: {
+      wait: async () => { calls.push("wait") },
+      messages: async (input: { cursor?: string }) => {
+        calls.push(input.cursor ?? "first")
+        return input.cursor
+          ? { data: { data: [{ id: "assistant", type: "assistant", time: { completed: 42 }, finish: "stop" }], cursor: {} } }
+          : { data: { data: [{ id: "user", type: "user" }], cursor: { next: "second" } } }
+      },
+    } } } as unknown as DeepAgentCodeClient
+    const assistant = await waitForV2PromptTerminal(client, { sessionID: "session", messageID: "user" })
+    expect(assistant.id).toBe("assistant")
+    expect(calls).toEqual(["wait", "first", "second"])
+  })
+
+  test("refuses an unrelated later user without a terminal", async () => {
+    const client = { v2: { session: {
+      wait: async () => undefined,
+      messages: async () => ({ data: { data: [{ id: "user", type: "user" }, { id: "other", type: "user" }], cursor: {} } }),
+    } } } as unknown as DeepAgentCodeClient
+    expect(waitForV2PromptTerminal(client, { sessionID: "session", messageID: "user" }))
+      .rejects.toThrow("ambiguous terminal")
   })
 })
