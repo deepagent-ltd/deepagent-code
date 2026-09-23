@@ -8847,6 +8847,8 @@ export class Session2 extends HeyApiClient {
    * Send message
    *
    * Create and send a new message to a session, streaming the AI response.
+   *
+   * @deprecated
    */
   public prompt<ThrowOnError extends boolean = false>(
     parameters: {
@@ -9362,6 +9364,8 @@ export class Session2 extends HeyApiClient {
    * Send async message
    *
    * Durably admit a new message or steer, start session execution if needed, and return without waiting for model completion.
+   *
+   * @deprecated
    */
   public promptAsync<ThrowOnError extends boolean = false>(
     parameters: {

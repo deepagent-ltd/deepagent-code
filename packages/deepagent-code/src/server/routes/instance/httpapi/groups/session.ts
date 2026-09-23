@@ -756,6 +756,7 @@ export const SessionApi = HttpApi.make("session")
             identifier: "session.prompt",
             summary: "Send message",
             description: "Create and send a new message to a session, streaming the AI response.",
+            deprecated: true,
           }),
         ),
         HttpApiEndpoint.post("promptPrepare", SessionPaths.promptPrepare, {
@@ -816,6 +817,7 @@ export const SessionApi = HttpApi.make("session")
             summary: "Send async message",
             description:
               "Durably admit a new message or steer, start session execution if needed, and return without waiting for model completion.",
+            deprecated: true,
           }),
         ),
         HttpApiEndpoint.post("command", SessionPaths.command, {
