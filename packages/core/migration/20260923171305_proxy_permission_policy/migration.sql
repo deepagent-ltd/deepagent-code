@@ -1,0 +1,1 @@
+ALTER TABLE `proxy_tenant` ADD `permission_policy` text;

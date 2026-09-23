@@ -9243,6 +9243,173 @@ export type GlobalProjectDeleteResponses = {
 
 export type GlobalProjectDeleteResponse = GlobalProjectDeleteResponses[keyof GlobalProjectDeleteResponses]
 
+export type GatewayModelsData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/v1/models"
+}
+
+export type GatewayModelsResponses = {
+  /**
+   * Success
+   */
+  200: {
+    object: "list"
+    data: Array<{
+      id: string
+      object: "model"
+      created: number
+      owned_by: string
+    }>
+  }
+}
+
+export type GatewayModelsResponse = GatewayModelsResponses[keyof GatewayModelsResponses]
+
+export type GatewayChatData = {
+  body?: unknown
+  path?: never
+  query?: never
+  url: "/v1/chat/completions"
+}
+
+export type GatewayChatResponses = {
+  /**
+   * Success
+   */
+  200: unknown
+}
+
+export type GatewayResponsesData = {
+  body?: unknown
+  path?: never
+  query?: never
+  url: "/v1/responses"
+}
+
+export type GatewayResponsesResponses = {
+  /**
+   * Success
+   */
+  200: unknown
+}
+
+export type ProxyAdminTenantListData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/proxy/admin/tenants"
+}
+
+export type ProxyAdminTenantListResponses = {
+  /**
+   * Success
+   */
+  200: unknown
+}
+
+export type ProxyAdminTenantCreateData = {
+  body?: {
+    id: string
+    key: string
+    directory: string
+    model_allowlist: Array<string>
+    tier: "passthrough" | "context" | "full"
+    permission_policy?: PermissionV2Ruleset
+    quota_requests_per_minute: number
+    quota_tokens_per_day: number
+    lane_limit: number
+    deadline_ms: number
+    enabled?: boolean
+  }
+  path?: never
+  query?: never
+  url: "/proxy/admin/tenants"
+}
+
+export type ProxyAdminTenantCreateResponses = {
+  /**
+   * Success
+   */
+  200: unknown
+}
+
+export type ProxyAdminTenantDeleteData = {
+  body?: never
+  path: {
+    tenantID: string
+  }
+  query?: never
+  url: "/proxy/admin/tenants/{tenantID}"
+}
+
+export type ProxyAdminTenantDeleteResponses = {
+  /**
+   * Success
+   */
+  200: unknown
+}
+
+export type ProxyAdminTenantUpdateData = {
+  body?: {
+    model_allowlist?: Array<string>
+    tier?: "passthrough" | "context" | "full"
+    permission_policy?: PermissionV2Ruleset
+    quota_requests_per_minute?: number
+    quota_tokens_per_day?: number
+    lane_limit?: number
+    deadline_ms?: number
+    enabled?: boolean
+  }
+  path: {
+    tenantID: string
+  }
+  query?: never
+  url: "/proxy/admin/tenants/{tenantID}"
+}
+
+export type ProxyAdminTenantUpdateResponses = {
+  /**
+   * Success
+   */
+  200: unknown
+}
+
+export type ProxyAdminLedgerListData = {
+  body?: never
+  path?: never
+  query?: {
+    tenant?: string
+    limit?: string
+  }
+  url: "/proxy/admin/ledger"
+}
+
+export type ProxyAdminLedgerListResponses = {
+  /**
+   * Success
+   */
+  200: unknown
+}
+
+export type ProxyAdminLaneListData = {
+  body?: never
+  path?: never
+  query?: {
+    tenant?: string
+    limit?: string
+  }
+  url: "/proxy/admin/lanes"
+}
+
+export type ProxyAdminLaneListResponses = {
+  /**
+   * Success
+   */
+  200: unknown
+}
+
 export type EventSubscribeData = {
   body?: never
   path?: never

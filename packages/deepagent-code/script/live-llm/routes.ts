@@ -8,6 +8,7 @@ export const executionStacks = [
   "cli-subprocess",
   "packaged-sidecar",
   "renderer-ui",
+  "server-gateway",
 ] as const
 
 export const modelSuites = [
@@ -57,6 +58,8 @@ export const modelSuites = [
   "plan-advance-contract",
   "plan-create-replan-contract",
   "v2-01-acceptance",
+  "proxy-smoke",
+  "tool-ecosystem",
 ] as const
 
 export type ExecutionStack = (typeof executionStacks)[number]
@@ -92,6 +95,7 @@ type Route = {
 }
 
 const adapterProvider = modelRun("live", "adapter", "provider-smoke")
+const proxySmoke = modelRun("live", "server-gateway", "proxy-smoke")
 const cliHeadless = modelRun("live", "cli-subprocess", "cli-headless")
 const adapterStructured = modelRun("live", "adapter", "structured-output")
 const v2Provider = modelRun("live", "session-v2", "v2-provider-loop")
@@ -105,6 +109,7 @@ const v2FileMutations = modelRun("live", "session-v2", "file-mutations")
 const v2BashRepair = modelRun("live", "session-v2", "bash-repair")
 const permissionsDeny = modelRun("ext", "legacy-session", "permissions-deny")
 const mcpMarker = modelRun("ext", "legacy-session", "mcp-marker")
+const toolEcosystem = modelRun("ext", "legacy-session", "tool-ecosystem")
 const providerAbort = modelRun("ext", "adapter", "provider-abort")
 const packagedSidecar = modelRun("ext", "packaged-sidecar", "packaged-sidecar")
 const interruptedSubagent = modelRun("ext", "legacy-session", "subagent-interrupted")
@@ -141,6 +146,7 @@ const planCreateReplanContract = modelRun("live", "legacy-session", "plan-create
 const v201Acceptance = modelRun("ext", "legacy-session", "v2-01-acceptance")
 const allHarnessRuns = [
   adapterProvider,
+  proxySmoke,
   cliHeadless,
   adapterStructured,
   v2Provider,
@@ -175,6 +181,7 @@ const allHarnessRuns = [
   backgroundSubagent,
   permissionsDeny,
   mcpMarker,
+  toolEcosystem,
   compactionRetention,
   contextAuthority,
   codeIntelContextTools,
@@ -188,6 +195,21 @@ const allHarnessRuns = [
 ]
 
 export const routeManifest = [
+  {
+    id: "proxy-gateway",
+    paths: [
+      "packages/core/src/proxy/**",
+      "packages/core/src/database/migration/*proxy*",
+      "packages/deepagent-code/script/live-llm/proxy-smoke.ts",
+      "packages/deepagent-code/src/server/routes/instance/httpapi/groups/gateway*",
+      "packages/deepagent-code/src/server/routes/instance/httpapi/handlers/gateway*",
+      "packages/deepagent-code/src/server/routes/instance/httpapi/middleware/proxy-*",
+      "packages/deepagent-code/src/server/routes/instance/httpapi/server.ts",
+      "packages/deepagent-code/src/event/v2-outbox-runtime.ts",
+    ],
+    checks: ["live-llm-routes", "session-v2"],
+    runs: [proxySmoke],
+  },
   {
     id: "live-llm-common-harness",
     paths: [
@@ -414,6 +436,7 @@ export const routeManifest = [
       "packages/core/src/deepagent/lmn-events.ts",
       "packages/core/src/deepagent/task-partitioner.ts",
       "packages/deepagent-code/src/session/agent-handoff-consumer.ts",
+      "packages/deepagent-code/src/session/event-turn-runner.ts",
       "packages/deepagent-code/src/session/agent-worktree.ts",
       "packages/deepagent-code/src/session/multi-agent-runtime.ts",
       "packages/deepagent-code/src/session/v4-event-runtime.ts",
@@ -421,6 +444,15 @@ export const routeManifest = [
     ],
     checks: ["permission", "session-continuation", "worktree-routing"],
     runs: [v4MultiAgentRuntime],
+  },
+  {
+    id: "custom-tool-v2-convergence",
+    paths: [
+      "packages/deepagent-code/src/tool/custom-tool-adapter.ts",
+      "packages/deepagent-code/src/tool/custom-tool-rejections.ts",
+    ],
+    checks: ["mcp", "session-v2"],
+    runs: [toolEcosystem],
   },
   {
     id: "live-llm-subagent-intensity-harness",

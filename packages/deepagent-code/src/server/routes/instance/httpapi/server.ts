@@ -82,6 +82,11 @@ import { CorsConfig, isAllowedCorsOrigin, type CorsOptions } from "@/server/cors
 import { serveUIEffect } from "@/server/shared/ui"
 import { ServerAuth } from "@/server/auth"
 import { InstanceHttpApi, RootHttpApi } from "./api"
+import { GatewayHttpApi } from "./groups/gateway"
+import { gatewayHandlers } from "./handlers/gateway"
+import { gatewayAdminHandlers } from "./handlers/gateway-admin"
+import { GatewayAdminApi } from "./groups/gateway-admin"
+import { authorizeProxyKey, proxyAuthorizationLayer, proxyError, proxyStartupGate } from "./middleware/proxy-authorization"
 import { Api } from "@deepagent-code/server/api"
 import { PublicApi } from "./public"
 import {
@@ -156,6 +161,7 @@ import { V2RunnerFrame } from "@/session/v2-runner-frame"
 import { V2OutboxRuntime } from "@/event/v2-outbox-runtime"
 import { V2OwnerSeed } from "@deepagent-code/core/session/runner/v2-owner-seed"
 import { V2OwnerDevMint } from "@deepagent-code/core/session/runner/v2-owner-dev-mint"
+import { LLMClient, RequestExecutor } from "@deepagent-code/llm/route"
 import { SessionRestart } from "@deepagent-code/core/session/execution/restart"
 
 export const context = Context.empty() as Context.Context<unknown>
@@ -254,6 +260,15 @@ const rootApiRoutes = HttpApiBuilder.layer(RootHttpApi).pipe(
   Layer.provide(schemaErrorLayer),
   Layer.provide(httpApiAuthLayer),
 )
+const gatewayApiRoutes = HttpApiBuilder.layer(GatewayHttpApi).pipe(
+  Layer.provide(gatewayHandlers),
+  Layer.provide(proxyAuthorizationLayer),
+)
+const gatewayAdminRoutes = HttpApiBuilder.layer(GatewayAdminApi).pipe(
+  Layer.provide(gatewayAdminHandlers),
+  Layer.provide(httpApiAuthLayer),
+)
+const gatewayClientLayer = LLMClient.layer.pipe(Layer.provide(RequestExecutor.defaultLayer))
 const eventApiRoutes = HttpApiBuilder.layer(EventApi).pipe(
   Layer.provide(eventHandlers),
   Layer.provide([httpApiAuthLayer, workspaceRoutingLive, instanceContextLayer]),
@@ -332,6 +347,22 @@ const docRoute = HttpRouter.use((router) => router.add("GET", "/doc", () => Effe
   Layer.provide(authOnlyRouterLayer),
 )
 
+const gatewayFallback = HttpRouter.use((router) =>
+  Effect.gen(function* () {
+    const flags = yield* RuntimeFlags.Service
+    const { db } = yield* Database.Service
+    yield* router.add("*", "/v1/*", (request) =>
+      authorizeProxyKey(db, flags.gateway, request).pipe(
+        Effect.map((result) =>
+          result.ok
+            ? proxyError(501, "model_not_supported", "This gateway endpoint is not supported")
+            : result.response,
+        ),
+      ),
+    )
+  }),
+)
+
 const uiRoute = HttpRouter.use((router) =>
   Effect.gen(function* () {
     const fs = yield* FSUtil.Service
@@ -353,6 +384,9 @@ type RouteRequirements =
 export function createRoutes(corsOptions?: CorsOptions, runtimeFlagsLayer = RuntimeFlags.defaultLayer) {
   const baseRoutes = Layer.mergeAll(
     rootApiRoutes,
+    gatewayApiRoutes,
+    gatewayAdminRoutes,
+    proxyStartupGate,
     eventApiRoutes,
     ptyConnectApiRoutes,
     imWebSocketApiRoutes,
@@ -360,6 +394,7 @@ export function createRoutes(corsOptions?: CorsOptions, runtimeFlagsLayer = Runt
     instanceRoutes,
     serverRoutes,
     docRoute,
+    gatewayFallback,
     uiRoute,
     // §A4/§C — start the V4 event-runtime daemons with the server (inert unless V4 flags are on). Draws
     // the session stack + RuntimeFlags from the provide stack below.
@@ -392,6 +427,7 @@ export function createRoutes(corsOptions?: CorsOptions, runtimeFlagsLayer = Runt
       Format.defaultLayer,
       LSP.defaultLayer,
       LLM.defaultLayer,
+      gatewayClientLayer,
       Installation.defaultLayer,
       MCP.defaultLayer,
       Root.applicationToolsLayer,

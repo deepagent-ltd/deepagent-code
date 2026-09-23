@@ -903,6 +903,7 @@ const v2OwnerStubLayer = Layer.merge(
       switchAgent: () => Effect.die("v2 owner stub: switchAgent unused"),
       switchModel: () => Effect.die("v2 owner stub: switchModel unused"),
       setPermissions: () => Effect.die("v2 owner stub: setPermissions unused"),
+      setArchived: () => Effect.die("v2 owner stub: setArchived unused"),
       prompt: () => Effect.die("v2 owner stub: prompt unused"),
       shell: () => Effect.die("v2 owner stub: shell unused"),
       skill: () => Effect.die("v2 owner stub: skill unused"),
@@ -1077,6 +1078,7 @@ const r0V2Stub = SessionV2.Service.of({
       r0V2SwitchModelCalls.push({ id: input.model.id, providerID: input.model.providerID })
     }),
   setPermissions: () => Effect.die("r0 stub: setPermissions unused"),
+  setArchived: () => Effect.die("r0 stub: setArchived unused"),
   prompt: (input) =>
     Effect.sync(() => {
       r0V2PromptCalls.push(input.sessionID)
@@ -5674,4 +5676,3 @@ const v2RealPlugin = testEffect(
     }),
   30_000,
 )
-

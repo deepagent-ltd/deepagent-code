@@ -217,6 +217,9 @@ import type {
   FindTextResponses,
   FormatterStatusErrors,
   FormatterStatusResponses,
+  GatewayChatResponses,
+  GatewayModelsResponses,
+  GatewayResponsesResponses,
   GlobalCapabilitiesErrors,
   GlobalCapabilitiesResponses,
   GlobalConfigGetErrors,
@@ -377,6 +380,7 @@ import type {
   PermissionRespondResponses,
   PermissionRuleset,
   PermissionV2Reply,
+  PermissionV2Ruleset,
   ProfileHotspotsErrors,
   ProfileHotspotsResponses,
   ProfileResultErrors,
@@ -409,6 +413,12 @@ import type {
   ProviderOauthAuthorizeResponses,
   ProviderOauthCallbackErrors,
   ProviderOauthCallbackResponses,
+  ProxyAdminLaneListResponses,
+  ProxyAdminLedgerListResponses,
+  ProxyAdminTenantCreateResponses,
+  ProxyAdminTenantDeleteResponses,
+  ProxyAdminTenantListResponses,
+  ProxyAdminTenantUpdateResponses,
   PtyConnectErrors,
   PtyConnectResponses,
   PtyConnectTokenErrors,
@@ -1747,6 +1757,245 @@ export class Global extends HeyApiClient {
   private _config?: Config
   get config(): Config {
     return (this._config ??= new Config({ client: this.client }))
+  }
+}
+
+export class Gateway extends HeyApiClient {
+  /**
+   * List proxy tenant models
+   */
+  public models<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<GatewayModelsResponses, unknown, ThrowOnError>({
+      url: "/v1/models",
+      ...options,
+    })
+  }
+
+  /**
+   * Create a proxy chat completion
+   */
+  public chat<ThrowOnError extends boolean = false>(
+    parameters?: {
+      body?: unknown
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "body", map: "body" }] }])
+    return (options?.client ?? this.client).post<GatewayChatResponses, unknown, ThrowOnError>({
+      url: "/v1/chat/completions",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Create a text-only proxy response
+   */
+  public responses<ThrowOnError extends boolean = false>(
+    parameters?: {
+      body?: unknown
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ key: "body", map: "body" }] }])
+    return (options?.client ?? this.client).post<GatewayResponsesResponses, unknown, ThrowOnError>({
+      url: "/v1/responses",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
+export class ProxyAdmin extends HeyApiClient {
+  /**
+   * List proxy tenants
+   */
+  public tenantList<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<ProxyAdminTenantListResponses, unknown, ThrowOnError>({
+      url: "/proxy/admin/tenants",
+      ...options,
+    })
+  }
+
+  /**
+   * Provision a proxy tenant
+   */
+  public tenantCreate<ThrowOnError extends boolean = false>(
+    parameters: {
+      id: string
+      key: string
+      directory: string
+      model_allowlist: Array<string>
+      tier: "passthrough" | "context" | "full"
+      permission_policy?: PermissionV2Ruleset
+      quota_requests_per_minute: number
+      quota_tokens_per_day: number
+      lane_limit: number
+      deadline_ms: number
+      enabled?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "id" },
+            { in: "body", key: "key" },
+            { in: "body", key: "directory" },
+            { in: "body", key: "model_allowlist" },
+            { in: "body", key: "tier" },
+            { in: "body", key: "permission_policy" },
+            { in: "body", key: "quota_requests_per_minute" },
+            { in: "body", key: "quota_tokens_per_day" },
+            { in: "body", key: "lane_limit" },
+            { in: "body", key: "deadline_ms" },
+            { in: "body", key: "enabled" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<ProxyAdminTenantCreateResponses, unknown, ThrowOnError>({
+      url: "/proxy/admin/tenants",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Revoke a proxy tenant while retaining its audit ledger
+   */
+  public tenantDelete<ThrowOnError extends boolean = false>(
+    parameters: {
+      tenantID: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "tenantID" }] }])
+    return (options?.client ?? this.client).delete<ProxyAdminTenantDeleteResponses, unknown, ThrowOnError>({
+      url: "/proxy/admin/tenants/{tenantID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Update a proxy tenant
+   */
+  public tenantUpdate<ThrowOnError extends boolean = false>(
+    parameters: {
+      tenantID: string
+      model_allowlist?: Array<string>
+      tier?: "passthrough" | "context" | "full"
+      permission_policy?: PermissionV2Ruleset
+      quota_requests_per_minute?: number
+      quota_tokens_per_day?: number
+      lane_limit?: number
+      deadline_ms?: number
+      enabled?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "tenantID" },
+            { in: "body", key: "model_allowlist" },
+            { in: "body", key: "tier" },
+            { in: "body", key: "permission_policy" },
+            { in: "body", key: "quota_requests_per_minute" },
+            { in: "body", key: "quota_tokens_per_day" },
+            { in: "body", key: "lane_limit" },
+            { in: "body", key: "deadline_ms" },
+            { in: "body", key: "enabled" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).patch<ProxyAdminTenantUpdateResponses, unknown, ThrowOnError>({
+      url: "/proxy/admin/tenants/{tenantID}",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Export proxy request ledger
+   */
+  public ledgerList<ThrowOnError extends boolean = false>(
+    parameters?: {
+      tenant?: string
+      limit?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "tenant" },
+            { in: "query", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ProxyAdminLedgerListResponses, unknown, ThrowOnError>({
+      url: "/proxy/admin/ledger",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * List proxy conversation lanes
+   */
+  public laneList<ThrowOnError extends boolean = false>(
+    parameters?: {
+      tenant?: string
+      limit?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "tenant" },
+            { in: "query", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ProxyAdminLaneListResponses, unknown, ThrowOnError>({
+      url: "/proxy/admin/lanes",
+      ...options,
+      ...params,
+    })
   }
 }
 
@@ -11683,6 +11932,16 @@ export class DeepAgentCodeClient extends HeyApiClient {
   private _global?: Global
   get global(): Global {
     return (this._global ??= new Global({ client: this.client }))
+  }
+
+  private _gateway?: Gateway
+  get gateway(): Gateway {
+    return (this._gateway ??= new Gateway({ client: this.client }))
+  }
+
+  private _proxyAdmin?: ProxyAdmin
+  get proxyAdmin(): ProxyAdmin {
+    return (this._proxyAdmin ??= new ProxyAdmin({ client: this.client }))
   }
 
   private _event?: Event_

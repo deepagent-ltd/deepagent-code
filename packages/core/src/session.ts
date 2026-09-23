@@ -406,6 +406,7 @@ export interface Interface {
     sessionID: SessionSchema.ID
     permissions: PermissionV2.Ruleset
   }) => Effect.Effect<void, NotFoundError>
+  readonly setArchived: (input: { sessionID: SessionSchema.ID; archived: boolean }) => Effect.Effect<void, NotFoundError>
   readonly prompt: (input: {
     id?: SessionMessage.ID
     sessionID: SessionSchema.ID
@@ -851,6 +852,20 @@ export const layer = Layer.effect(
           timestamp: yield* DateTime.now,
           permissions: input.permissions,
         })
+      }),
+      setArchived: Effect.fn("V2Session.setArchived")(function* (input) {
+        const info = yield* result.get(input.sessionID)
+        if ((info.time.archived !== undefined) === input.archived) return
+        const row = yield* db.select({ slug: SessionTable.slug, version: SessionTable.version })
+          .from(SessionTable).where(eq(SessionTable.id, input.sessionID)).get().pipe(Effect.orDie)
+        if (!row) return yield* new NotFoundError({ sessionID: input.sessionID })
+        yield* events.publish(SessionEvent.Updated, {
+          sessionID: input.sessionID,
+          info: SessionSchema.Info.make({ ...info, time: { ...info.time,
+            updated: yield* DateTime.now, archived: input.archived ? yield* DateTime.now : undefined } }),
+          slug: row.slug,
+          version: row.version,
+        }, { location: info.location })
       }),
       // RI-18 native manual compaction: admit a durable request (fixing the summary model and the
       // history fence), wake the drain — the summary provider turn runs inside SessionCompaction
