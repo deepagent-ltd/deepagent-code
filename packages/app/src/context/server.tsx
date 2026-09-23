@@ -215,7 +215,6 @@ export namespace ServerConnection {
   // The desktop's embedded local server
   export type Sidecar = {
     type: "sidecar"
-    variant: "base"
     http: HttpBase
   } & Base
 
@@ -249,7 +248,7 @@ export namespace ServerConnection {
   export type Key = string & { _brand: "Key" }
   export const Key = { make: (v: string) => v as Key }
 
-  export const builtin = (conn: Any) => conn.type === "sidecar" && conn.variant === "base"
+  export const builtin = (conn: Any) => conn.type === "sidecar"
   // A Server Edition connection is never "local" — it always routes through a
   // remote gateway, regardless of the gateway's hostname.
   export const server = (conn?: Any): conn is Server => conn?.type === "server"
