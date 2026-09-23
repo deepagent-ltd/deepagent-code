@@ -139,7 +139,7 @@ if (import.meta.main) {
   const directory = process.env.DEEPAGENT_SHARE_DATA_DIR ?? path.join(process.cwd(), "share-data")
   await cleanupExpiredShares(directory)
   setInterval(() => void cleanupExpiredShares(directory), 60 * 60 * 1000).unref()
-  Bun.serve({ port, fetch: createShareHandler({
+  Bun.serve({ hostname: process.env.DEEPAGENT_SHARE_BIND_HOST ?? "127.0.0.1", port, fetch: createShareHandler({
     directory,
     publicURL,
     uploadToken,
