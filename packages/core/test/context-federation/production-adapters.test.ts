@@ -24,6 +24,8 @@ import { type CodeQuery } from "../../src/code-intelligence/query"
 import { Database } from "../../src/database/database"
 import { SessionContext } from "../../src/context-federation/session-context"
 import { SessionRunnerCanonical } from "../../src/session/runner/canonical-turn"
+import { SelectionWriter } from "../../src/context-federation/selection-writer"
+import { budgetSelection } from "../../src/context-federation/selection-budget"
 import { SessionSchema } from "../../src/session/schema"
 import { SessionMessage } from "../../src/session/message"
 import { Prompt } from "../../src/session/prompt"
@@ -215,6 +217,93 @@ describe("W3 production adapters: real sources, never staged", () => {
     expect(result.graphStatuses.memory.status).toBe("empty")
     expect(result.graphStatuses.memory.rejectedCount).toBe(0)
     expect(result.graphStatuses.documents.observedMutationEpoch).toBe(7)
+  })
+
+  test("four real graph sources retain version, exact ref, and only sourced provenance", async () => {
+    const projectStore = new DurableKnowledgeStore(path.join(tmpdirPath, "four-graph-project"))
+    const evidence = projectStore.seedActive({
+      type: "knowledge",
+      description: "supporting source",
+      body: "supporting source body",
+      domain: null,
+      tags: [],
+      scope: "project-shared",
+      projectId: "legacy-project",
+      sensitivity: "public",
+      risk: "low",
+      confidence: { evidence_strength: "strong", support_count: 1 },
+      provenance: { source: "runner", evidence_refs: [] },
+    })
+    const knowledge = projectStore.seedActive({
+      type: "knowledge",
+      description: "seed knowledge fact",
+      body: "seed knowledge body",
+      domain: null,
+      tags: [],
+      scope: "project-shared",
+      projectId: "legacy-project",
+      sensitivity: "public",
+      risk: "low",
+      confidence: { evidence_strength: "strong", support_count: 1 },
+      provenance: { source: "runner", evidence_refs: [evidence.id] },
+    })
+    const memory = projectStore.seedActive({
+      type: "memory",
+      description: "seed knowledge memory",
+      body: "seed knowledge memory body",
+      domain: null,
+      tags: [],
+      scope: "project-shared",
+      projectId: "legacy-project",
+      sensitivity: "public",
+      risk: "low",
+      confidence: { evidence_strength: "strong", support_count: 1 },
+      provenance: { source: "runner", evidence_refs: [] },
+    })
+    const refs = [evidence, knowledge, memory].map((doc) => DeepAgentReleasedSnapshot.documentRef(doc, "project"))
+    const selection: DeepAgentReleasedSnapshot.Selection = {
+      securityNamespaceId: ns,
+      projectScopeKey: proj,
+      legacyProjectId: "legacy-project",
+      snapshotId: "snap-four-graph",
+      parentSnapshotId: null,
+      generation: 1,
+      membershipHash: DeepAgentReleasedSnapshot.exactRefsFingerprint(refs),
+      manifestHash: "e".repeat(64),
+      documents: refs,
+    }
+    const query = envelope({ releasedKnowledge: { snapshotId: selection.snapshotId, binding: "bound" } })
+    const resolved = await Effect.runPromise(SessionContextResolverV2.resolveGraphs(query, productionV2Adapters({
+      code: fakeCodeQuery({ intents: [] }, codeRef),
+      documents: documentsSource([docHit()]),
+      knowledge: {
+        stores: [new DurableKnowledgeStore(path.join(tmpdirPath, "four-graph-user")), projectStore],
+        released: { snapshotId: selection.snapshotId, binding: "bound", current: () => Effect.succeed(selection) },
+      },
+    }), 100))
+    expect(Object.values(resolved.graphStatuses).map((status) => status.status)).toEqual(["ready", "ready", "ready", "ready"])
+    const selected = SelectionWriter.buildSelectionEnvelope(budgetSelection(resolved, query), resolved, query, {
+      revision: 0,
+      triggerInputId: "msg_prod",
+      providerTurnSeq: 1,
+      now: 1_000,
+    })
+    expect(new Set(selected.selectedRefs.map((ref) => ref.graph))).toEqual(new Set(["code", "documents", "knowledge", "memory"]))
+    expect(selected.selectedRefs.every((ref) => ref.version && JSON.parse(ref.ref).revision === ref.version)).toBe(true)
+    expect(selected.selectedRefs.find((ref) => ref.graph === "knowledge" && JSON.parse(ref.ref).entityId === knowledge.id)?.provenanceRefs)
+      .toEqual([expect.stringContaining(evidence.id)])
+    expect(selected.selectedRefs.filter((ref) => ref.graph === "code" || ref.graph === "documents")
+      .every((ref) => ref.provenanceRefs?.length === 0)).toBe(true)
+    const evidenceText = SessionRunnerCanonical.renderGraphEvidence(selected)
+    expect((evidenceText.match(/Context selection \(this turn\):/g) ?? []).length).toBe(1)
+    expect(new TextEncoder().encode(evidenceText).length).toBeLessThanOrEqual(SessionRunnerCanonical.EvidenceByteBudget)
+    for (const graph of ["code", "documents", "knowledge", "memory"]) {
+      expect(evidenceText).toContain(`- ${graph}: ready`)
+      expect(evidenceText).toContain(`- ${graph} `)
+    }
+    expect(evidenceText).toContain(`provenance_refs=[${JSON.stringify(selected.selectedRefs.find((ref) =>
+      ref.graph === "knowledge" && JSON.parse(ref.ref).entityId === knowledge.id)?.provenanceRefs?.[0])}]`)
+    expect(evidenceText).toContain("provenance_refs=degraded_unavailable")
   })
 
   test("knowledge with a released snapshot + fixture store serves released candidates", async () => {

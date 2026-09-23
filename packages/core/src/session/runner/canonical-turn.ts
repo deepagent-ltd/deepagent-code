@@ -28,7 +28,7 @@ import {
 } from "../../context-federation/production-adapters"
 import type { RuntimeFeatureRegistry } from "../../flag/runtime-features"
 import { DeepAgentReleasedSnapshot } from "../../deepagent/released-snapshot"
-import { SelectionEnvelope, type SelectionQueryIntent } from "../../contract/selection"
+import { SelectionEnvelope, type GraphKind, type GraphStatus, type SelectionQueryIntent, type SelectionRef } from "../../contract/selection"
 import {
   SessionActivityInputTable,
   SessionActivityTable,
@@ -512,52 +512,48 @@ export const selectionGraphEvidence = Effect.fn("SessionRunnerCanonical.selectio
     .get()
     .pipe(Effect.orDie)
   if (row === undefined) return yield* Effect.succeed(undefined)
-  return renderGraphEvidence(row)
-})
-
-function renderGraphEvidence(row: typeof SessionContextSelectionTable.$inferSelect): string | undefined {
-  let statuses: Readonly<Record<string, { readonly status: string; readonly revision: string; readonly candidateCount: number; readonly reasonCode: string }>>
+  let statuses: Readonly<Record<GraphKind, GraphStatus & { readonly rejectedCount?: number }>>
   try {
-    statuses = JSON.parse(row.graph_statuses) as Readonly<Record<string, { readonly status: string; readonly revision: string; readonly candidateCount: number; readonly reasonCode: string }>>
+    statuses = JSON.parse(row.graph_statuses) as Readonly<Record<GraphKind, GraphStatus & { readonly rejectedCount?: number }>>
   } catch {
     return undefined
   }
-  let refs: readonly { readonly token: string }[]
-  try {
-    refs = JSON.parse(row.selected_refs) as readonly { readonly token: string }[]
-  } catch {
-    refs = []
-  }
+  const decodedRefs = Schema.decodeUnknownOption(Schema.fromJsonString(SelectionEnvelope.fields.selectedRefs))(row.selected_refs)
+  const refs: readonly SelectionRef[] = Option.isSome(decodedRefs) ? decodedRefs.value : []
+  return renderGraphEvidence({ graphStatuses: statuses, selectedRefs: refs })
+})
+
+/** Pure renderer shared by the durable read and the four-source request-evidence oracle. */
+export function renderGraphEvidence(input: {
+  readonly graphStatuses: Readonly<Record<GraphKind, GraphStatus & { readonly rejectedCount?: number }>>
+  readonly selectedRefs: readonly SelectionRef[]
+}): string {
   const graphLines = GraphOrder.map((graph) => {
-    const status = statuses[graph]
+    const status = input.graphStatuses[graph]
     if (status === undefined) return `- ${graph}: n/a`
     const revision = status.revision.length === 0 ? "" : ` [rev ${status.revision.slice(0, 48)}]`
-    const rejected = "rejectedCount" in status && typeof (status as { readonly rejectedCount?: unknown }).rejectedCount === "number" && (status as { readonly rejectedCount: number }).rejectedCount > 0
-      ? ` (${(status as { readonly rejectedCount: number }).rejectedCount} rejected)`
+    const adapterVersion = typeof status.adapterVersion === "string" ? status.adapterVersion.slice(0, 48) : "unknown"
+    const rejected = status.rejectedCount !== undefined && status.rejectedCount > 0
+      ? ` (${status.rejectedCount} rejected)`
       : ""
-    return `- ${graph}: ${status.status}${revision}${rejected} (${status.candidateCount} refs)`
+    return `- ${graph}: ${status.status}${revision} [adapter version ${adapterVersion}]${rejected} (${status.candidateCount} refs)`
   })
-  // L2 — total evidence byte budget (4 KB): ref tokens are added greedily under the budget so a
-  // high-token selection cannot make the system tail arbitrarily large. Each token is also
-  // single-token-bounded (120 chars, mirrored from the writer's truncation).
+  // L2 — total evidence byte budget (4 KB). Keep each ref and provenance exact when rendered;
+  // omit whole entries that do not fit rather than truncate an identity into a false reference.
   const lines: string[] = ["Context selection (this turn):", ...graphLines]
   let budgetUsed = bytesOf(lines.join("\n"))
-  // Reserve the two one-time tail parts (prefix + the "(and N more refs)" marker with a generous
-  // N bound) so the final join never exceeds the budget after a token was accepted.
-  const tailReserve = bytesOf("Selected refs: ") + bytesOf(" (and 999999 more refs)")
-  const tokens: string[] = []
+  const refs = input.selectedRefs
+  const tailReserve = bytesOf(`\nSelected refs:\n(and ${refs.length} more refs)`)
+  const rendered: string[] = []
   for (const ref of refs) {
-    const token = ref.token.slice(0, 120).trim()
-    if (token.length === 0) continue
-    if (tokens.length >= 8) break
-    if (budgetUsed + bytesOf(token) + 1 + tailReserve > EvidenceByteBudget) break
-    tokens.push(token)
-    budgetUsed += bytesOf(token) + 1
+    if (rendered.length >= 8) break
+    const line = `- ${ref.graph} ${JSON.stringify(ref.token.slice(0, 120))} version=${JSON.stringify(ref.version ?? "degraded_unavailable")} ref=${JSON.stringify(ref.ref)} provenance_refs=${ref.provenanceRefs?.length ? JSON.stringify(ref.provenanceRefs) : "degraded_unavailable"}`
+    if (budgetUsed + bytesOf(line) + 1 + tailReserve > EvidenceByteBudget) break
+    rendered.push(line)
+    budgetUsed += bytesOf(line) + 1
   }
-  if (tokens.length > 0) lines.push(`Selected refs: ${tokens.join(" ")}`)
-  const remaining = refs
-    .map((ref) => ref.token.slice(0, 120).trim())
-    .filter((token) => token.length > 0).length - tokens.length
+  if (rendered.length > 0) lines.push("Selected refs:", ...rendered)
+  const remaining = refs.length - rendered.length
   if (remaining > 0) lines.push(`(and ${remaining} more refs)`)
   return lines.join("\n")
 }

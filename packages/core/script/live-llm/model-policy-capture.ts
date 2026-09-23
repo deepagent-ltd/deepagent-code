@@ -50,7 +50,12 @@ const requireCase = (name: string) => {
   const result = artifact.cases.find((item) => item.name === name)
   if (!result?.modelPolicy || result.modelPolicy.receipts.length !== 1)
     throw new Error(`X-05 ${name} has no single durable model policy receipt`)
-  return { result: { ...result, modelPolicy: result.modelPolicy }, policy: result.modelPolicy.receipts[0]! }
+  const policy = result.modelPolicy.receipts[0]!
+  if (policy.policy.state !== "managed" || policy.policy.limitProvenance !== "model_limit" ||
+      policy.policy.safetyMargin < 0 || policy.policy.physicalInputBudget <= 0 ||
+      policy.policy.effectiveHardGate !== Math.min(target.hardGate, policy.policy.physicalInputBudget))
+    throw new Error(`X-05 ${name} lacks effective physical budget provenance`)
+  return { result: { ...result, modelPolicy: result.modelPolicy }, policy }
 }
 const requireNormal = (name: string) => {
   const { result, policy } = requireCase(name)
@@ -111,11 +116,14 @@ if (!smoke && !toolcall) {
     throw new Error("X-05 hard gate did not stop before provider dispatch")
 }
 
+const revision = Bun.spawnSync(["git", "rev-parse", "HEAD"], { cwd: path.resolve(import.meta.dir, "../../../..") })
+if (revision.exitCode !== 0) throw new Error("X-05 capture cannot identify its implementation revision")
 await writeLiveArtifact(
   { artifactDirectory: path.resolve(import.meta.dir, "../../.artifacts/live-llm") },
   artifact.suite,
   {
     ...artifact,
+    implementationRevision: revision.stdout.toString().trim(),
     evidence: toolcall ? { toolcall: true, toolName: "read" } : smoke ? { smoke: true } : {
       policyKey: target.key,
       observationLine: target.observation,

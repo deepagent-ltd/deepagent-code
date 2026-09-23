@@ -139,10 +139,10 @@ const database = Database.layerFromPath(":memory:")
 // history. The harness has no production graph sources wired, so the four graphs resolve as:
 const selectionEvidence = [
   "Context selection (this turn):",
-  "- code: degraded_unavailable [rev code:unavailable] (0 refs)",
-  "- documents: degraded_unavailable [rev documents:unavailable] (0 refs)",
-  "- knowledge: empty [rev released:no-store] (0 refs)",
-  "- memory: empty [rev memory:no-store] (0 refs)",
+  "- code: degraded_unavailable [rev code:unavailable] [adapter version code-intelligence.v1] (0 refs)",
+  "- documents: degraded_unavailable [rev documents:unavailable] [adapter version documents-union.v1] (0 refs)",
+  "- knowledge: empty [rev released:no-store] [adapter version released-knowledge.v1] (0 refs)",
+  "- memory: empty [rev memory:no-store] [adapter version durable-memory.v1] (0 refs)",
 ].join("\n")
 const withSelection = (parts: string[]) => parts
 let currentSelectionIdentity: ProductionV2LocationIdentity | undefined
@@ -1411,6 +1411,16 @@ describe("SessionRunnerLLM", () => {
       expect(checkpoint?.content).toMatchObject({
         schema_version: "context_checkpoint.v1",
         context_selection_refs: expect.arrayContaining([expect.stringMatching(/^selection:/)]),
+        source_selection_id: expect.any(String),
+        projection_hash: expect.any(String),
+        graph_revisions: expect.any(String),
+        graph_statuses: expect.any(String),
+        selected_refs: expect.any(String),
+        goal: { plan_ref: null, goal_ref: expect.stringMatching(/^activity_objective:v2:/), state: "active" },
+        task_refs: [],
+        approval_refs: [],
+        evidence_refs: [],
+        degraded: expect.arrayContaining(["plan_authority_unavailable", "retained_tail_boundary_unbound"]),
       })
       const policies = yield* db.select().from(SessionModelPolicyReceiptTable)
         .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)
@@ -1432,6 +1442,47 @@ describe("SessionRunnerLLM", () => {
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Continue after restart" }), resume: false })
       expect(yield* session.resume(sessionID).pipe(Effect.exit)).toMatchObject({ _tag: "Failure" })
       expect(requests).toHaveLength(0)
+    }),
+  )
+
+  it.effect("keeps the prompt epoch unchanged when a hard-gate summary is empty", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const { db } = yield* Database.Service
+      response = fragmentFixture("text", "hard-earlier", ["Earlier answer"]).completeEvents
+      yield* session.prompt({
+        sessionID,
+        prompt: new Prompt({ text: "Earlier question ".repeat(180) }),
+        resume: false,
+      })
+      yield* session.resume(sessionID)
+      const [before] = yield* db.select().from(SessionContextEpochTable)
+        .where(eq(SessionContextEpochTable.session_id, sessionID)).all().pipe(Effect.orDie)
+
+      currentModel = managedCompactModel
+      currentModelInfo = managedNoToolInfo
+      requests.length = 0
+      responses = [[]]
+      yield* session.prompt({
+        sessionID,
+        prompt: new Prompt({ text: "Recent exact request ".repeat(500) }),
+        resume: false,
+      })
+      expect(yield* session.resume(sessionID).pipe(Effect.exit)).toMatchObject({ _tag: "Failure" })
+
+      const [after] = yield* db.select().from(SessionContextEpochTable)
+        .where(eq(SessionContextEpochTable.session_id, sessionID)).all().pipe(Effect.orDie)
+      expect(after?.revision).toBe(before?.revision)
+      expect(requests).toHaveLength(1)
+      expect(requests[0]?.tools).toEqual([])
+      expect(yield* db.select().from(SessionContextCheckpointTable)
+        .where(eq(SessionContextCheckpointTable.session_id, sessionID)).all().pipe(Effect.orDie)).toHaveLength(1)
+      const policies = yield* db.select().from(SessionModelPolicyReceiptTable)
+        .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)
+      expect(policies.find((row) => row.blocked_reason === "compaction_unavailable")?.provider_attempt_id).toBeNull()
+      expect(yield* db.select().from(SessionProviderAttemptTable)
+        .where(eq(SessionProviderAttemptTable.session_id, sessionID)).all().pipe(Effect.orDie)).toHaveLength(2)
     }),
   )
 
