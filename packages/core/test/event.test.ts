@@ -1487,6 +1487,10 @@ describe("EventV2", () => {
 
       yield* events.claim(aggregateID, "owner-a")
       yield* events.replay(replayed, {
+        onCommit: (seq) => Effect.sync(() => repaired.push(seq)),
+      })
+      expect(repaired).toEqual([payload.seq!])
+      yield* events.replay(replayed, {
         ownerID: "owner-b",
         onCommit: (seq) => Effect.sync(() => repaired.push(seq)),
       })

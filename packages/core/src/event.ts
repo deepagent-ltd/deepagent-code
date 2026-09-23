@@ -914,7 +914,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                               // replay is already identity-verified here; repair only an intact event
                               // row, inside this transaction. Compacted dedupe-only rows have no local
                               // event to mirror and require an explicit historical backfill instead.
-                              if (stored && commit && (!input.ownerID || !row?.ownerID || row.ownerID === input.ownerID))
+                              if (stored && commit && (!row?.ownerID || row.ownerID === input.ownerID))
                                 yield* commit(stored.seq, { ...canonicalEvent, data: codec.decode(stored.data) })
                               return
                             }
