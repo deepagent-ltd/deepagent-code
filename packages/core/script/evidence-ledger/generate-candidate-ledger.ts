@@ -100,6 +100,8 @@ try {
       packagedDirectory,
       "--runs",
       runsPath,
+      "--evidence-dir",
+      evidenceDir,
       "--out",
       packagedPath,
     ])

@@ -16,20 +16,16 @@
  * silently manufacturing a green ledger. Evidence files may be raw runtime evidence or signed
  * envelopes; only signed envelopes are eligible for RELEASE-GO.
  */
-import { readdirSync } from "node:fs"
-import path from "node:path"
-import { Schema } from "effect"
 import { contentDigest } from "../../src/contract/digest"
 import {
   assertLedgerReleaseGo,
   EvidenceLedgerReleaseGateError,
   makeAuthoritativeLedger,
-  type EvidenceBundleArtifact,
 } from "../../src/contract/evidence-ledger"
 import { decodeEvidenceManifest } from "../../src/contract/evidence-manifest"
 import { assertPackagedRuntimeReport } from "../../src/contract/packaged-runtime-report"
-import { RuntimeIntegrityEvidenceContract } from "../../src/contract/runtime-integrity-evidence"
 import { Hash } from "../../src/util/hash"
+import { evidenceFiles, readEvidenceArtifact } from "./read-evidence"
 
 const args = process.argv.slice(2)
 
@@ -48,59 +44,6 @@ async function digestFile(filename: string | undefined): Promise<string> {
   if (!filename) return contentDigest({ present: false })
   const bytes = await Bun.file(filename).arrayBuffer()
   return Hash.sha256(Buffer.from(bytes))
-}
-
-function evidenceFiles(directory: string | undefined): string[] {
-  if (!directory) return []
-  const entries = readdirSync(directory, { withFileTypes: true })
-  return entries.flatMap((entry) => {
-    const filename = path.join(directory, entry.name)
-    if (entry.isDirectory()) return evidenceFiles(filename)
-    if (!entry.isFile() || !entry.name.endsWith(".json")) return []
-    return [filename]
-  })
-}
-
-async function readEvidenceArtifact(
-  filename: string,
-  publicKeyPem: string | undefined,
-): Promise<EvidenceBundleArtifact & { readonly candidateID?: string }> {
-  const value = await Bun.file(filename).json()
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    !("schemaVersion" in value) ||
-    typeof value.schemaVersion !== "string"
-  )
-    throw new Error(`evidence artifact is not a recognized JSON contract: ${filename}`)
-  if (value.schemaVersion === "runtime-integrity-evidence-signature.v1") {
-    const signed = Schema.decodeUnknownSync(RuntimeIntegrityEvidenceContract.SignedRuntimeIntegrityEvidence, {
-      onExcessProperty: "error",
-    })(value)
-    if (signed.evidenceDigest !== RuntimeIntegrityEvidenceContract.runtimeIntegrityEvidenceDigest(signed.evidence))
-      throw new Error(`signed evidence digest mismatch: ${filename}`)
-    if (
-      publicKeyPem !== undefined &&
-      !RuntimeIntegrityEvidenceContract.verifySignedRuntimeIntegrityEvidence({ signed, publicKeyPem })
-    )
-      throw new Error(`signed evidence signature invalid: ${filename}`)
-    return {
-      evidenceHash: signed.evidenceDigest,
-      signed: publicKeyPem !== undefined,
-      candidateID: signed.evidence.identity.candidateID,
-    }
-  }
-  if (value.schemaVersion === RuntimeIntegrityEvidenceContract.RuntimeIntegrityEvidenceVersion.schema) {
-    const evidence = Schema.decodeUnknownSync(RuntimeIntegrityEvidenceContract.RuntimeIntegrityEvidence, {
-      onExcessProperty: "error",
-    })(value)
-    return {
-      evidenceHash: RuntimeIntegrityEvidenceContract.runtimeIntegrityEvidenceDigest(evidence),
-      signed: false,
-      candidateID: evidence.identity.candidateID,
-    }
-  }
-  throw new Error(`unsupported evidence artifact schema: ${filename}`)
 }
 
 const manifestPath = requiredOption("--manifest")
