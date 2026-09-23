@@ -9,6 +9,7 @@ import {
   OrchestrationSchemas,
   type OrchestrationSchemaName,
 } from "../deepagent/orchestration"
+import { PermissionV2 } from "../permission"
 import type { PermissionSchema } from "../permission/schema"
 import type { SessionMessage } from "../session/message"
 import { SessionSchema } from "../session/schema"
@@ -89,12 +90,41 @@ export const admitTaskCall = Effect.fn("TaskPolicy.admitTaskCall")(function* (
     .pipe(Effect.orDie)
 })
 
-/** Parent restrictions become child denies; delegation can never turn ask/deny into allow. */
-export const inheritedTaskPermissions = (...rulesets: readonly PermissionSchema.Ruleset[]): PermissionSchema.Ruleset =>
-  rulesets
-    .flat()
-    .filter((rule) => rule.effect !== "allow")
-    .map((rule) => ({ action: rule.action, resource: rule.resource, effect: "deny" as const }))
+/**
+ * Parent restrictions become child denies; delegation can never turn ask/deny into allow.
+ *
+ * V1 parity (deepagent-code #26514, `deriveSubagentSessionPermission`), role-aware like the V1
+ * original:
+ *
+ * - The parent AGENT contributes only its `edit` rules (deny/ask forward as deny, allow forwards
+ *   verbatim). The edit class is the mutation restriction Plan-Mode-style agents carry on their
+ *   ruleset; the parent agent's broader working posture (e.g. a blanket `*: deny` plus narrow
+ *   task-tool allows) governs the PARENT's own tools and must not strip the delegated agent's
+ *   built-in allow face. A forwarded edit allow cannot widen the child: the child's own ruleset
+ *   still wins denies (PermissionV2's per-ruleset combination is deny-wins).
+ * - The parent SESSION forwards deny rules verbatim as hard runtime ceilings and ask rules as
+ *   deny; an ALLOW forwards only when it names a concrete (non-wildcard) action whose
+ *   (action, resource) pair the delegated agent's own ruleset already permits independently —
+ *   the #26514 narrow-allow forwarding that keeps a deny-all session allowlist from reducing the
+ *   child to a bare `deny *` (zero tool definitions). Order is preserved, so a parent allow
+ *   followed by a later deny still ends denied.
+ */
+export const inheritedTaskPermissions = (
+  subagent: PermissionSchema.Ruleset,
+  parentAgent: PermissionSchema.Ruleset,
+  parentSession: PermissionSchema.Ruleset,
+): PermissionSchema.Ruleset => [
+  ...parentAgent.flatMap((rule) =>
+    rule.action !== "edit"
+      ? []
+      : [rule.effect === "allow" ? rule : { action: rule.action, resource: rule.resource, effect: "deny" as const }],
+  ),
+  ...parentSession.flatMap((rule) => {
+    if (rule.effect !== "allow") return [{ action: rule.action, resource: rule.resource, effect: "deny" as const }]
+    if (rule.action.includes("*")) return []
+    return PermissionV2.evaluate(rule.action, rule.resource, subagent).effect === "allow" ? [rule] : []
+  }),
+]
 
 const safeSharedWorkspaceActions = new Set([
   "read",

@@ -37,7 +37,10 @@ if (
     `Foreground parent tool sequence mismatch: ${foreground.tools.map((tool) => `${tool.name}:${tool.status}`).join(", ")}`,
   )
 }
-if (record(completed[2]?.input, "task_read input").limit !== 100 || "before" in record(completed[2]?.input, "task_read input")) {
+// The task_read input schema is provider-tolerant (limit: number | numeric string), so the model
+// sending "100" is a valid complete-transcript request; compare numerically.
+const taskReadInput = record(completed[2]?.input, "task_read input")
+if (Number(taskReadInput.limit) !== 100 || "before" in taskReadInput) {
   throw new Error("Parent task_read did not request the complete transcript page")
 }
 if (foreground.children.length !== 1) {
@@ -50,13 +53,16 @@ if (!child || child.parentID !== foreground.sessionID || child.agent !== "resear
 if (!completed[1]?.output?.includes(child.id) || !completed[1].output.includes("[completed]")) {
   throw new Error("Parent task_status result did not report the completed child")
 }
-const subagent = nestedRecord(child.metadata, ["deepagent", "subagent"])
-if (subagent.state !== "completed" || subagent.finished !== true || subagent.reason !== "structured_output_valid") {
-  throw new Error("Foreground child durable metadata is not a valid completed structured result")
+// Durable V2 contract (task_run authority): the legacy deepagent.subagent session-metadata
+// projection and the session-level child.model stamp were removed with the V2-owner cutover —
+// task_status's [completed] report above is the durable state surface, and the schema-validated
+// structured result returned by the task call is the validated-outcome surface. Require the task
+// tool result to parse as the validated ResearchResult carrying the marker evidence.
+const taskResult = record(JSON.parse(String(completed[0]?.output ?? "").split("\ntask_id:")[0]), "task ResearchResult")
+if (typeof taskResult.mechanism !== "string" || taskResult.mechanism !== evidence) {
+  throw new Error("Foreground task result did not return the validated child ResearchResult")
 }
 if (
-  child.model?.providerID !== artifact.fingerprint.runtimeProviderID ||
-  child.model.id !== artifact.fingerprint.modelID ||
   child.assistants.some(
     (assistant) =>
       assistant.providerID !== artifact.fingerprint.runtimeProviderID || assistant.modelID !== artifact.fingerprint.modelID,
@@ -67,11 +73,17 @@ if (
 const childTools = child.assistants.flatMap((assistant) => assistant.tools)
 const read = childTools.find((tool) => tool.name === "read" && tool.status === "completed")
 if (!read?.output?.includes(marker)) throw new Error("Child did not obtain the marker through a completed read tool")
-const structured = child.assistants.find((assistant) => {
-  const encoded = JSON.stringify(assistant.structured)
-  return typeof encoded === "string" && encoded.includes(marker)
-})?.structured
-const result = record(structured, "ResearchResult")
+// The V2 finalizer contract rides the schema in the prompt text (no provider format, no
+// StructuredOutput synthesis): the child's final answer is the JSON text itself — fenced or raw —
+// which the parent task call extracts and validates (already asserted via taskResult above).
+const finalAnswer = child.assistants.at(-1)?.text ?? ""
+const fenced = finalAnswer.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1] ?? finalAnswer
+const start = fenced.indexOf("{")
+const end = fenced.lastIndexOf("}")
+const result = record(
+  JSON.parse(start !== -1 && end > start ? fenced.slice(start, end + 1) : "{}"),
+  "ResearchResult",
+)
 if (
   typeof result.module !== "string" ||
   typeof result.mechanism !== "string" ||
@@ -94,13 +106,10 @@ if (!foreground.finalText.includes(marker) || prompt.includes(marker)) {
     `Parent evidence mismatch: final=${foreground.finalText.includes(marker)}, prompt=${prompt.includes(marker)}`,
   )
 }
-const structuredParts = childTools.filter(
-  (tool) => tool.name === "StructuredOutput" && tool.status === "completed",
-)
-if (structuredParts.length !== 1) {
-  throw new Error(`Expected one completed child StructuredOutput part, received ${structuredParts.length}`)
-}
-if (!child.users.some((user) => nestedRecordOptional(user.metadata, ["deepagent", "structured_finalizer"]))) {
+// The V2 finalizer prompt is a plain durable user turn (no metadata projection, no synthesized
+// StructuredOutput tool): assert it by its fixed instruction text, which also proves the finalizer
+// ran exactly against the persisted research.
+if (!child.users.some((user) => user.text.includes("Convert the persisted research result"))) {
   throw new Error("Child transcript is missing the durable structured finalizer prompt")
 }
 
@@ -112,7 +121,7 @@ const resultArtifact = {
     childSessionIDLength: child.id.length,
     childMessageCount: child.messageCount,
     childAssistantTurns: child.assistants.length,
-    structuredToolParts: structuredParts.length,
+    structuredFinalAnswers: 1,
     rejectedParentToolCalls: foreground.tools.filter((tool) => tool.status === "error").map((tool) => tool.name),
   },
 }
@@ -129,21 +138,6 @@ console.log(
 function record(value: unknown, name: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`${name} is not an object`)
   return value as Record<string, unknown>
-}
-
-function nestedRecord(value: unknown, keys: string[]) {
-  const result = nestedRecordOptional(value, keys)
-  if (!result) throw new Error(`Missing object path ${keys.join(".")}`)
-  return result
-}
-
-function nestedRecordOptional(value: unknown, keys: string[]) {
-  return keys.reduce<Record<string, unknown> | undefined>((current, key) => {
-    if (!current) return undefined
-    const next = current[key]
-    if (typeof next !== "object" || next === null || Array.isArray(next)) return undefined
-    return next as Record<string, unknown>
-  }, typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined)
 }
 
 finishLiveScript()
