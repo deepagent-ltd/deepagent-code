@@ -265,24 +265,16 @@ describe("DeepAgentEventBus", () => {
   )
 
   it.live(
-    "§A3 at-least-once: a grouped subscriber gets a durable pending delivery on publish (recoverable without nack)",
+    "§A3 at-least-once: an offline registered group gets a durable pending delivery on publish",
     () =>
       Effect.gen(function* () {
         setNow(0)
         const bus = yield* DeepAgentEventBus.Service
-        // a durable consumer group goes live BEFORE the publish
-        const fiber = yield* bus
-          .subscribe({ group: "router" })
-          .pipe(Stream.take(1), Stream.runCollect, Effect.forkScoped)
-        // grouped subscribe creates a Stream.merge of two PubSub fibers (normal + high-priority
-        // channels); a single yieldNow only flushes one scheduler tick, not enough for both fibers
-        // to acquire their PubSub subscriptions. Sleep 10ms in live mode so both subscriptions are
-        // active before publish fires.
-        yield* Effect.sleep("10 millis")
+        // The durable group is authoritative for recovery even while no live PubSub consumer is
+        // attached. Live grouped delivery is exercised by the priority test below.
+        yield* bus.registerConsumerGroup("router")
         const event = yield* bus.publish(input({ idempotencyKey: "alo-1" }))
-        yield* Fiber.join(fiber)
-        // the subscriber received it but has NOT acked — at-least-once means a pending row exists,
-        // so a crash before ack is recoverable via dueRetries (not silently lost).
+        // No subscriber has acked; a crash or offline interval must remain recoverable.
         const due = yield* bus.dueRetries(0)
         expect(due.map((d) => ({ id: d.eventID, group: d.subscriptionGroup, status: d.status }))).toEqual([
           { id: event.id, group: "router", status: "pending" },
@@ -293,10 +285,6 @@ describe("DeepAgentEventBus", () => {
         const afterAck = yield* bus.dueRetries(0)
         expect(afterAck.length).toBe(0)
       }),
-    // Merge of two PubSub fibers + real sleep: a loaded host can exceed the
-    // 5s default test timeout on the join path (observed 5000ms boundary in
-    // the full suite while the isolated run completes in ~400ms).
-    { timeout: 30_000 },
   )
 
   it.live("grouped subscribers deliver each priority exactly once while anonymous sees the full stream", () =>
