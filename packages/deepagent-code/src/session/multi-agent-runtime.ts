@@ -1,6 +1,5 @@
 export * as MultiAgentRuntime from "./multi-agent-runtime"
 
-import path from "node:path"
 import { Cause, Context, Duration, Effect, Fiber, Layer, Schedule } from "effect"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
@@ -14,6 +13,7 @@ import { ApprovalQueue } from "@deepagent-code/core/deepagent/approval-queue"
 import { WorkspaceConcurrency } from "@deepagent-code/core/deepagent/workspace-concurrency"
 import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
 import { AgentExecution } from "@deepagent-code/core/deepagent/agent-execution"
+import { LockKeys } from "@deepagent-code/core/deepagent/lock-keys"
 import { FileLock } from "@deepagent-code/core/file-lock"
 import { Identifier } from "@deepagent-code/core/util/identifier"
 import type { SubagentTurnRunner, SubagentTurnResult } from "./goal-loop-wiring"
@@ -246,6 +246,7 @@ export const layerWith = (options: LayerOptions) =>
       const withExecutionLease = <A, E, R>(
         event: DeepAgentEvent.Event,
         record: AgentExecution.Record | undefined,
+        lockIDs: ReadonlyArray<string>,
         effect: Effect.Effect<A, E, R>,
       ): Effect.Effect<A, E, R> => {
         if (!execution || !record) return effect
@@ -259,8 +260,16 @@ export const layerWith = (options: LayerOptions) =>
             leaseMs,
           })
           .pipe(
-            Effect.flatMap((renewed) => (renewed ? Effect.void : Effect.die(new Error("execution_lease_lost")))),
-            Effect.repeat(Schedule.spaced(Duration.millis(Math.max(10, Math.floor(leaseMs / 3))))),
+            Effect.flatMap((renewed) => {
+              if (!renewed) return Effect.die(new Error("execution_lease_lost"))
+              if (fileLock && !lockIDs.every((id) => fileLock.renew(id))) return Effect.die(new Error("file_lock_lost"))
+              return Effect.void
+            }),
+            Effect.repeat(
+              Schedule.spaced(
+                Duration.millis(Math.max(10, Math.floor(Math.min(leaseMs, FileLock.AGENT_LOCK_TTL_MS) / 3))),
+              ),
+            ),
             Effect.flatMap(() => Effect.never),
           )
         return Effect.scoped(
@@ -822,20 +831,19 @@ export const layerWith = (options: LayerOptions) =>
               // edit the same file. FAIL CLOSED: acquire === null ⇒ defer, never run.
               // §C3.2 physical isolation is enforced by the production runner. Write turns fail closed when
               // no worktree can be created; dependent turns receive the upstream durable ref below.
+              const eventDir =
+                typeof (event.payload as { directory?: unknown } | null)?.directory === "string"
+                  ? (event.payload as { directory: string }).directory
+                  : event.workspaceID && !event.workspaceID.startsWith("wrk")
+                    ? event.workspaceID
+                    : undefined
+              // Rootless event scopes retain their library-test behavior until W2's explicit
+              // workspace_unresolvable refusal; rooted scopes already share the HTTP lock key.
+              const fileKeys = claim.files.map((file) => (eventDir ? LockKeys.fileLockKey(eventDir, file) : file))
               const acquiredLocks: string[] = []
               if (fileLock) {
-                // fileScope entries are repo-relative; resolve against the event's directory when it carries
-                // one (a NON-"wrk" workspaceID doubles as a directory), else lock on the raw scope string —
-                // lock keys only need to be CONSISTENT across subtasks of the same event, not real paths.
-                const eventDir =
-                  typeof (event.payload as { directory?: unknown } | null)?.directory === "string"
-                    ? (event.payload as { directory: string }).directory
-                    : event.workspaceID && !event.workspaceID.startsWith("wrk")
-                      ? event.workspaceID
-                      : undefined
                 let contended = false
-                for (const file of subtask.fileScope) {
-                  const lockKey = eventDir ? path.resolve(eventDir, file) : file
+                for (const lockKey of fileKeys) {
                   const entry = fileLock.acquire(lockKey, "agent")
                   if (entry === null) {
                     contended = true
@@ -872,8 +880,8 @@ export const layerWith = (options: LayerOptions) =>
                     ownerID,
                     agentID: agent.id,
                     resources: [
-                      ...claim.files.map((file) => `file:${file}`),
-                      ...claim.symbols.map((symbol) => `symbol:${symbol}`),
+                      ...fileKeys.map(LockKeys.claimFileResource),
+                      ...claim.symbols.map((symbol) => LockKeys.claimSymbolResource(event.workspaceID, symbol)),
                     ],
                     leaseMs,
                   })
@@ -938,6 +946,7 @@ export const layerWith = (options: LayerOptions) =>
                     withExecutionLease(
                       event,
                       executionLease,
+                      acquiredLocks,
                       runner
                         ? runner({
                             agentType: agent.name,

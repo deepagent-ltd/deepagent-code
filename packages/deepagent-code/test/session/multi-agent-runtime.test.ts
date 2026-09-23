@@ -1,5 +1,6 @@
 import { describe, expect } from "bun:test"
-import { Context, Cause, Deferred, Effect, Fiber, Layer } from "effect"
+import path from "node:path"
+import { Context, Cause, Deferred, Duration, Effect, Fiber, Layer } from "effect"
 import { MultiAgentRuntime } from "../../src/session/multi-agent-runtime"
 import type { SubagentTurnRunner } from "../../src/session/goal-loop-wiring"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
@@ -13,6 +14,7 @@ import { SecurityResolvers } from "@deepagent-code/core/deepagent/security-resol
 import { WorkspaceConfig } from "@deepagent-code/core/deepagent/workspace-config"
 import { IMRepositoryLive } from "@deepagent-code/core/im/repository"
 import { FileLock } from "@deepagent-code/core/file-lock"
+import { LockKeys } from "@deepagent-code/core/deepagent/lock-keys"
 import type { AgentDescriptor } from "@deepagent-code/core/im/mention-parser"
 import { BUILTIN_AGENT_DESCRIPTORS } from "@deepagent-code/core/im/builtin-agents"
 import { Agent } from "@/agent/agent"
@@ -1103,6 +1105,46 @@ describe("MultiAgentRuntime §C3.1 file-lock enforcement", () => {
       expect(codeEdit?.reason).toBe("file_locked")
       expect(ran).toEqual([])
       testFileLock.release(human!.lockId) // cleanup
+    }),
+  )
+})
+
+describe("MultiAgentRuntime file-lock lease", () => {
+  const actual = Effect.runSync(FileLock.Service.pipe(Effect.provide(FileLock.layer)))
+  const acquired: string[] = []
+  const renewed: string[] = []
+  const fileLock = FileLock.Service.of({
+    ...actual,
+    acquire: (key, kind) => {
+      acquired.push(key)
+      return actual.acquire(key, kind)
+    },
+    renew: (id) => {
+      renewed.push(id)
+      return actual.renew(id)
+    },
+  })
+  const runner: SubagentTurnRunner = () =>
+    Effect.sleep(Duration.millis(80)).pipe(
+      Effect.as({ ok: true, structured: undefined, text: "done", tokensUsed: 0, cost: 0, continuationRef: "agent/test" }),
+    )
+  const it = testEffect(makeLayer({ fileLock, runner, leaseMs: 30 }))
+
+  it.live("renews the same absolute lock key while an execution lease is active", () =>
+    Effect.gen(function* () {
+      acquired.length = 0
+      renewed.length = 0
+      setNow(1_000)
+      setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
+      const directory = path.resolve("heartbeat-workspace")
+      const key = LockKeys.fileLockKey(directory, "src/agent.ts")
+      const summary = yield* (yield* MultiAgentRuntime.Service).coordinate(
+        event({ payload: { directory, files: ["./src/agent.ts"] } }),
+      )
+      expect(summary.outcomes.map((outcome) => outcome.status)).toEqual(["completed", "completed"])
+      expect(acquired).toEqual([key, key])
+      expect(renewed.length).toBeGreaterThan(2)
+      expect(fileLock.status(key)).toBeNull()
     }),
   )
 })
