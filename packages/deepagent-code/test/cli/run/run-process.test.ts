@@ -7,6 +7,8 @@ import { describe, expect } from "bun:test"
 import { Effect } from "effect"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
+import { pathToFileURL } from "node:url"
+import { Database } from "bun:sqlite"
 import { cliIt } from "../../lib/cli-process"
 import { CompositionDigest } from "../../../src/effect/composition-digest"
 
@@ -35,6 +37,99 @@ const completeCurrentPlan = (hit: { body: Record<string, unknown> }) => {
 }
 
 describe("deepagentCode run (non-interactive subprocess)", () => {
+  cliIt.live(
+    "preserves committed custom tool history after uninstall and process restart",
+    ({ llm, home, deepagentCode }) =>
+      Effect.gen(function* () {
+        const databasePath = path.join(home, "historical-tool.db")
+        const toolPath = path.join(home, ".deepagent", "code", "tools", "historical.ts")
+        const pluginTool = pathToFileURL(path.resolve(import.meta.dir, "../../../../plugin/src/tool.ts")).href
+        const marker = "HISTORICAL_TOOL_RESULT_8f53"
+        yield* Effect.promise(() => mkdir(path.dirname(toolPath), { recursive: true }))
+        yield* Effect.promise(() =>
+          Bun.write(
+            toolPath,
+            [
+              `import { tool } from ${JSON.stringify(pluginTool)}`,
+              "export default tool({",
+              "  description: 'Return the exact historical marker',",
+              "  args: { challenge: tool.schema.string() },",
+              `  execute: async ({ challenge }) => ${JSON.stringify(marker)} + ':' + challenge,`,
+              "})",
+              "",
+            ].join("\n"),
+          ),
+        )
+
+        yield* llm.tool("historical", { challenge: "byte-for-byte" })
+        yield* llm.text("first turn complete")
+        const first = yield* deepagentCode.run("call historical tool", {
+          format: "json",
+          extraArgs: ["--dangerously-skip-permissions"],
+          env: { DEEPAGENT_CODE_DB: databasePath },
+          timeoutMs: 60_000,
+        })
+        deepagentCode.expectExit(first, 0)
+        const sessionID = deepagentCode.parseJsonEvents(first.stdout).find((event) => typeof event.sessionID === "string")
+          ?.sessionID
+        if (typeof sessionID !== "string") throw new Error("first run emitted no session ID")
+
+        // Read with a new SQLite connection after the first process exited: the result must be
+        // committed, not merely retained by the process-local tool registry or runner cache.
+        const database = new Database(databasePath, { readonly: true })
+        const committed = database
+          .query("SELECT data FROM session_message WHERE session_id = ? AND type = 'assistant' ORDER BY seq")
+          .all(sessionID) as Array<{ data: string }>
+        database.close()
+        expect(committed.some((row) => row.data.includes(`${marker}:byte-for-byte`))).toBe(true)
+
+        const beforeRestart = yield* llm.hits
+        const firstEgress = beforeRestart.find((hit) =>
+          JSON.stringify(hit.body.messages ?? []).includes(`${marker}:byte-for-byte`),
+        )
+        if (!firstEgress) throw new Error("tool result was not sent in the first process")
+        const historicalPair = (firstEgress.body.messages as Array<Record<string, unknown>>).filter(
+          (message) =>
+            (message.role === "assistant" && JSON.stringify(message.tool_calls ?? []).includes("historical")) ||
+            (message.role === "tool" && JSON.stringify(message.content ?? "").includes(marker)),
+        )
+        expect(historicalPair).toHaveLength(2)
+
+        yield* Effect.promise(() => Bun.file(toolPath).delete())
+        yield* llm.text("second turn complete")
+        const second = yield* deepagentCode.run("continue after uninstall", {
+          format: "json",
+          extraArgs: ["--session", sessionID],
+          env: { DEEPAGENT_CODE_DB: databasePath },
+          timeoutMs: 60_000,
+        })
+        deepagentCode.expectExit(second, 0)
+
+        const afterRestart = (yield* llm.hits)
+          .slice(beforeRestart.length)
+          .find(
+            (hit) =>
+              Array.isArray(hit.body.tools) &&
+              JSON.stringify(hit.body.messages ?? []).includes("continue after uninstall"),
+          )
+        if (!afterRestart) throw new Error("second process sent no continuation provider request")
+        const messages = afterRestart.body.messages as Array<Record<string, unknown>>
+        expect(
+          JSON.stringify(
+            messages.filter(
+              (message) =>
+                (message.role === "assistant" && JSON.stringify(message.tool_calls ?? []).includes("historical")) ||
+                (message.role === "tool" && JSON.stringify(message.content ?? "").includes(marker)),
+            ),
+          ),
+        ).toBe(JSON.stringify(historicalPair))
+        expect(
+          (afterRestart.body.tools as Array<{ function?: { name?: string } }>).map((entry) => entry.function?.name),
+        ).not.toContain("historical")
+      }),
+    120_000,
+  )
+
   // Happy path: prompt completes, output reaches stdout, process exits 0.
   // If this fails, all the others likely will too — debug here first.
   cliIt.concurrent(
