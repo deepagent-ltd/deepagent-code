@@ -38,11 +38,12 @@ import { Identifier } from "../id/id"
 import type { LocationRef } from "../location/ref"
 import { AbsolutePath } from "../schema"
 import { Hash } from "../util/hash"
-import { TaskRunEventTable, TaskRunTable } from "./sql"
+import { EventTaskWorkspaceTable, TaskRunEventTable, TaskRunTable } from "./sql"
 
 type DatabaseService = Database.Interface["db"]
 type Writer = Pick<DatabaseService, "select" | "insert" | "update">
 type RunRow = typeof TaskRunTable.$inferSelect
+type EventRow = typeof EventTaskWorkspaceTable.$inferSelect
 
 export class WorkspaceError extends Data.TaggedError("TaskWorkspace.Error")<{
   readonly runID: string
@@ -73,6 +74,173 @@ export type WorkspaceReceipt = {
   /** Human-readable derivation record (branch/directory layout) for UX/CLI consumers. */
   readonly derivation: string
 }
+
+export class EventWorkspaceError extends Data.TaggedError("TaskWorkspace.EventError")<{
+  readonly eventID: string
+  readonly taskID: string
+  readonly code: "git_failed" | "preflight_conflict" | "preflight_failed" | "preflight_not_ready"
+  readonly message: string
+}> {}
+
+export type EventWorkspaceReceipt = {
+  readonly eventID: string
+  readonly taskID: string
+  readonly generation: number
+  readonly operationKey: string
+  readonly repositoryRoot: string
+  readonly baseCommit: string
+  readonly branch: string
+  readonly directory: string
+  readonly continuationRef?: string
+}
+
+const eventReceipt = (row: EventRow): EventWorkspaceReceipt => ({
+  eventID: row.event_id,
+  taskID: row.task_id,
+  generation: row.generation,
+  operationKey: row.operation_key,
+  repositoryRoot: row.repository_root,
+  baseCommit: row.base_commit,
+  branch: row.branch,
+  directory: row.directory,
+  ...(row.continuation_ref ? { continuationRef: row.continuation_ref } : {}),
+})
+
+const eventIdentity = (input: { readonly eventID: string; readonly taskID: string; readonly generation: number }) =>
+  and(
+    eq(EventTaskWorkspaceTable.event_id, input.eventID),
+    eq(EventTaskWorkspaceTable.task_id, input.taskID),
+    eq(EventTaskWorkspaceTable.generation, input.generation),
+  )
+
+/** Freeze an event subtask's base and worktree before admitting its V2 child Session. */
+export const prepareEvent = Effect.fn("TaskWorkspace.prepareEvent")(function* (
+  db: DatabaseService,
+  input: {
+    readonly eventID: string
+    readonly taskID: string
+    readonly generation: number
+    readonly parentDirectory: string
+    readonly baseRef?: string
+    readonly now?: number
+  },
+) {
+  const error = (code: EventWorkspaceError["code"], message: string) =>
+    new EventWorkspaceError({ eventID: input.eventID, taskID: input.taskID, code, message })
+  if (!Number.isSafeInteger(input.generation) || input.generation < 0)
+    return yield* error("preflight_conflict", "invalid execution generation")
+  const rootResult = yield* git(input.parentDirectory, ["rev-parse", "--show-toplevel"])
+  if (rootResult.exitCode !== 0) return yield* error("git_failed", `repository root unavailable: ${text(rootResult.stderr)}`)
+  const repositoryRoot = text(rootResult.stdout)
+  const operationKey = `${input.eventID}:${input.taskID}`
+  // A later AgentExecution generation must not share a physical checkout with an old owner.
+  const name = `event-${Hash.sha256(`${operationKey}:${input.generation}`).slice(0, 24)}`
+  const branch = `deepagent-code/${name}`
+  const parent = path.join(Global.Path.data, "worktree", "durable", Hash.sha256(repositoryRoot).slice(0, 16))
+  yield* Effect.promise(() => fs.mkdir(parent, { recursive: true }))
+  const directory = path.join(yield* Effect.promise(() => fs.realpath(parent)), name)
+  const previous = yield* db.select().from(EventTaskWorkspaceTable).where(eventIdentity(input)).get().pipe(Effect.orDie)
+  const baseResult = previous
+    ? { exitCode: 0, stdout: previous.base_commit, stderr: "" }
+    : yield* git(repositoryRoot, ["rev-parse", "--verify", `${input.baseRef ?? "HEAD"}^{commit}`])
+  if (baseResult.exitCode !== 0) return yield* error("git_failed", `base ref unavailable: ${text(baseResult.stderr)}`)
+  const baseCommit = text(baseResult.stdout)
+  if (!previous) {
+    yield* db
+      .insert(EventTaskWorkspaceTable)
+      .values({
+        event_id: input.eventID,
+        task_id: input.taskID,
+        generation: input.generation,
+        operation_key: operationKey,
+        repository_root: repositoryRoot,
+        base_commit: baseCommit,
+        branch,
+        directory,
+        state: "pending",
+        time_created: input.now ?? Date.now(),
+      })
+      .onConflictDoNothing()
+      .pipe(Effect.orDie)
+  }
+  const row = (yield* db.select().from(EventTaskWorkspaceTable).where(eventIdentity(input)).get().pipe(Effect.orDie))!
+  if (row.repository_root !== repositoryRoot || row.operation_key !== operationKey || row.branch !== branch || row.directory !== directory)
+    return yield* error("preflight_conflict", "event workspace receipt identity changed")
+  if (row.state === "failed" || row.state === "reclaimed")
+    return yield* error("preflight_failed", row.error ?? `workspace is ${row.state}`)
+  if (row.state === "ready" || row.state === "retained") {
+    const registered = yield* registeredWorktree(repositoryRoot, directory)
+    if (registered?.branch !== branch)
+      return yield* error("preflight_conflict", "ready event worktree is not registered on its recorded branch")
+    const ancestor = yield* git(repositoryRoot, ["merge-base", "--is-ancestor", row.base_commit, registered.head])
+    if (ancestor.exitCode !== 0) return yield* error("preflight_conflict", "event worktree moved off its recorded base")
+    return eventReceipt(row)
+  }
+  const ensured = yield* ensureWorktree({ repositoryRoot, baseCommit: row.base_commit, name, branch, directory })
+  if (!ensured.ok) {
+    yield* db.update(EventTaskWorkspaceTable)
+      .set({ state: "failed", error: ensured.message, time_settled: input.now ?? Date.now() })
+      .where(and(eventIdentity(input), eq(EventTaskWorkspaceTable.state, "pending")))
+      .pipe(Effect.orDie)
+    return yield* error(ensured.code, ensured.message)
+  }
+  yield* db.update(EventTaskWorkspaceTable)
+    .set({ state: "ready" })
+    .where(and(eventIdentity(input), eq(EventTaskWorkspaceTable.state, "pending")))
+    .pipe(Effect.orDie)
+  return eventReceipt((yield* db.select().from(EventTaskWorkspaceTable).where(eventIdentity(input)).get().pipe(Effect.orDie))!)
+})
+
+/** Child admission fence. Retained receipts are admitted only for replay of an existing child. */
+export const requireEventAdmissible = Effect.fn("TaskWorkspace.requireEventAdmissible")(function* (
+  db: DatabaseService,
+  input: { readonly eventID: string; readonly taskID: string; readonly generation: number },
+) {
+  const row = yield* db.select().from(EventTaskWorkspaceTable).where(eventIdentity(input)).get().pipe(Effect.orDie)
+  if (!row || (row.state !== "ready" && row.state !== "retained"))
+    return yield* new EventWorkspaceError({
+      eventID: input.eventID,
+      taskID: input.taskID,
+      code: "preflight_not_ready",
+      message: `event worktree is ${row?.state ?? "missing"}`,
+    })
+  return eventReceipt(row)
+})
+
+/** Preserve an event subtask's writes as a branch ref and retain its worktree for crash audit. */
+export const settleEvent = Effect.fn("TaskWorkspace.settleEvent")(function* (
+  db: DatabaseService,
+  input: { readonly eventID: string; readonly taskID: string; readonly generation: number; readonly now?: number },
+) {
+  const row = yield* db.select().from(EventTaskWorkspaceTable).where(eventIdentity(input)).get().pipe(Effect.orDie)
+  const error = (message: string) => new EventWorkspaceError({
+    eventID: input.eventID, taskID: input.taskID, code: "git_failed", message,
+  })
+  if (!row || !["ready", "retained"].includes(row.state)) return yield* error("event worktree is not ready")
+  if (row.state === "retained" && row.continuation_ref)
+    return { ...eventReceipt(row), continuationRef: row.continuation_ref, artifacts: [`git-ref:${row.continuation_ref}`] }
+  const status = yield* git(row.directory, ["status", "--porcelain"])
+  if (status.exitCode !== 0) return yield* error(`event worktree status failed: ${text(status.stderr)}`)
+  if (text(status.stdout)) {
+    const staged = yield* git(row.directory, ["add", "-A"])
+    if (staged.exitCode !== 0) return yield* error(`event worktree stage failed: ${text(staged.stderr)}`)
+    const committed = yield* git(row.directory, [
+      "-c", "user.name=DeepAgent Code", "-c", "user.email=agent@deepagent.code", "commit",
+      "--no-gpg-sign", "--no-verify", "-m", "agent turn work (auto-preserved)",
+    ])
+    if (committed.exitCode !== 0) return yield* error(`event worktree commit failed: ${text(committed.stderr)}`)
+  }
+  const head = yield* git(row.directory, ["rev-parse", "HEAD"])
+  if (head.exitCode !== 0) return yield* error(`event worktree HEAD unavailable: ${text(head.stderr)}`)
+  const ancestor = yield* git(row.repository_root, ["merge-base", "--is-ancestor", row.base_commit, text(head.stdout)])
+  if (ancestor.exitCode !== 0) return yield* error("event worktree moved off its recorded base")
+  const continuationRef = text(head.stdout) === row.base_commit ? row.base_commit : row.branch
+  yield* db.update(EventTaskWorkspaceTable)
+    .set({ state: "retained", continuation_ref: continuationRef, time_settled: input.now ?? Date.now() })
+    .where(and(eventIdentity(input), eq(EventTaskWorkspaceTable.state, "ready")))
+    .pipe(Effect.orDie)
+  return { ...eventReceipt(row), continuationRef, artifacts: [`git-ref:${continuationRef}`] }
+})
 
 export type ReleaseOutcome = {
   readonly runID: string
@@ -665,7 +833,37 @@ export const reclaimStale = Effect.fn("TaskWorkspace.reclaimStale")(function* (
     if (error === undefined) reclaimed++
     else failed.push({ runID: row.run_id, error })
   }
-  return { scanned: stale.length, reclaimed, failed } satisfies ReclaimStaleReport
+  const eventStale = yield* db
+    .select()
+    .from(EventTaskWorkspaceTable)
+    .where(and(
+      inArray(EventTaskWorkspaceTable.state, ["retained", "failed"]),
+      isNotNull(EventTaskWorkspaceTable.time_settled),
+      lte(EventTaskWorkspaceTable.time_settled, cutoff),
+    ))
+    .all()
+    .pipe(Effect.orDie)
+  for (const row of eventStale) {
+    const pruned = yield* pruneWorktree(row.repository_root, row.directory)
+    if (!pruned.ok) {
+      failed.push({ runID: `${row.event_id}:${row.task_id}:${row.generation}`, error: pruned.message })
+      continue
+    }
+    const deleted = yield* git(row.repository_root, ["branch", "-D", row.branch])
+    if (deleted.exitCode !== 0) {
+      const exists = yield* git(row.repository_root, ["show-ref", "--verify", "--quiet", `refs/heads/${row.branch}`])
+      if (exists.exitCode === 0) {
+        failed.push({ runID: `${row.event_id}:${row.task_id}:${row.generation}`, error: text(deleted.stderr) })
+        continue
+      }
+    }
+    yield* db.update(EventTaskWorkspaceTable)
+      .set({ state: "reclaimed", time_settled: now })
+      .where(and(eventIdentity({ eventID: row.event_id, taskID: row.task_id, generation: row.generation }), eq(EventTaskWorkspaceTable.state, row.state)))
+      .pipe(Effect.orDie)
+    reclaimed++
+  }
+  return { scanned: stale.length + eventStale.length, reclaimed, failed } satisfies ReclaimStaleReport
 })
 
 /** Physical reclaim + receipt CAS; `undefined` on success, an error string on a kept row. */

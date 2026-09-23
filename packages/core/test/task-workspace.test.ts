@@ -18,7 +18,7 @@ import { SessionMessage } from "@deepagent-code/core/session/message"
 import { Prompt } from "@deepagent-code/core/session/prompt"
 import { SessionProjector } from "@deepagent-code/core/session/projector"
 import { SessionSchema } from "@deepagent-code/core/session/schema"
-import { SessionInputTable, SessionTable, TaskRunEventTable, TaskRunTable } from "@deepagent-code/core/session/sql"
+import { EventTaskWorkspaceTable, SessionInputTable, SessionTable, TaskRunEventTable, TaskRunTable } from "@deepagent-code/core/session/sql"
 import { SessionStore } from "@deepagent-code/core/session/store"
 import { TaskRunAuthority } from "@deepagent-code/core/session/task-run"
 import { TaskWorkspace } from "@deepagent-code/core/session/task-workspace"
@@ -633,6 +633,46 @@ describe("Core V2 TaskWorkspace stale-worktree reclamation (C-P2-08)", () => {
 })
 
 // ── Child-Location write stack (real built-in write tool against a Location root) ─────────────
+
+describe("event subtask TaskWorkspace receipts", () => {
+  it.effect("adopts a crash-window worktree, freezes its base, and reclaims both generations", () =>
+    Effect.gen(function* () {
+      const repo = yield* Effect.promise(() => makeRepo(path.join(tmpRoot(), "event-repo")))
+      const { db } = yield* services
+      const firstKey = { eventID: "evt_event_workspace", taskID: "evt_event_workspace:fix", generation: 1 }
+      const first = yield* TaskWorkspace.prepareEvent(db, { ...firstKey, parentDirectory: repo, now: 1_000 })
+      expect(first.operationKey).toBe(`${firstKey.eventID}:${firstKey.taskID}`)
+      expect(first.branch).toStartWith("deepagent-code/event-")
+      expect((yield* db.select().from(EventTaskWorkspaceTable).all()).map((row) => row.state)).toEqual(["ready"])
+      yield* db.update(EventTaskWorkspaceTable).set({ state: "pending" }).run().pipe(Effect.orDie)
+      const adopted = yield* TaskWorkspace.prepareEvent(db, {
+        ...firstKey, parentDirectory: repo, baseRef: "missing-ref-must-not-be-resolved", now: 1_100,
+      })
+      expect(adopted).toEqual(first)
+      yield* TaskWorkspace.requireEventAdmissible(db, firstKey)
+      yield* Effect.promise(() => fs.writeFile(path.join(first.directory, "fix.txt"), "fixed\n"))
+      const settled = yield* TaskWorkspace.settleEvent(db, { ...firstKey, now: 2_000 })
+      expect(settled.continuationRef).toBe(first.branch)
+      expect((yield* TaskWorkspace.settleEvent(db, { ...firstKey, now: 2_100 })).continuationRef).toBe(first.branch)
+
+      const nextKey = { eventID: firstKey.eventID, taskID: `${firstKey.eventID}:test`, generation: 2 }
+      const next = yield* TaskWorkspace.prepareEvent(db, {
+        ...nextKey, parentDirectory: repo, baseRef: settled.continuationRef, now: 3_000,
+      })
+      expect(next.directory).not.toBe(first.directory)
+      expect(yield* Effect.promise(() => fs.readFile(path.join(next.directory, "fix.txt"), "utf8"))).toBe("fixed\n")
+      yield* TaskWorkspace.settleEvent(db, { ...nextKey, now: 4_000 })
+      expect((yield* TaskWorkspace.reclaimStale(db, { now: 3_999, retentionMs: 3_000 })).reclaimed).toBe(0)
+      const reclaimed = yield* TaskWorkspace.reclaimStale(db, { now: 7_000, retentionMs: 3_000 })
+      expect(reclaimed).toMatchObject({ scanned: 2, reclaimed: 2, failed: [] })
+      expect((yield* db.select().from(EventTaskWorkspaceTable).all()).map((row) => row.state)).toEqual([
+        "reclaimed", "reclaimed",
+      ])
+      expect(worktreePaths(repo)).not.toContain(first.directory)
+      expect(worktreePaths(repo)).not.toContain(next.directory)
+    }),
+  )
+})
 
 const allowPermission = Layer.succeed(
   PermissionV2.Service,

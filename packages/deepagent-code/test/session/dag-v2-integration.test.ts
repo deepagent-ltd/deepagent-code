@@ -13,10 +13,15 @@ import { TaskPartitioner } from "@deepagent-code/core/deepagent/task-partitioner
 import { AgentListProviderService } from "@deepagent-code/core/im/agent-list-provider"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { SessionMessage } from "@deepagent-code/core/session/message"
+import { TaskWorkspace } from "@deepagent-code/core/session/task-workspace"
+import { PRQueue } from "@/agent/pr-queue"
+import { Git } from "@/git"
 import type { InstanceStore } from "@/project/instance-store"
+import type { Session } from "@/session/session"
 import { makeEventTurnRunnerV2 } from "@/session/event-turn-runner"
 import { MultiAgentRuntime } from "@/session/multi-agent-runtime"
 import { makeV2AdmissionBridge } from "@/session/v2-admission-bridge"
+import { V4PRCollaboration } from "@/session/v4-pr-collaboration"
 
 const git = async (args: string[], cwd: string) => {
   const process = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" })
@@ -226,6 +231,22 @@ describe("V2 event DAG with real git worktrees", () => {
       const core = Layer.mergeAll(DeepAgentEventBus.layer, ApprovalQueue.layer, AgentExecution.layer).pipe(
         Layer.provideMerge(database),
       )
+      const collaboration = Layer.mergeAll(Git.defaultLayer, PRQueue.layer.pipe(Layer.provide(database)))
+      const legacyRecords = new Map<string, { id: string; directory?: string }>()
+      const legacySessions = {
+        get: (id: string) => {
+          const found = legacyRecords.get(id)
+          return found ? Effect.succeed(found) : Effect.fail(new Error("missing legacy projection"))
+        },
+        create: (input: { id: string; directory?: string }) => Effect.sync(() => {
+          const row = { id: input.id, directory: input.directory }
+          legacyRecords.set(input.id, row)
+          return row
+        }),
+        setDirectory: (input: { sessionID: string; directory: string }) => Effect.sync(() => {
+          legacyRecords.set(input.sessionID, { id: input.sessionID, directory: input.directory })
+        }),
+      } as unknown as Session.Interface
       const agents = Layer.succeed(AgentListProviderService, {
         listAgents: () =>
           Effect.succeed([
@@ -245,14 +266,26 @@ describe("V2 event DAG with real git worktrees", () => {
         Effect.gen(function* () {
           const db = (yield* Database.Service).db
           const execution = yield* AgentExecution.Service
+          const gitService = yield* Git.Service
+          const queue = yield* PRQueue.Service
+          const bus = yield* DeepAgentEventBus.Service
+          const approvalQueue = yield* ApprovalQueue.Service
           return MultiAgentRuntime.layerWith({
-            runner: makeEventTurnRunnerV2({ sessions: fake.sessionsService, instanceStore: fake.instanceStore }),
+            runner: makeEventTurnRunnerV2({ sessions: fake.sessionsService, instanceStore: fake.instanceStore, db }),
             execution,
             dagCoordination: true,
             eventV2Admission: makeV2AdmissionBridge({ db, v2Session: fake.sessionsService }),
+            onEventCompleted: V4PRCollaboration.make({
+              sessions: legacySessions,
+              instanceStore: fake.instanceStore,
+              git: gitService,
+              queue,
+              bus,
+              approvalQueue,
+            }),
           })
         }),
-      ).pipe(Layer.provide(core), Layer.provide(agents))
+      ).pipe(Layer.provide(Layer.mergeAll(core, collaboration)), Layer.provide(agents))
       const event: DeepAgentEvent.Event = {
         id: DeepAgentEvent.ID.create(1_000),
         type: "ci.repair.requested",
@@ -266,11 +299,13 @@ describe("V2 event DAG with real git worktrees", () => {
       const refs: { fix?: string; test?: string } = {}
       await Effect.runPromise(
         Effect.gen(function* () {
-          const context = yield* Layer.build(Layer.mergeAll(runtime, core))
+          const context = yield* Layer.build(Layer.mergeAll(runtime, core, collaboration))
           const service = Context.get(context, MultiAgentRuntime.Service)
           const execution = Context.get(context, AgentExecution.Service)
           const bus = Context.get(context, DeepAgentEventBus.Service)
           const db = Context.get(context, Database.Service).db
+          const queue = Context.get(context, PRQueue.Service)
+          const approvals = Context.get(context, ApprovalQueue.Service)
           const request = { event, priority: event.priority, targets: [] }
           yield* service.dispatch(request)
           const tasks = TaskPartitioner.partition(event, { stableIDPrefix: event.id }).subtasks
@@ -295,6 +330,24 @@ describe("V2 event DAG with real git worktrees", () => {
           expect(fake.prompts).toHaveLength(2)
           expect((yield* EventAdmission.forSession(db, MultiAgentRuntime.parentSessionIDFor(event.id))).length).toBe(1)
           expect(fake.prompts.every((prompt) => prompt.delivery === "queue" && prompt.resume === false)).toBe(true)
+          const prs = (yield* queue.list()).filter((row) => row.metadata?.eventID === event.id)
+          expect(prs).toHaveLength(1)
+          expect(prs[0]?.metadata?.taskID).toBe(tasks[1].id)
+          expect(yield* approvals.listPending(event.workspaceID)).toHaveLength(1)
+          if (refs.fix && refs.test) {
+            expect(yield* Effect.promise(() => git(["show", `${refs.test}:fix.txt`], repo))).toBe("done")
+            expect(yield* Effect.promise(() => git(["show", `${refs.test}:test.txt`], repo))).toBe("done")
+            expect(yield* Effect.promise(() => git(["merge-base", "--is-ancestor", refs.fix!, refs.test!], repo))).toBe("")
+          }
+          const revisionDirectory = prs[0]?.metadata?.workerDirectory
+          if (typeof revisionDirectory === "string") {
+            const branch = yield* Effect.promise(() => git(["branch", "--show-current"], revisionDirectory))
+            yield* Effect.promise(() => git(["worktree", "remove", "--force", revisionDirectory], repo))
+            yield* Effect.promise(() => git(["branch", "-D", branch], repo))
+          }
+          expect((yield* TaskWorkspace.reclaimStale(db, {
+            now: Date.now() + TaskWorkspace.DEFAULT_WORKTREE_RETENTION_MS + 1_000,
+          })).reclaimed).toBe(2)
         }).pipe(Effect.scoped),
       )
       expect(fake.turns).toHaveLength(2)
@@ -304,11 +357,6 @@ describe("V2 event DAG with real git worktrees", () => {
       expect(await fs.exists(fake.turns[0].directory)).toBe(false)
       expect(await fs.exists(fake.turns[1].directory)).toBe(false)
       expect(refs.fix).not.toBe(refs.test)
-      if (refs.fix && refs.test) {
-        expect(await git(["show", `${refs.test}:fix.txt`], repo)).toBe("done")
-        expect(await git(["show", `${refs.test}:test.txt`], repo)).toBe("done")
-        expect(await git(["merge-base", "--is-ancestor", refs.fix, refs.test], repo)).toBe("")
-      }
     } finally {
       await fs.rm(repo, { recursive: true, force: true })
     }

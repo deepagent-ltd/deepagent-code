@@ -1255,9 +1255,20 @@ export const layerWith = (options: LayerOptions) =>
 
           if (!hasUnfinished && options.onEventCompleted) {
             const dependedOn = new Set(p.subtasks.flatMap((subtask) => subtask.dependsOn))
+            const ancestors = new Map<string, Set<string>>()
+            for (const subtask of p.subtasks)
+              ancestors.set(
+                subtask.id,
+                new Set(subtask.dependsOn.flatMap((id) => [id, ...(ancestors.get(id) ?? [])])),
+              )
+            const upstreamWrites = new Set(
+              p.subtasks.filter(requiresWriteIsolation).flatMap((subtask) => [...(ancestors.get(subtask.id) ?? [])]),
+            )
             const turns = p.subtasks.flatMap((subtask) => {
               const completedTurn = completedTurns.get(subtask.id)
-              if (dependedOn.has(subtask.id) || !completedTurn) return []
+              // A read-only review may follow the last write. Preserve that terminal write ref
+              // for PR admission even when the final DAG leaf itself has no continuation ref.
+              if ((dependedOn.has(subtask.id) && (!requiresWriteIsolation(subtask) || upstreamWrites.has(subtask.id))) || !completedTurn) return []
               return [{ task: subtask, ...completedTurn } satisfies CompletedTurn]
             })
             yield* options.onEventCompleted({ event, parentSessionID: parentSessionIDFor(event.id), turns })

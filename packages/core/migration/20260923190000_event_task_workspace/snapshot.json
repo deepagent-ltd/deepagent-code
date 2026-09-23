@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "b9a9186e-efb1-4a4d-ac87-b9003156608e",
+  "id": "5e8e0e83-b531-4c92-9302-04e38bb67b8d",
   "prevIds": [
-    "3e01ad82-b951-4965-b335-8cc9982a5d84"
+    "b9a9186e-efb1-4a4d-ac87-b9003156608e"
   ],
   "ddl": [
     {
@@ -332,6 +332,10 @@
     },
     {
       "name": "proxy_tenant",
+      "entityType": "tables"
+    },
+    {
+      "name": "event_task_workspace",
       "entityType": "tables"
     },
     {
@@ -9168,6 +9172,136 @@
     },
     {
       "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "event_id",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "task_id",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "generation",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "operation_key",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "repository_root",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "base_commit",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "branch",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "directory",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "state",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "continuation_ref",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "error",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_settled",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "type": "text",
       "notNull": false,
       "autoincrement": false,
       "default": null,
@@ -14816,6 +14950,17 @@
     },
     {
       "columns": [
+        "event_id",
+        "task_id",
+        "generation"
+      ],
+      "nameExplicit": false,
+      "name": "event_task_workspace_pk",
+      "entityType": "pks",
+      "table": "event_task_workspace"
+    },
+    {
+      "columns": [
         "session_id",
         "prompt_epoch",
         "ordinal"
@@ -17495,6 +17640,24 @@
       "name": "proxy_tenant_key_hash_idx",
       "entityType": "indexes",
       "table": "proxy_tenant"
+    },
+    {
+      "columns": [
+        {
+          "value": "state",
+          "isExpression": false
+        },
+        {
+          "value": "time_settled",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "event_task_workspace_reclaim_idx",
+      "entityType": "indexes",
+      "table": "event_task_workspace"
     },
     {
       "columns": [
