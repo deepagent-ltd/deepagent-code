@@ -204,18 +204,17 @@ const advisoryResiduePaths = Effect.fn("DiskReclaim.advisoryResiduePaths")(funct
 /** Every filesystem path referenced by a backup manifest under the backups root (the keep-set). */
 const manifestReferencedPaths = Effect.fn("DiskReclaim.manifestReferencedPaths")(function* (backupDir: string) {
   const referenced = new Set<string>()
-  for (const dir of [backupDir, path.join(backupDir, "archive")]) {
-    const names = yield* Effect.promise(() => fs.readdir(dir).catch(() => [] as string[]))
-    for (const name of names.filter((entry) => entry.endsWith(".manifest.json"))) {
-      const manifest = yield* Backup.readManifest(path.join(dir, name)).pipe(
-        Effect.catchCause(() => Effect.succeed(undefined)),
-      )
-      if (manifest === undefined) continue
-      referenced.add(path.resolve(manifest.backup.filePath))
-      referenced.add(path.resolve(manifest.source.filePath))
+  const unreadable: string[] = []
+  for (const file of (yield* Effect.promise(() => walk(backupDir))).filter((item) => item.endsWith(".manifest.json"))) {
+    const manifest = yield* Backup.readManifest(file).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+    if (manifest === undefined) {
+      unreadable.push(file)
+      continue
     }
+    referenced.add(path.resolve(manifest.backup.filePath))
+    referenced.add(path.resolve(manifest.source.filePath))
   }
-  return referenced
+  return { referenced, unreadable }
 })
 
 /** The safety oracle: a candidate is deletable only when nothing references or protects it. */
@@ -224,13 +223,15 @@ const blockedReasonFor = (input: {
   readonly dbPath: string
   readonly backupDir: string
   readonly referenced: ReadonlySet<string>
+  readonly unreadable: readonly string[]
 }): string | undefined => {
-  const { candidate, dbPath, backupDir, referenced } = input
+  const { candidate, dbPath, backupDir, referenced, unreadable } = input
   if (within(candidate, path.join(path.dirname(path.resolve(dbPath)), "restore-incidents")))
     return "restore-incidents is never deleted (design §3.1 ruling)"
   if (path.resolve(candidate) === path.resolve(dbPath)) return "the live authority database is never a candidate"
   if (candidate === `${dbPath}-wal` || candidate === `${dbPath}-shm`) return "WAL/SHM sidecar of the live database"
   if (within(candidate, backupDir)) return "the backups root is governed by retention (M-4), not reclaim"
+  if (unreadable.length > 0) return "backup manifest unreadable; reclaim blocked until it is repaired"
   if (referenced.has(path.resolve(candidate))) return "referenced by a backup manifest"
   return undefined
 }
@@ -246,7 +247,7 @@ const reclaimUnlocked = Effect.fn("DiskReclaim.reclaimUnlocked")(function* (inpu
   const incidentsDir = path.join(path.dirname(dbPath), "restore-incidents")
 
   const fromAdvisory = yield* advisoryResiduePaths(backupDir)
-  const referenced = yield* manifestReferencedPaths(backupDir)
+  const manifests = yield* manifestReferencedPaths(backupDir)
   // Advisory candidates UNION the live re-scan; the filesystem is the truth the checks run on.
   const liveScan = (yield* Effect.promise(() => fs.readdir(path.dirname(dbPath)).catch(() => [] as string[])))
     .map((name) => path.join(path.dirname(dbPath), name))
@@ -266,7 +267,7 @@ const reclaimUnlocked = Effect.fn("DiskReclaim.reclaimUnlocked")(function* (inpu
     Effect.gen(function* () {
       const exists = yield* Effect.promise(() => fs.stat(candidate).then(() => true).catch(() => false))
       if (!exists) return undefined
-      const blockedReason = blockedReasonFor({ candidate, dbPath, backupDir, referenced })
+      const blockedReason = blockedReasonFor({ candidate, dbPath, backupDir, ...manifests })
       return {
         path: candidate,
         sizeBytes: yield* Effect.promise(() => sizeOf(candidate)),

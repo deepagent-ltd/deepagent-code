@@ -124,7 +124,7 @@ describe("DiskReclaim (W-02 M-5)", () => {
     )
   })
 
-  test("safety oracle: a file referenced by a backup manifest is blocked even when it looks like residue", async () => {
+  test("safety oracle: a nested backup manifest protects its source from reclaim", async () => {
     await using tmp = await tmpdir()
     const filename = path.join(tmp.path, "store", "deepagent-code.db")
     await fs.mkdir(path.dirname(filename), { recursive: true })
@@ -133,11 +133,12 @@ describe("DiskReclaim (W-02 M-5)", () => {
     }).pipe(Effect.provide(Database.layerFromPath(filename)), Effect.ignore))
     const backupDir = path.join(tmp.path, "store", "backups")
     await fs.mkdir(backupDir, { recursive: true })
+    await fs.mkdir(path.join(backupDir, "old", "nested"), { recursive: true })
     // A .bak-looking file that a backup manifest legitimately references as its source.
     const referenced = path.join(tmp.path, "store", "manual.bak")
     await Bun.write(referenced, "referenced by a manifest")
     await Bun.write(
-      path.join(backupDir, "b.db.manifest.json"),
+      path.join(backupDir, "old", "nested", "b.db.manifest.json"),
       JSON.stringify({
         version: 1,
         backup: { fileName: "b.db", filePath: path.join(backupDir, "b.db"), sizeBytes: 1, sha256: "s", createdAt: 0 },
@@ -159,6 +160,29 @@ describe("DiskReclaim (W-02 M-5)", () => {
         expect(report.reclaimedBytes).toBe(0)
       }).pipe(Effect.provide(Database.layerFromPath(filename)), Effect.scoped),
     )
+  })
+
+  test("an unreadable nested manifest closes reclaim until the keep-set can be checked", async () => {
+    await using tmp = await tmpdir()
+    const filename = path.join(tmp.path, "store", "deepagent-code.db")
+    const backupDir = path.join(tmp.path, "store", "backups")
+    await fs.mkdir(path.join(backupDir, "old"), { recursive: true })
+    await Bun.write(path.join(backupDir, "old", "broken.manifest.json"), "not-json")
+    const residue = path.join(tmp.path, "store", "manual.bak")
+    await Bun.write(residue, "kept")
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        const report = yield* DiskReclaim.reclaim({ db, dbPath: filename, backupDir, dataRoot: tmp.path, confirm: true })
+        expect(report.candidates.find((candidate) => candidate.path === residue)).toMatchObject({
+          safe: false,
+          deleted: false,
+          blockedReason: "backup manifest unreadable; reclaim blocked until it is repaired",
+        })
+      }).pipe(Effect.provide(Database.layerFromPath(filename)), Effect.scoped),
+    )
+    expect(await exists(residue)).toBeTrue()
   })
 
   test("advisory input: M-2 disk advisory residue candidates feed the reclaim list", async () => {
