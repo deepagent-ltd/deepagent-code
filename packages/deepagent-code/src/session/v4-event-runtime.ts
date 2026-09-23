@@ -255,7 +255,7 @@ const runtimeLayer = Layer.unwrap(
       execution,
       fileLock,
       dagCoordination: flags.v4DagCoordination,
-      runner: makeEventTurnRunnerV2({ sessions: v2Session, instanceStore }),
+      runner: makeEventTurnRunnerV2({ sessions: v2Session, instanceStore, db }),
       // C5-12 — the production seam: when the V2 admission flag is ON the runtime uses this bridge.
       eventV2Admission,
       onEventCompleted: makeV4PRCollaboration({ sessions, instanceStore, git, queue, bus, approvalQueue }),

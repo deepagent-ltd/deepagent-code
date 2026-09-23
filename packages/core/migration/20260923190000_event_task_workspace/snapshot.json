@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "813f634b-496a-4fb1-b513-3ce696c0cfd0",
+  "id": "6797979b-83e3-5b9f-a1fb-a4bc4ebac885",
   "prevIds": [
-    "bfbf3ed9-9e5a-4326-bbba-a12512ac23d1"
+    "813f634b-496a-4fb1-b513-3ce696c0cfd0"
   ],
   "ddl": [
     {
@@ -19174,6 +19174,169 @@
       "name": "released_knowledge_snapshot_actor_type_check",
       "entityType": "checks",
       "table": "released_knowledge_snapshot"
+    },
+    {
+      "name": "event_task_workspace",
+      "entityType": "tables"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "event_id",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "task_id",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "generation",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "operation_key",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "repository_root",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "base_commit",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "branch",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "directory",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "state",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "continuation_ref",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "error",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_settled",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "columns": [
+        "event_id",
+        "task_id",
+        "generation"
+      ],
+      "nameExplicit": false,
+      "name": "event_task_workspace_pk",
+      "entityType": "pks",
+      "table": "event_task_workspace"
+    },
+    {
+      "columns": [
+        {
+          "value": "state",
+          "isExpression": false
+        },
+        {
+          "value": "time_settled",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "event_task_workspace_reclaim_idx",
+      "entityType": "indexes",
+      "table": "event_task_workspace"
     }
   ],
   "renames": []

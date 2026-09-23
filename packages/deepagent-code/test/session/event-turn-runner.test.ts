@@ -1,8 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import path from "node:path"
-import { DateTime, Effect, Fiber } from "effect"
+import fs from "node:fs/promises"
+import os from "node:os"
+import { Context, DateTime, Effect, Fiber, Layer } from "effect"
+import { Database } from "@deepagent-code/core/database/database"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { SessionMessage } from "@deepagent-code/core/session/message"
+import { EventTaskWorkspaceTable } from "@deepagent-code/core/session/sql"
+import { TaskWorkspace } from "@deepagent-code/core/session/task-workspace"
 import type { InstanceStore } from "@/project/instance-store"
 import { makeEventTurnRunnerV2 } from "../../src/session/event-turn-runner"
 import type { SubagentTurnInput } from "../../src/session/goal-loop-wiring"
@@ -94,6 +99,46 @@ const fakeServices = (options: { stall?: boolean; afterAdmission?: () => void } 
 }
 
 describe("V2 event turn runner", () => {
+  test("durable worktree replay after admit-only interruption never starts provider work", async () => {
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), "event-turn-durable-crash-"))
+    try {
+      const git = async (args: string[]) => {
+        const proc = Bun.spawn(["git", ...args], { cwd: repo, stdout: "pipe", stderr: "pipe" })
+        if (await proc.exited !== 0) throw new Error(`git ${args.join(" ")} failed`)
+      }
+      await git(["init", "-b", "main"])
+      await git(["config", "user.email", "test@test.dev"])
+      await git(["config", "user.name", "test"])
+      await fs.writeFile(path.join(repo, "seed.txt"), "seed\n")
+      await git(["add", "-A"])
+      await git(["commit", "--no-verify", "-m", "seed"])
+      let admitted: (() => void) | undefined
+      const admission = new Promise<void>((resolve) => { admitted = resolve })
+      const fake = fakeServices({ afterAdmission: () => admitted?.() })
+      await Effect.runPromise(Effect.gen(function* () {
+        const context = yield* Layer.build(Database.layerFromPath(":memory:"))
+        const db = Context.get(context, Database.Service).db
+        const run = makeEventTurnRunnerV2({ sessions: fake.v2Session, instanceStore: fake.instanceStore, db })
+        const attempt = input({ directory: repo, requiresWriteIsolation: true })
+        const fiber = Effect.runFork(run(attempt))
+        yield* Effect.promise(() => admission)
+        yield* Fiber.interrupt(fiber)
+        const receipts = yield* db.select().from(EventTaskWorkspaceTable).all()
+        expect(receipts).toHaveLength(1)
+        expect(receipts[0]?.state).toBe("retained")
+        const replay = yield* run(attempt)
+        expect(replay).toMatchObject({ ok: false, reason: "runner_failed" })
+        expect(fake.prompts).toHaveLength(1)
+        expect(fake.drains).toEqual([])
+        expect((yield* TaskWorkspace.reclaimStale(db, {
+          now: Date.now() + TaskWorkspace.DEFAULT_WORKTREE_RETENTION_MS + 1_000,
+        })).reclaimed).toBe(1)
+      }).pipe(Effect.scoped))
+    } finally {
+      await fs.rm(repo, { recursive: true, force: true })
+    }
+  })
+
   test("a crash after durable admission but before join leaves provider calls at zero", async () => {
     let admitted: (() => void) | undefined
     const admission = new Promise<void>((resolve) => {

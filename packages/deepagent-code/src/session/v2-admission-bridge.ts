@@ -64,6 +64,7 @@ import type { MultiAgentRuntime } from "./multi-agent-runtime"
 export const V4_EVENT_REGISTRY: EventRegistryIface = EventRegistry.createEventRegistry([
   {
     eventType: "ci.failure",
+    execution: "dag",
     kind: "observation",
     schemaId: "ci.failure.schema",
     schemaVersion: "1",
@@ -109,6 +110,7 @@ export const V4_EVENT_REGISTRY: EventRegistryIface = EventRegistry.createEventRe
   },
   {
     eventType: "pr.comment",
+    execution: "dag",
     kind: "command",
     schemaId: "pr.comment.schema",
     schemaVersion: "1",
@@ -124,6 +126,7 @@ export const V4_EVENT_REGISTRY: EventRegistryIface = EventRegistry.createEventRe
   },
   {
     eventType: "monitor.alert",
+    execution: "dag",
     kind: "observation",
     schemaId: "monitor.alert.schema",
     schemaVersion: "1",

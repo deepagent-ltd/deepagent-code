@@ -699,6 +699,30 @@ export const TaskRunTable = sqliteTable(
   ],
 )
 
+/** Durable event-subtask receipt. EventV2 aggregates may be pruned before this worktree's grace expires. */
+export const EventTaskWorkspaceTable = sqliteTable(
+  "event_task_workspace",
+  {
+    event_id: text().notNull(),
+    task_id: text().notNull(),
+    generation: integer().notNull(),
+    operation_key: text().notNull(),
+    repository_root: text().notNull(),
+    base_commit: text().notNull(),
+    branch: text().notNull(),
+    directory: text().notNull(),
+    state: text().$type<"pending" | "ready" | "failed" | "retained" | "reclaimed">().notNull(),
+    continuation_ref: text(),
+    error: text(),
+    time_created: integer().notNull(),
+    time_settled: integer(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.event_id, table.task_id, table.generation] }),
+    index("event_task_workspace_reclaim_idx").on(table.state, table.time_settled),
+  ],
+)
+
 export const TaskStructuredOutputEvidenceTable = sqliteTable(
   "task_structured_output_evidence",
   {

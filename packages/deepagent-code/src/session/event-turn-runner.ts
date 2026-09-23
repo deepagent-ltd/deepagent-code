@@ -4,10 +4,12 @@ import path from "node:path"
 import { Duration, Effect, Exit, Option } from "effect"
 import { AgentV2 } from "@deepagent-code/core/agent"
 import { contentDigest } from "@deepagent-code/core/contract/digest"
+import type { Database } from "@deepagent-code/core/database/database"
 import { Location } from "@deepagent-code/core/location"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { SessionMessage } from "@deepagent-code/core/session/message"
+import { TaskWorkspace } from "@deepagent-code/core/session/task-workspace"
 import { Prompt } from "@deepagent-code/core/session/prompt"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 import { InstanceRef, WorkspaceRef } from "@/effect/instance-ref"
@@ -18,6 +20,8 @@ import type { SubagentTurnInput, SubagentTurnResult, SubagentTurnRunner } from "
 export interface Dependencies {
   readonly sessions: SessionV2.Interface
   readonly instanceStore: InstanceStore.Interface
+  /** Production event DAGs require this durable receipt store; absent only in injected runner unit tests. */
+  readonly db?: Database.Interface["db"]
   readonly createWorktree?: typeof createAgentWorktree
   readonly cleanupWorktree?: typeof cleanupAgentWorktree
 }
@@ -109,9 +113,15 @@ export const makeEventTurnRunnerV2 =
             }),
           )
       const existingChild = yield* deps.sessions.get(ids.sessionID).pipe(Effect.option)
-      if (Option.isSome(existingChild) && input.requiresWriteIsolation) return failed("runner_failed")
-
-      const worktree = input.requiresWriteIsolation
+      if (Option.isSome(existingChild) && input.requiresWriteIsolation && !deps.db) return failed("runner_failed")
+      const durable = input.requiresWriteIsolation && deps.db
+        ? yield* TaskWorkspace.prepareEvent(deps.db, {
+            eventID: input.eventID!, taskID: input.taskID!, generation: input.generation!,
+            parentDirectory: directory,
+            ...(input.baseRef ? { baseRef: input.baseRef } : {}),
+          }).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+        : undefined
+      const worktree = input.requiresWriteIsolation && !deps.db
         ? yield* Effect.tryPromise({
             try: () =>
               (deps.createWorktree ?? createAgentWorktree)({
@@ -122,14 +132,21 @@ export const makeEventTurnRunnerV2 =
             catch: () => null,
           })
         : undefined
-      if (input.requiresWriteIsolation && !worktree) return failed("isolation_unavailable")
-      const childDirectory = worktree?.directory ?? directory
+      if (input.requiresWriteIsolation && !durable && !worktree) return failed("isolation_unavailable")
+      if (durable?.continuationRef && Option.isNone(existingChild)) return failed("runner_failed")
+      if (durable && deps.db) {
+        const admissible = yield* TaskWorkspace.requireEventAdmissible(deps.db, {
+          eventID: input.eventID!, taskID: input.taskID!, generation: input.generation!,
+        }).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
+        if (!admissible) return failed("isolation_unavailable")
+      }
+      const childDirectory = durable?.directory ?? worktree?.directory ?? directory
       const childLocation = Location.Ref.make({
         directory: AbsolutePath.make(childDirectory),
         ...(workspaceID ? { workspaceID } : {}),
       })
       const turn = Effect.gen(function* () {
-        const childContext = worktree ? yield* deps.instanceStore.load({ directory: childDirectory }) : parentContext
+        const childContext = durable || worktree ? yield* deps.instanceStore.load({ directory: childDirectory }) : parentContext
         const withChild = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
           effect.pipe(
             Effect.provideService(InstanceRef, childContext),
@@ -160,6 +177,9 @@ export const makeEventTurnRunnerV2 =
         if (child.parentID !== parent.id || child.location.directory !== childLocation.directory)
           return failed("runner_failed")
         const before = yield* withChild(deps.sessions.messages({ sessionID: child.id, order: "asc" }))
+        // A crashed admit-only turn is durable but must never restart provider work implicitly.
+        if (before.some((message) => message.id === ids.messageID) && !completedTurn(before, ids.messageID, child.id))
+          return failed("runner_failed")
         yield* withChild(
           deps.sessions.prompt({
             id: ids.messageID,
@@ -182,14 +202,18 @@ export const makeEventTurnRunnerV2 =
         )
       })
       const timed = turn.pipe(Effect.timeoutOption(Duration.millis(input.maxTurnDurationMs ?? 30 * 60_000)))
-      if (!worktree) return Option.getOrElse(yield* timed, () => failed("turn_timeout"))
+      if (!durable && !worktree) return Option.getOrElse(yield* timed, () => failed("turn_timeout"))
       return yield* Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           const exit = yield* restore(timed).pipe(Effect.exit)
-          const cleanup = yield* Effect.tryPromise({
-            try: () => (deps.cleanupWorktree ?? cleanupAgentWorktree)(worktree),
-            catch: () => null,
-          })
+          const cleanup = durable && deps.db
+            ? yield* TaskWorkspace.settleEvent(deps.db, {
+                eventID: input.eventID!, taskID: input.taskID!, generation: input.generation!,
+              }).pipe(Effect.catchCause(() => Effect.succeed(null)))
+            : yield* Effect.tryPromise({
+                try: () => (deps.cleanupWorktree ?? cleanupAgentWorktree)(worktree!),
+                catch: () => null,
+              })
           if (!cleanup) return failed("isolation_preservation_failed")
           if (Exit.isFailure(exit)) return yield* Effect.failCause(exit.cause)
           const result = Option.getOrElse(exit.value, () => failed("turn_timeout"))
