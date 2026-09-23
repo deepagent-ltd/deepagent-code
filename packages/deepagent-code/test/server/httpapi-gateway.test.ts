@@ -446,15 +446,37 @@ describe("gateway release gate", () => {
     Flag.DEEPAGENT_CODE_DB = join(directory, "proxy.sqlite")
     const openHandlers: Array<{ dispose: () => Promise<void> }> = []
     const streamGate = Promise.withResolvers<void>()
+    const offeredWrite: boolean[] = []
+    const deniedToolResults: string[] = []
     const upstream = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
       async fetch(request) {
-        const payload = await request.json() as { messages?: { role: string; content: unknown }[]; input?: unknown[] }
+        const payload = await request.json() as {
+          messages?: { role: string; content: unknown }[]
+          input?: unknown[]
+          tools?: { function?: { name?: string } }[]
+        }
         const lastUser = payload.messages?.filter((message) => message.role === "user").at(-1)
+        const deniedToolRequest = JSON.stringify(lastUser ?? payload.input?.at(-1)).includes("Denied tool")
+        const toolResult = payload.messages?.findLast((message) => message.role === "tool")
+        if (deniedToolRequest && !toolResult) {
+          offeredWrite.push(payload.tools?.some((tool) => tool.function?.name === "write") ?? false)
+          return new Response([
+            'data: {"choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}',
+            'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_proxy_denied_write","type":"function","function":{"name":"write","arguments":""}}]},"finish_reason":null}]}',
+            `data: ${JSON.stringify({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0,
+              function: { arguments: JSON.stringify({ path: "blocked.txt", content: "must not exist" }) } }]
+            }, finish_reason: null }] })}`,
+            'data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":11,"completion_tokens":4,"total_tokens":15}}',
+            "data: [DONE]", "",
+          ].join("\n\n"), { headers: { "content-type": "text/event-stream" } })
+        }
+        if (toolResult) deniedToolResults.push(JSON.stringify(toolResult))
         if (JSON.stringify(lastUser ?? payload.input?.at(-1)).includes("Reject"))
           return Response.json({ error: { message: "provider rejected test-key", type: "authentication_error" } }, { status: 401 })
-        const answer = JSON.stringify(lastUser ?? payload.input?.at(-1)).includes("Second question") ? "second durable answer" : "first durable answer"
+        const answer = toolResult ? "denied side effect confirmed" :
+          JSON.stringify(lastUser ?? payload.input?.at(-1)).includes("Second question") ? "second durable answer" : "first durable answer"
         if (JSON.stringify(lastUser ?? payload.input?.at(-1)).includes("Stream question")) {
           const encode = new TextEncoder()
           return new Response(new ReadableStream({
@@ -590,9 +612,43 @@ describe("gateway release gate", () => {
       } finally {
         policyReader.close()
       }
+      const changedPolicy = await handler(new Request("http://localhost/proxy/admin/tenants/tenant-context", {
+        method: "PATCH", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ permission_policy: [
+          { action: "*", resource: "*", effect: "allow" },
+          { action: "edit", resource: "blocked.txt", effect: "deny" },
+        ] }),
+      }), HttpApiApp.context)
+      expect(changedPolicy.status).toBe(200)
+      const deniedTool = await handler(new Request("http://localhost/v1/chat/completions", {
+        method: "POST", headers: { authorization: "Bearer sk-context", "content-type": "application/json",
+          "x-request-id": "context-denied-tool", "x-deepagent-session": "policy-lane" },
+        body: JSON.stringify({ model: "test-model", messages: [{ role: "user", content: "Denied tool" }] }),
+      }), HttpApiApp.context)
+      expect(deniedTool.status).toBe(200)
+      expect((await deniedTool.json()).choices[0].message.content).toBe("denied side effect confirmed")
+      expect(offeredWrite).toEqual([true])
+      expect(deniedToolResults).toHaveLength(1)
+      expect(deniedToolResults[0]).toContain("prevents you from using this specific tool call")
+      expect(deniedToolResults[0]).toContain("blocked.txt")
+      expect(await Bun.file(join(directory, "blocked.txt")).exists()).toBe(false)
+      const toolReader = new sqlite.Database(Flag.DEEPAGENT_CODE_DB, { readonly: true })
+      try {
+        const lane = toolReader.query("SELECT lane_session_id FROM proxy_request_ledger WHERE request_id = 'tenant-context:context-denied-tool'")
+          .get() as { lane_session_id: string }
+        const receipts = toolReader.query("SELECT prepared_turn FROM session_v2_provider_turn_receipt WHERE session_id = ? ORDER BY provider_turn_seq")
+          .all(lane.lane_session_id) as { prepared_turn: string }[]
+        expect((JSON.parse(receipts[0]!.prepared_turn).tool_final_offered_ids as string[])).toContain("write")
+        const effects = toolReader.query("SELECT tool_name, state, error_code FROM session_v2_tool_effect WHERE session_id = ?")
+          .all(lane.lane_session_id)
+        // The refusal is a settled tool result (model-visible), not a failed provider turn.
+        expect(effects).toEqual([{ tool_name: "write", state: "settled", error_code: null }])
+      } finally {
+        toolReader.close()
+      }
       const exported = await handler(new Request("http://localhost/proxy/admin/ledger?tenant=tenant-context"), HttpApiApp.context)
       expect(exported.status).toBe(200)
-      expect((await exported.json()).data).toHaveLength(4)
+      expect((await exported.json()).data).toHaveLength(5)
       const audited = await handler(new Request("http://localhost/proxy/admin/audit?tenant=tenant-context"), HttpApiApp.context)
       expect(audited.status).toBe(200)
       const auditEvents = (await audited.json()).data as { type: string; data: { tenantID: string } }[]
@@ -602,7 +658,7 @@ describe("gateway release gate", () => {
       ]))
       const lanes = await handler(new Request("http://localhost/proxy/admin/lanes?tenant=tenant-context"), HttpApiApp.context)
       expect(lanes.status).toBe(200)
-      expect((await lanes.json()).data.map((lane: { hint: string }) => lane.hint).sort()).toEqual(["default", "default"])
+      expect((await lanes.json()).data.map((lane: { hint: string }) => lane.hint).sort()).toEqual(["default", "default", "policy-lane"])
       const failed = await handler(new Request("http://localhost/v1/chat/completions", {
         method: "POST", headers: { authorization: "Bearer sk-context", "content-type": "application/json",
           "x-request-id": "context-5", "x-deepagent-session": "failure-lane" },
