@@ -1170,6 +1170,8 @@ export const routeManifest = [
   {
     id: "compaction-retention-suite",
     paths: [
+      "packages/core/src/session/long-context.sql.ts",
+      "packages/core/src/session/long-context.ts",
       "packages/deepagent-code/script/live-llm/compaction-retention.ts",
       "packages/deepagent-code/src/session/compaction.ts",
       "packages/deepagent-code/src/session/compaction-sql.ts",
@@ -1186,6 +1188,8 @@ export const routeManifest = [
   {
     id: "context-authority-suite",
     paths: [
+      "packages/core/src/session/long-context.sql.ts",
+      "packages/core/src/session/long-context.ts",
       "packages/core/src/database/migration/20260809120000_session_history_authority.ts",
       "packages/core/src/database/migration/20260810100000_prompt_authority_receipt.ts",
       "packages/core/src/database/migration/20260810110000_fork_side_effect_receipt.ts",
@@ -1226,6 +1230,14 @@ export const routeManifest = [
     ],
     checks: ["live-llm-routes", "session-continuation"],
     runs: [contextAuthority],
+  },
+  {
+    id: "session-share-contract",
+    paths: [
+      "packages/deepagent-code/src/session/bundle-share.ts",
+      "packages/deepagent-code/src/session/bundle.ts",
+    ],
+    checks: ["session-v2"],
   },
   {
     id: "code-intel-context-tools-suite",

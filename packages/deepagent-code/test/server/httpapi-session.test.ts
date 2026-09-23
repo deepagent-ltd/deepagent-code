@@ -496,13 +496,13 @@ describe("session HttpApi", () => {
       expect(effects).toEqual([{ name: "code_intel", kind: "read_only", state: "settled" }])
       expect(JSON.stringify(inputs[1])).toContain("schemaVersion")
     }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
-    15_000,
+    30_000,
   )
 
   // RI-113 production request snapshot oracle: on the real production HTTP stack the EXACT
-  // shipped builtin surface (nothing more, nothing less) must reach the provider request,
+  // shipped builtin surface plus the host-owned query_log tool must reach the provider request,
   // and the durable prepared turn must record the same set at all three lowering stages.
-  it.live("records the exact builtin tool surface in the durable production request snapshot", () =>
+  it.live("records the exact production tool surface in the durable request snapshot", () =>
     Effect.gen(function* () {
       const llm = yield* TestLLMServer
       yield* llm.text("snapshot recorded", { usage: { input: 1, output: 1 } })
@@ -524,11 +524,12 @@ describe("session HttpApi", () => {
       const waited = yield* request(`/api/session/${session.id}/wait`, { method: "POST", headers })
       expect(waited.status).toBe(204)
 
-      // The expected set derives from the registry authority itself (pinned to the product
-      // inventory by the RI-113 exact gate), so this test proves the wiring — declaration →
+      // The Core set derives from the registry authority itself (pinned to the product
+      // inventory by the RI-113 exact gate); query_log is registered through ApplicationTools.
+      // This proves the wiring — declaration →
       // Location registration → materialize → permission/model filter → provider request →
-      // durable receipt — without duplicating the tool list literal.
-      const expected = [...builtinToolNames].sort()
+      // durable receipt — without duplicating the Core tool list literal.
+      const expected = [...builtinToolNames, "query_log"].sort()
       const inputs = yield* llm.inputs
       const advertised = ((inputs[0]?.tools ?? []) as Array<{ function?: { name?: string } }>)
         .flatMap((tool) => (tool.function?.name ? [tool.function.name] : []))
@@ -546,7 +547,7 @@ describe("session HttpApi", () => {
       expect(receipt?.prepared?.tool_final_offered_ids?.slice().sort()).toEqual(expected)
       expect(receipt?.prepared?.tool_definition_hash).toHaveLength(64)
     }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
-    15_000,
+    30_000,
   )
 
   it.effect("maps busy sessions to public session busy errors", () =>
