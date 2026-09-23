@@ -508,8 +508,8 @@ const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
         ["packages/deepagent-code/src/server/routes/instance/httpapi/lifecycle.ts:disposeAfterResponse", ["module-flag", "process-global", "process-lifetime", "process-exit", "coordination-only", "process-global", "safe_bounded"]],
         ["packages/deepagent-code/src/server/routes/instance/httpapi/websocket-tracker.ts:closure@21:22.sockets", ["tracker-layer-instance", "per-socket", "active-websockets", "socket-close-cleanup", "coordination-only", "instance-scoped", "safe_bounded"]],
         // permission/question pending queues: resolved or interrupted within session scope.
-        ["packages/deepagent-code/src/permission/index.ts:closure@134:141.withPermissionOwner", ["Permission-layer-instance", "per-layer", "layer-lifetime", "layer-finalizer", "coordination-only", "instance-scoped", "safe_scoped"]],
-        ["packages/deepagent-code/src/permission/index.ts:closure@134:188.allPending", ["Permission-layer-instance", "per-ask", "active-asks", "resolve-or-interrupt-cleanup", "coordination-only", "instance-scoped", "safe_bounded"]],
+        ["packages/deepagent-code/src/permission/index.ts:closure@136:143.withPermissionOwner", ["Permission-layer-instance", "per-layer", "layer-lifetime", "layer-finalizer", "coordination-only", "instance-scoped", "safe_scoped"]],
+        ["packages/deepagent-code/src/permission/index.ts:closure@136:190.allPending", ["Permission-layer-instance", "per-ask", "active-asks", "resolve-or-interrupt-cleanup", "coordination-only", "instance-scoped", "safe_bounded"]],
         ["packages/deepagent-code/src/question/index.ts:closure@141:143.allPending", ["Question-layer-instance", "per-ask", "active-asks", "resolve-or-interrupt-cleanup", "coordination-only", "instance-scoped", "safe_bounded"]],
         // instance store / workspace / artifact-service / location-index: per-instance caches with
         // dispose-driven eviction (the instance registry owns the lifetime).
@@ -545,7 +545,7 @@ const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
         ["packages/deepagent-code/src/cli/cmd/run/otel.ts:ready", ["otel-bootstrap", "process-global", "process-lifetime", "process-exit", "coordination-only", "process-global", "safe_bounded"]],
         ["packages/deepagent-code/src/cli/cmd/run/otel.ts:runtime", ["otel-bootstrap", "process-global", "process-lifetime", "process-exit", "coordination-only", "process-global", "safe_bounded"]],
         ["packages/deepagent-code/src/cli/cmd/run/runtime.boot.ts:runtime", ["run-invocation", "per-run-invocation", "run-lifetime", "run-exit", "coordination-only", "run-scoped", "safe_scoped"]],
-        ["packages/deepagent-code/src/cli/cmd/run/runtime.ts:closure@911:912.sdk", ["run-invocation", "per-run-invocation", "run-lifetime", "run-exit", "coordination-only", "run-scoped", "safe_scoped"]],
+        ["packages/deepagent-code/src/cli/cmd/run/runtime.ts:closure@914:915.sdk", ["run-invocation", "per-run-invocation", "run-lifetime", "run-exit", "coordination-only", "run-scoped", "safe_scoped"]],
         ["packages/deepagent-code/src/cli/cmd/run/scrollback.surface.ts:RunScrollbackStream.pendingThemes@96", ["render-surface-instance", "per-render", "surface-lifetime", "surface-dispose", "coordination-only", "run-scoped", "safe_bounded"]],
         ["packages/deepagent-code/src/cli/cmd/run/scrollback.surface.ts:nextId", ["module-counter", "process-global", "process-lifetime", "process-exit", "coordination-only", "process-global", "safe_bounded"]],
         ["packages/deepagent-code/src/cli/cmd/run/session-data.ts:money", ["lazy-memoization", "source-module", "first-use-initialized", "not-applicable", "non-authority", "package-static", "safe_static"]],
@@ -581,11 +581,7 @@ const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
   ...Object.fromEntries(
     (
       [
-        // agent-gateway: the durable knowledge store is created inside the workspace-home build,
-        // backed by the on-disk project store (durable by design, owner = storage runtime); the
-        // storage closure and its seed are per createStorageRuntime invocation.
-        ["packages/core/src/agent-gateway.ts:closure@1108:1116.durable", ["DeepAgent-workspace-build", "per-build-invocation", "workspace-lifetime", "owner-scope-finalizer", "durable-by-design", "instance-scoped", "safe_scoped"]],
-        ["packages/core/src/agent-gateway.ts:closure@3563:3565.storage", ["DeepAgent-runtime-instance", "per-runtime-instance", "runtime-lifetime", "dispose-finalizer", "durable-by-design", "instance-scoped", "safe_scoped"]],
+        // The knowledge seed is constructed once per storage-runtime invocation.
         ["packages/core/src/agent-gateway.ts:createStorageRuntime@523:535.seed", ["createStorageRuntime-invocation", "single-call", "call-stack", "return", "ephemeral-runtime", "instance-scoped", "safe_scoped"]],
         // cross-spawn-spawner: in-flight child process registries drained by wait semantics.
         ["packages/core/src/cross-spawn-spawner.ts:closure@168:180.ins", ["spawner-layer-instance", "per-layer", "layer-lifetime", "layer-finalizer", "coordination-only", "instance-scoped", "safe_scoped"]],
@@ -600,11 +596,6 @@ const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
         ["packages/core/src/deepagent/hooks.ts:HookPolicy.handlers@20", ["HookPolicy-instance", "per-policy", "policy-lifetime", "policy-owner", "coordination-only", "instance-scoped", "safe_scoped"]],
         ["packages/core/src/deepagent/rate-limiter.ts:Service.buckets@24", ["RateLimiter-instance", "per-limiter", "limiter-lifetime", "limiter-owner", "coordination-only", "bounded-max-live-buckets", "safe_bounded"]],
         ["packages/core/src/deepagent/workspace-concurrency.ts:closure@53:57.inFlight", ["workspace-concurrency-instance", "per-instance", "instance-lifetime", "instance-owner", "coordination-only", "instance-scoped", "safe_scoped"]],
-        // EventV2 service registries: the single event authority; registries die with the layer.
-        ["packages/core/src/event.ts:closure@592:594.synchronized", ["EventV2-layer-instance", "per-layer", "layer-lifetime", "layer-finalizer", "coordination-only", "instance-scoped", "safe_scoped"]],
-        ["packages/core/src/event.ts:closure@592:595.typed", ["EventV2-layer-instance", "per-layer", "layer-lifetime", "layer-finalizer", "coordination-only", "instance-scoped", "safe_scoped"]],
-        ["packages/core/src/event.ts:closure@592:598.projectors", ["EventV2-layer-instance", "per-layer", "layer-lifetime", "layer-finalizer", "coordination-only", "instance-scoped", "safe_scoped"]],
-        ["packages/core/src/event.ts:closure@592:599.snapshotCodecs", ["EventV2-layer-instance", "per-layer", "layer-lifetime", "layer-finalizer", "coordination-only", "instance-scoped", "safe_scoped"]],
         ["packages/core/src/file-lock.ts:closure@44:46.locks", ["FileLock-layer-instance", "per-layer", "layer-lifetime", "layer-finalizer", "coordination-only", "instance-scoped", "safe_scoped"]],
         ["packages/core/src/file-lock.ts:closure@44:48.byId", ["FileLock-layer-instance", "per-layer", "layer-lifetime", "layer-finalizer", "coordination-only", "instance-scoped", "safe_scoped"]],
         ["packages/core/src/flag/runtime-features.ts:createRuntimeFeatureRegistry@112:116.features", ["createRuntimeFeatureRegistry-invocation", "per-registry", "registry-lifetime", "registry-owner", "coordination-only", "instance-scoped", "safe_scoped"]],
@@ -615,8 +606,6 @@ const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
         ["packages/core/src/question.ts:closure@131:133.pending", ["QuestionV2-layer-instance", "per-layer", "layer-lifetime", "layer-finalizer", "coordination-only", "session-scoped", "safe_scoped"]],
         ["packages/core/src/session/execution/local.ts:closure@18:26.ownedClaims", ["SessionExecutionLocal-layer-instance", "per-layer", "layer-lifetime", "layer-finalizer", "coordination-only", "instance-scoped", "safe_scoped"]],
         ["packages/core/src/session/run-coordinator.ts:closure@81:82.active", ["SessionRunCoordinator-instance", "per-coordinator", "scope-lifetime", "addFinalizer-clear", "coordination-only", "instance-scoped", "safe_scoped"]],
-        ["packages/core/src/session/runner/llm.ts:closure@500:867.withPublication", ["SessionRunnerLLM-layer-instance", "per-layer", "layer-lifetime", "layer-finalizer", "coordination-only", "per-turn", "safe_scoped"]],
-        ["packages/core/src/session/runner/llm.ts:closure@500:964.planResultMetadata", ["SessionRunnerLLM-layer-instance", "per-layer", "layer-lifetime", "layer-finalizer", "coordination-only", "per-turn", "safe_scoped"]],
         ["packages/core/src/session/runner/publish-llm-event.ts:createLLMEventPublisher@73:74.tools", ["createLLMEventPublisher-invocation", "per-publisher", "publisher-lifetime", "publisher-owner", "coordination-only", "instance-scoped", "safe_scoped"]],
         ["packages/core/src/session/runner/publish-llm-event.ts:fragments@105:109.chunks", ["fragments-invocation", "single-call", "call-stack", "return", "ephemeral-runtime", "instance-scoped", "safe_scoped"]],
         ["packages/core/src/session/runner/recovery.ts:closure@1465:1466.store", ["recovery-module-instance", "per-instance", "instance-lifetime", "instance-owner", "coordination-only", "instance-scoped", "safe_scoped"]],
@@ -1839,18 +1828,16 @@ const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
     reachability: "session-scoped",
     verdict: "safe_bounded",
   },
-  // event.ts EventV2 layer registries (re-pin of closure@592 after a one-line shift): typed is
-  // created per definition key in getOrCreate (event.ts:636-644); projectors/snapshotCodecs are
-  // registration-time registries with hard caps (64 per key at :2881; one codec per
-  // codec@schemaVersion key with duplicate-registration throw at :2889-2891); synchronized holds
-  // per-aggregate subscription pubsub sets removed by acquireRelease when a set empties
-  // (:2794-2806). The layer finalizer (:646-656) shuts down every pubsub.
+  // EventV2 registries belong to one layer build. Subscriptions delete on release and their
+  // pubsubs shut down in the layer finalizer; projector/codec registrations remain reachable
+  // only through that layer and become collectible when its scope closes. Registration is capped
+  // at 64 projectors per definition and one codec per codec@schemaVersion key.
   ...Object.fromEntries(
     ([
-      ["packages/core/src/event.ts:closure@593:595.synchronized", ["EventV2.layer-instance", "per-aggregate-subscription", "active-aggregate-subscriptions", "acquireRelease-delete-plus-layer-finalizer", "coordination-only", "instance-scoped", "safe_scoped"]],
-      ["packages/core/src/event.ts:closure@593:596.typed", ["EventV2.layer-instance", "per-definition-key", "source-definition-keyspace", "layer-finalizer-pubsub-shutdown", "coordination-only", "instance-scoped", "safe_scoped"]],
-      ["packages/core/src/event.ts:closure@593:599.projectors", ["EventV2.layer-instance", "per-definition-key", "max-64-projectors-per-key", "layer-finalizer", "coordination-only", "instance-scoped", "safe_scoped"]],
-      ["packages/core/src/event.ts:closure@593:600.snapshotCodecs", ["EventV2.layer-instance", "per-codec-schemaVersion-key", "one-codec-per-key", "layer-finalizer", "codec-registry-only", "instance-scoped", "safe_scoped"]],
+      ["packages/core/src/event.ts:closure@617:619.synchronized", ["EventV2.layer-instance", "per-aggregate-subscription", "active-aggregate-subscriptions", "acquireRelease-delete-plus-layer-finalizer", "coordination-only", "instance-scoped", "safe_scoped"]],
+      ["packages/core/src/event.ts:closure@617:620.typed", ["EventV2.layer-instance", "per-definition-key", "source-definition-keyspace", "layer-finalizer-pubsub-shutdown", "coordination-only", "instance-scoped", "safe_scoped"]],
+      ["packages/core/src/event.ts:closure@617:623.projectors", ["EventV2.layer-instance", "per-definition-key", "max-64-projectors-per-key", "layer-scope-close-gc", "coordination-only", "instance-scoped", "safe_scoped"]],
+      ["packages/core/src/event.ts:closure@617:624.snapshotCodecs", ["EventV2.layer-instance", "per-codec-schemaVersion-key", "one-codec-per-key", "layer-scope-close-gc", "codec-registry-only", "instance-scoped", "safe_scoped"]],
     ] as const).map(([key, [owner, keyScope, bound, finalizer, durability, reachability, verdict]]) => [
       key,
       { owner, keyScope, bound, finalizer, durability, reachability, verdict } satisfies RuntimeStateAudit,
@@ -1899,21 +1886,20 @@ const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
   // (:1145). Both die with the provider turn.
   ...Object.fromEntries(
     ([
-      ["packages/core/src/session/runner/llm.ts:closure@786:1370.withPublication", ["SessionRunner.runTurnAttempt-invocation", "single-turn", "call-stack", "return", "coordination-only", "per-turn", "safe_scoped"]],
-      ["packages/core/src/session/runner/llm.ts:closure@786:1477.planResultMetadata", ["SessionRunner.runTurnAttempt-invocation", "single-turn", "turn-plan-tool-call-count", "return", "turn-validation-only", "per-turn", "safe_scoped"]],
+      ["packages/core/src/session/runner/llm.ts:closure@786:1374.withPublication", ["SessionRunner.runTurnAttempt-invocation", "single-turn", "call-stack", "return", "coordination-only", "per-turn", "safe_scoped"]],
+      ["packages/core/src/session/runner/llm.ts:closure@786:1481.planResultMetadata", ["SessionRunner.runTurnAttempt-invocation", "single-turn", "turn-plan-tool-call-count", "return", "turn-validation-only", "per-turn", "safe_scoped"]],
     ] as const).map(([key, [owner, keyScope, bound, finalizer, durability, reachability, verdict]]) => [
       key,
       { owner, keyScope, bound, finalizer, durability, reachability, verdict } satisfies RuntimeStateAudit,
     ]),
   ),
-  // agent-gateway (re-pins of closure@1108/3563 after shift): the legacy learning queue's build()
-  // constructs the durable knowledge store per enqueued job from the captured baseDir+project root
-  // (:1110-1126); runtimeLayer constructs the storage runtime once per layer build (:3565-3569),
-  // living for the layer scope.
+  // The legacy learning queue constructs a durable knowledge store when each job drains; the
+  // worker drops out of the queue after completion. runtimeLayer builds one storage runtime per
+  // layer and drains its learning queue on scope close.
   ...Object.fromEntries(
     ([
-      ["packages/core/src/agent-gateway.ts:closure@1110:1118.durable", ["DeepAgent-workspace-build", "per-build-invocation", "workspace-lifetime", "owner-scope-finalizer", "durable-by-design", "instance-scoped", "safe_scoped"]],
-      ["packages/core/src/agent-gateway.ts:closure@3565:3567.storage", ["DeepAgent-runtime-instance", "per-runtime-layer", "layer-lifetime", "layer-scope-close", "durable-by-design", "instance-scoped", "safe_scoped"]],
+      ["packages/core/src/agent-gateway.ts:closure@1119:1127.durable", ["DeepAgent-learning-job-build", "per-queued-job", "job-run-lifetime", "queue-drain-job-settle-gc", "durable-store-backed", "instance-scoped", "safe_scoped"]],
+      ["packages/core/src/agent-gateway.ts:closure@3574:3576.storage", ["DeepAgent-runtime-instance", "per-runtime-layer", "layer-lifetime", "layer-scope-close-and-queue-drain", "durable-store-backed", "instance-scoped", "safe_scoped"]],
     ] as const).map(([key, [owner, keyScope, bound, finalizer, durability, reachability, verdict]]) => [
       key,
       { owner, keyScope, bound, finalizer, durability, reachability, verdict } satisfies RuntimeStateAudit,
@@ -1965,9 +1951,9 @@ const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
     reachability: "instance-scoped",
     verdict: "safe_scoped",
   },
-  // learning-reviewer-runner: one AbortController per isolated reviewer execute call, aborted by
-  // Effect.ensuring when the stream settles (learning-reviewer-runner.ts:94,113).
-  "packages/deepagent-code/src/deepagent/learning-reviewer-runner.ts:closure@86:98.abort": {
+  // One AbortController per reviewer execution; Effect.ensuring aborts it when the native stream
+  // settles, so neither stream state nor signal survives the call.
+  "packages/deepagent-code/src/deepagent/learning-reviewer-runner.ts:closure@88:100.abort": {
     owner: "ReviewerPort.execute-invocation",
     keyScope: "single-call",
     bound: "call-stack",
