@@ -4,7 +4,7 @@ import { NodeHttpServer, NodeServices } from "@effect/platform-node"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
-import { Cause, Config, Effect, Exit, Layer, Schedule } from "effect"
+import { Cause, Config, Effect, Exit, Layer, Schedule, Stream } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse, HttpRouter, HttpServer } from "effect/unstable/http"
 import { layerWebSocketConstructorGlobal } from "effect/unstable/socket/Socket"
 import { CrossSpawnSpawner } from "@deepagent-code/core/cross-spawn-spawner"
@@ -259,6 +259,24 @@ function responseJson(response: HttpClientResponse.HttpClientResponse) {
 
 function requestJson<T>(path: string, init?: RequestInit) {
   return request(path, init).pipe(Effect.flatMap(json<T>))
+}
+
+function readSessionEvent(response: HttpClientResponse.HttpClientResponse) {
+  return response.stream.pipe(
+    Stream.decodeText(),
+    Stream.splitLines,
+    Stream.filter((line) => line.startsWith("data: ")),
+    Stream.runHead,
+    Effect.timeoutOrElse({
+      duration: "5 seconds",
+      orElse: () => Effect.fail(new Error("session event cursor replay timed out")),
+    }),
+    Effect.flatMap((line) =>
+      line._tag === "None"
+        ? Effect.die("session event stream ended before replay")
+        : Effect.succeed(JSON.parse(line.value.slice(6)) as { seq: number; type: string }),
+    ),
+  )
 }
 
 // The dev V2-owner chain (mint keypair + verifier env) is armed process-wide by test/preload.ts:
@@ -1073,6 +1091,66 @@ describe("session HttpApi", () => {
         })
       }),
     { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.instance(
+    "returns a populated public context for a retained session",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-deepagent-code-directory": test.directory }
+        const session = yield* createSession({ title: "context readback" })
+        const message = yield* insertLegacyAssistantMessage(session.id)
+
+        const response = yield* request(`/api/session/${session.id}/context`, { headers })
+        expect(response.status).toBe(200)
+        const body = yield* json<{ data: SessionMessage.Message[] }>(response)
+        expect(body.data).toEqual([
+          expect.objectContaining({ id: message.id, type: "assistant" }),
+        ])
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.instance(
+    "replays session events after the durable HTTP watermark",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-deepagent-code-directory": test.directory }
+        const created = yield* requestJson<{ data: { id: string } }>("/api/session", {
+          method: "POST",
+          headers: { ...headers, "content-type": "application/json" },
+          body: JSON.stringify({}),
+        })
+        const sessionID = created.data.id
+        const watermark = yield* requestJson<{ cursor: number | null }>(`/api/session/${sessionID}/events/cursor`, {
+          headers,
+        })
+        expect(watermark.cursor).toBeNumber()
+        if (watermark.cursor === null) return yield* Effect.die("created session has no durable event cursor")
+
+        const admitted = yield* request(`/api/session/${sessionID}/prompt`, {
+          method: "POST",
+          headers: { ...headers, "content-type": "application/json" },
+          body: JSON.stringify({ id: "msg_v2_cursor_tail", prompt: { text: "cursor tail" }, resume: false }),
+        })
+        expect(admitted.status).toBe(200)
+        const next = yield* requestJson<{ cursor: number | null }>(`/api/session/${sessionID}/events/cursor`, {
+          headers,
+        })
+        expect(next.cursor).toBeGreaterThan(watermark.cursor)
+
+        const replay = yield* request(`/api/session/${sessionID}/events?after=${watermark.cursor}`, { headers })
+        expect(replay.status).toBe(200)
+        expect(replay.headers["content-type"]).toContain("text/event-stream")
+        expect(yield* readSessionEvent(replay)).toMatchObject({
+          seq: next.cursor,
+          type: "session.next.prompt.admitted",
+        })
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+    15_000,
   )
 
   it.instance(
