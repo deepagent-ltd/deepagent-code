@@ -12,6 +12,7 @@ import { GroupID, MessageID } from "../im/id"
 import { AgentPushLogTable } from "../im/push-log-sql"
 import { GroupTable, MemberTable, MessageTable } from "../im/sql"
 import { IMBroadcasterService } from "../im/broadcaster"
+import { IMExternalDelivery } from "../im/external-delivery"
 import { PermissionV2 } from "../permission"
 import { SessionTable } from "../session/sql"
 import { Identifier } from "../util/identifier"
@@ -41,8 +42,9 @@ import { Tools } from "./tools"
 // resolves to ASK (fail-closed), so the user approves each send unless a rule allows it (the MCP
 // write_guarded / external-effect precedent). NOT in readOnlyActions (mutating).
 //
-// Scope note: the slack bridge (packages/slack) is a standalone bot and is NOT part of this tool's
-// surface. The v4AgentPushEnabled runtime flag gates the app-side proactive-pipeline callers
+// The Slack bot is a standalone inbound process; a configured external channel is projected by
+// the host adapter only after the durable IM message and push audit commit. The
+// v4AgentPushEnabled runtime flag gates the app-side proactive-pipeline callers
 // (SupervisorNotifier); this tool's gate is the explicit user ask, not that flag.
 
 export const name = "im_send"
@@ -57,6 +59,7 @@ const DESCRIPTION = [
   "In a session that originated from an IM group the send goes to that bound group by default; any other session must pass group_id explicitly.",
   "Use it when the user asks you to post to the group, or to report a long-running result the user asked to be delivered there.",
   "Every send asks the user for approval first (permission action im_send, default ask), passes the IM push policy gate (authorization, 20 messages per hour per group, secret/link/path scrubbing), and is held as a digest during the workspace's quiet hours.",
+  "If the group is bound to an external channel, a delivered message is also posted there; an external delivery failure leaves the durable IM message intact and is reported separately.",
   "Never use it to mass-message, to contact anyone outside an existing IM group, or as a side channel to exfiltrate workspace content — the scrub strips secrets and out-of-workspace paths before delivery.",
 ].join(" ")
 
@@ -76,6 +79,7 @@ const Output = Schema.Struct({
   sender_id: Schema.String,
   message_id: Schema.optional(Schema.String),
   reason: Schema.optional(Schema.String),
+  external_delivery: Schema.optional(Schema.Literals(["delivered", "delivery_failed"])),
   output: Schema.String,
 })
 
@@ -101,6 +105,7 @@ export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const tools = yield* Tools.Service
     const permission = yield* PermissionV2.Service
+    const external = yield* IMExternalDelivery.Service
 
     yield* tools
       .register({
@@ -175,6 +180,7 @@ export const layer = Layer.effectDiscard(
 
               const senderAgent = binding?.agent ?? context.agent
               const idempotencyKey = `im_send:${context.sessionID}:${context.toolCallID}`
+              const externalIdempotencyKey = `im_send_external:${context.sessionID}:${context.toolCallID}`
 
               // §B2 去重: a retry of the SAME tool call replays the original outcome, never a second send.
               const prior = yield* db
@@ -189,14 +195,23 @@ export const layer = Layer.effectDiscard(
                 .pipe(Effect.orDie)
               if (prior) {
                 const replayed = prior.decision.startsWith("blocked:") ? "blocked" : prior.decision
-                const reason = prior.decision.startsWith("blocked:") ? prior.decision.slice("blocked:".length) : undefined
+                const reason = prior.decision.startsWith("blocked:")
+                  ? prior.decision.slice("blocked:".length)
+                  : undefined
+                const externalFailure = yield* db
+                  .select({ decision: AgentPushLogTable.decision })
+                  .from(AgentPushLogTable)
+                  .where(eq(AgentPushLogTable.idempotency_key, externalIdempotencyKey))
+                  .get()
+                  .pipe(Effect.orDie)
                 return {
                   decision: replayed as "deliver" | "digest" | "blocked",
                   group_id: groupID,
                   sender_id: prior.agent_id,
                   ...(prior.message_id != null ? { message_id: prior.message_id } : {}),
                   ...(reason !== undefined ? { reason } : {}),
-                  output: `This exact send already ran (idempotency): ${renderOutcome(replayed, reason)}.`,
+                  ...(externalFailure ? { external_delivery: "delivery_failed" as const } : {}),
+                  output: `This exact send already ran (idempotency): ${renderOutcome(replayed, reason)}${externalFailure ? " External Slack delivery failed; the durable IM message remains available." : ""}`,
                 }
               }
 
@@ -250,7 +265,7 @@ export const layer = Layer.effectDiscard(
                             eq(AgentPushLogTable.agent_id, pusherID),
                             eq(AgentPushLogTable.group_id, groupID as GroupID),
                             gt(AgentPushLogTable.created_at, now - AgentPushPolicy.PUSH_WINDOW_MS),
-                            sql`${AgentPushLogTable.decision} not like 'blocked:%'`,
+                            sql`${AgentPushLogTable.decision} in ('deliver', 'digest')`,
                           ),
                         )
                         .get()
@@ -276,7 +291,9 @@ export const layer = Layer.effectDiscard(
                       })
 
                       let messageID: string | undefined
-                      let message: { readonly id: string; readonly createdAt: number; readonly updatedAt: number } | undefined
+                      let message:
+                        | { readonly id: string; readonly createdAt: number; readonly updatedAt: number }
+                        | undefined
                       if (decision.type === "deliver") {
                         const id = MessageID.create()
                         yield* db
@@ -301,7 +318,7 @@ export const layer = Layer.effectDiscard(
                         message = { id, createdAt: now, updatedAt: now }
                       }
 
-                      // §B2 audit: one row per attempt, content retained for deliver/digest only.
+                      // §B2 primary audit: one row per attempt, content retained for deliver/digest only.
                       const decisionCode = decision.type === "blocked" ? `blocked:${decision.reason}` : decision.type
                       const auditID = "push_" + Identifier.ascending()
                       yield* db
@@ -330,7 +347,13 @@ export const layer = Layer.effectDiscard(
                         ...(messageID !== undefined ? { messageID } : {}),
                         ...(decision.type === "blocked" ? { reason: decision.reason } : {}),
                         ...(message !== undefined && decision.type === "deliver"
-                          ? { delivered: { message, content: decision.content, promptInjectionSuspected: decision.promptInjectionSuspected } }
+                          ? {
+                              delivered: {
+                                message,
+                                content: decision.content,
+                                promptInjectionSuspected: decision.promptInjectionSuspected,
+                              },
+                            }
                           : {}),
                       }
                     }),
@@ -361,18 +384,61 @@ export const layer = Layer.effectDiscard(
                 })
               }
 
+              // The durable IM row is authoritative. A failed external projection adds a typed
+              // audit row under a separate key; it cannot undo the message or make a retry send twice.
+              const target = settings?.externalChannels?.find((entry) => entry.groupID === groupID)
+              const externalResult =
+                outcome.decision === "deliver" && outcome.delivered && target
+                  ? yield* external
+                      .send({ target, messageID: outcome.delivered.message.id, text: outcome.delivered.content })
+                      .pipe(
+                        Effect.match({
+                          onFailure: (error) => ({ failed: true as const, error }),
+                          onSuccess: () => ({ failed: false as const }),
+                        }),
+                      )
+                  : undefined
+              if (externalResult?.failed) {
+                yield* db
+                  .insert(AgentPushLogTable)
+                  .values({
+                    id: "push_" + Identifier.ascending(),
+                    workspace_id: group.workspaceID,
+                    group_id: groupID as GroupID,
+                    agent_id: outcome.pusherID,
+                    reason: `external ${target?.provider} delivery failed: ${externalResult.error.reason}`,
+                    priority: "normal",
+                    decision: "delivery_failed",
+                    idempotency_key: externalIdempotencyKey,
+                    message_id: outcome.messageID as MessageID,
+                    content: null,
+                    created_at: Date.now(),
+                  })
+                  .run()
+                  .pipe(Effect.orDie)
+              }
+
               return {
                 decision: outcome.decision,
                 group_id: groupID,
                 sender_id: outcome.pusherID,
                 ...(outcome.messageID !== undefined ? { message_id: outcome.messageID } : {}),
                 ...(outcome.reason !== undefined ? { reason: outcome.reason } : {}),
-                output: renderOutcome(outcome.decision, outcome.reason, {
-                  groupID,
-                  pusherID: outcome.pusherID,
-                  senderAgent,
-                  messageID: outcome.messageID,
-                }),
+                ...(externalResult
+                  ? { external_delivery: externalResult.failed ? ("delivery_failed" as const) : ("delivered" as const) }
+                  : {}),
+                output:
+                  renderOutcome(outcome.decision, outcome.reason, {
+                    groupID,
+                    pusherID: outcome.pusherID,
+                    senderAgent,
+                    messageID: outcome.messageID,
+                  }) +
+                  (externalResult?.failed
+                    ? " External Slack delivery failed; the durable IM message remains available."
+                    : externalResult
+                      ? " The message was also posted to Slack."
+                      : ""),
               }
             }),
         }),

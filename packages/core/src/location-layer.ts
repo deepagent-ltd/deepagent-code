@@ -32,6 +32,7 @@ import { BuiltInTools } from "./tool/builtins"
 import { Image } from "./image"
 import { ToolRegistry } from "./tool/registry"
 import { ApplicationTools } from "./tool/application-tools"
+import { IMExternalDelivery } from "./im/external-delivery"
 import { ToolOutputStore } from "./tool-output-store"
 import { AppProcess } from "./process"
 import { Ripgrep } from "./ripgrep"
@@ -72,7 +73,8 @@ export interface LocationRuntimeHostInterface {
     | ProductionV2Sources
     | ContextToolRuntime.Service
     | ContextQueryAuthorization.Service
-    | ContextQueryAuthorization.Controller,
+    | ContextQueryAuthorization.Controller
+    | IMExternalDelivery.Service,
     never,
     AgentGateway.Runtime
   >
@@ -100,6 +102,7 @@ export const defaultLocationRuntimeHost = Layer.effect(
           // Bare-core fallback: one process-local authority store per keyed tree, matching the
           // pre-seam behavior where the tree self-provided `ContextQueryAuthorization.defaultLayer`.
           ContextQueryAuthorization.defaultLayer,
+          IMExternalDelivery.unavailableLayer,
           Layer.succeed(SessionRunner.CurrentToolSettleGate, undefined),
           Layer.succeed(SessionRunner.CurrentOnSessionSettled, undefined),
           Layer.succeed(V2ProviderTurn.CurrentBuildIdentity, buildIdentity),

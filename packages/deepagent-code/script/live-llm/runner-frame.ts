@@ -4,6 +4,7 @@ import { ProductionV2Sources } from "@deepagent-code/core/context-federation/pro
 import { Database } from "@deepagent-code/core/database/database"
 import { EventV2 } from "@deepagent-code/core/event"
 import { Global } from "@deepagent-code/core/global"
+import { IMExternalDelivery } from "@deepagent-code/core/im/external-delivery"
 import {
   LocationRuntimeHost,
   LocationServiceMap,
@@ -58,6 +59,7 @@ const host = Layer.effect(
         Layer.mergeAll(
           V2RunnerFrame.runnerFrameSeamFor(ref, sources),
           V2RunnerFrame.runnerFrameContextToolsFor(ref),
+          IMExternalDelivery.unavailableLayer,
           Layer.succeed(SessionRunner.CurrentToolSettleGate, undefined),
           Layer.succeed(SessionRunner.CurrentOnSessionSettled, undefined),
           Layer.succeed(V2ProviderTurn.CurrentBuildIdentity, buildIdentity),
@@ -88,7 +90,11 @@ export function liveLocationServiceMap() {
     Layer.provide(
       // ContextQueryAuthorization.defaultLayer shares the facades' internal store (same layer
       // object, one memoized build), matching runnerFrameLocationMapLayer in production.
-      Layer.mergeAll(CodeIntelFacade.defaultLayer, ContextQueryFacade.defaultLayer, ContextQueryAuthorization.defaultLayer),
+      Layer.mergeAll(
+        CodeIntelFacade.defaultLayer,
+        ContextQueryFacade.defaultLayer,
+        ContextQueryAuthorization.defaultLayer,
+      ),
     ),
     Layer.provide(LocationIndexRuntime.defaultLayer),
     Layer.provide(testInstanceStoreLayer),

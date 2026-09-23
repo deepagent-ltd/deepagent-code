@@ -4,6 +4,7 @@ import { Effect, Layer } from "effect"
 import { Database } from "@deepagent-code/core/database/database"
 import { WorkspaceConfigTable } from "@deepagent-code/core/deepagent/workspace-config-sql"
 import { GroupID } from "@deepagent-code/core/im/id"
+import { IMExternalDelivery } from "@deepagent-code/core/im/external-delivery"
 import { AgentPushLogTable } from "@deepagent-code/core/im/push-log-sql"
 import { GroupTable, MemberTable, MessageTable } from "@deepagent-code/core/im/sql"
 import { PermissionV2 } from "@deepagent-code/core/permission"
@@ -26,6 +27,21 @@ import { executeTool, settleTool, toolIdentity } from "./lib/tool"
 
 const assertions: PermissionV2.AssertInput[] = []
 let permissionMode: "allow" | "reject" = "allow"
+const externalCalls: Array<{ target: IMExternalDelivery.Target; messageID: string; text: string }> = []
+let externalFailure = false
+
+const external = Layer.succeed(
+  IMExternalDelivery.Service,
+  IMExternalDelivery.Service.of({
+    send: (input) =>
+      Effect.suspend(() => {
+        externalCalls.push(input)
+        return externalFailure
+          ? Effect.fail(new IMExternalDelivery.DeliveryFailed({ provider: "slack", reason: "request_failed" }))
+          : Effect.void
+      }),
+  }),
+)
 
 const permission = Layer.succeed(
   PermissionV2.Service,
@@ -48,7 +64,7 @@ const stack = Layer.mergeAll(
   Database.layerFromPath(":memory:"),
   registry,
   permission,
-  IMSendTool.layer.pipe(Layer.provide(registry), Layer.provide(permission)),
+  IMSendTool.layer.pipe(Layer.provide(registry), Layer.provide(permission), Layer.provide(external)),
 )
 
 const it = testEffect(stack)
@@ -66,11 +82,7 @@ const GROUP = GroupID.make("img_ws7_group")
 
 type Services = Effect.Success<typeof services>
 
-const seedBase = (
-  db: Services["db"],
-  sessionID: SessionSchema.ID,
-  metadata?: Record<string, unknown>,
-) =>
+const seedBase = (db: Services["db"], sessionID: SessionSchema.ID, metadata?: Record<string, unknown>) =>
   Effect.gen(function* () {
     yield* db
       .insert(ProjectTable)
@@ -114,6 +126,18 @@ const seedMember = (db: Services["db"], memberID: string) =>
     .run()
     .pipe(Effect.orDie)
 
+const seedBinding = (db: Services["db"]) =>
+  db
+    .insert(WorkspaceConfigTable)
+    .values({
+      workspace_id: WORKSPACE,
+      config: { externalChannels: [{ provider: "slack", groupID: GROUP, channelID: "C123" }] },
+      created_at: 1,
+      updated_at: 1,
+    })
+    .run()
+    .pipe(Effect.orDie)
+
 const call = (input: unknown, sessionID: SessionSchema.ID, id = "call-im_send-1") => ({
   sessionID,
   ...toolIdentity,
@@ -126,6 +150,7 @@ type SendOutput = {
   sender_id: string
   message_id?: string
   reason?: string
+  external_delivery?: "delivered" | "delivery_failed"
   output: string
 }
 
@@ -137,7 +162,10 @@ const messageCount = (db: Services["db"]) =>
     .select({ total: count() })
     .from(MessageTable)
     .get()
-    .pipe(Effect.orDie, Effect.map((row) => row?.total ?? 0))
+    .pipe(
+      Effect.orDie,
+      Effect.map((row) => row?.total ?? 0),
+    )
 
 const pushLog = (db: Services["db"], idempotencyKey: string) =>
   db
@@ -150,6 +178,8 @@ const pushLog = (db: Services["db"], idempotencyKey: string) =>
 beforeEach(() => {
   assertions.length = 0
   permissionMode = "allow"
+  externalCalls.length = 0
+  externalFailure = false
 })
 
 describe("im_send (WS7)", () => {
@@ -210,6 +240,7 @@ describe("im_send (WS7)", () => {
       const sessionID = SessionV2.ID.make("ses_im_send_limited")
       yield* seedBase(db, sessionID, { im: { groupID: GROUP, agent: "build" } })
       yield* seedMember(db, "build")
+      yield* seedBinding(db)
 
       const now = Date.now()
       for (let i = 0; i < 20; i++)
@@ -245,6 +276,7 @@ describe("im_send (WS7)", () => {
       // Blocked attempts retain no content.
       expect(audit?.content).toBeNull()
       expect(assertions).toHaveLength(1)
+      expect(externalCalls).toHaveLength(0)
     }),
   )
 
@@ -278,6 +310,7 @@ describe("im_send (WS7)", () => {
       const sessionID = SessionV2.ID.make("ses_im_send_replay")
       yield* seedBase(db, sessionID, { im: { groupID: GROUP, agent: "build" } })
       yield* seedMember(db, "build")
+      yield* seedBinding(db)
 
       const first = structured(yield* settleTool(registry, call({ text: "exactly once" }, sessionID)))
       const second = structured(yield* settleTool(registry, call({ text: "exactly once" }, sessionID)))
@@ -288,12 +321,10 @@ describe("im_send (WS7)", () => {
       expect(second.output).toContain("already ran")
 
       expect(yield* messageCount(db)).toBe(1)
-      const audits = yield* db
-        .select({ total: count() })
-        .from(AgentPushLogTable)
-        .get()
-        .pipe(Effect.orDie)
+      const audits = yield* db.select({ total: count() }).from(AgentPushLogTable).get().pipe(Effect.orDie)
       expect(audits?.total).toBe(1)
+      expect(externalCalls).toHaveLength(1)
+      expect(externalCalls[0]).toMatchObject({ target: { channelID: "C123" }, text: "exactly once" })
     }),
   )
 
@@ -310,7 +341,10 @@ describe("im_send (WS7)", () => {
         .insert(WorkspaceConfigTable)
         .values({
           workspace_id: WORKSPACE,
-          config: { quietHours: { startHour: hour, endHour: (hour + 1) % 24, tzOffsetMinutes: 0 } },
+          config: {
+            quietHours: { startHour: hour, endHour: (hour + 1) % 24, tzOffsetMinutes: 0 },
+            externalChannels: [{ provider: "slack", groupID: GROUP, channelID: "C123" }],
+          },
           created_at: 1,
           updated_at: 1,
         })
@@ -328,6 +362,51 @@ describe("im_send (WS7)", () => {
       expect(audit?.decision).toBe("digest")
       expect(audit?.content).toBe("held until morning")
       expect(audit?.digest_flushed_at).toBeNull()
+      expect(externalCalls).toHaveLength(0)
+    }),
+  )
+
+  it.effect("keeps the durable message and writes a typed audit when Slack delivery fails", () =>
+    Effect.gen(function* () {
+      const { db, registry } = yield* services
+      const sessionID = SessionV2.ID.make("ses_im_send_external_failure")
+      yield* seedBase(db, sessionID, { im: { groupID: GROUP, agent: "build" } })
+      yield* seedMember(db, "build")
+      yield* seedBinding(db)
+      externalFailure = true
+
+      const first = structured(yield* settleTool(registry, call({ text: "safe update" }, sessionID)))
+      const second = structured(yield* settleTool(registry, call({ text: "safe update" }, sessionID)))
+      expect(first.decision).toBe("deliver")
+      expect(first.external_delivery).toBe("delivery_failed")
+      expect(second.message_id).toBe(first.message_id)
+      expect(second.external_delivery).toBe("delivery_failed")
+      expect(yield* messageCount(db)).toBe(1)
+      expect(externalCalls).toHaveLength(1)
+      const audit = yield* pushLog(db, `im_send_external:${sessionID}:call-im_send-1`)
+      expect(audit?.decision).toBe("delivery_failed")
+      expect(String(audit?.message_id)).toBe(String(first.message_id))
+      expect(audit?.content).toBeNull()
+    }),
+  )
+
+  it.effect("sends only scrubbed content to the external channel", () =>
+    Effect.gen(function* () {
+      const { db, registry } = yield* services
+      const sessionID = SessionV2.ID.make("ses_im_send_external_scrub")
+      yield* seedBase(db, sessionID, { im: { groupID: GROUP, agent: "build" } })
+      yield* seedMember(db, "build")
+      yield* seedBinding(db)
+
+      const secret = "sk-ant-abcdefghijklmnop123"
+      const out = structured(yield* settleTool(registry, call({ text: `key ${secret} in /etc/passwd` }, sessionID)))
+      expect(out.external_delivery).toBe("delivered")
+      expect(externalCalls).toHaveLength(1)
+      expect(externalCalls[0]?.text).not.toContain(secret)
+      expect(externalCalls[0]?.text).not.toContain("/etc/passwd")
+      expect(externalCalls[0]?.text).toContain("«path removed»")
+      const durable = yield* db.select({ content: MessageTable.content }).from(MessageTable).get().pipe(Effect.orDie)
+      expect(durable?.content).toBe(externalCalls[0]?.text)
     }),
   )
 
@@ -337,6 +416,7 @@ describe("im_send (WS7)", () => {
       const sessionID = SessionV2.ID.make("ses_im_send_rejected")
       yield* seedBase(db, sessionID, { im: { groupID: GROUP, agent: "build" } })
       yield* seedMember(db, "build")
+      yield* seedBinding(db)
 
       permissionMode = "reject"
       const result = yield* executeTool(registry, call({ text: "please do not send" }, sessionID)).pipe(
@@ -346,6 +426,7 @@ describe("im_send (WS7)", () => {
       if (result.type !== "error") return
       expect(String(result.value)).toContain("The user rejected permission")
       expect(yield* messageCount(db)).toBe(0)
+      expect(externalCalls).toHaveLength(0)
     }),
   )
 })

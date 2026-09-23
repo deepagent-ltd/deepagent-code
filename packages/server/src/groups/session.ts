@@ -5,6 +5,7 @@ import { SessionMessage } from "@deepagent-code/core/session/message"
 import { SessionInput } from "@deepagent-code/core/session/input"
 import { Prompt } from "@deepagent-code/core/session/prompt"
 import { SessionV2 } from "@deepagent-code/core/session"
+import { SessionSchema } from "@deepagent-code/core/session/schema"
 import { ProjectV2 } from "@deepagent-code/core/project"
 import { AbsolutePath, PositiveInt, RelativePath, withStatics } from "@deepagent-code/core/schema"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
@@ -96,6 +97,7 @@ export const SessionGroup = HttpApiGroup.make("server.session")
         id: SessionV2.ID.pipe(Schema.optional),
         agent: AgentV2.ID.pipe(Schema.optional),
         model: ModelV2.Ref.pipe(Schema.optional),
+        metadata: SessionSchema.Metadata.pipe(Schema.optional),
       }),
       success: Schema.Struct({ data: SessionV2.Info }),
       error: InvalidRequestError,
