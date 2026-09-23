@@ -25,6 +25,7 @@ export type Event =
   | EventSessionExecutionSucceeded
   | EventSessionExecutionFailed
   | EventSessionExecutionInterrupted
+  | EventSessionLoopBudgetTriggered
   | EventSessionDeliveryRecorded
   | EventSessionCapabilityModeRecorded
   | EventSessionNextContextUpdated
@@ -981,6 +982,7 @@ export type GlobalEvent = {
           messageID: string
           prompt: Prompt
           delivery: "steer" | "queue" | "goal_steer"
+          revertEpoch?: number
         }
       }
     | {
@@ -1034,6 +1036,21 @@ export type GlobalEvent = {
           timestamp: number
           sessionID: string
           reason: "user" | "shutdown" | "superseded"
+        }
+      }
+    | {
+        id: string
+        type: "session.loop.budget.triggered"
+        properties: {
+          timestamp: number
+          sessionID: string
+          activityID: string
+          reason: "steps" | "repeated_tool" | "orphan_effect"
+          limit?: number
+          used?: number
+          tool?: string
+          inputHash?: string
+          effectIDs?: Array<string>
         }
       }
     | {
@@ -1974,6 +1991,7 @@ export type GlobalEvent = {
     | SyncEventSessionExecutionSucceeded1
     | SyncEventSessionExecutionFailed1
     | SyncEventSessionExecutionInterrupted1
+    | SyncEventSessionLoopBudgetTriggered1
     | SyncEventSessionDeliveryRecorded1
     | SyncEventSessionCapabilityModeRecorded1
     | SyncEventSessionNextContextUpdated1
@@ -2946,6 +2964,31 @@ export type CompositionToolRegistryDigest = {
   digest: string
 }
 
+export type CompositionV2RegistryDigest = {
+  applicationTools: {
+    count: number
+    ids: Array<string>
+    digest: string
+    rejected: number
+  }
+  materialized: {
+    count: number
+    ids: Array<string>
+    effectKinds: {
+      readOnly: number
+      mutating: number
+    }
+  }
+  legacyEgress: CompositionToolRegistryDigest
+}
+
+export type CompositionAuthoritySurfaceDigest = {
+  corePublicApi: boolean
+  legacyPromptMounted: boolean
+  v2AgentRosterConsumers: number
+  imAdmission: string
+}
+
 export type CompositionDatabaseDigest = {
   path: string
   migrationRegistryDigest: string
@@ -2962,10 +3005,11 @@ export type CompositionLocationHostDigest = {
 }
 
 export type CompositionDigestRecord = {
-  version: 1
+  version: 2
   digest: string
   sessionOwner: CompositionSessionOwnerDigest
-  toolRegistry: CompositionToolRegistryDigest
+  v2Registry: CompositionV2RegistryDigest
+  authoritySurface: CompositionAuthoritySurfaceDigest
   database: CompositionDatabaseDigest
   locationHost: CompositionLocationHostDigest
 }
@@ -5268,6 +5312,14 @@ export type InvalidCursorError = {
   message: string
 }
 
+export type StaleRevertEpochError = {
+  _tag: "StaleRevertEpochError"
+  sessionID: string
+  expected: number
+  actual: number
+  message: string
+}
+
 export type SessionNotFoundError = {
   _tag: "SessionNotFoundError"
   sessionID: string
@@ -6075,6 +6127,7 @@ export type SyncEventSessionNextPromptAdmitted1 = {
       messageID: string
       prompt: Prompt
       delivery: "steer" | "queue" | "goal_steer"
+      revertEpoch?: number
     }
   }
 }
@@ -6170,6 +6223,28 @@ export type SyncEventSessionExecutionInterrupted1 = {
       timestamp: number
       sessionID: string
       reason: "user" | "shutdown" | "superseded"
+    }
+  }
+}
+
+export type SyncEventSessionLoopBudgetTriggered1 = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "session.loop.budget.triggered.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      timestamp: number
+      sessionID: string
+      activityID: string
+      reason: "steps" | "repeated_tool" | "orphan_effect"
+      limit?: number
+      used?: number
+      tool?: string
+      inputHash?: string
+      effectIDs?: Array<string>
     }
   }
 }
@@ -7103,6 +7178,7 @@ export type SessionInputAdmitted = {
   delivery: "steer" | "queue" | "goal_steer"
   timeCreated: number
   promotedSeq?: number
+  revertEpoch?: number
 }
 
 export type SessionMessageAgentSwitched = {
@@ -7608,6 +7684,7 @@ export type EventSessionNextPromptAdmitted = {
     messageID: string
     prompt: Prompt
     delivery: "steer" | "queue" | "goal_steer"
+    revertEpoch?: number
   }
 }
 
@@ -7667,6 +7744,22 @@ export type EventSessionExecutionInterrupted = {
     timestamp: number
     sessionID: string
     reason: "user" | "shutdown" | "superseded"
+  }
+}
+
+export type EventSessionLoopBudgetTriggered = {
+  id: string
+  type: "session.loop.budget.triggered"
+  properties: {
+    timestamp: number
+    sessionID: string
+    activityID: string
+    reason: "steps" | "repeated_tool" | "orphan_effect"
+    limit?: number
+    used?: number
+    tool?: string
+    inputHash?: string
+    effectIDs?: Array<string>
   }
 }
 
@@ -20055,6 +20148,44 @@ export type V2HealthGetResponses = {
 
 export type V2HealthGetResponse = V2HealthGetResponses[keyof V2HealthGetResponses]
 
+export type V2HealthCompositionData = {
+  body?: never
+  path?: never
+  query?: never
+  url: "/health/composition"
+}
+
+export type V2HealthCompositionErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type V2HealthCompositionError = V2HealthCompositionErrors[keyof V2HealthCompositionErrors]
+
+export type V2HealthCompositionResponses = {
+  /**
+   * Success
+   */
+  200: {
+    version: 1
+    digest: string
+    qualification: "unqualified"
+    sessionOwner: "core/default-session-runtime"
+    locationHost: {
+      host: "core/default-location-host"
+      mcpBridge: false
+      pluginBridge: false
+    }
+    database: {
+      path: string
+    }
+  }
+}
+
+export type V2HealthCompositionResponse = V2HealthCompositionResponses[keyof V2HealthCompositionResponses]
+
 export type V2AgentListData = {
   body?: never
   path?: never
@@ -20184,6 +20315,7 @@ export type V2SessionPromptData = {
     prompt: Prompt
     delivery?: "steer" | "queue" | "goal_steer"
     resume?: boolean
+    revertEpoch?: number
   }
   path: {
     sessionID: string
@@ -20206,9 +20338,9 @@ export type V2SessionPromptErrors = {
    */
   404: SessionNotFoundError
   /**
-   * ConflictError
+   * ConflictError | StaleRevertEpochError
    */
-  409: ConflictError
+  409: ConflictError | StaleRevertEpochError
   /**
    * ServiceUnavailableError
    */

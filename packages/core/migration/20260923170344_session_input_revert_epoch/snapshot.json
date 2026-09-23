@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "6ec820d2-4fd8-452f-a9d9-8033f16437d0",
+  "id": "b382dc2b-718d-4213-8f86-d0498a68c14d",
   "prevIds": [
-    "4a7d9dd8-9b7c-4e6d-b415-a69a60fd0b56"
+    "6ec820d2-4fd8-452f-a9d9-8033f16437d0"
   ],
   "ddl": [
     {
@@ -9675,6 +9675,16 @@
       "default": null,
       "generated": null,
       "name": "admitted_seq",
+      "entityType": "columns",
+      "table": "session_input"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "revert_epoch",
       "entityType": "columns",
       "table": "session_input"
     },

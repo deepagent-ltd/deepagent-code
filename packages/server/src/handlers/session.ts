@@ -12,6 +12,7 @@ import {
   InvalidCursorError,
   InvalidRequestError,
   ServiceUnavailableError,
+  StaleRevertEpochError,
   SessionNotFoundError,
   UnknownError,
 } from "../errors"
@@ -118,6 +119,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 prompt: ctx.payload.prompt,
                 delivery: ctx.payload.delivery,
                 resume: ctx.payload.resume,
+                revertEpoch: ctx.payload.revertEpoch,
               })
               .pipe(
                 Effect.catchTag("Session.NotFoundError", (error) =>
@@ -133,6 +135,16 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                     new ConflictError({
                       message: `Prompt message ID conflicts with an existing durable record: ${error.messageID}`,
                       resource: error.messageID,
+                    }),
+                  ),
+                ),
+                Effect.catchTag("SessionInput.StaleRevertEpoch", (error) =>
+                  Effect.fail(
+                    new StaleRevertEpochError({
+                      sessionID: error.sessionID,
+                      expected: error.expected,
+                      actual: error.actual,
+                      message: "stale_revert_epoch",
                     }),
                   ),
                 ),

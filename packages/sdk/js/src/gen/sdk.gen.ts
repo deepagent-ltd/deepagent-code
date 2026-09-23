@@ -575,6 +575,8 @@ import type {
   V2FsListResponses,
   V2FsReadErrors,
   V2FsReadResponses,
+  V2HealthCompositionErrors,
+  V2HealthCompositionResponses,
   V2HealthGetErrors,
   V2HealthGetResponses,
   V2ModelListErrors,
@@ -2035,7 +2037,7 @@ export class Composition extends HeyApiClient {
   /**
    * Root composition digest
    *
-   * Reports the stable composition digest of this process root (session owner, tool registry, database, Location host). The incident-only maintenance shell constructs no business runtime and answers a typed 503 instead.
+   * Reports the stable v2 composition digest of this process root (session owner, V2 tool registry, authority surface, database, Location host). The incident-only maintenance shell constructs no business runtime and answers a typed 503 instead.
    */
   public digest<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
     return (options?.client ?? this.client).get<
@@ -10732,6 +10734,18 @@ export class Health extends HeyApiClient {
       ...options,
     })
   }
+
+  /**
+   * Inspect bare Core composition
+   *
+   * Reports the unqualified Core runtime used by standalone serve and its absent app bridges.
+   */
+  public composition<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
+    return (options?.client ?? this.client).get<V2HealthCompositionResponses, V2HealthCompositionErrors, ThrowOnError>({
+      url: "/health/composition",
+      ...options,
+    })
+  }
 }
 
 export class Agent extends HeyApiClient {
@@ -11031,6 +11045,7 @@ export class Session3 extends HeyApiClient {
       prompt: Prompt
       delivery?: "steer" | "queue" | "goal_steer"
       resume?: boolean
+      revertEpoch?: number
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -11044,6 +11059,7 @@ export class Session3 extends HeyApiClient {
             { in: "body", key: "prompt" },
             { in: "body", key: "delivery" },
             { in: "body", key: "resume" },
+            { in: "body", key: "revertEpoch" },
           ],
         },
       ],

@@ -12,7 +12,7 @@ import { SessionEvent } from "./event"
 import { SessionMessage } from "./message"
 import { Prompt } from "./prompt"
 import { SessionSchema } from "./schema"
-import { SessionInputTable, SessionMessageTable } from "./sql"
+import { SessionInputTable, SessionMessageTable, SessionTable } from "./sql"
 
 type DatabaseService = Database.Interface["db"]
 
@@ -32,6 +32,7 @@ export class Admitted extends Schema.Class<Admitted>("SessionInput.Admitted")({
   delivery: Delivery,
   timeCreated: V2Schema.DateTimeUtcFromMillis,
   promotedSeq: NonNegativeInt.pipe(Schema.optional),
+  revertEpoch: NonNegativeInt.pipe(Schema.optional),
 }) {}
 
 const decodePrompt = Schema.decodeUnknownSync(Prompt)
@@ -46,6 +47,7 @@ const fromRow = (row: typeof SessionInputTable.$inferSelect): Admitted =>
     delivery: row.delivery,
     timeCreated: DateTime.makeUnsafe(row.time_created),
     ...(row.promoted_seq === null ? {} : { promotedSeq: row.promoted_seq }),
+    ...(row.revert_epoch === null ? {} : { revertEpoch: row.revert_epoch }),
   })
 
 export const find = Effect.fn("SessionInput.find")(function* (db: DatabaseService, id: SessionMessage.ID) {
@@ -57,6 +59,12 @@ export class LifecycleConflict extends Schema.TaggedErrorClass<LifecycleConflict
   id: SessionMessage.ID,
 }) {}
 
+export class StaleRevertEpoch extends Schema.TaggedErrorClass<StaleRevertEpoch>()("SessionInput.StaleRevertEpoch", {
+  sessionID: SessionSchema.ID,
+  expected: NonNegativeInt,
+  actual: NonNegativeInt,
+}) {}
+
 export const admit = Effect.fn("SessionInput.admit")(function* (
   db: DatabaseService,
   events: EventV2.Interface,
@@ -65,6 +73,7 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
     readonly sessionID: SessionSchema.ID
     readonly prompt: Prompt
     readonly delivery: Delivery
+    readonly revertEpoch?: number
     /**
      * In-transaction hook committed atomically with the PromptLifecycle.Admitted event and its
      * `session_input` projection (same contract as `EventV2.publish`'s `{ commit }` option): the
@@ -78,6 +87,26 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
   const existing = yield* find(db, input.id)
   if (existing !== undefined) return existing
   const timestamp = yield* DateTime.now
+  const commit = input.revertEpoch === undefined && input.commit === undefined
+    ? undefined
+    : (seq: number, event: EventV2.Payload) =>
+        Effect.gen(function* () {
+          if (input.revertEpoch !== undefined) {
+            const session = yield* db
+              .select({ mutationEpoch: SessionTable.mutation_epoch })
+              .from(SessionTable)
+              .where(eq(SessionTable.id, input.sessionID))
+              .get()
+              .pipe(Effect.orDie)
+            if (session?.mutationEpoch !== input.revertEpoch)
+              return yield* new StaleRevertEpoch({
+                sessionID: input.sessionID,
+                expected: input.revertEpoch,
+                actual: session?.mutationEpoch ?? 0,
+              })
+          }
+          if (input.commit) yield* input.commit(seq, event)
+        })
   return yield* events
     .publish(SessionEvent.PromptLifecycle.Admitted, {
       messageID: input.id,
@@ -85,7 +114,8 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
       timestamp,
       prompt: input.prompt,
       delivery: input.delivery,
-    }, input.commit === undefined ? undefined : { commit: input.commit })
+      ...(input.revertEpoch === undefined ? {} : { revertEpoch: input.revertEpoch }),
+    }, commit === undefined ? undefined : { commit })
     .pipe(
       Effect.flatMap((event) =>
         event.seq === undefined
@@ -97,12 +127,15 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
                 sessionID: input.sessionID,
                 prompt: input.prompt,
                 delivery: input.delivery,
+                ...(input.revertEpoch === undefined ? {} : { revertEpoch: input.revertEpoch }),
                 timeCreated: timestamp,
               }),
             ),
       ),
       Effect.catchDefect((defect) =>
-        find(db, input.id).pipe(Effect.flatMap((stored) => (stored ? Effect.succeed(stored) : Effect.die(defect)))),
+        defect instanceof StaleRevertEpoch
+          ? Effect.fail(defect)
+          : find(db, input.id).pipe(Effect.flatMap((stored) => (stored ? Effect.succeed(stored) : Effect.die(defect)))),
       ),
     )
 })
@@ -128,6 +161,7 @@ export const projectAdmitted = Effect.fn("SessionInput.projectAdmitted")(functio
     readonly sessionID: SessionSchema.ID
     readonly prompt: Prompt
     readonly delivery: Delivery
+    readonly revertEpoch?: number
     readonly timeCreated: DateTime.Utc
   },
 ) {
@@ -144,6 +178,7 @@ export const projectAdmitted = Effect.fn("SessionInput.projectAdmitted")(functio
       id: input.id,
       session_id: input.sessionID,
       admitted_seq: input.admittedSeq,
+      revert_epoch: input.revertEpoch ?? null,
       prompt: encodePrompt(input.prompt),
       delivery: input.delivery,
       time_created: DateTime.toEpochMillis(input.timeCreated),
@@ -167,6 +202,7 @@ export const projectAdmitted = Effect.fn("SessionInput.projectAdmitted")(functio
     !admitted ||
     admitted.admittedSeq !== input.admittedSeq ||
     admitted.delivery !== input.delivery ||
+    admitted.revertEpoch !== input.revertEpoch ||
     DateTime.toEpochMillis(admitted.timeCreated) !== DateTime.toEpochMillis(input.timeCreated) ||
     !matchesPrompt(admitted, input)
   )
@@ -251,8 +287,12 @@ export const equivalent = (
     readonly sessionID: SessionSchema.ID
     readonly prompt: Prompt
     readonly delivery: Delivery
+    readonly revertEpoch?: number
   },
-) => input.delivery === expected.delivery && matchesPrompt(input, expected)
+) =>
+  input.delivery === expected.delivery &&
+  input.revertEpoch === expected.revertEpoch &&
+  matchesPrompt(input, expected)
 
 const matchesPrompt = (input: Admitted, expected: { readonly sessionID: SessionSchema.ID; readonly prompt: Prompt }) =>
   input.sessionID === expected.sessionID &&

@@ -412,7 +412,8 @@ export interface Interface {
     prompt: Prompt
     delivery?: SessionInput.Delivery
     resume?: boolean
-  }) => Effect.Effect<SessionInput.Admitted, NotFoundError | PromptConflictError>
+    revertEpoch?: number
+  }) => Effect.Effect<SessionInput.Admitted, NotFoundError | PromptConflictError | SessionInput.StaleRevertEpoch>
   readonly shell: (input: {
     id?: EventV2.ID
     sessionID: SessionSchema.ID
@@ -755,12 +756,19 @@ export const layer = Layer.effect(
             }, Effect.uninterruptible)
             const messageID = input.id ?? SessionMessage.ID.create()
             const delivery = input.delivery ?? "steer"
-            const expected = { sessionID: input.sessionID, messageID, prompt: input.prompt, delivery }
+            const expected = {
+              sessionID: input.sessionID,
+              messageID,
+              prompt: input.prompt,
+              delivery,
+              revertEpoch: input.revertEpoch,
+            }
             const admitted = yield* SessionInput.admit(db, events, {
               id: messageID,
               sessionID: input.sessionID,
               prompt: input.prompt,
               delivery,
+              revertEpoch: input.revertEpoch,
             }).pipe(
               Effect.catchDefect((defect) =>
                 defect instanceof SessionInput.LifecycleConflict

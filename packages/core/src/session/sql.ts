@@ -191,6 +191,7 @@ export const SessionInputTable = sqliteTable(
     prompt: text({ mode: "json" }).notNull().$type<Prompt>(),
     delivery: text().$type<SessionInput.Delivery>().notNull(),
     admitted_seq: integer().notNull(),
+    revert_epoch: integer(),
     promoted_seq: integer(),
     time_created: integer()
       .notNull()

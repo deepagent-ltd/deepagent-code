@@ -336,6 +336,53 @@ describe("SessionV2.prompt", () => {
     }),
   )
 
+  it.effect("fences stale revert epochs atomically and reuses the message ID as the intent key", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const input = {
+        id: messageID,
+        sessionID,
+        prompt: new Prompt({ text: "Save this intent once" }),
+        revertEpoch: 0,
+        resume: false,
+      }
+      const first = yield* session.prompt(input)
+      expect((yield* session.prompt(input)).admittedSeq).toBe(first.admittedSeq)
+      expect(first.revertEpoch).toBe(0)
+      expect((yield* session.prompt({ ...input, revertEpoch: 1 }).pipe(Effect.flip))._tag).toBe(
+        "Session.PromptConflictError",
+      )
+
+      const { db } = yield* Database.Service
+      yield* db.update(SessionTable).set({ mutation_epoch: 1 }).where(eq(SessionTable.id, sessionID)).run()
+      const stale = yield* session
+        .prompt({ ...input, id: SessionMessage.ID.create() })
+        .pipe(Effect.flip)
+      expect(stale).toMatchObject({
+        _tag: "SessionInput.StaleRevertEpoch",
+        sessionID,
+        expected: 0,
+        actual: 1,
+      })
+      expect(yield* admittedCount).toBe(1)
+      const durable = yield* db
+        .select()
+        .from(EventTable)
+        .where(eq(EventTable.type, EventV2.versionedType(SessionEvent.PromptLifecycle.Admitted.type, 1)))
+        .all()
+      expect(durable).toHaveLength(1)
+
+      const next = yield* session.prompt({
+        ...input,
+        id: SessionMessage.ID.create(),
+        revertEpoch: 1,
+      })
+      expect(next.revertEpoch).toBe(1)
+      expect(yield* admittedCount).toBe(2)
+    }),
+  )
+
   it.effect("returns one recorded message to concurrent exact retries", () =>
     Effect.gen(function* () {
       yield* setup

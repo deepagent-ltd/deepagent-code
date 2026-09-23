@@ -1353,6 +1353,7 @@ export const layer = Layer.effectDiscard(
           sessionID: event.data.sessionID,
           prompt: event.data.prompt,
           delivery: event.data.delivery,
+          revertEpoch: event.data.revertEpoch,
           timeCreated: event.data.timestamp,
         })
       }),

@@ -7,7 +7,7 @@ import { Prompt } from "@deepagent-code/core/session/prompt"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { SessionSchema } from "@deepagent-code/core/session/schema"
 import { ProjectV2 } from "@deepagent-code/core/project"
-import { AbsolutePath, PositiveInt, RelativePath, withStatics } from "@deepagent-code/core/schema"
+import { AbsolutePath, NonNegativeInt, PositiveInt, RelativePath, withStatics } from "@deepagent-code/core/schema"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 import { Schema, Struct } from "effect"
 import { HttpApiEndpoint, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
@@ -16,6 +16,7 @@ import {
   InvalidCursorError,
   InvalidRequestError,
   ServiceUnavailableError,
+  StaleRevertEpochError,
   SessionNotFoundError,
   UnknownError,
 } from "../errors"
@@ -140,9 +141,10 @@ export const SessionGroup = HttpApiGroup.make("server.session")
         prompt: Prompt,
         delivery: SessionInput.Delivery.pipe(Schema.optional),
         resume: Schema.Boolean.pipe(Schema.optional),
+        revertEpoch: NonNegativeInt.pipe(Schema.optional),
       }),
       success: Schema.Struct({ data: SessionInput.Admitted }),
-      error: [ConflictError, ServiceUnavailableError, SessionNotFoundError],
+      error: [ConflictError, StaleRevertEpochError, ServiceUnavailableError, SessionNotFoundError],
     })
       .middleware(SessionLocationMiddleware)
       .annotateMerge(

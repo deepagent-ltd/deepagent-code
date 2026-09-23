@@ -234,6 +234,7 @@ export namespace PromptLifecycle {
       prompt: Prompt,
       // Superset of SessionInput.Delivery; `goal_steer` (§S1.3) does not flow this dormant V2 path.
       delivery: Schema.Literals(["steer", "queue", "goal_steer"]),
+      revertEpoch: NonNegativeInt.pipe(Schema.optional),
     },
   })
   export type Admitted = typeof Admitted.Type
