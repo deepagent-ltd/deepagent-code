@@ -60,7 +60,6 @@ import { LearningReviewerRunner } from "@/deepagent/learning-reviewer-runner"
 import { LegacyEventCanonicalizerRuntime } from "@/legacy-event-canonicalizer-runtime"
 import { LocationIndexRuntime } from "@/location-index/runtime"
 import { V2OutboxRuntime } from "@/event/v2-outbox-runtime"
-import { TaskRunDispatcher } from "@deepagent-code/core/session/task-run-dispatcher"
 
 const v2StartupRecovery = Layer.effectDiscard(
   Effect.gen(function* () {
@@ -157,7 +156,7 @@ const baseAppLayer = Layer.mergeAll(
   // notification outbox delivery loop. Requirements (Database, SessionV2) come from the
   // provideMerge'd Database/sessionRuntimeLayer below — the same single V2 session runtime the
   // task tool and facade submit through.
-  TaskRunDispatcher.runtimeLayer(),
+  Root.taskDispatcherLayer,
 ).pipe(
   // These authorities must be providers of the merged production graph, not siblings whose
   // outputs cannot satisfy V2 outbox/session inputs.
@@ -212,7 +211,7 @@ export const AppLayer = baseAppLayer.pipe(
   // W0.5: deliver the shipped owner-authorization.json into the local DB once per runtime build
   // (after the database layer initialized; fail-open on file absence, fail-closed on verification
   // failure — nothing unverifiable is written).
-  Layer.provideMerge(V2OwnerSeed.layer({ env: process.env, appRoot: V2OwnerSeed.defaultOwnerAuthorizationAppRoot() })),
+  Layer.provideMerge(Root.ownerSeedLayer),
   Layer.provideMerge(captureRootDatabasePath),
 )
 

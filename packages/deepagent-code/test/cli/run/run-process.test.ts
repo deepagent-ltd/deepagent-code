@@ -8,6 +8,7 @@ import { Effect } from "effect"
 import { mkdir } from "node:fs/promises"
 import path from "node:path"
 import { cliIt } from "../../lib/cli-process"
+import { CompositionDigest } from "../../../src/effect/composition-digest"
 
 const goalEnvironment = {
   DEEPAGENT_ENABLED: "true",
@@ -46,6 +47,45 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
         expect(result.stdout).toContain("hello from the test llm")
       }),
     60_000,
+  )
+
+  cliIt.concurrent(
+    "logs the embedded composition digest and compares attach with the remote root",
+    ({ llm, deepagentCode }) =>
+      Effect.gen(function* () {
+        yield* llm.text("local composition response")
+        const local = yield* deepagentCode.run("local composition", { env: { DEEPAGENT_CODE_DB: ":memory:" } })
+        deepagentCode.expectExit(local, 0)
+        const localHash = local.stderr.match(/\[composition\] digest=([0-9a-f]{12})/)
+        expect(localHash?.[1]).toMatch(/^[0-9a-f]{12}$/)
+
+        const server = yield* deepagentCode.serve({ env: { DEEPAGENT_CODE_DB: ":memory:" } })
+        const response = yield* Effect.promise(() => fetch(`${server.url}/composition/digest`))
+        expect(response.status).toBe(200)
+        const remote = (yield* Effect.promise(() => response.json())) as CompositionDigest.Record
+        expect(localHash?.[1]).toBe(remote.digest.slice(0, 12))
+
+        yield* llm.text("attached composition response")
+        const attached = yield* deepagentCode.run("attached composition", {
+          env: { DEEPAGENT_CODE_DB: ":memory:" },
+          extraArgs: ["--attach", server.url],
+        })
+        deepagentCode.expectExit(attached, 0)
+        expect(attached.stderr).toContain(`[composition] digest=${remote.digest.slice(0, 12)} remote=match`)
+
+        yield* llm.text("different local composition response")
+        const mismatched = yield* deepagentCode.run("compare different local database", {
+          env: { DEEPAGENT_CODE_DB: "composition-client.db" },
+          extraArgs: ["--attach", server.url],
+        })
+        deepagentCode.expectExit(mismatched, 0)
+        expect(mismatched.stderr).toMatch(
+          new RegExp(
+            `\\[composition\\] warning: attach digest differs local=[0-9a-f]{12} remote=${remote.digest.slice(0, 12)}`,
+          ),
+        )
+      }),
+    120_000,
   )
 
   cliIt.concurrent(

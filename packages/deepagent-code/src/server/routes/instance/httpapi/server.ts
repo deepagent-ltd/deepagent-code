@@ -153,7 +153,6 @@ import { capabilityHandlers } from "./handlers/capability"
 import { systemContextHandlers } from "./handlers/system-context"
 import { contextHandlers } from "./handlers/context"
 import { V2RunnerFrame } from "@/session/v2-runner-frame"
-import { TaskRunDispatcher } from "@deepagent-code/core/session/task-run-dispatcher"
 import { V2OutboxRuntime } from "@/event/v2-outbox-runtime"
 import { V2OwnerSeed } from "@deepagent-code/core/session/runner/v2-owner-seed"
 import { V2OwnerDevMint } from "@deepagent-code/core/session/runner/v2-owner-dev-mint"
@@ -369,7 +368,7 @@ export function createRoutes(corsOptions?: CorsOptions, runtimeFlagsLayer = Runt
     // (durable background task runs claimed + drained through the authority executor) plus the
     // notification outbox delivery loop. Database comes from the provide stack below; SessionV2
     // from the V2RunnerFrame.sessionRuntimeLayer provided into this graph.
-    TaskRunDispatcher.runtimeLayer(),
+    Root.taskDispatcherLayer,
     // RI-24: snapshot the root context for the per-root runtime-integrity identity slot; the
     // identity derives detached on first drain use (RuntimeIntegrityIdentity.slotResolver).
     RuntimeIntegrityIdentity.captureRootContextLayer,
@@ -506,7 +505,7 @@ export function createRoutes(corsOptions?: CorsOptions, runtimeFlagsLayer = Runt
       // (fail-closed, nothing written) and only logged — a seed failure never blocks startup.
       Layer.provideMerge(
         Layer.mergeAll(
-          V2OwnerSeed.layer({ env: process.env, appRoot: V2OwnerSeed.defaultOwnerAuthorizationAppRoot() }),
+          Root.ownerSeedLayer,
           // run 模式适配（2026-09-03）：dev 构建自举 owner 授权 — V2-only profile 拒绝 legacy 后，
           // dev 构建（无发布授权文件）必须能自举，否则每个 dev run 都 fail-closed 在
           // v2_owner_campaign_not_verified。生产版本不走此路径（fail-closed 合同不变）。

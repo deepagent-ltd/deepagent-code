@@ -2,6 +2,8 @@ import { Layer } from "effect"
 import { Database } from "@deepagent-code/core/database/database"
 import { ApplicationTools } from "@deepagent-code/core/tool/application-tools"
 import { makeMemoMap } from "@deepagent-code/core/effect/memo-map"
+import { TaskRunDispatcher } from "@deepagent-code/core/session/task-run-dispatcher"
+import { V2OwnerSeed } from "@deepagent-code/core/session/runner/v2-owner-seed"
 import { MCP } from "@/mcp"
 import { ToolRegistry } from "@/tool/registry"
 import { InstanceRegistry } from "@/effect/instance-registry"
@@ -18,6 +20,11 @@ import { productionSourcesLayer } from "@/context-federation/production-sources"
 // including the ApplicationTools instance captured by the V2 Location map and its bridges.
 export const layer = V2RunnerFrame.sessionRuntimeLayer
 export const applicationToolsLayer = ApplicationTools.layer
+export const taskDispatcherLayer = TaskRunDispatcher.runtimeLayer()
+export const ownerSeedLayer = V2OwnerSeed.layer({
+  env: process.env,
+  appRoot: V2OwnerSeed.defaultOwnerAuthorizationAppRoot(),
+})
 export const mcpBridgeLayer = V2McpBridge.layer.pipe(
   Layer.provide(applicationToolsLayer),
   Layer.provide(InstanceRegistry.layer),
