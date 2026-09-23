@@ -768,6 +768,20 @@ export type Prompt = {
   agents?: Array<PromptAgentAttachment>
   references?: Array<PromptReferenceAttachment>
   format?: PromptOutputFormat
+  metadata?: {
+    [key: string]: unknown
+  }
+  intent?: {
+    id?: string
+    source?: string
+    variant?: string
+  }
+  agent?: string
+  model?: {
+    id: string
+    providerID: string
+    variant?: string
+  }
 }
 
 export type Pty = {
@@ -7383,6 +7397,17 @@ export type SessionMessageUser = {
   agents?: Array<PromptAgentAttachment>
   references?: Array<PromptReferenceAttachment>
   format?: PromptOutputFormat
+  agent?: string
+  model?: {
+    id: string
+    providerID: string
+    variant?: string
+  }
+  intent?: {
+    id?: string
+    source?: string
+    variant?: string
+  }
   type: "user"
 }
 

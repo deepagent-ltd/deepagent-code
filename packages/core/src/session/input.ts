@@ -579,5 +579,9 @@ const toMessage = (input: Admitted) =>
     agents: input.prompt.agents,
     references: input.prompt.references,
     format: input.prompt.format,
+    metadata: input.prompt.metadata,
+    agent: input.prompt.agent,
+    model: input.prompt.model,
+    intent: input.prompt.intent,
     time: { created: input.timeCreated },
   })

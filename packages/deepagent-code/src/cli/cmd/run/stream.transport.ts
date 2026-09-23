@@ -16,6 +16,7 @@
 // We also re-check live session status before resolving an idle event so a
 // delayed idle from an older turn cannot complete a newer busy turn.
 import type { Event, GlobalEvent, OpencodeClient } from "@deepagent-code/sdk"
+import { toV2Prompt } from "@deepagent-code/sdk"
 import { Context, Deferred, Effect, Exit, Layer, Scope, Stream } from "effect"
 import { makeRuntime } from "@/effect/run-service"
 import {
@@ -1323,8 +1324,13 @@ function createLayer(input: StreamInput) {
                   }).pipe(
                     Effect.andThen(
                       Effect.promise(() =>
-                        input.sdk.session.promptAsync(req, {
+                        input.sdk.v2.session.prompt({
+                          sessionID: req.sessionID,
+                          id: req.messageID,
+                          prompt: toV2Prompt(req),
+                        }, {
                           signal: turn.signal,
+                          throwOnError: true,
                         }),
                       ),
                     ),

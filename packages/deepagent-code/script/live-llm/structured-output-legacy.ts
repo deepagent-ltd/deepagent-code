@@ -271,7 +271,7 @@ try {
       withTmpdirInstance({ git: true, config: workspaceConfig }),
       Effect.scoped,
       Effect.provide(
-        Layer.mergeAll(SessionPromptV2.defaultLayer, Session.defaultLayer, Database.defaultLayer).pipe(
+        Layer.mergeAll(SessionPromptV2.testLayer, Session.defaultLayer, Database.defaultLayer).pipe(
         Layer.provide(testInstanceStoreLayer),
         Layer.provide(ownerSetup.ownerLayer),
       ),
