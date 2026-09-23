@@ -27,7 +27,9 @@ const responseJsonSchema: Record<string, unknown> = {
   required: ["verdict", "selected_candidate_ids"],
 }
 
-const maxOutputTokens = 1_024
+// DeepSeek live soak saw intermittent empty text at 1,024; 20/20 calls returned valid JSON at 4,096.
+// This is a bounded output allowance, not permission to retry a dispatched durable reviewer.
+const maxOutputTokens = 4_096
 const temperature = 0
 
 const reviewerRunId = (attemptId: string) => `learning-review-run:${Hash.sha256(attemptId).slice(0, 32)}`
@@ -35,7 +37,7 @@ const reviewerRunId = (attemptId: string) => `learning-review-run:${Hash.sha256(
 const policyHash = (providerId: string, modelId: string) =>
   Hash.sha256(
     CanonicalJson.stringify({
-      version: "deepagent-code.learning-reviewer-policy.v3",
+      version: "deepagent-code.learning-reviewer-policy.v4",
       provider_id: providerId,
       model_id: modelId,
       input: "frozen_candidate_request_only",
@@ -120,12 +122,11 @@ export function createLearningReviewerPort(input: {
           return yield* Effect.fail(new Error(`isolated reviewer native runtime is unavailable: ${native.reason}`))
         }
         const events = yield* native.stream.pipe(Stream.runCollect, Effect.ensuring(Effect.sync(() => abort.abort())))
-        const decoded = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(
-          Array.from(events)
-            .filter(LLMEvent.is.textDelta)
-            .map((event) => event.text)
-            .join(""),
-        )
+        const output = Array.from(events)
+          .filter(LLMEvent.is.textDelta)
+          .map((event) => event.text)
+          .join("")
+        const decoded = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(output)
         if (Option.isNone(decoded)) {
           return yield* Effect.fail(new Error("isolated reviewer returned invalid JSON output"))
         }

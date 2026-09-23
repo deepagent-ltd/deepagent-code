@@ -122,6 +122,7 @@ test("reviewer uses one frozen native request without Session, workspace, tools,
   ])
   expect(state.requests[0].tools).toEqual([])
   expect(state.requests[0].generation?.temperature).toBe(0)
+  expect(state.requests[0].generation?.maxTokens).toBe(4_096)
   expect(state.requests[0].metadata).toBeUndefined()
   expect(state.requests[0].responseFormat).toMatchObject({ type: "json", name: "learning_reviewer_response" })
   expect(JSON.stringify(state.requests[0])).not.toContain("/workspace/private")
@@ -205,7 +206,8 @@ test("DeepSeek reviewer validates JSON locally without unsupported wire text.for
     provider: {
       defaultModel: () => Effect.succeed({ providerID: deepseek.providerID, modelID: deepseek.id }),
       getSmallModel: () => Effect.succeed(deepseek),
-      getProvider: () => Effect.succeed({ ...providerInfo, id: deepseek.providerID, models: { [deepseek.id]: deepseek } }),
+      getProvider: () =>
+        Effect.succeed({ ...providerInfo, id: deepseek.providerID, models: { [deepseek.id]: deepseek } }),
       getModel: () => Effect.succeed(deepseek),
     },
     llmClient: {
