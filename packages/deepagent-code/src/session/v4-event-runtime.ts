@@ -716,7 +716,7 @@ const goalTickConsumerLayer = Layer.unwrap(
 // claims due spool rows and admits each bounded envelope as durable V2 session work
 // (`EventAdmission.admit` with the PRODUCTION SessionV2 adapter — the spool is the high/critical lane
 // of the V2 admission path). A consumption failure NACKS (bounded retry → `dead` = the DLQ) and
-// records an `event_consumer_failure` receipt in `deepagent_consumer_receipt` (`ConsumerReceipts.runOnce`,
+// records an `event_consumer_failure` receipt in `deepagent_consumer_receipt` (`ConsumerReceipts.recordDeadSpool`,
 // consumerKind "event_consumer_failure", source_event_id = the spool eventRef) + log.error — the durable,
 // admin-queriable DLQ visibility. (Admin HTTP surface: none exists for the spool today — receipt + log
 // only, per W5 scope.)
@@ -765,8 +765,8 @@ export const CONSUMER_FAILURE_KIND = "event_consumer_failure"
  *   - a strategic refusal (noise / invalid envelope / digest mismatch / disabled) is recorded as a
  *     `refused` admission receipt by `EventAdmission.admit` itself — the drain sees the typed refusal
  *     and NACKs (bounded retry); the receipt row IS the durable record of the refusal.
- *   - the `event_consumer_failure` receipt is written ONLY when the nack dead-letters the spool row
- *     (the DLQ terminal state) — intermediate retries stay visible via the spool row's own
+ *   - the `event_consumer_failure` receipt is written ONLY for a dead spool row and reconciled on each
+ *     drain pass (the DLQ terminal state) — intermediate retries stay visible via the spool row's own
  *     `attempts`/`last_error`; on eventual success a pending failure receipt is CLEARED (F4 ②).
  *   - an INTERRUPTION (daemon dispose) is not a consumption failure: the row stays claimed and the
  *     lease expiry revives it — no spurious nack, no attempt inflation, no receipt.
@@ -781,6 +781,11 @@ export const spoolDrainPass = (input: {
     const at = input.now?.() ?? Date.now()
     const v2Session = input.v2Session
     if (!v2Session || !EventAdmission.isEventV2AdmissionEnabled(input.runtimeFeatures)) return
+    // A crash can land a fenced dead nack before its admin receipt. Repair a bounded batch from
+    // the spool authority on every pass; already recorded rows are excluded by the scan.
+    const missing = yield* ConsumerReceipts.deadSpoolWithoutReceipt(input.db, CONSUMER_FAILURE_KIND, SPOOL_DRAIN_BATCH)
+    for (const row of missing)
+      yield* ConsumerReceipts.recordDeadSpool(input.db, CONSUMER_FAILURE_KIND, row.eventRef).pipe(Effect.orDie)
     const claimed = yield* EventSpool.claimDue(input.db, {
       claimantId: "v4-spool-drain",
       now: at,
@@ -831,19 +836,10 @@ export const spoolDrainPass = (input: {
           backoffMs,
         }).pipe(Effect.orDie)
         const settled = yield* EventSpool.getByRef(input.db, row.eventRef)
-        // W5 F4 ① — the DLQ receipt is written ONLY when this nack dead-lettered the row (terminal):
-        // the durable `event_consumer_failure` receipt (last_error = the reason, attempts = the real
-        // count) is the admin view of the DLQ. Intermediate retries keep the spool row as the record.
+        // The receipt's terminal status and attempt count derive from the dead spool row. If this
+        // write fails after nack, the next pass's repair scan restores it without re-admitting work.
         if (settled?.status === "dead") {
-          yield* ConsumerReceipts.runOnce(input.db, {
-            consumerKind: CONSUMER_FAILURE_KIND,
-            sourceEventId: row.eventRef,
-            // The failing side effect carries the consumption error so the durable receipt's `last_error`
-            // is the real reason (the receipt stays `pending` = "a failed consumption is recorded"; the
-            // DLQ terminal state lives on the dead spool row).
-            sideEffect: Effect.fail(new Error(reason)),
-            now: at,
-          }).pipe(Effect.catchCause(() => Effect.void))
+          yield* ConsumerReceipts.recordDeadSpool(input.db, CONSUMER_FAILURE_KIND, row.eventRef).pipe(Effect.orDie)
         }
         yield* Effect.logError("spool consumption failed (bounded retry → DLQ after cap)", {
           eventRef: row.eventRef,

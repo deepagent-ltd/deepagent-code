@@ -1450,6 +1450,50 @@ describe("EventV2", () => {
     }),
   )
 
+  it.effect("repairs an exact historical replay with its commit hook without notifying twice", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const aggregateID = EventV2.ID.create()
+      const payload = yield* events.publish(SyncMessage, { id: aggregateID, text: "historical" })
+      const replayed = {
+        id: payload.id,
+        type: EventV2.versionedType(SyncMessage.type, 1),
+        seq: payload.seq!,
+        aggregateID,
+        data: payload.data,
+      }
+      const received: EventV2.Payload[] = []
+      const repaired: number[] = []
+      yield* events.listen((event) => Effect.sync(() => received.push(event)))
+
+      yield* events.replay(replayed, { publish: true, onCommit: (seq) => Effect.sync(() => repaired.push(seq)) })
+      expect(repaired).toEqual([payload.seq!])
+      expect(received).toHaveLength(0)
+
+      const divergent = yield* events.replay({ ...replayed, data: { ...replayed.data, text: "changed" } }, {
+        onCommit: (seq) => Effect.sync(() => repaired.push(seq)),
+      }).pipe(Effect.exit)
+      expect(String(divergent)).toContain("Replay diverged")
+      expect(repaired).toEqual([payload.seq!])
+
+      const failedRepair = yield* events.replay(replayed, {
+        ownerID: "owner-a",
+        onCommit: () => Effect.fail(new Error("mirror unavailable")),
+      }).pipe(Effect.exit)
+      expect(String(failedRepair)).toContain("mirror unavailable")
+      const { db } = yield* Database.Service
+      expect((yield* db.select({ ownerID: EventSequenceTable.owner_id }).from(EventSequenceTable)
+        .where(eq(EventSequenceTable.aggregate_id, aggregateID)).get())?.ownerID).toBeNull()
+
+      yield* events.claim(aggregateID, "owner-a")
+      yield* events.replay(replayed, {
+        ownerID: "owner-b",
+        onCommit: (seq) => Effect.sync(() => repaired.push(seq)),
+      })
+      expect(repaired).toEqual([payload.seq!])
+    }),
+  )
+
   it.effect("claim fences replay owners", () =>
     Effect.gen(function* () {
       const events = yield* EventV2.Service

@@ -279,6 +279,28 @@ describe("W5 outbox writer — EventV2 publish lands in deepagent_event_outbox",
       }),
     ))
 
+  test("exact replay repairs a historical event whose C5 outbox row is missing", () =>
+    runWith((db, bridge) =>
+      Effect.gen(function* () {
+        const event = yield* bridge.publish(TestEvent, { sessionID: "ses_w5_historical", value: "historical" })
+        const serialized: EventV2.SerializedEvent = {
+          id: event.id,
+          type: EventV2.versionedType(TestEvent.type, 1),
+          seq: event.seq!,
+          aggregateID: "ses_w5_historical",
+          data: event.data,
+        }
+        yield* db.delete(DeepAgentEventOutboxTable).where(eq(DeepAgentEventOutboxTable.idempotency_key, `eventv2:${event.id}`)).run()
+        expect(yield* V2OutboxWriter.forEvent(db, event.id)).toBeUndefined()
+
+        const hooks: number[] = []
+        yield* bridge.replayAll([serialized], { onCommit: (seq) => Effect.sync(() => hooks.push(seq)) })
+        expect(hooks).toEqual([event.seq!])
+        expect(yield* V2OutboxWriter.forEvent(db, event.id)).toBeDefined()
+        expect((yield* db.select().from(EventTable).where(eq(EventTable.id, event.id)).all()).length).toBe(1)
+      }),
+    ))
+
   test("F7 scoped registry 同库: the bridge + EventV2 + Database share ONE Database", async () => {
     // Database.defaultLayer resolves the on-disk path from Global; isolate the test home so the real
     // user data dir is never touched (and clean it up after). This composes the SAME wiring as
