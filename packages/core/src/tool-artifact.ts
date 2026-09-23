@@ -1,7 +1,7 @@
 export * as ToolArtifact from "./tool-artifact"
 
 import { createHash, randomUUID } from "node:crypto"
-import { realpath, rename } from "node:fs/promises"
+import { link, realpath, unlink } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
 import path from "node:path"
 import { Effect, Schema } from "effect"
@@ -115,10 +115,23 @@ export const materialize = (input: { file: ToolFileContent; root: string; scopeI
     yield* Effect.tryPromise({
       try: async () => {
         const temporary = path.join(input.root, `${digest}.${randomUUID()}.tmp`)
-        await Bun.write(temporary, bytes, { createPath: true })
-        await rename(temporary, artifactPath(input.root, digest))
+        const target = artifactPath(input.root, digest)
+        try {
+          await Bun.write(temporary, bytes, { createPath: true })
+          // A hard link publishes the complete file without replacing an existing digest.
+          await link(temporary, target).catch(async (cause) => {
+            if (!(await Bun.file(target).exists())) throw cause
+          })
+          const retained = Bun.file(target)
+          if (retained.size !== bytes.byteLength || hashOf(new Uint8Array(await retained.arrayBuffer())) !== digest)
+            throw fail("integrity_mismatch")
+        } finally {
+          await unlink(temporary).catch((cause: NodeJS.ErrnoException) => {
+            if (cause.code !== "ENOENT") throw cause
+          })
+        }
       },
-      catch: () => fail("unavailable"),
+      catch: (cause) => (cause instanceof Error ? cause : fail("unavailable")),
     })
     return toolFile({
       type: "file",

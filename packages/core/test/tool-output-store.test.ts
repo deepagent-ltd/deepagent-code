@@ -1,5 +1,6 @@
 import { describe, expect } from "bun:test"
 import path from "path"
+import { createHash } from "node:crypto"
 import { pathToFileURL } from "node:url"
 import { Cause, DateTime, Effect, Exit, Fiber, Layer, Option } from "effect"
 import { LLM } from "@deepagent-code/llm"
@@ -341,6 +342,77 @@ describe("ToolOutputStore", () => {
           .pipe(Effect.flip)
         expect(refused._tag).toBe("ToolArtifact.Error")
         if (refused._tag === "ToolArtifact.Error") expect(refused.reason).toBe("invalid_source")
+      }),
+    ),
+  )
+
+  it.live("reuses an existing digest across concurrent and repeated materializations", () =>
+    withStore(({ root, store, fs }) =>
+      Effect.gen(function* () {
+        const managed = path.join(root, "tool-output", "image.png")
+        yield* Effect.promise(() => Bun.write(managed, "pixel", { createPath: true }))
+        const output = {
+          structured: {},
+          content: [
+            {
+              type: "file" as const,
+              source: { type: "file" as const, uri: pathToFileURL(managed).toString() },
+              mime: "image/png",
+            },
+          ],
+        }
+        const first = yield* Effect.all(
+          [
+            store.bound({ sessionID, toolCallID: "call-concurrent-a", output }),
+            store.bound({ sessionID, toolCallID: "call-concurrent-b", output }),
+          ],
+          { concurrency: 2 },
+        )
+        const repeated = yield* store.bound({ sessionID, toolCallID: "call-repeated", output })
+        expect(first[0].output.content).toEqual(first[1].output.content)
+        expect(repeated.output.content).toEqual(first[0].output.content)
+        const digest = createHash("sha256").update("pixel").digest("hex")
+        const retained = path.join(root, "tool-artifacts", "unplaced", sessionID)
+        expect(yield* fs.readDirectory(retained)).toEqual([`${digest}.bin`])
+        expect(yield* fs.readFileString(path.join(retained, `${digest}.bin`))).toBe("pixel")
+      }),
+    ),
+  )
+
+  it.live("rejects a conflicting digest file without overwriting it or leaving temporary files", () =>
+    withStore(({ root, store, fs }) =>
+      Effect.gen(function* () {
+        const managed = path.join(root, "tool-output", "image.png")
+        yield* Effect.promise(() => Bun.write(managed, "pixel", { createPath: true }))
+        const digest = createHash("sha256").update("pixel").digest("hex")
+        const retained = path.join(root, "tool-artifacts", "unplaced", sessionID)
+        yield* Effect.forEach(["other", "longer"], (corrupted) =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() =>
+              Bun.write(path.join(retained, `${digest}.bin`), corrupted, { createPath: true }),
+            )
+            const error = yield* store
+              .bound({
+                sessionID,
+                toolCallID: "call-conflicting-digest",
+                output: {
+                  structured: {},
+                  content: [
+                    {
+                      type: "file",
+                      source: { type: "file", uri: pathToFileURL(managed).toString() },
+                      mime: "image/png",
+                    },
+                  ],
+                },
+              })
+              .pipe(Effect.flip)
+            expect(error._tag).toBe("ToolArtifact.Error")
+            if (error._tag === "ToolArtifact.Error") expect(error.reason).toBe("integrity_mismatch")
+            expect(yield* fs.readFileString(path.join(retained, `${digest}.bin`))).toBe(corrupted)
+            expect(yield* fs.readDirectory(retained)).toEqual([`${digest}.bin`])
+          }),
+        )
       }),
     ),
   )
