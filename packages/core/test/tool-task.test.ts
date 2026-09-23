@@ -553,6 +553,39 @@ describe("task tool structured-output degraded settlement (bug-V2.0-003)", () =>
       expect(evidence?.raw_output).toBe(output.text)
     }),
   )
+
+  it.effect("a validated finalizer candidate seals evidence bound to the child's answer message", () =>
+    Effect.gen(function* () {
+      const { db, sessions, registry } = yield* services
+      yield* registerAgents
+      const parent = yield* sessions.create({ location: { directory: AbsolutePath.make("/tmp") } })
+
+      // The research turn and the finalizer turn both produce the schema-valid candidate.
+      fabricateTurns(db, `{"answer":42}`)
+      const settlement = yield* settleTool(registry, schemaCall(parent.id))
+
+      expect(settlement.result.type).toBe("text")
+      const output = outputOf(settlement)
+      expect(output.text).toBe(`{"answer":42}`)
+
+      const run = yield* db
+        .select()
+        .from(TaskRunTable)
+        .where(eq(TaskRunTable.child_session_id, SessionSchema.ID.make(output.task_id)))
+        .get()
+        .pipe(Effect.orDie)
+      expect(run?.state).toBe("completed")
+
+      // Regression (live subagent-foreground): the finalizer's evidence input must carry the
+      // authority's `outputMessageId` field — a misnamed spread silently dropped the binding and
+      // the insert guard aborted every validated record with a raw constraint error.
+      const evidence = yield* evidenceOf(db, run!.run_id)
+      expect(evidence?.validation_outcome).toBe("validated")
+      expect(evidence?.output_message_id).toBe("msg_degraded_turn_2")
+      expect(evidence?.raw_output).toBe(`{"answer":42}`)
+      expect(evidence?.owner_token).toBe(`core-v2-finalizer:${run!.child_session_id}`)
+    }),
+  )
 })
 
 describe("task tool timeout notice (WS4b-S2.3)", () => {

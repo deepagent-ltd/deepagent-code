@@ -626,7 +626,7 @@ export const layer = Layer.effectDiscard(
                   const recordEvidence = (
                     validationOutcome: "validated" | "validation_failed",
                     rawOutput: string,
-                    outputMessageID?: SessionMessage.ID,
+                    outputMessageId?: SessionMessage.ID,
                   ) =>
                     Effect.gen(function* () {
                       if (launch.runID === undefined) return
@@ -639,7 +639,7 @@ export const layer = Layer.effectDiscard(
                         schema: outputSchema,
                         validationOutcome,
                         rawOutput,
-                        ...(outputMessageID === undefined ? {} : { outputMessageID }),
+                        ...(outputMessageId === undefined ? {} : { outputMessageId }),
                         ownerToken: `core-v2-finalizer:${childID}`,
                       })
                     })
