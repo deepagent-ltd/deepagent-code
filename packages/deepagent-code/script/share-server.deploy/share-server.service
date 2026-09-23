@@ -1,0 +1,17 @@
+[Unit]
+Description=DeepAgent session share host
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/deepagent-share/env
+WorkingDirectory=%h/.local/share/deepagent-share
+ExecStart=%h/.local/lib/deepagent-share/current/share-server
+Restart=on-failure
+RestartSec=3s
+NoNewPrivileges=true
+UMask=0077
+
+[Install]
+WantedBy=default.target

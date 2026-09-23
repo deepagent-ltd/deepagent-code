@@ -64,6 +64,8 @@ export function createShareHandler(input: { directory: string; publicURL: string
 
   return async (request: Request): Promise<Response> => {
     const url = new URL(request.url)
+    if (request.method === "GET" && url.pathname === "/healthz")
+      return new Response("ok", { headers: { ...noStore, "Content-Type": "text/plain; charset=utf-8" } })
     if (request.method === "POST" && url.pathname === "/api/bundles") {
       if (!equals(tokenFrom(request), input.uploadToken)) return unauthorized()
       if (Number(request.headers.get("content-length") ?? 0) > BUNDLE_MAX_BYTES) return new Response("bundle too large", { status: 413 })

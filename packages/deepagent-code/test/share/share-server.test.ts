@@ -23,6 +23,10 @@ test("public share upload, token download, and revoke", async () => {
     const post = (authorization: string) => handle(new Request("https://share.example/api/bundles", {
       method: "POST", headers: { authorization }, body: new Blob([new Uint8Array(bytes)]),
     }))
+    const health = await handle(new Request("https://share.example/healthz"))
+    expect(health.status).toBe(200)
+    expect(await health.text()).toBe("ok")
+    expect(health.headers.get("cache-control")).toBe("no-store")
     expect((await post("Bearer wrong")).status).toBe(401)
     const uploaded = await post("Bearer upload-token-with-more-than-32-characters")
     expect(uploaded.status).toBe(201)
