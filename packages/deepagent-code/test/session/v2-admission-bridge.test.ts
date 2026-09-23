@@ -205,12 +205,16 @@ describe("C5-12 V2 admission bridge provider", () => {
     )
   })
 
-  test("schedule and repair events carry explicit execution modes without changing ordinary admission", async () => {
-    for (const type of ["schedule.scan", "ci.repair.requested"]) {
-      expect(V4_EVENT_REGISTRY.lookup(type)?.execution ?? "single").toBe(
-        type === "ci.repair.requested" ? "dag" : "single",
-      )
-      const req = { ...request(), event: event({ type, source: "schedule" }) }
+  test("registered DAG event types retain ordinary admission when explicitly requested", async () => {
+    for (const [type, source, execution] of [
+      ["schedule.scan", "schedule", "single"],
+      ["ci.repair.requested", "schedule", "dag"],
+      ["ci.failure", "ci", "dag"],
+      ["pr.comment", "pr", "dag"],
+      ["monitor.alert", "monitor", "dag"],
+    ] as const) {
+      expect(V4_EVENT_REGISTRY.lookup(type)?.execution ?? "single").toBe(execution)
+      const req = { ...request(), event: event({ type, source }) }
       const v2Calls: V2PromptCall[] = []
       await runWithDb((db) =>
         Effect.gen(function* () {
@@ -225,22 +229,29 @@ describe("C5-12 V2 admission bridge provider", () => {
     }
   })
 
-  test("DAG ingress resolves one durable receipt without prompting the event parent", async () => {
-    const req = { ...request(), event: event({ type: "ci.repair.requested", source: "schedule" }) }
-    const v2Calls: V2PromptCall[] = []
-    await runWithDb((db) =>
-      Effect.gen(function* () {
-        const provider = makeV2AdmissionBridge({ db, v2Session: fakeV2Session(v2Calls) })
-        expect(provider.executionFor?.(req.event.type)).toBe("dag")
-        if (!provider.admitReceiptOnly) throw new Error("missing receipt-only adapter")
-        yield* provider.admitReceiptOnly({ request: req, scope: scope(req.event) })
-        yield* provider.admitReceiptOnly({ request: req, scope: scope(req.event) })
-        const rows = yield* EventAdmission.forSession(db, parentSessionIDFor(req.event.id))
-        expect(rows).toHaveLength(1)
-        expect(rows[0]).toMatchObject({ status: "resolved" })
-      }),
-    )
-    expect(v2Calls).toEqual([])
+  test("DAG ingress for each registered type resolves one receipt without prompting the parent", async () => {
+    for (const [type, source] of [
+      ["ci.repair.requested", "schedule"],
+      ["ci.failure", "ci"],
+      ["pr.comment", "pr"],
+      ["monitor.alert", "monitor"],
+    ] as const) {
+      const req = { ...request(), event: event({ type, source }) }
+      const v2Calls: V2PromptCall[] = []
+      await runWithDb((db) =>
+        Effect.gen(function* () {
+          const provider = makeV2AdmissionBridge({ db, v2Session: fakeV2Session(v2Calls) })
+          expect(provider.executionFor?.(req.event.type)).toBe("dag")
+          if (!provider.admitReceiptOnly) throw new Error("missing receipt-only adapter")
+          yield* provider.admitReceiptOnly({ request: req, scope: scope(req.event) })
+          yield* provider.admitReceiptOnly({ request: req, scope: scope(req.event) })
+          const rows = yield* EventAdmission.forSession(db, parentSessionIDFor(req.event.id))
+          expect(rows).toHaveLength(1)
+          expect(rows[0]).toMatchObject({ status: "resolved" })
+        }),
+      )
+      expect(v2Calls).toEqual([])
+    }
   })
 
   test("provider.admit fails closed on an unregistered event type", async () => {
