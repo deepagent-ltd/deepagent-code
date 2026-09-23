@@ -101,6 +101,11 @@ export const chat = Effect.gen(function* () {
           existing?.provider_id !== String(selected.entry.id) || existing?.model_id !== String(selected.model.id) ||
           existing?.lane_session_id !== laneSessionID))
         return proxyError(409, "request_replay_unavailable", "Request execution binding changed since admission")
+      const credential = laneSessionID ? undefined : yield* auth.get(selected.entry.id)
+      const options = { ...selected.entry.options, ...selected.model.options }
+      const apiKey = credential?.type === "api" ? credential.key : typeof options.apiKey === "string" ? options.apiKey : selected.entry.key
+      if (!laneSessionID && (!apiKey || credential?.type === "oauth"))
+        return proxyError(501, "provider_not_supported", "Model transport is not available")
 
       const eventData = {
         requestID: ledgerID,
@@ -382,11 +387,6 @@ export const chat = Effect.gen(function* () {
         return HttpServerResponse.jsonUnsafe(payload, { headers: { "x-request-id": requestID, "cache-control": "no-store" } })
       }
 
-      const credential = yield* auth.get(selected.entry.id)
-      const options = { ...selected.entry.options, ...selected.model.options }
-      const apiKey = credential?.type === "api" ? credential.key : typeof options.apiKey === "string" ? options.apiKey : selected.entry.key
-      if (!apiKey || credential?.type === "oauth")
-        return proxyError(501, "provider_not_supported", "Model transport is not available")
       const baseURL = typeof options.baseURL === "string" ? options.baseURL : undefined
 
       const request = LLMNative.request({

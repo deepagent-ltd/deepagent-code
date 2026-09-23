@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { createHash } from "node:crypto"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ConfigProvider, Effect, Layer } from "effect"
@@ -386,6 +386,21 @@ describe("gateway release gate", () => {
       const unknown = await send("unknown-2", "Again", "sk-test-unknown-tenant")
       expect(unknown.status).toBe(503)
       expect((await unknown.json()).error.code).toBe("quota_usage_unknown")
+      expect(hits).toHaveLength(2)
+      const unsupportedDirectory = join(directory, "unsupported")
+      await mkdir(unsupportedDirectory)
+      const unsupportedProvider = testProviderConfig(`http://127.0.0.1:${upstream.port}/v1`)
+      unsupportedProvider.provider.test.options.apiKey = ""
+      await Bun.write(join(unsupportedDirectory, "deepagent-code.json"), JSON.stringify(unsupportedProvider))
+      const unsupportedTenant = await web.handler(new Request("http://localhost/proxy/admin/tenants", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: "tenant-unsupported", key: "sk-test-unsupported-tenant", directory: unsupportedDirectory,
+          model_allowlist: ["test/test-model"], tier: "passthrough", quota_requests_per_minute: 10,
+          quota_tokens_per_day: 100, lane_limit: 8, deadline_ms: 1_000 }),
+      }), HttpApiApp.context)
+      expect(unsupportedTenant.status).toBe(201)
+      expect((await send("unsupported-1", "No provider credential", "sk-test-unsupported-tenant")).status).toBe(501)
+      expect((await send("unsupported-2", "Retry after unsupported provider", "sk-test-unsupported-tenant")).status).toBe(501)
       expect(hits).toHaveLength(2)
       await web.dispose()
     } finally {
