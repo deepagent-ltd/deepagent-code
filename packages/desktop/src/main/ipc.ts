@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process"
-import { stat } from "node:fs/promises"
+import { stat, writeFile } from "node:fs/promises"
 import { basename } from "node:path"
 import { app, BrowserWindow, Notification, clipboard, dialog, ipcMain, shell } from "electron"
 import type { IpcMainEvent, IpcMainInvokeEvent } from "electron"
@@ -186,6 +186,15 @@ export function registerIpcHandlers(deps: Deps) {
       return result.filePath ?? null
     },
   )
+
+  ipcMain.handle("save-file-dialog", async (_event: IpcMainInvokeEvent, input: { defaultPath: string; bytes: ArrayBuffer }) => {
+    if (!(input.bytes instanceof ArrayBuffer) || input.bytes.byteLength > 64 * 1024 * 1024)
+      throw new Error("Invalid session bundle")
+    const result = await dialog.showSaveDialog({ title: "Save session bundle", defaultPath: basename(input.defaultPath) })
+    if (result.canceled || !result.filePath) return false
+    await writeFile(result.filePath, new Uint8Array(input.bytes))
+    return true
+  })
 
   ipcMain.on("open-link", (_event: IpcMainEvent, url: string) => {
     void shell.openExternal(url)

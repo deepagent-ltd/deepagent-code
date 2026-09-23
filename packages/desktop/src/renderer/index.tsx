@@ -177,6 +177,9 @@ const createPlatform = (): Platform => {
         defaultPath: opts?.defaultPath,
       })
     },
+    async saveFileDialog(input) {
+      return window.api.saveFileDialog(input)
+    },
 
     openLink(url: string) {
       window.api.openLink(url)

@@ -1122,28 +1122,105 @@ export function MessageTimeline(props: {
     navigate(`/${params.dir}/session`)
   }
 
-  const exportSession = async (sessionID: string) => {
+  const [exportProgress, setExportProgress] = createSignal("")
+  const [bundleShare, setBundleShare] = createSignal<Record<string, { url: string; revokeToken: string }>>((() => {
+    if (typeof localStorage === "undefined") return {}
+    try {
+      return JSON.parse(localStorage.getItem("deepagent.bundle-shares") ?? "{}")
+    } catch {
+      return {}
+    }
+  })())
+  let exportAbort: AbortController | undefined
+
+  const shareSessionBundle = async (sessionID: string, tier: "conversation" | "session_logs") => {
+    if (exportProgress()) return
+    setExportProgress(language.t("session.bundle.export.preparing"))
+    try {
+      const previous = bundleShare()[sessionID]
+      if (previous) {
+        await sdk.client.session.revokeBundleShare(previous, { throwOnError: true })
+        const remaining = { ...bundleShare() }
+        delete remaining[sessionID]
+        setBundleShare(remaining)
+        localStorage.setItem("deepagent.bundle-shares", JSON.stringify(remaining))
+      }
+      const response = await sdk.client.session.shareBundle({ sessionID, tier }, { throwOnError: true })
+      const share = response.data
+      if (!share?.url || !share.revokeToken) throw new Error("Share host returned no link")
+      const next = { ...bundleShare(), [sessionID]: { url: share.url, revokeToken: share.revokeToken } }
+      setBundleShare(next)
+      localStorage.setItem("deepagent.bundle-shares", JSON.stringify(next))
+      await navigator.clipboard.writeText(share.url)
+      showToast({ variant: "success", icon: "circle-check", title: language.t("session.bundle.share.copied") })
+    } catch (error) {
+      showToast({ title: error instanceof Error ? error.message : "Share failed" })
+    } finally {
+      setExportProgress("")
+    }
+  }
+
+  const revokeSessionBundle = async (sessionID: string) => {
+    const share = bundleShare()[sessionID]
+    if (!share) return
+    try {
+      await sdk.client.session.revokeBundleShare(share, { throwOnError: true })
+      const next = { ...bundleShare() }
+      delete next[sessionID]
+      setBundleShare(next)
+      localStorage.setItem("deepagent.bundle-shares", JSON.stringify(next))
+      showToast({ variant: "success", icon: "circle-check", title: language.t("session.bundle.share.revoked") })
+    } catch (error) {
+      showToast({ title: error instanceof Error ? error.message : "Revoke failed" })
+    }
+  }
+
+  const exportSession = async (sessionID: string, tier: "conversation" | "conversation_metadata" | "session_logs") => {
+    if (exportProgress()) return
     const session = sync.session.get(sessionID)
     const base = (session?.title || sessionID).replace(/[^\w\u4e00-\u9fff-]+/g, "-").slice(0, 60) || sessionID
+    exportAbort = new AbortController()
+    setExportProgress(language.t("session.bundle.export.preparing"))
     try {
-      const res = await sdk.client.session.exportSnapshot({ sessionID }, { throwOnError: true })
-      const bundle = typeof res.data === "string" ? res.data : JSON.stringify(res.data ?? {})
-      const url = URL.createObjectURL(new Blob([bundle], { type: "application/json" }))
-      const anchor = document.createElement("a")
-      anchor.href = url
-      anchor.download = `${base}-snapshot.json`
-      document.body.appendChild(anchor)
-      anchor.click()
-      anchor.remove()
-      URL.revokeObjectURL(url)
+      const response = await sdk.client.session.exportBundleStream(
+        { sessionID, tier, redact: true }, { throwOnError: true, signal: exportAbort.signal, sseMaxRetryAttempts: 1 },
+      )
+      let bundle = ""
+      for await (const raw of response.stream) {
+        const event = raw as unknown as { type: string; phase?: string; percent?: number; bundle?: string; message?: string }
+        if (event.type === "progress") setExportProgress(`${event.phase ?? "Preparing"} ${event.percent ?? 0}%`)
+        if (event.type === "error") throw new Error(event.message ?? "Export failed")
+        if (event.type === "result") bundle = event.bundle ?? ""
+      }
+      if (!bundle) throw new Error("Export ended without a bundle")
+      const bytes = Uint8Array.from(atob(bundle), (character) => character.charCodeAt(0))
+      setExportProgress(language.t("session.bundle.export.saving"))
+      const name = `${base}-${tier}.zip`
+      if (platform.saveFileDialog) {
+        const saved = await platform.saveFileDialog({ defaultPath: name, bytes: bytes.buffer })
+        if (!saved) return
+      } else {
+        const url = URL.createObjectURL(new Blob([bytes], { type: "application/zip" }))
+        const anchor = document.createElement("a")
+        anchor.href = url
+        anchor.download = name
+        document.body.appendChild(anchor)
+        anchor.click()
+        anchor.remove()
+        URL.revokeObjectURL(url)
+      }
       showToast({
         variant: "success",
         icon: "circle-check",
-        title: language.t("session.export.success"),
+        title: language.t("session.bundle.export.success"),
       })
     } catch (err) {
-      console.error("Failed to export session snapshot", err)
-      showToast({ title: language.t("common.requestFailed") })
+      if (exportAbort.signal.aborted) return
+      console.error("Failed to export session ZIP", err)
+      showToast({ title: err instanceof Error ? err.message : language.t("common.requestFailed") })
+    } finally {
+      exportAbort = undefined
+      setExportProgress("")
     }
   }
 
@@ -1699,6 +1776,12 @@ export function MessageTimeline(props: {
 
   return (
     <div class="relative w-full h-full min-w-0">
+      <Show when={exportProgress()}>
+        <div class="absolute left-4 right-4 top-4 z-[70] rounded-md bg-surface-base px-4 py-3 shadow-lg md:left-12 md:right-12" role="status">
+          <span>{exportProgress()}</span>
+          <button class="ml-4 underline" onClick={() => exportAbort?.abort()}>{language.t("session.bundle.export.cancel")}</button>
+        </div>
+      </Show>
       <Show when={recoveryStatus()}>
         {(recovery) => (
           <div class="absolute left-4 right-4 top-4 z-[70] md:left-12 md:right-12">
@@ -1923,9 +2006,26 @@ export function MessageTimeline(props: {
                                 </DropdownMenu.ItemLabel>
                               </DropdownMenu.Item>
                             </Show>
-                            <DropdownMenu.Item onSelect={() => void exportSession(id)}>
-                              <DropdownMenu.ItemLabel>{language.t("session.export.action")}</DropdownMenu.ItemLabel>
+                            <DropdownMenu.Item onSelect={() => void exportSession(id, "conversation")}>
+                              <DropdownMenu.ItemLabel>{language.t("session.bundle.export.conversation")}</DropdownMenu.ItemLabel>
                             </DropdownMenu.Item>
+                            <DropdownMenu.Item onSelect={() => void exportSession(id, "conversation_metadata")}>
+                              <DropdownMenu.ItemLabel>{language.t("session.bundle.export.metadata")}</DropdownMenu.ItemLabel>
+                            </DropdownMenu.Item>
+                            <DropdownMenu.Item onSelect={() => void exportSession(id, "session_logs")}>
+                              <DropdownMenu.ItemLabel>{language.t("session.bundle.export.logs")}</DropdownMenu.ItemLabel>
+                            </DropdownMenu.Item>
+                            <DropdownMenu.Item onSelect={() => void shareSessionBundle(id, "conversation")}>
+                              <DropdownMenu.ItemLabel>{language.t("session.bundle.share.conversation")}</DropdownMenu.ItemLabel>
+                            </DropdownMenu.Item>
+                            <DropdownMenu.Item onSelect={() => void shareSessionBundle(id, "session_logs")}>
+                              <DropdownMenu.ItemLabel>{language.t("session.bundle.share.logs")}</DropdownMenu.ItemLabel>
+                            </DropdownMenu.Item>
+                            <Show when={bundleShare()[id]}>
+                              <DropdownMenu.Item onSelect={() => void revokeSessionBundle(id)}>
+                                <DropdownMenu.ItemLabel>{language.t("session.bundle.share.revoke")}</DropdownMenu.ItemLabel>
+                              </DropdownMenu.Item>
+                            </Show>
                             <DropdownMenu.Item onSelect={() => command.trigger("session.export")}>
                               <DropdownMenu.ItemLabel>{language.t("session.export.markdown")}</DropdownMenu.ItemLabel>
                             </DropdownMenu.Item>

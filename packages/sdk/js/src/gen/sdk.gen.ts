@@ -478,12 +478,21 @@ import type {
   SessionDiffArtifactManifestResponses,
   SessionDiffErrors,
   SessionDiffResponses,
+  SessionExportBundleErrors,
+  SessionExportBundleResponses,
+  SessionExportBundleStreamErrors,
+  SessionExportBundleStreamResponse,
+  SessionExportBundleStreamResponses,
   SessionExportSnapshotErrors,
   SessionExportSnapshotResponses,
   SessionForkErrors,
   SessionForkResponses,
   SessionGetErrors,
   SessionGetResponses,
+  SessionImportBundleErrors,
+  SessionImportBundleResponses,
+  SessionImportBundleShareErrors,
+  SessionImportBundleShareResponses,
   SessionImportSnapshotErrors,
   SessionImportSnapshotResponses,
   SessionInitErrors,
@@ -515,6 +524,10 @@ import type {
   SessionProviderResolutionResolveResponses,
   SessionRevertErrors,
   SessionRevertResponses,
+  SessionRevokeBundleShareErrors,
+  SessionRevokeBundleShareResponses,
+  SessionShareBundleErrors,
+  SessionShareBundleResponses,
   SessionShareErrors,
   SessionShareResponses,
   SessionShellErrors,
@@ -2098,7 +2111,7 @@ export class Backup extends HeyApiClient {
   /**
    * Verify or restore a backup
    *
-   * Verifies the selected backup. In the incident-only maintenance shell, dry_run:false acquires the exclusive database owner, quarantines the current DB/WAL/SHM, restores and forward-migrates, then requires a process restart. A live business runtime refuses installation.
+   * Verifies the selected backup. In the incident-only maintenance shell, dry_run:false acquires the exclusive database owner, quarantines the current DB/WAL/SHM, restores and forward-migrates, then reopens the business runtime in the same process. A live business runtime refuses installation.
    */
   public restore<ThrowOnError extends boolean = false>(
     parameters?: {
@@ -10005,7 +10018,7 @@ export class Session2 extends HeyApiClient {
   /**
    * Export a session snapshot
    *
-   * Export the session's conversation (session + messages + parts) as a self-describing snapshot bundle (JSON). The bundle re-imports on another device as a fresh, continuable session.
+   * Export the session's conversation (session + messages + parts) as a self-describing snapshot bundle (JSON). The bundle re-imports on another device as a fresh, read-only archive.
    */
   public exportSnapshot<ThrowOnError extends boolean = false>(
     parameters: {
@@ -10028,7 +10041,7 @@ export class Session2 extends HeyApiClient {
   /**
    * Import a session snapshot
    *
-   * Import a previously exported session bundle into the current instance as a fresh, continuable session (new IDs, re-rooted to the current project/directory).
+   * Import a previously exported session bundle into the current instance as a fresh, read-only archive (new IDs, re-rooted to the current project/directory).
    */
   public importSnapshot<ThrowOnError extends boolean = false>(
     parameters: {
@@ -10043,6 +10056,206 @@ export class Session2 extends HeyApiClient {
       ThrowOnError
     >({
       url: "/session/import-snapshot",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Export a verified read-only session ZIP
+   */
+  public exportBundle<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      tier: "conversation" | "conversation_metadata" | "session_logs"
+      archive?: "zip"
+      redact?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "body", key: "tier" },
+            { in: "body", key: "archive" },
+            { in: "body", key: "redact" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<SessionExportBundleResponses, SessionExportBundleErrors, ThrowOnError>(
+      {
+        url: "/session/{sessionID}/export-bundle",
+        ...options,
+        ...params,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+          ...params.headers,
+        },
+      },
+    )
+  }
+
+  /**
+   * Stream ZIP export progress and result
+   */
+  public exportBundleStream<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      tier: "conversation" | "conversation_metadata" | "session_logs"
+      archive?: "zip"
+      redact?: boolean
+    },
+    options?: Options<never, ThrowOnError, SessionExportBundleStreamResponse>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "body", key: "tier" },
+            { in: "body", key: "archive" },
+            { in: "body", key: "redact" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).sse.post<
+      SessionExportBundleStreamResponses,
+      SessionExportBundleStreamErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/export-bundle-stream",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Import a verified read-only session ZIP
+   */
+  public importBundle<ThrowOnError extends boolean = false>(
+    parameters: {
+      bundle: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "body", key: "bundle" }] }])
+    return (options?.client ?? this.client).post<SessionImportBundleResponses, SessionImportBundleErrors, ThrowOnError>(
+      {
+        url: "/session/import-bundle",
+        ...options,
+        ...params,
+        headers: {
+          "Content-Type": "application/json",
+          ...options?.headers,
+          ...params.headers,
+        },
+      },
+    )
+  }
+
+  /**
+   * Upload a redacted session ZIP to the configured share host
+   */
+  public shareBundle<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      tier: "conversation" | "conversation_metadata" | "session_logs"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "body", key: "tier" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<SessionShareBundleResponses, SessionShareBundleErrors, ThrowOnError>({
+      url: "/session/{sessionID}/share-bundle",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Import a verified ZIP from a share link
+   */
+  public importBundleShare<ThrowOnError extends boolean = false>(
+    parameters: {
+      url: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "body", key: "url" }] }])
+    return (options?.client ?? this.client).post<
+      SessionImportBundleShareResponses,
+      SessionImportBundleShareErrors,
+      ThrowOnError
+    >({
+      url: "/session/import-bundle-share",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Revoke a session ZIP share
+   */
+  public revokeBundleShare<ThrowOnError extends boolean = false>(
+    parameters: {
+      url: string
+      revokeToken: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "body", key: "url" },
+            { in: "body", key: "revokeToken" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      SessionRevokeBundleShareResponses,
+      SessionRevokeBundleShareErrors,
+      ThrowOnError
+    >({
+      url: "/session/revoke-bundle-share",
       ...options,
       ...params,
       headers: {
