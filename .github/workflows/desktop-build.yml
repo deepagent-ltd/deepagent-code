@@ -159,7 +159,15 @@ jobs:
       - name: Install arm64 Windows platform packages
         if: matrix.group == 'win'
         shell: pwsh
-        run: npm install --no-save --no-package-lock --no-audit --no-fund "@lydell/node-pty-win32-arm64@1.2.0-beta.12" "@parcel/watcher-win32-arm64@2.5.1"
+        # npm chokes on the workspace's `catalog:` protocol, so install into an
+        # empty prefix (npm then ignores every package.json) and copy the platform
+        # packages into the desktop node_modules where electron-builder's os/cpu
+        # filter picks them up for the arm64 artifact.
+        run: |
+          $tmp = Join-Path $env:RUNNER_TEMP "win-arm64-pkgs"
+          New-Item -ItemType Directory -Force $tmp | Out-Null
+          npm install --no-save --no-package-lock --no-audit --no-fund --prefix $tmp "@lydell/node-pty-win32-arm64@1.2.0-beta.12" "@parcel/watcher-win32-arm64@2.5.1"
+          Copy-Item -Recurse -Force (Join-Path $tmp "node_modules" "*") "node_modules"
 
       # bun run build invokes the package prebuild lifecycle before electron-vite.
       - name: Build renderer

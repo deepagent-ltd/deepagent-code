@@ -90,7 +90,7 @@ const writeJsonAtomic = (filePath: string, value: unknown) =>
   Effect.promise(async () => {
     await fs.mkdir(path.dirname(filePath), { recursive: true })
     const tmp = `${filePath}.tmp-${Math.random().toString(36).slice(2)}`
-    await Bun.write(tmp, `${JSON.stringify(value, null, 2)}\n`)
+    await fs.writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`)
     await fs.rename(tmp, filePath)
   }).pipe(
     Effect.catchCause((cause) =>
@@ -105,7 +105,7 @@ const writeJsonAtomic = (filePath: string, value: unknown) =>
 
 /** Read + structurally validate the persisted report; a missing file is `undefined`. */
 export const read = Effect.fn("MigrationReport.read")(function* (reportPath: string) {
-  const text = yield* Effect.promise(() => Bun.file(reportPath).text()).pipe(
+  const text = yield* Effect.promise(() => fs.readFile(reportPath, "utf8")).pipe(
     Effect.catchCause(() => Effect.succeed(undefined)),
   )
   if (text === undefined) return undefined
@@ -136,8 +136,9 @@ const overallOf = (entries: readonly ReportEntry[]): CheckStatus =>
  * read as `another_process_active`. A genuinely foreign live holder still fails preflight.
  */
 const ownProcessHoldsLock = async (dbPath: string) => {
-  const meta = await Bun.file(path.join(`${dbPath}.runtime.lock`, "meta.json"))
-    .json()
+  const meta = await fs
+    .readFile(path.join(`${dbPath}.runtime.lock`, "meta.json"), "utf8")
+    .then((text) => JSON.parse(text))
     .catch(() => undefined)
   return (
     typeof meta === "object" &&
