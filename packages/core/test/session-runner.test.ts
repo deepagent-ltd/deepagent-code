@@ -228,11 +228,6 @@ const budgetModel = Model.make({
   provider: "fake",
   route: OpenAIChat.route.with({ limits: { context: 60_000, output: 1_000 } }),
 })
-const managedModel = Model.make({
-  id: "deepseek-flash",
-  provider: "deepseek",
-  route: OpenAIChat.route.with({ limits: { context: 1_000, output: 50 } }),
-})
 const managedCompactModel = Model.make({
   id: "deepseek-flash",
   provider: "deepseek",
@@ -1200,35 +1195,51 @@ describe("SessionRunnerLLM", () => {
     )
   }
 
-  it.effect("blocks a managed over-budget request before any provider attempt", () =>
-    Effect.gen(function* () {
-      yield* setup
-      currentModel = managedModel
-      const session = yield* SessionV2.Service
-      const { db } = yield* Database.Service
-      requests.length = 0
-      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "long input ".repeat(2_000) }), resume: false })
+  for (const [providerID, apiModelID, policyKey] of [
+    ["deepseek", "deepseek-v4-pro", "deepseek-v4-pro"],
+    ["deepseek", "deepseek-flash", "deepseek-v4-flash"],
+    ["moonshotai", "kimi-k3", "kimi-k3"],
+    ["zhipuai", "glm-5.2", "glm-5.2"],
+  ] as const) {
+    it.effect(`blocks ${apiModelID} before any provider attempt with a real assembled request`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        currentModel = Model.make({
+          id: apiModelID,
+          provider: providerID,
+          route: OpenAIChat.route.with({ limits: { context: 1_000, output: 50 } }),
+        })
+        const session = yield* SessionV2.Service
+        const { db } = yield* Database.Service
+        requests.length = 0
+        yield* session.prompt({ sessionID, prompt: new Prompt({ text: "long input ".repeat(2_000) }), resume: false })
 
-      const hardExit = yield* session.resume(sessionID).pipe(Effect.exit)
-      expect(hardExit).toMatchObject({ _tag: "Failure" })
-      expect(requests).toHaveLength(0)
-      expect(yield* db.select().from(V2ProviderTurnReceiptTable)
-        .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)).toHaveLength(0)
-      const [policy] = yield* db.select().from(SessionModelPolicyReceiptTable)
-        .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)
-      expect(policy).toMatchObject({
-        provider_id: "deepseek",
-        api_model_id: "deepseek-flash",
-        context_selection_id: expect.any(String),
-        offered_tool_ids: expect.arrayContaining(["echo"]),
-        trigger_source: "threshold",
-        blocked_reason: "compaction_unavailable",
-      })
-      expect(policy?.policy).toMatchObject({ state: "managed", effectiveHardGate: 1_000, limitMismatch: true })
-      expect(yield* db.select().from(SessionContextCheckpointTable)
-        .where(eq(SessionContextCheckpointTable.session_id, sessionID)).all().pipe(Effect.orDie)).toHaveLength(0)
-    }),
-  )
+        const hardExit = yield* session.resume(sessionID).pipe(Effect.exit)
+        expect(hardExit).toMatchObject({ _tag: "Failure" })
+        expect(requests).toHaveLength(0)
+        expect(yield* db.select().from(V2ProviderTurnReceiptTable)
+          .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)).toHaveLength(0)
+        const [policy] = yield* db.select().from(SessionModelPolicyReceiptTable)
+          .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)
+        expect(policy).toMatchObject({
+          provider_id: providerID,
+          api_model_id: apiModelID,
+          context_selection_id: expect.any(String),
+          offered_tool_ids: expect.arrayContaining(["echo"]),
+          trigger_source: "threshold",
+          blocked_reason: "compaction_unavailable",
+        })
+        expect(policy?.policy).toMatchObject({
+          state: "managed",
+          key: policyKey,
+          effectiveHardGate: 1_000,
+          limitMismatch: true,
+        })
+        expect(yield* db.select().from(SessionContextCheckpointTable)
+          .where(eq(SessionContextCheckpointTable.session_id, sessionID)).all().pipe(Effect.orDie)).toHaveLength(0)
+      }),
+    )
+  }
 
   it.effect("commits a checkpoint before hard-gate compaction and rebuilds the selected request", () =>
     Effect.gen(function* () {
