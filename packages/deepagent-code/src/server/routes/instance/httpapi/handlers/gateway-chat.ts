@@ -27,6 +27,9 @@ class QuotaExceeded extends Error {
   }
 }
 
+class QuotaPending extends Error {}
+class QuotaUsageUnknown extends Error {}
+
 export const chat = Effect.gen(function* () {
   const { db } = yield* Database.Service
   const store = yield* InstanceStore.Service
@@ -59,7 +62,7 @@ export const chat = Effect.gen(function* () {
         .select({ request_hash: ProxyRequestLedgerTable.request_hash, completed_at: ProxyRequestLedgerTable.completed_at,
           finish_reason: ProxyRequestLedgerTable.finish_reason, tier: ProxyRequestLedgerTable.tier,
           provider_id: ProxyRequestLedgerTable.provider_id, model_id: ProxyRequestLedgerTable.model_id,
-          lane_session_id: ProxyRequestLedgerTable.lane_session_id })
+          lane_session_id: ProxyRequestLedgerTable.lane_session_id, admitted_at: ProxyRequestLedgerTable.admitted_at })
         .from(ProxyRequestLedgerTable)
         .where(eq(ProxyRequestLedgerTable.request_id, ledgerID))
         .get()
@@ -99,7 +102,6 @@ export const chat = Effect.gen(function* () {
           existing?.lane_session_id !== laneSessionID))
         return proxyError(409, "request_replay_unavailable", "Request execution binding changed since admission")
 
-      const admittedAt = Date.now()
       const eventData = {
         requestID: ledgerID,
         tenantID: tenant.id,
@@ -108,7 +110,7 @@ export const chat = Effect.gen(function* () {
         modelID: String(selected.model.id),
         ...(laneSessionID ? { laneSessionID } : {}),
       }
-      const admission = exactReplay ? { status: "admitted" as const } : yield* events
+      const admitOnce = (admittedAt: number) => events
         .publish(
           RequestAdmitted,
           { ...eventData, admittedAt, stream: parsed.value.stream ?? false },
@@ -132,6 +134,8 @@ export const chat = Effect.gen(function* () {
                 const spent = yield* db
                   .select({
                     tokens: sql<number>`coalesce(sum(coalesce(${ProxyRequestLedgerTable.usage_input}, 0) + coalesce(${ProxyRequestLedgerTable.usage_output}, 0)), 0)`,
+                    pending: sql<number>`coalesce(sum(CASE WHEN ${ProxyRequestLedgerTable.completed_at} IS NULL THEN 1 ELSE 0 END), 0)`,
+                    unknown: sql<number>`coalesce(sum(CASE WHEN ${ProxyRequestLedgerTable.completed_at} IS NOT NULL AND (${ProxyRequestLedgerTable.usage_input} IS NULL OR ${ProxyRequestLedgerTable.usage_output} IS NULL) THEN 1 ELSE 0 END), 0)`,
                   })
                   .from(ProxyRequestLedgerTable)
                   .where(
@@ -141,6 +145,11 @@ export const chat = Effect.gen(function* () {
                     ),
                   )
                   .get()
+                // A tenant's next request waits for an earlier provider exchange to settle. This
+                // makes the durable usage total authoritative at admission without guessing a
+                // future provider's tokens; a missing usage report blocks further admission.
+                if ((spent?.pending ?? 0) > 0) return yield* Effect.fail(new QuotaPending())
+                if ((spent?.unknown ?? 0) > 0) return yield* Effect.fail(new QuotaUsageUnknown())
                 if (tenant.quota_tokens_per_day <= 0 || (spent?.tokens ?? 0) >= tenant.quota_tokens_per_day)
                   return yield* Effect.fail(new QuotaExceeded("tokens"))
                 yield* db
@@ -167,16 +176,33 @@ export const chat = Effect.gen(function* () {
         .pipe(
           Effect.as({ status: "admitted" as const }),
           Effect.catchCause((cause) => {
-            const failure = cause.reasons.find(
-              (reason) => Cause.isDieReason(reason) && reason.defect instanceof QuotaExceeded,
-            )
+            const failure = cause.reasons.find((reason) => Cause.isDieReason(reason) &&
+              (reason.defect instanceof QuotaExceeded || reason.defect instanceof QuotaPending ||
+                reason.defect instanceof QuotaUsageUnknown))
             return Effect.succeed(
               failure && Cause.isDieReason(failure) && failure.defect instanceof QuotaExceeded
                 ? { status: "quota" as const, kind: failure.defect.kind }
+                : failure && Cause.isDieReason(failure) && failure.defect instanceof QuotaPending
+                  ? { status: "pending" as const }
+                  : failure && Cause.isDieReason(failure) && failure.defect instanceof QuotaUsageUnknown
+                    ? { status: "usage_unknown" as const }
                 : { status: "unavailable" as const },
             )
           }),
         )
+      const admission = exactReplay
+        ? { status: "admitted" as const, admittedAt: existing!.admitted_at }
+        : yield* Effect.gen(function* () {
+            const deadline = Date.now() + tenant.deadline_ms
+            while (true) {
+              const admittedAt = Date.now()
+              const result = yield* admitOnce(admittedAt)
+              if (result.status !== "pending") return { ...result, admittedAt }
+              if (Date.now() >= deadline) return { status: "pending_timeout" as const, admittedAt }
+              yield* Effect.sleep("50 millis")
+            }
+          })
+      const admittedAt = admission.admittedAt
       if (admission.status === "quota") {
         const quota = admission.kind === "requests" ? tenant.quota_requests_per_minute : tenant.quota_tokens_per_day
         const reset =
@@ -197,6 +223,10 @@ export const chat = Effect.gen(function* () {
           String(reset),
         )
       }
+      if (admission.status === "usage_unknown")
+        return proxyError(503, "quota_usage_unknown", "Provider usage is unavailable for quota accounting")
+      if (admission.status === "pending_timeout")
+        return proxyError(503, "quota_wait_timeout", "An earlier tenant request has not settled")
       if (admission.status !== "admitted") return proxyError(503, "gateway_unavailable", "Gateway is unavailable")
 
       const complete = (output: {

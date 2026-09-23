@@ -313,6 +313,78 @@ describe("gateway release gate", () => {
     }
   }, 30_000)
 
+  test("serializes a tenant's token budget before a concurrent provider dispatch", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "deepagent-proxy-quota-test-"))
+    const originalDatabase = Flag.DEEPAGENT_CODE_DB
+    Flag.DEEPAGENT_CODE_DB = join(directory, "proxy.sqlite")
+    const firstSeen = Promise.withResolvers<void>()
+    const releaseFirst = Promise.withResolvers<void>()
+    const hits: string[] = []
+    const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+      const body = await request.text()
+      hits.push(body)
+      if (body.includes("First request")) {
+        firstSeen.resolve()
+        await releaseFirst.promise
+      }
+      return new Response([
+        'data: {"choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}',
+        'data: {"choices":[{"index":0,"delta":{"content":"quota answer"},"finish_reason":null}]}',
+        body.includes("Missing usage")
+          ? 'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}'
+          : 'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":4,"total_tokens":15}}',
+        "data: [DONE]", "",
+      ].join("\n\n"), { headers: { "content-type": "text/event-stream" } })
+    } })
+    try {
+      await Bun.write(join(directory, "deepagent-code.json"), JSON.stringify(testProviderConfig(`http://127.0.0.1:${upstream.port}/v1`)))
+      await Effect.runPromise(Effect.gen(function* () {
+        yield* (yield* Database.Service).db.insert(ProxyTenantTable).values({
+          id: "tenant-quota", key_hash: createHash("sha256").update("sk-quota").digest("hex"),
+          key_fingerprint: "quota-fingerprint", directory, model_allowlist: ["test/test-model"],
+          tier: "passthrough", quota_requests_per_minute: 10, quota_tokens_per_day: 15,
+          lane_limit: 8, deadline_ms: 5_000, enabled: true, created_at: Date.now(), updated_at: Date.now(),
+        })
+      }).pipe(Effect.provide(Database.defaultLayer)))
+      const web = HttpRouter.toWebHandler(HttpApiApp.createRoutes().pipe(
+        Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DEEPAGENT_CODE_GATEWAY: true }))),
+      ), { disableLogger: true })
+      const send = (id: string, content: string, key = "sk-quota") => web.handler(new Request("http://localhost/v1/chat/completions", {
+        method: "POST", headers: { authorization: `Bearer ${key}`, "content-type": "application/json", "x-request-id": id },
+        body: JSON.stringify({ model: "test-model", messages: [{ role: "user", content }] }),
+      }), HttpApiApp.context)
+      const first = send("quota-1", "First request")
+      await firstSeen.promise
+      const second = send("quota-2", "Second request")
+      await Bun.sleep(300)
+      expect(hits).toHaveLength(1)
+      releaseFirst.resolve()
+      expect((await first).status).toBe(200)
+      const denied = await second
+      expect(denied.status).toBe(429)
+      expect((await denied.json()).error.code).toBe("rate_limit_exceeded")
+      expect(hits).toHaveLength(1)
+      const provision = await web.handler(new Request("http://localhost/proxy/admin/tenants", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: "tenant-unknown", key: "sk-test-unknown-tenant", directory,
+          model_allowlist: ["test/test-model"], tier: "passthrough", quota_requests_per_minute: 10,
+          quota_tokens_per_day: 100, lane_limit: 8, deadline_ms: 5_000 }),
+      }), HttpApiApp.context)
+      expect(provision.status).toBe(201)
+      expect((await send("unknown-1", "Missing usage", "sk-test-unknown-tenant")).status).toBe(200)
+      const unknown = await send("unknown-2", "Again", "sk-test-unknown-tenant")
+      expect(unknown.status).toBe(503)
+      expect((await unknown.json()).error.code).toBe("quota_usage_unknown")
+      expect(hits).toHaveLength(2)
+      await web.dispose()
+    } finally {
+      releaseFirst.resolve()
+      upstream.stop(true)
+      Flag.DEEPAGENT_CODE_DB = originalDatabase
+      await rm(directory, { recursive: true, force: true })
+    }
+  }, 30_000)
+
   test("adopts a context lane and collects its own queued activity", async () => {
     const directory = await mkdtemp(join(tmpdir(), "deepagent-proxy-context-test-"))
     const originalDatabase = Flag.DEEPAGENT_CODE_DB
