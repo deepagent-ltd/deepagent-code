@@ -1939,7 +1939,11 @@ export async function runLegacyLiveCases(input: {
         ),
       ),
     )
-    assertHarnessComposition(result.composition, input.expectedApplicationToolIDs)
+    const { AppLayer } = await import("../../src/effect/app-runtime")
+    const productionComposition = await Effect.runPromise(
+      CompositionDigest.current.pipe(Effect.provide(AppLayer), Effect.scoped),
+    )
+    await assertHarnessComposition(result.composition, productionComposition, input.expectedApplicationToolIDs)
     const providerErrors = result.observations.flatMap((observation) => observation.providerErrors)
     const v4Errors = result.v4
       ? [

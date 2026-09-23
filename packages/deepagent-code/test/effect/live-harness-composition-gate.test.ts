@@ -1,11 +1,12 @@
 import { expect, test } from "bun:test"
+import { Effect } from "effect"
 import { CompositionDigest } from "../../src/effect/composition-digest"
-import { Root } from "../../src/effect/root"
+import { AppLayer } from "../../src/effect/app-runtime"
 import { assertHarnessComposition } from "../../script/live-llm/composition-gate"
 import { liveFrameIdentity } from "../../script/live-llm/runner-frame"
 
 test("G3 rejects a live harness whose fixture plugin bridge did not register", async () => {
-  const production = await Root.compositionDigest()
+  const production = await Effect.runPromise(CompositionDigest.current.pipe(Effect.provide(AppLayer), Effect.scoped))
   const facets = {
     sessionOwner: production.sessionOwner,
     v2Registry: production.v2Registry,
@@ -18,16 +19,23 @@ test("G3 rejects a live harness whose fixture plugin bridge did not register", a
     },
   }
   const harness = { version: 2 as const, digest: CompositionDigest.compute(facets), ...facets }
-  assertHarnessComposition(harness, production.v2Registry.applicationTools.ids)
-  expect(() => assertHarnessComposition(harness, [...production.v2Registry.applicationTools.ids, "missing_plugin_tool"]))
-    .toThrow("fixture application tools")
-  expect(() =>
+  await assertHarnessComposition(harness, production, production.v2Registry.applicationTools.ids)
+  await expect(assertHarnessComposition(harness, production, [...production.v2Registry.applicationTools.ids, "missing_plugin_tool"]))
+    .rejects.toThrow("fixture application tools")
+  await expect(
     assertHarnessComposition(
       {
         ...harness,
         locationHost: { ...harness.locationHost, seams: production.locationHost.seams },
       },
+      production,
       production.v2Registry.applicationTools.ids,
     ),
-  ).toThrow("digest content")
+  ).rejects.toThrow("digest content")
+  const changedOwner = { ...production.sessionOwner, placement: "different-owner-placement" }
+  await expect(assertHarnessComposition(harness, {
+    ...production,
+    sessionOwner: changedOwner,
+    digest: CompositionDigest.compute({ ...facets, sessionOwner: changedOwner, locationHost: production.locationHost }),
+  })).rejects.toThrow("production composition drift at sessionOwner.placement")
 }, 180_000)
