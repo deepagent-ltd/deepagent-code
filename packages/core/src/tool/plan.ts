@@ -14,12 +14,17 @@ export * as PlanWriteTool from "./plan"
 //  - the live `plan.updated` event publishes best-effort through serviceOption
 //    (the committed PlanStore doc is the authority; a missing bridge must never
 //    fail the write), and
-//  - permission is declared via Tool.withPermission instead of ctx.ask.
+//  - permission is declared via Tool.withPermission for the registry's inventory
+//    classification AND asserted at execute time (bash.ts pattern): withPermission
+//    metadata alone never raises an interactive ask, so a `plan: "ask"` ruleset
+//    silently behaved as allow under the V2 owner.
 
+import { ToolFailure } from "@deepagent-code/llm"
 import { Effect, Layer, Schema } from "effect"
 import * as controller from "../deepagent/plan-controller"
 import * as store from "../deepagent/plan-store"
 import * as sessionState from "../deepagent/session-state"
+import { PermissionV2 } from "../permission"
 import { NonNegativeInt } from "../schema"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
@@ -89,6 +94,7 @@ export const name = "plan"
 export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const tools = yield* Tools.Service
+    const permission = yield* PermissionV2.Service
     yield* tools
       .register({
         [name]: Tool.withPermission(
@@ -99,6 +105,29 @@ export const layer = Layer.effectDiscard(
             toModelOutput: ({ output }) => [{ type: "text" as const, text: output.output }],
             execute: (params, context) =>
               Effect.gen(function* () {
+                // V1-parity plan permission gate: the declared action must actually be asserted
+                // (bash.ts pattern), or `plan: "ask"` silently behaves as allow. Refusals lower to
+                // ToolFailure so the model sees the coached denial instead of a runtime defect.
+                yield* permission
+                  .assert({
+                    action: "plan",
+                    resources: ["*"],
+                    save: ["*"],
+                    sessionID: context.sessionID,
+                    agent: context.agent,
+                    source: {
+                      type: "tool" as const,
+                      messageID: context.assistantMessageID,
+                      callID: context.toolCallID,
+                    },
+                  })
+                  .pipe(
+                    Effect.mapError(
+                      (error) =>
+                        PermissionV2.permissionToolFailure(error) ??
+                        new ToolFailure({ message: "Plan write was not authorized." }),
+                    ),
+                  )
                 const sid = context.sessionID
                 const previous = store.getPlanDoc(sid)
                 const ref = store.planDocRef(sid)
