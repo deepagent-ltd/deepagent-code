@@ -769,7 +769,7 @@ export interface Interface {
     targetSessionID?: SessionID
     childDepth?: number
     taskRequestHash?: string
-  }) => Effect.Effect<Info, NotFound | ForkConflict>
+  }) => Effect.Effect<Info, NotFound | ForkConflict | SessionV2.LegacySessionRequiresAdoption>
   readonly recoverForks: () => Effect.Effect<void>
   readonly assertRunnable: (sessionID: SessionID) => Effect.Effect<void, UnavailableError>
   readonly touch: (sessionID: SessionID) => Effect.Effect<void>
@@ -841,7 +841,7 @@ export interface Interface {
     messageID: MessageID
   }) => Effect.Effect<{ from?: string; to?: string }, NotFound>
   readonly children: (parentID: SessionID) => Effect.Effect<Info[]>
-  readonly remove: (sessionID: SessionID) => Effect.Effect<void, NotFound>
+  readonly remove: (sessionID: SessionID) => Effect.Effect<void, NotFound | SessionV2.LegacySessionRequiresAdoption>
   readonly updateMessage: <T extends SessionV1.Info>(msg: T) => Effect.Effect<T>
   readonly publishMessageProjection: (input: {
     sessionID: SessionID
@@ -1062,8 +1062,35 @@ export const layer: Layer.Layer<
       return rows.map(fromRow)
     })
 
+    // The instance HTTP adapter checks this too, but task forks, workspace cleanup and other
+    // in-process callers use Session.Service directly. The projection's V2 authority bit is the
+    // same durable predicate as SessionV2.requireWritable, without adding a V2 layer cycle here.
+    const requireWritable = Effect.fn("Session.requireWritable")(function* (sessionID: SessionID) {
+      const row = yield* db
+        .select({ v2Authority: SessionTable.v2_authority })
+        .from(SessionTable)
+        .where(eq(SessionTable.id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
+      if (!row) return yield* new NotFoundError({ message: `Session not found: ${sessionID}` })
+      if (!row.v2Authority)
+        return yield* new SessionV2.LegacySessionRequiresAdoption({
+          sessionID: SessionV2.ID.make(sessionID),
+          code: "legacy_session_requires_adoption",
+        })
+    })
+
     const remove: Interface["remove"] = Effect.fnUntraced(function* (sessionID: SessionID) {
-      const session = yield* get(sessionID)
+      // Preflight the whole subtree before publishing any deletion. A V1-only child must not be
+      // silently skipped by the compatibility cleanup catch while its parent is removed.
+      const pending = [sessionID]
+      const seen = new Set<SessionID>()
+      for (const id of pending) {
+        if (seen.has(id)) continue
+        seen.add(id)
+        yield* requireWritable(id)
+        pending.push(...(yield* children(id)).map((child) => child.id))
+      }
       try {
         // `remove` needs to work in all cases, such as broken sessions that
         // run cleanup without instance state.
@@ -2125,6 +2152,7 @@ export const layer: Layer.Layer<
       childDepth?: number
       taskRequestHash?: string
     }) {
+      yield* requireWritable(input.sessionID)
       const forkMode = input.forkMode ?? "foreground"
       const intentID = input.intentID
       const requestHash = Hash.sha256(

@@ -1,5 +1,6 @@
 import type { NotFoundError as StorageNotFoundError } from "@/storage/storage"
 import { Session } from "@/session/session"
+import { SessionV2 } from "@deepagent-code/core/session"
 import { SessionRevert } from "@/session/revert"
 import { Effect } from "effect"
 import * as ApiError from "../errors"
@@ -8,13 +9,20 @@ export function mapStorageNotFound<A, R>(self: Effect.Effect<A, StorageNotFoundE
   return self.pipe(Effect.mapError((error) => ApiError.notFound(error.message)))
 }
 
-export function mapFork<A, R>(self: Effect.Effect<A, StorageNotFoundError | Session.ForkConflict, R>) {
+export function mapFork<A, R>(
+  self: Effect.Effect<A, StorageNotFoundError | Session.ForkConflict | SessionV2.LegacySessionRequiresAdoption, R>,
+) {
   return self.pipe(
-    Effect.mapError((error) =>
-      error instanceof Session.ForkConflict
-        ? new ApiError.ConflictError({ message: error.reason, resource: `fork_intent:${error.intentID}` })
-        : ApiError.notFound(error.message),
-    ),
+    Effect.mapError((error) => {
+      if (error instanceof Session.ForkConflict)
+        return new ApiError.ConflictError({ message: error.reason, resource: `fork_intent:${error.intentID}` })
+      if (error instanceof SessionV2.LegacySessionRequiresAdoption)
+        return new ApiError.ConflictError({
+          message: `Historical session ${error.sessionID} requires explicit audited adoption`,
+          resource: error.code,
+        })
+      return ApiError.notFound(error.message)
+    }),
   )
 }
 

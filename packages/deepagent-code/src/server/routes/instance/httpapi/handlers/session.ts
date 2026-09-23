@@ -411,7 +411,16 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
 
     const remove = Effect.fn("SessionHttpApi.remove")(function* (ctx: { params: { sessionID: SessionID } }) {
       yield* requireWritableSession(ctx.params.sessionID)
-      yield* SessionError.mapStorageNotFound(session.remove(ctx.params.sessionID))
+      yield* session.remove(ctx.params.sessionID).pipe(
+        Effect.mapError((error) =>
+          error instanceof SessionV2.LegacySessionRequiresAdoption
+            ? new ConflictError({
+                message: `Historical session ${error.sessionID} requires explicit audited adoption`,
+                resource: error.code,
+              })
+            : notFound(error.message),
+        ),
+      )
       return true
     })
 

@@ -78,8 +78,43 @@ describe("session action routes", () => {
             .where(eq(SessionTable.id, legacyID))
             .get())?.title,
         ).toBe("historical")
+
+        // HTTP guards alone are insufficient: internal task forks and workspace cleanup call
+        // Session.Service directly and must honor the same durable V2 authority bit.
+        expect(yield* Effect.flip(SessionNs.use.fork({ sessionID: legacyID, intentID: "legacy-internal-fork" }))).toMatchObject({
+          _tag: "Session.LegacySessionRequiresAdoption",
+          code: "legacy_session_requires_adoption",
+        })
+        expect(yield* Effect.flip(SessionNs.use.remove(legacyID))).toMatchObject({
+          _tag: "Session.LegacySessionRequiresAdoption",
+          code: "legacy_session_requires_adoption",
+        })
       }),
     { git: true },
+  )
+
+  it.instance("rejects a V2 parent removal before deleting a V1-only child", () =>
+    Effect.gen(function* () {
+      const parent = yield* SessionNs.use.create({ title: "writable parent" })
+      const childID = SessionID.descending()
+      yield* EventV2Bridge.Service.use((events) =>
+        events.publish(SessionV1.Event.Created, {
+          sessionID: childID,
+          info: { ...parent, id: childID, parentID: parent.id, title: "historical child" },
+        }),
+      )
+      expect(yield* Effect.flip(SessionNs.use.remove(parent.id))).toMatchObject({
+        _tag: "Session.LegacySessionRequiresAdoption",
+        sessionID: childID,
+      })
+      const { db } = yield* Database.Service
+      expect((yield* db.select().from(SessionTable).where(eq(SessionTable.id, parent.id)).get())?.title).toBe(
+        "writable parent",
+      )
+      expect((yield* db.select().from(SessionTable).where(eq(SessionTable.id, childID)).get())?.title).toBe(
+        "historical child",
+      )
+    }),
   )
 
   it.instance(
