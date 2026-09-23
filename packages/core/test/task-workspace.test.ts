@@ -635,6 +635,36 @@ describe("Core V2 TaskWorkspace stale-worktree reclamation (C-P2-08)", () => {
 // ── Child-Location write stack (real built-in write tool against a Location root) ─────────────
 
 describe("event subtask TaskWorkspace receipts", () => {
+  it.effect("duplicate prepares adopt one receipt while successive owner generations stay isolated", () =>
+    Effect.gen(function* () {
+      const repo = yield* Effect.promise(() => makeRepo(path.join(tmpRoot(), "event-owner-repo")))
+      const { db } = yield* services
+      const identity = { eventID: "evt_double_owner", taskID: "evt_double_owner:fix" }
+      const [first, duplicate] = yield* Effect.all([
+        TaskWorkspace.prepareEvent(db, { ...identity, generation: 1, parentDirectory: repo, now: 1_000 }),
+        TaskWorkspace.prepareEvent(db, { ...identity, generation: 1, parentDirectory: repo, now: 1_000 }),
+      ], { concurrency: 2 })
+      expect(duplicate).toEqual(first)
+      const successor = yield* TaskWorkspace.prepareEvent(db, {
+        ...identity, generation: 2, parentDirectory: repo, now: 1_100,
+      })
+      expect(successor.directory).not.toBe(first.directory)
+      expect(successor.branch).not.toBe(first.branch)
+      expect(worktreePaths(repo)).toContain(first.directory)
+      expect(worktreePaths(repo)).toContain(successor.directory)
+      yield* Effect.promise(() => fs.writeFile(path.join(first.directory, "owner-one.txt"), "owner one\n"))
+      yield* Effect.promise(() => fs.writeFile(path.join(successor.directory, "owner-two.txt"), "owner two\n"))
+      const settled = yield* Effect.all([
+        TaskWorkspace.settleEvent(db, { ...identity, generation: 1, now: 2_000 }),
+        TaskWorkspace.settleEvent(db, { ...identity, generation: 2, now: 2_000 }),
+      ], { concurrency: 2 })
+      expect(settled[0].continuationRef).not.toBe(settled[1].continuationRef)
+      expect(gitIn(repo, ["show", `${settled[0].continuationRef}:owner-one.txt`]).exitCode).toBe(0)
+      expect(gitIn(repo, ["show", `${settled[1].continuationRef}:owner-two.txt`]).exitCode).toBe(0)
+      expect((yield* TaskWorkspace.reclaimStale(db, { now: 5_000, retentionMs: 3_000 })).reclaimed).toBe(2)
+    }),
+  )
+
   it.effect("adopts a crash-window worktree, freezes its base, and reclaims both generations", () =>
     Effect.gen(function* () {
       const repo = yield* Effect.promise(() => makeRepo(path.join(tmpRoot(), "event-repo")))
