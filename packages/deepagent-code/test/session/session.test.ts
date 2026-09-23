@@ -349,6 +349,11 @@ describe("Session", () => {
       expect((fork.metadata as { forkedFrom?: { parentSessionID?: string } }).forkedFrom?.parentSessionID).toBe(
         created.id,
       )
+      const { db } = yield* Database.Service
+      const durableTypes = (yield* db.select({ type: EventTable.type }).from(EventTable)
+        .where(eq(EventTable.aggregate_id, fork.id)).all()).map((event) => event.type)
+      expect(durableTypes).toContain(EventV2.versionedType("session.updated", 2))
+      expect(durableTypes).not.toContain(EventV2.versionedType("session.updated", 1))
     }),
   )
 
