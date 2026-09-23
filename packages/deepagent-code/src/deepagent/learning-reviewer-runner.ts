@@ -35,7 +35,7 @@ const reviewerRunId = (attemptId: string) => `learning-review-run:${Hash.sha256(
 const policyHash = (providerId: string, modelId: string) =>
   Hash.sha256(
     CanonicalJson.stringify({
-      version: "deepagent-code.learning-reviewer-policy.v2",
+      version: "deepagent-code.learning-reviewer-policy.v3",
       provider_id: providerId,
       model_id: modelId,
       input: "frozen_candidate_request_only",
@@ -47,26 +47,30 @@ const policyHash = (providerId: string, modelId: string) =>
       temperature,
       max_output_tokens: maxOutputTokens,
       response_schema: responseJsonSchema,
+      response_transport: providerId === "openai" ? "json_schema" : "validated_json_text",
       learning: false,
     }),
   )
 
 export function createLearningReviewerPort(input: {
-  readonly auth: Auth.Interface
-  readonly provider: Provider.Interface
+  readonly auth: Pick<Auth.Interface, "get">
+  readonly provider: Pick<Provider.Interface, "defaultModel" | "getSmallModel" | "getProvider" | "getModel">
   readonly llmClient: LLMClientShape
 }) {
   return {
     identity: (request: { readonly attemptId: string; readonly jobId: string; readonly workspacePath: string }) =>
       Effect.gen(function* () {
-        const model = yield* input.provider.defaultModel()
+        const fallback = yield* input.provider.defaultModel()
+        const small = yield* input.provider.getSmallModel(fallback.providerID)
+        const providerId = small?.providerID ?? fallback.providerID
+        const modelId = small?.id ?? fallback.modelID
         return {
           // The durable schema retains this legacy field name. The value is an opaque reviewer-run
           // identity, not a Session ID: reviewer execution never creates or reads a Session row.
           reviewSessionId: reviewerRunId(request.attemptId),
-          providerId: model.providerID,
-          modelId: model.modelID,
-          policyHash: policyHash(model.providerID, model.modelID),
+          providerId,
+          modelId,
+          policyHash: policyHash(providerId, modelId),
         }
       }),
     execute: (request: {
@@ -104,7 +108,12 @@ export function createLearningReviewerPort(input: {
           providerOptions: {},
           headers: {},
           abort: abort.signal,
-          responseFormat: { name: "learning_reviewer_response", schema: responseJsonSchema },
+          // Compatible providers such as DeepSeek serve Responses but do not necessarily
+          // support constrained text.format. The same schema is validated locally below.
+          responseFormat:
+            request.providerId === "openai"
+              ? { name: "learning_reviewer_response", schema: responseJsonSchema }
+              : undefined,
           durableAttempt: true,
         })
         if (native.type === "unsupported") {
