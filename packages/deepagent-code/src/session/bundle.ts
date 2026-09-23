@@ -41,7 +41,7 @@ export type BundleManifest = {
 }
 
 const sha256 = (value: string) => createHash("sha256").update(value).digest("hex")
-const sensitiveKey = /(?:api[_-]?key|authorization|(?:^|[_-])token$|(?:^|[_-])(?:access|refresh|owner|auth|share|revoke)[_-]?token$|secret|password|credential|private[_-]?key)/i
+const sensitiveKey = /(?:^|[_-])(?:api[_-]?key|authorization|token|secret|password|credential|private[_-]?key)$|(?:ApiKey|Token|Secret|Password|Credential|PrivateKey)$/i
 const secretValue = /\b(?:sk-[A-Za-z0-9_-]{12,}|Bearer\s+\S+|(?:api[_-]?key|token|secret|password)\s*[=:]\s*(?:"[^"]*"|'[^']*'|[^\s,"'}]+))/gi
 const absolutePath = /(?:\/Users\/|\/home\/|\/root\/|\/tmp\/|\/var\/|[A-Za-z]:\\Users\\)[^\s"'`<>]+/g
 

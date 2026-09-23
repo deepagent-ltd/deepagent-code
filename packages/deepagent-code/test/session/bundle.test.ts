@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { BlobWriter, TextReader, ZipWriter } from "@zip.js/zip.js"
 import { createSessionBundle, parseSessionBundle, sanitizeBundleValue } from "../../src/session/bundle"
 import type { SessionSnapshot } from "../../src/session/snapshot"
 
@@ -56,9 +57,25 @@ describe("session ZIP bundle", () => {
     expect(result).toBe("session bundle relationship mismatch")
   })
 
+  test("rejects a valid ZIP whose member hashes do not match the manifest", async () => {
+    const writer = new ZipWriter(new BlobWriter("application/zip"))
+    await writer.add("manifest.json", new TextReader(JSON.stringify({
+      format: "deepagent-code.session-bundle", format_version: 1, archive: "zip", tier: "conversation",
+      exported_at: 1, source: { session_id: "ses_a", title: "test" },
+      counts: { messages: 0, parts: 0, events: 0, receipts: 0 },
+      checksums: { "session.json": "0".repeat(64), "conversation.json": "0".repeat(64) },
+      redacted: true, execution: "read_only_archive",
+    })))
+    await writer.add("session.json", new TextReader("{}"))
+    await writer.add("conversation.json", new TextReader("{}"))
+    const bytes = new Uint8Array(await (await writer.close()).arrayBuffer())
+    const result = await parseSessionBundle(bytes).then(() => "accepted", (error: Error) => error.message)
+    expect(result).toBe("session bundle checksum mismatch")
+  })
+
   test("redacts nested credentials and absolute paths", () => {
-    expect(sanitizeBundleValue({ nested: { authorization: "Bearer abc", text: "read /home/alice/key", command: 'API_KEY="private"' } })).toEqual({
-      nested: { authorization: "[REDACTED]", text: "read [REDACTED_PATH]", command: "[REDACTED]" },
+    expect(sanitizeBundleValue({ nested: { authorization: "Bearer abc", authorization_fingerprint: "digest", ownerToken: "owner-secret", text: "read /home/alice/key", command: 'API_KEY="private"' } })).toEqual({
+      nested: { authorization: "[REDACTED]", authorization_fingerprint: "digest", ownerToken: "[REDACTED]", text: "read [REDACTED_PATH]", command: "[REDACTED]" },
     })
   })
 })
