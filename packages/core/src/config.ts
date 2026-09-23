@@ -61,6 +61,9 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   skills: Schema.String.pipe(Schema.Array, Schema.optional).annotate({
     description: "Additional paths or URLs to discover skills from",
   }),
+  instructions: Schema.String.pipe(Schema.Array, Schema.optional).annotate({
+    description: "Additional local paths or URLs to include in System Context",
+  }),
   commands: Schema.Record(Schema.String, ConfigCommand.Info).pipe(Schema.optional).annotate({
     description: "Named slash command definitions",
   }),
@@ -88,6 +91,7 @@ export const RuntimeFieldConsumers = {
   tool_output: "ToolOutputStore",
   compaction: "SessionRunnerCompaction",
   skills: "ConfigSkillPlugin",
+  instructions: "ConfigInstructions",
   commands: "ConfigCommandPlugin",
   references: "ProjectReference",
   docs_sync: "ProjectDocsSync",
@@ -141,11 +145,9 @@ export const layer = Layer.effect(
       if (!text) return
 
       const errors: ParseError[] = []
-      const input: unknown = parse(
-        yield* ConfigVariable.substitute({ text, path: filepath, filesystem: fs }),
-        errors,
-        { allowTrailingComma: true },
-      )
+      const input: unknown = parse(yield* ConfigVariable.substitute({ text, path: filepath, filesystem: fs }), errors, {
+        allowTrailingComma: true,
+      })
       if (errors.length)
         return yield* Effect.die(
           new Error(
@@ -172,15 +174,17 @@ export const layer = Layer.effect(
           filepath,
           stripped: leftover,
           note: "fields of removed features; no Core V2 consumer exists",
-        })      }
+        })
+      }
 
       // Disabled-compatibility fields are stripped in BOTH branches: an explicitly-disabled
       // value (formatter/lsp/snapshot/snapshots = false) is accepted regardless of which
       // generation's shape the file uses.
       const stripped = withoutRemovedFeatureFields(withoutDisabledCompatibilityFields(input))
-      const info = yield* (v1
-        ? decodeV1Info(stripped).pipe(Effect.map(ConfigMigrateV1.migrate), Effect.flatMap(decodeInfo))
-        : decodeInfo(stripped)
+      const info = yield* (
+        v1
+          ? decodeV1Info(stripped).pipe(Effect.map(ConfigMigrateV1.migrate), Effect.flatMap(decodeInfo))
+          : decodeInfo(stripped)
       ).pipe(
         Effect.mapError((error) => new Error(`Invalid config in ${filepath}: ${error.message}`)),
         Effect.orDie,
@@ -257,22 +261,13 @@ export const layer = Layer.effect(
  * (type-level `satisfies`), and every refused key is NOT a schema field — nothing can be both
  * consumed and refused.
  */
-export const UNSUPPORTED_V1_RUNTIME_FIELDS = [
-  "snapshot",
-  "formatter",
-  "lsp",
-  "mcp",
-  "instructions",
-  "plugin",
-  "reference",
-] as const
+export const UNSUPPORTED_V1_RUNTIME_FIELDS = ["snapshot", "formatter", "lsp", "mcp", "plugin", "reference"] as const
 
 export const UNSUPPORTED_V2_RUNTIME_FIELDS = [
   "snapshots",
   "formatter",
   "lsp",
   "mcp",
-  "instructions",
   "plugins",
   "learning",
   "references",
@@ -293,7 +288,9 @@ function unsupportedRuntimeFields(input: unknown, v1: boolean) {
     ...fields
       .filter((key) => info[key] !== undefined)
       .filter((key) => !isDisabledCompatibilityField(key, info[key]))
-      .filter((key) => (key === "reference" || key === "references" ? !Flag.DEEPAGENT_CODE_EXPERIMENTAL_REFERENCES : true))
+      .filter((key) =>
+        key === "reference" || key === "references" ? !Flag.DEEPAGENT_CODE_EXPERIMENTAL_REFERENCES : true,
+      )
       .map((key) => unsupportedFieldLabel(key)),
   ]
 }
@@ -306,9 +303,7 @@ function isDisabledCompatibilityField(key: string, value: unknown) {
 
 function withoutDisabledCompatibilityFields(input: unknown) {
   if (!input || typeof input !== "object" || Array.isArray(input)) return input
-  return Object.fromEntries(
-    Object.entries(input).filter(([key, value]) => !isDisabledCompatibilityField(key, value)),
-  )
+  return Object.fromEntries(Object.entries(input).filter(([key, value]) => !isDisabledCompatibilityField(key, value)))
 }
 
 // Fields of features that were REMOVED entirely (share/autoupdate era). Unlike the
