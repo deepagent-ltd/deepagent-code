@@ -197,6 +197,7 @@ const modules = await Promise.all([
     import("./migration/20260923170344_session_input_revert_epoch"),
     import("./migration/20260923155709_proxy_gateway"),
     import("./migration/20260923171305_proxy_permission_policy"),
+    import("./migration/20260923181940_learning_generation"),
 ])
 
 const bodyHashes = [
@@ -396,6 +397,7 @@ const bodyHashes = [
   "fd4d04010592a3d0e8d220dd8dc2d8c400fc0dede1270f48e0bb722dc28550ce",
   "88346e00d74120b960e0c3766beba025923e33bdfc6ab53e2488de51970fc14b",
   "df16f488bfc4439d53f04d433c1ce6c5e4d0bc84ea30e7604ce7f0d4c8b4cb23",
+  "783acd2cb49357eac09f43bee7fdba3adac06a9e5dd33204b804cb696e9afe70",
 ]
 
 export const migrations = modules.map((module, index) => ({
