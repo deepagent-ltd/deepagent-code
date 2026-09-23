@@ -330,16 +330,16 @@ test("a failed warm reopen keeps the incident shell closed to business until ret
     })
     expect(restored.status).toBe(200)
     await waitFor(() => prepareAttempts > 0)
-    expect((await fetch(new URL(MaintenancePaths.bootstrapStatus, listener.url), { headers })).status).toBe(423)
-    expect((await fetch(new URL("/session", listener.url), { headers })).status).toBe(404)
+    expect((await waitForStatus(new URL(MaintenancePaths.bootstrapStatus, listener.url), 423, headers)).status).toBe(423)
+    expect((await waitForStatus(new URL("/session", listener.url), 404, headers)).status).toBe(404)
     expect(await fs.readdir(path.join(root.path, "restore-incidents"))).toHaveLength(1)
     allowPrepare = true
     await waitFor(() => rebindAttempts > 0)
-    expect((await fetch(new URL(MaintenancePaths.bootstrapStatus, listener.url), { headers })).status).toBe(423)
-    expect((await fetch(new URL("/session", listener.url), { headers })).status).toBe(404)
+    expect((await waitForStatus(new URL(MaintenancePaths.bootstrapStatus, listener.url), 423, headers)).status).toBe(423)
+    expect((await waitForStatus(new URL("/session", listener.url), 404, headers)).status).toBe(404)
     allowRebind = true
     expect((await waitForStatus(new URL(MaintenancePaths.bootstrapStatus, listener.url), 200, headers)).status).toBe(200)
-    expect((await fetch(new URL("/session", listener.url), { headers })).status).toBe(200)
+    expect((await waitForStatus(new URL("/session", listener.url), 200, headers)).status).toBe(200)
     expect(await fs.readdir(path.join(root.path, "restore-incidents"))).toHaveLength(1)
   } finally {
     await listener.stop(true)
@@ -354,14 +354,40 @@ async function waitFor(predicate: () => boolean) {
   throw new Error("timed out waiting for listener handoff")
 }
 
-async function waitForStatus(url: URL, expected: number, headers: Record<string, string>) {
-  for (let attempt = 0; attempt < 200; attempt++) {
-    const response = await fetch(url, { headers }).catch(() => undefined)
+async function waitForStatus(url: URL, expected: number, headers: Record<string, string>, probeTimeoutMs = 2_000) {
+  const deadline = Date.now() + 20_000
+  while (Date.now() < deadline) {
+    // A probe can straddle the close/rebind handoff. Abort that one request so a stalled
+    // connection cannot pin the entire retry loop until the test's outer timeout.
+    const response = await fetch(url, {
+      headers,
+      signal: AbortSignal.timeout(Math.max(1, Math.min(probeTimeoutMs, deadline - Date.now()))),
+    }).catch(() => undefined)
     if (response?.status === expected) return response
     await Bun.sleep(100)
   }
   throw new Error(`timed out waiting for HTTP ${expected}`)
 }
+
+test("maintenance status polling retries a probe that never responds", async () => {
+  let probes = 0
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    fetch: () => {
+      probes++
+      if (probes === 1) return new Promise<Response>(() => {})
+      return Response.json({ ready: true })
+    },
+  })
+  try {
+    const response = await waitForStatus(new URL(`http://127.0.0.1:${server.port}/`), 200, {}, 100)
+    expect(response.status).toBe(200)
+    expect(probes).toBe(2)
+  } finally {
+    server.stop(true)
+  }
+}, 5_000)
 
 test("a backup failure during full runtime construction falls back to the incident shell", async () => {
   await using root = await tmpdir()
