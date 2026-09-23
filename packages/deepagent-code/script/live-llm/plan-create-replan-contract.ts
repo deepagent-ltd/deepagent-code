@@ -29,9 +29,8 @@ const artifact = await runLegacyLiveCases({
   primaryPermission: { "*": "deny", plan: "ask" },
   permissionReply: { reply: "once" },
   sharedSession: true,
-  inspectDurability: true,
+  inspectProviderTurns: true,
   inspectPlan: true,
-  observeAssembledRequestFingerprints: true,
   environment: { DEEPAGENT_ENABLED: "true", DEEPAGENT_MODE: "high" },
   primaryPrompt: [
     "This is a Plan create/replan parameter-contract test in one durable Session.",

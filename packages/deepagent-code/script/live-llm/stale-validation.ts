@@ -68,8 +68,11 @@ const artifact = await runLegacyLiveCases({
   inspectFiles: ["src/pipeline.txt", "notes/reference.txt"],
   toolSandbox: { verifierScript: verifier, initialVerifier: "fail" },
   sharedSession: true,
-  observeAssembledRequestFingerprints: true,
-  environment: { DEEPAGENT_MODE: "high" },
+  inspectProviderTurns: true,
+  // DEEPAGENT_ENABLED must be set explicitly: the V2 location layer gates the managed DeepAgent
+  // runtime on it (the harness default is "false"), while the legacy path only consulted
+  // DEEPAGENT_MODE. This suite's oracles need the active validation-harvest runtime.
+  environment: { DEEPAGENT_ENABLED: "true", DEEPAGENT_MODE: "high" },
   // The runtime's default primary prompt says "do not add validation steps", which would pre-suppress the
   // re-validation this suite is trying to observe and would turn Oracle 4 into a tautology. Use a neutral
   // multi-round prompt instead so a re-injected stale failure is free to produce its original symptom.
@@ -108,53 +111,44 @@ const failed = requireCase("fail")
 const repaired = requireCase("repair")
 const unrelated = requireCase("unrelated")
 
-const requestFingerprints = (testCase: typeof failed) =>
-  testCase.assembledRequestFingerprints.map((properties) => record(properties, "assembled request fingerprint"))
-const validationState = (properties: Record<string, unknown>) => {
-  const counts = record(properties.counts, "assembled request counts")
-  const fingerprints = properties.validationFingerprints
-  if (!Array.isArray(fingerprints)) throw new Error("Assembled request validation fingerprints are missing")
-  return {
-    validations: integer(counts.validations, "validation count"),
-    duplicates: integer(counts.validationDuplicates, "validation duplicate count"),
-    fingerprints: fingerprints.map((item) => {
-      const entry = record(item, "validation fingerprint")
-      return {
-        fingerprint: nonEmptyString(entry.fingerprint, "validation fingerprint value"),
-        count: integer(entry.count, "fingerprint count"),
-      }
-    }),
-  }
+// Durable V2 request-side oracle: the legacy session.request.assembled-fingerprint GlobalBus event
+// is legacy-owner-only, so the assembled-request multiplicities are read from the durable V2
+// provider-turn receipts' volatile system parts instead — the exact control content the request
+// carried (round context, previous results, continuation tail). The volatile tail is where the
+// original stale-reharvest symptom surfaced (collectValidationFailureText re-emitted into it).
+const volatileParts = (testCase: typeof failed) =>
+  (testCase.providerTurns ?? []).flatMap((turn) => turn.systemVolatileParts)
+if ((unrelated.providerTurns ?? []).length === 0) {
+  throw new Error("Stale-validation observed no durable provider-turn receipts")
 }
-const failedValidation = validationState(requireLast(requestFingerprints(failed), "fail request fingerprint"))
-const repairedValidation = validationState(requireLast(requestFingerprints(repaired), "repair request fingerprint"))
-const unrelatedValidation = validationState(requireLast(requestFingerprints(unrelated), "unrelated request fingerprint"))
-// Provider-generic multiplicity contract: each round assembles at least the distinct
-// validations it ran (fail, then fail+repair), duplicates stay absent (no repetition), and a
-// round that runs no further validation does not grow the set. Exact counts are model
-// behavior when a provider validates more than asked.
-if (failedValidation.validations < 1 || failedValidation.duplicates !== 0) {
-  throw new Error("Round 1 did not assemble a distinct failing validation result")
-}
-if (repairedValidation.validations < 2 || repairedValidation.duplicates !== 0) {
-  throw new Error("Round 2 did not assemble the distinct fail and repair validation results")
-}
+// V2 semantics note: a NEW user admission after a settled activity resets the round state
+// (observeUserAdmission "reopened"), so the repair/unrelated rounds render FRESH round contexts
+// (第 1 轮, empty previous results) — a strictly stronger guarantee than the legacy re-harvest
+// guard this suite originally pinned. The positive "round 2 carries the failure as fresh
+// previous-results" assertion is therefore structurally unsatisfiable under V2 and is replaced by
+// the stale-marker bans below; the within-activity addCandidate dedupe stays unit-guarded.
+//
+// HARD: the stale failure text must not survive into ANY later round's assembled requests —
+// neither the repair round (where it would be fresh-but-superseded) nor the unrelated round
+// (where it has no live source at all).
 if (
-  unrelatedValidation.duplicates !== 0 ||
-  unrelatedValidation.validations < repairedValidation.validations ||
-  unrelatedValidation.validations > repairedValidation.validations + 1
+  [...volatileParts(repaired), ...volatileParts(unrelated)].some((part) => part.includes(errorMarker))
 ) {
-  throw new Error("Round 3 changed validation multiplicity unexpectedly")
-}
-const repairedFingerprintCounts = new Map(
-  repairedValidation.fingerprints.map((item) => [item.fingerprint, item.count] as const),
-)
-if (
-  unrelatedValidation.fingerprints.some(
-    (item) => item.count !== 1 || repairedFingerprintCounts.get(item.fingerprint) !== item.count,
+  throw new Error(
+    "A later round's assembled requests re-injected round 1's stale failure marker " +
+      "(round-state reset / addCandidate dedupe)",
   )
-) {
-  throw new Error("A stale validation fingerprint was duplicated or replaced in the unrelated round")
+}
+// HARD: within any single turn, the SAME failure text must not be assembled more than once —
+// the original N-copies symptom. A part containing the marker twice, or two parts each carrying
+// it in one turn, is re-harvest, not fresh evidence.
+for (const testCase of [failed, repaired, unrelated]) {
+  for (const [index, turn] of (testCase.providerTurns ?? []).entries()) {
+    const markerParts = turn.systemVolatileParts.filter((part) => part.includes(errorMarker))
+    if (markerParts.length > 1 || markerParts.some((part) => part.indexOf(errorMarker) !== part.lastIndexOf(errorMarker))) {
+      throw new Error(`Assembled provider turn ${index + 1} carried duplicated stale failure evidence`)
+    }
+  }
 }
 
 // Oracle 1 (HARD): round 1 produced a real, nonzero validation failure — the evidence whose re-injection
@@ -235,6 +229,8 @@ const result = {
     errorMarkerInUnrelatedFinalText,
     errorMarkerInUnrelatedTools,
     unrelatedToolSequence: unrelated.newTools.map((tool) => `${tool.name}:${tool.status}`),
+    unrelatedProviderTurns: (unrelated.providerTurns ?? []).length,
+    volatilePartsWithStaleMarker: volatileParts(unrelated).filter((part) => part.includes(errorMarker)).length,
     changedPaths: artifact.workspace.status
       .split("\n")
       .filter((line) => line.trim())
@@ -245,27 +241,18 @@ await writeLiveArtifact(
   { artifactDirectory: path.resolve(import.meta.dir, "../../.artifacts/live-llm") },
   result.suite,
   result,
+  {
+    redactions: [
+      { value: successMarker, replacement: "<success-marker>" },
+      { value: errorMarker, replacement: "<error-marker>" },
+      { value: readMarker, replacement: "<read-marker>" },
+    ],
+  },
 )
 console.log(
   `${result.suite}: passed (${result.fingerprint.providerID}/${result.fingerprint.modelID}, ` +
     `${result.cases.reduce((total, testCase) => total + testCase.usage.input + testCase.usage.output, 0)} tokens)`,
 )
-
-function requireLast<T>(items: readonly T[], name: string): T {
-  const item = items.at(-1)
-  if (item === undefined) throw new Error(`Missing ${name}`)
-  return item
-}
-
-function integer(value: unknown, name: string): number {
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) throw new Error(`${name} is invalid`)
-  return value
-}
-
-function nonEmptyString(value: unknown, name: string): string {
-  if (typeof value !== "string" || value.length === 0) throw new Error(`${name} is invalid`)
-  return value
-}
 
 function record(value: unknown, name: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`${name} is not an object`)

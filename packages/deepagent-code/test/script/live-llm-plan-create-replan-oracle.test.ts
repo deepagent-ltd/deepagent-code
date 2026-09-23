@@ -110,7 +110,7 @@ function createObservation() {
       },
     ],
     plan: { document: created, ref: { id: "doc_create", version: 1 } },
-    durability: receipts("assistant_create", "call_create", "semantic_valid"),
+    providerTurns: turnReceipts("call_create"),
   }
 }
 
@@ -156,42 +156,20 @@ function replanObservation() {
       },
       ref: { id: "doc_replan", version: 2 },
     },
-    durability: receipts("assistant_replan", "call_replan", "semantic_valid"),
+    providerTurns: turnReceipts("call_replan"),
   }
 }
 
-function receipts(messageID: string, callID: string, validationOutcome: string) {
-  return {
-    requestReceipts: [
-      {
-        receipt_id: `receipt_${callID}`,
-        assistant_message_id: messageID,
-        request_state: "dispatched",
-        final_offered_tool_ids: ["plan"],
-        call_ids: [callID],
-        tool_definition_hash: "definition_hash",
-      },
-    ],
-    argumentReceipts: [
-      receipt("ai_sdk_input", "schema_valid", "payload_hash", callID),
-      receipt("adapter_assembly", "schema_valid", "payload_hash", callID),
-      receipt("processor_decoded", validationOutcome, "payload_hash", callID),
-      receipt("raw_frame", "not_evaluated", null, callID),
-    ],
-  }
-}
-
-function receipt(layer: string, validationOutcome: string, payloadHash: string | null, callID: string) {
-  return {
-    receipt_id: `receipt_${callID}`,
-    layer,
-    call_id: layer === "raw_frame" ? null : callID,
-    tool_name: layer === "raw_frame" ? null : "plan",
-    event_type: layer === "adapter_assembly" ? "tool-call" : layer,
-    payload_hash: payloadHash,
-    payload_length: payloadHash ? 120 : null,
-    payload_keys: payloadHash ? ["expected_plan_id", "expected_version", "operation", "steps"] : [],
-    unavailable_reason: payloadHash ? null : "provider_transport_did_not_expose_raw_frame",
-    validation_outcome: validationOutcome,
-  }
+function turnReceipts(callID: string) {
+  return [
+    {
+      receiptID: `receipt_${callID}`,
+      requestOrdinal: 1,
+      providerTurnSeq: 1,
+      state: "settled",
+      toolFinalOfferedIDs: ["plan"],
+      toolDefinitionHash: "definition_hash",
+      toolCallIDs: [callID],
+    },
+  ]
 }

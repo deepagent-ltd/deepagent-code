@@ -187,6 +187,12 @@ export async function runLegacyLiveCases(input: {
   steerDuringCases?: ReadonlyArray<{ duringCaseName: string; text: string }>
   observeAssembledRequestFingerprints?: boolean
   inspectDurability?: boolean
+  // Durable V2 oracles: per-case provider-turn receipts (volatile context classification + the
+  // assembled history messages) and task_run rows owned by the Core V2 TaskRunAuthority. These
+  // replace the legacy GlobalBus fingerprint event and the deepagent.subagent session-metadata
+  // projection that the V2-owner cutover removed.
+  inspectProviderTurns?: boolean
+  inspectTaskRuns?: boolean
   inspectPlan?: boolean
   subagentIntensity?: "inherit" | "downgrade"
   environment?: Readonly<Record<string, string>>
@@ -256,7 +262,7 @@ export async function runLegacyLiveCases(input: {
     const { CrossSpawnSpawner } = await import("@deepagent-code/core/cross-spawn-spawner")
     const { EffectFlock } = await import("@deepagent-code/core/util/effect-flock")
     const { Context, Deferred, Effect, Fiber, Layer, Option, Schedule, Schema } = await import("effect")
-    const { eq } = await import("drizzle-orm")
+    const { and, desc, eq, gt, inArray } = await import("drizzle-orm")
     const { AgentExecution } = await import("@deepagent-code/core/deepagent/agent-execution")
     const { ApprovalQueue } = await import("@deepagent-code/core/deepagent/approval-queue")
     const { DeepAgentEventBus } = await import("@deepagent-code/core/deepagent/deepagent-event-bus")
@@ -294,6 +300,8 @@ export async function runLegacyLiveCases(input: {
     const { PartTable, SessionIntentTable, SessionMessageTable, SessionWorldStateBaselineTable } = await import(
       "@deepagent-code/core/session/sql"
     )
+    const { SessionInputTable, TaskRunTable } = await import("@deepagent-code/core/session/sql")
+    const { V2ProviderTurnReceiptTable } = await import("@deepagent-code/core/session/runner/v2-provider-turn.sql")
     const { SessionV2 } = await import("@deepagent-code/core/session")
     const { SessionMessage } = await import("@deepagent-code/core/session/message")
     const { SessionPromptIntent } = await import("../../src/session/prompt-intent")
@@ -375,7 +383,6 @@ export async function runLegacyLiveCases(input: {
       const v2Session = yield* SessionV2.Service
       const database = yield* Database.Service
       const runState = yield* SessionRunState.Service
-      const steers = yield* SessionSteer.Service
       const compaction = yield* SessionCompaction.Service
       const revert = yield* SessionRevert.Service
       const sessions = yield* Session.Service
@@ -842,6 +849,16 @@ export async function runLegacyLiveCases(input: {
               })
             : undefined
           const messagesBefore = yield* sessions.messages({ sessionID: session.id })
+          const lastProviderTurnBefore = input.inspectProviderTurns
+            ? yield* database.db
+                .select({ requestOrdinal: V2ProviderTurnReceiptTable.request_ordinal })
+                .from(V2ProviderTurnReceiptTable)
+                .where(eq(V2ProviderTurnReceiptTable.session_id, SessionV2.ID.make(session.id)))
+                .orderBy(desc(V2ProviderTurnReceiptTable.request_ordinal))
+                .limit(1)
+                .get()
+                .pipe(Effect.orDie)
+            : undefined
           const toolCountBefore = messagesBefore.reduce(
             (count, message) => count + message.parts.filter((part) => part.type === "tool").length,
             0,
@@ -1012,37 +1029,70 @@ export async function runLegacyLiveCases(input: {
               ? yield* turn
               : yield* Effect.gen(function* () {
                   const fiber = yield* turn.pipe(Effect.forkChild)
-                  const active = yield* runState
-                    .isBusy(session.id)
-                    .pipe(
-                      Effect.repeat({ while: (busy) => !busy, schedule: Schedule.spaced("10 millis") }),
-                      Effect.timeout(config.timeoutMs),
-                    )
+                  // V2-owner busy oracle: a live provider-turn receipt (preparing/dispatching/
+                  // streaming) for the session. The promptV2 drain calls coreV2Session.resume
+                  // directly (no execution-coordinator lifecycle events), and the legacy
+                  // SessionRunState.runners registry is never populated under the V2 owner.
+                  const durableBusy = Effect.gen(function* () {
+                    const live = yield* database.db
+                      .select({ receiptID: V2ProviderTurnReceiptTable.receipt_id })
+                      .from(V2ProviderTurnReceiptTable)
+                      .where(
+                        and(
+                          eq(V2ProviderTurnReceiptTable.session_id, SessionV2.ID.make(session.id)),
+                          inArray(V2ProviderTurnReceiptTable.state, ["preparing", "dispatching", "streaming"]),
+                        ),
+                      )
+                      .get()
+                      .pipe(Effect.orDie)
+                    return live !== undefined
+                  })
+                  const active = yield* durableBusy.pipe(
+                    Effect.repeat({ while: (busy) => !busy, schedule: Schedule.spaced("10 millis") }),
+                    Effect.timeout(config.timeoutMs),
+                  )
                   if (!active)
                     return yield* Effect.die(new Error("Prompt did not enter an active turn before steering"))
                   yield* Effect.forEach(
                     concurrentSteers,
                     (steer, index) =>
                       Effect.gen(function* () {
-                        const activeBeforeAdmission = yield* runState.isBusy(session.id)
-                        const ingress = yield* prompts.promptOrSteer({
+                        const activeBeforeAdmission = yield* durableBusy
+                        // V2-owner steering ingress: prompt-async is the durable admit-only
+                        // surface (P1-1). A chat prompt admitted while an activity is live takes
+                        // delivery "steer" (SessionV2.prompt default) and coalesces into the
+                        // active activity at the next safe provider-turn boundary — the V2
+                        // admission contract the legacy promptOrSteer branch implemented.
+                        const messageID = MessageID.ascending()
+                        yield* prompts.promptAsync({
                           sessionID: session.id,
-                          messageID: MessageID.ascending(),
+                          messageID,
                           model: { providerID, modelID },
                           agent: testCase.agent ?? "live-test",
                           parts: [{ type: "text", text: steer.text }],
                         })
-                        if (ingress.kind !== "steer")
-                          return yield* Effect.die(new Error(`Steer ${index + 1} started a second turn`))
-                        const pendingAfterAdmission = (yield* steers.pending(session.id, ingress.delivery)).some(
-                          (item) => item.id === ingress.admitted.id,
-                        )
+                        const row = yield* database.db
+                          .select({
+                            delivery: SessionInputTable.delivery,
+                            admittedSeq: SessionInputTable.admitted_seq,
+                            promotedSeq: SessionInputTable.promoted_seq,
+                          })
+                          .from(SessionInputTable)
+                          .where(eq(SessionInputTable.id, SessionMessage.ID.make(messageID)))
+                          .get()
+                          .pipe(Effect.orDie)
+                        if (!row || row.delivery !== "steer")
+                          return yield* Effect.die(
+                            new Error(
+                              `Steer ${index + 1} was not durably admitted as delivery=steer: ${JSON.stringify(row)}`,
+                            ),
+                          )
                         steeringEvidence.push({
-                          id: ingress.admitted.id,
-                          delivery: ingress.delivery,
-                          ordinal: ingress.admitted.seq,
+                          id: messageID,
+                          delivery: row.delivery,
+                          ordinal: row.admittedSeq,
                           activeBeforeAdmission,
-                          pendingAfterAdmission,
+                          pendingAfterAdmission: row.promotedSeq === null,
                           consumedAfterAdmission: false,
                         })
                       }),
@@ -1053,10 +1103,16 @@ export async function runLegacyLiveCases(input: {
                     steeringEvidence,
                     (evidence) =>
                       Effect.gen(function* () {
-                        const pendingAfterRun = (yield* steers.pending(session.id)).some(
-                          (item) => item.id === evidence.id,
-                        )
-                        evidence.consumedAfterAdmission = !pendingAfterRun
+                        const pendingAfterRun = yield* database.db
+                          .select({ promotedSeq: SessionInputTable.promoted_seq })
+                          .from(SessionInputTable)
+                          .where(eq(SessionInputTable.id, SessionMessage.ID.make(evidence.id)))
+                          .get()
+                          .pipe(Effect.orDie)
+                        if (!pendingAfterRun) {
+                          return yield* Effect.die(new Error(`Durable steer inbox row disappeared: ${evidence.id}`))
+                        }
+                        evidence.consumedAfterAdmission = pendingAfterRun.promotedSeq !== null
                       }),
                     { discard: true },
                   )
@@ -1432,10 +1488,92 @@ export async function runLegacyLiveCases(input: {
                 root: AgentGateway.DeepAgentPlanStore.planStoreRoot(session.id),
               }
             : undefined
+          // Durable V2 provider-turn receipts: the authority surface for per-turn request evidence
+          // (volatile context classification, offered tools). The receipt carries only the history
+          // HASH (not the assembled messages), so request-content oracles key off the volatile
+          // parts. The legacy session.request.assembled-fingerprint GlobalBus event is
+          // legacy-owner-only.
+          const providerTurns = input.inspectProviderTurns
+            ? yield* database.db
+                .select({
+                  receiptID: V2ProviderTurnReceiptTable.receipt_id,
+                  requestOrdinal: V2ProviderTurnReceiptTable.request_ordinal,
+                  activityID: V2ProviderTurnReceiptTable.activity_id,
+                  providerTurnSeq: V2ProviderTurnReceiptTable.provider_turn_seq,
+                  state: V2ProviderTurnReceiptTable.state,
+                  providerID: V2ProviderTurnReceiptTable.provider_id,
+                  modelID: V2ProviderTurnReceiptTable.model_id,
+                  preparedTurn: V2ProviderTurnReceiptTable.prepared_turn,
+                  outcomeArtifact: V2ProviderTurnReceiptTable.outcome_artifact,
+                })
+                .from(V2ProviderTurnReceiptTable)
+                .where(
+                  and(
+                    eq(V2ProviderTurnReceiptTable.session_id, SessionV2.ID.make(session.id)),
+                    gt(V2ProviderTurnReceiptTable.request_ordinal, lastProviderTurnBefore?.requestOrdinal ?? 0),
+                  ),
+                )
+                .orderBy(V2ProviderTurnReceiptTable.request_ordinal)
+                .all()
+                .pipe(
+                  Effect.orDie,
+                  Effect.map((rows) =>
+                    rows.map((row) => ({
+                      receiptID: row.receiptID,
+                      requestOrdinal: row.requestOrdinal,
+                      activityID: row.activityID,
+                      providerTurnSeq: row.providerTurnSeq,
+                      state: row.state,
+                      providerID: row.providerID,
+                      modelID: row.modelID,
+                      systemVolatileParts: row.preparedTurn?.system_volatile_parts ?? [],
+                      toolFinalOfferedIDs: row.preparedTurn?.tool_final_offered_ids ?? [],
+                      toolDefinitionHash: row.preparedTurn?.tool_definition_hash ?? null,
+                      toolCallIDs:
+                        row.outcomeArtifact?.flatMap((event) =>
+                          typeof event === "object" &&
+                          event !== null &&
+                          "type" in event &&
+                          event.type === "tool-call" &&
+                          "name" in event &&
+                          event.name === "plan" &&
+                          "id" in event &&
+                          typeof event.id === "string"
+                            ? [event.id]
+                            : [],
+                        ) ?? [],
+                    })),
+                  ),
+                )
+            : undefined
+          // Durable V2 task runs owned by the Core TaskRunAuthority (replaces the deleted
+          // deepagent.subagent session-metadata projection as the subagent control-plane oracle).
+          const taskRuns = input.inspectTaskRuns
+            ? yield* database.db
+                .select({
+                  runID: TaskRunTable.run_id,
+                  executionRuntime: TaskRunTable.execution_runtime,
+                  parentSessionID: TaskRunTable.parent_session_id,
+                  childSessionID: TaskRunTable.child_session_id,
+                  generation: TaskRunTable.generation,
+                  deliveryMode: TaskRunTable.delivery_mode,
+                  phase: TaskRunTable.phase,
+                  state: TaskRunTable.state,
+                  reason: TaskRunTable.reason,
+                  mutationCapability: TaskRunTable.mutation_capability,
+                  workspaceMode: TaskRunTable.workspace_mode,
+                })
+                .from(TaskRunTable)
+                .where(eq(TaskRunTable.parent_session_id, SessionV2.ID.make(session.id)))
+                .all()
+                .pipe(Effect.orDie)
+            : undefined
           return {
             name: testCase.name,
             sessionID: session.id,
             plan,
+            providerTurns,
+            taskRuns,
             assembledRequestFingerprints: assembledRequestFingerprints
               .slice(requestFingerprintCountBefore)
               .filter((event) => event.payload?.properties?.sessionID === session.id)
