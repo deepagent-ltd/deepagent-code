@@ -201,6 +201,7 @@ export const routeManifest = [
       "packages/core/src/proxy/**",
       "packages/core/src/database/migration/*proxy*",
       "packages/deepagent-code/script/live-llm/proxy-smoke.ts",
+      "packages/deepagent-code/script/live-llm/proxy-process-smoke.ts",
       "packages/deepagent-code/src/server/routes/instance/httpapi/groups/gateway*",
       "packages/deepagent-code/src/server/routes/instance/httpapi/handlers/gateway*",
       "packages/deepagent-code/src/server/routes/instance/httpapi/middleware/proxy-*",
