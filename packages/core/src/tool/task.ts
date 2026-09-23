@@ -517,7 +517,11 @@ export const layer = Layer.effectDiscard(
                       child: {
                         title: `task: ${params.description}`,
                         location: parent.location,
-                        permissions: inheritedTaskPermissions(parentAgent?.permissions ?? [], parent.permissions),
+                        permissions: inheritedTaskPermissions(
+                          resolved.permissions,
+                          parentAgent?.permissions ?? [],
+                          parent.permissions,
+                        ),
                         ...(workspaceMode === "worktree" ? { workspace: { mode: "worktree" as const } } : {}),
                       },
                     }).pipe(
