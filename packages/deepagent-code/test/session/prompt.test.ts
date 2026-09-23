@@ -4265,27 +4265,31 @@ v2Real.instance(
           parts: [{ type: "text", text: "Cancel this run" }],
         }),
       ).pipe(Effect.forkChild)
-      yield* llm.wait(1)
+      yield* awaitWithTimeout(llm.wait(1), "timed out waiting for first durable provider dispatch", "20 seconds")
 
       // V2 successor of the legacy steer buffer: a noReply admission while the drain hangs lands as a
       // durable pending session_input row (chat-path delivery defaults to "steer"); it is promoted
       // only by a later drain, so the in-flight provider turn stays the only dispatch.
       const steerID = MessageID.ascending()
-      yield* provideR0OwnerRefs(
-        prompt.prompt({
-          sessionID: session.id,
-          agent: "build",
-          noReply: true,
-          messageID: steerID,
-          parts: [{ type: "text", text: "This steer belongs to the canceled run" }],
-        }),
+      yield* awaitWithTimeout(
+        provideR0OwnerRefs(
+          prompt.prompt({
+            sessionID: session.id,
+            agent: "build",
+            noReply: true,
+            messageID: steerID,
+            parts: [{ type: "text", text: "This steer belongs to the canceled run" }],
+          }),
+        ),
+        "timed out admitting attached steer",
+        "10 seconds",
       )
       const admitted = yield* SessionInput.find(db, SessionMessage.ID.make(steerID))
       expect(admitted?.delivery).toBe("steer")
       expect(admitted?.promotedSeq).toBeUndefined()
       expect(yield* llm.calls).toBe(1)
 
-      yield* prompt.cancel(session.id)
+      yield* awaitWithTimeout(prompt.cancel(session.id), "timed out cancelling durable run", "10 seconds")
       const exit = yield* awaitWithTimeout(Fiber.await(running), "timed out joining canceled durable run", "5 seconds")
       // V2-only: cancel interrupts the process-local ownership chain; the joined prompt caller exits
       // with a failure, and no legacy activity/run/steer/intent rows exist to terminalize. The unwind
@@ -4306,12 +4310,16 @@ v2Real.instance(
       expect(yield* db.select().from(SessionIntentTable).all().pipe(Effect.orDie)).toHaveLength(0)
 
       yield* llm.text("next prompt completed")
-      const next = yield* provideR0OwnerRefs(
-        prompt.prompt({
-          sessionID: session.id,
-          agent: "build",
-          parts: [{ type: "text", text: "Start a new run" }],
-        }),
+      const next = yield* awaitWithTimeout(
+        provideR0OwnerRefs(
+          prompt.prompt({
+            sessionID: session.id,
+            agent: "build",
+            parts: [{ type: "text", text: "Start a new run" }],
+          }),
+        ),
+        "timed out completing next durable prompt",
+        "20 seconds",
       )
       expect(next.parts.some((part) => part.type === "text" && part.text === "next prompt completed")).toBeTrue()
       // The post-cancel drain promoted the pending steer and folded it into the next provider input.
@@ -4320,7 +4328,8 @@ v2Real.instance(
       const inputs = yield* llm.inputs
       expect(JSON.stringify(inputs.at(-1)?.messages)).toContain("This steer belongs to the canceled run")
     }),
-  15_000,
+  // Let the stage-specific deadlines report which operation stalled under a loaded full-package run.
+  75_000,
 )
 
 // Agent variant
