@@ -371,4 +371,50 @@ describe("V2PluginToolsBridge native execution semantics", () => {
     expect(await rejected()).toBe(1)
     await reloadRt.dispose()
   })
+
+  test("live plugin removal unregisters its tool and the next snapshot sees replacements", async () => {
+    let definitions: V1Tool.Def[] = [metadataTool]
+    let changed: (() => Effect.Effect<void>) | undefined
+    const liveRt = ManagedRuntime.make(
+      Layer.mergeAll(
+        ApplicationTools.layer,
+        InstanceRegistry.layer,
+        V2PluginToolsBridge.layer.pipe(
+          Layer.provide(ApplicationTools.layer),
+          Layer.provide(InstanceRegistry.layer),
+          Layer.provide(
+            Layer.succeed(
+              ToolRegistry.Service,
+              ToolRegistry.Service.of({
+                ids: () => Effect.succeed([]),
+                all: () => Effect.succeed([]),
+                custom: () => Effect.succeed(definitions),
+                watchCustom: (callback) =>
+                  Effect.sync(() => {
+                    changed = callback
+                    return () => {
+                      changed = undefined
+                    }
+                  }),
+                named: () => Effect.die("unused"),
+                tools: () => Effect.die("unused"),
+              }),
+            ),
+          ),
+        ),
+      ),
+    )
+    const registered = () =>
+      liveRt.runPromise(Effect.map(ApplicationTools.Service, (applications) => [...applications.entries().keys()]))
+    await liveRt.runPromise(InstanceRegistry.initializeInstance(instance))
+    expect(await registered()).toContain("meta_tool")
+    const history = await liveRt.runPromise(settle("meta_tool"))
+    definitions = [progressTool]
+    if (!changed) throw new Error("plugin change listener missing")
+    await liveRt.runPromise(changed())
+    expect(await registered()).not.toContain("meta_tool")
+    expect(await registered()).toContain("progress_tool")
+    expect((history.structured as Record<string, unknown>)["output"]).toBe("did work")
+    await liveRt.dispose()
+  })
 })

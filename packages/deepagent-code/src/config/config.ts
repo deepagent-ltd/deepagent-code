@@ -993,6 +993,11 @@ export const layer = Layer.effect(
     const watchChanges = Effect.fn("Config.watch")(function* (changed: () => Effect.Effect<void>) {
       const ctx = yield* InstanceState.context
       const dirs = yield* directories()
+      const pluginFiles =
+        (yield* get()).plugin_origins?.flatMap((origin) => {
+          const spec = ConfigPlugin.pluginSpecifier(origin.spec)
+          return spec.startsWith("file://") ? [fileURLToPath(spec)] : []
+        }) ?? []
       const files = yield* ConfigPaths.files("deepagent-code", ctx.directory, ctx.worktree).pipe(
         Effect.provideService(FSUtil.Service, fs),
         Effect.orDie,
@@ -1002,6 +1007,7 @@ export const layer = Layer.effect(
         ctx.directory,
         ...dirs,
         ...files.map(path.dirname),
+        ...pluginFiles.map(path.dirname),
         ...dirs.flatMap((dir) => [path.join(dir, "plugin"), path.join(dir, "plugins")]),
       ])
       const semaphore = yield* Semaphore.make(1)
@@ -1009,21 +1015,33 @@ export const layer = Layer.effect(
       const watchers = [...targets].flatMap((dir) => {
         if (!existsSync(dir)) return []
         try {
-          return [watch(dir, (_event, filename) => {
-            const name = filename?.toString() ?? ""
-            const pluginDirectory = /^(?:plugin|plugins)$/.test(path.basename(dir))
-            if (closed || (name && !/^(?:config|deepagent-code)\.jsonc?$|^\.deepagent-code$|^plugins?$/.test(name)
-              && !(pluginDirectory && /\.[cm]?[jt]sx?$/.test(name)))) return
-            void Effect.runPromise(
-              semaphore.withPermit(
-                Effect.gen(function* () {
-                  if (closed) return
-                  yield* invalidate()
-                  yield* changed()
-                }),
-              ).pipe(Effect.provideService(InstanceRef, ctx)),
-            ).catch((error) => log.warn("config live refresh failed", { directory: ctx.directory, error: String(error) }))
-          })]
+          return [
+            watch(dir, (_event, filename) => {
+              const name = filename?.toString() ?? ""
+              const pluginDirectory = /^(?:plugin|plugins)$/.test(path.basename(dir))
+              if (
+                closed ||
+                (name &&
+                  !/^(?:config|deepagent-code)\.jsonc?$|^\.deepagent-code$|^plugins?$/.test(name) &&
+                  !(pluginDirectory && /\.[cm]?[jt]sx?$/.test(name)) &&
+                  !pluginFiles.some((file) => path.dirname(file) === dir && path.basename(file) === name))
+              )
+                return
+              void Effect.runPromise(
+                semaphore
+                  .withPermit(
+                    Effect.gen(function* () {
+                      if (closed) return
+                      yield* invalidate()
+                      yield* changed()
+                    }),
+                  )
+                  .pipe(Effect.provideService(InstanceRef, ctx)),
+              ).catch((error) =>
+                log.warn("config live refresh failed", { directory: ctx.directory, error: String(error) }),
+              )
+            }),
+          ]
         } catch (error) {
           log.warn("config watch unavailable", { directory: dir, error: String(error) })
           return []
