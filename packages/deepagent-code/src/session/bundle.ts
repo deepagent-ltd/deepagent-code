@@ -143,13 +143,19 @@ export async function parseSessionBundle(bytes: Uint8Array, progress?: BundlePro
   if (new Set(names).size !== names.length) throw new Error("duplicate bundle member")
   if (names.some((name) => name.startsWith("/") || name.includes("..") || name.includes("\\")))
     throw new Error("unsafe bundle member")
-  const contents = Object.fromEntries(
-    await Promise.all(entries.map(async (entry) => {
+  const contents: Record<string, string> = {}
+  let actualBytes = 0
+  try {
+    for (const entry of entries) {
       if (!entry.getData || entry.uncompressedSize > BUNDLE_MAX_BYTES) throw new Error("unsupported or oversized bundle member")
-      return [entry.filename, await entry.getData(new TextWriter())] as const
-    })),
-  )
-  await reader.close()
+      const value = await entry.getData(new TextWriter())
+      actualBytes += Buffer.byteLength(value)
+      if (actualBytes > BUNDLE_MAX_BYTES) throw new Error("session bundle expands beyond 64 MiB limit")
+      contents[entry.filename] = value
+    }
+  } finally {
+    await reader.close()
+  }
   const manifest = JSON.parse(contents["manifest.json"] ?? "null") as BundleManifest | null
   if (manifest?.format !== BUNDLE_FORMAT || manifest.format_version !== BUNDLE_VERSION || manifest.archive !== "zip")
     throw new Error("unsupported session bundle format or version")
