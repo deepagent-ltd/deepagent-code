@@ -21,6 +21,8 @@ import { SessionExecutionLocal } from "@deepagent-code/core/session/execution/lo
 import * as SessionRunnerLLM from "@deepagent-code/core/session/runner/llm"
 import { SessionRunnerModel } from "@deepagent-code/core/session/runner/model"
 import { V2ProviderTurn } from "@deepagent-code/core/session/runner/v2-provider-turn"
+import { V2ProviderTurnReceiptTable } from "@deepagent-code/core/session/runner/v2-provider-turn.sql"
+import { SessionActivityTable } from "@deepagent-code/core/context-federation/session-sql"
 import { V2ToolEffect } from "@deepagent-code/core/session/runner/v2-tool-effect"
 import { SessionProviderOwner } from "@deepagent-code/core/context-federation/provider-owner"
 import { SessionContext } from "@deepagent-code/core/context-federation/session-context"
@@ -36,6 +38,7 @@ import { SystemContextRegistry } from "@deepagent-code/core/system-context/regis
 import { SystemContext } from "@deepagent-code/core/system-context"
 import { SkillGuidance } from "@deepagent-code/core/skill/guidance"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
+import { DeepAgentActivityAuthority } from "../src/deepagent"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { Git } from "@deepagent-code/core/git"
 import { describe, expect } from "bun:test"
@@ -229,6 +232,7 @@ describe("SessionRunnerLLM recorded", () => {
           directory: "/project",
           title: "test",
           version: "test",
+          v2_authority: true,
         })
         .onConflictDoNothing()
         .run()
@@ -249,6 +253,31 @@ describe("SessionRunnerLLM recorded", () => {
       expect(messages[1]?.type === "assistant" ? messages[1].content : []).toMatchObject([
         { type: "text", text: "Hello!" },
       ])
+      const activity = yield* db
+        .select({ activityID: SessionActivityTable.activity_id })
+        .from(SessionActivityTable)
+        .where(eq(SessionActivityTable.session_id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
+      const receipt = yield* db
+        .select({ receiptID: V2ProviderTurnReceiptTable.receipt_id })
+        .from(V2ProviderTurnReceiptTable)
+        .where(eq(V2ProviderTurnReceiptTable.activity_id, activity!.activityID))
+        .get()
+        .pipe(Effect.orDie)
+      const progress = yield* DeepAgentActivityAuthority.reconstruct({
+        activityKind: "v2",
+        activityID: activity!.activityID,
+      })
+      expect(progress.objective).toMatchObject({
+        objectiveText: "Say hello in one short sentence.",
+        enforcementState: "disabled",
+        state: "completed",
+      })
+      expect(progress.latestObservation).toMatchObject({
+        revision: 0,
+        idempotencyKey: `v2-provider-turn:${receipt?.receiptID}`,
+      })
       expect(
         (yield* db
           .select({ type: EventTable.type })

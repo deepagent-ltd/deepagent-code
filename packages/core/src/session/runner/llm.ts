@@ -46,9 +46,11 @@ import { SessionMessage } from "../message"
 import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
 import { GoalLoop } from "../../deepagent/goal-loop"
+import { DeepAgentActivityAuthority } from "../../deepagent/activity-authority"
+import { SessionActivityProgressObservationTable } from "../../deepagent/activity-authority.sql"
 import { getActiveGoal } from "../../deepagent/session-state"
 import { DocumentStore } from "../../deepagent/document-store"
-import { planStoreRoot } from "../../deepagent/plan-store"
+import { planDocRef, planStoreRoot } from "../../deepagent/plan-store"
 import {
   type DeliveryReceipt,
   type RunError,
@@ -62,6 +64,7 @@ import { SessionRunnerModel } from "./model"
 import { PreparedProviderTurn } from "./prepared-provider-turn"
 import { buildDeepAgentPrompt, buildGovernedPlanContext } from "./deepagent-prompt"
 import { V2ToolEffect } from "./v2-tool-effect"
+import { V2ToolEffectTable } from "./v2-tool-effect.sql"
 import { createLLMEventPublisher } from "./publish-llm-event"
 import { normalizeAttachments } from "./attachments"
 import { rehydrateToolArtifacts } from "./tool-artifacts"
@@ -427,7 +430,8 @@ export const layer = Layer.effect(
     const queryAuthorization = yield* ContextQueryAuthorization.Controller
     const selectionSources = yield* ProductionV2Sources
     const ownerAuthorization = yield* V2ProviderTurn.OwnerAuthorization
-    const db = (yield* Database.Service).db
+    const database = yield* Database.Service
+    const db = database.db
     const remoteCompaction = yield* SessionCompaction.CurrentRemoteCompaction
     const compaction = SessionCompaction.make({
       events,
@@ -446,6 +450,98 @@ export const layer = Layer.effect(
 
     const getContext = Effect.fn("SessionRunner.getContext")(function* (sessionID: SessionSchema.ID) {
       return yield* store.context(sessionID)
+    })
+
+    // Fix-E: project each settled V2 provider turn into the durable activity vector. Read-only
+    // results are content fingerprints (same observation adds no new evidence); only mutating
+    // effects contribute unique receipt identities. V2 no-progress enforcement remains disabled
+    // until its permission challenge can resume the same activity with a durable decision.
+    const observeV2Progress = Effect.fn("SessionRunner.observeV2Progress")(function* (
+      sessionID: SessionSchema.ID,
+      activityID: string,
+      needsContinuation: boolean,
+    ) {
+      const receipt = yield* db
+        .select()
+        .from(V2ProviderTurnReceiptTable)
+        .where(
+          and(
+            eq(V2ProviderTurnReceiptTable.session_id, sessionID),
+            eq(V2ProviderTurnReceiptTable.activity_id, activityID),
+            eq(V2ProviderTurnReceiptTable.owner_mode, "v2"),
+            eq(V2ProviderTurnReceiptTable.state, "settled"),
+          ),
+        )
+        .orderBy(desc(V2ProviderTurnReceiptTable.request_ordinal))
+        .get()
+        .pipe(Effect.orDie)
+      if (!receipt) return
+      const idempotencyKey = `v2-provider-turn:${receipt.receipt_id}`
+      const observed = yield* db
+        .select({ revision: SessionActivityProgressObservationTable.revision })
+        .from(SessionActivityProgressObservationTable)
+        .where(eq(SessionActivityProgressObservationTable.idempotency_key, idempotencyKey))
+        .get()
+        .pipe(Effect.orDie)
+      if (observed) return
+      const current = yield* DeepAgentActivityAuthority.reconstruct({ activityKind: "v2", activityID })
+      if (current.objective.state !== "active") return
+      const configured = current.objective.objectiveFingerprint
+        ? current.objective
+        : yield* Effect.gen(function* () {
+            const activity = yield* db
+              .select({ triggerInputID: SessionActivityTable.trigger_input_id })
+              .from(SessionActivityTable)
+              .where(eq(SessionActivityTable.activity_id, activityID))
+              .get()
+              .pipe(Effect.orDie)
+            if (!activity) return yield* Effect.die(`V2 activity ${activityID} has no trigger input`)
+            const trigger = yield* SessionInput.find(db, SessionMessage.ID.make(activity.triggerInputID))
+            if (!trigger) return yield* Effect.die(`V2 activity ${activityID} has no durable prompt`)
+            return yield* DeepAgentActivityAuthority.configure({
+              activityKind: "v2",
+              activityID,
+              expectedVersion: current.objective.version,
+              objectiveText: trigger.prompt.text.trim() || `Complete activity ${activityID}`,
+              completionCriteria: [{ kind: "plan_complete" }],
+              enforcementState: "disabled",
+            })
+          })
+      const effects = yield* db
+        .select()
+        .from(V2ToolEffectTable)
+        .where(eq(V2ToolEffectTable.receipt_id, receipt.receipt_id))
+        .all()
+        .pipe(Effect.orDie)
+      const plan = planDocRef(sessionID)
+      yield* DeepAgentActivityAuthority.observe({
+        activityKind: "v2",
+        activityID,
+        idempotencyKey,
+        expectedVersion: configured.version,
+        ...(plan === null ? {} : { planVersion: plan.version }),
+        evidence: effects
+          .filter((effect) => effect.effect_kind === "read_only")
+          .map((effect) => ({
+            fingerprint: Hash.sha256(CanonicalJson.stringify({
+              tool: effect.tool_name,
+              state: effect.state,
+              outcome: effect.outcome_hash,
+            })),
+            kind: "tool_read",
+          })),
+        effectReceipts: effects
+          .filter((effect) => effect.effect_kind === "mutating")
+          .map((effect) => ({
+            receiptID: effect.effect_id,
+            fingerprint: Hash.sha256(CanonicalJson.stringify({
+              tool: effect.tool_name,
+              state: effect.state,
+              outcome: effect.outcome_hash,
+            })),
+          })),
+        nextAction: needsContinuation ? "continue" : "finish",
+      })
     })
     const failInterruptedTools = Effect.fn("SessionRunner.failInterruptedTools")(function* (
       sessionID: SessionSchema.ID,
@@ -2350,6 +2446,10 @@ export const layer = Layer.effect(
         // provider turn or misreporting the already-finished answer as a step-limit failure.
         if (restored?.terminalStop && !pendingSteer) {
           settledActivityId = settledActivityId ?? restored.activityID
+          yield* observeV2Progress(input.sessionID, restored.activityID, false).pipe(
+            Effect.provideService(Database.Service, database),
+            Effect.orDie,
+          )
           yield* Effect.uninterruptible(
             contexts.settleActivity({ activityId: restored.activityID, state: "settled" }),
           ).pipe(Effect.orDie)
@@ -2372,6 +2472,11 @@ export const layer = Layer.effect(
           promotion = "steer"
           activityId = result.activityId ?? activityId
           attempts += 1
+          if (activityId !== undefined)
+            yield* observeV2Progress(input.sessionID, activityId, needsContinuation).pipe(
+              Effect.provideService(Database.Service, database),
+              Effect.orDie,
+            )
           const repeated = loopBudget.repeatedTool()
           if (repeated) {
             if (activityId === undefined) return yield* Effect.die("repeated tool call without an admitted activity")
