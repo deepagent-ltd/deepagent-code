@@ -8,6 +8,10 @@ import { InstanceRef } from "@/effect/instance-ref"
 import { adaptCustomTool, customToolName } from "@/tool/custom-tool-adapter"
 import { CustomToolRejections } from "@/tool/custom-tool-rejections"
 
+// These capabilities retain app-owned services and flags; the Core V2 registry owns their
+// advertised definitions and settlement after this instance-scoped registration.
+const hostToolIDs = new Set(["lsp", "profile", "debug", "query_log"])
+
 /**
  * Instance-owned registration of npm/filesystem plugin and config-glob tools. The V1 registry
  * remains the definition source; the canonical Core ApplicationTools registry owns execution.
@@ -30,12 +34,12 @@ export const layer = Layer.effectDiscard(
             Effect.gen(function* () {
               if (disposed) return
               const custom = yield* registry.custom().pipe(Effect.provideService(InstanceRef, context))
-              // query_log is a host-owned filesystem tool, not a Core built-in. It shares the
-              // process ApplicationTools authority with plugin definitions while retaining its
-              // instance-bound archive path and the RuntimeFlags roster switch.
+              // Keep app-owned tools bound to their defining instance while the Core registry
+              // handles the provider-facing snapshot and settlement. The V1 roster retains each
+              // RuntimeFlags visibility gate; disposing the instance removes the whole batch.
               const host = (yield* registry.all().pipe(Effect.provideService(InstanceRef, context)))
-                .filter((def) => def.id === "query_log")
-              const adapted = [...custom.filter((def) => def.id !== "query_log"), ...host].map((def) => ({
+                .filter((def) => hostToolIDs.has(def.id))
+              const adapted = [...custom.filter((def) => !hostToolIDs.has(def.id)), ...host].map((def) => ({
                 id: def.id,
                 name: customToolName(def.id),
                 // The Core settle fiber has no V1 InstanceRef; preserve the defining instance.

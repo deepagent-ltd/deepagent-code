@@ -185,6 +185,33 @@ test("gateway service inventory is resolved by the qualified server root", async
   }
 }, 180_000)
 
+test("production startup reads app-owned tools back from the canonical V2 registry", async () => {
+  await using root = await tmpdir()
+  const original = Flag.DEEPAGENT_CODE_DB
+  Flag.DEEPAGENT_CODE_DB = path.join(root.path, "app-tools-composition.db")
+  const web = HttpRouter.toWebHandler(HttpApiApp.createRoutes().pipe(
+    Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({
+      DEEPAGENT_CODE_EXPERIMENTAL_LSP_TOOL: true,
+      DEEPAGENT_CODE_PROFILE_TOOL: true,
+      DEEPAGENT_CODE_DEBUG_TOOL: true,
+      DEEPAGENT_CODE_EXPERIMENTAL_QUERY_LOG: true,
+    }))),
+  ), { disableLogger: true })
+  try {
+    const response = await web.handler(new Request("http://localhost/composition/digest"), HttpApiApp.context)
+    expect(response.status).toBe(200)
+    const digest = (await response.json()) as CompositionDigest.Record
+    for (const id of ["lsp", "profile", "debug", "query_log"]) {
+      expect(digest.v2Registry.applicationTools.ids).toContain(id)
+      expect(digest.v2Registry.materialized.ids).toContain(id)
+      expect(digest.v2Registry.legacyEgress.ids).toContain(id)
+    }
+  } finally {
+    await web.dispose()
+    Flag.DEEPAGENT_CODE_DB = original
+  }
+}, 180_000)
+
 test("roots opened on different databases digest differently (and identically on every other facet)", async () => {
   await using root = await tmpdir()
   const original = Flag.DEEPAGENT_CODE_DB
