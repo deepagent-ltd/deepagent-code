@@ -208,7 +208,7 @@ const replacementModel = Model.make({ id: "replacement", provider: "fake", route
 const compactModel = Model.make({
   id: "compact",
   provider: "fake",
-  route: OpenAIChat.route.with({ limits: { context: 4_000, output: 50 } }),
+  route: OpenAIChat.route.with({ limits: { context: 6_000, output: 50 } }),
 })
 const recoveryModel = Model.make({
   id: "recovery",
@@ -232,7 +232,7 @@ const budgetModel = Model.make({
 const managedCompactModel = Model.make({
   id: "deepseek-flash",
   provider: "deepseek",
-  route: OpenAIChat.route.with({ limits: { context: 3_000, output: 50 } }),
+  route: OpenAIChat.route.with({ limits: { context: 4_000, output: 50 } }),
 })
 const managedObservationModel = Model.make({
   id: "deepseek-flash",
@@ -1240,7 +1240,7 @@ describe("SessionRunnerLLM", () => {
         currentModel = Model.make({
           id: apiModelID,
           provider: providerID,
-          route: OpenAIChat.route.with({ limits: { context: 1_000, output: 50 } }),
+          route: OpenAIChat.route.with({ limits: { context: 4_096, output: 50 } }),
         })
         const session = yield* SessionV2.Service
         const { db } = yield* Database.Service
@@ -1265,7 +1265,10 @@ describe("SessionRunnerLLM", () => {
         expect(policy?.policy).toMatchObject({
           state: "managed",
           key: policyKey,
-          effectiveHardGate: 1_000,
+          effectiveHardGate: 3_072,
+          physicalInputBudget: 3_072,
+          safetyMargin: 1_024,
+          limitProvenance: "model_limit",
           limitMismatch: true,
         })
         expect(yield* db.select().from(SessionContextCheckpointTable)
@@ -1321,6 +1324,7 @@ describe("SessionRunnerLLM", () => {
         expect(policy?.context_selection_id).toBeTruthy()
         expect(policy?.context_projection_hash).toBeTruthy()
         expect(policy?.offered_tool_ids).toEqual(requests[0]!.tools.map((tool) => tool.name))
+        expect(policy?.degraded_tool_ids).toEqual([])
         expect(requests[0]!.messages.flatMap((message) => message.content)
           .filter((part) => part.type === "text" && part.text.includes("Context selection (this turn):"))).toHaveLength(1)
         expect(policy?.provider_attempt_id).toBe(attempt?.attempt_id)
@@ -1411,9 +1415,12 @@ describe("SessionRunnerLLM", () => {
       const policies = yield* db.select().from(SessionModelPolicyReceiptTable)
         .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)
       expect(policies.some((row) => row.checkpoint_id === checkpoint?.checkpoint_id && row.checkpoint_hash === checkpoint?.content_hash)).toBe(true)
-      expect(policies).toHaveLength(2)
-      expect(policies.find((row) => row.checkpoint_id !== null)?.context_selection_id).not.toBe(
-        policies.find((row) => row.checkpoint_id === null)?.context_selection_id,
+      expect(policies).toHaveLength(3)
+      expect(policies.filter((row) => row.policy.state === "unmanaged")).toHaveLength(1)
+      const managedPolicies = policies.filter((row) => row.policy.state === "managed")
+      expect(managedPolicies).toHaveLength(2)
+      expect(managedPolicies.find((row) => row.checkpoint_id !== null)?.context_selection_id).not.toBe(
+        managedPolicies.find((row) => row.checkpoint_id === null)?.context_selection_id,
       )
       expect((yield* db.select().from(SessionContextSelectionTable)
         .where(eq(SessionContextSelectionTable.session_id, sessionID)).all().pipe(Effect.orDie)).length).toBeGreaterThanOrEqual(2)
@@ -1445,6 +1452,7 @@ describe("SessionRunnerLLM", () => {
       const [policy] = yield* db.select().from(SessionModelPolicyReceiptTable)
         .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)
       expect(policy?.policy).toMatchObject({ state: "managed", action: "observed" })
+      expect(policy?.degraded_tool_ids).toEqual(expect.arrayContaining(["echo", "defect", "task"]))
       expect(policy?.trigger_source).toBe("none")
       const [receipt] = yield* db.select().from(V2ProviderTurnReceiptTable)
         .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)
@@ -2625,8 +2633,10 @@ describe("SessionRunnerLLM", () => {
       expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
         withSelection(["Initial context"]),
       ])
-      expect(yield* (yield* Database.Service).db.select().from(SessionModelPolicyReceiptTable)
-        .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)).toHaveLength(0)
+      const policies = yield* (yield* Database.Service).db.select().from(SessionModelPolicyReceiptTable)
+        .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)
+      expect(policies).toHaveLength(1)
+      expect(policies[0]).toMatchObject({ api_model_id: "replacement", policy: { state: "unmanaged" } })
     }),
   )
 
@@ -3148,6 +3158,11 @@ describe("SessionRunnerLLM", () => {
   it.effect("forces one compaction and retries after provider context overflow", () =>
     Effect.gen(function* () {
       const session = yield* setupOverflowRecovery
+      currentModel = Model.make({
+        id: "deepseek-flash",
+        provider: "deepseek",
+        route: OpenAIChat.route.with({ limits: { context: 20_000, output: 1_000 } }),
+      })
       responses = [
         [
           LLMEvent.stepStart({ index: 0 }),
@@ -3166,6 +3181,10 @@ describe("SessionRunnerLLM", () => {
         { type: "compaction", summary: "## Goal\n- Recover overflow" },
         { type: "assistant", finish: "stop" },
       ])
+      const policies = yield* (yield* Database.Service).db.select().from(SessionModelPolicyReceiptTable)
+        .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)
+      expect(policies.filter((row) => row.policy.state === "managed").map((row) => row.trigger_source).sort())
+        .toEqual(["none", "provider_overflow"])
       yield* replaySessionProjection(sessionID)
       expect(yield* session.context(sessionID)).toMatchObject([
         { type: "compaction" },
@@ -3710,8 +3729,11 @@ describe("SessionRunnerLLM", () => {
       expect(requests.map((request) => request.model)).toEqual([managedObservationModel, replacementModel])
       const policy = yield* (yield* Database.Service).db.select().from(SessionModelPolicyReceiptTable)
         .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)
-      expect(policy).toHaveLength(1)
-      expect(policy[0]?.policy).toMatchObject({ state: "managed", key: "deepseek-v4-flash", action: "normal" })
+      expect(policy).toHaveLength(2)
+      expect(policy.map((row) => row.policy.state).sort()).toEqual(["managed", "unmanaged"])
+      expect(policy.find((row) => row.policy.state === "managed")?.policy).toMatchObject({
+        state: "managed", key: "deepseek-v4-flash", action: "normal",
+      })
       expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
         withSelection(["Initial context"]),
         withSelection(["Replacement context"]),

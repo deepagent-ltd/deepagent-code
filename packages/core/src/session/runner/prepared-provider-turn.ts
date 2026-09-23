@@ -308,12 +308,25 @@ export function budget(model: Model, estimatedFullRequestTokens = 0): Budget {
       safetyMargin: 0,
       provenance: "host_guard",
     }
+  const safetyMargin = positiveEnv("DEEPAGENT_CODE_CONTEXT_SAFETY_MARGIN", 1_024)
+  const physicalInputBudget = context - safetyMargin
+  if (physicalInputBudget <= 0)
+    return {
+      decision: "unavailable",
+      reason: "context_limit_invalid",
+      estimatedFullRequestTokens,
+      physicalInputBudget,
+      reservedOutputTokens: output,
+      safetyMargin,
+      provenance: "model_limit",
+    }
   return {
-    decision: "ok",
+    decision: estimatedFullRequestTokens < physicalInputBudget ? "ok" : "unavailable",
+    ...(estimatedFullRequestTokens >= physicalInputBudget ? { reason: "physical_budget_exceeded" as const } : {}),
     estimatedFullRequestTokens,
-    physicalInputBudget: context,
+    physicalInputBudget,
     reservedOutputTokens: output,
-    safetyMargin: 0,
+    safetyMargin,
     provenance: "model_limit",
   }
 }

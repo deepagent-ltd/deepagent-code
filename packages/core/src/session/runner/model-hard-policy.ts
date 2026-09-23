@@ -39,6 +39,8 @@ export type Decision =
       readonly effectiveObservationLine: number
       readonly effectiveHardGate: number
       readonly physicalInputBudget: number
+      readonly limitProvenance: "model_limit" | "host_guard"
+      readonly safetyMargin: number
       readonly limitMismatch: boolean
       readonly action: "normal" | "observed" | "hard_gate_compact" | "hard_gate_blocked"
     }
@@ -52,6 +54,8 @@ export function decide(input: {
   readonly runtimeModelID: string
   readonly apiModelID?: string
   readonly physicalInputBudget: number
+  readonly limitProvenance?: "model_limit" | "host_guard"
+  readonly safetyMargin?: number
   readonly estimatedFullRequestTokens: number
   readonly autoCompact: boolean
 }): Decision {
@@ -75,6 +79,8 @@ export function decide(input: {
     effectiveObservationLine,
     effectiveHardGate,
     physicalInputBudget: input.physicalInputBudget,
+    limitProvenance: input.limitProvenance ?? "model_limit",
+    safetyMargin: input.safetyMargin ?? 0,
     limitMismatch: input.physicalInputBudget < policy.hardGate,
     action:
       input.estimatedFullRequestTokens >= effectiveHardGate

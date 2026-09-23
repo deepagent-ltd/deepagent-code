@@ -26,7 +26,7 @@ export const SessionModelPolicyReceiptTable = sqliteTable(
     offered_tool_ids: text({ mode: "json" }).$type<readonly string[]>().notNull(),
     degraded_tool_ids: text({ mode: "json" }).$type<readonly string[]>().notNull(),
     provider_attempt_id: text(),
-    trigger_source: text().$type<"threshold" | "none">().notNull(),
+    trigger_source: text().$type<"threshold" | "provider_overflow" | "none">().notNull(),
     checkpoint_id: text(),
     checkpoint_hash: text(),
     blocked_reason: text(),

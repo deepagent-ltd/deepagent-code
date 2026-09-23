@@ -946,8 +946,9 @@ export const commitTurn = Effect.fn("SessionRunnerCanonical.commitTurn")(functio
             input.policy.apiModelID !== input.receipt.modelId ||
             input.policy.selectionID !== input.admission.selectionId ||
             input.policy.projectionHash !== input.admission.projectionHash ||
-            input.policy.policy.state !== "managed" ||
-            (input.policy.policy.action !== "normal" && input.policy.policy.action !== "observed")
+            (input.policy.policy.state !== "unmanaged" &&
+              (input.policy.policy.state !== "managed" ||
+                (input.policy.policy.action !== "normal" && input.policy.policy.action !== "observed")))
           )) return yield* new AdmissionError({ reason: "model_policy_attempt_binding_mismatch" })
           const validUntil = now + ValidationMs
           yield* input.contexts.appendValidation({

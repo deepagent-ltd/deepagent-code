@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test"
+import { Model } from "@deepagent-code/llm"
+import { route } from "@deepagent-code/llm/protocols/openai-chat"
 import { ModelHardPolicy } from "../src/session/runner/model-hard-policy"
+import { PreparedProviderTurn } from "../src/session/runner/prepared-provider-turn"
 
 describe("FEATURE-001-405 managed model hard gates", () => {
   test.each([
@@ -39,6 +42,41 @@ describe("FEATURE-001-405 managed model hard gates", () => {
       limitMismatch: true,
       action: "hard_gate_blocked",
     })
+  })
+
+  test("uses the BUG-007 safety margin as the effective provider input budget", () => {
+    const model = Model.make({
+      id: "kimi-k3",
+      provider: "moonshotai",
+      route: route.with({ limits: { input: 256_000, output: 1_000 } }),
+    })
+    const budget = PreparedProviderTurn.budget(model, 254_976)
+    expect(budget).toMatchObject({
+      decision: "unavailable",
+      reason: "physical_budget_exceeded",
+      physicalInputBudget: 254_976,
+      reservedOutputTokens: 1_000,
+      safetyMargin: 1_024,
+      provenance: "model_limit",
+    })
+    expect(ModelHardPolicy.decide({
+      providerID: "moonshotai",
+      runtimeModelID: "kimi-k3",
+      apiModelID: "kimi-k3",
+      physicalInputBudget: budget.physicalInputBudget,
+      limitProvenance: budget.provenance,
+      safetyMargin: budget.safetyMargin,
+      estimatedFullRequestTokens: 254_976,
+      autoCompact: false,
+    })).toMatchObject({
+      state: "managed",
+      effectiveHardGate: 254_976,
+      limitMismatch: true,
+      limitProvenance: "model_limit",
+      safetyMargin: 1_024,
+      action: "hard_gate_blocked",
+    })
+    expect(PreparedProviderTurn.budget(model, 254_975).decision).toBe("ok")
   })
 
   test("API model identity outranks a misleading runtime alias; similar names stay unmanaged", () => {

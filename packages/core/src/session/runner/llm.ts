@@ -928,6 +928,7 @@ export const layer = Layer.effect(
             ]
           : []),
       ]
+      const offeredToolIDs = toolDefinitions.map((tool) => tool.name)
       const stepLimitReached = loopBudget.stepLimitReached(currentStep)
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
       // V1 parity (workspace-context.ts): validation commands are inferred from the same workspace
@@ -1201,11 +1202,15 @@ export const layer = Layer.effect(
       // deliberately EXCLUDES the notice itself, so the warning can never feed back into the
       // percentage that produced it.
       const inputUsage = SessionCompaction.estimateInputUsage(model, request)
+      const physicalBudget = PreparedProviderTurn.budget(model)
       const policyInput = {
         providerID: model.provider,
         runtimeModelID: modelInfo?.id ?? model.id,
         apiModelID: model.id,
-        physicalInputBudget: model.route.defaults.limits?.input ?? model.route.defaults.limits?.context ?? 0,
+        physicalInputBudget: physicalBudget.provenance === "host_guard" ? 0 :
+          physicalBudget.reason === "context_limit_invalid" ? -1 : physicalBudget.physicalInputBudget,
+        limitProvenance: physicalBudget.provenance,
+        safetyMargin: physicalBudget.safetyMargin,
         autoCompact: compaction.autoEnabled,
       }
       const initialPolicy = ModelHardPolicy.decide({
@@ -1235,8 +1240,7 @@ export const layer = Layer.effect(
           },
         }),
       )
-      const policyReceipt = modelPolicy.state === "unmanaged" ? undefined
-        : {
+      const policyReceipt = {
           sessionID: session.id,
           activityID: selectionAdmission.activityId,
           userMessageID: receiptUserMessageID,
@@ -1251,11 +1255,10 @@ export const layer = Layer.effect(
           selectionID: selectionAdmission.selectionId,
           projectionHash: selectionAdmission.projectionHash,
           graphSnapshotRefs: selectionAdmission.selectedRefs ?? [],
-          offeredToolIDs: toolDefinitions.map((tool) => tool.name),
-          degradedToolIDs: toolMaterialization.permissionFilteredIDs,
+          offeredToolIDs,
+          degradedToolIDs: toolMaterialization.registeredIDs.filter((id) => !offeredToolIDs.includes(id)),
         }
-      if (policyReceipt) {
-        if (modelPolicy.state === "unavailable") {
+      if (modelPolicy.state === "unavailable") {
           const policyReceiptID = yield* LongContext.recordPolicy({ db, ...policyReceipt }).pipe(Effect.orDie)
           yield* LongContext.settlePolicy(db, policyReceiptID, { blockedReason: modelPolicy.reason }).pipe(Effect.orDie)
           return yield* new ContextBudgetHardGateError({
@@ -1265,7 +1268,7 @@ export const layer = Layer.effect(
             reason: modelPolicy.reason,
           })
         }
-        if (modelPolicy.state === "managed" && modelPolicy.action.startsWith("hard_gate")) {
+      if (modelPolicy.state === "managed" && modelPolicy.action.startsWith("hard_gate")) {
           const policyReceiptID = yield* LongContext.recordPolicy({ db, ...policyReceipt }).pipe(Effect.orDie)
           const previousHardGate = entries.findLast((entry) =>
             entry.message.type === "compaction" && entry.message.reason === "hard_gate")
@@ -1303,8 +1306,8 @@ export const layer = Layer.effect(
             effectiveHardGate: modelPolicy.effectiveHardGate,
             reason,
           })
-        }
-      } else if (yield* compaction.compactIfNeeded({
+      }
+      if (modelPolicy.state === "unmanaged" && (yield* compaction.compactIfNeeded({
         sessionID: session.id,
         entries,
         model,
@@ -1314,7 +1317,7 @@ export const layer = Layer.effect(
         ownerMode: parityCampaign ? "shadow_v2" : "v2",
         admission: selectionAdmission,
         ...(inputUsage === undefined ? {} : { estimatedInputTokens: inputUsage.tokens }),
-      })) return yield* Effect.die(rebuildPreparedTurn(undefined, currentStep))
+      }))) return yield* Effect.die(rebuildPreparedTurn(undefined, currentStep))
       const requestBudget = PreparedProviderTurn.budget(model, estimatedFullRequestTokens)
       const admittedTurn = yield* SessionRunnerCanonical.commitTurn({
         db,
@@ -1904,10 +1907,15 @@ export const layer = Layer.effect(
           )
           const failure =
             stream._tag === "Failure" ? Option.getOrUndefined(Cause.findErrorOption(stream.cause)) : undefined
+          const providerOverflow = isContextOverflowFailure(overflowFailure ?? failure)
+          if (providerOverflow) {
+            if (!providerReceipt.providerAttemptId) return yield* Effect.die("provider_overflow_without_attempt")
+            yield* LongContext.markProviderOverflow(db, session.id, providerReceipt.providerAttemptId).pipe(Effect.orDie)
+          }
           if (
             recoverOverflow &&
             !publisher.hasAssistantStarted() &&
-            isContextOverflowFailure(overflowFailure ?? failure) &&
+            providerOverflow &&
             (yield* restore(
               recoverOverflow({
                 sessionID: session.id,

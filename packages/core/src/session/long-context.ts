@@ -116,6 +116,22 @@ export const settlePolicy = Effect.fn("LongContext.settlePolicy")(function* (
   ).where(eq(SessionModelPolicyReceiptTable.receipt_id, receiptID)).pipe(Effect.orDie)
 })
 
+/** A provider overflow is reactive evidence on the already dispatched attempt, never a new preflight. */
+export const markProviderOverflow = Effect.fn("LongContext.markProviderOverflow")(function* (
+  db: DB,
+  sessionID: SessionSchema.ID,
+  providerAttemptID: string,
+) {
+  const updated = yield* db.update(SessionModelPolicyReceiptTable)
+    .set({ trigger_source: "provider_overflow" })
+    .where(and(
+      eq(SessionModelPolicyReceiptTable.session_id, sessionID),
+      eq(SessionModelPolicyReceiptTable.provider_attempt_id, providerAttemptID),
+    ))
+    .returning({ receiptID: SessionModelPolicyReceiptTable.receipt_id }).all().pipe(Effect.orDie)
+  if (updated.length !== 1) return yield* Effect.fail(new Error("model_policy_overflow_receipt_missing"))
+})
+
 /** The EventV2 compaction-start fact is the durable run admission. This artifact is written after
  * that fact and before any summary provider work; Ended verifies the binding before epoch change. */
 export const writeCheckpoint = Effect.fn("LongContext.writeCheckpoint")(function* (input: {
