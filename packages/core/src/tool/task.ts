@@ -77,6 +77,9 @@ const Input = Schema.Struct({
     description:
       "Optional declared file scope (globs or directory prefixes) this task expects to touch. Recorded on the durable run; overlapping scopes across active sibling write tasks raise a non-blocking warning.",
   }),
+  background: Schema.optional(Schema.Boolean).annotate({
+    description: "Run the agent in the background. The task returns its ID immediately and a completion notification follows.",
+  }),
 })
 
 const RunInfo = Schema.Struct({
@@ -407,6 +410,7 @@ export const layer = Layer.effectDiscard(
                   }
                   const deadline = Date.now() + DEFAULT_SUBAGENT_TIMEOUT_MS
                   let timedOut = false
+                  const background = params.background === true && params.task_id === undefined
 
                   // Follow-up turns (resume-by-task_id first turns, structured-output finalizer
                   // prompts) stay with the tool layer: admit-only prompt + explicit awaited drain.
@@ -458,6 +462,7 @@ export const layer = Layer.effectDiscard(
                       ? Effect.succeed(undefined)
                       : database.db
                           .select({
+                            state: TaskRunTable.state,
                             workspace_mode: TaskRunTable.workspace_mode,
                             worktree_branch: TaskRunTable.worktree_branch,
                             worktree_state: TaskRunTable.worktree_state,
@@ -509,7 +514,7 @@ export const layer = Layer.effectDiscard(
                       parentSessionID: context.sessionID,
                       parentMessageID: context.assistantMessageID,
                       toolCallID: context.toolCallID,
-                      deliveryMode: "foreground",
+                      deliveryMode: background ? "background" : "foreground",
                       prompt: new Prompt({ text: params.prompt }),
                       agent: resolved.id,
                       ...(outputSchema === undefined ? {} : { outputSchema }),
@@ -535,6 +540,27 @@ export const layer = Layer.effectDiscard(
                         ),
                       ),
                     )
+                    if (background) {
+                      const current = yield* runRowByID(admitted.run.runID)
+                      const state =
+                        current?.state === "completed" ||
+                        current?.state === "failed" ||
+                        current?.state === "interrupted" ||
+                        current?.state === "recovery_required"
+                          ? current.state
+                          : "running"
+                      return {
+                        childID: admitted.run.childSessionID,
+                        runID: admitted.run.runID,
+                        warnings,
+                        run: runInfoOf(current, params.subagent_type),
+                        text: `<task id="${admitted.run.childSessionID}" state="${state}">\n${
+                          state === "running"
+                            ? `Background task enqueued: ${params.description}`
+                            : `Background task settled as ${state}; use task_read for its transcript.`
+                        }\n</task>`,
+                      }
+                    }
                     const result = yield* TaskRunAuthority.execute({
                       db: database.db,
                       run: admitted.run,
@@ -591,6 +617,13 @@ export const layer = Layer.effectDiscard(
                   const research = launch.text
                   const warnings = launch.warnings
                   const runInfo = launch.run
+                  if (background)
+                    return {
+                      task_id: childID,
+                      text: research,
+                      ...(runInfo === undefined ? {} : { run: runInfo }),
+                      ...(warnings.length === 0 ? {} : { warnings }),
+                    }
                   if (!outputSchema)
                     return {
                       task_id: childID,

@@ -5,6 +5,8 @@ import path from "node:path"
 import type { ConfigV1 } from "@deepagent-code/core/v1/config/config"
 import type { PermissionV1 } from "@deepagent-code/core/v1/permission"
 import type { PermissionV2 } from "@deepagent-code/core/permission"
+import type { QuestionV2 } from "@deepagent-code/core/question"
+import type { Effect } from "effect"
 import type { SessionV1 } from "@deepagent-code/core/v1/session"
 import { GlobalBus, type GlobalEvent } from "../../src/bus/global"
 import type { QuestionID } from "../../src/question/schema"
@@ -271,6 +273,8 @@ export async function runLegacyLiveCases(input: {
     const { BUILTIN_AGENT_DESCRIPTORS } = await import("@deepagent-code/core/im/builtin-agents")
     const { AgentListProviderService } = await import("@deepagent-code/core/im/agent-list-provider")
     const { PermissionV2 } = await import("@deepagent-code/core/permission")
+    const { QuestionV2 } = await import("@deepagent-code/core/question")
+    const { TaskRunDispatcher } = await import("@deepagent-code/core/session/task-run-dispatcher")
     const { Location } = await import("@deepagent-code/core/location")
     const { LocationServiceMap } = await import("@deepagent-code/core/location-layer")
     const { AbsolutePath } = await import("@deepagent-code/core/schema")
@@ -301,6 +305,7 @@ export async function runLegacyLiveCases(input: {
       "@deepagent-code/core/session/sql"
     )
     const { SessionInputTable, TaskRunTable } = await import("@deepagent-code/core/session/sql")
+    const { SessionActivityTable } = await import("@deepagent-code/core/context-federation/session-sql")
     const { V2ProviderTurnReceiptTable } = await import("@deepagent-code/core/session/runner/v2-provider-turn.sql")
     const { SessionV2 } = await import("@deepagent-code/core/session")
     const { SessionMessage } = await import("@deepagent-code/core/session/message")
@@ -418,6 +423,52 @@ export async function runLegacyLiveCases(input: {
       }> = []
       const events = yield* EventV2Bridge.Service
       const locationServices = yield* Effect.serviceOption(LocationServiceMap)
+      const handleQuestion = (
+        request: (typeof questionRequests)[number],
+        reply: (answers: string[][]) => Effect.Effect<void>,
+        reject: () => Effect.Effect<void>,
+      ) => {
+        questionRequests.push(request)
+        const questionAction = input.questionAction
+        if (questionAction?.type === "abort") {
+          request.latch = { type: "abort" }
+          return prompts.cancel(request.sessionID as SessionID).pipe(Effect.orDie)
+        }
+        if (questionAction?.type === "background") {
+          return Effect.gen(function* () {
+            const child = yield* sessions.get(request.sessionID as SessionID)
+            if (!child.parentID) return yield* Effect.die(new Error("Background child has no parent Session"))
+            const observation = yield* Effect.gen(function* () {
+              const messages = yield* sessions.messages({ sessionID: child.parentID as SessionID })
+              const taskRunning = messages.some((message) =>
+                message.parts.some(
+                  (part) =>
+                    part.type === "tool" &&
+                    part.tool === "task" &&
+                    part.state.status === "completed" &&
+                    part.state.output.includes('state="running"'),
+                ),
+              )
+              return taskRunning ? true : undefined
+            }).pipe(
+              Effect.repeat({ while: (value) => value === undefined, schedule: Schedule.spaced("50 millis") }),
+              Effect.timeout(config.timeoutMs),
+            )
+            request.latch = {
+              type: "background",
+              parentSessionID: child.parentID,
+              taskRunning: observation === true,
+            }
+            yield* reply([[questionAction.reply]])
+          })
+        }
+        if (questionAction?.type === "hold") {
+          request.latch = { type: "hold" }
+          return Effect.void
+        }
+        if (input.questionReply !== undefined) return reply([[input.questionReply]])
+        return reject()
+      }
       const unsubscribe = yield* events.listen((event) => {
         // Core V2 asks (permission.v2.asked) settle ONLY through PermissionV2.reply — the legacy
         // Permission.reply below settles app-level (V1) asks and would leave a V2 assert parked
@@ -499,53 +550,35 @@ export async function runLegacyLiveCases(input: {
       })
       yield* Effect.addFinalizer(() => unsubscribe)
       const unsubscribeQuestions = yield* events.listen((event) => {
-        if (event.type !== Question.Event.Asked.type) return Effect.void
-        const request = event.data as (typeof questionRequests)[number]
-        questionRequests.push(request)
-        const questionAction = input.questionAction
-        if (questionAction?.type === "abort") {
-          request.latch = { type: "abort" }
-          return prompts.cancel(request.sessionID as SessionID).pipe(Effect.orDie)
-        }
-        if (questionAction?.type === "background") {
+        if (event.type === QuestionV2.Event.Asked.type) {
+          const asked = event.data as QuestionV2.Request
+          const request: (typeof questionRequests)[number] = {
+            id: asked.id as unknown as QuestionID,
+            sessionID: asked.sessionID,
+            questions: asked.questions,
+            ...(asked.tool === undefined ? {} : { tool: asked.tool }),
+          }
+          if (Option.isNone(locationServices))
+            return Effect.die(new Error("Live LLM harness has no LocationServiceMap for QuestionV2 reply"))
+          const ref = event.location ?? Location.Ref.make({ directory: AbsolutePath.make(instance.directory) })
+          const question = Effect.serviceOption(QuestionV2.Service).pipe(Effect.provide(locationServices.value.get(ref)))
           return Effect.gen(function* () {
-            const child = yield* sessions.get(request.sessionID as SessionID)
-            if (!child.parentID) return yield* Effect.die(new Error("Background child has no parent Session"))
-            const observation = yield* Effect.gen(function* () {
-              const messages = yield* sessions.messages({ sessionID: child.parentID as SessionID })
-              const taskRunning = messages.some((message) =>
-                message.parts.some(
-                  (part) =>
-                    part.type === "tool" &&
-                    part.tool === "task" &&
-                    part.state.status === "completed" &&
-                    part.state.output.includes('state="running"'),
-                ),
-              )
-              return taskRunning ? true : undefined
-            }).pipe(
-              Effect.repeat({ while: (value) => value === undefined, schedule: Schedule.spaced("50 millis") }),
-              Effect.timeout(config.timeoutMs),
+            const service = yield* question
+            if (Option.isNone(service)) return yield* Effect.die(new Error("QuestionV2 service is missing from the asking Location"))
+            yield* handleQuestion(
+              request,
+              (answers) => service.value.reply({ requestID: asked.id, answers }).pipe(Effect.orDie),
+              () => service.value.reject(asked.id).pipe(Effect.orDie),
             )
-            request.latch = {
-              type: "background",
-              parentSessionID: child.parentID,
-              taskRunning: observation === true,
-            }
-            yield* questions.reply({
-              requestID: request.id,
-              answers: [[questionAction.reply]],
-            })
           }).pipe(Effect.orDie)
         }
-        if (questionAction?.type === "hold") {
-          request.latch = { type: "hold" }
-          return Effect.void
-        }
-        if (input.questionReply !== undefined) {
-          return questions.reply({ requestID: request.id, answers: [[input.questionReply]] }).pipe(Effect.orDie)
-        }
-        return questions.reject(request.id).pipe(Effect.orDie)
+        if (event.type !== Question.Event.Asked.type) return Effect.void
+        const request = event.data as (typeof questionRequests)[number]
+        return handleQuestion(
+          request,
+          (answers) => questions.reply({ requestID: request.id, answers }).pipe(Effect.orDie),
+          () => questions.reject(request.id).pipe(Effect.orDie),
+        ).pipe(Effect.orDie)
       })
       yield* Effect.addFinalizer(() => unsubscribeQuestions)
       const v4Event = input.v4Event
@@ -1212,8 +1245,18 @@ export async function runLegacyLiveCases(input: {
               const finalText = latest?.parts.some(
                 (part) => part.type === "text" && !part.synthetic && !part.ignored && part.text.trim().length > 0,
               )
+              const latestActivity = yield* database.db
+                .select({ state: SessionActivityTable.state })
+                .from(SessionActivityTable)
+                .where(eq(SessionActivityTable.session_id, SessionV2.ID.make(session.id)))
+                .orderBy(desc(SessionActivityTable.ordinal))
+                .limit(1)
+                .get()
+                .pipe(Effect.orDie)
+              // V2 projections do not set the legacy assistant completion timestamp. Its durable
+              // activity settlement is the completion oracle for the automatic queue continuation.
               return input.awaitParentTools?.every((tool) => completed.has(tool)) &&
-                latest?.info.time.completed !== undefined &&
+                (latestActivity ? latestActivity.state === "settled" : latest?.info.time.completed !== undefined) &&
                 finalText
                 ? true
                 : undefined
@@ -1868,6 +1911,10 @@ export async function runLegacyLiveCases(input: {
                 // Location's PermissionV2 to auto-reply.
                 liveLocationMap,
                 sessionRuntimeLayer,
+                TaskRunDispatcher.runtimeLayer().pipe(
+                  Layer.provide(sessionRuntimeLayer),
+                  Layer.provide(Database.defaultLayer),
+                ),
               ),
             ),
             Layer.provide(sessionRuntimeLayer),

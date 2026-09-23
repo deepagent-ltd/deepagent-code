@@ -202,6 +202,36 @@ const textOf = (result: { readonly type: string; readonly value?: unknown }) => 
 const outputOf = (settlement: { readonly output?: unknown }) =>
   (settlement.output as { structured: unknown }).structured as TaskTool.Output
 
+describe("task tool background dispatch", () => {
+  it.effect("admits a durable background run and returns before the child drain", () =>
+    Effect.gen(function* () {
+      const { db, sessions, registry } = yield* services
+      yield* registerAgents
+      const parent = yield* sessions.create({ location: { directory: AbsolutePath.make("/tmp") } })
+      resumeHook = () => Effect.die("background task drained inline")
+
+      const settlement = yield* settleTool(
+        registry,
+        taskCall(
+          { description: "background fixture research", prompt: "read the fixture", subagent_type: "explore", background: true },
+          parent.id,
+        ),
+      )
+      const output = outputOf(settlement)
+      expect(output.text).toContain(`id="${output.task_id}" state="running"`)
+      const rows = yield* db
+        .select()
+        .from(TaskRunTable)
+        .where(eq(TaskRunTable.child_session_id, SessionSchema.ID.make(output.task_id)))
+        .all()
+        .pipe(Effect.orDie)
+      expect(rows).toHaveLength(1)
+      expect(rows[0]?.delivery_mode).toBe("background")
+      expect(rows[0]?.state).toBe("admitted")
+    }),
+  )
+})
+
 describe("task tool run visibility (WS4b-S2.1)", () => {
   it.effect("a completed isolated run reports branch + worktree state and the branch line", () =>
     Effect.gen(function* () {
