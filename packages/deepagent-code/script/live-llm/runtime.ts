@@ -262,7 +262,7 @@ export async function runLegacyLiveCases(input: {
     const { CrossSpawnSpawner } = await import("@deepagent-code/core/cross-spawn-spawner")
     const { EffectFlock } = await import("@deepagent-code/core/util/effect-flock")
     const { Context, Deferred, Effect, Fiber, Layer, Option, Schedule, Schema } = await import("effect")
-    const { and, eq, inArray } = await import("drizzle-orm")
+    const { and, desc, eq, gt, inArray } = await import("drizzle-orm")
     const { AgentExecution } = await import("@deepagent-code/core/deepagent/agent-execution")
     const { ApprovalQueue } = await import("@deepagent-code/core/deepagent/approval-queue")
     const { DeepAgentEventBus } = await import("@deepagent-code/core/deepagent/deepagent-event-bus")
@@ -849,6 +849,16 @@ export async function runLegacyLiveCases(input: {
               })
             : undefined
           const messagesBefore = yield* sessions.messages({ sessionID: session.id })
+          const lastProviderTurnBefore = input.inspectProviderTurns
+            ? yield* database.db
+                .select({ requestOrdinal: V2ProviderTurnReceiptTable.request_ordinal })
+                .from(V2ProviderTurnReceiptTable)
+                .where(eq(V2ProviderTurnReceiptTable.session_id, SessionV2.ID.make(session.id)))
+                .orderBy(desc(V2ProviderTurnReceiptTable.request_ordinal))
+                .limit(1)
+                .get()
+                .pipe(Effect.orDie)
+            : undefined
           const toolCountBefore = messagesBefore.reduce(
             (count, message) => count + message.parts.filter((part) => part.type === "tool").length,
             0,
@@ -1099,7 +1109,10 @@ export async function runLegacyLiveCases(input: {
                           .where(eq(SessionInputTable.id, SessionMessage.ID.make(evidence.id)))
                           .get()
                           .pipe(Effect.orDie)
-                        evidence.consumedAfterAdmission = pendingAfterRun?.promotedSeq !== null
+                        if (!pendingAfterRun) {
+                          return yield* Effect.die(new Error(`Durable steer inbox row disappeared: ${evidence.id}`))
+                        }
+                        evidence.consumedAfterAdmission = pendingAfterRun.promotedSeq !== null
                       }),
                     { discard: true },
                   )
@@ -1491,9 +1504,15 @@ export async function runLegacyLiveCases(input: {
                   providerID: V2ProviderTurnReceiptTable.provider_id,
                   modelID: V2ProviderTurnReceiptTable.model_id,
                   preparedTurn: V2ProviderTurnReceiptTable.prepared_turn,
+                  outcomeArtifact: V2ProviderTurnReceiptTable.outcome_artifact,
                 })
                 .from(V2ProviderTurnReceiptTable)
-                .where(eq(V2ProviderTurnReceiptTable.session_id, SessionV2.ID.make(session.id)))
+                .where(
+                  and(
+                    eq(V2ProviderTurnReceiptTable.session_id, SessionV2.ID.make(session.id)),
+                    gt(V2ProviderTurnReceiptTable.request_ordinal, lastProviderTurnBefore?.requestOrdinal ?? 0),
+                  ),
+                )
                 .orderBy(V2ProviderTurnReceiptTable.request_ordinal)
                 .all()
                 .pipe(
@@ -1510,6 +1529,19 @@ export async function runLegacyLiveCases(input: {
                       systemVolatileParts: row.preparedTurn?.system_volatile_parts ?? [],
                       toolFinalOfferedIDs: row.preparedTurn?.tool_final_offered_ids ?? [],
                       toolDefinitionHash: row.preparedTurn?.tool_definition_hash ?? null,
+                      toolCallIDs:
+                        row.outcomeArtifact?.flatMap((event) =>
+                          typeof event === "object" &&
+                          event !== null &&
+                          "type" in event &&
+                          event.type === "tool-call" &&
+                          "name" in event &&
+                          event.name === "plan" &&
+                          "id" in event &&
+                          typeof event.id === "string"
+                            ? [event.id]
+                            : [],
+                        ) ?? [],
                     })),
                   ),
                 )

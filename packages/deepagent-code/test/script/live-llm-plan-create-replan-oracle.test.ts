@@ -169,6 +169,7 @@ function turnReceipts(callID: string) {
       state: "settled",
       toolFinalOfferedIDs: ["plan"],
       toolDefinitionHash: "definition_hash",
+      toolCallIDs: [callID],
     },
   ]
 }

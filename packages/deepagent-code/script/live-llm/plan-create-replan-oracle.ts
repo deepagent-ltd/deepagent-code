@@ -48,7 +48,7 @@ export function assertPlanCreateObservation(input: {
     throw new Error(`${input.caseName} create steps differed from the requested structure`)
   }
   if (metadata.plan_protocol !== "success") throw new Error(`${input.caseName} create did not succeed`)
-  assertPlanTurnReceipts(input.caseName, input.observation.providerTurns)
+  assertPlanTurnReceipts(input.caseName, call, input.observation.providerTurns)
 
   const plan = input.observation.plan?.document
   const ref = input.observation.plan?.ref
@@ -151,7 +151,7 @@ export function assertPlanReplanObservation(input: {
     if (metadata.plan_protocol !== expected.protocol) {
       throw new Error(`${input.caseName} expected ${expected.protocol}, received ${String(metadata.plan_protocol)}`)
     }
-    assertPlanTurnReceipts(input.caseName, input.observation.providerTurns)
+    assertPlanTurnReceipts(input.caseName, call, input.observation.providerTurns)
   })
 
   const plan = input.observation.plan?.document

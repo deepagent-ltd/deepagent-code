@@ -31,6 +31,7 @@ export type PlanProviderTurnReceipt = {
   state: string
   toolFinalOfferedIDs: readonly string[]
   toolDefinitionHash: string | null
+  toolCallIDs: readonly string[]
 }
 
 export function assertPlanAdvanceObservation(input: {
@@ -117,7 +118,7 @@ export function assertPlanAdvanceObservation(input: {
       )
     }
     protocolByCall.push(protocol)
-    assertPlanTurnReceipts(input.caseName, input.observation.providerTurns)
+    assertPlanTurnReceipts(input.caseName, call, input.observation.providerTurns)
   })
 
   const plan = input.observation.plan?.document
@@ -171,23 +172,24 @@ export function assertPlanAdvanceObservation(input: {
 
 export function assertPlanTurnReceipts(
   caseName: string,
+  call: PlanToolCall,
   providerTurns: readonly PlanProviderTurnReceipt[] | undefined,
 ) {
-  // Durable V2 request-authority surface: the provider-turn receipt that offered the plan tool
-  // (settled state, plan in the final offered IDs, non-null tool-definition hash) replaces the
-  // legacy session_tool_request_receipt rows, which the V2 owner no longer writes. The legacy
-  // per-layer argument payload hashes (ai_sdk_input/adapter_assembly/processor_decoded) have no
-  // V2 counterpart; argument validity stays asserted through the settled call's own
-  // plan_protocol metadata in the calling oracle.
+  // The settled V2 receipt must contain this call ID in its provider outcome, not merely offer
+  // plan somewhere in the same Session. The legacy per-layer argument payload hashes have no V2
+  // counterpart; argument validity stays asserted through the call's plan_protocol metadata.
   if (!providerTurns || providerTurns.length === 0) {
     throw new Error(`${caseName} did not capture durable provider-turn receipts`)
   }
   const receipt = providerTurns.find(
     (turn) =>
-      turn.state === "settled" && turn.toolFinalOfferedIDs.includes("plan") && !!turn.toolDefinitionHash,
+      turn.state === "settled" &&
+      turn.toolFinalOfferedIDs.includes("plan") &&
+      !!turn.toolDefinitionHash &&
+      turn.toolCallIDs.includes(call.id),
   )
   if (!receipt) {
-    throw new Error(`${caseName} settled provider-turn receipt offering plan was incomplete`)
+    throw new Error(`${caseName} settled provider-turn receipt for plan call ${call.id} was incomplete`)
   }
 }
 

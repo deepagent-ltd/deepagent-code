@@ -93,7 +93,30 @@ describe("Plan advance live oracle", () => {
           },
         ],
       }),
-    ).toThrow("settled provider-turn receipt offering plan was incomplete")
+    ).toThrow("settled provider-turn receipt for plan call call_1 was incomplete")
+  })
+
+  test("rejects a settled plan receipt from another call", () => {
+    const value = observation()
+    value.providerTurns![0]!.toolCallIDs = ["call_from_previous_case"]
+    expect(() =>
+      assertPlanAdvanceObservation({
+        caseName: "wrong-call-receipt",
+        observation: value,
+        immutable,
+        expectedVersion: 2,
+        expectedActiveStepID: "step_2",
+        expectedStatuses: { step_1: "done", step_2: "active" },
+        expectedCalls: [
+          {
+            version: 1,
+            protocol: "success",
+            activeStepID: "step_2",
+            statuses: { step_1: "done", step_2: "active" },
+          },
+        ],
+      }),
+    ).toThrow("settled provider-turn receipt for plan call call_1 was incomplete")
   })
 })
 
@@ -137,6 +160,7 @@ function observation() {
         state: "settled",
         toolFinalOfferedIDs: ["plan"],
         toolDefinitionHash: "definition_hash",
+        toolCallIDs: ["call_1"],
       },
     ],
   }
