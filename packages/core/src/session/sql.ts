@@ -696,7 +696,7 @@ export const TaskRunTable = sqliteTable(
   ],
 )
 
-/** Durable worktree receipt for an EventV2 DAG subtask, independent of task-tool runs. */
+/** Durable event-subtask receipt. EventV2 aggregates may be pruned before this worktree's grace expires. */
 export const EventTaskWorkspaceTable = sqliteTable(
   "event_task_workspace",
   {

@@ -213,27 +213,34 @@ export const settleEvent = Effect.fn("TaskWorkspace.settleEvent")(function* (
   input: { readonly eventID: string; readonly taskID: string; readonly generation: number; readonly now?: number },
 ) {
   const row = yield* db.select().from(EventTaskWorkspaceTable).where(eventIdentity(input)).get().pipe(Effect.orDie)
-  const error = (message: string) => new EventWorkspaceError({
-    eventID: input.eventID, taskID: input.taskID, code: "git_failed", message,
+  const fail = (message: string) => Effect.gen(function* () {
+    if (row?.state === "ready")
+      yield* db.update(EventTaskWorkspaceTable)
+        .set({ state: "failed", error: message, time_settled: input.now ?? Date.now() })
+        .where(and(eventIdentity(input), eq(EventTaskWorkspaceTable.state, "ready")))
+        .pipe(Effect.orDie)
+    return yield* new EventWorkspaceError({
+      eventID: input.eventID, taskID: input.taskID, code: "git_failed", message,
+    })
   })
-  if (!row || !["ready", "retained"].includes(row.state)) return yield* error("event worktree is not ready")
+  if (!row || !["ready", "retained"].includes(row.state)) return yield* fail("event worktree is not ready")
   if (row.state === "retained" && row.continuation_ref)
     return { ...eventReceipt(row), continuationRef: row.continuation_ref, artifacts: [`git-ref:${row.continuation_ref}`] }
   const status = yield* git(row.directory, ["status", "--porcelain"])
-  if (status.exitCode !== 0) return yield* error(`event worktree status failed: ${text(status.stderr)}`)
+  if (status.exitCode !== 0) return yield* fail(`event worktree status failed: ${text(status.stderr)}`)
   if (text(status.stdout)) {
     const staged = yield* git(row.directory, ["add", "-A"])
-    if (staged.exitCode !== 0) return yield* error(`event worktree stage failed: ${text(staged.stderr)}`)
+    if (staged.exitCode !== 0) return yield* fail(`event worktree stage failed: ${text(staged.stderr)}`)
     const committed = yield* git(row.directory, [
       "-c", "user.name=DeepAgent Code", "-c", "user.email=agent@deepagent.code", "commit",
       "--no-gpg-sign", "--no-verify", "-m", "agent turn work (auto-preserved)",
     ])
-    if (committed.exitCode !== 0) return yield* error(`event worktree commit failed: ${text(committed.stderr)}`)
+    if (committed.exitCode !== 0) return yield* fail(`event worktree commit failed: ${text(committed.stderr)}`)
   }
   const head = yield* git(row.directory, ["rev-parse", "HEAD"])
-  if (head.exitCode !== 0) return yield* error(`event worktree HEAD unavailable: ${text(head.stderr)}`)
+  if (head.exitCode !== 0) return yield* fail(`event worktree HEAD unavailable: ${text(head.stderr)}`)
   const ancestor = yield* git(row.repository_root, ["merge-base", "--is-ancestor", row.base_commit, text(head.stdout)])
-  if (ancestor.exitCode !== 0) return yield* error("event worktree moved off its recorded base")
+  if (ancestor.exitCode !== 0) return yield* fail("event worktree moved off its recorded base")
   const continuationRef = text(head.stdout) === row.base_commit ? row.base_commit : row.branch
   yield* db.update(EventTaskWorkspaceTable)
     .set({ state: "retained", continuation_ref: continuationRef, time_settled: input.now ?? Date.now() })
@@ -943,7 +950,7 @@ const spawnOrNull = (cwd: string, args: readonly string[]) => {
 const git = (cwd: string, args: readonly string[]): Effect.Effect<GitResult> =>
   Effect.sync(() => {
     const proc = spawnOrNull(cwd, args)
-    if (proc === undefined || proc.status === null)
+    if (proc === undefined || proc.status === null || proc.stdout === null || proc.stderr === null)
       return { exitCode: -1, stdout: "", stderr: `git ${args[0]} could not run in ${cwd}` }
     return {
       exitCode: proc.status,

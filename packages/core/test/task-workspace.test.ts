@@ -1,6 +1,6 @@
 import { afterAll, describe, expect } from "bun:test"
 import { and, count, eq } from "drizzle-orm"
-import { Effect, Layer } from "effect"
+import { Effect, Exit, Layer } from "effect"
 import fs from "fs/promises"
 import { realpathSync } from "node:fs"
 import path from "path"
@@ -635,6 +635,23 @@ describe("Core V2 TaskWorkspace stale-worktree reclamation (C-P2-08)", () => {
 // ── Child-Location write stack (real built-in write tool against a Location root) ─────────────
 
 describe("event subtask TaskWorkspace receipts", () => {
+  it.effect("settlement failure becomes reclaimable without claiming preserved work succeeded", () =>
+    Effect.gen(function* () {
+      const repo = yield* Effect.promise(() => makeRepo(path.join(tmpRoot(), "event-failed-settle")))
+      const { db } = yield* services
+      const identity = { eventID: "evt_failed_settle", taskID: "evt_failed_settle:fix", generation: 1 }
+      const receipt = yield* TaskWorkspace.prepareEvent(db, { ...identity, parentDirectory: repo, now: 1_000 })
+      expectExit0(gitIn(repo, ["worktree", "remove", "--force", receipt.directory]), "remove fixture worktree")
+      const attempt = yield* TaskWorkspace.settleEvent(db, { ...identity, now: 2_000 }).pipe(Effect.exit)
+      expect(Exit.isFailure(attempt)).toBe(true)
+      const row = (yield* db.select().from(EventTaskWorkspaceTable).all())[0]
+      expect(row).toMatchObject({ state: "failed", time_settled: 2_000 })
+      expect(row?.continuation_ref).toBeNull()
+      expect((yield* TaskWorkspace.reclaimStale(db, { now: 5_000, retentionMs: 3_000 })).reclaimed).toBe(1)
+      expect((yield* db.select().from(EventTaskWorkspaceTable).all())[0]?.state).toBe("reclaimed")
+    }),
+  )
+
   it.effect("duplicate prepares adopt one receipt while successive owner generations stay isolated", () =>
     Effect.gen(function* () {
       const repo = yield* Effect.promise(() => makeRepo(path.join(tmpRoot(), "event-owner-repo")))
