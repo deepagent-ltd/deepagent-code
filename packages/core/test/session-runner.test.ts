@@ -98,7 +98,7 @@ import {
   SessionMessageTable,
   SessionTable,
 } from "@deepagent-code/core/session/sql"
-import { SessionContextSelectionTable } from "@deepagent-code/core/context-federation/session-sql"
+import { SessionActivityTable, SessionContextSelectionTable } from "@deepagent-code/core/context-federation/session-sql"
 import { SessionStore } from "@deepagent-code/core/session/store"
 import { SystemContext } from "@deepagent-code/core/system-context"
 import { SystemContextRegistry } from "@deepagent-code/core/system-context/registry"
@@ -5153,6 +5153,27 @@ describe("SessionRunnerLLM", () => {
           ],
         },
       ])
+      const { db } = yield* Database.Service
+      const budgetEvents = yield* db
+        .select({ data: EventTable.data })
+        .from(EventTable)
+        .where(eq(EventTable.type, EventV2.durableType(SessionEvent.LoopBudget.Triggered)))
+        .all()
+        .pipe(Effect.orDie)
+      expect(budgetEvents).toHaveLength(1)
+      expect(budgetEvents[0]?.data).toMatchObject({ reason: "orphan_effect", effectIDs: [expect.any(String)] })
+      const admissions = yield* db
+        .select({ admissionId: V2ToolEffectAdmissionTable.admission_id })
+        .from(V2ToolEffectAdmissionTable)
+        .where(eq(V2ToolEffectAdmissionTable.session_id, sessionID))
+        .all()
+        .pipe(Effect.orDie)
+      expect(budgetEvents[0]?.data["effectIDs"]).toEqual(admissions.map((effect) => effect.admissionId))
+      yield* replaySessionProjection(sessionID)
+      expect((yield* session.context(sessionID)).at(-1)).toMatchObject({
+        type: "assistant",
+        content: [{ type: "tool", id: "call-await-interrupt", state: { status: "error" } }],
+      })
     }),
   )
 
@@ -5218,7 +5239,8 @@ describe("SessionRunnerLLM", () => {
         }),
       )
 
-      yield* session.resume(sessionID)
+      const failure = yield* session.resume(sessionID).pipe(Effect.flip)
+      expect(failure).toMatchObject({ _tag: "SessionRunner.StepLimitExceededError", limit: 2 })
 
       expect(requests).toHaveLength(2)
       expect(requests[0]?.toolChoice).toBeUndefined()
@@ -5458,6 +5480,11 @@ describe("SessionRunnerLLM", () => {
       ]
       yield* session.resume(sessionID)
       expect(requests).toHaveLength(30)
+      expect(requests[29]?.toolChoice).toMatchObject({ type: "none" })
+      expect(requests[29]?.messages.at(-1)).toMatchObject({
+        role: "assistant",
+        content: [{ type: "text", text: expect.stringContaining("MAXIMUM STEPS REACHED") }],
+      })
     }),
   )
 
@@ -5535,7 +5562,66 @@ describe("SessionRunnerLLM", () => {
 
       expect(failure).toMatchObject({ _tag: "SessionRunner.StepLimitExceededError", sessionID, limit: 25 })
       expect(requests).toHaveLength(25)
-      expect(executions).toHaveLength(25)
+      expect(executions).toHaveLength(24)
+      const { db } = yield* Database.Service
+      const budgetEvents = yield* db
+        .select({ data: EventTable.data })
+        .from(EventTable)
+        .where(eq(EventTable.type, EventV2.durableType(SessionEvent.LoopBudget.Triggered)))
+        .all()
+        .pipe(Effect.orDie)
+      expect(budgetEvents).toHaveLength(1)
+      expect(budgetEvents[0]?.data).toMatchObject({ reason: "steps", limit: 25, used: 25 })
+      expect(
+        yield* db
+          .select({ state: SessionActivityTable.state })
+          .from(SessionActivityTable)
+          .where(eq(SessionActivityTable.session_id, sessionID))
+          .all()
+          .pipe(Effect.orDie),
+      ).toEqual([{ state: "failed" }])
+    }),
+  )
+
+  it.effect("stops a third identical tool call before execution and records the loop receipt", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Repeat one tool" }), resume: false })
+      requests.length = 0
+      executions.length = 0
+      responses = Array.from({ length: 3 }, (_, index) => [
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.toolCall({ id: `call-repeat-${index}`, name: "echo", input: { text: "same" } }),
+        LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+        LLMEvent.finish({ reason: "tool-calls" }),
+      ])
+
+      const failure = yield* session.resume(sessionID).pipe(Effect.flip)
+      expect(failure).toMatchObject({ _tag: "SessionRunner.RepeatedToolError", tool: "echo", count: 3 })
+      expect(requests).toHaveLength(3)
+      expect(executions).toEqual(["same", "same"])
+      expect((yield* session.context(sessionID)).at(-1)).toMatchObject({
+        type: "assistant",
+        content: [{ type: "tool", id: "call-repeat-2", state: { status: "error" } }],
+      })
+      const { db } = yield* Database.Service
+      const budgetEvents = yield* db
+        .select({ data: EventTable.data })
+        .from(EventTable)
+        .where(eq(EventTable.type, EventV2.durableType(SessionEvent.LoopBudget.Triggered)))
+        .all()
+        .pipe(Effect.orDie)
+      expect(budgetEvents).toHaveLength(1)
+      expect(budgetEvents[0]?.data).toMatchObject({ reason: "repeated_tool", tool: "echo", used: 3 })
+      expect(
+        yield* db
+          .select({ state: SessionActivityTable.state })
+          .from(SessionActivityTable)
+          .where(eq(SessionActivityTable.session_id, sessionID))
+          .all()
+          .pipe(Effect.orDie),
+      ).toEqual([{ state: "failed" }])
     }),
   )
 

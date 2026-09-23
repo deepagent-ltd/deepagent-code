@@ -294,6 +294,25 @@ export namespace Execution {
   export type Interrupted = typeof Interrupted.Type
 }
 
+/** One durable diagnosis for a loop stop or an interrupted tool with unknown side effects. */
+export namespace LoopBudget {
+  export const Triggered = EventV2.define({
+    type: "session.loop.budget.triggered",
+    ...options,
+    schema: {
+      ...Base,
+      activityID: Schema.String,
+      reason: Schema.Literals(["steps", "repeated_tool", "orphan_effect"]),
+      limit: NonNegativeInt.pipe(Schema.optional),
+      used: NonNegativeInt.pipe(Schema.optional),
+      tool: Schema.String.pipe(Schema.optional),
+      inputHash: Schema.String.pipe(Schema.optional),
+      effectIDs: Schema.Array(Schema.String).pipe(Schema.optional),
+    },
+  })
+  export type Triggered = typeof Triggered.Type
+}
+
 /**
  * G2/G-E — the durable delivery receipt. The finalizer's verdict used to exist only as a stderr
  * line, so "why was this work not delivered, and where is it now?" could not be answered after the
@@ -741,6 +760,7 @@ const DurableDefinitions = [
   Execution.Succeeded,
   Execution.Failed,
   Execution.Interrupted,
+  LoopBudget.Triggered,
   ContextUpdated,
   Synthetic,
   StructuredCaptured,

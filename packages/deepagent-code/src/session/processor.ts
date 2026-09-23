@@ -1,6 +1,7 @@
 import { PermissionV1 } from "@deepagent-code/core/v1/permission"
 import { DeepAgentActivityAuthority } from "@deepagent-code/core/deepagent/index"
 import { Hash } from "@deepagent-code/core/util/hash"
+import { REPEATED_TOOL_LIMIT } from "@deepagent-code/core/session/runner/loop-budget"
 import { Image } from "@/image/image"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { Cause, Deferred, Effect, Exit, Layer, Context, Scope, Schema, Data } from "effect"
@@ -39,9 +40,9 @@ import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { InvalidToolInputError } from "ai"
 import { SessionPromptIntent } from "./prompt-intent"
 
-const DOOM_LOOP_THRESHOLD = 3
+const DOOM_LOOP_THRESHOLD = REPEATED_TOOL_LIMIT
 const DOOM_LOOP_SEQUENCE_WINDOW = 12
-const DOOM_LOOP_MIN_REPEATS = 3
+const DOOM_LOOP_MIN_REPEATS = REPEATED_TOOL_LIMIT
 const DOOM_LOOP_MAX_PERIOD = 4
 const log = Log.create({ service: "session.processor" })
 

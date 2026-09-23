@@ -92,6 +92,23 @@ export class StepLimitExceededError extends Schema.TaggedErrorClass<StepLimitExc
   }
 }
 
+export class RepeatedToolError extends Schema.TaggedErrorClass<RepeatedToolError>()("SessionRunner.RepeatedToolError", {
+  sessionID: SessionSchema.ID,
+  tool: Schema.String,
+  inputHash: Schema.String,
+  count: Schema.Int,
+}) {
+  constructor(props: {
+    readonly sessionID: SessionSchema.ID
+    readonly tool: string
+    readonly inputHash: string
+    readonly count: number
+  }) {
+    super(props)
+    this.message = `${props.tool} called ${props.count} consecutive times with identical input in session ${props.sessionID}`
+  }
+}
+
 /** A durable execution claim already exists. The caller must classify/recover that Session instead
  * of starting another provider drain whose preceding physical outcome may be unknown. */
 export class ExecutionRecoveryRequiredError extends Schema.TaggedErrorClass<ExecutionRecoveryRequiredError>()(
@@ -110,6 +127,7 @@ export type RunError =
   | MessageDecodeError
   | ContextSnapshotDecodeError
   | StepLimitExceededError
+  | RepeatedToolError
   | ExecutionRecoveryRequiredError
   | SystemContext.InitializationBlocked
   | SessionContextEpoch.AgentReplacementBlocked

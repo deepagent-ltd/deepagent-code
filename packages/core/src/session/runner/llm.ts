@@ -51,6 +51,7 @@ import {
   type RunError,
   Service,
   StepLimitExceededError,
+  RepeatedToolError,
   CurrentOnSessionSettled,
   CurrentToolSettleGate,
 } from "./index"
@@ -69,6 +70,7 @@ import { SessionRunnerCanonical } from "./canonical-turn"
 import { productionAdaptersEnabled, ProductionV2Sources } from "../../context-federation/production-adapters"
 import { CurrentRuntimeFeatures } from "../../flag/runtime-features"
 import { V2ProviderTurn } from "./v2-provider-turn"
+import { LoopBudget, REPEATED_TOOL_LIMIT } from "./loop-budget"
 import { V2ProviderTurnReceiptTable } from "./v2-provider-turn.sql"
 import { CanonicalJson } from "../../util/canonical-json"
 import { Hash } from "../../util/hash"
@@ -102,7 +104,7 @@ import {
  *   - [ ] Mark busy, retrying, idle, interrupted, or terminal-failure status durably.
  *   - [ ] Honor interruption and reject stale work after runtime attachment replacement.
  *   - [x] Bound model steps.
- *   - [ ] Bound provider retries and repeated identical tool calls.
+ *   - [x] Bound provider retries and repeated identical tool calls.
  *
  * - Runtime context assembly
  *   - Keep V1 runtime-context parity enforced by the production runner tests and Context Epoch invariants.
@@ -601,6 +603,7 @@ export const layer = Layer.effect(
       sessionID: SessionSchema.ID,
       promotion: SessionInput.Delivery | undefined,
       step: number,
+      loopBudget: LoopBudget,
       recoverOverflow?: typeof compaction.compactAfterOverflow,
       providerRetry = 0,
     ) {
@@ -741,7 +744,7 @@ export const layer = Layer.effect(
             ]
           : []),
       ]
-      const stepLimitReached = agent.info?.steps !== undefined && currentStep >= agent.info.steps
+      const stepLimitReached = loopBudget.stepLimitReached(currentStep)
       const promptCacheKey = /^ses_[0-9a-f]{64}$/.test(session.id) ? session.id.slice(4) : session.id
       // V1 parity (workspace-context.ts): validation commands are inferred from the same workspace
       // signals — package scripts, package manager, AGENTS.md, TS/Python/Go markers. Passing only the
@@ -926,15 +929,27 @@ export const layer = Layer.effect(
         queryAuthorization,
         runtimeFeatures,
       })
+      loopBudget.forActivity(selectionAdmission.activityId)
       // An interrupted turn must terminalize the activity it admitted; otherwise the leftover
       // `active` activity blocks every future queued admission on this Session. The per-turn scope
       // closes on interruption too, and settleActivity is idempotent. Explicit query authority is
       // released on every exit; a continuation admits and binds its own selection before tools run.
       yield* Effect.addFinalizer((exit) =>
         (Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)
-          ? contexts
-              .settleActivity({ activityId: selectionAdmission.activityId, state: "interrupted" })
-              .pipe(Effect.ignore)
+          ? Effect.gen(function* () {
+              yield* contexts
+                .settleActivity({ activityId: selectionAdmission.activityId, state: "interrupted" })
+                .pipe(Effect.ignore)
+              const pending = yield* toolEffects.listPendingForSession(session.id)
+              if (pending.length > 0)
+                yield* events.publish(SessionEvent.LoopBudget.Triggered, {
+                  sessionID: session.id,
+                  timestamp: yield* DateTime.now,
+                  activityID: selectionAdmission.activityId,
+                  reason: "orphan_effect",
+                  effectIDs: pending.map((effect) => effect.admissionId),
+                })
+            })
           : Effect.void
         ).pipe(Effect.ensuring(queryAuthorization.remove(session.id).pipe(Effect.ignore))),
       )
@@ -1080,8 +1095,9 @@ export const layer = Layer.effect(
         withPublication(publisher.publish(event, outputPaths))
       const baseSettleTool: ToolRegistry.Materialization["settle"] = stepLimitReached
         ? () =>
-            Effect.succeed({
-              result: { type: "error", value: "Tools are disabled after the maximum agent steps" },
+            Effect.sync(() => {
+              loopBudget.denyToolAtStep()
+              return { result: { type: "error" as const, value: "Tools are disabled after the maximum agent steps" } }
             })
         : toolMaterialization.settle
       // Durable tool-effect authority: admission is committed before the tool body can run. A
@@ -1263,6 +1279,16 @@ export const layer = Layer.effect(
       }
       const settleTool: ToolRegistry.Materialization["settle"] = (input) =>
         Effect.gen(function* () {
+          // A third identical call is a V1-compatible doom-loop stop. Refuse it before effect
+          // admission: there is no side effect to recover, and the tool result remains durable.
+          const repeated = stepLimitReached ? undefined : loopBudget.observeTool(input.call.name, input.call.input)
+          if (repeated)
+            return {
+              result: {
+                type: "error" as const,
+                value: `Repeated ${repeated.tool} call stopped after ${repeated.count} identical inputs`,
+              },
+            }
           yield* admitToolEffect(input)
           // G-A/G-B: per-drain tool ledger. Identical repeats and re-reads of an already-read path
           // are the two facts the ablation traces could only be explained by grepping the transcript;
@@ -1810,6 +1836,7 @@ export const layer = Layer.effect(
       sessionID: SessionSchema.ID,
       promotion: SessionInput.Delivery | undefined,
       step: number,
+      loopBudget: LoopBudget,
       providerRetry?: number,
       ownerFencedRetries?: number,
     ) => Effect.Effect<
@@ -1821,10 +1848,11 @@ export const layer = Layer.effect(
       sessionID,
       promotion,
       step,
+      loopBudget,
       providerRetry = 0,
       ownerFencedRetries = 0,
     ) {
-      return yield* runTurnAttempt(sessionID, promotion, step).pipe(
+      return yield* runTurnAttempt(sessionID, promotion, step, loopBudget).pipe(
         // RequestSeal is intentionally a no-error callback at the HTTP boundary, so a durable
         // pre-dispatch refusal arrives as a defect. Restore the one known typed domain error here;
         // post-dispatch fencing is reconciled inside V2ProviderTurn.stream and never reaches this
@@ -1857,6 +1885,7 @@ export const layer = Layer.effect(
                 sessionID,
                 promotion,
                 defect.transition.step,
+                loopBudget,
                 budgets.providerRetry,
                 budgets.ownerFencedRetries,
               )
@@ -1866,6 +1895,7 @@ export const layer = Layer.effect(
               sessionID,
               defect.transition.promotion,
               defect.transition.step ?? step,
+              loopBudget,
             )
           }),
         ),
@@ -1876,10 +1906,18 @@ export const layer = Layer.effect(
       sessionID,
       promotion,
       step,
+      loopBudget,
       providerRetry = 0,
       ownerFencedRetries = 0,
     ) {
-      return yield* runTurnAttempt(sessionID, promotion, step, compaction.compactAfterOverflow, providerRetry).pipe(
+      return yield* runTurnAttempt(
+        sessionID,
+        promotion,
+        step,
+        loopBudget,
+        compaction.compactAfterOverflow,
+        providerRetry,
+      ).pipe(
         // See the post-compaction path above. Only RequestSeal can still defect with this typed
         // pre-dispatch conflict; stream/settlement owner loss is successor-reconciled in place.
         Effect.catchDefect((defect) =>
@@ -1926,17 +1964,19 @@ export const layer = Layer.effect(
                 sessionID,
                 promotion,
                 defect.transition.step,
+                loopBudget,
                 budgets.providerRetry,
                 budgets.ownerFencedRetries,
               )
             }
             yield* Effect.yieldNow
             if (defect.transition._tag === "ContinueAfterOverflowCompaction")
-              return yield* runAfterOverflowCompaction(sessionID, undefined, defect.transition.step)
+              return yield* runAfterOverflowCompaction(sessionID, undefined, defect.transition.step, loopBudget)
             return yield* runTurn(
               sessionID,
               defect.transition.promotion,
               defect.transition.step ?? step,
+              loopBudget,
               providerRetry,
               ownerFencedRetries,
             )
@@ -2144,9 +2184,10 @@ export const layer = Layer.effect(
         const configAgents = Config.latest(yield* config.entries(), "agents")
         const configSteps = configAgents?.[runSession?.agent ?? "auto"]?.steps
         const stepCeiling = runAgent?.info?.steps ?? configSteps ?? MAX_STEPS
+        const loopBudget = new LoopBudget(stepCeiling)
         let attempts = 0
         while (attempts < stepCeiling) {
-          const result = yield* runTurn(input.sessionID, promotion, step)
+          const result = yield* runTurn(input.sessionID, promotion, step, loopBudget)
           needsContinuation = result.needsContinuation
           // A steer promotion restarts the chain's step numbering; the budget restarts with it
           // (the pre-configured-era loop's MAX_STEPS headroom made this implicit; an explicit
@@ -2156,6 +2197,26 @@ export const layer = Layer.effect(
           promotion = "steer"
           activityId = result.activityId ?? activityId
           attempts += 1
+          const repeated = loopBudget.repeatedTool()
+          if (repeated) {
+            if (activityId === undefined) return yield* Effect.die("repeated tool call without an admitted activity")
+            yield* events.publish(SessionEvent.LoopBudget.Triggered, {
+              sessionID: input.sessionID,
+              timestamp: yield* DateTime.now,
+              activityID: activityId,
+              reason: "repeated_tool",
+              tool: repeated.tool,
+              inputHash: repeated.inputHash,
+              limit: REPEATED_TOOL_LIMIT,
+              used: repeated.count,
+            })
+            yield* Effect.uninterruptible(contexts.settleActivity({ activityId, state: "failed" })).pipe(Effect.orDie)
+            return yield* new RepeatedToolError({ sessionID: input.sessionID, ...repeated })
+          }
+          if (loopBudget.toolDeniedAtStep()) {
+            needsContinuation = true
+            break
+          }
           if (needsContinuation) continue
           if (yield* SessionInput.hasPending(db, input.sessionID, "steer")) {
             needsContinuation = true
@@ -2163,8 +2224,19 @@ export const layer = Layer.effect(
           }
           if (!needsContinuation) break
         }
-        if (needsContinuation)
+        if (needsContinuation) {
+          if (activityId === undefined) return yield* Effect.die("step budget exhausted without an admitted activity")
+          yield* events.publish(SessionEvent.LoopBudget.Triggered, {
+            sessionID: input.sessionID,
+            timestamp: yield* DateTime.now,
+            activityID: activityId,
+            reason: "steps",
+            limit: stepCeiling,
+            used: attempts,
+          })
+          yield* Effect.uninterruptible(contexts.settleActivity({ activityId, state: "failed" })).pipe(Effect.orDie)
           return yield* new StepLimitExceededError({ sessionID: input.sessionID, limit: stepCeiling })
+        }
         // One activity's turn chain is complete: settle it so a queued input may open the next
         // activity. Settle is idempotent and best-effort; recovery owns activities a drain never
         // settles. Interrupted turns settle their own activity through the per-turn scope
