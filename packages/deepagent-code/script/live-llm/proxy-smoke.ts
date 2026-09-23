@@ -53,7 +53,7 @@ await Effect.runPromise(Effect.gen(function* () {
     directory: root,
     model_allowlist: [`live-deepseek/${config.modelID}`],
     tier: "passthrough",
-    quota_requests_per_minute: 20,
+    quota_requests_per_minute: 100,
     quota_tokens_per_day: 100_000,
     lane_limit: 8,
     deadline_ms: Math.min(config.timeoutMs, 180_000),
@@ -72,6 +72,7 @@ const baseURL = `http://127.0.0.1:${server.port}`
 const client = new OpenAI({ apiKey: tenantKey, baseURL: `${baseURL}/v1`, maxRetries: 0, timeout: config.timeoutMs })
 const sqlite = await import("bun:sqlite")
 const evidence: { phase: string; requestID: string; input: number; output: number; costKnown: boolean }[] = []
+const soakLatencies: number[] = []
 
 function checkLedger(requestID: string, usage: { prompt_tokens: number; completion_tokens: number }) {
   const reader = new sqlite.Database(Flag.DEEPAGENT_CODE_DB, { readonly: true })
@@ -187,9 +188,36 @@ try {
   } finally {
     reader.close()
   }
+  // A bounded single-tenant pilot samples repeated enhanced requests after the semantic gates.
+  // Every sample must reconcile with both the provider receipt and the durable request ledger.
+  for (const index of Array.from({ length: 10 }, (_, value) => value)) {
+    const requestID = `proxy-soak-${index}`
+    const started = performance.now()
+    const reply = await client.chat.completions.create({
+      model: config.modelID, user: "soak-lane",
+      messages: [{ role: "user", content: `Reply with one short sentence about number ${index}.` }],
+      max_tokens: 64,
+    }, { headers: { "X-Request-ID": requestID } })
+    soakLatencies.push(Math.round(performance.now() - started))
+    assert.ok(reply.choices[0]?.message.content)
+    assert.ok(reply.usage?.prompt_tokens && reply.usage.completion_tokens)
+    const ledger = checkLedger(requestID, reply.usage)
+    checkTerminal(requestID, reply.choices[0].message.content, reply.usage)
+    evidence.push({ phase: "context-soak", requestID, input: reply.usage.prompt_tokens,
+      output: reply.usage.completion_tokens, costKnown: ledger.cost_total !== null })
+  }
+  const sortedLatencies = [...soakLatencies].sort((left, right) => left - right)
+  const soak = {
+    tenant: tenantID,
+    requests: soakLatencies.length,
+    errorRate: 0,
+    p95LatencyMs: sortedLatencies[Math.ceil(sortedLatencies.length * 0.95) - 1],
+    usageDiscrepancies: 0,
+  }
   await writeLiveArtifact(config, "proxy-smoke", { status: "passed", provider: config.providerID,
-    model: config.modelID, requests: evidence, totalTokens: evidence.reduce((total, item) => total + item.input + item.output, 0) })
-  console.log(`proxy-smoke passed: ${evidence.length} provider exchanges, ${evidence.reduce((total, item) => total + item.input + item.output, 0)} tokens`)
+    model: config.modelID, requests: evidence, soak,
+    totalTokens: evidence.reduce((total, item) => total + item.input + item.output, 0) })
+  console.log(`proxy-smoke passed: ${evidence.length} provider exchanges, ${evidence.reduce((total, item) => total + item.input + item.output, 0)} tokens; pilot p95 ${soak.p95LatencyMs} ms`)
 } catch (error) {
   await writeLiveArtifact(config, "proxy-smoke", { status: "failed", provider: config.providerID,
     model: config.modelID, requests: evidence, failure: error instanceof Error ? error.message.replaceAll(config.apiKey, "<redacted>") : "unknown" })
