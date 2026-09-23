@@ -109,6 +109,16 @@ export class RepeatedToolError extends Schema.TaggedErrorClass<RepeatedToolError
   }
 }
 
+export class ContextBudgetHardGateError extends Schema.TaggedErrorClass<ContextBudgetHardGateError>()(
+  "SessionRunner.ContextBudgetHardGateError",
+  { sessionID: SessionSchema.ID, estimatedTokens: Schema.Int, effectiveHardGate: Schema.Int, reason: Schema.String },
+) {
+  constructor(props: { readonly sessionID: SessionSchema.ID; readonly estimatedTokens: number; readonly effectiveHardGate: number; readonly reason: string }) {
+    super(props)
+    this.message = `context_budget_hard_gate: ${props.reason} (${props.estimatedTokens} >= ${props.effectiveHardGate})`
+  }
+}
+
 /** A durable execution claim already exists. The caller must classify/recover that Session instead
  * of starting another provider drain whose preceding physical outcome may be unknown. */
 export class ExecutionRecoveryRequiredError extends Schema.TaggedErrorClass<ExecutionRecoveryRequiredError>()(
@@ -128,6 +138,7 @@ export type RunError =
   | ContextSnapshotDecodeError
   | StepLimitExceededError
   | RepeatedToolError
+  | ContextBudgetHardGateError
   | ExecutionRecoveryRequiredError
   | SystemContext.InitializationBlocked
   | SessionContextEpoch.AgentReplacementBlocked

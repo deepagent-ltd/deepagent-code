@@ -34,6 +34,7 @@ import { ToolRegistry } from "../../tool/registry"
 import { ToolOutputStore } from "../../tool-output-store"
 import { SessionContextEpoch } from "../context-epoch"
 import { SessionCompaction } from "../compaction"
+import { LongContext } from "../long-context"
 import { CompactionRequest } from "../compaction-request"
 import { SessionContext } from "../../context-federation/session-context"
 import { SessionActivityTable } from "../../context-federation/session-sql"
@@ -54,12 +55,14 @@ import {
   type RunError,
   Service,
   StepLimitExceededError,
+  ContextBudgetHardGateError,
   RepeatedToolError,
   CurrentOnSessionSettled,
   CurrentToolSettleGate,
 } from "./index"
 import { SessionRunnerModel } from "./model"
 import { PreparedProviderTurn } from "./prepared-provider-turn"
+import { ModelHardPolicy } from "./model-hard-policy"
 import { buildDeepAgentPrompt, buildGovernedPlanContext } from "./deepagent-prompt"
 import { V2ToolEffect } from "./v2-tool-effect"
 import { createLLMEventPublisher } from "./publish-llm-event"
@@ -77,7 +80,6 @@ import { LoopBudget, REPEATED_TOOL_LIMIT } from "./loop-budget"
 import { V2ProviderTurnReceiptTable } from "./v2-provider-turn.sql"
 import { CanonicalJson } from "../../util/canonical-json"
 import { Hash } from "../../util/hash"
-import { Token } from "../../util/token"
 import { CapabilitySnapshot } from "../../system-context/capability-snapshot"
 // W4.1/P1-1: the snapshot restore reads the DURABLE `session_capability_load` table
 // (the in-process kernel cache is process-local only — a restart would lose it).
@@ -905,6 +907,17 @@ export const layer = Layer.effect(
           },
         },
       })
+      const durableCheckpoint = entries.findLast((entry) =>
+        entry.message.type === "compaction" && entry.message.reason === "hard_gate")?.message
+      const refreshAfterSelectionID = durableCheckpoint?.type === "compaction" &&
+        durableCheckpoint.checkpointID && durableCheckpoint.checkpointHash
+          ? yield* LongContext.sourceSelectionID(
+              db,
+              session.id,
+              durableCheckpoint.checkpointID,
+              durableCheckpoint.checkpointHash,
+            ).pipe(Effect.orDie)
+          : undefined
       // Canonical activity/selection admission: the runner takes its durable identity from the
       // promoted inputs (or the surrounding turn identity for continuations), never from derived keys.
       const selectionAdmission = yield* SessionRunnerCanonical.admitSelection({
@@ -917,6 +930,7 @@ export const layer = Layer.effect(
         fallbackUserInputId: receiptUserMessageID,
         system: { baseline: system.baseline, revision: system.revision, baselineSeq: system.baselineSeq },
         historyEndMessageId: context.at(-1)?.id,
+        ...(refreshAfterSelectionID ? { refreshAfterSelectionID } : {}),
         ...(modelProtocol
           ? {
               model: {
@@ -965,6 +979,15 @@ export const layer = Layer.effect(
       const selectionEvidence = productionAdaptersEnabled(runtimeFeatures)
         ? yield* SessionRunnerCanonical.selectionGraphEvidence(db, selectionAdmission.selectionId)
         : undefined
+      if (durableCheckpoint?.type === "compaction" && durableCheckpoint.checkpointID && durableCheckpoint.checkpointHash) {
+        const content = yield* LongContext.assertCheckpoint(
+          db,
+          session.id,
+          durableCheckpoint.checkpointID,
+          durableCheckpoint.checkpointHash,
+        ).pipe(Effect.orDie)
+        volatileSystemParts.push(`Context checkpoint (durable authority references; revalidate before acting):\n${CanonicalJson.stringify(content)}`)
+      }
       if (selectionEvidence !== undefined) {
         volatileSystemParts.push(selectionEvidence)
       }
@@ -999,41 +1022,29 @@ export const layer = Layer.effect(
       // deliberately EXCLUDES the notice itself, so the warning can never feed back into the
       // percentage that produced it.
       const inputUsage = SessionCompaction.estimateInputUsage(model, request)
+      const policyInput = {
+        providerID: model.provider,
+        runtimeModelID: modelInfo?.id ?? model.id,
+        apiModelID: model.id,
+        physicalInputBudget: model.route.defaults.limits?.input ?? model.route.defaults.limits?.context ?? 0,
+        autoCompact: compaction.autoEnabled,
+      }
+      const initialPolicy = ModelHardPolicy.decide({
+        ...policyInput,
+        estimatedFullRequestTokens: PreparedProviderTurn.estimateFullRequestTokens(request),
+      })
       const budgetNotice =
-        inputUsage === undefined ? undefined : contextBudgetNotice(inputUsage.tokens / inputUsage.context)
+        initialPolicy.state !== "unmanaged" || inputUsage === undefined
+          ? undefined
+          : contextBudgetNotice(inputUsage.tokens / inputUsage.context)
       if (budgetNotice !== undefined) {
         volatileSystemParts.push(budgetNotice)
         request = LLM.updateRequest(request, {
           messages: [...historyMessages, ...volatileSystemParts.map(Message.system), ...controlMessages],
         })
       }
-      if (
-        yield* compaction.compactIfNeeded({
-          sessionID: session.id,
-          entries,
-          model,
-          request,
-          userMessageID: receiptUserMessageID,
-          historyPromptEpoch,
-          ownerMode: parityCampaign ? "shadow_v2" : "v2",
-          admission: selectionAdmission,
-          ...(inputUsage === undefined ? {} : { estimatedInputTokens: inputUsage.tokens }),
-        })
-      )
-        return yield* Effect.die(rebuildPreparedTurn(undefined, currentStep))
-      // Unknown-context-limit host guard (legacy `requestBudget` parity): with no physical limit the
-      // estimate is the only budget line; with a known limit, pre-turn compaction above already gated.
-      const requestBudget = PreparedProviderTurn.budget(
-        model,
-        Token.estimate(
-          JSON.stringify({
-            system: request.system,
-            messages: request.messages,
-            tools: toolDefinitions,
-            toolChoice: request.toolChoice,
-          }),
-        ),
-      )
+      const estimatedFullRequestTokens = PreparedProviderTurn.estimateFullRequestTokens(request)
+      const modelPolicy = ModelHardPolicy.decide({ ...policyInput, estimatedFullRequestTokens })
       // One recoverable boundary: canonical attempt + V2 receipt are created and bound atomically.
       const requestInputHash = Hash.sha256(
         CanonicalJson.stringify({
@@ -1044,6 +1055,86 @@ export const layer = Layer.effect(
           },
         }),
       )
+      const policyReceiptID = modelPolicy.state === "unmanaged" ? undefined
+        : yield* LongContext.recordPolicy({
+          db,
+          sessionID: session.id,
+          activityID: selectionAdmission.activityId,
+          userMessageID: receiptUserMessageID,
+          promptEpoch: historyPromptEpoch,
+          requestHash: requestInputHash,
+          providerID: policyInput.providerID,
+          runtimeModelID: policyInput.runtimeModelID,
+          apiModelID: policyInput.apiModelID,
+          policy: modelPolicy,
+          estimatedFullRequestTokens,
+          reservedOutputTokens: request.generation?.maxTokens ?? model.route.defaults.limits?.output ?? 0,
+          selectionID: selectionAdmission.selectionId,
+          projectionHash: selectionAdmission.projectionHash,
+          graphSnapshotRefs: selectionAdmission.selectedRefs ?? [],
+          offeredToolIDs: toolDefinitions.map((tool) => tool.name),
+          degradedToolIDs: toolMaterialization.permissionFilteredIDs,
+        }).pipe(Effect.orDie)
+      if (modelPolicy.state !== "unmanaged" && policyReceiptID) {
+        if (modelPolicy.state === "unavailable") {
+          yield* LongContext.settlePolicy(db, policyReceiptID, { blockedReason: modelPolicy.reason }).pipe(Effect.orDie)
+          return yield* new ContextBudgetHardGateError({
+            sessionID: session.id,
+            estimatedTokens: estimatedFullRequestTokens,
+            effectiveHardGate: 0,
+            reason: modelPolicy.reason,
+          })
+        }
+        if (modelPolicy.action.startsWith("hard_gate")) {
+          const previousHardGate = entries.findLast((entry) =>
+            entry.message.type === "compaction" && entry.message.reason === "hard_gate")
+          const noNewConversation = previousHardGate !== undefined &&
+            !entries.some((entry) => entry.seq > previousHardGate.seq &&
+              (entry.message.type === "user" || entry.message.type === "assistant"))
+          const compacted = modelPolicy.action === "hard_gate_compact" && !noNewConversation
+            ? yield* compaction.compactAfterOverflow({
+                sessionID: session.id,
+                entries,
+                model,
+                request,
+                userMessageID: receiptUserMessageID,
+                historyPromptEpoch,
+                ownerMode: parityCampaign ? "shadow_v2" : "v2",
+                admission: selectionAdmission,
+                reason: "hard_gate",
+                estimatedInputTokens: estimatedFullRequestTokens,
+              })
+            : false
+          if (compacted && typeof compacted === "object" && "checkpointID" in compacted &&
+              compacted.checkpointID && compacted.checkpointHash) {
+            yield* LongContext.settlePolicy(db, policyReceiptID, {
+              checkpointID: compacted.checkpointID,
+              checkpointHash: compacted.checkpointHash,
+            }).pipe(Effect.orDie)
+            return yield* Effect.die(rebuildPreparedTurn(undefined, currentStep))
+          }
+          const reason = noNewConversation ? "post_compaction_budget_still_exceeded" :
+            modelPolicy.action === "hard_gate_blocked" ? "auto_compaction_disabled" : "compaction_unavailable"
+          yield* LongContext.settlePolicy(db, policyReceiptID, { blockedReason: reason }).pipe(Effect.orDie)
+          return yield* new ContextBudgetHardGateError({
+            sessionID: session.id,
+            estimatedTokens: estimatedFullRequestTokens,
+            effectiveHardGate: modelPolicy.effectiveHardGate,
+            reason,
+          })
+        }
+      } else if (yield* compaction.compactIfNeeded({
+        sessionID: session.id,
+        entries,
+        model,
+        request,
+        userMessageID: receiptUserMessageID,
+        historyPromptEpoch,
+        ownerMode: parityCampaign ? "shadow_v2" : "v2",
+        admission: selectionAdmission,
+        ...(inputUsage === undefined ? {} : { estimatedInputTokens: inputUsage.tokens }),
+      })) return yield* Effect.die(rebuildPreparedTurn(undefined, currentStep))
+      const requestBudget = PreparedProviderTurn.budget(model, estimatedFullRequestTokens)
       const providerReceipt = (yield* SessionRunnerCanonical.commitTurn({
         db,
         contexts,
@@ -1062,6 +1153,10 @@ export const layer = Layer.effect(
         },
         ownerToken: yield* providerTurns.currentOwnerToken(),
       })).receipt
+      if (policyReceiptID) {
+        if (!providerReceipt.providerAttemptId) return yield* Effect.die("Managed provider receipt has no attempt binding")
+        yield* LongContext.bindProviderAttempt(db, policyReceiptID, providerReceipt.providerAttemptId).pipe(Effect.orDie)
+      }
       // R4 — pricing belongs to the Location catalog and is an explicit runner dependency. A
       // missing catalog model keeps cost 0 rather than guessing, but a composition can no longer
       // silently omit the catalog service and disable accounting for every turn.
@@ -1635,6 +1730,7 @@ export const layer = Layer.effect(
                 historyPromptEpoch,
                 ownerMode: parityCampaign ? "shadow_v2" : "v2",
                 admission: selectionAdmission,
+                reason: "provider_overflow",
               }),
             ))
           ) {

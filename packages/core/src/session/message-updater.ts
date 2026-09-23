@@ -397,6 +397,8 @@ export function update(adapter: Adapter, event: SessionEvent.Event) {
             reason: event.data.reason,
             summary: event.data.text,
             recent: event.data.recent,
+            checkpointID: event.data.checkpointID,
+            checkpointHash: event.data.checkpointHash,
             time: { created: event.data.timestamp },
           }),
         )

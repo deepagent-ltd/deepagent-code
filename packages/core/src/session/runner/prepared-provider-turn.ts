@@ -1,8 +1,9 @@
-import type { Model } from "@deepagent-code/llm"
+import type { LLMRequest, Model } from "@deepagent-code/llm"
 import type { ProtocolAttemptIdentity } from "../../contract/model-protocol"
 import type { PreparedCapabilitySnapshotRef } from "../../contract/prepared-turn"
 import { CanonicalJson } from "../../util/canonical-json"
 import { Hash } from "../../util/hash"
+import { Token } from "../../util/token"
 
 export type Owner = "legacy_aisdk" | "legacy_native" | "v2" | "shadow_v2"
 export type ContextReadiness = "ready" | "fallback" | "unavailable"
@@ -256,6 +257,24 @@ export function mergeSystemParts(...groups: ReadonlyArray<ReadonlyArray<string |
 const positiveEnv = (name: string, fallback: number) => {
   const value = Number(process.env[name])
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback
+}
+
+/** Budget the complete provider input before dispatch, including protocol options and tool choice.
+ * The fixed reserve covers role delimiters/framing omitted by the JSON representation; cache hits
+ * do not reduce the model's occupied context window. Keep this estimator shared by the hard gate
+ * and the durable prepared-turn budget receipt. */
+export function estimateFullRequestTokens(request: LLMRequest): number {
+  return Token.estimate(JSON.stringify({
+    model: request.model.id,
+    system: request.system,
+    messages: request.messages,
+    tools: request.tools,
+    toolChoice: request.toolChoice,
+    generation: request.generation,
+    providerOptions: request.providerOptions,
+    responseFormat: request.responseFormat,
+    metadata: request.metadata,
+  })) + 256
 }
 
 // Shared by the session runner and the compaction summary turn so every durable receipt budgets the

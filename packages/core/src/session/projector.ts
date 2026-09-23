@@ -17,6 +17,7 @@ import { SessionMessageUpdater } from "./message-updater"
 import { SessionInput } from "./input"
 import { WorkspaceV2 } from "../workspace"
 import { SessionContextEpoch } from "./context-epoch"
+import { LongContext } from "./long-context"
 import {
   MessageTable,
   PartTable,
@@ -1546,6 +1547,11 @@ export const layer = Layer.effectDiscard(
       const seq = event.seq
       if (seq === undefined) return Effect.die("Synchronized Session event is missing aggregate sequence")
       return Effect.gen(function* () {
+        if (event.data.reason === "hard_gate") {
+          if (!event.data.checkpointID || !event.data.checkpointHash)
+            return yield* Effect.die("Hard-gate compaction has no checkpoint binding")
+          yield* LongContext.assertCheckpoint(db, event.data.sessionID, event.data.checkpointID, event.data.checkpointHash).pipe(Effect.orDie)
+        }
         yield* run(db, event)
         yield* SessionContextEpoch.requestReplacement(db, event.data.sessionID, seq)
       })

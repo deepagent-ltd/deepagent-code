@@ -14,8 +14,6 @@ const candidates: Record<string, Partial<Record<string, PolicyKey>>> = {
   deepseek: {
     "deepseek-v4-pro": "deepseek-v4-pro",
     "deepseek-flash": "deepseek-v4-flash",
-    // DeepSeek currently routes this legacy API alias to V4.1 Flash.
-    "deepseek-v4-flash": "deepseek-v4-flash",
   },
   moonshotai: { "kimi-k3": "kimi-k3" },
   zhipuai: { "glm-5.2": "glm-5.2" },
