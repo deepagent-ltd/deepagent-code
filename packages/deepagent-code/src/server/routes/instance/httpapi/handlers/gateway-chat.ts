@@ -8,6 +8,7 @@ import { Database } from "@deepagent-code/core/database/database"
 import { DeepAgentRateLimitBucketTable } from "@deepagent-code/core/deepagent/deepagent-event-sql"
 import { ModelsDev } from "@deepagent-code/core/models-dev"
 import { ProxyRequestLedgerTable } from "@deepagent-code/core/proxy/sql"
+import { SessionV2 } from "@deepagent-code/core/session"
 import { RequestAdmitted, ResponseCompleted } from "@deepagent-code/core/proxy/event"
 import { Auth } from "@/auth"
 import { InstanceRef } from "@/effect/instance-ref"
@@ -16,6 +17,7 @@ import { InstanceStore } from "@/project/instance-store"
 import { Provider } from "@/provider/provider"
 import { LLMNative } from "@/session/llm/native-request"
 import { parseChatPayload } from "../groups/gateway-wire"
+import { collectEnhanced, proxyLaneID } from "./gateway-enhanced"
 import { ProxyTenantContext, proxyError } from "../middleware/proxy-authorization"
 
 class QuotaExceeded extends Error {
@@ -32,6 +34,7 @@ export const chat = Effect.gen(function* () {
   const client = yield* LLMClient.Service
   const events = yield* EventV2Bridge.Service
   const modelsDev = yield* ModelsDev.Service
+  const sessions = yield* SessionV2.Service
 
   return (input: { request: HttpServerRequest.HttpServerRequest }) =>
     Effect.gen(function* () {
@@ -40,8 +43,10 @@ export const chat = Effect.gen(function* () {
       const parsed = parseChatPayload(Option.isSome(decoded) ? decoded.value : undefined)
       if (!parsed.ok) return parsed.response
       const tenant = yield* ProxyTenantContext
-      if (tenant.tier !== "passthrough")
-        return proxyError(501, "enhancement_unavailable", "Enhanced proxy tier is not available")
+      if (tenant.tier === "full")
+        return proxyError(501, "full_tier_unavailable", "Full proxy tier is not available")
+      if (tenant.tier !== "passthrough" && parsed.value.messages.at(-1)?.role !== "user")
+        return proxyError(400, "invalid_request", "Enhanced chat requires a final user message")
 
       const requestID = input.request.headers["x-request-id"] || `req_${randomUUID()}`
       if (!/^[A-Za-z0-9._:-]{1,128}$/.test(requestID))
@@ -73,17 +78,10 @@ export const chat = Effect.gen(function* () {
       )
       if (candidates.length !== 1) return proxyError(404, "model_not_found", "Model is not available")
       const selected = candidates[0]!
-      const credential = yield* auth.get(selected.entry.id)
-      const options = { ...selected.entry.options, ...selected.model.options }
-      const apiKey =
-        credential?.type === "api"
-          ? credential.key
-          : typeof options.apiKey === "string"
-            ? options.apiKey
-            : selected.entry.key
-      if (!apiKey || credential?.type === "oauth")
-        return proxyError(501, "provider_not_supported", "Model transport is not available")
-      const baseURL = typeof options.baseURL === "string" ? options.baseURL : undefined
+      const hint = input.request.headers["x-deepagent-session"] ?? parsed.value.user ?? "default"
+      if (tenant.tier !== "passthrough" && (hint.length > 128 || hint.length === 0))
+        return proxyError(400, "invalid_session_hint", "Invalid session hint")
+      const laneSessionID = tenant.tier === "passthrough" ? undefined : proxyLaneID(tenant, hint)
 
       const admittedAt = Date.now()
       const eventData = {
@@ -92,6 +90,7 @@ export const chat = Effect.gen(function* () {
         tier: tenant.tier,
         providerID: String(selected.entry.id),
         modelID: String(selected.model.id),
+        ...(laneSessionID ? { laneSessionID } : {}),
       }
       const admission = yield* events
         .publish(
@@ -142,6 +141,7 @@ export const chat = Effect.gen(function* () {
                   tier: tenant.tier,
                   provider_id: String(selected.entry.id),
                   model_id: String(selected.model.id),
+                  lane_session_id: laneSessionID,
                   admitted_at: admittedAt,
                   stream: parsed.value.stream ?? false,
                 })
@@ -235,6 +235,58 @@ export const chat = Effect.gen(function* () {
               usage.outputTokens * modelCost.output) /
             1_000_000
           : null
+
+      if (laneSessionID) {
+        const enhanced = yield* collectEnhanced({
+          db,
+          sessions,
+          tenant,
+          sessionID: laneSessionID,
+          requestID,
+          request: parsed.value,
+          providerID: selected.entry.id,
+          modelID: selected.model.id,
+        })
+        if (!enhanced.ok) {
+          yield* complete({ finishReason: enhanced.code, cost: null })
+          return proxyError(enhanced.status, enhanced.code, enhanced.message)
+        }
+        const usage = enhanced.usage
+        yield* complete({ finishReason: enhanced.finishReason, usage, cost: costFor(usage), firstTokenAt: enhanced.firstTokenAt })
+        const usageWire = usage?.inputTokens !== undefined && usage.outputTokens !== undefined
+          ? { prompt_tokens: usage.inputTokens, completion_tokens: usage.outputTokens,
+              total_tokens: usage.totalTokens ?? usage.inputTokens + usage.outputTokens }
+          : null
+        const payload = {
+          id: `chatcmpl-${requestID}`,
+          object: "chat.completion",
+          created: Math.floor(admittedAt / 1000),
+          model: parsed.value.model,
+          choices: [{ index: 0, message: { role: "assistant", content: enhanced.text }, finish_reason: enhanced.finishReason }],
+          usage: usageWire,
+        }
+        if (!parsed.value.stream)
+          return HttpServerResponse.jsonUnsafe(payload, { headers: { "x-request-id": requestID, "cache-control": "no-store" } })
+        const chunk = (choices: unknown[], finalUsage?: unknown) => `data: ${JSON.stringify({
+          id: `chatcmpl-${requestID}`, object: "chat.completion.chunk", created: Math.floor(admittedAt / 1000),
+          model: parsed.value.model, choices, ...(finalUsage ? { usage: finalUsage } : {}),
+        })}\n\n`
+        return HttpServerResponse.text(
+          chunk([{ index: 0, delta: { role: "assistant" }, finish_reason: null }]) +
+            chunk([{ index: 0, delta: { content: enhanced.text }, finish_reason: null }]) +
+            chunk([{ index: 0, delta: {}, finish_reason: enhanced.finishReason }]) +
+            (parsed.value.stream_options?.include_usage ? chunk([], usageWire) : "") +
+            "data: [DONE]\n\n",
+          { contentType: "text/event-stream", headers: { "x-request-id": requestID, "cache-control": "no-store" } },
+        )
+      }
+
+      const credential = yield* auth.get(selected.entry.id)
+      const options = { ...selected.entry.options, ...selected.model.options }
+      const apiKey = credential?.type === "api" ? credential.key : typeof options.apiKey === "string" ? options.apiKey : selected.entry.key
+      if (!apiKey || credential?.type === "oauth")
+        return proxyError(501, "provider_not_supported", "Model transport is not available")
+      const baseURL = typeof options.baseURL === "string" ? options.baseURL : undefined
 
       const request = LLMNative.request({
         model: selected.model,

@@ -259,4 +259,69 @@ describe("gateway release gate", () => {
       await rm(directory, { recursive: true, force: true })
     }
   }, 30_000)
+
+  test("adopts a context lane and collects its own queued activity", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "deepagent-proxy-context-test-"))
+    const originalDatabase = Flag.DEEPAGENT_CODE_DB
+    Flag.DEEPAGENT_CODE_DB = join(directory, "proxy.sqlite")
+    const upstream = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const payload = await request.json() as { messages?: { role: string; content: unknown }[]; input?: unknown[] }
+        const lastUser = payload.messages?.filter((message) => message.role === "user").at(-1)
+        const answer = JSON.stringify(lastUser ?? payload.input?.at(-1)).includes("Second question") ? "second durable answer" : "first durable answer"
+        return new Response([
+        'data: {"id":"upstream-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}',
+        `data: {"id":"upstream-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"${answer}"},"finish_reason":null}]}`,
+        'data: {"id":"upstream-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":4,"total_tokens":15}}',
+        "data: [DONE]", "",
+        ].join("\n\n"), { headers: { "content-type": "text/event-stream" } })
+      },
+    })
+    try {
+      await Bun.write(join(directory, "deepagent-code.json"), JSON.stringify(testProviderConfig(`http://127.0.0.1:${upstream.port}/v1`)))
+      await Effect.runPromise(Effect.gen(function* () {
+        yield* (yield* Database.Service).db.insert(ProxyTenantTable).values({
+          id: "tenant-context", key_hash: createHash("sha256").update("sk-context").digest("hex"),
+          key_fingerprint: "context-fingerprint", directory, model_allowlist: ["test/test-model"],
+          tier: "context", quota_requests_per_minute: 10, quota_tokens_per_day: 100_000,
+          lane_limit: 8, deadline_ms: 5_000, enabled: true, created_at: Date.now(), updated_at: Date.now(),
+        })
+      }).pipe(Effect.provide(Database.defaultLayer)))
+      const web = HttpRouter.toWebHandler(HttpApiApp.createRoutes().pipe(
+        Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DEEPAGENT_CODE_GATEWAY: true }))),
+      ), { disableLogger: true })
+      const handler = web.handler
+      const send = (requestID: string, content: string) => handler(new Request("http://localhost/v1/chat/completions", {
+        method: "POST", headers: { authorization: "Bearer sk-context", "content-type": "application/json", "x-request-id": requestID },
+        body: JSON.stringify({ model: "test-model", messages: [{ role: "user", content }] }),
+      }), HttpApiApp.context)
+      const [first, second] = await Promise.all([send("context-1", "First question"), send("context-2", "Second question")])
+      expect(first.status).toBe(200)
+      expect(second.status).toBe(200)
+      expect((await first.json()).choices[0].message.content).toBe("first durable answer")
+      expect((await second.json()).choices[0].message.content).toBe("second durable answer")
+      const sqlite = await import("bun:sqlite")
+      const reader = new sqlite.Database(Flag.DEEPAGENT_CODE_DB, { readonly: true })
+      try {
+        const activities = reader.query("SELECT activity_id, ordinal, state FROM session_activity ORDER BY ordinal").all() as { activity_id: string; ordinal: number; state: string }[]
+        expect(activities).toHaveLength(2)
+        expect(activities.map((activity) => activity.state)).toEqual(["settled", "settled"])
+        const messages = reader.query("SELECT data FROM session_message WHERE type = 'assistant' ORDER BY seq").all() as { data: string }[]
+        expect(messages.map((row) => JSON.parse(row.data).content.filter((part: { type: string }) => part.type === "text").map((part: { text: string }) => part.text).join("")).sort()).toEqual(["first durable answer", "second durable answer"])
+        const ledger = reader.query("SELECT request_id, lane_session_id, usage_input, usage_output FROM proxy_request_ledger ORDER BY admitted_at").all() as { request_id: string; lane_session_id: string; usage_input: number; usage_output: number }[]
+        expect(ledger).toHaveLength(2)
+        expect(ledger[0]?.lane_session_id).toBe(ledger[1]?.lane_session_id)
+        expect(ledger.every((row) => row.usage_input === 11 && row.usage_output === 4)).toBe(true)
+      } finally {
+        reader.close()
+      }
+      await web.dispose()
+    } finally {
+      upstream.stop(true)
+      Flag.DEEPAGENT_CODE_DB = originalDatabase
+      await rm(directory, { recursive: true, force: true })
+    }
+  }, 30_000)
 })
