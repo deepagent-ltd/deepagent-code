@@ -480,6 +480,50 @@ describe("EventV2", () => {
     }),
   )
 
+  it.effect("reports a commit hook failure through the checked channel after rolling back, then retries exactly", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const aggregateID = EventV2.ID.create()
+      const eventID = EventV2.ID.create()
+      const delivered: EventV2.ID[] = []
+      yield* db.run("CREATE TABLE IF NOT EXISTS event_checked_commit_probe (value text NOT NULL)")
+      yield* db.run("DELETE FROM event_checked_commit_probe")
+      yield* events.project(SyncMessage, () =>
+        db.run("INSERT INTO event_checked_commit_probe (value) VALUES ('projected')").pipe(Effect.orDie, Effect.asVoid),
+      )
+      yield* events.listen((event) => Effect.sync(() => delivered.push(event.id)))
+
+      const failed = yield* events.publishChecked(SyncMessage, { id: aggregateID, text: "hello" }, {
+        id: eventID,
+        idempotent: true,
+        commit: () => Effect.fail(new Error("outbox unavailable")),
+      }).pipe(Effect.catch(Effect.succeed))
+      expect(failed).toBeInstanceOf(EventV2.CommitHookError)
+      if (failed instanceof EventV2.CommitHookError) {
+        expect(failed.eventID).toBe(eventID)
+        expect(failed.message).toContain("outbox unavailable")
+      }
+      expect(yield* db.all("SELECT value FROM event_checked_commit_probe")).toEqual([])
+      expect(yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, aggregateID)).all()).toEqual([])
+      expect(delivered).toEqual([])
+
+      const committed = yield* events.publishChecked(SyncMessage, { id: aggregateID, text: "hello" }, {
+        id: eventID,
+        idempotent: true,
+        commit: () => Effect.void,
+      })
+      expect(committed.seq).toBe(0)
+      expect(yield* db.all("SELECT value FROM event_checked_commit_probe")).toEqual([{ value: "projected" }])
+      expect(delivered).toEqual([eventID])
+
+      const legacy = yield* events.publish(SyncMessage, { id: EventV2.ID.create(), text: "legacy" }, {
+        commit: () => Effect.fail(new Error("legacy hook failed")),
+      }).pipe(Effect.exit)
+      expect(Exit.isFailure(legacy) && Cause.hasDies(legacy.cause)).toBeTrue()
+    }),
+  )
+
   it.effect("rejects local commit hooks on live-only events", () =>
     Effect.gen(function* () {
       const events = yield* EventV2.Service
@@ -1495,6 +1539,46 @@ describe("EventV2", () => {
         onCommit: (seq) => Effect.sync(() => repaired.push(seq)),
       })
       expect(repaired).toEqual([payload.seq!])
+    }),
+  )
+
+  it.effect("keeps replayAll checked hook failures typed and rolls back the entire batch", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      const aggregateID = EventV2.ID.create()
+      const batch = [0, 1].map((seq) => ({
+        id: EventV2.ID.create(),
+        type: EventV2.versionedType(SyncMessage.type, 1),
+        seq,
+        aggregateID,
+        data: { id: aggregateID, text: `event ${seq}` },
+      }))
+      const delivered: EventV2.ID[] = []
+      yield* events.listen((event) => Effect.sync(() => delivered.push(event.id)))
+
+      const failed = yield* events.replayAllChecked(batch, {
+        publish: true,
+        onCommit: (seq) => seq === 1 ? Effect.fail(new Error("second mirror unavailable")) : Effect.void,
+      }).pipe(Effect.catch(Effect.succeed))
+      expect(failed).toBeInstanceOf(EventV2.CommitHookError)
+      if (failed instanceof EventV2.CommitHookError) {
+        expect(failed.eventID).toBe(batch[1]?.id)
+        expect(failed.message).toContain("second mirror unavailable")
+      }
+      expect(yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, aggregateID)).all()).toEqual([])
+      expect(yield* db.select().from(EventSequenceTable).where(eq(EventSequenceTable.aggregate_id, aggregateID)).all()).toEqual([])
+      expect(delivered).toEqual([])
+
+      expect(yield* events.replayAllChecked(batch, { publish: true, onCommit: () => Effect.void })).toBe(aggregateID)
+      expect(delivered).toEqual(batch.map((event) => event.id))
+      expect((yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, aggregateID)).all())).toHaveLength(2)
+
+      const exactRepair = yield* events.replayChecked(batch[0]!, {
+        onCommit: () => Effect.fail(new Error("repair unavailable")),
+      }).pipe(Effect.catch(Effect.succeed))
+      expect(exactRepair).toBeInstanceOf(EventV2.CommitHookError)
+      expect((yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, aggregateID)).all())).toHaveLength(2)
     }),
   )
 

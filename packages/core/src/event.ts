@@ -192,6 +192,16 @@ export class InvalidSyncEventError extends Schema.TaggedErrorClass<InvalidSyncEv
   },
 ) {}
 
+export class CommitHookError extends Schema.TaggedErrorClass<CommitHookError>()(
+  "EventV2.CommitHookError",
+  {
+    eventID: ID,
+    eventType: Schema.String,
+    message: Schema.String,
+    cause: Schema.Unknown,
+  },
+) {}
+
 export const MAX_ENCODED_PAYLOAD_BYTES = 4 * 1024 * 1024
 export const AGGREGATE_READ_BATCH_EVENTS = 100
 export const AGGREGATE_READ_BATCH_BYTES = 4 * 1024 * 1024
@@ -455,6 +465,12 @@ export interface PublishOptions {
 }
 
 export interface Interface {
+  /** Additive typed channel for an in-transaction commit hook. Other storage failures remain defects. */
+  readonly publishChecked: <D extends Definition>(
+    definition: D,
+    data: Data<D>,
+    options?: PublishOptions,
+  ) => Effect.Effect<Payload<D>, CommitHookError>
   readonly publish: <D extends Definition>(
     definition: D,
     data: Data<D>,
@@ -485,6 +501,10 @@ export interface Interface {
       readonly onCommit?: (seq: number, event: Payload) => Effect.Effect<void, unknown>
     },
   ) => Effect.Effect<void>
+  readonly replayChecked: (
+    event: SerializedEvent,
+    options?: Parameters<Interface["replay"]>[1],
+  ) => Effect.Effect<void, CommitHookError>
   readonly replayAll: (
     events: SerializedEvent[],
     options?: {
@@ -494,6 +514,10 @@ export interface Interface {
       readonly onCommit?: (seq: number, event: Payload) => Effect.Effect<void, unknown>
     },
   ) => Effect.Effect<string | undefined>
+  readonly replayAllChecked: (
+    events: SerializedEvent[],
+    options?: Parameters<Interface["replayAll"]>[1],
+  ) => Effect.Effect<string | undefined, CommitHookError>
   readonly snapshot: (aggregateID: string) => Effect.Effect<SerializedSnapshot | undefined>
   readonly aggregateState?: (aggregateID: string) => Effect.Effect<{
     readonly seq: Cursor
@@ -670,6 +694,12 @@ export const layerWith = (layerOptions?: LayerOptions) =>
         tombstoneOptions?: PublishOptions["tombstone"],
       ) {
         return Effect.gen(function* () {
+          const runCommitHook = (seq: number, payload: Payload) =>
+            commit!(seq, payload).pipe(
+              Effect.mapError((error) =>
+                new CommitHookError({ eventID: payload.id, eventType: payload.type, message: String(error), cause: error }),
+              ),
+            )
           const sync = definition.sync
           if (!sync)
             return yield* Effect.die(
@@ -915,7 +945,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                               // row, inside this transaction. Compacted dedupe-only rows have no local
                               // event to mirror and require an explicit historical backfill instead.
                               if (stored && commit && (!row?.ownerID || row.ownerID === input.ownerID))
-                                yield* commit(stored.seq, { ...canonicalEvent, data: codec.decode(stored.data) })
+                                yield* runCommitHook(stored.seq, { ...canonicalEvent, data: codec.decode(stored.data) })
                               return
                             }
                             yield* Effect.die(
@@ -982,7 +1012,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                                 )
                               : isDeepStrictEqual(stored.data, encoded))
                           ) {
-                            if (commit) yield* commit(stored.seq, canonicalEvent)
+                            if (commit) yield* runCommitHook(stored.seq, canonicalEvent)
                             return { aggregateID, seq: stored.seq, inserted: false }
                           }
                           if (stored)
@@ -1005,7 +1035,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                           for (const projector of list) {
                             yield* projector({ ...canonicalEvent, seq } as Payload)
                           }
-                          if (commit) yield* commit(seq, canonicalEvent)
+                          if (commit) yield* runCommitHook(seq, canonicalEvent)
                           yield* db
                             .insert(EventSequenceTable)
                             .values([{ aggregate_id: aggregateID, seq, owner_id: input?.ownerID }])
@@ -1056,7 +1086,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                         }),
                       { behavior: "immediate" },
                     )
-                    .pipe(Effect.orDie)
+                    .pipe(Effect.catch((error) => error instanceof CommitHookError ? Effect.fail(error) : Effect.die(error)))
                   if (committed?.inserted && !deferDurableWake) {
                     yield* Effect.forEach(
                       synchronized.get(committed.aggregateID) ?? [],
@@ -1129,7 +1159,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
         })
       }
 
-      function publish<D extends Definition>(definition: D, data: Data<D>, options?: PublishOptions) {
+      function publishChecked<D extends Definition>(definition: D, data: Data<D>, options?: PublishOptions) {
         return Effect.gen(function* () {
           if (options?.idempotent && (!options.id || definition.sync === undefined)) {
             return yield* Effect.die(
@@ -1162,7 +1192,11 @@ export const layerWith = (layerOptions?: LayerOptions) =>
         })
       }
 
-      function replay(
+      function publish<D extends Definition>(definition: D, data: Data<D>, options?: PublishOptions) {
+        return publishChecked(definition, data, options).pipe(Effect.orDie)
+      }
+
+      function replayChecked(
         event: SerializedEvent,
         options?: {
           readonly publish?: boolean
@@ -1213,7 +1247,11 @@ export const layerWith = (layerOptions?: LayerOptions) =>
         })
       }
 
-      function replayAll(
+      function replay(event: SerializedEvent, options?: Parameters<Interface["replay"]>[1]) {
+        return replayChecked(event, options).pipe(Effect.orDie)
+      }
+
+      function replayAllChecked(
         events: SerializedEvent[],
         options?: {
           readonly publish?: boolean
@@ -1265,7 +1303,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                     Effect.forEach(
                       events,
                       (event) =>
-                        replay(event, {
+                        replayChecked(event, {
                           ...options,
                           publish: false,
                           deferDurableWake: true,
@@ -1275,7 +1313,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
                     ),
                   { behavior: "immediate" },
                 )
-                .pipe(Effect.orDie)
+                .pipe(Effect.catch((error) => error instanceof CommitHookError ? Effect.fail(error) : Effect.die(error)))
               yield* (layerOptions?.afterReplayAllCommit?.(source) ?? Effect.void).pipe(
                 Effect.catchCause(() => Effect.void),
               )
@@ -1288,6 +1326,10 @@ export const layerWith = (layerOptions?: LayerOptions) =>
           if (options?.publish) yield* Effect.forEach(committed, (event) => notify(event, true), { discard: true })
           return source
         })
+      }
+
+      function replayAll(events: SerializedEvent[], options?: Parameters<Interface["replayAll"]>[1]) {
+        return replayAllChecked(events, options).pipe(Effect.orDie)
       }
 
       function snapshot(aggregateID: string) {
@@ -2991,6 +3033,7 @@ export const layerWith = (layerOptions?: LayerOptions) =>
       }
 
       return Service.of({
+        publishChecked,
         publish,
         subscribe,
         all: streamAll,
@@ -3001,7 +3044,9 @@ export const layerWith = (layerOptions?: LayerOptions) =>
         project,
         registerSnapshotCodec,
         replay,
+        replayChecked,
         replayAll,
+        replayAllChecked,
         snapshot,
         aggregateState,
         prepareCheckpoint,

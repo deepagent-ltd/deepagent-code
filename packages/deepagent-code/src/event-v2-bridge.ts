@@ -167,7 +167,7 @@ export const layerWithRegistry = (
         return V2OutboxWriter.land(db, { event, registration, now: Date.now() }).pipe(Effect.asVoid)
       }
 
-      const publish: EventV2.Interface["publish"] = (definition, data, options) =>
+      const publishChecked: EventV2.Interface["publishChecked"] = (definition, data, options) =>
         Effect.gen(function* () {
           // The in-transaction landing hook. Only attached for synchronized (durable) events: EventV2
           // dies on a commit hook for a non-sync event (there is no event transaction to share) — for a
@@ -186,13 +186,13 @@ export const layerWithRegistry = (
                   })
               : options?.commit
           const event = yield* options?.location
-            ? events.publish(definition, data, { ...options, commit })
+            ? events.publishChecked(definition, data, { ...options, commit })
             : Effect.gen(function* () {
                 const route = yield* EventRouteRef
                 const ctx = route ?? (yield* InstanceRef)
-                if (!ctx) return yield* events.publish(definition, data, { ...options, commit })
+                if (!ctx) return yield* events.publishChecked(definition, data, { ...options, commit })
                 const workspaceID = route?.workspaceID ?? (yield* WorkspaceRef)
-                return yield* events.publish(definition, data, {
+                return yield* events.publishChecked(definition, data, {
                   ...options,
                   commit,
                   location: new Location.Info({
@@ -205,12 +205,28 @@ export const layerWithRegistry = (
           return event
         })
 
+      const publish: EventV2.Interface["publish"] = (definition, data, options) =>
+        publishChecked(definition, data, options).pipe(Effect.orDie)
+
       // W5 ① replay driver — the EventV2 replay surface (sync / import / control-plane re-commit of the
       // serialized event log) lands C5-registered event ids in-transaction too. Replayed commits carry the
       // SAME `eventv2:<eventId>` idempotency key, so a re-replay fenced on the same key. The hook COMPOSES
       // with a caller-supplied in-transaction hook (never replaces it).
+      const replayChecked: EventV2.Interface["replayChecked"] = (serialized, options) =>
+        events.replayChecked(serialized, {
+          ...options,
+          onCommit: (seq, event) =>
+            Effect.gen(function* () {
+              if (options?.onCommit) yield* options.onCommit(seq, event)
+              return yield* landIfRegistered(event)
+            }),
+        })
+
       const replay: EventV2.Interface["replay"] = (serialized, options) =>
-        events.replay(serialized, {
+        replayChecked(serialized, options).pipe(Effect.orDie)
+
+      const replayAllChecked: EventV2.Interface["replayAllChecked"] = (serialized, options) =>
+        events.replayAllChecked(serialized, {
           ...options,
           onCommit: (seq, event) =>
             Effect.gen(function* () {
@@ -220,14 +236,7 @@ export const layerWithRegistry = (
         })
 
       const replayAll: EventV2.Interface["replayAll"] = (serialized, options) =>
-        events.replayAll(serialized, {
-          ...options,
-          onCommit: (seq, event) =>
-            Effect.gen(function* () {
-              if (options?.onCommit) yield* options.onCommit(seq, event)
-              return yield* landIfRegistered(event)
-            }),
-        })
+        replayAllChecked(serialized, options).pipe(Effect.orDie)
 
       const unsubscribe = yield* events.listen((event) =>
         Effect.gen(function* () {
@@ -273,8 +282,11 @@ export const layerWithRegistry = (
       return Service.of({
         ...events,
         publish,
+        publishChecked,
         replay,
+        replayChecked,
         replayAll,
+        replayAllChecked,
         listen: (listener) => events.listen((event) => listener(compatibilityEvent(event))),
       })
     }),

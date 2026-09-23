@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto"
 import { and, eq, gte, sql } from "drizzle-orm"
-import { Cause, Effect, Option, Queue, Ref, Schema, Stream } from "effect"
+import { Effect, Option, Queue, Ref, Schema, Stream } from "effect"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { LLMResponse } from "@deepagent-code/llm"
 import { LLMClient, RequestExecutor } from "@deepagent-code/llm/route"
@@ -130,7 +130,7 @@ export const chat = Effect.gen(function* () {
         ...(laneSessionID ? { laneSessionID } : {}),
       }
       const admitOnce = (admittedAt: number) => events
-        .publish(
+        .publishChecked(
           RequestAdmitted,
           { ...eventData, admittedAt, stream: parsed.value.stream ?? false },
           {
@@ -194,20 +194,16 @@ export const chat = Effect.gen(function* () {
         )
         .pipe(
           Effect.as({ status: "admitted" as const }),
-          Effect.catchCause((cause) => {
-            const failure = cause.reasons.find((reason) => Cause.isDieReason(reason) &&
-              (reason.defect instanceof QuotaExceeded || reason.defect instanceof QuotaPending ||
-                reason.defect instanceof QuotaUsageUnknown))
-            return Effect.succeed(
-              failure && Cause.isDieReason(failure) && failure.defect instanceof QuotaExceeded
-                ? { status: "quota" as const, kind: failure.defect.kind }
-                : failure && Cause.isDieReason(failure) && failure.defect instanceof QuotaPending
-                  ? { status: "pending" as const }
-                  : failure && Cause.isDieReason(failure) && failure.defect instanceof QuotaUsageUnknown
-                    ? { status: "usage_unknown" as const }
-                : { status: "unavailable" as const },
-            )
-          }),
+          Effect.catch((error) => Effect.succeed(
+            error.cause instanceof QuotaExceeded
+              ? { status: "quota" as const, kind: error.cause.kind }
+              : error.cause instanceof QuotaPending
+                ? { status: "pending" as const }
+                : error.cause instanceof QuotaUsageUnknown
+                  ? { status: "usage_unknown" as const }
+                  : { status: "unavailable" as const },
+          )),
+          Effect.catchCause(() => Effect.succeed({ status: "unavailable" as const })),
         )
       const admission = exactReplay
         ? { status: "admitted" as const, admittedAt: existing!.admitted_at }

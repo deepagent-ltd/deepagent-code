@@ -54,6 +54,7 @@ const recordingEvents = (published: Array<{ type: string; data: unknown }>) =>
         published.push({ type: definition.type, data })
         return data
       })) as EventV2.Interface["publish"],
+    publishChecked: (() => Effect.die("unused")) as EventV2.Interface["publishChecked"],
     subscribe: () => Stream.empty,
     all: () => Stream.empty,
     aggregateEvents: () => Stream.empty,
@@ -62,7 +63,9 @@ const recordingEvents = (published: Array<{ type: string; data: unknown }>) =>
     beforeCommit: () => Effect.void,
     project: (() => Effect.void) as EventV2.Interface["project"],
     replay: (() => Effect.void) as EventV2.Interface["replay"],
+    replayChecked: (() => Effect.die("unused")) as EventV2.Interface["replayChecked"],
     replayAll: (() => Effect.succeed(undefined)) as EventV2.Interface["replayAll"],
+    replayAllChecked: (() => Effect.die("unused")) as EventV2.Interface["replayAllChecked"],
     snapshot: () => Effect.succeed(undefined),
     checkpoint: () => Effect.die("unused"),
     claim: () => Effect.die("unused"),
