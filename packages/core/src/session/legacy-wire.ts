@@ -250,6 +250,13 @@ export function legacyUser(input: {
         modelID: (input.model?.id ?? "") as ModelV2.ID,
         ...(input.model?.variant === undefined ? {} : { variant: input.model.variant }),
       },
+      // V1-wire parity: the durable user row carries the structured-output request (Prompt.format
+      // survives promotion); the legacy owner persisted it on the user message and the read model
+      // (API/messages surface) still expects it, so the egress must not drop it. The shapes are
+      // structurally identical, so the mapping is a plain copy.
+      ...(input.message.type === "user" && input.message.format !== undefined
+        ? { format: input.message.format as SessionV1.OutputFormatText | SessionV1.OutputFormatJsonSchema }
+        : {}),
     },
     parts,
   }
