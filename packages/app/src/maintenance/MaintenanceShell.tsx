@@ -1,8 +1,11 @@
-import { createEffect, createMemo, createSignal, For, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js"
+import { useLanguage } from "@/context/language"
 import type { MaintenanceClient } from "./maintenance-client"
 import {
   initialShellState,
   isRestoreBusy,
+  migrationPhaseViews,
+  migrationProgress,
   operationsForMode,
   reduceShell,
   restoreCanSubmit,
@@ -10,6 +13,7 @@ import {
   toOutcomeDiagnostics,
   type ShellAction,
   type ShellState,
+  type ShellViewMode,
 } from "./maintenance-shell-state"
 import { MaintenanceDiagnostics } from "./MaintenanceDiagnostics"
 
@@ -22,9 +26,17 @@ import { MaintenanceDiagnostics } from "./MaintenanceDiagnostics"
 // renders the normal app when mode === "ready". The client is injected for tests
 // (fixture/in-memory only, no live network).
 
-export function MaintenanceShell(props: { client: MaintenanceClient }) {
+export function MaintenanceShell(props: {
+  client: MaintenanceClient
+  /** Forced view mode (the gate's migration-in-progress decision overrides bootstrap mode). */
+  mode?: ShellViewMode
+  /** Notified when a rendered migration chain settles (completed or vanished) so the gate can show the app. */
+  onMigrationSettled?: () => void
+}) {
   const [state, setState] = createSignal<ShellState>(initialShellState)
   const [busy, setBusy] = createSignal(false)
+  const [migrationBusy, setMigrationBusy] = createSignal(false)
+  const language = useLanguage()
   const dispatch = (action: ShellAction) => setState((prev) => reduceShell(prev, action))
   const ops = () => operationsForMode(state().mode)
 
@@ -45,6 +57,12 @@ export function MaintenanceShell(props: { client: MaintenanceClient }) {
       restoreSelected: restoreSelection(s),
       restoreBusy: isRestoreBusy(s),
       restoreError: s.restore.status === "error" ? s.restore.stableCode : undefined,
+      migration: s.migration,
+      // Derived once here so the JSX below never touches the union members.
+      migrationPhases: s.migration.status === "idle" || s.migration.status === "unavailable" ? [] : migrationPhaseViews(s.migration.journal),
+      migrationProgress: s.migration.status === "idle" || s.migration.status === "unavailable" ? undefined : migrationProgress(s.migration.journal),
+      migrationUnavailableCode: s.migration.status === "unavailable" ? s.migration.stableCode : undefined,
+      migrationGuidance: s.migration.status === "failed" ? s.migration.journal.failure?.recoveryGuidance : undefined,
     }
   })
 
@@ -57,6 +75,12 @@ export function MaintenanceShell(props: { client: MaintenanceClient }) {
 
   createEffect(() => {
     void (async () => {
+      // W-02 M-6: the gate may force the migration-in-progress mode (a READY store with an
+      // orchestrated chain running); that mode renders progress instead of the backup surface.
+      if (props.mode === "migration_in_progress") {
+        dispatch({ type: "bootstrapLoaded", mode: props.mode, diagnostics: toOutcomeDiagnostics(undefined) })
+        return
+      }
       const outcome = await props.client.bootstrapStatus()
       if (outcome.kind === "ready") {
         dispatch({ type: "bootstrapLoaded", mode: "ready", diagnostics: toOutcomeDiagnostics(outcome.state.diagnostics) })
@@ -72,6 +96,38 @@ export function MaintenanceShell(props: { client: MaintenanceClient }) {
       }
     })()
   })
+
+  // W-02 M-6 — poll the orchestration journal while the migration view is up. Phase progress
+  // (journal.currentPhase / phases[].state, including stop_after staged invocations) updates live;
+  // failure.recoveryGuidance renders verbatim once the chain stops. The poll NEVER blocks the
+  // shell: an unreachable status endpoint degrades to a stable code, and a settled chain hands
+  // control back to the gate.
+  const pollMigration = async () => {
+    const result = await props.client.migrationStatus()
+    if ("data" in result) {
+      dispatch({ type: "migrationLoaded", journal: result.data.journal })
+      if (result.data.journal === undefined || result.data.journal.status === "completed") props.onMigrationSettled?.()
+    } else if ("error" in result) {
+      dispatch({ type: "migrationFailed", stableCode: result.error.data.code })
+    } else {
+      dispatch({ type: "migrationFailed", stableCode: "network_unreachable" })
+    }
+  }
+  createEffect(() => {
+    if (state().mode !== "migration_in_progress") return
+    void pollMigration()
+    const timer = setInterval(() => void pollMigration(), 1500)
+    onCleanup(() => clearInterval(timer))
+  })
+
+  const resumeMigration = async () => {
+    if (migrationBusy()) return
+    setMigrationBusy(true)
+    // Re-running the chain resumes idempotently from the failed phase (M-2 semantics).
+    await props.client.runMigration()
+    setMigrationBusy(false)
+    void pollMigration()
+  }
 
   const verify = async (manifestPath: string) => {
     dispatch({ type: "verifyStart" })
@@ -111,7 +167,13 @@ export function MaintenanceShell(props: { client: MaintenanceClient }) {
       <header class="border-b border-border-weak-base px-6 py-4">
         <div class="text-14-medium text-text-strong">Database maintenance</div>
         <div class="mt-1 text-12-regular text-text-weak">
-          {view().mode === "blocked_schema" ? "The store is not writable (schema)." : view().mode === "read_only_recovery" ? "The store is in read-only recovery." : "Diagnostics"}
+          {view().mode === "blocked_schema"
+            ? "The store is not writable (schema)."
+            : view().mode === "read_only_recovery"
+              ? "The store is in read-only recovery."
+              : view().mode === "migration_in_progress"
+                ? language.t("maintenance.migration.title")
+                : "Diagnostics"}
         </div>
       </header>
 
@@ -140,6 +202,73 @@ export function MaintenanceShell(props: { client: MaintenanceClient }) {
             <li>Export evidence: {ops().export ? "allowed" : "disabled"}</li>
           </ul>
         </section>
+
+        <Show when={view().mode === "migration_in_progress"}>
+          <section class="mb-6 rounded-md border border-border-weak-base p-4" data-testid="migration-progress">
+            <div class="flex items-center justify-between">
+              <h2 class="text-13-medium text-text-strong">{language.t("maintenance.migration.title")}</h2>
+              <span class="text-12-regular text-text-weak">
+                <Show when={view().migration.status === "active"} fallback={<span data-testid="migration-headline">
+                  {view().migration.status === "completed"
+                    ? language.t("maintenance.migration.completed.title")
+                    : view().migration.status === "failed"
+                      ? language.t("maintenance.migration.failed.title")
+                      : view().migration.status === "unavailable"
+                        ? `${language.t("maintenance.migration.unavailable")} (${view().migrationUnavailableCode})`
+                        : language.t("maintenance.migration.pending")}
+                </span>}>
+                  <span data-testid="migration-headline">
+                    {language.t("maintenance.migration.progress", {
+                      done: view().migrationProgress?.done ?? 0,
+                      total: view().migrationProgress?.total ?? 0,
+                    })}
+                  </span>
+                </Show>
+              </span>
+            </div>
+            <ol class="mt-3 flex flex-col gap-1" data-testid="migration-phases">
+              <For each={view().migrationPhases}>
+                {(phase) => (
+                  <li class="flex items-center justify-between gap-3 text-12-regular">
+                    <span class={phase.state === "pending" ? "text-text-weak" : "text-text-strong"}>
+                      {language.t(`maintenance.migration.phase.${phase.phase}`)}
+                    </span>
+                    <span
+                      class={
+                        phase.state === "completed"
+                          ? "text-text-success"
+                          : phase.state === "failed"
+                            ? "text-text-critical"
+                            : phase.state === "running"
+                              ? "text-text-warning"
+                              : "text-text-weak"
+                      }
+                    >
+                      {language.t(`maintenance.migration.state.${phase.state}`)}
+                    </span>
+                  </li>
+                )}
+              </For>
+            </ol>
+            <Show when={view().migration.status === "failed"}>
+              <div class="mt-3 rounded-md border border-border-critical-base bg-surface-raised-base p-3" data-testid="migration-guidance">
+                <div class="text-12-medium text-text-critical">{language.t("maintenance.migration.failed.title")}</div>
+                <div class="mt-1 text-11-regular text-text-weak">
+                  {/* The journal's user-readable recovery guidance renders verbatim (M-6). */}
+                  {view().migrationGuidance}
+                </div>
+                <button
+                  type="button"
+                  class="mt-2 text-12-regular underline disabled:opacity-50"
+                  disabled={migrationBusy()}
+                  onClick={() => void resumeMigration()}
+                >
+                  {migrationBusy() ? language.t("maintenance.migration.resuming") : language.t("maintenance.migration.resume")}
+                </button>
+              </div>
+            </Show>
+          </section>
+        </Show>
 
         <section class="rounded-md border border-border-weak-base p-4">
           <div class="flex items-center justify-between">

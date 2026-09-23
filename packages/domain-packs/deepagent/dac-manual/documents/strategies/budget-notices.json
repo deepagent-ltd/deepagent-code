@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:dac-manual:budget-notices",
+  "type": "strategy",
+  "title": "Context budget notices: 70% and 90% semantics",
+  "description": "A BUDGET NOTICE (~70%) means finish the current subtask before new explorations; a BUDGET WARNING (~90%) means compaction is imminent — wrap up now.",
+  "body": "The runtime measures context-window occupancy per turn and injects a volatile notice when it crosses a tier. BUDGET NOTICE fires at roughly 70%: \"context window ~N% full. Prefer completing the current subtask; avoid starting new large explorations.\" BUDGET WARNING fires at roughly 90%: \"compaction is imminent. Wrap up: record key state in durable form (files/plan), avoid new tool-heavy detours.\" The N is the measured occupancy, so a 95% turn warns rather than notices.\n\nUse when either notice appears. On NOTICE: finish the subtask in flight, defer new broad searches, and avoid launching exploratory fan-out that would strand half-read results. On WARNING: stop opening new work, and record what the next context will need in durable form — write decisions and state into files or the plan document, make sure delegated results are captured, then conclude the turn cleanly.\n\nHow to invoke: no tool — the notice is a system message; the correct response is behavioral.\n\nCaveats: do not ignore a WARNING and keep exploring; the following compaction is lossy by construction (see the compaction-survival document). Do not confuse this window occupancy with cost accounting — it measures the current request's context fill, not billing. Risk boundary: state that exists only in conversation when compaction hits is exactly what the summary may lose. Validation signal: after a WARNING turn, everything the next turn needs is reachable from disk or the durable ledgers, not from memory.",
+  "domain": "context_engineering",
+  "scope_hint": "deepagent.dac-manual:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:deepagent.dac-manual",
+  "pack_id": "deepagent.dac-manual"
+}

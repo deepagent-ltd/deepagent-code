@@ -131,6 +131,9 @@ export const oversightHandlers = HttpApiBuilder.group(InstanceHttpApi, "oversigh
               .revert({
                 sessionID: SessionID.make(ctx.payload.sessionID),
                 messageID: MessageID.make(latestMessageID),
+                // Ops-initiated rollback of an agent's changes, not a user chat revert: suppress the
+                // C2 "user reverted" notice (the durable rollback audit row is this path's receipt).
+                notice: false,
               })
               .pipe(
                 Effect.as<RollbackAudit.RollbackOutcome>("reverted"),

@@ -3,7 +3,6 @@ import type { AsyncStorage, SyncStorage } from "@solid-primitives/storage"
 import type { Accessor } from "solid-js"
 import type { DesktopMenuAction } from "../desktop-menu"
 import { ServerConnection } from "./server"
-import type { WslServersPlatform } from "../wsl/types"
 import type { UpdaterPlatform } from "../updater"
 
 type PickerPaths = string | string[] | null
@@ -93,9 +92,6 @@ type PlatformBase = {
 
   /** Set the default server URL to use on app startup (platform-specific) */
   setDefaultServer?(url: ServerConnection.Key | null): Promise<void> | void
-
-  /** Manage WSL sidecar servers (Electron on Windows only) */
-  wslServers?: WslServersPlatform
 
   /** U7: isolated in-app browser (Electron desktop only). Navigation-only — never exposes page
    * content to the app/agent. The WebContentsView is drawn by the main process over the rect. */

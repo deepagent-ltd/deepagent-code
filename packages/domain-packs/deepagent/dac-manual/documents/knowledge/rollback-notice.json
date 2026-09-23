@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:dac-manual:rollback-notice",
+  "type": "knowledge",
+  "title": "Goal rollback notice: your recent edits were reverted",
+  "description": "An autonomous goal-loop rollback notice means the workspace returned to the last validated state — re-verify file state before continuing.",
+  "body": "During a supervised autonomous goal run, a failed verification can trigger an automatic rollback. You learn about it through a one-shot synthetic notice: \"Autonomous run rolled the workspace back to the last validated state. Your most recent edits were reverted; re-verify file state with tools before continuing.\"\n\nUse when the rollback notice arrives. Actions: re-verify — inspect the files you last edited with fresh reads, check git state if relevant, and compare what exists against what you intended before making any new change. Do not assume your last edits are present (they were reverted), and do not re-apply them verbatim: the rollback happened because validation failed, so an identical retry fails again. Adjust the approach based on whatever validation signal the run reported.\n\nHow to invoke: no tool — the notice is a system message; the correct response is behavioral.\n\nInput/output: the notice carries no diff; the ground truth is the workspace itself, so read it.\n\nCaveats: this differs from a user revert notice — a rollback is the autonomous run discarding its own unvalidated work, not the user rewinding the conversation; the goal and plan still stand. Risk boundary: layering new edits on top of assumed-but-reverted state produces incoherent files. Validation signal: after the notice, your next edit starts from content you re-read this turn, not from memory. Rollback is the system protecting the last good state — work with it, not against it.",
+  "domain": "reliability",
+  "scope_hint": "deepagent.dac-manual:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:deepagent.dac-manual",
+  "pack_id": "deepagent.dac-manual"
+}

@@ -1869,13 +1869,12 @@ const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
       { owner, keyScope, bound, finalizer, durability, reachability, verdict } satisfies RuntimeStateAudit,
     ]),
   ),
-  // tool/task-policy.ts: taskBatches is the fan-out admission ledger — per
-  // (session,assistantMessage) batch capped at MAX_SUBAGENT_FANOUT (:26) with a 1024-batch FIFO
-  // ceiling (:28); taskSlots is the per-session subagent semaphore pool, refcounted and deleted at
-  // zero users (:96-101). Coordination ceilings only — durable task authority is TaskRunAuthority.
+  // tool/task-policy.ts: taskSlots is the per-session subagent semaphore pool, refcounted and
+  // deleted at zero users. Coordination ceiling only — the fan-out admission ledger became the
+  // durable session_v2_task_call_admission table (C-P2-08) and durable task authority is
+  // TaskRunAuthority.
   ...Object.fromEntries(
     ([
-      ["packages/core/src/tool/task-policy.ts:taskBatches", ["TaskPolicy.fanout-admission", "per-session-assistant-message", "fanout-cap-per-batch-plus-1024-batch-fifo", "fifo-eviction-at-cap", "coordination-only", "v2-task-admission", "safe_bounded"]],
       ["packages/core/src/tool/task-policy.ts:taskSlots", ["TaskPolicy.concurrency-pool", "per-session-key", "active-sessions-refcount", "refcount-zero-delete", "mutex-only", "v2-task-admission", "safe_bounded"]],
     ] as const).map(([key, [owner, keyScope, bound, finalizer, durability, reachability, verdict]]) => [
       key,

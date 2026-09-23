@@ -8,7 +8,7 @@ import { createHash } from "node:crypto"
 // MUST be regenerated + the SDK rebuilt — this test is that gate.
 
 const openapiPath = new URL("../../openapi.json", import.meta.url).pathname
-const expectedDigest = "b1a79087cadc649552b40e75afa44ad521d977416ebd81b4f5043de24d8b2508"
+const expectedDigest = "192cfbdb12f49314c0d3189609b2dcc80cca95ef4f6d135ef0694838d729108c"
 
 describe("C6-04 OpenAPI schema drift (digest gate)", () => {
   test("the committed openapi.json digest is stable (regenerate + rebuild when it changes)", async () => {

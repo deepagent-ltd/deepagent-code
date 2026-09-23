@@ -255,7 +255,7 @@ export const ProvidersListCommand = effectCmd({
     const modelsDev = yield* ModelsDev.Service
 
     UI.empty()
-    const authPath = path.join(Global.Path.data, "auth.json")
+    const authPath = path.join(Global.Path.config, "auth.json")
     const homedir = os.homedir()
     const displayPath = authPath.startsWith(homedir) ? authPath.replace(homedir, "~") : authPath
     yield* Prompt.intro(`Credentials ${UI.Style.TEXT_DIM}${displayPath}`)

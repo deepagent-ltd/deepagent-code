@@ -42,11 +42,19 @@ Output: Creates directory 'foo'"
       "type": "string",
     },
     "timeout": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer",
+        },
+        {
+          "minLength": 1,
+          "type": "string",
+        },
+      ],
       "description": "Optional timeout in milliseconds",
-      "exclusiveMinimum": 0,
-      "maximum": 9007199254740991,
-      "minimum": -9007199254740991,
-      "type": "integer",
     },
     "workdir": {
       "description": "The working directory to run the command in. Defaults to the current directory. Use this instead of 'cd' commands.",
@@ -159,20 +167,36 @@ exports[`tool parameters JSON Schema (wire shape) lsp 1`] = `
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
     "character": {
+      "anyOf": [
+        {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer",
+        },
+        {
+          "minLength": 1,
+          "type": "string",
+        },
+      ],
       "description": "The character offset (1-based, as shown in editors)",
-      "maximum": 9007199254740991,
-      "minimum": 1,
-      "type": "integer",
     },
     "filePath": {
       "description": "The absolute or relative path to the file",
       "type": "string",
     },
     "line": {
+      "anyOf": [
+        {
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer",
+        },
+        {
+          "minLength": 1,
+          "type": "string",
+        },
+      ],
       "description": "The line number (1-based, as shown in editors)",
-      "maximum": 9007199254740991,
-      "minimum": 1,
-      "type": "integer",
     },
     "operation": {
       "description": "The LSP operation to perform",
@@ -280,16 +304,32 @@ exports[`tool parameters JSON Schema (wire shape) read 1`] = `
       "type": "string",
     },
     "limit": {
+      "anyOf": [
+        {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer",
+        },
+        {
+          "minLength": 1,
+          "type": "string",
+        },
+      ],
       "description": "The maximum number of lines to read (defaults to 2000)",
-      "maximum": 9007199254740991,
-      "minimum": 0,
-      "type": "integer",
     },
     "offset": {
+      "anyOf": [
+        {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer",
+        },
+        {
+          "minLength": 1,
+          "type": "string",
+        },
+      ],
       "description": "The line number to start reading from (1-indexed)",
-      "maximum": 9007199254740991,
-      "minimum": 0,
-      "type": "integer",
     },
   },
   "required": [
@@ -371,7 +411,6 @@ exports[`tool parameters JSON Schema (wire shape) task 1`] = `
 }
 `;
 
-
 exports[`tool parameters JSON Schema (wire shape) webfetch 1`] = `
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -387,8 +426,16 @@ exports[`tool parameters JSON Schema (wire shape) webfetch 1`] = `
       "type": "string",
     },
     "timeout": {
+      "anyOf": [
+        {
+          "type": "number",
+        },
+        {
+          "minLength": 1,
+          "type": "string",
+        },
+      ],
       "description": "Optional timeout in seconds (max 120)",
-      "type": "number",
     },
     "url": {
       "description": "The URL to fetch content from",
@@ -407,8 +454,16 @@ exports[`tool parameters JSON Schema (wire shape) websearch 1`] = `
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
     "contextMaxCharacters": {
+      "anyOf": [
+        {
+          "type": "number",
+        },
+        {
+          "minLength": 1,
+          "type": "string",
+        },
+      ],
       "description": "Maximum characters for context string optimized for LLMs (default: 10000)",
-      "type": "number",
     },
     "livecrawl": {
       "description": "Live crawl mode - 'fallback': use live crawling as backup if cached content unavailable, 'preferred': prioritize live crawling (default: 'fallback')",
@@ -419,8 +474,16 @@ exports[`tool parameters JSON Schema (wire shape) websearch 1`] = `
       "type": "string",
     },
     "numResults": {
+      "anyOf": [
+        {
+          "type": "number",
+        },
+        {
+          "minLength": 1,
+          "type": "string",
+        },
+      ],
       "description": "Number of search results to return (default: 8)",
-      "type": "number",
     },
     "query": {
       "description": "Websearch query",

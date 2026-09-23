@@ -1,0 +1,92 @@
+---
+title: Windows
+description: Windows 上で DeepAgent Code をネイティブにインストールして使う。
+---
+
+import { Steps } from "@astrojs/starlight/components"
+
+DeepAgent Code は Windows 上でネイティブに動作します。WSL は不要です。CLI とデスクトップアプリの両方が Windows ビルドを提供し、ユーザー環境変数を自動的に読み込み、データは Windows の標準ディレクトリに保存されます。
+
+---
+
+## デスクトップアプリのインストール
+
+<Steps>
+
+1. **インストーラーをダウンロード**
+
+   最新の [GitHub リリース](https://github.com/deepagent-ltd/deepagent-code/releases)から `deepagent-code-desktop-win-x64.exe` を入手します。
+
+2. **インストーラーを実行**
+
+   インストーラーはユーザー単位でインストールし（管理者権限は不要）、アプリケーションフォルダーを**ユーザー** PATH に追加し（システム PATH は変更しません）、インストール先を選択できます。
+
+3. **DeepAgent Code を起動**
+
+   Windows で設定した環境変数（「システム環境変数の編集」で設定した API キーなど）は起動時にレジストリから読み込まれるため、PATH の追加設定は不要です。
+
+</Steps>
+
+---
+
+## CLI のインストール
+
+- **Chocolatey**
+
+  ```bash
+  choco install deepagent-code
+  ```
+
+- **Scoop**
+
+  ```bash
+  scoop install deepagent-code
+  ```
+
+- **NPM**
+
+  ```bash
+  npm install -g deepagent-code
+  ```
+
+- **直接ダウンロード**
+
+  単一ファイルの Windows バイナリ（`windows-x64`、`windows-arm64`）は [Releases](https://github.com/deepagent-ltd/deepagent-code/releases) ページで公開されています。PATH 内のディレクトリに配置してください。
+
+その後 TUI を起動します：
+
+```powershell
+deepagent-code
+```
+
+コマンドはデフォルトで PowerShell 経由で実行されます（`pwsh` → `powershell` → `cmd` のフォールバック）。Git Bash もサポートされています。
+
+---
+
+## データの保存先
+
+Windows では設定とデータが分離されます：
+
+| 内容                            | 場所                       |
+| ------------------------------------------ | -------------------------------------- |
+| 設定と資格情報                                  | `%APPDATA%\deepagent-code\` (roaming) |
+| データ、キャッシュ、worktree、スナップショット | `%LOCALAPPDATA%\deepagent-code\`      |
+
+以前のプレビュー版（または WSL ベースのインストール）が `%USERPROFILE%\.deepagent\code` にデータを残している場合、初回起動時に新しい場所へ自動移行されます。
+
+---
+
+## WSL からの移行
+
+以前 WSL 内で DeepAgent Code を使っていた場合：
+
+- `/mnt/c/...` 配下のプロジェクトはもともと Windows ファイルシステム上にあります。ネイティブアプリまたは CLI で直接開けます。
+- WSL ファイルシステム内のデータ（`~/.deepagent`）は Windows と共有されません。必要なもの（設定や資格情報など）をディストリビューション外にコピーするか、新規で開始して `/connect` をやり直してください。
+- ネイティブ版が問題なく動くようになったら WSL 側のコピーをアンインストールしてください。
+
+---
+
+## 更新
+
+- **デスクトップ** — 更新は内蔵アップデーター経由で配信され、インストーラーはコード署名されています。
+- **CLI** — 同じパッケージマネージャーで再インストールするか、[Releases](https://github.com/deepagent-ltd/deepagent-code/releases) ページから最新バイナリをダウンロードしてください。

@@ -67,14 +67,7 @@ describe("RI-113 V1→V2 tool surface guard", () => {
 
   test("V1-only capabilities stay absent from the V2 surface until an explicit migration", () => {
     const deferred = [
-      // V1 durable task-run management family (V2 task is one-shot/resume keyed by session id;
-      // the durable task_runs store + recovery surface has no V2 counterpart yet)
-      "task_status",
-      "task_read",
-      "task_close",
-      "task_recovery",
       // V1 workflow helpers with no V2 consumer
-      "pr_finalize",
       "dismiss_validation",
       "spectool",
       // V1 flag-gated diagnostics (default OFF in V1, no V2 surface)
@@ -102,9 +95,36 @@ describe("RI-113 V1→V2 tool surface guard", () => {
   test("the V2-only capability tools and the conditional graph pair are present", () => {
     // code_intel/context_query are additionally gated at runtime by the
     // context_query_tools_v2 flag plus ContextToolRuntime availability.
-    for (const name of ["capability_search", "capability_load", "code_intel", "context_query"]) {
+    for (const name of [
+      "capability_search",
+      "capability_load",
+      "domain_pack_load",
+      "pack_search",
+      "code_intel",
+      "context_query",
+    ]) {
       expect(builtinToolNames.has(name)).toBe(true)
       expect(DeepAgentCodeToolInventory.toolNames.has(name)).toBe(true)
+    }
+  })
+
+  test("the V2 task-oversight and merge-loop family is present", () => {
+    // V2.0.1 WS4b: the durable task_run control plane (status/read/close/recovery) and the
+    // TaskPRReview merge loop are migrated onto the V2 surface.
+    for (const name of ["task_status", "task_read", "task_close", "task_recovery", "pr_finalize"]) {
+      expect(builtinToolNames.has(name)).toBe(true)
+      expect(DeepAgentCodeToolInventory.toolNames.has(name)).toBe(true)
+    }
+  })
+
+  test("the V2.0.1 WS7 knowledge-propose and IM-send tools are present", () => {
+    // V2.0.1 WS7 (design §8): knowledge_propose is the model's write path into the human review
+    // queue; im_send is the model's policy-gated proactive IM send. Both are mutating and neither
+    // belongs to readOnlyActions.
+    for (const name of ["knowledge_propose", "im_send"]) {
+      expect(builtinToolNames.has(name)).toBe(true)
+      expect(DeepAgentCodeToolInventory.toolNames.has(name)).toBe(true)
+      expect(DeepAgentCodeToolInventory.permissionActions.has(name)).toBe(true)
     }
   })
 })

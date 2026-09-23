@@ -226,8 +226,12 @@ export function prePushEnvironment(
     ...Object.fromEntries(
       [
         "PATH",
+        "HOME",
         "TMPDIR",
         "SHELL",
+        // Operational registry override (local mirror); HOME also unlocks ~/.bunfig.toml and
+        // the global bun cache for the child install commands.
+        "BUN_CONFIG_REGISTRY",
         "LANG",
         "LC_ALL",
         "TERM",

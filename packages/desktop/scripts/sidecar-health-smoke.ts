@@ -41,7 +41,7 @@ await Promise.all(
 // no default timeout — so a global watchdog covers it. On expiry the watchdog
 // prints the app's main.log tail (where sidecar spawn/health diagnostics land)
 // and exits 1 instead of leaving CI hanging until the job limit. The budget must
-// exceed the worst-case legal startup: local health (15s) + WSL fallback (120s).
+// exceed the worst-case legal startup: sidecar spawn stall (60s) + local health wait (15s).
 const WATCHDOG_TIMEOUT_MS = 180_000
 
 type Server = { url: string; username: string | null; password: string | null }

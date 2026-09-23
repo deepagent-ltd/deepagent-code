@@ -58,6 +58,13 @@ export const SettingsAboutV2: Component = () => {
             </SettingsRowV2>
 
             <SettingsRowV2
+              title={language.t("settings.about.help.title")}
+              description={language.t("settings.about.help.description")}
+            >
+              <Link href="https://ai.deepagent.ltd/">ai.deepagent.ltd</Link>
+            </SettingsRowV2>
+
+            <SettingsRowV2
               title={language.t("settings.about.attribution.title")}
               description={language.t("settings.about.attribution.description")}
             >

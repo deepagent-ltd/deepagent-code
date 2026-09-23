@@ -1,6 +1,6 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "name": "deepagent-code",
   "type": "module",
   "license": "AGPL-3.0-or-later",
@@ -45,6 +45,8 @@
     "test:llm-ext:mcp-marker": "bun run script/live-llm/mcp-marker.ts",
     "test:llm-ext:permissions-deny": "bun run script/live-llm/permissions-deny.ts",
     "test:llm-ext:long-session": "bun run script/live-llm/long-session.ts",
+    "test:llm-ext:code-intel": "bun run script/live-llm/code-intel.ts",
+    "test:llm-ext:v2-01-acceptance": "bun run script/live-llm/v2-01-acceptance.ts",
     "test:llm-ext:compaction-retention": "bun run script/live-llm/compaction-retention.ts",
     "test:llm-ext:context-authority": "bun run script/live-llm/context-authority.ts",
     "test:llm-ext:expert-panel": "bun run script/live-llm/expert-panel.ts",
@@ -78,6 +80,11 @@
       "bun": "./src/storage/db.bun.ts",
       "node": "./src/storage/db.node.ts",
       "default": "./src/storage/db.bun.ts"
+    },
+    "#dpapi": {
+      "bun": "./src/mcp/dpapi.bun.ts",
+      "node": "./src/mcp/dpapi.node.ts",
+      "default": "./src/mcp/dpapi.bun.ts"
     },
     "#wiki-fts-db": {
       "bun": "./src/wiki/wiki-fts-db.bun.ts",
@@ -127,7 +134,7 @@
     "@ai-sdk/openai": "3.0.53",
     "@ai-sdk/openai-compatible": "2.0.41",
     "@ai-sdk/perplexity": "3.0.26",
-    "@ai-sdk/provider": "3.0.8",
+    "@ai-sdk/provider": "catalog:",
     "@ai-sdk/togetherai": "2.0.41",
     "@ai-sdk/vercel": "2.0.39",
     "@ai-sdk/xai": "3.0.82",
@@ -192,15 +199,11 @@
     "semver": "^7.6.3",
     "solid-js": "catalog:",
     "strip-ansi": "7.1.2",
-    "tree-sitter-bash": "0.25.0",
-    "tree-sitter-powershell": "0.25.10",
     "turndown": "7.2.0",
     "ulid": "catalog:",
     "venice-ai-sdk-provider": "2.0.2",
     "vscode-jsonrpc": "8.2.1",
-    "web-tree-sitter": "0.25.10",
     "ws": "8.21.0",
-    "xdg-basedir": "5.1.0",
     "yargs": "18.0.0",
     "zod": "catalog:"
   },

@@ -155,6 +155,12 @@ type Input = {
   readonly admission: SelectionAdmission
   /** RI-18: manual compaction is forced (no token threshold) and reports reason "manual". */
   readonly reason?: "auto" | "manual"
+  /**
+   * B4: pre-computed request estimate from turn preparation (the same measurement
+   * `estimateInputUsage` produces). When present the trigger reuses it instead of re-serializing
+   * the request, so the turn's budget warning and the compaction decision share one computation.
+   */
+  readonly estimatedInputTokens?: number
 }
 
 const estimate = (value: unknown) => Token.estimate(JSON.stringify(value))
@@ -174,6 +180,22 @@ export const resolvedKeepTokens = (context: number, settings: { tokens: number; 
 }
 
 const modelInputLimit = (model: Model) => model.route.defaults.limits?.input ?? model.route.defaults.limits?.context
+
+const estimateRequestTokens = (request: Pick<LLMRequest, "system" | "messages" | "tools">) =>
+  estimate({ system: request.system, messages: request.messages, tools: request.tools })
+
+/**
+ * B4 (design §7.3): the SAME occupancy measurement the compaction trigger uses — the
+ * system+messages+tools token estimate against the model's input window — exported so turn
+ * preparation computes it once per turn and shares one number between the budget warning tiers
+ * and the trigger (`Input.estimatedInputTokens`). Undefined when the model declares no usable
+ * input limit, matching the trigger's guard.
+ */
+export const estimateInputUsage = (model: Model, request: Pick<LLMRequest, "system" | "messages" | "tools">) => {
+  const context = modelInputLimit(model)
+  if (context === undefined || context <= 0) return undefined
+  return { context, tokens: estimateRequestTokens(request) }
+}
 
 const truncate = (value: string) =>
   value.length <= TOOL_OUTPUT_MAX_CHARS ? value : `${value.slice(0, TOOL_OUTPUT_MAX_CHARS)}\n[truncated]`
@@ -610,11 +632,8 @@ export const make = (dependencies: Dependencies) => {
     if (!config.auto) return false
     const context = modelInputLimit(input.model)
     if (context === undefined || context <= 0) return false
-    if (
-      estimate({ system: input.request.system, messages: input.request.messages, tools: input.request.tools }) <=
-      inputBudget(context, resolvedBuffer(context, config))
-    )
-      return false
+    const tokens = input.estimatedInputTokens ?? estimateRequestTokens(input.request)
+    if (tokens <= inputBudget(context, resolvedBuffer(context, config))) return false
     return yield* compactAfterOverflow(input)
   })
   return {

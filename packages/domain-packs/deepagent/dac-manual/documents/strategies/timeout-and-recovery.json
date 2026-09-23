@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:dac-manual:timeout-and-recovery",
+  "type": "strategy",
+  "title": "Subagent timeout, resume, and recovery semantics",
+  "description": "A timed-out task keeps its worktree and can be resumed by task_id; a recovery_required run needs task_recovery after user approval.",
+  "body": "Every subagent run has a 30-minute timeout. A timeout is NOT data loss: the run's worktree and branch are retained, the task result says so (\"timed out ... worktree retained on branch ...; resume with task_id ... or close it with task_close\"), and the partial transcript stays readable. Use this strategy whenever a task ends before completion.\n\nActions: 1) call task with the SAME task_id (and the same subagent_type) plus a follow-up prompt to continue where it stopped — resume only works for a direct child of your session; 2) or call task_close(task_id) to abandon it; 3) inspect partial work first with task_read when you are unsure which is right.\n\nA run marked recovery_required is different: its durable state is ambiguous (e.g. the process crashed mid-settle), so the old run is never resumed. task_status/task_read point you at task_recovery(task_id, resolution, reason) — resolution is \"failed\" or \"closed\", and the call asks the user for explicit approval. After resolving, continuing the work means a NEW task call with the same task_id, which starts a new run generation.\n\nCaveats: do not retry a stalled launch by blindly re-prompting a fresh task — you would duplicate the worktree work; resume by task_id instead. Do not call task_recovery without the user's approval; it is a gated, recorded decision. Risk boundary: a retained worktree still consumes a branch — close tasks you will not resume. Validation signal: after resume, the task output continues the prior transcript rather than starting over.",
+  "domain": "orchestration",
+  "scope_hint": "deepagent.dac-manual:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:deepagent.dac-manual",
+  "pack_id": "deepagent.dac-manual"
+}

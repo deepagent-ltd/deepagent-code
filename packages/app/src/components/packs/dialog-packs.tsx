@@ -1,5 +1,4 @@
 import { Component, For, Show, createMemo, createResource, createSignal } from "solid-js"
-import { Dialog } from "@deepagent-code/ui/v2/dialog-v2"
 import { Button } from "@deepagent-code/ui/button"
 import { useLanguage } from "@/context/language"
 import { showToast } from "@/utils/toast"
@@ -20,7 +19,7 @@ type PacksResponse = {
   packs: Pack[]
 }
 
-type PackClient = {
+export type PackClient = {
   deepagent: {
     packsAll(): Promise<{ data?: PacksResponse; response: Response }>
     packsPin(input: { packId: string }): Promise<unknown>
@@ -54,7 +53,9 @@ export const setPackPinned = async (client: PackClient, action: "pin" | "unpin",
   return client.deepagent.packsUnpin({ packId })
 }
 
-export const DialogPacks: Component<{ client: PackClient }> = (props) => {
+// WS1: the packs body is hosted as a tab inside the merged Knowledge dialog
+// (components/knowledge/dialog-knowledge), so this is a panel, not a standalone dialog.
+export const PacksPanel: Component<{ client: PackClient }> = (props) => {
   const language = useLanguage()
   const [busy, setBusy] = createSignal(false)
 
@@ -135,34 +136,28 @@ export const DialogPacks: Component<{ client: PackClient }> = (props) => {
   )
 
   return (
-    <Dialog size="x-large" variant="settings" title={language.t("packs.title")}>
-      <div class="settings-v2-panel" data-component="packs-dialog">
-        <div class="settings-v2-tab-body deepagent-dialog-body">
-          <div class="deepagent-dialog-scroll flex flex-col gap-3">
+    <div class="settings-v2-panel" data-component="packs-dialog">
+      <div class="settings-v2-tab-body deepagent-dialog-body">
+        <div class="deepagent-dialog-scroll flex flex-col gap-3">
+          <Show
+            when={!data.loading}
+            fallback={<div class="p-4 text-13-regular text-v2-text-text-faint">{language.t("review.loading")}</div>}
+          >
             <Show
-              when={!data.loading}
-              fallback={<div class="p-4 text-13-regular text-v2-text-text-faint">{language.t("review.loading")}</div>}
+              when={!data.error}
+              fallback={<div class="p-4 text-13-regular text-red-600">{String(data.error)}</div>}
             >
               <Show
-                when={!data.error}
-                fallback={<div class="p-4 text-13-regular text-red-600">{String(data.error)}</div>}
+                when={(data()?.packs.length ?? 0) > 0}
+                fallback={<div class="p-4 text-13-regular text-v2-text-text-faint">{language.t("packs.empty")}</div>}
               >
-                <Show
-                  when={(data()?.packs.length ?? 0) > 0}
-                  fallback={<div class="p-4 text-13-regular text-v2-text-text-faint">{language.t("packs.empty")}</div>}
-                >
-                  <Section label={language.t("packs.builtin")} count={builtinPacks().length} packs={builtinPacks()} />
-                  <Section
-                    label={language.t("packs.external")}
-                    count={externalPacks().length}
-                    packs={externalPacks()}
-                  />
-                </Show>
+                <Section label={language.t("packs.builtin")} count={builtinPacks().length} packs={builtinPacks()} />
+                <Section label={language.t("packs.external")} count={externalPacks().length} packs={externalPacks()} />
               </Show>
             </Show>
-          </div>
+          </Show>
         </div>
       </div>
-    </Dialog>
+    </div>
   )
 }

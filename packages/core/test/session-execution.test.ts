@@ -147,7 +147,7 @@ describe("SessionExecution lifecycle", () => {
     Effect.gen(function* () {
       const database = yield* Database.Service
       const sessionID = SessionSchema.ID.make("ses_suspend_completed")
-      yield* seedSessions(database, [sessionID], { time_suspended: Date.now() })
+      yield* seedSessions(database, [sessionID], { execution_claim_token: Date.now() })
 
       let runs = 0
       const scope = yield* Scope.make()
@@ -227,7 +227,7 @@ describe("SessionExecution lifecycle", () => {
       const first = SessionSchema.ID.make("ses_recovery_first")
       const second = SessionSchema.ID.make("ses_recovery_second")
       const claimToken = Date.now()
-      yield* seedSessions(database, [first, second], { time_suspended: claimToken })
+      yield* seedSessions(database, [first, second], { execution_claim_token: claimToken })
       const now = Date.now()
       yield* (yield* SessionProviderOwner.Service).register({ ownerToken: "recovery-owner", leaseMs: 60_000 })
       yield* database.db
@@ -310,7 +310,7 @@ describe("SessionExecution lifecycle", () => {
       const claimed = SessionSchema.ID.make("ses_redrive_claimed")
       const unclaimed = SessionSchema.ID.make("ses_redrive_unclaimed")
       const claimToken = Date.now()
-      yield* seedSessions(database, [claimed], { time_suspended: claimToken })
+      yield* seedSessions(database, [claimed], { execution_claim_token: claimToken })
       yield* seedSessions(database, [unclaimed])
       yield* database.db
         .insert(SessionInputTable)
@@ -475,7 +475,7 @@ describe("SessionExecution lifecycle", () => {
     Effect.gen(function* () {
       const database = yield* Database.Service
       const sessionID = SessionSchema.ID.make("ses_redrive_interrupt_barrier")
-      yield* seedSessions(database, [sessionID], { time_suspended: 1 })
+      yield* seedSessions(database, [sessionID], { execution_claim_token: 1 })
       yield* database.db
         .update(SessionTable)
         .set({ interrupt_seq: 2 })
@@ -510,7 +510,7 @@ describe("SessionExecution lifecycle", () => {
     Effect.gen(function* () {
       const database = yield* Database.Service
       const sessionID = SessionSchema.ID.make("ses_recovery_effects")
-      yield* seedSessions(database, [sessionID], { time_suspended: Date.now() })
+      yield* seedSessions(database, [sessionID], { execution_claim_token: Date.now() })
       const now = Date.now()
       yield* database.db
         .run(sql`
@@ -592,7 +592,7 @@ describe("SessionExecution lifecycle", () => {
     Effect.gen(function* () {
       const database = yield* Database.Service
       const sessionID = SessionSchema.ID.make("ses_recovery_legacy")
-      yield* seedSessions(database, [sessionID], { time_suspended: Date.now() })
+      yield* seedSessions(database, [sessionID], { execution_claim_token: Date.now() })
       const now = Date.now()
       yield* (yield* SessionProviderOwner.Service).register({ ownerToken: "legacy-owner", leaseMs: 600_000 })
       // Receipt inserts demand a live released-knowledge identity chain; seed the minimal
@@ -700,7 +700,7 @@ describe("SessionExecution lifecycle", () => {
     Effect.gen(function* () {
       const database = yield* Database.Service
       const sessionID = SessionSchema.ID.make("ses_recovery_unowned")
-      yield* seedSessions(database, [sessionID], { time_suspended: Date.now() })
+      yield* seedSessions(database, [sessionID], { execution_claim_token: Date.now() })
       const now = Date.now()
       // Only a dead-lease running task: no live owner anywhere, unknown outcome must surface as
       // recovery_required at the disposition level.
@@ -734,7 +734,7 @@ describe("SessionExecution lifecycle", () => {
 function seedSessions(
   database: Database.Interface,
   sessionIDs: ReadonlyArray<SessionSchema.ID>,
-  values: { time_suspended?: number } = {},
+  values: { execution_claim_token?: number } = {},
 ) {
   return Effect.gen(function* () {
     yield* database.db
@@ -763,7 +763,7 @@ function seedSessions(
 
 function suspensions(database: Database.Interface) {
   return database.db
-    .select({ id: SessionTable.id, suspended: SessionTable.time_suspended })
+    .select({ id: SessionTable.id, suspended: SessionTable.execution_claim_token })
     .from(SessionTable)
     .all()
     .pipe(
@@ -833,7 +833,7 @@ function seedForeignClaimTurn(
   },
 ) {
   return Effect.gen(function* () {
-    yield* seedSessions(database, [sessionID], { time_suspended: input.claimToken })
+    yield* seedSessions(database, [sessionID], { execution_claim_token: input.claimToken })
     const userMessageId = "msg_foreign_turn"
     yield* database.db
       .insert(SessionInputTable)

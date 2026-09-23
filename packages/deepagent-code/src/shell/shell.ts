@@ -2,6 +2,7 @@ import { Flag } from "@deepagent-code/core/flag/flag"
 import { lazy } from "@/util/lazy"
 import { Filesystem } from "@/util/filesystem"
 import { which } from "@deepagent-code/core/util/which"
+import { ShellScan } from "@deepagent-code/core/shell/scan"
 import path from "path"
 import { spawn, type ChildProcess } from "child_process"
 import { setTimeout as sleep } from "node:timers/promises"
@@ -88,12 +89,29 @@ function resolve(file: string) {
   return which(shell) ?? undefined
 }
 
-function win() {
+// Pure win32 fallback chain (D-W2), highest priority first: PowerShell 7 (pwsh) → Windows
+// PowerShell (5.1) → Git Bash → cmd (COMSPEC). Probe results are injected so the ordering is
+// pinned by tests on any host; win() performs the real probes.
+export function winChain(probe: {
+  pwsh?: string
+  powershell?: string
+  gitbash?: string
+  comspec?: string
+}): string[] {
+  return [probe.pwsh, probe.powershell, probe.gitbash, probe.comspec || "cmd.exe"].filter(
+    (item): item is string => Boolean(item),
+  )
+}
+
+export function win() {
   return Array.from(
     new Set(
-      [which("pwsh"), which("powershell"), gitbash(), process.env.COMSPEC || "cmd.exe"]
-        .filter((item): item is string => Boolean(item))
-        .map(full),
+      winChain({
+        pwsh: which("pwsh") ?? undefined,
+        powershell: which("powershell") ?? undefined,
+        gitbash: gitbash(),
+        comspec: process.env.COMSPEC,
+      }).map(full),
     ),
   )
 }
@@ -109,7 +127,17 @@ function select(file: string | undefined, opts?: { acceptable?: boolean }) {
     const shell = resolve(file)
     if (shell) return shell
   }
-  if (process.platform === "win32") return win()[0]!
+  // D-W2 strict default chain: pwsh → powershell → cmd (COMSPEC). Git Bash stays selectable via
+  // configuration and remains in winChain for validation's POSIX-faithful iteration, but never
+  // becomes the silent default (same source as the V2 core bash tool).
+  if (process.platform === "win32")
+    return full(
+      ShellScan.defaultWindowsChain({
+        pwsh: which("pwsh") ?? undefined,
+        powershell: which("powershell") ?? undefined,
+        comspec: process.env.COMSPEC,
+      }),
+    )
   return fallback()
 }
 

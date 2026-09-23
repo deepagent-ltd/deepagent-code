@@ -276,6 +276,23 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
           }
 
           log?.write("send.permission.reply", next)
+          // V2 asks arrive as permission.v2.asked and are marked by the session-data reducer;
+          // they settle through the session-scoped V2 route. The legacy /permission/:id/reply
+          // route only sees app-level Permission requests and 404s on PermissionV2 request IDs.
+          if (next.v2) {
+            if (!next.sessionID) {
+              throw new Error(`V2 permission reply ${next.requestID} is missing its session ID`)
+            }
+
+            await ctx.sdk.v2.session.permission.reply({
+              sessionID: next.sessionID,
+              requestID: next.requestID,
+              reply: next.reply,
+              ...(next.message ? { message: next.message } : {}),
+            })
+            return
+          }
+
           await ctx.sdk.permission.reply(next)
         },
         onQuestionReply: async (next) => {

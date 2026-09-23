@@ -180,8 +180,8 @@ describe("SessionFederatedContext", () => {
             title: "Runtime",
             version: "test",
             // RI-53: provider attempt prepare requires an active execution claim on the session
-            // row (CAS token in time_suspended); the claim is held for the whole test.
-            time_suspended: 1,
+            // row (CAS token in execution_claim_token); the claim is held for the whole test.
+            execution_claim_token: 1,
           })
           .run()
         yield* db

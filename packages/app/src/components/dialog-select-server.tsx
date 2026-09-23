@@ -507,7 +507,6 @@ export function useServerManagementController(options: { onSelect?: () => void; 
 
   async function handleRemove(key: ServerConnection.Key) {
     try {
-      if (key.startsWith("wsl:")) await platform.wslServers?.removeServer(key)
       tabs.removeServer(key)
       server.remove(key)
       if ((await platform.getDefaultServer?.()) === key) {

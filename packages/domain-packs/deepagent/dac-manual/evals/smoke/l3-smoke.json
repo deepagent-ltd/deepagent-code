@@ -1,0 +1,63 @@
+{
+  "schema_version": "domain_pack_eval.v1",
+  "pack_id": "deepagent.dac-manual",
+  "maturity_target": "L3",
+  "positive_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "operate",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "L3 smoke for deepagent.dac-manual: delegate a subagent task, retain its worktree after timeout, merge with pr_finalize, survive compaction, honor a permission denied refusal"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "negative_profile": {
+    "scenario_mode": "wish",
+    "agent_strength": "max",
+    "task_kind": "implement",
+    "code_domains": [],
+    "business_domains": [],
+    "platforms": [],
+    "languages": [],
+    "frameworks": [],
+    "data_classes": [],
+    "risk_markers": [],
+    "repo_signals": [
+      "plain prose note with no repository or domain signal"
+    ],
+    "round_signals": [],
+    "user_overrides": []
+  },
+  "retrieval_query": "subagent task delegate worktree pr_finalize compaction permission denied task_read budget notice manual",
+  "expected_pack_id": "deepagent.dac-manual",
+  "expected_min_retrieved_refs": 3,
+  "validation_smoke": {
+    "name": "deepagent.dac-manual L3 validation smoke",
+    "signals": [
+      "a write-type task result names its deepagent-code/task-* branch and the pr_finalize path",
+      "a timed-out task resumes through the same task_id with its worktree retained",
+      "a permission refusal is never retried unchanged",
+      "a post-compaction turn re-verifies file and task state with tools before acting"
+    ]
+  },
+  "diagnosis_smoke": {
+    "name": "deepagent.dac-manual diagnosis smoke",
+    "signals": [
+      "parent assumes a write-type subagent's changes are already in its workspace",
+      "a denied tool call is retried unchanged or routed around",
+      "delegated write tasks launched with overlapping file scopes",
+      "post-compaction turn trusts the summary without re-verification"
+    ]
+  },
+  "source_refs": [
+    "source:deepagent-code-shipped-behavior:v2.0.1"
+  ]
+}

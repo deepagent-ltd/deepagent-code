@@ -32,6 +32,10 @@ export const renderPlanStatus = (
   // Lightweight modes omit plan machinery unless a governed caller (currently goal-worker)
   // explicitly requests the durable snapshot and its CAS precondition.
   if (!options?.includeLightweight && AgentGateway.DeepAgentPlanController.isLightweightMode(agentMode)) return null
+  // The plan authority only exists once the gateway configured a storage root. A general-mode /
+  // plain session on a host that never configured one has no plan controller at all — skip the
+  // injection instead of throwing "plan-store: no runtime state dir" out of the request path.
+  if (!AgentGateway.DeepAgentPlanStore.hasRoot()) return null
   const plan = AgentGateway.DeepAgentSessionState.getPlan(sessionID)
   if (!plan) return null
 

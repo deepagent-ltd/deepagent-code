@@ -168,7 +168,14 @@ export const makeApply =
                   { discard: true },
                 )
       return { applied }
-    }).pipe(Effect.mapError((error) => (error instanceof ToolFailure ? error : fail("patch"))))
+    }).pipe(
+      Effect.mapError((error) => {
+        const refusal = PermissionV2.permissionToolFailure(error)
+        if (error instanceof ToolFailure) return error
+        if (refusal !== null) return refusal
+        return fail("patch")
+      }),
+    )
   }
 
 export const layer = Layer.effectDiscard(

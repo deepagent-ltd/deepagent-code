@@ -578,7 +578,7 @@ function seed() {
         directory: "/tmp/v2-provider-turn",
         title: "V2 provider turn",
         version: "test",
-        time_suspended: 104,
+        execution_claim_token: 104,
       })
       .onConflictDoNothing()
       .run()

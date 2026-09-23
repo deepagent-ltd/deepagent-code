@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:dac-manual:task-oversight-tools",
+  "type": "knowledge",
+  "title": "Task oversight: task_status, task_read, task_close",
+  "description": "Monitor, inspect, and cancel dispatched subagent tasks with the task_status, task_read, and task_close tools.",
+  "body": "Three read/ops tools give you oversight over tasks THIS session dispatched. task_status (no parameters) lists the session's subagent tasks oldest first from the durable run ledger — per task: state (running, completed, failed, interrupted, closed, recovery_required, unknown), agent type, title, elapsed time, and a next-step hint. Use it before deciding to wait, resume, read, or close. task_read(task_id, limit, before) pages the child transcript newest-first (default 20, max 100 messages; before is the cursor from a previous page) and prepends a task_result block with the durable result when one exists — source structured, validated_text, raw, or task_run. Use it to recover partial work after an interruption, to inspect a review verdict, or when a task result was truncated. It only reads sessions you directly spawned and never returns hidden reasoning. task_close(task_id, reason?) cancels a task and all its sub-tasks atomically: queued runs close immediately; active runs are asked to close and settle after their current provider boundary.\n\nHow to invoke: task_status first, then task_read on the task_id it prints; task_close when the work is no longer wanted.\n\nCaveats: a completed task needs no close. Closing abandons the worktree branch unless you later resume by task_id. Risk boundary: these tools never modify your workspace, but task_close is a mutating control action — verify the target id from task_status output rather than guessing one. Validation signal: task_status reflects the close on the next call.",
+  "domain": "orchestration",
+  "scope_hint": "deepagent.dac-manual:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:deepagent.dac-manual",
+  "pack_id": "deepagent.dac-manual"
+}

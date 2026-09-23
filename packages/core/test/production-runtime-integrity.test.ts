@@ -56,14 +56,16 @@ describe("production runtime integrity", () => {
     expect(runner).not.toContain("registerToolSettleGate")
   })
 
-  test("production built-ins cannot advertise the inactive domain pack prototype", async () => {
+  test("production built-ins register the real domain_pack_load implementation", async () => {
+    // V2.0.1 WS3 chain repair: the inactive prototype in capability-load-tool.ts is gone;
+    // the production tool lives in domain-pack-load-tool.ts and is registered by builtins.
     const loads = await Bun.file(
       path.join(repository, "packages/core/src/system-context/capability-load-tool.ts"),
     ).text()
     const builtins = await Bun.file(path.join(repository, "packages/core/src/tool/builtins.ts")).text()
-    expect(loads).toContain("export function makeDomainPackLoadTool")
-    expect(loads.slice(loads.indexOf("export const layer"))).not.toContain("[domainPackLoadName]")
-    expect(builtins).not.toContain("CapabilityLoadTool.domainPackLoadName")
+    expect(loads).not.toContain("export function makeDomainPackLoadTool")
+    expect(builtins).toContain("DomainPackLoadTool.layer")
+    expect(builtins).toContain("DomainPackLoadTool.name")
   })
 
   test("the DeepAgent V2 frame composes Core's canonical Session runtime", async () => {
@@ -621,7 +623,12 @@ describe("production runtime integrity", () => {
   })
 
   test("every runtime-integrity ledger row remains a valid Markdown table record", async () => {
-    const design = await Bun.file(path.join(repository, "docs/core-v2.0-beta/design.md")).text()
+    // The ledger lives in git-ignored docs/ (local review copies only): a clean checkout or a
+    // linked worktree has no design.md, and the property can only be asserted where the file
+    // exists — the same posture as the manifest cross-check above.
+    const designPath = path.join(repository, "docs/core-v2.0-beta/design.md")
+    if (!(await Bun.file(designPath).exists())) return
+    const design = await Bun.file(designPath).text()
     expect(
       design
         .split("\n")

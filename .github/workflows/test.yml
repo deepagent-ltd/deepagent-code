@@ -41,6 +41,29 @@ jobs:
       - name: Run test fixture gate
         run: bun script/check-test-fixtures.ts
 
+  manifest-digest-gate:
+    name: manifest-digest-gate
+    # K-05/B-11: the C7-10 deterministic manifest must reproduce from the committed
+    # tree on any machine — byte-stable across runs, pinned to head-pin.ts, every
+    # digest input git-tracked, and git-ignored .artifacts/ residue unable to
+    # perturb the digest. Pure stateless gate, mirrors the test-fixture-gate pattern.
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Run manifest digest reproducibility gate
+        working-directory: packages/core
+        run: bun run manifest:assert-reproducible
+
   unit:
     name: unit (${{ matrix.settings.name }})
     strategy:

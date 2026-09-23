@@ -21,6 +21,30 @@ const withShell = async (shell: string | undefined, fn: () => void | Promise<voi
 }
 
 describe("shell", () => {
+  test("winChain orders pwsh → powershell → gitbash → comspec", () => {
+    expect(
+      Shell.winChain({
+        pwsh: "C:\\PowerShell\\7\\pwsh.exe",
+        powershell: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        gitbash: "C:\\Program Files\\Git\\bin\\bash.exe",
+        comspec: "C:\\Windows\\System32\\cmd.exe",
+      }),
+    ).toEqual([
+      "C:\\PowerShell\\7\\pwsh.exe",
+      "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "C:\\Program Files\\Git\\bin\\bash.exe",
+      "C:\\Windows\\System32\\cmd.exe",
+    ])
+  })
+
+  test("winChain drops missing probes and defaults comspec to cmd.exe", () => {
+    expect(Shell.winChain({ powershell: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" })).toEqual([
+      "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "cmd.exe",
+    ])
+    expect(Shell.winChain({})).toEqual(["cmd.exe"])
+  })
+
   test("normalizes shell names", () => {
     expect(Shell.name("/bin/bash")).toBe("bash")
     if (process.platform === "win32") {

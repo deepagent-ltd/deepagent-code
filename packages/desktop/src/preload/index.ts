@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron"
-import type { ElectronAPI, WslServersEvent, BrowserState } from "./types"
+import type { ElectronAPI, BrowserState } from "./types"
 import type { UpdaterState } from "@deepagent-code/app/updater"
 const updaterCallbacks = new Set<(state: UpdaterState) => void>()
 const UPDATER_CALLBACK_LIMIT = 64
@@ -30,29 +30,6 @@ const api: ElectronAPI = {
       ipcRenderer.on("browser-state", handler)
       return () => ipcRenderer.removeListener("browser-state", handler)
     },
-  },
-  wslServers: {
-    getState: () => ipcRenderer.invoke("wsl-servers-get-state"),
-    subscribe: (cb) => {
-      const handler = (_: unknown, event: WslServersEvent) => cb(event)
-      ipcRenderer.on("wsl-servers-event", handler)
-      void ipcRenderer.invoke("wsl-servers-subscribe")
-      return () => {
-        ipcRenderer.removeListener("wsl-servers-event", handler)
-        void ipcRenderer.invoke("wsl-servers-unsubscribe")
-      }
-    },
-    probeRuntime: () => ipcRenderer.invoke("wsl-servers-probe-runtime"),
-    refreshDistros: () => ipcRenderer.invoke("wsl-servers-refresh-distros"),
-    installWsl: () => ipcRenderer.invoke("wsl-servers-install-wsl"),
-    installDistro: (name) => ipcRenderer.invoke("wsl-servers-install-distro", name),
-    probeDistro: (name) => ipcRenderer.invoke("wsl-servers-probe-distro", name),
-    probeDeepagentCode: (name) => ipcRenderer.invoke("wsl-servers-probe-deepagent-code", name),
-    installDeepagentCode: (name) => ipcRenderer.invoke("wsl-servers-install-deepagent-code", name),
-    openTerminal: (name) => ipcRenderer.invoke("wsl-servers-open-terminal", name),
-    addServer: (distro) => ipcRenderer.invoke("wsl-servers-add", distro),
-    removeServer: (id) => ipcRenderer.invoke("wsl-servers-remove", id),
-    startServer: (id) => ipcRenderer.invoke("wsl-servers-start", id),
   },
   updater: {
     subscribe: async (cb) => {

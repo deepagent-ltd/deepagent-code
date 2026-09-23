@@ -10,7 +10,21 @@ on:
 
 jobs:
   typecheck:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # W-01 §2.2.6: typecheck the Windows surface too — the win32 branches added
+    # by the native Windows work (shell dialect layer, data-directory split,
+    # registry env import, DPAPI, NSIS) must stay type-clean on the OS they
+    # target, and path/name casing errors only surface on a case-preserving
+    # filesystem.
+    name: typecheck (${{ matrix.settings.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - name: linux
+            host: blacksmith-4vcpu-ubuntu-2404
+          - name: windows
+            host: blacksmith-4vcpu-windows-2025
+    runs-on: ${{ matrix.settings.host }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1

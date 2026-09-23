@@ -43,7 +43,7 @@ export const seedIndeterminateProviderAuthority = (
     `).pipe(Effect.orDie)
     yield* db.run(sql`
       INSERT INTO session
-        (id, project_id, slug, directory, title, version, time_suspended, time_created, time_updated)
+        (id, project_id, slug, directory, title, version, execution_claim_token, time_created, time_updated)
       VALUES (
         ${attempt.sessionId}, ${projectId}, 'recovery', '/tmp/recovery-executor', 'recovery',
         'test', ${claimToken}, ${dbNow}, ${dbNow}

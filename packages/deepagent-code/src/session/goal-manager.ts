@@ -34,6 +34,7 @@ import type { GoalStatus, GoalLimits, CompletionCriterion } from "@deepagent-cod
 import { InvalidGoalError } from "@deepagent-code/core/deepagent/goal-loop"
 import { RuntimeFlags } from "../effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { Database } from "@deepagent-code/core/database/database"
 import { BackgroundJob } from "@/background/job"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { Session } from "./session"
@@ -51,6 +52,7 @@ import {
   GoalLoopWiring,
   liveDiagnostics,
   liveRollback,
+  liveRollbackNotice,
   makeTaskSubagentRunner,
   type PanelQuestionInput,
 } from "./goal-loop-wiring"
@@ -230,19 +232,24 @@ export const layer = Layer.effect(
     // event-driven runtime flag is on (default OFF → behavior byte-identical to V3.9).
     const eventBus = yield* DeepAgentEventBus.Service
     const approvalQueue = yield* ApprovalQueue.Service
+    const { db } = yield* Database.Service
 
     // Diagnostics accessor with LSP already provided, so the goal-loop wiring stays free of LSP in its
     // requirement channel (liveDiagnostics needs LSP.Service; we satisfy it here at construction).
     const diagnostics = () => liveDiagnostics().pipe(Effect.provideService(LSP.Service, lsp))
 
-    // Rollback port shared by start + resume (best-effort revert to the last message).
-    const rollback = liveRollback(revert, (sid) =>
-      sessions
-        .messages({ sessionID: SessionID.make(sid) })
-        .pipe(
-          Effect.map((msgs) => msgs.at(-1)?.info.id ?? null),
-          Effect.catchCause(() => Effect.succeed(null)),
-        ),
+    // Rollback port shared by start + resume (best-effort revert to the last message + the B5
+    // one-shot rollback notice published to the reverted session).
+    const rollback = liveRollback(
+      revert,
+      (sid) =>
+        sessions
+          .messages({ sessionID: SessionID.make(sid) })
+          .pipe(
+            Effect.map((msgs) => msgs.at(-1)?.info.id ?? null),
+            Effect.catchCause(() => Effect.succeed(null)),
+          ),
+      liveRollbackNotice(events, db),
     )
 
     const defaultPanelQuestion = (): PanelQuestionInput => ({
@@ -875,6 +882,7 @@ export const productionLayer = Layer.suspend(() =>
     Layer.provide(SessionRevert.defaultLayer),
     Layer.provide(SessionSteer.defaultLayer),
     Layer.provide(EventV2Bridge.defaultLayer),
+    Layer.provide(Database.defaultLayer),
     Layer.provide(BackgroundJob.defaultLayer),
     Layer.provide(Provider.defaultLayer),
     Layer.provide(LSP.defaultLayer),

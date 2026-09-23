@@ -104,7 +104,12 @@ export const toolFileSourceFromUri = (uri: string): ToolFileSource => {
 export type ToolResultValue =
   | { readonly type: "json"; readonly value: unknown }
   | { readonly type: "text"; readonly value: unknown }
-  | { readonly type: "error"; readonly value: unknown }
+  | {
+      readonly type: "error"
+      readonly value: unknown
+      /** Optional producer-side classification (e.g. a permission refusal failureCode). */
+      readonly metadata?: Record<string, unknown>
+    }
   | { readonly type: "content"; readonly value: ReadonlyArray<ToolResultContentPart> }
 
 const isToolResultValue = (value: unknown): value is ToolResultValue =>
@@ -125,6 +130,7 @@ export const ToolResultValue = Object.assign(
     Schema.Struct({
       type: Schema.Literal("error"),
       value: Schema.Unknown,
+      metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
     }),
     Schema.Struct({
       type: Schema.Literal("content"),

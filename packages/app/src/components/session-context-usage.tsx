@@ -2,47 +2,28 @@ import { Match, Show, Switch, createMemo } from "solid-js"
 import { Tooltip, type TooltipProps } from "@deepagent-code/ui/tooltip"
 import { ProgressCircle } from "@deepagent-code/ui/progress-circle"
 import { Button } from "@deepagent-code/ui/button"
+import { useDialog } from "@deepagent-code/ui/context/dialog"
 import type { Part } from "@deepagent-code/sdk/client"
 
-import { useFile } from "@/context/file"
-import { useLayout } from "@/context/layout"
 import { useSync } from "@/context/sync"
 import { useLanguage } from "@/context/language"
 import { useProviders } from "@/hooks/use-providers"
 import { getSessionContextMetrics, getConversationTokens } from "@/components/session/session-context-metrics"
 import { useSessionLayout } from "@/pages/session/session-layout"
-import { createSessionTabs } from "@/pages/session/helpers"
 
 interface SessionContextUsageProps {
   variant?: "button" | "indicator"
   placement?: TooltipProps["placement"]
 }
 
-function openSessionContext(args: {
-  view: ReturnType<ReturnType<typeof useLayout>["view"]>
-  layout: ReturnType<typeof useLayout>
-  tabs: ReturnType<ReturnType<typeof useLayout>["tabs"]>
-}) {
-  if (!args.view.reviewPanel.opened()) args.view.reviewPanel.open()
-  if (args.layout.fileTree.opened() && args.layout.fileTree.tab() !== "all") args.layout.fileTree.setTab("all")
-  void args.tabs.open("context")
-  args.tabs.setActive("context")
-}
-
 export function SessionContextUsage(props: SessionContextUsageProps) {
   const sync = useSync()
-  const file = useFile()
-  const layout = useLayout()
   const language = useLanguage()
+  const dialog = useDialog()
   const providers = useProviders()
-  const { params, tabs, view } = useSessionLayout()
+  const { params } = useSessionLayout()
 
   const variant = createMemo(() => props.variant ?? "button")
-  const tabState = createSessionTabs({
-    tabs,
-    pathFromTab: file.pathFromTab,
-    normalizeTab: (tab) => (tab.startsWith("file://") ? file.tab(tab) : tab),
-  })
   const messages = createMemo(() => (params.id ? (sync.data.message[params.id] ?? []) : []))
 
   const metrics = createMemo(() =>
@@ -60,15 +41,9 @@ export function SessionContextUsage(props: SessionContextUsageProps) {
 
   const openContext = () => {
     if (!params.id) return
-
-    if (tabState.activeTab() === "context") {
-      tabs().close("context")
-      return
-    }
-    openSessionContext({
-      view: view(),
-      layout,
-      tabs: tabs(),
+    // Lazy: keeps the tab contents (ui/file → @pierre/diffs worker) out of the timeline's module graph.
+    void import("@/components/session-context-dialog").then((x) => {
+      dialog.show(() => <x.SessionContextUsageDialog />)
     })
   }
 

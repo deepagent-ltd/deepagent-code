@@ -38,16 +38,18 @@ export const CapabilityVersion = {
 } as const
 
 /**
- * Disclosure budget limits, mirroring the frozen capability-load contract
- * (contract/capability-load.ts `CapabilityBudgetLimits`; design §7.3 / §13). The
- * enforced L0/L2 budget check below uses the frozen `assertContentLoadBudget`,
- * so a manifest or catalog that exceeds a literal here fails at the contract's
- * own gate. These literals are the values the frozen contract decoded to; if the
- * contract drifts, the catalog gate fails loudly rather than silently truncating.
+ * Disclosure budget limits, mirroring the capability-load contract
+ * (contract/capability-load.ts `CapabilityBudgetLimits`; design §7.3 / §13, with the
+ * V2.0.1-001 §4.6 decision ④ raising L0 from 700 to 1000 tokens for the expanded
+ * ~12-15 row catalog). The enforced L0/L2 budget check below uses the contract's
+ * `assertContentLoadBudget`, so a manifest or catalog that exceeds a literal here
+ * fails at the contract's own gate. These literals are the values the contract
+ * decoded to; if the contract drifts, the catalog gate fails loudly rather than
+ * silently truncating.
  */
 export const CapabilityBudget = {
   l0MaxBytes: 4096,
-  l0MaxTokens: 700,
+  l0MaxTokens: 1000,
   l2SingleMaxTokens: 1200,
   l2PerTurnMaxNew: 2,
   l2PerTurnMaxNewTokens: 2400,
@@ -234,8 +236,17 @@ export const DeepAgentCodeToolInventory: CapabilityInventory = {
     "skill",
     "plan",
     "task",
+    "task_status",
+    "task_read",
+    "task_close",
+    "task_recovery",
+    "pr_finalize",
+    "knowledge_propose",
+    "im_send",
     "capability_search",
     "capability_load",
+    "domain_pack_load",
+    "pack_search",
     "context_query",
     "code_intel",
   ]),
@@ -262,6 +273,13 @@ export const DeepAgentCodeToolInventory: CapabilityInventory = {
     "skill",
     "plan",
     "task",
+    "task_status",
+    "task_read",
+    "task_close",
+    "task_recovery",
+    "pr_finalize",
+    "knowledge_propose",
+    "im_send",
     "context.read",
     "code_intel",
     "context_query",

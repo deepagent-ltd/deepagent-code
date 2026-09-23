@@ -4,9 +4,15 @@
 // defaults and the default values are queryable in exactly one module.
 //
 // REPO-WIDE SEMANTICS: one flag table lives in `@deepagent-code/core/deepagent/flip-flag`
-// (`flipFlagValueOn`). Every boolean below and its Core gate ships ON by default
-// (`unsetDefault = true`). For every DEFINED value both sides agree exactly: trim + lowercase,
-// `""` / `"false"` / `"0"` → OFF, any other value → ON.
+// (`flipFlagValueOn`). Every boolean below ships ON by default (`unsetDefault = true`) on both
+// sides of the repo boundary — this entry table and its gates. Since the W3.8 M1 single-point
+// closure the core gates no longer parse these keys themselves: admission / IM single-write /
+// federation resolve through the manifest-derived `RuntimeFeatures` registry
+// (`core/flag/runtime-features.ts`, all `unsetDefault = true`), and `productionAdaptersEnabled`
+// delegates to it. The owner flag is consumed app-side (`RuntimeFlags.coreV2ExecutionOwner`) with
+// the same table and default; core's ablation beacon (`deepagent/mechanism-beacon.ts`) mirrors
+// the same values for observability only. For every DEFINED value all readers agree exactly:
+// trim + lowercase, `""` / `"false"` / `"0"` → OFF, any other value → ON.
 // `applyRuntimeDefaults` is strictly set-if-unset: an explicit value — including `=false`/`=0` —
 // is never overwritten, so a kill-switch set by the operator survives.
 
@@ -18,11 +24,13 @@ export const CORE_V2_EXECUTION_OWNER_ENV = "DEEPAGENT_CODE_CORE_V2_EXECUTION_OWN
 export const V2_OWNER_CAMPAIGN_ENV = "DEEPAGENT_CODE_V2_OWNER_CAMPAIGN"
 export const V2_BUILD_IDENTITY_ENV = "DEEPAGENT_CODE_V2_BUILD_IDENTITY"
 export const CONTEXT_FEDERATION_PRODUCTION_ENV = "DEEPAGENT_CODE_CONTEXT_FEDERATION_PRODUCTION"
-/** Self-hosted models.dev-compatible catalog (updated every 6h). An explicit value — including
- * "https://models.dev" — always survives; offline installs fall back to the vendored snapshot
- * because ModelsDev merges fetched data OVER the vendored catalog (never replaces it). */
+/** Ordered models.dev catalog fetch chain: the self-hosted aly mirror (hourly-synced from
+ * models.dev, reachable from CN networks), then models.dev itself. Comma-separated; entries may
+ * be base URLs or full /api.json URLs. An explicit value always survives. There is no build-time
+ * snapshot fallback — offline first runs serve the vendored deepagent catalog until the hourly
+ * refresh heals the disk cache. */
 export const MODELS_URL_ENV = "DEEPAGENT_CODE_MODELS_URL"
-export const DEFAULT_MODELS_URL = "https://ai.deepagent.ltd/api.json"
+export const DEFAULT_MODELS_URL = "https://ai.deepagent.ltd,https://models.dev"
 /** Test-only affordance used by the two entries to print their canonical defaults vector and exit
  * without starting the CLI/server (W0.1 automated-verification case 4). */
 export const RUNTIME_DEFAULTS_SNAPSHOT_ENV = "DEEPAGENT_CODE_RUNTIME_DEFAULTS_SNAPSHOT"

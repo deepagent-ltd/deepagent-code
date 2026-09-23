@@ -687,6 +687,7 @@ const goalTickConsumerLayer = Layer.unwrap(
     const lsp = yield* LSP.Service
     const instanceStore = yield* InstanceStore.Service
     const events = yield* EventV2Bridge.Service
+    const { db } = yield* Database.Service
     const eventBus = yield* DeepAgentEventBus.Service
     const approvalQueue = yield* ApprovalQueue.Service
     // LEGACY-EXECUTION-ZERO: the V2 session authority + snapshot drive cold tick reconstruction.
@@ -701,6 +702,7 @@ const goalTickConsumerLayer = Layer.unwrap(
       lsp,
       instanceStore,
       events,
+      db,
       eventBus,
       approvalQueue,
       flags,

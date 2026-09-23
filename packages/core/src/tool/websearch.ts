@@ -5,7 +5,7 @@ import { Context, Duration, Effect, Layer, Schema } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { truthy } from "../flag/flag"
 import { InstallationVersion } from "../installation/version"
-import { PositiveInt } from "../schema"
+import { tolerantInt } from "../schema"
 import { PermissionV2 } from "../permission"
 import { makeLocationNode } from "../effect/app-node"
 import { LayerNodePlatform } from "../effect/app-node-platform"
@@ -38,7 +38,8 @@ The current year is ${new Date().getFullYear()}. Use this year when searching fo
 
 export const Input = Schema.Struct({
   query: Schema.String.annotate({ description: "Websearch query" }),
-  numResults: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(MAX_NUM_RESULTS))).annotate({
+  // Tolerant int arms (F-1): GLM-class providers send stringified numbers.
+  numResults: Schema.optional(tolerantInt(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(MAX_NUM_RESULTS))).annotate({
     description: `Number of search results to return (default: 8, maximum: ${MAX_NUM_RESULTS})`,
   }),
   livecrawl: Schema.optional(Schema.Literals(["fallback", "preferred"])).annotate({
@@ -48,7 +49,9 @@ export const Input = Schema.Struct({
   type: Schema.optional(Schema.Literals(["auto", "fast", "deep"])).annotate({
     description: "Search type - 'auto': balanced search (default), 'fast': quick results, 'deep': comprehensive search",
   }),
-  contextMaxCharacters: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(MAX_CONTEXT_CHARACTERS))).annotate(
+  contextMaxCharacters: Schema.optional(
+    tolerantInt(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(MAX_CONTEXT_CHARACTERS)),
+  ).annotate(
     {
       description: `Maximum characters for context string optimized for models (default: 10000, maximum: ${MAX_CONTEXT_CHARACTERS})`,
     },
@@ -246,7 +249,13 @@ export const layer = Layer.effectDiscard(
                 provider,
                 text: text ?? NO_RESULTS,
               }
-            }).pipe(Effect.mapError(() => new ToolFailure({ message: `Unable to search the web for ${input.query}` })))
+            }).pipe(
+              Effect.mapError((error) => {
+                const refusal = PermissionV2.permissionToolFailure(error)
+                if (refusal !== null) return refusal
+                return new ToolFailure({ message: `Unable to search the web for ${input.query}` })
+              }),
+            )
           },
         }),
       })

@@ -91,8 +91,9 @@ describe("all real LLM test runner", () => {
       USER: "test-user",
       LOGNAME: "test-user",
       DISPLAY: ":99",
-      MODELS_DEV_API_JSON: "/isolated/models.json",
+      DEEPAGENT_CODE_MODELS_PATH: "/isolated/models.json",
       HOME: "/host/home",
+      BUN_CONFIG_REGISTRY: "https://mirror.example",
       SSH_AUTH_SOCK: "/host/agent.sock",
       AWS_SECRET_ACCESS_KEY: "host-secret",
       HTTPS_PROXY: "http://host-proxy.invalid",
@@ -105,7 +106,9 @@ describe("all real LLM test runner", () => {
       USER: "test-user",
       LOGNAME: "test-user",
       DISPLAY: ":99",
-      MODELS_DEV_API_JSON: "/isolated/models.json",
+      DEEPAGENT_CODE_MODELS_PATH: "/isolated/models.json",
+      HOME: "/host/home",
+      BUN_CONFIG_REGISTRY: "https://mirror.example",
     })
     expect(runnerEnvironment(config, hostEnvironment, true)).toEqual({
       PATH: "/usr/bin:/bin",
@@ -113,7 +116,9 @@ describe("all real LLM test runner", () => {
       USER: "test-user",
       LOGNAME: "test-user",
       DISPLAY: ":99",
-      MODELS_DEV_API_JSON: "/isolated/models.json",
+      DEEPAGENT_CODE_MODELS_PATH: "/isolated/models.json",
+      HOME: "/host/home",
+      BUN_CONFIG_REGISTRY: "https://mirror.example",
       DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE: config.apiKeyFile,
       DEEPAGENT_CODE_LIVE_LLM_PROVIDER: "deepseek",
       DEEPAGENT_CODE_LIVE_LLM_BASE_URL: config.baseURL,
@@ -129,10 +134,10 @@ describe("all real LLM test runner", () => {
     )
   })
 
-  test("pins the repository models snapshot when the host does not provide one", () => {
+  test("pins the repository models catalog when the host does not provide one", () => {
     expect(runnerEnvironment(config, { PATH: "/usr/bin:/bin" })).toEqual({
       PATH: "/usr/bin:/bin",
-      MODELS_DEV_API_JSON: defaultModelsSnapshotFile,
+      DEEPAGENT_CODE_MODELS_PATH: defaultModelsSnapshotFile,
     })
   })
 

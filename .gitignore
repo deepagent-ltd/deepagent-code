@@ -40,6 +40,9 @@ logs/
 tsconfig.tsbuildinfo
 /packages/*/.artifacts/
 /script/live-llm.config.local.json
+/script/live-llm.config.local.*.json
+.tmp/
+kimi-export-*.md
 
 # Internal design and release artifacts are local-only. Stable public documentation belongs in
 # README files, language documentation, or the reviewed design/ tree.
