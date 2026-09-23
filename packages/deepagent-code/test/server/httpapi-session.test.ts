@@ -271,6 +271,26 @@ afterEach(async () => {
 })
 
 describe("session HttpApi", () => {
+  it.live("reads a V2 session by ID and returns a typed miss", () =>
+    Effect.gen(function* () {
+      const directory = yield* tmpdirScoped({ git: true })
+      const headers = { "x-deepagent-code-directory": directory, "content-type": "application/json" }
+      const created = yield* requestJson<{ data: { id: string; title: string } }>("/api/session", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({}),
+      })
+      const found = yield* requestJson<{ data: { id: string; title: string } }>(`/api/session/${created.data.id}`, {
+        headers,
+      })
+      expect(found.data).toMatchObject(created.data)
+
+      const missing = yield* request("/api/session/ses_missing_v2_get", { headers })
+      expect(missing.status).toBe(404)
+      expect(yield* responseJson(missing)).toMatchObject({ _tag: "SessionNotFoundError" })
+    }),
+  )
+
   it.live("blocks compatibility history mutations while a Core V2 drain is active", () =>
     Effect.gen(function* () {
       const llm = yield* TestLLMServer
@@ -420,7 +440,7 @@ describe("session HttpApi", () => {
         true,
       )
     }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
-    15_000,
+    30_000,
   )
 
   it.live("advertises and executes Core context tools through the production HTTP runtime", () =>

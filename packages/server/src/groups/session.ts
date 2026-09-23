@@ -134,6 +134,21 @@ export const SessionGroup = HttpApiGroup.make("server.session")
     ),
   )
   .add(
+    HttpApiEndpoint.get("session.get", "/api/session/:sessionID", {
+      params: { sessionID: SessionV2.ID },
+      success: Schema.Struct({ data: SessionV2.Info }),
+      error: SessionNotFoundError,
+    })
+      .middleware(SessionLocationMiddleware)
+      .annotateMerge(
+        OpenApi.annotations({
+          identifier: "v2.session.get",
+          summary: "Get session",
+          description: "Read the current durable Session projection.",
+        }),
+      ),
+  )
+  .add(
     HttpApiEndpoint.post("session.prompt", "/api/session/:sessionID/prompt", {
       params: { sessionID: SessionV2.ID },
       payload: Schema.Struct({
@@ -250,6 +265,6 @@ export const SessionGroup = HttpApiGroup.make("server.session")
   .annotateMerge(
     OpenApi.annotations({
       title: "sessions",
-      description: "Experimental session routes.",
+      description: "Core V2 session routes.",
     }),
   )
