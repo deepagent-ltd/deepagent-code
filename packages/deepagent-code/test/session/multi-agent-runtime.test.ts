@@ -646,6 +646,139 @@ describe("MultiAgentRuntime randomized DAG conflict oracle", () => {
 describe("MultiAgentRuntime arbitration handoff", () => {
   const it = testEffect(makeLayer())
 
+  const rankings: ReadonlyArray<{
+    name: string
+    first: Partial<TaskPartitioner.Subtask>
+    second: Partial<TaskPartitioner.Subtask>
+  }> = [
+    { name: "priority", first: { priority: "low" }, second: { priority: "critical" } },
+    { name: "diff size", first: { diffSize: 100 }, second: { diffSize: 10 } },
+    { name: "origin", first: { origin: "schedule" }, second: { origin: "human" } },
+  ]
+
+  for (const ranking of rankings) {
+    it.effect(`${ranking.name} outranks partition order before any turn is admitted`, () =>
+      Effect.gen(function* () {
+        setNow(1_000)
+        setRegistry([agent("worker", ["work"], "level_1")])
+        const invoked: string[] = []
+        const runner: SubagentTurnRunner = (input) =>
+          Effect.sync(() => {
+            invoked.push(input.taskID!)
+            return { ok: true, structured: undefined, text: "done", tokensUsed: 0, cost: 0 }
+          })
+        const partition: NonNullable<MultiAgentRuntime.LayerOptions["partition"]> = (input) => ({
+          event: input,
+          subtasks: [ranking.first, ranking.second].map((facts, index) => ({
+            id: `${input.id}:${index}`,
+            capability: "work",
+            intent: `inspect ${index}`,
+            dependsOn: [],
+            fileScope: ["src/shared.ts"],
+            requiredAutonomy: "level_1" as const,
+            ...facts,
+          })),
+        })
+        const input = event({ id: DeepAgentEvent.ID.create(1_310), type: "test.ranking", source: "schedule" })
+        const result = yield* Effect.gen(function* () {
+          const runtime = yield* MultiAgentRuntime.Service
+          const first = yield* runtime.coordinate(input)
+          const firstInvoked = [...invoked]
+          const replay = yield* runtime.coordinate(input)
+          return { first, firstInvoked, replay }
+        }).pipe(Effect.provide(makeLayer({ partition, runner, dagCoordination: true })))
+        expect(result.firstInvoked).toEqual([`${input.id}:1`])
+        expect(result.first.outcomes).toContainEqual(
+          expect.objectContaining({ taskID: `${input.id}:1`, status: "completed" }),
+        )
+        expect(result.first.outcomes).toContainEqual(
+          expect.objectContaining({ taskID: `${input.id}:0`, status: "deferred", reason: "conflict_deferred" }),
+        )
+        expect(result.first.hasUnfinished).toBe(true)
+        expect(invoked).toEqual([`${input.id}:1`, `${input.id}:0`])
+        expect(result.replay.hasUnfinished).toBe(false)
+      }),
+    )
+  }
+
+  it.effect("the default OFF coordinate path retains partition-order admission", () =>
+    Effect.gen(function* () {
+      setNow(1_000)
+      setRegistry([agent("worker", ["work"], "level_1")])
+      const invoked: string[] = []
+      const partition: NonNullable<MultiAgentRuntime.LayerOptions["partition"]> = (input) => ({
+        event: input,
+        subtasks: [0, 1].map((index) => ({
+          id: `${input.id}:${index}`,
+          capability: "work",
+          intent: `inspect ${index}`,
+          dependsOn: [],
+          fileScope: ["src/shared.ts"],
+          requiredAutonomy: "level_1" as const,
+          priority: index === 0 ? ("low" as const) : ("critical" as const),
+        })),
+      })
+      const input = event({ id: DeepAgentEvent.ID.create(1_305), type: "test.flag-off" })
+      const summary = yield* Effect.gen(function* () {
+        return yield* (yield* MultiAgentRuntime.Service).coordinate(input)
+      }).pipe(
+        Effect.provide(
+          makeLayer({
+            partition,
+            runner: (turn) =>
+              Effect.sync(() => {
+                invoked.push(turn.taskID!)
+                return { ok: true, structured: undefined, text: "done", tokensUsed: 0, cost: 0 }
+              }),
+          }),
+        ),
+      )
+      expect(invoked).toEqual([`${input.id}:0`])
+      expect(summary.outcomes).toContainEqual(expect.objectContaining({ taskID: `${input.id}:1`, status: "deferred" }))
+    }),
+  )
+
+  it.effect("a security-blocked peer does not create a false same-wave tie", () =>
+    Effect.gen(function* () {
+      setNow(1_000)
+      setRegistry([agent("worker", ["allowed", "denied"], "level_1")])
+      const invoked: string[] = []
+      const partition: NonNullable<MultiAgentRuntime.LayerOptions["partition"]> = (input) => ({
+        event: input,
+        subtasks: ["allowed", "denied"].map((capability, index) => ({
+          id: `${input.id}:${index}`,
+          capability,
+          intent: capability,
+          dependsOn: [],
+          fileScope: ["src/shared.ts"],
+          requiredAutonomy: "level_1" as const,
+        })),
+      })
+      const input = event({ id: DeepAgentEvent.ID.create(1_306), type: "test.security-tie" })
+      const summary = yield* Effect.gen(function* () {
+        return yield* (yield* MultiAgentRuntime.Service).coordinate(input)
+      }).pipe(
+        Effect.provide(
+          makeLayer({
+            partition,
+            dagCoordination: true,
+            runtimeAllowed: (_, __, capability) => Effect.succeed(capability === "allowed"),
+            runner: (turn) =>
+              Effect.sync(() => {
+                invoked.push(turn.taskID!)
+                return { ok: true, structured: undefined, text: "done", tokensUsed: 0, cost: 0 }
+              }),
+          }),
+        ),
+      )
+      expect(invoked).toEqual([`${input.id}:0`])
+      expect(summary.outcomes).toContainEqual(
+        expect.objectContaining({ taskID: `${input.id}:1`, status: "blocked", reason: "security:runtime_operation" }),
+      )
+      expect(summary.hasUnfinished).toBe(false)
+    }),
+  )
+
   it.effect("a same-wave true tie defers for human resolution and keeps the event retryable", () =>
     Effect.gen(function* () {
       resetRunner()
@@ -669,13 +802,13 @@ describe("MultiAgentRuntime arbitration handoff", () => {
             type: "test.tie",
           }),
         )
-      }).pipe(Effect.provide(makeLayer({ partition })))
-      expect(summary.outcomes).toContainEqual(expect.objectContaining({ status: "completed" }))
-      expect(summary.outcomes).toContainEqual(
-        expect.objectContaining({ status: "deferred", reason: "conflict_needs_human" }),
-      )
+      }).pipe(Effect.provide(makeLayer({ partition, dagCoordination: true })))
+      expect(summary.outcomes).toHaveLength(2)
+      expect(
+        summary.outcomes.every((outcome) => outcome.status === "deferred" && outcome.reason === "conflict_needs_human"),
+      ).toBe(true)
       expect(summary.hasUnfinished).toBe(true)
-      expect(ran).toEqual(["worker"])
+      expect(ran).toEqual([])
     }),
   )
 })

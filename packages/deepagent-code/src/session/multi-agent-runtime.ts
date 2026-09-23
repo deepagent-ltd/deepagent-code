@@ -441,6 +441,14 @@ export const layerWith = (options: LayerOptions) =>
                 readonly result: SubagentTurnResult
               }>
             > = []
+            const ready: Array<{
+              readonly subtask: TaskPartitioner.Subtask
+              readonly agent: AgentDescriptor
+              readonly capable: ReadonlyArray<AgentDescriptor>
+              readonly claim: ConflictArbiter.Claim
+              readonly executionRecord?: AgentExecution.Record
+              readonly dependencyRefs: ReadonlyArray<string>
+            }> = []
 
             for (const subtask of wave) {
               // §C2 DAG gate: every dependency must have COMPLETED this pass. A dep that was blocked or
@@ -765,13 +773,57 @@ export const layerWith = (options: LayerOptions) =>
                 agentID: agent.id,
                 files: subtask.fileScope,
                 symbols,
-                priority: event.priority,
+                priority: options.dagCoordination ? (subtask.priority ?? event.priority) : event.priority,
+                ...(options.dagCoordination && subtask.diffSize != null ? { diffSize: subtask.diffSize } : {}),
                 origin:
-                  event.source === "im" || event.actorID != null
-                    ? "human"
-                    : event.source === "schedule"
-                      ? "schedule"
-                      : "system",
+                  options.dagCoordination && subtask.origin
+                    ? subtask.origin
+                    : event.source === "im" || event.actorID != null
+                      ? "human"
+                      : event.source === "schedule"
+                        ? "schedule"
+                        : "system",
+              }
+              ready.push({ subtask, agent, capable, claim, executionRecord, dependencyRefs })
+            }
+
+            // Gate first, then rank the eligible same-wave claims before acquiring any slot, lock or
+            // durable execution lease. Otherwise a later higher-ranked claim cannot displace a turn
+            // already admitted by partition order.
+            const ordered = options.dagCoordination
+              ? ready.toSorted((a, b) => ConflictArbiter.compare(a.claim, b.claim))
+              : ready
+            const tied = new Set<string>()
+            if (options.dagCoordination) {
+              for (const [index, candidate] of ordered.entries()) {
+                for (const other of ordered.slice(index + 1)) {
+                  if (!ConflictArbiter.conflicts(candidate.claim, other.claim)) continue
+                  if (ConflictArbiter.resolve([candidate.claim, other.claim]).type !== "needs_human") continue
+                  tied.add(candidate.subtask.id)
+                  tied.add(other.subtask.id)
+                }
+              }
+            }
+
+            for (const { subtask, agent, capable, claim, executionRecord, dependencyRefs } of ordered) {
+              const ambiguous = ordered.some(
+                (candidate) =>
+                  tied.has(candidate.subtask.id) &&
+                  candidate.subtask.id !== subtask.id &&
+                  ConflictArbiter.compare(candidate.claim, claim) <= 0 &&
+                  ConflictArbiter.conflicts(candidate.claim, claim),
+              )
+              if (tied.has(subtask.id) || ambiguous) {
+                outcomes.push({
+                  taskID: subtask.id,
+                  capability: subtask.capability,
+                  status: "deferred",
+                  agentID: agent.id,
+                  reason: tied.has(subtask.id) ? "conflict_needs_human" : "conflict_deferred",
+                })
+                retryable.add(subtask.id)
+                hasUnfinished = true
+                continue
               }
               // only claims NOT in this subtask's dependency chain are true concurrent conflicts.
               const deps = ancestorsOf(subtask.id)

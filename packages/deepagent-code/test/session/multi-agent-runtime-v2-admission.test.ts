@@ -155,6 +155,13 @@ const conflictingWrites: NonNullable<MultiAgentRuntime.LayerOptions["partition"]
     requiredAutonomy: "level_2" as const,
   })),
 })
+const rankedWrites: NonNullable<MultiAgentRuntime.LayerOptions["partition"]> = (input) => ({
+  event: input,
+  subtasks: conflictingWrites(input).subtasks.map((subtask, index) => ({
+    ...subtask,
+    diffSize: index === 0 ? 1 : 2,
+  })),
+})
 
 const saved = process.env[EventAdmission.EVENT_V2_ADMISSION_ENV]
 
@@ -309,7 +316,7 @@ describe("C5-04 MultiAgentRuntime V2 admission dispatch branch", () => {
         }),
       undefined,
       true,
-      conflictingWrites,
+      rankedWrites,
     )
     expect(calls).toEqual(["receipt", "receipt", "receipt"])
   })
@@ -322,12 +329,14 @@ describe("C5-04 MultiAgentRuntime V2 admission dispatch branch", () => {
       (runtime) =>
         Effect.gen(function* () {
           const summary = yield* runtime.coordinate(event({ payload: { directory: "/tmp/event-tie" } }))
-          expect(summary.outcomes).toContainEqual(expect.objectContaining({ status: "completed" }))
-          expect(summary.outcomes).toContainEqual(
-            expect.objectContaining({ status: "deferred", reason: "conflict_needs_human" }),
-          )
+          expect(summary.outcomes).toHaveLength(2)
+          expect(
+            summary.outcomes.every(
+              (outcome) => outcome.status === "deferred" && outcome.reason === "conflict_needs_human",
+            ),
+          ).toBe(true)
           expect(summary.hasUnfinished).toBe(true)
-          expect(runnerRan).toHaveLength(1)
+          expect(runnerRan).toHaveLength(0)
         }),
       undefined,
       true,
