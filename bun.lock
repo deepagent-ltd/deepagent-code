@@ -30,7 +30,7 @@
     },
     "packages/app": {
       "name": "@deepagent-code/app",
-      "version": "2.0.0",
+      "version": "2.0.1",
       "dependencies": {
         "@codemirror/autocomplete": "6",
         "@codemirror/commands": "6",
@@ -104,7 +104,7 @@
     },
     "packages/cli": {
       "name": "@deepagent-code/cli",
-      "version": "2.0.0",
+      "version": "2.0.1",
       "bin": {
         "lildax": "./bin/lildax.cjs",
       },
@@ -129,7 +129,7 @@
     },
     "packages/core": {
       "name": "@deepagent-code/core",
-      "version": "2.0.0",
+      "version": "2.0.1",
       "dependencies": {
         "@ai-sdk/alibaba": "1.0.17",
         "@ai-sdk/amazon-bedrock": "4.0.112",
@@ -220,7 +220,7 @@
     },
     "packages/deepagent-code": {
       "name": "deepagent-code",
-      "version": "2.0.0",
+      "version": "2.0.1",
       "bin": {
         "deepagent-code": "./bin/deepagent",
         "deepagent": "./bin/deepagent",
@@ -343,7 +343,7 @@
     },
     "packages/desktop": {
       "name": "@deepagent-code/desktop",
-      "version": "2.0.0",
+      "version": "2.0.1",
       "dependencies": {
         "@lydell/node-pty": "catalog:",
         "@zip.js/zip.js": "2.7.62",
@@ -427,7 +427,7 @@
     },
     "packages/function": {
       "name": "@deepagent-code/function",
-      "version": "2.0.0",
+      "version": "2.0.1",
       "dependencies": {
         "@hono/node-server": "2.0.10",
         "@octokit/auth-app": "8.0.1",
@@ -483,7 +483,7 @@
     },
     "packages/plugin": {
       "name": "@deepagent-code/plugin",
-      "version": "2.0.0",
+      "version": "2.0.1",
       "dependencies": {
         "@deepagent-code/sdk": "workspace:*",
         "effect": "catalog:",
@@ -536,7 +536,7 @@
     },
     "packages/server": {
       "name": "@deepagent-code/server",
-      "version": "2.0.0",
+      "version": "2.0.1",
       "dependencies": {
         "@deepagent-code/core": "workspace:*",
         "drizzle-orm": "catalog:",
@@ -613,7 +613,7 @@
     },
     "packages/ui": {
       "name": "@deepagent-code/ui",
-      "version": "2.0.0",
+      "version": "2.0.1",
       "dependencies": {
         "@deepagent-code/core": "workspace:*",
         "@deepagent-code/sdk": "workspace:*",
@@ -662,7 +662,7 @@
     },
     "packages/web": {
       "name": "@deepagent-code/web",
-      "version": "2.0.0",
+      "version": "2.0.1",
       "dependencies": {
         "@astrojs/markdown-remark": "7.3.1",
         "@astrojs/node": "11.1.6",
