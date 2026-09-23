@@ -13,20 +13,23 @@ import { testProviderConfig } from "../lib/test-provider"
 
 describe("gateway release gate", () => {
   test("defaults off with a typed OpenAI 404 for declared and unknown /v1 routes", async () => {
-    const handler = HttpRouter.toWebHandler(
+    const web = HttpRouter.toWebHandler(
       HttpApiApp.createRoutes().pipe(Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({})))),
       { disableLogger: true },
-    ).handler
-
-    for (const pathname of ["/v1/models", "/v1/embeddings"]) {
-      const response = await handler(
-        new Request(new URL(pathname, "http://localhost"), { headers: { authorization: "Bearer sk-test-secret" } }),
-        HttpApiApp.context,
-      )
-      expect(response.status).toBe(404)
-      expect(await response.json()).toEqual({
-        error: { message: "Gateway is disabled", type: "invalid_request_error", code: "gateway_disabled" },
-      })
+    )
+    try {
+      for (const pathname of ["/v1/models", "/v1/embeddings"]) {
+        const response = await web.handler(
+          new Request(new URL(pathname, "http://localhost"), { headers: { authorization: "Bearer sk-test-secret" } }),
+          HttpApiApp.context,
+        )
+        expect(response.status).toBe(404)
+        expect(await response.json()).toEqual({
+          error: { message: "Gateway is disabled", type: "invalid_request_error", code: "gateway_disabled" },
+        })
+      }
+    } finally {
+      await web.dispose()
     }
   }, 30_000)
 
@@ -35,6 +38,7 @@ describe("gateway release gate", () => {
     const key = "sk-test-proxy-tenant"
     const originalDatabase = Flag.DEEPAGENT_CODE_DB
     Flag.DEEPAGENT_CODE_DB = join(directory, "proxy.sqlite")
+    const openHandlers: Array<{ dispose: () => Promise<void> }> = []
     try {
       await Effect.runPromise(
         Effect.gen(function* () {
@@ -56,12 +60,14 @@ describe("gateway release gate", () => {
           })
         }).pipe(Effect.provide(Database.defaultLayer)),
       )
-      const handler = HttpRouter.toWebHandler(
+      const web = HttpRouter.toWebHandler(
         HttpApiApp.createRoutes().pipe(
           Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DEEPAGENT_CODE_GATEWAY: true }))),
         ),
         { disableLogger: true },
-      ).handler
+      )
+      openHandlers.push(web)
+      const handler = web.handler
       const unauthorized = await handler(new Request("http://localhost/v1/models"), HttpApiApp.context)
       expect(unauthorized.status).toBe(401)
       expect((await unauthorized.json()).error.code).toBe("invalid_api_key")
@@ -113,6 +119,7 @@ describe("gateway release gate", () => {
       }), HttpApiApp.context)
       expect(missing.status).toBe(404)
     } finally {
+      await Promise.all(openHandlers.map((web) => web.dispose()))
       Flag.DEEPAGENT_CODE_DB = originalDatabase
       await rm(directory, { recursive: true, force: true })
     }
@@ -122,6 +129,7 @@ describe("gateway release gate", () => {
     const directory = await mkdtemp(join(tmpdir(), "deepagent-proxy-chat-test-"))
     const originalDatabase = Flag.DEEPAGENT_CODE_DB
     Flag.DEEPAGENT_CODE_DB = join(directory, "proxy.sqlite")
+    const openHandlers: Array<{ dispose: () => Promise<void> }> = []
     const hits: string[] = []
     const upstream = Bun.serve({
       hostname: "127.0.0.1",
@@ -169,12 +177,14 @@ describe("gateway release gate", () => {
           })
         }).pipe(Effect.provide(Database.defaultLayer)),
       )
-      const handler = HttpRouter.toWebHandler(
+      const web = HttpRouter.toWebHandler(
         HttpApiApp.createRoutes().pipe(
           Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DEEPAGENT_CODE_GATEWAY: true }))),
         ),
         { disableLogger: true },
-      ).handler
+      )
+      openHandlers.push(web)
+      const handler = web.handler
       const response = await handler(
         new Request("http://localhost/v1/chat/completions", {
           method: "POST",
@@ -307,6 +317,7 @@ describe("gateway release gate", () => {
         reader.close()
       }
     } finally {
+      await Promise.all(openHandlers.map((web) => web.dispose()))
       upstream.stop(true)
       Flag.DEEPAGENT_CODE_DB = originalDatabase
       await rm(directory, { recursive: true, force: true })
@@ -389,6 +400,7 @@ describe("gateway release gate", () => {
     const directory = await mkdtemp(join(tmpdir(), "deepagent-proxy-context-test-"))
     const originalDatabase = Flag.DEEPAGENT_CODE_DB
     Flag.DEEPAGENT_CODE_DB = join(directory, "proxy.sqlite")
+    const openHandlers: Array<{ dispose: () => Promise<void> }> = []
     const streamGate = Promise.withResolvers<void>()
     const upstream = Bun.serve({
       hostname: "127.0.0.1",
@@ -434,6 +446,7 @@ describe("gateway release gate", () => {
       const web = HttpRouter.toWebHandler(HttpApiApp.createRoutes().pipe(
         Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DEEPAGENT_CODE_GATEWAY: true }))),
       ), { disableLogger: true })
+      openHandlers.push(web)
       const handler = web.handler
       const send = (requestID: string, content: string, stream = false, hint?: string) => handler(new Request("http://localhost/v1/chat/completions", {
         method: "POST", headers: { authorization: "Bearer sk-context", "content-type": "application/json", "x-request-id": requestID,
@@ -586,6 +599,7 @@ describe("gateway release gate", () => {
       expect(laneRows.find((lane) => lane.hint === "default")?.archived_at).toBeGreaterThan(0)
       expect(laneRows.find((lane) => lane.hint === "second-lane")?.archived_at).toBeNull()
       await web.dispose()
+      openHandlers.pop()
       const disabled = HttpRouter.toWebHandler(HttpApiApp.createRoutes().pipe(
         Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DEEPAGENT_CODE_GATEWAY: false }))),
       ), { disableLogger: true })
@@ -605,6 +619,7 @@ describe("gateway release gate", () => {
         await disabled.dispose()
       }
     } finally {
+      await Promise.all(openHandlers.map((web) => web.dispose()))
       streamGate.resolve()
       upstream.stop(true)
       Flag.DEEPAGENT_CODE_DB = originalDatabase
