@@ -1,13 +1,18 @@
 import { expect, test } from "bun:test"
-import { Cause, Context, Effect, Exit, Schema } from "effect"
+import { Cause, ConfigProvider, Context, Effect, Exit, Layer, Schema } from "effect"
 import path from "node:path"
+import { createHash } from "node:crypto"
+import { HttpRouter } from "effect/unstable/http"
 import { Flag } from "@deepagent-code/core/flag/flag"
 import { Database } from "@deepagent-code/core/database/database"
 import { migrations } from "@deepagent-code/core/database/migration.gen"
 import { DatabaseUpgradeRun } from "@deepagent-code/core/database/upgrade-run"
+import { ProxyTenantTable } from "@deepagent-code/core/proxy/sql"
 import { ContractDigest } from "@deepagent-code/core/contract/digest"
 import { ApplicationTools } from "@deepagent-code/core/tool/application-tools"
 import { Server } from "../../src/server/server"
+import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
+import { gatewayServiceTags } from "../../src/server/routes/instance/httpapi/handlers/gateway-chat"
 import { AppRuntime, compositionDigest } from "../../src/effect/app-runtime"
 import { Root } from "../../src/effect/root"
 import { CompositionDigest } from "../../src/effect/composition-digest"
@@ -126,6 +131,57 @@ test("HTTP server root and AppRuntime root expose the identical composition dige
   } finally {
     await Server.disposeDefault()
     await listener.stop(true)
+  }
+}, 180_000)
+
+test("gateway service inventory is resolved by the qualified server root", async () => {
+  await using root = await tmpdir()
+  const original = Flag.DEEPAGENT_CODE_DB
+  Flag.DEEPAGENT_CODE_DB = path.join(root.path, "gateway-composition.db")
+  try {
+    await Effect.runPromise(Effect.gen(function* () {
+      yield* (yield* Database.Service).db.insert(ProxyTenantTable).values({
+        id: "composition-tenant",
+        key_hash: createHash("sha256").update("sk-composition-tenant").digest("hex"),
+        key_fingerprint: "composition-key",
+        directory: root.path,
+        model_allowlist: [],
+        tier: "passthrough",
+        quota_requests_per_minute: 1,
+        quota_tokens_per_day: 1,
+        lane_limit: 1,
+        deadline_ms: 1_000,
+        enabled: true,
+        created_at: Date.now(),
+        updated_at: Date.now(),
+      })
+    }).pipe(Effect.provide(Database.defaultLayer)))
+    const web = HttpRouter.toWebHandler(HttpApiApp.createRoutes().pipe(
+      Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DEEPAGENT_CODE_GATEWAY: true }))),
+    ), { disableLogger: true })
+    try {
+      expect(Object.values(gatewayServiceTags).map((service) => service.key).toSorted()).toEqual([
+        "@deepagent-code/Auth", "@deepagent-code/EventV2Bridge", "@deepagent-code/InstanceStore",
+        "@deepagent-code/LLMClient", "@deepagent-code/ModelsDev", "@deepagent-code/Provider",
+        "@deepagent-code/v2/Session", "@deepagent-code/v2/storage/Database",
+      ] satisfies (typeof gatewayServiceTags)[keyof typeof gatewayServiceTags]["key"][])
+      const before = await web.handler(new Request("http://localhost/composition/digest"), HttpApiApp.context)
+      expect(before.status).toBe(200)
+      const composition = (await before.json()) as CompositionDigest.Record
+      expectWireInvariants(composition)
+      const gateway = await web.handler(new Request("http://localhost/v1/models", {
+        headers: { authorization: "Bearer sk-composition-tenant" },
+      }), HttpApiApp.context)
+      expect(gateway.status).toBe(200)
+      expect(await gateway.json()).toEqual({ object: "list", data: [] })
+      const after = await web.handler(new Request("http://localhost/composition/digest"), HttpApiApp.context)
+      expect(after.status).toBe(200)
+      expect(await after.json()).toEqual(composition)
+    } finally {
+      await web.dispose()
+    }
+  } finally {
+    Flag.DEEPAGENT_CODE_DB = original
   }
 }, 180_000)
 

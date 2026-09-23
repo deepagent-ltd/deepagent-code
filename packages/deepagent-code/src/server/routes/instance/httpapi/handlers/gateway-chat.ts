@@ -30,15 +30,29 @@ class QuotaExceeded extends Error {
 class QuotaPending extends Error {}
 class QuotaUsageUnknown extends Error {}
 
+// The root-scoped service inventory consumed by chat is also the startup subset probe in the
+// server root. The request-scoped tenant comes from ProxyAuthorization middleware.
+export const gatewayServiceTags = {
+  database: Database.Service,
+  store: InstanceStore.Service,
+  provider: Provider.Service,
+  auth: Auth.Service,
+  client: LLMClient.Service,
+  events: EventV2Bridge.Service,
+  modelsDev: ModelsDev.Service,
+  sessions: SessionV2.Service,
+} as const
+
 export const chat = Effect.gen(function* () {
-  const { db } = yield* Database.Service
-  const store = yield* InstanceStore.Service
-  const provider = yield* Provider.Service
-  const auth = yield* Auth.Service
-  const client = yield* LLMClient.Service
-  const events = yield* EventV2Bridge.Service
-  const modelsDev = yield* ModelsDev.Service
-  const sessions = yield* SessionV2.Service
+  const services = yield* Effect.all(gatewayServiceTags)
+  const db = services.database.db
+  const store = services.store
+  const provider = services.provider
+  const auth = services.auth
+  const client = services.client
+  const events = services.events
+  const modelsDev = services.modelsDev
+  const sessions = services.sessions
   const scope = yield* Effect.scope
 
   return (input: { request: HttpServerRequest.HttpServerRequest }) =>

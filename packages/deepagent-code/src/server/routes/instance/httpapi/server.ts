@@ -84,6 +84,7 @@ import { ServerAuth } from "@/server/auth"
 import { InstanceHttpApi, RootHttpApi } from "./api"
 import { GatewayHttpApi } from "./groups/gateway"
 import { gatewayHandlers } from "./handlers/gateway"
+import { gatewayServiceTags } from "./handlers/gateway-chat"
 import { gatewayAdminHandlers } from "./handlers/gateway-admin"
 import { GatewayAdminApi } from "./groups/gateway-admin"
 import { authorizeProxyKey, proxyAuthorizationLayer, proxyError, proxyStartupGate } from "./middleware/proxy-authorization"
@@ -269,6 +270,12 @@ const gatewayAdminRoutes = HttpApiBuilder.layer(GatewayAdminApi).pipe(
   Layer.provide(httpApiAuthLayer),
 )
 const gatewayClientLayer = LLMClient.layer.pipe(Layer.provide(RequestExecutor.defaultLayer))
+const gatewayServiceSubsetGate = Layer.effectDiscard(Effect.gen(function* () {
+  if (!(yield* RuntimeFlags.Service).gateway) return
+  // Resolve the handler's actual service inventory from this server root before any gateway
+  // request can be admitted. The scoped composition test checks the same root's live digest.
+  yield* Effect.all(gatewayServiceTags, { discard: true })
+}))
 const eventApiRoutes = HttpApiBuilder.layer(EventApi).pipe(
   Layer.provide(eventHandlers),
   Layer.provide([httpApiAuthLayer, workspaceRoutingLive, instanceContextLayer]),
@@ -387,6 +394,7 @@ export function createRoutes(corsOptions?: CorsOptions, runtimeFlagsLayer = Runt
     gatewayApiRoutes,
     gatewayAdminRoutes,
     proxyStartupGate,
+    gatewayServiceSubsetGate,
     eventApiRoutes,
     ptyConnectApiRoutes,
     imWebSocketApiRoutes,
