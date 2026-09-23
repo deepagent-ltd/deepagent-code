@@ -1,6 +1,7 @@
 import { describe, expect } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Context, Effect, Layer } from "effect"
 import { AgentExecution } from "@deepagent-code/core/deepagent/agent-execution"
+import { ApprovalQueue } from "@deepagent-code/core/deepagent/approval-queue"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { HandoffAdmission } from "@deepagent-code/core/deepagent/handoff-admission"
 import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
@@ -10,6 +11,8 @@ import { Database } from "@deepagent-code/core/database/database"
 import { AgentListProviderService } from "@deepagent-code/core/im/agent-list-provider"
 import type { AgentDescriptor } from "@deepagent-code/core/im/mention-parser"
 import { AgentHandoffConsumer, HANDOFF_GROUP } from "@/session/agent-handoff-consumer"
+import { MultiAgentRuntime } from "@/session/multi-agent-runtime"
+import type { SubagentTurnRunner } from "@/session/goal-loop-wiring"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { pollWithTimeout, testEffect } from "../lib/effect"
 
@@ -32,16 +35,20 @@ const agents: AgentDescriptor[] = [
   },
 ]
 
+const registry = Layer.succeed(AgentListProviderService, {
+  listAgents: () => Effect.succeed(agents),
+  findByTrigger: () => Effect.succeed([]),
+  findByCapability: () => Effect.succeed([]),
+})
+
 const makeLayer = (runtimeAllowed: boolean, runLoop = false) => {
   const database = Database.layerFromPath(":memory:")
-  const core = Layer.mergeAll(DeepAgentEventBus.layer, AgentExecution.layer, HandoffAdmission.layer).pipe(
-    Layer.provideMerge(database),
-  )
-  const registry = Layer.succeed(AgentListProviderService, {
-    listAgents: () => Effect.succeed(agents),
-    findByTrigger: () => Effect.succeed([]),
-    findByCapability: () => Effect.succeed([]),
-  })
+  const core = Layer.mergeAll(
+    DeepAgentEventBus.layer,
+    AgentExecution.layer,
+    HandoffAdmission.layer,
+    ApprovalQueue.layer,
+  ).pipe(Layer.provideMerge(database))
   const security = Layer.succeed(SecurityResolvers.Service, {
     resolveTrustedSources: () => Effect.succeed(["ci"] as const),
     actorHasWorkspacePermission: () => Effect.succeed(true),
@@ -118,6 +125,91 @@ describe("AgentHandoffConsumer", () => {
   const allowed = testEffect(makeLayer(true))
   const denied = testEffect(makeLayer(false))
   const daemon = testEffect(makeLayer(true, true))
+
+  allowed.effect("owner A failure transfers through the consumer and owner B continues the assigned task", () =>
+    Effect.gen(function* () {
+      const bus = yield* DeepAgentEventBus.Service
+      const execution = yield* AgentExecution.Service
+      const queue = yield* ApprovalQueue.Service
+      const consumer = yield* AgentHandoffConsumer.Service
+      yield* bus.registerConsumerGroup(HANDOFF_GROUP, LMNEvents.AGENT_HANDOFF_REQUESTED)
+      const original = yield* bus.publish({
+        type: "ci.failure",
+        source: "ci",
+        workspaceID: "wrk_handoff_integration",
+        idempotencyKey: "handoff-integration",
+        priority: "normal",
+        payload: { directory: "/tmp/handoff-integration", files: ["src/a.ts"] },
+      })
+      const fixTaskID = TaskPartitioner.partition(original, { stableIDPrefix: original.id }).subtasks[0].id
+      const dependencies = Layer.mergeAll(
+        Layer.succeed(DeepAgentEventBus.Service, bus),
+        Layer.succeed(AgentExecution.Service, execution),
+        Layer.succeed(ApprovalQueue.Service, queue),
+        registry,
+      )
+      const runtime = (ownerID: string, runner: SubagentTurnRunner) =>
+        Layer.build(
+          MultiAgentRuntime.layerWith({
+            execution,
+            ownerID,
+            runner,
+            dagCoordination: true,
+          }).pipe(Layer.provide(dependencies)),
+        ).pipe(Effect.map((context) => Context.get(context, MultiAgentRuntime.Service)))
+      const first = yield* runtime("runtime_a", () =>
+        Effect.succeed({
+          ok: false,
+          reason: "runner_failed",
+          structured: undefined,
+          text: "",
+          tokensUsed: 0,
+          cost: 0,
+          continuationRef: "agent/partial",
+        }),
+      )
+      const resumed: { agentType: string; baseRef?: string; generation?: number }[] = []
+      const second = yield* runtime("runtime_b", (input) =>
+        Effect.sync(() => {
+          resumed.push({ agentType: input.agentType, baseRef: input.baseRef, generation: input.generation })
+          return {
+            ok: true,
+            structured: undefined,
+            text: "repaired",
+            tokensUsed: 0,
+            cost: 0,
+            continuationRef: "agent/final",
+          }
+        }),
+      )
+      const pending = yield* first.coordinate(original)
+      expect(pending.outcomes[0]).toMatchObject({ status: "deferred", reason: "handoff_requested" })
+      expect(pending.hasUnfinished).toBe(true)
+      const handoffs = yield* bus.recentByType({
+        type: LMNEvents.AGENT_HANDOFF_REQUESTED,
+        now: Date.now(),
+        windowMs: 60_000,
+      })
+      expect(handoffs).toHaveLength(1)
+      expect(yield* consumer.handle(handoffs[0])).toBe("accepted")
+      expect(
+        (yield* execution.get({ workspaceID: original.workspaceID, eventID: original.id, taskID: fixTaskID }))
+          ?.assignedAgentID,
+      ).toBe("agent_b")
+      const finished = yield* second.coordinate(original)
+      expect(finished.outcomes.map((outcome) => outcome.status)).toEqual(["completed", "completed"])
+      expect(resumed[0]).toEqual({ agentType: "agent_b", baseRef: "agent/partial", generation: 2 })
+      expect(
+        (yield* execution.get({ workspaceID: original.workspaceID, eventID: original.id, taskID: fixTaskID }))
+          ?.continuationRef,
+      ).toBe("agent/final")
+      expect((yield* second.coordinate(original)).outcomes[0]).toMatchObject({
+        status: "completed",
+        reason: "already_completed",
+      })
+      expect(resumed).toHaveLength(2)
+    }),
+  )
 
   allowed.effect("validates, atomically transfers, acks, and idempotently accepts redelivery", () =>
     Effect.gen(function* () {

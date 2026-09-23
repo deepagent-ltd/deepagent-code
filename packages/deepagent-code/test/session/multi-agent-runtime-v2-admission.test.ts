@@ -144,6 +144,18 @@ const fakeBridge = (calls: Array<Record<string, unknown>>): MultiAgentRuntime.Ev
     }),
 })
 
+const conflictingWrites: NonNullable<MultiAgentRuntime.LayerOptions["partition"]> = (input) => ({
+  event: input,
+  subtasks: ["first", "second"].map((name) => ({
+    id: `${input.id}:${name}`,
+    capability: "code_edit",
+    intent: `edit ${name}`,
+    dependsOn: [],
+    fileScope: ["src/shared.ts"],
+    requiredAutonomy: "level_2" as const,
+  })),
+})
+
 const saved = process.env[EventAdmission.EVENT_V2_ADMISSION_ENV]
 
 describe("C5-04 MultiAgentRuntime V2 admission dispatch branch", () => {
@@ -273,17 +285,6 @@ describe("C5-04 MultiAgentRuntime V2 admission dispatch branch", () => {
           calls.push("receipt")
         }),
     }
-    const partition: NonNullable<MultiAgentRuntime.LayerOptions["partition"]> = (input) => ({
-      event: input,
-      subtasks: ["first", "second"].map((name) => ({
-        id: `${input.id}:${name}`,
-        capability: "code_edit",
-        intent: `edit ${name}`,
-        dependsOn: [],
-        fileScope: ["src/shared.ts"],
-        requiredAutonomy: "level_2" as const,
-      })),
-    })
     const input = {
       ...request(),
       event: event({ payload: { directory: "/tmp/event-repo", files: ["src/shared.ts"] } }),
@@ -308,9 +309,30 @@ describe("C5-04 MultiAgentRuntime V2 admission dispatch branch", () => {
         }),
       undefined,
       true,
-      partition,
+      conflictingWrites,
     )
     expect(calls).toEqual(["receipt", "receipt", "receipt"])
+  })
+
+  test("an exact conflict tie remains a deferred human arbitration outcome", async () => {
+    setRegistry([agent("fixer", ["code_edit"], "level_2")])
+    resetRunner()
+    await withRuntime(
+      fakeBridge([]),
+      (runtime) =>
+        Effect.gen(function* () {
+          const summary = yield* runtime.coordinate(event({ payload: { directory: "/tmp/event-tie" } }))
+          expect(summary.outcomes).toContainEqual(expect.objectContaining({ status: "completed" }))
+          expect(summary.outcomes).toContainEqual(
+            expect.objectContaining({ status: "deferred", reason: "conflict_needs_human" }),
+          )
+          expect(summary.hasUnfinished).toBe(true)
+          expect(runnerRan).toHaveLength(1)
+        }),
+      undefined,
+      true,
+      conflictingWrites,
+    )
   })
 
   test("flag ON + seam ABSENT: dispatch fails with the typed refusal — never a silent legacy run", async () => {
