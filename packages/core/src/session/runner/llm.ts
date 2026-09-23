@@ -2185,6 +2185,52 @@ export const layer = Layer.effect(
         )
         .get()
         .pipe(Effect.orDie)
+      const latestStep = yield* db
+        .select({ seq: EventTable.seq, data: EventTable.data })
+        .from(EventTable)
+        .where(
+          and(
+            eq(EventTable.aggregate_id, sessionID),
+            eq(EventTable.type, EventV2.durableType(SessionEvent.Step.Started)),
+            gt(EventTable.seq, latestSteer?.seq ?? trigger.promotedSeq),
+          ),
+        )
+        .orderBy(desc(EventTable.seq))
+        .get()
+        .pipe(Effect.orDie)
+      const latestStepEvents = latestStep
+        ? yield* db
+            .select({ type: EventTable.type, data: EventTable.data })
+            .from(EventTable)
+            .where(
+              and(
+                eq(EventTable.aggregate_id, sessionID),
+                gt(EventTable.seq, latestStep.seq),
+                inArray(EventTable.type, [
+                  EventV2.durableType(SessionEvent.Step.Ended),
+                  EventV2.durableType(SessionEvent.Step.Failed),
+                  EventV2.durableType(SessionEvent.Tool.Called),
+                ]),
+              ),
+            )
+            .all()
+            .pipe(Effect.orDie)
+        : []
+      const lastAssistantMessageID = latestStep?.data["assistantMessageID"]
+      const terminalStop =
+        lastAssistantMessageID !== undefined &&
+        latestStepEvents.some(
+          (event) =>
+            event.type === EventV2.durableType(SessionEvent.Step.Ended) &&
+            event.data["assistantMessageID"] === lastAssistantMessageID &&
+            event.data["finish"] === "stop",
+        ) &&
+        !latestStepEvents.some(
+          (event) =>
+            event.data["assistantMessageID"] === lastAssistantMessageID &&
+            (event.type === EventV2.durableType(SessionEvent.Tool.Called) ||
+              event.type === EventV2.durableType(SessionEvent.Step.Failed)),
+        )
       budget.forActivity(active.activityID)
       const calls = yield* db
         .select({ seq: EventTable.seq, data: EventTable.data })
@@ -2201,7 +2247,7 @@ export const layer = Layer.effect(
         .all()
         .pipe(Effect.orDie)
       const earliest = calls.at(-1)
-      if (!earliest) return { activityID: active.activityID, stepsUsed: spent?.value ?? 0 }
+      if (!earliest) return { activityID: active.activityID, stepsUsed: spent?.value ?? 0, terminalStop }
       const terminal = yield* db
         .select({ data: EventTable.data })
         .from(EventTable)
@@ -2231,7 +2277,7 @@ export const layer = Layer.effect(
           ),
         )
       }
-      return { activityID: active.activityID, stepsUsed: spent?.value ?? 0 }
+      return { activityID: active.activityID, stepsUsed: spent?.value ?? 0, terminalStop }
     })
 
     const runDrain = Effect.fn("SessionRunner.run")(function* (input: {
@@ -2299,6 +2345,18 @@ export const layer = Layer.effect(
         // A pending steer will be promoted by the next runTurn and reset the step count. An
         // already-promoted steer is the durable recovery boundary used above.
         const pendingSteer = yield* SessionInput.hasPending(db, input.sessionID, "steer")
+        // A completed final response may have committed just before the process lost its local
+        // activity-settlement continuation. Close it from durable evidence without spending a
+        // provider turn or misreporting the already-finished answer as a step-limit failure.
+        if (restored?.terminalStop && !pendingSteer) {
+          settledActivityId = settledActivityId ?? restored.activityID
+          yield* Effect.uninterruptible(
+            contexts.settleActivity({ activityId: restored.activityID, state: "settled" }),
+          ).pipe(Effect.orDie)
+          openActivity = yield* SessionInput.hasPending(db, input.sessionID, "queue")
+          promotion = openActivity ? "queue" : undefined
+          continue
+        }
         let step = pendingSteer ? 1 : (restored?.stepsUsed ?? 0) + 1
         let attempts = pendingSteer ? 0 : (restored?.stepsUsed ?? 0)
         let activityId: string | undefined = restored?.activityID

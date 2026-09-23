@@ -5820,6 +5820,71 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("settles a durable final response without spending another step on resume", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const agents = yield* AgentV2.Service
+      yield* agents.update((editor) =>
+        editor.update(AgentV2.ID.make("auto"), (agent) => {
+          agent.steps = 1
+        }),
+      )
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Already answered" }), resume: false })
+      const { db } = yield* Database.Service
+      const events = yield* EventV2.Service
+      const promoted = yield* SessionInput.promoteSteers(db, events, sessionID, Number.MAX_SAFE_INTEGER)
+      yield* db
+        .insert(SessionActivityTable)
+        .values({
+          activity_id: "activity-restart-finished",
+          session_id: sessionID,
+          ordinal: 0,
+          trigger_input_id: promoted[0]!,
+          delivery: "steer",
+          state: "active",
+          created_at: Date.now(),
+        })
+        .run()
+        .pipe(Effect.orDie)
+      const assistantMessageID = SessionMessage.ID.create()
+      yield* events.publish(SessionEvent.Step.Started, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID,
+        agent: "auto",
+        model: { id: ModelV2.ID.make("fake-model"), providerID: ProviderV2.ID.make("fake") },
+      })
+      yield* events.publish(SessionEvent.Step.Ended, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID,
+        finish: "stop",
+        cost: 0,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      })
+      requests.length = 0
+      yield* session.resume(sessionID)
+      expect(requests).toHaveLength(0)
+      expect(
+        yield* db
+          .select({ state: SessionActivityTable.state })
+          .from(SessionActivityTable)
+          .where(eq(SessionActivityTable.session_id, sessionID))
+          .get()
+          .pipe(Effect.orDie),
+      ).toEqual({ state: "settled" })
+      expect(
+        yield* db
+          .select({ seq: EventTable.seq })
+          .from(EventTable)
+          .where(eq(EventTable.type, EventV2.durableType(SessionEvent.LoopBudget.Triggered)))
+          .all()
+          .pipe(Effect.orDie),
+      ).toHaveLength(0)
+    }),
+  )
+
   it.effect("does not restart a capped tool loop for a coalesced stale wake", () =>
     Effect.gen(function* () {
       yield* setup
