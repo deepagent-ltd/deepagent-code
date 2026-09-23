@@ -73,6 +73,10 @@ await ownerSetup.seedRow()
 const { SessionV1 } = await import("@deepagent-code/core/v1/session")
 const { ModelV2 } = await import("@deepagent-code/core/model")
 const { ProviderV2 } = await import("@deepagent-code/core/provider")
+const { Database } = await import("@deepagent-code/core/database/database")
+const { SessionMessageTable } = await import("@deepagent-code/core/session/sql")
+const { SessionV2 } = await import("@deepagent-code/core/session")
+const { and, desc, eq } = await import("drizzle-orm")
 const { Effect, Layer, Schema } = await import("effect")
 const { SessionPromptV2 } = await import("../../src/session/prompt-v2")
 const { Session } = await import("../../src/session/session")
@@ -142,6 +146,7 @@ const workspaceConfig: ConfigV1.Info = {
 const program = Effect.gen(function* () {
   const prompts = yield* SessionPromptV2.Service
   const sessions = yield* Session.Service
+  const database = yield* Database.Service
   const session = yield* sessions.create({ title: "Live structured output" })
   const startedAt = Date.now()
   const result = yield* prompts.prompt({
@@ -211,9 +216,24 @@ const program = Effect.gen(function* () {
   if (JSON.stringify(persistedOutput) !== JSON.stringify(expected)) {
     throw new Error("Persisted assistant structured metadata differs from the returned message")
   }
-  const user = messages.find((message) => message.info.role === "user")
-  if (user?.info.role !== "user" || user.info.format?.type !== "json_schema") {
-    throw new Error("Structured output format was not persisted on the user message")
+  // Durable V2 contract: the structured-output request persists on the durable promoted user row
+  // (session_message.data.format) — the row the runner itself reads the request from (llm.ts
+  // `context.findLast(user)?.format`). The V1-wire egress's user row is a projection that does not
+  // model format, so the wire row is not the authority for this oracle.
+  const durableUser = (yield* database.db
+    .select({ data: SessionMessageTable.data })
+    .from(SessionMessageTable)
+    .where(and(eq(SessionMessageTable.session_id, SessionV2.ID.make(session.id)), eq(SessionMessageTable.type, "user")))
+    .orderBy(desc(SessionMessageTable.seq))
+    .limit(1)
+    .get()
+    .pipe(Effect.orDie))?.data as { format?: { type?: string } } | undefined
+  if (durableUser?.format?.type !== "json_schema") {
+    throw new Error(
+      `Structured output format was not persisted on the durable user message: ${JSON.stringify(
+        durableUser?.format ?? null,
+      )}`,
+    )
   }
   const inputTokens = result.info.tokens.input + result.info.tokens.cache.read + result.info.tokens.cache.write
   if (inputTokens <= 0 || result.info.tokens.output <= 0) {
@@ -251,7 +271,7 @@ try {
       withTmpdirInstance({ git: true, config: workspaceConfig }),
       Effect.scoped,
       Effect.provide(
-        Layer.mergeAll(SessionPromptV2.defaultLayer, Session.defaultLayer).pipe(
+        Layer.mergeAll(SessionPromptV2.defaultLayer, Session.defaultLayer, Database.defaultLayer).pipe(
         Layer.provide(testInstanceStoreLayer),
         Layer.provide(ownerSetup.ownerLayer),
       ),

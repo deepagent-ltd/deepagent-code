@@ -252,10 +252,22 @@ export function legacyUser(input: {
       },
       // V1-wire parity: the durable user row carries the structured-output request (Prompt.format
       // survives promotion); the legacy owner persisted it on the user message and the read model
-      // (API/messages surface) still expects it, so the egress must not drop it. The shapes are
-      // structurally identical, so the mapping is a plain copy.
+      // (API/messages surface) still expects it, so the egress must not drop it. The V1 Info codec
+      // only accepts Format CLASS instances (a plain object fails encode — see the app's
+      // structured-output tests), so re-instantiate rather than copy.
       ...(input.message.type === "user" && input.message.format !== undefined
-        ? { format: input.message.format as SessionV1.OutputFormatText | SessionV1.OutputFormatJsonSchema }
+        ? {
+            format:
+              input.message.format.type === "json_schema"
+                ? new SessionV1.OutputFormatJsonSchema({
+                    type: "json_schema",
+                    schema: input.message.format.schema ?? {},
+                    ...(input.message.format.retryCount === undefined
+                      ? {}
+                      : { retryCount: input.message.format.retryCount }),
+                  })
+                : new SessionV1.OutputFormatText({ type: "text" }),
+          }
         : {}),
     },
     parts,
