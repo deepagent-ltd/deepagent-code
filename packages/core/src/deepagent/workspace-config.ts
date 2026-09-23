@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm"
 import { Database } from "../database/database"
 import { WorkspaceConfigTable } from "./workspace-config-sql"
 import { DeepAgentEvent } from "./deepagent-event"
+import { IMExternalDelivery } from "../im/external-delivery"
 
 // V4.0 — the per-workspace config service. Reads/writes the single JSON `config` blob per workspace and
 // exposes it as a validated, defaulted `Settings`. Four V4 subsystems consume it:
@@ -47,6 +48,9 @@ export const Settings = Schema.Struct({
   rateLimits: Schema.optional(RateLimitConfig),
   // §E1 trusted event sources (security-gate layer 1). Omitted ⇒ DEFAULT_TRUSTED_SOURCES.
   trustedSources: Schema.optional(Schema.Array(DeepAgentEvent.EventSource)),
+  // A group may fan out to one configured external channel. The group and workspace remain
+  // the durable delivery authority; this mapping only enables a post-commit projection.
+  externalChannels: Schema.optional(Schema.Array(IMExternalDelivery.Target)),
 })
 export type Settings = Schema.Schema.Type<typeof Settings>
 
@@ -71,6 +75,7 @@ export interface Resolved {
     readonly agentExecConcurrent?: number
   }
   readonly trustedSources: ReadonlyArray<DeepAgentEvent.EventSource>
+  readonly externalChannels: ReadonlyArray<IMExternalDelivery.Target>
 }
 
 const resolveSettings = (workspaceID: string, settings: Settings): Resolved => ({
@@ -82,7 +87,9 @@ const resolveSettings = (workspaceID: string, settings: Settings): Resolved => (
     ...(settings.rateLimits?.eventPublishPerMinute != null
       ? { eventPublishPerMinute: settings.rateLimits.eventPublishPerMinute }
       : {}),
-    ...(settings.rateLimits?.agentPushPerHour != null ? { agentPushPerHour: settings.rateLimits.agentPushPerHour } : {}),
+    ...(settings.rateLimits?.agentPushPerHour != null
+      ? { agentPushPerHour: settings.rateLimits.agentPushPerHour }
+      : {}),
     ...(settings.rateLimits?.agentExecConcurrent != null
       ? { agentExecConcurrent: settings.rateLimits.agentExecConcurrent }
       : {}),
@@ -91,6 +98,7 @@ const resolveSettings = (workspaceID: string, settings: Settings): Resolved => (
     settings.trustedSources != null && settings.trustedSources.length > 0
       ? settings.trustedSources
       : DEFAULT_TRUSTED_SOURCES,
+  externalChannels: settings.externalChannels ?? [],
 })
 
 export interface Interface {
@@ -149,6 +157,7 @@ export const layerWith = (options?: LayerOptions) =>
             ...(patch.quietHours !== undefined ? { quietHours: patch.quietHours } : {}),
             ...(patch.rateLimits !== undefined ? { rateLimits: patch.rateLimits } : {}),
             ...(patch.trustedSources !== undefined ? { trustedSources: patch.trustedSources } : {}),
+            ...(patch.externalChannels !== undefined ? { externalChannels: patch.externalChannels } : {}),
           }
           const at = now()
           yield* db

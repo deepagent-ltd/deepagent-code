@@ -5234,6 +5234,22 @@ export type TrustedSourcesInput = {
   trustedSources: Array<"im" | "git" | "ci" | "pr" | "monitor" | "schedule" | "system">
 }
 
+export type ExternalChannelsResult = {
+  externalChannels: Array<{
+    provider: "slack"
+    groupID: string
+    channelID: string
+  }>
+}
+
+export type ExternalChannelsInput = {
+  externalChannels: Array<{
+    provider: "slack"
+    groupID: string
+    channelID: string
+  }>
+}
+
 export type UnauthorizedError = {
   _tag: "UnauthorizedError"
   message: string
@@ -19923,6 +19939,70 @@ export type WorkspaceConfigTrustedSourcesPutResponses = {
 export type WorkspaceConfigTrustedSourcesPutResponse =
   WorkspaceConfigTrustedSourcesPutResponses[keyof WorkspaceConfigTrustedSourcesPutResponses]
 
+export type WorkspaceConfigExternalChannelsGetData = {
+  body?: never
+  path: {
+    workspaceID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workspace/{workspaceID}/config/external-channels"
+}
+
+export type WorkspaceConfigExternalChannelsGetErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type WorkspaceConfigExternalChannelsGetError =
+  WorkspaceConfigExternalChannelsGetErrors[keyof WorkspaceConfigExternalChannelsGetErrors]
+
+export type WorkspaceConfigExternalChannelsGetResponses = {
+  /**
+   * ExternalChannelsResult
+   */
+  200: ExternalChannelsResult
+}
+
+export type WorkspaceConfigExternalChannelsGetResponse =
+  WorkspaceConfigExternalChannelsGetResponses[keyof WorkspaceConfigExternalChannelsGetResponses]
+
+export type WorkspaceConfigExternalChannelsPutData = {
+  body?: ExternalChannelsInput
+  path: {
+    workspaceID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/workspace/{workspaceID}/config/external-channels"
+}
+
+export type WorkspaceConfigExternalChannelsPutErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type WorkspaceConfigExternalChannelsPutError =
+  WorkspaceConfigExternalChannelsPutErrors[keyof WorkspaceConfigExternalChannelsPutErrors]
+
+export type WorkspaceConfigExternalChannelsPutResponses = {
+  /**
+   * ExternalChannelsResult
+   */
+  200: ExternalChannelsResult
+}
+
+export type WorkspaceConfigExternalChannelsPutResponse =
+  WorkspaceConfigExternalChannelsPutResponses[keyof WorkspaceConfigExternalChannelsPutResponses]
+
 export type ImWebsocketConnectData = {
   body?: never
   path: {
@@ -20062,6 +20142,7 @@ export type V2SessionCreateData = {
       providerID: string
       variant?: string
     }
+    metadata?: SessionMetadata
   }
   path?: never
   query?: {

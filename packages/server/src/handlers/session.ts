@@ -33,6 +33,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                 id: ctx.payload.id,
                 agent: ctx.payload.agent,
                 model: ctx.payload.model,
+                metadata: ctx.payload.metadata,
                 location: {
                   directory: location.directory,
                   workspaceID: location.workspaceID,

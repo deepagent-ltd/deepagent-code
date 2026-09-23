@@ -42,6 +42,7 @@ import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { gatewayConfigFromSettings } from "@/deepagent/config"
 import { DurableLearningRuntime } from "@/deepagent/learning-runtime"
 import { SettingsStore } from "@/settings/store"
+import { SlackExternalDelivery } from "@/im/slack-external-delivery"
 
 // W3.10 — the V2 runner frame host hook (closes B-review P0 / O-W3-10).
 //
@@ -170,12 +171,16 @@ const runnerFrameHost = Layer.effect(
         Layer.mergeAll(
           runnerFrameSeamFor(ref, sources),
           runnerFrameContextToolsFor(ref),
+          SlackExternalDelivery.layer,
           V2PlanGate.layer.pipe(Layer.provide(Layer.succeed(RuntimeFlags.Service, flags))),
           Layer.succeed(SessionRunner.CurrentOnSessionSettled, onSessionSettled),
           Layer.succeed(V2ProviderTurn.CurrentCampaign, parityCampaign),
           Layer.succeed(V2ProviderTurn.CurrentOwnerCampaign, ownerCampaign),
           Layer.succeed(V2ProviderTurn.CurrentBuildIdentity, buildIdentity),
-          Layer.succeed(V2ProviderTurn.CurrentRuntimeIntegrityIdentity, RuntimeIntegrityIdentity.slotResolver(identitySlot)),
+          Layer.succeed(
+            V2ProviderTurn.CurrentRuntimeIntegrityIdentity,
+            RuntimeIntegrityIdentity.slotResolver(identitySlot),
+          ),
           Layer.succeed(V2ProviderTurn.CurrentOwnerAuthorizationPublicKey, ownerAuthorizationPublicKey),
           Layer.succeed(V2ProviderTurn.CurrentHistoryEpochLookup, historyEpochLookup),
           Layer.succeed(V2ToolEffect.CurrentPermissionGrantLookup, permissionGrantLookup),
@@ -214,6 +219,7 @@ export const frameIdentity: CompositionDigest.FrameIdentityShape = {
     seams: [
       "core/ContextToolRuntime:instance-scoped",
       "core/ProductionV2Sources:instance-identity",
+      "core/IMExternalDelivery:slack-channel",
       "core/ContextQueryAuthorization:process-local-store",
       "core/SessionCompaction.CurrentRemoteCompaction",
       "core/SessionRunner.CurrentOnSessionSettled",
@@ -278,7 +284,11 @@ export const runnerFrameLocationMapLayer = LocationServiceMap.layerNoDeps.pipe(
   // frame: the same layer object feeds the facades' internal requirements and the host capture
   // (one memoized build), so runner binds and facade resolves can never diverge.
   Layer.provide(
-    Layer.mergeAll(CodeIntelFacade.defaultLayer, ContextQueryFacade.defaultLayer, ContextQueryAuthorization.defaultLayer),
+    Layer.mergeAll(
+      CodeIntelFacade.defaultLayer,
+      ContextQueryFacade.defaultLayer,
+      ContextQueryAuthorization.defaultLayer,
+    ),
   ),
   Layer.provide(LocationIndexRuntime.defaultLayer),
   Layer.provide(InstanceLayer.layer),
@@ -305,6 +315,4 @@ export const sessionRuntimeLayer = Layer.mergeAll(
     Layer.provide(TaskTool.delegationSlotLayer),
     Layer.provide(coreSessionRuntime),
   ),
-).pipe(
-  Layer.provide(EventV2Bridge.defaultLayer),
-)
+).pipe(Layer.provide(EventV2Bridge.defaultLayer))

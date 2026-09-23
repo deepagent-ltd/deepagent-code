@@ -177,6 +177,7 @@ import type {
   ExperimentalWorkspaceSyncListResponses,
   ExperimentalWorkspaceWarpErrors,
   ExperimentalWorkspaceWarpResponses,
+  ExternalChannelsInput,
   FileCreateBody,
   FileCreateErrors,
   FileCreateResponses,
@@ -481,6 +482,7 @@ import type {
   SessionMessageResponses,
   SessionMessagesErrors,
   SessionMessagesResponses,
+  SessionMetadata,
   SessionPlanErrors,
   SessionPlanResponses,
   SessionPromptAsyncErrors,
@@ -636,6 +638,10 @@ import type {
   WebhookMonitorResponses,
   WebhookPrErrors,
   WebhookPrResponses,
+  WorkspaceConfigExternalChannelsGetErrors,
+  WorkspaceConfigExternalChannelsGetResponses,
+  WorkspaceConfigExternalChannelsPutErrors,
+  WorkspaceConfigExternalChannelsPutResponses,
   WorkspaceConfigTrustedSourcesGetErrors,
   WorkspaceConfigTrustedSourcesGetResponses,
   WorkspaceConfigTrustedSourcesPutErrors,
@@ -10625,10 +10631,92 @@ export class TrustedSources extends HeyApiClient {
   }
 }
 
+export class ExternalChannels extends HeyApiClient {
+  /**
+   * Get external IM channel bindings
+   */
+  public get<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workspaceID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      WorkspaceConfigExternalChannelsGetResponses,
+      WorkspaceConfigExternalChannelsGetErrors,
+      ThrowOnError
+    >({
+      url: "/workspace/{workspaceID}/config/external-channels",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Replace external IM channel bindings
+   */
+  public put<ThrowOnError extends boolean = false>(
+    parameters: {
+      workspaceID: string
+      directory?: string
+      workspace?: string
+      externalChannelsInput?: ExternalChannelsInput
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workspaceID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "externalChannelsInput", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).put<
+      WorkspaceConfigExternalChannelsPutResponses,
+      WorkspaceConfigExternalChannelsPutErrors,
+      ThrowOnError
+    >({
+      url: "/workspace/{workspaceID}/config/external-channels",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class WorkspaceConfig extends HeyApiClient {
   private _trustedSources?: TrustedSources
   get trustedSources(): TrustedSources {
     return (this._trustedSources ??= new TrustedSources({ client: this.client }))
+  }
+
+  private _externalChannels?: ExternalChannels
+  get externalChannels(): ExternalChannels {
+    return (this._externalChannels ??= new ExternalChannels({ client: this.client }))
   }
 }
 
@@ -10901,6 +10989,7 @@ export class Session3 extends HeyApiClient {
         providerID: string
         variant?: string
       }
+      metadata?: SessionMetadata
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -10913,6 +11002,7 @@ export class Session3 extends HeyApiClient {
             { in: "body", key: "id" },
             { in: "body", key: "agent" },
             { in: "body", key: "model" },
+            { in: "body", key: "metadata" },
           ],
         },
       ],
