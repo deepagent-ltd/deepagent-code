@@ -12,7 +12,10 @@ import { SessionMessage } from "@deepagent-code/core/session/message"
 import { SessionSchema } from "@deepagent-code/core/session/schema"
 import { V2PluginToolsBridge } from "@/session/v2-plugin-tools-bridge"
 import { InstanceRegistry } from "@/effect/instance-registry"
+import { InstanceRef } from "@/effect/instance-ref"
 import { ToolRegistry } from "@/tool/registry"
+import { adaptCustomTool, customToolName } from "@/tool/custom-tool-adapter"
+import { CustomToolRejections } from "@/tool/custom-tool-rejections"
 import type { InstanceContext } from "@/project/instance-context"
 import * as V1Tool from "@/tool/tool"
 
@@ -146,6 +149,18 @@ describe("V2PluginToolsBridge native execution semantics", () => {
       }),
   }
 
+  const instanceBoundTool: V1Tool.Def = {
+    id: "instance_bound_tool",
+    description: "uses a legacy instance-scoped service during execution",
+    parameters: Schema.Unknown,
+    execute: () =>
+      Effect.gen(function* () {
+        const current = yield* InstanceRef
+        if (!current) return yield* Effect.die("missing instance context")
+        return { title: "", metadata: {}, output: current.directory }
+      }),
+  }
+
   const slowTool = () => {
     const state = { started: false, aborted: false }
     const def: V1Tool.Def = {
@@ -174,6 +189,12 @@ describe("V2PluginToolsBridge native execution semantics", () => {
   // One shared runtime/instance: registration is instance-scoped in production, and a single
   // initializeInstance registers every tool below exactly once.
   const slow = slowTool()
+
+  test("normalizes valid custom names and rejects names Core cannot register", () => {
+    expect(customToolName("plugin.action")).toBe("plugin_action")
+    expect(adaptCustomTool({ ...metadataTool, id: "1-invalid!" })).toBeUndefined()
+  })
+
   const rt = ManagedRuntime.make(
     Layer.mergeAll(
       ApplicationTools.layer,
@@ -187,7 +208,8 @@ describe("V2PluginToolsBridge native execution semantics", () => {
             ToolRegistry.Service.of({
               ids: () => Effect.succeed([]),
               all: () => Effect.succeed([]),
-              custom: () => Effect.succeed([metadataTool, progressTool, attachmentTool, askingTool, slow.def]),
+              custom: () =>
+                Effect.succeed([metadataTool, progressTool, attachmentTool, askingTool, instanceBoundTool, slow.def]),
               named: () => Effect.die("unused"),
               tools: () => Effect.die("unused"),
             }),
@@ -242,6 +264,11 @@ describe("V2PluginToolsBridge native execution semantics", () => {
       settle("asking_tool").pipe(Effect.provideService(PermissionV2.Service, approvedPermission)),
     )
     expect((output.structured as Record<string, unknown>)["output"]).toBe("ran")
+  })
+
+  test("settle restores the registering instance for legacy wrapper dependencies", async () => {
+    const output = await rt.runPromise(settle("instance_bound_tool"))
+    expect((output.structured as Record<string, unknown>)["output"]).toBe(instance.directory)
   })
 
   test("ctx.ask rejection is a typed tool failure, never a die inside settle", async () => {
@@ -308,7 +335,7 @@ describe("V2PluginToolsBridge native execution semantics", () => {
               ToolRegistry.Service.of({
                 ids: () => Effect.succeed([]),
                 all: () => Effect.succeed([]),
-                custom: () => Effect.succeed([metadataTool]),
+                custom: () => Effect.succeed([metadataTool, { ...metadataTool, id: "1-invalid!" }]),
                 named: () => Effect.die("unused"),
                 tools: () => Effect.die("unused"),
               }),
@@ -321,12 +348,18 @@ describe("V2PluginToolsBridge native execution semantics", () => {
       reloadRt.runPromise(
         Effect.map(Effect.service(ApplicationTools.Service), (applications) => applications.entries().has("meta_tool")),
       )
+    const rejected = () =>
+      reloadRt.runPromise(
+        Effect.map(ApplicationTools.Service, (applications) => CustomToolRejections.count(applications)),
+      )
 
     await reloadRt.runPromise(InstanceRegistry.initializeInstance(instance))
     expect(await registered()).toBe(true)
+    expect(await rejected()).toBe(1)
 
     await reloadRt.runPromise(InstanceRegistry.disposeInstanceState(instance))
     expect(await registered()).toBe(false)
+    expect(await rejected()).toBe(0)
 
     const reloaded: InstanceContext = {
       directory: "/fixture/project",
@@ -335,6 +368,7 @@ describe("V2PluginToolsBridge native execution semantics", () => {
     } as InstanceContext
     await reloadRt.runPromise(InstanceRegistry.initializeInstance(reloaded))
     expect(await registered()).toBe(true)
+    expect(await rejected()).toBe(1)
     await reloadRt.dispose()
   })
 })

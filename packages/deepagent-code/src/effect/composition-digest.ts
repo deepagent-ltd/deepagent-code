@@ -13,6 +13,7 @@ import { SessionRuntimeStatus } from "@deepagent-code/core/session/runtime-statu
 import { SessionStore } from "@deepagent-code/core/session/store"
 import { InstanceStore } from "@/project/instance-store"
 import { ToolRegistry } from "@/tool/registry"
+import { CustomToolRejections } from "@/tool/custom-tool-rejections"
 
 // RI-36/RI-39/RI-44 composition oracle: ONE stable digest per real composition root (HTTP server
 // route graph, AppRuntime). Both roots share `V2RunnerFrame.sessionRuntimeLayer`, so every facet
@@ -43,7 +44,12 @@ export const ToolRegistryDigest = Schema.Struct({
 }).annotate({ identifier: "CompositionToolRegistryDigest" })
 
 export const V2RegistryDigest = Schema.Struct({
-  applicationTools: ToolRegistryDigest,
+  applicationTools: Schema.Struct({
+    count: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+    ids: Schema.Array(Schema.String),
+    digest: Schema.String,
+    rejected: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  }),
   materialized: Schema.Struct({
     count: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
     ids: Schema.Array(Schema.String),
@@ -190,6 +196,7 @@ export const current: Effect.Effect<
   // (`process.cwd()`, the same directory both roots hand to `productionSourcesLayer`).
   const ids = (yield* instances.provide({ directory: process.cwd() }, tools.ids())).toSorted()
   const applicationIDs = [...applications.entries().keys()].toSorted()
+  const rejected = CustomToolRejections.count(applications)
   const coreRegistry = yield* Effect.promise(() => import("@deepagent-code/core/tool/registry"))
   const materialization = yield* coreRegistry.ToolRegistry.Service.use((registry) => registry.materialize()).pipe(
     Effect.provide(LocationServiceMap.get({ directory: AbsolutePath.make(process.cwd()) })),
@@ -208,7 +215,8 @@ export const current: Effect.Effect<
       applicationTools: {
         count: applicationIDs.length,
         ids: applicationIDs,
-        digest: ContractDigest.contentDigest({ kind: "application-tools", ids: applicationIDs }),
+        digest: ContractDigest.contentDigest({ kind: "application-tools", ids: applicationIDs, rejected }),
+        rejected,
       },
       materialized: {
         count: registeredIDs.length,

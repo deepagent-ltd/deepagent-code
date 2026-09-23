@@ -347,6 +347,7 @@ export async function runLegacyLiveCases(input: {
     const { makeTaskSubagentRunner } = await import("../../src/session/goal-loop-wiring")
     const { TestInstance, testInstanceStoreLayer, tmpdirScoped } = await import("../../test/fixture/fixture")
     const { liveLocationServiceMap } = await import("./runner-frame")
+    const { Root } = await import("../../src/effect/root")
 
     // Mirror production (src/session/v2-runner-frame.ts): SessionRuntime.layer threads ONE shared
     // delegation slot into every drain fiber, and the capture wires that holder to the SessionV2
@@ -1901,6 +1902,9 @@ export async function runLegacyLiveCases(input: {
                 LSP.defaultLayer,
                 MCP.defaultLayer,
                 ToolRegistry.productionLayer,
+                Root.applicationToolsLayer,
+                Root.mcpBridgeLayer,
+                Root.pluginBridgeLayer,
                 RuntimeFlags.defaultLayer,
                 InstanceRegistry.layer,
                 // Ambient shared placement: the session runtime below references this SAME

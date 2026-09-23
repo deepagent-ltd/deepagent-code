@@ -1,17 +1,19 @@
 import { expect, test } from "bun:test"
-import { Cause, Context, Effect, Exit } from "effect"
+import { Cause, Context, Effect, Exit, Schema } from "effect"
 import path from "node:path"
 import { Flag } from "@deepagent-code/core/flag/flag"
 import { Database } from "@deepagent-code/core/database/database"
 import { migrations } from "@deepagent-code/core/database/migration.gen"
 import { DatabaseUpgradeRun } from "@deepagent-code/core/database/upgrade-run"
 import { ContractDigest } from "@deepagent-code/core/contract/digest"
+import { ApplicationTools } from "@deepagent-code/core/tool/application-tools"
 import { Server } from "../../src/server/server"
 import { AppRuntime, compositionDigest } from "../../src/effect/app-runtime"
 import { Root } from "../../src/effect/root"
 import { CompositionDigest } from "../../src/effect/composition-digest"
 import { RuntimeIntegrityIdentity } from "../../src/effect/runtime-integrity-identity"
 import { V2RunnerFrame } from "../../src/session/v2-runner-frame"
+import { adaptCustomTool } from "../../src/tool/custom-tool-adapter"
 import { MaintenancePaths } from "../../src/server/routes/instance/httpapi/groups/maintenance"
 import { tmpdir } from "../fixture/fixture"
 import { seedIndeterminateProviderAuthority } from "../fixture/provider-recovery"
@@ -44,6 +46,13 @@ function expectWireInvariants(record: CompositionDigest.Record) {
   expect(record.database.bootstrapDigest).toMatch(/^[0-9a-f]{64}$/)
   expect(record.v2Registry.applicationTools.ids).toEqual([...record.v2Registry.applicationTools.ids].toSorted())
   expect(record.v2Registry.applicationTools.count).toBe(record.v2Registry.applicationTools.ids.length)
+  expect(record.v2Registry.applicationTools.digest).toBe(
+    ContractDigest.contentDigest({
+      kind: "application-tools",
+      ids: record.v2Registry.applicationTools.ids,
+      rejected: record.v2Registry.applicationTools.rejected,
+    }),
+  )
   expect(record.v2Registry.materialized.ids).toEqual([...record.v2Registry.materialized.ids].toSorted())
   expect(record.v2Registry.materialized.count).toBe(record.v2Registry.materialized.ids.length)
   expect(
@@ -149,6 +158,30 @@ test("roots opened on different databases digest differently (and identically on
   }
 }, 180_000)
 
+test("a scoped plugin fixture changes the live application-tool facet until it unloads", async () => {
+  const baseline = await compositionDigest()
+  const fixture = adaptCustomTool({
+    id: "fixture_plugin_tool",
+    description: "fixture plugin tool",
+    parameters: Schema.Unknown,
+    execute: () => Effect.succeed({ title: "", metadata: {}, output: "fixture" }),
+  })
+  expect(fixture).toBeDefined()
+  if (!fixture) return
+  const loaded = await AppRuntime.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* ApplicationTools.Service.use((applications) => applications.register({ fixture_plugin_tool: fixture }))
+        return yield* CompositionDigest.current
+      }),
+    ),
+  )
+  expect(loaded.v2Registry.applicationTools.ids).toContain("fixture_plugin_tool")
+  expect(loaded.v2Registry.applicationTools.count).toBe(baseline.v2Registry.applicationTools.count + 1)
+  expect(loaded.v2Registry.applicationTools.digest).not.toBe(baseline.v2Registry.applicationTools.digest)
+  expect((await compositionDigest()).v2Registry.applicationTools).toEqual(baseline.v2Registry.applicationTools)
+}, 180_000)
+
 test("a context missing the session owner graph cannot produce a digest", async () => {
   // Deliberately under-provisioned probe: the requirement channel is erased so the digest runs
   // against an empty context and must fail closed on the first missing owner service.
@@ -167,7 +200,7 @@ test("the top-level digest moves when any single facet changes and is key-order 
       services: ["@deepagent-code/v2/Session", "@deepagent-code/v2/SessionExecution"],
     },
     v2Registry: {
-      applicationTools: { count: 0, ids: [], digest: "a".repeat(64) },
+      applicationTools: { count: 0, ids: [], digest: "a".repeat(64), rejected: 0 },
       materialized: { count: 2, ids: ["read", "write"], effectKinds: { readOnly: 1, mutating: 1 } },
       legacyEgress: { count: 2, ids: ["read", "write"], digest: "t".repeat(64) },
     },
@@ -212,6 +245,15 @@ test("the top-level digest moves when any single facet changes and is key-order 
   ).not.toBe(digest)
   expect(
     CompositionDigest.compute({ ...base, authoritySurface: { ...base.authoritySurface, legacyPromptMounted: false } }),
+  ).not.toBe(digest)
+  expect(
+    CompositionDigest.compute({
+      ...base,
+      v2Registry: {
+        ...base.v2Registry,
+        applicationTools: { ...base.v2Registry.applicationTools, rejected: 1 },
+      },
+    }),
   ).not.toBe(digest)
   const reordered: CompositionDigest.Facets = {
     locationHost: base.locationHost,
