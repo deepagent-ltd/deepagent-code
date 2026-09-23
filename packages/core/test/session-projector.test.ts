@@ -1,3 +1,4 @@
+import { projectLayer } from "./fixture/project-layer"
 import { describe, expect } from "bun:test"
 import { DateTime, Effect, Layer, Schema } from "effect"
 import { asc, eq } from "drizzle-orm"
@@ -312,7 +313,7 @@ describe("SessionProjector", () => {
         SessionV2.layer.pipe(
           Layer.provide(events),
           Layer.provide(database),
-          Layer.provide(Project.defaultLayer),
+          Layer.provide(projectLayer(database)),
           Layer.provide(SessionStore.layer.pipe(Layer.provide(database))),
           Layer.provide(SessionExecution.noopLayer),
         ),

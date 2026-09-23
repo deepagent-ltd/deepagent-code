@@ -1,3 +1,4 @@
+import { projectLayer } from "./fixture/project-layer"
 import { describe, expect } from "bun:test"
 import { Deferred, Effect, Fiber, Layer } from "effect"
 import { AgentV2 } from "@deepagent-code/core/agent"
@@ -30,7 +31,7 @@ const sessions = SessionV2.layer.pipe(
   Layer.provide(events),
   Layer.provide(database),
   Layer.provide(store),
-  Layer.provide(Project.defaultLayer),
+  Layer.provide(projectLayer(database)),
   Layer.provide(SessionExecution.noopLayer),
 )
 const saved = PermissionSaved.layer.pipe(Layer.provide(database))

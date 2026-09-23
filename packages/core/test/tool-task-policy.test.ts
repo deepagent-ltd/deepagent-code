@@ -1,10 +1,10 @@
+import { projectLayer } from "./fixture/project-layer"
 import { describe, expect, test } from "bun:test"
 import Ajv from "ajv"
 import path from "path"
 import { Effect, Layer } from "effect"
 import { Database } from "@deepagent-code/core/database/database"
 import { EventV2 } from "@deepagent-code/core/event"
-import { Project } from "@deepagent-code/core/project"
 import { SessionExecution } from "@deepagent-code/core/session/execution"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import { SessionProjector } from "@deepagent-code/core/session/projector"
@@ -314,7 +314,7 @@ const stackOver = (database: Layer.Layer<Database.Service, unknown>) => {
     Layer.provide(events),
     Layer.provide(database),
     Layer.provide(SessionStore.layer.pipe(Layer.provide(database))),
-    Layer.provide(Project.defaultLayer),
+    Layer.provide(projectLayer(database)),
     Layer.provide(SessionExecution.noopLayer),
   )
   return Layer.mergeAll(database, events, sessions, SessionProjector.layer.pipe(Layer.provide(events), Layer.provide(database)))

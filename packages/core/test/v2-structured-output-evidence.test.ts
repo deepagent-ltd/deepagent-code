@@ -1,10 +1,10 @@
+import { projectLayer } from "./fixture/project-layer"
 import { describe, expect } from "bun:test"
 import { createHash } from "node:crypto"
 import { count, eq, sql } from "drizzle-orm"
 import { Effect, Fiber, Layer } from "effect"
 import { Database } from "@deepagent-code/core/database/database"
 import { EventV2 } from "@deepagent-code/core/event"
-import { Project } from "@deepagent-code/core/project"
 import { SessionExecution } from "@deepagent-code/core/session/execution"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import { Prompt } from "@deepagent-code/core/session/prompt"
@@ -33,7 +33,7 @@ const stackOver = (database: Layer.Layer<Database.Service, unknown>) => {
     Layer.provide(events),
     Layer.provide(database),
     Layer.provide(SessionStore.layer.pipe(Layer.provide(database))),
-    Layer.provide(Project.defaultLayer),
+    Layer.provide(projectLayer(database)),
     Layer.provide(SessionExecution.noopLayer),
   )
   return Layer.mergeAll(database, events, projector, sessions)

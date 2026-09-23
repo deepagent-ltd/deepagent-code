@@ -1,3 +1,4 @@
+import { projectLayer } from "./fixture/project-layer"
 import { describe, expect, test } from "bun:test"
 import path from "node:path"
 import { LLMClient, LLMEvent, Model, type LLMClientShape, type LLMRequest } from "@deepagent-code/llm"
@@ -155,7 +156,7 @@ const systemContext = Layer.effectDiscard(
     ),
   ),
 ).pipe(Layer.provideMerge(SystemContextRegistry.layer))
-const location = Location.layer({ directory }).pipe(Layer.provide(Project.defaultLayer))
+const location = Location.layer({ directory }).pipe(Layer.provide(projectLayer(database)))
 const skillGuidance = Layer.mock(SkillGuidance.Service, {
   load: () => Effect.succeed(SystemContext.empty),
 })
@@ -294,7 +295,7 @@ const sessions = SessionV2.layer.pipe(
   Layer.provide(events),
   Layer.provide(database),
   Layer.provide(store),
-  Layer.provide(Project.defaultLayer),
+  Layer.provide(projectLayer(database)),
   Layer.provide(execution),
 )
 const it = testEffect(

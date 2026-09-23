@@ -1,3 +1,4 @@
+import { projectLayer } from "./fixture/project-layer"
 import { HttpRecorder } from "@deepagent-code/http-recorder"
 import { HttpRecorderInternal } from "@deepagent-code/http-recorder/internal"
 import * as OpenAIChat from "@deepagent-code/llm/protocols/openai-chat"
@@ -101,7 +102,7 @@ const model = OpenAIChat.route
   .model({ id: "deepseek-flash" })
 const models = SessionRunnerModel.layerWith(() => Effect.succeed({ model }))
 const systemContext = SystemContextRegistry.layer
-const location = Location.layer({ directory: AbsolutePath.make("/project") }).pipe(Layer.provide(Project.defaultLayer))
+const location = Location.layer({ directory: AbsolutePath.make("/project") }).pipe(Layer.provide(projectLayer(database)))
 const skillGuidance = Layer.mock(SkillGuidance.Service, { load: () => Effect.succeed(SystemContext.empty) })
 const config = Layer.succeed(Config.Service, Config.Service.of({ entries: () => Effect.succeed([]) }))
 const catalog = Layer.succeed(
@@ -178,7 +179,7 @@ const sessions = SessionV2.layer.pipe(
   Layer.provide(events),
   Layer.provide(database),
   Layer.provide(store),
-  Layer.provide(Project.defaultLayer),
+  Layer.provide(projectLayer(database)),
   Layer.provide(execution),
 )
 const it = testEffect(

@@ -1,3 +1,4 @@
+import { projectLayer } from "./fixture/project-layer"
 import { describe, expect, test } from "bun:test"
 import { Database as BunDatabase } from "bun:sqlite"
 import path from "node:path"
@@ -6,7 +7,6 @@ import { Effect, Exit, Layer } from "effect"
 import { Database } from "@deepagent-code/core/database/database"
 import { EventV2 } from "@deepagent-code/core/event"
 import { EventTable } from "@deepagent-code/core/event/sql"
-import { Project } from "@deepagent-code/core/project"
 import { SessionExecution } from "@deepagent-code/core/session/execution"
 import { SessionEvent } from "@deepagent-code/core/session/event"
 import { SessionMessage } from "@deepagent-code/core/session/message"
@@ -44,7 +44,7 @@ const stackOver = (database: Layer.Layer<Database.Service, unknown>) => {
     Layer.provide(events),
     Layer.provide(database),
     Layer.provide(SessionStore.layer.pipe(Layer.provide(database))),
-    Layer.provide(Project.defaultLayer),
+    Layer.provide(projectLayer(database)),
     Layer.provide(SessionExecution.noopLayer),
   )
   return Layer.mergeAll(database, events, projector, sessions)

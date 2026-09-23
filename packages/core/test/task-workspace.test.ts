@@ -1,3 +1,4 @@
+import { projectLayer } from "./fixture/project-layer"
 import { afterAll, describe, expect } from "bun:test"
 import { and, count, eq } from "drizzle-orm"
 import { Effect, Exit, Layer } from "effect"
@@ -14,7 +15,6 @@ import { FSUtil } from "@deepagent-code/core/fs-util"
 import { Location } from "@deepagent-code/core/location"
 import { LocationMutation } from "@deepagent-code/core/location-mutation"
 import { PermissionV2 } from "@deepagent-code/core/permission"
-import { Project } from "@deepagent-code/core/project"
 import { SessionExecution } from "@deepagent-code/core/session/execution"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import { Prompt } from "@deepagent-code/core/session/prompt"
@@ -59,7 +59,7 @@ const stackOver = (database: Layer.Layer<Database.Service, unknown>) => {
     Layer.provide(events),
     Layer.provide(database),
     Layer.provide(SessionStore.layer.pipe(Layer.provide(database))),
-    Layer.provide(Project.defaultLayer),
+    Layer.provide(projectLayer(database)),
     Layer.provide(SessionExecution.noopLayer),
   )
   return Layer.mergeAll(database, events, projector, sessions)

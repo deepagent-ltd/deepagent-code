@@ -1,3 +1,4 @@
+import { projectLayer } from "./fixture/project-layer"
 import { describe, expect } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -351,7 +352,7 @@ const systemContext = Layer.effectDiscard(
     ),
   ),
 ).pipe(Layer.provideMerge(SystemContextRegistry.layer))
-const location = Location.layer({ directory: AbsolutePath.make("/project") }).pipe(Layer.provide(Project.defaultLayer))
+const location = Location.layer({ directory: AbsolutePath.make("/project") }).pipe(Layer.provide(projectLayer(database)))
 const skillGuidance = Layer.mock(SkillGuidance.Service, {
   load: (agent) =>
     Effect.succeed(
@@ -574,7 +575,7 @@ const sessionsFor = (runnerLayer: ReturnType<typeof runnerStack>) =>
     Layer.provide(events),
     Layer.provide(database),
     Layer.provide(store),
-    Layer.provide(Project.defaultLayer),
+    Layer.provide(projectLayer(database)),
     Layer.provide(executionFor(runnerLayer)),
   )
 // The production root carries Database.Service INTO the Location runner trees (app-runtime pipes
@@ -625,7 +626,7 @@ const containedSessions = SessionV2.layer.pipe(
   Layer.provide(events),
   Layer.provide(database),
   Layer.provide(store),
-  Layer.provide(Project.defaultLayer),
+  Layer.provide(projectLayer(database)),
   Layer.provide(containedExecution),
 )
 const it = testEffect(

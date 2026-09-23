@@ -1,3 +1,4 @@
+import { projectLayer } from "./fixture/project-layer"
 import { describe, expect } from "bun:test"
 import { DateTime, Effect, Fiber, Layer, Stream } from "effect"
 import { eq } from "drizzle-orm"
@@ -52,7 +53,7 @@ const sessions = SessionV2.layer.pipe(
   Layer.provide(events),
   Layer.provide(database),
   Layer.provide(store),
-  Layer.provide(Project.defaultLayer),
+  Layer.provide(projectLayer(database)),
   Layer.provide(execution),
 )
 const it = testEffect(Layer.mergeAll(database, events, projector, store, execution, sessions))

@@ -1,3 +1,4 @@
+import { projectLayer } from "./fixture/project-layer"
 import * as OpenAIResponses from "@deepagent-code/llm/protocols/openai-responses"
 import { Auth, LLMClient, RequestExecutor } from "@deepagent-code/llm/route"
 import { LLMEvent, type LLMClientShape, type LLMRequest } from "@deepagent-code/llm"
@@ -185,7 +186,7 @@ const models = SessionRunnerModel.layerWith(() => Effect.sync(() => {
     : { model, info: openAIInfo, provider: openAIProvider }
 }))
 const systemContext = SystemContextRegistry.layer
-const location = Location.layer({ directory: AbsolutePath.make("/project") }).pipe(Layer.provide(Project.defaultLayer))
+const location = Location.layer({ directory: AbsolutePath.make("/project") }).pipe(Layer.provide(projectLayer(database)))
 const skillGuidance = Layer.mock(SkillGuidance.Service, { load: () => Effect.succeed(SystemContext.empty) })
 const config = Layer.succeed(Config.Service, Config.Service.of({ entries: () => Effect.succeed([]) }))
 const runner = SessionRunnerLLM.layer.pipe(
@@ -238,7 +239,7 @@ const sessions = SessionV2.layer.pipe(
   Layer.provide(events),
   Layer.provide(database),
   Layer.provide(store),
-  Layer.provide(Project.defaultLayer),
+  Layer.provide(projectLayer(database)),
   Layer.provide(execution),
 )
 const it = testEffect(
