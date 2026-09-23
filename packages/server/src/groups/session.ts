@@ -181,7 +181,7 @@ export const SessionGroup = HttpApiGroup.make("server.session")
         modelID: ModelV2.ID,
       }),
       success: HttpApiSchema.NoContent,
-      error: [SessionNotFoundError, ServiceUnavailableError],
+      error: [ConflictError, SessionNotFoundError, ServiceUnavailableError],
     })
       .middleware(SessionLocationMiddleware)
       .annotateMerge(

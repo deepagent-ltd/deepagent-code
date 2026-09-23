@@ -155,6 +155,14 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                     }),
                   ),
                 ),
+                Effect.catchTag("Session.LegacySessionRequiresAdoption", (error) =>
+                  Effect.fail(
+                    new ConflictError({
+                      message: `Historical session ${error.sessionID} requires explicit audited adoption`,
+                      resource: error.code,
+                    }),
+                  ),
+                ),
                 Effect.catchTag("SessionInput.StaleRevertEpoch", (error) =>
                   Effect.fail(
                     new StaleRevertEpochError({
@@ -183,6 +191,14 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
                   new SessionNotFoundError({
                     sessionID: error.sessionID,
                     message: `Session not found: ${error.sessionID}`,
+                  }),
+                ),
+              ),
+              Effect.catchTag("Session.LegacySessionRequiresAdoption", (error) =>
+                Effect.fail(
+                  new ConflictError({
+                    message: `Historical session ${error.sessionID} requires explicit audited adoption`,
+                    resource: error.code,
                   }),
                 ),
               ),

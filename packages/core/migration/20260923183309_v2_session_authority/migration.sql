@@ -1,0 +1,1 @@
+ALTER TABLE `session` ADD `v2_authority` integer DEFAULT false NOT NULL;

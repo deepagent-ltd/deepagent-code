@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "b382dc2b-718d-4213-8f86-d0498a68c14d",
+  "id": "813f634b-496a-4fb1-b513-3ce696c0cfd0",
   "prevIds": [
-    "6ec820d2-4fd8-452f-a9d9-8033f16437d0"
+    "b382dc2b-718d-4213-8f86-d0498a68c14d"
   ],
   "ddl": [
     {
@@ -10515,6 +10515,16 @@
       "default": "0",
       "generated": null,
       "name": "mutation_epoch",
+      "entityType": "columns",
+      "table": "session"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "v2_authority",
       "entityType": "columns",
       "table": "session"
     },

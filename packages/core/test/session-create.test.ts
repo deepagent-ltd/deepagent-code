@@ -507,12 +507,7 @@ describe("SessionV2.create", () => {
           .pipe(Effect.orDie),
       ).toEqual(sequence)
       expect(
-        yield* db
-          .select()
-          .from(EventTable)
-          .where(eq(EventTable.aggregate_id, created.id))
-          .all()
-          .pipe(Effect.orDie),
+        yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id)).all().pipe(Effect.orDie),
       ).toEqual(beforeEvents)
 
       yield* db
@@ -619,12 +614,7 @@ describe("SessionV2.create", () => {
             .pipe(Effect.orDie),
         ).toEqual(sequence)
         expect(
-          yield* db
-            .select()
-            .from(EventTable)
-            .where(eq(EventTable.aggregate_id, created.id))
-            .all()
-            .pipe(Effect.orDie),
+          yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id)).all().pipe(Effect.orDie),
         ).toEqual(beforeEvents)
       }
 
@@ -666,7 +656,7 @@ describe("SessionV2.create", () => {
             },
           },
           { ownerID: "wrk_owner", strictOwner: true },
-      )
+        )
         .pipe(Effect.catchDefect(Effect.succeed))
       expect(ownedDefect).toBeInstanceOf(EventV2.InvalidSyncEventError)
       expect((ownedDefect as EventV2.InvalidSyncEventError).message).toContain("current workspace authority")
@@ -722,7 +712,10 @@ describe("SessionV2.create", () => {
       const session = yield* SessionV2.Service
       const created = yield* session.create({ location })
       const unavailable = (
-        effect: Effect.Effect<void, SessionV2.NotFoundError | SessionV2.OperationUnavailableError>,
+        effect: Effect.Effect<
+          void,
+          SessionV2.NotFoundError | SessionV2.LegacySessionRequiresAdoption | SessionV2.OperationUnavailableError
+        >,
       ) =>
         effect.pipe(
           Effect.flip,
@@ -757,12 +750,7 @@ describe("SessionV2.create", () => {
         .run()
         .pipe(Effect.orDie)
       yield* session.create({ location })
-      const row = yield* db
-        .select()
-        .from(ProjectTable)
-        .where(eq(ProjectTable.id, resolved.id))
-        .get()
-        .pipe(Effect.orDie)
+      const row = yield* db.select().from(ProjectTable).where(eq(ProjectTable.id, resolved.id)).get().pipe(Effect.orDie)
       expect(row?.worktree).toBe(AbsolutePath.make("/sentinel-worktree"))
     }),
   )
@@ -782,10 +770,9 @@ describe("SessionV2.create", () => {
       expect(yield* session.get(created.id)).toMatchObject({ model })
       expect(
         Array.from(
-          yield* session.events({ sessionID: created.id, after: EventV2.Cursor.make(0) }).pipe(
-            Stream.take(1),
-            Stream.runCollect,
-          ),
+          yield* session
+            .events({ sessionID: created.id, after: EventV2.Cursor.make(0) })
+            .pipe(Stream.take(1), Stream.runCollect),
         ),
       ).toMatchObject([{ event: { type: "session.next.model.switched", data: { model } } }])
     }),
@@ -819,10 +806,9 @@ describe("SessionV2.create", () => {
       expect(yield* session.get(created.id)).toMatchObject({ permissions })
       expect(
         Array.from(
-          yield* session.events({ sessionID: created.id, after: EventV2.Cursor.make(0) }).pipe(
-            Stream.take(1),
-            Stream.runCollect,
-          ),
+          yield* session
+            .events({ sessionID: created.id, after: EventV2.Cursor.make(0) })
+            .pipe(Stream.take(1), Stream.runCollect),
         ),
       ).toMatchObject([{ event: { type: "session.next.permissions.changed", data: { permissions } } }])
     }),
@@ -847,7 +833,6 @@ describe("SessionV2.create", () => {
     }),
   )
 })
-
 
 describe("SessionV2 agent admission validation (RI-04)", () => {
   rosterIt.effect("create typed-fails an unknown agent before projecting the Session", () =>
