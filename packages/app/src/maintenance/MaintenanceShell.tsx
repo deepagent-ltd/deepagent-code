@@ -48,7 +48,7 @@ export function MaintenanceShell(props: {
   const view = createMemo(() => {
     const s = state()
     return {
-      mode: migrationReadOnly() && s.migration.status === "failed" ? "read_only_recovery" : s.mode,
+      mode: migrationReadOnly() && s.migration.status === "failed" ? "migration_failed_read_only" : s.mode,
       bootError: s.bootError,
       diagnostics: s.diagnostics,
       backups: s.backups,
