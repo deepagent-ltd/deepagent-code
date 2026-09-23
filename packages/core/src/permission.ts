@@ -354,13 +354,22 @@ export const layer = Layer.effect(
               actorType: "user",
               actorID: "permission-ui",
               ...(input.message ? { feedback: input.message } : {}),
-            }).pipe(EffectRuntime.provideService(Database.Service, database), EffectRuntime.orDie)
+            }).pipe(
+              EffectRuntime.provideService(Database.Service, database),
+              EffectRuntime.catchTags({
+                "ActivityAuthority.ConflictError": () => new NotFoundError({ requestID: input.requestID }),
+                "ActivityAuthority.InvalidInputError": () => new NotFoundError({ requestID: input.requestID }),
+              }),
+            )
             if (decision === "approved_once")
               yield* DeepAgentActivityAuthority.consumeOnce({
                 requestID: input.requestID,
                 consumerID: `v2-no-progress:${durable.activityID}`,
                 idempotencyKey: `v2-no-progress-consumption:${input.requestID}`,
-              }).pipe(EffectRuntime.provideService(Database.Service, database), EffectRuntime.orDie)
+              }).pipe(
+                EffectRuntime.provideService(Database.Service, database),
+                EffectRuntime.catchTag("ActivityAuthority.ConflictError", () => new NotFoundError({ requestID: input.requestID })),
+              )
             if (durable.state === "pending")
               yield* events.publish(Event.Replied, {
                 sessionID: durable.sessionID,
