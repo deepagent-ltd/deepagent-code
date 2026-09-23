@@ -173,6 +173,10 @@ export type SubagentTurnInput = {
   readonly directory?: string
   /** Durable parent Session that owns every child turn and collaboration artifact for one V4 event. */
   readonly parentSessionID?: string
+  /** Event DAG claim identity. Generation advances only after a durable retry claim. */
+  readonly eventID?: string
+  readonly taskID?: string
+  readonly generation?: number
   /**
    * Event-driven write turns fail closed when a dedicated worktree cannot be created. Read-only turns may
    * deliberately degrade to the event directory.

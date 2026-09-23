@@ -959,6 +959,9 @@ export const layerWith = (options: LayerOptions) =>
                             ].join("\n\n"),
                             workspaceID: event.workspaceID,
                             parentSessionID: parentSessionIDFor(event.id),
+                            eventID: event.id,
+                            taskID: subtask.id,
+                            generation: executionLease?.generation ?? 0,
                             requiresWriteIsolation: requiresWriteIsolation(subtask),
                             ...(executionRecord?.continuationRef || dependencyRefs[0]
                               ? { baseRef: executionRecord?.continuationRef ?? dependencyRefs[0] }
