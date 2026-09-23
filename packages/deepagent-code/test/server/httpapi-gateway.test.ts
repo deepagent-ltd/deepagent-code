@@ -436,7 +436,7 @@ describe("gateway release gate", () => {
       }
       const full = await handler(new Request("http://localhost/v1/chat/completions", {
         method: "POST", headers: { authorization: "Bearer sk-context", "content-type": "application/json",
-          "x-request-id": "context-4", "x-deepagent-session": "full-lane" },
+          "x-request-id": "context-4" },
         body: JSON.stringify({ model: "test-model", messages: [{ role: "user", content: "Full question" }] }),
       }), HttpApiApp.context)
       expect(full.status).toBe(200)
@@ -445,6 +445,8 @@ describe("gateway release gate", () => {
       try {
         const session = policyReader.query("SELECT permission FROM session WHERE id IN (SELECT lane_session_id FROM proxy_request_ledger WHERE request_id = 'tenant-context:context-4')").get() as { permission: string }
         expect(JSON.parse(session.permission)).toEqual([{ action: "*", resource: "*", effect: "deny" }])
+        const laneIDs = policyReader.query("SELECT lane_session_id FROM proxy_request_ledger WHERE request_id IN ('tenant-context:context-1', 'tenant-context:context-4') ORDER BY request_id").all() as { lane_session_id: string }[]
+        expect(laneIDs[0]?.lane_session_id).not.toBe(laneIDs[1]?.lane_session_id)
       } finally {
         policyReader.close()
       }
@@ -453,7 +455,7 @@ describe("gateway release gate", () => {
       expect((await exported.json()).data).toHaveLength(4)
       const lanes = await handler(new Request("http://localhost/proxy/admin/lanes?tenant=tenant-context"), HttpApiApp.context)
       expect(lanes.status).toBe(200)
-      expect((await lanes.json()).data.map((lane: { hint: string }) => lane.hint).sort()).toEqual(["default", "full-lane"])
+      expect((await lanes.json()).data.map((lane: { hint: string }) => lane.hint).sort()).toEqual(["default", "default"])
       const failed = await handler(new Request("http://localhost/v1/chat/completions", {
         method: "POST", headers: { authorization: "Bearer sk-context", "content-type": "application/json",
           "x-request-id": "context-5", "x-deepagent-session": "failure-lane" },

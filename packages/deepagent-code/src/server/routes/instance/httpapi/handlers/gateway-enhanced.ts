@@ -20,7 +20,7 @@ import type { ChatPayload } from "../groups/gateway-wire"
 type Tenant = typeof ProxyTenantTable.$inferSelect
 
 export const proxyLaneID = (tenant: Tenant, hint: string) =>
-  SessionV2.ID.make(`ses_proxy_${contentDigest(`${tenant.id}:${tenant.key_fingerprint}:${hint}`).slice(0, 24)}`)
+  SessionV2.ID.make(`ses_proxy_${contentDigest(`${tenant.id}:${tenant.key_fingerprint}:${tenant.tier}:${hint}`).slice(0, 24)}`)
 
 export const proxyPromptID = (tenant: Tenant, requestID: string) =>
   SessionMessage.ID.make(`msg_${contentDigest(`proxy:${tenant.id}:${requestID}`).slice(0, 40)}`)
