@@ -4,6 +4,7 @@ import path from "node:path"
 import type { ConfigV1 } from "@deepagent-code/core/v1/config/config"
 import { finishLiveScript } from "./lifecycle"
 import { runtimeProviderIDFor } from "./runtime"
+import { prepareHarnessOwner } from "../../../core/script/live-llm/runtime"
 import {
   loadLiveLLMConfig,
   liveLLMKeyFileReference,
@@ -62,6 +63,12 @@ process.env.DEEPAGENT_CODE_DISABLE_AUTOUPDATE = "1"
 process.env.DEEPAGENT_CODE_DISABLE_MODELS_FETCH = "1"
 process.env.DEEPAGENT_CODE_DISABLE_DEFAULT_PLUGINS = "1"
 process.env.DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE = config.apiKeyFile
+
+// The V2 owner gate is default-on (prompt-v2 refuses with v2_owner_unavailable otherwise). Arm the
+// harness-owned campaign BEFORE any layer boots (Reference defaults cache env) and seed the row
+// before the program boots, mirroring the runLegacyLiveCases harness.
+const ownerSetup = await prepareHarnessOwner()
+await ownerSetup.seedRow()
 
 const { SessionV1 } = await import("@deepagent-code/core/v1/session")
 const { ModelV2 } = await import("@deepagent-code/core/model")
@@ -244,7 +251,10 @@ try {
       withTmpdirInstance({ git: true, config: workspaceConfig }),
       Effect.scoped,
       Effect.provide(
-        Layer.mergeAll(SessionPromptV2.defaultLayer, Session.defaultLayer).pipe(Layer.provide(testInstanceStoreLayer)),
+        Layer.mergeAll(SessionPromptV2.defaultLayer, Session.defaultLayer).pipe(
+        Layer.provide(testInstanceStoreLayer),
+        Layer.provide(ownerSetup.ownerLayer),
+      ),
       ),
       Effect.timeout(config.timeoutMs),
     ),
