@@ -37,7 +37,10 @@ if (
     `Foreground parent tool sequence mismatch: ${foreground.tools.map((tool) => `${tool.name}:${tool.status}`).join(", ")}`,
   )
 }
-if (record(completed[2]?.input, "task_read input").limit !== 100 || "before" in record(completed[2]?.input, "task_read input")) {
+// The task_read input schema is provider-tolerant (limit: number | numeric string), so the model
+// sending "100" is a valid complete-transcript request; compare numerically.
+const taskReadInput = record(completed[2]?.input, "task_read input")
+if (Number(taskReadInput.limit) !== 100 || "before" in taskReadInput) {
   throw new Error("Parent task_read did not request the complete transcript page")
 }
 if (foreground.children.length !== 1) {
