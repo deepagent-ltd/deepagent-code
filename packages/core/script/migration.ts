@@ -30,6 +30,8 @@ if (args.values["registry-only"]) {
   process.exit(0)
 }
 
+await assertBaselinePresent()
+
 await $`bun drizzle-kit generate ${args.values.name ? ["--name", args.values.name] : []}`.cwd(
   path.join(root, "packages/core"),
 )
@@ -46,9 +48,53 @@ for (const name of sqlMigrations) {
   )
 }
 
+await pruneHistoricalSnapshots(sqlDir)
+
 await Bun.write(registry, await renderRegistry(await migrationNamesInRegistryOrder()))
 
+/**
+ * Snapshot convention (X-14, user ruling 2026-09-23): only the NEWEST full-schema baseline
+ * snapshot.json is committed. drizzle-kit diffs against the lexicographically-last snapshot
+ * only, so historical snapshots are dead weight. Deleting the baseline instead would make
+ * the next generate diff against the empty dry snapshot and emit a full-schema migration
+ * (the duplicate-generation trap), so refuse to run on a tree that has migrations but no
+ * baseline — restore the baseline from git history instead.
+ */
+async function assertBaselinePresent() {
+  const migrations = await sqlMigrationNames(sqlDir)
+  if (migrations.length === 0) return
+  if ((await snapshotPaths(sqlDir)).length === 0) {
+    throw new Error(
+      "packages/core/migration has SQL migrations but no snapshot.json baseline. " +
+        "Regenerating now would duplicate the entire schema. Restore the newest baseline snapshot from git history " +
+        "(the last committed snapshot.json) before running script/migration.ts.",
+    )
+  }
+}
+
+/** Keep only the lexicographically-last (newest) snapshot as the committed baseline. */
+async function pruneHistoricalSnapshots(directory: string) {
+  const snapshots = await snapshotPaths(directory)
+  const keep = snapshots.at(-1)
+  for (const file of snapshots) {
+    if (file === keep) continue
+    await fs.rm(file)
+    console.log(`Pruned historical schema snapshot: ${path.relative(root, file)}`)
+  }
+}
+
+async function snapshotPaths(directory: string) {
+  return (await Array.fromAsync(new Bun.Glob("*/snapshot.json").scan({ cwd: directory }))).sort()
+}
+
 async function check() {
+  await assertBaselinePresent()
+  const committed = await snapshotPaths(sqlDir)
+  if (committed.length > 1) {
+    throw new Error(
+      `packages/core/migration commits ${committed.length} snapshot.json files; the convention keeps only the newest baseline. Run \`bun script/migration.ts\` from packages/core.`,
+    )
+  }
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "deepagent-code-core-migration-check-"))
   const output = path.join(temporary, "migration")
   try {
