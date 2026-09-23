@@ -10,6 +10,7 @@ import * as Contract from "../contract/model-protocol"
 import { CanonicalJson } from "../util/canonical-json"
 import { Hash } from "../util/hash"
 import { SessionEvent } from "./event"
+import { LongContext } from "./long-context"
 import { SessionMessage } from "./message"
 import { SessionSchema } from "./schema"
 import { SessionRunnerCanonical, type SelectionAdmission } from "./runner/canonical-turn"
@@ -154,7 +155,7 @@ type Input = {
   readonly ownerMode: "shadow_v2" | "v2"
   readonly admission: SelectionAdmission
   /** RI-18: manual compaction is forced (no token threshold) and reports reason "manual". */
-  readonly reason?: "auto" | "manual"
+  readonly reason?: "auto" | "manual" | "hard_gate" | "provider_overflow"
   /**
    * B4: pre-computed request estimate from turn preparation (the same measurement
    * `estimateInputUsage` produces). When present the trigger reuses it instead of re-serializing
@@ -437,6 +438,17 @@ export const make = (dependencies: Dependencies) => {
       timestamp: yield* DateTime.now,
       reason: input.reason ?? "auto",
     })
+    const checkpoint = input.reason === "hard_gate"
+      ? yield* LongContext.writeCheckpoint({
+          db: dependencies.db,
+          sessionID: input.sessionID,
+          activityID: input.admission.activityId,
+          checkpointID: messageID,
+          promptEpoch: input.historyPromptEpoch,
+          sourceEndMessageID: input.entries.at(-1)?.message.id ?? null,
+          selectionID: input.admission.selectionId,
+        }).pipe(Effect.orDie)
+      : undefined
 
     const remote = dependencies.remoteCompaction
     // design §5.3 Responses-only gate (C2-05): remote compact is only applicable on an explicit
@@ -480,8 +492,9 @@ export const make = (dependencies: Dependencies) => {
             reason: input.reason ?? "auto",
             text: remoteResult.summary,
             recent: selected.recent,
+            ...(checkpoint ?? {}),
           })
-          return { receiptID: null }
+          return { receiptID: null, ...(checkpoint ?? {}) }
         }
         log.warn("remote compaction returned an empty summary, entering compact recovery", {
           sessionID: input.sessionID,
@@ -509,6 +522,8 @@ export const make = (dependencies: Dependencies) => {
       tools: [],
       generation: { maxTokens: summaryOutput },
     })
+    const summaryEstimatedTokens = PreparedProviderTurn.estimateFullRequestTokens(summaryRequest)
+    if (summaryEstimatedTokens >= context) return false
     const summaryRequestInputHash = Hash.sha256(
       CanonicalJson.stringify({
         ...LLMRequest.input(summaryRequest),
@@ -562,7 +577,7 @@ export const make = (dependencies: Dependencies) => {
               toolChoice: null,
               toolResultReferences: [],
               samplingMaxOutputTokens: summaryOutput,
-              budget: PreparedProviderTurn.budget(input.model),
+              budget: PreparedProviderTurn.budget(input.model, summaryEstimatedTokens),
               userMessageID: input.userMessageID,
               activityID: summaryReceipt.activityId,
               providerTurnSeq: summaryReceipt.providerTurnSeq,
@@ -625,8 +640,9 @@ export const make = (dependencies: Dependencies) => {
       reason: input.reason ?? "auto",
       text: summary,
       recent: selected.recent,
+      ...(checkpoint ?? {}),
     })
-    return { receiptID: summaryReceiptID ?? null }
+    return { receiptID: summaryReceiptID ?? null, ...(checkpoint ?? {}) }
   })
   const compactIfNeeded = Effect.fn("SessionCompaction.compactIfNeeded")(function* (input: Input) {
     if (!config.auto) return false
@@ -637,6 +653,7 @@ export const make = (dependencies: Dependencies) => {
     return yield* compactAfterOverflow(input)
   })
   return {
+    autoEnabled: config.auto,
     compactIfNeeded,
     compactAfterOverflow,
   }

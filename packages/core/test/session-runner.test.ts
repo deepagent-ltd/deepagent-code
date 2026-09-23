@@ -22,6 +22,7 @@ import * as OpenAIChat from "@deepagent-code/llm/protocols/openai-chat"
 import * as OpenAIResponses from "@deepagent-code/llm/protocols/openai-responses"
 import { Database } from "@deepagent-code/core/database/database"
 import { CompactionRequestTable } from "../src/session/compaction-request.sql"
+import { SessionContextCheckpointTable, SessionModelPolicyReceiptTable } from "../src/session/long-context.sql"
 import { EventV2 } from "@deepagent-code/core/event"
 import { Hash } from "@deepagent-code/core/util/hash"
 import { PermissionV2 } from "@deepagent-code/core/permission"
@@ -67,6 +68,7 @@ import { SessionContext } from "@deepagent-code/core/context-federation/session-
 import { ContextQueryAuthorization } from "@deepagent-code/core/context-federation/query-authorization"
 import { SessionRunnerCanonical } from "@deepagent-code/core/session/runner/canonical-turn"
 import { SessionCompaction } from "@deepagent-code/core/session/compaction"
+import { PreparedProviderTurn } from "@deepagent-code/core/session/runner/prepared-provider-turn"
 import { DocumentStore } from "@deepagent-code/core/deepagent/document-store"
 import { createPlanDoc, planScope, type PlanStep } from "@deepagent-code/core/deepagent/plan-controller"
 import { planStoreRoot } from "@deepagent-code/core/deepagent/plan-store"
@@ -222,6 +224,32 @@ const budgetModel = Model.make({
   id: "budget",
   provider: "fake",
   route: OpenAIChat.route.with({ limits: { context: 60_000, output: 1_000 } }),
+})
+const managedModel = Model.make({
+  id: "deepseek-flash",
+  provider: "deepseek",
+  route: OpenAIChat.route.with({ limits: { context: 1_000, output: 50 } }),
+})
+const managedCompactModel = Model.make({
+  id: "deepseek-flash",
+  provider: "deepseek",
+  route: OpenAIChat.route.with({ limits: { context: 3_000, output: 50 } }),
+})
+const managedObservationModel = Model.make({
+  id: "deepseek-flash",
+  provider: "deepseek",
+  route: OpenAIChat.route.with({ limits: { context: 1_000_000, output: 50 } }),
+})
+const managedCatalogEntry = ModelV2.Info.empty(ProviderV2.ID.make("deepseek"), ModelV2.ID.make("deepseek-flash"))
+const managedNoToolInfo = new ModelV2.Info({
+  ...managedCatalogEntry,
+  api: {
+    id: managedCatalogEntry.id,
+    type: "aisdk",
+    package: "@ai-sdk/openai-compatible",
+    url: "https://api.deepseek.com/v1",
+    protocol: "openai-compatible.chat",
+  },
 })
 const authorizations: Tool.Context[] = []
 const permissionAssertions: PermissionV2.AssertInput[] = []
@@ -1057,6 +1085,122 @@ const verifyPartialFlushOnInterruption = (kind: FragmentKind) =>
   })
 
 describe("SessionRunnerLLM", () => {
+  it.effect("blocks a managed over-budget request before any provider attempt", () =>
+    Effect.gen(function* () {
+      yield* setup
+      currentModel = managedModel
+      const session = yield* SessionV2.Service
+      const { db } = yield* Database.Service
+      requests.length = 0
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "long input ".repeat(2_000) }), resume: false })
+
+      const hardExit = yield* session.resume(sessionID).pipe(Effect.exit)
+      expect(hardExit).toMatchObject({ _tag: "Failure" })
+      expect(requests).toHaveLength(0)
+      expect(yield* db.select().from(V2ProviderTurnReceiptTable)
+        .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)).toHaveLength(0)
+      const [policy] = yield* db.select().from(SessionModelPolicyReceiptTable)
+        .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)
+      expect(policy).toMatchObject({
+        provider_id: "deepseek",
+        api_model_id: "deepseek-flash",
+        context_selection_id: expect.any(String),
+        offered_tool_ids: expect.arrayContaining(["echo"]),
+        trigger_source: "threshold",
+        blocked_reason: "compaction_unavailable",
+      })
+      expect(policy?.policy).toMatchObject({ state: "managed", effectiveHardGate: 1_000, limitMismatch: true })
+      expect(yield* db.select().from(SessionContextCheckpointTable)
+        .where(eq(SessionContextCheckpointTable.session_id, sessionID)).all().pipe(Effect.orDie)).toHaveLength(0)
+    }),
+  )
+
+  it.effect("commits a checkpoint before hard-gate compaction and rebuilds the selected request", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const { db } = yield* Database.Service
+      response = fragmentFixture("text", "hard-earlier", ["Earlier answer"]).completeEvents
+      yield* session.prompt({
+        sessionID,
+        prompt: new Prompt({ text: "Earlier question ".repeat(180) }),
+        resume: false,
+      })
+      yield* session.resume(sessionID)
+
+      currentModel = managedCompactModel
+      currentModelInfo = managedNoToolInfo
+      requests.length = 0
+      responses = [
+        fragmentFixture("text", "hard-summary", ["## Goal\n- Preserve the task"]).completeEvents,
+        fragmentFixture("text", "hard-final", ["Continued"]).completeEvents,
+      ]
+      yield* session.prompt({
+        sessionID,
+        prompt: new Prompt({ text: "Recent exact request ".repeat(500) }),
+        resume: false,
+      })
+      expect(yield* session.resume(sessionID).pipe(Effect.exit)).toMatchObject({ _tag: "Success" })
+
+      expect(requests).toHaveLength(2)
+      expect(requests[0]?.tools).toEqual([])
+      expect(userTexts(requests[1])[0]).toContain("<summary>\n## Goal\n- Preserve the task\n</summary>")
+      expect(JSON.stringify(requests[1]?.messages)).toContain("Context checkpoint (durable authority references")
+      const [checkpoint] = yield* db.select().from(SessionContextCheckpointTable)
+        .where(eq(SessionContextCheckpointTable.session_id, sessionID)).all().pipe(Effect.orDie)
+      expect(checkpoint).toMatchObject({ session_id: sessionID, activity_id: expect.any(String) })
+      expect(checkpoint?.content).toMatchObject({
+        schema_version: "context_checkpoint.v1",
+        context_selection_refs: expect.arrayContaining([expect.stringMatching(/^selection:/)]),
+      })
+      const policies = yield* db.select().from(SessionModelPolicyReceiptTable)
+        .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)
+      expect(policies.some((row) => row.checkpoint_id === checkpoint?.checkpoint_id && row.checkpoint_hash === checkpoint?.content_hash)).toBe(true)
+      expect(policies).toHaveLength(2)
+      expect(policies.find((row) => row.checkpoint_id !== null)?.context_selection_id).not.toBe(
+        policies.find((row) => row.checkpoint_id === null)?.context_selection_id,
+      )
+      expect((yield* db.select().from(SessionContextSelectionTable)
+        .where(eq(SessionContextSelectionTable.session_id, sessionID)).all().pipe(Effect.orDie)).length).toBeGreaterThanOrEqual(2)
+
+      // A modified artifact cannot be projected into another provider turn after restart/resume.
+      yield* db.update(SessionContextCheckpointTable).set({ content: { tampered: true } })
+        .where(eq(SessionContextCheckpointTable.checkpoint_id, checkpoint!.checkpoint_id)).pipe(Effect.orDie)
+      requests.length = 0
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Continue after restart" }), resume: false })
+      expect(yield* session.resume(sessionID).pipe(Effect.exit)).toMatchObject({ _tag: "Failure" })
+      expect(requests).toHaveLength(0)
+    }),
+  )
+
+  it.effect("records an observation at full-request scale without a model-facing reminder or compaction", () =>
+    Effect.gen(function* () {
+      yield* setup
+      currentModel = managedObservationModel
+      currentModelInfo = managedNoToolInfo
+      const session = yield* SessionV2.Service
+      const { db } = yield* Database.Service
+      response = fragmentFixture("text", "observed", ["Observed answer"]).completeEvents
+      requests.length = 0
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "x".repeat(1_030_000) }), resume: false })
+      expect(yield* session.resume(sessionID).pipe(Effect.exit)).toMatchObject({ _tag: "Success" })
+
+      expect(requests).toHaveLength(1)
+      expect(budgetNotices(requests[0]!)).toHaveLength(0)
+      const [policy] = yield* db.select().from(SessionModelPolicyReceiptTable)
+        .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)
+      expect(policy?.policy).toMatchObject({ state: "managed", action: "observed" })
+      expect(policy?.trigger_source).toBe("none")
+      const [receipt] = yield* db.select().from(V2ProviderTurnReceiptTable)
+        .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)
+      expect(receipt?.provider_id).toBe("deepseek")
+      expect(policy?.provider_attempt_id).toBe(receipt?.provider_attempt_id)
+      expect(PreparedProviderTurn.estimateFullRequestTokens(requests[0]!)).toBe(policy?.estimated_full_request_tokens)
+      expect(yield* db.select().from(SessionContextCheckpointTable)
+        .where(eq(SessionContextCheckpointTable.session_id, sessionID)).all().pipe(Effect.orDie)).toHaveLength(0)
+    }),
+  )
+
   it.effect("W7: invokes the injected onSessionSettled hook once after a settled drain", () =>
     Effect.gen(function* () {
       yield* setup

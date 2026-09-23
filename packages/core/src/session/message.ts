@@ -186,6 +186,8 @@ export class Compaction extends Schema.Class<Compaction>("Session.Message.Compac
   reason: SessionEvent.Compaction.Started.data.fields.reason,
   summary: Schema.String,
   recent: Schema.String,
+  checkpointID: Schema.String.pipe(Schema.optional),
+  checkpointHash: Schema.String.pipe(Schema.optional),
   ...Base,
 }) {}
 

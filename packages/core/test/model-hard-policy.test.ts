@@ -54,6 +54,16 @@ describe("FEATURE-001-405 managed model hard gates", () => {
     ).toEqual({ state: "unmanaged", reason: "model_not_registered" })
     expect(
       ModelHardPolicy.decide({
+        providerID: "deepseek",
+        runtimeModelID: "deepseek-v4-flash",
+        apiModelID: "deepseek-v4-flash",
+        physicalInputBudget: 1_000_000,
+        estimatedFullRequestTokens: 900_000,
+        autoCompact: true,
+      }),
+    ).toEqual({ state: "unmanaged", reason: "model_not_registered" })
+    expect(
+      ModelHardPolicy.decide({
         providerID: "deepagent",
         runtimeModelID: "k3-256k",
         physicalInputBudget: 256_000,

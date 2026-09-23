@@ -148,6 +148,8 @@ export type AdmitSelectionInput = {
   readonly fallbackUserInputId?: string
   readonly system: SystemSnapshot
   readonly historyEndMessageId?: string
+  /** Force one post-checkpoint successor; reuse it on exact retry instead of churning revisions. */
+  readonly refreshAfterSelectionID?: string
   readonly model?: {
     readonly id: string
     readonly providerID: string
@@ -328,7 +330,8 @@ function selectContext(
     // Reuse an existing V2 selection for this activity (exact-retry/continuation): ONLY a real V2
     // selection is dispatchable. A legacy_incomplete row (C3-08 read-side marking) stays readable
     // for history but is NOT reusable for a new dispatch — build a V2 successor instead.
-    if (latest && !isLegacyIncompleteRow(latest)) return yield* admissionFromRow(latest, activity, input, now)
+    if (latest && !isLegacyIncompleteRow(latest) && latest.selection_id !== input.refreshAfterSelectionID)
+      return yield* admissionFromRow(latest, activity, input, now)
     const revision = latest ? latest.revision + 1 : 0
     return yield* buildV2Selection(input, activity, now, frame, revision)
   })

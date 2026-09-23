@@ -703,7 +703,12 @@ export namespace Compaction {
     schema: {
       ...Base,
       messageID: SessionMessageID.ID,
-      reason: Schema.Union([Schema.Literal("auto"), Schema.Literal("manual")]),
+      reason: Schema.Union([
+        Schema.Literal("auto"),
+        Schema.Literal("manual"),
+        Schema.Literal("hard_gate"),
+        Schema.Literal("provider_overflow"),
+      ]),
     },
   })
   export type Started = typeof Started.Type
@@ -738,6 +743,8 @@ export namespace Compaction {
       reason: Started.data.fields.reason,
       text: Schema.String,
       recent: Schema.String,
+      checkpointID: Schema.String.pipe(Schema.optional),
+      checkpointHash: Schema.String.pipe(Schema.optional),
     },
   })
   export type Ended = typeof Ended.Type

@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "6797979b-83e3-5b9f-a1fb-a4bc4ebac885",
+  "id": "32cdd5c2-2f4e-42fe-af1e-69541bc34a51",
   "prevIds": [
-    "813f634b-496a-4fb1-b513-3ce696c0cfd0"
+    "6797979b-83e3-5b9f-a1fb-a4bc4ebac885"
   ],
   "ddl": [
     {
@@ -124,6 +124,14 @@
     },
     {
       "name": "session_v2_compaction_request",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_context_checkpoint",
+      "entityType": "tables"
+    },
+    {
+      "name": "session_model_policy_receipt",
       "entityType": "tables"
     },
     {
@@ -336,6 +344,10 @@
     },
     {
       "name": "proxy_tenant",
+      "entityType": "tables"
+    },
+    {
+      "name": "event_task_workspace",
       "entityType": "tables"
     },
     {
@@ -4159,6 +4171,316 @@
       "name": "settled_at",
       "entityType": "columns",
       "table": "session_v2_compaction_request"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "checkpoint_id",
+      "entityType": "columns",
+      "table": "session_context_checkpoint"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "session_context_checkpoint"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "activity_id",
+      "entityType": "columns",
+      "table": "session_context_checkpoint"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "prompt_epoch",
+      "entityType": "columns",
+      "table": "session_context_checkpoint"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "content_hash",
+      "entityType": "columns",
+      "table": "session_context_checkpoint"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "content",
+      "entityType": "columns",
+      "table": "session_context_checkpoint"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "session_context_checkpoint"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "receipt_id",
+      "entityType": "columns",
+      "table": "session_model_policy_receipt"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "session_model_policy_receipt"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "activity_id",
+      "entityType": "columns",
+      "table": "session_model_policy_receipt"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "user_message_id",
+      "entityType": "columns",
+      "table": "session_model_policy_receipt"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "prompt_epoch",
+      "entityType": "columns",
+      "table": "session_model_policy_receipt"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "request_hash",
+      "entityType": "columns",
+      "table": "session_model_policy_receipt"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "provider_id",
+      "entityType": "columns",
+      "table": "session_model_policy_receipt"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "runtime_model_id",
+      "entityType": "columns",
+      "table": "session_model_policy_receipt"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "api_model_id",
+      "entityType": "columns",
+      "table": "session_model_policy_receipt"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "policy",
+      "entityType": "columns",
+      "table": "session_model_policy_receipt"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "estimated_full_request_tokens",
+      "entityType": "columns",
+      "table": "session_model_policy_receipt"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "estimator_version",
+      "entityType": "columns",
+      "table": "session_model_policy_receipt"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "reserved_output_tokens",
+      "entityType": "columns",
+      "table": "session_model_policy_receipt"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "context_selection_id",
+      "entityType": "columns",
+      "table": "session_model_policy_receipt"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "context_projection_hash",
+      "entityType": "columns",
+      "table": "session_model_policy_receipt"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "graph_snapshot_refs",
+      "entityType": "columns",
+      "table": "session_model_policy_receipt"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "offered_tool_ids",
+      "entityType": "columns",
+      "table": "session_model_policy_receipt"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "degraded_tool_ids",
+      "entityType": "columns",
+      "table": "session_model_policy_receipt"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "provider_attempt_id",
+      "entityType": "columns",
+      "table": "session_model_policy_receipt"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "trigger_source",
+      "entityType": "columns",
+      "table": "session_model_policy_receipt"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "checkpoint_id",
+      "entityType": "columns",
+      "table": "session_model_policy_receipt"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "checkpoint_hash",
+      "entityType": "columns",
+      "table": "session_model_policy_receipt"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "blocked_reason",
+      "entityType": "columns",
+      "table": "session_model_policy_receipt"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "session_model_policy_receipt"
     },
     {
       "type": "text",
@@ -9282,6 +9604,136 @@
     },
     {
       "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "event_id",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "task_id",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "generation",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "operation_key",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "repository_root",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "base_commit",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "branch",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "directory",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "state",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "continuation_ref",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "error",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_created",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time_settled",
+      "entityType": "columns",
+      "table": "event_task_workspace"
+    },
+    {
+      "type": "text",
       "notNull": false,
       "autoincrement": false,
       "default": null,
@@ -13860,6 +14312,36 @@
     },
     {
       "columns": [
+        "session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_session_context_checkpoint_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "session_context_checkpoint"
+    },
+    {
+      "columns": [
+        "session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_session_model_policy_receipt_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "session_model_policy_receipt"
+    },
+    {
+      "columns": [
         "descriptor_id"
       ],
       "tableTo": "session_provider_recovery_descriptor",
@@ -14970,6 +15452,17 @@
     },
     {
       "columns": [
+        "event_id",
+        "task_id",
+        "generation"
+      ],
+      "nameExplicit": false,
+      "name": "event_task_workspace_pk",
+      "entityType": "pks",
+      "table": "event_task_workspace"
+    },
+    {
+      "columns": [
         "session_id",
         "prompt_epoch",
         "ordinal"
@@ -15247,6 +15740,24 @@
       "nameExplicit": false,
       "name": "session_v2_compaction_request_pk",
       "table": "session_v2_compaction_request",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "checkpoint_id"
+      ],
+      "nameExplicit": false,
+      "name": "session_context_checkpoint_pk",
+      "table": "session_context_checkpoint",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "receipt_id"
+      ],
+      "nameExplicit": false,
+      "name": "session_model_policy_receipt_pk",
+      "table": "session_model_policy_receipt",
       "entityType": "pks"
     },
     {
@@ -16699,6 +17210,42 @@
       "isUnique": false,
       "where": null,
       "origin": "manual",
+      "name": "session_context_checkpoint_session_idx",
+      "entityType": "indexes",
+      "table": "session_context_checkpoint"
+    },
+    {
+      "columns": [
+        {
+          "value": "session_id",
+          "isExpression": false
+        },
+        {
+          "value": "created_at",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "session_model_policy_receipt_session_idx",
+      "entityType": "indexes",
+      "table": "session_model_policy_receipt"
+    },
+    {
+      "columns": [
+        {
+          "value": "session_id",
+          "isExpression": false
+        },
+        {
+          "value": "created_at",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
       "name": "session_provider_recovery_descriptor_session_idx",
       "entityType": "indexes",
       "table": "session_provider_recovery_descriptor"
@@ -17694,6 +18241,24 @@
       "name": "proxy_tenant_key_hash_idx",
       "entityType": "indexes",
       "table": "proxy_tenant"
+    },
+    {
+      "columns": [
+        {
+          "value": "state",
+          "isExpression": false
+        },
+        {
+          "value": "time_settled",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "event_task_workspace_reclaim_idx",
+      "entityType": "indexes",
+      "table": "event_task_workspace"
     },
     {
       "columns": [
@@ -19174,169 +19739,6 @@
       "name": "released_knowledge_snapshot_actor_type_check",
       "entityType": "checks",
       "table": "released_knowledge_snapshot"
-    },
-    {
-      "name": "event_task_workspace",
-      "entityType": "tables"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "event_id",
-      "entityType": "columns",
-      "table": "event_task_workspace"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "task_id",
-      "entityType": "columns",
-      "table": "event_task_workspace"
-    },
-    {
-      "type": "integer",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "generation",
-      "entityType": "columns",
-      "table": "event_task_workspace"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "operation_key",
-      "entityType": "columns",
-      "table": "event_task_workspace"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "repository_root",
-      "entityType": "columns",
-      "table": "event_task_workspace"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "base_commit",
-      "entityType": "columns",
-      "table": "event_task_workspace"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "branch",
-      "entityType": "columns",
-      "table": "event_task_workspace"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "directory",
-      "entityType": "columns",
-      "table": "event_task_workspace"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "state",
-      "entityType": "columns",
-      "table": "event_task_workspace"
-    },
-    {
-      "type": "text",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "continuation_ref",
-      "entityType": "columns",
-      "table": "event_task_workspace"
-    },
-    {
-      "type": "text",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "error",
-      "entityType": "columns",
-      "table": "event_task_workspace"
-    },
-    {
-      "type": "integer",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "time_created",
-      "entityType": "columns",
-      "table": "event_task_workspace"
-    },
-    {
-      "type": "integer",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "time_settled",
-      "entityType": "columns",
-      "table": "event_task_workspace"
-    },
-    {
-      "columns": [
-        "event_id",
-        "task_id",
-        "generation"
-      ],
-      "nameExplicit": false,
-      "name": "event_task_workspace_pk",
-      "entityType": "pks",
-      "table": "event_task_workspace"
-    },
-    {
-      "columns": [
-        {
-          "value": "state",
-          "isExpression": false
-        },
-        {
-          "value": "time_settled",
-          "isExpression": false
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "origin": "manual",
-      "name": "event_task_workspace_reclaim_idx",
-      "entityType": "indexes",
-      "table": "event_task_workspace"
     }
   ],
   "renames": []
