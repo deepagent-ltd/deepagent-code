@@ -873,7 +873,10 @@ export const layerWith = (options: LayerOptions) =>
               // no worktree can be created; dependent turns receive the upstream durable ref below.
               // Legacy coordinate() callers retain their rootless test behavior while the production
               // DAG lane refuses write turns without an absolute filesystem root above.
-              const fileKeys = claim.files.map((file) => (eventDir ? LockKeys.fileLockKey(eventDir, file) : file))
+              const fileKeys =
+                claim.files.length === 0 && requiresWriteIsolation(subtask) && eventDir
+                  ? [LockKeys.fileLockKey(eventDir, ".")]
+                  : claim.files.map((file) => (eventDir ? LockKeys.fileLockKey(eventDir, file) : file))
               const acquiredLocks: string[] = []
               if (fileLock) {
                 let contended = false

@@ -1,9 +1,10 @@
 export * as AgentExecution from "./agent-execution"
 
 import { Context, Effect, Layer } from "effect"
-import { and, eq, gt, inArray, lte, sql } from "drizzle-orm"
+import { and, eq, gt, lte, sql } from "drizzle-orm"
 import { Database } from "../database/database"
 import { DeepAgentEvent } from "./deepagent-event"
+import { LockKeys } from "./lock-keys"
 import { AgentExecutionLockTable, AgentExecutionTable, AgentTokenDebitTable } from "./agent-execution-sql"
 
 export const DEFAULT_LEASE_MS = 30_000
@@ -159,6 +160,14 @@ const decode = (row: typeof AgentExecutionTable.$inferSelect): Record => ({
 
 const tokenWindowStart = (at: number, windowMs: number) => Math.floor(at / windowMs) * windowMs
 
+// A file resource may name one file or a broad directory root. The latter fences unknown file scope
+// against every concrete descendant without serializing two unrelated concrete files.
+const resourceConflicts = (left: string, right: string): boolean => {
+  if (left === right) return true
+  if (!left.startsWith("file:") || !right.startsWith("file:")) return false
+  return LockKeys.filePathsOverlap(left.slice("file:".length), right.slice("file:".length))
+}
+
 export const layerWith = (options?: LayerOptions) =>
   Layer.effect(
     Service,
@@ -225,13 +234,15 @@ export const layerWith = (options?: LayerOptions) =>
                     .where(
                       and(
                         eq(AgentExecutionLockTable.workspace_id, input.workspaceID),
-                        inArray(AgentExecutionLockTable.resource_key, resources),
                         gt(AgentExecutionLockTable.lease_expires_at, at),
                       ),
                     )
                     .all()
                     .pipe(Effect.orDie)
-                  if (locks.length > 0) return { type: "resource_locked" } as const
+                  if (
+                    locks.some((lock) => resources.some((resource) => resourceConflicts(resource, lock.resource_key)))
+                  )
+                    return { type: "resource_locked" } as const
                 }
 
                 const generation = (existing?.generation ?? 0) + 1

@@ -212,9 +212,8 @@ export const makeEventPanelPort =
       Effect.catchCause((cause) => Effect.fail(cause)),
     )
 
-// The MultiAgentRuntime layer (v2w-j4 durable-only: V2-admission-only dispatch — no turn runner is
-// wired; the legacy event turn runner is deleted). Requires the session stack + core V4 services
-// (provided by the app graph). This is the DispatchPort the dispatcher drives.
+// The MultiAgentRuntime layer has the default single-event V2 admission lane and an opt-in V2 DAG
+// lane. Both require the session stack and core V4 services provided by the app graph.
 const runtimeLayer = Layer.unwrap(
   Effect.gen(function* () {
     const sessions = yield* Session.Service
@@ -235,12 +234,10 @@ const runtimeLayer = Layer.unwrap(
     // HTTP handlers use, so a human editing a file blocks an agent subtask from touching it).
     const fileLock = yield* FileLock.Service
     // C5-12 — the production V2 admission bridge provider wired into the `eventV2Admission` seam. Built
-    // here (the production seam construction site) so that when `isEventV2AdmissionEnabled()` is ON the
-    // runtime routes the event through the durable V2 admission path (SessionV2) instead of §C
-    // coordination. The bridge is typed against the runtime's seam and reads the SessionV2 stack + the V2
-    // Database from the shared graph directly; an absent SessionV2 stack is an inert provider (admit fails
-    // closed at dispatch time, matching the default-off discipline). The security namespace is resolved by
-    // the bridge (deterministic workspace-scoped default; ContextLocationIdentity upgrade is a follow-on).
+    // here so the single lane can admit a parent prompt and the DAG lane can persist its ingress receipt
+    // before coordinating child turns. The bridge reads the shared V2 Session and Database services. The
+    // security namespace remains a deterministic workspace-scoped default until ContextLocationIdentity
+    // supplies it.
     const db = (yield* Database.Service).db
     const v2Session = yield* SessionV2.Service
     const flags = yield* RuntimeFlags.Service

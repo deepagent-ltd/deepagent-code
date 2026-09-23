@@ -291,7 +291,7 @@ export interface Interface {
    * ack (the event is durably logged for the trace regardless). Exposed for deterministic testing; the
    * background subscription calls this per event.
    */
-  readonly handle: (event: DeepAgentEvent.Event) => Effect.Effect<HandleDecision>
+  readonly handle: (event: DeepAgentEvent.Event, claimToken?: string) => Effect.Effect<HandleDecision>
   /**
    * Run ONE scheduler tick: fetch due schedules, publish each one's templated event through the bus,
    * and advance its state (markFired). Returns the number of schedules fired. Exposed for testing; the
@@ -360,8 +360,16 @@ export const layerWith = (options?: LayerOptions) =>
       const pendingDeliveryCount = options?.pendingDeliveryCount
       const queueDepth = options?.queueDepth ?? (() => 0)
 
-      const nack = (event: DeepAgentEvent.Event, reason: string) =>
-        bus.nack({ subscriptionGroup: DISPATCH_GROUP, eventID: event.id, reason })
+      const nack = (event: DeepAgentEvent.Event, reason: string, claimToken?: string) =>
+        claimToken
+          ? bus
+              .nackClaim({ subscriptionGroup: DISPATCH_GROUP, eventID: event.id, claimToken, reason })
+              .pipe(Effect.asVoid)
+          : bus.nack({ subscriptionGroup: DISPATCH_GROUP, eventID: event.id, reason })
+      const ack = (event: DeepAgentEvent.Event, claimToken?: string) =>
+        claimToken
+          ? bus.ackClaim({ subscriptionGroup: DISPATCH_GROUP, eventID: event.id, claimToken }).pipe(Effect.asVoid)
+          : bus.ack(DISPATCH_GROUP, event.id)
 
       // A dispatch refusal that retrying can never fix (the event type is not registered with the V2
       // admission registry). Settle it as a
@@ -374,7 +382,7 @@ export const layerWith = (options?: LayerOptions) =>
 
       // Run one dispatch and settle its bus delivery: ack on accept, terminal-drop on a permanent
       // refusal, nack (§A3 retry) on any other failure.
-      const settleDispatch = (request: DispatchRequest) =>
+      const settleDispatch = (request: DispatchRequest, claimToken?: string) =>
         Effect.gen(function* () {
           const outcome = yield* port.dispatch(request).pipe(
             Effect.as("ok" as const),
@@ -393,12 +401,12 @@ export const layerWith = (options?: LayerOptions) =>
               return Effect.succeed("fail" as const)
             }),
           )
-          if (outcome === "ok") return yield* bus.ack(DISPATCH_GROUP, request.event.id)
+          if (outcome === "ok") return yield* ack(request.event, claimToken)
           if (outcome === "refused") {
             yield* bus.recordDrop({ event: request.event, reason: "unregistered_event_type" })
-            return yield* bus.ack(DISPATCH_GROUP, request.event.id)
+            return yield* ack(request.event, claimToken)
           }
-          yield* nack(request.event, "dispatch port failed")
+          yield* nack(request.event, "dispatch port failed", claimToken)
         })
 
       // §E4/§N — resolve whether `at` falls in the workspace's configured quiet window + the window's END
@@ -459,6 +467,7 @@ export const layerWith = (options?: LayerOptions) =>
         event: DeepAgentEvent.Event,
         agentRegistry: ReadonlyArray<AgentDescriptor>,
         mentionNames: ReadonlyArray<string>,
+        claimToken?: string,
       ): Effect.Effect<HandleDecision> =>
         Effect.gen(function* () {
           const payload = event.payload as { groupID?: unknown; messageID?: unknown } | null
@@ -521,7 +530,7 @@ export const layerWith = (options?: LayerOptions) =>
                 ),
               )
             }
-            yield* bus.ack(DISPATCH_GROUP, event.id)
+            yield* ack(event, claimToken)
             return {
               type: "receipted",
               reason: notDeclaring.length > 0 ? "agent_no_trigger_mention" : "no_declared_trigger",
@@ -556,11 +565,11 @@ export const layerWith = (options?: LayerOptions) =>
           }
 
           const priority = event.priority
-          yield* settleDispatch({ event, priority, targets })
+          yield* settleDispatch({ event, priority, targets }, claimToken)
           return { type: "dispatch", priority, targets } as const
         })
 
-      const handle: Interface["handle"] = (event) =>
+      const handle: Interface["handle"] = (event, claimToken) =>
         Effect.gen(function* () {
           const flagEnabled = flagForEventType(flags, event.type)
 
@@ -579,7 +588,7 @@ export const layerWith = (options?: LayerOptions) =>
                 eventID: event.id,
                 cause: Cause.pretty(agentsExit.cause),
               })
-              yield* nack(event, "agent registry lookup failed")
+              yield* nack(event, "agent registry lookup failed", claimToken)
               return { type: "dropped", reason: "no_match" } as EventRouter.RouteDecision
             }
             agents = agentsExit.value
@@ -610,7 +619,7 @@ export const layerWith = (options?: LayerOptions) =>
             // this branch is the dormant bus-side half and cannot double-execute with it.)
             const mentions = mentionNamesFor(event)
             if (mentions.length > 0 && isEventV2AdmissionEnabled(options?.runtimeFeatures)) {
-              return yield* handleMention(event, agents, mentions)
+              return yield* handleMention(event, agents, mentions, claimToken)
             }
           }
 
@@ -632,7 +641,7 @@ export const layerWith = (options?: LayerOptions) =>
           if (decision.type === "dispatch") {
             // hand to the runtime; on failure nack so the bus retries (§A3), on success ack.
             // A permanent refusal (unregistered event type) is settled as a terminal drop instead.
-            yield* settleDispatch({ event, priority: decision.priority, targets: decision.targets })
+            yield* settleDispatch({ event, priority: decision.priority, targets: decision.targets }, claimToken)
           } else if (decision.reason === "backpressure") {
             // §A4 回压: a backpressure drop is TRANSIENT — the queue is momentarily full. NACK so the
             // bus retries when it drains, rather than acking (which would permanently lose the event).
@@ -641,7 +650,7 @@ export const layerWith = (options?: LayerOptions) =>
             // nack so a shed is always counted even if the nack write later hiccups.
             log.info("route.backpressure; nacking for retry", { eventType: event.type, eventID: event.id })
             yield* bus.recordDrop({ event, reason: decision.reason })
-            yield* nack(event, "backpressure")
+            yield* nack(event, "backpressure", claimToken)
           } else {
             // terminal drop (flag_disabled / no_match / deduped) — ack the delivery (the durable event
             // log keeps it for the §F2 trace) and record WHY as an observability signal (§A4 event_dropped).
@@ -651,7 +660,7 @@ export const layerWith = (options?: LayerOptions) =>
             // drop picture by reason, not just backpressure.
             log.info("route.dropped", { eventType: event.type, eventID: event.id, reason: decision.reason })
             yield* bus.recordDrop({ event, reason: decision.reason })
-            yield* bus.ack(DISPATCH_GROUP, event.id)
+            yield* ack(event, claimToken)
           }
 
           return decision
@@ -871,7 +880,7 @@ export const layerWith = (options?: LayerOptions) =>
               log.warn("retry: event missing for pending delivery", { eventID: delivery.eventID })
               continue
             }
-            yield* handle(event) // re-runs the full route → ack/nack cycle (nack extends backoff → DLQ)
+            yield* handle(event, claim.claimToken) // claim-aware settle releases the token on nack
             redriven++
           }
           return redriven

@@ -696,6 +696,90 @@ describe("MultiAgentRuntime durable multi-owner execution", () => {
     }),
   )
 
+  it.effect("unknown file scope fences a concrete file across runtime owners", () =>
+    Effect.gen(function* () {
+      setNow(40_000)
+      setRegistry([agent("fixer", ["code_edit"], "level_2")])
+      const bus = yield* DeepAgentEventBus.Service
+      const queue = yield* ApprovalQueue.Service
+      const execution = yield* AgentExecution.Service
+      const started = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      let firstActive = false
+      let secondRuns = 0
+      const dependencies = Layer.mergeAll(
+        Layer.succeed(DeepAgentEventBus.Service, bus),
+        Layer.succeed(ApprovalQueue.Service, queue),
+        Layer.succeed(AgentExecution.Service, execution),
+        fakeAgentList,
+      )
+      const broadTask: NonNullable<MultiAgentRuntime.LayerOptions["partition"]> = (input) => ({
+        event: input,
+        subtasks: [{ ...oneTask(input).subtasks[0], fileScope: [] }],
+      })
+      const runtime = (
+        ownerID: string,
+        runner: SubagentTurnRunner,
+        partition: NonNullable<MultiAgentRuntime.LayerOptions["partition"]> = oneTask,
+      ) =>
+        Layer.build(
+          MultiAgentRuntime.layerWith({
+            runner,
+            partition,
+            execution,
+            ownerID,
+            dagCoordination: true,
+          }).pipe(Layer.provide(dependencies)),
+        ).pipe(Effect.map((context) => Context.get(context, MultiAgentRuntime.Service)))
+      const first = yield* runtime(
+        "runtime_a",
+        () =>
+          Effect.gen(function* () {
+            firstActive = true
+            yield* Deferred.succeed(started, undefined)
+            yield* Deferred.await(release)
+            firstActive = false
+            return {
+              ok: true,
+              structured: undefined,
+              text: "first",
+              tokensUsed: 0,
+              cost: 0,
+              continuationRef: "agent/first",
+            }
+          }),
+        broadTask,
+      )
+      const second = yield* runtime("runtime_b", () =>
+        Effect.sync(() => {
+          expect(firstActive).toBe(false)
+          secondRuns++
+          return {
+            ok: true,
+            structured: undefined,
+            text: "second",
+            tokensUsed: 0,
+            cost: 0,
+            continuationRef: "agent/second",
+          }
+        }),
+      )
+      const shared = { type: "test.resource-exclusion", payload: { directory: "/tmp/event-shared-root" } }
+      const eventA = event({ ...shared, id: DeepAgentEvent.ID.create(40_000) })
+      const eventB = event({ ...shared, id: DeepAgentEvent.ID.create(40_001) })
+      const firstFiber = yield* Effect.forkScoped(first.coordinate(eventA))
+      yield* Deferred.await(started)
+      const contended = yield* second.coordinate(eventB)
+      expect(contended.outcomes[0]).toMatchObject({ status: "deferred", reason: "execution_resource_locked" })
+      expect(contended.hasUnfinished).toBe(true)
+      expect(secondRuns).toBe(0)
+      yield* Deferred.succeed(release, undefined)
+      expect((yield* Fiber.join(firstFiber)).outcomes[0]?.status).toBe("completed")
+      expect((yield* second.coordinate(eventB)).outcomes[0]?.status).toBe("completed")
+      expect(secondRuns).toBe(1)
+    }),
+  )
+
   it.effect("runner failure durably requests handoff to the next capable agent", () =>
     Effect.gen(function* () {
       setNow(20_000)

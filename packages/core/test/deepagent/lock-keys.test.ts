@@ -18,4 +18,12 @@ describe("event execution lock keys", () => {
       LockKeys.claimSymbolResource("wrk_b", "src/agent.ts#Agent.run"),
     )
   })
+
+  test("broad roots overlap descendants without swallowing sibling repositories", () => {
+    const root = path.resolve("workspace")
+    expect(LockKeys.filePathsOverlap(root, path.join(root, "src", "a.ts"))).toBe(true)
+    expect(LockKeys.filePathsOverlap(path.join(root, "src", "a.ts"), root)).toBe(true)
+    expect(LockKeys.filePathsOverlap(path.join(root, "src", "a.ts"), path.join(root, "src", "b.ts"))).toBe(false)
+    expect(LockKeys.filePathsOverlap(root, `${root}-other/src/a.ts`)).toBe(false)
+  })
 })

@@ -216,6 +216,35 @@ describe("EventDispatcher dispatch failure + retry pump", () => {
       expect((yield* bus.dueRetries(Number.MAX_SAFE_INTEGER)).length).toBe(0) // acked, no longer pending
     }),
   )
+
+  it.effect("an always-deferred dispatch reaches the bounded DLQ instead of retrying forever", () =>
+    Effect.gen(function* () {
+      resetRecorder()
+      failDispatch = true
+      setNow(1_000)
+      const bus = yield* DeepAgentEventBus.Service
+      const dispatcher = yield* EventDispatcher.Service
+      yield* bus
+        .subscribe({ group: EventDispatcher.DISPATCH_GROUP })
+        .pipe(Stream.take(1), Stream.runCollect, Effect.forkScoped)
+      yield* Effect.yieldNow
+      const event = yield* bus.publish(input({ idempotencyKey: "always-deferred" }))
+      yield* dispatcher.handle(event)
+      setNow(2_000)
+      expect(yield* dispatcher.pumpRetries(2_000)).toBe(1)
+      expect(recorded).toHaveLength(2)
+      expect((yield* bus.dueRetries(10_000)).map((entry) => entry.eventID)).toContain(event.id)
+      setNow(10_000)
+      expect(yield* dispatcher.pumpRetries(10_000)).toBe(1)
+      expect(recorded).toHaveLength(3)
+      expect((yield* bus.deadLetters()).map((entry) => entry.eventID)).toContain(event.id)
+      expect((yield* bus.dueRetries(Number.MAX_SAFE_INTEGER)).map((entry) => entry.eventID)).not.toContain(event.id)
+      setNow(20_000)
+      yield* dispatcher.pumpRetries(20_000) // may consume the terminal DLQ alert
+      expect(recorded).toHaveLength(3)
+      expect(yield* dispatcher.pumpRetries(20_000)).toBe(0)
+    }),
+  )
 })
 
 describe("EventDispatcher condition tick", () => {
