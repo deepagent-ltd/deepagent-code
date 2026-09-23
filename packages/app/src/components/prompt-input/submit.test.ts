@@ -34,7 +34,7 @@ const sentPromptAsync: Array<{
   directory: string
   metadata?: unknown
   text?: string
-  parts?: Array<{ id?: string; type: string; text?: string }>
+  parts?: unknown[]
   messageID?: string
   intentID?: string
   intentSource?: string
