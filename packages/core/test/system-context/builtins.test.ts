@@ -1,5 +1,7 @@
 import { describe, expect } from "bun:test"
 import { Effect, Layer } from "effect"
+import { FetchHttpClient } from "effect/unstable/http"
+import { Config } from "@deepagent-code/core/config"
 import * as TestClock from "effect/testing/TestClock"
 import { Location } from "@deepagent-code/core/location"
 import { FSUtil } from "@deepagent-code/core/fs-util"
@@ -27,6 +29,8 @@ const locationLayer = Layer.succeed(
 )
 const it = testEffect(
   SystemContextBuiltIns.locationLayer.pipe(
+    Layer.provide(FetchHttpClient.layer),
+    Layer.provide(Layer.succeed(Config.Service, Config.Service.of({ entries: () => Effect.succeed([]) }))),
     Layer.provide(FSUtil.defaultLayer),
     Layer.provide(Global.layerWith({ config: "/global" })),
     Layer.provide(locationLayer),
@@ -46,6 +50,8 @@ const instructionFS = Layer.effect(
 ).pipe(Layer.provide(FSUtil.defaultLayer))
 const itWithInstructions = testEffect(
   SystemContextBuiltIns.locationLayer.pipe(
+    Layer.provide(FetchHttpClient.layer),
+    Layer.provide(Layer.succeed(Config.Service, Config.Service.of({ entries: () => Effect.succeed([]) }))),
     Layer.provide(instructionFS),
     Layer.provide(Global.layerWith({ config: "/global" })),
     Layer.provide(locationLayer),

@@ -155,6 +155,7 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()(
   {
     lookup: (ref: Location.Ref) => {
       const location = Location.layer(ref)
+      const config = Config.locationLayer
       const runtimeHost = Layer.unwrap(Effect.map(LocationRuntimeHost, (host) => host.layer(ref)))
       // Production System Context stack (design §7.3 L0): the host-local builtins +
       // ambient instructions, the stably-loaded `deepagent/capability-catalog`
@@ -165,11 +166,11 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()(
         SystemContextBuiltIns.locationLayer,
         CapabilityCatalog.layer,
         ProjectDocs.layer,
-      ).pipe(Layer.provideMerge(SystemContextRegistry.layer))
+      ).pipe(Layer.provideMerge(config), Layer.provideMerge(SystemContextRegistry.layer))
       const base = Layer.mergeAll(
         location,
         Policy.locationLayer,
-        Config.locationLayer,
+        config,
         ProjectReference.locationLayer,
         PluginV2.locationLayer,
         Catalog.locationLayer,

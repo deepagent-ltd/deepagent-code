@@ -428,6 +428,7 @@ describe("Config", () => {
                   },
                 },
                 skills: { paths: ["./skills"], urls: ["https://example.com/.well-known/skills/"] },
+                instructions: ["LOCAL.md"],
                 attachment: { image: { auto_resize: false, max_width: 1200 } },
                 provider: {
                   custom: {
@@ -488,6 +489,7 @@ describe("Config", () => {
               permissions: [{ action: "read", resource: "*", effect: "allow" }],
             })
             expect(documents[0]?.info.skills).toEqual(["./skills", "https://example.com/.well-known/skills/"])
+            expect(documents[0]?.info.instructions).toEqual(["LOCAL.md"])
             expect(documents[0]?.info.attachments).toEqual({ image: { auto_resize: false, max_width: 1200 } })
             expect(documents[0]?.info.providers?.custom).toMatchObject({
               request: { body: { apiKey: "secret" } },
@@ -607,7 +609,6 @@ describe("Config", () => {
                 formatter: false,
                 lsp: false,
                 mcp: { servers: {} },
-                instructions: ["CONTRIBUTING.md"],
                 references: { docs: { path: "../docs" } },
                 plugins: ["example-plugin"],
                 learning: { project_copy: false },
@@ -621,10 +622,7 @@ describe("Config", () => {
               return previous
             }),
             () =>
-              Config.Service.use((config) => config.entries()).pipe(
-                Effect.provide(testLayer(tmp.path)),
-                Effect.exit,
-              ),
+              Config.Service.use((config) => config.entries()).pipe(Effect.provide(testLayer(tmp.path)), Effect.exit),
             (previous) =>
               Effect.sync(() => {
                 if (previous === undefined) delete process.env.DEEPAGENT_CODE_EXPERIMENTAL_REFERENCES
@@ -636,14 +634,7 @@ describe("Config", () => {
           if (Exit.isFailure(exit)) {
             const error = Cause.pretty(exit.cause)
             expect(error).toContain("Unsupported Core V2 config")
-            for (const field of [
-              "snapshots",
-              "mcp",
-              "instructions",
-              "references",
-              "plugins",
-              "learning.project_copy",
-            ]) {
+            for (const field of ["snapshots", "mcp", "references", "plugins", "learning.project_copy"]) {
               expect(error).toContain(field)
             }
           }

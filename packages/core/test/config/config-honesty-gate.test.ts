@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test"
-import { Info, RuntimeFieldConsumers, UNSUPPORTED_V1_RUNTIME_FIELDS, UNSUPPORTED_V2_RUNTIME_FIELDS } from "../../src/config"
+import {
+  Info,
+  RuntimeFieldConsumers,
+  UNSUPPORTED_V1_RUNTIME_FIELDS,
+  UNSUPPORTED_V2_RUNTIME_FIELDS,
+} from "../../src/config"
 
 // C-P2-03 generated gate: the config surface stays honest in one place. The type-level
 // `satisfies Record<keyof Info, string>` on RuntimeFieldConsumers already pins "every schema
@@ -42,7 +47,9 @@ describe("config honesty gate (C-P2-03)", () => {
   test("v1 and v2 refusal lists stay disjoint from each other's naming scheme", () => {
     // v1 uses singular (snapshot/plugin/reference), v2 plural-era (snapshots/plugins/references);
     // a key drifting into the wrong list fails loudly instead of quietly refusing both eras.
-    const shared = UNSUPPORTED_V1_RUNTIME_FIELDS.filter((key) => (UNSUPPORTED_V2_RUNTIME_FIELDS as readonly string[]).includes(key))
-    expect([...shared].sort()).toEqual(["formatter", "instructions", "lsp", "mcp"])
+    const shared = UNSUPPORTED_V1_RUNTIME_FIELDS.filter((key) =>
+      (UNSUPPORTED_V2_RUNTIME_FIELDS as readonly string[]).includes(key),
+    )
+    expect([...shared].sort()).toEqual(["formatter", "lsp", "mcp"])
   })
 })
