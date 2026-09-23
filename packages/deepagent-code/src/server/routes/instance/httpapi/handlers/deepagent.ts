@@ -375,6 +375,9 @@ export const deepagentHandlers = HttpApiBuilder.group(InstanceHttpApi, "deepagen
       evidence_refs: item.evidence_refs,
       approval_status: item.approval_status,
       scope: item.scope,
+      inboxID: item.inboxID,
+      reviewReason: item.reviewReason,
+      reasonGroup: item.reasonGroup,
     })
 
     const knowledgePending = Effect.fn("DeepAgentHttpApi.knowledgePending")(function* () {

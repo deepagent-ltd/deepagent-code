@@ -11,6 +11,7 @@ import {
   decideEnvFact,
   modifyEnvFact,
   reviewAuthorityKey,
+  groupPendingByReason,
   type KnowledgeItem,
   type ReviewClient,
   type EnvFactItem,
@@ -26,6 +27,7 @@ export {
   decideEnvFact,
   modifyEnvFact,
   reviewAuthorityKey,
+  groupPendingByReason,
   type KnowledgeItem,
   type ReviewClient,
   type EnvFactBody,
@@ -153,32 +155,24 @@ export const ReviewPanel: Component<{ client: ReviewClient }> = (props) => {
   const pending = createMemo(() => (items() ?? []).filter((i) => i.approval_status === "pending" && matchesQuery(i)))
   const approved = createMemo(() => (items() ?? []).filter((i) => i.approval_status === "approved" && matchesQuery(i)))
 
-  // Group by SCOPE, not by type: the governance view shows the user's learned facts split into
-  // "this project" vs "global". A doc scoped `durable:project:<id>` is project-local; anything else
-  // (`durable`, or legacy untagged) is global. (Skills + domain-pack seed docs are already excluded
-  // server-side, so every item here is a human-readable, user-learned fact.)
-  const scopeOf = (item: KnowledgeItem): "project" | "global" =>
-    item.scope?.startsWith("durable:project:") ? "project" : "global"
   const scopeLabel = (scope: string) =>
     scope === "project" ? language.t("review.scope.project") : language.t("review.scope.global")
 
-  // Project bucket first (most specific to what the user is working on), then global.
-  const SCOPE_ORDER = ["project", "global"] as const
-  const pendingGroups = createMemo(() => {
-    const byScope = new Map<string, KnowledgeItem[]>()
-    for (const item of pending()) {
-      const key = scopeOf(item)
-      const list = byScope.get(key)
-      if (list) list.push(item)
-      else byScope.set(key, [item])
-    }
-    const ordered: Array<{ scope: string; items: KnowledgeItem[] }> = []
-    for (const scope of SCOPE_ORDER) {
-      const list = byScope.get(scope)
-      if (list?.length) ordered.push({ scope, items: list })
-    }
-    return ordered
-  })
+  const pendingGroups = createMemo(() => groupPendingByReason(pending()))
+  const reasonLabel = (reason: string) => {
+    const key = {
+      "manual review policy": "review.reason.manual",
+      "reviewer unavailable": "review.reason.reviewerUnavailable",
+      sensitive: "review.reason.sensitive",
+      contradiction: "review.reason.contradiction",
+      pack_promotion: "review.reason.packPromotion",
+      global_promotion: "review.reason.globalPromotion",
+      "near-duplicate merge requires review": "review.reason.nearDuplicate",
+      "confidence below automatic admission floor": "review.reason.lowConfidence",
+      other: "review.reason.other",
+    }[reason]
+    return key ? language.t(key) : reason
+  }
 
   // Which boxes are expanded. Default: all pending type boxes open, approved collapsed.
   const [collapsed, setCollapsed] = createSignal<ReadonlySet<string>>(new Set(["approved"]))
@@ -236,6 +230,7 @@ export const ReviewPanel: Component<{ client: ReviewClient }> = (props) => {
       <label
         data-action="review-item"
         data-status={item.approval_status}
+        data-inbox-id={item.inboxID}
         class="flex cursor-pointer items-start gap-3 border-b border-v2-border-border-muted px-3 py-2.5 last:border-b-0 hover:bg-v2-background-bg-layer-01"
       >
         <input type="checkbox" class="mt-0.5" checked={checked()} onChange={() => toggle(item)} />
@@ -534,7 +529,11 @@ export const ReviewPanel: Component<{ client: ReviewClient }> = (props) => {
               }
             >
               <For each={pendingGroups()}>
-                {(group) => GroupBox({ boxKey: group.scope, label: scopeLabel(group.scope), items: group.items })}
+                {(group) => GroupBox({
+                  boxKey: JSON.stringify([group.scope, group.reason]),
+                  label: `${scopeLabel(group.scope)} · ${reasonLabel(group.reason)}`,
+                  items: group.items,
+                })}
               </For>
               <Show when={approved().length > 0}>
                 {GroupBox({ boxKey: "approved", label: language.t("review.status.approved"), items: approved() })}

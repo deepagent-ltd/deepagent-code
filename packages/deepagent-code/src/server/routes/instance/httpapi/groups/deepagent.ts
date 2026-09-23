@@ -196,6 +196,9 @@ export const DeepAgentKnowledgeItem = Schema.Struct({
   // Storage scope for project-vs-global grouping in the Review UI: "durable" (global) or
   // "durable:project:<project_id>". Optional so an older server without the field still decodes.
   scope: Schema.optional(Schema.String),
+  inboxID: Schema.optional(Schema.String),
+  reviewReason: Schema.optional(Schema.String),
+  reasonGroup: Schema.optional(Schema.String),
 })
 
 export const DeepAgentKnowledgeList = Schema.Struct({ items: Schema.Array(DeepAgentKnowledgeItem) })

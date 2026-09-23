@@ -10987,6 +10987,9 @@ export type DeepagentKnowledgePendingResponses = {
       evidence_refs: Array<string>
       approval_status: "pending" | "approved" | "rejected"
       scope?: string
+      inboxID?: string
+      reviewReason?: string
+      reasonGroup?: string
     }>
   }
 }
@@ -11076,6 +11079,9 @@ export type DeepagentKnowledgeApproveResponses = {
       evidence_refs: Array<string>
       approval_status: "pending" | "approved" | "rejected"
       scope?: string
+      inboxID?: string
+      reviewReason?: string
+      reasonGroup?: string
     }
     release_revocation?:
       | {
@@ -11147,6 +11153,9 @@ export type DeepagentKnowledgeRejectIdsResponses = {
       evidence_refs: Array<string>
       approval_status: "pending" | "approved" | "rejected"
       scope?: string
+      inboxID?: string
+      reviewReason?: string
+      reasonGroup?: string
     }
     release_revocation?:
       | {
