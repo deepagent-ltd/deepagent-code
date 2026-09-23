@@ -122,17 +122,20 @@ export const collectEnhanced = (input: {
       return { ok: false as const, status: 409, code: "request_conflict", message: "Request ID conflicts with an admitted prompt" }
 
     const deadline = Date.now() + input.tenant.deadline_ms
-    while (Date.now() < deadline) {
+    const timeout = { ok: false as const, status: 504, code: "enhancement_timeout", message: "Enhanced response timed out" }
+    while (true) {
       const activity = yield* input.db.select().from(SessionActivityTable)
         .where(and(eq(SessionActivityTable.session_id, input.sessionID), eq(SessionActivityTable.trigger_input_id, admitted.value.id)))
         .get()
       if (!activity) {
+        if (Date.now() >= deadline) return timeout
         yield* Effect.sleep("50 millis")
         continue
       }
       const trigger = yield* input.db.select({ promoted_seq: SessionInputTable.promoted_seq }).from(SessionInputTable)
         .where(eq(SessionInputTable.id, admitted.value.id)).get()
       if (trigger?.promoted_seq === null || trigger?.promoted_seq === undefined) {
+        if (Date.now() >= deadline) return timeout
         yield* Effect.sleep("50 millis")
         continue
       }
@@ -154,6 +157,15 @@ export const collectEnhanced = (input: {
       const terminal = rows.findLast((row) => row.data && "finish" in row.data && row.data.finish !== "tool-calls")
       const latest = activity.state === "settled" ? terminal : rows.at(-1)
       const message = latest ? yield* input.sessions.message({ sessionID: input.sessionID, messageID: latest.id }) : undefined
+      const terminalMessage = terminal && latest?.id !== terminal.id
+        ? yield* input.sessions.message({ sessionID: input.sessionID, messageID: terminal.id }) : message
+      // The provider deadline is established by the durable terminal assistant completion. Once
+      // the provider finished in time, allow bounded time for the activity/identity projection to
+      // settle; otherwise a blocked poll can report 504 after a successful provider exchange.
+      const completedAt = terminal && terminalMessage?.type === "assistant" && terminalMessage.time.completed
+        ? DateTime.toEpochMillis(terminalMessage.time.completed) : undefined
+      const settlementDeadline = completedAt !== undefined && completedAt <= deadline
+        ? Math.max(deadline, completedAt + Math.max(input.tenant.deadline_ms, 30_000)) : deadline
       if (activity.state === "settled" && message?.type === "assistant" && input.onDelta) {
         const text = message.content.filter((part) => part.type === "text").map((part) => part.text).join("")
         if (!text.startsWith(emitted))
@@ -163,6 +175,9 @@ export const collectEnhanced = (input: {
       }
       if (activity.state === "failed" || activity.state === "interrupted" || message?.type === "assistant" && message.error)
         return { ok: false as const, status: 502, code: "enhancement_failed", message: "Enhanced execution failed" }
+      if ((Date.now() >= settlementDeadline && activity.state !== "settled") ||
+        (activity.state === "settled" && (activity.settled_at ?? 0) > settlementDeadline))
+        return timeout
       if (activity.state !== "settled") {
         yield* Effect.sleep("50 millis")
         continue
@@ -203,6 +218,5 @@ export const collectEnhanced = (input: {
         },
       }
     }
-    return { ok: false as const, status: 504, code: "enhancement_timeout", message: "Enhanced response timed out" }
     }).pipe(Effect.ensuring(unsubscribe))
   })
