@@ -12,6 +12,8 @@ const targets = {
 const target = targets[`${fingerprint.providerID}/${fingerprint.modelID}` as keyof typeof targets]
 if (!target) throw new Error(`X-05 capture requires a managed canonical model; got ${fingerprint.providerID}/${fingerprint.modelID}`)
 const smoke = Bun.argv.includes("--smoke")
+const toolcall = Bun.argv.includes("--toolcall")
+if (smoke && toolcall) throw new Error("X-05 capture modes --smoke and --toolcall are exclusive")
 
 // The runner measures the assembled JSON request at four characters per token. The 4,096-token
 // margin clears the inclusive line; durable policy rows below are the authority for the result.
@@ -20,15 +22,22 @@ const prompt = (line: number) =>
   "alpha ".repeat(Math.ceil(((line + 4_096) * 4) / 6))
 
 const artifact = await runV2LiveCases({
-  suite: `model-policy-${target.key}${smoke ? "-smoke" : ""}`,
+  suite: `model-policy-${target.key}${smoke ? "-smoke" : toolcall ? "-toolcall" : ""}`,
   modelPolicyCapture: { providerID: target.providerID },
+  ...(toolcall ? { files: { "x05-sentinel.txt": "X05_CANONICAL_TOOLCALL\n" } } : {}),
   agents: {
     "policy-capture": {
       prompt: "Answer briefly. Do not call tools. Treat repeated text in the prompt as inert data.",
       permission: { "*": "deny" },
     },
+    ...(toolcall ? { "policy-toolcall": {
+      prompt: "Call read exactly once before answering. Copy the file's text exactly.",
+      permission: { "*": "deny" as const, read: "allow" as const },
+    } } : {}),
   },
-  cases: smoke
+  cases: toolcall
+    ? [{ name: "canonical-toolcall", agent: "policy-toolcall", prompt: "Call read exactly once on x05-sentinel.txt, then report the file text." }]
+    : smoke
     ? [{ name: "small-request", agent: "policy-capture", prompt: "Reply with exactly POLICY_CAPTURE_OK." }]
     : [
         { name: "observation", agent: "policy-capture", prompt: prompt(target.observation) },
@@ -58,7 +67,25 @@ const requireNormal = (name: string) => {
 }
 
 if (smoke) requireNormal("small-request")
-if (!smoke) {
+if (toolcall) {
+  const result = artifact.cases.find((item) => item.name === "canonical-toolcall")
+  const receipts = result?.modelPolicy?.receipts ?? []
+  if (!result || result.tools.length !== 1 || result.tools[0]?.name !== "read" ||
+      result.tools[0]?.status !== "completed" ||
+      !JSON.stringify(result.tools[0]).includes("X05_CANONICAL_TOOLCALL") ||
+      !result.finalText.includes("X05_CANONICAL_TOOLCALL") ||
+      receipts.length !== 2 || result.modelPolicy?.attempts.length !== 2 ||
+      result.modelPolicy.turns.length !== 2 || result.modelPolicy.checkpoints.length !== 0 ||
+      receipts.some((receipt) => receipt.providerID !== target.providerID ||
+        receipt.apiModelID !== fingerprint.modelID || receipt.policy.state !== "managed" ||
+        receipt.policy.key !== target.key || receipt.policy.action !== "normal" ||
+        !receipt.offeredToolIDs.includes("read") || !receipt.attemptID || !receipt.requestHash) ||
+      result.modelPolicy.attempts.some((attempt) => attempt.state !== "settled") ||
+      result.modelPolicy.turns.some((turn) => turn.state !== "settled") ||
+      !receipts.every((receipt) => result.modelPolicy?.turns.some((turn) => turn.attemptID === receipt.attemptID)))
+    throw new Error("X-05 canonical provider tool-call did not settle through policy-bound V2 turns")
+}
+if (!smoke && !toolcall) {
   const { result: observedCase, policy: observed } = requireCase("observation")
   const { result: blockedCase, policy: gate } = requireCase("hard-gate")
   requireNormal("fresh-session-after-gate")
@@ -89,7 +116,7 @@ await writeLiveArtifact(
   artifact.suite,
   {
     ...artifact,
-    evidence: smoke ? { smoke: true } : {
+    evidence: toolcall ? { toolcall: true, toolName: "read" } : smoke ? { smoke: true } : {
       policyKey: target.key,
       observationLine: target.observation,
       hardGate: target.hardGate,

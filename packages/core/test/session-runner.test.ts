@@ -1321,6 +1321,8 @@ describe("SessionRunnerLLM", () => {
         expect(policy?.context_selection_id).toBeTruthy()
         expect(policy?.context_projection_hash).toBeTruthy()
         expect(policy?.offered_tool_ids).toEqual(requests[0]!.tools.map((tool) => tool.name))
+        expect(requests[0]!.messages.flatMap((message) => message.content)
+          .filter((part) => part.type === "text" && part.text.includes("Context selection (this turn):"))).toHaveLength(1)
         expect(policy?.provider_attempt_id).toBe(attempt?.attempt_id)
         expect(turn?.provider_attempt_id).toBe(attempt?.attempt_id)
         expect(attempt?.state).toBe("settled")
@@ -2598,6 +2600,7 @@ describe("SessionRunnerLLM", () => {
   it.effect("retries a model switch before the final provider-dispatch boundary", () =>
     Effect.gen(function* () {
       yield* setup
+      currentModel = managedObservationModel
       const session = yield* SessionV2.Service
       const events = yield* EventV2.Service
       let switched = false
@@ -2622,6 +2625,8 @@ describe("SessionRunnerLLM", () => {
       expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
         withSelection(["Initial context"]),
       ])
+      expect(yield* (yield* Database.Service).db.select().from(SessionModelPolicyReceiptTable)
+        .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)).toHaveLength(0)
     }),
   )
 
@@ -3547,6 +3552,7 @@ describe("SessionRunnerLLM", () => {
   it.effect("continues with reloaded history after durably settling one local tool call", () =>
     Effect.gen(function* () {
       yield* setup
+      currentModel = managedObservationModel
       const session = yield* SessionV2.Service
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Echo this" }), resume: false })
 
@@ -3575,6 +3581,14 @@ describe("SessionRunnerLLM", () => {
       yield* session.resume(sessionID)
 
       expect(requests).toHaveLength(2)
+      const policy = yield* (yield* Database.Service).db.select().from(SessionModelPolicyReceiptTable)
+        .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)
+      const turns = yield* (yield* Database.Service).db.select().from(V2ProviderTurnReceiptTable)
+        .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)
+      expect(policy).toHaveLength(2)
+      expect(policy.every((row) => row.policy.state === "managed" && row.policy.key === "deepseek-v4-flash" &&
+        row.policy.action === "normal" && row.offered_tool_ids.includes("echo") &&
+        turns.some((turn) => turn.provider_attempt_id === row.provider_attempt_id))).toBe(true)
       expect(requests[1]?.messages.map((message) => message.role)).toEqual(["user", "assistant", "tool", "system"])
       expect(authorizations).toMatchObject([{ sessionID, toolCallID: "call-echo" }])
       expect(executions).toEqual(["hello"])
@@ -3659,6 +3673,7 @@ describe("SessionRunnerLLM", () => {
   it.effect("reloads a model switch before a tool-driven continuation turn", () =>
     Effect.gen(function* () {
       yield* setup
+      currentModel = managedObservationModel
       const session = yield* SessionV2.Service
       const events = yield* EventV2.Service
       yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Echo this" }), resume: false })
@@ -3692,7 +3707,11 @@ describe("SessionRunnerLLM", () => {
       yield* Deferred.succeed(toolExecutionGate, undefined)
       yield* Fiber.join(run)
 
-      expect(requests.map((request) => request.model)).toEqual([model, replacementModel])
+      expect(requests.map((request) => request.model)).toEqual([managedObservationModel, replacementModel])
+      const policy = yield* (yield* Database.Service).db.select().from(SessionModelPolicyReceiptTable)
+        .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)
+      expect(policy).toHaveLength(1)
+      expect(policy[0]?.policy).toMatchObject({ state: "managed", key: "deepseek-v4-flash", action: "normal" })
       expect(requests.map((request) => request.system.map((part) => part.text))).toEqual([
         withSelection(["Initial context"]),
         withSelection(["Replacement context"]),
