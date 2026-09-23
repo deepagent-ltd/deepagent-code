@@ -13,8 +13,9 @@ import { contentDigest } from "./digest"
 //
 // Cross-field coherence: this contract freezes the shape and the versioned enums,
 // not cross-field rules. Coherence between fields (e.g. a `denied`/`disabled`
-// state implies a matching `reasonCode`; `budget_exceeded` implies
-// `newThisTurn` > `limitNewPerTurn`; an uncertainty `timeout` implies
+// state implies a matching `reasonCode`; `budget_exceeded` reports the
+// attempted token/count gate and does not imply a persisted loaded receipt;
+// an uncertainty `timeout` implies
 // `network_unknown`) is enforced by consumers / refinements on the V2 request
 // path, NOT by the frozen shape.
 //
