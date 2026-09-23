@@ -171,12 +171,12 @@ const writeJsonAtomic = (filePath: string, value: unknown) =>
   Effect.promise(async () => {
     await fs.mkdir(path.dirname(filePath), { recursive: true })
     const tmp = `${filePath}.tmp-${Math.random().toString(36).slice(2)}`
-    await Bun.write(tmp, `${JSON.stringify(value, null, 2)}\n`)
+    await fs.writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`)
     await fs.rename(tmp, filePath)
   })
 
 export const readJournal = Effect.fn("MigrationOrchestrator.readJournal")(function* (journalPath: string) {
-  const text = yield* Effect.promise(() => Bun.file(journalPath).text()).pipe(
+  const text = yield* Effect.promise(() => fs.readFile(journalPath, "utf8")).pipe(
     Effect.catchCause(() => Effect.succeed(undefined)),
   )
   if (text === undefined) return undefined
