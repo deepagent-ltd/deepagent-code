@@ -11,13 +11,14 @@ import {
   type ProviderErrorEvent,
 } from "@deepagent-code/llm"
 import { AgentGateway } from "../../agent-gateway"
-import { desc, eq } from "drizzle-orm"
+import { and, desc, eq, gt, inArray } from "drizzle-orm"
 import { Cause, DateTime, Duration, Effect, Exit, FiberSet, Layer, Option, Schema, Semaphore, Stream } from "effect"
 import path from "node:path"
 import { AgentV2 } from "../../agent"
 import { Config } from "../../config"
 import { Database } from "../../database/database"
 import { EventV2 } from "../../event"
+import { EventTable } from "../../event/sql"
 import { Location } from "../../location"
 import { ModelV2 } from "../../model"
 import { ProviderV2 } from "../../provider"
@@ -35,10 +36,12 @@ import { SessionContextEpoch } from "../context-epoch"
 import { SessionCompaction } from "../compaction"
 import { CompactionRequest } from "../compaction-request"
 import { SessionContext } from "../../context-federation/session-context"
+import { SessionActivityTable } from "../../context-federation/session-sql"
 import { ContextQueryAuthorization } from "../../context-federation/query-authorization"
 import { SessionEvent } from "../event"
 import { SessionHistory } from "../history"
 import { SessionInput } from "../input"
+import { SessionInputTable } from "../sql"
 import { SessionMessage } from "../message"
 import { SessionSchema } from "../schema"
 import { SessionStore } from "../store"
@@ -1281,7 +1284,9 @@ export const layer = Layer.effect(
         Effect.gen(function* () {
           // A third identical call is a V1-compatible doom-loop stop. Refuse it before effect
           // admission: there is no side effect to recover, and the tool result remains durable.
-          const repeated = stepLimitReached ? undefined : loopBudget.observeTool(input.call.name, input.call.input)
+          const repeated = stepLimitReached
+            ? undefined
+            : loopBudget.observeTool(input.call.id, input.call.name, input.call.input)
           if (repeated)
             return {
               result: {
@@ -1383,7 +1388,7 @@ export const layer = Layer.effect(
               repeatNudge === undefined ? settlement : appendResultTail(settlement, repeatNudge),
             ),
           )
-        })
+        }).pipe(Effect.ensuring(Effect.sync(() => loopBudget.markToolDone(input.call.id))))
       let overflowFailure: ProviderErrorEvent | undefined
       let structuredCapture: { readonly callID: string; readonly value: unknown } | undefined
       const providerEvents: LLMEvent[] = []
@@ -1547,7 +1552,17 @@ export const layer = Layer.effect(
               }
             }
             yield* publish(event)
-            if (event.type !== "tool-call" || event.providerExecuted) return
+            if (event.type === "tool-result" || event.type === "tool-error") {
+              loopBudget.markToolDone(event.id)
+              return
+            }
+            if (event.type !== "tool-call") return
+            // Hosted calls have already run at the provider; observe them for loop diagnosis
+            // and to break a local-tool streak, then wait for their provider result.
+            if (event.providerExecuted) {
+              loopBudget.observeTool(event.id, event.name, event.input)
+              return
+            }
             // RI-126: the synthesized StructuredOutput call IS the turn's final answer — capture
             // its input as the structured value and acknowledge it with the legacy success text
             // instead of settling through the registry (it is advertised, never registered).
@@ -2121,6 +2136,77 @@ export const layer = Layer.effect(
         ),
       )
 
+    // An explicit resume can reuse an active activity after a safe startup recovery. Reconstruct
+    // the two preceding calls from committed events so restarting the process cannot grant two
+    // fresh identical attempts. Unsettled calls remain in the window as a barrier; the recovery
+    // guard decides whether their unknown effects permit another provider turn at all.
+    const restoreLoopBudget = Effect.fn("SessionRunner.restoreLoopBudget")(function* (
+      sessionID: SessionSchema.ID,
+      budget: LoopBudget,
+    ) {
+      const active = yield* db
+        .select({ activityID: SessionActivityTable.activity_id, triggerInputID: SessionActivityTable.trigger_input_id })
+        .from(SessionActivityTable)
+        .where(and(eq(SessionActivityTable.session_id, sessionID), eq(SessionActivityTable.state, "active")))
+        .get()
+        .pipe(Effect.orDie)
+      if (!active) return
+      const trigger = yield* db
+        .select({ promotedSeq: SessionInputTable.promoted_seq })
+        .from(SessionInputTable)
+        .where(eq(SessionInputTable.id, SessionMessage.ID.make(active.triggerInputID)))
+        .get()
+        .pipe(Effect.orDie)
+      if (trigger?.promotedSeq === null || trigger === undefined)
+        return yield* Effect.die("active activity has no promoted trigger for loop-budget recovery")
+      const calls = yield* db
+        .select({ seq: EventTable.seq, data: EventTable.data })
+        .from(EventTable)
+        .where(
+          and(
+            eq(EventTable.aggregate_id, sessionID),
+            eq(EventTable.type, EventV2.durableType(SessionEvent.Tool.Called)),
+            gt(EventTable.seq, trigger.promotedSeq),
+          ),
+        )
+        .orderBy(desc(EventTable.seq))
+        .limit(REPEATED_TOOL_LIMIT - 1)
+        .all()
+        .pipe(Effect.orDie)
+      const earliest = calls.at(-1)
+      if (!earliest) return
+      const terminal = yield* db
+        .select({ data: EventTable.data })
+        .from(EventTable)
+        .where(
+          and(
+            eq(EventTable.aggregate_id, sessionID),
+            inArray(EventTable.type, [
+              EventV2.durableType(SessionEvent.Tool.Success),
+              EventV2.durableType(SessionEvent.Tool.Failed),
+            ]),
+            gt(EventTable.seq, earliest.seq),
+          ),
+        )
+        .all()
+        .pipe(Effect.orDie)
+      budget.forActivity(active.activityID)
+      for (const row of calls.toReversed()) {
+        const decoded = Schema.decodeUnknownOption(SessionEvent.Tool.Called.data)(row.data)
+        if (Option.isNone(decoded)) return yield* Effect.die("invalid durable tool call in loop-budget recovery")
+        budget.seedTool(
+          decoded.value.callID,
+          decoded.value.tool,
+          decoded.value.input,
+          terminal.some(
+            (event) =>
+              event.data["assistantMessageID"] === decoded.value.assistantMessageID &&
+              event.data["callID"] === decoded.value.callID,
+          ),
+        )
+      }
+    })
+
     const runDrain = Effect.fn("SessionRunner.run")(function* (input: {
       readonly sessionID: SessionSchema.ID
       readonly force?: boolean
@@ -2185,6 +2271,7 @@ export const layer = Layer.effect(
         const configSteps = configAgents?.[runSession?.agent ?? "auto"]?.steps
         const stepCeiling = runAgent?.info?.steps ?? configSteps ?? MAX_STEPS
         const loopBudget = new LoopBudget(stepCeiling)
+        yield* restoreLoopBudget(input.sessionID, loopBudget)
         let attempts = 0
         while (attempts < stepCeiling) {
           const result = yield* runTurn(input.sessionID, promotion, step, loopBudget)

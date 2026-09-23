@@ -5625,6 +5625,66 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("restores the active activity's settled tool streak on explicit resume", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Resume an active tool streak" }), resume: false })
+      const { db } = yield* Database.Service
+      const events = yield* EventV2.Service
+      const promoted = yield* SessionInput.promoteSteers(db, events, sessionID, Number.MAX_SAFE_INTEGER)
+      expect(promoted).toHaveLength(1)
+      yield* db
+        .insert(SessionActivityTable)
+        .values({
+          activity_id: "activity-restart-streak",
+          session_id: sessionID,
+          ordinal: 0,
+          trigger_input_id: promoted[0]!,
+          delivery: "steer",
+          state: "active",
+          created_at: Date.now(),
+        })
+        .run()
+        .pipe(Effect.orDie)
+      // These are the committed tool-call/result facts left by prior provider turns. A fresh
+      // runner drain must rebuild its detector from the active activity's durable event suffix.
+      const assistantMessageID = SessionMessage.ID.create()
+      for (const callID of ["before-restart-1", "before-restart-2"]) {
+        yield* events.publish(SessionEvent.Tool.Called, {
+          sessionID,
+          timestamp: yield* DateTime.now,
+          assistantMessageID,
+          callID,
+          tool: "echo",
+          input: { text: "same" },
+          provider: { executed: false },
+        })
+        yield* events.publish(SessionEvent.Tool.Success, {
+          sessionID,
+          timestamp: yield* DateTime.now,
+          assistantMessageID,
+          callID,
+          structured: {},
+          content: [],
+          provider: { executed: false },
+        })
+      }
+      executions.length = 0
+      responses = [
+        [
+          LLMEvent.stepStart({ index: 0 }),
+          LLMEvent.toolCall({ id: "after-restart-3", name: "echo", input: { text: "same" } }),
+          LLMEvent.stepFinish({ index: 0, reason: "tool-calls" }),
+          LLMEvent.finish({ reason: "tool-calls" }),
+        ],
+      ]
+      const failure = yield* session.resume(sessionID).pipe(Effect.flip)
+      expect(failure).toMatchObject({ _tag: "SessionRunner.RepeatedToolError", tool: "echo", count: 3 })
+      expect(executions).toEqual([])
+    }),
+  )
+
   it.effect("does not restart a capped tool loop for a coalesced stale wake", () =>
     Effect.gen(function* () {
       yield* setup

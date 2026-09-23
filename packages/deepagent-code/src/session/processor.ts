@@ -1,7 +1,11 @@
 import { PermissionV1 } from "@deepagent-code/core/v1/permission"
 import { DeepAgentActivityAuthority } from "@deepagent-code/core/deepagent/index"
 import { Hash } from "@deepagent-code/core/util/hash"
-import { REPEATED_TOOL_LIMIT } from "@deepagent-code/core/session/runner/loop-budget"
+import {
+  REPEATED_TOOL_LIMIT,
+  repeatedIdenticalTool,
+  toolInputIdentity,
+} from "@deepagent-code/core/session/runner/loop-budget"
 import { Image } from "@/image/image"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { Cause, Deferred, Effect, Exit, Layer, Context, Scope, Schema, Data } from "effect"
@@ -86,11 +90,6 @@ function canonicalJson(value: unknown): string {
   return "{" + pairs.join(",") + "}"
 }
 
-/** Build the stable fingerprint for one tool invocation. */
-function toolFingerprint(toolName: string, input: unknown): string {
-  return toolName + ":" + canonicalJson(input)
-}
-
 /**
  * Activity-level sequence tracker.  One instance is created per durable
  * user activity and shared across all processor instances (provider steps)
@@ -125,7 +124,8 @@ export class ToolSequenceTracker {
   }
 
   fingerprint(toolName: string, input: unknown): string {
-    return toolFingerprint(toolName, this.fingerprintResolver ? this.fingerprintResolver(toolName, input) : input)
+    return toolInputIdentity(toolName, this.fingerprintResolver ? this.fingerprintResolver(toolName, input) : input)
+      .fingerprint
   }
 
   /** Record a newly started (running) tool call. */
@@ -190,9 +190,11 @@ export class ToolSequenceTracker {
    */
   detect(): { period: number; count: number; sequenceKey: string } | null {
     if (this.calls.length === 0) return null
+    const identical = repeatedIdenticalTool(this.calls)
+    if (identical) return { period: 1, count: REPEATED_TOOL_LIMIT, sequenceKey: identical }
     const fps = this.calls.map((c) => c.fingerprint)
 
-    for (let period = 1; period <= DOOM_LOOP_MAX_PERIOD; period++) {
+    for (let period = 2; period <= DOOM_LOOP_MAX_PERIOD; period++) {
       const needed = period * DOOM_LOOP_MIN_REPEATS
       if (fps.length < needed) continue
 
@@ -1526,16 +1528,17 @@ export const layer = Layer.effect(
               Effect.provideService(Database.Service, database),
             )
             const recentParts = parts.slice(-DOOM_LOOP_THRESHOLD)
-
+            const recentTools = recentParts.filter((part): part is SessionV1.ToolPart => part.type === "tool")
             const singleRepeat =
               recentParts.length === DOOM_LOOP_THRESHOLD &&
-              recentParts.every(
-                (part) =>
-                  part.type === "tool" &&
-                  part.tool === value.name &&
-                  part.state.status !== "pending" &&
-                  JSON.stringify(part.state.input) === JSON.stringify(input),
-              )
+              recentTools.length === DOOM_LOOP_THRESHOLD &&
+              recentTools.every((part) => part.state.status !== "pending") &&
+              repeatedIdenticalTool(
+                recentTools.map((part) => ({
+                  fingerprint: toolInputIdentity(part.tool, part.state.input).fingerprint,
+                  done: true,
+                })),
+              ) === toolInputIdentity(value.name, input).fingerprint
 
             const sequenceRepeat =
               !singleRepeat &&
