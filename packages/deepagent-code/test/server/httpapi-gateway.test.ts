@@ -503,6 +503,24 @@ describe("gateway release gate", () => {
       expect(laneRows.find((lane) => lane.hint === "default")?.archived_at).toBeGreaterThan(0)
       expect(laneRows.find((lane) => lane.hint === "second-lane")?.archived_at).toBeNull()
       await web.dispose()
+      const disabled = HttpRouter.toWebHandler(HttpApiApp.createRoutes().pipe(
+        Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DEEPAGENT_CODE_GATEWAY: false }))),
+      ), { disableLogger: true })
+      const audit = new sqlite.Database(Flag.DEEPAGENT_CODE_DB, { readonly: true })
+      try {
+        const count = () => audit.query("SELECT count(*) AS total FROM proxy_request_ledger").get() as { total: number }
+        const before = count().total
+        const blocked = await disabled.handler(new Request("http://localhost/v1/chat/completions", {
+          method: "POST", headers: { authorization: "Bearer sk-context", "content-type": "application/json", "x-request-id": "disabled" },
+          body: JSON.stringify({ model: "test-model", messages: [{ role: "user", content: "Must not run" }] }),
+        }), HttpApiApp.context)
+        expect(blocked.status).toBe(404)
+        expect((await blocked.json()).error.code).toBe("gateway_disabled")
+        expect(count().total).toBe(before)
+      } finally {
+        audit.close()
+        await disabled.dispose()
+      }
     } finally {
       streamGate.resolve()
       upstream.stop(true)
