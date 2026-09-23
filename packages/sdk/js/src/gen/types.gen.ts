@@ -53,6 +53,9 @@ export type Event =
   | EventSessionNextCompactionStarted
   | EventSessionNextCompactionDelta
   | EventSessionNextCompactionEnded
+  | EventProxyRequestAdmitted
+  | EventProxyResponseCompleted
+  | EventProxyMechanismTraced
   | EventModelsDevRefreshed
   | EventPluginAdded
   | EventCatalogModelUpdated
@@ -1421,6 +1424,71 @@ export type GlobalEvent = {
       }
     | {
         id: string
+        type: "proxy.request.admitted"
+        properties: {
+          requestID: string
+          tenantID: string
+          tier: "passthrough" | "context" | "full"
+          providerID: string
+          modelID: string
+          laneSessionID?: string
+          admittedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          stream: boolean
+        }
+      }
+    | {
+        id: string
+        type: "proxy.response.completed"
+        properties: {
+          requestID: string
+          tenantID: string
+          tier: "passthrough" | "context" | "full"
+          providerID: string
+          modelID: string
+          laneSessionID?: string
+          completedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          finishReason: string
+          usageInput?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          usageOutput?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          usageReasoning?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          usageCacheRead?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          usageCacheWrite?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          usageSource?: "provider" | "estimated"
+          costUnavailable: boolean
+          mechanismTrace?: {
+            activityID: string
+            selections: Array<{
+              selectionID: string
+              tokenCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+              projectionHash: string
+              selectedRefs: string
+              truncated: boolean
+            }>
+          }
+        }
+      }
+    | {
+        id: string
+        type: "proxy.mechanism.traced"
+        properties: {
+          requestID: string
+          tenantID: string
+          tier: "passthrough" | "context" | "full"
+          providerID: string
+          modelID: string
+          laneSessionID?: string
+          activityID: string
+          selections: Array<{
+            selectionID: string
+            tokenCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+            projectionHash: string
+            selectedRefs: string
+            truncated: boolean
+          }>
+        }
+      }
+    | {
+        id: string
         type: "models-dev.refreshed"
         properties: {
           [key: string]: unknown
@@ -2016,6 +2084,9 @@ export type GlobalEvent = {
     | SyncEventSessionNextCompactionStarted1
     | SyncEventSessionNextCompactionEnded1
     | SyncEventSessionNextCompactionEnded2
+    | SyncEventProxyRequestAdmitted1
+    | SyncEventProxyResponseCompleted1
+    | SyncEventProxyMechanismTraced1
     | SyncEventSessionCompacted1
 }
 
@@ -6754,6 +6825,92 @@ export type SyncEventSessionNextCompactionEnded2 = {
   }
 }
 
+export type SyncEventProxyRequestAdmitted1 = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "proxy.request.admitted.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      requestID: string
+      tenantID: string
+      tier: "passthrough" | "context" | "full"
+      providerID: string
+      modelID: string
+      laneSessionID?: string
+      admittedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      stream: boolean
+    }
+  }
+}
+
+export type SyncEventProxyResponseCompleted1 = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "proxy.response.completed.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      requestID: string
+      tenantID: string
+      tier: "passthrough" | "context" | "full"
+      providerID: string
+      modelID: string
+      laneSessionID?: string
+      completedAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      finishReason: string
+      usageInput?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      usageOutput?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      usageReasoning?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      usageCacheRead?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      usageCacheWrite?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      usageSource?: "provider" | "estimated"
+      costUnavailable: boolean
+      mechanismTrace?: {
+        activityID: string
+        selections: Array<{
+          selectionID: string
+          tokenCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+          projectionHash: string
+          selectedRefs: string
+          truncated: boolean
+        }>
+      }
+    }
+  }
+}
+
+export type SyncEventProxyMechanismTraced1 = {
+  type: "sync"
+  id: string
+  syncEvent: {
+    type: "proxy.mechanism.traced.1"
+    id: string
+    seq: number
+    aggregateID: string
+    data: {
+      requestID: string
+      tenantID: string
+      tier: "passthrough" | "context" | "full"
+      providerID: string
+      modelID: string
+      laneSessionID?: string
+      activityID: string
+      selections: Array<{
+        selectionID: string
+        tokenCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        projectionHash: string
+        selectedRefs: string
+        truncated: boolean
+      }>
+    }
+  }
+}
+
 export type SyncEventSessionCompacted1 = {
   type: "sync"
   id: string
@@ -8157,6 +8314,74 @@ export type EventSessionNextCompactionEnded = {
     reason: "auto" | "manual"
     text: string
     recent: string
+  }
+}
+
+export type EventProxyRequestAdmitted = {
+  id: string
+  type: "proxy.request.admitted"
+  properties: {
+    requestID: string
+    tenantID: string
+    tier: "passthrough" | "context" | "full"
+    providerID: string
+    modelID: string
+    laneSessionID?: string
+    admittedAt: number | "NaN" | "Infinity" | "-Infinity"
+    stream: boolean
+  }
+}
+
+export type EventProxyResponseCompleted = {
+  id: string
+  type: "proxy.response.completed"
+  properties: {
+    requestID: string
+    tenantID: string
+    tier: "passthrough" | "context" | "full"
+    providerID: string
+    modelID: string
+    laneSessionID?: string
+    completedAt: number | "NaN" | "Infinity" | "-Infinity"
+    finishReason: string
+    usageInput?: number | "NaN" | "Infinity" | "-Infinity"
+    usageOutput?: number | "NaN" | "Infinity" | "-Infinity"
+    usageReasoning?: number | "NaN" | "Infinity" | "-Infinity"
+    usageCacheRead?: number | "NaN" | "Infinity" | "-Infinity"
+    usageCacheWrite?: number | "NaN" | "Infinity" | "-Infinity"
+    usageSource?: "provider" | "estimated"
+    costUnavailable: boolean
+    mechanismTrace?: {
+      activityID: string
+      selections: Array<{
+        selectionID: string
+        tokenCount: number | "NaN" | "Infinity" | "-Infinity"
+        projectionHash: string
+        selectedRefs: string
+        truncated: boolean
+      }>
+    }
+  }
+}
+
+export type EventProxyMechanismTraced = {
+  id: string
+  type: "proxy.mechanism.traced"
+  properties: {
+    requestID: string
+    tenantID: string
+    tier: "passthrough" | "context" | "full"
+    providerID: string
+    modelID: string
+    laneSessionID?: string
+    activityID: string
+    selections: Array<{
+      selectionID: string
+      tokenCount: number | "NaN" | "Infinity" | "-Infinity"
+      projectionHash: string
+      selectedRefs: string
+      truncated: boolean
+    }>
   }
 }
 
@@ -19300,6 +19525,224 @@ export type SessionImportSnapshotResponses = {
 }
 
 export type SessionImportSnapshotResponse = SessionImportSnapshotResponses[keyof SessionImportSnapshotResponses]
+
+export type SessionExportBundleData = {
+  body?: {
+    tier: "conversation" | "conversation_metadata" | "session_logs"
+    archive?: "zip"
+    redact?: boolean
+  }
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/session/{sessionID}/export-bundle"
+}
+
+export type SessionExportBundleErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionExportBundleError = SessionExportBundleErrors[keyof SessionExportBundleErrors]
+
+export type SessionExportBundleResponses = {
+  /**
+   * Success
+   */
+  200: {
+    bundle: string
+    archive: "zip"
+  }
+}
+
+export type SessionExportBundleResponse = SessionExportBundleResponses[keyof SessionExportBundleResponses]
+
+export type SessionExportBundleStreamData = {
+  body?: {
+    tier: "conversation" | "conversation_metadata" | "session_logs"
+    archive?: "zip"
+    redact?: boolean
+  }
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/session/{sessionID}/export-bundle-stream"
+}
+
+export type SessionExportBundleStreamErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionExportBundleStreamError = SessionExportBundleStreamErrors[keyof SessionExportBundleStreamErrors]
+
+export type SessionExportBundleStreamResponses = {
+  /**
+   * Success
+   */
+  200: string
+}
+
+export type SessionExportBundleStreamResponse =
+  SessionExportBundleStreamResponses[keyof SessionExportBundleStreamResponses]
+
+export type SessionImportBundleData = {
+  body?: {
+    bundle: string
+  }
+  path?: never
+  query?: never
+  url: "/session/import-bundle"
+}
+
+export type SessionImportBundleErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type SessionImportBundleError = SessionImportBundleErrors[keyof SessionImportBundleErrors]
+
+export type SessionImportBundleResponses = {
+  /**
+   * Success
+   */
+  200: {
+    sessionID: string
+    messages: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    parts: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type SessionImportBundleResponse = SessionImportBundleResponses[keyof SessionImportBundleResponses]
+
+export type SessionShareBundleData = {
+  body?: {
+    tier: "conversation" | "conversation_metadata" | "session_logs"
+  }
+  path: {
+    sessionID: string
+  }
+  query?: never
+  url: "/session/{sessionID}/share-bundle"
+}
+
+export type SessionShareBundleErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type SessionShareBundleError = SessionShareBundleErrors[keyof SessionShareBundleErrors]
+
+export type SessionShareBundleResponses = {
+  /**
+   * Success
+   */
+  200: {
+    id: string
+    url: string
+    revokeToken: string
+    expiresAt: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type SessionShareBundleResponse = SessionShareBundleResponses[keyof SessionShareBundleResponses]
+
+export type SessionImportBundleShareData = {
+  body?: {
+    url: string
+  }
+  path?: never
+  query?: never
+  url: "/session/import-bundle-share"
+}
+
+export type SessionImportBundleShareErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type SessionImportBundleShareError = SessionImportBundleShareErrors[keyof SessionImportBundleShareErrors]
+
+export type SessionImportBundleShareResponses = {
+  /**
+   * Success
+   */
+  200: {
+    sessionID: string
+    messages: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    parts: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type SessionImportBundleShareResponse =
+  SessionImportBundleShareResponses[keyof SessionImportBundleShareResponses]
+
+export type SessionRevokeBundleShareData = {
+  body?: {
+    url: string
+    revokeToken: string
+  }
+  path?: never
+  query?: never
+  url: "/session/revoke-bundle-share"
+}
+
+export type SessionRevokeBundleShareErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
+}
+
+export type SessionRevokeBundleShareError = SessionRevokeBundleShareErrors[keyof SessionRevokeBundleShareErrors]
+
+export type SessionRevokeBundleShareResponses = {
+  /**
+   * Success
+   */
+  200: {
+    revoked: boolean
+  }
+}
+
+export type SessionRevokeBundleShareResponse =
+  SessionRevokeBundleShareResponses[keyof SessionRevokeBundleShareResponses]
 
 export type SyncStartData = {
   body?: never
