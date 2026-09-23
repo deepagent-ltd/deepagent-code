@@ -1138,7 +1138,8 @@ export const RunCommand = effectCmd({
             ).then((data) => ({ data }), (error: unknown) => ({ error }))
             if ("error" in result) {
               if (result.error instanceof RunTimedOut) throw result.error
-              if (!emit("error", { error: result.error })) UI.error(formatRunError(result.error))
+              const message = formatRunError(result.error)
+              if (!emit("error", { error: message })) UI.error(message)
               process.exitCode = 1
               return
             }
