@@ -47,6 +47,11 @@ import {
   ForkPayload,
   InitPayload,
   ImportSnapshotPayload,
+  ExportBundlePayload,
+  ImportBundlePayload,
+  ShareBundlePayload,
+  ImportBundleSharePayload,
+  RevokeBundleSharePayload,
   LegacyForkPayload,
   ListQuery,
   MessagesQuery,
@@ -73,6 +78,8 @@ import { randomUUID } from "node:crypto"
 import { getWorkspaceContext } from "../utils/workspace-context"
 import { SessionDiffArtifact } from "@/session/diff-artifact"
 import { exportSessionSnapshot, importSessionSnapshot, type SessionSnapshot } from "@/session/snapshot"
+import { exportSessionBundle, parseSessionBundle, BUNDLE_MAX_BYTES } from "@/session/bundle"
+import { uploadSessionBundle, downloadSessionBundle, revokeSessionBundle } from "@/session/bundle-share"
 import { InstanceState } from "@/effect/instance-state"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 
@@ -1136,6 +1143,101 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       }).pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
     })
 
+    const exportBundle = Effect.fn("SessionHttpApi.exportBundle")(function* (ctx: {
+      params: { sessionID: SessionID }
+      payload: typeof ExportBundlePayload.Type
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      const bytes = yield* exportSessionBundle({ sessionID: ctx.params.sessionID, ...ctx.payload }).pipe(
+        Effect.mapError(() => new HttpApiError.BadRequest({})),
+      )
+      return { bundle: Buffer.from(bytes).toString("base64"), archive: "zip" as const }
+    })
+
+    const exportBundleStream = Effect.fn("SessionHttpApi.exportBundleStream")(function* (ctx: {
+      params: { sessionID: SessionID }
+      payload: typeof ExportBundlePayload.Type
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      const queue = yield* Queue.dropping<unknown, Error | Cause.Done>(64)
+      yield* exportSessionBundle({
+        sessionID: ctx.params.sessionID,
+        ...ctx.payload,
+        progress: (phase, percent, bytes) => {
+          Queue.offerUnsafe(queue, { type: "progress", phase, percent, bytes })
+        },
+      }).pipe(
+        Effect.tap((bytes) => Effect.sync(() => Queue.offerUnsafe(queue, { type: "result", archive: "zip", bundle: Buffer.from(bytes).toString("base64") }))),
+        Effect.catchCause((cause) => Effect.sync(() => Queue.offerUnsafe(queue, { type: "error", message: Cause.pretty(cause) }))),
+        Effect.forkScoped({ startImmediately: true }),
+      )
+      return HttpServerResponse.stream(
+        Stream.fromQueue(queue).pipe(
+          Stream.takeUntil(isPromptPrepareTerminal),
+          Stream.map(promptPrepareEvent),
+          Stream.pipeThroughChannel(Sse.encode()),
+          Stream.encodeText,
+          Stream.ensuring(Queue.shutdown(queue)),
+        ),
+        { contentType: "text/event-stream", headers: { "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no" } },
+      )
+    })
+
+    const importBundle = Effect.fn("SessionHttpApi.importBundle")(function* (ctx: {
+      payload: typeof ImportBundlePayload.Type
+    }) {
+      if (ctx.payload.bundle.length > BUNDLE_MAX_BYTES * 1.4)
+        return yield* new HttpApiError.BadRequest({})
+      const parsed = yield* Effect.tryPromise(() => parseSessionBundle(Buffer.from(ctx.payload.bundle, "base64"))).pipe(
+        Effect.mapError(() => new HttpApiError.BadRequest({})),
+      )
+      const instanceCtx = yield* InstanceState.context
+      return yield* importSessionSnapshot({
+        snapshot: parsed.snapshot,
+        projectID: instanceCtx.project.id,
+        directory: instanceCtx.directory,
+      }).pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+    })
+
+    const shareBundle = Effect.fn("SessionHttpApi.shareBundle")(function* (ctx: {
+      params: { sessionID: SessionID }
+      payload: typeof ShareBundlePayload.Type
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      const service = process.env.DEEPAGENT_SHARE_PUBLIC_URL
+      const uploadToken = process.env.DEEPAGENT_SHARE_UPLOAD_TOKEN
+      if (!service || !uploadToken)
+        return yield* new ServiceUnavailableError({ service: "session.shareBundle", message: "Bundle share host is not configured" })
+      const bytes = yield* exportSessionBundle({ sessionID: ctx.params.sessionID, tier: ctx.payload.tier, share: true })
+        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+      return yield* Effect.tryPromise(() => uploadSessionBundle({ bytes, service, uploadToken }))
+        .pipe(Effect.mapError(() => new ServiceUnavailableError({ service: "session.shareBundle", message: "Bundle upload failed" })))
+    })
+
+    const importBundleShare = Effect.fn("SessionHttpApi.importBundleShare")(function* (ctx: {
+      payload: typeof ImportBundleSharePayload.Type
+    }) {
+      const service = process.env.DEEPAGENT_SHARE_PUBLIC_URL
+      if (!service)
+        return yield* new ServiceUnavailableError({ service: "session.importBundleShare", message: "Bundle share host is not configured" })
+      const parsed = yield* Effect.tryPromise(() => downloadSessionBundle({ url: ctx.payload.url, service }))
+        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+      const instanceCtx = yield* InstanceState.context
+      return yield* importSessionSnapshot({ snapshot: parsed.snapshot, projectID: instanceCtx.project.id, directory: instanceCtx.directory })
+        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+    })
+
+    const revokeBundleShare = Effect.fn("SessionHttpApi.revokeBundleShare")(function* (ctx: {
+      payload: typeof RevokeBundleSharePayload.Type
+    }) {
+      const service = process.env.DEEPAGENT_SHARE_PUBLIC_URL
+      if (!service)
+        return yield* new ServiceUnavailableError({ service: "session.revokeBundleShare", message: "Bundle share host is not configured" })
+      yield* Effect.tryPromise(() => revokeSessionBundle({ ...ctx.payload, service }))
+        .pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+      return { revoked: true }
+    })
+
     return handlers
       .handle("list", list)
       .handle("status", status)
@@ -1181,5 +1283,11 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("continuationResolutionResolve", continuationResolutionResolve)
       .handle("exportSnapshot", exportSnapshot)
       .handle("importSnapshot", importSnapshot)
+      .handle("exportBundle", exportBundle)
+      .handle("exportBundleStream", exportBundleStream)
+      .handle("importBundle", importBundle)
+      .handle("shareBundle", shareBundle)
+      .handle("importBundleShare", importBundleShare)
+      .handle("revokeBundleShare", revokeBundleShare)
   }),
 )
