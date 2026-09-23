@@ -182,6 +182,7 @@ describe("live LLM route manifest", () => {
           "live:legacy-session:subagent-control-plane",
           "live:legacy-session:subagent-foreground",
           "live:packaged-sidecar:activity-progress-restart",
+          "live:server-gateway:proxy-smoke",
           "live:session-v2:bash-repair",
           "live:session-v2:file-mutations",
           "live:session-v2:file-read-search",
