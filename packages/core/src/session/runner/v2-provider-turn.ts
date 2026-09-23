@@ -1606,7 +1606,22 @@ export function admitInTransaction(
           existing.state === "indeterminate_after_crash" && existing.owner_token === ownerToken
         const recoverableOwnerLoss =
           existing.state === "failed" && existing.error_code === "owner_lost_before_dispatch"
-        if (!sameOwnerQuarantine && !recoverableOwnerLoss)
+        // A route change after admission is safe to rebuild only when the paired attempt
+        // terminalized from prepared, before any wire seal or first provider event.
+        const driftedAttempt = existing.error_code === "config_drift_rebuild_required" &&
+          existing.provider_attempt_id &&
+          !existing.prepared_turn &&
+          !existing.wire_request_hash
+          ? yield* tx.select().from(SessionProviderAttemptTable)
+              .where(eq(SessionProviderAttemptTable.attempt_id, existing.provider_attempt_id)).get()
+          : undefined
+        const recoverableConfigDrift = existing.state === "failed" &&
+          driftedAttempt?.state === "failed" &&
+          driftedAttempt.error_code === "config_drift_rebuild_required" &&
+          !driftedAttempt.prepared_turn_hash &&
+          !driftedAttempt.wire_request_hash &&
+          !driftedAttempt.first_event_at
+        if (!sameOwnerQuarantine && !recoverableOwnerLoss && !recoverableConfigDrift)
           return yield* new UnsafeRetryError({ state: existing.state })
       } else if (
         existing.provider_id !== input.providerId ||

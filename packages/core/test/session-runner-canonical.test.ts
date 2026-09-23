@@ -172,6 +172,7 @@ it.effect("creates attempt and receipt in one recoverable boundary and binds the
       contexts: yield* SessionContext.Service,
       sessionID,
       admission,
+      protocolAttemptIdentityHash: Hash.sha256("route-one"),
       receipt: receiptInput,
       ownerToken: yield* providerTurns.currentOwnerToken(),
     })
@@ -180,6 +181,7 @@ it.effect("creates attempt and receipt in one recoverable boundary and binds the
     expect(first.receipt.activityId).toBe(admission.activityId)
     expect(first.receipt.providerAttemptId).toBe(first.attempt.attemptId)
     expect(first.receipt.providerTurnSeq).toBe(first.attempt.providerTurnSeq)
+    expect(first.attempt.protocolAttemptIdentityHash).toBe(Hash.sha256("route-one"))
 
     // Exact retry converges onto the same prepared attempt and preparing receipt.
     const retry = yield* SessionRunnerCanonical.commitTurn({
@@ -187,11 +189,24 @@ it.effect("creates attempt and receipt in one recoverable boundary and binds the
       contexts: yield* SessionContext.Service,
       sessionID,
       admission,
+      protocolAttemptIdentityHash: Hash.sha256("route-one"),
       receipt: receiptInput,
       ownerToken: yield* providerTurns.currentOwnerToken(),
     })
     expect(retry.attempt.attemptId).toBe(first.attempt.attemptId)
     expect(retry.receipt.receiptId).toBe(first.receipt.receiptId)
+
+    // A retry cannot silently adopt a prepared attempt admitted under a different route.
+    const drifted = yield* SessionRunnerCanonical.commitTurn({
+      db,
+      contexts: yield* SessionContext.Service,
+      sessionID,
+      admission,
+      protocolAttemptIdentityHash: Hash.sha256("route-two"),
+      receipt: receiptInput,
+      ownerToken: yield* providerTurns.currentOwnerToken(),
+    }).pipe(Effect.flip)
+    expect(drifted).toMatchObject({ reason: "prepared_attempt_binding_mismatch" })
   }),
 )
 

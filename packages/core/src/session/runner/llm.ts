@@ -1314,11 +1314,12 @@ export const layer = Layer.effect(
         ...(inputUsage === undefined ? {} : { estimatedInputTokens: inputUsage.tokens }),
       })) return yield* Effect.die(rebuildPreparedTurn(undefined, currentStep))
       const requestBudget = PreparedProviderTurn.budget(model, estimatedFullRequestTokens)
-      const providerReceipt = (yield* SessionRunnerCanonical.commitTurn({
+      const admittedTurn = yield* SessionRunnerCanonical.commitTurn({
         db,
         contexts,
         sessionID: session.id,
         admission: selectionAdmission,
+        protocolAttemptIdentityHash: protocolIdentityHash,
         receipt: {
           sessionId: session.id,
           userMessageId: receiptUserMessageID,
@@ -1331,7 +1332,8 @@ export const layer = Layer.effect(
           ownerMode: parityCampaign ? "shadow_v2" : "v2",
         },
         ownerToken: yield* providerTurns.currentOwnerToken(),
-      })).receipt
+      })
+      const providerReceipt = admittedTurn.receipt
       if (policyReceiptID) {
         if (!providerReceipt.providerAttemptId) return yield* Effect.die("Managed provider receipt has no attempt binding")
         yield* LongContext.bindProviderAttempt(db, policyReceiptID, providerReceipt.providerAttemptId).pipe(Effect.orDie)
@@ -1707,16 +1709,24 @@ export const layer = Layer.effect(
         yield* terminalizePreDispatch("epoch_mismatch_rebuild")
         return yield* Effect.die(rebuildPreparedTurn(undefined, currentStep))
       }
-      // C2-04/B2 residual dispatch seam: never dispatch a drifted attempt. When the receipt already
-      // carries a bound protocol attempt identity (an exact-retry re-seal), the CURRENT config must
-      // still resolve to the SAME identity; a mismatch means route/protocol/origin/capability/lowering
-      // changed after the attempt was bound, so a dispatch would violate design §2.3. Rebuild from the
-      // current config (the established turnaround) and leave the stale attempt un-dispatched.
-      const boundIdentityHash = providerReceipt.preparedTurn?.protocol_attempt_identity_hash
+      // The attempt binds the route at admission, before the prepared turn exists. Re-resolve the
+      // Location catalog at the actual dispatch seam: a changed endpoint/protocol/capability must
+      // terminalize the admitted turn and rebuild; it must never send the old request on a new route.
+      const currentModel = yield* models.resolve(session).pipe(
+        Effect.onError(() => terminalizePreDispatch("config_revalidation_failed")),
+      )
+      const currentIdentity = currentModel.info === undefined
+        ? undefined
+        : protocolAttemptIdentityFor(
+            currentModel.info,
+            currentModel.provider,
+            buildCapabilityEvidence(currentModel.info, currentModel.provider),
+          )
+      const boundIdentityHash = admittedTurn.attempt.protocolAttemptIdentityHash
       if (
-        protocolIdentity !== undefined &&
-        boundIdentityHash !== undefined &&
-        configDrift(protocolIdentity, boundIdentityHash)
+        (boundIdentityHash === undefined && currentIdentity !== undefined) ||
+        (boundIdentityHash !== undefined &&
+          (currentIdentity === undefined || configDrift(currentIdentity, boundIdentityHash)))
       ) {
         yield* terminalizePreDispatch("config_drift_rebuild_required")
         return yield* Effect.die(rebuildPreparedTurn(undefined, currentStep))

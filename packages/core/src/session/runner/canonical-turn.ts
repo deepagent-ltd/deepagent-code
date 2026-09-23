@@ -785,6 +785,7 @@ export type CommitTurnInput = {
   readonly sessionID: SessionSchema.ID
   readonly admission: SelectionAdmission
   readonly receipt: Omit<V2ProviderTurn.AdmitInput, "ownerToken" | "activityId" | "providerTurnSeq">
+  readonly protocolAttemptIdentityHash?: string
   readonly ownerToken: string
   readonly now?: number
 }
@@ -954,6 +955,7 @@ export const commitTurn = Effect.fn("SessionRunnerCanonical.commitTurn")(functio
             selectionId: input.admission.selectionId,
             projectionHash: input.admission.projectionHash,
             requestHash: input.receipt.requestInputHash,
+            protocolAttemptIdentityHash: input.protocolAttemptIdentityHash,
             providerId: input.receipt.providerId,
             ownerToken: input.ownerToken,
             authorizationEpoch: input.admission.authorizationEpoch,

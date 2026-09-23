@@ -49,6 +49,7 @@ import taskStructuredOutputReceiptMigration from "@deepagent-code/core/database/
 import taskExecutionSpecAuthorityMigration from "@deepagent-code/core/database/migration/20260812210000_task_execution_spec_authority"
 import taskStructuredOutputEvidenceAuthorityMigration from "@deepagent-code/core/database/migration/20260812220000_task_structured_output_evidence_authority"
 import providerCrossStateRecoveryMigration from "@deepagent-code/core/database/migration/20260812061000_provider_cross_state_recovery"
+import providerAttemptProtocolIdentityMigration from "@deepagent-code/core/database/migration/20260924060000_provider_attempt_protocol_identity"
 import recoveryProviderMigration from "@deepagent-code/core/database/migration/20260830000000_session_provider_recovery"
 import type { SqlClient as SqlClientService } from "effect/unstable/sql/SqlClient"
 import { Database } from "@deepagent-code/core/database/database"
@@ -103,6 +104,25 @@ const contextReadiness = {
 }
 
 describe("DatabaseMigration", () => {
+  test("keeps historical attempt identities null and rejects later binding mutation", async () => {
+    await run(Effect.gen(function* () {
+      const db = yield* makeDb
+      yield* db.run(sql`CREATE TABLE session_provider_attempt (attempt_id TEXT PRIMARY KEY)`)
+      yield* db.run(sql`INSERT INTO session_provider_attempt (attempt_id) VALUES ('historical')`)
+      yield* DatabaseMigration.applyOnly(db, [providerAttemptProtocolIdentityMigration])
+
+      expect(yield* db.get(sql`SELECT protocol_attempt_identity_hash FROM session_provider_attempt WHERE attempt_id = 'historical'`))
+        .toEqual({ protocol_attempt_identity_hash: null })
+      expect(String(yield* db.run(sql`UPDATE session_provider_attempt SET protocol_attempt_identity_hash = ${"a".repeat(64)} WHERE attempt_id = 'historical'`).pipe(Effect.exit)))
+        .toContain("session_provider_attempt protocol identity is immutable")
+      expect(String(yield* db.run(sql`INSERT INTO session_provider_attempt (attempt_id, protocol_attempt_identity_hash) VALUES ('invalid', 'not-a-hash')`).pipe(Effect.exit)))
+        .toContain("CHECK constraint failed")
+      yield* db.run(sql`INSERT INTO session_provider_attempt (attempt_id, protocol_attempt_identity_hash) VALUES ('bound', ${"b".repeat(64)})`)
+      expect(String(yield* db.run(sql`UPDATE session_provider_attempt SET protocol_attempt_identity_hash = ${"c".repeat(64)} WHERE attempt_id = 'bound'`).pipe(Effect.exit)))
+        .toContain("session_provider_attempt protocol identity is immutable")
+    }))
+  })
+
   test("rejects duplicate migration IDs before changing the database", async () => {
     await run(
       Effect.gen(function* () {

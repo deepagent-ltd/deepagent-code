@@ -26,6 +26,7 @@ import { SessionContext } from "@deepagent-code/core/context-federation/session-
 import { ContextQueryAuthorization } from "@deepagent-code/core/context-federation/query-authorization"
 import { ProductionV2Sources } from "@deepagent-code/core/context-federation/production-adapters"
 import { SessionRunnerCanonical } from "@deepagent-code/core/session/runner/canonical-turn"
+import { SessionProviderAttemptTable } from "@deepagent-code/core/context-federation/session-sql"
 import { ToolRegistry } from "@deepagent-code/core/tool/registry"
 import { SessionTable } from "@deepagent-code/core/session/sql"
 import { SessionStore } from "@deepagent-code/core/session/store"
@@ -50,12 +51,10 @@ import { testEffect } from "./lib/effect"
 /**
  * C2-04/B2 residual (P2-01) — live-runner identity binding + dispatch seam.
  *
- * When the model resolver supplies the catalog `ModelV2.Info` (as the production
- * `locationLayer` does), the prepared attempt must carry the protocol attempt
- * identity (route/protocol/origin/capability/lowering) and its hash, and the
- * dispatch seam must refuse to dispatch when the CURRENT config drifts from a
- * previously-bound identity (exact-retry re-seal) — the stale attempt records
- * zero physical requests (design §2.3, §4.1 step 8).
+ * When the model resolver supplies catalog `ModelV2.Info`, admission binds the
+ * protocol identity hash on the durable attempt before the wire seal. A route
+ * change before dispatch terminalizes that attempt and admits a fresh successor;
+ * the stale attempt records zero physical requests (design §2.3, §4.1 step 8).
  */
 
 const database = Database.layerFromPath(":memory:")
@@ -145,6 +144,10 @@ const openAIProvider = new ProviderV2.Info({
   api: { type: "aisdk", package: "@ai-sdk/openai", url: "https://api.openai.com/v1" },
   request: { headers: {}, body: {} },
 })
+const driftedInfo = new ModelV2.Info({
+  ...openAIInfo,
+  api: { ...openAIInfo.api, url: "https://drifted.openai.com/v1" },
+})
 const catalog = Layer.succeed(
   Catalog.Service,
   Catalog.Service.of({
@@ -168,10 +171,19 @@ const model = OpenAIResponses.route
   .with({ auth: Auth.bearer("test") })
   .with({ limits: { context: 100, input: 80, output: 20 } })
   .model({ id: "api-gpt-4.1-mini" })
+const driftedModel = OpenAIResponses.route
+  .with({ endpoint: { baseURL: "https://drifted.openai.com/v1" } })
+  .with({ auth: Auth.bearer("test") })
+  .with({ limits: { context: 100, input: 80, output: 20 } })
+  .model({ id: "api-gpt-4.1-mini" })
 
-const models = SessionRunnerModel.layerWith(() =>
-  Effect.succeed({ model, info: openAIInfo, provider: openAIProvider }),
-)
+const routeState = { driftAfterFirst: false, resolves: 0 }
+const models = SessionRunnerModel.layerWith(() => Effect.sync(() => {
+  routeState.resolves++
+  return routeState.driftAfterFirst && routeState.resolves > 1
+    ? { model: driftedModel, info: driftedInfo, provider: openAIProvider }
+    : { model, info: openAIInfo, provider: openAIProvider }
+}))
 const systemContext = SystemContextRegistry.layer
 const location = Location.layer({ directory: AbsolutePath.make("/project") }).pipe(Layer.provide(Project.defaultLayer))
 const skillGuidance = Layer.mock(SkillGuidance.Service, { load: () => Effect.succeed(SystemContext.empty) })
@@ -279,6 +291,8 @@ const seedSession = Effect.gen(function* () {
 describe("SessionRunner identity binding (C2-04/B2 residual)", () => {
   beforeEach(() => {
     requests.length = 0
+    routeState.driftAfterFirst = false
+    routeState.resolves = 0
     AgentGateway.configure({ enabled: false, agentMode: "high" })
   })
 
@@ -308,7 +322,8 @@ describe("SessionRunner identity binding (C2-04/B2 residual)", () => {
         .pipe(Effect.orDie)
       expect(receipt).toBeDefined()
       if (!receipt) return
-      // The prepared attempt record carries the C2-04 identity + hash (bound at dispatch).
+      // The wire-sealed prepared turn carries the C2-04 identity + hash; the attempt
+      // was already bound at admission.
       expect(receipt.owner_mode).toBe("v2")
       expect(receipt.prepared_turn).toMatchObject({
         protocol_attempt_identity: {
@@ -321,6 +336,9 @@ describe("SessionRunner identity binding (C2-04/B2 residual)", () => {
       const boundIdentityHash = (receipt.prepared_turn as { protocol_attempt_identity_hash?: string })
         .protocol_attempt_identity_hash
       expect(boundIdentityHash).toMatch(/^[0-9a-f]{64}$/)
+      const attempts = yield* db.select().from(SessionProviderAttemptTable).all().pipe(Effect.orDie)
+      expect(attempts).toHaveLength(1)
+      expect(attempts[0]?.protocol_attempt_identity_hash).toBe(boundIdentityHash ?? null)
       // W8 — the seal persisted the identity-folded canonical hash: the durable column equals the
       // record's canonical value and differs from the raw request hash once an identity is bound.
       // (The transition trigger pins json_extract(prepared_turn, '$.prepared_turn_hash') to the
@@ -334,14 +352,37 @@ describe("SessionRunner identity binding (C2-04/B2 residual)", () => {
     }),
   )
 
+  it.effect("rebuilds a route changed after admission before any stale dispatch", () =>
+    Effect.gen(function* () {
+      routeState.driftAfterFirst = true
+      yield* seedSession
+      const session = yield* SessionV2.Service
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Say hello." }), resume: false })
+      yield* session.resume(sessionID)
+
+      const { db } = yield* Database.Service
+      const attempts = yield* db.select().from(SessionProviderAttemptTable)
+        .orderBy(SessionProviderAttemptTable.provider_turn_seq).all().pipe(Effect.orDie)
+      expect(attempts).toHaveLength(2)
+      expect(attempts[0]).toMatchObject({
+        state: "failed",
+        error_code: "config_drift_rebuild_required",
+        first_event_at: null,
+      })
+      expect(attempts[0]?.protocol_attempt_identity_hash).toBe(
+        ModelProtocol.protocolAttemptIdentityHash(ModelProtocol.protocolAttemptIdentityFor(openAIInfo, openAIProvider)),
+      )
+      expect(attempts[1]?.protocol_attempt_identity_hash).toBe(
+        ModelProtocol.protocolAttemptIdentityHash(ModelProtocol.protocolAttemptIdentityFor(driftedInfo, openAIProvider)),
+      )
+      expect(requests).toHaveLength(1)
+    }),
+  )
+
   it.effect("refuses to dispatch a drifted attempt (bound identity mismatch => zero requests)", () =>
     Effect.gen(function* () {
       // Same canonical OpenAI protocol, but a drifted endpoint binding changes the identity hash.
       const identityA = ModelProtocol.protocolAttemptIdentityFor(openAIInfo, openAIProvider)
-      const driftedInfo = new ModelV2.Info({
-        ...openAIInfo,
-        api: { ...openAIInfo.api, url: "https://drifted.openai.com/v1" },
-      })
       const drifted = ModelProtocol.protocolAttemptIdentityFor(driftedInfo, openAIProvider)
       expect(ModelProtocol.configDrift(drifted, ModelProtocol.protocolAttemptIdentityHash(identityA))).toBe(true)
 
