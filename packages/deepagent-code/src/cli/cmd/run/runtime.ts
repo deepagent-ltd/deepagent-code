@@ -625,7 +625,10 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
               providerID: state.model.providerID,
               modelID: state.model.modelID,
             })
-            if (result.error) return "session compaction failed"
+            if (result.error)
+              return "message" in result.error && typeof result.error.message === "string"
+                ? result.error.message
+                : "session compaction failed"
             return "session compacted"
           },
           onSessionCommand: async (command) => {
