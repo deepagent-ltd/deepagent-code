@@ -170,9 +170,11 @@ if (!skipInstall) {
   // compile target, so every cross target (win32 included) hard-fails resolution with
   // "Could not resolve @ff-labs/fff-bin-<target>/..." unless that platform's bin package
   // is installed. fff-bun is a dependency of core, not this package, so force the install
-  // from core's directory to pull every @ff-labs/fff-bin-* variant without touching manifests.
+  // from core's directory to pull every @ff-labs/fff-bin-* variant. --no-save keeps the
+  // install from rewriting core's package.json/lockfile when the pinned version drifts
+  // from what the catalog resolved (P2-5: no silent manifest mutation from a build step).
   const corePkg = JSON.parse(readFileSync(path.resolve(dir, "../core/package.json"), "utf8"))
-  await $`bun install --cwd ${path.resolve(dir, "../core")} --os="*" --cpu="*" @ff-labs/fff-bun@${corePkg.dependencies["@ff-labs/fff-bun"]}`
+  await $`bun install --no-save --cwd ${path.resolve(dir, "../core")} --os="*" --cpu="*" @ff-labs/fff-bun@${corePkg.dependencies["@ff-labs/fff-bun"]}`
 }
 for (const item of targets) {
   const name = [
