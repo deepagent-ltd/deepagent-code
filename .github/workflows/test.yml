@@ -72,10 +72,13 @@ jobs:
         settings:
           - name: linux
             host: blacksmith-4vcpu-ubuntu-2404
+            timeout: 20
           - name: windows
             host: blacksmith-4vcpu-windows-2025
+            timeout: 20
           - name: macos
             host: macos-14
+            timeout: 60
     runs-on: ${{ matrix.settings.host }}
     defaults:
       run:
@@ -109,7 +112,7 @@ jobs:
             turbo-${{ runner.os }}-
 
       - name: Run unit tests
-        timeout-minutes: 20
+        timeout-minutes: ${{ matrix.settings.timeout }}
         run: bun turbo test:ci --log-order=stream --log-prefix=task
         env:
           DEEPAGENT_CODE_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
