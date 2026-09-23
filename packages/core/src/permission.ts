@@ -202,12 +202,15 @@ export const layer = Layer.effect(
     const saved = yield* PermissionSaved.Service
     const database = yield* Database.Service
     const pending = new Map<ID, Pending>()
-    yield* DeepAgentActivityAuthority.heartbeatPermissionOwner({ ownerID: noProgressOwnerID, leaseMs: 30_000 }).pipe(
-      EffectRuntime.provideService(Database.Service, database),
-      EffectRuntime.orDie,
-    )
-    yield* DeepAgentActivityAuthority.heartbeatPermissionOwner({ ownerID: noProgressOwnerID, leaseMs: 30_000 }).pipe(
-      EffectRuntime.provideService(Database.Service, database),
+    const recoverPermissions = EffectRuntime.gen(function* () {
+      yield* DeepAgentActivityAuthority.heartbeatPermissionOwner({ ownerID: noProgressOwnerID, leaseMs: 30_000 })
+      // An abandoned external effect must be quarantined before its permission is settled;
+      // recovery otherwise crosses the activity terminal fence and can leave the ask stranded.
+      yield* DeepAgentActivityAuthority.recoverPermissionEffects(noProgressOwnerID)
+      yield* DeepAgentActivityAuthority.recoverPendingPermissions(noProgressOwnerID)
+    }).pipe(EffectRuntime.provideService(Database.Service, database))
+    yield* recoverPermissions.pipe(EffectRuntime.orDie)
+    yield* recoverPermissions.pipe(
       EffectRuntime.catchCause((cause) => EffectRuntime.logError("V2 no-progress owner heartbeat failed", { cause })),
       EffectRuntime.repeat(Schedule.fixed(Duration.seconds(10))),
       EffectRuntime.forkScoped,

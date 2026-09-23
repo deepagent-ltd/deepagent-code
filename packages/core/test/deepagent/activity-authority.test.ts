@@ -16,6 +16,19 @@ const makeDb = EffectDrizzleSqlite.makeWithDefaults()
 const ref = { activityKind: "legacy" as const, activityID: "activity-1" }
 
 describe("DeepAgentActivityAuthority", () => {
+  test("a final provider turn settles without opening a no-progress challenge", async () => {
+    await run(
+      Effect.gen(function* () {
+        const configured = yield* configure()
+        const first = yield* observe(configured.version, false, "finish")
+        const second = yield* observe(first.objective.version, false, "finish")
+        const third = yield* observe(second.objective.version, false, "finish")
+        expect(third.objective).toMatchObject({ state: "active", noProgressCount: 2 })
+        expect((yield* DeepAgentActivityAuthority.reconstruct(ref)).pendingPermissionRequestIDs).toEqual([])
+      }),
+    )
+  })
+
   test("backfills a disabled objective and projects the base activity terminal state", async () => {
     await run(
       Effect.gen(function* () {

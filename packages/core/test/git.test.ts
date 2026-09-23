@@ -12,6 +12,23 @@ import { testEffect } from "./lib/effect"
 const it = testEffect(Git.defaultLayer)
 
 describe("Git", () => {
+  it.live("captures successive workspace revisions even when the same file remains dirty", () =>
+    withRemote((fixture) =>
+      Effect.gen(function* () {
+        const git = yield* Git.Service
+        const directory = AbsolutePath.make(fixture.source)
+        const clean = yield* git.patch(directory)
+        yield* Effect.promise(() => fs.writeFile(path.join(fixture.source, "README.md"), "first edit\n"))
+        const first = yield* git.patch(directory)
+        yield* Effect.promise(() => fs.writeFile(path.join(fixture.source, "README.md"), "second edit\n"))
+        const second = yield* git.patch(directory)
+        expect(new Set([clean, first, second]).size).toBe(3)
+        yield* Effect.promise(() => fs.writeFile(path.join(fixture.source, "new.txt"), "new evidence\n"))
+        expect(yield* git.patch(directory)).not.toBe(second)
+      }),
+    ),
+  )
+
   it.live("clones a remote and reads checkout metadata", () =>
     withRemote((fixture) =>
       Effect.gen(function* () {
