@@ -851,14 +851,10 @@ export const layer = Layer.effect(
                 return yield* new PromptConflictError({ sessionID: input.sessionID, messageID })
               return yield* returnPrompt(prior)
             }
-            // Validate before the durable write, but publish selection only after admission.
-            // A stale revert epoch or lifecycle conflict must not leave a switched Session.
+            // The admitted event projects selection in the same transaction as the inbox row.
+            // Validate first so an invalid agent cannot leave a durable, unrunnable input.
             if (input.prompt.agent !== undefined)
-              yield* requireAdmissionAgent(
-                writable.location,
-                AgentV2.ID.make(input.prompt.agent),
-                true,
-              )
+              yield* requireAdmissionAgent(writable.location, AgentV2.ID.make(input.prompt.agent), true)
             const admitted = yield* SessionInput.admit(db, events, {
               id: messageID,
               sessionID: input.sessionID,
@@ -874,19 +870,6 @@ export const layer = Layer.effect(
             )
             if (!SessionInput.equivalent(admitted, expected))
               return yield* new PromptConflictError({ sessionID: input.sessionID, messageID })
-            if (input.prompt.agent !== undefined)
-              yield* result.switchAgent({ sessionID: input.sessionID, agent: input.prompt.agent })
-            if (input.prompt.model !== undefined)
-              yield* result.switchModel({
-                sessionID: input.sessionID,
-                model: {
-                  id: ModelV2.ID.make(input.prompt.model.id),
-                  providerID: ProviderV2.ID.make(input.prompt.model.providerID),
-                  ...(input.prompt.model.variant === undefined
-                    ? {}
-                    : { variant: ModelV2.VariantID.make(input.prompt.model.variant) }),
-                },
-              })
             return yield* returnPrompt(admitted)
           }),
         ),

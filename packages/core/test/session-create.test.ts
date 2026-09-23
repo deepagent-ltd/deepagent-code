@@ -331,6 +331,7 @@ describe("SessionV2.create", () => {
         model: { providerID: "provider", id: "selected", variant: "fast" },
       })
       const admitted = yield* session.prompt({ sessionID: created.id, prompt, resume: false })
+      expect((yield* session.get(created.id)).model?.id).toBe(ModelV2.ID.make("selected"))
       yield* session.switchModel({
         sessionID: created.id,
         model: { providerID: ProviderV2.ID.make("provider"), id: ModelV2.ID.make("later") },
@@ -345,12 +346,11 @@ describe("SessionV2.create", () => {
       expect(legacy?.data).toMatchObject({ metadata: prompt.metadata, model: { modelID: "selected", variant: "fast" } })
       expect(
         (yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id)).all())
-          .slice(0, 5)
+          .slice(0, 4)
           .map((event) => event.type),
       ).toEqual([
         "session.created.2",
         "session.next.prompt.admitted.1",
-        "session.next.model.switched.1",
         "session.next.model.switched.1",
         "session.next.prompt.promoted.1",
       ])
@@ -388,6 +388,32 @@ describe("SessionV2.create", () => {
     }),
   )
 
+  it.effect("concurrent exact prompt retries project one selection with the admitted input", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionV2.Service
+      const { db } = yield* Database.Service
+      const created = yield* session.create({ location })
+      const input = {
+        sessionID: created.id,
+        id: SessionMessage.ID.create(),
+        prompt: new Prompt({ text: "Select once", model: { providerID: "provider", id: "selected" } }),
+        resume: false,
+      }
+
+      const receipts = yield* Effect.all([session.prompt(input), session.prompt(input)], { concurrency: "unbounded" })
+      expect(receipts[0]).toEqual(receipts[1])
+      expect((yield* session.get(created.id)).model?.id).toBe(ModelV2.ID.make("selected"))
+      expect(
+        (yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id)).all())
+          .map((event) => event.type),
+      ).toEqual(["session.created.2", "session.next.prompt.admitted.1"])
+      expect(
+        (yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, created.id)).all())
+          .filter((event) => event.type === "session.next.model.switched.1"),
+      ).toHaveLength(0)
+    }),
+  )
+
   it.effect("replays one prompt lifecycle into a fresh target database", () =>
     Effect.gen(function* () {
       const session = yield* SessionV2.Service
@@ -396,7 +422,11 @@ describe("SessionV2.create", () => {
       const created = yield* session.create({ id: SessionV2.ID.make("ses_fresh_target_replay"), location })
       const admitted = yield* session.prompt({
         sessionID: created.id,
-        prompt: new Prompt({ text: "Replay lifecycle" }),
+        prompt: new Prompt({
+          text: "Replay lifecycle",
+          agent: "plan",
+          model: { providerID: "provider", id: "selected" },
+        }),
         resume: false,
       })
       yield* SessionInput.promoteSteers(sourceDb, sourceEvents, created.id, Number.MAX_SAFE_INTEGER)
@@ -435,6 +465,7 @@ describe("SessionV2.create", () => {
 
         expect(yield* store.get(created.id)).toBeUndefined()
         expect(yield* events.replayAll(serialized.slice(0, 2))).toBe(created.id)
+        expect(yield* store.get(created.id)).toMatchObject({ agent: "plan", model: { id: "selected" } })
         expect(yield* SessionInput.find(db, admitted.id)).toMatchObject({
           id: admitted.id,
           sessionID: created.id,

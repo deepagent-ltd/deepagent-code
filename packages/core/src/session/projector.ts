@@ -1470,6 +1470,21 @@ export const layer = Layer.effectDiscard(
           revertEpoch: event.data.revertEpoch,
           timeCreated: event.data.timestamp,
         })
+        // Prompt-scoped selection is part of admission authority. Project it with the inbox row
+        // and its epoch fence so a crash cannot leave an admitted input with stale selection.
+        if (event.data.prompt.agent !== undefined || event.data.prompt.model !== undefined) {
+          yield* db
+            .update(SessionTable)
+            .set({
+              ...(event.data.prompt.agent === undefined ? {} : { agent: event.data.prompt.agent }),
+              ...(event.data.prompt.model === undefined ? {} : { model: event.data.prompt.model }),
+              time_updated: DateTime.toEpochMillis(event.data.timestamp),
+            })
+            .where(eq(SessionTable.id, event.data.sessionID))
+            .run()
+            .pipe(Effect.orDie)
+          yield* SessionContextEpoch.requestReplacement(db, event.data.sessionID, event.seq)
+        }
       }),
     )
     yield* events.project(SessionEvent.PromptLifecycle.Promoted, (event) =>
