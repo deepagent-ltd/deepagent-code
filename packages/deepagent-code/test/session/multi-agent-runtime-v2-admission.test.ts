@@ -75,6 +75,8 @@ const agent = (id: string, caps: string[], autonomy?: AgentDescriptor["autonomy"
 const makeRuntime = (
   eventV2Admission?: MultiAgentRuntime.EventV2AdmissionBridge,
   runtimeFeatures?: RuntimeFeatureRegistry,
+  dagCoordination = false,
+  partition?: MultiAgentRuntime.LayerOptions["partition"],
 ) => {
   const database = Database.layerFromPath(":memory:")
   const core = Layer.mergeAll(
@@ -88,6 +90,8 @@ const makeRuntime = (
       return MultiAgentRuntime.layerWith({
         runner: fakeRunner,
         execution,
+        dagCoordination,
+        ...(partition ? { partition } : {}),
         ...(eventV2Admission ? { eventV2Admission } : {}),
         ...(runtimeFeatures ? { runtimeFeatures } : {}),
       })
@@ -99,14 +103,16 @@ const makeRuntime = (
 /** Build the runtime layer, run `body` against it (keeping its scope alive), and return its result. */
 function withRuntime<A>(
   eventV2Admission: MultiAgentRuntime.EventV2AdmissionBridge | undefined,
-  body: (runtime: MultiAgentRuntime.Interface) => Effect.Effect<A, unknown>,
+  body: (runtime: MultiAgentRuntime.Interface, bus: DeepAgentEventBus.Interface) => Effect.Effect<A, unknown>,
   runtimeFeatures?: RuntimeFeatureRegistry,
+  dagCoordination = false,
+  partition?: MultiAgentRuntime.LayerOptions["partition"],
 ): Promise<A> {
   return Effect.runPromise(
     Effect.gen(function* () {
-      const ctx = yield* Layer.build(makeRuntime(eventV2Admission, runtimeFeatures))
+      const ctx = yield* Layer.build(makeRuntime(eventV2Admission, runtimeFeatures, dagCoordination, partition))
       const runtime = Context.get(ctx, MultiAgentRuntime.Service)
-      return yield* body(runtime)
+      return yield* body(runtime, Context.get(ctx, DeepAgentEventBus.Service))
     }).pipe(Effect.scoped),
   )
 }
@@ -138,6 +144,18 @@ const fakeBridge = (calls: Array<Record<string, unknown>>): MultiAgentRuntime.Ev
     }),
 })
 
+const conflictingWrites: NonNullable<MultiAgentRuntime.LayerOptions["partition"]> = (input) => ({
+  event: input,
+  subtasks: ["first", "second"].map((name) => ({
+    id: `${input.id}:${name}`,
+    capability: "code_edit",
+    intent: `edit ${name}`,
+    dependsOn: [],
+    fileScope: ["src/shared.ts"],
+    requiredAutonomy: "level_2" as const,
+  })),
+})
+
 const saved = process.env[EventAdmission.EVENT_V2_ADMISSION_ENV]
 
 describe("C5-04 MultiAgentRuntime V2 admission dispatch branch", () => {
@@ -156,7 +174,10 @@ describe("C5-04 MultiAgentRuntime V2 admission dispatch branch", () => {
     await withRuntime(fakeBridge(calls), (runtime) => runtime.dispatch(request()))
     // The bridge resolved the scope + admitted; the V4 runner NEVER ran (coordination skipped).
     expect(calls.length).toBe(1)
-    const admitted = calls[0] as { request: EventDispatcher.DispatchRequest; scope: EventAdmissionWiring.AdmissionScope }
+    const admitted = calls[0] as {
+      request: EventDispatcher.DispatchRequest
+      scope: EventAdmissionWiring.AdmissionScope
+    }
     expect(admitted.request.event.id).toBeDefined()
     expect(admitted.scope.workspaceId).toBe("wrk_1")
     expect(admitted.scope.projectScopeKey).toBe("proj_1")
@@ -165,6 +186,153 @@ describe("C5-04 MultiAgentRuntime V2 admission dispatch branch", () => {
     expect(admitted.scope.authorizedTrigger).toBe(true)
     // The §C coordination path (which would run the runner) was NOT entered.
     expect(runnerRan.length).toBe(0)
+  })
+
+  test("DAG mode stays on ordinary admission while the second lane flag is OFF", async () => {
+    setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
+    resetRunner()
+    const calls: string[] = []
+    const bridge: MultiAgentRuntime.EventV2AdmissionBridge = {
+      securityNamespaceFor: () => Effect.succeed("ns"),
+      executionFor: () => "dag",
+      admit: () =>
+        Effect.sync(() => {
+          calls.push("single")
+        }),
+      admitReceiptOnly: () =>
+        Effect.sync(() => {
+          calls.push("receipt")
+        }),
+    }
+    await withRuntime(bridge, (runtime) => runtime.dispatch(request()))
+    expect(calls).toEqual(["single"])
+    expect(runnerRan).toEqual([])
+  })
+
+  test("DAG mode admits an ingress receipt and executes V2 child turns when explicitly enabled", async () => {
+    setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
+    resetRunner()
+    const calls: string[] = []
+    const bridge: MultiAgentRuntime.EventV2AdmissionBridge = {
+      securityNamespaceFor: () => Effect.succeed("ns"),
+      executionFor: () => "dag",
+      admit: () =>
+        Effect.sync(() => {
+          calls.push("single")
+        }),
+      admitReceiptOnly: () =>
+        Effect.sync(() => {
+          calls.push("receipt")
+        }),
+    }
+    await withRuntime(
+      bridge,
+      (runtime) =>
+        runtime.dispatch({
+          ...request(),
+          event: event({ payload: { directory: "/tmp/event-repo", files: ["src/a.ts"] } }),
+        }),
+      undefined,
+      true,
+    )
+    expect(calls).toEqual(["receipt"])
+    expect(runnerRan).toEqual(["fixer", "fixer"])
+  })
+
+  test("DAG write turn without an absolute root defers before claiming or running", async () => {
+    setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
+    resetRunner()
+    const calls: string[] = []
+    const bridge: MultiAgentRuntime.EventV2AdmissionBridge = {
+      securityNamespaceFor: () => Effect.succeed("ns"),
+      executionFor: () => "dag",
+      admit: () =>
+        Effect.sync(() => {
+          calls.push("single")
+        }),
+      admitReceiptOnly: () =>
+        Effect.sync(() => {
+          calls.push("receipt")
+        }),
+    }
+    await withRuntime(
+      bridge,
+      (runtime) =>
+        Effect.gen(function* () {
+          const error = yield* Effect.flip(runtime.dispatch(request()))
+          expect(error).toBeInstanceOf(MultiAgentRuntime.EventDAGUnfinishedError)
+        }),
+      undefined,
+      true,
+    )
+    expect(calls).toEqual(["receipt"])
+    expect(runnerRan).toEqual([])
+  })
+
+  test("conflicting DAG work nacks once, then replay skips the completed winner and runs the deferred node", async () => {
+    setRegistry([agent("fixer", ["code_edit"], "level_2")])
+    resetRunner()
+    const calls: string[] = []
+    const bridge: MultiAgentRuntime.EventV2AdmissionBridge = {
+      securityNamespaceFor: () => Effect.succeed("ns"),
+      executionFor: () => "dag",
+      admit: () =>
+        Effect.sync(() => {
+          calls.push("single")
+        }),
+      admitReceiptOnly: () =>
+        Effect.sync(() => {
+          calls.push("receipt")
+        }),
+    }
+    const input = {
+      ...request(),
+      event: event({ payload: { directory: "/tmp/event-repo", files: ["src/shared.ts"] } }),
+    }
+    await withRuntime(
+      bridge,
+      (runtime, bus) =>
+        Effect.gen(function* () {
+          const error = yield* Effect.flip(runtime.dispatch(input))
+          expect(error).toBeInstanceOf(MultiAgentRuntime.EventDAGUnfinishedError)
+          expect(runnerRan).toHaveLength(1)
+          expect((yield* bus.recentByType({ type: "agent.task.completed", windowMs: 10_000, now: 1_000 })).length).toBe(
+            1,
+          )
+          yield* runtime.dispatch(input)
+          expect(runnerRan).toHaveLength(2)
+          yield* runtime.dispatch(input)
+          expect(runnerRan).toHaveLength(2)
+          expect((yield* bus.recentByType({ type: "agent.task.completed", windowMs: 10_000, now: 1_000 })).length).toBe(
+            2,
+          )
+        }),
+      undefined,
+      true,
+      conflictingWrites,
+    )
+    expect(calls).toEqual(["receipt", "receipt", "receipt"])
+  })
+
+  test("an exact conflict tie remains a deferred human arbitration outcome", async () => {
+    setRegistry([agent("fixer", ["code_edit"], "level_2")])
+    resetRunner()
+    await withRuntime(
+      fakeBridge([]),
+      (runtime) =>
+        Effect.gen(function* () {
+          const summary = yield* runtime.coordinate(event({ payload: { directory: "/tmp/event-tie" } }))
+          expect(summary.outcomes).toContainEqual(expect.objectContaining({ status: "completed" }))
+          expect(summary.outcomes).toContainEqual(
+            expect.objectContaining({ status: "deferred", reason: "conflict_needs_human" }),
+          )
+          expect(summary.hasUnfinished).toBe(true)
+          expect(runnerRan).toHaveLength(1)
+        }),
+      undefined,
+      true,
+      conflictingWrites,
+    )
   })
 
   test("flag ON + seam ABSENT: dispatch fails with the typed refusal — never a silent legacy run", async () => {

@@ -642,7 +642,7 @@ describe("SessionV2.prompt", () => {
     }),
   )
 
-  it.effect("only records the prompt when resume is false", () =>
+  it.effect("an admitted but unjoined prompt stays durable without waking execution, including exact retry", () =>
     Effect.gen(function* () {
       yield* setup
       const session = yield* SessionV2.Service
@@ -650,8 +650,13 @@ describe("SessionV2.prompt", () => {
       wakeCalls.length = 0
       wakeSeqs.length = 0
 
-      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Do not run" }), resume: false })
+      const request = { id: messageID, sessionID, prompt: new Prompt({ text: "Do not run" }), resume: false }
+      const first = yield* session.prompt(request)
+      const retry = yield* session.prompt(request)
 
+      expect(retry).toEqual(first)
+      expect(yield* admitted(messageID)).toMatchObject({ id: messageID, sessionID, prompt: { text: "Do not run" } })
+      expect(yield* admittedCount).toBe(1)
       expect(executionCalls).toEqual([])
       expect(wakeCalls).toEqual([])
       expect(wakeSeqs).toEqual([])

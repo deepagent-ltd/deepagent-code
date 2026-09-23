@@ -25,6 +25,7 @@ import { InstanceRef, WorkspaceRef } from "@/effect/instance-ref"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { MultiAgentRuntime } from "./multi-agent-runtime"
+import { makeEventTurnRunnerV2 } from "./event-turn-runner"
 import { makeV2AdmissionBridge, makeSessionV2Adapter } from "./v2-admission-bridge"
 import { EventDispatcher, DISPATCH_GROUP } from "./event-dispatcher"
 import { AgentHandoffConsumer, HANDOFF_GROUP } from "./agent-handoff-consumer"
@@ -67,8 +68,7 @@ import { PRQueue } from "@/agent/pr-queue"
 // and then ignored. This layer assembles them and starts their scoped fibers with the server:
 //
 //   EventDispatcher   — subscribes the bus, runs the §A4 router, hands routed events to →
-//   MultiAgentRuntime — the DispatchPort; v2w-j4 durable-only: V2 admission only (the §C turn
-//                       runner is deleted; an unavailable admission lane fails closed at dispatch) →
+//   MultiAgentRuntime — the DispatchPort; V2 admission plus flag-gated V2 DAG coordination →
 //   RetentionSweeper  — the §A3 periodic prune loop.
 //
 // Everything is FLAG-GATED at the point of behavior: the dispatcher only dispatches when
@@ -212,9 +212,8 @@ export const makeEventPanelPort =
       Effect.catchCause((cause) => Effect.fail(cause)),
     )
 
-// The MultiAgentRuntime layer (v2w-j4 durable-only: V2-admission-only dispatch — no turn runner is
-// wired; the legacy event turn runner is deleted). Requires the session stack + core V4 services
-// (provided by the app graph). This is the DispatchPort the dispatcher drives.
+// The MultiAgentRuntime layer has the default single-event V2 admission lane and an opt-in V2 DAG
+// lane. Both require the session stack and core V4 services provided by the app graph.
 const runtimeLayer = Layer.unwrap(
   Effect.gen(function* () {
     const sessions = yield* Session.Service
@@ -235,18 +234,14 @@ const runtimeLayer = Layer.unwrap(
     // HTTP handlers use, so a human editing a file blocks an agent subtask from touching it).
     const fileLock = yield* FileLock.Service
     // C5-12 — the production V2 admission bridge provider wired into the `eventV2Admission` seam. Built
-    // here (the production seam construction site) so that when `isEventV2AdmissionEnabled()` is ON the
-    // runtime routes the event through the durable V2 admission path (SessionV2) instead of §C
-    // coordination. The bridge is typed against the runtime's seam and reads the SessionV2 stack + the V2
-    // Database from the shared graph directly; an absent SessionV2 stack is an inert provider (admit fails
-    // closed at dispatch time, matching the default-off discipline). The security namespace is resolved by
-    // the bridge (deterministic workspace-scoped default; ContextLocationIdentity upgrade is a follow-on).
+    // here so the single lane can admit a parent prompt and the DAG lane can persist its ingress receipt
+    // before coordinating child turns. The bridge reads the shared V2 Session and Database services. The
+    // security namespace remains a deterministic workspace-scoped default until ContextLocationIdentity
+    // supplies it.
     const db = (yield* Database.Service).db
     const v2Session = yield* SessionV2.Service
+    const flags = yield* RuntimeFlags.Service
     const eventV2Admission = makeV2AdmissionBridge({ db, v2Session })
-    // v2w-j4 durable-only: no `runner` is passed — dispatch is V2-admission-only and an unavailable
-    // admission lane fails closed with MultiAgentRuntime.EventV2AdmissionUnavailableError (the §C
-    // coordination library's runner seam remains for deterministic tests only).
     // §E2 — cap concurrent agent execution per workspace (default 5).
     // §E1 — wire the four-layer gate to real, fail-closed resolvers:
     //   L1 (event_source)  — per-EVENT: the event's workspace trusted-source set (system events must
@@ -259,6 +254,8 @@ const runtimeLayer = Layer.unwrap(
       concurrency,
       execution,
       fileLock,
+      dagCoordination: flags.v4DagCoordination,
+      runner: makeEventTurnRunnerV2({ sessions: v2Session, instanceStore }),
       // C5-12 — the production seam: when the V2 admission flag is ON the runtime uses this bridge.
       eventV2Admission,
       onEventCompleted: makeV4PRCollaboration({ sessions, instanceStore, git, queue, bus, approvalQueue }),
@@ -297,11 +294,7 @@ const runtimeLayer = Layer.unwrap(
 type GoalTickFlags = Pick<RuntimeFlags.Info, "v4MultiAgentRuntime" | "v4GoalTickEventDriven">
 type V4DaemonFlags = Pick<
   RuntimeFlags.Info,
-  | "v4MultiAgentRuntime"
-  | "v4PanelAutoConvene"
-  | "v4AgentPushEnabled"
-  | "v4EventDrivenArchive"
-  | "v4GoalTickEventDriven"
+  "v4MultiAgentRuntime" | "v4PanelAutoConvene" | "v4AgentPushEnabled" | "v4EventDrivenArchive" | "v4GoalTickEventDriven"
 >
 
 export const goalTickConsumerEnabled = (flags: GoalTickFlags): boolean =>
@@ -435,22 +428,21 @@ const retentionLayer = Layer.unwrap(
           })
           if (attempt.state === "prepared") attempt = yield* events.stageCheckpoint({ snapshotID: attempt.snapshotID })
           if (attempt.state === "prepared") return true
-          const snapshot = attempt.state === "complete"
-            ? yield* events.snapshot(sessionID)
-            : yield* events.finalizeCheckpoint({ snapshotID: attempt.snapshotID })
+          const snapshot =
+            attempt.state === "complete"
+              ? yield* events.snapshot(sessionID)
+              : yield* events.finalizeCheckpoint({ snapshotID: attempt.snapshotID })
           if (!snapshot || snapshot.snapshotID !== attempt.snapshotID) return false
           const compact = (remaining: number): Effect.Effect<boolean> =>
-            events
-              .compact!({
-                aggregateID: sessionID,
-                throughSeq: EventV2.Cursor.make(state.seq),
-                limit: 100,
-              })
-              .pipe(
-                Effect.flatMap((result) =>
-                  result.complete || remaining <= 1 ? Effect.succeed(result.complete) : compact(remaining - 1),
-                ),
-              )
+            events.compact!({
+              aggregateID: sessionID,
+              throughSeq: EventV2.Cursor.make(state.seq),
+              limit: 100,
+            }).pipe(
+              Effect.flatMap((result) =>
+                result.complete || remaining <= 1 ? Effect.succeed(result.complete) : compact(remaining - 1),
+              ),
+            )
           return yield* compact(10)
         }),
     })
@@ -738,8 +730,7 @@ export const SPOOL_DRAIN_BATCH = 20
 export const SPOOL_DRAIN_LEASE_MS = 120_000
 
 /** Deterministic admission anchor per spool row (SessionV2 dedupe — a re-drain never double-admits). */
-export const spoolAdmissionAnchor = (eventRef: string, sessionID: string): string =>
-  `spool:${eventRef}:${sessionID}`
+export const spoolAdmissionAnchor = (eventRef: string, sessionID: string): string => `spool:${eventRef}:${sessionID}`
 
 // W5 F4 ③ — nack retry backoff. Exponential with a floor of 5s and a cap of 5min, keyed by the ATTEMPT
 // count (1st nack → 5s, 2nd → 10s, 3rd → 20s … past the 5-min cap). Kept small (fixed helper, one
@@ -852,9 +843,7 @@ export const spoolDrainPass = (input: {
             // DLQ terminal state lives on the dead spool row).
             sideEffect: Effect.fail(new Error(reason)),
             now: at,
-          }).pipe(
-            Effect.catchCause(() => Effect.void),
-          )
+          }).pipe(Effect.catchCause(() => Effect.void))
         }
         yield* Effect.logError("spool consumption failed (bounded retry → DLQ after cap)", {
           eventRef: row.eventRef,
@@ -881,10 +870,7 @@ const spoolDrainLayer = Layer.effectDiscard(
     const { db } = yield* Database.Service
     const v2Session = yield* SessionV2.Service
     yield* spoolDrainPass({ db, v2Session })
-      .pipe(
-        Effect.repeat(Schedule.spaced(Duration.millis(SPOOL_DRAIN_INTERVAL_MS))),
-        Effect.forkScoped,
-      )
+      .pipe(Effect.repeat(Schedule.spaced(Duration.millis(SPOOL_DRAIN_INTERVAL_MS))), Effect.forkScoped)
       .pipe(Effect.asVoid)
   }),
 )

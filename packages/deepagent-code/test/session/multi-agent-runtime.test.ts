@@ -1,5 +1,6 @@
 import { describe, expect } from "bun:test"
-import { Context, Cause, Deferred, Effect, Fiber, Layer } from "effect"
+import path from "node:path"
+import { Context, Cause, Deferred, Duration, Effect, Fiber, Layer } from "effect"
 import { MultiAgentRuntime } from "../../src/session/multi-agent-runtime"
 import type { SubagentTurnRunner } from "../../src/session/goal-loop-wiring"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
@@ -8,11 +9,14 @@ import { Database } from "@deepagent-code/core/database/database"
 import { AgentListProviderService } from "@deepagent-code/core/im/agent-list-provider"
 import { ApprovalQueue } from "@deepagent-code/core/deepagent/approval-queue"
 import { AgentExecution } from "@deepagent-code/core/deepagent/agent-execution"
+import { ConflictArbiter } from "@deepagent-code/core/deepagent/conflict-arbiter"
+import { TaskPartitioner } from "@deepagent-code/core/deepagent/task-partitioner"
 import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
 import { SecurityResolvers } from "@deepagent-code/core/deepagent/security-resolvers"
 import { WorkspaceConfig } from "@deepagent-code/core/deepagent/workspace-config"
 import { IMRepositoryLive } from "@deepagent-code/core/im/repository"
 import { FileLock } from "@deepagent-code/core/file-lock"
+import { LockKeys } from "@deepagent-code/core/deepagent/lock-keys"
 import type { AgentDescriptor } from "@deepagent-code/core/im/mention-parser"
 import { BUILTIN_AGENT_DESCRIPTORS } from "@deepagent-code/core/im/builtin-agents"
 import { Agent } from "@/agent/agent"
@@ -551,6 +555,131 @@ describe("MultiAgentRuntime.coordinate", () => {
   )
 })
 
+describe("MultiAgentRuntime randomized DAG conflict oracle", () => {
+  const it = testEffect(makeLayer())
+
+  it.live("only nonconflicting siblings overlap and every dependency starts after its parent ends", () =>
+    Effect.gen(function* () {
+      setNow(1_000)
+      setRegistry([agent("worker", ["work"], "level_1")])
+      let seed = 0x2a4b9c01
+      const random = (limit: number) => {
+        seed = (Math.imul(seed, 1_664_525) + 1_013_904_223) >>> 0
+        return seed % limit
+      }
+      const plans = Array.from(
+        { length: 24 },
+        (_, caseIndex): ReadonlyArray<TaskPartitioner.Subtask> =>
+          Array.from({ length: 5 }, (_, taskIndex) => ({
+            id: `tsk_oracle_${caseIndex}_${taskIndex}`,
+            capability: "work",
+            intent: "inspect a declared scope",
+            dependsOn: taskIndex > 0 && random(3) === 0 ? [`tsk_oracle_${caseIndex}_${random(taskIndex)}`] : [],
+            fileScope: random(6) === 0 ? [] : [`src/${["a", "b", "c", "d"][random(4)]}.ts`],
+            requiredAutonomy: "level_1" as const,
+          })),
+      )
+      const intervals = new Map<string, { start: number; end: number }>()
+      let tick = 0
+      const runner: SubagentTurnRunner = (input) =>
+        Effect.gen(function* () {
+          const start = ++tick
+          yield* Effect.sleep(Duration.millis(2))
+          intervals.set(input.taskID!, { start, end: ++tick })
+          return { ok: true, structured: undefined, text: "done", tokensUsed: 0, cost: 0 }
+        })
+      const partition: NonNullable<MultiAgentRuntime.LayerOptions["partition"]> = (input) => ({
+        event: input,
+        subtasks: plans[Number(input.id.slice("dae_oracle_".length))],
+      })
+      const symbolsForFiles: NonNullable<MultiAgentRuntime.LayerOptions["symbolsForFiles"]> = (_, files) =>
+        Effect.succeed(files.some((file) => file.endsWith("a.ts") || file.endsWith("c.ts")) ? ["shared"] : [])
+      const summaries = yield* Effect.gen(function* () {
+        const runtime = yield* MultiAgentRuntime.Service
+        const result = []
+        for (const index of plans.keys()) {
+          result.push(
+            yield* runtime.coordinate(
+              event({
+                id: DeepAgentEvent.ID.make(`dae_oracle_${index}`),
+                type: "test.random-dag",
+                source: (["im", "schedule", "system"] as const)[index % 3],
+                priority: (["low", "normal", "high", "critical"] as const)[index % 4],
+              }),
+            ),
+          )
+        }
+        return result
+      }).pipe(Effect.provide(makeLayer({ runner, partition, symbolsForFiles })))
+
+      let overlaps = 0
+      for (const [caseIndex, plan] of plans.entries()) {
+        const summary = summaries[caseIndex]
+        for (const task of plan) {
+          const current = intervals.get(task.id)
+          for (const dependency of task.dependsOn) {
+            const parent = intervals.get(dependency)
+            if (current && parent) expect(parent.end).toBeLessThan(current.start)
+          }
+          for (const other of plan.filter((candidate) => candidate.id < task.id)) {
+            const prior = intervals.get(other.id)
+            if (!current || !prior || current.start > prior.end || prior.start > current.end) continue
+            overlaps++
+            const claim = (node: TaskPartitioner.Subtask): ConflictArbiter.Claim => ({
+              taskID: node.id,
+              agentID: "worker",
+              files: node.fileScope,
+              symbols: node.fileScope.some((file) => file.endsWith("a.ts") || file.endsWith("c.ts")) ? ["shared"] : [],
+              priority: "normal",
+              origin: "system",
+            })
+            expect(ConflictArbiter.conflicts(claim(task), claim(other))).toBe(false)
+          }
+        }
+        if (summary.outcomes.some((outcome) => outcome.status === "deferred")) expect(summary.hasUnfinished).toBe(true)
+      }
+      expect(overlaps).toBeGreaterThan(0)
+    }),
+  )
+})
+
+describe("MultiAgentRuntime arbitration handoff", () => {
+  const it = testEffect(makeLayer())
+
+  it.effect("a same-wave true tie defers for human resolution and keeps the event retryable", () =>
+    Effect.gen(function* () {
+      resetRunner()
+      setNow(1_000)
+      setRegistry([agent("worker", ["work"], "level_1")])
+      const partition: NonNullable<MultiAgentRuntime.LayerOptions["partition"]> = (input) => ({
+        event: input,
+        subtasks: [0, 1].map((index) => ({
+          id: `${input.id}:${index}`,
+          capability: "work",
+          intent: `inspect ${index}`,
+          dependsOn: [],
+          fileScope: ["src/shared.ts"],
+          requiredAutonomy: "level_1" as const,
+        })),
+      })
+      const summary = yield* Effect.gen(function* () {
+        return yield* (yield* MultiAgentRuntime.Service).coordinate(
+          event({
+            id: DeepAgentEvent.ID.create(1_300),
+            type: "test.tie",
+          }),
+        )
+      }).pipe(Effect.provide(makeLayer({ partition })))
+      expect(summary.outcomes).toContainEqual(expect.objectContaining({ status: "completed" }))
+      expect(summary.outcomes).toContainEqual(
+        expect.objectContaining({ status: "deferred", reason: "conflict_needs_human" }),
+      )
+      expect(summary.hasUnfinished).toBe(true)
+      expect(ran).toEqual(["worker"])
+    }),
+  )
+})
+
 describe("MultiAgentRuntime durable multi-owner execution", () => {
   const it = testEffect(makeLayer())
   const oneTask: NonNullable<MultiAgentRuntime.LayerOptions["partition"]> = (input) => ({
@@ -622,6 +751,159 @@ describe("MultiAgentRuntime durable multi-owner execution", () => {
       expect(replay.outcomes[0]).toMatchObject({ status: "completed", reason: "already_completed" })
       expect(firstRuns).toBe(1)
       expect(secondRuns).toBe(0)
+    }),
+  )
+
+  it.effect("an interrupted owner leaves a lease that expires; replay claims generation two", () =>
+    Effect.gen(function* () {
+      setNow(30_000)
+      setRegistry([agent("fixer", ["code_edit"], "level_2")])
+      const bus = yield* DeepAgentEventBus.Service
+      const queue = yield* ApprovalQueue.Service
+      const execution = yield* AgentExecution.Service
+      const started = yield* Deferred.make<void>()
+      const generations: number[] = []
+      const dependencies = Layer.mergeAll(
+        Layer.succeed(DeepAgentEventBus.Service, bus),
+        Layer.succeed(ApprovalQueue.Service, queue),
+        Layer.succeed(AgentExecution.Service, execution),
+        fakeAgentList,
+      )
+      const runtime = (ownerID: string, runner: SubagentTurnRunner) =>
+        Layer.build(
+          MultiAgentRuntime.layerWith({
+            runner,
+            partition: oneTask,
+            execution,
+            ownerID,
+            leaseMs: 100,
+            dagCoordination: true,
+          }).pipe(Layer.provide(dependencies)),
+        ).pipe(Effect.map((context) => Context.get(context, MultiAgentRuntime.Service)))
+      const first = yield* runtime("runtime_crashed", (input) =>
+        Effect.gen(function* () {
+          generations.push(input.generation ?? -1)
+          yield* Deferred.succeed(started, undefined)
+          return yield* Effect.never
+        }),
+      )
+      const second = yield* runtime("runtime_replay", (input) =>
+        Effect.sync(() => {
+          generations.push(input.generation ?? -1)
+          return {
+            ok: true,
+            structured: undefined,
+            text: "recovered",
+            tokensUsed: 0,
+            cost: 0,
+            continuationRef: "agent/recovered",
+          }
+        }),
+      )
+      const input = event({
+        id: DeepAgentEvent.ID.create(30_000),
+        type: "test.crash-replay",
+        payload: { directory: "/tmp/event-crash-replay" },
+      })
+      const firstFiber = yield* Effect.forkScoped(first.coordinate(input))
+      yield* Deferred.await(started)
+      yield* Fiber.interrupt(firstFiber)
+      expect(
+        (yield* execution.get({ workspaceID: input.workspaceID, eventID: input.id, taskID: `${input.id}:work` }))
+          ?.status,
+      ).toBe("running")
+      setNow(30_200)
+      const recovered = yield* second.coordinate(input)
+      expect(recovered.outcomes).toEqual([expect.objectContaining({ status: "completed" })])
+      expect(generations).toEqual([1, 2])
+      expect(
+        (yield* execution.get({ workspaceID: input.workspaceID, eventID: input.id, taskID: `${input.id}:work` }))
+          ?.generation,
+      ).toBe(2)
+    }),
+  )
+
+  it.effect("unknown file scope fences a concrete file across runtime owners", () =>
+    Effect.gen(function* () {
+      setNow(40_000)
+      setRegistry([agent("fixer", ["code_edit"], "level_2")])
+      const bus = yield* DeepAgentEventBus.Service
+      const queue = yield* ApprovalQueue.Service
+      const execution = yield* AgentExecution.Service
+      const started = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      let firstActive = false
+      let secondRuns = 0
+      const dependencies = Layer.mergeAll(
+        Layer.succeed(DeepAgentEventBus.Service, bus),
+        Layer.succeed(ApprovalQueue.Service, queue),
+        Layer.succeed(AgentExecution.Service, execution),
+        fakeAgentList,
+      )
+      const broadTask: NonNullable<MultiAgentRuntime.LayerOptions["partition"]> = (input) => ({
+        event: input,
+        subtasks: [{ ...oneTask(input).subtasks[0], fileScope: [] }],
+      })
+      const runtime = (
+        ownerID: string,
+        runner: SubagentTurnRunner,
+        partition: NonNullable<MultiAgentRuntime.LayerOptions["partition"]> = oneTask,
+      ) =>
+        Layer.build(
+          MultiAgentRuntime.layerWith({
+            runner,
+            partition,
+            execution,
+            ownerID,
+            dagCoordination: true,
+          }).pipe(Layer.provide(dependencies)),
+        ).pipe(Effect.map((context) => Context.get(context, MultiAgentRuntime.Service)))
+      const first = yield* runtime(
+        "runtime_a",
+        () =>
+          Effect.gen(function* () {
+            firstActive = true
+            yield* Deferred.succeed(started, undefined)
+            yield* Deferred.await(release)
+            firstActive = false
+            return {
+              ok: true,
+              structured: undefined,
+              text: "first",
+              tokensUsed: 0,
+              cost: 0,
+              continuationRef: "agent/first",
+            }
+          }),
+        broadTask,
+      )
+      const second = yield* runtime("runtime_b", () =>
+        Effect.sync(() => {
+          expect(firstActive).toBe(false)
+          secondRuns++
+          return {
+            ok: true,
+            structured: undefined,
+            text: "second",
+            tokensUsed: 0,
+            cost: 0,
+            continuationRef: "agent/second",
+          }
+        }),
+      )
+      const shared = { type: "test.resource-exclusion", payload: { directory: "/tmp/event-shared-root" } }
+      const eventA = event({ ...shared, id: DeepAgentEvent.ID.create(40_000) })
+      const eventB = event({ ...shared, id: DeepAgentEvent.ID.create(40_001) })
+      const firstFiber = yield* Effect.forkScoped(first.coordinate(eventA))
+      yield* Deferred.await(started)
+      const contended = yield* second.coordinate(eventB)
+      expect(contended.outcomes[0]).toMatchObject({ status: "deferred", reason: "execution_resource_locked" })
+      expect(contended.hasUnfinished).toBe(true)
+      expect(secondRuns).toBe(0)
+      yield* Deferred.succeed(release, undefined)
+      expect((yield* Fiber.join(firstFiber)).outcomes[0]?.status).toBe("completed")
+      expect((yield* second.coordinate(eventB)).outcomes[0]?.status).toBe("completed")
+      expect(secondRuns).toBe(1)
     }),
   )
 
@@ -1042,6 +1324,47 @@ describe("MultiAgentRuntime §E1 production wiring — L1 resolver ERROR fails c
   )
 })
 
+describe("MultiAgentRuntime §E1 resolver defect matrix", () => {
+  const it = testEffect(makeLayer())
+  const cases: ReadonlyArray<{
+    layer: string
+    options: Partial<MultiAgentRuntime.LayerOptions>
+    reason: string
+  }> = [
+    {
+      layer: "source trust",
+      options: { trustedSourcesFor: () => Effect.die(new Error("source resolver unavailable")) },
+      reason: "security:event_source",
+    },
+    {
+      layer: "actor permission",
+      options: { actorHasPermission: () => Effect.die(new Error("actor resolver unavailable")) },
+      reason: "security:actor_permission",
+    },
+    {
+      layer: "runtime operation",
+      options: { runtimeAllowed: () => Effect.die(new Error("operation resolver unavailable")) },
+      reason: "security:runtime_operation",
+    },
+  ]
+
+  for (const scenario of cases) {
+    it.effect(`${scenario.layer} defect blocks the task without invoking the runner`, () =>
+      Effect.gen(function* () {
+        resetRunner()
+        setNow(1_000)
+        setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
+        const summary = yield* Effect.gen(function* () {
+          return yield* (yield* MultiAgentRuntime.Service).coordinate(event())
+        }).pipe(Effect.provide(makeLayer(scenario.options)))
+        expect(summary.outcomes[0]).toMatchObject({ status: "blocked", reason: scenario.reason })
+        expect(summary.hasUnfinished).toBe(false)
+        expect(ran).toEqual([])
+      }),
+    )
+  }
+})
+
 // ─── §C3.1 FileLock enforcement — a REAL FileLock.Service instance drives contention/release ──────────
 // The runtime acquires an AGENT lock on each file a subtask writes before running it; a file already
 // held (by another agent OR by a human) DEFERS the subtask (retryable), so two concurrently-admitted
@@ -1103,6 +1426,99 @@ describe("MultiAgentRuntime §C3.1 file-lock enforcement", () => {
       expect(codeEdit?.reason).toBe("file_locked")
       expect(ran).toEqual([])
       testFileLock.release(human!.lockId) // cleanup
+    }),
+  )
+
+  it.effect("releases every earlier file lock when a later file is contended", () =>
+    Effect.gen(function* () {
+      resetRunner()
+      setNow(1_000)
+      setRegistry([agent("fixer", ["code_edit"], "level_2")])
+      const directory = path.resolve("partial-lock-workspace")
+      const firstKey = LockKeys.fileLockKey(directory, "src/a.ts")
+      const secondKey = LockKeys.fileLockKey(directory, "src/b.ts")
+      const holder = testFileLock.acquire(secondKey, "human")
+      expect(holder).not.toBeNull()
+      const released: string[] = []
+      const fileLock = FileLock.Service.of({
+        ...testFileLock,
+        release: (id) => {
+          released.push(id)
+          return testFileLock.release(id)
+        },
+      })
+      const partition: NonNullable<MultiAgentRuntime.LayerOptions["partition"]> = (input) => ({
+        event: input,
+        subtasks: [
+          {
+            id: `${input.id}:fix`,
+            capability: "code_edit",
+            intent: "edit two files",
+            dependsOn: [],
+            fileScope: ["src/a.ts", "src/b.ts"],
+            requiredAutonomy: "level_2",
+          },
+        ],
+      })
+      const summary = yield* Effect.gen(function* () {
+        return yield* (yield* MultiAgentRuntime.Service).coordinate(
+          event({ id: DeepAgentEvent.ID.create(1_201), type: "test.partial-lock", payload: { directory } }),
+        )
+      }).pipe(Effect.provide(makeLayer({ fileLock, partition })))
+      expect(summary.outcomes).toMatchObject([{ status: "deferred", reason: "file_locked" }])
+      expect(summary.hasUnfinished).toBe(true)
+      expect(released).toHaveLength(1)
+      expect(testFileLock.status(firstKey)).toBeNull()
+      expect(testFileLock.status(secondKey)?.lockId).toBe(holder?.lockId)
+      expect(ran).toEqual([])
+      testFileLock.release(holder!.lockId)
+    }),
+  )
+})
+
+describe("MultiAgentRuntime file-lock lease", () => {
+  const actual = Effect.runSync(FileLock.Service.pipe(Effect.provide(FileLock.layer)))
+  const acquired: string[] = []
+  const renewed: string[] = []
+  const fileLock = FileLock.Service.of({
+    ...actual,
+    acquire: (key, kind) => {
+      acquired.push(key)
+      return actual.acquire(key, kind)
+    },
+    renew: (id) => {
+      renewed.push(id)
+      return actual.renew(id)
+    },
+  })
+  const runner: SubagentTurnRunner = () =>
+    Effect.sleep(Duration.millis(80)).pipe(
+      Effect.as({
+        ok: true,
+        structured: undefined,
+        text: "done",
+        tokensUsed: 0,
+        cost: 0,
+        continuationRef: "agent/test",
+      }),
+    )
+  const it = testEffect(makeLayer({ fileLock, runner, leaseMs: 30 }))
+
+  it.live("renews the same absolute lock key while an execution lease is active", () =>
+    Effect.gen(function* () {
+      acquired.length = 0
+      renewed.length = 0
+      setNow(1_000)
+      setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
+      const directory = path.resolve("heartbeat-workspace")
+      const key = LockKeys.fileLockKey(directory, "src/agent.ts")
+      const summary = yield* (yield* MultiAgentRuntime.Service).coordinate(
+        event({ payload: { directory, files: ["./src/agent.ts"] } }),
+      )
+      expect(summary.outcomes.map((outcome) => outcome.status)).toEqual(["completed", "completed"])
+      expect(acquired).toEqual([key, key])
+      expect(renewed.length).toBeGreaterThan(2)
+      expect(fileLock.status(key)).toBeNull()
     }),
   )
 })

@@ -152,11 +152,42 @@ export const V4_EVENT_REGISTRY: EventRegistryIface = EventRegistry.createEventRe
     requestedCapability: "deepagent.goal.advance",
     autonomyCeiling: "medium",
   },
+  {
+    eventType: "schedule.scan",
+    kind: "observation",
+    schemaId: "schedule.scan.schema",
+    schemaVersion: "1",
+    payloadContentType: "application/json",
+    payloadVersion: "v1",
+    allowedProducerKinds: ["system"],
+    allowedSourceKinds: ["system"],
+    causation: { allowed: ["causedByEventId"], requiresCause: false },
+    risk: "low",
+    objective: "run the scheduled maintenance scan",
+    requestedCapability: "deepagent.maintenance.scan",
+    autonomyCeiling: "low",
+  },
+  {
+    eventType: "ci.repair.requested",
+    execution: "dag",
+    kind: "command",
+    schemaId: "ci.repair.requested.schema",
+    schemaVersion: "1",
+    payloadContentType: "application/json",
+    payloadVersion: "v1",
+    allowedProducerKinds: ["system"],
+    allowedSourceKinds: ["system"],
+    causation: { allowed: ["causedByEventId"], requiresCause: false },
+    risk: "high",
+    objective: "repair the repeated CI failure and verify the fix",
+    requestedCapability: "deepagent.ci.repair",
+    autonomyCeiling: "high",
+  },
 ])
 
 /**
  * A dispatch-time refusal that can NEVER succeed on retry: the event type is not registered with the
- * V2 admission registry (e.g. `schedule.scan` / `ci.repair.requested` until their product lanes ship).
+ * V2 admission registry.
  * Typed (mirroring `MultiAgentRuntime.EventV2AdmissionUnavailableError`) so the dispatcher can settle
  * the delivery as a terminal drop (ack + recordDrop) instead of burning the §A3 retry budget and
  * DLQ-ing a delivery that was never deliverable.
@@ -167,9 +198,7 @@ export class EventNotRegisteredError extends Error {
     readonly eventType: string,
     readonly eventId: string,
   ) {
-    super(
-      `C5-12 event type "${eventType}" is not registered with the V2 admission registry; refusing (fail-closed)`,
-    )
+    super(`C5-12 event type "${eventType}" is not registered with the V2 admission registry; refusing (fail-closed)`)
     this.name = "EventNotRegisteredError"
   }
 }
@@ -347,36 +376,43 @@ export const makeV2AdmissionBridge = (deps: V2AdmissionBridgeDeps): MultiAgentRu
   const securityNamespaceFor =
     deps.securityNamespaceFor ?? ((workspaceId: string) => Effect.succeed(defaultSecurityNamespaceFor(workspaceId)))
 
+  const admit = (
+    request: EventDispatcher.DispatchRequest,
+    scope: EventAdmissionWiring.AdmissionScope,
+    receiptOnly: boolean,
+  ) =>
+    Effect.gen(function* () {
+      if (!receiptOnly && !deps.v2Session) {
+        return yield* Effect.fail(
+          new Error(`C5-12 V2 admission bridge requires the SessionV2 stack to admit event "${request.event.id}"`),
+        )
+      }
+      const registration = registry.lookup(request.event.type)
+      if (!registration) {
+        return yield* Effect.fail(new EventNotRegisteredError(request.event.type, request.event.id))
+      }
+      const envelope = toEventEnvelope(request.event, registration)
+      const verdict = EventRegistry.validatePublish(registry, envelope)
+      if (!verdict.ok) {
+        return yield* Effect.fail(new Error(`C5-12 event "${request.event.id}" is not publishable: ${verdict.message}`))
+      }
+      const registered = envelope as RegisteredEventEnvelope
+      yield* EventAdmissionWiring.admitWork(deps.db, {
+        event: registered,
+        registration: verdict.registration,
+        scope,
+        // DAG ingress uses the same validated C5 receipt, but each child runner owns its own
+        // V2 prompt admission. The receipt adapter deliberately creates no parent prompt.
+        adapter: receiptOnly
+          ? { admit: ({ messageID }) => Effect.succeed({ messageID }) }
+          : makeSessionV2Adapter(deps.v2Session!, deps.locationFor ?? defaultLocationFor, scope.workspaceId),
+        now: now(),
+      })
+    })
   return {
     securityNamespaceFor,
-    admit: ({ request, scope }) =>
-      Effect.gen(function* () {
-        if (!deps.v2Session) {
-          return yield* Effect.fail(
-            new Error(
-              `C5-12 V2 admission bridge requires the SessionV2 stack to admit event "${request.event.id}"`,
-            ),
-          )
-        }
-        const registration = registry.lookup(request.event.type)
-        if (!registration) {
-          return yield* Effect.fail(new EventNotRegisteredError(request.event.type, request.event.id))
-        }
-        const envelope = toEventEnvelope(request.event, registration)
-        const verdict = EventRegistry.validatePublish(registry, envelope)
-        if (!verdict.ok) {
-          return yield* Effect.fail(
-            new Error(`C5-12 event "${request.event.id}" is not publishable: ${verdict.message}`),
-          )
-        }
-        const registered = envelope as RegisteredEventEnvelope
-        yield* EventAdmissionWiring.admitWork(deps.db, {
-          event: registered,
-          registration: verdict.registration,
-          scope,
-          adapter: makeSessionV2Adapter(deps.v2Session, deps.locationFor ?? defaultLocationFor, scope.workspaceId),
-          now: now(),
-        })
-      }),
+    executionFor: (eventType) => registry.lookup(eventType)?.execution ?? "single",
+    admit: ({ request, scope }) => admit(request, scope, false),
+    admitReceiptOnly: ({ request, scope }) => admit(request, scope, true),
   }
 }
