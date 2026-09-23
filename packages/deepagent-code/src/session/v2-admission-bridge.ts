@@ -297,12 +297,11 @@ export const toEventEnvelope = (event: DeepAgentEvent.Event, registration: Event
 }
 
 /**
- * A deterministic SessionV2 message id derived from the admission's opaque exact-retry anchor
- * (`event-admission:<eventId>:<sessionId>`). SessionV2.prompt `id` must be a valid `msg_` id; the anchor
- * is opaque, so the adapter derives a stable `msg_` id (same anchor ⇒ same id ⇒ SessionV2 dedupes an exact
- * retry). Never carries the raw anchor into the message id — it is content-hashed.
+ * Preserve a caller's valid SessionV2 message identity. Historical event-admission anchors lack the
+ * `msg_` prefix, so they retain their stable hash mapping for exact retries of existing receipts.
  */
-const sessionMessageID = (anchor: string): string => `msg_${contentDigest(anchor).slice(0, 40)}`
+const sessionMessageID = (anchor: string): string =>
+  anchor.startsWith("msg_") ? anchor : `msg_${contentDigest(anchor).slice(0, 40)}`
 
 /** The `(yield* SessionV2.Service).prompt(...)` adapter wrapped to the `EventAdmission.SessionWorkAdapter`
  * contract. The model-facing prompt is the serialized bounded envelope (`promptText`), never the raw V4
