@@ -594,12 +594,11 @@ describe("production runtime integrity", () => {
 
     // `review_required` is the explicit adjudication backlog: process-lifetime bindings whose
     // owner/bound/finalizer a human has to rule on. RI-94's terminal state is an empty backlog, and
-    // the recorded clearing (5fc382979, 269 -> 0) has since drifted back to the entries below
-    // (mostly `session/prompt.ts` and `event.ts` module-level state). The gate therefore pins the
-    // CURRENT count: it admits the known backlog but a NEW unadjudicated binding fails here instead
+    // the recorded clearing (5fc382979, 269 -> 0) has since drifted back to the entries below.
+    // The gate pins the currently identified backlog: a NEW unadjudicated binding fails here instead
     // of arriving silently. To lower the ceiling, adjudicate entries and update this number — never
     // raise it without an entry in the review.
-    const REVIEW_REQUIRED_CEILING = 35
+    const REVIEW_REQUIRED_CEILING = 13
     const backlog = candidates.filter((candidate) => candidate.verdict === "review_required")
     expect(backlog.length).toBeLessThanOrEqual(REVIEW_REQUIRED_CEILING)
     if (backlog.length > 0)

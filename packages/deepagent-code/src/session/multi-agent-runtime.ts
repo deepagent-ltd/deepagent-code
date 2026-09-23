@@ -1097,9 +1097,9 @@ export const layerWith = (options: LayerOptions) =>
               )
             }
 
-            // WorkspaceConcurrency has already admitted each runner against the workspace's configured
-            // cap. A second fixed limit here would silently underutilize configured caps above 16.
-            const settled = yield* Effect.all(running, { concurrency: "unbounded" })
+            // WorkspaceConcurrency has admitted each runner against the workspace cap. This finite
+            // value starts every admitted turn without imposing a second, lower cap.
+            const settled = yield* Effect.all(running, { concurrency: Math.max(1, running.length) })
             for (const { subtask, agent, capable, lease, result } of settled) {
               if (result.ok) {
                 const artifacts = [

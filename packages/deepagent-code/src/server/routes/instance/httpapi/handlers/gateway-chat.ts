@@ -284,7 +284,8 @@ export const chat = Effect.gen(function* () {
           model: parsed.value.model, choices, ...(finalUsage ? { usage: finalUsage } : {}),
         })}\n\n`
         if (parsed.value.stream) {
-          const queue = yield* Queue.unbounded<string>()
+          // Backpressure the model stream when an HTTP consumer reads slowly.
+          const queue = yield* Queue.bounded<string>(128)
           yield* collectEnhanced({
             ...enhancedInput,
             onDelta: (text) => Queue.offer(queue, chunk([{ index: 0, delta: { content: text }, finish_reason: null }])).pipe(Effect.asVoid),
