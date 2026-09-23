@@ -362,6 +362,27 @@ describe("gateway release gate", () => {
       } finally {
         reader.close()
       }
+      const writer = new sqlite.Database(Flag.DEEPAGENT_CODE_DB)
+      try {
+        writer.query("UPDATE proxy_tenant SET tier = 'full', permission_policy = ? WHERE id = 'tenant-context'")
+          .run(JSON.stringify([{ action: "*", resource: "*", effect: "deny" }]))
+      } finally {
+        writer.close()
+      }
+      const full = await handler(new Request("http://localhost/v1/chat/completions", {
+        method: "POST", headers: { authorization: "Bearer sk-context", "content-type": "application/json",
+          "x-request-id": "context-4", "x-deepagent-session": "full-lane" },
+        body: JSON.stringify({ model: "test-model", messages: [{ role: "user", content: "Full question" }] }),
+      }), HttpApiApp.context)
+      expect(full.status).toBe(200)
+      expect((await full.json()).choices[0].message.content).toBe("first durable answer")
+      const policyReader = new sqlite.Database(Flag.DEEPAGENT_CODE_DB, { readonly: true })
+      try {
+        const session = policyReader.query("SELECT permission FROM session WHERE id IN (SELECT lane_session_id FROM proxy_request_ledger WHERE request_id = 'tenant-context:context-4')").get() as { permission: string }
+        expect(JSON.parse(session.permission)).toEqual([{ action: "*", resource: "*", effect: "deny" }])
+      } finally {
+        policyReader.close()
+      }
       await web.dispose()
     } finally {
       streamGate.resolve()

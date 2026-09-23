@@ -1,4 +1,5 @@
 import { index, integer, real, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core"
+import type { PermissionV2 } from "../permission"
 
 export const ProxyTenantTable = sqliteTable(
   "proxy_tenant",
@@ -9,6 +10,7 @@ export const ProxyTenantTable = sqliteTable(
     directory: text().notNull(),
     model_allowlist: text({ mode: "json" }).$type<string[]>().notNull(),
     tier: text().$type<"passthrough" | "context" | "full">().notNull(),
+    permission_policy: text({ mode: "json" }).$type<PermissionV2.Ruleset>(),
     quota_requests_per_minute: integer().notNull(),
     quota_tokens_per_day: integer().notNull(),
     lane_limit: integer().notNull(),

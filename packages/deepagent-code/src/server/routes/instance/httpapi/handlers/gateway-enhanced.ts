@@ -58,10 +58,11 @@ export const collectEnhanced = (input: {
     const session = yield* input.sessions.create({
       id: input.sessionID,
       title: `Proxy ${input.tenant.id}`,
-      metadata: { proxy: { tenant: input.tenant.id, keyFingerprint: input.tenant.key_fingerprint, lane: hint } },
+      metadata: { proxy: { tenant: input.tenant.id, keyFingerprint: input.tenant.key_fingerprint, lane: hint,
+        tier: input.tenant.tier } },
       location: Location.Ref.make({ directory: AbsolutePath.make(input.tenant.directory) }),
       model: { id: ModelV2.ID.make(input.modelID), providerID: ProviderV2.ID.make(input.providerID) },
-      permissions: input.tenant.tier === "context" ? [{ action: "*", resource: "*", effect: "deny" }] : [],
+      permissions: input.tenant.tier === "context" ? [{ action: "*", resource: "*", effect: "deny" }] : input.tenant.permission_policy ?? [],
     })
     const binding = session.metadata?.proxy
     if (
@@ -69,6 +70,7 @@ export const collectEnhanced = (input: {
       (binding as Record<string, unknown>).tenant !== input.tenant.id ||
       (binding as Record<string, unknown>).keyFingerprint !== input.tenant.key_fingerprint ||
       (binding as Record<string, unknown>).lane !== hint ||
+      (binding as Record<string, unknown>).tier !== input.tenant.tier ||
       session.location.directory !== input.tenant.directory ||
       session.model?.id !== input.modelID || session.model?.providerID !== input.providerID
     )

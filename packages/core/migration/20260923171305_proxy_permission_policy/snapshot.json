@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "3e01ad82-b951-4965-b335-8cc9982a5d84",
+  "id": "b9a9186e-efb1-4a4d-ac87-b9003156608e",
   "prevIds": [
-    "d2520f00-09ce-452f-9c94-e663e19e2e12"
+    "3e01ad82-b951-4965-b335-8cc9982a5d84"
   ],
   "ddl": [
     {
@@ -9083,6 +9083,16 @@
       "default": null,
       "generated": null,
       "name": "tier",
+      "entityType": "columns",
+      "table": "proxy_tenant"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "permission_policy",
       "entityType": "columns",
       "table": "proxy_tenant"
     },

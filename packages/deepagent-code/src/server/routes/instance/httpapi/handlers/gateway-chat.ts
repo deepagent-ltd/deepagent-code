@@ -45,8 +45,8 @@ export const chat = Effect.gen(function* () {
       const parsed = parseChatPayload(Option.isSome(decoded) ? decoded.value : undefined)
       if (!parsed.ok) return parsed.response
       const tenant = yield* ProxyTenantContext
-      if (tenant.tier === "full")
-        return proxyError(501, "full_tier_unavailable", "Full proxy tier is not available")
+      if (tenant.tier === "full" && !tenant.permission_policy?.length)
+        return proxyError(503, "permission_policy_required", "Full proxy tier requires a permission policy")
       if (tenant.tier !== "passthrough" && parsed.value.messages.at(-1)?.role !== "user")
         return proxyError(400, "invalid_request", "Enhanced chat requires a final user message")
 
