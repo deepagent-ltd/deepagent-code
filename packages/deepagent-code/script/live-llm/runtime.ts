@@ -268,6 +268,7 @@ export async function runLegacyLiveCases(input: {
     const { Context, Deferred, Effect, Fiber, Layer, Option, Schedule, Schema } = await import("effect")
     const { and, desc, eq, gt, inArray } = await import("drizzle-orm")
     const { AgentExecution } = await import("@deepagent-code/core/deepagent/agent-execution")
+    const { DeepAgentEventAdmissionTable } = await import("@deepagent-code/core/deepagent/event-admission-sql")
     const { ApprovalQueue } = await import("@deepagent-code/core/deepagent/approval-queue")
     const { DeepAgentEventBus } = await import("@deepagent-code/core/deepagent/deepagent-event-bus")
     const { Scheduler } = await import("@deepagent-code/core/deepagent/scheduler")
@@ -338,7 +339,9 @@ export async function runLegacyLiveCases(input: {
     const { SessionToolArgumentReceiptTable } = await import("../../src/session/tool-argument-receipt.sql")
     const { SessionToolRequestReceiptTable } = await import("../../src/session/tool-request-receipt.sql")
     const { EventDispatcher } = await import("../../src/session/event-dispatcher")
+    const { makeEventTurnRunnerV2 } = await import("../../src/session/event-turn-runner")
     const { MultiAgentRuntime } = await import("../../src/session/multi-agent-runtime")
+    const { makeV2AdmissionBridge } = await import("../../src/session/v2-admission-bridge")
     const { V4PRCollaboration } = await import("../../src/session/v4-pr-collaboration")
     const { RuntimeFlags } = await import("../../src/effect/runtime-flags")
     const { InstanceRef } = await import("../../src/effect/instance-ref")
@@ -589,13 +592,9 @@ export async function runLegacyLiveCases(input: {
       })
       yield* Effect.addFinalizer(() => unsubscribeQuestions)
       const v4Event = input.v4Event
-      // v2w-j4 durable-only: the production V1 event turn runner is deleted and MultiAgentRuntime.dispatch
-      // is V2-admission-only. This LIVE §C harness still exercises the coordination library end-to-end
-      // (partition → gate → arbitrate → run → PR collaboration) with the V2-native subagent runner: the
-      // runner slot is deferred until the event id (hence its deterministic parent session) exists, and
-      // the dispatcher's dispatchPort drives `coordinate` directly — the harness-local equivalent of the
-      // deleted production dispatch branch, so the durable delivery/ack machinery stays exercised.
-      let v4Runner: ReturnType<typeof makeTaskSubagentRunner> | undefined
+      // Exercise the production V2 DAG lane: receipt-only event admission, durable child-session
+      // execution and isolated worktree continuations. The ordinary task subagent runner has no
+      // continuation ref and would leave the dependent verification task permanently un-runnable.
       const v4 =
         v4Event && agents && instances && gitService && prQueue
           ? yield* Effect.gen(function* () {
@@ -607,7 +606,7 @@ export async function runLegacyLiveCases(input: {
                 AgentExecution.layer,
                 Scheduler.layer,
               ).pipe(Layer.provide(databaseLayer))
-              const flags = RuntimeFlags.layer({ v4MultiAgentRuntime: true })
+              const flags = RuntimeFlags.layer({ v4MultiAgentRuntime: true, v4DagCoordination: true })
               const registry = Layer.succeed(AgentListProviderService, {
                 listAgents: () => Effect.succeed([...BUILTIN_AGENT_DESCRIPTORS]),
                 findByTrigger: () => Effect.succeed([]),
@@ -620,6 +619,8 @@ export async function runLegacyLiveCases(input: {
                   const approvalQueue = yield* ApprovalQueue.Service
                   return MultiAgentRuntime.layerWith({
                     execution,
+                    dagCoordination: true,
+                    eventV2Admission: makeV2AdmissionBridge({ db: database.db, v2Session }),
                     trustedSources: [v4Event.source],
                     onEventCompleted: V4PRCollaboration.make({
                       sessions,
@@ -629,17 +630,7 @@ export async function runLegacyLiveCases(input: {
                       bus,
                       approvalQueue,
                     }),
-                    runner: (turn) =>
-                      v4Runner
-                        ? v4Runner(turn)
-                        : Effect.succeed({
-                            ok: false,
-                            reason: "runner_not_wired",
-                            structured: undefined,
-                            text: "",
-                            tokensUsed: 0,
-                            cost: 0,
-                          }),
+                    runner: makeEventTurnRunnerV2({ sessions: v2Session, instanceStore: instances, db: database.db }),
                   })
                 }),
               ).pipe(Layer.provide(core), Layer.provide(registry))
@@ -649,16 +640,7 @@ export async function runLegacyLiveCases(input: {
                   const bus = yield* DeepAgentEventBus.Service
                   return EventDispatcher.layerWith({
                     dispatchPort: {
-                      dispatch: (request) =>
-                        multiAgent.coordinate(request.event).pipe(
-                          Effect.flatMap((summary) =>
-                            summary.hasUnfinished
-                              ? Effect.fail(
-                                  new Error(`multi-agent coordination incomplete for event ${request.event.id}`),
-                                )
-                              : Effect.void,
-                          ),
-                        ),
+                      dispatch: (request) => multiAgent.dispatch(request),
                     },
                     runLoops: false,
                     pendingDeliveryCount: bus.pendingDeliveryCount,
@@ -678,9 +660,8 @@ export async function runLegacyLiveCases(input: {
                 priority: "normal",
                 payload: { ...v4Event.payload, directory: instance.directory },
               })
-              // The event id now exists: create its deterministic parent session and install the
-              // V2-native subagent runner into the deferred slot (makeTaskSubagentRunner parents every
-              // child turn here and freezes the driver model onto the child session).
+              // The event id now exists: materialize the deterministic V1 parent projection used by
+              // the PR collaboration observer. Dispatch admits the same id through SessionV2.
               const parentSessionID = MultiAgentRuntime.parentSessionIDFor(event.id)
               yield* V4PRCollaboration.ensureEventParent({
                 sessions,
@@ -689,19 +670,19 @@ export async function runLegacyLiveCases(input: {
                 directory: instance.directory,
                 correlationID: event.id,
               })
-              v4Runner = makeTaskSubagentRunner({
-                sessions,
-                agents,
-                parentSessionID,
-                model: { providerID, modelID },
-                purpose: "generic",
-                v2Session,
-              })
               const sourceDeliveryPendingBefore = (yield* bus.dueRetries(Number.MAX_SAFE_INTEGER)).some(
                 (delivery) =>
                   delivery.subscriptionGroup === EventDispatcher.DISPATCH_GROUP && delivery.eventID === event.id,
               )
               const decision = yield* eventDispatcher.handle(event)
+              const ingressReceipt = (yield* database.db
+                .select()
+                .from(DeepAgentEventAdmissionTable)
+                .where(eq(DeepAgentEventAdmissionTable.event_ref, `event://${event.id}`)))[0]
+              const parentUserMessages = (yield* v2Session.messages({
+                sessionID: SessionV2.ID.make(parentSessionID),
+                order: "asc",
+              })).filter((message) => message.type === "user").length
               const sourceDeliveryPendingAfter = (yield* bus.dueRetries(Number.MAX_SAFE_INTEGER)).some(
                 (delivery) =>
                   delivery.subscriptionGroup === EventDispatcher.DISPATCH_GROUP && delivery.eventID === event.id,
@@ -767,6 +748,11 @@ export async function runLegacyLiveCases(input: {
                 Effect.gen(function* () {
                   const info = yield* sessions.get(sessionID as SessionID)
                   const messages = yield* sessions.messages({ sessionID: info.id })
+                  const usageByMessage = new Map(
+                    (yield* v2Session.messages({ sessionID: SessionV2.ID.make(sessionID), order: "asc" })).flatMap(
+                      (message) => (message.type === "assistant" ? [[message.id, message.tokens] as const] : []),
+                    ),
+                  )
                   return {
                     id: info.id,
                     agent: info.agent,
@@ -780,7 +766,10 @@ export async function runLegacyLiveCases(input: {
                               providerID: message.info.providerID,
                               modelID: message.info.modelID,
                               error: message.info.error,
-                              tokens: message.info.tokens,
+                              // The V1 wire mirror retains tool parts but not V2 provider usage.
+                              // Debit evidence must come from the authoritative V2 projection.
+                              tokens:
+                                usageByMessage.get(SessionMessage.ID.make(message.info.id)) ?? message.info.tokens,
                               tools: message.parts
                                 .filter((part) => part.type === "tool")
                                 .map((part) => ({ name: part.tool, status: part.state.status })),
@@ -798,6 +787,13 @@ export async function runLegacyLiveCases(input: {
               return {
                 event,
                 dispatch: { decision, sourceDeliveryPendingBefore, sourceDeliveryPendingAfter },
+                ingressReceipt: ingressReceipt && {
+                  eventRef: ingressReceipt.event_ref,
+                  sessionID: ingressReceipt.session_id,
+                  envelopeDigest: ingressReceipt.envelope_digest,
+                  status: ingressReceipt.status,
+                  parentUserMessages,
+                },
                 summary,
                 executions,
                 childSessions,
