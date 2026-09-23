@@ -58,7 +58,8 @@ describe("C0-01 caller inventory gate", () => {
     // govern/reclaim) and the k01 provider-resolution facade + blocked surfacing joined.
     // V2.0.2 adds 20 production entries, including project-switch learning, proxy routes,
     // and X-07 bundle/share handlers. Every newly extracted route is classified below.
-    expect(inventory.entries.length).toBe(433)
+    // X-10c proxy audit adds one EventV2 ledger reader to the production route surface.
+    expect(inventory.entries.length).toBe(434)
     const lildax = inventory.entries
       .filter((entry) => entry.entry.surface === "cli-lildax")
       .map((entry) => entry.entry.id)
@@ -175,6 +176,17 @@ describe("C0-01 caller inventory gate", () => {
     expect(channels!.evidence.length).toBeGreaterThanOrEqual(2)
     const ids = new Set(channels!.evidence.map((proof) => proof.repoFile))
     expect([...ids].some((file) => file.includes("event-v2-bridge"))).toBe(true)
+    expect(channels!.evidence.map((proof) => proof.marker)).toContain("events.publishChecked")
+  })
+
+  test("proxy audit endpoint reads the EventV2 ledger without claiming write authority", () => {
+    const audit = inventory.entries.find((entry) => entry.entry.id === "http.instance.proxyAdmin.auditList")
+    expect(audit).toBeDefined()
+    expect(audit!.roles.map((role) => role.verdict)).toEqual(DIMENSIONS.map(() => "read_only"))
+    for (const role of audit!.roles) {
+      expect(role.evidence.map((proof) => proof.marker)).toContain("reach:packages/core/src/event/sql.ts")
+      expect(role.evidence.map((proof) => proof.marker)).toContain("body:db.select")
+    }
   })
 
   test("F4 regression: report carries zero absolute repository paths", async () => {

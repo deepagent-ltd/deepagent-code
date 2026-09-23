@@ -204,8 +204,10 @@ describe("C0-08 legacy-zero gate real inventory (actual frozen numbers)", () => 
     expect(counters.v2Dims).toBe(213)
     // V2.0.2 caller expansion: 2 proxy chat adapters plus 3 tenant mutations (+35 dims);
     // 15 learning/catalog/admin-query/bundle and other routes are read-only (+105 dims).
+    // X-10c proxy audit adds one EventV2 ledger query (+7 read-only); the checked V2 bridge
+    // publisher retains its existing V2 event dimension after its evidence anchor is updated.
     expect(counters.adapterDims).toBe(474)
-    expect(counters.readOnlyDims).toBe(2344)
+    expect(counters.readOnlyDims).toBe(2351)
     expect(counters.unclassifiedDims).toBe(0)
   })
 
@@ -253,6 +255,37 @@ describe("C0-08 legacy-zero gate real inventory (actual frozen numbers)", () => 
   })
 })
 
+test("legacy-zero CLI waits for asynchronous gate failure before reporting success", async () => {
+  await using directory = await tmpdir()
+  const script = path.join(import.meta.dirname, "../script/legacy-zero-gate/run-gate.ts")
+  const preload = path.join(directory.path, "reject-gate.ts")
+  await Bun.write(preload, [
+    'import { mock } from "bun:test"',
+    `mock.module(${JSON.stringify(path.join(import.meta.dirname, "../script/legacy-zero-gate/gate.ts"))}, () => ({`,
+    '  currentTreeCounts: async () => ({}),',
+    '  mustBeZero: async () => { await Promise.resolve(); throw new Error("injected async gate failure") },',
+    '  redOracle: async () => ({}),',
+    '}))',
+  ].join("\n"))
+
+  const failed = Bun.spawnSync([process.execPath, "--preload", preload, script, "must-be-zero"], {
+    cwd: path.join(import.meta.dirname, ".."),
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+  expect(failed.exitCode).not.toBe(0)
+  expect(failed.stderr.toString()).toContain("injected async gate failure")
+  expect(failed.stdout.toString()).not.toContain("PASSED")
+
+  const passed = Bun.spawnSync([process.execPath, script, "must-be-zero"], {
+    cwd: path.join(import.meta.dirname, ".."),
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+  expect(passed.exitCode).toBe(0)
+  expect(passed.stdout.toString()).toMatch(/legacy-zero gate PASSED \(snapshot [0-9a-f]{64}\)/)
+})
+
 describe("C0-08 legacy-zero gate snapshot (byte-stable)", () => {
   const inventory = realInventory
   const bridgeSites = selectionBridgeSites()
@@ -292,9 +325,10 @@ describe("C0-08 legacy-zero gate snapshot (byte-stable)", () => {
     // v2f-i (2026-09-18): the dead core agent-orchestrator entry is deleted (404→403, roles −7).
     // v2w-j4 (2026-09-19): github.agent-execution is declared (+1 entry, +7 roles — v2 on
     // admission/execution, read_only on the rest).
-    expect(snapshot.entries).toBe(433)
+    // X-10c proxy audit contributes one read-only entry and seven classified roles.
+    expect(snapshot.entries).toBe(434)
     // 2026-09-08 step 5c 重钉:同批漂移(2814→2807)。
-    expect(snapshot.roles).toBe(3031)
+    expect(snapshot.roles).toBe(3038)
     expect(snapshot.selectionBridgeUsages).toBe(0)
   })
 

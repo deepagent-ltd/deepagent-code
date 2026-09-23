@@ -365,6 +365,15 @@ export const RULE_PACKS: readonly RulePack[] = [
     ])),
   },
   {
+    match: (id) => id === "http.instance.proxyAdmin.auditList",
+    rules: all7(readOnly([
+      { kind: "reach", pathSuffix: "packages/core/src/event/sql.ts" },
+      body("db.select"),
+      notBody("SessionV2.prompt"),
+      notBody("promptSvc.promptOrSteer"),
+    ])),
+  },
+  {
     match: (id) => id === "http.instance.proxyAdmin.laneList",
     rules: all7(readOnly([
       { kind: "reach", pathSuffix: "packages/core/src/session/sql.ts" },
@@ -1352,7 +1361,7 @@ export const RULE_PACKS: readonly RulePack[] = [
     match: (id) => id === "event.v2-bridge",
     rules: withReadOnlyRest(
       {},
-      [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")],
+      [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt")],
       "packages/core/src/event.ts",
     ),
   },
