@@ -363,7 +363,7 @@ export const layerWith = (options?: LayerOptions) =>
         bus.nack({ subscriptionGroup: DISPATCH_GROUP, eventID: event.id, reason })
 
       // A dispatch refusal that retrying can never fix (the event type is not registered with the V2
-      // admission registry — e.g. `schedule.scan` until its product lane ships). Settle it as a
+      // admission registry). Settle it as a
       // terminal drop (recordDrop + ack) instead of burning the §A3 retry budget and DLQ-ing a
       // delivery that was never deliverable.
       const isPermanentDispatchRefusal = (cause: Cause.Cause<unknown>): boolean => {

@@ -152,11 +152,41 @@ export const V4_EVENT_REGISTRY: EventRegistryIface = EventRegistry.createEventRe
     requestedCapability: "deepagent.goal.advance",
     autonomyCeiling: "medium",
   },
+  {
+    eventType: "schedule.scan",
+    kind: "observation",
+    schemaId: "schedule.scan.schema",
+    schemaVersion: "1",
+    payloadContentType: "application/json",
+    payloadVersion: "v1",
+    allowedProducerKinds: ["system"],
+    allowedSourceKinds: ["system"],
+    causation: { allowed: ["causedByEventId"], requiresCause: false },
+    risk: "low",
+    objective: "run the scheduled maintenance scan",
+    requestedCapability: "deepagent.maintenance.scan",
+    autonomyCeiling: "low",
+  },
+  {
+    eventType: "ci.repair.requested",
+    kind: "command",
+    schemaId: "ci.repair.requested.schema",
+    schemaVersion: "1",
+    payloadContentType: "application/json",
+    payloadVersion: "v1",
+    allowedProducerKinds: ["system"],
+    allowedSourceKinds: ["system"],
+    causation: { allowed: ["causedByEventId"], requiresCause: false },
+    risk: "high",
+    objective: "repair the repeated CI failure and verify the fix",
+    requestedCapability: "deepagent.ci.repair",
+    autonomyCeiling: "high",
+  },
 ])
 
 /**
  * A dispatch-time refusal that can NEVER succeed on retry: the event type is not registered with the
- * V2 admission registry (e.g. `schedule.scan` / `ci.repair.requested` until their product lanes ship).
+ * V2 admission registry.
  * Typed (mirroring `MultiAgentRuntime.EventV2AdmissionUnavailableError`) so the dispatcher can settle
  * the delivery as a terminal drop (ack + recordDrop) instead of burning the §A3 retry budget and
  * DLQ-ing a delivery that was never deliverable.
