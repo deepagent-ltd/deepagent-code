@@ -16,12 +16,12 @@ export class ProxyAuthorization extends HttpApiMiddleware.Service<
   { provides: ProxyTenantContext }
 >()("@deepagent-code/ProxyAuthorization") {}
 
-export function proxyError(status: number, code: string, message: string) {
+export function proxyError(status: number, code: string, message: string, type?: string) {
   return HttpServerResponse.jsonUnsafe(
     {
       error: {
         message,
-        type: status === 401 ? "authentication_error" : status >= 500 ? "api_error" : "invalid_request_error",
+        type: type ?? (status === 401 ? "authentication_error" : status >= 500 ? "api_error" : "invalid_request_error"),
         code,
       },
     },

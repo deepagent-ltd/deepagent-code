@@ -56,6 +56,7 @@ const sessionV2Reads = Layer.effect(
       switchAgent: die,
       switchModel: die,
       setPermissions: die,
+      setArchived: die,
       prompt: die,
       shell: die,
       skill: die,

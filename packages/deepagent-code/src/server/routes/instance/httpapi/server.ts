@@ -84,6 +84,8 @@ import { ServerAuth } from "@/server/auth"
 import { InstanceHttpApi, RootHttpApi } from "./api"
 import { GatewayHttpApi } from "./groups/gateway"
 import { gatewayHandlers } from "./handlers/gateway"
+import { gatewayAdminHandlers } from "./handlers/gateway-admin"
+import { GatewayAdminApi } from "./groups/gateway-admin"
 import { authorizeProxyKey, proxyAuthorizationLayer, proxyError, proxyStartupGate } from "./middleware/proxy-authorization"
 import { Api } from "@deepagent-code/server/api"
 import { PublicApi } from "./public"
@@ -262,6 +264,10 @@ const gatewayApiRoutes = HttpApiBuilder.layer(GatewayHttpApi).pipe(
   Layer.provide(gatewayHandlers),
   Layer.provide(proxyAuthorizationLayer),
 )
+const gatewayAdminRoutes = HttpApiBuilder.layer(GatewayAdminApi).pipe(
+  Layer.provide(gatewayAdminHandlers),
+  Layer.provide(httpApiAuthLayer),
+)
 const gatewayClientLayer = LLMClient.layer.pipe(Layer.provide(RequestExecutor.defaultLayer))
 const eventApiRoutes = HttpApiBuilder.layer(EventApi).pipe(
   Layer.provide(eventHandlers),
@@ -379,6 +385,7 @@ export function createRoutes(corsOptions?: CorsOptions, runtimeFlagsLayer = Runt
   const baseRoutes = Layer.mergeAll(
     rootApiRoutes,
     gatewayApiRoutes,
+    gatewayAdminRoutes,
     proxyStartupGate,
     eventApiRoutes,
     ptyConnectApiRoutes,

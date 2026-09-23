@@ -82,6 +82,28 @@ describe("gateway release gate", () => {
       )
       expect(response.status).toBe(200)
       expect(await response.json()).toEqual({ object: "list", data: [] })
+      const provisioned = await handler(new Request("http://localhost/proxy/admin/tenants", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: "tenant-admin", key: "sk-admin-created-tenant", directory,
+          model_allowlist: [], tier: "passthrough", quota_requests_per_minute: 5,
+          quota_tokens_per_day: 10_000, lane_limit: 8, deadline_ms: 120_000 }),
+      }), HttpApiApp.context)
+      expect(provisioned.status).toBe(201)
+      expect((await provisioned.json()).id).toBe("tenant-admin")
+      const listed = await handler(new Request("http://localhost/proxy/admin/tenants"), HttpApiApp.context)
+      expect(listed.status).toBe(200)
+      const tenants = await listed.json()
+      expect(tenants.data.map((tenant: { id: string }) => tenant.id).sort()).toEqual(["tenant-admin", "tenant-test"])
+      expect(JSON.stringify(tenants)).not.toContain("sk-admin-created-tenant")
+      expect(JSON.stringify(tenants)).not.toContain("key_hash")
+      const updated = await handler(new Request("http://localhost/proxy/admin/tenants/tenant-admin", {
+        method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: false }),
+      }), HttpApiApp.context)
+      expect(updated.status).toBe(200)
+      const disabled = await handler(new Request("http://localhost/v1/models", {
+        headers: { authorization: "Bearer sk-admin-created-tenant" },
+      }), HttpApiApp.context)
+      expect(disabled.status).toBe(401)
     } finally {
       Flag.DEEPAGENT_CODE_DB = originalDatabase
       await rm(directory, { recursive: true, force: true })
@@ -127,7 +149,7 @@ describe("gateway release gate", () => {
             directory,
             model_allowlist: ["test/test-model"],
             tier: "passthrough",
-            quota_requests_per_minute: 3,
+            quota_requests_per_minute: 4,
             quota_tokens_per_day: 100_000,
             lane_limit: 8,
             deadline_ms: 120_000,
@@ -182,6 +204,22 @@ describe("gateway release gate", () => {
       expect(sse).toContain('"prompt_tokens":11')
       expect(sse).toContain("data: [DONE]")
       expect(hits).toHaveLength(2)
+      const responses = await handler(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { authorization: "Bearer sk-test-proxy-chat", "content-type": "application/json", "x-request-id": "example-3" },
+        body: JSON.stringify({ model: "test-model", input: "Say hello" }),
+      }), HttpApiApp.context)
+      expect(responses.status).toBe(200)
+      const responseBody = await responses.json()
+      expect(responseBody.object).toBe("response")
+      expect(responseBody.output[0].content[0].text).toBe("exact upstream text")
+      expect(responseBody.usage).toMatchObject({ input_tokens: 11, output_tokens: 4 })
+      expect(hits).toHaveLength(3)
+      const unsupported = await handler(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { authorization: "Bearer sk-test-proxy-chat", "content-type": "application/json" },
+        body: JSON.stringify({ model: "test-model", input: "Say hello", tools: [] }),
+      }), HttpApiApp.context)
+      expect(unsupported.status).toBe(501)
+      expect((await unsupported.json()).error.code).toBe("model_not_supported")
       const repeated = await handler(
         new Request("http://localhost/v1/chat/completions", {
           method: "POST",
@@ -202,7 +240,7 @@ describe("gateway release gate", () => {
           headers: {
             authorization: "Bearer sk-test-proxy-chat",
             "content-type": "application/json",
-            "x-request-id": "example-3",
+            "x-request-id": "example-4",
           },
           body: JSON.stringify({ model: "test-model", messages: [{ role: "user", content: "Reject" }] }),
         }),
@@ -218,7 +256,7 @@ describe("gateway release gate", () => {
           headers: {
             authorization: "Bearer sk-test-proxy-chat",
             "content-type": "application/json",
-            "x-request-id": "example-4",
+            "x-request-id": "example-5",
           },
           body: JSON.stringify({ model: "test-model", messages: [{ role: "user", content: "Again" }] }),
         }),
@@ -226,9 +264,9 @@ describe("gateway release gate", () => {
       )
       expect(limited.status).toBe(429)
       expect((await limited.json()).error.code).toBe("rate_limit_exceeded")
-      expect(limited.headers.get("x-ratelimit-limit-requests")).toBe("3")
+      expect(limited.headers.get("x-ratelimit-limit-requests")).toBe("4")
       expect(limited.headers.get("x-ratelimit-remaining-requests")).toBe("0")
-      expect(hits).toHaveLength(3)
+      expect(hits).toHaveLength(4)
       const sqlite = await import("bun:sqlite")
       const reader = new sqlite.Database(Flag.DEEPAGENT_CODE_DB, { readonly: true })
       try {
@@ -248,7 +286,7 @@ describe("gateway release gate", () => {
         expect(ledger.every((row) => row.lane_session_id === null)).toBe(true)
         expect(events.map((event) => event.type)).toContain("proxy.request.admitted.1")
         expect(events.map((event) => event.type)).toContain("proxy.response.completed.1")
-        expect(reader.query("SELECT count(*) AS count FROM deepagent_event_outbox WHERE event_type LIKE 'proxy.%'").get()).toMatchObject({ count: 6 })
+        expect(reader.query("SELECT count(*) AS count FROM deepagent_event_outbox WHERE event_type LIKE 'proxy.%'").get()).toMatchObject({ count: 8 })
         expect(reader.query("SELECT count(*) AS count FROM session").get()).toMatchObject({ count: 0 })
       } finally {
         reader.close()
@@ -271,6 +309,8 @@ describe("gateway release gate", () => {
       async fetch(request) {
         const payload = await request.json() as { messages?: { role: string; content: unknown }[]; input?: unknown[] }
         const lastUser = payload.messages?.filter((message) => message.role === "user").at(-1)
+        if (JSON.stringify(lastUser ?? payload.input?.at(-1)).includes("Reject"))
+          return Response.json({ error: { message: "provider rejected test-key", type: "authentication_error" } }, { status: 401 })
         const answer = JSON.stringify(lastUser ?? payload.input?.at(-1)).includes("Second question") ? "second durable answer" : "first durable answer"
         if (JSON.stringify(lastUser ?? payload.input?.at(-1)).includes("Stream question")) {
           const encode = new TextEncoder()
@@ -315,8 +355,12 @@ describe("gateway release gate", () => {
       const [first, second] = await Promise.all([send("context-1", "First question"), send("context-2", "Second question")])
       expect(first.status).toBe(200)
       expect(second.status).toBe(200)
-      expect((await first.json()).choices[0].message.content).toBe("first durable answer")
-      expect((await second.json()).choices[0].message.content).toBe("second durable answer")
+      const firstBody = await first.json()
+      const secondBody = await second.json()
+      expect(firstBody.choices[0].message.content).toBe("first durable answer")
+      expect(secondBody.choices[0].message.content).toBe("second durable answer")
+      expect(firstBody.usage).toMatchObject({ prompt_tokens: 11, completion_tokens: 4 })
+      expect(secondBody.usage).toMatchObject({ prompt_tokens: 11, completion_tokens: 4 })
       const replay = await send("context-1", "First question")
       expect(replay.status).toBe(200)
       expect((await replay.json()).choices[0].message.content).toBe("first durable answer")
@@ -358,7 +402,13 @@ describe("gateway release gate", () => {
         expect(ledger).toHaveLength(3)
         expect(ledger[0]?.lane_session_id).toBe(ledger[1]?.lane_session_id)
         expect(ledger.every((row) => row.usage_input === 11 && row.usage_output === 4)).toBe(true)
-        expect(reader.query("SELECT count(*) AS count FROM event WHERE type LIKE 'proxy.%'").get()).toMatchObject({ count: 6 })
+        const providerUsage = reader.query("SELECT data FROM event WHERE type = 'session.next.step.ended.2'").all() as { data: string }[]
+        expect(providerUsage).toHaveLength(3)
+        expect(providerUsage.every((row) => JSON.parse(row.data).tokens.input === 11 && JSON.parse(row.data).tokens.output === 4)).toBe(true)
+        expect(reader.query("SELECT count(*) AS count FROM event WHERE type LIKE 'proxy.%'").get()).toMatchObject({ count: 9 })
+        const trace = reader.query("SELECT data FROM event WHERE type = 'proxy.response.completed.1' LIMIT 1").get() as { data: string }
+        expect(JSON.parse(trace.data).mechanismTrace.activityID).toMatch(/^act/)
+        expect(reader.query("SELECT count(*) AS count FROM deepagent_event_outbox WHERE event_type = 'proxy.mechanism.traced'").get()).toMatchObject({ count: 3 })
       } finally {
         reader.close()
       }
@@ -383,6 +433,58 @@ describe("gateway release gate", () => {
       } finally {
         policyReader.close()
       }
+      const exported = await handler(new Request("http://localhost/proxy/admin/ledger?tenant=tenant-context"), HttpApiApp.context)
+      expect(exported.status).toBe(200)
+      expect((await exported.json()).data).toHaveLength(4)
+      const lanes = await handler(new Request("http://localhost/proxy/admin/lanes?tenant=tenant-context"), HttpApiApp.context)
+      expect(lanes.status).toBe(200)
+      expect((await lanes.json()).data.map((lane: { hint: string }) => lane.hint).sort()).toEqual(["default", "full-lane"])
+      const failed = await handler(new Request("http://localhost/v1/chat/completions", {
+        method: "POST", headers: { authorization: "Bearer sk-context", "content-type": "application/json",
+          "x-request-id": "context-5", "x-deepagent-session": "failure-lane" },
+        body: JSON.stringify({ model: "test-model", messages: [{ role: "user", content: "Reject" }] }),
+      }), HttpApiApp.context)
+      expect(failed.status).toBe(502)
+      const failure = await failed.json()
+      expect(failure.error.type).toBe("deepagent_enhancement_error")
+      expect(JSON.stringify(failure)).not.toContain("test-key")
+      const secondTenant = await handler(new Request("http://localhost/proxy/admin/tenants", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: "tenant-other", key: "sk-other-tenant-key", directory,
+          model_allowlist: ["test/test-model"], tier: "context", quota_requests_per_minute: 10,
+          quota_tokens_per_day: 100_000, lane_limit: 8, deadline_ms: 5_000 }),
+      }), HttpApiApp.context)
+      expect(secondTenant.status).toBe(201)
+      const other = await handler(new Request("http://localhost/v1/chat/completions", {
+        method: "POST", headers: { authorization: "Bearer sk-other-tenant-key", "content-type": "application/json", "x-request-id": "context-1" },
+        body: JSON.stringify({ model: "test-model", messages: [{ role: "user", content: "Tenant B" }] }),
+      }), HttpApiApp.context)
+      expect(other.status).toBe(200)
+      const isolation = new sqlite.Database(Flag.DEEPAGENT_CODE_DB, { readonly: true })
+      try {
+        const rows = isolation.query("SELECT tenant_id, lane_session_id FROM proxy_request_ledger WHERE request_id IN ('tenant-context:context-1', 'tenant-other:context-1') ORDER BY tenant_id").all() as { tenant_id: string; lane_session_id: string }[]
+        expect(rows).toHaveLength(2)
+        expect(rows[0]?.lane_session_id).not.toBe(rows[1]?.lane_session_id)
+        const otherLanes = await handler(new Request("http://localhost/proxy/admin/lanes?tenant=tenant-other"), HttpApiApp.context)
+        expect((await otherLanes.json()).data.map((lane: { tenant: string }) => lane.tenant)).toEqual(["tenant-other"])
+      } finally {
+        isolation.close()
+      }
+      const limit = await handler(new Request("http://localhost/proxy/admin/tenants/tenant-other", {
+        method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ lane_limit: 1 }),
+      }), HttpApiApp.context)
+      expect(limit.status).toBe(200)
+      const nextLane = await handler(new Request("http://localhost/v1/chat/completions", {
+        method: "POST", headers: { authorization: "Bearer sk-other-tenant-key", "content-type": "application/json",
+          "x-request-id": "context-2", "x-deepagent-session": "second-lane" },
+        body: JSON.stringify({ model: "test-model", messages: [{ role: "user", content: "Tenant B again" }] }),
+      }), HttpApiApp.context)
+      expect(nextLane.status).toBe(200)
+      const archivedLanes = await handler(new Request("http://localhost/proxy/admin/lanes?tenant=tenant-other"), HttpApiApp.context)
+      const laneRows = (await archivedLanes.json()).data as { hint: string; archived_at: number | null }[]
+      expect(laneRows).toHaveLength(2)
+      expect(laneRows.find((lane) => lane.hint === "default")?.archived_at).toBeGreaterThan(0)
+      expect(laneRows.find((lane) => lane.hint === "second-lane")?.archived_at).toBeNull()
       await web.dispose()
     } finally {
       streamGate.resolve()

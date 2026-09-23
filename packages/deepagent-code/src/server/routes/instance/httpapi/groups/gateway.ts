@@ -22,5 +22,11 @@ export const GatewayHttpApi = HttpApi.make("deepagent-code-gateway").add(
         success: Schema.Unknown,
       }).annotateMerge(OpenApi.annotations({ summary: "Create a proxy chat completion" })),
     )
+    .add(
+      HttpApiEndpoint.post("responses", "/v1/responses", {
+        payload: Schema.Unknown,
+        success: Schema.Unknown,
+      }).annotateMerge(OpenApi.annotations({ summary: "Create a text-only proxy response" })),
+    )
     .middleware(ProxyAuthorization),
 )

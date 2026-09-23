@@ -10,6 +10,17 @@ const base = {
   laneSessionID: Schema.optional(Schema.String),
 }
 
+const Trace = Schema.Struct({
+  activityID: Schema.String,
+  selections: Schema.Array(Schema.Struct({
+    selectionID: Schema.String,
+    tokenCount: Schema.Number,
+    projectionHash: Schema.String,
+    selectedRefs: Schema.String,
+    truncated: Schema.Boolean,
+  })),
+})
+
 export const RequestAdmitted = EventV2.define({
   type: "proxy.request.admitted",
   sync: { aggregate: "requestID", version: 1 },
@@ -29,5 +40,16 @@ export const ResponseCompleted = EventV2.define({
     usageCacheRead: Schema.optional(Schema.Number),
     usageCacheWrite: Schema.optional(Schema.Number),
     usageSource: Schema.optional(Schema.Literals(["provider", "estimated"])),
+    costUnavailable: Schema.Boolean,
+    mechanismTrace: Schema.optional(Trace),
+  },
+})
+
+export const MechanismTraced = EventV2.define({
+  type: "proxy.mechanism.traced",
+  sync: { aggregate: "requestID", version: 1 },
+  schema: {
+    ...base,
+    ...Trace.fields,
   },
 })

@@ -81,6 +81,7 @@ const SESSION_LIFECYCLE_FACTS = [
   "session.execution.interrupted",
   "proxy.request.admitted",
   "proxy.response.completed",
+  "proxy.mechanism.traced",
 ] as const
 
 const factRegistration = (eventType: string): EventTypeRegistration => ({

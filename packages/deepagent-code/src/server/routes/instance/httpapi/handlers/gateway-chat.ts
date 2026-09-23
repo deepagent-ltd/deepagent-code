@@ -10,7 +10,7 @@ import { DeepAgentRateLimitBucketTable } from "@deepagent-code/core/deepagent/de
 import { ModelsDev } from "@deepagent-code/core/models-dev"
 import { ProxyRequestLedgerTable } from "@deepagent-code/core/proxy/sql"
 import { SessionV2 } from "@deepagent-code/core/session"
-import { RequestAdmitted, ResponseCompleted } from "@deepagent-code/core/proxy/event"
+import { MechanismTraced, RequestAdmitted, ResponseCompleted } from "@deepagent-code/core/proxy/event"
 import { Auth } from "@/auth"
 import { InstanceRef } from "@/effect/instance-ref"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -46,7 +46,7 @@ export const chat = Effect.gen(function* () {
       if (!parsed.ok) return parsed.response
       const tenant = yield* ProxyTenantContext
       if (tenant.tier === "full" && !tenant.permission_policy?.length)
-        return proxyError(503, "permission_policy_required", "Full proxy tier requires a permission policy")
+        return proxyError(503, "permission_policy_required", "Full proxy tier requires a permission policy", "deepagent_enhancement_error")
       if (tenant.tier !== "passthrough" && parsed.value.messages.at(-1)?.role !== "user")
         return proxyError(400, "invalid_request", "Enhanced chat requires a final user message")
 
@@ -70,7 +70,7 @@ export const chat = Effect.gen(function* () {
         )
       if (exactReplay && existing?.completed_at && existing.finish_reason?.startsWith("enhancement_"))
         return proxyError(existing.finish_reason === "enhancement_timeout" ? 504 : 502,
-          existing.finish_reason, "Previously admitted enhanced request failed")
+          existing.finish_reason, "Previously admitted enhanced request failed", "deepagent_enhancement_error")
 
       const instance = yield* store.load({ directory: tenant.directory })
       const catalog = yield* provider.list().pipe(Effect.provideService(InstanceRef, instance))
@@ -196,9 +196,14 @@ export const chat = Effect.gen(function* () {
         cost: number | null
         firstTokenAt?: number
         completedAt?: number
+        trace?: {
+          activityID: string
+          selections: { selectionID: string; tokenCount: number; projectionHash: string; selectedRefs: string; truncated: boolean }[]
+        }
       }) => {
         const completedAt = output.completedAt ?? Date.now()
-        return events.publish(
+        return Effect.gen(function* () {
+          yield* events.publish(
           ResponseCompleted,
           {
             ...eventData,
@@ -210,6 +215,8 @@ export const chat = Effect.gen(function* () {
             usageCacheRead: output.usage?.cacheReadInputTokens,
             usageCacheWrite: output.usage?.cacheWriteInputTokens,
             usageSource: output.usage ? "provider" : undefined,
+            costUnavailable: output.cost === null,
+            mechanismTrace: output.trace,
           },
           {
             ...(laneSessionID && output.completedAt ? {
@@ -235,7 +242,13 @@ export const chat = Effect.gen(function* () {
                 .run()
                 .pipe(Effect.asVoid),
           },
-        )
+          )
+          if (!output.trace) return
+          yield* events.publish(MechanismTraced, { ...eventData, ...output.trace }, {
+            id: EventV2.ID.make(`evt_proxy_trace_${createHash("sha256").update(ledgerID).digest("hex").slice(0, 40)}`),
+            idempotent: true,
+          }).pipe(Effect.ignore)
+        })
       }
 
       const modelCost = (yield* modelsDev.get())[selected.entry.id]?.models[selected.model.id]?.cost
@@ -254,6 +267,7 @@ export const chat = Effect.gen(function* () {
           sessions,
           tenant,
           sessionID: laneSessionID,
+          hint,
           requestID,
           request: parsed.value,
           providerID: selected.entry.id,
@@ -269,6 +283,8 @@ export const chat = Effect.gen(function* () {
             ...enhancedInput,
             onDelta: (text) => Queue.offer(queue, chunk([{ index: 0, delta: { content: text }, finish_reason: null }])).pipe(Effect.asVoid),
           }).pipe(
+            Effect.catchCause(() => Effect.succeed({ ok: false as const, status: 503,
+              code: "enhancement_failed", message: "Enhanced execution failed" })),
             Effect.flatMap((enhanced) => Effect.gen(function* () {
               if (!enhanced.ok) {
                 yield* complete({ finishReason: enhanced.code, cost: null })
@@ -277,7 +293,7 @@ export const chat = Effect.gen(function* () {
               }
               const usage = enhanced.usage
               yield* complete({ finishReason: enhanced.finishReason, usage, cost: costFor(usage), firstTokenAt: enhanced.firstTokenAt,
-                completedAt: enhanced.completedAt })
+                completedAt: enhanced.completedAt, trace: enhanced.trace })
               yield* Queue.offer(queue, chunk([{ index: 0, delta: {}, finish_reason: enhanced.finishReason }]))
               if (parsed.value.stream_options?.include_usage && usage?.inputTokens !== undefined && usage.outputTokens !== undefined)
                 yield* Queue.offer(queue, chunk([], { prompt_tokens: usage.inputTokens, completion_tokens: usage.outputTokens,
@@ -295,14 +311,16 @@ export const chat = Effect.gen(function* () {
             { contentType: "text/event-stream", headers: { "cache-control": "no-cache, no-transform", "x-request-id": requestID } },
           )
         }
-        const enhanced = yield* collectEnhanced(enhancedInput)
+        const enhanced = yield* collectEnhanced(enhancedInput).pipe(Effect.catchCause(() => Effect.succeed({
+          ok: false as const, status: 503, code: "enhancement_failed", message: "Enhanced execution failed",
+        })))
         if (!enhanced.ok) {
           yield* complete({ finishReason: enhanced.code, cost: null })
-          return proxyError(enhanced.status, enhanced.code, enhanced.message)
+          return proxyError(enhanced.status, enhanced.code, enhanced.message, "deepagent_enhancement_error")
         }
         const usage = enhanced.usage
         yield* complete({ finishReason: enhanced.finishReason, usage, cost: costFor(usage), firstTokenAt: enhanced.firstTokenAt,
-          completedAt: enhanced.completedAt })
+          completedAt: enhanced.completedAt, trace: enhanced.trace })
         const usageWire = usage?.inputTokens !== undefined && usage.outputTokens !== undefined
           ? { prompt_tokens: usage.inputTokens, completion_tokens: usage.outputTokens,
               total_tokens: usage.totalTokens ?? usage.inputTokens + usage.outputTokens }

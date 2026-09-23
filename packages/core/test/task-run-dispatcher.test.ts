@@ -343,6 +343,7 @@ const stubSessions = Layer.succeed(
     switchAgent: die,
     switchModel: die,
     setPermissions: die,
+    setArchived: die,
     // A transient admission defect (not the fatal conflict/not-found classes): retries back off.
     prompt: () => Effect.die(new Error("parent admission transiently failing")),
     shell: die,
