@@ -17,7 +17,7 @@ import { EventTable } from "@deepagent-code/core/event/sql"
 import { SessionTable } from "@deepagent-code/core/session/sql"
 import { SessionSchema } from "@deepagent-code/core/session/schema"
 import { and, eq, isNull } from "drizzle-orm"
-import { Context, Effect, FiberSet, Layer, Semaphore } from "effect"
+import { Context, Effect, FiberSet, Layer, Schema, Semaphore } from "effect"
 import { randomUUID } from "node:crypto"
 
 export interface Interface {
@@ -110,16 +110,16 @@ export const layerWithRuntimeFeatures = (runtimeFeatures: RuntimeFeatureRegistry
                 .pipe(Effect.orDie)
               if (!row) return yield* Effect.fail(new Error(`missing EventV2 row ${outbox.eventId}`))
               if (isEventV2AdmissionEnabled(runtimeFeatures)) {
-                const session = yield* db
+                const session = Schema.is(SessionSchema.ID)(outbox.aggregateId) ? yield* db
                   .select({
                     directory: SessionTable.directory,
                     project: SessionTable.project_id,
                     workspace: SessionTable.workspace_id,
                   })
                   .from(SessionTable)
-                  .where(eq(SessionTable.id, SessionSchema.ID.make(outbox.aggregateId)))
+                  .where(eq(SessionTable.id, outbox.aggregateId))
                   .get()
-                  .pipe(Effect.orDie)
+                  .pipe(Effect.orDie) : undefined
                 const version = Number(row.type.slice(outbox.eventType.length + 1))
                 // Rehydrated rows carry the wire form (epoch millis, not Date instances), while
                 // compatibilityEvent's Schema.is guards validate decoded payloads. Feeding the
