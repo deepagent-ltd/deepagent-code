@@ -76,7 +76,7 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
     readonly revertEpoch?: number
     /**
      * In-transaction hook committed atomically with the PromptLifecycle.Admitted event and its
-     * `session_input` projection (same contract as `EventV2.publish`'s `{ commit }` option): the
+     * `session_input` projection (same contract as `EventV2.publishChecked`'s `{ commit }` option): the
      * hook must be an idempotent write or CAS, and a failure rolls back BOTH the event and the
      * projected row. Not replayed from the serialized event log, so a hook that repairs state must
      * converge on its own.
@@ -108,7 +108,7 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
           if (input.commit) yield* input.commit(seq, event)
         })
   return yield* events
-    .publish(SessionEvent.PromptLifecycle.Admitted, {
+    .publishChecked(SessionEvent.PromptLifecycle.Admitted, {
       messageID: input.id,
       sessionID: input.sessionID,
       timestamp,
@@ -132,10 +132,11 @@ export const admit = Effect.fn("SessionInput.admit")(function* (
               }),
             ),
       ),
+      Effect.catch((error) =>
+        error.cause instanceof StaleRevertEpoch ? Effect.fail(error.cause) : Effect.die(error),
+      ),
       Effect.catchDefect((defect) =>
-        defect instanceof StaleRevertEpoch
-          ? Effect.fail(defect)
-          : find(db, input.id).pipe(Effect.flatMap((stored) => (stored ? Effect.succeed(stored) : Effect.die(defect)))),
+        find(db, input.id).pipe(Effect.flatMap((stored) => (stored ? Effect.succeed(stored) : Effect.die(defect)))),
       ),
     )
 })

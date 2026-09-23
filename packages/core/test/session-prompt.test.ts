@@ -385,6 +385,28 @@ describe("SessionV2.prompt", () => {
     }),
   )
 
+  it.effect("rolls back an unrelated admission hook failure without treating it as a stale epoch", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const { db } = yield* Database.Service
+      const events = yield* EventV2.Service
+      const id = SessionMessage.ID.create()
+      const failure = yield* SessionInput.admit(db, events, {
+        id,
+        sessionID,
+        prompt: new Prompt({ text: "Uncommitted intent" }),
+        delivery: "steer",
+        commit: () => Effect.fail(new Error("unrelated admission hook failure")),
+      }).pipe(Effect.catchDefect(Effect.succeed))
+
+      expect(failure).toBeInstanceOf(EventV2.CommitHookError)
+      if (failure instanceof EventV2.CommitHookError)
+        expect(failure.cause).toMatchObject({ message: "unrelated admission hook failure" })
+      expect(yield* SessionInput.find(db, id)).toBeUndefined()
+      expect(yield* eventCount(EventV2.versionedType(SessionEvent.PromptLifecycle.Admitted.type, 1))).toBe(0)
+    }),
+  )
+
   it.effect("returns one recorded message to concurrent exact retries", () =>
     Effect.gen(function* () {
       yield* setup

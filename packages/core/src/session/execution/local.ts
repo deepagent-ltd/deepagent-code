@@ -68,16 +68,18 @@ export const layer = Layer.effect(
         Effect.gen(function* () {
           const session = yield* store.get(sessionID)
           if (!session) return yield* Effect.die(`Session not found: ${sessionID}`)
-          yield* events.publish(
+          yield* events.publishChecked(
             SessionEvent.Execution.Started,
             { sessionID, timestamp: yield* DateTime.now },
             { ...claimOnCommit(sessionID), location: session.location },
           )
         }).pipe(
-          // EventV2 makes commit-hook failures transactional defects. Recover this expected CAS
-          // refusal into the typed execution channel so resume/wait can report recovery_required.
-          Effect.catchDefect((defect) =>
-            defect instanceof SessionRunner.ExecutionRecoveryRequiredError ? Effect.fail(defect) : Effect.die(defect),
+          // A refused claim aborts the event transaction. Recover only this expected CAS result
+          // from the checked hook channel; all other hook failures remain defects.
+          Effect.catch((error) =>
+            error.cause instanceof SessionRunner.ExecutionRecoveryRequiredError
+              ? Effect.fail(error.cause)
+              : Effect.die(error),
           ),
           Effect.asVoid,
         ),

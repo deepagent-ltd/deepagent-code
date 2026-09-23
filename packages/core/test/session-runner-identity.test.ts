@@ -118,6 +118,8 @@ const client = Layer.succeed(
 )
 
 // Catalog OpenAI model -> resolves to `openai.responses`, route `openai-responses`.
+// The identity oracle must reach the wire seam. Keep this fixture above the host's 1,024-token
+// safety margin and the assembled request estimate; budget refusal has separate tests.
 const openAIInfo = new ModelV2.Info({
   id: ModelV2.ID.make("gpt-4.1-mini"),
   providerID: ProviderV2.ID.make("openai"),
@@ -135,7 +137,7 @@ const openAIInfo = new ModelV2.Info({
   cost: [],
   status: "active",
   enabled: true,
-  limit: { context: 100, input: 80, output: 20 },
+  limit: { context: 128_000, input: 120_000, output: 8_000 },
 })
 const openAIProvider = new ProviderV2.Info({
   id: ProviderV2.ID.make("openai"),
@@ -170,12 +172,12 @@ const catalog = Layer.succeed(
 const model = OpenAIResponses.route
   .with({ endpoint: { baseURL: "https://api.openai.com/v1" } })
   .with({ auth: Auth.bearer("test") })
-  .with({ limits: { context: 100, input: 80, output: 20 } })
+  .with({ limits: { context: 128_000, input: 120_000, output: 8_000 } })
   .model({ id: "api-gpt-4.1-mini" })
 const driftedModel = OpenAIResponses.route
   .with({ endpoint: { baseURL: "https://drifted.openai.com/v1" } })
   .with({ auth: Auth.bearer("test") })
-  .with({ limits: { context: 100, input: 80, output: 20 } })
+  .with({ limits: { context: 128_000, input: 120_000, output: 8_000 } })
   .model({ id: "api-gpt-4.1-mini" })
 
 const routeState = { driftAfterFirst: false, resolves: 0 }
