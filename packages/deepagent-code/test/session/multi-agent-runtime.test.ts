@@ -643,6 +643,43 @@ describe("MultiAgentRuntime randomized DAG conflict oracle", () => {
   )
 })
 
+describe("MultiAgentRuntime arbitration handoff", () => {
+  const it = testEffect(makeLayer())
+
+  it.effect("a same-wave true tie defers for human resolution and keeps the event retryable", () =>
+    Effect.gen(function* () {
+      resetRunner()
+      setNow(1_000)
+      setRegistry([agent("worker", ["work"], "level_1")])
+      const partition: NonNullable<MultiAgentRuntime.LayerOptions["partition"]> = (input) => ({
+        event: input,
+        subtasks: [0, 1].map((index) => ({
+          id: `${input.id}:${index}`,
+          capability: "work",
+          intent: `inspect ${index}`,
+          dependsOn: [],
+          fileScope: ["src/shared.ts"],
+          requiredAutonomy: "level_1" as const,
+        })),
+      })
+      const summary = yield* Effect.gen(function* () {
+        return yield* (yield* MultiAgentRuntime.Service).coordinate(
+          event({
+            id: DeepAgentEvent.ID.create(1_300),
+            type: "test.tie",
+          }),
+        )
+      }).pipe(Effect.provide(makeLayer({ partition })))
+      expect(summary.outcomes).toContainEqual(expect.objectContaining({ status: "completed" }))
+      expect(summary.outcomes).toContainEqual(
+        expect.objectContaining({ status: "deferred", reason: "conflict_needs_human" }),
+      )
+      expect(summary.hasUnfinished).toBe(true)
+      expect(ran).toEqual(["worker"])
+    }),
+  )
+})
+
 describe("MultiAgentRuntime durable multi-owner execution", () => {
   const it = testEffect(makeLayer())
   const oneTask: NonNullable<MultiAgentRuntime.LayerOptions["partition"]> = (input) => ({
@@ -1285,6 +1322,47 @@ describe("MultiAgentRuntime §E1 production wiring — L1 resolver ERROR fails c
       expect(ran).toEqual([])
     }),
   )
+})
+
+describe("MultiAgentRuntime §E1 resolver defect matrix", () => {
+  const it = testEffect(makeLayer())
+  const cases: ReadonlyArray<{
+    layer: string
+    options: Partial<MultiAgentRuntime.LayerOptions>
+    reason: string
+  }> = [
+    {
+      layer: "source trust",
+      options: { trustedSourcesFor: () => Effect.die(new Error("source resolver unavailable")) },
+      reason: "security:event_source",
+    },
+    {
+      layer: "actor permission",
+      options: { actorHasPermission: () => Effect.die(new Error("actor resolver unavailable")) },
+      reason: "security:actor_permission",
+    },
+    {
+      layer: "runtime operation",
+      options: { runtimeAllowed: () => Effect.die(new Error("operation resolver unavailable")) },
+      reason: "security:runtime_operation",
+    },
+  ]
+
+  for (const scenario of cases) {
+    it.effect(`${scenario.layer} defect blocks the task without invoking the runner`, () =>
+      Effect.gen(function* () {
+        resetRunner()
+        setNow(1_000)
+        setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
+        const summary = yield* Effect.gen(function* () {
+          return yield* (yield* MultiAgentRuntime.Service).coordinate(event())
+        }).pipe(Effect.provide(makeLayer(scenario.options)))
+        expect(summary.outcomes[0]).toMatchObject({ status: "blocked", reason: scenario.reason })
+        expect(summary.hasUnfinished).toBe(false)
+        expect(ran).toEqual([])
+      }),
+    )
+  }
 })
 
 // ─── §C3.1 FileLock enforcement — a REAL FileLock.Service instance drives contention/release ──────────

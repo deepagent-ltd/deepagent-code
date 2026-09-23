@@ -722,8 +722,12 @@ export const layerWith = (options: LayerOptions) =>
                 : trustedSources == null
                   ? true
                   : SecurityGate.isTrustedSource(event.source, trustedSources)
-              const actorOk = yield* actorHasPermission(event, agent)
-              const runtimeOk = yield* runtimeAllowed(event, agent, subtask.capability)
+              const actorOk = yield* actorHasPermission(event, agent).pipe(
+                Effect.catchCause(() => Effect.succeed(false)),
+              )
+              const runtimeOk = yield* runtimeAllowed(event, agent, subtask.capability).pipe(
+                Effect.catchCause(() => Effect.succeed(false)),
+              )
               const security = SecurityGate.check({
                 eventSourceTrusted: sourceTrusted,
                 actorHasPermission: actorOk,
