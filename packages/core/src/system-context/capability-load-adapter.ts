@@ -28,8 +28,8 @@ import {
 // (existing | available | superseded | missing_body | denied | budget_exceeded) onto
 // the FROZEN ContentLoadState union (loaded | already_loaded | denied | disabled |
 // incompatible | not_found | budget_exceeded), builds a byte-stable FROZEN
-// CapabilityLoadReceipt (the `session_capability_load` durable receipt, design
-// §7.5), and provides the typed `withTurnIdentity(...)` seam the runner uses to
+// CapabilityLoadReceipt (persisted in `session_capability_load` only for loaded
+// bodies; refusals are transient, design §7.5), and provides the typed `withTurnIdentity(...)` seam the runner uses to
 // bind the REAL session/activity/turn identity (a prepared-turn turnId) into the
 // load before the kernel runs.
 //

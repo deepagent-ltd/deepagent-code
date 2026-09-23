@@ -35,8 +35,8 @@ import {
 // actions — never a path, URL or body). Execution resolves the manifest from the runtime
 // catalog, binds the REAL session/activity/turn identity, runs the K2 kernel through the
 // adapter (budget gate included: an over-limit body/turn settles as the typed frozen
-// `budget_exceeded` state — the body is never returned) and persists the durable receipt
-// (`session_capability_load`). The model-visible text is the L1 card (id/version/summary/
+// `budget_exceeded` state — the body is never returned) and persists a durable receipt
+// (`session_capability_load`) only for actually-loaded bodies. The model-visible text is the L1 card (id/version/summary/
 // entry tools) plus the exact hash- and budget-validated procedure body (design §7.3 L2 disclosure).
 //
 // The tools are authorized by the `capability.read` permission (Tool.withPermission) — load
@@ -49,7 +49,7 @@ export const CapabilityLoadToolOutput = Schema.Struct({
   body: Schema.String.pipe(Schema.optional),
   token_count: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(Schema.optional),
   byte_count: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(Schema.optional),
-  /** Byte-stable content digest of the durable receipt (loadedAt stripped) — audit binding. */
+  /** Byte-stable digest of an actually-loaded body's durable receipt (loadedAt stripped). */
   receipt_digest: Schema.String.pipe(Schema.optional),
 })
 export type CapabilityLoadToolOutput = typeof CapabilityLoadToolOutput.Type
