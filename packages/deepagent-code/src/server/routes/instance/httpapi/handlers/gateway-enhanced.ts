@@ -1,5 +1,5 @@
 import { and, asc, eq, gt, lt } from "drizzle-orm"
-import { Effect } from "effect"
+import { DateTime, Effect, Schema } from "effect"
 import { Usage } from "@deepagent-code/llm"
 import { contentDigest } from "@deepagent-code/core/contract/digest"
 import { SessionActivityTable } from "@deepagent-code/core/context-federation/session-sql"
@@ -10,9 +10,11 @@ import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ProxyTenantTable } from "@deepagent-code/core/proxy/sql"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { SessionV2 } from "@deepagent-code/core/session"
+import { SessionEvent } from "@deepagent-code/core/session/event"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import { Prompt } from "@deepagent-code/core/session/prompt"
 import { SessionInputTable, SessionMessageTable } from "@deepagent-code/core/session/sql"
+import { EventV2Bridge } from "@/event-v2-bridge"
 import type { ChatPayload } from "../groups/gateway-wire"
 
 type Tenant = typeof ProxyTenantTable.$inferSelect
@@ -34,8 +36,24 @@ export const collectEnhanced = (input: {
   request: ChatPayload
   providerID: string
   modelID: string
+  onDelta?: (text: string) => Effect.Effect<void>
 }) =>
   Effect.gen(function* () {
+    let emitted = ""
+    const events = yield* EventV2Bridge.Service
+    const unsubscribe = input.onDelta
+      ? yield* events.listen((event) => Effect.gen(function* () {
+          if (!Schema.is(SessionEvent.Text.Delta)(event) || event.data.sessionID !== input.sessionID) return
+          const active = yield* input.db.select({ trigger_input_id: SessionActivityTable.trigger_input_id })
+            .from(SessionActivityTable)
+            .where(and(eq(SessionActivityTable.session_id, input.sessionID), eq(SessionActivityTable.state, "active")))
+            .get()
+          if (active?.trigger_input_id !== proxyPromptID(input.tenant, input.requestID)) return
+          emitted += event.data.delta
+          yield* input.onDelta!(event.data.delta).pipe(Effect.ignore)
+        }).pipe(Effect.ignore))
+      : Effect.void
+    return yield* Effect.gen(function* () {
     const hint = input.sessionID
     const session = yield* input.sessions.create({
       id: input.sessionID,
@@ -75,16 +93,12 @@ export const collectEnhanced = (input: {
         yield* Effect.sleep("50 millis")
         continue
       }
-      if (activity.state === "failed" || activity.state === "interrupted")
-        return { ok: false as const, status: 502, code: "enhancement_failed", message: "Enhanced execution failed" }
-      if (activity.state !== "settled") {
+      const trigger = yield* input.db.select({ promoted_seq: SessionInputTable.promoted_seq }).from(SessionInputTable)
+        .where(eq(SessionInputTable.id, admitted.value.id)).get()
+      if (trigger?.promoted_seq === null || trigger?.promoted_seq === undefined) {
         yield* Effect.sleep("50 millis")
         continue
       }
-      const trigger = yield* input.db.select({ promoted_seq: SessionInputTable.promoted_seq }).from(SessionInputTable)
-        .where(eq(SessionInputTable.id, admitted.value.id)).get()
-      if (trigger?.promoted_seq === null || trigger?.promoted_seq === undefined)
-        return { ok: false as const, status: 502, code: "enhancement_projection_missing", message: "Enhanced response projection is missing" }
       const next = yield* input.db.select().from(SessionActivityTable)
         .where(and(eq(SessionActivityTable.session_id, input.sessionID), gt(SessionActivityTable.ordinal, activity.ordinal)))
         .orderBy(asc(SessionActivityTable.ordinal)).limit(1).get()
@@ -101,10 +115,23 @@ export const collectEnhanced = (input: {
             ? undefined : lt(SessionMessageTable.seq, nextInput.promoted_seq),
         )).orderBy(asc(SessionMessageTable.seq)).all()
       const terminal = rows.findLast((row) => row.data && "finish" in row.data && row.data.finish !== "tool-calls")
-      if (!terminal) return { ok: false as const, status: 502, code: "enhancement_projection_missing", message: "Enhanced response projection is missing" }
-      const message = yield* input.sessions.message({ sessionID: input.sessionID, messageID: terminal.id })
-      if (message?.type !== "assistant" || message.error)
+      const latest = activity.state === "settled" ? terminal : rows.at(-1)
+      const message = latest ? yield* input.sessions.message({ sessionID: input.sessionID, messageID: latest.id }) : undefined
+      if (activity.state === "settled" && message?.type === "assistant" && input.onDelta) {
+        const text = message.content.filter((part) => part.type === "text").map((part) => part.text).join("")
+        if (!text.startsWith(emitted))
+          return { ok: false as const, status: 502, code: "enhancement_projection_changed", message: "Enhanced response projection changed during streaming" }
+        if (text.length > emitted.length) yield* input.onDelta(text.slice(emitted.length))
+        emitted = text
+      }
+      if (activity.state === "failed" || activity.state === "interrupted" || message?.type === "assistant" && message.error)
         return { ok: false as const, status: 502, code: "enhancement_failed", message: "Enhanced execution failed" }
+      if (activity.state !== "settled") {
+        yield* Effect.sleep("50 millis")
+        continue
+      }
+      if (!terminal || message?.type !== "assistant")
+        return { ok: false as const, status: 502, code: "enhancement_projection_missing", message: "Enhanced response projection is missing" }
       const usage = message.tokens ? Usage.from({
         inputTokens: message.tokens.input,
         outputTokens: message.tokens.output,
@@ -119,7 +146,9 @@ export const collectEnhanced = (input: {
         finishReason: message.finish ?? "stop",
         usage,
         firstTokenAt: terminal.time_created,
+        completedAt: DateTime.toEpochMillis(message.time.completed ?? message.time.created),
       }
     }
     return { ok: false as const, status: 504, code: "enhancement_timeout", message: "Enhanced response timed out" }
+    }).pipe(Effect.ensuring(unsubscribe))
   })

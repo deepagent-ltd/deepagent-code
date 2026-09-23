@@ -264,6 +264,7 @@ describe("gateway release gate", () => {
     const directory = await mkdtemp(join(tmpdir(), "deepagent-proxy-context-test-"))
     const originalDatabase = Flag.DEEPAGENT_CODE_DB
     Flag.DEEPAGENT_CODE_DB = join(directory, "proxy.sqlite")
+    const streamGate = Promise.withResolvers<void>()
     const upstream = Bun.serve({
       hostname: "127.0.0.1",
       port: 0,
@@ -271,6 +272,20 @@ describe("gateway release gate", () => {
         const payload = await request.json() as { messages?: { role: string; content: unknown }[]; input?: unknown[] }
         const lastUser = payload.messages?.filter((message) => message.role === "user").at(-1)
         const answer = JSON.stringify(lastUser ?? payload.input?.at(-1)).includes("Second question") ? "second durable answer" : "first durable answer"
+        if (JSON.stringify(lastUser ?? payload.input?.at(-1)).includes("Stream question")) {
+          const encode = new TextEncoder()
+          return new Response(new ReadableStream({
+            start(controller) {
+              controller.enqueue(encode.encode('data: {"choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}\n\n'))
+              controller.enqueue(encode.encode('data: {"choices":[{"index":0,"delta":{"content":"first durable"},"finish_reason":null}]}\n\n'))
+              void streamGate.promise.then(() => {
+                controller.enqueue(encode.encode('data: {"choices":[{"index":0,"delta":{"content":" answer"},"finish_reason":null}]}\n\n'))
+                controller.enqueue(encode.encode('data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":4,"total_tokens":15}}\n\ndata: [DONE]\n\n'))
+                controller.close()
+              })
+            },
+          }), { headers: { "content-type": "text/event-stream" } })
+        }
         return new Response([
         'data: {"id":"upstream-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}',
         `data: {"id":"upstream-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"${answer}"},"finish_reason":null}]}`,
@@ -293,32 +308,63 @@ describe("gateway release gate", () => {
         Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DEEPAGENT_CODE_GATEWAY: true }))),
       ), { disableLogger: true })
       const handler = web.handler
-      const send = (requestID: string, content: string) => handler(new Request("http://localhost/v1/chat/completions", {
+      const send = (requestID: string, content: string, stream = false) => handler(new Request("http://localhost/v1/chat/completions", {
         method: "POST", headers: { authorization: "Bearer sk-context", "content-type": "application/json", "x-request-id": requestID },
-        body: JSON.stringify({ model: "test-model", messages: [{ role: "user", content }] }),
+        body: JSON.stringify({ model: "test-model", messages: [{ role: "user", content }], stream, stream_options: { include_usage: true } }),
       }), HttpApiApp.context)
       const [first, second] = await Promise.all([send("context-1", "First question"), send("context-2", "Second question")])
       expect(first.status).toBe(200)
       expect(second.status).toBe(200)
       expect((await first.json()).choices[0].message.content).toBe("first durable answer")
       expect((await second.json()).choices[0].message.content).toBe("second durable answer")
+      const replay = await send("context-1", "First question")
+      expect(replay.status).toBe(200)
+      expect((await replay.json()).choices[0].message.content).toBe("first durable answer")
+      const conflict = await send("context-1", "Changed question")
+      expect(conflict.status).toBe(409)
+      expect((await conflict.json()).error.code).toBe("request_conflict")
+      const streamed = await send("context-3", "Stream question", true)
+      expect(streamed.status).toBe(200)
+      const readerStream = streamed.body!.getReader()
+      const decoder = new TextDecoder()
+      let sse = ""
+      let firstDeltaTimedOut = false
+      const deadline = setTimeout(() => { firstDeltaTimedOut = true; streamGate.resolve() }, 2_000)
+      while (!sse.includes('"content":"first durable"')) {
+        const item = await readerStream.read()
+        if (item.done) throw new Error("Proxy stream ended before its first text delta")
+        sse += decoder.decode(item.value)
+      }
+      clearTimeout(deadline)
+      expect(firstDeltaTimedOut).toBe(false)
+      streamGate.resolve()
+      while (true) {
+        const item = await readerStream.read()
+        if (item.done) break
+        sse += decoder.decode(item.value)
+      }
+      expect([...sse.matchAll(/^data: (\{.*\})$/gm)].map((match) => JSON.parse(match[1]!).choices?.[0]?.delta?.content ?? "").join("")).toBe("first durable answer")
+      expect(sse).toContain('"prompt_tokens":11')
+      expect(sse).toContain("data: [DONE]")
       const sqlite = await import("bun:sqlite")
       const reader = new sqlite.Database(Flag.DEEPAGENT_CODE_DB, { readonly: true })
       try {
         const activities = reader.query("SELECT activity_id, ordinal, state FROM session_activity ORDER BY ordinal").all() as { activity_id: string; ordinal: number; state: string }[]
-        expect(activities).toHaveLength(2)
-        expect(activities.map((activity) => activity.state)).toEqual(["settled", "settled"])
+        expect(activities).toHaveLength(3)
+        expect(activities.map((activity) => activity.state)).toEqual(["settled", "settled", "settled"])
         const messages = reader.query("SELECT data FROM session_message WHERE type = 'assistant' ORDER BY seq").all() as { data: string }[]
-        expect(messages.map((row) => JSON.parse(row.data).content.filter((part: { type: string }) => part.type === "text").map((part: { text: string }) => part.text).join("")).sort()).toEqual(["first durable answer", "second durable answer"])
+        expect(messages.map((row) => JSON.parse(row.data).content.filter((part: { type: string }) => part.type === "text").map((part: { text: string }) => part.text).join("")).sort()).toEqual(["first durable answer", "first durable answer", "second durable answer"])
         const ledger = reader.query("SELECT request_id, lane_session_id, usage_input, usage_output FROM proxy_request_ledger ORDER BY admitted_at").all() as { request_id: string; lane_session_id: string; usage_input: number; usage_output: number }[]
-        expect(ledger).toHaveLength(2)
+        expect(ledger).toHaveLength(3)
         expect(ledger[0]?.lane_session_id).toBe(ledger[1]?.lane_session_id)
         expect(ledger.every((row) => row.usage_input === 11 && row.usage_output === 4)).toBe(true)
+        expect(reader.query("SELECT count(*) AS count FROM event WHERE type LIKE 'proxy.%'").get()).toMatchObject({ count: 6 })
       } finally {
         reader.close()
       }
       await web.dispose()
     } finally {
+      streamGate.resolve()
       upstream.stop(true)
       Flag.DEEPAGENT_CODE_DB = originalDatabase
       await rm(directory, { recursive: true, force: true })

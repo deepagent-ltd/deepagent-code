@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from "node:crypto"
 import { and, eq, gte, sql } from "drizzle-orm"
-import { Cause, Effect, Option, Ref, Schema, Stream } from "effect"
+import { Cause, Effect, Option, Queue, Ref, Schema, Stream } from "effect"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { LLMResponse } from "@deepagent-code/llm"
 import { LLMClient, RequestExecutor } from "@deepagent-code/llm/route"
 import { Database } from "@deepagent-code/core/database/database"
+import { EventV2 } from "@deepagent-code/core/event"
 import { DeepAgentRateLimitBucketTable } from "@deepagent-code/core/deepagent/deepagent-event-sql"
 import { ModelsDev } from "@deepagent-code/core/models-dev"
 import { ProxyRequestLedgerTable } from "@deepagent-code/core/proxy/sql"
@@ -35,6 +36,7 @@ export const chat = Effect.gen(function* () {
   const events = yield* EventV2Bridge.Service
   const modelsDev = yield* ModelsDev.Service
   const sessions = yield* SessionV2.Service
+  const scope = yield* Effect.scope
 
   return (input: { request: HttpServerRequest.HttpServerRequest }) =>
     Effect.gen(function* () {
@@ -54,16 +56,21 @@ export const chat = Effect.gen(function* () {
       const ledgerID = `${tenant.id}:${requestID}`
       const requestHash = createHash("sha256").update(JSON.stringify(parsed.value)).digest("hex")
       const existing = yield* db
-        .select({ request_hash: ProxyRequestLedgerTable.request_hash })
+        .select({ request_hash: ProxyRequestLedgerTable.request_hash, completed_at: ProxyRequestLedgerTable.completed_at,
+          finish_reason: ProxyRequestLedgerTable.finish_reason })
         .from(ProxyRequestLedgerTable)
         .where(eq(ProxyRequestLedgerTable.request_id, ledgerID))
         .get()
-      if (existing)
+      const exactReplay = !!existing && existing.request_hash === requestHash && tenant.tier !== "passthrough"
+      if (existing && !exactReplay)
         return proxyError(
           409,
           existing.request_hash === requestHash ? "request_replay_unavailable" : "request_conflict",
           "A request with this ID was already admitted",
         )
+      if (exactReplay && existing?.completed_at && existing.finish_reason?.startsWith("enhancement_"))
+        return proxyError(existing.finish_reason === "enhancement_timeout" ? 504 : 502,
+          existing.finish_reason, "Previously admitted enhanced request failed")
 
       const instance = yield* store.load({ directory: tenant.directory })
       const catalog = yield* provider.list().pipe(Effect.provideService(InstanceRef, instance))
@@ -92,7 +99,7 @@ export const chat = Effect.gen(function* () {
         modelID: String(selected.model.id),
         ...(laneSessionID ? { laneSessionID } : {}),
       }
-      const admission = yield* events
+      const admission = exactReplay ? { status: "admitted" as const } : yield* events
         .publish(
           RequestAdmitted,
           { ...eventData, admittedAt, stream: parsed.value.stream ?? false },
@@ -188,8 +195,9 @@ export const chat = Effect.gen(function* () {
         usage?: ReturnType<typeof LLMResponse.usage>
         cost: number | null
         firstTokenAt?: number
+        completedAt?: number
       }) => {
-        const completedAt = Date.now()
+        const completedAt = output.completedAt ?? Date.now()
         return events.publish(
           ResponseCompleted,
           {
@@ -204,6 +212,10 @@ export const chat = Effect.gen(function* () {
             usageSource: output.usage ? "provider" : undefined,
           },
           {
+            ...(laneSessionID && output.completedAt ? {
+              id: EventV2.ID.make(`evt_proxy_complete_${createHash("sha256").update(ledgerID).digest("hex").slice(0, 40)}`),
+              idempotent: true,
+            } : {}),
             commit: () =>
               db
                 .update(ProxyRequestLedgerTable)
@@ -237,7 +249,7 @@ export const chat = Effect.gen(function* () {
           : null
 
       if (laneSessionID) {
-        const enhanced = yield* collectEnhanced({
+        const enhancedInput = {
           db,
           sessions,
           tenant,
@@ -246,13 +258,51 @@ export const chat = Effect.gen(function* () {
           request: parsed.value,
           providerID: selected.entry.id,
           modelID: selected.model.id,
-        })
+        }
+        const chunk = (choices: unknown[], finalUsage?: unknown) => `data: ${JSON.stringify({
+          id: `chatcmpl-${requestID}`, object: "chat.completion.chunk", created: Math.floor(admittedAt / 1000),
+          model: parsed.value.model, choices, ...(finalUsage ? { usage: finalUsage } : {}),
+        })}\n\n`
+        if (parsed.value.stream) {
+          const queue = yield* Queue.unbounded<string>()
+          yield* collectEnhanced({
+            ...enhancedInput,
+            onDelta: (text) => Queue.offer(queue, chunk([{ index: 0, delta: { content: text }, finish_reason: null }])).pipe(Effect.asVoid),
+          }).pipe(
+            Effect.flatMap((enhanced) => Effect.gen(function* () {
+              if (!enhanced.ok) {
+                yield* complete({ finishReason: enhanced.code, cost: null })
+                yield* Queue.offer(queue, `data: ${JSON.stringify({ error: { message: enhanced.message, type: "deepagent_enhancement_error", code: enhanced.code } })}\n\n`)
+                return
+              }
+              const usage = enhanced.usage
+              yield* complete({ finishReason: enhanced.finishReason, usage, cost: costFor(usage), firstTokenAt: enhanced.firstTokenAt,
+                completedAt: enhanced.completedAt })
+              yield* Queue.offer(queue, chunk([{ index: 0, delta: {}, finish_reason: enhanced.finishReason }]))
+              if (parsed.value.stream_options?.include_usage && usage?.inputTokens !== undefined && usage.outputTokens !== undefined)
+                yield* Queue.offer(queue, chunk([], { prompt_tokens: usage.inputTokens, completion_tokens: usage.outputTokens,
+                  total_tokens: usage.totalTokens ?? usage.inputTokens + usage.outputTokens }))
+            })),
+            Effect.catchCause(() => Queue.offer(queue, `data: ${JSON.stringify({ error: { message: "Enhanced execution failed", type: "deepagent_enhancement_error", code: "enhancement_failed" } })}\n\n`).pipe(Effect.asVoid)),
+            Effect.ensuring(Queue.offer(queue, "data: [DONE]\n\n")),
+            Effect.forkIn(scope, { startImmediately: true }),
+          )
+          return HttpServerResponse.stream(
+            Stream.make(chunk([{ index: 0, delta: { role: "assistant" }, finish_reason: null }])).pipe(
+              Stream.concat(Stream.fromQueue(queue).pipe(Stream.takeUntil((value) => value === "data: [DONE]\n\n"))),
+              Stream.encodeText,
+            ),
+            { contentType: "text/event-stream", headers: { "cache-control": "no-cache, no-transform", "x-request-id": requestID } },
+          )
+        }
+        const enhanced = yield* collectEnhanced(enhancedInput)
         if (!enhanced.ok) {
           yield* complete({ finishReason: enhanced.code, cost: null })
           return proxyError(enhanced.status, enhanced.code, enhanced.message)
         }
         const usage = enhanced.usage
-        yield* complete({ finishReason: enhanced.finishReason, usage, cost: costFor(usage), firstTokenAt: enhanced.firstTokenAt })
+        yield* complete({ finishReason: enhanced.finishReason, usage, cost: costFor(usage), firstTokenAt: enhanced.firstTokenAt,
+          completedAt: enhanced.completedAt })
         const usageWire = usage?.inputTokens !== undefined && usage.outputTokens !== undefined
           ? { prompt_tokens: usage.inputTokens, completion_tokens: usage.outputTokens,
               total_tokens: usage.totalTokens ?? usage.inputTokens + usage.outputTokens }
@@ -265,20 +315,7 @@ export const chat = Effect.gen(function* () {
           choices: [{ index: 0, message: { role: "assistant", content: enhanced.text }, finish_reason: enhanced.finishReason }],
           usage: usageWire,
         }
-        if (!parsed.value.stream)
-          return HttpServerResponse.jsonUnsafe(payload, { headers: { "x-request-id": requestID, "cache-control": "no-store" } })
-        const chunk = (choices: unknown[], finalUsage?: unknown) => `data: ${JSON.stringify({
-          id: `chatcmpl-${requestID}`, object: "chat.completion.chunk", created: Math.floor(admittedAt / 1000),
-          model: parsed.value.model, choices, ...(finalUsage ? { usage: finalUsage } : {}),
-        })}\n\n`
-        return HttpServerResponse.text(
-          chunk([{ index: 0, delta: { role: "assistant" }, finish_reason: null }]) +
-            chunk([{ index: 0, delta: { content: enhanced.text }, finish_reason: null }]) +
-            chunk([{ index: 0, delta: {}, finish_reason: enhanced.finishReason }]) +
-            (parsed.value.stream_options?.include_usage ? chunk([], usageWire) : "") +
-            "data: [DONE]\n\n",
-          { contentType: "text/event-stream", headers: { "x-request-id": requestID, "cache-control": "no-store" } },
-        )
+        return HttpServerResponse.jsonUnsafe(payload, { headers: { "x-request-id": requestID, "cache-control": "no-store" } })
       }
 
       const credential = yield* auth.get(selected.entry.id)
