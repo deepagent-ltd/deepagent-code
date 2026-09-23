@@ -81,9 +81,11 @@ export function init(options: Options) {
 
 async function initialize(options: Options) {
   if (options.level) level = options.level
+  // Route concurrent logs away from the previous stream before ending it. Test/runtime re-init can
+  // overlap background fibers that log while the old file handle is closing.
+  write = writeStderr
   await closeWrite?.()
   closeWrite = undefined
-  write = writeStderr
   logpath = ""
   void cleanup(Global.Path.log)
   if (options.print) return
