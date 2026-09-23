@@ -8,6 +8,7 @@ import { Backup } from "@deepagent-code/core/database/backup"
 import { Database } from "@deepagent-code/core/database/database"
 import { Global } from "@deepagent-code/core/global"
 import { isResidue, MigrationOrchestrator, sizeOf, walk } from "./migration-orchestrator"
+import { withMaintenanceLock } from "./maintenance-lock"
 
 // W-02 M-5 (design §3.3) — disk reclaim. Codes the full measurement of the data root
 // (~/.deepagent/code, resolved through Global.Path — never a hardcoded string) into an inventory,
@@ -79,6 +80,8 @@ export interface ReclaimReport {
   readonly candidates: readonly ReclaimCandidate[]
   readonly restoreIncidentsBytes: number
   readonly restoreIncidentsNeverDeleted: true
+  /** A failed confirmed run still records the deletions completed before the failure. */
+  readonly failure?: { readonly code: DiskReclaimError["code"]; readonly detail: string }
 }
 
 export interface ReclaimInput {
@@ -232,7 +235,11 @@ const blockedReasonFor = (input: {
   return undefined
 }
 
-export const reclaim = Effect.fn("DiskReclaim.reclaim")(function* (input: ReclaimInput) {
+export const reclaim = Effect.fn("DiskReclaim.reclaim")((input: ReclaimInput) =>
+  withMaintenanceLock(input.backupDir, reclaimUnlocked(input)),
+)
+
+const reclaimUnlocked = Effect.fn("DiskReclaim.reclaimUnlocked")(function* (input: ReclaimInput) {
   const dataRoot = path.resolve(input.dataRoot ?? Global.Path.data)
   const dbPath = path.resolve(input.dbPath)
   const backupDir = path.resolve(input.backupDir)
@@ -275,32 +282,38 @@ export const reclaim = Effect.fn("DiskReclaim.reclaim")(function* (input: Reclai
   const totalBytesBefore = inventoryBefore.reduce((sum, entry) => sum + entry.sizeBytes, 0)
   const executed = input.confirm === true
   const vacuumRequested = input.vacuum === true
-  const vacuumed = executed && vacuumRequested
+  let vacuumed = false
   const deleted = new Set<string>()
+  let failure: DiskReclaimError | undefined
 
   if (executed) {
     for (const item of deletable) {
-      yield* Effect.promise(() => fs.rm(item.path)).pipe(
-        Effect.catchCause(
-          (cause) =>
-            new DiskReclaimError({
-              code: "reclaim_failed",
-              detail: `cannot delete ${item.path}: ${cause instanceof Error ? cause.message : String(cause)}`,
-            }),
-        ),
-      )
+      const removed = yield* Effect.tryPromise({
+        try: () => fs.rm(item.path),
+        catch: (cause) =>
+          new DiskReclaimError({
+            code: "reclaim_failed",
+            detail: `cannot delete ${item.path}: ${cause instanceof Error ? cause.message : String(cause)}`,
+          }),
+      }).pipe(Effect.match({ onFailure: (error) => ({ error }), onSuccess: () => ({}) }))
+      if ("error" in removed) {
+        failure = removed.error
+        break
+      }
       deleted.add(item.path)
     }
-    if (vacuumRequested) {
-      yield* input.db.run(sql`VACUUM`).pipe(
-        Effect.catchCause(
-          (cause) =>
-            new DiskReclaimError({
-              code: "reclaim_failed",
-              detail: `VACUUM failed: ${cause instanceof Error ? cause.message : String(cause)}`,
-            }),
+    if (vacuumRequested && failure === undefined) {
+      const vacuum = yield* input.db.run(sql`VACUUM`).pipe(
+        Effect.catchCause((cause) =>
+          new DiskReclaimError({
+            code: "reclaim_failed",
+            detail: `VACUUM failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+          }),
         ),
+        Effect.match({ onFailure: (error) => ({ error }), onSuccess: () => ({}) }),
       )
+      if ("error" in vacuum) failure = vacuum.error
+      else vacuumed = true
     }
   }
   const candidates: readonly ReclaimCandidate[] = plan
@@ -337,7 +350,9 @@ export const reclaim = Effect.fn("DiskReclaim.reclaim")(function* (input: Reclai
     candidates,
     restoreIncidentsBytes: incidentsBytesOf(inventoryAfter),
     restoreIncidentsNeverDeleted: true,
+    ...(failure === undefined ? {} : { failure: { code: failure.code, detail: failure.detail } }),
   }
   yield* writeJsonAtomic(reportPathFor(backupDir), report)
+  if (failure) return yield* failure
   return report
 })

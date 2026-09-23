@@ -13,6 +13,7 @@ import { PostVerify } from "@deepagent-code/core/database/post-verify"
 import { DatabaseUpgradeRun } from "@deepagent-code/core/database/upgrade-run"
 import { InstallationVersion } from "@deepagent-code/core/installation/version"
 import { MdExport, type MdExportError } from "./md-export"
+import { withMaintenanceLock } from "./maintenance-lock"
 
 // W-02 M-2 (design §3.3) — the V1→V2 migration flow orchestrator. EXTERNAL by design: the
 // upgrade-run state machine and its storage-layer transition trigger stay untouched (a phase here
@@ -463,7 +464,11 @@ const phaseEffect = (phase: Phase, input: RunInput, journal: Journal) =>
               ? runArchivePhase(input, journal)
               : runDiskAdvisoryPhase(input, journal)
 
-export const run = Effect.fn("MigrationOrchestrator.run")(function* (input: RunInput) {
+export const run = Effect.fn("MigrationOrchestrator.run")((input: RunInput) =>
+  withMaintenanceLock(input.backupDir, runUnlocked(input)),
+)
+
+const runUnlocked = Effect.fn("MigrationOrchestrator.runUnlocked")(function* (input: RunInput) {
   const journalPath = journalPathFor(input.backupDir)
   const previous = yield* readJournal(journalPath)
   // Resume an interrupted/failed orchestration; a completed one starts a fresh chain (the archive

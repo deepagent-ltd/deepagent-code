@@ -2,11 +2,15 @@ export * as BackupGovernor from "./backup-governor"
 
 import fs from "node:fs/promises"
 import { createReadStream, createWriteStream } from "node:fs"
+import { createHash } from "node:crypto"
 import path from "node:path"
-import { createGzip } from "node:zlib"
+import { createGunzip, createGzip } from "node:zlib"
+import { Writable } from "node:stream"
+import { pipeline } from "node:stream/promises"
 import { Data, Effect } from "effect"
 import { Backup } from "@deepagent-code/core/database/backup"
 import { MdExport } from "./md-export"
+import { withMaintenanceLock } from "./maintenance-lock"
 
 // W-02 M-4 (design §3.3) — backups governance. The backups root currently only ever grows; this
 // module implements the retention policy and the explicit govern action:
@@ -105,6 +109,33 @@ const gzipInto = (source: string, destination: string) =>
     ),
   )
 
+/** Read the archive back through gunzip before moving its manifest or deleting the source. */
+const verifyGzip = (source: string, archive: string, expected: { readonly sha256: string; readonly sizeBytes: number }) =>
+  Effect.tryPromise({
+    try: async () => {
+      const hash = createHash("sha256")
+      let sizeBytes = 0
+      await pipeline(
+        createReadStream(archive),
+        createGunzip(),
+        new Writable({
+          write(chunk: Buffer, _encoding, callback) {
+            hash.update(chunk)
+            sizeBytes += chunk.byteLength
+            callback()
+          },
+        }),
+      )
+      if (sizeBytes !== expected.sizeBytes || hash.digest("hex") !== expected.sha256)
+        throw new Error("gunzip bytes do not match the backup manifest")
+    },
+    catch: (error) =>
+      new BackupGovernorError({
+        code: "archive_failed",
+        detail: `cannot verify ${archive} against ${source}: ${String(error)}`,
+      }),
+  })
+
 /** The md-export manifest path(s) that currently pair with backups under this root, if any. */
 const mdExportsFor = Effect.fn("BackupGovernor.mdExportsFor")(function* (backupDir: string) {
   const manifest = yield* MdExport.readManifest(MdExport.manifestPathFor(backupDir))
@@ -144,7 +175,11 @@ const stampMdExports = (manifestPath: string, mdExports: readonly string[]) =>
     ),
   )
 
-export const govern = Effect.fn("BackupGovernor.govern")(function* (input: GovernInput) {
+export const govern = Effect.fn("BackupGovernor.govern")((input: GovernInput) =>
+  withMaintenanceLock(input.backupDir, governUnlocked(input)),
+)
+
+const governUnlocked = Effect.fn("BackupGovernor.governUnlocked")(function* (input: GovernInput) {
   const keep = input.keep ?? DefaultKeep
   if (!Number.isInteger(keep) || keep < 1)
     return yield* new BackupGovernorError({ code: "invalid_policy", detail: `keep must be an integer >= 1, got ${keep}` })
@@ -201,6 +236,7 @@ export const govern = Effect.fn("BackupGovernor.govern")(function* (input: Gover
     yield* Effect.promise(() => fs.mkdir(archiveDir, { recursive: true }))
     const target = path.join(archiveDir, `${item.manifest.backup.fileName}.gz`)
     yield* gzipInto(item.manifest.backup.filePath, target)
+    yield* verifyGzip(item.manifest.backup.filePath, target, item.manifest.backup)
     yield* stampMdExports(item.manifestPath, mdExports)
     yield* Effect.promise(() => fs.rename(item.manifestPath, path.join(archiveDir, path.basename(item.manifestPath))))
     yield* Effect.promise(() => fs.rm(item.manifest.backup.filePath))

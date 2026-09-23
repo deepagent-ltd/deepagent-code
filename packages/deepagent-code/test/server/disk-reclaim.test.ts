@@ -21,6 +21,35 @@ const exists = async (file: string) =>
     .catch(() => false)
 
 describe("DiskReclaim (W-02 M-5)", () => {
+  test("a failed deletion persists the completed partial reclaim report", async () => {
+    await using tmp = await tmpdir()
+    const filename = path.join(tmp.path, "store", "deepagent-code.db")
+    const backupDir = path.join(tmp.path, "store", "backups")
+    await fs.mkdir(backupDir, { recursive: true })
+    await Bun.write(path.join(tmp.path, "store", "a.bak"), "deleted first")
+    await fs.mkdir(path.join(tmp.path, "store", "z.bak"))
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        const failure = yield* Effect.flip(DiskReclaim.reclaim({
+          db,
+          dbPath: filename,
+          backupDir,
+          dataRoot: tmp.path,
+          confirm: true,
+        }))
+        expect(failure).toMatchObject({ _tag: "DiskReclaim.DiskReclaimError", code: "reclaim_failed" })
+      }).pipe(Effect.provide(Database.layerFromPath(filename)), Effect.scoped),
+    )
+    const report = await Bun.file(DiskReclaim.reportPathFor(backupDir)).json() as DiskReclaim.ReclaimReport
+    expect(report.failure?.code).toBe("reclaim_failed")
+    expect(report.candidates.find((candidate) => path.basename(candidate.path) === "a.bak")?.deleted).toBeTrue()
+    expect(report.candidates.find((candidate) => path.basename(candidate.path) === "z.bak")?.deleted).toBeFalse()
+    expect(await exists(path.join(tmp.path, "store", "a.bak"))).toBeFalse()
+    expect(await exists(path.join(tmp.path, "store", "z.bak"))).toBeTrue()
+  })
+
   test("inventory + confirm gate: without confirm nothing is deleted; with confirm residue goes", async () => {
     await using tmp = await tmpdir()
     const filename = path.join(tmp.path, "store", "deepagent-code.db")
