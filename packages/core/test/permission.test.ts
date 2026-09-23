@@ -188,16 +188,39 @@ describe("PermissionV2", () => {
         )
         if (reply === "once")
           expect(
-            yield* db.get("SELECT consumer_id FROM session_activity_permission_once_consumption WHERE request_id = 'per_v2_no_progress'"),
+            yield* db.get(
+              "SELECT consumer_id FROM session_activity_permission_once_consumption WHERE request_id = 'per_v2_no_progress'",
+            ),
           ).toEqual({ consumer_id: "v2-no-progress:v2-no-progress-activity" })
         if (reply === "always") {
-          expect(yield* db.select().from(PermissionTable).where(eq(PermissionTable.project_id, Project.ID.global)).all()).toMatchObject([
-            { action: "doom_loop", resource: "read" },
-          ])
+          expect(
+            yield* db.select().from(PermissionTable).where(eq(PermissionTable.project_id, Project.ID.global)).all(),
+          ).toMatchObject([{ action: "doom_loop", resource: "read" }])
         }
       }),
     )
   }
+  it.effect("repairs a missing reply event after the durable decision committed", () =>
+    Effect.gen(function* () {
+      const challenge = yield* durableNoProgressChallenge()
+      const replied: string[] = []
+      const unsubscribe = yield* (yield* EventV2.Service).listen((event) =>
+        Effect.sync(() => {
+          if (event.type === "permission.v2.replied") replied.push(event.id)
+        }),
+      )
+      yield* Effect.addFinalizer(() => unsubscribe)
+      yield* DeepAgentActivityAuthority.decidePermission({
+        requestID: challenge.requestID,
+        idempotencyKey: `v2-no-progress-decision:${challenge.requestID}:interrupted`,
+        decision: "interrupted",
+        actorType: "user",
+        actorID: "permission-ui",
+      })
+      yield* (yield* PermissionV2.Service).reply({ requestID: challenge.requestID, reply: "reject" })
+      expect(replied).toEqual(["evt_v2_permission_replied_per_v2_no_progress"])
+    }),
+  )
   it.effect("returns the evaluated effect and only queues prompts", () =>
     Effect.gen(function* () {
       yield* setup([{ action: "read", resource: "*", effect: "allow" }])
@@ -426,15 +449,13 @@ describe("PermissionV2", () => {
         yield* service.ask(assertion({ id: PermissionV2.ID.create(`per_capacity_${index}`) }))
 
       expect(
-        yield* service
-          .ask(assertion({ id: PermissionV2.ID.create("per_capacity_overflow") }))
-          .pipe(Effect.flip),
+        yield* service.ask(assertion({ id: PermissionV2.ID.create("per_capacity_overflow") })).pipe(Effect.flip),
       ).toEqual(new PermissionV2.CapacityError({ limit: PermissionV2.MAX_PENDING_REQUESTS }))
 
       yield* service.reply({ requestID: PermissionV2.ID.create("per_capacity_0"), reply: "once" })
-      expect(
-        yield* service.ask(assertion({ id: PermissionV2.ID.create("per_capacity_reused") })),
-      ).toMatchObject({ effect: "ask" })
+      expect(yield* service.ask(assertion({ id: PermissionV2.ID.create("per_capacity_reused") }))).toMatchObject({
+        effect: "ask",
+      })
     }),
   )
 })

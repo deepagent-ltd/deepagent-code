@@ -246,7 +246,9 @@ export const layer = Layer.effect(
 
     function configuredEffect(action: string, resource: string, rulesets: readonly Ruleset[]): Effect {
       const rules = rulesets
-        .map((rules) => rules.findLast((rule) => Wildcard.match(action, rule.action) && Wildcard.match(resource, rule.resource)))
+        .map((rules) =>
+          rules.findLast((rule) => Wildcard.match(action, rule.action) && Wildcard.match(resource, rule.resource)),
+        )
         .filter((rule): rule is Rule => rule !== undefined)
       if (rules.some((rule) => rule.effect === "deny")) return "deny"
       if (rules.some((rule) => rule.effect === "ask")) return "ask"
@@ -368,14 +370,21 @@ export const layer = Layer.effect(
                 idempotencyKey: `v2-no-progress-consumption:${input.requestID}`,
               }).pipe(
                 EffectRuntime.provideService(Database.Service, database),
-                EffectRuntime.catchTag("ActivityAuthority.ConflictError", () => new NotFoundError({ requestID: input.requestID })),
+                EffectRuntime.catchTag(
+                  "ActivityAuthority.ConflictError",
+                  () => new NotFoundError({ requestID: input.requestID }),
+                ),
               )
-            if (durable.state === "pending")
-              yield* events.publish(Event.Replied, {
+            const eventID = EventV2.ID.make(`evt_v2_permission_replied_${input.requestID}`)
+            yield* events.publish(
+              Event.Replied,
+              {
                 sessionID: durable.sessionID,
                 requestID: input.requestID,
                 reply: input.reply,
-              })
+              },
+              { id: eventID },
+            )
             return
           }
           yield* events.publish(Event.Replied, {
@@ -445,25 +454,32 @@ export const layer = Layer.effect(
       const durable = yield* database.db
         .select()
         .from(SessionActivityPermissionRequestTable)
-        .where(and(
-          eq(SessionActivityPermissionRequestTable.activity_kind, "v2"),
-          eq(SessionActivityPermissionRequestTable.request_kind, "no_progress"),
-          eq(SessionActivityPermissionRequestTable.state, "pending"),
-          eq(SessionActivityPermissionRequestTable.project_id, location.project.id),
-          location.workspaceID
-            ? eq(SessionActivityPermissionRequestTable.workspace_id, location.workspaceID)
-            : isNull(SessionActivityPermissionRequestTable.workspace_id),
-        ))
+        .where(
+          and(
+            eq(SessionActivityPermissionRequestTable.activity_kind, "v2"),
+            eq(SessionActivityPermissionRequestTable.request_kind, "no_progress"),
+            eq(SessionActivityPermissionRequestTable.state, "pending"),
+            eq(SessionActivityPermissionRequestTable.project_id, location.project.id),
+            location.workspaceID
+              ? eq(SessionActivityPermissionRequestTable.workspace_id, location.workspaceID)
+              : isNull(SessionActivityPermissionRequestTable.workspace_id),
+          ),
+        )
         .all()
         .pipe(EffectRuntime.orDie)
-      return [...Array.from(pending.values(), (item) => item.request), ...durable.map((row): Request => ({
-        id: ID.make(row.request_id),
-        sessionID: row.session_id,
-        action: row.permission,
-        resources: [...row.patterns],
-        save: [...row.always_patterns],
-        metadata: { activity_id: row.activity_id, authority_epoch: row.authority_epoch, kind: "no_progress" },
-      }))]
+      return [
+        ...Array.from(pending.values(), (item) => item.request),
+        ...durable.map(
+          (row): Request => ({
+            id: ID.make(row.request_id),
+            sessionID: row.session_id,
+            action: row.permission,
+            resources: [...row.patterns],
+            save: [...row.always_patterns],
+            metadata: { activity_id: row.activity_id, authority_epoch: row.authority_epoch, kind: "no_progress" },
+          }),
+        ),
+      ]
     })
 
     const get = EffectRuntime.fn("PermissionV2.get")(function* (id: ID) {
@@ -472,15 +488,17 @@ export const layer = Layer.effect(
       const row = yield* database.db
         .select()
         .from(SessionActivityPermissionRequestTable)
-        .where(and(
-          eq(SessionActivityPermissionRequestTable.request_id, id),
-          eq(SessionActivityPermissionRequestTable.activity_kind, "v2"),
-          eq(SessionActivityPermissionRequestTable.request_kind, "no_progress"),
-          eq(SessionActivityPermissionRequestTable.project_id, location.project.id),
-          location.workspaceID
-            ? eq(SessionActivityPermissionRequestTable.workspace_id, location.workspaceID)
-            : isNull(SessionActivityPermissionRequestTable.workspace_id),
-        ))
+        .where(
+          and(
+            eq(SessionActivityPermissionRequestTable.request_id, id),
+            eq(SessionActivityPermissionRequestTable.activity_kind, "v2"),
+            eq(SessionActivityPermissionRequestTable.request_kind, "no_progress"),
+            eq(SessionActivityPermissionRequestTable.project_id, location.project.id),
+            location.workspaceID
+              ? eq(SessionActivityPermissionRequestTable.workspace_id, location.workspaceID)
+              : isNull(SessionActivityPermissionRequestTable.workspace_id),
+          ),
+        )
         .get()
         .pipe(EffectRuntime.orDie)
       if (!row) return undefined
