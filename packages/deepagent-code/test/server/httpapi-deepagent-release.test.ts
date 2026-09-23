@@ -9,6 +9,7 @@ import {
 } from "@deepagent-code/core/deepagent/released-snapshot.sql"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
+import { documentRevision } from "@deepagent-code/core/deepagent/document-store"
 import { eq } from "drizzle-orm"
 import { Effect, Layer } from "effect"
 import { HttpServer } from "effect/unstable/http"
@@ -430,9 +431,9 @@ describe("DeepAgent released knowledge HTTP API", () => {
       const v1 = yield* seedProject(instance.directory, "historical_revision", "evaluated body v1")
       const v1Ref = AgentGateway.DeepAgentReleasedSnapshot.documentRef(v1, "project")
       const v2 = yield* withKnowledge(() =>
-        AgentGateway.DeepAgentKnowledgeSource.storesForWorkspace(instance.directory)[1]!.documentStore.update(
-          v1.id,
-          "latest body v2",
+        AgentGateway.DeepAgentKnowledgeSource.storesForWorkspace(instance.directory)[1]!.documentStore.commitGovernedEdit(
+          v1.id, documentRevision(v1), "latest body v2",
+          { type: "human", id: "test-editor" }, { source: "human", evidence_refs: ["human:test-editor"] },
         ),
       )
 
@@ -550,9 +551,9 @@ describe("DeepAgent released knowledge HTTP API", () => {
       expect(errorMessage(duplicate.body)).toContain("duplicate document authority")
 
       const v2 = yield* withKnowledge(() =>
-        AgentGateway.DeepAgentKnowledgeSource.storesForWorkspace(instance.directory)[1]!.documentStore.update(
-          v1.id,
-          "candidate body v2",
+        AgentGateway.DeepAgentKnowledgeSource.storesForWorkspace(instance.directory)[1]!.documentStore.commitGovernedEdit(
+          v1.id, documentRevision(v1), "candidate body v2",
+          { type: "human", id: "test-editor" }, { source: "human", evidence_refs: ["human:test-editor"] },
         ),
       )
       const conflict = yield* shipGate(instance.directory, {

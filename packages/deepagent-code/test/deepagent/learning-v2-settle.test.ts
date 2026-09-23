@@ -280,6 +280,7 @@ const seedSession = Effect.gen(function* () {
       directory: root,
       title: "W7 settle",
       version: "test",
+      v2_authority: true,
     })
     .onConflictDoNothing()
     .run()
@@ -435,6 +436,7 @@ describe("W7 V2 session settle → durable learning admission", () => {
           directory: root,
           title: "W7 empty",
           version: "test",
+          v2_authority: true,
         })
         .onConflictDoNothing()
         .run()

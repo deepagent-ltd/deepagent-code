@@ -453,6 +453,7 @@ const newSession = (id: string) =>
         directory: root,
         title: "G2 delivery",
         version: "test",
+        v2_authority: true,
       })
       .onConflictDoNothing()
       .run()
