@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:dac-manual:knowledge-propose-tool",
+  "type": "knowledge",
+  "title": "knowledge_propose: the remember-this write path",
+  "description": "Stage durable facts into the human review queue with knowledge_propose; candidates stay invisible to retrieval until a human approves them.",
+  "body": "knowledge_propose(type, description, body, domain?, tags?, scope?) is the only model write path into durable knowledge. Everything it stages is a review CANDIDATE: status candidate, invisible to retrieval (the retriever whitelist only serves active entries), but immediately listed in the human review queue (the Knowledge review dialog and the pending endpoint). A near-duplicate of an existing entry — same type, scope and domain with a high description token overlap — reinforces that entry's support count instead of creating a duplicate row, so proposing the same fact twice does not flood the queue.\n\nHow to invoke: use when the user says 'remember this', or when a fact emerges that will still be valuable across sessions — a project convention, an environment fact, a durable preference. Use type memory for project or environment facts, knowledge for reusable insights and conventions. Scope defaults to project (this workspace's store); pass scope global only for facts that genuinely apply to every project.\n\nCaveats: do not use it for task-local scratch — temporary working state belongs in the conversation or a file. Content matching credential patterns (tokens, passwords, private keys, user:password connection strings) is rejected outright; restate the fact without the sensitive value or do not propose it. A session stages at most 10 proposals, so spend them on what truly matters. Risk boundary: staging only writes to the review queue — it never changes what retrieval serves, and approval remains a human decision the tool cannot make. Validation signal: the tool returns candidate_id with status pending_review (or already_active when the proposal merged into an existing active entry); after a human approves the candidate in the review queue, retrieval can surface it.",
+  "domain": "knowledge",
+  "scope_hint": "deepagent.dac-manual:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:deepagent.dac-manual",
+  "pack_id": "deepagent.dac-manual"
+}

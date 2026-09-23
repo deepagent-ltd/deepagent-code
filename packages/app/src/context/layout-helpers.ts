@@ -12,15 +12,21 @@ const RIGHT_PANEL_MODES = new Set([
   "subagents",
   "browser",
   "mcp",
-  "plugins",
-  "profile",
-  "debug",
   "im",
+  "dev",
   "terminal",
   "debug-console",
   "problems",
 ])
 const RIGHT_PANEL_FAILURE_THRESHOLD = 2
+
+// WS1: modes whose panel still exists under a new identity map to it; anything else that
+// disappeared (plugins, stats, context as a standalone) falls back to a closed panel.
+const LEGACY_RIGHT_PANEL_MODE: Record<string, string> = {
+  oversight: "subagents",
+  debug: "dev",
+  profile: "dev",
+}
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
@@ -32,7 +38,7 @@ export function migrateRightPanelSessionView(sessionView: unknown, build: string
     Object.entries(sessionView).map(([key, raw]) => {
       if (!isRecord(raw)) return [key, raw]
       const storedMode = raw.rightPanelMode
-      const mode = storedMode === "oversight" ? "subagents" : storedMode
+      const mode = typeof storedMode === "string" ? (LEGACY_RIGHT_PANEL_MODE[storedMode] ?? storedMode) : storedMode
       const validMode = typeof mode === "string" && RIGHT_PANEL_MODES.has(mode) ? mode : undefined
       const failure = isRecord(raw.rightPanelFailure) ? raw.rightPanelFailure : undefined
       const quarantined =

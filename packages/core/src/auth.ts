@@ -134,8 +134,13 @@ export const layer = Layer.effect(
     const fsys = yield* FSUtil.Service
     const global = yield* Global.Service
     const events = yield* EventV2.Service
-    const file = path.join(global.data, "account.json")
-    const legacyFile = path.join(global.data, "auth.json")
+    // Credentials roam with the user (D-W1): account.json and the legacy auth.json live in the
+    // roaming config home (%APPDATA%\deepagent-code on Windows; identical to data elsewhere).
+    const file = path.join(global.config, "account.json")
+    const legacyFile = path.join(global.config, "auth.json")
+    // The config home may not exist yet (a Global.layerWith test override, or a freshly
+    // provisioned roaming profile) — the global layer mkdir only runs for the default path.
+    yield* fsys.ensureDir(global.config).pipe(Effect.orDie)
 
     const writeMigrated = Effect.fnUntraced(function* (raw: Record<string, unknown>) {
       const migrated = migrate(raw)

@@ -153,6 +153,19 @@ export const UnknownError = Schema.Struct({
 })
 export type UnknownError = typeof UnknownError.Type
 
+/**
+ * Tool-call failure classification. `unknown` is the default for unclassified failures; the
+ * `permission_*` types are derived from the settlement's structured failureCode (a rejected or
+ * rule-denied permission prompt) so consumers can distinguish user refusals from other errors.
+ */
+export const ToolCallError = Schema.Struct({
+  type: Schema.Literals(["unknown", "permission_rejected", "permission_corrected", "permission_denied"]),
+  message: Schema.String,
+}).annotate({
+  identifier: "Session.Error.ToolCall",
+})
+export type ToolCallError = typeof ToolCallError.Type
+
 export const AgentSwitched = EventV2.define({
   type: "session.next.agent.switched",
   ...options,
@@ -629,7 +642,7 @@ export namespace Tool {
     ...options,
     schema: {
       ...ToolBase,
-      error: UnknownError,
+      error: ToolCallError,
       result: Schema.Unknown.pipe(Schema.optional),
       provider: Schema.Struct({
         executed: Schema.Boolean,

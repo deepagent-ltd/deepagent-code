@@ -127,7 +127,13 @@ function installPackage(name) {
   const version = packageJson.optionalDependencies?.[name]
   if (!version) return
 
-  const root = path.join(os.homedir(), ".deepagent", "code", "tmp", "install")
+  // Keep the staging area in the platform data home (D-W1): %LOCALAPPDATA%\deepagent-code on
+  // Windows, ~/.deepagent/code elsewhere.
+  const dataHome =
+    os.platform() === "win32"
+      ? path.join(process.env.LOCALAPPDATA ?? path.join(os.homedir(), "AppData", "Local"), "deepagent-code")
+      : path.join(os.homedir(), ".deepagent", "code")
+  const root = path.join(dataHome, "tmp", "install")
   fs.mkdirSync(root, { recursive: true })
   const temp = fs.mkdtempSync(path.join(root, "package-"))
   try {

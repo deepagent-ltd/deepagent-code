@@ -357,6 +357,18 @@ export const suites: Suite[] = [
     realLLM: true,
   },
   {
+    id: "ext:code-intel",
+    package: "deepagent-code",
+    command: ["bun", "run", "test:llm-ext:code-intel"],
+    realLLM: true,
+  },
+  {
+    id: "ext:v2-01-acceptance",
+    package: "deepagent-code",
+    command: ["bun", "run", "test:llm-ext:v2-01-acceptance"],
+    realLLM: true,
+  },
+  {
     id: "ext:expert-panel",
     package: "deepagent-code",
     command: ["bun", "run", "test:llm-ext:expert-panel"],
@@ -493,8 +505,13 @@ export function runnerEnvironment(
     ...Object.fromEntries(
       [
         "PATH",
+        "HOME",
         "TMPDIR",
         "SHELL",
+        // Operational registry override (e.g. a local mirror when the default npm registry is
+        // unreachable): without HOME the child also loses ~/.bunfig.toml and the global bun
+        // cache, which turns a warm no-op install into a full cold download.
+        "BUN_CONFIG_REGISTRY",
         "LANG",
         "LC_ALL",
         "TERM",
@@ -515,7 +532,7 @@ export function runnerEnvironment(
         "PATHEXT",
       ].flatMap((key) => (hostEnvironment[key] === undefined ? [] : ([[key, hostEnvironment[key]]] as const))),
     ),
-    MODELS_DEV_API_JSON: hostEnvironment.MODELS_DEV_API_JSON ?? defaultModelsSnapshotFile,
+    DEEPAGENT_CODE_MODELS_PATH: hostEnvironment.DEEPAGENT_CODE_MODELS_PATH ?? defaultModelsSnapshotFile,
     ...(includeCredential
       ? {
           DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE: config.apiKeyFile,

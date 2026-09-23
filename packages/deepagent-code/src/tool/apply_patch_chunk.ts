@@ -1,4 +1,5 @@
 import { Effect, Schema } from "effect"
+import { tolerantInt } from "@deepagent-code/core/schema"
 import * as Tool from "./tool"
 import { ApplyPatchTool } from "./apply_patch"
 
@@ -23,7 +24,9 @@ export const Parameters = Schema.Struct({
   transactionID: Schema.optional(Schema.String).annotate({
     description: "The transaction ID returned by begin; required for append, commit, and abort",
   }),
-  offset: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))).annotate({
+  // Tolerant int arm (F-1): the offset is copied from the previous result's nextOffset, which
+  // GLM-class providers echo back stringified.
+  offset: Schema.optional(tolerantInt(Schema.isGreaterThanOrEqualTo(0))).annotate({
     description: "UTF-8 byte offset for append or commit; must equal nextOffset from the previous result",
   }),
   patchText: Schema.optional(Schema.String).annotate({

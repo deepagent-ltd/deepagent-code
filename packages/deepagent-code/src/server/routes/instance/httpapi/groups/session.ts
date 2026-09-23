@@ -2,6 +2,7 @@ import { PermissionV1 } from "@deepagent-code/core/v1/permission"
 import { Permission } from "@/permission"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 
+import { RecoveryCommandContract } from "@deepagent-code/core/contract/recovery-command"
 import { Session } from "@/session/session"
 import { MessageV2 } from "@/session/message-v2"
 import { SessionPromptV2 } from "@/session/prompt-v2"
@@ -37,6 +38,7 @@ import { GraphKind } from "@deepagent-code/core/context-federation/contract"
 import { GraphQueryStatus } from "@deepagent-code/core/context-federation/federation"
 import { Sensitivity } from "@deepagent-code/core/context-federation/authorization"
 import { SessionLegacyProviderResolution } from "@/session/legacy-provider-resolution"
+import { SessionProviderResolution } from "@/session/provider-resolution"
 import { SessionCompaction } from "@/session/compaction"
 import {
   File as DiffArtifactFile,
@@ -188,7 +190,9 @@ export const PlanSnapshotResult = Schema.Struct({
 })
 export const CommandPayload = Schema.Struct(Struct.omit(SessionCommandV2.CommandInput.fields, ["sessionID"]))
 export const ShellPayload = Schema.Struct(Struct.omit(SessionCommandV2.ShellInput.fields, ["sessionID"]))
-export const RevertPayload = Schema.Struct(Struct.omit(SessionRevert.RevertInput.fields, ["sessionID"]))
+// `notice` stays out of the wire payload: it is an internal C2-notice suppression knob for
+// autonomous rollback paths, not a client-facing option.
+export const RevertPayload = Schema.Struct(Struct.omit(SessionRevert.RevertInput.fields, ["sessionID", "notice"]))
 export const PermissionResponsePayload = Schema.Struct({
   response: PermissionV1.Reply,
 })
@@ -337,6 +341,83 @@ export const ContextCohortResult = Schema.Struct({
 export const ProviderResolutionPayload = Schema.Struct(
   Struct.omit(SessionLegacyProviderResolution.ResolveInput.fields, ["sessionID"]),
 )
+
+// K-01 R-1 — the unified provider-resolution command facade surface. The payload is the
+// frozen RecoveryCommand vocabulary (six kinds) minus the path session id; the facade routes
+// internally to the owning recovery authority by receipt source.
+export const ProviderResolutionCommandPayload = Schema.Union([
+  Schema.Struct(Struct.omit(SessionProviderResolution.RecoverCommandInput.fields, ["sessionID"])),
+  Schema.Struct(Struct.omit(SessionProviderResolution.AbandonExactCommandInput.fields, ["sessionID"])),
+  Schema.Struct(Struct.omit(SessionProviderResolution.RepairBaselineCommandInput.fields, ["sessionID"])),
+  Schema.Struct(Struct.omit(SessionProviderResolution.ForkFromSafeBoundaryCommandInput.fields, ["sessionID"])),
+  Schema.Struct(Struct.omit(SessionProviderResolution.ConfirmSettledCommandInput.fields, ["sessionID"])),
+  Schema.Struct(Struct.omit(SessionProviderResolution.QueryCommandInput.fields, ["sessionID"])),
+]).pipe(Schema.toTaggedUnion("commandKind"))
+
+/** Wire projection of one durable federation-attempt recovery descriptor row. */
+const FederationDescriptorResult = Schema.Struct({
+  descriptorID: Schema.String,
+  sessionID: Schema.String,
+  activityID: Schema.String,
+  turnID: Schema.String,
+  kind: Schema.String,
+  payload: RecoveryCommandContract.RecoveryDescriptor,
+  createdAt: Schema.Int,
+})
+
+/** Wire projection of one durable recovery-command row. */
+const FederationCommandResult = Schema.Struct({
+  commandID: Schema.String,
+  attemptID: Schema.String,
+  requestHash: Schema.String,
+  state: Schema.String,
+  commandKind: Schema.optional(Schema.String),
+  createdAt: Schema.Int,
+  updatedAt: Schema.Int,
+})
+
+export const ProviderResolutionCommandResult = Schema.Union([
+  Schema.Struct({
+    commandKind: Schema.Literal("recover"),
+    legacyReceiptDescriptors: Schema.Array(SessionLegacyProviderResolution.Descriptor),
+    federationAttemptDescriptors: Schema.Array(FederationDescriptorResult),
+  }),
+  Schema.Struct({
+    commandKind: Schema.Literal("abandon_exact"),
+    authority: Schema.Literal("legacy_provider_receipt"),
+    resolution: SessionLegacyProviderResolution.Resolution,
+  }),
+  Schema.Struct({
+    commandKind: Schema.Literal("abandon_exact"),
+    authority: Schema.Literal("context_federation_attempt"),
+    commandID: Schema.String,
+    commandState: Schema.Literal("abandoned"),
+    attemptState: Schema.Literal("resolved_abandoned"),
+    resolutionID: Schema.String,
+  }),
+  Schema.Struct({
+    commandKind: Schema.Literal("confirm_settled"),
+    authority: Schema.Literal("context_federation_attempt"),
+    commandID: Schema.String,
+    commandState: Schema.Literal("settled"),
+    attemptState: Schema.Literal("resolved_settled"),
+    resolutionID: Schema.String,
+    evidenceDigest: Schema.String,
+  }),
+  Schema.Struct({
+    commandKind: Schema.Literal("fork_from_safe_boundary"),
+    authority: Schema.Literal("legacy_provider_receipt"),
+    forkSessionID: Schema.String,
+    forkCutoffMessageID: Schema.String,
+  }),
+  Schema.Struct({
+    commandKind: Schema.Literal("query_command"),
+    authority: Schema.Literals(["legacy_provider_receipt", "context_federation_attempt"]),
+    command: Schema.optional(FederationCommandResult),
+    resolution: Schema.optional(SessionLegacyProviderResolution.Resolution),
+  }),
+]).pipe(Schema.toTaggedUnion("commandKind"))
+
 export const ContinuationResolutionPayload = Schema.Struct(
   Struct.omit(SessionCompaction.ContinuationResolutionInput.fields, ["sessionID"]),
 )
@@ -388,6 +469,7 @@ export const SessionPaths = {
   contextAttemptResolve: `${root}/:sessionID/context/attempt/:attemptID/resolve`,
   contextCohort: `${root}/context/cohort`,
   providerResolution: `${root}/:sessionID/provider-resolution`,
+  providerResolutionCommand: `${root}/:sessionID/provider-resolution/command`,
   continuationResolution: `${root}/:sessionID/continuation-resolution`,
   exportSnapshot: `${root}/:sessionID/export`,
   importSnapshot: `${root}/import-snapshot`,
@@ -902,6 +984,26 @@ export const SessionApi = HttpApi.make("session")
             identifier: "session.providerResolutionResolve",
             summary: "Resolve a provider outcome",
             description: "Append an audited abandoned resolution and activate a safe successor history epoch.",
+          }),
+        ),
+        HttpApiEndpoint.post("providerResolutionCommand", SessionPaths.providerResolutionCommand, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          payload: ProviderResolutionCommandPayload,
+          success: described(
+            ProviderResolutionCommandResult,
+            "Unified provider-resolution command outcome",
+          ),
+          error: [HttpApiError.BadRequest, ApiNotFoundError, ConflictError, ServiceUnavailableError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.providerResolutionCommand",
+            summary: "Execute a unified provider-resolution command",
+            description:
+              "The ONE recovery command entry (frozen RecoveryCommand vocabulary). Routes internally " +
+              "by receipt source: legacy provider receipts to the legacy resolution authority, Context " +
+              "Federation attempts to the durable recovery-command authority. Never replays a " +
+              "post-dispatch outcome and never dispatches a provider request.",
           }),
         ),
         HttpApiEndpoint.get("continuationResolutionList", SessionPaths.continuationResolution, {

@@ -33,7 +33,7 @@ export type Entry = Schema.Schema.Type<typeof Entry>
 const decodeAuthData = Schema.decodeUnknownOption(Schema.Record(Schema.String, Entry))
 type AuthData = Record<string, Entry>
 
-const filepath = path.join(Global.Path.data, "mcp-auth.json")
+const filepath = path.join(Global.Path.config, "mcp-auth.json")
 const lockKey = `mcp-auth:${filepath}`
 
 export interface Interface {

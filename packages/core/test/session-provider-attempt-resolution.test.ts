@@ -113,7 +113,7 @@ const seedIndeterminateTurn = (suffix: string, seq = 1) =>
         directory: "/project",
         title: "resolution",
         version: "test",
-        time_suspended: 105,
+        execution_claim_token: 105,
       })
       .onConflictDoNothing()
       .run()

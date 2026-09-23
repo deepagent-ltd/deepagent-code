@@ -1,4 +1,4 @@
-import { Option, Schema, SchemaGetter } from "effect"
+import { Option, Schema, SchemaAST, SchemaGetter } from "effect"
 
 export { externalID } from "./schema/external-id"
 export type { ExternalID } from "./schema/external-id"
@@ -12,6 +12,32 @@ export const PositiveInt = Schema.Int.check(Schema.isGreaterThan(0))
  * Integer greater than or equal to zero.
  */
 export const NonNegativeInt = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
+
+/**
+ * Provider-tolerant integer field for model-facing tool inputs (ablation F-1 family):
+ * GLM-class providers serialize JSON numbers as strings ("120000"). The string arm decodes
+ * through the SAME checks as the integer arm, so a value-equivalent string lands as a real
+ * number while fractional, malformed, empty, or literal "null" strings still reject — a bare
+ * NumberFromString arm would surface those as NaN (or "" as 0) and poison downstream
+ * equality/range checks (the plan-write F-7 incident).
+ */
+export const tolerantInt = (...checks: readonly [SchemaAST.Check<number>, ...Array<SchemaAST.Check<number>>]) =>
+  Schema.Union([Schema.Int.check(...checks), StringifiedNumber.check(Schema.isInt(), ...checks)])
+
+/**
+ * Provider-tolerant finite number field for model-facing tool inputs. Both arms are
+ * finite-checked: the string arm so "null"/"abc" never decode to NaN, the number arm so a
+ * JSON `1e999` (Infinity) rejects the same way its string form does.
+ */
+export const tolerantNumber = (...checks: ReadonlyArray<SchemaAST.Check<number>>) =>
+  Schema.Union([
+    Schema.Number.check(Schema.isFinite(), ...checks),
+    StringifiedNumber.check(Schema.isFinite(), ...checks),
+  ])
+
+// NumberFromString alone maps "" to 0 and non-numeric strings to NaN; gating on non-empty
+// input keeps the arm to genuinely value-equivalent strings before the numeric checks run.
+const StringifiedNumber = Schema.NonEmptyString.pipe(Schema.decodeTo(Schema.NumberFromString))
 
 /**
  * Relative file path (e.g., `src/components/Button.tsx`).

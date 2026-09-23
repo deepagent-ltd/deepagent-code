@@ -62,10 +62,20 @@ import { FetchHttpClient } from "effect/unstable/http"
 const deepagentEnabledFromEnv = () => process.env.DEEPAGENT_ENABLED !== "false" && process.env.DEEPAGENT_ENABLED !== "0"
 
 export interface LocationRuntimeHostInterface {
-  /** Supplies the host-owned query/runtime seams for one cached Location tree. */
+  /** Supplies the host-owned query/runtime seams for one cached Location tree. The query-authority
+   * store is part of the seam because the host-captured graph facades resolve session envelopes
+   * from the store THEY were built with: a tree-private store would make every runner bind
+   * invisible to them (code_intel / context_query then answer `authorization_unavailable`). */
   readonly layer: (
     ref: Location.Ref,
-  ) => Layer.Layer<ProductionV2Sources | ContextToolRuntime.Service, never, AgentGateway.Runtime>
+  ) => Layer.Layer<
+    | ProductionV2Sources
+    | ContextToolRuntime.Service
+    | ContextQueryAuthorization.Service
+    | ContextQueryAuthorization.Controller,
+    never,
+    AgentGateway.Runtime
+  >
 }
 
 /**
@@ -87,6 +97,9 @@ export const defaultLocationRuntimeHost = Layer.effect(
         Layer.mergeAll(
           Layer.succeed(ProductionV2Sources, {}),
           ContextToolRuntime.unavailableLayer,
+          // Bare-core fallback: one process-local authority store per keyed tree, matching the
+          // pre-seam behavior where the tree self-provided `ContextQueryAuthorization.defaultLayer`.
+          ContextQueryAuthorization.defaultLayer,
           Layer.succeed(SessionRunner.CurrentToolSettleGate, undefined),
           Layer.succeed(SessionRunner.CurrentOnSessionSettled, undefined),
           Layer.succeed(V2ProviderTurn.CurrentBuildIdentity, buildIdentity),
@@ -176,7 +189,10 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()(
         Layer.provide(resources),
         Layer.provide(base),
       )
-      const services = Layer.mergeAll(base, resources, permissionsAndTools, ContextQueryAuthorization.defaultLayer)
+      // The query-authority store is NOT self-provided here: the runner's session binds must land
+      // in the store the host's graph facades resolve from, so it travels through the
+      // LocationRuntimeHost seam (provided by `runtimeHost` below).
+      const services = Layer.mergeAll(base, resources, permissionsAndTools)
       const image = Image.layer.pipe(Layer.provide(services))
       const mutation = FileMutation.locationLayer.pipe(Layer.provide(services))
       const searches = LocationSearch.layer.pipe(Layer.provide(Ripgrep.layer), Layer.provide(services))

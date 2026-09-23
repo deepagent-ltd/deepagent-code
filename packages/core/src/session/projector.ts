@@ -11,8 +11,6 @@ import { FilePartArtifact } from "../file-part-artifact"
 import { FilePartArtifactBindingTable } from "../file-part-artifact.sql"
 import { SessionEvent } from "./event"
 import { SessionV1 } from "../v1/session"
-import { ProviderV2 } from "../provider"
-import { ModelV2 } from "../model"
 import { WorkspaceTable } from "../control-plane/workspace.sql"
 import { SessionMessage } from "./message"
 import { SessionMessageUpdater } from "./message-updater"
@@ -29,7 +27,7 @@ import {
   SessionWireProjectionTable,
 } from "./sql"
 import { V2ProviderTurnReceiptTable } from "./runner/v2-provider-turn.sql"
-import { legacyAssistant as legacyAssistantExport } from "./legacy-wire"
+import { legacyAssistant as legacyAssistantExport, legacyUser } from "./legacy-wire"
 import type { DeepMutable } from "../schema"
 import { SessionSchema } from "./schema"
 
@@ -450,58 +448,8 @@ const firstWireParent = (db: DatabaseService, sessionID: SessionSchema.ID) => {
     )
 }
 
-function legacyUserRow(input: {
-  readonly sessionID: SessionSchema.ID
-  readonly message: SessionMessage.User | SessionMessage.Synthetic
-  readonly agent: string | null
-  readonly model: { id: string; providerID: string; variant?: string } | null
-  readonly synthetic?: boolean
-}): SessionV1.WithParts {
-  const created = DateTime.toEpochMillis(input.message.time.created)
-  const messageID = SessionV1.MessageID.ascending(input.message.id)
-  const parts: SessionV1.Part[] = []
-  if (input.message.text) {
-    parts.push({
-      id: SessionV1.PartID.ascending(`prt_${input.message.id.slice("msg_".length)}_0`),
-      sessionID: input.sessionID,
-      messageID,
-      type: "text",
-      text: input.message.text,
-      ...(input.synthetic === true ? { synthetic: true } : {}),
-      time: { start: created, end: created },
-    })
-  }
-  const files = input.message.type === "user" ? (input.message.files ?? []) : []
-  for (const [index, file] of files.entries()) {
-    parts.push({
-      id: SessionV1.PartID.ascending(`prt_${input.message.id.slice("msg_".length)}_f${index}`),
-      sessionID: input.sessionID,
-      messageID,
-      type: "file",
-      url: file.uri,
-      mime: file.mime,
-      ...(file.name === undefined ? {} : { filename: file.name }),
-      time: { start: created, end: created },
-    } as SessionV1.Part)
-  }
-  return {
-    info: {
-      id: messageID,
-      sessionID: input.sessionID,
-      role: "user",
-      time: { created },
-      agent: input.agent ?? "",
-      // The wire user row feeds next-turn model resolution (currentModel falls back to the last
-      // user message's model); carry the session's model so the fallback never resolves empty.
-      model: {
-        providerID: (input.model?.providerID ?? "") as ProviderV2.ID,
-        modelID: (input.model?.id ?? "") as ModelV2.ID,
-        ...(input.model?.variant === undefined ? {} : { variant: input.model.variant }),
-      },
-    },
-    parts,
-  }
-}
+// W4-6 — the canonical user/synthetic converter moved next to legacyAssistant in legacy-wire.ts
+// (shared with the W-02 M-1 batch MD exporter); the projector re-uses it through that import.
 
 // Derive + publish the V1 wire rows for one folded SessionMessage. Assistant rows carry the full
 // legacyAssistant conversion (model/cost/tokens/path + synthesized step-finish); user rows carry
@@ -543,7 +491,7 @@ function publishWireForMessage(
                 .where(eq(SessionTable.id, sessionID))
                 .get()
                 .pipe(Effect.orDie)
-              return legacyUserRow({
+              return legacyUser({
                 sessionID,
                 message,
                 agent: identity?.agent ?? null,

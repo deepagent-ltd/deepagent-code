@@ -1,5 +1,4 @@
 import { Component, createEffect, createMemo, createResource, createSignal, For, Show } from "solid-js"
-import { Dialog } from "@deepagent-code/ui/v2/dialog-v2"
 import { Button } from "@deepagent-code/ui/button"
 import { Collapsible } from "@deepagent-code/ui/collapsible"
 import { Icon } from "@deepagent-code/ui/icon"
@@ -54,7 +53,9 @@ export const resolveWikiExpandedGroup = (
   searching: boolean,
 ) => (searching ? groups.find((group) => group.items.length > 0)?.group : expanded)
 
-export const DialogWiki: Component<{ client: WikiClient }> = (props) => {
+// WS1: the wiki body is hosted as a tab inside the merged Knowledge dialog
+// (components/knowledge/dialog-knowledge), so this is a panel, not a standalone dialog.
+export const WikiPanel: Component<{ client: WikiClient }> = (props) => {
   const language = useLanguage()
   const [query, setQuery] = createSignal("")
   const [selectedId, setSelectedId] = createSignal<{ docId: string; scope: string } | undefined>(undefined)
@@ -142,52 +143,50 @@ export const DialogWiki: Component<{ client: WikiClient }> = (props) => {
   }
 
   return (
-    <Dialog size="x-large" variant="settings" title={language.t("wiki.title")}>
-      <div class="settings-v2-panel" data-component="wiki-dialog">
-        <div class="settings-v2-tab-body deepagent-dialog-body">
-          <p class="text-12-regular text-v2-text-text-faint">{language.t("wiki.description")}</p>
+    <div class="settings-v2-panel" data-component="wiki-dialog">
+      <div class="settings-v2-tab-body deepagent-dialog-body">
+        <p class="text-12-regular text-v2-text-text-faint">{language.t("wiki.description")}</p>
 
-          {/* Search over the FTS projection. */}
-          <div class="flex min-w-0 items-center gap-2 rounded-lg border border-v2-border-border-muted px-3 py-2">
-            <Icon name="magnifying-glass" size="small" class="text-v2-text-text-faint" />
-            <input
-              type="text"
-              data-action="wiki-search"
-              value={query()}
-              onInput={(e) => setQuery(e.currentTarget.value)}
-              placeholder={language.t("wiki.search")}
-              aria-label={language.t("wiki.search")}
-              class="min-w-0 flex-1 bg-transparent text-13-regular text-v2-text-text-base outline-none placeholder:text-v2-text-text-faint"
-            />
-          </div>
+        {/* Search over the FTS projection. */}
+        <div class="flex min-w-0 items-center gap-2 rounded-lg border border-v2-border-border-muted px-3 py-2">
+          <Icon name="magnifying-glass" size="small" class="text-v2-text-text-faint" />
+          <input
+            type="text"
+            data-action="wiki-search"
+            value={query()}
+            onInput={(e) => setQuery(e.currentTarget.value)}
+            placeholder={language.t("wiki.search")}
+            aria-label={language.t("wiki.search")}
+            class="min-w-0 flex-1 bg-transparent text-13-regular text-v2-text-text-base outline-none placeholder:text-v2-text-text-faint"
+          />
+        </div>
 
-          {/* Two-column list + detail. */}
-          <div class="flex min-h-0 flex-1 gap-3">
-            <WikiList
-              groups={groups()}
-              loading={pages.loading}
-              searchKey={query().trim()}
-              empty={query().trim() ? language.t("wiki.searchEmpty") : language.t("wiki.empty")}
-              selectedId={selectedId()?.docId}
-              onSelect={select}
-              typeLabel={(group) => language.t(`wiki.type.${group}`)}
-            />
-            <WikiDetail
-              page={page()}
-              loading={page.loading}
-              hasSelection={!!selectedId()}
-              editing={editing()}
-              editBody={editBody()}
-              busy={busy()}
-              onEditBody={setEditBody}
-              onStartEdit={startEdit}
-              onCancelEdit={() => setEditing(false)}
-              onSave={saveEdit}
-            />
-          </div>
+        {/* Two-column list + detail. */}
+        <div class="flex min-h-0 flex-1 gap-3">
+          <WikiList
+            groups={groups()}
+            loading={pages.loading}
+            searchKey={query().trim()}
+            empty={query().trim() ? language.t("wiki.searchEmpty") : language.t("wiki.empty")}
+            selectedId={selectedId()?.docId}
+            onSelect={select}
+            typeLabel={(group) => language.t(`wiki.type.${group}`)}
+          />
+          <WikiDetail
+            page={page()}
+            loading={page.loading}
+            hasSelection={!!selectedId()}
+            editing={editing()}
+            editBody={editBody()}
+            busy={busy()}
+            onEditBody={setEditBody}
+            onStartEdit={startEdit}
+            onCancelEdit={() => setEditing(false)}
+            onSave={saveEdit}
+          />
         </div>
       </div>
-    </Dialog>
+    </div>
   )
 }
 

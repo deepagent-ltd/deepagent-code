@@ -103,13 +103,15 @@ export const layer = Layer.effectDiscard(
             execute: (input, context) => {
               const unableToEdit = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
                 effect.pipe(
-                  Effect.mapError((error) =>
-                    error instanceof FileMutation.StaleContentError
-                      ? new ToolFailure({
-                          message: "File changed after permission approval. Read it again before editing.",
-                        })
-                      : new ToolFailure({ message: `Unable to edit ${input.path}` }),
-                  ),
+                  Effect.mapError((error) => {
+                    const refusal = PermissionV2.permissionToolFailure(error)
+                    if (refusal !== null) return refusal
+                    if (error instanceof FileMutation.StaleContentError)
+                      return new ToolFailure({
+                        message: "File changed after permission approval. Read it again before editing.",
+                      })
+                    return new ToolFailure({ message: `Unable to edit ${input.path}` })
+                  }),
                 )
 
               return Effect.gen(function* () {

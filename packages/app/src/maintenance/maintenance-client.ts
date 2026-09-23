@@ -10,6 +10,9 @@ import type {
   MaintenanceFailure,
   MaintenanceHttpError,
   MaintenanceResult,
+  MigrationPhase,
+  MigrationRun,
+  MigrationStatus,
   RecoveryCommandInput,
   RecoveryCommandResult,
   RecoveryDescriptorRecord,
@@ -37,6 +40,9 @@ export interface MaintenanceClient {
   recoveryCommandGet(commandId: string): Promise<MaintenanceResult<RecoveryDescriptorRecord>>
   recoveryEvidenceExport(exportId: string): Promise<MaintenanceResult<EvidenceExportManifest>>
   createRecoveryEvidenceExport(input: EvidenceExportInput): Promise<MaintenanceResult<EvidenceExportManifest>>
+  // W-02 M-6 — the migration orchestration surface (journal polling + resume after failure).
+  migrationStatus(dir?: string): Promise<MaintenanceResult<MigrationStatus>>
+  runMigration(input?: { dir?: string; stop_after?: MigrationPhase }): Promise<MaintenanceResult<MigrationRun>>
 }
 
 export interface MaintenanceClientConfig {
@@ -179,6 +185,12 @@ export function createMaintenanceClient(config: MaintenanceClientConfig): Mainte
     },
     async createRecoveryEvidenceExport(input) {
       return fromSdk<EvidenceExportManifest>(() => client.maintenance.recovery.evidenceExport2.create({ evidenceExportInput: input }))
+    },
+    async migrationStatus(dir) {
+      return fromSdk<MigrationStatus>(() => client.maintenance.migration.status({ dir }))
+    },
+    async runMigration(input) {
+      return fromSdk<MigrationRun>(() => client.maintenance.migration.run({ migrationRunInput: input ?? {} }))
     },
   }
 }

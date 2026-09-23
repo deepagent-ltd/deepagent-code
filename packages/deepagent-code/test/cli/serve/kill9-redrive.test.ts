@@ -43,8 +43,8 @@ function requestJson(base: string, requestPath: string, init: RequestInit = {}):
 function readSessionRow(databasePath: string, sessionID: string) {
   const database = new Database(databasePath, { readonly: true })
   const row = database
-    .query("SELECT time_suspended, interrupt_seq FROM session WHERE id = ?")
-    .get(sessionID) as { time_suspended: number | null; interrupt_seq: number | null } | null
+    .query("SELECT execution_claim_token, interrupt_seq FROM session WHERE id = ?")
+    .get(sessionID) as { execution_claim_token: number | null; interrupt_seq: number | null } | null
   database.close()
   return row
 }
@@ -191,7 +191,7 @@ cliIt.live(
       })
       // The durable claim from the dead process is still in place: startup redrive refused to
       // exact-release a drain whose outcome is unknown.
-      expect(readSessionRow(databasePath, sessionID)?.time_suspended).not.toBeNull()
+      expect(readSessionRow(databasePath, sessionID)?.execution_claim_token).not.toBeNull()
       second.kill()
       expect(yield* Effect.promise(() => second.exited)).toEqual(expect.any(Number))
     }),
@@ -231,7 +231,7 @@ cliIt.live(
       // wake: B is still pending, still unexecuted, and no second physical call ever happened.
       expect(yield* llm.calls).toBe(1)
       const session = readSessionRow(databasePath, sessionID)
-      expect(session?.time_suspended).toBeNull()
+      expect(session?.execution_claim_token).toBeNull()
       expect(session?.interrupt_seq).not.toBeNull()
       expect(pending?.admitted_seq).toBeLessThanOrEqual(session?.interrupt_seq ?? -1)
       expect(readInputRow(databasePath, pendingID)?.promoted_seq).toBeNull()
@@ -335,7 +335,7 @@ cliIt.live(
       // Healthy takeover: nothing fenced, nothing suspended, and the durable session row is clean.
       const status = yield* requestJson(second.url, "/session/status", { headers })
       expect(status.body).not.toHaveProperty(sessionID)
-      expect(readSessionRow(databasePath, sessionID)?.time_suspended).toBeNull()
+      expect(readSessionRow(databasePath, sessionID)?.execution_claim_token).toBeNull()
       second.kill()
       expect(yield* Effect.promise(() => second.exited)).toEqual(expect.any(Number))
     }),

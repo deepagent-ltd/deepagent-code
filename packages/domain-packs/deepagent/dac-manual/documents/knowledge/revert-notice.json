@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:dac-manual:revert-notice",
+  "type": "knowledge",
+  "title": "User revert notice: later state is gone",
+  "description": "A revert notice means the user rewound the conversation and files — everything after the revert point was undone; re-check before continuing.",
+  "body": "The user can rewind the session. When that happens a one-shot synthetic notice appears: \"The user reverted the conversation to message <id>; all later messages and file changes were undone.\" (A restore emits the counterpart: \"The user restored the previously reverted conversation.\")\n\nUse when the revert notice arrives. Actions: treat every message, edit, and decision after the named message as never having happened — file changes were reverted on disk, so do not rely on them and do not redo them blindly. Re-check the current file state with tools before continuing, and expect the user to redirect the work; the revert usually signals a change of mind, not a request to replay the same steps.\n\nHow to invoke: no tool — the notice is a system message; the correct response is behavioral.\n\nInput/output: the notice names the message id of the revert point; anything after it is invalidated.\n\nCaveats: do not confuse a user revert with an autonomous goal rollback (a separate notice) — a revert is the user's deliberate rewind of conversation AND files. Also do not assume your earlier plan still stands; the user saw it and chose to go back. Risk boundary: continuing from remembered post-revert state re-applies changes the user explicitly undid. Validation signal: your first action after a revert notice is a fresh read or status check, and your plan reflects the rewound world.",
+  "domain": "reliability",
+  "scope_hint": "deepagent.dac-manual:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:deepagent.dac-manual",
+  "pack_id": "deepagent.dac-manual"
+}

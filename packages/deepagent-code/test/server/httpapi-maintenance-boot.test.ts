@@ -85,6 +85,15 @@ test("a non-ready store starts only the authenticated read-only maintenance shel
     expect(recovered.status).toBe(200)
     expect(await recovered.json()).toMatchObject({ descriptor: { descriptorKind: "resolvable_exact" } })
 
+    // The redrive-blocked listing is a business-runtime projection: the incident shell owns no
+    // Session runtime, so it answers an honest typed 503 instead of a fabricated empty list.
+    const redriveBlocked = await fetch(new URL(MaintenancePaths.recoveryRedriveBlocked, listener.url), { headers })
+    expect(redriveBlocked.status).toBe(503)
+    expect(await redriveBlocked.json()).toMatchObject({
+      name: "ApiUnavailable",
+      data: { code: "service_unavailable" },
+    })
+
     const business = await fetch(new URL("/session", listener.url), { headers })
     expect(business.status).toBe(404)
   } finally {
@@ -164,7 +173,7 @@ test("the ready runtime abandons one exact indeterminate provider attempt throug
       activity: database.query("SELECT state FROM session_activity WHERE activity_id = ?").get(authority.attempt.activityId),
       command: database.query("SELECT state, actor_type, actor_id FROM recovery_command WHERE command_id = ?").get(commandId),
       bridge: database.query("SELECT attempt_id, receipt_id FROM session_v2_provider_recovery_bridge WHERE command_id = ?").get(commandId),
-      session: database.query("SELECT time_suspended FROM session WHERE id = ?").get(authority.attempt.sessionId),
+      session: database.query("SELECT execution_claim_token FROM session WHERE id = ?").get(authority.attempt.sessionId),
     }).toEqual({
       attempt: { state: "resolved_abandoned", attempt_version: 4 },
       // The original receipt remains immutable evidence of the unknown provider outcome;
@@ -173,7 +182,7 @@ test("the ready runtime abandons one exact indeterminate provider attempt throug
       activity: { state: "interrupted" },
       command: { state: "abandoned", actor_type: "user", actor_id: "http-operator" },
       bridge: { attempt_id: authority.attempt.attemptId, receipt_id: authority.receiptId },
-      session: { time_suspended: null },
+      session: { execution_claim_token: null },
     })
   } finally {
     database.close()

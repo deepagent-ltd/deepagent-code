@@ -12,6 +12,7 @@ import "./settings-v2.css"
 import { SettingsServersV2 } from "./servers"
 import { SettingsAboutV2 } from "./about"
 import { SettingsCapabilitiesV2 } from "./capabilities"
+import { SettingsPluginsV2 } from "./plugins"
 
 export const DialogSettings: Component = () => {
   const language = useLanguage()
@@ -57,6 +58,10 @@ export const DialogSettings: Component = () => {
                       <Icon name="package" />
                       {language.t("settings.capabilities.title")}
                     </TabsV2.Trigger>
+                    <TabsV2.Trigger value="plugins">
+                      <Icon name="plugin" />
+                      {language.t("status.popover.tab.plugins")}
+                    </TabsV2.Trigger>
                   </div>
                 </div>
 
@@ -94,6 +99,9 @@ export const DialogSettings: Component = () => {
         </TabsV2.Content>
         <TabsV2.Content value="capabilities" class="settings-v2-panel">
           <SettingsCapabilitiesV2 />
+        </TabsV2.Content>
+        <TabsV2.Content value="plugins" class="settings-v2-panel">
+          <SettingsPluginsV2 />
         </TabsV2.Content>
         <TabsV2.Content value="about" class="settings-v2-panel">
           <SettingsAboutV2 />

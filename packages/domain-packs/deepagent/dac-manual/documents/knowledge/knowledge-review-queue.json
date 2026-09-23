@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:dac-manual:knowledge-review-queue",
+  "type": "knowledge",
+  "title": "Durable knowledge, search surfaces, and the human review queue",
+  "description": "Durable knowledge is curated and human-reviewed; reach it through capability_search and pack_search — there is no model write path today.",
+  "body": "DeepAgent Code keeps a durable knowledge base: curated strategy, methodology, knowledge, and skill documents from the built-in domain packs (this manual included), seeded active at startup, plus learned candidates. The governing rule is that knowledge becomes retrievable only after review: staged candidates sit in a human review queue, and only active documents surface to you. There is currently NO tool that lets you write or propose knowledge — do not look for one; if something is worth remembering durably, tell the user so a human can record it.\n\nUse when you need guidance that files do not hold. Two read surfaces exist: capability_search finds DeepAgentCode capability cards (what features exist, their entry tools) and capability_load discloses a capability's procedure body; pack_search finds domain-pack documents and domain_pack_load discloses a document body (see the manual-search-load-chain document). Search before answering a domain or system question from priors.\n\nInput/output: searches return bounded cards with summaries; loads return bounded bodies.\n\nCaveats: a missing search hit is not proof that no guidance exists — rephrase the query once before falling back to priors. Risk boundary: because writes require human review, never claim you \"saved\" or \"remembered\" anything for future sessions; the claim would be false. Validation signal: guidance you cite traces to a loaded document, not to a recalled phrase.",
+  "domain": "knowledge",
+  "scope_hint": "deepagent.dac-manual:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:deepagent.dac-manual",
+  "pack_id": "deepagent.dac-manual"
+}

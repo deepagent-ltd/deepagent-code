@@ -121,12 +121,18 @@ export const layerWithRuntimeFeatures = (runtimeFeatures: RuntimeFeatureRegistry
                   .get()
                   .pipe(Effect.orDie)
                 const version = Number(row.type.slice(outbox.eventType.length + 1))
+                // Rehydrated rows carry the wire form (epoch millis, not Date instances), while
+                // compatibilityEvent's Schema.is guards validate decoded payloads. Feeding the
+                // raw row silently no-ops the legacy egress rebuild and clients receive native
+                // V2 shapes (e.g. session info without a top-level `directory`).
+                const sync = EventV2.syncRegistry.get(EventV2.versionedType(outbox.eventType, version))
+                const data = sync ? sync.decode(row.data) : row.data
                 const event = compatibilityEvent({
                   id: EventV2.ID.make(outbox.eventId),
                   type: outbox.eventType,
                   version,
                   seq: row.seq,
-                  data: row.data,
+                  data,
                 })
                 const info = row.data.info as
                   | { location?: { directory?: string; workspaceID?: string; project?: { id?: string } } }

@@ -115,8 +115,6 @@ export const Event = {
   }),
 }
 
-declare const DEEPAGENT_CODE_MODELS_DEV: Record<string, Provider> | undefined
-
 /**
  * Vendored catalog entry for the DeepAgent first-party API platform (newAPI
  * gateway) — the third-party models.dev catalog does not know it, so its
@@ -296,6 +294,26 @@ export const DEEPAGENT_MODEL_PROTOCOL: Record<string, "openai-compatible.respons
 
 const mergeVendored = (loaded: Record<string, Provider>) => ({ ...OFFICIAL_VENDORED_CATALOG, ...loaded })
 
+// Chain entries may be base URLs ("https://models.dev") or full file URLs (".../api.json",
+// the historical DEFAULT_MODELS_URL shape); both map to the base the catalog is fetched from.
+const normalizeSource = (entry: string) => {
+  const trimmed = entry.trim().replace(/\/+$/, "")
+  return trimmed.endsWith("/api.json") ? trimmed.slice(0, -"/api.json".length) : trimmed
+}
+
+// A source only succeeds when the body parses to a non-empty provider map — a proxy/WAF HTML
+// error page served with a 200 must fall through to the next source, not poison the disk cache.
+const parseCatalog = (text: string) =>
+  Effect.try({
+    try: () => {
+      const data = JSON.parse(text) as Record<string, Provider>
+      if (typeof data !== "object" || data === null || Array.isArray(data) || Object.keys(data).length === 0)
+        throw new Error("not a non-empty provider map")
+      return { text, data }
+    },
+    catch: () => new Error("models.dev catalog body is not valid JSON"),
+  })
+
 export interface Interface {
   readonly get: () => Effect.Effect<Record<string, Provider>>
   readonly refresh: (force?: boolean) => Effect.Effect<void>
@@ -320,10 +338,19 @@ export const layer = Layer.effect(
       ),
     )
 
-    const source = Flag.DEEPAGENT_CODE_MODELS_URL || "https://models.dev"
+    // Ordered fetch chain: the self-hosted aly mirror (hourly-synced from models.dev, reachable
+    // from CN networks) first, models.dev itself as the authoritative fallback. No build-time
+    // snapshot: offline first runs serve the vendored deepagent catalog until refresh heals.
+    const rawSource = Flag.DEEPAGENT_CODE_MODELS_URL
+    const sources = (rawSource ?? "https://ai.deepagent.ltd,https://models.dev")
+      .split(",")
+      .map(normalizeSource)
+      .filter((entry) => entry.length > 0)
     const filepath = path.join(
       global.cache,
-      source === "https://models.dev" ? "models.json" : `models-${Hash.fast(source)}.json`,
+      rawSource === undefined || rawSource.trim() === "https://models.dev"
+        ? "models.json"
+        : `models-${Hash.fast(rawSource)}.json`,
     )
     const ttl = Duration.minutes(5)
     const lockKey = `models-dev:${filepath}`
@@ -336,11 +363,17 @@ export const layer = Layer.effect(
     })
 
     const fetchApi = Effect.fn("ModelsDev.fetchApi")(function* () {
-      return yield* HttpClientRequest.get(`${source}/api.json`).pipe(
-        HttpClientRequest.setHeader("User-Agent", USER_AGENT),
-        http.execute,
-        Effect.flatMap((res) => res.text),
-        Effect.timeout("10 seconds"),
+      return yield* Effect.firstSuccessOf(
+        sources.map((base) =>
+          HttpClientRequest.get(`${base}/api.json`).pipe(
+            HttpClientRequest.setHeader("User-Agent", USER_AGENT),
+            http.execute,
+            Effect.flatMap((res) => res.text),
+            Effect.timeout("10 seconds"),
+            Effect.flatMap(parseCatalog),
+            Effect.tapError((error) => Effect.logDebug("models.dev source failed", { base, error })),
+          ),
+        ),
       )
     })
 
@@ -358,14 +391,10 @@ export const layer = Layer.effect(
       Effect.map((v) => v as Record<string, Provider> | undefined),
     )
 
-    const loadSnapshot = Effect.sync(() =>
-      typeof DEEPAGENT_CODE_MODELS_DEV === "undefined" ? undefined : DEEPAGENT_CODE_MODELS_DEV,
-    )
-
     const fetchAndWrite = Effect.fn("ModelsDev.fetchAndWrite")(function* () {
-      const text = yield* fetchApi()
+      const fetched = yield* fetchApi()
       const tempfile = `${filepath}.${process.pid}.${Date.now()}.tmp`
-      yield* fs.writeWithDirs(tempfile, text).pipe(
+      yield* fs.writeWithDirs(tempfile, fetched.text).pipe(
         Effect.andThen(fs.rename(tempfile, filepath)),
         Effect.catch((error) =>
           Effect.gen(function* () {
@@ -374,24 +403,31 @@ export const layer = Layer.effect(
           }),
         ),
       )
-      return text
+      return fetched.data
     })
 
     const populate = Effect.gen(function* () {
       const fromDisk = yield* loadFromDisk
       if (fromDisk) return mergeVendored(fromDisk)
-      const snapshot = yield* loadSnapshot
-      if (snapshot) return mergeVendored(snapshot)
       if (Flag.DEEPAGENT_CODE_DISABLE_MODELS_FETCH) return OFFICIAL_VENDORED_CATALOG
       // The root-scoped flock is cross-process: concurrent CLIs sharing this Global root serialize
       // the cache file, while independent embedded roots cannot accidentally share a module path.
-      const text = yield* Effect.scoped(
+      // A failed chain must not kill provider init (there is no bundled snapshot anymore): serve
+      // the vendored deepagent catalog and let the hourly refresh heal the disk cache.
+      const data = yield* Effect.scoped(
         Effect.gen(function* () {
           yield* flock.acquire(lockKey)
           return yield* fetchAndWrite()
         }),
+      ).pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("models.dev catalog fetch failed, serving vendored catalog", { error }).pipe(
+            Effect.as(undefined),
+          ),
+        ),
       )
-      return mergeVendored(JSON.parse(text) as Record<string, Provider>)
+      if (!data) return OFFICIAL_VENDORED_CATALOG
+      return mergeVendored(data)
     }).pipe(Effect.withSpan("ModelsDev.populate"), Effect.orDie)
 
     const [cachedGet, invalidate] = yield* Effect.cachedInvalidateWithTTL(populate, Duration.infinity)

@@ -73,7 +73,13 @@ const registryLayer = Layer.effect(
       }).pipe(
         Effect.map((output) => ({ output })),
         Effect.catchTag("LLM.ToolFailure", (failure) =>
-          Effect.succeed({ result: { type: "error" as const, value: failure.message } }),
+          Effect.succeed({
+            result: {
+              type: "error" as const,
+              value: failure.message,
+              ...(failure.metadata === undefined ? {} : { metadata: failure.metadata }),
+            },
+          }),
         ),
       )
       if ("result" in pending) return pending
@@ -173,6 +179,8 @@ const readOnlyActions = new Set([
   "context_query",
   "capability_search",
   "capability.read",
+  "task_status",
+  "task_read",
 ])
 
 function whollyDisabled(action: string, policy: PermissionV2.Ruleset | PermissionPolicy) {

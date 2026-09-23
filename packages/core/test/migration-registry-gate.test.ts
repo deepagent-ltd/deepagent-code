@@ -58,7 +58,20 @@ import { migrations } from "../src/database/migration.gen"
 // evidence authority migration (20260919073750_v2_structured_output_evidence) joined the
 // registry (session_v2_structured_output_evidence + insert/update/delete guards);
 // `migration --check` green at re-pin time.
-const PINNED_DIGEST = "9f97f646a1612275ac711ba623caf5b4837af18335e83c28f9ccc4c01b953587"
+// Successor pin (2026-09-23, A1-09/B-17): the execution_claim_token rename migration
+// (20260922152631_execution_claim_token) joined the registry (session.time_suspended column
+// renamed to execution_claim_token + partial index rename); explicit re-pin of the release
+// candidate.
+// Successor pin (2026-09-23, C-P2-08): the durable task-call fan-out admission migration
+// (20260922182048_v2_task_call_admission) joined the registry (the per-message subagent
+// fan-out cap ledger: session_v2_task_call_admission with a globally unique tool_call_id
+// plus the (session_id, assistant_message_id) batch index); explicit re-pin of the release
+// candidate.
+// Successor pin (2026-09-23, K-01 R-3): the recovery_command_exit migration
+// (20260922182457_recovery_command_exit) joined the registry (command_kind/evidence columns
+// for the confirm-settled durable exit) alongside the merged v2_task_call_admission entry;
+// explicit re-pin over the merged tree.
+const PINNED_DIGEST = "d060e26dd41e2ea9018e7803d73eb4bc280b6506045463e6fb269b2e2e3aeeb2"
 
 const digest = (entries: readonly { readonly id: string; readonly hash: string }[]) =>
   createHash("sha256").update(JSON.stringify(entries)).digest("hex")

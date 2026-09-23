@@ -13,7 +13,11 @@ import type { PlanDoc } from "@deepagent-code/core/deepagent/plan-controller"
 import type { ValidationResult } from "@deepagent-code/core/deepagent/round-state"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { SessionMessage } from "@deepagent-code/core/session/message"
+import { SessionInput } from "@deepagent-code/core/session/input"
 import { Prompt } from "@deepagent-code/core/session/prompt"
+import type { EventV2 } from "@deepagent-code/core/event"
+import type { Database } from "@deepagent-code/core/database/database"
+import { Hash } from "@deepagent-code/core/util/hash"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import type * as LSPClient from "../lsp/client"
@@ -57,7 +61,8 @@ import { boundDegradedRawResult, makeDegradedStructuredOutput } from "../tool/ta
  *                    exceeds `maxSeverity`.
  *   panel_approves → `runPanel(...)` with a real lens-prompted panelist runner (§D.7 关键决策点召集
  *                    panel); `decision = verdict.decision`.
- *   rollback       → `SessionRevert.Service`, best-effort (never fatal).
+ *   rollback       → `SessionRevert.Service`, best-effort (never fatal); a successful revert also
+ *                    lands ONE durable Synthetic rollback notice (B5) in the reverted session.
  *   step executor  → ONE durable V2 subagent turn against the `goal-worker` agent (§D.6 不越权: the
  *                    turn runs through the NORMAL session/tool permission path — the loop never elevates).
  *
@@ -1131,15 +1136,57 @@ export const liveRollback =
   (
     revert: SessionRevert.Interface,
     latestMessageID: (sessionID: string) => Effect.Effect<string | null>,
+    publishNotice: RollbackNoticePublisher,
   ): RollbackPort =>
   (rbInput) =>
     Effect.gen(function* () {
       const messageID = yield* latestMessageID(rbInput.sessionId).pipe(Effect.catchCause(() => Effect.succeed(null)))
       if (messageID == null) return
-      yield* revert
-        .revert({ sessionID: SessionID.make(rbInput.sessionId), messageID: MessageID.make(messageID) })
-        .pipe(Effect.ignore)
+      const reverted = yield* revert
+        .revert({
+          sessionID: SessionID.make(rbInput.sessionId),
+          messageID: MessageID.make(messageID),
+          // Not a user-initiated revert: suppress the C2 "user reverted" notice — the B5 rollback
+          // notice below is the actor-accurate one for this path.
+          notice: false,
+        })
+        .pipe(Effect.option)
+      // B5: notify only after a revert ACTUALLY landed (a no-target call returns the session
+      // unchanged, and a BusyError/LimitError surfaces as None). Best-effort like the revert itself;
+      // a repeated rollback for the same (goalID, tick) — e.g. a cold-tick re-execution — is absorbed
+      // by the publisher's deterministic-id dedupe instead of duplicating the notice.
+      if (Option.isNone(reverted) || reverted.value.revert == null) return
+      yield* publishNotice({ goalID: rbInput.goalId, sessionID: rbInput.sessionId, tick: rbInput.tick }).pipe(
+        Effect.catchCause((cause) => Effect.logError("liveRollback: rollback notice publish failed", cause)),
+      )
     }).pipe(Effect.catchCause(() => Effect.void))
 
+/**
+ * B5 (WS6 §7.4) — the one-shot model-facing rollback notice, published to the reverted session after a
+ * successful autonomous rollback so the next turn re-verifies file state instead of assuming its
+ * reverted edits still exist. Placed in the wiring layer (not goal-loop.ts): the core controller is a
+ * pure deterministic machine with no session-event publish channel in its deps.
+ */
+export const GOAL_ROLLBACK_NOTICE =
+  "Autonomous run rolled the workspace back to the last validated state. Your most recent edits were reverted; re-verify file state with tools before continuing."
+
+/** Injected one-shot notice sink for liveRollback — keyed on (goalID, tick) so replays never duplicate. */
+export type RollbackNoticePublisher = (input: {
+  readonly goalID: string
+  readonly sessionID: string
+  readonly tick: number
+}) => Effect.Effect<void>
+
+/** The production rollback notice publisher: a durable Synthetic message, idempotent by its derived deterministic id. */
+export const liveRollbackNotice =
+  (events: EventV2.Interface, db: Database.Interface["db"]): RollbackNoticePublisher =>
+  (input) =>
+    SessionInput.publishSyntheticNoticeOnce(db, events, {
+      sessionID: SessionID.make(input.sessionID),
+      messageID: SessionMessage.ID.make(
+        `msg_${Hash.sha256(`goal-rollback-notice:${input.goalID}:${input.tick}`).slice(0, 40)}`,
+      ),
+      text: GOAL_ROLLBACK_NOTICE,
+    })
 
 export * as GoalLoopWiring from "./goal-loop-wiring"

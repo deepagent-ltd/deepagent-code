@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:dac-manual:code-intel-suite",
+  "type": "knowledge",
+  "title": "The code_intel tool suite",
+  "description": "Structural code queries — search, definition, references, calls, dependencies, outline, diagnostics — through the code_intel tool.",
+  "body": "code_intel answers structural questions about the current workspace from the shared code graph plus LSP enrichment: who calls X, what does Y depend on, where is Z defined. Use it for \"who calls this\", \"what breaks if I change this signature\", and module-shape questions before cross-file edits — exactly the questions plain grep answers too broadly or too shallowly. Do not use it to read a file's full contents; read the file.\n\nHow to invoke: pass an intent and its arguments. search takes query or symbol (behavior, symbol, path, or natural-language concept). definition, references, implementations, calls, and dependencies take symbol or file. outline and diagnostics require file. calls_out returns the symbols the target calls (outgoing edges); calls_in returns its callers (incoming edges). Start with depth 1 for immediate neighbors and increase it only when the first result is insufficient.\n\nInput/output: results include the node's degree counts (inDegree, outDegree, callsIn, callsOut), an explicit direction on relationship hits, and opaque references you can pass to context_query for cross-graph evidence tracing.\n\nCaveats: the graph is an index and can lag the files on disk — verify a load-bearing answer by reading the source before editing, and always read the current file you intend to change; snippets are bounded evidence, not an editable snapshot. The tool is read-only and may be unavailable when the code-graph runtime is off. Risk boundary: a stale index miss is not proof a caller does not exist.",
+  "domain": "code_intel",
+  "scope_hint": "deepagent.dac-manual:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:deepagent.dac-manual",
+  "pack_id": "deepagent.dac-manual"
+}

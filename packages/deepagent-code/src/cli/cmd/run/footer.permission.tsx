@@ -14,7 +14,6 @@
 import type { TextareaRenderable } from "@opentui/core"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal } from "solid-js"
-import type { PermissionRequest } from "@deepagent-code/sdk"
 import {
   createPermissionBodyState,
   permissionAlwaysLines,
@@ -32,7 +31,7 @@ import {
 import { footerWidthPolicy } from "./footer.width"
 import { toolFiletype } from "./tool"
 import { transparent, type RunBlockTheme, type RunFooterTheme } from "./theme"
-import type { PermissionReply, RunDiffStyle } from "./types"
+import type { PermissionReply, RunDiffStyle, RunPermissionRequest } from "./types"
 
 function buttons(
   list: PermissionOption[],
@@ -131,7 +130,7 @@ export function RejectField(props: {
 }
 
 export function RunPermissionBody(props: {
-  request: PermissionRequest
+  request: RunPermissionRequest
   theme: RunFooterTheme
   block: RunBlockTheme
   diffStyle?: RunDiffStyle
@@ -176,7 +175,9 @@ export function RunPermissionBody(props: {
     }))
 
     try {
-      await props.onReply(next)
+      // V2 asks carry their provenance on the request (see session-data.ts); route the reply
+      // through the session-scoped V2 surface so the runtime does not 404 on the legacy route.
+      await props.onReply(props.request.v2 ? { ...next, sessionID: props.request.sessionID, v2: true } : next)
     } catch {
       setState((prev) => ({
         ...prev,

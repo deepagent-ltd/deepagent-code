@@ -19,10 +19,7 @@ describe("auditPackageInputs", () => {
   test("accepts generated application assets", async () => {
     await using root = await fixture()
     await mkdir(path.join(root.root, "out", "main", "chunks"), { recursive: true })
-    await writeFile(
-      path.join(root.root, "out", "main", "chunks", "models-dev.build.json"),
-      JSON.stringify({ source: "test/tool/fixtures/models-api.json", sha256: "a".repeat(64) }),
-    )
+    await writeFile(path.join(root.root, "out", "main", "chunks", "node.js"), "export {}")
     await expect(auditPackageInputs(root.root)).resolves.toBeUndefined()
   })
 

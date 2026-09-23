@@ -181,3 +181,56 @@ export type BootstrapStatusOutcome =
   | { kind: "read_only_recovery"; state: BootstrapState }
   | { kind: "blocked_schema"; state: BootstrapState }
   | { kind: "unreachable"; error: MaintenanceFailure }
+
+// W-02 M-6 — the migration orchestration journal wire shapes (maintenance group, M-2). The shell
+// polls /maintenance/migration/status and renders phase progress; failure.recoveryGuidance is
+// rendered verbatim (it is authored user-readable on the server).
+
+export const MIGRATION_PHASES = [
+  "md_export",
+  "backup_create",
+  "backup_verify",
+  "migration_apply",
+  "post_verify",
+  "archive",
+  "disk_advisory",
+] as const
+export type MigrationPhase = (typeof MIGRATION_PHASES)[number]
+
+export interface MigrationPhaseRecord {
+  phase: MigrationPhase
+  state: "completed" | "failed"
+  startedAt: number
+  completedAt: number
+  outcome?: unknown
+  failure?: { code: string; detail: string }
+}
+
+export interface MigrationJournal {
+  version: 1
+  kind: "migration-orchestration-journal"
+  orchestrationId: string
+  dbPath: string
+  startedAt: number
+  updatedAt: number
+  status: "in_progress" | "completed" | "failed"
+  currentPhase?: MigrationPhase
+  phases: MigrationPhaseRecord[]
+  failure?: {
+    phase: MigrationPhase
+    code: string
+    detail: string
+    recoveryGuidance: string
+  }
+}
+
+export interface MigrationStatus {
+  active: boolean
+  journal?: MigrationJournal
+}
+
+export interface MigrationRun {
+  status: "in_progress" | "completed" | "failed"
+  journal: MigrationJournal
+  diskAdvisoryPath?: string
+}

@@ -66,6 +66,7 @@ import { useCommand, type CommandOption } from "@/context/command"
 import { ConstrainDragXAxis, getDraggableId, FixedDragDropSensors } from "@/utils/solid-dnd"
 import { DebugBar } from "@/components/debug-bar"
 import { reviewSummary } from "@/components/review/dialog-review.api"
+import type { KnowledgeTab } from "@/components/knowledge/dialog-knowledge"
 import { fetchCapabilities } from "@/components/deepagent/panel-goal.api"
 import { Titlebar, type TitlebarUpdate } from "@/components/titlebar"
 import { useDirectoryPicker } from "@/components/directory-picker"
@@ -1334,26 +1335,20 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
     })
   }
 
-  function openReview() {
+  // WS1: one rail button opens the merged Knowledge dialog (审核 | Wiki | 领域包 tabs). The
+  // review-pending badge and wiki-capability gating carry over from the three old entries.
+  function openKnowledge(tab?: KnowledgeTab) {
     const run = ++dialogRun
     const dir = currentDir()
     const sdk = serverSDK.createDirSdkContext(dir)
-    void import("@/components/review/dialog-review").then((x) => {
+    void import("@/components/knowledge/dialog-knowledge").then((x) => {
       if (dialogDead || dialogRun !== run) return
-      dialog.show(() => <x.DialogReview client={sdk.client as never} />)
+      dialog.show(() => (
+        <x.DialogKnowledge client={sdk.client as never} tab={tab} wikiAvailable={!!wikiAvailable.latest} />
+      ))
     })
     // Refresh the sidebar badge once the reviewer closes.
     setTimeout(() => void refetchReviewPending(), 1500)
-  }
-
-  function openWiki() {
-    const run = ++dialogRun
-    const dir = currentDir()
-    const sdk = serverSDK.createDirSdkContext(dir)
-    void import("@/components/wiki/dialog-wiki").then((x) => {
-      if (dialogDead || dialogRun !== run) return
-      dialog.show(() => <x.DialogWiki client={sdk.client as never} />)
-    })
   }
 
   function openHistoryProjects() {
@@ -1369,16 +1364,6 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
           onDeleted={(directory: string) => layout.projects.close(directory)}
         />
       ))
-    })
-  }
-
-  function openPacks() {
-    const run = ++dialogRun
-    const dir = currentDir()
-    const sdk = serverSDK.createDirSdkContext(dir)
-    void import("@/components/packs/dialog-packs").then((x) => {
-      if (dialogDead || dialogRun !== run) return
-      dialog.show(() => <x.DialogPacks client={sdk.client as never} />)
     })
   }
 
@@ -2520,20 +2505,13 @@ export default function Layout(props: ParentProps<{ onStartupRestoreSettled?: ()
       settingsLabel={() => language.t("sidebar.settings")}
       settingsKeybind={() => command.keybind("settings.open")}
       onOpenSettings={openSettings}
-      reviewLabel={() => language.t("sidebar.review")}
-      onOpenReview={openReview}
+      knowledgeLabel={() => language.t("knowledge.title")}
+      onOpenKnowledge={() => openKnowledge()}
       reviewPending={() => !!reviewPending.latest}
-      wikiLabel={() => language.t("sidebar.wiki")}
-      onOpenWiki={openWiki}
-      wikiAvailable={() => !!wikiAvailable.latest}
       historyLabel={() => language.t("sidebar.history")}
       onOpenHistory={openHistoryProjects}
-      packsLabel={() => language.t("packs.title")}
-      onOpenPacks={openPacks}
       archivedLabel={() => language.t("session.archived.title")}
       onOpenArchived={openArchivedSessions}
-      helpLabel={() => language.t("sidebar.help")}
-      onOpenHelp={() => platform.openLink("https://ai.deepagent.ltd/")}
       renderPanel={() =>
         mobile ? <SidebarPanel project={currentProject} mobile /> : <SidebarPanel project={currentProject} merged />
       }

@@ -613,9 +613,6 @@ export const dict = {
   "settings.section.server": "เซิร์ฟเวอร์",
   "settings.tab.general": "ทั่วไป",
   "settings.tab.shortcuts": "ทางลัด",
-  "settings.desktop.section.wsl": "WSL",
-  "settings.desktop.wsl.title": "การรวม WSL",
-  "settings.desktop.wsl.description": "เรียกใช้เซิร์ฟเวอร์ DeepAgent Code ภายใน WSL บน Windows",
 
   "settings.general.section.appearance": "รูปลักษณ์",
   "settings.general.section.notifications": "การแจ้งเตือนระบบ",
@@ -995,6 +992,8 @@ export const dict = {
   "settings.about.attribution.title": "สร้างบน deepagent-code",
   "settings.about.attribution.description": "DeepAgent Code สร้างบน deepagent-code และใช้งานภายใต้สัญญาอนุญาต MIT",
   "settings.about.license.title": "สัญญาอนุญาต",
+  "settings.about.help.title": "ความช่วยเหลือ",
+  "settings.about.help.description": "เอกสาร คู่มือ และการสนับสนุน",
   "settings.general.section.advanced": "ขั้นสูง",
   "settings.general.section.deepagent": "DeepAgent",
   "settings.general.deepagent.mode.title": "เอเจนต์",

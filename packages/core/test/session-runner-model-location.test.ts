@@ -151,15 +151,21 @@ describe("SessionRunnerModel production Location vertical", () => {
                 ProviderV2.ID.make("deepagent"),
                 ProviderV2.ID.make("acme"),
               ])
+              // Provenance is unique naming (K-04): the vendored first-party seed
+              // carries no origin; only the config-ingressed provider does.
+              expect(providers[0]?.origin).toBeUndefined()
+              expect(providers[1]?.origin).toBe("config")
               // No session model: the config `model` scalar selects the default.
               return yield* SessionRunnerModel.Service.use((service) => service.resolve(session(tmp.path)))
             }).pipe(Effect.scoped, Effect.provide(LocationServiceMap.get({ directory: AbsolutePath.make(tmp.path) })))
 
             expect(resolved.info?.providerID).toBe(ProviderV2.ID.make("acme"))
             expect(resolved.info?.id).toBe(ModelV2.ID.make("acme-chat-large"))
-            // `enabled` via "custom" is ConfigProviderPlugin's marker: the catalog entry was
-            // written from Core config, not from models.dev or any V1 provider path.
+            // `enabled` via "custom" is ConfigProviderPlugin's availability marker; `origin:
+            // "config"` (K-04) is the dedicated provenance marker that the entry was written
+            // from Core config, not from models.dev or any V1 provider path.
             expect(resolved.provider?.enabled).toEqual({ via: "custom", data: {} })
+            expect(resolved.provider?.origin).toBe("config")
             expect(resolved.provider?.api).toMatchObject({
               package: "@ai-sdk/openai-compatible",
               url: "https://acme.example/v1",
@@ -288,6 +294,68 @@ describe("SessionRunnerModel production Location vertical", () => {
               reason: "model_protocol_selection_required",
               selectionState: "disabled",
             })
+          }),
+        ),
+      ),
+    20000,
+  )
+
+  it.live(
+    "resolves a custom provider model with undeclared pricing/limit as typed-unavailable, never 0",
+    () =>
+      Effect.acquireRelease(
+        Effect.promise(() => tmpdir()),
+        (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+      ).pipe(
+        Effect.flatMap((tmp) =>
+          Effect.gen(function* () {
+            // A config-defined provider whose model declares NO limit and NO cost:
+            // the honest BYOK shape where the user only knows an endpoint and an id.
+            yield* Effect.promise(() =>
+              fs.writeFile(
+                path.join(tmp.path, "deepagent-code.json"),
+                JSON.stringify({
+                  providers: {
+                    acme: {
+                      api: {
+                        type: "aisdk",
+                        package: "@ai-sdk/openai-compatible",
+                        url: "https://acme.example/v1",
+                        protocol: "openai-compatible.chat",
+                      },
+                      models: {
+                        "acme-opaque": {
+                          name: "Acme Opaque",
+                          capabilities: { tools: false, input: ["text"], output: ["text"] },
+                        },
+                      },
+                    },
+                  },
+                }),
+              ),
+            )
+
+            const resolved = yield* SessionRunnerModel.Service.use((service) =>
+              service.resolve(
+                session(tmp.path, {
+                  id: ModelV2.ID.make("acme-opaque"),
+                  providerID: ProviderV2.ID.make("acme"),
+                }),
+              ),
+            ).pipe(Effect.scoped, Effect.provide(LocationServiceMap.get({ directory: AbsolutePath.make(tmp.path) })))
+
+            expect(resolved.provider?.origin).toBe("config")
+            // The catalog entry carries no fabricated numbers...
+            expect(resolved.info?.limit.context).toBeUndefined()
+            expect(resolved.info?.limit.input).toBeUndefined()
+            expect(resolved.info?.limit.output).toBeUndefined()
+            expect(resolved.info?.cost).toEqual([])
+            // ...and neither does the lowered runner request: unknown limits stay
+            // absent on the route (405-007: a 0 would read as a real window).
+            expect(resolved.model.route.defaults.limits?.context).toBeUndefined()
+            expect(resolved.model.route.defaults.limits?.input).toBeUndefined()
+            expect(resolved.model.route.defaults.limits?.output).toBeUndefined()
+            expect(resolved.model.route.id).toBe("openai-compatible-chat")
           }),
         ),
       ),

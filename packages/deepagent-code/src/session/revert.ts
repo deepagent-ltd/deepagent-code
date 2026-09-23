@@ -24,12 +24,18 @@ export const RevertInput = Schema.Struct({
   sessionID: SessionID,
   messageID: MessageID,
   partID: Schema.optional(PartID),
+  /**
+   * C2 notice gate (default on). Autonomous rollbacks (goal-loop liveRollback, oversight rollback)
+   * pass false: the "user reverted" notice is only truthful for genuine user-initiated reverts, and
+   * those paths publish their own actor-accurate notice (or none). Omitted from the HTTP payload.
+   */
+  notice: Schema.optional(Schema.Boolean),
 })
 export type RevertInput = Schema.Schema.Type<typeof RevertInput>
 
 export interface Interface {
   readonly revert: (input: RevertInput) => Effect.Effect<Session.Info, Session.BusyError | LimitError>
-  readonly unrevert: (input: { sessionID: SessionID }) => Effect.Effect<Session.Info, Session.BusyError>
+  readonly unrevert: (input: { sessionID: SessionID; notice?: boolean }) => Effect.Effect<Session.Info, Session.BusyError>
   readonly cleanup: (session: Session.Info, mutationEpoch?: number) => Effect.Effect<void>
 }
 
@@ -136,6 +142,7 @@ export const layer = Layer.effect(
           files: manifest.totalFiles,
           diffManifest: descriptor,
         },
+        ...(input.notice === undefined ? {} : { notice: input.notice }),
       })
       yield* sessions.setSummary({
         sessionID: input.sessionID,
@@ -150,13 +157,16 @@ export const layer = Layer.effect(
       return yield* sessions.get(input.sessionID).pipe(Effect.orDie)
     })
 
-    const unrevertUnlocked = Effect.fn("SessionRevert.unrevertUnlocked")(function* (input: { sessionID: SessionID }) {
+    const unrevertUnlocked = Effect.fn("SessionRevert.unrevertUnlocked")(function* (input: {
+      sessionID: SessionID
+      notice?: boolean
+    }) {
       log.info("unreverting", input)
       yield* state.assertNotBusy(input.sessionID)
       const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
       if (!session.revert) return session
       if (session.revert.snapshot) yield* snap.restore(session.revert.snapshot)
-      yield* sessions.commitUnrevert(input.sessionID)
+      yield* sessions.commitUnrevert(input)
       return yield* sessions.get(input.sessionID).pipe(Effect.orDie)
     })
 

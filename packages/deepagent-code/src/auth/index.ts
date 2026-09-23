@@ -7,7 +7,9 @@ import { FSUtil } from "@deepagent-code/core/fs-util"
 
 export const OAUTH_DUMMY_KEY = "deepagent-code-oauth-dummy-key"
 
-const file = path.join(Global.Path.data, "auth.json")
+// D-W1: auth.json holds provider credentials, so it lives in the roaming config home
+// (%APPDATA%\deepagent-code on Windows; identical to the data home elsewhere).
+const file = path.join(Global.Path.config, "auth.json")
 
 const fail = (message: string) => (cause: unknown) => new AuthError({ message, cause })
 

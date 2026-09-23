@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:dac-manual:file-scope-overlap",
+  "type": "knowledge",
+  "title": "file_scope declarations and overlap warnings",
+  "description": "Declare file_scope on write-type tasks; an overlap warning means two active sibling tasks declared intersecting scopes.",
+  "body": "file_scope is an optional task parameter: a list of globs or directory prefixes the task expects to touch. It is recorded on the durable run and used for advisory conflict detection between sibling write-type tasks.\n\nUse when you launch more than one write-type task in the same round — declare disjoint scopes (e.g. [\"src/auth/\"] vs [\"src/api/\"]) so the overlap check can vouch for the split. Do not declare a scope broader than the task needs, and do not bother for read-only tasks: the check only applies to write-type runs.\n\nHow to invoke: pass file_scope on the task call. If the new run's scope intersects an ACTIVE sibling write run's declared scope, the task result carries a non-blocking warning naming the sibling task and the common paths: \"Scope overlaps with active task ... consider sequencing or disjoint scopes.\"\n\nInput/output: the warning arrives in the task output's warnings list; the launch still proceeds. An empty or omitted scope raises NO warning — silence means \"nothing declared\", not \"proven disjoint\".\n\nCaveats: the warning is advisory; physical isolation is each run's own worktree, and real semantic conflicts surface later as a merge conflict at pr_finalize. Actions on a warning: verify the overlap is intentional, sequence the tasks, or re-scope one of them. Risk boundary: two tasks editing the same files concurrently is the classic lost-update setup — record which task owns which file before letting both run. Validation signal: a re-launched task with a disjoint scope returns no warning.",
+  "domain": "orchestration",
+  "scope_hint": "deepagent.dac-manual:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:deepagent.dac-manual",
+  "pack_id": "deepagent.dac-manual"
+}

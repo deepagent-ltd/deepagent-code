@@ -196,6 +196,19 @@ The maximum number of steps allowed for this task has been reached. Tools are di
 
 Summarize the work completed so far, list any remaining tasks, and recommend what should happen next. Do not make any tool calls.`
 
+// B4 (design §7.3): tiered context-window budget warning for the volatile system tail. Tiers
+// align with the goal-loop soft-notify fractions (GoalLoop.DEFAULT_SOFT_NOTIFY_FRACTIONS
+// [0.7, 0.9]); the message carries the MEASURED occupancy (not the tier constant), and the
+// highest crossed tier wins so a 95% turn warns rather than notices.
+const contextBudgetNotice = (occupancy: number): string | undefined => {
+  const percent = Math.round(occupancy * 100)
+  if (percent >= 90)
+    return `BUDGET WARNING: context window ~${percent}% full; compaction is imminent. Wrap up: record key state in durable form (files/plan), avoid new tool-heavy detours.`
+  if (percent >= 70)
+    return `BUDGET NOTICE: context window ~${percent}% full. Prefer completing the current subtask; avoid starting new large explorations.`
+  return undefined
+}
+
 // V4.0.1 P0b OUTPUT soft-landing (legacy loop parity): a response cut off at the output-token
 // ceiling (finish "length") with no local tool call gets a bounded "continue from the cutoff"
 // synthetic nudge and one more provider turn instead of ending the turn mid-sentence. The
@@ -959,6 +972,22 @@ export const layer = Layer.effect(
         (historyEpochLookup
           ? yield* historyEpochLookup(session.id).pipe(Effect.catchCause(() => Effect.succeed(undefined)))
           : undefined) ?? system.revision
+      // B4 (design §7.3): ONE occupancy estimate per turn, shared with the compaction trigger
+      // below (via estimatedInputTokens) — the same system+messages+tools vs window measurement
+      // compaction has always used. A crossed tier appends a volatile system part: ephemeral
+      // (never durable), lowered AFTER the projected history like the W3.6 evidence tail above,
+      // so the stable prompt-cache prefix (the reminders.ts contract) is untouched. The estimate
+      // deliberately EXCLUDES the notice itself, so the warning can never feed back into the
+      // percentage that produced it.
+      const inputUsage = SessionCompaction.estimateInputUsage(model, request)
+      const budgetNotice =
+        inputUsage === undefined ? undefined : contextBudgetNotice(inputUsage.tokens / inputUsage.context)
+      if (budgetNotice !== undefined) {
+        volatileSystemParts.push(budgetNotice)
+        request = LLM.updateRequest(request, {
+          messages: [...historyMessages, ...volatileSystemParts.map(Message.system), ...controlMessages],
+        })
+      }
       if (
         yield* compaction.compactIfNeeded({
           sessionID: session.id,
@@ -969,6 +998,7 @@ export const layer = Layer.effect(
           historyPromptEpoch,
           ownerMode: parityCampaign ? "shadow_v2" : "v2",
           admission: selectionAdmission,
+          ...(inputUsage === undefined ? {} : { estimatedInputTokens: inputUsage.tokens }),
         })
       )
         return yield* Effect.die(rebuildPreparedTurn(undefined, currentStep))
@@ -1032,11 +1062,13 @@ export const layer = Layer.effect(
           ? {
               costOf: (stepTokens: { input: number; output: number; cache: { read: number; write: number } }) => {
                 const per = (count: number, rate: number) => (Math.max(0, count) / 1e6) * rate
+                // Unknown cache rates stay unaccounted (typed unavailable in the
+                // catalog entry — never a fabricated 0 rate; K-04 / 405-007).
                 return (
                   per(stepTokens.input, pricing.input) +
                   per(stepTokens.output, pricing.output) +
-                  per(stepTokens.cache.read, pricing.cache.read) +
-                  per(stepTokens.cache.write, pricing.cache.write)
+                  (pricing.cache?.read === undefined ? 0 : per(stepTokens.cache.read, pricing.cache.read)) +
+                  (pricing.cache?.write === undefined ? 0 : per(stepTokens.cache.write, pricing.cache.write))
                 )
               },
             }

@@ -1,4 +1,5 @@
 import { Effect, Schema } from "effect"
+import { tolerantInt } from "@deepagent-code/core/schema"
 import * as Tool from "./tool"
 import path from "path"
 import { LSP } from "@/lsp/lsp"
@@ -53,7 +54,8 @@ export const Parameters = Schema.Struct({
   expression: Schema.optional(Schema.String).annotate({
     description: "For intent:eval — expression to evaluate in the current frame.",
   }),
-  frame: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))).annotate({
+  // Tolerant int arm (F-1): GLM-class providers send the frame index as a stringified number.
+  frame: Schema.optional(tolerantInt(Schema.isGreaterThanOrEqualTo(0))).annotate({
     description: "For intent:inspect/eval — stack frame index (0 = innermost). Default: 0.",
   }),
   language: Schema.optional(Schema.String).annotate({

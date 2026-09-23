@@ -4,6 +4,7 @@ import os from "os"
 import path from "path"
 import { Effect } from "effect"
 import { Fff } from "#fff"
+import { Fff as FffNode } from "@deepagent-code/core/filesystem/fff.node"
 import { Search } from "@deepagent-code/core/filesystem/search"
 import { testEffect } from "../lib/effect"
 import { tmpRootAsync } from "../fixture/tmpdir"
@@ -160,6 +161,46 @@ describe("file.search", () => {
       // open() records the query->file association in fff's history db via the
       // live picker. It must resolve a remembered file and run without error.
       yield* search.open({ cwd: dir, file: "alpha-target-two.ts" })
+    }),
+  )
+
+  // D-W4 (a): win32 ships upstream-prebuilt fff natives, so the native engine is the
+  // primary path everywhere Bun runs. The degradation contract below keeps the tools
+  // usable through ripgrep whenever the native engine is switched off — the test-home
+  // gate models a missing/failed native load without mocking fff itself: grep and glob
+  // fall back to rg, while the fuzzy file picker fails closed (undefined) so callers
+  // apply their own fallback (httpapi drops to fs.find).
+  it.live("degrades to ripgrep and fails the fuzzy picker closed when the native fff engine is gated off", () =>
+    Effect.gen(function* () {
+      // Gate the native engine off for the duration of the test, restoring the env after.
+      yield* Effect.acquireRelease(
+        Effect.sync(() => (process.env.DEEPAGENT_CODE_TEST_HOME = path.join(os.tmpdir(), "fff-degrade-probe"))),
+        () => Effect.sync(() => delete process.env.DEEPAGENT_CODE_TEST_HOME),
+      )
+
+      const dir = yield* tmpdir()
+      yield* write(path.join(dir, "src", "match.ts"), "const needle = 1\n")
+
+      const search = yield* Search.Service
+      const result = yield* search.search({ cwd: dir, pattern: "needle", limit: 10 })
+      const globbed = yield* search.glob({ cwd: dir, pattern: "**/*.ts", limit: 10 })
+      const picked = yield* search.file({ cwd: dir, query: "match", limit: 10 })
+
+      expect(result.engine).toBe("ripgrep")
+      expect(result.items).toHaveLength(1)
+      expect(result.items[0]?.path.text).toBe("src/match.ts")
+      expect(globbed.files).toEqual([path.join(dir, "src", "match.ts")])
+      expect(picked).toBeUndefined()
+    }),
+  )
+
+  // The node runtime (desktop sidecar) resolves #fff to the fff.node stub; it must
+  // fail closed so selection degrades to ripgrep instead of erroring.
+  it.effect("keeps the node-runtime fff stub fail-closed", () =>
+    Effect.sync(() => {
+      expect(FffNode.available()).toBe(false)
+      const made = FffNode.create({ basePath: os.tmpdir() })
+      expect(made.ok).toBe(false)
     }),
   )
 })

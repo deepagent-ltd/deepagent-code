@@ -4,6 +4,7 @@ import { NonNegativeInt } from "@deepagent-code/core/schema"
 import { Effect, Layer, Context, Schema } from "effect"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@deepagent-code/core/event"
+import { SessionRuntimeStatus } from "@deepagent-code/core/session/runtime-status"
 
 export const Info = Schema.Union([
   Schema.Struct({
@@ -31,6 +32,8 @@ export const Info = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("recovery_required"),
     message: Schema.String,
+    /** Typed reason the startup redrive left this Session fenced (K-01 R-4). */
+    blockedReason: Schema.optional(Schema.Literals([...SessionRuntimeStatus.StartupRedriveBlockedReasons])),
   }),
 ]).annotate({ identifier: "SessionStatus" })
 export type Info = Schema.Schema.Type<typeof Info>

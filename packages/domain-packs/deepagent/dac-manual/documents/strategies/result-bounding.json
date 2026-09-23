@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:dac-manual:result-bounding",
+  "type": "strategy",
+  "title": "Bounded subagent results and full-transcript recovery",
+  "description": "Task results are capped at 8000 characters tail-biased; use task_read for the full transcript and output_schema for structured verdicts.",
+  "body": "A subagent's returned text is bounded to the LAST 8000 characters (tail-biased, because conclusions live at the end). When truncation happens the result keeps an explicit notice with the original size, the task_read pointer, and the branch — the full result is always reachable.\n\nUse when a task result ends with \"Output truncated (N chars)\": call task_read(task_id) — and page with the before cursor — to inspect the full transcript and the durable task_result block instead of re-running the task or guessing the missing head. Do not treat a truncated result as complete.\n\nFor machine-consumed answers, prefer bounding by shape instead of size: pass output_schema (reviewer and researcher get their named schema by default) so the final answer is validated strict JSON. A schema that never validates after one correction attempt fails the task call with the validation error; the raw turns remain in the child session for inspection.\n\nCaveats: the cap applies to the injected result text, not to the child's own session — nothing is deleted. Risk boundary: acting on a partial result is the failure mode this bound exists to prevent; verify completeness via the truncation notice, not by estimating length yourself. Validation signal: task_read's task_result block names its source (structured, validated_text, raw, or task_run) — a structured source is the strongest evidence the answer is complete.",
+  "domain": "orchestration",
+  "scope_hint": "deepagent.dac-manual:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:deepagent.dac-manual",
+  "pack_id": "deepagent.dac-manual"
+}

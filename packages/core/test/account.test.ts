@@ -1,4 +1,5 @@
 import path from "path"
+import fs from "fs/promises"
 import { describe, expect } from "bun:test"
 import { produce } from "immer"
 import { Effect, Fiber, Layer, Option, Stream } from "effect"
@@ -57,16 +58,21 @@ function testLayer(dir: string) {
     Layer.provide(FSUtil.defaultLayer),
     Layer.provideMerge(EventV2.defaultLayer),
     Layer.provide(
-      Global.layerWith({
-        data: dir,
-        cache: path.join(dir, "cache"),
-        config: path.join(dir, "config"),
-        state: path.join(dir, "state"),
-        tmp: path.join(dir, "tmp"),
-        bin: path.join(dir, "bin"),
-        log: path.join(dir, "log"),
-        repos: path.join(dir, "repos"),
-      }),
+      Layer.mergeAll(
+        Global.layerWith({
+          data: dir,
+          cache: path.join(dir, "cache"),
+          config: path.join(dir, "config"),
+          state: path.join(dir, "state"),
+          tmp: path.join(dir, "tmp"),
+          bin: path.join(dir, "bin"),
+          log: path.join(dir, "log"),
+          repos: path.join(dir, "repos"),
+        }),
+        // D-W1: account.json lives in the config home, so the injected layer must create the
+        // config directory it declares — production gets this from global's mkdir bootstrap.
+        Layer.effectDiscard(Effect.promise(() => fs.mkdir(path.join(dir, "config"), { recursive: true }))),
+      ),
     ),
   )
 }

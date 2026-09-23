@@ -156,6 +156,14 @@ const MUTATING_TOOLS = new Set([
   // activity_result are read-only projections and stay unlisted.
   "activity_start",
   "activity_control",
+  // V2.0.1 WS4b/WS7: the task control-plane and merge loop mutate run/worktree state; the two new
+  // side-effect tools stage a durable candidate, resp. deliver an IM message. Their read-only
+  // siblings (task_status, task_read, pack_search, domain_pack_load) stay unlisted.
+  "task_close",
+  "task_recovery",
+  "pr_finalize",
+  "knowledge_propose",
+  "im_send",
 ])
 const ALWAYS_ALLOWED_TOOLS = new Set(["read", "grep", "glob", "list", "ls", "search", "task", "webfetch"])
 

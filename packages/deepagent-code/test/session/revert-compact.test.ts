@@ -98,6 +98,12 @@ const tool = Effect.fn("test.tool")(function* (sessionID: SessionID, messageID: 
 const read = (file: string) => Effect.promise(() => fs.readFile(file, "utf-8"))
 const write = (file: string, text: string) => Effect.promise(() => fs.writeFile(file, text))
 
+// C2 (WS6 §7.5): a revert commit lands a model-facing Synthetic notice that the W4-6 egress mirrors
+// onto the V1 wire as a user row whose only part is a synthetic text. These tests assert CHAT-message
+// cleanup semantics, so count only rows carrying at least one non-synthetic part.
+const chatOnly = (msgs: SessionV1.WithParts[]) =>
+  msgs.filter((message) => message.parts.some((part) => !(part.type === "text" && part.synthetic)))
+
 const tokens = {
   input: 0,
   output: 0,
@@ -133,7 +139,7 @@ describe("revert + compact workflow", () => {
         yield* revert.cleanup(stale, staleEpoch)
 
         expect((yield* sessions.get(info.id)).revert?.messageID).toBe(second.id)
-        expect(yield* sessions.messages({ sessionID: info.id })).toHaveLength(2)
+        expect(chatOnly(yield* sessions.messages({ sessionID: info.id }))).toHaveLength(2)
       }),
     ),
   )
@@ -280,12 +286,12 @@ describe("revert + compact workflow", () => {
           expect(sessionInfo.revert).toBeDefined()
           expect(sessionInfo.revert?.messageID).toBeDefined()
 
-          messages = yield* session.messages({ sessionID })
+          messages = chatOnly(yield* session.messages({ sessionID }))
           expect(messages.length).toBe(4)
 
           yield* revert.cleanup(sessionInfo)
 
-          messages = yield* session.messages({ sessionID })
+          messages = chatOnly(yield* session.messages({ sessionID }))
           const remainingIds = messages.map((m) => m.info.id)
           expect(messages.length).toBeLessThan(4)
           expect(remainingIds).not.toContain(userMsg2.id)
@@ -381,7 +387,7 @@ describe("revert + compact workflow", () => {
           sessionInfo = yield* session.get(sessionID)
           expect(sessionInfo.revert).toBeUndefined()
 
-          const messages = yield* session.messages({ sessionID })
+          const messages = chatOnly(yield* session.messages({ sessionID }))
           expect(messages.length).toBe(0)
 
           yield* session.remove(sessionID)
@@ -415,7 +421,7 @@ describe("revert + compact workflow", () => {
           const state = yield* session.get(sid)
           yield* revert.cleanup(state)
 
-          const msgs = yield* session.messages({ sessionID: sid })
+          const msgs = chatOnly(yield* session.messages({ sessionID: sid }))
           expect(msgs.length).toBe(1)
           expect(msgs[0].parts.length).toBe(1)
           expect(msgs[0].parts[0].id).toBe(p1.id)

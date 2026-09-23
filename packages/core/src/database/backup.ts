@@ -67,6 +67,12 @@ export interface BackupManifest {
     readonly buildId: string
     readonly registryDigest: string
   }
+  /**
+   * W-02 M-4 (design §3.3): the md-export manifests (MdExport.manifestPathFor) this backup is
+   * paired with — the human-readable transcript layer beside the consistency snapshot. Optional
+   * so pre-M-4 manifests stay valid; stamped by backup governance, not by Backup.create.
+   */
+  readonly mdExports?: readonly string[]
 }
 
 export interface CapabilityRow {

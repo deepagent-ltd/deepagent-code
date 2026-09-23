@@ -34,6 +34,7 @@ import {
 } from "../../context-federation/session-sql"
 import { SessionProviderOwner } from "../../context-federation/provider-owner"
 import { SessionTable } from "../sql"
+import { Database } from "../../database/database"
 import { SessionSchema } from "../schema"
 import { V2ProviderRecoveryBridgeTable, V2ProviderTurnReceiptTable } from "./v2-provider-turn.sql"
 import { randomUUID } from "node:crypto"
@@ -100,6 +101,10 @@ export type CommandRow = {
   readonly resultHash?: string
   readonly actorType?: "user" | "administrator" | "system"
   readonly actorId?: string
+  /** The committed exit-vocabulary entry this row executes (NULL = the pre-vocabulary abandon-only rows). */
+  readonly commandKind?: RecoveryCommandContract.RecoveryCommandKind
+  /** The typed `RecoveryEvidence` a `confirm_settled` row carries (absent when not recorded/decodable). */
+  readonly evidence?: RecoveryCommandContract.RecoveryEvidence
   readonly createdAt: number
   readonly updatedAt: number
 }
@@ -135,6 +140,8 @@ type CommandDbRow = {
   result_hash: string | null
   actor_type: string | null
   actor_id: string | null
+  command_kind: string | null
+  evidence: string | null
   created_at: number
   updated_at: number
 }
@@ -200,6 +207,10 @@ export function decodeCommandRow(row: CommandDbRow): CommandRow | undefined {
     row.actor_type === "user" || row.actor_type === "administrator" || row.actor_type === "system"
       ? row.actor_type
       : undefined
+  // The evidence body is decoded strictly through the frozen contract; a row that carries an
+  // undecodable body stays readable (the executor keeps it pending with a typed reason) — the
+  // evidence itself is NEVER partially trusted.
+  const evidence = decodeStoredEvidence(row.evidence)
   return {
     commandId: row.command_id,
     ...(row.descriptor_id !== null ? { descriptorId: row.descriptor_id } : {}),
@@ -211,8 +222,22 @@ export function decodeCommandRow(row: CommandDbRow): CommandRow | undefined {
     ...(actorType !== undefined && row.actor_id !== null
       ? { actorType, actorId: row.actor_id }
       : {}),
+    ...(row.command_kind !== null
+      ? { commandKind: row.command_kind as RecoveryCommandContract.RecoveryCommandKind }
+      : {}),
+    ...(evidence !== undefined ? { evidence } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  }
+}
+
+/** Strictly decode a stored evidence body; absent/undecodable → `undefined` (never partial). */
+function decodeStoredEvidence(body: string | null): RecoveryCommandContract.RecoveryEvidence | undefined {
+  if (body === null) return undefined
+  try {
+    return RecoveryCommandContract.decodeRecoveryEvidence(JSON.parse(body))
+  } catch {
+    return undefined
   }
 }
 
@@ -321,6 +346,10 @@ export interface DurableRecoveryStore {
     readonly expectedOwnerToken?: string
     readonly actorType?: "user" | "administrator" | "system"
     readonly actorId?: string
+    /** The committed exit-vocabulary entry this row executes (default: `abandon_exact`). */
+    readonly commandKind?: RecoveryCommandContract.RecoveryCommandKind
+    /** The typed evidence a `confirm_settled` row carries; required for that kind. */
+    readonly evidence?: RecoveryCommandContract.RecoveryEvidence
     readonly createdAt?: number
   }) => Effect.Effect<CommandWriteOutcome, never>
   /** Atomically records a descriptor and claims its attempt command slot; no orphan descriptor. */
@@ -335,6 +364,8 @@ export interface DurableRecoveryStore {
     readonly expectedOwnerToken?: string
     readonly actorType?: "user" | "administrator" | "system"
     readonly actorId?: string
+    readonly commandKind?: RecoveryCommandContract.RecoveryCommandKind
+    readonly evidence?: RecoveryCommandContract.RecoveryEvidence
     readonly createdAt?: number
   }) => Effect.Effect<CommandWriteOutcome, never>
   /** Apply a committed exact-abandon command to every bound authority in one transaction. */
@@ -342,6 +373,19 @@ export interface DurableRecoveryStore {
     readonly commandId: string
     readonly reason: string
   }) => Effect.Effect<"applied" | "already" | "authority_conflict", never>
+  /**
+   * Apply a committed confirm-settled command to every bound authority in one transaction —
+   * the mirror of `applyExactAbandon` for the settled exit: resolution decision "settled"
+   * carrying the command's typed provider evidence, attempt → resolved_settled, activity →
+   * settled, the resolved(settled) terminal descriptor, the command-state CAS and the
+   * execution-claim release. The receipt is NEVER rewritten (it stays
+   * `indeterminate_after_crash` as the incident evidence; the receipt state machine has no
+   * resolved_* vocabulary). A row whose evidence is absent or fails the durable binding
+   * checks is a typed `evidence_rejected` — the row stays pending, nothing is written.
+   */
+  readonly applyExactSettled: (input: {
+    readonly commandId: string
+  }) => Effect.Effect<"applied" | "already" | "authority_conflict" | "evidence_rejected", never>
   /**
    * Conditional state transition (CAS by `state` match, and by `expected_owner_token`
    * when the caller passes one — design §9.2 C1B-11 fenced writes). `result_hash` is
@@ -452,6 +496,8 @@ export const makeDurableRecoveryStore = (db: Database): DurableRecoveryStore => 
     readonly expectedOwnerToken?: string
     readonly actorType?: "user" | "administrator" | "system"
     readonly actorId?: string
+    readonly commandKind?: RecoveryCommandContract.RecoveryCommandKind
+    readonly evidence?: RecoveryCommandContract.RecoveryEvidence
     readonly createdAt?: number
   }) {
     // One immediate transaction: the writer lock makes select-then-insert atomic across
@@ -470,7 +516,7 @@ export const makeDurableRecoveryStore = (db: Database): DurableRecoveryStore => 
           // typed mismatch and is never clobbered.
           const prior = yield* tx.get<CommandDbRow | undefined>(sql`
             SELECT command_id, descriptor_id, attempt, state, expected_owner_token, result_hash,
-                   actor_type, actor_id, created_at, updated_at
+                   actor_type, actor_id, command_kind, evidence, created_at, updated_at
             FROM recovery_command
             WHERE json_extract(attempt, '$.sessionId') = ${input.attemptIdentity.sessionId}
               AND json_extract(attempt, '$.attemptId') = ${input.attemptIdentity.attemptId}
@@ -499,6 +545,8 @@ export const makeDurableRecoveryStore = (db: Database): DurableRecoveryStore => 
               result_hash: null,
               actor_type: input.actorType ?? null,
               actor_id: input.actorId ?? null,
+              command_kind: input.commandKind ?? null,
+              evidence: input.evidence ?? null,
               created_at: now,
               updated_at: now,
             })
@@ -512,7 +560,7 @@ export const makeDurableRecoveryStore = (db: Database): DurableRecoveryStore => 
           if (!inserted) {
             const conflicted = yield* tx.get<CommandDbRow | undefined>(sql`
               SELECT command_id, descriptor_id, attempt, state, expected_owner_token, result_hash,
-                     actor_type, actor_id, created_at, updated_at
+                     actor_type, actor_id, command_kind, evidence, created_at, updated_at
               FROM recovery_command
               WHERE json_extract(attempt, '$.sessionId') = ${input.attemptIdentity.sessionId}
                 AND json_extract(attempt, '$.attemptId') = ${input.attemptIdentity.attemptId}
@@ -551,6 +599,8 @@ export const makeDurableRecoveryStore = (db: Database): DurableRecoveryStore => 
     readonly expectedOwnerToken?: string
     readonly actorType?: "user" | "administrator" | "system"
     readonly actorId?: string
+    readonly commandKind?: RecoveryCommandContract.RecoveryCommandKind
+    readonly evidence?: RecoveryCommandContract.RecoveryEvidence
     readonly createdAt?: number
   }) {
     return yield* db.transaction(
@@ -559,7 +609,7 @@ export const makeDurableRecoveryStore = (db: Database): DurableRecoveryStore => 
           const address = input.commandId ?? recoveryCommandContentAddress(input)
           const prior = yield* tx.get<CommandDbRow | undefined>(sql`
             SELECT command_id, descriptor_id, attempt, state, expected_owner_token, result_hash,
-                   actor_type, actor_id, created_at, updated_at
+                   actor_type, actor_id, command_kind, evidence, created_at, updated_at
             FROM recovery_command
             WHERE json_extract(attempt, '$.sessionId') = ${input.attemptIdentity.sessionId}
               AND json_extract(attempt, '$.attemptId') = ${input.attemptIdentity.attemptId}
@@ -600,6 +650,8 @@ export const makeDurableRecoveryStore = (db: Database): DurableRecoveryStore => 
             result_hash: null,
             actor_type: input.actorType ?? null,
             actor_id: input.actorId ?? null,
+            command_kind: input.commandKind ?? null,
+            evidence: input.evidence ?? null,
             created_at: now,
             updated_at: now,
           }).run()
@@ -613,6 +665,127 @@ export const makeDurableRecoveryStore = (db: Database): DurableRecoveryStore => 
     ).pipe(Effect.orDie)
   })
 
+  /**
+   * The read-only exact-command authority check shared by the abandon and confirm-settled
+   * exits: command slot + resolvable_exact descriptor + attempt/receipt identity CAS +
+   * stale-owner release + the Session execution-claim fence. No write happens here — every
+   * typed refusal returns BEFORE the recovery-owner lease is taken, so a refused apply
+   * commits nothing.
+   */
+  const readExactCommandAuthority = Effect.fn("RecoveryDurableStore.readExactCommandAuthority")(function* (
+    tx: Parameters<Parameters<Database.Interface["db"]["transaction"]>[0]>[0],
+    commandId: string,
+  ) {
+    const commandRaw = yield* tx.get<CommandDbRow | undefined>(sql`
+      SELECT command_id, descriptor_id, attempt, state, expected_owner_token, result_hash,
+             actor_type, actor_id, command_kind, evidence, created_at, updated_at
+      FROM recovery_command WHERE command_id = ${commandId}
+    `)
+    if (!commandRaw) return { verdict: "authority_conflict" as const }
+    const command = decodeCommandRow(commandRaw)
+    if (!command) return { verdict: "authority_conflict" as const }
+    // A terminal slot in THIS exit is the idempotent `already`; a terminal slot in a DIFFERENT
+    // exit is an authority conflict — the attempt is closed and no second exit exists.
+    if (isTerminalCommandState(command.state)) return { verdict: "terminal" as const, state: command.state }
+    if (command.state !== CommandState.pending || !command.descriptorId)
+      return { verdict: "authority_conflict" as const }
+    const descriptorRaw = yield* tx.get<DescriptorDbRow | undefined>(sql`
+      SELECT descriptor_id, session_id, activity_id, turn_id, kind, payload, content_hash, created_at
+      FROM session_provider_recovery_descriptor WHERE descriptor_id = ${command.descriptorId}
+    `)
+    const descriptor = descriptorRaw ? decodeDescriptorRow(descriptorRaw) : undefined
+    if (!descriptor || descriptor.payload.descriptorKind !== "resolvable_exact")
+      return { verdict: "authority_conflict" as const }
+    if (
+      command.actorType === undefined ||
+      command.actorId === undefined ||
+      command.actorType === "system"
+    )
+      return { verdict: "authority_conflict" as const }
+    const attempt = yield* tx
+      .select()
+      .from(SessionProviderAttemptTable)
+      .where(eq(SessionProviderAttemptTable.attempt_id, command.attempt.attemptId))
+      .get()
+    if (
+      !attempt ||
+      attempt.session_id !== command.attempt.sessionId ||
+      attempt.activity_id !== command.attempt.activityId ||
+      attempt.provider_turn_seq !== command.attempt.providerTurnSeq ||
+      attempt.selection_id !== command.attempt.selectionId ||
+      attempt.projection_hash !== command.attempt.projectionHash ||
+      attempt.request_hash !== command.requestHash ||
+      attempt.provider_id !== command.attempt.providerId ||
+      attempt.state !== "indeterminate_after_crash" ||
+      attempt.owner_token === null ||
+      command.expectedOwnerToken !== attempt.owner_token ||
+      descriptor.payload.casTokens.expectedState !== attempt.state ||
+      descriptor.payload.casTokens.expectedVersion !== attempt.attempt_version ||
+      descriptor.payload.casTokens.ownerToken !== attempt.owner_token
+    )
+      return { verdict: "authority_conflict" as const }
+    const receipt = yield* tx
+      .select()
+      .from(V2ProviderTurnReceiptTable)
+      .where(eq(V2ProviderTurnReceiptTable.provider_attempt_id, attempt.attempt_id))
+      .get()
+    if (
+      !receipt ||
+      receipt.session_id !== attempt.session_id ||
+      receipt.activity_id !== attempt.activity_id ||
+      receipt.provider_turn_seq !== attempt.provider_turn_seq ||
+      receipt.provider_id !== attempt.provider_id ||
+      receipt.owner_token !== attempt.owner_token ||
+      receipt.state !== "indeterminate_after_crash" ||
+      (command.attempt.protocol !== undefined && command.attempt.protocol !== receipt.protocol)
+    )
+      return { verdict: "authority_conflict" as const }
+    const staleOwner = yield* tx
+      .select()
+      .from(SessionProviderOwnerLeaseTable)
+      .where(eq(SessionProviderOwnerLeaseTable.owner_token, attempt.owner_token))
+      .get()
+    const now = yield* SessionProviderOwner.observedAtInTransaction(tx)
+    if (!staleOwner || (staleOwner.released_at === null && staleOwner.lease_expires_at > now))
+      return { verdict: "authority_conflict" as const }
+    const session = yield* tx
+      .select({ claimToken: SessionTable.execution_claim_token })
+      .from(SessionTable)
+      .where(eq(SessionTable.id, SessionSchema.ID.make(attempt.session_id)))
+      .get()
+    if (session?.claimToken !== attempt.execution_claim_token)
+      return { verdict: "authority_conflict" as const }
+    return {
+      verdict: "proceed" as const,
+      command,
+      descriptor,
+      attempt,
+      receipt,
+      ownerToken: attempt.owner_token,
+      now,
+    }
+  })
+
+  /** Take the short-lived recovery owner lease + record the successor capability (shared write). */
+  const takeRecoveryOwnerLease = Effect.fn("RecoveryDurableStore.takeRecoveryOwnerLease")(function* (
+    tx: Parameters<Parameters<Database.Interface["db"]["transaction"]>[0]>[0],
+    now: number,
+  ) {
+    const recoveryOwnerToken = `recovery:${randomUUID()}`
+    yield* tx.insert(SessionProviderOwnerLeaseTable).values({
+      owner_token: recoveryOwnerToken,
+      registered_at: databaseNow,
+      heartbeat_at: databaseNow,
+      lease_expires_at: sql`${databaseNow} + 30000`,
+    }).run()
+    yield* tx.run(sql`
+      INSERT INTO database_capability(capability, minimum_reader_protocol, minimum_writer_protocol, installed_at)
+      VALUES ('provider_owner_successor_v1', 3, 3, ${now})
+      ON CONFLICT(capability) DO NOTHING
+    `)
+    return recoveryOwnerToken
+  })
+
   const applyExactAbandon = Effect.fn("RecoveryDurableStore.applyExactAbandon")(function* (input: {
     readonly commandId: string
     readonly reason: string
@@ -620,95 +793,12 @@ export const makeDurableRecoveryStore = (db: Database): DurableRecoveryStore => 
     return yield* db.transaction(
       (tx) =>
         Effect.gen(function* () {
-          const commandRaw = yield* tx.get<CommandDbRow | undefined>(sql`
-            SELECT command_id, descriptor_id, attempt, state, expected_owner_token, result_hash,
-                   actor_type, actor_id, created_at, updated_at
-            FROM recovery_command WHERE command_id = ${input.commandId}
-          `)
-          if (!commandRaw) return "authority_conflict" as const
-          const command = decodeCommandRow(commandRaw)
-          if (!command) return "authority_conflict" as const
-          if (command.state === CommandState.abandoned) return "already" as const
-          if (command.state !== CommandState.pending || !command.descriptorId) return "authority_conflict" as const
-          const descriptorRaw = yield* tx.get<DescriptorDbRow | undefined>(sql`
-            SELECT descriptor_id, session_id, activity_id, turn_id, kind, payload, content_hash, created_at
-            FROM session_provider_recovery_descriptor WHERE descriptor_id = ${command.descriptorId}
-          `)
-          const descriptor = descriptorRaw ? decodeDescriptorRow(descriptorRaw) : undefined
-          if (!descriptor || descriptor.payload.descriptorKind !== "resolvable_exact")
-            return "authority_conflict" as const
-          if (
-            command.actorType === undefined ||
-            command.actorId === undefined ||
-            command.actorType === "system"
-          )
-            return "authority_conflict" as const
-          const attempt = yield* tx
-            .select()
-            .from(SessionProviderAttemptTable)
-            .where(eq(SessionProviderAttemptTable.attempt_id, command.attempt.attemptId))
-            .get()
-          if (
-            !attempt ||
-            attempt.session_id !== command.attempt.sessionId ||
-            attempt.activity_id !== command.attempt.activityId ||
-            attempt.provider_turn_seq !== command.attempt.providerTurnSeq ||
-            attempt.selection_id !== command.attempt.selectionId ||
-            attempt.projection_hash !== command.attempt.projectionHash ||
-            attempt.request_hash !== command.requestHash ||
-            attempt.provider_id !== command.attempt.providerId ||
-            attempt.state !== "indeterminate_after_crash" ||
-            attempt.owner_token === null ||
-            command.expectedOwnerToken !== attempt.owner_token ||
-            descriptor.payload.casTokens.expectedState !== attempt.state ||
-            descriptor.payload.casTokens.expectedVersion !== attempt.attempt_version ||
-            descriptor.payload.casTokens.ownerToken !== attempt.owner_token
-          )
-            return "authority_conflict" as const
-          const receipt = yield* tx
-            .select()
-            .from(V2ProviderTurnReceiptTable)
-            .where(eq(V2ProviderTurnReceiptTable.provider_attempt_id, attempt.attempt_id))
-            .get()
-          if (
-            !receipt ||
-            receipt.session_id !== attempt.session_id ||
-            receipt.activity_id !== attempt.activity_id ||
-            receipt.provider_turn_seq !== attempt.provider_turn_seq ||
-            receipt.provider_id !== attempt.provider_id ||
-            receipt.owner_token !== attempt.owner_token ||
-            receipt.state !== "indeterminate_after_crash" ||
-            (command.attempt.protocol !== undefined && command.attempt.protocol !== receipt.protocol)
-          )
-            return "authority_conflict" as const
-          const staleOwner = yield* tx
-            .select()
-            .from(SessionProviderOwnerLeaseTable)
-            .where(eq(SessionProviderOwnerLeaseTable.owner_token, attempt.owner_token))
-            .get()
-          const now = yield* SessionProviderOwner.observedAtInTransaction(tx)
-          if (!staleOwner || (staleOwner.released_at === null && staleOwner.lease_expires_at > now))
-            return "authority_conflict" as const
-          const session = yield* tx
-            .select({ claimToken: SessionTable.time_suspended })
-            .from(SessionTable)
-            .where(eq(SessionTable.id, SessionSchema.ID.make(attempt.session_id)))
-            .get()
-          if (session?.claimToken !== attempt.execution_claim_token)
-            return "authority_conflict" as const
-
-          const recoveryOwnerToken = `recovery:${randomUUID()}`
-          yield* tx.insert(SessionProviderOwnerLeaseTable).values({
-            owner_token: recoveryOwnerToken,
-            registered_at: databaseNow,
-            heartbeat_at: databaseNow,
-            lease_expires_at: sql`${databaseNow} + 30000`,
-          }).run()
-          yield* tx.run(sql`
-            INSERT INTO database_capability(capability, minimum_reader_protocol, minimum_writer_protocol, installed_at)
-            VALUES ('provider_owner_successor_v1', 3, 3, ${now})
-            ON CONFLICT(capability) DO NOTHING
-          `)
+          const authority = yield* readExactCommandAuthority(tx, input.commandId)
+          if (authority.verdict === "terminal")
+            return authority.state === CommandState.abandoned ? ("already" as const) : ("authority_conflict" as const)
+          if (authority.verdict !== "proceed") return authority.verdict
+          const { command, descriptor, attempt, receipt, ownerToken, now } = authority
+          const recoveryOwnerToken = yield* takeRecoveryOwnerLease(tx, now)
           const resolutionId = `resolution_${contentDigest({ commandId: command.commandId, decision: "abandoned" })}`
           yield* tx.insert(SessionProviderAttemptResolutionTable).values({
             resolution_id: resolutionId,
@@ -733,7 +823,7 @@ export const makeDurableRecoveryStore = (db: Database): DurableRecoveryStore => 
                 eq(SessionProviderAttemptTable.attempt_id, attempt.attempt_id),
                 eq(SessionProviderAttemptTable.state, "indeterminate_after_crash"),
                 eq(SessionProviderAttemptTable.attempt_version, attempt.attempt_version),
-                eq(SessionProviderAttemptTable.owner_token, attempt.owner_token),
+                eq(SessionProviderAttemptTable.owner_token, ownerToken),
               ),
             )
             .returning({ attemptId: SessionProviderAttemptTable.attempt_id })
@@ -772,7 +862,7 @@ export const makeDurableRecoveryStore = (db: Database): DurableRecoveryStore => 
             casTokens: {
               expectedState: "resolved_abandoned",
               expectedVersion: attempt.attempt_version + 1,
-              ownerToken: attempt.owner_token,
+              ownerToken,
             },
             descriptorKind: "resolved",
             resolved: { resolutionRef: resolutionId, bridgeRef: resolutionId, terminal: "abandoned" },
@@ -799,7 +889,7 @@ export const makeDurableRecoveryStore = (db: Database): DurableRecoveryStore => 
               and(
                 eq(RecoveryCommandTable.command_id, command.commandId),
                 eq(RecoveryCommandTable.state, CommandState.pending),
-                eq(RecoveryCommandTable.expected_owner_token, attempt.owner_token),
+                eq(RecoveryCommandTable.expected_owner_token, ownerToken),
               ),
             )
             .returning({ commandId: RecoveryCommandTable.command_id })
@@ -807,11 +897,167 @@ export const makeDurableRecoveryStore = (db: Database): DurableRecoveryStore => 
           if (!settledCommand) return yield* Effect.fail("recovery command CAS lost")
           const released = yield* tx
             .update(SessionTable)
-            .set({ time_suspended: null, time_updated: sql`${SessionTable.time_updated}` })
+            .set({ execution_claim_token: null, time_updated: sql`${SessionTable.time_updated}` })
             .where(
               and(
                 eq(SessionTable.id, SessionSchema.ID.make(attempt.session_id)),
-                eq(SessionTable.time_suspended, attempt.execution_claim_token),
+                eq(SessionTable.execution_claim_token, attempt.execution_claim_token),
+              ),
+            )
+            .returning({ id: SessionTable.id })
+            .get()
+          if (!released) return yield* Effect.fail("session execution claim changed during recovery")
+          yield* tx
+            .update(SessionProviderOwnerLeaseTable)
+            .set({ released_at: databaseNow })
+            .where(eq(SessionProviderOwnerLeaseTable.owner_token, recoveryOwnerToken))
+            .run()
+          return "applied" as const
+        }),
+      { behavior: "immediate" },
+    ).pipe(Effect.orDie)
+  })
+
+  /**
+   * Verify the typed evidence a confirm_settled command carries against the durable attempt
+   * binding. Free text is structurally impossible (the frozen contract rejects it at decode),
+   * so this checks the binding only: the terminal state is "settled", the provider matches the
+   * attempt, and — when the attempt recorded an idempotency key — the evidence names it.
+   */
+  const evidenceMatchesAttempt = (
+    evidence: RecoveryCommandContract.RecoveryEvidence | undefined,
+    attempt: typeof SessionProviderAttemptTable.$inferSelect,
+  ): evidence is RecoveryCommandContract.RecoveryEvidence =>
+    evidence !== undefined &&
+    evidence.terminalState === "settled" &&
+    evidence.providerId === attempt.provider_id &&
+    (attempt.idempotency_key === null || evidence.idempotencyKey === attempt.idempotency_key)
+
+  const applyExactSettled = Effect.fn("RecoveryDurableStore.applyExactSettled")(function* (input: {
+    readonly commandId: string
+  }) {
+    return yield* db.transaction(
+      (tx) =>
+        Effect.gen(function* () {
+          const authority = yield* readExactCommandAuthority(tx, input.commandId)
+          if (authority.verdict === "terminal")
+            return authority.state === CommandState.settled ? ("already" as const) : ("authority_conflict" as const)
+          if (authority.verdict !== "proceed") return authority.verdict
+          const { command, descriptor, attempt, receipt, ownerToken, now } = authority
+          // The settled exit is evidence-bound: a row without a verifiable typed evidence body
+          // is a typed refusal BEFORE any write — the row stays pending for re-recording.
+          if (command.commandKind !== "confirm_settled" || !evidenceMatchesAttempt(command.evidence, attempt))
+            return "evidence_rejected" as const
+          const evidence = command.evidence
+          const recoveryOwnerToken = yield* takeRecoveryOwnerLease(tx, now)
+          const resolutionId = `resolution_${contentDigest({ commandId: command.commandId, decision: "settled" })}`
+          yield* tx.insert(SessionProviderAttemptResolutionTable).values({
+            resolution_id: resolutionId,
+            attempt_id: attempt.attempt_id,
+            actor_type: command.actorType ?? "system",
+            actor_id: command.actorId ?? "missing",
+            decision: "settled",
+            provider_evidence: JSON.stringify(evidence),
+            risk_acknowledged: false,
+            reason: "network_unknown",
+            created_at: now,
+          }).run()
+          const resolved = yield* tx
+            .update(SessionProviderAttemptTable)
+            .set({
+              state: "resolved_settled",
+              attempt_version: sql`${SessionProviderAttemptTable.attempt_version} + 1`,
+              settled_at: now,
+            })
+            .where(
+              and(
+                eq(SessionProviderAttemptTable.attempt_id, attempt.attempt_id),
+                eq(SessionProviderAttemptTable.state, "indeterminate_after_crash"),
+                eq(SessionProviderAttemptTable.attempt_version, attempt.attempt_version),
+                eq(SessionProviderAttemptTable.owner_token, ownerToken),
+              ),
+            )
+            .returning({ attemptId: SessionProviderAttemptTable.attempt_id })
+            .get()
+          if (!resolved) return yield* Effect.fail("provider attempt recovery CAS lost")
+          // The CF resolution authority settles the ACTIVITY for a settled decision (the
+          // attempt's coordination record; provider-attempt.ts `resolve`). The provider
+          // RECEIPT is deliberately untouched — it keeps `indeterminate_after_crash` as the
+          // incident evidence (no resolved_* receipt state exists; applyExactAbandon likewise
+          // never rewrites it).
+          const activity = yield* tx
+            .update(SessionActivityTable)
+            .set({ state: "settled", settled_at: now })
+            .where(
+              and(
+                eq(SessionActivityTable.activity_id, attempt.activity_id),
+                eq(SessionActivityTable.state, "active"),
+              ),
+            )
+            .returning({ activityId: SessionActivityTable.activity_id })
+            .get()
+          if (!activity) return yield* Effect.fail("provider recovery activity CAS lost")
+          yield* tx.insert(V2ProviderRecoveryBridgeTable).values({
+            resolution_id: resolutionId,
+            attempt_id: attempt.attempt_id,
+            receipt_id: receipt.receipt_id,
+            command_id: command.commandId,
+            created_at: now,
+          }).run()
+
+          const terminalDescriptor: RecoveryCommandContract.RecoveryDescriptor = {
+            schemaVersion: "recovery-descriptor.v1",
+            requestHash: attempt.request_hash,
+            provenance: { origin: "recorded", sourceRefs: [attempt.attempt_id, receipt.receipt_id, command.commandId] },
+            baseline: descriptor.payload.baseline,
+            terminalBridge: {
+              bridgeId: resolutionId,
+              bridgeType: "terminal_bridge",
+              terminalRef: "settled",
+            },
+            casTokens: {
+              expectedState: "resolved_settled",
+              expectedVersion: attempt.attempt_version + 1,
+              ownerToken,
+            },
+            descriptorKind: "resolved",
+            resolved: { resolutionRef: resolutionId, bridgeRef: resolutionId, terminal: "settled" },
+          }
+          const descriptorHash = RecoveryCommandContract.recoveryDescriptorDigest(terminalDescriptor)
+          yield* tx.insert(SessionProviderRecoveryDescriptorTable).values({
+            descriptor_id: `descriptor_${descriptorHash}`,
+            session_id: attempt.session_id,
+            activity_id: attempt.activity_id,
+            turn_id: String(attempt.provider_turn_seq),
+            kind: terminalDescriptor.descriptorKind,
+            payload: terminalDescriptor,
+            content_hash: descriptorHash,
+            created_at: now,
+          }).run()
+          const settledCommand = yield* tx
+            .update(RecoveryCommandTable)
+            .set({
+              state: CommandState.settled,
+              result_hash: contentDigest({ resolutionId, terminal: "settled" }),
+              updated_at: now,
+            })
+            .where(
+              and(
+                eq(RecoveryCommandTable.command_id, command.commandId),
+                eq(RecoveryCommandTable.state, CommandState.pending),
+                eq(RecoveryCommandTable.expected_owner_token, ownerToken),
+              ),
+            )
+            .returning({ commandId: RecoveryCommandTable.command_id })
+            .get()
+          if (!settledCommand) return yield* Effect.fail("recovery command CAS lost")
+          const released = yield* tx
+            .update(SessionTable)
+            .set({ execution_claim_token: null, time_updated: sql`${SessionTable.time_updated}` })
+            .where(
+              and(
+                eq(SessionTable.id, SessionSchema.ID.make(attempt.session_id)),
+                eq(SessionTable.execution_claim_token, attempt.execution_claim_token),
               ),
             )
             .returning({ id: SessionTable.id })
@@ -879,7 +1125,7 @@ export const makeDurableRecoveryStore = (db: Database): DurableRecoveryStore => 
   const getCommand = Effect.fn("RecoveryDurableStore.getCommand")(function* (commandId: string) {
     const row = yield* db.get<CommandDbRow | undefined>(sql`
       SELECT command_id, descriptor_id, attempt, state, expected_owner_token, result_hash,
-             actor_type, actor_id, created_at, updated_at
+             actor_type, actor_id, command_kind, evidence, created_at, updated_at
       FROM recovery_command WHERE command_id = ${commandId}
     `).pipe(Effect.orDie)
     return row ? decodeCommandRow(row) : undefined
@@ -890,11 +1136,11 @@ export const makeDurableRecoveryStore = (db: Database): DurableRecoveryStore => 
     attemptId: string,
   ) {
     const row = yield* db.get<CommandDbRow | undefined>(sql`
-      SELECT command_id, descriptor_id, attempt, state, expected_owner_token, result_hash,
-             actor_type, actor_id, created_at, updated_at
-      FROM recovery_command
-      WHERE json_extract(attempt, '$.sessionId') = ${sessionId}
-        AND json_extract(attempt, '$.attemptId') = ${attemptId}
+        SELECT command_id, descriptor_id, attempt, state, expected_owner_token, result_hash,
+               actor_type, actor_id, command_kind, evidence, created_at, updated_at
+        FROM recovery_command
+        WHERE json_extract(attempt, '$.sessionId') = ${sessionId}
+          AND json_extract(attempt, '$.attemptId') = ${attemptId}
     `).pipe(Effect.orDie)
     return row ? decodeCommandRow(row) : undefined
   })
@@ -906,7 +1152,8 @@ export const makeDurableRecoveryStore = (db: Database): DurableRecoveryStore => 
     // must not hide it. Its session comes from the attempt JSON instead.
     const rows = yield* db.all<CommandDbRow>(sql`
       SELECT c.command_id, c.descriptor_id, c.attempt, c.state, c.expected_owner_token,
-             c.result_hash, c.actor_type, c.actor_id, c.created_at, c.updated_at
+             c.result_hash, c.actor_type, c.actor_id, c.command_kind, c.evidence,
+             c.created_at, c.updated_at
       FROM recovery_command c
       LEFT JOIN session_provider_recovery_descriptor d ON d.descriptor_id = c.descriptor_id
       WHERE d.session_id = ${sessionId}
@@ -924,7 +1171,7 @@ export const makeDurableRecoveryStore = (db: Database): DurableRecoveryStore => 
   ) {
     const rows = yield* db.all<CommandDbRow>(sql`
       SELECT command_id, descriptor_id, attempt, state, expected_owner_token, result_hash,
-             actor_type, actor_id, created_at, updated_at
+             actor_type, actor_id, command_kind, evidence, created_at, updated_at
       FROM recovery_command
       WHERE json_extract(attempt, '$.requestHash') = ${requestHash}
       ORDER BY created_at DESC, command_id DESC
@@ -994,6 +1241,7 @@ export const makeDurableRecoveryStore = (db: Database): DurableRecoveryStore => 
     putCommand,
     putDescriptorAndCommand,
     applyExactAbandon,
+    applyExactSettled,
     transitionCommand,
     getCommand,
     getCommandForAttempt,

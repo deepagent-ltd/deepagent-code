@@ -1559,6 +1559,19 @@ export const layer = Layer.effect(
           // options.apiKey) but its catalog identity/models are fixed. Leave its catalog entry
           // intact — the custom loader reads the config key — and never treat it as third-party.
           if (providerID === "deepagent-code") continue
+          // Config.get() overlays the SettingsStore DeepAgent runtime settings (promptMode,
+          // intelligenceModel, …) as a settings-only pseudo `provider.deepagent` entry so gateway and
+          // intelligence readers keep their historic `provider.deepagent.options` location. That entry
+          // carries no credential and no models — it is not a connection, and registering it would
+          // surface a ghost connected provider in the picker. Real DeepAgent connections arrive via
+          // the key store ("api"), DEEPAGENT_API_KEY ("env"), or a genuine config/model-scoped entry.
+          if (
+            providerID === "deepagent" &&
+            !provider.options?.apiKey &&
+            !provider.options?.baseURL &&
+            Object.keys(provider.models ?? {}).length === 0
+          )
+            continue
           // `deepagent` is the official first-party provider, but its config entry is the sanctioned
           // MODEL-SCOPED overlay (the hosted gateway: per-model upstreamProviderID/authProviderID +
           // per-model provider npm/api), vetted at registration against SUPPORTED_* sets below.

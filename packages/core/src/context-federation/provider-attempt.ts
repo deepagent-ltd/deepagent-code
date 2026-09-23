@@ -595,7 +595,7 @@ export function prepareInTransaction(
       .get()
     yield* requireLiveOwner(tx, input.ownerToken)
     const session = yield* tx
-      .select({ executionClaimToken: SessionTable.time_suspended })
+      .select({ executionClaimToken: SessionTable.execution_claim_token })
       .from(SessionTable)
       .where(eq(SessionTable.id, input.sessionId))
       .get()

@@ -43,7 +43,8 @@ const createTables = (db: Db) =>
         command_id TEXT PRIMARY KEY,
         descriptor_id TEXT REFERENCES session_provider_recovery_descriptor(descriptor_id) ON DELETE CASCADE,
         attempt TEXT NOT NULL, state TEXT NOT NULL, expected_owner_token TEXT, result_hash TEXT,
-        actor_type TEXT, actor_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+        actor_type TEXT, actor_id TEXT, command_kind TEXT, evidence TEXT,
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
       )
     `)
     yield* db.run(sql`
@@ -580,7 +581,7 @@ describe("SessionProviderRecoveryDurable store (W2)", () => {
         // Crash-left durable state: one indeterminate attempt + its recovery descriptors.
         // The startup-inventory read surface mirrors the tracked schema's columns; empty tables
         // classify to no items and the seeded sync authority keeps the inventory total.
-        yield* db.run(sql`CREATE TABLE session (id TEXT PRIMARY KEY, time_suspended INTEGER)`)
+        yield* db.run(sql`CREATE TABLE session (id TEXT PRIMARY KEY, execution_claim_token INTEGER)`)
         yield* db.run(sql`
           CREATE TABLE session_provider_attempt (
             attempt_id TEXT PRIMARY KEY, state TEXT NOT NULL, session_id TEXT, activity_id TEXT,
@@ -596,6 +597,7 @@ describe("SessionProviderRecoveryDurable store (W2)", () => {
         yield* db.run(sql`CREATE TABLE task_run (run_id TEXT PRIMARY KEY, state TEXT NOT NULL, execution_owner TEXT, lease_expires_at INTEGER)`)
         yield* db.run(sql`CREATE TABLE event_snapshot_attempt (snapshot_id TEXT PRIMARY KEY, state TEXT NOT NULL)`)
         yield* db.run(sql`CREATE TABLE event_compaction_receipt (aggregate_id TEXT PRIMARY KEY, state TEXT NOT NULL)`)
+        yield* db.run(sql`CREATE TABLE session_v2_compaction_request (request_id TEXT PRIMARY KEY, status TEXT NOT NULL)`)
         yield* db.run(sql`CREATE TABLE session_facade_activity (activity_id TEXT PRIMARY KEY, state TEXT NOT NULL)`)
         yield* db.run(sql`CREATE TABLE session_activity (activity_id TEXT PRIMARY KEY, state TEXT NOT NULL)`)
         yield* db.run(sql`CREATE TABLE session_provider_attempt_resolution (resolution_id TEXT PRIMARY KEY, attempt_id TEXT NOT NULL, decision TEXT NOT NULL)`)

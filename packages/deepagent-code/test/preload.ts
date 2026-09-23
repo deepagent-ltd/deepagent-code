@@ -1,5 +1,5 @@
 // IMPORTANT: Set env vars BEFORE any imports from src/ directory
-// xdg-basedir reads env vars at import time, so we must set these first
+// XDG vars still isolate any transitive dependency that reads XDG homes at import time.
 import os from "os"
 import path from "path"
 import fs from "fs/promises"

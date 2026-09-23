@@ -42,7 +42,8 @@ export const ReviewListCommand = effectCmd({
           review.agentMode,
           review.status,
           review.nextAction,
-          review.diagnosis.status,
+          // Reviews without a diagnosis yet (pending) carry a null diagnosis.
+          review.diagnosis?.status ?? "-",
         ]),
       ),
     )

@@ -45,6 +45,17 @@ export const Native = Schema.Struct({
 export const Api = Schema.Union([AISDK, Native]).pipe(Schema.toTaggedUnion("type"))
 export type Api = typeof Api.Type
 
+/**
+ * Provenance of a catalog provider entry: which ingression source wrote it
+ * (K-04). `"config"` marks user-defined providers ingressed from Core config
+ * documents by ConfigProviderPlugin; absent means the first-party fillers
+ * (models-dev catalog, first-party provider plugins). A dedicated field with a
+ * closed literal set — availability (`enabled.via`) is never overloaded to
+ * double as origin.
+ */
+export const Origin = Schema.Literals(["config"])
+export type Origin = typeof Origin.Type
+
 export const Request = Schema.Struct({
   headers: Schema.Record(Schema.String, Schema.String),
   body: Schema.Record(Schema.String, Schema.Any),
@@ -54,6 +65,8 @@ export type Request = typeof Request.Type
 export class Info extends Schema.Class<Info>("ProviderV2.Info")({
   id: ID,
   name: Schema.String,
+  // Ingression provenance (see Origin). Absent on first-party filled entries.
+  origin: Origin.pipe(Schema.optional),
   enabled: Schema.Union([
     Schema.Literal(false),
     Schema.Struct({

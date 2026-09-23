@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:dac-manual:worktree-merge-loop",
+  "type": "methodology",
+  "title": "Worktree isolation and the pr_finalize merge loop",
+  "description": "Write-type subagents work on isolated deepagent-code/task-* branches; inspect with task_read, then review and merge with pr_finalize.",
+  "body": "A write-type subagent (general, senior-reviewer) never edits your checkout: it runs in a durable git worktree on a branch named deepagent-code/task-<hash>, provisioned before the child session starts. Its changes live ONLY on that branch until you finalize them — do not assume they are in your workspace, and do not redo the edits locally.\n\nUse when any write-type task has finished and you want its work integrated. The merge loop: 1) run task_status to see which tasks completed; 2) inspect the exact diff/transcript with task_read when the summary is not enough; 3) call pr_finalize once — optionally with explicit run_ids; a retained (e.g. timed-out) run is only processed when you pass its run id. pr_finalize drives a durable reviewer run per branch, seals the structured verdict as evidence, merges approved work into your branch (fast-forward or merge commit) and cleans the branch up; a changes-requested verdict keeps the branch so you can resume the task by task_id and finalize again.\n\nInput/output: pr_finalize returns one record per run: status merged / changes_requested / rejected / converged, plus merge mode or rationale. It is idempotent — re-calling converges an in-flight cycle.\n\nCaveats: only a primary session may finalize, and the call asks permission. Semantic conflicts between sibling branches surface at merge time, so keep file scopes disjoint up front. Risk boundary: verify the merged result (run the build/tests) before reporting completion; a merge receipt is evidence of integration, not of correctness.",
+  "domain": "orchestration",
+  "scope_hint": "deepagent.dac-manual:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:deepagent.dac-manual",
+  "pack_id": "deepagent.dac-manual"
+}

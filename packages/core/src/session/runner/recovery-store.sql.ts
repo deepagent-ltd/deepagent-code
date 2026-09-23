@@ -1,5 +1,5 @@
 import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core"
-import type { RecoveryDescriptor } from "../../contract/recovery-command"
+import type { RecoveryDescriptor, RecoveryEvidence } from "../../contract/recovery-command"
 import type { AttemptIdentity } from "./recovery-store"
 
 // W2 — durable C1B recovery surfaces (design §W2). Each table mirrors a hand-written
@@ -43,6 +43,13 @@ export const RecoveryCommandTable = sqliteTable("recovery_command", {
   /** Maintenance wire record: the actor that issued the command (nullable for core writes). */
   actor_type: text(),
   actor_id: text(),
+  /**
+   * The committed exit-vocabulary entry (contract `RecoveryCommandKind`) this row executes.
+   * NULL = the pre-vocabulary rows, whose only executor exit was `abandon_exact`.
+   */
+  command_kind: text(),
+  /** The typed `RecoveryEvidence` JSON a `confirm_settled` row carries (NULL otherwise). */
+  evidence: text({ mode: "json" }).$type<RecoveryEvidence>(),
   created_at: integer().notNull(),
   updated_at: integer().notNull(),
 })

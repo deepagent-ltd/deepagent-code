@@ -6,6 +6,7 @@ import { Database } from "@deepagent-code/core/database/database"
 import { TaskRunTable } from "@deepagent-code/core/session/sql"
 import { and, desc, eq } from "drizzle-orm"
 import { Effect, Schema } from "effect"
+import { tolerantNumber } from "@deepagent-code/core/schema"
 import type { SessionID } from "@/session/schema"
 
 const id = "task_read"
@@ -20,9 +21,11 @@ const DESCRIPTION = [
   "Never returns hidden reasoning content.",
 ].join(" ")
 
-const Parameters = Schema.Struct({
+export const Parameters = Schema.Struct({
   task_id: Schema.String.annotate({ description: "The subagent session ID (from task_status output)" }),
-  limit: Schema.optional(Schema.Number).annotate({
+  // Tolerant number arm (F-1): GLM-class providers send stringified numbers; a malformed or
+  // "null" string rejects at the schema instead of poisoning the Math.min clamp with NaN.
+  limit: Schema.optional(tolerantNumber()).annotate({
     description: "Max messages to return (default 20, max 100)",
   }),
   before: Schema.optional(Schema.String).annotate({

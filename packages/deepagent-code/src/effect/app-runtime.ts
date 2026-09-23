@@ -63,6 +63,7 @@ import { LegacyEventCanonicalizerRuntime } from "@/legacy-event-canonicalizer-ru
 import { productionSourcesLayer } from "@/context-federation/production-sources"
 import { LocationIndexRuntime } from "@/location-index/runtime"
 import { RecoveryExecutor } from "@/server/recovery-executor"
+import { TaskWorktreeReclamation } from "@/effect/task-worktree-reclamation"
 import { V2RunnerFrame } from "@/session/v2-runner-frame"
 import { V2OutboxRuntime } from "@/event/v2-outbox-runtime"
 import { V2McpBridge } from "@/session/v2-mcp-bridge"
@@ -220,6 +221,10 @@ export const AppLayer = baseAppLayer.pipe(
   // It self-provides the module-level Database.defaultLayer constant (memoized by object
   // identity, so it is the SAME connection the base graph builds — no split-brain).
   Layer.provide(RecoveryExecutor.layer.pipe(Layer.provide(Database.defaultLayer))),
+  // C-P2-08 — startup reclamation of stale retained run-owned worktrees (timeout retention debt
+  // past the grace period); same layer-build-means-boot drain convention, same shared
+  // Database.defaultLayer connection, and it never fails the boot.
+  Layer.provide(TaskWorktreeReclamation.layer.pipe(Layer.provide(Database.defaultLayer))),
   Layer.provideMerge(devCampaignMint),
   // W0.5: deliver the shipped owner-authorization.json into the local DB once per runtime build
   // (after the database layer initialized; fail-open on file absence, fail-closed on verification

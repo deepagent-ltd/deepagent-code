@@ -52,9 +52,10 @@ import type { MultiAgentRuntime } from "./multi-agent-runtime"
 //
 // AUTHORITY: this provider NEVER trusts the raw V4 payload. It validates the event as a registry-validated
 // C5 envelope and lifts only the bounded envelope REF into SessionV2; the trust level comes from the scope
-// the runtime derived (`authorizedTrigger: true` → `derived`, design §8.4). An unregistered / malformed /
-// over-budget event is a typed refusal that fails the dispatch (the dispatcher nacks and the retry pump
-// re-drives) — never a silent re-admission.
+// the runtime derived (`authorizedTrigger: true` → `derived`, design §8.4). An unregistered event type is
+// an `EventNotRegisteredError` refusal (permanent — the dispatcher settles it as a terminal drop); a
+// malformed / over-budget event is a plain refusal that fails the dispatch (the dispatcher nacks and the
+// retry pump re-drives) — never a silent re-admission.
 //
 // LAYERING: `deepagent-code`. Imports core fully (C5 registry, admission, wiring, SessionV2, Database)
 // and the runtime's own seam type; the provider only bridges the two, it never reimplements admission.
@@ -152,6 +153,26 @@ export const V4_EVENT_REGISTRY: EventRegistryIface = EventRegistry.createEventRe
     autonomyCeiling: "medium",
   },
 ])
+
+/**
+ * A dispatch-time refusal that can NEVER succeed on retry: the event type is not registered with the
+ * V2 admission registry (e.g. `schedule.scan` / `ci.repair.requested` until their product lanes ship).
+ * Typed (mirroring `MultiAgentRuntime.EventV2AdmissionUnavailableError`) so the dispatcher can settle
+ * the delivery as a terminal drop (ack + recordDrop) instead of burning the §A3 retry budget and
+ * DLQ-ing a delivery that was never deliverable.
+ */
+export class EventNotRegisteredError extends Error {
+  readonly _tag = "V2AdmissionBridge.EventNotRegisteredError"
+  constructor(
+    readonly eventType: string,
+    readonly eventId: string,
+  ) {
+    super(
+      `C5-12 event type "${eventType}" is not registered with the V2 admission registry; refusing (fail-closed)`,
+    )
+    this.name = "EventNotRegisteredError"
+  }
+}
 
 /**
  * Deterministic security namespace for a workspace. The seam contract is `Effect<string, unknown>`, and a
@@ -315,9 +336,10 @@ const defaultLocationFor = (workspaceId: string | undefined): Location.Ref | und
  * the runtime will use it whenever `isEventV2AdmissionEnabled()` is ON.
  *
  * `admit` translates the routed V4 event into a registry-validated C5 envelope and drives
- * `EventAdmissionWiring.admitWork` with the injected SessionV2 adapter. A registry refusal (unregistered /
- * malformed) or an admission refusal (noise / over-budget / disabled) is surfaced as an Effect failure so
- * the dispatcher nacks and the retry pump re-drives — never a silent drop.
+ * `EventAdmissionWiring.admitWork` with the injected SessionV2 adapter. An unregistered event type is an
+ * `EventNotRegisteredError` (permanent: the dispatcher terminal-drops it); a malformed envelope or an
+ * admission refusal (noise / over-budget / disabled) is surfaced as an Effect failure so the dispatcher
+ * nacks and the retry pump re-drives — never a silent drop.
  */
 export const makeV2AdmissionBridge = (deps: V2AdmissionBridgeDeps): MultiAgentRuntime.EventV2AdmissionBridge => {
   const registry = deps.registry ?? V4_EVENT_REGISTRY
@@ -338,11 +360,7 @@ export const makeV2AdmissionBridge = (deps: V2AdmissionBridgeDeps): MultiAgentRu
         }
         const registration = registry.lookup(request.event.type)
         if (!registration) {
-          return yield* Effect.fail(
-            new Error(
-              `C5-12 event type "${request.event.type}" is not registered with the V2 admission registry; refusing (fail-closed)`,
-            ),
-          )
+          return yield* Effect.fail(new EventNotRegisteredError(request.event.type, request.event.id))
         }
         const envelope = toEventEnvelope(request.event, registration)
         const verdict = EventRegistry.validatePublish(registry, envelope)

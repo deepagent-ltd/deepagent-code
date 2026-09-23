@@ -55,8 +55,7 @@ export default defineConfig({
         async writeBundle() {
           await mkdir("./out/main/chunks", { recursive: true })
           for (const file of await readdir(DEEPAGENT_CODE_SERVER_DIST)) {
-            if (!file.endsWith(".wasm") && !["node.js", "node.js.map", "models-dev.build.json"].includes(file))
-              continue
+            if (!file.endsWith(".wasm") && !["node.js", "node.js.map"].includes(file)) continue
             await copyFile(`${DEEPAGENT_CODE_SERVER_DIST}/${file}`, `./out/main/chunks/${file}`)
           }
           await rm("./out/main/domain-packs", { recursive: true, force: true })

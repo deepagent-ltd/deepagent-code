@@ -1,6 +1,6 @@
 {
   "name": "@deepagent-code/app",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "",
   "type": "module",
   "exports": {
@@ -8,7 +8,6 @@
     "./desktop-menu": "./src/desktop-menu.ts",
     "./zoom-levels": "./src/zoom-levels.ts",
     "./updater": "./src/updater.ts",
-    "./wsl/types": "./src/wsl/types.ts",
     "./vite": "./vite.js",
     "./index.css": "./src/index.css"
   },

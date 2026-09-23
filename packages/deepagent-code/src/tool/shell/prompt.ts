@@ -1,6 +1,6 @@
 import { Schema } from "effect"
 import DESCRIPTION from "./shell.txt"
-import { PositiveInt } from "@deepagent-code/core/schema"
+import { tolerantInt } from "@deepagent-code/core/schema"
 import { Global } from "@deepagent-code/core/global"
 import { ShellID } from "./id"
 
@@ -22,7 +22,10 @@ export type Limits = {
 export function parameterSchema(description: string) {
   return Schema.Struct({
     command: Schema.String.annotate({ description: "The command to execute" }),
-    timeout: Schema.optional(PositiveInt).annotate({ description: "Optional timeout in milliseconds" }),
+    // Tolerant int arm (F-1): GLM-class providers send the timeout as a stringified number.
+    timeout: Schema.optional(tolerantInt(Schema.isGreaterThan(0))).annotate({
+      description: "Optional timeout in milliseconds",
+    }),
     workdir: Schema.optional(Schema.String).annotate({
       description: `The working directory to run the command in. Defaults to the current directory. Use this instead of 'cd' commands.`,
     }),

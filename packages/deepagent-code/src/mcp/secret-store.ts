@@ -8,6 +8,8 @@ import { ConfigMCPV1 } from "@deepagent-code/core/v1/config/mcp"
 import { McpCatalog } from "./catalog"
 import * as Log from "@deepagent-code/core/util/log"
 import { buffer } from "node:stream/consumers"
+import { dpapiCodec } from "#dpapi"
+import type { Codec } from "./dpapi"
 
 const log = Log.create({ service: "mcp.secret" })
 
@@ -30,13 +32,14 @@ const log = Log.create({ service: "mcp.secret" })
  * under the data dir + an explicit warning — it NEVER silently writes secrets into the
  * project config repo.
  *
- * HONESTY about backends (matches what claude-code itself ships — even upstream leaves
- * Linux libsecret a TODO and falls back to a 0600 file):
- *  - macOS Keychain: REAL, via the `security` subprocess.
- *  - Linux libsecret / Windows DPAPI: NOT yet implemented natively — they report
- *    `available: false` so selection degrades to the REAL 0600 file fallback. No fake
- *    backend is presented as real.
- */
+   * HONESTY about backends:
+   *  - macOS Keychain: REAL, via the `security` subprocess.
+   *  - Linux libsecret: REAL, via the `secret-tool` subprocess (G35-1).
+   *  - Windows DPAPI: REAL, via the `#dpapi` codec — crypt32.dll through bun:ffi on the
+   *    CLI, powershell.exe .NET ProtectedData on the node sidecar (W-b / W-01). Not yet
+   *    verified on a physical Windows machine (no machine in the dev environment); that
+   *    validation is on the W-d Windows acceptance list.
+   */
 export namespace SecretStore {
   // ════════════════════════════════════════════════════════════════════════════
   // ${VAR} env expansion (Step 1) — PURE, no I/O, no service needed.
@@ -157,8 +160,8 @@ export namespace SecretStore {
     }
   }
 
-  /** Default location for the fail-safe credentials file: under the data dir, NOT the repo. */
-  export const defaultFilePath = (): string => path.join(Global.Path.data, "mcp-secrets.json")
+  /** Default location for the fail-safe credentials file: the roaming config home, NOT the repo. */
+  export const defaultFilePath = (): string => path.join(Global.Path.config, "mcp-secrets.json")
 
   const KEYCHAIN_SERVICE = "deepagent-code-mcp"
 
@@ -261,85 +264,42 @@ export namespace SecretStore {
   })
 
   /**
-   * Windows Credential Manager backend — via PowerShell's Windows.Security.Credentials.PasswordVault
-   * (WinRT, available on Windows 8.1+ / Windows Server 2012 R2+).
+   * Windows DPAPI backend (W-b / W-01) — REAL DPAPI at CurrentUser scope via the `#dpapi`
+   * runtime-split codec: the CLI (bun) calls crypt32.dll's CryptProtectData/
+   * CryptUnprotectData directly through bun:ffi; the desktop sidecar (node) uses
+   * powershell.exe .NET ProtectedData, which invokes the same win32 functions, so blobs
+   * interop across runtimes.
    *
-   * G35-1 (v4.0.4): real implementation replacing the always-unavailable stub. Uses the PasswordVault
-   * API, which is backed by DPAPI under the hood — credentials are encrypted with the user's key and
-   * stored in the OS credential store (visible in Windows Credential Manager → Windows Credentials).
+   * DPAPI encrypts but does not store, so the backend persists each ciphertext as a base64
+   * value in a chmod 0600 JSON envelope under the data dir — never plaintext, never inside
+   * the project config repo. Only the OS key holder (the same user on the same machine) can
+   * decrypt; a leaked envelope file alone yields nothing.
    *
-   * Note: not yet verified on Windows (no test machine in current environment). The implementation
-   * follows Microsoft's documented PasswordVault PowerShell pattern. Verified path deferred to
-   * v4.0.6 once a Windows CI/test machine is available.
+   * The codec is injectable so tests exercise the store logic (envelope, accounts, failure
+   * paths) without needing Windows; the real codec is platform-guarded and reports
+   * unavailable off win32, degrading to the fail-safe file backend.
    */
-  export const dpapiBackend = (): Backend => ({
-    id: "dpapi",
-    available: async () => {
-      if (process.platform !== "win32") return false
-      // Probe PowerShell + PasswordVault availability with a minimal no-op script.
-      const res = await Process.run(
-        [
-          "powershell.exe",
-          "-NoProfile",
-          "-NonInteractive",
-          "-Command",
-          "[Windows.Security.Credentials.PasswordVault,Windows.Security.Credentials,ContentType=WindowsRuntime] | Out-Null; Write-Output ok",
-        ],
-        { nothrow: true },
-      ).catch(() => undefined)
-      return !!res && res.code === 0 && res.stdout.toString().includes("ok")
-    },
-    put: async (account, secret) => {
-      const label = `${KEYCHAIN_SERVICE}:${account}`
-      const script = `
-        [Windows.Security.Credentials.PasswordVault,Windows.Security.Credentials,ContentType=WindowsRuntime] | Out-Null
-        $vault = New-Object Windows.Security.Credentials.PasswordVault
-        # Remove existing entry before adding to avoid duplicates.
-        try { $vault.Remove($vault.Retrieve('${label}', '${account}')) } catch {}
-        $cred = New-Object Windows.Security.Credentials.PasswordCredential('${label}', '${account}', '${secret.replace(/'/g, "''")}')
-        $vault.Add($cred)
-        Write-Output ok
-      `.trim()
-      const res = await Process.run(
-        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
-        { nothrow: true },
-      )
-      if (res.code !== 0 || !res.stdout.toString().includes("ok")) {
-        throw new Error(`Windows Credential Manager put failed (code ${res.code})`)
-      }
-    },
-    get: async (account) => {
-      const label = `${KEYCHAIN_SERVICE}:${account}`
-      const script = `
-        [Windows.Security.Credentials.PasswordVault,Windows.Security.Credentials,ContentType=WindowsRuntime] | Out-Null
-        $vault = New-Object Windows.Security.Credentials.PasswordVault
-        try {
-          $cred = $vault.Retrieve('${label}', '${account}')
-          $cred.RetrievePassword()
-          Write-Output $cred.Password
-        } catch { exit 1 }
-      `.trim()
-      const res = await Process.run(
-        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
-        { nothrow: true },
-      ).catch(() => undefined)
-      if (!res || res.code !== 0) return undefined
-      const value = res.stdout.toString().replace(/\r?\n$/, "")
-      return value || undefined
-    },
-    remove: async (account) => {
-      const label = `${KEYCHAIN_SERVICE}:${account}`
-      const script = `
-        [Windows.Security.Credentials.PasswordVault,Windows.Security.Credentials,ContentType=WindowsRuntime] | Out-Null
-        $vault = New-Object Windows.Security.Credentials.PasswordVault
-        try { $vault.Remove($vault.Retrieve('${label}', '${account}')) } catch {}
-      `.trim()
-      await Process.run(
-        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
-        { nothrow: true },
-      ).catch(() => {})
-    },
-  })
+  export const defaultDpapiFilePath = (): string => path.join(Global.Path.data, "mcp-secrets.dpapi.json")
+
+  export const dpapiBackend = (filePath: string = defaultDpapiFilePath(), codec: Codec = dpapiCodec): Backend => {
+    // Reuse the 0600 JSON envelope mechanics of the file backend; values stored here are
+    // base64 DPAPI ciphertext, not plaintext.
+    const envelopes = fileBackend(filePath)
+    return {
+      id: "dpapi",
+      available: async () => process.platform === "win32" && (await codec.available()),
+      put: async (account, secret) => {
+        const ciphertext = await codec.protect(new TextEncoder().encode(secret))
+        await envelopes.put(account, Buffer.from(ciphertext).toString("base64"))
+      },
+      get: async (account) => {
+        const envelope = await envelopes.get(account)
+        if (envelope === undefined) return undefined
+        return new TextDecoder().decode(await codec.unprotect(Buffer.from(envelope, "base64")))
+      },
+      remove: (account) => envelopes.remove(account),
+    }
+  }
 
   /**
    * Pick the best available backend for the current platform, fail-safe: try the native

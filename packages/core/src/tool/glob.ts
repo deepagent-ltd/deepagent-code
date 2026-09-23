@@ -78,7 +78,11 @@ export const layer = Layer.effectDiscard(
               })
               return yield* search.files(input)
             }).pipe(
-              Effect.mapError(() => new ToolFailure({ message: `Unable to find files matching ${input.pattern}` })),
+              Effect.mapError((error) => {
+                const refusal = PermissionV2.permissionToolFailure(error)
+                if (refusal !== null) return refusal
+                return new ToolFailure({ message: `Unable to find files matching ${input.pattern}` })
+              }),
             ),
         }),
       })

@@ -1,0 +1,12 @@
+{
+  "ref_id": "skill:dac-manual:operate-a-delegation-round",
+  "type": "skill",
+  "title": "Operate a full delegation round",
+  "description": "Run one complete delegation cycle: split work, launch with scopes, monitor, inspect, finalize merges, verify.",
+  "body": "Use when a task decomposes into independent chunks worth delegating. Actions, in order: 1) Split — identify self-contained chunks and assign each the weakest sufficient agent type (read-only unless edits are required). 2) Launch — one message, one task call per chunk (at most 8 per message, 4 running concurrently), each with a detailed brief, disjoint file_scope values for write types, and output_schema where a verdict is expected. 3) Monitor — task_status to watch states; never duplicate delegated work inline. 4) Inspect — task_read any task whose summary is truncated, failed, or interrupted; resume a timed-out task with the same task_id or close it with task_close. 5) Finalize — when write-type runs finish, call pr_finalize once and read its per-run receipts; re-drive a changes-requested branch by resuming that task and finalizing again. 6) Verify — run the build and tests on the merged result yourself before reporting completion.\n\nDo not skip step 6: a merge receipt proves integration, not correctness. Do not launch overlapping write scopes to save time — the merge conflict costs more than the sequence.\n\nValidation signals: every launched task_id reaches a terminal state, every write-type branch is either merged or deliberately retained, and the merged workspace passes its own checks. Record the outcome per task before closing the round. Risk boundary: more than 4 concurrent write-type runs on adjacent scopes is an escalation case — sequence them instead.",
+  "domain": "orchestration",
+  "scope_hint": "deepagent.dac-manual:skills",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:deepagent.dac-manual",
+  "pack_id": "deepagent.dac-manual"
+}
