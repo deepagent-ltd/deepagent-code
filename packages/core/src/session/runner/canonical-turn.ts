@@ -152,7 +152,7 @@ export type AdmitSelectionInput = {
     readonly id: string
     readonly providerID: string
     readonly protocol: SelectionEnvelope["modelCapability"]["protocol"]
-    readonly contextWindow: number
+    readonly contextWindow?: number
     readonly structuredOutput: boolean
   }
   /** Location-scoped production sources captured by the runner at layer construction. Direct
@@ -621,14 +621,13 @@ function buildV2Envelope(
           modelId: input.model.id,
           providerId: input.model.providerID,
           protocol: input.model.protocol,
-          contextWindow: input.model.contextWindow,
+          ...(input.model.contextWindow === undefined ? {} : { contextWindow: input.model.contextWindow }),
           structuredOutput: input.model.structuredOutput,
         }
       : {
           modelId: "",
           providerId: "",
           protocol: "openai.responses",
-          contextWindow: 0,
           structuredOutput: false,
         },
     releasedKnowledge: released

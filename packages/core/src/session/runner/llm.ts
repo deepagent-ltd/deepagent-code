@@ -923,7 +923,7 @@ export const layer = Layer.effect(
                 id: model.id,
                 providerID: model.provider,
                 protocol: modelProtocol,
-                contextWindow: modelInfo?.limit.context ?? 0,
+                contextWindow: modelInfo?.limit.context,
                 structuredOutput: modelInfo?.api.protocolCapabilities?.structuredOutput ?? false,
               },
             }
@@ -2077,7 +2077,7 @@ export const layer = Layer.effect(
                 id: model.id,
                 providerID: model.provider,
                 protocol: modelProtocolSelection.protocol,
-                contextWindow: modelInfo?.limit.context ?? 0,
+                contextWindow: modelInfo?.limit.context,
                 structuredOutput: modelInfo?.api.protocolCapabilities?.structuredOutput ?? false,
               },
             }

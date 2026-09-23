@@ -154,7 +154,9 @@ export const SelectionModelCapability = Schema.Struct({
     "openai-compatible.chat",
     "anthropic.messages",
   ]),
-  contextWindow: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  // Absent means unknown. Keep zero decodable for older durable v1 envelopes that
+  // used it as a placeholder, but new writers omit the field instead of inventing 0.
+  contextWindow: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(Schema.optional),
   structuredOutput: Schema.Boolean,
 })
 export type SelectionModelCapability = typeof SelectionModelCapability.Type

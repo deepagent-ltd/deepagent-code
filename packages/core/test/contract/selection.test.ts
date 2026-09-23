@@ -124,6 +124,18 @@ describe("selection contract round-trip and digest", () => {
     expect(decoded).toEqual(envelope)
   })
 
+  test("unknown context window stays absent while legacy zero remains decodable", () => {
+    const legacy = makeEnvelope()
+    const unknown = { ...legacy, modelCapability: { ...legacy.modelCapability } }
+    delete unknown.modelCapability.contextWindow
+    const decoded = decodeSelectionEnvelope(encodeSelectionEnvelope(decodeSelectionEnvelope(unknown)))
+    expect(decoded.modelCapability).not.toHaveProperty("contextWindow")
+    expect(
+      decodeSelectionEnvelope({ ...legacy, modelCapability: { ...legacy.modelCapability, contextWindow: 0 } })
+        .modelCapability.contextWindow,
+    ).toBe(0)
+  })
+
   test("digest is byte-stable: same input two calls -> identical", () => {
     const envelope = makeEnvelope()
     const first = selectionDigest(envelope)
