@@ -336,6 +336,8 @@ const stubSessions = Layer.succeed(
     list: die,
     create: die,
     get: die,
+    requireWritable: die,
+    update: die,
     messages: die,
     message: die,
     context: die,
@@ -484,12 +486,7 @@ const outboxRowFor = (db: DatabaseService, runID: string) =>
     .pipe(Effect.orDie)
 
 const parentInputs = (db: DatabaseService, sessionID: SessionSchema.ID) =>
-  db
-    .select()
-    .from(SessionInputTable)
-    .where(eq(SessionInputTable.session_id, sessionID))
-    .all()
-    .pipe(Effect.orDie)
+  db.select().from(SessionInputTable).where(eq(SessionInputTable.session_id, sessionID)).all().pipe(Effect.orDie)
 
 const receiptCount = (db: DatabaseService) =>
   db.select({ total: count() }).from(V2TaskRunReceiptTable).get().pipe(Effect.orDie)

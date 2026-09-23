@@ -58,6 +58,9 @@ export const SessionTable = sqliteTable(
     tokens_cache_read: integer().notNull().default(0),
     tokens_cache_write: integer().notNull().default(0),
     mutation_epoch: integer().notNull().default(0),
+    // A shared V1/V2 row is writable through V2 only after native creation or an audited adoption.
+    // The marker survives event compaction; row existence alone does not establish authority.
+    v2_authority: integer({ mode: "boolean" }).notNull().default(false),
     // Highest durable interrupt event admitted for this Session. Advisory wakes at or below this
     // aggregate sequence must remain suppressed across process restarts.
     interrupt_seq: integer(),

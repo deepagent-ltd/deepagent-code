@@ -16886,6 +16886,10 @@ export type SessionDeleteErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
 }
 
 export type SessionDeleteError = SessionDeleteErrors[keyof SessionDeleteErrors]
@@ -16967,6 +16971,10 @@ export type SessionUpdateErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
 }
 
 export type SessionUpdateError = SessionUpdateErrors[keyof SessionUpdateErrors]
@@ -17487,6 +17495,10 @@ export type SessionAbortErrors = {
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
   /**
+   * ConflictError
+   */
+  409: ConflictError
+  /**
    * ServiceUnavailableError
    */
   503: ServiceUnavailableError
@@ -17528,6 +17540,10 @@ export type SessionInitErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
   /**
    * ServiceUnavailableError
    */
@@ -17646,6 +17662,10 @@ export type SessionSummarizeErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
   /**
    * ServiceUnavailableError
    */
@@ -17906,6 +17926,10 @@ export type SessionCommandErrors = {
    */
   404: NotFoundError
   /**
+   * ConflictError
+   */
+  409: ConflictError
+  /**
    * ServiceUnavailableError
    */
   503: ServiceUnavailableError
@@ -17955,9 +17979,9 @@ export type SessionShellErrors = {
    */
   404: NotFoundError
   /**
-   * SessionBusyError
+   * ConflictError | SessionBusyError
    */
-  409: SessionBusyError
+  409: ConflictError | SessionBusyError
   /**
    * ServiceUnavailableError
    */
@@ -20634,6 +20658,10 @@ export type V2SessionCompactErrors = {
    * SessionNotFoundError
    */
   404: SessionNotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
   /**
    * ServiceUnavailableError
    */

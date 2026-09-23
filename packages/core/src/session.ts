@@ -148,6 +148,12 @@ export class PromptConflictError extends Schema.TaggedErrorClass<PromptConflictE
   messageID: SessionMessage.ID,
 }) {}
 
+/** A V1-only row is readable but cannot enter the V2 write authority without audited adoption. */
+export class LegacySessionRequiresAdoption extends Schema.TaggedErrorClass<LegacySessionRequiresAdoption>()(
+  "Session.LegacySessionRequiresAdoption",
+  { sessionID: SessionSchema.ID, code: Schema.Literal("legacy_session_requires_adoption") },
+) {}
+
 /**
  * The requested agent exists in the Location roster but is not directly selectable for a Session
  * (`mode: "subagent"` or `hidden` — the same rule AgentV2 applies when selecting the default agent).
@@ -374,6 +380,16 @@ export interface Interface {
     input: CreateInput,
   ) => Effect.Effect<SessionSchema.Info, AgentV2.NotFoundError | AgentNotSelectableError>
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.Info, NotFoundError>
+  readonly requireWritable: (
+    sessionID: SessionSchema.ID,
+  ) => Effect.Effect<SessionSchema.Info, NotFoundError | LegacySessionRequiresAdoption>
+  readonly update: (input: {
+    sessionID: SessionSchema.ID
+    title?: string
+    metadata?: SessionSchema.Metadata | null
+    permissions?: PermissionV2.Ruleset
+    archived?: number | null
+  }) => Effect.Effect<SessionSchema.Info, NotFoundError | LegacySessionRequiresAdoption>
   readonly messages: (input: {
     sessionID: SessionSchema.ID
     limit?: number
@@ -397,16 +413,21 @@ export interface Interface {
   readonly switchAgent: (input: {
     sessionID: SessionSchema.ID
     agent: string
-  }) => Effect.Effect<void, NotFoundError | AgentV2.NotFoundError | AgentNotSelectableError>
+  }) => Effect.Effect<
+    void,
+    NotFoundError | LegacySessionRequiresAdoption | AgentV2.NotFoundError | AgentNotSelectableError
+  >
   readonly switchModel: (input: {
     sessionID: SessionSchema.ID
     model: ModelV2.Ref
-  }) => Effect.Effect<void, NotFoundError>
+  }) => Effect.Effect<void, NotFoundError | LegacySessionRequiresAdoption>
   readonly setPermissions: (input: {
     sessionID: SessionSchema.ID
     permissions: PermissionV2.Ruleset
-  }) => Effect.Effect<void, NotFoundError>
-  readonly setArchived: (input: { sessionID: SessionSchema.ID; archived: boolean }) => Effect.Effect<void, NotFoundError>
+  }) => Effect.Effect<void, NotFoundError | LegacySessionRequiresAdoption>
+  readonly setArchived: (
+    input: { sessionID: SessionSchema.ID; archived: boolean },
+  ) => Effect.Effect<void, NotFoundError | LegacySessionRequiresAdoption>
   readonly prompt: (input: {
     id?: SessionMessage.ID
     sessionID: SessionSchema.ID
@@ -414,23 +435,30 @@ export interface Interface {
     delivery?: SessionInput.Delivery
     resume?: boolean
     revertEpoch?: number
-  }) => Effect.Effect<SessionInput.Admitted, NotFoundError | PromptConflictError | SessionInput.StaleRevertEpoch>
+  }) => Effect.Effect<
+    SessionInput.Admitted,
+    NotFoundError | LegacySessionRequiresAdoption | PromptConflictError | SessionInput.StaleRevertEpoch
+  >
   readonly shell: (input: {
     id?: EventV2.ID
     sessionID: SessionSchema.ID
     command: string
     resume?: boolean
-  }) => Effect.Effect<void, NotFoundError | OperationUnavailableError>
+  }) => Effect.Effect<void, NotFoundError | LegacySessionRequiresAdoption | OperationUnavailableError>
   readonly skill: (input: {
     id?: EventV2.ID
     sessionID: SessionSchema.ID
     skill: string
     resume?: boolean
-  }) => Effect.Effect<void, NotFoundError | OperationUnavailableError>
-  readonly compact: (input: CompactInput) => Effect.Effect<void, NotFoundError | OperationUnavailableError>
+  }) => Effect.Effect<void, NotFoundError | LegacySessionRequiresAdoption | OperationUnavailableError>
+  readonly compact: (
+    input: CompactInput,
+  ) => Effect.Effect<void, NotFoundError | LegacySessionRequiresAdoption | OperationUnavailableError>
   readonly wait: (id: SessionSchema.ID) => Effect.Effect<void, NotFoundError | SessionRunner.RunError>
-  readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | SessionRunner.RunError>
-  readonly interrupt: (sessionID: SessionSchema.ID) => Effect.Effect<void>
+  readonly resume: (
+    sessionID: SessionSchema.ID,
+  ) => Effect.Effect<void, NotFoundError | LegacySessionRequiresAdoption | SessionRunner.RunError>
+  readonly interrupt: (sessionID: SessionSchema.ID) => Effect.Effect<void, LegacySessionRequiresAdoption | Error>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/v2/Session") {}
@@ -654,6 +682,52 @@ export const layer = Layer.effect(
         if (!session) return yield* new NotFoundError({ sessionID })
         return session
       }),
+      requireWritable: Effect.fn("V2Session.requireWritable")(function* (sessionID) {
+        const row = yield* db
+          .select({ v2Authority: SessionTable.v2_authority })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, sessionID))
+          .get()
+          .pipe(Effect.orDie)
+        if (!row) return yield* new NotFoundError({ sessionID })
+        if (!row.v2Authority)
+          return yield* new LegacySessionRequiresAdoption({ sessionID, code: "legacy_session_requires_adoption" })
+        return yield* result.get(sessionID)
+      }),
+      update: Effect.fn("V2Session.update")(function* (input) {
+        yield* result.requireWritable(input.sessionID)
+        const row = yield* db
+          .select()
+          .from(SessionTable)
+          .where(eq(SessionTable.id, input.sessionID))
+          .get()
+          .pipe(Effect.orDie)
+        if (!row) return yield* new NotFoundError({ sessionID: input.sessionID })
+        const current = fromRow(row)
+        const info = SessionSchema.Info.make({
+          ...current,
+          title: input.title ?? current.title,
+          metadata: input.metadata === undefined ? current.metadata : (input.metadata ?? undefined),
+          permissions: input.permissions ?? current.permissions,
+          time: {
+            ...current.time,
+            updated: DateTime.makeUnsafe(Date.now()),
+            archived:
+              input.archived === undefined
+                ? current.time.archived
+                : input.archived === null
+                  ? undefined
+                  : DateTime.makeUnsafe(input.archived),
+          },
+        })
+        yield* events.publish(SessionEvent.Updated, {
+          sessionID: input.sessionID,
+          info,
+          slug: row.slug,
+          version: row.version,
+        })
+        return yield* result.get(input.sessionID)
+      }),
       list: Effect.fn("V2Session.list")(function* (input = {}) {
         const direction = input.anchor?.direction ?? "next"
         const requestedOrder = input.order ?? "desc"
@@ -750,7 +824,7 @@ export const layer = Layer.effect(
       prompt: Effect.fn("V2Session.prompt")((input) =>
         Effect.uninterruptible(
           Effect.gen(function* () {
-            yield* result.get(input.sessionID)
+            yield* result.requireWritable(input.sessionID)
             const returnPrompt = Effect.fnUntraced(function* (admitted: SessionInput.Admitted) {
               if (input.resume !== false) yield* enqueueWake(admitted)
               return admitted
@@ -792,7 +866,7 @@ export const layer = Layer.effect(
         // process and mirrors the exchange as V1 wire rows (no legacy durable writes, no provider
         // call). Wired hosts inject CurrentManualShell; an unwired composition keeps the typed
         // refusal with the concrete reason.
-        yield* result.get(input.sessionID)
+        yield* result.requireWritable(input.sessionID)
         const manual = yield* CurrentManualShell
         if (!manual)
           return yield* new OperationUnavailableError({
@@ -813,10 +887,11 @@ export const layer = Layer.effect(
       // advisory composition (loaded into the system context at turn boundaries), with no standalone
       // "inject this skill now" service. Typed refusal with the concrete reason.
       skill: Effect.fn("V2Session.skill")(function* (input) {
-        yield* result.get(input.sessionID)
+        yield* result.requireWritable(input.sessionID)
         return yield* new OperationUnavailableError({
           operation: "skill",
-          reason: "manual skill invocation is not wired: skill guidance composes into the next turn's system context only",
+          reason:
+            "manual skill invocation is not wired: skill guidance composes into the next turn's system context only",
         })
       }),
       // W1.2 (revised by RI-04) — switchAgent is REAL: the AgentSwitched event still owns the
@@ -827,7 +902,7 @@ export const layer = Layer.effect(
       // Session.AgentNotSelectableError, instead of projecting a switch the per-turn runner resolve
       // would reject later. The event owns the transition; admission owns the refusal.
       switchAgent: Effect.fn("V2Session.switchAgent")(function* (input) {
-        const session = yield* result.get(input.sessionID)
+        const session = yield* result.requireWritable(input.sessionID)
         yield* requireAdmissionAgent(session.location, AgentV2.ID.make(input.agent), true)
         yield* events.publish(SessionEvent.AgentSwitched, {
           sessionID: input.sessionID,
@@ -837,7 +912,7 @@ export const layer = Layer.effect(
         })
       }),
       switchModel: Effect.fn("V2Session.switchModel")(function* (input) {
-        yield* result.get(input.sessionID)
+        yield* result.requireWritable(input.sessionID)
         yield* events.publish(SessionEvent.ModelSwitched, {
           sessionID: input.sessionID,
           messageID: SessionMessage.ID.create(),
@@ -846,7 +921,7 @@ export const layer = Layer.effect(
         })
       }),
       setPermissions: Effect.fn("V2Session.setPermissions")(function* (input) {
-        yield* result.get(input.sessionID)
+        yield* result.requireWritable(input.sessionID)
         yield* events.publish(SessionEvent.PermissionsChanged, {
           sessionID: input.sessionID,
           timestamp: yield* DateTime.now,
@@ -854,7 +929,7 @@ export const layer = Layer.effect(
         })
       }),
       setArchived: Effect.fn("V2Session.setArchived")(function* (input) {
-        const info = yield* result.get(input.sessionID)
+        const info = yield* result.requireWritable(input.sessionID)
         if ((info.time.archived !== undefined) === input.archived) return
         const row = yield* db.select({ slug: SessionTable.slug, version: SessionTable.version })
           .from(SessionTable).where(eq(SessionTable.id, input.sessionID)).get().pipe(Effect.orDie)
@@ -873,7 +948,7 @@ export const layer = Layer.effect(
       // crashes leave recovery_required for the maintenance surface; a settled no-op means the
       // history had nothing worth compacting.
       compact: Effect.fn("V2Session.compact")(function* (input) {
-        yield* result.get(input.sessionID)
+        yield* result.requireWritable(input.sessionID)
         // The summary model identity is EXPLICIT — a caller that cannot name the model gets a
         // typed refusal, never a fabricated or defaulted identity.
         if (input.model === undefined)
@@ -920,21 +995,24 @@ export const layer = Layer.effect(
         yield* execution.awaitIdle(sessionID)
       }),
       resume: Effect.fn("V2Session.resume")(function* (sessionID) {
-        yield* result.get(sessionID)
+        yield* result.requireWritable(sessionID)
         yield* execution.resume(sessionID)
       }),
       interrupt: Effect.fn("V2Session.interrupt")((sessionID) =>
         Effect.uninterruptible(
           Effect.gen(function* () {
             const session = yield* store.get(sessionID)
-            if (!session) return yield* execution.interrupt(sessionID)
-            const event = yield* events.publish(SessionEvent.InterruptRequested, {
-              sessionID,
-              timestamp: yield* DateTime.now,
-            })
+            if (!session) return yield* execution.interrupt(sessionID).pipe(Effect.orDie)
+            yield* result.requireWritable(sessionID)
+            const event = yield* events
+              .publish(SessionEvent.InterruptRequested, {
+                sessionID,
+                timestamp: yield* DateTime.now,
+              })
+              .pipe(Effect.orDie)
             if (event.seq === undefined)
               return yield* Effect.die("Interrupt request event is missing aggregate sequence")
-            yield* execution.interrupt(sessionID, event.seq)
+            yield* execution.interrupt(sessionID, event.seq).pipe(Effect.orDie)
           }),
         ),
       ),
