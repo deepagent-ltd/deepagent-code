@@ -59,7 +59,7 @@ const artifact = await runLegacyLiveCases({
   },
   toolSandbox: { verifierScript: verifier },
   sharedSession: true,
-  observeAssembledRequestFingerprints: true,
+  inspectProviderTurns: true,
   environment: { DEEPAGENT_MODE: "high" },
   primaryPrompt:
     "This is a serial tool-continuation contract test. Use only the tools named by the current user, " +
@@ -121,10 +121,28 @@ if (finalMarkers.some((index) => index < 0) || finalMarkers.some((index, offset)
   throw new Error(`Continuation final markers are missing or out of order: ${finalMarkers.join(", ")}`)
 }
 
-const contextKinds = continuation.assembledRequestFingerprints.map((fingerprint) =>
-  typeof fingerprint.volatileContextKind === "string" ? fingerprint.volatileContextKind : "missing",
-)
-if (contextKinds[0] !== "none") {
+// Durable V2 context-kind oracle: the legacy assembled-request fingerprint event is
+// legacy-owner-only, so the classification reads the provider-turn receipts' volatile system
+// parts instead — the exact control tail the request carried. Markers come from the gateway's
+// own renderers (buildVolatileContinuationContext / buildVolatileRoundContext).
+const contextKinds = (continuation.providerTurns ?? []).map((turn) => {
+  const parts = turn.systemVolatileParts
+  if (parts.some((part) => part.includes("# Tool continuation"))) return "continuation"
+  if (parts.some((part) => part.includes("# 本轮状态 (round context)"))) return "round"
+  return "none"
+})
+if ((continuation.providerTurns ?? []).length === 0) {
+  throw new Error("Continuation activity observed no durable provider-turn receipts")
+}
+// A fresh activity's first provider turn must not be a tool continuation, and must not inherit
+// the PREVIOUS case's round state: the passing validation from case 1 (passMarker) has no live
+// source in this case, so its appearance in the first turn's control tail is stale re-injection.
+// Under V2 the first turn legitimately carries a FRESH round context (kind "round"), so "none"
+// is no longer the expected first-turn kind.
+if (contextKinds[0] === "continuation") {
+  throw new Error(`New activity opened as a tool continuation: ${contextKinds.join(" -> ")}`)
+}
+if ((continuation.providerTurns ?? [])[0]?.systemVolatileParts.some((part) => part.includes(passMarker))) {
   throw new Error(`New activity inherited stale runtime context: ${contextKinds.join(" -> ")}`)
 }
 if (
