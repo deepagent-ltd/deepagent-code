@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "b382dc2b-718d-4213-8f86-d0498a68c14d",
+  "id": "bfbf3ed9-9e5a-4326-bbba-a12512ac23d1",
   "prevIds": [
-    "6ec820d2-4fd8-452f-a9d9-8033f16437d0"
+    "b382dc2b-718d-4213-8f86-d0498a68c14d"
   ],
   "ddl": [
     {
@@ -56,6 +56,10 @@
     },
     {
       "name": "learning_admission_outbox",
+      "entityType": "tables"
+    },
+    {
+      "name": "learning_generation",
       "entityType": "tables"
     },
     {
@@ -1907,6 +1911,116 @@
       "name": "updated_at",
       "entityType": "columns",
       "table": "learning_admission_outbox"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "generation_id",
+      "entityType": "columns",
+      "table": "learning_generation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "session_id",
+      "entityType": "columns",
+      "table": "learning_generation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "project_id",
+      "entityType": "columns",
+      "table": "learning_generation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "activity_id",
+      "entityType": "columns",
+      "table": "learning_generation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "workspace_path",
+      "entityType": "columns",
+      "table": "learning_generation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "admission_json",
+      "entityType": "columns",
+      "table": "learning_generation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "admission_hash",
+      "entityType": "columns",
+      "table": "learning_generation"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "settled_at",
+      "entityType": "columns",
+      "table": "learning_generation"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "trigger",
+      "entityType": "columns",
+      "table": "learning_generation"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "claimed_at",
+      "entityType": "columns",
+      "table": "learning_generation"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "admitted_at",
+      "entityType": "columns",
+      "table": "learning_generation"
     },
     {
       "type": "text",
@@ -13020,6 +13134,36 @@
     },
     {
       "columns": [
+        "session_id"
+      ],
+      "tableTo": "session",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "fk_learning_generation_session_id_session_id_fk",
+      "entityType": "fks",
+      "table": "learning_generation"
+    },
+    {
+      "columns": [
+        "project_id"
+      ],
+      "tableTo": "project",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "fk_learning_generation_project_id_project_id_fk",
+      "entityType": "fks",
+      "table": "learning_generation"
+    },
+    {
+      "columns": [
         "plan_id"
       ],
       "tableTo": "learning_governance_plan",
@@ -14618,6 +14762,15 @@
     },
     {
       "columns": [
+        "generation_id"
+      ],
+      "nameExplicit": false,
+      "name": "learning_generation_pk",
+      "table": "learning_generation",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
         "action_id"
       ],
       "nameExplicit": false,
@@ -15578,6 +15731,42 @@
       "name": "learning_admission_outbox_pending_idx",
       "entityType": "indexes",
       "table": "learning_admission_outbox"
+    },
+    {
+      "columns": [
+        {
+          "value": "session_id",
+          "isExpression": false
+        },
+        {
+          "value": "activity_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "learning_generation_activity_idx",
+      "entityType": "indexes",
+      "table": "learning_generation"
+    },
+    {
+      "columns": [
+        {
+          "value": "trigger",
+          "isExpression": false
+        },
+        {
+          "value": "settled_at",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "learning_generation_pending_idx",
+      "entityType": "indexes",
+      "table": "learning_generation"
     },
     {
       "columns": [
@@ -18080,6 +18269,30 @@
       "name": "learning_admission_outbox_settlement_check",
       "entityType": "checks",
       "table": "learning_admission_outbox"
+    },
+    {
+      "value": "json_valid(\"admission_json\") AND json_type(\"admission_json\") = 'object'",
+      "name": "learning_generation_payload_json_check",
+      "entityType": "checks",
+      "table": "learning_generation"
+    },
+    {
+      "value": "length(\"admission_hash\") = 64 AND \"admission_hash\" NOT GLOB '*[^0-9a-f]*'",
+      "name": "learning_generation_payload_hash_check",
+      "entityType": "checks",
+      "table": "learning_generation"
+    },
+    {
+      "value": "\"trigger\" IS NULL OR \"trigger\" IN ('idle', 'pause', 'project_switch')",
+      "name": "learning_generation_trigger_check",
+      "entityType": "checks",
+      "table": "learning_generation"
+    },
+    {
+      "value": "(\"trigger\" IS NULL AND \"claimed_at\" IS NULL AND \"admitted_at\" IS NULL) OR (\"trigger\" IS NOT NULL AND \"claimed_at\" IS NOT NULL)",
+      "name": "learning_generation_claim_check",
+      "entityType": "checks",
+      "table": "learning_generation"
     },
     {
       "value": "\"sequence\" >= 0",

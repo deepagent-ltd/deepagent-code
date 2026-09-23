@@ -3478,6 +3478,10 @@ export type ProfileHotspot = {
   calls: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
 }
 
+export type DeepAgentProjectSwitchError = {
+  message: string
+}
+
 export type DeepAgentPromotionError = {
   message: string
 }
@@ -10779,6 +10783,38 @@ export type ProfileRunsResponses = {
 }
 
 export type ProfileRunsResponse = ProfileRunsResponses[keyof ProfileRunsResponses]
+
+export type DeepagentProjectSwitchData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/deepagent/learning/project-switch"
+}
+
+export type DeepagentProjectSwitchErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * DeepAgentProjectSwitchError
+   */
+  503: DeepAgentProjectSwitchError
+}
+
+export type DeepagentProjectSwitchError = DeepagentProjectSwitchErrors[keyof DeepagentProjectSwitchErrors]
+
+export type DeepagentProjectSwitchResponses = {
+  /**
+   * Settled learning generations claimed for the previous project
+   */
+  200: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type DeepagentProjectSwitchResponse = DeepagentProjectSwitchResponses[keyof DeepagentProjectSwitchResponses]
 
 export type DeepagentReviewsData = {
   body?: never
