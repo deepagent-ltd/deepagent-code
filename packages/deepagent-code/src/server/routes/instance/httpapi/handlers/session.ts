@@ -60,7 +60,14 @@ import {
   SummarizePayload,
   UpdatePayload,
 } from "../groups/session"
-import { ApiNotFoundError, ConflictError, PermissionNotFoundError, ServiceUnavailableError, SessionBusyError, notFound } from "../errors"
+import {
+  ApiNotFoundError,
+  ConflictError,
+  PermissionNotFoundError,
+  ServiceUnavailableError,
+  SessionBusyError,
+  notFound,
+} from "../errors"
 import * as SessionError from "./session-errors"
 import { randomUUID } from "node:crypto"
 import { getWorkspaceContext } from "../utils/workspace-context"
@@ -93,7 +100,9 @@ const isPromptPrepareTerminal = (event: unknown) =>
 /** Map the unified facade's typed refusals onto the provider-resolution HTTP errors. */
 const mapProviderResolutionError =
   (service: string) =>
-  (error: SessionProviderResolution.Error): HttpApiError.BadRequest | ApiNotFoundError | ConflictError | ServiceUnavailableError =>
+  (
+    error: SessionProviderResolution.Error,
+  ): HttpApiError.BadRequest | ApiNotFoundError | ConflictError | ServiceUnavailableError =>
     error instanceof SessionProviderResolution.NotFound
       ? notFound(error.reason)
       : error instanceof SessionProviderResolution.Conflict
@@ -127,11 +136,12 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     yield* DevCampaignMint
 
     const mapLegacyZero = (error: LegacyExecutionUnavailable) =>
-      new ServiceUnavailableError({
-        service: "session.prompt",
-        message:
-          error.reason + ": " + error.detail + (error.sessionID ? " (session " + error.sessionID + ")" : ""),
-      })
+      error.reason === "legacy_session_requires_adoption"
+        ? new ConflictError({ message: error.detail, resource: error.reason })
+        : new ServiceUnavailableError({
+            service: "session.prompt",
+            message: error.reason + ": " + error.detail + (error.sessionID ? " (session " + error.sessionID + ")" : ""),
+          })
 
     const refuseLegacyRecoveryMutation = (sessionID: SessionID, operation: string) =>
       flags.coreV2Only
@@ -184,8 +194,25 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     })
 
     const requireSession = Effect.fn("SessionHttpApi.requireSession")(function* (sessionID: SessionID) {
+      yield* coreV2Session
+        .get(SessionV2.ID.make(sessionID))
+        .pipe(Effect.mapError(() => notFound(`Session not found: ${sessionID}`)))
       return yield* SessionError.mapStorageNotFound(session.get(sessionID))
     })
+
+    const requireWritableSession = (sessionID: SessionID) =>
+      coreV2Session
+        .requireWritable(SessionV2.ID.make(sessionID))
+        .pipe(
+          Effect.mapError((error) =>
+            error instanceof SessionV2.LegacySessionRequiresAdoption
+              ? new ConflictError({
+                  message: `Historical session ${sessionID} requires explicit audited adoption`,
+                  resource: error.code,
+                })
+              : notFound(`Session not found: ${sessionID}`),
+          ),
+        )
 
     const get = Effect.fn("SessionHttpApi.get")(function* (ctx: { params: { sessionID: SessionID } }) {
       return yield* requireSession(ctx.params.sessionID)
@@ -243,9 +270,11 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       return yield* SessionDiffArtifact.migrate({
         sessionID: ctx.params.sessionID,
         ...(ctx.payload.limit ? { limit: ctx.payload.limit } : {}),
-      }).pipe(Effect.mapError((error) =>
-        new ServiceUnavailableError({ service: "session.diff-artifact", message: error.message }),
-      ))
+      }).pipe(
+        Effect.mapError(
+          (error) => new ServiceUnavailableError({ service: "session.diff-artifact", message: error.message }),
+        ),
+      )
     })
 
     const diffArtifactManifest = Effect.fn("SessionHttpApi.diffArtifactManifest")(function* (ctx: {
@@ -329,25 +358,25 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       if (flags.coreV2Only) {
         const instanceCtx = yield* InstanceState.context
         const workspaceID = yield* InstanceState.workspaceID
-        const created = yield* coreV2Session.create({
-          ...(ctx.payload?.parentID ? { parentID: SessionV2.ID.make(ctx.payload.parentID) } : {}),
-          ...(ctx.payload?.title ? { title: ctx.payload.title } : {}),
-          ...(ctx.payload?.metadata ? { metadata: ctx.payload.metadata } : {}),
-          ...(ctx.payload?.agent ? { agent: AgentV2.ID.make(ctx.payload.agent) } : {}),
-          ...(ctx.payload?.model
-            ? { model: { id: ctx.payload.model.id, providerID: ctx.payload.model.providerID } }
-            : {}),
-          permissions: SessionV2.permissionsFromLegacy(ctx.payload?.permission),
-          location: { directory: AbsolutePath.make(instanceCtx.directory), ...(workspaceID ? { workspaceID } : {}) },
-        }).pipe(
-          // RI-04 admission validation surfaces as a typed 400 like the public V2 endpoint.
-          Effect.catchTags({
-            "AgentV2.NotFoundError": (error) =>
-              Effect.fail(new HttpApiError.BadRequest({})),
-            "Session.AgentNotSelectableError": (error) =>
-              Effect.fail(new HttpApiError.BadRequest({})),
-          }),
-        )
+        const created = yield* coreV2Session
+          .create({
+            ...(ctx.payload?.parentID ? { parentID: SessionV2.ID.make(ctx.payload.parentID) } : {}),
+            ...(ctx.payload?.title ? { title: ctx.payload.title } : {}),
+            ...(ctx.payload?.metadata ? { metadata: ctx.payload.metadata } : {}),
+            ...(ctx.payload?.agent ? { agent: AgentV2.ID.make(ctx.payload.agent) } : {}),
+            ...(ctx.payload?.model
+              ? { model: { id: ctx.payload.model.id, providerID: ctx.payload.model.providerID } }
+              : {}),
+            permissions: SessionV2.permissionsFromLegacy(ctx.payload?.permission),
+            location: { directory: AbsolutePath.make(instanceCtx.directory), ...(workspaceID ? { workspaceID } : {}) },
+          })
+          .pipe(
+            // RI-04 admission validation surfaces as a typed 400 like the public V2 endpoint.
+            Effect.catchTags({
+              "AgentV2.NotFoundError": (error) => Effect.fail(new HttpApiError.BadRequest({})),
+              "Session.AgentNotSelectableError": (error) => Effect.fail(new HttpApiError.BadRequest({})),
+            }),
+          )
         // Read-back cannot miss a session Core just projected; a miss is a defect, not a 404.
         return yield* session.get(SessionID.make(created.id)).pipe(Effect.orDie)
       }
@@ -374,6 +403,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     })
 
     const remove = Effect.fn("SessionHttpApi.remove")(function* (ctx: { params: { sessionID: SessionID } }) {
+      yield* requireWritableSession(ctx.params.sessionID)
       yield* SessionError.mapStorageNotFound(session.remove(ctx.params.sessionID))
       return true
     })
@@ -383,32 +413,30 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       payload: typeof UpdatePayload.Type
     }) {
       const current = yield* requireSession(ctx.params.sessionID)
-      if (ctx.payload.title !== undefined) {
-        yield* session.setTitle({ sessionID: ctx.params.sessionID, title: ctx.payload.title })
-      }
-      if (ctx.payload.metadata !== undefined) {
-        yield* session.setMetadata({ sessionID: ctx.params.sessionID, metadata: ctx.payload.metadata })
-      }
-      if (ctx.payload.permission !== undefined) {
-        const permission = Permission.merge(current.permission ?? [], ctx.payload.permission)
-        yield* session.setPermission({
-          sessionID: ctx.params.sessionID,
-          permission,
+      yield* coreV2Session
+        .update({
+          sessionID: SessionV2.ID.make(ctx.params.sessionID),
+          ...(ctx.payload.title !== undefined ? { title: ctx.payload.title } : {}),
+          ...(ctx.payload.metadata !== undefined ? { metadata: ctx.payload.metadata } : {}),
+          ...(ctx.payload.permission !== undefined
+            ? {
+                permissions: SessionV2.permissionsFromLegacy(
+                  Permission.merge(current.permission ?? [], ctx.payload.permission),
+                ),
+              }
+            : {}),
+          ...(ctx.payload.time?.archived !== undefined ? { archived: ctx.payload.time.archived } : {}),
         })
-        if (flags.coreV2Only) {
-          const v2ID = SessionV2.ID.make(ctx.params.sessionID)
-          const adopted = yield* coreV2Session.get(v2ID).pipe(Effect.option)
-          if (Option.isSome(adopted)) {
-            yield* coreV2Session.setPermissions({
-              sessionID: v2ID,
-              permissions: SessionV2.permissionsFromLegacy(permission),
-            }).pipe(Effect.orDie)
-          }
-        }
-      }
-      if (ctx.payload.time?.archived !== undefined) {
-        yield* session.setArchived({ sessionID: ctx.params.sessionID, time: ctx.payload.time.archived })
-      }
+        .pipe(
+          Effect.mapError((error) =>
+            error instanceof SessionV2.LegacySessionRequiresAdoption
+              ? new ConflictError({
+                  message: `Historical session ${ctx.params.sessionID} requires explicit audited adoption`,
+                  resource: error.code,
+                })
+              : notFound(`Session not found: ${ctx.params.sessionID}`),
+          ),
+        )
       return yield* requireSession(ctx.params.sessionID)
     })
 
@@ -418,6 +446,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
       payload: typeof ForkPayload.Type
     }) {
+      yield* requireWritableSession(ctx.params.sessionID)
       return yield* SessionError.mapFork(
         session.fork({
           sessionID: ctx.params.sessionID,
@@ -501,11 +530,12 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       // the direct path.
       if (flags.coreV2Only) {
         const currentSession = yield* requireSession(ctx.params.sessionID)
-        yield* coreV2Session.compact({
-          sessionID: SessionV2.ID.make(ctx.params.sessionID),
-          model: { providerID: ctx.payload.providerID, modelID: ctx.payload.modelID },
-          auto: ctx.payload.auto ?? false,
-        })
+        yield* coreV2Session
+          .compact({
+            sessionID: SessionV2.ID.make(ctx.params.sessionID),
+            model: { providerID: ctx.payload.providerID, modelID: ctx.payload.modelID },
+            auto: ctx.payload.auto ?? false,
+          })
           .pipe(
             Effect.mapError(
               (error) =>
@@ -538,13 +568,15 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       })
       // F-18 follow-up: the V2 drain loop may fail with a typed admission Conflict (reason in
       // `error.reason`) — render it as 503 with the reason instead of leaking a defect.
-      yield* promptSvc.loop({ sessionID: ctx.params.sessionID }).pipe(
-        Effect.mapError((error) =>
-          error instanceof SessionPromptIntent.Conflict
-            ? new ServiceUnavailableError({ service: "session.v2.admission", message: error.reason })
-            : mapLegacyZero(error),
-        ),
-      )
+      yield* promptSvc
+        .loop({ sessionID: ctx.params.sessionID })
+        .pipe(
+          Effect.mapError((error) =>
+            error instanceof SessionPromptIntent.Conflict
+              ? new ServiceUnavailableError({ service: "session.v2.admission", message: error.reason })
+              : mapLegacyZero(error),
+          ),
+        )
       return true
     })
 
@@ -578,16 +610,16 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
               : error instanceof SessionMutationEpoch.Stale
                 ? new ConflictError({
                     message: "prompt intent was superseded by a session revert",
-                  resource: `session:${error.sessionID}`,
-                })
-              : error instanceof SessionPromptIntent.Conflict
-                ? new ConflictError({ message: error.reason, resource: `session_intent:${error.intentID}` })
-                : error instanceof SessionPromptIntent.InProgress
-                  ? new ConflictError({
-                      message: "prompt intent admission is already in progress",
-                      resource: `session_intent:${error.intentID}`,
-                    })
-                  : new HttpApiError.BadRequest({}),
+                    resource: `session:${error.sessionID}`,
+                  })
+                : error instanceof SessionPromptIntent.Conflict
+                  ? new ConflictError({ message: error.reason, resource: `session_intent:${error.intentID}` })
+                  : error instanceof SessionPromptIntent.InProgress
+                    ? new ConflictError({
+                        message: "prompt intent admission is already in progress",
+                        resource: `session_intent:${error.intentID}`,
+                      })
+                    : new HttpApiError.BadRequest({}),
           ),
         )
       const body =
@@ -749,18 +781,18 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           error instanceof LegacyExecutionUnavailable
             ? mapLegacyZero(error)
             : error instanceof SessionPromptIntent.Conflict
-            ? new ConflictError({ message: error.reason, resource: `session_intent:${error.intentID}` })
-            : error instanceof SessionPromptIntent.InProgress
-              ? new ConflictError({
-                  message: "prompt intent admission is already in progress",
-                  resource: `session_intent:${error.intentID}`,
-                })
-              : error instanceof SessionMutationEpoch.Stale
+              ? new ConflictError({ message: error.reason, resource: `session_intent:${error.intentID}` })
+              : error instanceof SessionPromptIntent.InProgress
                 ? new ConflictError({
-                    message: "prompt intent was superseded by a session revert",
-                    resource: `session:${error.sessionID}`,
+                    message: "prompt intent admission is already in progress",
+                    resource: `session_intent:${error.intentID}`,
                   })
-                : new HttpApiError.BadRequest({}),
+                : error instanceof SessionMutationEpoch.Stale
+                  ? new ConflictError({
+                      message: "prompt intent was superseded by a session revert",
+                      resource: `session:${error.sessionID}`,
+                    })
+                  : new HttpApiError.BadRequest({}),
         ),
       )
       return receipt
@@ -786,18 +818,16 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     }) {
       yield* requireSession(ctx.params.sessionID)
       yield* SessionError.mapBusy(assertSessionLaneAvailable(ctx.params.sessionID))
-      return yield* commandSvc
-        .shell({ ...ctx.payload, sessionID: ctx.params.sessionID })
-        .pipe(
-          Effect.mapError((error) =>
-            error instanceof Session.BusyError
-              ? new SessionBusyError({
-                  sessionID: error.sessionID,
-                  message: `Session is busy: ${error.sessionID}`,
-                })
-              : mapLegacyZero(error),
-          ),
-        )
+      return yield* commandSvc.shell({ ...ctx.payload, sessionID: ctx.params.sessionID }).pipe(
+        Effect.mapError((error) =>
+          error instanceof Session.BusyError
+            ? new SessionBusyError({
+                sessionID: error.sessionID,
+                message: `Session is busy: ${error.sessionID}`,
+              })
+            : mapLegacyZero(error),
+        ),
+      )
     })
 
     const revert = Effect.fn("SessionHttpApi.revert")(function* (ctx: {
@@ -1012,16 +1042,16 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           authority: outcome.authority,
           ...(outcome.authority === "context_federation_attempt"
             ? {
-              command: {
-                commandID: outcome.command.commandId,
-                attemptID: outcome.command.attempt.attemptId,
-                requestHash: outcome.command.requestHash,
-                state: outcome.command.state,
-                ...(outcome.command.commandKind ? { commandKind: outcome.command.commandKind } : {}),
-                createdAt: outcome.command.createdAt,
-                updatedAt: outcome.command.updatedAt,
-              },
-            }
+                command: {
+                  commandID: outcome.command.commandId,
+                  attemptID: outcome.command.attempt.attemptId,
+                  requestHash: outcome.command.requestHash,
+                  state: outcome.command.state,
+                  ...(outcome.command.commandKind ? { commandKind: outcome.command.commandKind } : {}),
+                  createdAt: outcome.command.createdAt,
+                  updatedAt: outcome.command.updatedAt,
+                },
+              }
             : {}),
           ...(outcome.authority === "legacy_provider_receipt" && outcome.resolution !== undefined
             ? { resolution: outcome.resolution }
@@ -1048,35 +1078,32 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
 
     // Legacy-profile path only (unreachable under coreV2Only — see the refusal above): resolves
     // explicit compaction continuations and replays through the legacy loop.
-    const legacyContinuationResolutionResolve = Effect.fn(
-      "SessionHttpApi.legacyContinuationResolutionResolve",
-    )(function* (ctx: {
-      params: { sessionID: SessionID }
-      payload: typeof ContinuationResolutionPayload.Type
-    }) {
-      const actor = yield* getWorkspaceContext()
-      const result = yield* compactSvc
-        .resolveContinuation({ ...ctx.payload, sessionID: ctx.params.sessionID, actorID: actor.userID })
-        .pipe(
-          Effect.mapError((error) =>
-            error instanceof SessionCompaction.ContinuationResolutionNotFound
-              ? notFound(error.reason)
-              : new ConflictError({ message: error.reason, resource: error.code }),
-          ),
-        )
-      if (result.shouldReplay)
-        yield* promptSvc.loop({ sessionID: result.sessionID }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.logError("explicit compaction continuation replay failed", {
-              runID: result.runID,
-              resolutionID: result.resolutionID,
-              cause: Cause.pretty(cause),
-            }),
-          ),
-          Effect.forkIn(scope, { startImmediately: true }),
-        )
-      return result
-    })
+    const legacyContinuationResolutionResolve = Effect.fn("SessionHttpApi.legacyContinuationResolutionResolve")(
+      function* (ctx: { params: { sessionID: SessionID }; payload: typeof ContinuationResolutionPayload.Type }) {
+        const actor = yield* getWorkspaceContext()
+        const result = yield* compactSvc
+          .resolveContinuation({ ...ctx.payload, sessionID: ctx.params.sessionID, actorID: actor.userID })
+          .pipe(
+            Effect.mapError((error) =>
+              error instanceof SessionCompaction.ContinuationResolutionNotFound
+                ? notFound(error.reason)
+                : new ConflictError({ message: error.reason, resource: error.code }),
+            ),
+          )
+        if (result.shouldReplay)
+          yield* promptSvc.loop({ sessionID: result.sessionID }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logError("explicit compaction continuation replay failed", {
+                runID: result.runID,
+                resolutionID: result.resolutionID,
+                cause: Cause.pretty(cause),
+              }),
+            ),
+            Effect.forkIn(scope, { startImmediately: true }),
+          )
+        return result
+      },
+    )
 
     // LEGACY-EXECUTION-ZERO classification: history export/import (snapshot bundle) — archival
     // read/copy of existing message/part rows, never executes or claims a turn. Exempt.

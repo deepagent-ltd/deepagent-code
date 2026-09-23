@@ -647,7 +647,7 @@ export const SessionApi = HttpApi.make("session")
           params: { sessionID: SessionID },
           query: WorkspaceRoutingQuery,
           success: described(Schema.Boolean, "Successfully deleted session"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError],
+          error: [HttpApiError.BadRequest, ConflictError, ApiNotFoundError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.delete",
@@ -660,7 +660,7 @@ export const SessionApi = HttpApi.make("session")
           query: WorkspaceRoutingQuery,
           payload: UpdatePayload,
           success: described(Session.Info, "Successfully updated session"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError],
+          error: [HttpApiError.BadRequest, ConflictError, ApiNotFoundError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.update",
@@ -686,7 +686,7 @@ export const SessionApi = HttpApi.make("session")
           params: { sessionID: SessionID },
           query: WorkspaceRoutingQuery,
           success: described(Schema.Boolean, "Aborted session"),
-          error: [HttpApiError.BadRequest, ServiceUnavailableError],
+          error: [HttpApiError.BadRequest, ConflictError, ServiceUnavailableError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.abort",
@@ -699,7 +699,7 @@ export const SessionApi = HttpApi.make("session")
           query: WorkspaceRoutingQuery,
           payload: InitPayload,
           success: described(Schema.Boolean, "200"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError, ServiceUnavailableError],
+          error: [HttpApiError.BadRequest, ConflictError, ApiNotFoundError, ServiceUnavailableError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.init",
@@ -737,7 +737,7 @@ export const SessionApi = HttpApi.make("session")
           query: WorkspaceRoutingQuery,
           payload: SummarizePayload,
           success: described(Schema.Boolean, "Summarized session"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError, ServiceUnavailableError],
+          error: [HttpApiError.BadRequest, ConflictError, ApiNotFoundError, ServiceUnavailableError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.summarize",
@@ -823,7 +823,7 @@ export const SessionApi = HttpApi.make("session")
           query: WorkspaceRoutingQuery,
           payload: CommandPayload,
           success: described(SessionV1.WithParts, "Created message"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError, ServiceUnavailableError],
+          error: [HttpApiError.BadRequest, ConflictError, ApiNotFoundError, ServiceUnavailableError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.command",
@@ -836,7 +836,7 @@ export const SessionApi = HttpApi.make("session")
           query: WorkspaceRoutingQuery,
           payload: ShellPayload,
           success: described(SessionV1.WithParts, "Created message"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError, SessionBusyError, ServiceUnavailableError],
+          error: [HttpApiError.BadRequest, ConflictError, ApiNotFoundError, SessionBusyError, ServiceUnavailableError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.shell",
@@ -990,10 +990,7 @@ export const SessionApi = HttpApi.make("session")
           params: { sessionID: SessionID },
           query: WorkspaceRoutingQuery,
           payload: ProviderResolutionCommandPayload,
-          success: described(
-            ProviderResolutionCommandResult,
-            "Unified provider-resolution command outcome",
-          ),
+          success: described(ProviderResolutionCommandResult, "Unified provider-resolution command outcome"),
           error: [HttpApiError.BadRequest, ApiNotFoundError, ConflictError, ServiceUnavailableError],
         }).annotateMerge(
           OpenApi.annotations({

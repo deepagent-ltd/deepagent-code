@@ -63,6 +63,7 @@ import {
   MessageTable,
   PartTable,
   SessionMessageTable,
+  SessionTable,
   SessionPromptEpochMessageTable,
   TaskRunEventTable,
   TaskRunTable,
@@ -882,6 +883,8 @@ const v2OwnerStubLayer = Layer.merge(
       list: () => Effect.succeed([]),
       create: () => Effect.die("v2 owner stub: create unused"),
       get: () => Effect.die("v2 owner stub: get unused"),
+      requireWritable: () => Effect.die("v2 owner stub: requireWritable unused"),
+      update: () => Effect.die("v2 owner stub: update unused"),
       messages: () => Effect.succeed([]),
       message: () => Effect.succeed(undefined),
       context: () =>
@@ -1037,6 +1040,8 @@ const r0V2Stub = SessionV2.Service.of({
       Effect.as({ id: input.id, directory: "/tmp/ws1", slug: "r0", agent: "build" } as unknown as SessionV2.Info),
     ),
   get: () => Effect.fail(new Error("stub: not adopted") as unknown as SessionV2.NotFoundError),
+  requireWritable: () => Effect.succeed({ id: SessionV2.ID.make("ses_r0_stub") } as SessionV2.Info),
+  update: () => Effect.die("r0 stub: update unused"),
   messages: () =>
     Effect.succeed([
       new SessionMessage.User({
@@ -1178,7 +1183,6 @@ const mintR0Authorization = (db: Database.Interface["db"]): Effect.Effect<void, 
       })
       .run()
   })
-
 
 // Loop semantics
 
@@ -5040,8 +5044,11 @@ v2Qualified.instance(
 
       expect(r0V2PromptCalls).toContain(chat.id)
       expect(r0V2ResumeCalls).toContain(chat.id)
-      expect(r0V2AdoptCalls).toContain(chat.id)
-      expect(r0V2AdoptPermissions).toContainEqual([{ action: "bash", resource: "*", effect: "deny" }])
+      expect(r0V2AdoptCalls).toEqual([])
+      expect(r0V2AdoptPermissions).toEqual([])
+      const createdRow = yield* db.select().from(SessionTable).where(eq(SessionTable.id, chat.id)).get()
+      expect(createdRow?.v2_authority).toBe(true)
+      expect(createdRow?.permission).toEqual([{ action: "bash", resource: "*", effect: "deny" }])
       expect(result.info.role).toBe("assistant")
       expect(result.parts.some((part) => part.type === "text" && part.text === "v2 owner reply")).toBe(true)
       // Mirror: V1 reader sees the user + assistant rows (V2 authority projected to the limited reader).
@@ -5400,26 +5407,28 @@ const shellBlockKey = (chat: { id: string }, payload: string) =>
         const payload = `printf side-effect >> ${path.join(directory, "count-intent.txt")}; printf ran`
         const marker = path.join(directory, "crash-after-intent.json")
 
-        yield* withCommandEffectCrashPoint(
-          { directory, marker, point: "after_intent_insert" },
-          () =>
-            Effect.gen(function* () {
-              const running = yield* provideR0OwnerRefs(
-                prompt.command({ sessionID: chat.id, command: "receipt", arguments: "" }),
-              ).pipe(Effect.forkChild)
-              yield* pollWithTimeout(
-                Effect.promise(() => Bun.file(marker).exists().then((exists) => (exists ? true : undefined))),
-                "command never reached the after-intent crash point",
-                "10 seconds",
-              )
-              // The ordering oracle: the durable intent row EXISTS while the OS effect has
-              // NOT run yet — intent-first, not execute-first.
-              const row = yield* CommandEffectReceipt.latestRow(db, shellBlockKey(chat, payload))
-              expect(row?.status).toBe("pending")
-              expect(row?.attempt).toBe(1)
-              expect(yield* readCountFile(path.join(directory, "count-intent.txt"))).toBe("")
-              yield* Fiber.interrupt(running)
-            }),
+        yield* withCommandEffectCrashPoint({ directory, marker, point: "after_intent_insert" }, () =>
+          Effect.gen(function* () {
+            const running = yield* provideR0OwnerRefs(
+              prompt.command({ sessionID: chat.id, command: "receipt", arguments: "" }),
+            ).pipe(Effect.forkChild)
+            yield* pollWithTimeout(
+              Effect.promise(() =>
+                Bun.file(marker)
+                  .exists()
+                  .then((exists) => (exists ? true : undefined)),
+              ),
+              "command never reached the after-intent crash point",
+              "10 seconds",
+            )
+            // The ordering oracle: the durable intent row EXISTS while the OS effect has
+            // NOT run yet — intent-first, not execute-first.
+            const row = yield* CommandEffectReceipt.latestRow(db, shellBlockKey(chat, payload))
+            expect(row?.status).toBe("pending")
+            expect(row?.attempt).toBe(1)
+            expect(yield* readCountFile(path.join(directory, "count-intent.txt"))).toBe("")
+            yield* Fiber.interrupt(running)
+          }),
         )
 
         // The crashed attempt left an unsettled intent: the retry must refuse re-execution
@@ -5457,7 +5466,6 @@ const shellBlockKey = (chat: { id: string }, payload: string) =>
     ),
   30_000,
 )
-
 ;(process.platform !== "win32" ? v2Real.instance : v2Real.instance.skip)(
   "P0-4: crash between execute and settle leaves UNKNOWN; retry refuses, force re-runs and settles",
   () =>
@@ -5470,25 +5478,27 @@ const shellBlockKey = (chat: { id: string }, payload: string) =>
         const payload = `printf side-effect >> ${path.join(directory, "count-settle.txt")}; printf ran`
         const marker = path.join(directory, "crash-before-settle.json")
 
-        yield* withCommandEffectCrashPoint(
-          { directory, marker, point: "after_execute_before_settle" },
-          () =>
-            Effect.gen(function* () {
-              const running = yield* provideR0OwnerRefs(
-                prompt.command({ sessionID: chat.id, command: "receipt", arguments: "" }),
-              ).pipe(Effect.forkChild)
-              yield* pollWithTimeout(
-                Effect.promise(() => Bun.file(marker).exists().then((exists) => (exists ? true : undefined))),
-                "command never reached the before-settle crash point",
-                "10 seconds",
-              )
-              // The OS effect RAN (definite observable), but the settle never committed: the
-              // durable outcome is unknown and the row must still be pending.
-              expect(yield* readCountFile(path.join(directory, "count-settle.txt"))).toBe("side-effect")
-              const row = yield* CommandEffectReceipt.latestRow(db, shellBlockKey(chat, payload))
-              expect(row?.status).toBe("pending")
-              yield* Fiber.interrupt(running)
-            }),
+        yield* withCommandEffectCrashPoint({ directory, marker, point: "after_execute_before_settle" }, () =>
+          Effect.gen(function* () {
+            const running = yield* provideR0OwnerRefs(
+              prompt.command({ sessionID: chat.id, command: "receipt", arguments: "" }),
+            ).pipe(Effect.forkChild)
+            yield* pollWithTimeout(
+              Effect.promise(() =>
+                Bun.file(marker)
+                  .exists()
+                  .then((exists) => (exists ? true : undefined)),
+              ),
+              "command never reached the before-settle crash point",
+              "10 seconds",
+            )
+            // The OS effect RAN (definite observable), but the settle never committed: the
+            // durable outcome is unknown and the row must still be pending.
+            expect(yield* readCountFile(path.join(directory, "count-settle.txt"))).toBe("side-effect")
+            const row = yield* CommandEffectReceipt.latestRow(db, shellBlockKey(chat, payload))
+            expect(row?.status).toBe("pending")
+            yield* Fiber.interrupt(running)
+          }),
         )
 
         // Retry sees the unsettled attempt and refuses — no second side-effect line.
@@ -5515,7 +5525,6 @@ const shellBlockKey = (chat: { id: string }, payload: string) =>
     ),
   30_000,
 )
-
 ;(process.platform !== "win32" ? v2Real.instance : v2Real.instance.skip)(
   "P0-4: completed !-shell block settles exactly once; duplicate delivery reuses the outcome",
   () =>
@@ -5613,11 +5622,10 @@ const v2RealPlugin = testEffect(
       yield* llm.text("second")
       yield* provideR0OwnerRefs(prompt.command({ sessionID: chat.id, command: "receipt", arguments: "" }))
       expect(commandEffectHookCalls).toHaveLength(1)
-      expect(((yield* CommandEffectReceipt.latestRow(db, hookKey))?.attempt) ?? 0).toBe(1)
+      expect((yield* CommandEffectReceipt.latestRow(db, hookKey))?.attempt ?? 0).toBe(1)
     }),
   30_000,
 )
-
 ;(process.platform !== "win32" ? v2RealPlugin.instance : v2RealPlugin.instance.skip)(
   "P0-4: quarantined plugin hook receipt refuses re-trigger; force re-runs the hook",
   () =>
@@ -5633,25 +5641,27 @@ const v2RealPlugin = testEffect(
       const marker = path.join(directory, "crash-hook-after-intent.json")
       commandEffectHookCalls.length = 0
 
-      yield* withCommandEffectCrashPoint(
-        { directory, marker, point: "after_intent_insert" },
-        () =>
-          Effect.gen(function* () {
-            const running = yield* provideR0OwnerRefs(
-              prompt.command({ sessionID: chat.id, command: "receipt", arguments: "" }),
-            ).pipe(Effect.forkChild)
-            yield* pollWithTimeout(
-              Effect.promise(() => Bun.file(marker).exists().then((exists) => (exists ? true : undefined))),
-              "command never reached the hook after-intent crash point",
-              "10 seconds",
-            )
-            const row = yield* CommandEffectReceipt.latestRow(db, hookKey)
-            expect(row?.kind).toBe("plugin_hook")
-            expect(row?.status).toBe("pending")
-            expect(commandEffectHookCalls).toHaveLength(0)
-            yield* Fiber.interrupt(running)
-          }),
-        )
+      yield* withCommandEffectCrashPoint({ directory, marker, point: "after_intent_insert" }, () =>
+        Effect.gen(function* () {
+          const running = yield* provideR0OwnerRefs(
+            prompt.command({ sessionID: chat.id, command: "receipt", arguments: "" }),
+          ).pipe(Effect.forkChild)
+          yield* pollWithTimeout(
+            Effect.promise(() =>
+              Bun.file(marker)
+                .exists()
+                .then((exists) => (exists ? true : undefined)),
+            ),
+            "command never reached the hook after-intent crash point",
+            "10 seconds",
+          )
+          const row = yield* CommandEffectReceipt.latestRow(db, hookKey)
+          expect(row?.kind).toBe("plugin_hook")
+          expect(row?.status).toBe("pending")
+          expect(commandEffectHookCalls).toHaveLength(0)
+          yield* Fiber.interrupt(running)
+        }),
+      )
 
       const refused = yield* provideR0OwnerRefs(
         prompt.command({ sessionID: chat.id, command: "receipt", arguments: "" }),
@@ -5664,9 +5674,7 @@ const v2RealPlugin = testEffect(
       expect((yield* CommandEffectReceipt.latestRow(db, hookKey))?.status).toBe("unknown")
 
       yield* llm.text("done")
-      yield* provideR0OwnerRefs(
-        prompt.command({ sessionID: chat.id, command: "receipt", arguments: "", force: true }),
-      )
+      yield* provideR0OwnerRefs(prompt.command({ sessionID: chat.id, command: "receipt", arguments: "", force: true }))
       expect(commandEffectHookCalls).toHaveLength(1)
       const forced = yield* CommandEffectReceipt.latestRow(db, hookKey)
       expect(forced?.attempt).toBe(2)
@@ -5674,4 +5682,3 @@ const v2RealPlugin = testEffect(
     }),
   30_000,
 )
-

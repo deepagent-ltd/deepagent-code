@@ -20,16 +20,7 @@ import { SessionStatus } from "./status"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { pathToFileURL } from "url"
-import {
-  Cause,
-  Context,
-  Effect,
-  Layer,
-  Option,
-  Schema,
-  Scope,
-  Types,
-} from "effect"
+import { Cause, Context, Effect, Layer, Option, Schema, Scope, Types } from "effect"
 import * as DateTime from "effect/DateTime"
 import * as EffectLogger from "@deepagent-code/core/effect/logger"
 import { KeyedMutex } from "@deepagent-code/core/effect/keyed-mutex"
@@ -57,7 +48,6 @@ import { V2ProviderTurnReceiptTable } from "@deepagent-code/core/session/runner/
 import { SessionV2 } from "@deepagent-code/core/session"
 import * as mechanismBeacon from "@deepagent-code/core/deepagent/mechanism-beacon"
 import { ModelV2 } from "@deepagent-code/core/model"
-import { AgentV2 } from "@deepagent-code/core/agent"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import {
   AgentAttachment,
@@ -124,19 +114,13 @@ function mirrorAdmissionMetadata(metadata: PromptInput["metadata"]) {
 const TERMINAL_GOAL_PHASES: ReadonlySet<string> = new Set(["done", "needs_human", "rolled_back", "stopped"])
 
 export interface Interface {
-  readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
+  readonly cancel: (sessionID: SessionID) => Effect.Effect<void, LegacyExecutionUnavailable>
   readonly prompt: (
     input: PromptInput,
-  ) => Effect.Effect<
-    SessionV1.WithParts,
-    SessionPromptIntent.Error | Session.BusyError | LegacyExecutionUnavailable
-  >
+  ) => Effect.Effect<SessionV1.WithParts, SessionPromptIntent.Error | Session.BusyError | LegacyExecutionUnavailable>
   readonly promptAsync: (
     input: PromptInput,
-  ) => Effect.Effect<
-    PromptAdmissionReceipt,
-    SessionPromptIntent.Error | Session.BusyError | LegacyExecutionUnavailable
-  >
+  ) => Effect.Effect<PromptAdmissionReceipt, SessionPromptIntent.Error | Session.BusyError | LegacyExecutionUnavailable>
   // LEGACY-EXECUTION-ZERO: the legacy steer-buffer admission is closed under the V2-only profile —
   // this surface is the typed firewall refusal. Goal steers admit on the V2 goal channel inside
   // promptOrSteer (delivery "goal_steer"); chat coalescing is the V2 admission contract itself.
@@ -151,10 +135,7 @@ export interface Interface {
   // chat admission (busy/steer coalescing is the V2 admission contract).
   readonly promptOrSteer: (
     input: PromptInput,
-  ) => Effect.Effect<
-    PromptOrSteerResult,
-    SessionPromptIntent.Error | Session.BusyError | LegacyExecutionUnavailable
-  >
+  ) => Effect.Effect<PromptOrSteerResult, SessionPromptIntent.Error | Session.BusyError | LegacyExecutionUnavailable>
   readonly loop: (
     input: LoopInput,
     onRunning?: Effect.Effect<void>,
@@ -163,16 +144,12 @@ export interface Interface {
   // Admission-support model resolution shared with the command surface (session-command-v2):
   // currentModel resolves the session's effective model (session row → last user message → provider
   // default), the same resolution the command template/shell mirror paths consume.
-  readonly currentModel: (sessionID: SessionID) => Effect.Effect<
-    { providerID: ProviderV2.ID; modelID: ModelV2.ID; variant?: string },
-    never,
-    never
-  >
+  readonly currentModel: (
+    sessionID: SessionID,
+  ) => Effect.Effect<{ providerID: ProviderV2.ID; modelID: ModelV2.ID; variant?: string }, never, never>
   // The lane-interrupt assistant the shell lane and the loop's shell-busy queue resolve (RI-128):
   // the latest non-user message, or the newest message when only user rows exist.
-  readonly lastAssistant: (
-    sessionID: SessionID,
-  ) => Effect.Effect<SessionV1.WithParts>
+  readonly lastAssistant: (sessionID: SessionID) => Effect.Effect<SessionV1.WithParts>
   readonly refineIntelligenceDraft: (input: {
     sessionID: SessionID
     rawInput: string
@@ -214,18 +191,12 @@ type PromptLifecycle = {
 type ExecutePrompt = (
   input: PromptInput,
   lifecycle?: PromptLifecycle,
-) => Effect.Effect<
-  SessionV1.WithParts,
-  SessionPromptIntent.Error | Session.BusyError | LegacyExecutionUnavailable
->
+) => Effect.Effect<SessionV1.WithParts, SessionPromptIntent.Error | Session.BusyError | LegacyExecutionUnavailable>
 
 type ExecutePromptOrSteer = (
   input: PromptInput,
   lifecycle?: PromptLifecycle,
-) => Effect.Effect<
-  PromptOrSteerResult,
-  SessionPromptIntent.Error | Session.BusyError | LegacyExecutionUnavailable
->
+) => Effect.Effect<PromptOrSteerResult, SessionPromptIntent.Error | Session.BusyError | LegacyExecutionUnavailable>
 
 export const layer = Layer.effect(
   Service,
@@ -276,7 +247,16 @@ export const layer = Layer.effect(
     const cancel = Effect.fn("SessionPrompt.cancel")(function* (sessionID: SessionID) {
       // LEGACY-EXECUTION-ZERO: under the V2-only profile abort targets the V2 execution owner
       // (process-local interrupt, idle = no-op) instead of the legacy run-state cancel.
-      yield* coreV2Session.interrupt(sessionID)
+      yield* coreV2Session.interrupt(sessionID).pipe(
+        Effect.catchTag("Session.LegacySessionRequiresAdoption", () =>
+          refuseLegacyExecution({
+            sessionID,
+            reason: "legacy_session_requires_adoption",
+            detail: "Historical V1-only session requires an explicit audited adoption before writing",
+          }),
+        ),
+        Effect.catch((error) => (error instanceof LegacyExecutionUnavailable ? Effect.fail(error) : Effect.die(error))),
+      )
       // RI-128: the `!` shell lane lives on the run-state Runner, decoupled from the V2 drain —
       // bridge cancel to it so a running shell aborts (and a loop queued behind it is released).
       yield* state.cancelShell(sessionID)
@@ -790,45 +770,25 @@ export const layer = Layer.effect(
 
     // P2-10 (rN): lifecycle is accepted for call-site compatibility but not wired to V2 admission
     // (no lifecycle.ready under the profile); no production caller passes one under the profile today.
-    // 1.4.8.rN: legacy-created sessions (Session.Service.create writes only the V1 side) have no
-    // V2 projection row until the first V2 event materializes one. Adoption get-or-create runs BEFORE
-    // admission so a paused/queued legacy session never 404s into the V2 path; races and transient
-    // create failures are tolerated (the following admission reports the real typed error).
+    // V1 and V2 share a projection row. Only the durable V2 authority marker grants write access;
+    // ordinary prompt requests never create or repair an historical Session.
     const ensureV2Session = Effect.fn("SessionPrompt.ensureV2Session")(function* (sessionID: SessionID) {
-      const v2ID = SessionV2.ID.make(sessionID)
-      const exists = yield* coreV2Session.get(v2ID).pipe(Effect.option)
-      const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
-      const permissions = SessionV2.permissionsFromLegacy(session.permission)
-      if (Option.isSome(exists)) {
-        // Migration repair for Sessions adopted before permission propagation existed. During the
-        // V2-only transition the public compatibility API still owns these edits, so a non-empty
-        // legacy ruleset must not leave the Core execution projection less restrictive.
-        if (session.permission && JSON.stringify(exists.value.permissions) !== JSON.stringify(permissions)) {
-          yield* coreV2Session.setPermissions({ sessionID: v2ID, permissions }).pipe(Effect.orDie)
-        }
-        return
-      }
-      yield* coreV2Session
-        .create({
-          id: v2ID,
-          location: {
-            directory: AbsolutePath.make(session.directory),
-            ...(session.workspaceID ? { workspaceID: session.workspaceID } : {}),
-          },
-          ...(session.agent ? { agent: AgentV2.ID.make(session.agent) } : {}),
-          ...(session.model ? { model: { id: session.model.id, providerID: session.model.providerID } } : {}),
-          permissions,
-        })
-        .pipe(
-          Effect.catch((error) =>
-            elog
-              .warn("v2 session adoption failed", {
-                sessionID,
-                error: String((error as { message?: unknown }).message ?? error),
-              })
-              .pipe(Effect.asVoid),
-          ),
-        )
+      yield* coreV2Session.requireWritable(SessionV2.ID.make(sessionID)).pipe(
+        Effect.catchTags({
+          "Session.LegacySessionRequiresAdoption": () =>
+            refuseLegacyExecution({
+              sessionID,
+              reason: "legacy_session_requires_adoption",
+              detail: "Historical V1-only session requires an explicit audited adoption before writing",
+            }),
+          "Session.NotFoundError": () =>
+            refuseLegacyExecution({
+              sessionID,
+              reason: "v2_stack_unavailable",
+              detail: "Session has no V2 projection",
+            }),
+        }),
+      )
     })
 
     const promptV2 = Effect.fn("SessionPrompt.promptV2")(function* (input: PromptInput, lifecycle?: PromptLifecycle) {
@@ -858,9 +818,7 @@ export const layer = Layer.effect(
         ...(session.workspaceID ? { workspaceID: session.workspaceID } : {}),
       })
       const resolvedV2 = roster ? V2AgentRoster.resolveIn(roster, agentName) : undefined
-      const resolvedV1 = roster
-        ? undefined
-        : Option.getOrUndefined(yield* agents.get(agentName).pipe(Effect.option))
+      const resolvedV1 = roster ? undefined : Option.getOrUndefined(yield* agents.get(agentName).pipe(Effect.option))
       if (!resolvedV2 && !resolvedV1) {
         const available = roster
           ? V2AgentRoster.selectableNames(roster)
@@ -880,9 +838,7 @@ export const layer = Layer.effect(
           resolvedV2.mode !== "subagent" &&
           !resolvedV2.hidden
         )
-          yield* coreV2Session
-            .switchAgent({ sessionID: v2SessionID, agent: String(resolvedV2.id) })
-            .pipe(Effect.orDie)
+          yield* coreV2Session.switchAgent({ sessionID: v2SessionID, agent: String(resolvedV2.id) }).pipe(Effect.orDie)
       }
       // P2-6 (rN): this model identity is used ONLY for the V1 mirror row (display fidelity); the
       // drain's model resolution happens in the core runner from the V2 session store. The final
@@ -1244,9 +1200,7 @@ export const layer = Layer.effect(
             Effect.fail(
               new SessionPromptIntent.Conflict({
                 intentID: String(input.sessionID),
-                reason: String(
-                  (error as { message?: unknown }).message ?? (error as { _tag?: unknown })._tag ?? error,
-                ),
+                reason: String((error as { message?: unknown }).message ?? (error as { _tag?: unknown })._tag ?? error),
               }),
             ),
           ),
