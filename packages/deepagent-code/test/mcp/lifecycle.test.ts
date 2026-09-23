@@ -7,6 +7,7 @@ import { V2McpBridge } from "@/session/v2-mcp-bridge"
 import { InstanceRegistry } from "@/effect/instance-registry"
 import { InstanceRef } from "@/effect/instance-ref"
 import { testEffect } from "../lib/effect"
+import path from "path"
 
 // The mock.module registrations below persist for the whole process unless
 // restored; release them when this file finishes so later files import the
@@ -351,6 +352,40 @@ withV2Tools.instance(
       connectShouldFail = false
       yield* mcp.connect("live-server")
       expect(applications.entries().has("mcp__live-server__echo")).toBe(true)
+    }),
+  { config: { mcp: {} } },
+)
+
+withV2Tools.instance(
+  "external config edits add and remove MCP tools without reloading the instance",
+  () =>
+    Effect.gen(function* () {
+      const context = yield* InstanceRef
+      if (!context) return yield* Effect.die("missing instance")
+      const applications = yield* ApplicationTools.Service
+      const mcp = yield* MCP.Service
+      lastCreatedClientName = "config-server"
+      getOrCreateClientState("config-server").tools = [
+        { name: "echo", description: "echo", inputSchema: { type: "object", properties: {} } },
+      ]
+      yield* InstanceRegistry.initializeInstance(context)
+      const file = path.join(context.directory, "deepagent-code.json")
+      yield* Effect.promise(() =>
+        Bun.write(file, JSON.stringify({ mcp: { "config-server": { type: "local", command: ["echo", "test"] } } })),
+      )
+      const waitFor = (present: boolean) =>
+        Effect.promise(async () => {
+          for (let i = 0; i < 100; i++) {
+            if (applications.entries().has("mcp__config-server__echo") === present) return
+            await Bun.sleep(20)
+          }
+          throw new Error(`MCP tool did not become ${present ? "present" : "absent"}`)
+        })
+      yield* waitFor(true)
+      const tool = Object.values(yield* mcp.tools())[0]
+      expect(tool && ToolProvenance.get(tool)?.configSource).toBe(file)
+      yield* Effect.promise(() => Bun.write(file, JSON.stringify({ mcp: {} })))
+      yield* waitFor(false)
     }),
   { config: { mcp: {} } },
 )

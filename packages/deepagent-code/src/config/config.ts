@@ -11,13 +11,14 @@ import { Auth } from "../auth"
 import { Env } from "../env"
 import { applyEdits, modify } from "jsonc-parser"
 import { InstallationLocal, InstallationVersion } from "@deepagent-code/core/installation/version"
-import { existsSync } from "fs"
+import { existsSync, watch } from "fs"
 import { Account } from "@/account/account"
 import { isRecord } from "@/util/record"
 import type { ConsoleState } from "@deepagent-code/core/v1/config/console-state"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { InstanceState } from "@/effect/instance-state"
-import { Cause, Context, Duration, Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
+import { InstanceRef } from "@/effect/instance-ref"
+import { Cause, Context, Duration, Effect, Exit, Fiber, Layer, Option, Schema, Semaphore } from "effect"
 import { JsonError, InvalidError } from "@deepagent-code/core/v1/config/error"
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
@@ -146,6 +147,7 @@ type Info = ConfigV1.Info & {
   // plugin_origins is derived state, not a persisted config field. It keeps each winning plugin spec together
   // with the file and scope it came from so later runtime code can make location-sensitive decisions.
   plugin_origins?: ConfigPlugin.Origin[]
+  mcp_origins?: Record<string, string>
 }
 
 // A non-fatal config-load problem surfaced to the user (e.g. in Settings → Providers) so they can tell
@@ -175,6 +177,7 @@ export interface Interface {
   readonly invalidate: () => Effect.Effect<void>
   readonly directories: () => Effect.Effect<string[]>
   readonly waitForDependencies: () => Effect.Effect<void>
+  readonly watch?: (changed: () => Effect.Effect<void>) => Effect.Effect<() => void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/Config") {}
@@ -285,7 +288,7 @@ function patchJsonc(input: string, patch: unknown, path: string[] = []): string 
 }
 
 function writable(info: Info) {
-  const { plugin_origins: _plugin_origins, ...next } = info
+  const { plugin_origins: _plugin_origins, mcp_origins: _mcp_origins, ...next } = info
   return next
 }
 
@@ -668,6 +671,12 @@ export const layer = Layer.effect(
 
         const merge = (source: string, next: Info, kind?: ConfigPlugin.Scope) => {
           result = mergeConfigConcatArrays(result, next)
+          if (next.mcp) {
+            result.mcp_origins = {
+              ...result.mcp_origins,
+              ...Object.fromEntries(Object.keys(next.mcp).map((name) => [name, source])),
+            }
+          }
           return mergePluginOrigins(source, next.plugin, kind)
         }
 
@@ -977,6 +986,53 @@ export const layer = Layer.effect(
 
     const invalidate = Effect.fn("Config.invalidate")(function* () {
       yield* invalidateGlobal
+      const instance = yield* Effect.serviceOption(InstanceRef)
+      if (Option.isSome(instance)) yield* InstanceState.invalidate(state)
+    })
+
+    const watchChanges = Effect.fn("Config.watch")(function* (changed: () => Effect.Effect<void>) {
+      const ctx = yield* InstanceState.context
+      const dirs = yield* directories()
+      const files = yield* ConfigPaths.files("deepagent-code", ctx.directory, ctx.worktree).pipe(
+        Effect.provideService(FSUtil.Service, fs),
+        Effect.orDie,
+      )
+      const targets = new Set([
+        Global.Path.config,
+        ctx.directory,
+        ...dirs,
+        ...files.map(path.dirname),
+        ...dirs.flatMap((dir) => [path.join(dir, "plugin"), path.join(dir, "plugins")]),
+      ])
+      const semaphore = yield* Semaphore.make(1)
+      let closed = false
+      const watchers = [...targets].flatMap((dir) => {
+        if (!existsSync(dir)) return []
+        try {
+          return [watch(dir, (_event, filename) => {
+            const name = filename?.toString() ?? ""
+            const pluginDirectory = /^(?:plugin|plugins)$/.test(path.basename(dir))
+            if (closed || (name && !/^(?:config|deepagent-code)\.jsonc?$|^\.deepagent-code$|^plugins?$/.test(name)
+              && !(pluginDirectory && /\.[cm]?[jt]sx?$/.test(name)))) return
+            void Effect.runPromise(
+              semaphore.withPermit(
+                Effect.gen(function* () {
+                  if (closed) return
+                  yield* invalidate()
+                  yield* changed()
+                }),
+              ).pipe(Effect.provideService(InstanceRef, ctx)),
+            ).catch((error) => log.warn("config live refresh failed", { directory: ctx.directory, error: String(error) }))
+          })]
+        } catch (error) {
+          log.warn("config watch unavailable", { directory: dir, error: String(error) })
+          return []
+        }
+      })
+      return () => {
+        closed = true
+        watchers.forEach((watcher) => watcher.close())
+      }
     })
 
     const updateGlobal = Effect.fn("Config.updateGlobal")(function* (config: Info) {
@@ -1026,6 +1082,7 @@ export const layer = Layer.effect(
       invalidate,
       directories,
       waitForDependencies,
+      watch: watchChanges,
     })
   }),
 )

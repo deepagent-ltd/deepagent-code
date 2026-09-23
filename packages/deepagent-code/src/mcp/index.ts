@@ -242,6 +242,7 @@ interface AuthResult {
 
 interface State {
   config: Record<string, ConfigMCPV1.Info>
+  configured: NonNullable<ConfigV1.Info["mcp"]>
   status: Record<string, Status>
   clients: Record<string, MCPClient>
   defs: Record<string, MCPToolDef[]>
@@ -251,6 +252,8 @@ export interface Interface {
   readonly status: () => Effect.Effect<Record<string, Status>>
   readonly clients: () => Effect.Effect<Record<string, MCPClient>>
   readonly tools: () => Effect.Effect<Record<string, Tool>>
+  readonly reconcileConfig?: () => Effect.Effect<void>
+  readonly watchConfig?: () => Effect.Effect<() => void>
   readonly prompts: () => Effect.Effect<Record<string, PromptInfo & { client: string }>>
   readonly resources: () => Effect.Effect<Record<string, ResourceInfo & { client: string }>>
   readonly add: (name: string, mcp: ConfigMCPV1.Info) => Effect.Effect<{ status: Record<string, Status> | Status }>
@@ -605,6 +608,7 @@ export const layer = Layer.effect(
         const config = yield* migrateOnStartup(cfg.mcp ?? {})
         const s: State = {
           config: {},
+          configured: { ...config },
           status: {},
           clients: {},
           defs: {},
@@ -735,6 +739,31 @@ export const layer = Layer.effect(
       return { status: s.status }
     })
 
+    const reconcileConfig = Effect.fn("MCP.reconcileConfig")(function* () {
+      const s = yield* InstanceState.get(state)
+      const configured = (yield* cfgSvc.get()).mcp ?? {}
+      for (const name of new Set([...Object.keys(s.configured), ...Object.keys(configured)])) {
+        const previous = s.configured[name]
+        const next = configured[name]
+        if (JSON.stringify(previous) === JSON.stringify(next)) continue
+        if (!next || !isMcpConfigured(next) || next.enabled === false) {
+          yield* closeClient(s, name)
+          delete s.clients[name]
+          delete s.defs[name]
+          if (next) s.status[name] = { status: "disabled" }
+          else delete s.status[name]
+          yield* events.publish(ToolsChanged, { server: name }).pipe(Effect.ignore)
+          continue
+        }
+        yield* createAndStore(name, next)
+      }
+      s.configured = { ...configured }
+    })
+
+    const watchConfig = Effect.fn("MCP.watchConfig")(function* () {
+      return cfgSvc.watch ? yield* cfgSvc.watch(() => reconcileConfig()) : () => {}
+    })
+
     // M1 (S1-v3.4): the preset catalog is static metadata — listing it connects nothing.
     const catalog = Effect.fn("MCP.catalog")(function* () {
       return McpCatalog.list()
@@ -823,6 +852,7 @@ export const layer = Layer.effect(
                 source: "mcp",
                 mcpServer: clientName,
                 mcpToolName: mcpTool.name,
+                configSource: cfg.mcp_origins?.[clientName] ?? "runtime",
                 // M7 (S1-v3.4): tier is the catalog-DERIVED tier (see above), so the session tool gate
                 // derives read_only→allow / else→ask from a source the model/config cannot forge. A
                 // non-matching (hand-added or tampered) server derives undefined → gate fails closed.
@@ -1095,6 +1125,8 @@ export const layer = Layer.effect(
       status,
       clients,
       tools,
+      reconcileConfig,
+      watchConfig,
       prompts,
       resources,
       add,

@@ -142,11 +142,17 @@ export const layer = Layer.effectDiscard(
                 )
               : Effect.void,
           )
+          const stopWatching = mcp.watchConfig
+            ? yield* mcp.watchConfig().pipe(
+                Effect.provideService(InstanceRef, context),
+              )
+            : () => {}
           InstanceRegistry.registerInstanceStateDisposer(context, () =>
             Effect.runPromise(
               semaphore.withPermit(
                 Effect.gen(function* () {
                   disposed = true
+                  stopWatching()
                   yield* unsubscribe
                   if (scope) yield* Scope.close(scope, Exit.void)
                 }),
