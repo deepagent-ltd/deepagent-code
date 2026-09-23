@@ -15,6 +15,7 @@ import { DurableLearningRuntime } from "@/deepagent/learning-runtime"
 import { RecoveryExecutor } from "@/server/recovery-executor"
 import { TaskWorktreeReclamation } from "@/effect/task-worktree-reclamation"
 import { productionSourcesLayer } from "@/context-federation/production-sources"
+import { EventV2Bridge } from "@/event-v2-bridge"
 
 // Both production roots must use these exact Layer objects. Effect memoizes by Layer identity,
 // including the ApplicationTools instance captured by the V2 Location map and its bridges.
@@ -28,6 +29,7 @@ export const ownerSeedLayer = V2OwnerSeed.layer({
 export const mcpBridgeLayer = V2McpBridge.layer.pipe(
   Layer.provide(applicationToolsLayer),
   Layer.provide(InstanceRegistry.layer),
+  Layer.provide(EventV2Bridge.defaultLayer),
   Layer.provideMerge(MCP.defaultLayer),
 )
 export const pluginBridgeLayer = V2PluginToolsBridge.layer.pipe(
