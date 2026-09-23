@@ -18,7 +18,7 @@
  */
 export const HeadPin = {
   /** Commit whose tree the digests were pinned on. Informational; the digests are the gate. */
-  commit: "0f1762172ab5aba7473f4b894773d7e1bd8f0957",
-  setTreeDigest: "7124bf19c6e72fc72d3fbd5902392914e341dc957637c45c01b9c4ac151293bf",
-  overallDigest: "f1a079bbb0a1183b00145a262f4673f9a3eab0f05fbd1a133c428aadb4fca3b6",
+  commit: "bb15cb59",
+  setTreeDigest: "bbb211660fcf194c6191555880e3bda88a0b6fbdbefe41f12a9a8215c3b3a017",
+  overallDigest: "0e393989d36281ca4f1c4ed8c3e6e43049b3714b0b3db7f19ada0e43d00ed71a",
 } as const
