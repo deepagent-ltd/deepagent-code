@@ -3,7 +3,7 @@ import { SessionTable } from "./sql"
 import type { SessionSchema } from "./schema"
 import type { ModelHardPolicy } from "./runner/model-hard-policy"
 
-/** One diagnostic per assembled request; blocked requests never create a provider attempt. */
+/** One diagnostic per preflight decision; dispatchable receipts bind one provider attempt. */
 export const SessionModelPolicyReceiptTable = sqliteTable(
   "session_model_policy_receipt",
   {
