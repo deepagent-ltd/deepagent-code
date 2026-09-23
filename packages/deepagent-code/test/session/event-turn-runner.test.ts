@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import path from "node:path"
-import { DateTime, Effect } from "effect"
+import { DateTime, Effect, Fiber } from "effect"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import type { InstanceStore } from "@/project/instance-store"
@@ -19,7 +19,7 @@ const input = (over: Partial<SubagentTurnInput> = {}): SubagentTurnInput => ({
   ...over,
 })
 
-const fakeServices = (options: { stall?: boolean } = {}) => {
+const fakeServices = (options: { stall?: boolean; afterAdmission?: () => void } = {}) => {
   const sessions = new Map<
     string,
     { id: SessionV2.ID; parentID?: SessionV2.ID; location: { directory: string }; permissions: [] }
@@ -66,7 +66,10 @@ const fakeServices = (options: { stall?: boolean } = {}) => {
             { id: value.id, type: "user", time: { created: DateTime.makeUnsafe(1) } } as SessionMessage.Message,
           ])
         return { id: value.id }
-      }),
+      }).pipe(
+        Effect.tap(() => Effect.sync(() => options.afterAdmission?.())),
+        Effect.flatMap((result) => (options.afterAdmission ? Effect.never : Effect.succeed(result))),
+      ),
     resume: (sessionID: SessionV2.ID) =>
       options.stall
         ? Effect.never
@@ -91,6 +94,22 @@ const fakeServices = (options: { stall?: boolean } = {}) => {
 }
 
 describe("V2 event turn runner", () => {
+  test("a crash after durable admission but before join leaves provider calls at zero", async () => {
+    let admitted: (() => void) | undefined
+    const admission = new Promise<void>((resolve) => {
+      admitted = resolve
+    })
+    const fake = fakeServices({ afterAdmission: () => admitted?.() })
+    const run = makeEventTurnRunnerV2({ sessions: fake.v2Session, instanceStore: fake.instanceStore })
+    const fiber = Effect.runFork(run(input()))
+    await admission
+    await Effect.runPromise(Fiber.interrupt(fiber))
+    expect(fake.prompts).toHaveLength(1)
+    expect(fake.prompts[0]).toMatchObject({ resume: false, delivery: "queue" })
+    expect(fake.drains).toEqual([])
+    expect(fake.sessions.has(fake.prompts[0].sessionID)).toBe(true)
+  })
+
   test("replay reconciles one durable prompt identity and does not drive the provider twice", async () => {
     const fake = fakeServices()
     const run = makeEventTurnRunnerV2({ sessions: fake.v2Session, instanceStore: fake.instanceStore })

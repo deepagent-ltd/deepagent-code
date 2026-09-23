@@ -9,6 +9,8 @@ import { Database } from "@deepagent-code/core/database/database"
 import { AgentListProviderService } from "@deepagent-code/core/im/agent-list-provider"
 import { ApprovalQueue } from "@deepagent-code/core/deepagent/approval-queue"
 import { AgentExecution } from "@deepagent-code/core/deepagent/agent-execution"
+import { ConflictArbiter } from "@deepagent-code/core/deepagent/conflict-arbiter"
+import { TaskPartitioner } from "@deepagent-code/core/deepagent/task-partitioner"
 import { LMNEvents } from "@deepagent-code/core/deepagent/lmn-events"
 import { SecurityResolvers } from "@deepagent-code/core/deepagent/security-resolvers"
 import { WorkspaceConfig } from "@deepagent-code/core/deepagent/workspace-config"
@@ -549,6 +551,94 @@ describe("MultiAgentRuntime.coordinate", () => {
       )
       expect(summary.outcomes.map((o) => o.status)).toEqual(["completed", "completed"])
       expect(ran).toEqual(["ops", "ops"])
+    }),
+  )
+})
+
+describe("MultiAgentRuntime randomized DAG conflict oracle", () => {
+  const it = testEffect(makeLayer())
+
+  it.live("only nonconflicting siblings overlap and every dependency starts after its parent ends", () =>
+    Effect.gen(function* () {
+      setNow(1_000)
+      setRegistry([agent("worker", ["work"], "level_1")])
+      let seed = 0x2a4b9c01
+      const random = (limit: number) => {
+        seed = (Math.imul(seed, 1_664_525) + 1_013_904_223) >>> 0
+        return seed % limit
+      }
+      const plans = Array.from(
+        { length: 24 },
+        (_, caseIndex): ReadonlyArray<TaskPartitioner.Subtask> =>
+          Array.from({ length: 5 }, (_, taskIndex) => ({
+            id: `tsk_oracle_${caseIndex}_${taskIndex}`,
+            capability: "work",
+            intent: "inspect a declared scope",
+            dependsOn: taskIndex > 0 && random(3) === 0 ? [`tsk_oracle_${caseIndex}_${random(taskIndex)}`] : [],
+            fileScope: random(6) === 0 ? [] : [`src/${["a", "b", "c", "d"][random(4)]}.ts`],
+            requiredAutonomy: "level_1" as const,
+          })),
+      )
+      const intervals = new Map<string, { start: number; end: number }>()
+      let tick = 0
+      const runner: SubagentTurnRunner = (input) =>
+        Effect.gen(function* () {
+          const start = ++tick
+          yield* Effect.sleep(Duration.millis(2))
+          intervals.set(input.taskID!, { start, end: ++tick })
+          return { ok: true, structured: undefined, text: "done", tokensUsed: 0, cost: 0 }
+        })
+      const partition: NonNullable<MultiAgentRuntime.LayerOptions["partition"]> = (input) => ({
+        event: input,
+        subtasks: plans[Number(input.id.slice("dae_oracle_".length))],
+      })
+      const symbolsForFiles: NonNullable<MultiAgentRuntime.LayerOptions["symbolsForFiles"]> = (_, files) =>
+        Effect.succeed(files.some((file) => file.endsWith("a.ts") || file.endsWith("c.ts")) ? ["shared"] : [])
+      const summaries = yield* Effect.gen(function* () {
+        const runtime = yield* MultiAgentRuntime.Service
+        const result = []
+        for (const index of plans.keys()) {
+          result.push(
+            yield* runtime.coordinate(
+              event({
+                id: DeepAgentEvent.ID.make(`dae_oracle_${index}`),
+                type: "test.random-dag",
+                source: (["im", "schedule", "system"] as const)[index % 3],
+                priority: (["low", "normal", "high", "critical"] as const)[index % 4],
+              }),
+            ),
+          )
+        }
+        return result
+      }).pipe(Effect.provide(makeLayer({ runner, partition, symbolsForFiles })))
+
+      let overlaps = 0
+      for (const [caseIndex, plan] of plans.entries()) {
+        const summary = summaries[caseIndex]
+        for (const task of plan) {
+          const current = intervals.get(task.id)
+          for (const dependency of task.dependsOn) {
+            const parent = intervals.get(dependency)
+            if (current && parent) expect(parent.end).toBeLessThan(current.start)
+          }
+          for (const other of plan.filter((candidate) => candidate.id < task.id)) {
+            const prior = intervals.get(other.id)
+            if (!current || !prior || current.start > prior.end || prior.start > current.end) continue
+            overlaps++
+            const claim = (node: TaskPartitioner.Subtask): ConflictArbiter.Claim => ({
+              taskID: node.id,
+              agentID: "worker",
+              files: node.fileScope,
+              symbols: node.fileScope.some((file) => file.endsWith("a.ts") || file.endsWith("c.ts")) ? ["shared"] : [],
+              priority: "normal",
+              origin: "system",
+            })
+            expect(ConflictArbiter.conflicts(claim(task), claim(other))).toBe(false)
+          }
+        }
+        if (summary.outcomes.some((outcome) => outcome.status === "deferred")) expect(summary.hasUnfinished).toBe(true)
+      }
+      expect(overlaps).toBeGreaterThan(0)
     }),
   )
 })
@@ -1258,6 +1348,52 @@ describe("MultiAgentRuntime §C3.1 file-lock enforcement", () => {
       expect(codeEdit?.reason).toBe("file_locked")
       expect(ran).toEqual([])
       testFileLock.release(human!.lockId) // cleanup
+    }),
+  )
+
+  it.effect("releases every earlier file lock when a later file is contended", () =>
+    Effect.gen(function* () {
+      resetRunner()
+      setNow(1_000)
+      setRegistry([agent("fixer", ["code_edit"], "level_2")])
+      const directory = path.resolve("partial-lock-workspace")
+      const firstKey = LockKeys.fileLockKey(directory, "src/a.ts")
+      const secondKey = LockKeys.fileLockKey(directory, "src/b.ts")
+      const holder = testFileLock.acquire(secondKey, "human")
+      expect(holder).not.toBeNull()
+      const released: string[] = []
+      const fileLock = FileLock.Service.of({
+        ...testFileLock,
+        release: (id) => {
+          released.push(id)
+          return testFileLock.release(id)
+        },
+      })
+      const partition: NonNullable<MultiAgentRuntime.LayerOptions["partition"]> = (input) => ({
+        event: input,
+        subtasks: [
+          {
+            id: `${input.id}:fix`,
+            capability: "code_edit",
+            intent: "edit two files",
+            dependsOn: [],
+            fileScope: ["src/a.ts", "src/b.ts"],
+            requiredAutonomy: "level_2",
+          },
+        ],
+      })
+      const summary = yield* Effect.gen(function* () {
+        return yield* (yield* MultiAgentRuntime.Service).coordinate(
+          event({ id: DeepAgentEvent.ID.create(1_201), type: "test.partial-lock", payload: { directory } }),
+        )
+      }).pipe(Effect.provide(makeLayer({ fileLock, partition })))
+      expect(summary.outcomes).toMatchObject([{ status: "deferred", reason: "file_locked" }])
+      expect(summary.hasUnfinished).toBe(true)
+      expect(released).toHaveLength(1)
+      expect(testFileLock.status(firstKey)).toBeNull()
+      expect(testFileLock.status(secondKey)?.lockId).toBe(holder?.lockId)
+      expect(ran).toEqual([])
+      testFileLock.release(holder!.lockId)
     }),
   )
 })

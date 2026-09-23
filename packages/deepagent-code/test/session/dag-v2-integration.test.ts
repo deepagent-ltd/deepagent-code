@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { Context, DateTime, Effect, Layer } from "effect"
+import { Context, DateTime, Duration, Effect, Layer } from "effect"
 import { Database } from "@deepagent-code/core/database/database"
 import { AgentExecution } from "@deepagent-code/core/deepagent/agent-execution"
 import { ApprovalQueue } from "@deepagent-code/core/deepagent/approval-queue"
@@ -25,7 +25,7 @@ const git = async (args: string[], cwd: string) => {
   return stdout.trim()
 }
 
-const fakeSessions = () => {
+const fakeSessions = (options: { parallel?: boolean } = {}) => {
   const sessions = new Map<
     string,
     {
@@ -39,6 +39,11 @@ const fakeSessions = () => {
   const messages = new Map<string, SessionMessage.Message[]>()
   const prompts: { sessionID: string; delivery?: string; resume?: boolean }[] = []
   const turns: { taskID: string; directory: string; sawFix: boolean }[] = []
+  const parallelEvidence = { started: [] as string[], overlap: false }
+  let releaseParallel = () => {}
+  const bothStarted = new Promise<void>((resolve) => {
+    releaseParallel = resolve
+  })
   const sessionsService = {
     get: (id: SessionV2.ID) => {
       const found = sessions.get(id)
@@ -74,8 +79,24 @@ const fakeSessions = () => {
           if (!child?.metadata?.taskID) throw new Error("missing child task")
           const testTurn = child.metadata.taskID.endsWith(":1")
           const sawFix = await fs.exists(path.join(child.location.directory, "fix.txt"))
-          if (testTurn && !sawFix) throw new Error("test turn did not inherit the fix branch")
-          await fs.writeFile(path.join(child.location.directory, testTurn ? "test.txt" : "fix.txt"), "done\n")
+          if (options.parallel) {
+            parallelEvidence.started.push(child.location.directory)
+            if (parallelEvidence.started.length === 2) {
+              parallelEvidence.overlap = (
+                await Promise.all(parallelEvidence.started.map((directory) => fs.exists(directory)))
+              ).every(Boolean)
+              releaseParallel()
+            }
+            await bothStarted
+          }
+          if (!options.parallel && testTurn && !sawFix) throw new Error("test turn did not inherit the fix branch")
+          await fs.writeFile(
+            path.join(
+              child.location.directory,
+              options.parallel ? `parallel-${testTurn ? 1 : 0}.txt` : testTurn ? "test.txt" : "fix.txt",
+            ),
+            "done\n",
+          )
           turns.push({ taskID: child.metadata.taskID, directory: child.location.directory, sawFix })
           messages.set(sessionID, [
             ...(messages.get(sessionID) ?? []),
@@ -97,10 +118,100 @@ const fakeSessions = () => {
   const instanceStore = {
     load: ({ directory }: { directory: string }) => Effect.succeed({ directory }),
   } as unknown as InstanceStore.Interface
-  return { sessionsService, instanceStore, prompts, turns }
+  return { sessionsService, instanceStore, prompts, turns, parallelEvidence }
 }
 
 describe("V2 event DAG with real git worktrees", () => {
+  test("disjoint write scopes run concurrently in two real worktrees", async () => {
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), "dag-v2-parallel-"))
+    try {
+      await git(["init", "-b", "main"], repo)
+      await git(["config", "user.email", "test@test.dev"], repo)
+      await git(["config", "user.name", "test"], repo)
+      await fs.writeFile(path.join(repo, "seed.txt"), "seed\n")
+      await git(["add", "-A"], repo)
+      await git(["commit", "--no-verify", "-m", "seed"], repo)
+      const fake = fakeSessions({ parallel: true })
+      const database = Database.layerFromPath(":memory:")
+      const core = Layer.mergeAll(DeepAgentEventBus.layer, ApprovalQueue.layer, AgentExecution.layer).pipe(
+        Layer.provideMerge(database),
+      )
+      const agents = Layer.succeed(AgentListProviderService, {
+        listAgents: () =>
+          Effect.succeed([
+            {
+              id: "fixer",
+              name: "fixer",
+              displayName: "fixer",
+              visible: true,
+              capabilities: ["code_edit"],
+              autonomy: "level_2" as const,
+            },
+          ]),
+        findByTrigger: () => Effect.succeed([]),
+        findByCapability: () => Effect.succeed([]),
+      })
+      const runtime = Layer.unwrap(
+        Effect.gen(function* () {
+          const execution = yield* AgentExecution.Service
+          return MultiAgentRuntime.layerWith({
+            runner: makeEventTurnRunnerV2({ sessions: fake.sessionsService, instanceStore: fake.instanceStore }),
+            execution,
+            dagCoordination: true,
+            partition: (event) => ({
+              event,
+              subtasks: [0, 1].map((index) => ({
+                id: `${event.id}:${index}`,
+                capability: "code_edit",
+                intent: `edit independent file ${index}`,
+                dependsOn: [],
+                fileScope: [`parallel-${index}.txt`],
+                requiredAutonomy: "level_2" as const,
+              })),
+            }),
+          })
+        }),
+      ).pipe(Layer.provide(core), Layer.provide(agents))
+      const refs = await Effect.runPromise(
+        Effect.gen(function* () {
+          const context = yield* Layer.build(Layer.mergeAll(runtime, core))
+          const service = Context.get(context, MultiAgentRuntime.Service)
+          const execution = Context.get(context, AgentExecution.Service)
+          const event: DeepAgentEvent.Event = {
+            id: DeepAgentEvent.ID.create(2_000),
+            type: "test.parallel",
+            source: "schedule",
+            workspaceID: "wrk_dag_parallel",
+            idempotencyKey: "parallel-once",
+            priority: "normal",
+            createdAt: 2_000,
+            payload: { directory: repo },
+          }
+          const summary = yield* service.coordinate(event)
+          expect(summary.outcomes.map((outcome) => outcome.status)).toEqual(["completed", "completed"])
+          return yield* Effect.forEach([0, 1], (index) =>
+            execution.get({ workspaceID: event.workspaceID, eventID: event.id, taskID: `${event.id}:${index}` }),
+          )
+        }).pipe(Effect.scoped, Effect.timeout(Duration.seconds(5))),
+      )
+      expect(fake.parallelEvidence.overlap).toBe(true)
+      expect(new Set(fake.parallelEvidence.started).size).toBe(2)
+      expect(fake.turns).toHaveLength(2)
+      expect(fake.prompts.every((prompt) => prompt.resume === false)).toBe(true)
+      expect(await Promise.all(fake.parallelEvidence.started.map((directory) => fs.exists(directory)))).toEqual([
+        false,
+        false,
+      ])
+      expect(refs.every((record) => record?.status === "completed" && record.continuationRef)).toBe(true)
+      if (refs[0]?.continuationRef && refs[1]?.continuationRef) {
+        expect(await git(["show", `${refs[0].continuationRef}:parallel-0.txt`], repo)).toBe("done")
+        expect(await git(["show", `${refs[1].continuationRef}:parallel-1.txt`], repo)).toBe("done")
+      }
+    } finally {
+      await fs.rm(repo, { recursive: true, force: true })
+    }
+  })
+
   test("repair fix then test inherits the first committed ref and replays without another turn", async () => {
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), "dag-v2-integration-"))
     try {
