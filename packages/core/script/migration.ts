@@ -9,6 +9,7 @@ import { parseArgs } from "util"
 
 const root = path.resolve(import.meta.dirname, "../../..")
 const sqlDir = path.join(root, "packages/core/migration")
+const baselinePin = path.join(sqlDir, "schema-baseline")
 const tsDir = path.join(root, "packages/core/src/database/migration")
 const registry = path.join(root, "packages/core/src/database/migration.gen.ts")
 const args = parseArgs({
@@ -48,7 +49,8 @@ for (const name of sqlMigrations) {
   )
 }
 
-await pruneHistoricalSnapshots(sqlDir)
+const baseline = await pruneHistoricalSnapshots(sqlDir)
+if (baseline) await Bun.write(baselinePin, `${path.relative(sqlDir, baseline)}\n`)
 
 await Bun.write(registry, await renderRegistry(await migrationNamesInRegistryOrder()))
 
@@ -58,16 +60,25 @@ await Bun.write(registry, await renderRegistry(await migrationNamesInRegistryOrd
  * only, so historical snapshots are dead weight. Deleting the baseline instead would make
  * the next generate diff against the empty dry snapshot and emit a full-schema migration
  * (the duplicate-generation trap), so refuse to run on a tree that has migrations but no
- * baseline — restore the baseline from git history instead.
+ * baseline — restore the baseline from git history instead. schema-baseline pins the
+ * expected path so a lone older snapshot cannot silently replace a deleted baseline.
  */
 async function assertBaselinePresent() {
   const migrations = await sqlMigrationNames(sqlDir)
   if (migrations.length === 0) return
-  if ((await snapshotPaths(sqlDir)).length === 0) {
+  const baseline = (await snapshotPaths(sqlDir)).at(-1)
+  if (!baseline) {
     throw new Error(
       "packages/core/migration has SQL migrations but no snapshot.json baseline. " +
         "Regenerating now would duplicate the entire schema. Restore the newest baseline snapshot from git history " +
         "(the last committed snapshot.json) before running script/migration.ts.",
+    )
+  }
+  const pinned = Bun.file(baselinePin)
+  if (!(await pinned.exists()) || (await pinned.text()).trim() !== path.relative(sqlDir, baseline)) {
+    throw new Error(
+      "packages/core/migration snapshot baseline does not match schema-baseline. " +
+        "Restore the pinned snapshot from git history before running script/migration.ts.",
     )
   }
 }
@@ -81,10 +92,13 @@ async function pruneHistoricalSnapshots(directory: string) {
     await fs.rm(file)
     console.log(`Pruned historical schema snapshot: ${path.relative(root, file)}`)
   }
+  return keep
 }
 
 async function snapshotPaths(directory: string) {
-  return (await Array.fromAsync(new Bun.Glob("*/snapshot.json").scan({ cwd: directory }))).sort()
+  return (await Array.fromAsync(new Bun.Glob("*/snapshot.json").scan({ cwd: directory })))
+    .map((file) => path.join(directory, file))
+    .sort()
 }
 
 async function check() {
