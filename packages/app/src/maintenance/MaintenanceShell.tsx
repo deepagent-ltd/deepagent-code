@@ -22,9 +22,9 @@ import { MaintenanceDiagnostics } from "./MaintenanceDiagnostics"
 // maps the resulting view to markup. It never reads a raw SQL/path/credential —
 // diagnostics render through `MaintenanceDiagnostics` (stable-code only).
 //
-// The shell is shown only for the non-ready bootstrap modes; the `BootstrapGate`
-// renders the normal app when mode === "ready". The client is injected for tests
-// (fixture/in-memory only, no live network).
+// The shell is shown for non-ready bootstrap modes and for a ready store with a running or
+// failed migration chain; the `BootstrapGate` renders the normal app only after the chain
+// settles. The client is injected for tests (fixture/in-memory only, no live network).
 
 export function MaintenanceShell(props: {
   client: MaintenanceClient
@@ -38,15 +38,17 @@ export function MaintenanceShell(props: {
   const [state, setState] = createSignal<ShellState>(initialShellState)
   const [busy, setBusy] = createSignal(false)
   const [migrationBusy, setMigrationBusy] = createSignal(false)
+  // A failed chain may be left in a read-only maintenance view. This is a UI escape only: the
+  // durable journal is untouched, and polling continues so a later successful retry reopens app.
+  const [migrationReadOnly, setMigrationReadOnly] = createSignal(false)
   const language = useLanguage()
   const dispatch = (action: ShellAction) => setState((prev) => reduceShell(prev, action))
-  const ops = () => operationsForMode(state().mode)
 
   // Narrow the union once into a plain view so JSX never touches a union member.
   const view = createMemo(() => {
     const s = state()
     return {
-      mode: s.mode,
+      mode: migrationReadOnly() && s.migration.status === "failed" ? "read_only_recovery" : s.mode,
       bootError: s.bootError,
       diagnostics: s.diagnostics,
       backups: s.backups,
@@ -67,6 +69,7 @@ export function MaintenanceShell(props: {
       migrationGuidance: s.migration.status === "failed" ? s.migration.journal.failure?.recoveryGuidance : undefined,
     }
   })
+  const ops = () => operationsForMode(view().mode)
 
   const loadBackups = async () => {
     const result = await props.client.listBackups()
@@ -183,17 +186,30 @@ export function MaintenanceShell(props: {
       <header class="border-b border-border-weak-base px-6 py-4">
         <div class="text-14-medium text-text-strong">Database maintenance</div>
         <div class="mt-1 text-12-regular text-text-weak">
-          {view().mode === "blocked_schema"
-            ? "The store is not writable (schema)."
-            : view().mode === "read_only_recovery"
-              ? "The store is in read-only recovery."
-              : view().mode === "migration_in_progress"
-                ? language.t("maintenance.migration.title")
-                : "Diagnostics"}
+          {migrationReadOnly() && view().migration.status === "failed"
+            ? language.t("maintenance.migration.readonly.title")
+            : view().mode === "blocked_schema"
+              ? "The store is not writable (schema)."
+              : view().mode === "read_only_recovery"
+                ? "The store is in read-only recovery."
+                : view().mode === "migration_in_progress"
+                  ? language.t("maintenance.migration.title")
+                  : "Diagnostics"}
         </div>
       </header>
 
       <main class="mx-auto w-full max-w-3xl flex-1 px-6 py-6">
+        <Show when={migrationReadOnly() && view().migration.status === "failed"}>
+          <div
+            class="mb-4 rounded-md border border-border-warning-base bg-surface-raised-base p-4"
+            data-testid="migration-readonly-exit"
+          >
+            <div class="text-12-regular text-text-weak">{language.t("maintenance.migration.readonly.description")}</div>
+            <button type="button" class="mt-2 text-12-regular underline" onClick={() => setMigrationReadOnly(false)}>
+              {language.t("maintenance.migration.readonly.return")}
+            </button>
+          </div>
+        </Show>
         <Show when={view().bootError}>
           <div class="mb-4 rounded-md border border-border-critical-base bg-surface-raised-base p-4">
             <div class="text-13-medium text-text-critical">Bootstrap could not be read ({view().bootError})</div>
@@ -273,14 +289,27 @@ export function MaintenanceShell(props: {
                   {/* The journal's user-readable recovery guidance renders verbatim (M-6). */}
                   {view().migrationGuidance}
                 </div>
-                <button
-                  type="button"
-                  class="mt-2 text-12-regular underline disabled:opacity-50"
-                  disabled={migrationBusy()}
-                  onClick={() => void resumeMigration()}
-                >
-                  {migrationBusy() ? language.t("maintenance.migration.resuming") : language.t("maintenance.migration.resume")}
-                </button>
+                <div class="mt-2 flex gap-4">
+                  <button
+                    type="button"
+                    class="text-12-regular underline disabled:opacity-50"
+                    disabled={migrationBusy()}
+                    onClick={() => void resumeMigration()}
+                  >
+                    {migrationBusy() ? language.t("maintenance.migration.resuming") : language.t("maintenance.migration.resume")}
+                  </button>
+                  <button
+                    type="button"
+                    class="text-12-regular underline disabled:opacity-50"
+                    disabled={migrationBusy()}
+                    onClick={() => {
+                      setMigrationReadOnly(true)
+                      void loadBackups()
+                    }}
+                  >
+                    {language.t("maintenance.migration.readonly.exit")}
+                  </button>
+                </div>
               </div>
             </Show>
           </section>
