@@ -56,7 +56,9 @@ describe("C0-01 caller inventory gate", () => {
     // module (408→407).
     // V2.0.1 merge-wave re-pin (2026-09-23, +6): the m3-m6 maintenance surfaces (report/
     // govern/reclaim) and the k01 provider-resolution facade + blocked surfacing joined.
-    expect(inventory.entries.length).toBe(413)
+    // V2.0.2 adds 20 production entries, including project-switch learning, proxy routes,
+    // and X-07 bundle/share handlers. Every newly extracted route is classified below.
+    expect(inventory.entries.length).toBe(433)
     const lildax = inventory.entries
       .filter((entry) => entry.entry.surface === "cli-lildax")
       .map((entry) => entry.entry.id)
