@@ -251,7 +251,13 @@ export const chat = Effect.gen(function* () {
         })
       }
 
-      const modelCost = (yield* modelsDev.get())[selected.entry.id]?.models[selected.model.id]?.cost
+      const catalogCost = (yield* modelsDev.get())[selected.entry.id]?.models[selected.model.id]?.cost
+      // Custom model tariffs are explicit config, while Provider.Info's zero default is not a
+      // price declaration. Keep cost unavailable when neither catalog nor config knows a tariff.
+      const modelCost = catalogCost ?? (selected.model.cost.input > 0 || selected.model.cost.output > 0
+        ? { input: selected.model.cost.input, output: selected.model.cost.output,
+            cache_read: selected.model.cost.cache.read, cache_write: selected.model.cost.cache.write }
+        : undefined)
       const costFor = (usage: ReturnType<typeof LLMResponse.usage>) =>
         modelCost && usage?.inputTokens !== undefined && usage.outputTokens !== undefined
           ? ((usage.nonCachedInputTokens ?? usage.inputTokens) * modelCost.input +

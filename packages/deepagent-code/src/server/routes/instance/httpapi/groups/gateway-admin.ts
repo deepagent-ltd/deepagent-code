@@ -42,6 +42,9 @@ export const GatewayAdminApi = HttpApi.make("gateway-admin").add(
     .add(HttpApiEndpoint.patch("tenantUpdate", "/proxy/admin/tenants/:tenantID", {
       params: TenantParams, payload: TenantUpdate, success: Schema.Unknown,
     }).annotateMerge(OpenApi.annotations({ summary: "Update a proxy tenant" })))
+    .add(HttpApiEndpoint.delete("tenantDelete", "/proxy/admin/tenants/:tenantID", {
+      params: TenantParams, success: Schema.Unknown,
+    }).annotateMerge(OpenApi.annotations({ summary: "Revoke a proxy tenant while retaining its audit ledger" })))
     .add(HttpApiEndpoint.get("ledgerList", "/proxy/admin/ledger", {
       query: TenantQuery, success: Schema.Unknown,
     }).annotateMerge(OpenApi.annotations({ summary: "Export proxy request ledger" })))

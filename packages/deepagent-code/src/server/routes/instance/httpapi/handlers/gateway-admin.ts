@@ -122,6 +122,14 @@ export const gatewayAdminHandlers = HttpApiBuilder.group(GatewayAdminApi, "proxy
     return handlers.handleRaw("tenantCreate", tenantCreate)
       .handle("tenantList", tenantList)
       .handleRaw("tenantUpdate", tenantUpdate)
+      .handleRaw("tenantDelete", (input: { params: { tenantID: string } }) =>
+        Effect.gen(function* () {
+          const revoked = yield* db.update(ProxyTenantTable).set({ enabled: false, updated_at: Date.now() })
+            .where(eq(ProxyTenantTable.id, input.params.tenantID)).returning({ id: ProxyTenantTable.id }).get()
+          if (!revoked) return proxyError(404, "tenant_not_found", "Proxy tenant was not found")
+          return HttpServerResponse.empty({ status: 204 })
+        }).pipe(Effect.catchCause(() => Effect.succeed(proxyError(503, "admin_unavailable", "Proxy admin is unavailable")))),
+      )
       .handle("ledgerList", ledgerList)
       .handle("laneList", laneList)
   }),

@@ -104,6 +104,14 @@ describe("gateway release gate", () => {
         headers: { authorization: "Bearer sk-admin-created-tenant" },
       }), HttpApiApp.context)
       expect(disabled.status).toBe(401)
+      const revoked = await handler(new Request("http://localhost/proxy/admin/tenants/tenant-admin", {
+        method: "DELETE",
+      }), HttpApiApp.context)
+      expect(revoked.status).toBe(204)
+      const missing = await handler(new Request("http://localhost/proxy/admin/tenants/unknown", {
+        method: "DELETE",
+      }), HttpApiApp.context)
+      expect(missing.status).toBe(404)
     } finally {
       Flag.DEEPAGENT_CODE_DB = originalDatabase
       await rm(directory, { recursive: true, force: true })
@@ -139,7 +147,9 @@ describe("gateway release gate", () => {
       },
     })
     try {
-      await Bun.write(join(directory, "deepagent-code.json"), JSON.stringify(testProviderConfig(`http://127.0.0.1:${upstream.port}/v1`)))
+      const pricedProvider = testProviderConfig(`http://127.0.0.1:${upstream.port}/v1`)
+      Object.assign(pricedProvider.provider.test.models["test-model"], { cost: { input: 1, output: 2 } })
+      await Bun.write(join(directory, "deepagent-code.json"), JSON.stringify(pricedProvider))
       await Effect.runPromise(
         Effect.gen(function* () {
           yield* (yield* Database.Service).db.insert(ProxyTenantTable).values({
@@ -270,17 +280,18 @@ describe("gateway release gate", () => {
       const sqlite = await import("bun:sqlite")
       const reader = new sqlite.Database(Flag.DEEPAGENT_CODE_DB, { readonly: true })
       try {
-        const ledger = reader.query("SELECT request_id, usage_input, usage_output, lane_session_id FROM proxy_request_ledger").all() as {
+        const ledger = reader.query("SELECT request_id, usage_input, usage_output, cost_total, lane_session_id FROM proxy_request_ledger").all() as {
           request_id: string
           usage_input: number | null
           usage_output: number | null
+          cost_total: number | null
           lane_session_id: string | null
         }[]
         const events = reader.query("SELECT type FROM event").all() as { type: string }[]
         expect(ledger).toEqual(
           expect.arrayContaining([
-            expect.objectContaining({ request_id: "tenant-chat:example-1", usage_input: 11, usage_output: 4 }),
-            expect.objectContaining({ request_id: "tenant-chat:example-2", usage_input: 11, usage_output: 4 }),
+            expect.objectContaining({ request_id: "tenant-chat:example-1", usage_input: 11, usage_output: 4, cost_total: 0.000019 }),
+            expect.objectContaining({ request_id: "tenant-chat:example-2", usage_input: 11, usage_output: 4, cost_total: 0.000019 }),
           ]),
         )
         expect(ledger.every((row) => row.lane_session_id === null)).toBe(true)
