@@ -514,6 +514,7 @@ describe("production runtime integrity", () => {
         "const lock = Semaphore.makeUnsafe(1)",
         "const memoMap = Layer.makeMemoMapUnsafe()",
         "const context = Context.makeUnsafe<unknown>(new Map())",
+        "const timestamp = DateTime.makeUnsafe(0)",
         'const staticValues = new Set(["one"])',
         "const version = { registry: 2 }",
         "// version.registry = 3 is documentation, not executable mutation",
@@ -549,6 +550,7 @@ describe("production runtime integrity", () => {
     expect(candidates.find((candidate) => candidate.name === "lock")?.classification).toBe("bounded_cache_review")
     expect(candidates.find((candidate) => candidate.name === "memoMap")?.classification).toBe("runtime_state_review")
     expect(candidates.find((candidate) => candidate.name === "context")?.classification).toBe("runtime_state_review")
+    expect(candidates.find((candidate) => candidate.name === "timestamp")).toBeUndefined()
     expect(candidates.find((candidate) => candidate.name === "staticValues")?.classification).toBe("static_container")
     expect(candidates.find((candidate) => candidate.name === "version")?.mutated).toBe(false)
     expect(candidates.find((candidate) => candidate.name === "totals")?.mutated).toBe(true)
@@ -598,7 +600,9 @@ describe("production runtime integrity", () => {
     // The gate pins the currently identified backlog: a NEW unadjudicated binding fails here instead
     // of arriving silently. To lower the ceiling, adjudicate entries and update this number — never
     // raise it without an entry in the review.
-    const REVIEW_REQUIRED_CEILING = 13
+    // The remaining three are process-global session/turn budget maps without a production
+    // finalizer or durable owner: domain_pack_load (two) and knowledge_propose (one).
+    const REVIEW_REQUIRED_CEILING = 3
     const backlog = candidates.filter((candidate) => candidate.verdict === "review_required")
     expect(backlog.length).toBeLessThanOrEqual(REVIEW_REQUIRED_CEILING)
     if (backlog.length > 0)
