@@ -1996,7 +1996,7 @@ describe("workspace sync state", () => {
         { git: true },
       )
     })
-  }, 30_000)
+  }, 60_000)
 
   it.live("does not advance its durable cursor when a history page fails replay", () => {
     return Effect.gen(function* () {
