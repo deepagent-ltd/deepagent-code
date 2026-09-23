@@ -354,6 +354,7 @@ export async function runLegacyLiveCases(input: {
     const { liveFrameIdentity, liveLocationServiceMap } = await import("./runner-frame")
     const { assertHarnessComposition } = await import("./composition-gate")
     const { Root } = await import("../../src/effect/root")
+    const { ModelsDev } = await import("@deepagent-code/core/models-dev")
     const { CompositionDigest } = await import("../../src/effect/composition-digest")
 
     // Mirror production (src/session/v2-runner-frame.ts): SessionRuntime.layer threads ONE shared
@@ -1883,6 +1884,8 @@ export async function runLegacyLiveCases(input: {
                 Permission.defaultLayer,
                 Question.defaultLayer,
                 EventV2Bridge.defaultLayer,
+                ModelsDev.defaultLayer,
+                Root.gatewayClientLayer,
                 Worktree.appLayer,
                 Git.defaultLayer,
                 EffectFlock.defaultLayer,

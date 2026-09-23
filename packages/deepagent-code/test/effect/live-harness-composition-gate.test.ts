@@ -12,13 +12,14 @@ test("G3 rejects a live harness whose fixture plugin bridge did not register", a
     v2Registry: production.v2Registry,
     authoritySurface: production.authoritySurface,
     database: production.database,
+    serviceCoverage: production.serviceCoverage,
     locationHost: {
       ...production.locationHost,
       host: liveFrameIdentity.locationHost.host,
       seams: [...liveFrameIdentity.locationHost.seams],
     },
   }
-  const harness = { version: 2 as const, digest: CompositionDigest.compute(facets), ...facets }
+  const harness = { version: 3 as const, digest: CompositionDigest.compute(facets), ...facets }
   await assertHarnessComposition(harness, production, production.v2Registry.applicationTools.ids)
   await expect(assertHarnessComposition(harness, production, [...production.v2Registry.applicationTools.ids, "missing_plugin_tool"]))
     .rejects.toThrow("fixture application tools")

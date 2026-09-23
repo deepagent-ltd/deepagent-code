@@ -44,8 +44,8 @@ export async function assertHarnessComposition(
     throw new Error(`G3 production composition drift at ${path}: ${JSON.stringify(actual)} != ${JSON.stringify(expected)}`)
   }
 
-  equal("digest version", record.version, 2)
-  equal("production digest version", production.version, 2)
+  equal("digest version", record.version, 3)
+  equal("production digest version", production.version, 3)
   equal(
     "production digest content",
     production.digest,
@@ -55,6 +55,7 @@ export async function assertHarnessComposition(
       authoritySurface: production.authoritySurface,
       database: production.database,
       locationHost: production.locationHost,
+      serviceCoverage: production.serviceCoverage,
     }),
   )
   equal(
@@ -66,6 +67,7 @@ export async function assertHarnessComposition(
       authoritySurface: record.authoritySurface,
       database: record.database,
       locationHost: record.locationHost,
+      serviceCoverage: record.serviceCoverage,
     }),
   )
   equal("session execution", record.sessionOwner.execution, V2RunnerFrame.frameIdentity.sessionOwner.execution)

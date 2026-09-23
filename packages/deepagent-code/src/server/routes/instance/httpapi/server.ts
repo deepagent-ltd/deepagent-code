@@ -84,7 +84,7 @@ import { ServerAuth } from "@/server/auth"
 import { InstanceHttpApi, RootHttpApi } from "./api"
 import { GatewayHttpApi } from "./groups/gateway"
 import { gatewayHandlers } from "./handlers/gateway"
-import { gatewayServiceTags } from "./handlers/gateway-chat"
+import { gatewayServiceTags } from "@/effect/gateway-service-tags"
 import { gatewayAdminHandlers } from "./handlers/gateway-admin"
 import { GatewayAdminApi } from "./groups/gateway-admin"
 import { authorizeProxyKey, proxyAuthorizationLayer, proxyError, proxyStartupGate } from "./middleware/proxy-authorization"
@@ -162,7 +162,6 @@ import { V2RunnerFrame } from "@/session/v2-runner-frame"
 import { V2OutboxRuntime } from "@/event/v2-outbox-runtime"
 import { V2OwnerSeed } from "@deepagent-code/core/session/runner/v2-owner-seed"
 import { V2OwnerDevMint } from "@deepagent-code/core/session/runner/v2-owner-dev-mint"
-import { LLMClient, RequestExecutor } from "@deepagent-code/llm/route"
 import { SessionRestart } from "@deepagent-code/core/session/execution/restart"
 
 export const context = Context.empty() as Context.Context<unknown>
@@ -269,7 +268,6 @@ const gatewayAdminRoutes = HttpApiBuilder.layer(GatewayAdminApi).pipe(
   Layer.provide(gatewayAdminHandlers),
   Layer.provide(httpApiAuthLayer),
 )
-const gatewayClientLayer = LLMClient.layer.pipe(Layer.provide(RequestExecutor.defaultLayer))
 const gatewayServiceSubsetGate = Layer.effectDiscard(Effect.gen(function* () {
   if (!(yield* RuntimeFlags.Service).gateway) return
   // Resolve the handler's actual service inventory from this server root before any gateway
@@ -435,7 +433,7 @@ export function createRoutes(corsOptions?: CorsOptions, runtimeFlagsLayer = Runt
       Format.defaultLayer,
       LSP.defaultLayer,
       LLM.defaultLayer,
-      gatewayClientLayer,
+      Root.gatewayClientLayer,
       Installation.defaultLayer,
       MCP.defaultLayer,
       Root.applicationToolsLayer,

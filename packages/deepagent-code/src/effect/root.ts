@@ -1,4 +1,5 @@
 import { Layer } from "effect"
+import { LLMClient, RequestExecutor } from "@deepagent-code/llm/route"
 import { Database } from "@deepagent-code/core/database/database"
 import { ApplicationTools } from "@deepagent-code/core/tool/application-tools"
 import { makeMemoMap } from "@deepagent-code/core/effect/memo-map"
@@ -21,6 +22,7 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 // including the ApplicationTools instance captured by the V2 Location map and its bridges.
 export const layer = V2RunnerFrame.sessionRuntimeLayer
 export const applicationToolsLayer = ApplicationTools.layer
+export const gatewayClientLayer = LLMClient.layer.pipe(Layer.provide(RequestExecutor.defaultLayer))
 export const taskDispatcherLayer = TaskRunDispatcher.runtimeLayer()
 export const ownerSeedLayer = V2OwnerSeed.layer({
   env: process.env,

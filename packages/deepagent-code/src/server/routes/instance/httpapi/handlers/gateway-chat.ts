@@ -3,19 +3,14 @@ import { and, eq, gte, sql } from "drizzle-orm"
 import { Effect, Option, Queue, Ref, Schema, Stream } from "effect"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { LLMResponse } from "@deepagent-code/llm"
-import { LLMClient, RequestExecutor } from "@deepagent-code/llm/route"
+import { RequestExecutor } from "@deepagent-code/llm/route"
 import { Database } from "@deepagent-code/core/database/database"
 import { EventV2 } from "@deepagent-code/core/event"
 import { DeepAgentRateLimitBucketTable } from "@deepagent-code/core/deepagent/deepagent-event-sql"
-import { ModelsDev } from "@deepagent-code/core/models-dev"
 import { ProxyRequestLedgerTable } from "@deepagent-code/core/proxy/sql"
-import { SessionV2 } from "@deepagent-code/core/session"
 import { MechanismTraced, RequestAdmitted, ResponseCompleted } from "@deepagent-code/core/proxy/event"
-import { Auth } from "@/auth"
 import { InstanceRef } from "@/effect/instance-ref"
-import { EventV2Bridge } from "@/event-v2-bridge"
-import { InstanceStore } from "@/project/instance-store"
-import { Provider } from "@/provider/provider"
+import { gatewayServiceTags } from "@/effect/gateway-service-tags"
 import { LLMNative } from "@/session/llm/native-request"
 import { parseChatPayload } from "../groups/gateway-wire"
 import { collectEnhanced, proxyLaneID } from "./gateway-enhanced"
@@ -29,19 +24,6 @@ class QuotaExceeded extends Error {
 
 class QuotaPending extends Error {}
 class QuotaUsageUnknown extends Error {}
-
-// The root-scoped service inventory consumed by chat is also the startup subset probe in the
-// server root. The request-scoped tenant comes from ProxyAuthorization middleware.
-export const gatewayServiceTags = {
-  database: Database.Service,
-  store: InstanceStore.Service,
-  provider: Provider.Service,
-  auth: Auth.Service,
-  client: LLMClient.Service,
-  events: EventV2Bridge.Service,
-  modelsDev: ModelsDev.Service,
-  sessions: SessionV2.Service,
-} as const
 
 export const chat = Effect.gen(function* () {
   const services = yield* Effect.all(gatewayServiceTags)

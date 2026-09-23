@@ -3091,14 +3091,19 @@ export type CompositionLocationHostDigest = {
   seams: Array<string>
 }
 
+export type CompositionServiceCoverageDigest = {
+  services: Array<string>
+}
+
 export type CompositionDigestRecord = {
-  version: 2
+  version: 3
   digest: string
   sessionOwner: CompositionSessionOwnerDigest
   v2Registry: CompositionV2RegistryDigest
   authoritySurface: CompositionAuthoritySurfaceDigest
   database: CompositionDatabaseDigest
   locationHost: CompositionLocationHostDigest
+  serviceCoverage: CompositionServiceCoverageDigest
 }
 
 export type MdExportInput = {
@@ -9649,6 +9654,24 @@ export type ProxyAdminLedgerListData = {
 }
 
 export type ProxyAdminLedgerListResponses = {
+  /**
+   * Success
+   */
+  200: unknown
+}
+
+export type ProxyAdminAuditListData = {
+  body?: never
+  path?: never
+  query?: {
+    tenant?: string
+    limit?: string
+    after?: string
+  }
+  url: "/proxy/admin/audit"
+}
+
+export type ProxyAdminAuditListResponses = {
   /**
    * Success
    */

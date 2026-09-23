@@ -14,6 +14,7 @@ import { SessionStore } from "@deepagent-code/core/session/store"
 import { InstanceStore } from "@/project/instance-store"
 import { ToolRegistry } from "@/tool/registry"
 import { CustomToolRejections } from "@/tool/custom-tool-rejections"
+import { gatewayServiceTags } from "./gateway-service-tags"
 
 // RI-36/RI-39/RI-44 composition oracle: ONE stable digest per real composition root (HTTP server
 // route graph, AppRuntime). Both roots share `V2RunnerFrame.sessionRuntimeLayer`, so every facet
@@ -94,14 +95,20 @@ export const LocationHostDigest = Schema.Struct({
   seams: Schema.Array(Schema.String),
 }).annotate({ identifier: "CompositionLocationHostDigest" })
 
+export const ServiceCoverageDigest = Schema.Struct({
+  // Each listed service is resolved from the calling root before its digest is emitted.
+  services: Schema.Array(Schema.String),
+}).annotate({ identifier: "CompositionServiceCoverageDigest" })
+
 export const Record = Schema.Struct({
-  version: Schema.Literal(2),
+  version: Schema.Literal(3),
   digest: Schema.String,
   sessionOwner: SessionOwnerDigest,
   v2Registry: V2RegistryDigest,
   authoritySurface: AuthoritySurfaceDigest,
   database: DatabaseDigest,
   locationHost: LocationHostDigest,
+  serviceCoverage: ServiceCoverageDigest,
 }).annotate({ identifier: "CompositionDigestRecord" })
 
 export type Record = Schema.Schema.Type<typeof Record>
@@ -112,11 +119,12 @@ export interface Facets {
   readonly authoritySurface: Schema.Schema.Type<typeof AuthoritySurfaceDigest>
   readonly database: Schema.Schema.Type<typeof DatabaseDigest>
   readonly locationHost: Schema.Schema.Type<typeof LocationHostDigest>
+  readonly serviceCoverage: Schema.Schema.Type<typeof ServiceCoverageDigest>
 }
 
 /** Byte-stable top-level digest over the composition facets (canonical JSON + SHA-256). */
 export function compute(facets: Facets): string {
-  return ContractDigest.contentDigest({ schema: "deepagent-code-composition-digest-v2", ...facets })
+  return ContractDigest.contentDigest({ schema: "deepagent-code-composition-digest-v3", ...facets })
 }
 
 export interface FrameIdentityShape {
@@ -172,23 +180,11 @@ const ownerServices = [
  * resolvability proof of the owner graph; the requirements intentionally stay on the effect (not a
  * layer) so the digest always reflects the CALLING root's full context.
  */
-export const current: Effect.Effect<
-  Record,
-  never,
-  | Database.Service
-  | ApplicationTools.Service
-  | ToolRegistry.Service
-  | InstanceStore.Service
-  | SessionV2.Service
-  | SessionExecution.Service
-  | SessionRestart.Service
-  | SessionRuntimeStatus.Service
-  | SessionStore.Service
-  | LocationServiceMap
-> = Effect.gen(function* () {
+export const current = Effect.gen(function* () {
   const database = yield* Database.Service
   const identity = yield* FrameIdentity
   yield* Effect.all([...ownerServices, LocationServiceMap], { discard: true })
+  yield* Effect.all(gatewayServiceTags, { discard: true })
   const tools = yield* ToolRegistry.Service
   const applications = yield* ApplicationTools.Service
   const instances = yield* InstanceStore.Service
@@ -246,8 +242,13 @@ export const current: Effect.Effect<
       idleTimeToLive: identity.locationHost.idleTimeToLive,
       seams: [...identity.locationHost.seams],
     },
+    serviceCoverage: {
+      services: [...new Set(
+        [...ownerServices, ...Object.values(gatewayServiceTags)].map((service) => service.key),
+      )].toSorted(),
+    },
   }
-  return { version: 2 as const, digest: compute(facets), ...facets }
+  return { version: 3 as const, digest: compute(facets), ...facets }
 })
 
 export * as CompositionDigest from "./composition-digest"

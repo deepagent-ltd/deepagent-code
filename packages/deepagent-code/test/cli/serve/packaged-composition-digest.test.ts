@@ -33,7 +33,7 @@ if (!packagedBinary) {
         expect(response.status).toBe(200)
         const body = (yield* Effect.promise(() => response.json())) as CompositionDigest.Record
 
-        expect(body.version).toBe(2)
+        expect(body.version).toBe(3)
         expect(body.digest).toMatch(/^[0-9a-f]{64}$/)
         expect(
           CompositionDigest.compute({
@@ -42,6 +42,7 @@ if (!packagedBinary) {
             authoritySurface: body.authoritySurface,
             database: body.database,
             locationHost: body.locationHost,
+            serviceCoverage: body.serviceCoverage,
           }),
         ).toBe(body.digest)
 

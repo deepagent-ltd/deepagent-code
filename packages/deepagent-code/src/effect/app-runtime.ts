@@ -94,6 +94,7 @@ const baseAppLayer = Layer.mergeAll(
   Snapshot.defaultLayer,
   Plugin.defaultLayer,
   ModelsDev.defaultLayer,
+  Root.gatewayClientLayer,
   Provider.defaultLayer,
   ProviderAuth.defaultLayer,
   Agent.defaultLayer,

@@ -12,7 +12,7 @@ import { ContractDigest } from "@deepagent-code/core/contract/digest"
 import { ApplicationTools } from "@deepagent-code/core/tool/application-tools"
 import { Server } from "../../src/server/server"
 import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
-import { gatewayServiceTags } from "../../src/server/routes/instance/httpapi/handlers/gateway-chat"
+import { gatewayServiceTags } from "../../src/effect/gateway-service-tags"
 import { AppRuntime, compositionDigest } from "../../src/effect/app-runtime"
 import { Root } from "../../src/effect/root"
 import { CompositionDigest } from "../../src/effect/composition-digest"
@@ -34,7 +34,7 @@ async function httpDigest(url: URL): Promise<CompositionDigest.Record> {
 }
 
 function expectWireInvariants(record: CompositionDigest.Record) {
-  expect(record.version).toBe(2)
+  expect(record.version).toBe(3)
   expect(record.digest).toMatch(/^[0-9a-f]{64}$/)
   // The wire digest is the canonical recomputation over its own facets.
   expect(
@@ -44,6 +44,7 @@ function expectWireInvariants(record: CompositionDigest.Record) {
       authoritySurface: record.authoritySurface,
       database: record.database,
       locationHost: record.locationHost,
+      serviceCoverage: record.serviceCoverage,
     }),
   ).toBe(record.digest)
   // The database facet is bound to core's migration registry digest mechanism.
@@ -68,6 +69,7 @@ function expectWireInvariants(record: CompositionDigest.Record) {
     ContractDigest.contentDigest({ kind: "tool-registry", ids: record.v2Registry.legacyEgress.ids }),
   )
   expect(record.authoritySurface).toEqual(Root.authoritySurface)
+  expect(record.serviceCoverage.services).toEqual([...record.serviceCoverage.services].toSorted())
   // The session owner facet is the live-resolved core owner graph.
   expect(record.sessionOwner.services).toEqual(
     [
@@ -163,12 +165,14 @@ test("gateway service inventory is resolved by the qualified server root", async
       expect(Object.values(gatewayServiceTags).map((service) => service.key).toSorted()).toEqual([
         "@deepagent-code/Auth", "@deepagent-code/EventV2Bridge", "@deepagent-code/InstanceStore",
         "@deepagent-code/LLMClient", "@deepagent-code/ModelsDev", "@deepagent-code/Provider",
+        "@deepagent-code/RuntimeFlags",
         "@deepagent-code/v2/Session", "@deepagent-code/v2/storage/Database",
       ] satisfies (typeof gatewayServiceTags)[keyof typeof gatewayServiceTags]["key"][])
       const before = await web.handler(new Request("http://localhost/composition/digest"), HttpApiApp.context)
       expect(before.status).toBe(200)
       const composition = (await before.json()) as CompositionDigest.Record
       expectWireInvariants(composition)
+      expect(Object.values(gatewayServiceTags).every((service) => composition.serviceCoverage.services.includes(service.key))).toBe(true)
       const gateway = await web.handler(new Request("http://localhost/v1/models", {
         headers: { authorization: "Bearer sk-composition-tenant" },
       }), HttpApiApp.context)
@@ -288,6 +292,7 @@ test("the top-level digest moves when any single facet changes and is key-order 
       legacyEgress: { count: 2, ids: ["read", "write"], digest: "t".repeat(64) },
     },
     authoritySurface: Root.authoritySurface,
+    serviceCoverage: { services: ["@deepagent-code/example/Service"] },
     database: {
       path: "/data/deepagent-code.db",
       migrationRegistryDigest: "m".repeat(64),
@@ -329,6 +334,7 @@ test("the top-level digest moves when any single facet changes and is key-order 
   expect(
     CompositionDigest.compute({ ...base, authoritySurface: { ...base.authoritySurface, legacyPromptMounted: false } }),
   ).not.toBe(digest)
+  expect(CompositionDigest.compute({ ...base, serviceCoverage: { services: [] } })).not.toBe(digest)
   expect(
     CompositionDigest.compute({
       ...base,
@@ -343,6 +349,7 @@ test("the top-level digest moves when any single facet changes and is key-order 
     database: base.database,
     v2Registry: base.v2Registry,
     authoritySurface: base.authoritySurface,
+    serviceCoverage: base.serviceCoverage,
     sessionOwner: base.sessionOwner,
   }
   expect(CompositionDigest.compute(reordered)).toBe(digest)

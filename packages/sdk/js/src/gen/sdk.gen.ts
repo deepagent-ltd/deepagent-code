@@ -415,6 +415,7 @@ import type {
   ProviderOauthAuthorizeResponses,
   ProviderOauthCallbackErrors,
   ProviderOauthCallbackResponses,
+  ProxyAdminAuditListResponses,
   ProxyAdminLaneListResponses,
   ProxyAdminLedgerListResponses,
   ProxyAdminTenantCreateResponses,
@@ -1980,6 +1981,36 @@ export class ProxyAdmin extends HeyApiClient {
     )
     return (options?.client ?? this.client).get<ProxyAdminLedgerListResponses, unknown, ThrowOnError>({
       url: "/proxy/admin/ledger",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Export durable proxy audit events
+   */
+  public auditList<ThrowOnError extends boolean = false>(
+    parameters?: {
+      tenant?: string
+      limit?: string
+      after?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "tenant" },
+            { in: "query", key: "limit" },
+            { in: "query", key: "after" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<ProxyAdminAuditListResponses, unknown, ThrowOnError>({
+      url: "/proxy/admin/audit",
       ...options,
       ...params,
     })
