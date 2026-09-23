@@ -24,26 +24,13 @@ export type PlanToolCall = {
   metadata?: unknown
 }
 
-export type PlanRequestReceipt = {
-  receipt_id: string
-  assistant_message_id: string | null
-  request_state: string
-  final_offered_tool_ids: readonly string[]
-  call_ids: readonly string[]
-  tool_definition_hash: string | null
-}
-
-export type PlanArgumentReceipt = {
-  receipt_id: string
-  layer: string
-  call_id: string | null
-  tool_name: string | null
-  event_type: string
-  payload_hash: string | null
-  payload_length: number | null
-  payload_keys: readonly string[]
-  unavailable_reason: string | null
-  validation_outcome: string
+export type PlanProviderTurnReceipt = {
+  receiptID: string
+  requestOrdinal: number
+  providerTurnSeq: number
+  state: string
+  toolFinalOfferedIDs: readonly string[]
+  toolDefinitionHash: string | null
 }
 
 export function assertPlanAdvanceObservation(input: {
@@ -51,10 +38,7 @@ export function assertPlanAdvanceObservation(input: {
   observation: {
     newTools: readonly PlanToolCall[]
     plan?: { document: PlanOracleDocument | null; ref: { id: string; version: number } | null }
-    durability?: {
-      requestReceipts: readonly PlanRequestReceipt[]
-      argumentReceipts: readonly PlanArgumentReceipt[]
-    }
+    providerTurns?: readonly PlanProviderTurnReceipt[]
   }
   immutable: PlanOracleDocument
   expectedVersion: number
@@ -86,11 +70,14 @@ export function assertPlanAdvanceObservation(input: {
     const metadata = record(call.metadata, `${input.caseName} plan metadata ${index + 1}`)
     // Provider-generic precondition contract: every advance targets the immutable plan with a
     // plausible version — the exact version sequence is model behavior, not a product guarantee.
+    // The V2 tool input record keeps the provider's raw JSON, where numeric versions can arrive
+    // stringified (the same provider-tolerance the tool's own tolerantInt schema applies).
+    const expectedVersion = Number(args.expected_version)
     if (
       args.operation !== "advance" ||
       args.expected_plan_id !== input.immutable.plan_id ||
-      typeof args.expected_version !== "number" ||
-      args.expected_version < 1
+      !Number.isInteger(expectedVersion) ||
+      expectedVersion < 1
     ) {
       throw new Error(`${input.caseName} plan precondition mismatch: ${JSON.stringify(args)}`)
     }
@@ -130,7 +117,7 @@ export function assertPlanAdvanceObservation(input: {
       )
     }
     protocolByCall.push(protocol)
-    assertPlanArgumentReceipts(input.caseName, call, input.observation.durability, protocol)
+    assertPlanTurnReceipts(input.caseName, input.observation.providerTurns)
   })
 
   const plan = input.observation.plan?.document
@@ -182,59 +169,25 @@ export function assertPlanAdvanceObservation(input: {
   }
 }
 
-export function assertPlanArgumentReceipts(
+export function assertPlanTurnReceipts(
   caseName: string,
-  call: PlanToolCall,
-  durability:
-    | {
-        requestReceipts: readonly PlanRequestReceipt[]
-        argumentReceipts: readonly PlanArgumentReceipt[]
-      }
-    | undefined,
-  protocol: "success" | "conflict",
+  providerTurns: readonly PlanProviderTurnReceipt[] | undefined,
 ) {
-  if (!durability) throw new Error(`${caseName} did not capture request/argument receipts`)
-  const request = durability.requestReceipts.find(
-    (receipt) => receipt.assistant_message_id === call.messageID && receipt.call_ids.includes(call.id),
-  )
-  if (
-    !request ||
-    request.request_state !== "dispatched" ||
-    !request.final_offered_tool_ids.includes("plan") ||
-    !request.tool_definition_hash
-  ) {
-    throw new Error(`${caseName} request receipt was incomplete: ${JSON.stringify(request)}`)
+  // Durable V2 request-authority surface: the provider-turn receipt that offered the plan tool
+  // (settled state, plan in the final offered IDs, non-null tool-definition hash) replaces the
+  // legacy session_tool_request_receipt rows, which the V2 owner no longer writes. The legacy
+  // per-layer argument payload hashes (ai_sdk_input/adapter_assembly/processor_decoded) have no
+  // V2 counterpart; argument validity stays asserted through the settled call's own
+  // plan_protocol metadata in the calling oracle.
+  if (!providerTurns || providerTurns.length === 0) {
+    throw new Error(`${caseName} did not capture durable provider-turn receipts`)
   }
-  const receipts = durability.argumentReceipts.filter(
-    (receipt) => receipt.receipt_id === request.receipt_id && receipt.call_id === call.id,
+  const receipt = providerTurns.find(
+    (turn) =>
+      turn.state === "settled" && turn.toolFinalOfferedIDs.includes("plan") && !!turn.toolDefinitionHash,
   )
-  const aiSdkInput = receipts.find((receipt) => receipt.layer === "ai_sdk_input")
-  const adapter = receipts.find((receipt) => receipt.layer === "adapter_assembly" && receipt.event_type === "tool-call")
-  const decoded = receipts.find((receipt) => receipt.layer === "processor_decoded")
-  const rawFrame = durability.argumentReceipts.find(
-    (receipt) => receipt.receipt_id === request.receipt_id && receipt.layer === "raw_frame",
-  )
-  if (
-    !aiSdkInput?.payload_hash ||
-    !adapter?.payload_hash ||
-    !decoded?.payload_hash ||
-    aiSdkInput.tool_name !== "plan" ||
-    adapter.tool_name !== "plan" ||
-    decoded.tool_name !== "plan" ||
-    adapter.payload_hash !== decoded.payload_hash ||
-    adapter.payload_length !== decoded.payload_length ||
-    JSON.stringify(adapter.payload_keys) !== JSON.stringify(decoded.payload_keys) ||
-    aiSdkInput.validation_outcome !== "schema_valid" ||
-    adapter.validation_outcome !== "schema_valid" ||
-    decoded.validation_outcome !== (protocol === "success" ? "semantic_valid" : "conflict")
-  ) {
-    throw new Error(`${caseName} argument receipt chain was incomplete: ${JSON.stringify(receipts)}`)
-  }
-  if (
-    !rawFrame ||
-    (rawFrame.payload_hash == null && rawFrame.unavailable_reason !== "provider_transport_did_not_expose_raw_frame")
-  ) {
-    throw new Error(`${caseName} raw-frame provenance was neither captured nor explicitly unavailable`)
+  if (!receipt) {
+    throw new Error(`${caseName} settled provider-turn receipt offering plan was incomplete`)
   }
 }
 

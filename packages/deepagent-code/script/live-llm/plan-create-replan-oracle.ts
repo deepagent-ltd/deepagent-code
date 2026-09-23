@@ -1,18 +1,14 @@
 import {
-  assertPlanArgumentReceipts,
-  type PlanArgumentReceipt,
+  assertPlanTurnReceipts,
   type PlanOracleDocument,
-  type PlanRequestReceipt,
+  type PlanProviderTurnReceipt,
   type PlanToolCall,
 } from "./plan-advance-oracle"
 
 type PlanObservation = {
   newTools: readonly PlanToolCall[]
   plan?: { document: PlanOracleDocument | null; ref: { id: string; version: number } | null }
-  durability?: {
-    requestReceipts: readonly PlanRequestReceipt[]
-    argumentReceipts: readonly PlanArgumentReceipt[]
-  }
+  providerTurns?: readonly PlanProviderTurnReceipt[]
 }
 
 export function assertPlanCreateObservation(input: {
@@ -52,7 +48,7 @@ export function assertPlanCreateObservation(input: {
     throw new Error(`${input.caseName} create steps differed from the requested structure`)
   }
   if (metadata.plan_protocol !== "success") throw new Error(`${input.caseName} create did not succeed`)
-  assertPlanArgumentReceipts(input.caseName, call, input.observation.durability, "success")
+  assertPlanTurnReceipts(input.caseName, input.observation.providerTurns)
 
   const plan = input.observation.plan?.document
   const ref = input.observation.plan?.ref
@@ -106,10 +102,12 @@ export function assertPlanReplanObservation(input: {
       args,
       new Set(["operation", "expected_plan_id", "expected_version", "replan_reason", "goal", "steps"]),
     )
+    // Provider tolerance: the V2 tool input record keeps the provider's raw JSON, so a numeric
+    // expected_version can arrive stringified (the tool's own tolerantInt contract).
     if (
       args.operation !== "replan" ||
       args.expected_plan_id !== input.authority.plan_id ||
-      args.expected_version !== expected.version ||
+      Number(args.expected_version) !== expected.version ||
       args.replan_reason !== input.expectedReason ||
       args.goal !== input.authority.goal ||
       "active_step_id" in args ||
@@ -153,7 +151,7 @@ export function assertPlanReplanObservation(input: {
     if (metadata.plan_protocol !== expected.protocol) {
       throw new Error(`${input.caseName} expected ${expected.protocol}, received ${String(metadata.plan_protocol)}`)
     }
-    assertPlanArgumentReceipts(input.caseName, call, input.observation.durability, expected.protocol)
+    assertPlanTurnReceipts(input.caseName, input.observation.providerTurns)
   })
 
   const plan = input.observation.plan?.document

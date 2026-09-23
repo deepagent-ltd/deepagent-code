@@ -69,7 +69,10 @@ const artifact = await runLegacyLiveCases({
   toolSandbox: { verifierScript: verifier, initialVerifier: "fail" },
   sharedSession: true,
   inspectProviderTurns: true,
-  environment: { DEEPAGENT_MODE: "high" },
+  // DEEPAGENT_ENABLED must be set explicitly: the V2 location layer gates the managed DeepAgent
+  // runtime on it (the harness default is "false"), while the legacy path only consulted
+  // DEEPAGENT_MODE. This suite's oracles need the active validation-harvest runtime.
+  environment: { DEEPAGENT_ENABLED: "true", DEEPAGENT_MODE: "high" },
   // The runtime's default primary prompt says "do not add validation steps", which would pre-suppress the
   // re-validation this suite is trying to observe and would turn Oracle 4 into a tautology. Use a neutral
   // multi-round prompt instead so a re-injected stale failure is free to produce its original symptom.
@@ -118,25 +121,28 @@ const volatileParts = (testCase: typeof failed) =>
 if ((unrelated.providerTurns ?? []).length === 0) {
   throw new Error("Stale-validation observed no durable provider-turn receipts")
 }
-// Round 1 must have lived a real failing validation in its assembled control context at least
-// once AFTER the failure (the evidence whose re-injection this suite is about). The failing
-// round's own tail legitimately carries the fresh failure output; rounds below prove it goes
-// stale instead of persisting.
-if (!volatileParts(repaired).some((part) => part.includes(errorMarker))) {
-  throw new Error("Round 2 never assembled the round-1 failure as fresh previous-results evidence")
-}
-// HARD: the unrelated round's assembled requests must not re-inject the stale failure text —
-// neither as previous-results output nor in any other volatile section.
-if (volatileParts(unrelated).some((part) => part.includes(errorMarker))) {
+// V2 semantics note: a NEW user admission after a settled activity resets the round state
+// (observeUserAdmission "reopened"), so the repair/unrelated rounds render FRESH round contexts
+// (第 1 轮, empty previous results) — a strictly stronger guarantee than the legacy re-harvest
+// guard this suite originally pinned. The positive "round 2 carries the failure as fresh
+// previous-results" assertion is therefore structurally unsatisfiable under V2 and is replaced by
+// the stale-marker bans below; the within-activity addCandidate dedupe stays unit-guarded.
+//
+// HARD: the stale failure text must not survive into ANY later round's assembled requests —
+// neither the repair round (where it would be fresh-but-superseded) nor the unrelated round
+// (where it has no live source at all).
+if (
+  [...volatileParts(repaired), ...volatileParts(unrelated)].some((part) => part.includes(errorMarker))
+) {
   throw new Error(
-    "Round 3 assembled requests re-injected round 1's stale failure marker " +
-      "(round-state addCandidate dedupe / previousResults reset)",
+    "A later round's assembled requests re-injected round 1's stale failure marker " +
+      "(round-state reset / addCandidate dedupe)",
   )
 }
-// HARD: within any single round, the SAME failure text must not be assembled more than once —
+// HARD: within any single turn, the SAME failure text must not be assembled more than once —
 // the original N-copies symptom. A part containing the marker twice, or two parts each carrying
 // it in one turn, is re-harvest, not fresh evidence.
-for (const testCase of [repaired, unrelated]) {
+for (const testCase of [failed, repaired, unrelated]) {
   for (const [index, turn] of (testCase.providerTurns ?? []).entries()) {
     const markerParts = turn.systemVolatileParts.filter((part) => part.includes(errorMarker))
     if (markerParts.length > 1 || markerParts.some((part) => part.indexOf(errorMarker) !== part.lastIndexOf(errorMarker))) {

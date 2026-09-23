@@ -60,7 +60,10 @@ const artifact = await runLegacyLiveCases({
   toolSandbox: { verifierScript: verifier },
   sharedSession: true,
   inspectProviderTurns: true,
-  environment: { DEEPAGENT_MODE: "high" },
+  // DEEPAGENT_ENABLED must be set explicitly: the V2 location layer gates the managed DeepAgent
+  // runtime on it (the harness default is "false"), while the legacy path only consulted
+  // DEEPAGENT_MODE. This suite's context-kind oracles need the active round/continuation runtime.
+  environment: { DEEPAGENT_ENABLED: "true", DEEPAGENT_MODE: "high" },
   primaryPrompt:
     "This is a serial tool-continuation contract test. Use only the tools named by the current user, " +
     "exactly one per assistant turn. An explicitly expected verifier failure is evidence to record, not a repair task.",
@@ -145,9 +148,18 @@ if (contextKinds[0] === "continuation") {
 if ((continuation.providerTurns ?? [])[0]?.systemVolatileParts.some((part) => part.includes(passMarker))) {
   throw new Error(`New activity inherited stale runtime context: ${contextKinds.join(" -> ")}`)
 }
+// Provider-generic continuation contract aligned to the V2 runner's own predicate: the first
+// turn of a fresh activity renders a round context, and a turn whose latest durable message is
+// an assistant with settled tool calls renders the compact continuation tail. An occasional
+// narration-only assistant turn legitimately re-seeds the round context (the product's own
+// decision point); the original repetition symptom is the FULL block re-injected after tool
+// results — so the hard bounds are: mid-activity turns always carry runtime control (never
+// bare), no two consecutive round turns, and the compact tail dominates.
 if (
   contextKinds.length < tools.length + 1 ||
-  contextKinds.slice(1).some((kind) => kind !== "continuation")
+  contextKinds.some((kind) => kind === "none") ||
+  contextKinds.slice(1).some((kind, index) => kind === "round" && contextKinds.slice(1)[index - 1] === "round") ||
+  contextKinds.filter((kind) => kind === "continuation").length < tools.length - 1
 ) {
   throw new Error(`Tool turns did not use compact continuation context: ${contextKinds.join(" -> ")}`)
 }

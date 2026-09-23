@@ -82,7 +82,14 @@ export function liveLocationServiceMap() {
         host,
         Database.defaultLayer,
         EventV2.layer.pipe(Layer.provide(Database.defaultLayer)),
-        AgentGateway.runtimeLayer({ enabled: false, runsDir: Global.Path.agent.runs, durableLearning: false }),
+        // Same env gate as Core's default map: the harness isolation defaults DEEPAGENT_ENABLED to
+        // "false", and suites that assert the managed DeepAgent runtime (round/continuation
+        // context, validation harvest) opt in through their environment block.
+        AgentGateway.runtimeLayer({
+          enabled: process.env.DEEPAGENT_ENABLED !== "false" && process.env.DEEPAGENT_ENABLED !== "0",
+          runsDir: Global.Path.agent.runs,
+          durableLearning: false,
+        }),
       ),
     ]),
     Layer.provide(
