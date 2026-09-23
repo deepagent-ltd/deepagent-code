@@ -1411,7 +1411,7 @@ export type GlobalEvent = {
           timestamp: number
           sessionID: string
           messageID: string
-          reason: "auto" | "manual"
+          reason: "auto" | "manual" | "hard_gate" | "provider_overflow"
         }
       }
     | {
@@ -1431,9 +1431,11 @@ export type GlobalEvent = {
           timestamp: number
           sessionID: string
           messageID: string
-          reason: "auto" | "manual"
+          reason: "auto" | "manual" | "hard_gate" | "provider_overflow"
           text: string
           recent: string
+          checkpointID?: string
+          checkpointHash?: string
         }
       }
     | {
@@ -6798,7 +6800,7 @@ export type SyncEventSessionNextCompactionStarted1 = {
       timestamp: number
       sessionID: string
       messageID: string
-      reason: "auto" | "manual"
+      reason: "auto" | "manual" | "hard_gate" | "provider_overflow"
     }
   }
 }
@@ -6832,9 +6834,11 @@ export type SyncEventSessionNextCompactionEnded2 = {
       timestamp: number
       sessionID: string
       messageID: string
-      reason: "auto" | "manual"
+      reason: "auto" | "manual" | "hard_gate" | "provider_overflow"
       text: string
       recent: string
+      checkpointID?: string
+      checkpointHash?: string
     }
   }
 }
@@ -7579,9 +7583,11 @@ export type SessionMessageAssistant = {
 
 export type SessionMessageCompaction = {
   type: "compaction"
-  reason: "auto" | "manual"
+  reason: "auto" | "manual" | "hard_gate" | "provider_overflow"
   summary: string
   recent: string
+  checkpointID?: string
+  checkpointHash?: string
   id: string
   metadata?: {
     [key: string]: unknown
@@ -8314,7 +8320,7 @@ export type EventSessionNextCompactionStarted = {
     timestamp: number
     sessionID: string
     messageID: string
-    reason: "auto" | "manual"
+    reason: "auto" | "manual" | "hard_gate" | "provider_overflow"
   }
 }
 
@@ -8336,9 +8342,11 @@ export type EventSessionNextCompactionEnded = {
     timestamp: number
     sessionID: string
     messageID: string
-    reason: "auto" | "manual"
+    reason: "auto" | "manual" | "hard_gate" | "provider_overflow"
     text: string
     recent: string
+    checkpointID?: string
+    checkpointHash?: string
   }
 }
 
