@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "6ec820d2-4fd8-452f-a9d9-8033f16437d0",
+  "id": "3e01ad82-b951-4965-b335-8cc9982a5d84",
   "prevIds": [
-    "4a7d9dd8-9b7c-4e6d-b415-a69a60fd0b56"
+    "d2520f00-09ce-452f-9c94-e663e19e2e12"
   ],
   "ddl": [
     {
@@ -324,6 +324,14 @@
     },
     {
       "name": "project",
+      "entityType": "tables"
+    },
+    {
+      "name": "proxy_request_ledger",
+      "entityType": "tables"
+    },
+    {
+      "name": "proxy_tenant",
       "entityType": "tables"
     },
     {
@@ -8834,6 +8842,326 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
+      "name": "request_id",
+      "entityType": "columns",
+      "table": "proxy_request_ledger"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "request_hash",
+      "entityType": "columns",
+      "table": "proxy_request_ledger"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "tenant_id",
+      "entityType": "columns",
+      "table": "proxy_request_ledger"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "lane_session_id",
+      "entityType": "columns",
+      "table": "proxy_request_ledger"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "tier",
+      "entityType": "columns",
+      "table": "proxy_request_ledger"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "provider_id",
+      "entityType": "columns",
+      "table": "proxy_request_ledger"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "model_id",
+      "entityType": "columns",
+      "table": "proxy_request_ledger"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "usage_input",
+      "entityType": "columns",
+      "table": "proxy_request_ledger"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "usage_output",
+      "entityType": "columns",
+      "table": "proxy_request_ledger"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "usage_reasoning",
+      "entityType": "columns",
+      "table": "proxy_request_ledger"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "usage_cache_read",
+      "entityType": "columns",
+      "table": "proxy_request_ledger"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "usage_cache_write",
+      "entityType": "columns",
+      "table": "proxy_request_ledger"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "usage_source",
+      "entityType": "columns",
+      "table": "proxy_request_ledger"
+    },
+    {
+      "type": "real",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "cost_total",
+      "entityType": "columns",
+      "table": "proxy_request_ledger"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "finish_reason",
+      "entityType": "columns",
+      "table": "proxy_request_ledger"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "admitted_at",
+      "entityType": "columns",
+      "table": "proxy_request_ledger"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "first_token_at",
+      "entityType": "columns",
+      "table": "proxy_request_ledger"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "completed_at",
+      "entityType": "columns",
+      "table": "proxy_request_ledger"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "stream",
+      "entityType": "columns",
+      "table": "proxy_request_ledger"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "proxy_tenant"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "key_hash",
+      "entityType": "columns",
+      "table": "proxy_tenant"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "key_fingerprint",
+      "entityType": "columns",
+      "table": "proxy_tenant"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "directory",
+      "entityType": "columns",
+      "table": "proxy_tenant"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "model_allowlist",
+      "entityType": "columns",
+      "table": "proxy_tenant"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "tier",
+      "entityType": "columns",
+      "table": "proxy_tenant"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "quota_requests_per_minute",
+      "entityType": "columns",
+      "table": "proxy_tenant"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "quota_tokens_per_day",
+      "entityType": "columns",
+      "table": "proxy_tenant"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "lane_limit",
+      "entityType": "columns",
+      "table": "proxy_tenant"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "deadline_ms",
+      "entityType": "columns",
+      "table": "proxy_tenant"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "enabled",
+      "entityType": "columns",
+      "table": "proxy_tenant"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "proxy_tenant"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "table": "proxy_tenant"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
       "name": "id",
       "entityType": "columns",
       "table": "message"
@@ -13778,6 +14106,21 @@
     },
     {
       "columns": [
+        "tenant_id"
+      ],
+      "tableTo": "proxy_tenant",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "fk_proxy_request_ledger_tenant_id_proxy_tenant_id_fk",
+      "entityType": "fks",
+      "table": "proxy_request_ledger"
+    },
+    {
+      "columns": [
         "session_id"
       ],
       "tableTo": "session",
@@ -15027,6 +15370,24 @@
       "nameExplicit": false,
       "name": "project_pk",
       "table": "project",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "request_id"
+      ],
+      "nameExplicit": false,
+      "name": "proxy_request_ledger_pk",
+      "table": "proxy_request_ledger",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "proxy_tenant_pk",
+      "table": "proxy_tenant",
       "entityType": "pks"
     },
     {
@@ -17082,6 +17443,38 @@
       "name": "permission_project_action_resource_idx",
       "entityType": "indexes",
       "table": "permission"
+    },
+    {
+      "columns": [
+        {
+          "value": "tenant_id",
+          "isExpression": false
+        },
+        {
+          "value": "admitted_at",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "proxy_request_ledger_tenant_admitted_idx",
+      "entityType": "indexes",
+      "table": "proxy_request_ledger"
+    },
+    {
+      "columns": [
+        {
+          "value": "key_hash",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "proxy_tenant_key_hash_idx",
+      "entityType": "indexes",
+      "table": "proxy_tenant"
     },
     {
       "columns": [

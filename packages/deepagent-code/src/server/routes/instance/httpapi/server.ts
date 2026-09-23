@@ -82,6 +82,9 @@ import { CorsConfig, isAllowedCorsOrigin, type CorsOptions } from "@/server/cors
 import { serveUIEffect } from "@/server/shared/ui"
 import { ServerAuth } from "@/server/auth"
 import { InstanceHttpApi, RootHttpApi } from "./api"
+import { GatewayHttpApi } from "./groups/gateway"
+import { gatewayHandlers } from "./handlers/gateway"
+import { proxyAuthorizationLayer, proxyError, proxyStartupGate } from "./middleware/proxy-authorization"
 import { Api } from "@deepagent-code/server/api"
 import { PublicApi } from "./public"
 import {
@@ -254,6 +257,10 @@ const rootApiRoutes = HttpApiBuilder.layer(RootHttpApi).pipe(
   Layer.provide(schemaErrorLayer),
   Layer.provide(httpApiAuthLayer),
 )
+const gatewayApiRoutes = HttpApiBuilder.layer(GatewayHttpApi).pipe(
+  Layer.provide(gatewayHandlers),
+  Layer.provide(proxyAuthorizationLayer),
+)
 const eventApiRoutes = HttpApiBuilder.layer(EventApi).pipe(
   Layer.provide(eventHandlers),
   Layer.provide([httpApiAuthLayer, workspaceRoutingLive, instanceContextLayer]),
@@ -332,6 +339,19 @@ const docRoute = HttpRouter.use((router) => router.add("GET", "/doc", () => Effe
   Layer.provide(authOnlyRouterLayer),
 )
 
+const gatewayFallback = HttpRouter.use((router) =>
+  Effect.gen(function* () {
+    const flags = yield* RuntimeFlags.Service
+    yield* router.add("*", "/v1/*", () =>
+      Effect.succeed(
+        flags.gateway
+          ? proxyError(501, "model_not_supported", "This gateway endpoint is not supported")
+          : proxyError(404, "gateway_disabled", "Gateway is disabled"),
+      ),
+    )
+  }),
+)
+
 const uiRoute = HttpRouter.use((router) =>
   Effect.gen(function* () {
     const fs = yield* FSUtil.Service
@@ -353,6 +373,8 @@ type RouteRequirements =
 export function createRoutes(corsOptions?: CorsOptions, runtimeFlagsLayer = RuntimeFlags.defaultLayer) {
   const baseRoutes = Layer.mergeAll(
     rootApiRoutes,
+    gatewayApiRoutes,
+    proxyStartupGate,
     eventApiRoutes,
     ptyConnectApiRoutes,
     imWebSocketApiRoutes,
@@ -360,6 +382,7 @@ export function createRoutes(corsOptions?: CorsOptions, runtimeFlagsLayer = Runt
     instanceRoutes,
     serverRoutes,
     docRoute,
+    gatewayFallback,
     uiRoute,
     // §A4/§C — start the V4 event-runtime daemons with the server (inert unless V4 flags are on). Draws
     // the session stack + RuntimeFlags from the provide stack below.

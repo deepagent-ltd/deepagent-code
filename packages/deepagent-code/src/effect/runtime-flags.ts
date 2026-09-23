@@ -36,6 +36,7 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   autoShare: bool("DEEPAGENT_CODE_AUTO_SHARE"),
   pure: bool("DEEPAGENT_CODE_PURE"),
   disableDefaultPlugins: bool("DEEPAGENT_CODE_DISABLE_DEFAULT_PLUGINS"),
+  gateway: bool("DEEPAGENT_CODE_GATEWAY"),
   disableEmbeddedWebUi: bool("DEEPAGENT_CODE_DISABLE_EMBEDDED_WEB_UI"),
   disableExternalSkills: bool("DEEPAGENT_CODE_DISABLE_EXTERNAL_SKILLS"),
   disableLspDownload: bool("DEEPAGENT_CODE_DISABLE_LSP_DOWNLOAD"),
