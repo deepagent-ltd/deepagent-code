@@ -1,3 +1,4 @@
+import { eventLayer } from "./fixture/event-layer"
 import { describe, expect } from "bun:test"
 import { DateTime, Effect, Layer, Option } from "effect"
 import { Catalog } from "@deepagent-code/core/catalog"
@@ -17,7 +18,7 @@ const locationLayer = Layer.succeed(
   Location.Service.of(location({ directory: AbsolutePath.make("test") })),
 )
 const it = testEffect(
-  Catalog.locationLayer.pipe(Layer.provideMerge(EventV2.defaultLayer), Layer.provideMerge(locationLayer)),
+  Catalog.locationLayer.pipe(Layer.provideMerge(eventLayer()), Layer.provideMerge(locationLayer)),
 )
 
 describe("CatalogV2", () => {

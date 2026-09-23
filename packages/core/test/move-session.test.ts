@@ -1,18 +1,33 @@
 import { describe, expect } from "bun:test"
 import { Database } from "@deepagent-code/core/database/database"
+import { EventV2 } from "@deepagent-code/core/event"
 import { MoveSession } from "@deepagent-code/core/control-plane/move-session"
 import { EventTable } from "@deepagent-code/core/event/sql"
 import { ProjectV2 } from "@deepagent-code/core/project"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { SessionV2 } from "@deepagent-code/core/session"
+import { SessionExecution } from "@deepagent-code/core/session/execution"
+import { SessionProjector } from "@deepagent-code/core/session/projector"
+import { SessionStore } from "@deepagent-code/core/session/store"
 import { SessionTable } from "@deepagent-code/core/session/sql"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { eq, sql } from "drizzle-orm"
 import { Effect, Layer } from "effect"
 import { testEffect } from "./lib/effect"
+import { projectLayer } from "./fixture/project-layer"
 
 const database = Database.layerFromPath(":memory:")
-const layer = Layer.mergeAll(database, SessionV2.defaultLayer, MoveSession.defaultLayer)
+const events = EventV2.layer.pipe(Layer.provide(database))
+const sessions = SessionV2.layer.pipe(
+  Layer.provide(SessionExecution.noopLayer),
+  Layer.provide(SessionStore.layer.pipe(Layer.provide(database))),
+  Layer.provide(SessionProjector.layer.pipe(Layer.provide(events), Layer.provide(database))),
+  Layer.provide(events),
+  Layer.provide(database),
+  Layer.provide(projectLayer(database)),
+  Layer.orDie,
+)
+const layer = MoveSession.layer.pipe(Layer.provideMerge(sessions), Layer.provideMerge(database))
 const it = testEffect(layer)
 
 const source = AbsolutePath.make("/source")

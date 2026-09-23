@@ -1,3 +1,4 @@
+import { eventLayer } from "../fixture/event-layer"
 import { $ } from "bun"
 import { describe, expect } from "bun:test"
 import fs from "fs/promises"
@@ -28,7 +29,7 @@ if (!watcherUsable && Watcher.hasNativeBinding() && !process.env.CI)
 
 type WatcherEvent = { file: string; event: "add" | "change" | "unlink" }
 
-const it = testEffect(Layer.mergeAll(FSUtil.defaultLayer, EventV2.defaultLayer))
+const it = testEffect(Layer.mergeAll(FSUtil.defaultLayer, eventLayer()))
 
 const configLayer = Layer.succeed(
   Config.Service,
@@ -252,7 +253,7 @@ describeWatcher("Watcher", () => {
         yield* noUpdate((event) => event.file === file, fs.writeFileString(file, "gone")).pipe(
           Effect.provideService(EventV2.Service, events),
         )
-      }).pipe(Effect.provide(Layer.mergeAll(FSUtil.defaultLayer, EventV2.defaultLayer))),
+      }).pipe(Effect.provide(Layer.mergeAll(FSUtil.defaultLayer, eventLayer()))),
     90_000,
   )
 

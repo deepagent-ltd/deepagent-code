@@ -1,3 +1,4 @@
+import { eventLayer } from "../fixture/event-layer"
 import { Npm } from "@deepagent-code/core/npm"
 import type { LanguageModelV3 } from "@ai-sdk/provider"
 import { expect } from "bun:test"
@@ -48,7 +49,7 @@ export const catalogLayer = Layer.succeed(
 
 export const it = testEffect(
   Catalog.locationLayer.pipe(
-    Layer.provideMerge(EventV2.defaultLayer),
+    Layer.provideMerge(eventLayer()),
     Layer.provideMerge(locationLayer),
     Layer.provideMerge(npmLayer),
   ),
