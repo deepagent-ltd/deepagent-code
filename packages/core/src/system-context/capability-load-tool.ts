@@ -76,7 +76,7 @@ export interface CapabilityLoadToolOptions {
   readonly db: Database.Interface["db"]
   readonly catalog?: ReadonlyArray<CapabilityManifest>
   /** Identity seam; the default resolves the session's latest provider turn (real activity/turn). */
-  readonly turnIdentity?: (sessionID: SessionSchema.ID) => Effect.Effect<CapabilityLoadTurnIdentity>
+  readonly turnIdentity?: (sessionID: SessionSchema.ID) => Effect.Effect<CapabilityLoadTurnIdentity, unknown>
 }
 
 /**
@@ -95,7 +95,7 @@ export interface CapabilityLoadToolOptions {
  * `packages/core/test/system-context/capability-l2-production.test.ts`.
  */
 export const makeDefaultCapabilityLoadTurnIdentity =
-  (db: Database.Interface["db"]): ((sessionID: SessionSchema.ID) => Effect.Effect<CapabilityLoadTurnIdentity>) =>
+  (db: Database.Interface["db"]): ((sessionID: SessionSchema.ID) => Effect.Effect<CapabilityLoadTurnIdentity, unknown>) =>
   (sessionID) =>
     Effect.gen(function* () {
       const row = yield* db
@@ -105,7 +105,7 @@ export const makeDefaultCapabilityLoadTurnIdentity =
         .orderBy(desc(V2ProviderTurnReceiptTable.created_at), desc(V2ProviderTurnReceiptTable.request_ordinal))
         .limit(1)
         .get()
-        .pipe(Effect.orDie)
+        .pipe(Effect.catchDefect(() => Effect.fail(new Error("Capability load turn identity is unavailable"))))
       if (!row) return { sessionId: sessionID, activityId: "", turnId: "" }
       return { sessionId: sessionID, activityId: row.activity_id, turnId: String(row.provider_turn_seq) }
     })

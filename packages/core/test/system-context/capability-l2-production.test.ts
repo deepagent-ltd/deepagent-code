@@ -522,6 +522,18 @@ describe("capability_load tool settle: budget gate + audit receipt + snapshot ch
         expect(Tool.permission(packTool, "domain_pack_load")).toBe("capability.read")
       }).pipe(Effect.provide(Database.layerFromPath(":memory:"))),
     ))
+
+  test("a capability receipt database outage settles as a typed tool error", () =>
+    Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        yield* registerLoadTools(db)
+        yield* db.run("DROP TABLE session_capability_load").pipe(Effect.orDie)
+        const settlement = yield* settleLoadCall("call-db-unavailable", "deepagent.code-read")
+        expect(settlement.result.type).toBe("error")
+        expect(String(settlement.result.value)).toContain("Capability load storage is unavailable")
+      }).pipe(Effect.provide(toolLayer), Effect.scoped),
+    ))
 })
 
 describe("capability_load snapshot id: runtime-authoritative (W4.1 P0-2)", () => {
