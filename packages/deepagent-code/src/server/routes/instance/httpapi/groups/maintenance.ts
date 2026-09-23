@@ -361,7 +361,9 @@ const BackupGovernanceReportSchema = Schema.Struct({
 
 const BackupGovernInput = Schema.Struct({
   dir: Schema.optional(Schema.String),
-  keep: Schema.optional(Schema.NumberFromString.pipe(Schema.decodeTo(Schema.Int.check(Schema.isGreaterThan(0))))).annotate({
+  keep: Schema.optional(
+    Schema.NumberFromString.pipe(Schema.decodeTo(Schema.Int.check(Schema.isGreaterThan(0)))),
+  ).annotate({
     description: "How many of the newest non-milestone backups to retain (default 3).",
   }),
 }).annotate({ identifier: "BackupGovernInput" })
@@ -598,7 +600,7 @@ export const MaintenanceApi = HttpApi.make("maintenance").add(
           identifier: "maintenance.composition.digest",
           summary: "Root composition digest",
           description:
-            "Reports the stable composition digest of this process root (session owner, tool registry, database, Location host). The incident-only maintenance shell constructs no business runtime and answers a typed 503 instead.",
+            "Reports the stable v2 composition digest of this process root (session owner, V2 tool registry, authority surface, database, Location host). The incident-only maintenance shell constructs no business runtime and answers a typed 503 instead.",
         }),
       ),
       HttpApiEndpoint.post("mdExport", MaintenancePaths.mdExport, {

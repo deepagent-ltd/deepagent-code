@@ -26,10 +26,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { RuntimeIntegrityIdentity } from "@/effect/runtime-integrity-identity"
 import { LSP } from "@/lsp/lsp"
 import { MCP } from "@/mcp"
-import { V2McpBridge } from "@/session/v2-mcp-bridge"
-import { V2PluginToolsBridge } from "@/session/v2-plugin-tools-bridge"
-import { ApplicationTools } from "@deepagent-code/core/tool/application-tools"
-import { InstanceRegistry } from "@/effect/instance-registry"
+import { Root } from "@/effect/root"
 import { Permission } from "@/permission"
 import { Installation } from "@/installation"
 import { InstanceLayer } from "@/project/instance-layer"
@@ -49,7 +46,6 @@ import { SessionCompaction } from "@/session/compaction"
 import { LLM } from "@/session/llm"
 import { SessionPromptV2 } from "@/session/prompt-v2"
 import { SessionCommandV2 } from "@/session/command-v2"
-import { PromptEpoch } from "@/session/prompt-epoch"
 import { DurableLearningRuntime } from "@/deepagent/learning-runtime"
 import { LearningReviewerRunner } from "@/deepagent/learning-reviewer-runner"
 import { DevCampaignMint, devCampaignMint } from "@/effect/dev-campaign-mint"
@@ -153,12 +149,9 @@ import { maintenanceHandlers, maintenanceOnlyHandlersFor } from "./handlers/main
 import { MaintenanceApi } from "./groups/maintenance"
 import type { BootstrapState } from "@deepagent-code/core/database/bootstrap"
 import { layer as maintenanceRegistryLayer } from "./maintenance-registry"
-import { RecoveryExecutor } from "@/server/recovery-executor"
-import { TaskWorktreeReclamation } from "@/effect/task-worktree-reclamation"
 import { capabilityHandlers } from "./handlers/capability"
 import { systemContextHandlers } from "./handlers/system-context"
 import { contextHandlers } from "./handlers/context"
-import { productionSourcesLayer } from "@/context-federation/production-sources"
 import { V2RunnerFrame } from "@/session/v2-runner-frame"
 import { TaskRunDispatcher } from "@deepagent-code/core/session/task-run-dispatcher"
 import { V2OutboxRuntime } from "@/event/v2-outbox-runtime"
@@ -402,18 +395,11 @@ export function createRoutes(corsOptions?: CorsOptions, runtimeFlagsLayer = Runt
       LLM.defaultLayer,
       Installation.defaultLayer,
       MCP.defaultLayer,
+      Root.applicationToolsLayer,
       // RI-26 W3: the same MCP→ApplicationTools bridge as the app root, so the embedded server's
       // Location trees (built through this graph's memoized ApplicationTools) expose MCP tools.
-      V2McpBridge.layer.pipe(
-        Layer.provide(ApplicationTools.layer),
-        Layer.provide(InstanceRegistry.layer),
-        Layer.provideMerge(MCP.defaultLayer),
-      ),
-      V2PluginToolsBridge.layer.pipe(
-        Layer.provide(ApplicationTools.layer),
-        Layer.provide(InstanceRegistry.layer),
-        Layer.provideMerge(ToolRegistry.productionLayer),
-      ),
+      Root.mcpBridgeLayer,
+      Root.pluginBridgeLayer,
       ModelsDev.defaultLayer,
       Permission.defaultLayer,
       Plugin.defaultLayer,
@@ -483,12 +469,12 @@ export function createRoutes(corsOptions?: CorsOptions, runtimeFlagsLayer = Runt
     .pipe(
       // The public Core handlers, legacy adapters, status surface, and every location drain share one
       // open V2 runtime. Its augmented map captures the production sources supplied immediately below.
-      Layer.provide(V2RunnerFrame.sessionRuntimeLayer),
+      Layer.provide(Root.layer),
       // W3.7 — the ProductionV2Sources VALUE seam (same context-flow mechanism as the PromptEpoch
       // seam below): the route graph's location-layer runner subtree forwards it into the four-graph
       // adapters (real code/documents/knowledge/memory sources), and the C6 context-readiness handler
       // requires it so readiness probes the SAME adapter set the runner serves (W3.7 L5).
-      Layer.provide(productionSourcesLayer({ workspaceDirectory: process.cwd() })),
+      Layer.provide(Root.routesProvideStack.productionSources),
       // F-14: the C6 readiness handler resolves LocationIndexRuntime for the probe-time identity —
       // the runner subtree builds its own per-location runtime, but the bare HTTP composition never
       // provided the service, so /context/readiness 500'd with "Service not found" in every embedded
@@ -498,24 +484,20 @@ export function createRoutes(corsOptions?: CorsOptions, runtimeFlagsLayer = Runt
       Layer.provide(LocationIndexRuntime.defaultLayer),
       Layer.provide(DurableLearningRuntime.reviewerRegistryLayer),
       Layer.provide(DurableLearningRuntime.lifecycleObserverLayer.pipe(Layer.provide(Database.defaultLayer))),
-      Layer.provide(PromptEpoch.v2RunnerSeamLayer.pipe(Layer.provide(Database.defaultLayer))),
+      Layer.provide(Root.routesProvideStack.promptEpoch),
       // W7 — settle-triggered durable learning (same INTO-the-base seam direction as above).
-      Layer.provide(DurableLearningRuntime.onSessionSettledSeamLayer.pipe(Layer.provide(Database.defaultLayer))),
+      Layer.provide(Root.routesProvideStack.onSessionSettled),
       // W2.2 — C1B recovery executor production wiring: the executor layer build runs the
       // startup drain (process boot = post-crash resume: applies committed pending recovery
       // commands, never fails the boot). It self-provides the module-level
       // Database.defaultLayer constant — memoized by object identity under the shared
       // memoMap, the SAME connection the route graph builds (single-instance local
       // process, one database; no clustering; no split-brain).
-      Layer.provide(RecoveryExecutor.layer.pipe(Layer.provide(Database.defaultLayer))),
+      Layer.provide(Root.routesProvideStack.recoveryExecutor),
       // C-P2-08 — startup reclamation of stale retained run-owned worktrees (same
       // layer-build-means-boot drain and shared Database.defaultLayer connection as the
       // recovery executor above; never fails the boot).
-      Layer.provide(TaskWorktreeReclamation.layer.pipe(Layer.provide(Database.defaultLayer))),
-      // C-P2-08 — startup reclamation of stale retained run-owned worktrees (same
-      // layer-build-means-boot drain and shared Database.defaultLayer connection as the
-      // recovery executor above; never fails the boot).
-      Layer.provide(TaskWorktreeReclamation.layer.pipe(Layer.provide(Database.defaultLayer))),
+      Layer.provide(Root.routesProvideStack.worktreeReclamation),
       Layer.provideMerge(devCampaignMint),
       // W0.5 (blocker-2): the release pipeline ships owner-authorization.json with the install
       // product; this layer seeds ONE signed row into the local DB when the routes graph is built —
@@ -537,7 +519,7 @@ export function createRoutes(corsOptions?: CorsOptions, runtimeFlagsLayer = Runt
       // subtree captures (env override, else the persisted state-dir dev keypair, else the pinned
       // production key). The layer carries its own mint-first ordering, so a fresh-state first
       // boot qualifies instead of capturing the production key before the mint writes the keypair.
-      Layer.provideMerge(V2RunnerFrame.ownerQualificationReferencesLayer),
+      Layer.provideMerge(Root.routesProvideStack.ownerReferences),
     )
     .pipe(Layer.orDie)
 }

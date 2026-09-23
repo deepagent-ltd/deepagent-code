@@ -231,6 +231,8 @@ export const frameIdentity: CompositionDigest.FrameIdentityShape = {
       "core/V2ProviderTurn.CurrentOwnerCampaign",
       "core/V2ToolEffect.CurrentPermissionGrantLookup",
       "deepagent-code/V2PlanGate",
+      "deepagent-code/V2McpBridge:enabled",
+      "deepagent-code/V2PluginToolsBridge:enabled",
     ],
   },
 }

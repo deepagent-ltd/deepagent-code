@@ -4,6 +4,8 @@ import { migrations } from "@deepagent-code/core/database/migration.gen"
 import { DatabaseUpgradeRun } from "@deepagent-code/core/database/upgrade-run"
 import { ContractDigest } from "@deepagent-code/core/contract/digest"
 import { LocationServiceMap } from "@deepagent-code/core/location-layer"
+import { AbsolutePath } from "@deepagent-code/core/schema"
+import { ApplicationTools } from "@deepagent-code/core/tool/application-tools"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { SessionExecution } from "@deepagent-code/core/session/execution"
 import { SessionRestart } from "@deepagent-code/core/session/execution/restart"
@@ -15,7 +17,7 @@ import { ToolRegistry } from "@/tool/registry"
 // RI-36/RI-39/RI-44 composition oracle: ONE stable digest per real composition root (HTTP server
 // route graph, AppRuntime). Both roots share `V2RunnerFrame.sessionRuntimeLayer`, so every facet
 // below must compare equal when the two roots are equivalent — and must move when any root closes
-// over a different execution owner, tool registry, database, or Location host.
+// over a different execution owner, V2 tool registry, authority surface, database, or Location host.
 //
 // Stability contract: facets exclude listener port/hostname, wall-clock timestamps, random
 // correlation/run ids, and the process pid. Those are runtime accidents of ONE boot, not
@@ -40,6 +42,31 @@ export const ToolRegistryDigest = Schema.Struct({
   digest: Schema.String,
 }).annotate({ identifier: "CompositionToolRegistryDigest" })
 
+export const V2RegistryDigest = Schema.Struct({
+  applicationTools: ToolRegistryDigest,
+  materialized: Schema.Struct({
+    count: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+    ids: Schema.Array(Schema.String),
+    effectKinds: Schema.Struct({ readOnly: Schema.Int, mutating: Schema.Int }),
+  }),
+  legacyEgress: ToolRegistryDigest,
+}).annotate({ identifier: "CompositionV2RegistryDigest" })
+
+export const AuthoritySurfaceDigest = Schema.Struct({
+  corePublicApi: Schema.Boolean,
+  legacyPromptMounted: Schema.Boolean,
+  v2AgentRosterConsumers: Schema.Int,
+  imAdmission: Schema.String,
+}).annotate({ identifier: "CompositionAuthoritySurfaceDigest" })
+
+// Static route inventory: reflect intentional mounts and consumers without request-time reflection.
+export const authoritySurface = {
+  corePublicApi: true,
+  legacyPromptMounted: true,
+  v2AgentRosterConsumers: 2,
+  imAdmission: "session-v2-direct",
+} as const
+
 export const DatabaseDigest = Schema.Struct({
   // The database file THIS root's live connection has open (`PRAGMA database_list` on its own
   // Database service) — not the ambient flag at digest time, which a post-boot flag flip would
@@ -62,10 +89,11 @@ export const LocationHostDigest = Schema.Struct({
 }).annotate({ identifier: "CompositionLocationHostDigest" })
 
 export const Record = Schema.Struct({
-  version: Schema.Literal(1),
+  version: Schema.Literal(2),
   digest: Schema.String,
   sessionOwner: SessionOwnerDigest,
-  toolRegistry: ToolRegistryDigest,
+  v2Registry: V2RegistryDigest,
+  authoritySurface: AuthoritySurfaceDigest,
   database: DatabaseDigest,
   locationHost: LocationHostDigest,
 }).annotate({ identifier: "CompositionDigestRecord" })
@@ -74,14 +102,15 @@ export type Record = Schema.Schema.Type<typeof Record>
 
 export interface Facets {
   readonly sessionOwner: Schema.Schema.Type<typeof SessionOwnerDigest>
-  readonly toolRegistry: Schema.Schema.Type<typeof ToolRegistryDigest>
+  readonly v2Registry: Schema.Schema.Type<typeof V2RegistryDigest>
+  readonly authoritySurface: Schema.Schema.Type<typeof AuthoritySurfaceDigest>
   readonly database: Schema.Schema.Type<typeof DatabaseDigest>
   readonly locationHost: Schema.Schema.Type<typeof LocationHostDigest>
 }
 
-/** Byte-stable top-level digest over the four composition facets (canonical JSON + SHA-256). */
+/** Byte-stable top-level digest over the composition facets (canonical JSON + SHA-256). */
 export function compute(facets: Facets): string {
-  return ContractDigest.contentDigest({ schema: "deepagent-code-composition-digest-v1", ...facets })
+  return ContractDigest.contentDigest({ schema: "deepagent-code-composition-digest-v2", ...facets })
 }
 
 export interface FrameIdentityShape {
@@ -141,6 +170,7 @@ export const current: Effect.Effect<
   Record,
   never,
   | Database.Service
+  | ApplicationTools.Service
   | ToolRegistry.Service
   | InstanceStore.Service
   | SessionV2.Service
@@ -154,10 +184,17 @@ export const current: Effect.Effect<
   const identity = yield* FrameIdentity
   yield* Effect.all([...ownerServices, LocationServiceMap], { discard: true })
   const tools = yield* ToolRegistry.Service
+  const applications = yield* ApplicationTools.Service
   const instances = yield* InstanceStore.Service
   // Tool registration is instance-scoped; the root's canonical instance is the production workspace
   // (`process.cwd()`, the same directory both roots hand to `productionSourcesLayer`).
   const ids = (yield* instances.provide({ directory: process.cwd() }, tools.ids())).toSorted()
+  const applicationIDs = [...applications.entries().keys()].toSorted()
+  const coreRegistry = yield* Effect.promise(() => import("@deepagent-code/core/tool/registry"))
+  const materialization = yield* coreRegistry.ToolRegistry.Service.use((registry) => registry.materialize()).pipe(
+    Effect.provide(LocationServiceMap.get({ directory: AbsolutePath.make(process.cwd()) })),
+  )
+  const registeredIDs = [...materialization.registeredIDs].toSorted()
   const files = yield* database.db.all<{ name: string; file: string }>("PRAGMA database_list").pipe(Effect.orDie)
   const opened = files.find((row) => row.name === "main")?.file
   const facets: Facets = {
@@ -167,11 +204,27 @@ export const current: Effect.Effect<
       coordination: identity.sessionOwner.coordination,
       services: ownerServices.map((service) => service.key).toSorted(),
     },
-    toolRegistry: {
-      count: ids.length,
-      ids,
-      digest: ContractDigest.contentDigest({ kind: "tool-registry", ids }),
+    v2Registry: {
+      applicationTools: {
+        count: applicationIDs.length,
+        ids: applicationIDs,
+        digest: ContractDigest.contentDigest({ kind: "application-tools", ids: applicationIDs }),
+      },
+      materialized: {
+        count: registeredIDs.length,
+        ids: registeredIDs,
+        effectKinds: {
+          readOnly: registeredIDs.filter((id) => materialization.effectKind(id) === "read_only").length,
+          mutating: registeredIDs.filter((id) => materialization.effectKind(id) === "mutating").length,
+        },
+      },
+      legacyEgress: {
+        count: ids.length,
+        ids,
+        digest: ContractDigest.contentDigest({ kind: "tool-registry", ids }),
+      },
     },
+    authoritySurface,
     database: {
       path: opened ? opened : ":memory:",
       migrationRegistryDigest: DatabaseUpgradeRun.registryDigest(migrations),
@@ -186,7 +239,7 @@ export const current: Effect.Effect<
       seams: [...identity.locationHost.seams],
     },
   }
-  return { version: 1 as const, digest: compute(facets), ...facets }
+  return { version: 2 as const, digest: compute(facets), ...facets }
 })
 
 export * as CompositionDigest from "./composition-digest"
