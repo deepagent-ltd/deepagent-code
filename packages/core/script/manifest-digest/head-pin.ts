@@ -11,14 +11,12 @@
  * `bun run script/manifest-digest/generate-manifest.ts` and update both digests
  * here.
  *
- * C-P2-08 re-pin (2026-09-23): the migration registry gained the durable task-call
- * fan-out admission migration (20260922182048_v2_task_call_admission).
- * Post-merge re-pin (2026-09-23): the c-p2-08 branch pinned without the concurrently
- * merged k04 contract changes in its tree; regenerated over the combined merge tree.
+ * V2.0.2 re-pin (2026-09-24): regenerate over the merged X-05 selection contract
+ * and X-13e loaded-only capability audit contract.
  */
 export const HeadPin = {
   /** Commit whose tree the digests were pinned on. Informational; the digests are the gate. */
-  commit: "9b310768",
-  setTreeDigest: "72904ef11f3e5c2ab5ac0ffabbe3567489dffe57d6252508f2bc4512bf74c55d",
-  overallDigest: "5db24c513a55753db143cc99f6f545e9e6a9993db4dfcdb4b20f00bb9a88ed69",
+  commit: "8daf3330",
+  setTreeDigest: "8ab8cb189a2750b69c4cc73c9e272199a3b48eddf1ce9ed1b1697fcc44e0436f",
+  overallDigest: "9d8d6e8d024c089c3044628c8a73e47ff51773641e7482c2a83b71e251e73ed0",
 } as const
