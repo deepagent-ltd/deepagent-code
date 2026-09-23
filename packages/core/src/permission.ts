@@ -1,7 +1,11 @@
 export * as PermissionV2 from "./permission"
 
 import { ToolFailure } from "@deepagent-code/llm"
-import { Context, Deferred, Effect as EffectRuntime, Layer, Schema } from "effect"
+import { Context, Deferred, Duration, Effect as EffectRuntime, Layer, Schedule, Schema } from "effect"
+import { and, eq, isNull } from "drizzle-orm"
+import { Database } from "./database/database"
+import { DeepAgentActivityAuthority } from "./deepagent/activity-authority"
+import { SessionActivityPermissionRequestTable } from "./deepagent/activity-authority.sql"
 import { makeLocationNode } from "./effect/app-node"
 import { EventV2 } from "./event"
 import { Location } from "./location"
@@ -140,6 +144,7 @@ export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Per
 }) {}
 
 export const MAX_PENDING_REQUESTS = 512
+export const noProgressOwnerID = `v2-no-progress:${Identifier.ascending()}`
 
 export class CapacityError extends Schema.TaggedErrorClass<CapacityError>()("PermissionV2.CapacityError", {
   limit: Schema.Number,
@@ -195,7 +200,21 @@ export const layer = Layer.effect(
     const agents = yield* AgentV2.Service
     const sessions = yield* SessionStore.Service
     const saved = yield* PermissionSaved.Service
+    const database = yield* Database.Service
     const pending = new Map<ID, Pending>()
+    const recoverPermissions = EffectRuntime.gen(function* () {
+      yield* DeepAgentActivityAuthority.heartbeatPermissionOwner({ ownerID: noProgressOwnerID, leaseMs: 30_000 })
+      // An abandoned external effect must be quarantined before its permission is settled;
+      // recovery otherwise crosses the activity terminal fence and can leave the ask stranded.
+      yield* DeepAgentActivityAuthority.recoverPermissionEffects(noProgressOwnerID)
+      yield* DeepAgentActivityAuthority.recoverPendingPermissions(noProgressOwnerID)
+    }).pipe(EffectRuntime.provideService(Database.Service, database))
+    yield* recoverPermissions.pipe(EffectRuntime.orDie)
+    yield* recoverPermissions.pipe(
+      EffectRuntime.catchCause((cause) => EffectRuntime.logError("V2 no-progress owner heartbeat failed", { cause })),
+      EffectRuntime.repeat(Schedule.fixed(Duration.seconds(10))),
+      EffectRuntime.forkScoped,
+    )
 
     yield* EffectRuntime.addFinalizer(() =>
       EffectRuntime.forEach(pending.values(), (item) => Deferred.fail(item.deferred, new RejectedError()), {
@@ -227,7 +246,9 @@ export const layer = Layer.effect(
 
     function configuredEffect(action: string, resource: string, rulesets: readonly Ruleset[]): Effect {
       const rules = rulesets
-        .map((rules) => rules.findLast((rule) => Wildcard.match(action, rule.action) && Wildcard.match(resource, rule.resource)))
+        .map((rules) =>
+          rules.findLast((rule) => Wildcard.match(action, rule.action) && Wildcard.match(resource, rule.resource)),
+        )
         .filter((rule): rule is Rule => rule !== undefined)
       if (rules.some((rule) => rule.effect === "deny")) return "deny"
       if (rules.some((rule) => rule.effect === "ask")) return "ask"
@@ -314,7 +335,58 @@ export const layer = Layer.effect(
       EffectRuntime.uninterruptible(
         EffectRuntime.gen(function* () {
           const existing = pending.get(input.requestID)
-          if (!existing) return yield* new NotFoundError({ requestID: input.requestID })
+          if (!existing) {
+            const durable = yield* DeepAgentActivityAuthority.permissionRequestForRequest(input.requestID).pipe(
+              EffectRuntime.provideService(Database.Service, database),
+            )
+            if (
+              !durable ||
+              durable.activityKind !== "v2" ||
+              durable.requestKind !== "no_progress" ||
+              durable.projectID !== location.project.id ||
+              durable.workspaceID !== location.workspaceID
+            )
+              return yield* new NotFoundError({ requestID: input.requestID })
+            const decision =
+              input.reply === "once" ? "approved_once" : input.reply === "always" ? "approved_always" : "interrupted"
+            yield* DeepAgentActivityAuthority.decidePermission({
+              requestID: input.requestID,
+              idempotencyKey: `v2-no-progress-decision:${input.requestID}:${decision}`,
+              decision,
+              actorType: "user",
+              actorID: "permission-ui",
+              ...(input.message ? { feedback: input.message } : {}),
+            }).pipe(
+              EffectRuntime.provideService(Database.Service, database),
+              EffectRuntime.catchTags({
+                "ActivityAuthority.ConflictError": () => new NotFoundError({ requestID: input.requestID }),
+                "ActivityAuthority.InvalidInputError": () => new NotFoundError({ requestID: input.requestID }),
+              }),
+            )
+            if (decision === "approved_once")
+              yield* DeepAgentActivityAuthority.consumeOnce({
+                requestID: input.requestID,
+                consumerID: `v2-no-progress:${durable.activityID}`,
+                idempotencyKey: `v2-no-progress-consumption:${input.requestID}`,
+              }).pipe(
+                EffectRuntime.provideService(Database.Service, database),
+                EffectRuntime.catchTag(
+                  "ActivityAuthority.ConflictError",
+                  () => new NotFoundError({ requestID: input.requestID }),
+                ),
+              )
+            const eventID = EventV2.ID.make(`evt_v2_permission_replied_${input.requestID}`)
+            yield* events.publish(
+              Event.Replied,
+              {
+                sessionID: durable.sessionID,
+                requestID: input.requestID,
+                reply: input.reply,
+              },
+              { id: eventID },
+            )
+            return
+          }
           yield* events.publish(Event.Replied, {
             sessionID: existing.request.sessionID,
             requestID: existing.request.id,
@@ -379,15 +451,69 @@ export const layer = Layer.effect(
     )
 
     const list = EffectRuntime.fn("PermissionV2.list")(function* () {
-      return Array.from(pending.values(), (item) => item.request)
+      const durable = yield* database.db
+        .select()
+        .from(SessionActivityPermissionRequestTable)
+        .where(
+          and(
+            eq(SessionActivityPermissionRequestTable.activity_kind, "v2"),
+            eq(SessionActivityPermissionRequestTable.request_kind, "no_progress"),
+            eq(SessionActivityPermissionRequestTable.state, "pending"),
+            eq(SessionActivityPermissionRequestTable.project_id, location.project.id),
+            location.workspaceID
+              ? eq(SessionActivityPermissionRequestTable.workspace_id, location.workspaceID)
+              : isNull(SessionActivityPermissionRequestTable.workspace_id),
+          ),
+        )
+        .all()
+        .pipe(EffectRuntime.orDie)
+      return [
+        ...Array.from(pending.values(), (item) => item.request),
+        ...durable.map(
+          (row): Request => ({
+            id: ID.make(row.request_id),
+            sessionID: row.session_id,
+            action: row.permission,
+            resources: [...row.patterns],
+            save: [...row.always_patterns],
+            metadata: { activity_id: row.activity_id, authority_epoch: row.authority_epoch, kind: "no_progress" },
+          }),
+        ),
+      ]
     })
 
     const get = EffectRuntime.fn("PermissionV2.get")(function* (id: ID) {
-      return pending.get(id)?.request
+      const local = pending.get(id)?.request
+      if (local) return local
+      const row = yield* database.db
+        .select()
+        .from(SessionActivityPermissionRequestTable)
+        .where(
+          and(
+            eq(SessionActivityPermissionRequestTable.request_id, id),
+            eq(SessionActivityPermissionRequestTable.activity_kind, "v2"),
+            eq(SessionActivityPermissionRequestTable.request_kind, "no_progress"),
+            eq(SessionActivityPermissionRequestTable.project_id, location.project.id),
+            location.workspaceID
+              ? eq(SessionActivityPermissionRequestTable.workspace_id, location.workspaceID)
+              : isNull(SessionActivityPermissionRequestTable.workspace_id),
+          ),
+        )
+        .get()
+        .pipe(EffectRuntime.orDie)
+      if (!row) return undefined
+      return {
+        id,
+        sessionID: row.session_id,
+        action: row.permission,
+        resources: [...row.patterns],
+        save: [...row.always_patterns],
+        metadata: { activity_id: row.activity_id, authority_epoch: row.authority_epoch, kind: "no_progress" },
+      } satisfies Request
     })
 
     const forSession = EffectRuntime.fn("PermissionV2.forSession")(function* (sessionID: SessionSchema.ID) {
-      return Array.from(pending.values(), (item) => item.request).filter((request) => request.sessionID === sessionID)
+      return (yield* list()).filter((request) => request.sessionID === sessionID)
     })
 
     return Service.of({ ask, assert, reply, get, forSession, list })
@@ -397,7 +523,7 @@ export const layer = Layer.effect(
 export const node = makeLocationNode({
   service: Service,
   layer,
-  deps: [EventV2.node, Location.node, AgentV2.node, SessionStore.node, PermissionSaved.node],
+  deps: [EventV2.node, Location.node, AgentV2.node, SessionStore.node, PermissionSaved.node, Database.node],
 })
 
 export const locationLayer = layer.pipe(Layer.provideMerge(AgentV2.locationLayer))

@@ -128,7 +128,7 @@ describe("bootstrapDirectory", () => {
     expect(mcpReads).toEqual([])
   })
 
-  test("preserves v2-provenanced permission entries the legacy list cannot see", async () => {
+  test("rebuilds V2 pending permissions from durable list and clears decided entries", async () => {
     const legacySession = { id: "ses_legacy", time: { created: 1, updated: 1 } } as State["session"][number]
     const v2Permission = {
       id: "per_v2",
@@ -186,10 +186,35 @@ describe("bootstrapDirectory", () => {
       sdk: {
         app: { agents: async () => ({ data: [{ name: "build", mode: "primary" }] }) },
         config: { get: async () => ({ data: {} }) },
-        session: { status: async () => ({ data: {} }) },
+        session: {
+          status: async () => ({ data: {} }),
+          get: async ({ sessionID }: { sessionID: string }) => ({
+            data: { id: sessionID, time: { created: 1, updated: 1 } },
+          }),
+        },
         vcs: { get: async () => ({ data: undefined }) },
         command: { list: async () => ({ data: [] }) },
         permission: { list: async () => ({ data: [legacyPermission] }) },
+        v2: {
+          permission: {
+            request: {
+              list: async () => ({
+                data: {
+                  data: [
+                    {
+                      id: "per_v2",
+                      sessionID: "ses_v2",
+                      action: "bash",
+                      resources: ["git status"],
+                      save: [],
+                      metadata: {},
+                    },
+                  ],
+                },
+              }),
+            },
+          },
+        },
         question: { list: async () => ({ data: [] }) },
         provider: { list: async () => ({ data: { all: [], connected: [], default: {} } }) },
       } as unknown as DeepAgentCodeClient,

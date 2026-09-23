@@ -454,10 +454,9 @@ export const layer = Layer.effect(
       return yield* store.context(sessionID)
     })
 
-    // Fix-E: project each settled V2 provider turn into the durable activity vector. Read-only
-    // results are content fingerprints (same observation adds no new evidence); only mutating
-    // effects contribute unique receipt identities. V2 no-progress enforcement remains disabled
-    // until its permission challenge can resume the same activity with a durable decision.
+    // Fix-E: project each settled V2 provider turn into the durable activity vector. A Git
+    // patch+HEAD fingerprint is an independent workspace revision source: successive edits to
+    // the same dirty file still advance the vector, including human edits outside tool receipts.
     const observeV2Progress = Effect.fn("SessionRunner.observeV2Progress")(function* (
       sessionID: SessionSchema.ID,
       activityID: string,
@@ -485,9 +484,23 @@ export const layer = Layer.effect(
         .where(eq(SessionActivityProgressObservationTable.idempotency_key, idempotencyKey))
         .get()
         .pipe(Effect.orDie)
-      if (observed) return
       const current = yield* DeepAgentActivityAuthority.reconstruct({ activityKind: "v2", activityID })
-      if (current.objective.state !== "active") return
+      if (current.objective.state === "needs_human") {
+        yield* requestV2NoProgress(sessionID, activityID, current)
+        return true
+      }
+      if (current.objective.state !== "active" || observed) return false
+      const workspaceRevision = yield* Effect.gen(function* () {
+        const patch = yield* gitService.patch(location.directory)
+        const head = yield* gitService.head(location.directory)
+        if (!head) return yield* Effect.fail(new Error("Git HEAD is unavailable"))
+        return Hash.sha256(CanonicalJson.stringify({ head, patch }))
+      }).pipe(Effect.option)
+      if (Option.isNone(workspaceRevision) && current.objective.enforcementState === "monitoring") {
+        yield* Effect.logWarning("V2 workspace revision unavailable; no-progress enforcement skipped", { activityID })
+        return false
+      }
+      const revision = Option.getOrUndefined(workspaceRevision)
       const configured = current.objective.objectiveFingerprint
         ? current.objective
         : yield* Effect.gen(function* () {
@@ -506,7 +519,8 @@ export const layer = Layer.effect(
               expectedVersion: current.objective.version,
               objectiveText: trigger.prompt.text.trim() || `Complete activity ${activityID}`,
               completionCriteria: [{ kind: "plan_complete" }],
-              enforcementState: "disabled",
+              enforcementState: revision ? "monitoring" : "disabled",
+              ...(revision ? { stallThreshold: 2 } : {}),
             })
           })
       const effects = yield* db
@@ -521,29 +535,95 @@ export const layer = Layer.effect(
         activityID,
         idempotencyKey,
         expectedVersion: configured.version,
+        ...(revision ? { workspaceRevision: revision } : {}),
         ...(plan === null ? {} : { planVersion: plan.version }),
         evidence: effects
           .filter((effect) => effect.effect_kind === "read_only")
           .map((effect) => ({
-            fingerprint: Hash.sha256(CanonicalJson.stringify({
-              tool: effect.tool_name,
-              state: effect.state,
-              outcome: effect.outcome_hash,
-            })),
+            fingerprint: Hash.sha256(
+              CanonicalJson.stringify({
+                tool: effect.tool_name,
+                state: effect.state,
+                outcome: effect.outcome_hash,
+              }),
+            ),
             kind: "tool_read",
           })),
         effectReceipts: effects
           .filter((effect) => effect.effect_kind === "mutating")
           .map((effect) => ({
             receiptID: effect.effect_id,
-            fingerprint: Hash.sha256(CanonicalJson.stringify({
-              tool: effect.tool_name,
-              state: effect.state,
-              outcome: effect.outcome_hash,
-            })),
+            fingerprint: Hash.sha256(
+              CanonicalJson.stringify({
+                tool: effect.tool_name,
+                state: effect.state,
+                outcome: effect.outcome_hash,
+              }),
+            ),
           })),
         nextAction: needsContinuation ? "continue" : "finish",
       })
+      const latest = yield* DeepAgentActivityAuthority.reconstruct({ activityKind: "v2", activityID })
+      if (latest.objective.state !== "needs_human") return false
+      yield* requestV2NoProgress(sessionID, activityID, latest)
+      return true
+    })
+    const requestV2NoProgress = Effect.fn("SessionRunner.requestV2NoProgress")(function* (
+      sessionID: SessionSchema.ID,
+      activityID: string,
+      current: DeepAgentActivityAuthority.Reconstructed,
+    ) {
+      const observation = current.latestObservation
+      if (!observation) return yield* Effect.die(`no-progress activity has no observation: ${activityID}`)
+      const requestID = PermissionV2.ID.create(
+        `per_${Hash.sha256(`v2-no-progress:${activityID}:${observation.revision}`).slice(0, 48)}`,
+      )
+      const existing = yield* DeepAgentActivityAuthority.permissionRequestForRequest(requestID)
+      if (existing && existing.state !== "pending") return
+      const eventID = EventV2.ID.make(`evt_v2_permission_asked_${requestID}`)
+      const effects = yield* db
+        .select({ tool: V2ToolEffectTable.tool_name })
+        .from(V2ToolEffectTable)
+        .innerJoin(V2ProviderTurnReceiptTable, eq(V2ToolEffectTable.receipt_id, V2ProviderTurnReceiptTable.receipt_id))
+        .where(eq(V2ProviderTurnReceiptTable.activity_id, activityID))
+        .all()
+        .pipe(Effect.orDie)
+      const patterns = [...new Set(effects.map((effect) => effect.tool))].toSorted()
+      const resources = patterns.length ? patterns : ["activity"]
+      const metadata = {
+        activity_id: activityID,
+        observation_revision: observation.revision,
+        no_progress_count: observation.noProgressCount,
+        vector_hash: observation.vectorHash,
+        kind: "no_progress",
+      }
+      if (!existing)
+        yield* DeepAgentActivityAuthority.requestPermission({
+          activityKind: "v2",
+          activityID,
+          requestID,
+          requestKind: "no_progress",
+          idempotencyKey: `v2-no-progress-request:${requestID}`,
+          permission: "doom_loop",
+          patterns: resources,
+          alwaysPatterns: resources,
+          metadata,
+          ownerID: PermissionV2.noProgressOwnerID,
+          ...(location.workspaceID ? { workspaceID: location.workspaceID } : {}),
+          expiresAt: Date.now() + 86_400_000,
+        })
+      yield* events.publish(
+        PermissionV2.Event.Asked,
+        {
+          id: requestID,
+          sessionID,
+          action: "doom_loop",
+          resources,
+          save: resources,
+          metadata,
+        },
+        { id: eventID },
+      )
     })
     const failInterruptedTools = Effect.fn("SessionRunner.failInterruptedTools")(function* (
       sessionID: SessionSchema.ID,
@@ -2534,6 +2614,19 @@ export const layer = Layer.effect(
         const stepCeiling = runAgent?.info?.steps ?? configSteps ?? MAX_STEPS
         const loopBudget = new LoopBudget(stepCeiling)
         const restored = yield* restoreLoopBudget(input.sessionID, loopBudget)
+        if (restored) {
+          const objective = yield* DeepAgentActivityAuthority.reconstruct({
+            activityKind: "v2",
+            activityID: restored.activityID,
+          }).pipe(Effect.provideService(Database.Service, database), Effect.orDie)
+          if (objective.objective.state === "needs_human") {
+            yield* requestV2NoProgress(input.sessionID, restored.activityID, objective).pipe(
+              Effect.provideService(Database.Service, database),
+              Effect.orDie,
+            )
+            return
+          }
+        }
         // A pending steer will be promoted by the next runTurn and reset the step count. An
         // already-promoted steer is the durable recovery boundary used above.
         const pendingSteer = yield* SessionInput.hasPending(db, input.sessionID, "steer")
@@ -2568,11 +2661,13 @@ export const layer = Layer.effect(
           promotion = "steer"
           activityId = result.activityId ?? activityId
           attempts += 1
-          if (activityId !== undefined)
-            yield* observeV2Progress(input.sessionID, activityId, needsContinuation).pipe(
+          if (activityId !== undefined) {
+            const waitingForPermission = yield* observeV2Progress(input.sessionID, activityId, needsContinuation).pipe(
               Effect.provideService(Database.Service, database),
               Effect.orDie,
             )
+            if (waitingForPermission) return
+          }
           const repeated = loopBudget.repeatedTool()
           if (repeated) {
             if (activityId === undefined) return yield* Effect.die("repeated tool call without an admitted activity")

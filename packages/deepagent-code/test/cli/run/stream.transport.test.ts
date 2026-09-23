@@ -426,6 +426,7 @@ function sdk(
     messages?: OpencodeClient["session"]["messages"]
     children?: OpencodeClient["session"]["children"]
     permissions?: OpencodeClient["permission"]["list"]
+    v2Permissions?: OpencodeClient["v2"]["session"]["permission"]["list"]
     questions?: OpencodeClient["question"]["list"]
   } = {},
 ) {
@@ -439,42 +440,91 @@ function sdk(
   const messages: OpencodeClient["session"]["messages"] = input.messages ?? (() => ok([]))
   const children: OpencodeClient["session"]["children"] = input.children ?? (() => ok([]))
   const permissions: OpencodeClient["permission"]["list"] = input.permissions ?? (() => ok([]))
+  const v2Permissions: OpencodeClient["v2"]["session"]["permission"]["list"] =
+    input.v2Permissions ?? (() => ok({ data: [] }))
   const questions: OpencodeClient["question"]["list"] = input.questions ?? (() => ok([]))
 
   spyOn(client.event, "subscribe").mockImplementation(subscribe)
   spyOn(client.global, "event").mockImplementation(globalEvent)
   spyOn(client.v2.session, "prompt").mockImplementation(async (request, options) => {
-    const result = await promptAsync({
-      sessionID: request.sessionID,
-      messageID: request.id,
-      agent: request.prompt.agent,
-      model: request.prompt.model
-        ? { providerID: request.prompt.model.providerID, modelID: request.prompt.model.id }
-        : undefined,
-      variant: request.prompt.model?.variant,
-      metadata: request.prompt.metadata,
-      parts: [
-        ...(request.prompt.files ?? []).map((file) => ({
-          type: "file" as const,
-          url: file.uri,
-          mime: file.mime,
-          filename: file.name,
-        })),
-        { type: "text" as const, text: request.prompt.text },
-      ],
-    }, options)
-    return { ...result, data: { data: { id: result.data?.messageID ?? "msg-test-admitted", delivery: "steer" } } } as never
+    const result = await promptAsync(
+      {
+        sessionID: request.sessionID,
+        messageID: request.id,
+        agent: request.prompt.agent,
+        model: request.prompt.model
+          ? { providerID: request.prompt.model.providerID, modelID: request.prompt.model.id }
+          : undefined,
+        variant: request.prompt.model?.variant,
+        metadata: request.prompt.metadata,
+        parts: [
+          ...(request.prompt.files ?? []).map((file) => ({
+            type: "file" as const,
+            url: file.uri,
+            mime: file.mime,
+            filename: file.name,
+          })),
+          { type: "text" as const, text: request.prompt.text },
+        ],
+      },
+      options,
+    )
+    return {
+      ...result,
+      data: { data: { id: result.data?.messageID ?? "msg-test-admitted", delivery: "steer" } },
+    } as never
   })
   spyOn(client.session, "status").mockImplementation(status)
   spyOn(client.session, "messages").mockImplementation(messages)
   spyOn(client.session, "children").mockImplementation(children)
   spyOn(client.permission, "list").mockImplementation(permissions)
+  spyOn(client.v2.session.permission, "list").mockImplementation(v2Permissions)
   spyOn(client.question, "list").mockImplementation(questions)
 
   return client
 }
 
 describe("run stream transport", () => {
+  test("recovers a durable V2 challenge when its asked event was missed", async () => {
+    const src = eventFeed()
+    const ui = footer()
+    const transport = await createSessionTransport({
+      sdk: sdk({
+        stream: src.stream,
+        v2Permissions: async () =>
+          ok({
+            data: [
+              {
+                id: "per_v2_no_progress",
+                sessionID: "session-1",
+                action: "doom_loop",
+                resources: ["read"],
+                save: ["read"],
+                metadata: { kind: "no_progress" },
+              },
+            ],
+          }),
+      }),
+      sessionID: "session-1",
+      thinking: true,
+      limits: () => ({}),
+      footer: ui.api,
+    })
+
+    try {
+      expect(ui.events).toContainEqual({
+        type: "stream.view",
+        view: {
+          type: "permission",
+          request: expect.objectContaining({ id: "per_v2_no_progress", permission: "doom_loop", v2: true }),
+        },
+      })
+    } finally {
+      src.close()
+      await transport.close()
+    }
+  })
+
   test("does not replay persisted main-session history during bootstrap by default", async () => {
     const src = eventFeed()
     const ui = footer()

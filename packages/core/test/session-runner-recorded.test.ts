@@ -122,11 +122,20 @@ const catalog = Layer.succeed(
     },
   }),
 )
+// An unborn repository has no HEAD. Keep the transport fixture deterministic while forcing the
+// harder boundary where a patch was captured but HEAD disappeared before the revision was sealed.
+const gitWithoutHead = Layer.effect(
+  Git.Service,
+  Effect.gen(function* () {
+    const git = yield* Git.Service
+    return Git.Service.of({ ...git, patch: () => Effect.succeed(""), head: () => Effect.succeed(undefined) })
+  }),
+).pipe(Layer.provide(Git.defaultLayer))
 const runner = SessionRunnerLLM.layer.pipe(
   Layer.provide(ContextQueryAuthorization.defaultLayer),
   Layer.provide(Layer.succeed(ProductionV2Sources, {})),
   Layer.provide(FSUtil.defaultLayer),
-  Layer.provide(Git.defaultLayer),
+  Layer.provide(gitWithoutHead),
   Layer.provide(
     Layer.succeed(
       V2ProviderTurn.OwnerAuthorization,
@@ -136,10 +145,7 @@ const runner = SessionRunnerLLM.layer.pipe(
   Layer.provide(V2ProviderTurn.layer.pipe(Layer.provide(SessionProviderOwner.layer), Layer.provide(database))),
   Layer.provide(V2ToolEffect.layer.pipe(Layer.provide(database))),
   Layer.provide(
-    SessionContext.layer.pipe(
-      Layer.provide(SessionRunnerCanonical.degradedArtifactStore),
-      Layer.provide(database),
-    ),
+    SessionContext.layer.pipe(Layer.provide(SessionRunnerCanonical.degradedArtifactStore), Layer.provide(database)),
   ),
   Layer.provide(database),
   Layer.provide(store),
