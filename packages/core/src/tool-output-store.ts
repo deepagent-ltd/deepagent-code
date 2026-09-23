@@ -6,9 +6,13 @@ import { Config } from "./config"
 import { makeLocationNode } from "./effect/app-node"
 import { FSUtil } from "./fs-util"
 import { Global } from "./global"
+import { Location } from "./location"
 import { SessionSchema } from "./session/schema"
 import { Identifier } from "./util/identifier"
+import { Hash } from "./util/hash"
 import type { ToolOutput } from "@deepagent-code/llm"
+import type { ToolContent, ToolFileContent } from "@deepagent-code/llm/schema"
+import { ToolArtifact } from "./tool-artifact"
 
 export const MAX_LINES = 2_000
 export const MAX_BYTES = 50 * 1024
@@ -20,6 +24,7 @@ export interface BoundInput {
   readonly sessionID: SessionSchema.ID
   readonly toolCallID: string
   readonly output: ToolOutput
+  readonly location?: Location.Ref
 }
 
 export interface BoundResult {
@@ -32,11 +37,16 @@ export class StorageError extends Schema.TaggedErrorClass<StorageError>()("ToolO
   cause: Schema.Defect,
 }) {}
 
-export type Error = StorageError
+export type Error = StorageError | ToolArtifact.Error
 
 export interface Interface {
   readonly limits: () => Effect.Effect<{ readonly maxLines: number; readonly maxBytes: number }>
   readonly bound: (input: BoundInput) => Effect.Effect<BoundResult, Error>
+  readonly rehydrate: (input: {
+    readonly sessionID: SessionSchema.ID
+    readonly file: ToolFileContent
+    readonly location?: Location.Ref
+  }) => Effect.Effect<ToolContent, ToolArtifact.Error>
   readonly cleanup: () => Effect.Effect<void>
 }
 
@@ -111,6 +121,17 @@ export const layer = Layer.effect(
     const global = yield* Global.Service
     const config = yield* Effect.serviceOption(Config.Service)
     const directory = path.join(global.data, MANAGED_DIRECTORY)
+    // The production runner supplies the immutable Session placement. Keep the Session ID beneath
+    // the Location digest so neither another workspace nor another Session can reuse a ref.
+    const artifactRoot = (sessionID: SessionSchema.ID, location?: Location.Ref) =>
+      path.join(
+        global.data,
+        "tool-artifacts",
+        location === undefined
+          ? "unplaced"
+          : Hash.sha256(`${location.directory}\0${location.workspaceID ?? "implicit-local"}`),
+        sessionID,
+      )
     const limits = Effect.fn("ToolOutputStore.limits")(function* () {
       if (Option.isNone(config)) return { maxLines: MAX_LINES, maxBytes: MAX_BYTES }
       const entries = yield* config.value.entries().pipe(Effect.catch(() => Effect.succeed([] as Config.Entry[])))
@@ -132,12 +153,22 @@ export const layer = Layer.effect(
 
     const bound = Effect.fn("ToolOutputStore.bound")(function* (input: BoundInput) {
       const outputLimits = yield* limits()
-      const media = input.output.content.filter((item) => item.type === "file")
-      const text = input.output.content.filter((item) => item.type === "text")
+      const content = yield* Effect.forEach(input.output.content, (item) =>
+        item.type === "text"
+          ? Effect.succeed(item)
+          : ToolArtifact.materialize({
+              file: item,
+              root: artifactRoot(input.sessionID, input.location),
+              managedRoot: directory,
+            }),
+      )
+      const output = { ...input.output, content }
+      const media = output.content.filter((item) => item.type === "file")
+      const text = output.content.filter((item) => item.type === "text")
       const contextual =
-        input.output.content.length === 0
+        output.content.length === 0
           ? yield* Effect.try({
-              try: () => JSON.stringify(input.output.structured, null, 2) ?? String(input.output.structured),
+              try: () => JSON.stringify(output.structured, null, 2) ?? String(output.structured),
               catch: (cause) => new StorageError({ operation: "encode", cause }),
             })
           : text.map((item) => item.text).join("")
@@ -145,17 +176,14 @@ export const layer = Layer.effect(
         lineCount(contextual) <= outputLimits.maxLines &&
         Buffer.byteLength(contextual, "utf-8") <= outputLimits.maxBytes
       )
-        return {
-          output: input.output,
-          outputPaths: [],
-        }
+        return { output, outputPaths: [] }
 
       const outputPath = yield* write(contextual)
       const marker = `... output truncated; full content saved to ${outputPath} ...`
 
       return {
         output: {
-          structured: input.output.structured,
+          structured: output.structured,
           content: [
             {
               type: "text" as const,
@@ -183,7 +211,13 @@ export const layer = Layer.effect(
       }
     })
 
-    return Service.of({ limits, bound, cleanup })
+    return Service.of({
+      limits,
+      bound,
+      rehydrate: ({ sessionID, file, location }) =>
+        ToolArtifact.rehydrate({ file, root: artifactRoot(sessionID, location) }),
+      cleanup,
+    })
   }),
 )
 

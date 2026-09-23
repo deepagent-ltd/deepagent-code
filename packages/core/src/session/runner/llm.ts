@@ -60,6 +60,7 @@ import { buildDeepAgentPrompt, buildGovernedPlanContext } from "./deepagent-prom
 import { V2ToolEffect } from "./v2-tool-effect"
 import { createLLMEventPublisher } from "./publish-llm-event"
 import { normalizeAttachments } from "./attachments"
+import { rehydrateToolArtifacts } from "./tool-artifacts"
 import { toLLMMessages } from "./to-llm-message"
 import { SessionHistoryProjection } from "./session-history-projection"
 import { ModelPromptProfile } from "../../deepagent/model-prompt-profile"
@@ -845,7 +846,7 @@ export const layer = Layer.effect(
         reasoningKeep: openaiFamilyProtocol ? 0 : undefined,
       })
       const historyRequestMessages = yield* normalizeAttachments(
-        projection.messages,
+        yield* rehydrateToolArtifacts(projection.messages, session.id, location, toolMaterialization.rehydrateArtifact),
         modelInfo?.capabilities.input,
       ).pipe(Effect.provideService(FSUtil.Service, fs))
       const historyMessages = toLLMMessages(historyRequestMessages, model)
@@ -1545,6 +1546,7 @@ export const layer = Layer.effect(
                   agent: agent.id,
                   assistantMessageID,
                   call: event,
+                  location,
                 }),
               ).pipe(
                 Effect.flatMap((settlement) => {

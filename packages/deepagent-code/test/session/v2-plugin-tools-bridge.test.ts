@@ -120,6 +120,21 @@ describe("V2PluginToolsBridge native execution semantics", () => {
       }),
   }
 
+  const attachmentTool: V1Tool.Def = {
+    id: "attachment_tool",
+    description: "returns a remote attachment for Core materialization",
+    parameters: Schema.Unknown,
+    execute: () =>
+      Effect.succeed({
+        title: "remote image",
+        metadata: {},
+        output: "Image attached",
+        attachments: [
+          { type: "file", mime: "image/png", url: "https://assets.example.test/image.png", filename: "image.png" },
+        ],
+      }),
+  }
+
   const askingTool: V1Tool.Def = {
     id: "asking_tool",
     description: "asks for permission through ctx.ask",
@@ -172,8 +187,7 @@ describe("V2PluginToolsBridge native execution semantics", () => {
             ToolRegistry.Service.of({
               ids: () => Effect.succeed([]),
               all: () => Effect.succeed([]),
-              custom: () =>
-                Effect.succeed([metadataTool, progressTool, askingTool, slow.def]),
+              custom: () => Effect.succeed([metadataTool, progressTool, attachmentTool, askingTool, slow.def]),
               named: () => Effect.die("unused"),
               tools: () => Effect.die("unused"),
             }),
@@ -196,6 +210,16 @@ describe("V2PluginToolsBridge native execution semantics", () => {
     expect(structured["title"]).toBe("counted")
     expect(structured["metadata"]).toEqual({ rows: 2 })
     expect(output.content[0]).toEqual({ type: "text", text: "did work" })
+  })
+
+  test("keeps remote plugin attachments for the Core artifact materializer", async () => {
+    const output = await rt.runPromise(settle("attachment_tool"))
+    expect(output.content[1]).toEqual({
+      type: "file",
+      source: { type: "url", url: "https://assets.example.test/image.png" },
+      mime: "image/png",
+      name: "image.png",
+    })
   })
 
   test("ctx.metadata publishes a durable Tool.Progress event through EventV2", async () => {
@@ -295,9 +319,7 @@ describe("V2PluginToolsBridge native execution semantics", () => {
     )
     const registered = () =>
       reloadRt.runPromise(
-        Effect.map(Effect.service(ApplicationTools.Service), (applications) =>
-          applications.entries().has("meta_tool"),
-        ),
+        Effect.map(Effect.service(ApplicationTools.Service), (applications) => applications.entries().has("meta_tool")),
       )
 
     await reloadRt.runPromise(InstanceRegistry.initializeInstance(instance))

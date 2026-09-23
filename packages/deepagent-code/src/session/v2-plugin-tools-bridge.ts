@@ -46,9 +46,7 @@ export const layer = Layer.effectDiscard(
     instanceRegistry.registerInitializer((context) =>
       Effect.runPromise(
         Effect.gen(function* () {
-          const custom = yield* registry
-            .custom()
-            .pipe(Effect.provideService(InstanceRef, context))
+          const custom = yield* registry.custom().pipe(Effect.provideService(InstanceRef, context))
           const registered: Record<string, Tool.AnyTool> = {}
           for (const def of custom) {
             const name = def.id.replace(/[^A-Za-z0-9_-]/g, "_")
@@ -77,13 +75,12 @@ export const layer = Layer.effectDiscard(
                       else signal.addEventListener("abort", abort, { once: true })
                       const detach = () => signal.removeEventListener("abort", abort)
                       const stop = Effect.runCallback(
-                        (def.execute as (
-                          args: unknown,
-                          ctx: V1Tool.Context,
-                        ) => Effect.Effect<V1Tool.ExecuteResult, unknown>)(
-                          input,
-                          bridgeContext(callContext, controller.signal),
-                        ).pipe(
+                        (
+                          def.execute as (
+                            args: unknown,
+                            ctx: V1Tool.Context,
+                          ) => Effect.Effect<V1Tool.ExecuteResult, unknown>
+                        )(input, bridgeContext(callContext, controller.signal)).pipe(
                           Effect.mapError(
                             (error) =>
                               new ToolFailure({
@@ -99,11 +96,7 @@ export const layer = Layer.effectDiscard(
                           signal,
                           onExit: (exit) => {
                             detach()
-                            resume(
-                              exit._tag === "Success"
-                                ? Effect.succeed(exit.value)
-                                : Effect.failCause(exit.cause),
-                            )
+                            resume(exit._tag === "Success" ? Effect.succeed(exit.value) : Effect.failCause(exit.cause))
                           },
                         },
                       )
@@ -191,9 +184,7 @@ function askThroughV2(
     const permission = Option.getOrUndefined(yield* Effect.serviceOption(PermissionV2.Service))
     if (!permission)
       return yield* Effect.fail(
-        new Error(
-          `Custom tool ask for "${request.permission}" ran outside a V2 permission authority context`,
-        ),
+        new Error(`Custom tool ask for "${request.permission}" ran outside a V2 permission authority context`),
       )
     yield* permission
       .assert({
@@ -217,9 +208,7 @@ function askThroughV2(
 const structuredResult = (result: V1Tool.ExecuteResult): Record<string, unknown> => ({
   output: result.output,
   ...(result.title ? { title: result.title } : {}),
-  ...(isRecord(result.metadata) && Object.keys(result.metadata).length > 0
-    ? { metadata: result.metadata }
-    : {}),
+  ...(isRecord(result.metadata) && Object.keys(result.metadata).length > 0 ? { metadata: result.metadata } : {}),
   ...(result.attachments?.length ? { attachments: result.attachments } : {}),
 })
 
@@ -229,23 +218,24 @@ const modelOutput = ({ output }: { readonly output: unknown }): ReadonlyArray<To
     { type: "text" as const, text: String(result.output) },
     ...(result.attachments ?? []).flatMap((attachment) => {
       const match = /^data:([^;,]+);base64,(.+)$/.exec(attachment.url)
-      return match
-        ? [
-            {
-              type: "file" as const,
-              data: match[2],
-              mime: attachment.mime,
-              ...(attachment.filename ? { name: attachment.filename } : {}),
-            },
-          ]
-        : []
+      return [
+        {
+          type: "file" as const,
+          source: match
+            ? { type: "data" as const, data: match[2] }
+            : attachment.url.startsWith("file:")
+              ? { type: "file" as const, uri: attachment.url }
+              : { type: "url" as const, url: attachment.url },
+          mime: attachment.mime,
+          ...(attachment.filename ? { name: attachment.filename } : {}),
+        },
+      ]
     }),
   ]
 }
 
 function deniedMessage(error: unknown) {
-  if (error instanceof PermissionV2.RejectedError)
-    return "The user rejected permission to use this specific tool call."
+  if (error instanceof PermissionV2.RejectedError) return "The user rejected permission to use this specific tool call."
   if (error instanceof PermissionV2.CorrectedError)
     return `The user rejected permission to use this specific tool call with the following feedback: ${error.feedback}`
   if (error instanceof PermissionV2.DeniedError)

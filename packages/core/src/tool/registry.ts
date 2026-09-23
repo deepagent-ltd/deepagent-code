@@ -1,8 +1,16 @@
 export * as ToolRegistry from "./registry"
 
-import { ToolOutput, type ToolCall, type ToolDefinition, type ToolSettlement } from "@deepagent-code/llm"
+import {
+  ToolOutput,
+  type ToolCall,
+  type ToolDefinition,
+  type ToolSettlement,
+  type ToolContent,
+  type ToolFileContent,
+} from "@deepagent-code/llm"
 import { Context, Effect, Layer, Scope } from "effect"
 import { AgentV2 } from "../agent"
+import { Location } from "../location"
 import { makeLocationNode } from "../effect/app-node"
 import { PermissionV2 } from "../permission"
 import { SessionMessage } from "../session/message"
@@ -17,6 +25,7 @@ export type ExecuteInput = {
   readonly agent: AgentV2.ID
   readonly assistantMessageID: SessionMessage.ID
   readonly call: ToolCall
+  readonly location?: Location.Ref
 }
 
 export interface Interface {
@@ -33,6 +42,11 @@ export interface Materialization {
   readonly definitions: ReadonlyArray<ToolDefinition>
   readonly effectKind: (name: string) => "mutating" | "read_only"
   readonly settle: (input: ExecuteInput) => Effect.Effect<Settlement, ToolOutputStore.Error>
+  readonly rehydrateArtifact: (input: {
+    readonly sessionID: SessionSchema.ID
+    readonly file: ToolFileContent
+    readonly location?: Location.Ref
+  }) => Effect.Effect<ToolContent, ToolOutputStore.Error>
 }
 
 export interface Settlement extends ToolSettlement {
@@ -84,13 +98,33 @@ const registryLayer = Layer.effect(
       )
       if ("result" in pending) return pending
       const output = pending.output
-      const bounded = yield* resources.bound({ sessionID: input.sessionID, toolCallID: input.call.id, output })
-      const result = ToolOutput.toResultValue(bounded.output)
+      const bounded = yield* resources
+        .bound({ sessionID: input.sessionID, toolCallID: input.call.id, output, location: input.location })
+        .pipe(
+          Effect.map((value) => ({ _tag: "bounded" as const, value })),
+          Effect.catchTag("ToolArtifact.Error", (error) => Effect.succeed({ _tag: "artifact_error" as const, error })),
+        )
+      if (bounded._tag === "artifact_error")
+        return {
+          result: {
+            type: "error" as const,
+            value: `Tool artifact unavailable: ${bounded.error.reason}`,
+            metadata: { reason: bounded.error.reason },
+          },
+        }
+      const retained = bounded.value
+      // The durable tool event keeps an opaque artifact ref. The next provider turn reloads
+      // that ref from the Session's artifact store; it does not persist inline base64 twice.
+      const result = retained.output.content.some(
+        (item) => item.type === "file" && item.source.type === "file" && item.source.uri.startsWith("artifact:"),
+      )
+        ? { type: "text" as const, value: "Tool artifact retained for provider replay" }
+        : ToolOutput.toResultValue(retained.output)
       if (result.type === "error")
-        return bounded.outputPaths.length > 0 ? { result, outputPaths: bounded.outputPaths } : { result }
-      return bounded.outputPaths.length > 0
-        ? { result, output: bounded.output, outputPaths: bounded.outputPaths }
-        : { result, output: bounded.output }
+        return retained.outputPaths.length > 0 ? { result, outputPaths: retained.outputPaths } : { result }
+      return retained.outputPaths.length > 0
+        ? { result, output: retained.output, outputPaths: retained.outputPaths }
+        : { result, output: retained.output }
     })
 
     return Service.of({
@@ -156,6 +190,7 @@ const registryLayer = Layer.effect(
             if (registration) return settleWith(input, registration.identity)
             return Effect.succeed({ result: { type: "error", value: `Unknown tool: ${input.call.name}` } })
           },
+          rehydrateArtifact: resources.rehydrate,
         }
       }),
     })
