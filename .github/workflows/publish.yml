@@ -86,23 +86,6 @@ jobs:
           deepagent-code-app-id: ${{ vars.DEEPAGENT_CODE_APP_ID }}
           deepagent-code-app-secret: ${{ secrets.DEEPAGENT_CODE_APP_SECRET }}
 
-      - name: Build (release identity pinned)
-        id: build
-        run: |
-          ./packages/deepagent-code/script/build.ts ${{ (github.ref_name == 'beta' && '--sourcemaps') || '' }}
-          ./packages/cli/script/build.ts ${{ (github.ref_name == 'beta' && '--sourcemaps') || '' }}
-          # Ship the authorization row at every binary's appRoot (dirname of the executable —
-          # V2OwnerSeed.defaultOwnerAuthorizationAppRoot) so default installs self-qualify.
-          for dir in packages/deepagent-code/dist/deepagent-code-*/bin packages/cli/dist/*/bin; do
-            [ -d "$dir" ] && cp "$RUNNER_TEMP/owner-authorization.json" "$dir/owner-authorization.json"
-          done
-        env:
-          DEEPAGENT_CODE_VERSION: ${{ needs.version.outputs.version }}
-          DEEPAGENT_CODE_RELEASE: ${{ needs.version.outputs.release }}
-          DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY: ${{ runner.temp }}/release-owner-public-key.pem
-          GH_REPO: ${{ needs.version.outputs.repo }}
-          GH_TOKEN: ${{ steps.committer.outputs.token }}
-
       # Owner authorization (2026-09-11 ruling): mint with a ONE-TIME Ed25519 pair BEFORE the
       # binaries build — the public half is pinned into this exact build via the
       # DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY define and the private half dies with the mint
@@ -121,6 +104,23 @@ jobs:
             | tee "$RUNNER_TEMP/mint-result.json"
           jq -r '.public_key_pem' "$RUNNER_TEMP/mint-result.json" > "$RUNNER_TEMP/release-owner-public-key.pem"
           test -s "$RUNNER_TEMP/release-owner-public-key.pem"
+
+      - name: Build (release identity pinned)
+        id: build
+        run: |
+          ./packages/deepagent-code/script/build.ts ${{ (github.ref_name == 'beta' && '--sourcemaps') || '' }}
+          ./packages/cli/script/build.ts ${{ (github.ref_name == 'beta' && '--sourcemaps') || '' }}
+          # Ship the authorization row at every binary's appRoot (dirname of the executable —
+          # V2OwnerSeed.defaultOwnerAuthorizationAppRoot) so default installs self-qualify.
+          for dir in packages/deepagent-code/dist/deepagent-code-*/bin packages/cli/dist/*/bin; do
+            [ -d "$dir" ] && cp "$RUNNER_TEMP/owner-authorization.json" "$dir/owner-authorization.json"
+          done
+        env:
+          DEEPAGENT_CODE_VERSION: ${{ needs.version.outputs.version }}
+          DEEPAGENT_CODE_RELEASE: ${{ needs.version.outputs.release }}
+          DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY: ${{ runner.temp }}/release-owner-public-key.pem
+          GH_REPO: ${{ needs.version.outputs.repo }}
+          GH_TOKEN: ${{ steps.committer.outputs.token }}
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
