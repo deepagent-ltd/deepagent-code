@@ -34,7 +34,8 @@ describe("DiskReclaim (W-02 M-5)", () => {
     // Operational residue in the store directory + the red-line incident set.
     await Bun.write(path.join(tmp.path, "store", "repro.db"), "repro residue")
     await Bun.write(path.join(tmp.path, "store", "old.bak"), "bak residue")
-    await Bun.write(path.join(tmp.path, "store", "deepagent-code-other.db"), "stale channel db")
+    await Bun.write(path.join(tmp.path, "store", "deepagent-code-other.db"), "other live channel db")
+    await Bun.write(path.join(tmp.path, "store", "deepagent-code-repro.db"), "repro live channel db")
     await fs.mkdir(path.join(tmp.path, "store", "restore-incidents"), { recursive: true })
     await Bun.write(path.join(tmp.path, "store", "restore-incidents", "incident-1.db"), "incident copy")
     await fs.mkdir(path.join(tmp.path, "cache"), { recursive: true })
@@ -49,7 +50,7 @@ describe("DiskReclaim (W-02 M-5)", () => {
         expect(dry.executed).toBe(false)
         expect(dry.reclaimedBytes).toBe(0)
         const dryCandidates = new Map(dry.candidates.map((candidate) => [path.basename(candidate.path), candidate]))
-        expect([...dryCandidates.keys()].sort()).toEqual(["deepagent-code-other.db", "old.bak", "repro.db"])
+        expect([...dryCandidates.keys()].sort()).toEqual(["old.bak", "repro.db"])
         expect([...dryCandidates.values()].every((candidate) => candidate.safe && !candidate.deleted)).toBe(true)
         // The full measurement classified the data root.
         const categories = new Map(dry.inventory.map((entry) => [entry.category, entry]))
@@ -68,9 +69,8 @@ describe("DiskReclaim (W-02 M-5)", () => {
           confirm: true,
         })
         expect(executed.executed).toBe(true)
-        expect(executed.reclaimedBytes).toBe("repro residue".length + "bak residue".length + "stale channel db".length)
+        expect(executed.reclaimedBytes).toBe("repro residue".length + "bak residue".length)
         expect(executed.candidates.filter((candidate) => candidate.deleted).map((candidate) => path.basename(candidate.path)).sort()).toEqual([
-          "deepagent-code-other.db",
           "old.bak",
           "repro.db",
         ])
@@ -84,6 +84,8 @@ describe("DiskReclaim (W-02 M-5)", () => {
         expect(yield* Effect.promise(() => exists(path.join(tmp.path, "store", "restore-incidents", "incident-1.db")))).toBe(true)
         // The live db, its sidecars, operational data and the backups root survive.
         expect(yield* Effect.promise(() => exists(filename))).toBe(true)
+        expect(yield* Effect.promise(() => exists(path.join(tmp.path, "store", "deepagent-code-other.db")))).toBe(true)
+        expect(yield* Effect.promise(() => exists(path.join(tmp.path, "store", "deepagent-code-repro.db")))).toBe(true)
         expect(yield* Effect.promise(() => exists(path.join(tmp.path, "cache", "operational.bin")))).toBe(true)
         // The report persisted under the backups root.
         const stored = yield* Effect.promise(() => Bun.file(DiskReclaim.reportPathFor(backupDir)).json())

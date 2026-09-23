@@ -357,12 +357,12 @@ const runArchivePhase = (input: RunInput, journal: Journal) =>
 
 // -- disk advisory (advisory list only — M-5 executes deletion) ---------------------------------------------
 
-const ResiduePatterns = [/\.bak$/i, /repro\.db$/i, /^\..*\.tmp-/] as const
+const ResiduePatterns = [/\.bak$/i, /^repro\.db$/i, /^\..*\.tmp-/] as const
+const ChannelDatabase = /^deepagent-code(?:-[a-zA-Z0-9._-]+)?\.db$/i
 
-/** Operational-residue classifier, shared with the M-4/M-5 governance modules. */
+/** Only explicit residue shapes are reclaimable; another channel or configured .db may be live. */
 export const isResidue = (name: string, dbPath: string) =>
-  ResiduePatterns.some((pattern) => pattern.test(name)) ||
-  (name.endsWith(".db") && path.resolve(path.dirname(dbPath), name) !== path.resolve(dbPath))
+  name !== path.basename(dbPath) && !ChannelDatabase.test(name) && ResiduePatterns.some((pattern) => pattern.test(name))
 
 /** Recursive file walk, shared with the M-4/M-5 governance modules. */
 export const walk = async (dir: string): Promise<string[]> => {
@@ -403,9 +403,8 @@ const computeDiskAdvisory = async (input: RunInput, orchestrationId: string): Pr
       note: "Incident quarantine copy. NEVER deleted (design §3.1 ruling / restore.ts).",
     })
   }
-  // Residue candidates live flat in the store directory (multi-channel DBs, manual .bak, repro
-  // DBs, orphaned tmp files). Listed as reclaimable; M-5 executes deletion only after checks +
-  // user confirmation.
+  // Explicit residue candidates live flat in the store directory (manual .bak, repro DBs,
+  // orphaned tmp files). Other .db files may belong to active channels or configured stores.
   for (const entry of await fs.readdir(dbDir, { withFileTypes: true }).catch(() => [])) {
     if (!entry.isFile() || !isResidue(entry.name, input.dbPath)) continue
     const file = path.join(dbDir, entry.name)
