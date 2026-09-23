@@ -13,9 +13,9 @@ import { TaskRunTable } from "./sql"
 import type { ModelHardPolicy } from "./runner/model-hard-policy"
 
 type DB = Database.Interface["db"]
+type Transaction = Parameters<Parameters<DB["transaction"]>[0]>[0]
 
-export const recordPolicy = Effect.fn("LongContext.recordPolicy")(function* (input: {
-  readonly db: DB
+export type PolicyInput = {
   readonly sessionID: SessionSchema.ID
   readonly activityID: string
   readonly userMessageID: string
@@ -32,7 +32,9 @@ export const recordPolicy = Effect.fn("LongContext.recordPolicy")(function* (inp
   readonly graphSnapshotRefs: readonly string[]
   readonly offeredToolIDs: readonly string[]
   readonly degradedToolIDs: readonly string[]
-}) {
+}
+
+function policyRecord(input: PolicyInput, providerAttemptID?: string) {
   const receiptID = `model_policy_${Hash.sha256(CanonicalJson.stringify({
     sessionID: input.sessionID,
     activityID: input.activityID,
@@ -40,8 +42,9 @@ export const recordPolicy = Effect.fn("LongContext.recordPolicy")(function* (inp
     requestHash: input.requestHash,
     policy: input.policy,
     estimatedFullRequestTokens: input.estimatedFullRequestTokens,
+    ...(providerAttemptID === undefined ? {} : { providerAttemptID }),
   }))}`
-  yield* input.db.insert(SessionModelPolicyReceiptTable).values({
+  const values = {
     receipt_id: receiptID,
     session_id: input.sessionID,
     activity_id: input.activityID,
@@ -60,9 +63,44 @@ export const recordPolicy = Effect.fn("LongContext.recordPolicy")(function* (inp
     graph_snapshot_refs: [...input.graphSnapshotRefs],
     offered_tool_ids: [...input.offeredToolIDs],
     degraded_tool_ids: [...input.degradedToolIDs],
+    provider_attempt_id: providerAttemptID,
     trigger_source: input.policy.state === "managed" && input.policy.action.startsWith("hard_gate") ? "threshold" : "none",
     created_at: Date.now(),
-  }).onConflictDoNothing().pipe(Effect.orDie)
+  } satisfies typeof SessionModelPolicyReceiptTable.$inferInsert
+  return { receiptID, values }
+}
+
+/** A blocked request has no provider attempt, so its diagnostic is durable on its own. */
+export const recordPolicy = Effect.fn("LongContext.recordPolicy")(function* (input: PolicyInput & { readonly db: DB }) {
+  const { receiptID, values } = policyRecord(input)
+  yield* input.db.insert(SessionModelPolicyReceiptTable).values(values).onConflictDoNothing().pipe(Effect.orDie)
+  return receiptID
+})
+
+/** A dispatchable request commits its diagnostic with the canonical attempt and V2 receipt. */
+export const recordPolicyInTransaction = Effect.fn("LongContext.recordPolicyInTransaction")(function* (
+  tx: Transaction,
+  input: PolicyInput,
+  providerAttemptID: string,
+) {
+  const { receiptID, values } = policyRecord(input, providerAttemptID)
+  yield* tx.insert(SessionModelPolicyReceiptTable).values(values).onConflictDoNothing().pipe(Effect.orDie)
+  const stored = yield* tx.select().from(SessionModelPolicyReceiptTable)
+    .where(eq(SessionModelPolicyReceiptTable.receipt_id, receiptID)).get().pipe(Effect.orDie)
+  if (!stored || stored.session_id !== values.session_id || stored.activity_id !== values.activity_id ||
+      stored.user_message_id !== values.user_message_id || stored.prompt_epoch !== values.prompt_epoch ||
+      stored.request_hash !== values.request_hash || stored.provider_id !== values.provider_id ||
+      stored.runtime_model_id !== values.runtime_model_id || stored.api_model_id !== values.api_model_id ||
+      stored.estimated_full_request_tokens !== values.estimated_full_request_tokens ||
+      stored.reserved_output_tokens !== values.reserved_output_tokens ||
+      stored.context_selection_id !== values.context_selection_id ||
+      stored.context_projection_hash !== values.context_projection_hash ||
+      stored.provider_attempt_id !== providerAttemptID ||
+      CanonicalJson.stringify(stored.policy) !== CanonicalJson.stringify(values.policy) ||
+      CanonicalJson.stringify(stored.graph_snapshot_refs) !== CanonicalJson.stringify(values.graph_snapshot_refs) ||
+      CanonicalJson.stringify(stored.offered_tool_ids) !== CanonicalJson.stringify(values.offered_tool_ids) ||
+      CanonicalJson.stringify(stored.degraded_tool_ids) !== CanonicalJson.stringify(values.degraded_tool_ids))
+    return yield* Effect.fail(new Error("model_policy_receipt_binding_conflict"))
   return receiptID
 })
 
@@ -76,15 +114,6 @@ export const settlePolicy = Effect.fn("LongContext.settlePolicy")(function* (
       ? { blocked_reason: outcome.blockedReason }
       : { checkpoint_id: outcome.checkpointID, checkpoint_hash: outcome.checkpointHash },
   ).where(eq(SessionModelPolicyReceiptTable.receipt_id, receiptID)).pipe(Effect.orDie)
-})
-
-export const bindProviderAttempt = Effect.fn("LongContext.bindProviderAttempt")(function* (
-  db: DB,
-  receiptID: string,
-  providerAttemptID: string,
-) {
-  yield* db.update(SessionModelPolicyReceiptTable).set({ provider_attempt_id: providerAttemptID })
-    .where(eq(SessionModelPolicyReceiptTable.receipt_id, receiptID)).pipe(Effect.orDie)
 })
 
 /** The EventV2 compaction-start fact is the durable run admission. This artifact is written after

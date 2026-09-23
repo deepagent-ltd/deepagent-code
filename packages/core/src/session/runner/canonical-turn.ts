@@ -42,6 +42,7 @@ import {
   SecurityNamespaceTable,
 } from "../../context-federation/sql"
 import { SessionSchema } from "../schema"
+import { LongContext } from "../long-context"
 import { Hash } from "../../util/hash"
 import { V2ProviderTurn } from "./v2-provider-turn"
 import { V2ProviderTurnReceiptTable } from "./v2-provider-turn.sql"
@@ -787,13 +788,13 @@ export type CommitTurnInput = {
   readonly receipt: Omit<V2ProviderTurn.AdmitInput, "ownerToken" | "activityId" | "providerTurnSeq">
   readonly protocolAttemptIdentityHash?: string
   readonly ownerToken: string
+  /** Dispatchable model policy is committed in the same transaction as the attempt. */
+  readonly policy?: LongContext.PolicyInput
   readonly now?: number
 }
 
-// Creates the canonical provider attempt and the V2 receipt for one physical request inside a single
-// transaction and binds them explicitly. Exact retries converge: a prepared attempt with the same
-// binding is reused, a preparing receipt with the same identity is re-admitted, and an existing
-// binding to the same attempt is idempotent.
+// Creates the canonical provider attempt, V2 receipt, and optional model policy for one physical
+// request inside a single transaction. Exact retries converge on the same prepared attempt.
 export const commitTurn = Effect.fn("SessionRunnerCanonical.commitTurn")(function* (input: CommitTurnInput) {
   const now = input.now ?? Date.now()
   const result = yield* input.db
@@ -975,6 +976,8 @@ export const commitTurn = Effect.fn("SessionRunnerCanonical.commitTurn")(functio
             receipt.providerAttemptId === attempt.attemptId
               ? receipt
               : yield* V2ProviderTurn.bindAttemptInTransaction(tx, receipt, attempt.attemptId)
+          if (input.policy)
+            yield* LongContext.recordPolicyInTransaction(tx, input.policy, attempt.attemptId)
           return { receipt: bound, attempt, providerTurnSeq }
         }),
       { behavior: "immediate" },

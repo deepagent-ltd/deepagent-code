@@ -1224,7 +1224,8 @@ export const layer = Layer.effect(
       }
       const estimatedFullRequestTokens = PreparedProviderTurn.estimateFullRequestTokens(request)
       const modelPolicy = ModelHardPolicy.decide({ ...policyInput, estimatedFullRequestTokens })
-      // One recoverable boundary: canonical attempt + V2 receipt are created and bound atomically.
+      // The policy for a dispatchable request joins the canonical attempt + V2 receipt transaction.
+      // Hard-gate refusals have no attempt and retain their own durable diagnostic.
       const requestInputHash = Hash.sha256(
         CanonicalJson.stringify({
           ...LLMRequest.input(request),
@@ -1234,9 +1235,8 @@ export const layer = Layer.effect(
           },
         }),
       )
-      const policyReceiptID = modelPolicy.state === "unmanaged" ? undefined
-        : yield* LongContext.recordPolicy({
-          db,
+      const policyReceipt = modelPolicy.state === "unmanaged" ? undefined
+        : {
           sessionID: session.id,
           activityID: selectionAdmission.activityId,
           userMessageID: receiptUserMessageID,
@@ -1253,9 +1253,10 @@ export const layer = Layer.effect(
           graphSnapshotRefs: selectionAdmission.selectedRefs ?? [],
           offeredToolIDs: toolDefinitions.map((tool) => tool.name),
           degradedToolIDs: toolMaterialization.permissionFilteredIDs,
-        }).pipe(Effect.orDie)
-      if (modelPolicy.state !== "unmanaged" && policyReceiptID) {
+        }
+      if (policyReceipt) {
         if (modelPolicy.state === "unavailable") {
+          const policyReceiptID = yield* LongContext.recordPolicy({ db, ...policyReceipt }).pipe(Effect.orDie)
           yield* LongContext.settlePolicy(db, policyReceiptID, { blockedReason: modelPolicy.reason }).pipe(Effect.orDie)
           return yield* new ContextBudgetHardGateError({
             sessionID: session.id,
@@ -1264,7 +1265,8 @@ export const layer = Layer.effect(
             reason: modelPolicy.reason,
           })
         }
-        if (modelPolicy.action.startsWith("hard_gate")) {
+        if (modelPolicy.state === "managed" && modelPolicy.action.startsWith("hard_gate")) {
+          const policyReceiptID = yield* LongContext.recordPolicy({ db, ...policyReceipt }).pipe(Effect.orDie)
           const previousHardGate = entries.findLast((entry) =>
             entry.message.type === "compaction" && entry.message.reason === "hard_gate")
           const noNewConversation = previousHardGate !== undefined &&
@@ -1331,13 +1333,10 @@ export const layer = Layer.effect(
           protocol: model.route.protocol,
           ownerMode: parityCampaign ? "shadow_v2" : "v2",
         },
+        policy: policyReceipt,
         ownerToken: yield* providerTurns.currentOwnerToken(),
       })
       const providerReceipt = admittedTurn.receipt
-      if (policyReceiptID) {
-        if (!providerReceipt.providerAttemptId) return yield* Effect.die("Managed provider receipt has no attempt binding")
-        yield* LongContext.bindProviderAttempt(db, policyReceiptID, providerReceipt.providerAttemptId).pipe(Effect.orDie)
-      }
       // R4 — pricing belongs to the Location catalog and is an explicit runner dependency. A
       // missing catalog model keeps cost 0 rather than guessing, but a composition can no longer
       // silently omit the catalog service and disable accounting for every turn.
