@@ -207,7 +207,11 @@ export const forgetSessionStageMarker = (sessionID?: string): void => {
   if (sessionID !== undefined) lastRenderedStageBySession.delete(sessionID)
 }
 
-export const buildVolatileRoundContext = (ctx: PromptContext, runtimeControl?: string): string => {
+export const buildVolatileRoundContext = (
+  ctx: PromptContext,
+  runtimeControl?: string,
+  loopRecovery = false,
+): string => {
   const sections: string[] = []
 
   // Round + activation stage: the model's sense of "where am I in the loop". Was previously baked
@@ -231,11 +235,21 @@ export const buildVolatileRoundContext = (ctx: PromptContext, runtimeControl?: s
   // G3 review fix: the dedup marker is per-session — see lastRenderedStageBySession above.
   const sessionKey = ctx.sessionID ?? "_anonymous"
   if (
+    !loopRecovery &&
     ctx.activation.guidance.trim() &&
     (ctx.round === 1 || lastRenderedStageBySession.get(sessionKey) !== ctx.activation.stage)
   ) {
     lastRenderedStageBySession.set(sessionKey, ctx.activation.stage)
     sections.push(activationSection(ctx.activation))
+  }
+  if (loopRecovery) {
+    sections.push(
+      [
+        "# Loop recovery",
+        "",
+        "A repeated action or no-progress breaker fired. Reassess the latest evidence and choose a materially different next action; do not retry the same sequence.",
+      ].join("\n"),
+    )
   }
 
   // Task objective + goals/criteria: the current target can be re-seeded on a continue round (the
@@ -280,12 +294,14 @@ export const buildVolatileRoundContext = (ctx: PromptContext, runtimeControl?: s
 // every tool result makes that control block look like a fresh user request and can induce semantic
 // restatement loops. Keep only an explicit, constant-size continuation directive in the volatile tail;
 // live plan state is included in the same trusted control block by the request layer.
-export const buildVolatileContinuationContext = (runtimeControl?: string): string =>
+export const buildVolatileContinuationContext = (runtimeControl?: string, loopRecovery = false): string =>
   wrapVolatileRoundContext([
     [
-      "# Tool continuation",
+      loopRecovery ? "# Loop recovery" : "# Tool continuation",
       "",
-      "Continue directly from the immediately preceding tool result.",
+      loopRecovery
+        ? "A repeated action or no-progress breaker fired. Reassess the latest tool result and choose a materially different next action; do not retry the same sequence."
+        : "Continue directly from the immediately preceding tool result.",
       "Apply runtime and plan control state silently. Do not restate or re-summarize the user request, the current phase, or conclusions already established unless the tool result materially changes them.",
     ].join("\n"),
     ...(runtimeControl ? [runtimeControl] : []),

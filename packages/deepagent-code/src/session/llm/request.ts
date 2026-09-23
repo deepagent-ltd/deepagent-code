@@ -27,6 +27,10 @@ import { GlobalBus } from "@/bus/global"
 import { Global } from "@deepagent-code/core/global"
 import type { DocumentRef, Selection } from "@deepagent-code/core/deepagent/released-snapshot"
 import { PreparedProviderTurn } from "@deepagent-code/core/session/runner/prepared-provider-turn"
+import { Database } from "@deepagent-code/core/database/database"
+import { SessionActivityPermissionRequestTable } from "@deepagent-code/core/deepagent/activity-authority.sql"
+import { SessionPromptIntent } from "../prompt-intent"
+import { and, eq, inArray } from "drizzle-orm"
 
 type PromptContext = AgentGateway.PromptContext
 type EnvironmentContext = AgentGateway.EnvironmentContext
@@ -212,6 +216,7 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     // fresh non-orchestrated activity, because its next write parameters must never depend on history.
     const isToolContinuation = input.messages.at(-1)?.role === "tool"
     const baseContextKind = isToolContinuation ? "continuation" : runtimeSystemRequired ? "round" : "none"
+    const loopRecovery = baseContextKind === "none" ? false : yield* approvedNoProgressChallenge(input.user.sessionID)
     const planStatus =
       input.agent.name === "compaction"
         ? null
@@ -219,9 +224,9 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
     workflowPlanStatus = planStatus
     volatileRoundContext =
       baseContextKind === "continuation"
-        ? AgentGateway.volatileContinuationContext(planStatus ?? undefined)
+        ? AgentGateway.volatileContinuationContext(planStatus ?? undefined, loopRecovery)
         : baseContextKind === "round"
-          ? AgentGateway.volatileRoundContext(promptContext.context, planStatus ?? undefined)
+          ? AgentGateway.volatileRoundContext(promptContext.context, planStatus ?? undefined, loopRecovery)
           : planStatus
             ? AgentGateway.volatilePlanContext(planStatus)
             : ""
@@ -440,6 +445,32 @@ export const prepare = Effect.fn("LLMRequestPrep.prepare")(function* (input: Pre
   if (input.flags.assembledRequestFingerprint)
     emitAssembledRequestFingerprint(input, prepared, validationCommands, volatileContextKind)
   return prepared
+})
+
+const approvedNoProgressChallenge = Effect.fn("LLMRequestPrep.approvedNoProgressChallenge")(function* (
+  sessionID: SessionV1.User["sessionID"],
+) {
+  const database = yield* Effect.serviceOption(Database.Service)
+  if (database._tag === "None") return false
+  const activity = yield* SessionPromptIntent.activeActivityForSession(sessionID).pipe(
+    Effect.provideService(Database.Service, database.value),
+  )
+  if (!activity) return false
+  const approved = yield* database.value.db
+    .select({ requestID: SessionActivityPermissionRequestTable.request_id })
+    .from(SessionActivityPermissionRequestTable)
+    .where(
+      and(
+        eq(SessionActivityPermissionRequestTable.activity_kind, "legacy"),
+        eq(SessionActivityPermissionRequestTable.activity_id, activity.activityID),
+        eq(SessionActivityPermissionRequestTable.session_id, sessionID),
+        eq(SessionActivityPermissionRequestTable.request_kind, "no_progress"),
+        inArray(SessionActivityPermissionRequestTable.state, ["approved_once", "approved_always"]),
+      ),
+    )
+    .get()
+    .pipe(Effect.orDie)
+  return Boolean(approved)
 })
 
 export function toolResultReferences(messages: readonly ModelMessage[]) {

@@ -720,17 +720,26 @@ export const systemPrompt = (providerID: string, context?: PromptContext) =>
 // the cache breakpoint) so the model still sees round/stage/previous-results/budget without churning
 // the prefix. Returns "" when there is nothing round-specific (⇒ caller skips injection). Only emitted
 // when the DeepAgent runtime is active, matching systemPrompt().
-export const volatileRoundContext = (context: PromptContext, runtimeControl?: string): string =>
-  volatileRoundContextWith(current, context, runtimeControl)
+export const volatileRoundContext = (context: PromptContext, runtimeControl?: string, loopRecovery = false): string =>
+  volatileRoundContextWith(current, context, runtimeControl, loopRecovery)
 
-export const volatileContinuationContext = (runtimeControl?: string): string =>
-  volatileContinuationContextWith(current, runtimeControl)
+export const volatileContinuationContext = (runtimeControl?: string, loopRecovery = false): string =>
+  volatileContinuationContextWith(current, runtimeControl, loopRecovery)
 
-const volatileRoundContextWith = (config: CurrentConfig, context: PromptContext, runtimeControl?: string): string =>
-  isManagedDeepAgentRuntimeWith(config) ? buildVolatileRoundContext(context, runtimeControl) : ""
+const volatileRoundContextWith = (
+  config: CurrentConfig,
+  context: PromptContext,
+  runtimeControl?: string,
+  loopRecovery = false,
+): string =>
+  isManagedDeepAgentRuntimeWith(config) ? buildVolatileRoundContext(context, runtimeControl, loopRecovery) : ""
 
-const volatileContinuationContextWith = (config: CurrentConfig, runtimeControl?: string): string =>
-  isManagedDeepAgentRuntimeWith(config) ? buildVolatileContinuationContext(runtimeControl) : ""
+const volatileContinuationContextWith = (
+  config: CurrentConfig,
+  runtimeControl?: string,
+  loopRecovery = false,
+): string =>
+  isManagedDeepAgentRuntimeWith(config) ? buildVolatileContinuationContext(runtimeControl, loopRecovery) : ""
 
 export const volatilePlanContext = (runtimeControl: string): string => buildVolatilePlanContext(runtimeControl)
 
