@@ -7,6 +7,7 @@ import { Location } from "@deepagent-code/core/location"
 import { PermissionV2 } from "@deepagent-code/core/permission"
 import { PermissionTable } from "@deepagent-code/core/permission/sql"
 import { PermissionSaved } from "@deepagent-code/core/permission/saved"
+import { DeepAgentActivityAuthority } from "@deepagent-code/core/deepagent/activity-authority"
 import { Project } from "@deepagent-code/core/project"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { AbsolutePath } from "@deepagent-code/core/schema"
@@ -93,6 +94,54 @@ function assertion(input: Partial<PermissionV2.AssertInput> = {}) {
   } satisfies PermissionV2.AssertInput
 }
 
+function durableNoProgressChallenge() {
+  return Effect.gen(function* () {
+    yield* setup()
+    const { db } = yield* Database.Service
+    yield* db.run(
+      "INSERT INTO session_input (id, session_id, prompt, delivery, admitted_seq, promoted_seq, time_created) VALUES ('v2-no-progress-input', 'ses_test', '{}', 'queue', 1, 1, 30)",
+    )
+    yield* db.run(
+      "INSERT INTO session_activity (activity_id, session_id, ordinal, trigger_input_id, delivery, state, created_at, settled_at) VALUES ('v2-no-progress-activity', 'ses_test', 0, 'v2-no-progress-input', 'queue', 'active', 30, NULL)",
+    )
+    const ref = { activityKind: "v2" as const, activityID: "v2-no-progress-activity" }
+    const configured = yield* DeepAgentActivityAuthority.configure({
+      ...ref,
+      expectedVersion: 1,
+      objectiveText: "finish the task",
+      completionCriteria: [{ kind: "plan_complete" }],
+      enforcementState: "monitoring",
+      stallThreshold: 1,
+    })
+    const observation = (expectedVersion: number, idempotencyKey: string) =>
+      DeepAgentActivityAuthority.observe({
+        ...ref,
+        expectedVersion,
+        idempotencyKey,
+        workspaceRevision: "workspace-unchanged",
+        evidence: [],
+        effectReceipts: [],
+        nextAction: "continue",
+      })
+    const first = yield* observation(configured.version, "v2-no-progress-first")
+    const stalled = yield* observation(first.objective.version, "v2-no-progress-stalled")
+    expect(stalled.objective.state).toBe("needs_human")
+    const requestID = PermissionV2.ID.create("per_v2_no_progress")
+    yield* DeepAgentActivityAuthority.requestPermission({
+      ...ref,
+      requestID,
+      requestKind: "no_progress",
+      idempotencyKey: "v2-no-progress-request",
+      permission: "doom_loop",
+      patterns: ["read"],
+      alwaysPatterns: ["read"],
+      metadata: { revision: stalled.observation.revision },
+      ownerID: PermissionV2.noProgressOwnerID,
+    })
+    return { ref, requestID }
+  })
+}
+
 function waitForRequest() {
   return Effect.gen(function* () {
     const service = yield* PermissionV2.Service
@@ -111,6 +160,44 @@ function waitForRequest() {
 }
 
 describe("PermissionV2", () => {
+  for (const reply of ["once", "always", "reject"] as const) {
+    it.effect(`reconstructs a V2 no-progress challenge and durably handles ${reply}`, () =>
+      Effect.gen(function* () {
+        const challenge = yield* durableNoProgressChallenge()
+        const service = yield* PermissionV2.Service
+        expect((yield* service.forSession(SessionV2.ID.make("ses_test"))).map((request) => request.id)).toContain(
+          challenge.requestID,
+        )
+        expect(yield* service.get(challenge.requestID)).toMatchObject({
+          action: "doom_loop",
+          resources: ["read"],
+          metadata: { kind: "no_progress" },
+        })
+        yield* service.reply({ requestID: challenge.requestID, reply })
+        yield* service.reply({ requestID: challenge.requestID, reply })
+        expect(yield* service.forSession(SessionV2.ID.make("ses_test"))).toEqual([])
+        expect((yield* DeepAgentActivityAuthority.reconstruct(challenge.ref)).objective.state).toBe(
+          reply === "reject" ? "interrupted" : "active",
+        )
+        const { db } = yield* Database.Service
+        const decision = yield* db.get<{ decision: string }>(
+          "SELECT decision FROM session_activity_permission_decision WHERE request_id = 'per_v2_no_progress'",
+        )
+        expect(decision?.decision).toBe(
+          reply === "once" ? "approved_once" : reply === "always" ? "approved_always" : "interrupted",
+        )
+        if (reply === "once")
+          expect(
+            yield* db.get("SELECT consumer_id FROM session_activity_permission_once_consumption WHERE request_id = 'per_v2_no_progress'"),
+          ).toEqual({ consumer_id: "v2-no-progress:v2-no-progress-activity" })
+        if (reply === "always") {
+          expect(yield* db.select().from(PermissionTable).where(eq(PermissionTable.project_id, Project.ID.global)).all()).toMatchObject([
+            { action: "doom_loop", resource: "read" },
+          ])
+        }
+      }),
+    )
+  }
   it.effect("returns the evaluated effect and only queues prompts", () =>
     Effect.gen(function* () {
       yield* setup([{ action: "read", resource: "*", effect: "allow" }])
