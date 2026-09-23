@@ -17,6 +17,7 @@ function missingRequest(id: PermissionV2.ID) {
 export const PermissionHandler = HttpApiBuilder.group(Api, "server.permission", (handlers) =>
   Effect.gen(function* () {
     const database = yield* Database.Service
+    const session = yield* SessionV2.Service
     return handlers
       .handle(
         "permission.request.list",
@@ -48,7 +49,7 @@ export const PermissionHandler = HttpApiBuilder.group(Api, "server.permission", 
                 activityID,
               }).pipe(Effect.provideService(Database.Service, database), Effect.orDie)
               if (current.objective.state === "active")
-                yield* (yield* SessionV2.Service).resume(ctx.params.sessionID).pipe(
+                yield* session.resume(ctx.params.sessionID).pipe(
                   Effect.catchCause((cause) => Effect.logError("V2 no-progress continuation failed", { cause })),
                   Effect.forkDetach,
                 )
