@@ -16,6 +16,7 @@ import { V2OutboxWriter } from "@/event/v2-outbox-writer"
 import "@deepagent-code/core/account"
 import "@deepagent-code/core/catalog"
 import "@deepagent-code/core/session/event"
+import "@deepagent-code/core/proxy/event"
 import { SessionEvent } from "@deepagent-code/core/session/event"
 import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { Context, DateTime, Effect, Layer, Schema } from "effect"
@@ -130,11 +131,22 @@ function legacySessionInfo(
   })
 }
 
+export const assertSynchronizedOutboxRegistry = (
+  registry: Parameters<typeof V2OutboxWriter.registrationForEventType>[1],
+) => {
+  const invalid = registry.eventTypes().filter((type) => EventV2.registry.get(type)?.sync === undefined)
+  if (invalid.length > 0)
+    throw new Error(`C5 outbox registrations require synchronized EventV2 definitions: ${invalid.join(", ")}`)
+}
+
 export const layerWithRegistry = (
   registry: Parameters<typeof V2OutboxWriter.registrationForEventType>[1],
   runtimeFeatures: RuntimeFeatureRegistry = RuntimeFeatures,
-) =>
-  Layer.effect(
+) => {
+  // Every registered type must have a durable EventV2 row. Validate at graph construction so a
+  // non-sync registration cannot silently turn an authorized C5 fact into a best-effort event.
+  assertSynchronizedOutboxRegistry(registry)
+  return Layer.effect(
     Service,
     Effect.gen(function* () {
       const events = yield* EventV2.Service
@@ -150,6 +162,8 @@ export const layerWithRegistry = (
       const landIfRegistered = (event: EventV2.Payload): Effect.Effect<void, unknown> => {
         const registration = V2OutboxWriter.registrationForEventType(event.type, registry)
         if (!registration) return Effect.void
+        if (event.version === undefined || EventV2.registry.get(event.type)?.sync === undefined)
+          return Effect.die(new Error(`registered C5 event is not synchronized: ${event.type}`))
         return V2OutboxWriter.land(db, { event, registration, now: Date.now() }).pipe(Effect.asVoid)
       }
 
@@ -161,8 +175,8 @@ export const layerWithRegistry = (
           // COMPOSES with the caller's hook rather than replacing it: a caller may already commit its own
           // local projection in the same transaction (e.g. the fork-delivery cursor), so the outbox
           // landing runs after it, never instead of it. The hook itself checks the C5 registration (the
-          // outbox refuses arbitrary types, design §8.8) — a registered NON-sync type is therefore not
-          // landed (documented: C5-registered facts are sync).
+          // outbox refuses arbitrary types, design §8.8). Registry validation above rejects
+          // registered non-sync types before this graph starts.
           const commit =
             definition.sync !== undefined
               ? (seq: number, event: EventV2.Payload) =>
@@ -265,6 +279,7 @@ export const layerWithRegistry = (
       })
     }),
   )
+}
 
 export const layerWithRuntimeFeatures = (runtimeFeatures: RuntimeFeatureRegistry) =>
   layerWithRegistry(V2OutboxWriter.EVENT_V2_OUTBOX_REGISTRY, runtimeFeatures)
