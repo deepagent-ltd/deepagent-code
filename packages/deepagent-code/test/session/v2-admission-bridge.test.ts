@@ -2,7 +2,12 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test"
 import { Context, Effect, Exit, Layer } from "effect"
 import { MultiAgentRuntime } from "../../src/session/multi-agent-runtime"
 import { parentSessionIDFor } from "../../src/session/multi-agent-runtime"
-import { makeV2AdmissionBridge, V4_EVENT_REGISTRY } from "../../src/session/v2-admission-bridge"
+import {
+  makeSessionV2Adapter,
+  makeV2AdmissionBridge,
+  toEventEnvelope,
+  V4_EVENT_REGISTRY,
+} from "../../src/session/v2-admission-bridge"
 import type { SubagentTurnRunner } from "../../src/session/goal-loop-wiring"
 import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
@@ -14,6 +19,16 @@ import { EventAdmission } from "@deepagent-code/core/deepagent/event-admission"
 import { EventAdmissionWiring } from "@deepagent-code/core/deepagent/event-admission-wiring"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { SessionMessage } from "@deepagent-code/core/session/message"
+import { SessionExecution } from "@deepagent-code/core/session/execution"
+import { SessionInput } from "@deepagent-code/core/session/input"
+import { SessionStore } from "@deepagent-code/core/session/store"
+import { SessionProjector } from "@deepagent-code/core/session/projector"
+import { SessionTable } from "@deepagent-code/core/session/sql"
+import { EventV2 } from "@deepagent-code/core/event"
+import { Project } from "@deepagent-code/core/project"
+import { ProjectTable } from "@deepagent-code/core/project/sql"
+import { AbsolutePath } from "@deepagent-code/core/schema"
+import { EventRegistry } from "@deepagent-code/core/deepagent/event-registry"
 import type { AgentDescriptor } from "@deepagent-code/core/im/mention-parser"
 import type { EventDispatcher } from "../../src/session/event-dispatcher"
 
@@ -166,6 +181,84 @@ describe("C5-12 V2 admission bridge provider", () => {
   afterAll(() => {
     if (saved === undefined) delete process.env[EventAdmission.EVENT_V2_ADMISSION_ENV]
     else process.env[EventAdmission.EVENT_V2_ADMISSION_ENV] = saved
+  })
+
+  test("a prefixed anchor keeps its identity across exact retry and rejects conflicting reuse", async () => {
+    const database = Database.layerFromPath(":memory:")
+    const events = EventV2.layer.pipe(Layer.provide(database))
+    const projector = SessionProjector.layer.pipe(Layer.provide(events), Layer.provide(database))
+    const store = SessionStore.layer.pipe(Layer.provide(database))
+    const sessions = SessionV2.layer.pipe(
+      Layer.provide(events),
+      Layer.provide(database),
+      Layer.provide(store),
+      Layer.provide(Project.defaultLayer),
+      Layer.provide(SessionExecution.noopLayer),
+    )
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const context = yield* Layer.build(Layer.mergeAll(database, events, projector, store, sessions))
+        const db = Context.get(context, Database.Service).db
+        const session = Context.get(context, SessionV2.Service)
+        const sessionID = SessionV2.ID.make("ses_bridge_anchor")
+        yield* db
+          .insert(ProjectTable)
+          .values({
+            id: Project.ID.global,
+            worktree: AbsolutePath.make("/project"),
+            sandboxes: [],
+          })
+          .run()
+          .pipe(Effect.orDie)
+        yield* db
+          .insert(SessionTable)
+          .values({
+            id: sessionID,
+            project_id: Project.ID.global,
+            slug: "bridge-anchor",
+            directory: "/project",
+            title: "bridge anchor",
+            version: "test",
+          })
+          .run()
+          .pipe(Effect.orDie)
+        const source = event()
+        const registration = V4_EVENT_REGISTRY.lookup(source.type)
+        if (!registration) throw new Error("missing test registration")
+        const resolution = EventAdmissionWiring.resolveAdmissionInput(
+          EventRegistry.assertPublishable(V4_EVENT_REGISTRY, toEventEnvelope(source, registration)),
+          registration,
+          scope(source),
+        )
+        if (!resolution.ok) throw new Error("admission resolution refused")
+        const adapter = makeSessionV2Adapter(session, () => undefined, source.workspaceID)
+        const prefixed = {
+          envelope: resolution.envelope,
+          sessionID,
+          messageID: "msg_preserved_anchor",
+          delivery: "steer" as const,
+          resume: false,
+          promptText: "bounded event prompt",
+        }
+        const first = yield* adapter.admit(prefixed)
+        const retry = yield* adapter.admit(prefixed)
+        expect(first.messageID).toBe(prefixed.messageID)
+        expect(retry).toEqual(first)
+        expect(yield* SessionInput.find(db, SessionMessage.ID.make(prefixed.messageID))).toMatchObject({
+          id: prefixed.messageID,
+          prompt: { text: prefixed.promptText },
+        })
+        const conflict = yield* adapter.admit({ ...prefixed, promptText: "changed prompt" }).pipe(Effect.flip)
+        expect(conflict).toMatchObject({ _tag: "Session.PromptConflictError" })
+
+        const legacy = { ...prefixed, messageID: "event-admission:legacy:session" }
+        const oldFirst = yield* adapter.admit(legacy)
+        const oldRetry = yield* adapter.admit(legacy)
+        expect(oldFirst.messageID).toStartWith("msg_")
+        expect(oldFirst.messageID).not.toBe(legacy.messageID)
+        expect(oldRetry).toEqual(oldFirst)
+      }).pipe(Effect.scoped),
+    )
   })
 
   test("provider.admit translates V4 → validated C5 envelope and drives the SessionV2 adapter", async () => {
