@@ -1,7 +1,7 @@
 import { describe, expect } from "bun:test"
 import { createHash } from "node:crypto"
 import { count, eq, sql } from "drizzle-orm"
-import { Effect, Layer } from "effect"
+import { Effect, Fiber, Layer } from "effect"
 import { Database } from "@deepagent-code/core/database/database"
 import { EventV2 } from "@deepagent-code/core/event"
 import { Project } from "@deepagent-code/core/project"
@@ -259,6 +259,38 @@ describe("V2 structured output evidence", () => {
 
       // The frozen V1 authority stays untouched by the whole V2 flow.
       expect(yield* v1EvidenceCount(db)).toBe(0)
+    }),
+  )
+
+  it.effect("concurrent finalizer double-writes converge on one row instead of a raw constraint error", () =>
+    Effect.gen(function* () {
+      const { db, sessions } = yield* services
+      const submitted = yield* submitSchemaRun("call-structured-race")
+      const executed = yield* TaskRunAuthority.execute({ db, run: submitted.run, sessions, timeoutMs: 5_000 })
+      expect(executed.outcome).toBe("completed")
+      yield* insertAssistantMessage(db, submitted.run.childSessionID, "msg_final_answer", 5)
+
+      // Two finalizers racing the same run (advisory wake + explicit drain, a retried tool call):
+      // the UNIQUE(run_id) CAS converges both — identical content succeeds twice, and a divergent
+      // loser surfaces the typed conflict, never a bare constraint error and never a second row.
+      const fiberA = yield* Effect.forkChild(
+        TaskRunAuthority.recordStructuredEvidence(db, finalizerInput(submitted.run.runID)),
+      )
+      const fiberB = yield* Effect.forkChild(
+        TaskRunAuthority.recordStructuredEvidence(db, finalizerInput(submitted.run.runID)),
+      )
+      const exitA = yield* Fiber.await(fiberA)
+      const exitB = yield* Fiber.await(fiberB)
+      expect(exitA._tag).toBe("Success")
+      expect(exitB._tag).toBe("Success")
+      expect((yield* evidenceCount(db))?.total).toBe(1)
+
+      const divergent = yield* TaskRunAuthority.recordStructuredEvidence(
+        db,
+        finalizerInput(submitted.run.runID, { rawOutput: JSON.stringify({ answer: 43 }) }),
+      ).pipe(Effect.flip)
+      expect(divergent).toMatchObject({ _tag: "TaskRunAuthority.StructuredEvidenceConflict" })
+      expect((yield* evidenceCount(db))?.total).toBe(1)
     }),
   )
 

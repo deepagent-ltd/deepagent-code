@@ -710,9 +710,12 @@ export const recordStructuredEvidence = Effect.fn("TaskRunAuthority.recordStruct
 
 /**
  * Tx-bound CAS writer: the first record wins, an exact re-record converges on the same row, and
- * any divergence is a typed conflict — the recorded verdict is never overwritten. Shape or
- * binding violations (hex64 hashes, outcome vocabulary, missing binding message, non-V2 run)
- * abort the insert at the database guard, rolling the surrounding transaction back.
+ * any divergence is a typed conflict — the recorded verdict is never overwritten. The insert
+ * itself is the UNIQUE(run_id) CAS (`ON CONFLICT DO NOTHING`): a writer landing between the
+ * pre-read and the insert converges through the post-conflict re-read instead of surfacing a raw
+ * constraint error. Shape or binding violations (hex64 hashes, outcome vocabulary, missing
+ * binding message, non-V2 run) abort the insert at the database guard, rolling the surrounding
+ * transaction back.
  */
 export const recordStructuredEvidenceInTransaction = Effect.fn(
   "TaskRunAuthority.recordStructuredEvidenceInTransaction",
@@ -733,18 +736,7 @@ export const recordStructuredEvidenceInTransaction = Effect.fn(
     .where(eq(V2StructuredOutputEvidenceTable.run_id, input.runId))
     .get()
     .pipe(Effect.orDie)
-  if (existing) {
-    if (
-      existing.schema_name !== input.schemaName ||
-      existing.validation_outcome !== input.validationOutcome ||
-      existing.output_sha256 !== outputSha256 ||
-      existing.schema_sha256 !== schemaSha256 ||
-      existing.raw_output !== input.rawOutput ||
-      existing.output_message_id !== (input.outputMessageId ?? null)
-    )
-      return yield* new StructuredEvidenceConflict({ runId: input.runId, reason: "divergence" })
-    return fromEvidenceRow(existing)
-  }
+  if (existing) return yield* convergeEvidenceOrConflict(existing, input, schemaSha256, outputSha256)
   const evidence: StructuredEvidence = {
     evidenceId: Identifier.ascending("job"),
     runId: run.run_id,
@@ -759,7 +751,7 @@ export const recordStructuredEvidenceInTransaction = Effect.fn(
     ownerToken: input.ownerToken,
     timeCreated: input.now ?? Date.now(),
   }
-  yield* tx
+  const inserted = yield* tx
     .insert(V2StructuredOutputEvidenceTable)
     .values({
       evidence_id: evidence.evidenceId,
@@ -775,10 +767,42 @@ export const recordStructuredEvidenceInTransaction = Effect.fn(
       owner_token: evidence.ownerToken,
       time_created: evidence.timeCreated,
     })
-    .run()
+    // The UNIQUE(run_id) CAS in ONE statement: a writer that lands between the read above and
+    // this insert loses silently instead of surfacing a raw constraint error — the row is then
+    // re-read and judged by the same convergence rule.
+    .onConflictDoNothing({ target: V2StructuredOutputEvidenceTable.run_id })
+    .returning({ evidence_id: V2StructuredOutputEvidenceTable.evidence_id })
+    .get()
     .pipe(Effect.orDie)
-  return evidence
+  if (inserted) return evidence
+  const winner = yield* tx
+    .select()
+    .from(V2StructuredOutputEvidenceTable)
+    .where(eq(V2StructuredOutputEvidenceTable.run_id, input.runId))
+    .get()
+    .pipe(Effect.orDie)
+  if (winner === undefined)
+    return yield* Effect.die(`structured evidence conflict row vanished: ${input.runId}`)
+  return yield* convergeEvidenceOrConflict(winner, input, schemaSha256, outputSha256)
 })
+
+// The recorded verdict is never overwritten: an exact re-record converges on the existing row,
+// any divergence is the typed conflict. Shared by the pre-read branch and the post-conflict
+// re-read so both observe one convergence discipline.
+const convergeEvidenceOrConflict = (
+  row: typeof V2StructuredOutputEvidenceTable.$inferSelect,
+  input: StructuredEvidenceInput,
+  schemaSha256: string,
+  outputSha256: string,
+) =>
+  row.schema_name === input.schemaName &&
+  row.validation_outcome === input.validationOutcome &&
+  row.output_sha256 === outputSha256 &&
+  row.schema_sha256 === schemaSha256 &&
+  row.raw_output === input.rawOutput &&
+  row.output_message_id === (input.outputMessageId ?? null)
+    ? Effect.succeed(fromEvidenceRow(row))
+    : Effect.fail(new StructuredEvidenceConflict({ runId: input.runId, reason: "divergence" }))
 
 /**
  * Reader for status/review surfaces: the durable structured-contract verdict of a run, or
