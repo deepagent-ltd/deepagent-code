@@ -1,5 +1,6 @@
 export * as MultiAgentRuntime from "./multi-agent-runtime"
 
+import path from "node:path"
 import { Cause, Context, Duration, Effect, Fiber, Layer, Schedule } from "effect"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
@@ -825,6 +826,29 @@ export const layerWith = (options: LayerOptions) =>
                 continue
               }
 
+              const eventDir =
+                typeof (event.payload as { directory?: unknown } | null)?.directory === "string"
+                  ? (event.payload as { directory: string }).directory
+                  : event.workspaceID && !event.workspaceID.startsWith("wrk")
+                    ? event.workspaceID
+                    : undefined
+              if (
+                options.dagCoordination &&
+                requiresWriteIsolation(subtask) &&
+                (!eventDir || !path.isAbsolute(eventDir))
+              ) {
+                outcomes.push({
+                  taskID: subtask.id,
+                  capability: subtask.capability,
+                  status: "deferred",
+                  agentID: agent.id,
+                  reason: "workspace_unresolvable",
+                })
+                retryable.add(subtask.id)
+                hasUnfinished = true
+                continue
+              }
+
               // §E2 concurrency cap — acquire a per-workspace execution slot. Over cap ⇒ DEFER (retryable
               // via the bus, not dropped), so a burst never runs more than the workspace's cap at once.
               const slot = concurrency ? yield* concurrency.acquire(event.workspaceID) : undefined
@@ -847,14 +871,8 @@ export const layerWith = (options: LayerOptions) =>
               // edit the same file. FAIL CLOSED: acquire === null ⇒ defer, never run.
               // §C3.2 physical isolation is enforced by the production runner. Write turns fail closed when
               // no worktree can be created; dependent turns receive the upstream durable ref below.
-              const eventDir =
-                typeof (event.payload as { directory?: unknown } | null)?.directory === "string"
-                  ? (event.payload as { directory: string }).directory
-                  : event.workspaceID && !event.workspaceID.startsWith("wrk")
-                    ? event.workspaceID
-                    : undefined
-              // Rootless event scopes retain their library-test behavior until W2's explicit
-              // workspace_unresolvable refusal; rooted scopes already share the HTTP lock key.
+              // Legacy coordinate() callers retain their rootless test behavior while the production
+              // DAG lane refuses write turns without an absolute filesystem root above.
               const fileKeys = claim.files.map((file) => (eventDir ? LockKeys.fileLockKey(eventDir, file) : file))
               const acquiredLocks: string[] = []
               if (fileLock) {
@@ -1020,7 +1038,9 @@ export const layerWith = (options: LayerOptions) =>
               )
             }
 
-            const settled = yield* Effect.all(running, { concurrency: 16 })
+            // WorkspaceConcurrency has already admitted each runner against the workspace's configured
+            // cap. A second fixed limit here would silently underutilize configured caps above 16.
+            const settled = yield* Effect.all(running, { concurrency: "unbounded" })
             for (const { subtask, agent, capable, lease, result } of settled) {
               if (result.ok) {
                 const artifacts = [

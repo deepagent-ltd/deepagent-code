@@ -627,6 +627,75 @@ describe("MultiAgentRuntime durable multi-owner execution", () => {
     }),
   )
 
+  it.effect("an interrupted owner leaves a lease that expires; replay claims generation two", () =>
+    Effect.gen(function* () {
+      setNow(30_000)
+      setRegistry([agent("fixer", ["code_edit"], "level_2")])
+      const bus = yield* DeepAgentEventBus.Service
+      const queue = yield* ApprovalQueue.Service
+      const execution = yield* AgentExecution.Service
+      const started = yield* Deferred.make<void>()
+      const generations: number[] = []
+      const dependencies = Layer.mergeAll(
+        Layer.succeed(DeepAgentEventBus.Service, bus),
+        Layer.succeed(ApprovalQueue.Service, queue),
+        Layer.succeed(AgentExecution.Service, execution),
+        fakeAgentList,
+      )
+      const runtime = (ownerID: string, runner: SubagentTurnRunner) =>
+        Layer.build(
+          MultiAgentRuntime.layerWith({
+            runner,
+            partition: oneTask,
+            execution,
+            ownerID,
+            leaseMs: 100,
+            dagCoordination: true,
+          }).pipe(Layer.provide(dependencies)),
+        ).pipe(Effect.map((context) => Context.get(context, MultiAgentRuntime.Service)))
+      const first = yield* runtime("runtime_crashed", (input) =>
+        Effect.gen(function* () {
+          generations.push(input.generation ?? -1)
+          yield* Deferred.succeed(started, undefined)
+          return yield* Effect.never
+        }),
+      )
+      const second = yield* runtime("runtime_replay", (input) =>
+        Effect.sync(() => {
+          generations.push(input.generation ?? -1)
+          return {
+            ok: true,
+            structured: undefined,
+            text: "recovered",
+            tokensUsed: 0,
+            cost: 0,
+            continuationRef: "agent/recovered",
+          }
+        }),
+      )
+      const input = event({
+        id: DeepAgentEvent.ID.create(30_000),
+        type: "test.crash-replay",
+        payload: { directory: "/tmp/event-crash-replay" },
+      })
+      const firstFiber = yield* Effect.forkScoped(first.coordinate(input))
+      yield* Deferred.await(started)
+      yield* Fiber.interrupt(firstFiber)
+      expect(
+        (yield* execution.get({ workspaceID: input.workspaceID, eventID: input.id, taskID: `${input.id}:work` }))
+          ?.status,
+      ).toBe("running")
+      setNow(30_200)
+      const recovered = yield* second.coordinate(input)
+      expect(recovered.outcomes).toEqual([expect.objectContaining({ status: "completed" })])
+      expect(generations).toEqual([1, 2])
+      expect(
+        (yield* execution.get({ workspaceID: input.workspaceID, eventID: input.id, taskID: `${input.id}:work` }))
+          ?.generation,
+      ).toBe(2)
+    }),
+  )
+
   it.effect("runner failure durably requests handoff to the next capable agent", () =>
     Effect.gen(function* () {
       setNow(20_000)
@@ -1126,7 +1195,14 @@ describe("MultiAgentRuntime file-lock lease", () => {
   })
   const runner: SubagentTurnRunner = () =>
     Effect.sleep(Duration.millis(80)).pipe(
-      Effect.as({ ok: true, structured: undefined, text: "done", tokensUsed: 0, cost: 0, continuationRef: "agent/test" }),
+      Effect.as({
+        ok: true,
+        structured: undefined,
+        text: "done",
+        tokensUsed: 0,
+        cost: 0,
+        continuationRef: "agent/test",
+      }),
     )
   const it = testEffect(makeLayer({ fileLock, runner, leaseMs: 30 }))
 
