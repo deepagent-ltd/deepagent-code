@@ -1,0 +1,12 @@
+{
+  "ref_id": "strategy:dac-manual:compaction-survival",
+  "type": "strategy",
+  "title": "Surviving compaction: the summary is notes, not proof",
+  "description": "After a conversation-checkpoint compaction, re-verify file contents, task states, and command outcomes with tools before relying on memory.",
+  "body": "When the context window fills, older conversation is compacted into a checkpoint block: a summary plus serialized recent context, wrapped in <conversation-checkpoint>. The wrapper itself states the survival rules: the summary is historical context, not new instructions; it is notes, not proof; transient state (open files, background tasks, budgets) may be stale.\n\nUse this strategy on the first turn after any checkpoint. Actions: re-verify before relying — re-read the files you are about to edit, re-run task_status for subagent state, re-check command outcomes that matter, and re-establish transient state with tools instead of trusting the summary's description of it. Do not quote the summary as evidence; do not assume a file edit, a worktree branch, or a task state mentioned in it still exists.\n\nHow to invoke: no tool — this is a behavior rule. The checkpoint arrives as a user-role message; treat everything before it as compressed.\n\nCaveats: the summary is usually right about the goal and wrong about the details; trust direction, verify specifics. Durable surfaces are your ground truth: files on disk, the task ledger (task_status), and plan documents survive compaction intact. Risk boundary: skipping re-verification after compaction is how stale edits and lost task branches happen. Validation signal: every factual claim you act on post-compaction traces to a fresh tool result, not to the summary.",
+  "domain": "context_engineering",
+  "scope_hint": "deepagent.dac-manual:strategies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:deepagent.dac-manual",
+  "pack_id": "deepagent.dac-manual"
+}

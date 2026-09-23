@@ -72,7 +72,8 @@ import { PermissionPrompt } from "./permission"
 import { QuestionPrompt } from "./question"
 import { DialogExportOptions } from "../../ui/dialog-export-options"
 import * as Model from "../../util/model"
-import { formatTranscript } from "../../util/transcript"
+import { formatTranscript, transcriptFilename } from "@deepagent-code/sdk/transcript"
+import { uniqueExportPath } from "@deepagent-code/sdk/transcript-file"
 import { sessionEpilogue } from "../../util/presentation"
 import { setPreLayoutSiblingMargin } from "../../util/layout"
 import { useTuiConfig } from "../../config"
@@ -1226,7 +1227,7 @@ export function Session() {
           if (!sessionData) return
           const sessionMessages = messages()
 
-          const defaultFilename = `session-${sessionData.id.slice(0, 8)}.md`
+          const defaultFilename = transcriptFilename(sessionData)
 
           const options = await DialogExportOptions.show(
             dialog,
@@ -1263,7 +1264,9 @@ export function Session() {
           } else {
             const exportDir = paths.cwd
             const filename = options.filename.trim()
-            const filepath = path.join(exportDir, filename)
+            // Dedupe once up front so the editor round-trip below rewrites the SAME
+            // file instead of colliding with the first write.
+            const filepath = await uniqueExportPath(path.join(exportDir, filename))
 
             await writeExport(filepath, transcript)
 
@@ -1280,7 +1283,7 @@ export function Session() {
               await writeExport(filepath, result)
             }
 
-            toast.show({ message: `Session exported to ${filename}`, variant: "success" })
+            toast.show({ message: `Session exported to ${path.basename(filepath)}`, variant: "success" })
           }
         } catch {
           toast.show({ message: i18n.t("tui.session.failedExport"), variant: "error" })

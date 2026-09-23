@@ -477,6 +477,35 @@ export const consumeGoalSteers = Effect.fn("SessionInput.consumeGoalSteers")(fun
     .pipe(Effect.orDie)
 })
 
+/**
+ * Publish a one-shot durable Synthetic notice keyed by a caller-derived deterministic message id.
+ * Idempotent: an existing message row with the same id means the notice already landed (crash replay,
+ * repeated drain, exact retry), so the publish is skipped and the session never shows duplicates.
+ */
+export const publishSyntheticNoticeOnce = Effect.fn("SessionInput.publishSyntheticNoticeOnce")(function* (
+  db: DatabaseService,
+  events: EventV2.Interface,
+  input: {
+    sessionID: SessionSchema.ID
+    messageID: SessionMessage.ID
+    text: string
+  },
+) {
+  const existing = yield* db
+    .select({ id: SessionMessageTable.id })
+    .from(SessionMessageTable)
+    .where(eq(SessionMessageTable.id, input.messageID))
+    .get()
+    .pipe(Effect.orDie)
+  if (existing) return
+  yield* events.publish(SessionEvent.Synthetic, {
+    sessionID: input.sessionID,
+    messageID: input.messageID,
+    timestamp: yield* DateTime.now,
+    text: input.text,
+  })
+})
+
 // One deterministic notice per pending goal steer (a goal_steer that found no active goal): the
 // notice's message id derives from the steer's own row id, so re-drains across crash/restart never
 // fan out duplicate notices for the same steer.
@@ -493,18 +522,9 @@ export const GOAL_STEER_PENDING_NOTICE =
  */
 export const publishGoalSteerPendingNotice = Effect.fn("SessionInput.publishGoalSteerPendingNotice")(
   function* (db: DatabaseService, events: EventV2.Interface, sessionID: SessionSchema.ID, steerID: SessionMessage.ID) {
-    const messageID = goalSteerNoticeID(steerID)
-    const existing = yield* db
-      .select({ id: SessionMessageTable.id })
-      .from(SessionMessageTable)
-      .where(eq(SessionMessageTable.id, messageID))
-      .get()
-      .pipe(Effect.orDie)
-    if (existing) return
-    yield* events.publish(SessionEvent.Synthetic, {
+    yield* publishSyntheticNoticeOnce(db, events, {
       sessionID,
-      messageID,
-      timestamp: yield* DateTime.now,
+      messageID: goalSteerNoticeID(steerID),
       text: GOAL_STEER_PENDING_NOTICE,
     })
   },

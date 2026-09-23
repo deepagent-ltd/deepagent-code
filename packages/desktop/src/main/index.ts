@@ -8,6 +8,7 @@ import { getCACertificates, setDefaultCACertificates } from "node:tls"
 import type { Event } from "electron"
 import { app, BrowserWindow } from "electron"
 import { resolveDataPath } from "@deepagent-code/core/global-path"
+import { migrateLegacyHomeIfNeeded } from "@deepagent-code/core/global-migrate"
 
 import { Deferred, Effect, Fiber } from "effect"
 import contextMenu from "electron-context-menu"
@@ -27,13 +28,7 @@ import {
   spawnLocalServer,
   type SidecarListener,
 } from "./server"
-import {
-  resolveWslSidecarMode,
-  startPrimarySidecar,
-  waitForWslServerReady,
-  type SidecarReady,
-  type WslSidecarMode,
-} from "./sidecar-routing"
+import { startPrimarySidecar, type SidecarReady } from "./sidecar-routing"
 import { setupAutoUpdater, showUpdaterDialog } from "./updater"
 import {
   createMainWindow,
@@ -44,9 +39,6 @@ import {
   setCloseToTrayEnabled,
   setIsQuitting,
 } from "./windows"
-import { createWslServersController, type WslServersController } from "./wsl/servers"
-import { registerWslIpcHandlers } from "./wsl/ipc"
-import { spawnWslSidecar } from "./wsl/sidecar"
 import { initPowerSaveBlocker, stopPowerSaveBlocker } from "./power"
 import { desktopStoragePaths } from "./storage-path"
 import { createTray, destroyTray } from "./tray"
@@ -134,6 +126,12 @@ const main = Effect.gen(function* () {
     return root
   })()
   if (!onboardingTestRoot) delete process.env.DEEPAGENT_CODE_TEST_HOME
+  // D-W1 one-shot migration must run BEFORE the mkdir block below scaffolds the data home:
+  // creating it first flips the migration's freshness check into a permanent skip and strands a
+  // preview-era ~/.deepagent/code (no-op off win32 / under the test-home boundary).
+  const legacyMigration = yield* Effect.promise(() => migrateLegacyHomeIfNeeded(process.env))
+  if (legacyMigration && (!legacyMigration.migrated || legacyMigration.error))
+    console.warn("[global-migrate]", JSON.stringify(legacyMigration))
   const dataRoot = resolveDataPath(process.env)
   const storage = desktopStoragePaths(dataRoot, appId)
   ;[
@@ -156,27 +154,8 @@ const main = Effect.gen(function* () {
   logger = initLogging()
   initCrashReporter()
 
-  const wslServers = createWslServersController(
-    app.getVersion(),
-    async (distro) => {
-      logger.log("spawning wsl sidecar", { distro })
-      return spawnWslSidecar(distro, {
-        onLine: (line) => logger.log("wsl sidecar", { distro, stream: line.stream, text: line.text }),
-      })
-    },
-    {
-      logger: {
-        log: (message, meta) => logger.log(message, meta),
-        error: (message, meta) => logger.error(message, meta),
-      },
-    },
-  )
-  const stopSidecars = async () => {
-    await killSidecar()
-    wslServers.stopAll()
-  }
   const relaunch = () => {
-    void stopSidecars().finally(() => {
+    void killSidecar().finally(() => {
       app.relaunch()
       app.exit(0)
     })
@@ -235,11 +214,11 @@ const main = Effect.gen(function* () {
 
   app.on("before-quit", () => {
     setIsQuitting(true)
-    void stopSidecars()
+    void killSidecar()
   })
 
   app.on("will-quit", () => {
-    void stopSidecars()
+    void killSidecar()
     stopPowerSaveBlocker()
     destroyTray()
   })
@@ -267,7 +246,7 @@ const main = Effect.gen(function* () {
 
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
     process.on(signal, () => {
-      void stopSidecars().finally(() => app.exit(0))
+      void killSidecar().finally(() => app.exit(0))
     })
   }
 
@@ -278,7 +257,7 @@ const main = Effect.gen(function* () {
   app.setAsDefaultProtocolClient("deepagent-code")
   registerRendererProtocol()
   setDockIcon()
-  const updater = setupAutoUpdater(stopSidecars, storage.updater)
+  const updater = setupAutoUpdater(killSidecar, storage.updater)
   registerIpcHandlers({
     killSidecar: () => killSidecar(),
     relaunch,
@@ -305,7 +284,6 @@ const main = Effect.gen(function* () {
     exportDebugLogs: (options) => exportDebugLogs({ ...options, pick: options?.pick ?? true }),
     recordFatalRendererError: (error) => writeLog("renderer", "fatal renderer error", { ...error }, "error"),
   })
-  registerWslIpcHandlers(wslServers)
 
   mainWindow = createMainWindow()
   if (mainWindow) {
@@ -380,35 +358,22 @@ const main = Effect.gen(function* () {
     logger.log("spawning sidecar", { url })
     const connection = yield* Effect.promise(() =>
       startPrimarySidecar({
-        platform: process.platform,
-        mode: process.platform === "win32" ? resolveWslSidecarMode() : "native",
         hostname,
         port,
         password,
         spawnLocalServer,
-        startWslPrimary: (wslMode) => startWslPrimary(wslServers, wslMode),
         onStdout: (message) => writeLog("server", "stdout", { message }),
         onStderr: (message) => writeLog("server", "stderr", { message }, "warn"),
         onExit: (code) => writeLog("utility", "sidecar exited", { code }, "warn"),
-        onPlatformFallback: (reason) => {
-          logger.log("sidecar_platform_fallback", { mode: "auto", reason })
-        },
       }),
     ).pipe(
       Effect.tapError((error) => Effect.sync(() => logger.error("primary sidecar startup failed", error))),
     )
     server = connection.listener
 
-    // Windows keeps the managed WSL server list available next to the local
-    // sidecar. A WSL fallback already ran initialize() while routing, so only
-    // the local-first path re-triggers it.
-    if (process.platform === "win32" && !connection.wslFallback) {
-      void wslServers.initialize().catch((error) => logger.error("wsl server initialization failed", error))
-    }
-
     // startPrimarySidecar only resolves after the sidecar's API health check
-    // passed (or a ready WSL primary was selected), so the credentials handed
-    // to the renderer are verified — never a listener-only URL.
+    // passed, so the credentials handed to the renderer are verified — never a
+    // listener-only URL.
     yield* Deferred.succeed(serverReady, connection.ready)
 
     logger.log("loading task finished")
@@ -416,17 +381,5 @@ const main = Effect.gen(function* () {
 
   yield* Fiber.await(loadingTask)
 })
-
-function startWslPrimary(wslServers: WslServersController, mode: WslSidecarMode): Promise<SidecarReady> {
-  return waitForWslServerReady(wslServers, { mode }).then((ready) => ({
-    listener: null,
-    ready: {
-      url: ready.url,
-      username: ready.username,
-      password: ready.password,
-    },
-    wslFallback: true,
-  }))
-}
 
 Effect.runFork(main)

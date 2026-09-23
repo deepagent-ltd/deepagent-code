@@ -202,7 +202,7 @@ const program = Effect.gen(function* () {
       .run()
     yield* db
       .update(SessionTable)
-      .set({ time_suspended: now })
+      .set({ execution_claim_token: now })
       .where(eq(SessionTable.id, sessionID))
       .run()
     const attempt = yield* (yield* SessionProviderAttempt.Service).prepare({

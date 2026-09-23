@@ -6,12 +6,15 @@
   "license": "AGPL-3.0-or-later",
   "scripts": {
     "typecheck": "tsgo --noEmit",
-    "build": "bun ./script/build.ts"
+    "build": "bun ./script/build.ts",
+    "test": "bun test"
   },
   "exports": {
     ".": "./src/index.ts",
     "./client": "./src/client.ts",
-    "./server": "./src/server.ts"
+    "./server": "./src/server.ts",
+    "./transcript": "./src/transcript.ts",
+    "./transcript-file": "./src/transcript-file.ts"
   },
   "files": [
     "dist"

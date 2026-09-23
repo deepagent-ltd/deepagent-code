@@ -10,8 +10,6 @@ const dir = path.resolve(__dirname, "..")
 
 process.chdir(dir)
 
-const generated = await import("./generate.ts")
-
 const result = await Bun.build({
   target: "node",
   entrypoints: ["./src/node.ts"],
@@ -26,7 +24,6 @@ const result = await Bun.build({
     // identity from InstallationVersion, so a sidecar built without this define can never match the
     // minted v2-owner-<version> authorization row.
     DEEPAGENT_CODE_VERSION: `'${Script.version}'`,
-    DEEPAGENT_CODE_MODELS_DEV: generated.modelsData,
     DEEPAGENT_CODE_CHANNEL: `'${Script.channel}'`,
   },
   files: {
@@ -34,16 +31,6 @@ const result = await Bun.build({
   },
 })
 if (!result.success) throw new AggregateError(result.logs, "Failed to build the Node server")
-await Bun.file("./dist/node/models-dev.build.json").write(
-  JSON.stringify(
-    {
-      source: generated.modelsSource,
-      sha256: generated.modelsSha256,
-    },
-    null,
-    2,
-  ),
-)
 
 // Bun preserves CommonJS __dirname/__filename values for bundled dependencies. Those values point
 // at the build machine and are unusable after installation, so make the bundle reproducible and

@@ -330,7 +330,10 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // durable queue / GoalManager / PanelConsult runners and records session_facade_activity rows
   // (fail-closed partial unique index per (parent_session, subkind) active). Default false until
   // the release gate qualifies the delegation paths; enable with DEEPAGENT_CODE_ACTIVITY_FACADE=true.
-  activityFacade: bool("DEEPAGENT_CODE_ACTIVITY_FACADE"),
+  // K-06 (B-03, 2026-09-23): the four activity-facade tools are GA — default ON. The env
+  // kill switch stays: DEEPAGENT_CODE_ACTIVITY_FACADE=false restores the legacy tool set
+  // without a release (rollback = one environment variable).
+  activityFacade: Config.boolean("DEEPAGENT_CODE_ACTIVITY_FACADE").pipe(Config.withDefault(true)),
   // RISK-003 ④ (event maintenance legacy data governance): durable automated schedule for the legacy
   // event canonicalizer. The canonicalizer itself is already wired (core event.ts
   // canonicalizeLegacyArtifacts + the sync maintenance endpoint); this flag starts a bounded

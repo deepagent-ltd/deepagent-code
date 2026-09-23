@@ -50,6 +50,11 @@ export type FooterQueuedPrompt = {
   prompt: RunPrompt
 }
 
+// V2 asks (permission.v2.asked) are normalized into the legacy PermissionRequest shape the footer
+// renders; the `v2` marker keeps provenance so the reply settles through the session-scoped V2
+// route. The legacy /permission/:id/reply route cannot see PermissionV2's pending map and 404s.
+export type RunPermissionRequest = PermissionRequest & { v2?: boolean }
+
 export type RunAgent = NonNullable<Awaited<ReturnType<OpencodeClient["app"]["agents"]>>["data"]>[number]
 
 type RunResourceMap = NonNullable<Awaited<ReturnType<OpencodeClient["experimental"]["resource"]["list"]>>["data"]>
@@ -175,7 +180,7 @@ export type RunEntryBody =
 // "prompt".
 export type FooterView =
   | { type: "prompt" }
-  | { type: "permission"; request: PermissionRequest }
+  | { type: "permission"; request: RunPermissionRequest }
   | { type: "question"; request: QuestionRequest }
 
 export type FooterPromptRoute =
@@ -209,7 +214,7 @@ export type FooterSubagentDetail = {
 export type FooterSubagentState = {
   tabs: FooterSubagentTab[]
   details: Record<string, FooterSubagentDetail>
-  permissions: PermissionRequest[]
+  permissions: RunPermissionRequest[]
   questions: QuestionRequest[]
 }
 
@@ -283,7 +288,12 @@ export type FooterEvent =
       state: FooterSubagentState
     }
 
-export type PermissionReply = Parameters<OpencodeClient["permission"]["reply"]>[0]
+export type PermissionReply = Parameters<OpencodeClient["permission"]["reply"]>[0] & {
+  // Present when the ask arrived as permission.v2.asked (see RunPermissionRequest): the reply
+  // settles through the session-scoped V2 route, not the legacy /permission/:id/reply route.
+  sessionID?: string
+  v2?: boolean
+}
 
 export type QuestionReply = Parameters<OpencodeClient["question"]["reply"]>[0]
 

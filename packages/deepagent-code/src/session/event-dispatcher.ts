@@ -17,6 +17,7 @@ import { isEventV2AdmissionEnabled } from "@deepagent-code/core/deepagent/event-
 import type { RuntimeFeatureRegistry } from "@deepagent-code/core/flag/runtime-features"
 import { declaresMentionTrigger, MENTION_TRIGGER } from "@/agent/agent"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { EventNotRegisteredError } from "./v2-admission-bridge"
 import * as Log from "@deepagent-code/core/util/log"
 
 // V4.0 §A4 — the Event Router + Scheduler RUNTIME WIRING (Wave 2b). This is the deepagent-code half
@@ -57,7 +58,9 @@ export interface DispatchRequest {
 
 // The seam to the session runtime. Implementations start/queue an agent turn per target. Returning
 // normally = the dispatch was accepted (the dispatcher then acks the bus delivery); throwing/failing =
-// the dispatcher nacks so the bus schedules a retry.
+// the dispatcher nacks so the bus schedules a retry — EXCEPT a permanent refusal the retry can never
+// fix (`EventNotRegisteredError` from the V2 admission bridge), which is settled as a terminal drop
+// (recordDrop + ack) instead.
 export interface DispatchPort {
   // May fail: a failed dispatch causes the dispatcher to nack (§A3 retry). The error type is `unknown`
   // so implementations aren't forced into a single error channel — `handle` catches the whole cause.
@@ -359,6 +362,44 @@ export const layerWith = (options?: LayerOptions) =>
       const nack = (event: DeepAgentEvent.Event, reason: string) =>
         bus.nack({ subscriptionGroup: DISPATCH_GROUP, eventID: event.id, reason })
 
+      // A dispatch refusal that retrying can never fix (the event type is not registered with the V2
+      // admission registry — e.g. `schedule.scan` until its product lane ships). Settle it as a
+      // terminal drop (recordDrop + ack) instead of burning the §A3 retry budget and DLQ-ing a
+      // delivery that was never deliverable.
+      const isPermanentDispatchRefusal = (cause: Cause.Cause<unknown>): boolean => {
+        const failure = Cause.findErrorOption(cause)
+        return Option.isSome(failure) && failure.value instanceof EventNotRegisteredError
+      }
+
+      // Run one dispatch and settle its bus delivery: ack on accept, terminal-drop on a permanent
+      // refusal, nack (§A3 retry) on any other failure.
+      const settleDispatch = (request: DispatchRequest) =>
+        Effect.gen(function* () {
+          const outcome = yield* port.dispatch(request).pipe(
+            Effect.as("ok" as const),
+            Effect.catchCause((cause) => {
+              if (isPermanentDispatchRefusal(cause)) {
+                log.warn("dispatch permanently refused; dropping", {
+                  eventID: request.event.id,
+                  cause: Cause.pretty(cause),
+                })
+                return Effect.succeed("refused" as const)
+              }
+              log.error("dispatch failed; nacking for retry", {
+                eventID: request.event.id,
+                cause: Cause.pretty(cause),
+              })
+              return Effect.succeed("fail" as const)
+            }),
+          )
+          if (outcome === "ok") return yield* bus.ack(DISPATCH_GROUP, request.event.id)
+          if (outcome === "refused") {
+            yield* bus.recordDrop({ event: request.event, reason: "unregistered_event_type" })
+            return yield* bus.ack(DISPATCH_GROUP, request.event.id)
+          }
+          yield* nack(request.event, "dispatch port failed")
+        })
+
       // §E4/§N — resolve whether `at` falls in the workspace's configured quiet window + the window's END
       // (epoch ms) so a deferred tick can be rescheduled PAST the window. Returns { quiet:false } when no
       // config service, no configured window, or a lookup fails (fail-safe: never quiet ⇒ fire normally).
@@ -514,18 +555,7 @@ export const layerWith = (options?: LayerOptions) =>
           }
 
           const priority = event.priority
-          const outcome = yield* port.dispatch({ event, priority, targets }).pipe(
-            Effect.as("ok" as const),
-            Effect.catchCause((cause) => {
-              log.error("dispatch failed; nacking for retry", {
-                eventID: event.id,
-                cause: Cause.pretty(cause),
-              })
-              return Effect.succeed("fail" as const)
-            }),
-          )
-          if (outcome === "ok") yield* bus.ack(DISPATCH_GROUP, event.id)
-          else yield* nack(event, "dispatch port failed")
+          yield* settleDispatch({ event, priority, targets })
           return { type: "dispatch", priority, targets } as const
         })
 
@@ -600,18 +630,8 @@ export const layerWith = (options?: LayerOptions) =>
 
           if (decision.type === "dispatch") {
             // hand to the runtime; on failure nack so the bus retries (§A3), on success ack.
-            const outcome = yield* port.dispatch({ event, priority: decision.priority, targets: decision.targets }).pipe(
-              Effect.as("ok" as const),
-              Effect.catchCause((cause) => {
-                log.error("dispatch failed; nacking for retry", {
-                  eventID: event.id,
-                  cause: Cause.pretty(cause),
-                })
-                return Effect.succeed("fail" as const)
-              }),
-            )
-            if (outcome === "ok") yield* bus.ack(DISPATCH_GROUP, event.id)
-            else yield* nack(event, "dispatch port failed")
+            // A permanent refusal (unregistered event type) is settled as a terminal drop instead.
+            yield* settleDispatch({ event, priority: decision.priority, targets: decision.targets })
           } else if (decision.reason === "backpressure") {
             // §A4 回压: a backpressure drop is TRANSIENT — the queue is momentarily full. NACK so the
             // bus retries when it drains, rather than acking (which would permanently lose the event).

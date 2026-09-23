@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:dac-manual:assuming-worktree-changes-are-local",
+  "type": "failure_dossier",
+  "description": "Treating a write-type subagent's output as already present in your workspace, then editing around changes that were never there.",
+  "body": "Failure mode: a general or senior-reviewer task finishes, the parent reads the summary, and proceeds as if the files in its own checkout now contain the work — writing follow-up edits against imagined content, or reporting completion to the user. The changes only exist on the task's deepagent-code/task-* branch in its isolated worktree. Detection signals: the task output carried a run block with a branch; the parent never called pr_finalize; the workspace files do not contain the changes when read. Do not assume isolation merges itself. Safer fallback: after any write-type task, inspect with task_read if needed, call pr_finalize to review and merge the branch, verify the merged workspace with the build/tests, and only then report completion.",
+  "domain": "orchestration",
+  "scope_hint": "deepagent.dac-manual:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:deepagent.dac-manual:human_authored",
+  "pack_id": "deepagent.dac-manual"
+}

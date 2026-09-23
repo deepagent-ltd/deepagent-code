@@ -64,6 +64,9 @@ try {
   await Bun.write(
     sourcePath,
     `${serializeManifest(
+      // The base manifest is a pure function of the committed tree (the generator never reads the
+      // git-ignored .artifacts/ tree); the freshly produced inventory report is bound explicitly as
+      // content-addressed evidence under its documented repo-relative key.
       generateManifest({
         repoRoot: repository,
         extraInputs: {

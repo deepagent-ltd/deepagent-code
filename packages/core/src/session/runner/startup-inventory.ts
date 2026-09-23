@@ -10,7 +10,8 @@ export * as StartupInventory from "./startup-inventory"
 //   provider_attempt (session_provider_attempt)
 //   tool_effect      (session_v2_tool_effect_admission + terminal effect/grant evidence)
 //   task_run         (task_run)
-//   compaction       (event_snapshot_attempt + event_compaction_receipt)
+//   compaction       (event_snapshot_attempt + event_compaction_receipt
+//                     + session_v2_compaction_request)
 //   session_activity (session_facade_activity)
 //   recovery_descriptor (session_provider_recovery_descriptor)
 //   recovery_command (recovery_command plus exact provider authority)
@@ -95,8 +96,8 @@ export const InventoryClassifications: readonly InventoryClassification[] = [
 export type StartupInventoryItem = {
   readonly category: StartupCategory
   /**
-   * Durable row id. For compaction (two tables) this is prefixed so the row is
-   * unambiguous: `snapshot:<id>` | `receipt:<id>`.
+   * Durable row id. For compaction (three tables) this is prefixed so the row is
+   * unambiguous: `snapshot:<id>` | `receipt:<id>` | `request:<id>`.
    */
   readonly id: string
   readonly classification: InventoryClassification
@@ -352,10 +353,22 @@ const compactionReceipt: Readonly<Record<string, InventoryClassification>> = {
   running: "recovery",
 }
 
+// RI-18 durable manual-compaction request. The runner drain is the only executor
+// (pending → dispatched → settled/recovery_required/failed). A dispatched row observed at
+// boot is orphaned — settleOrphaned flips it to recovery_required — so its outcome is unknown.
+const compactionRequest: Readonly<Record<string, InventoryClassification>> = {
+  pending: "safe_before_dispatch",
+  dispatched: "recovery",
+  settled: "resolved",
+  recovery_required: "recovery",
+  failed: "resolved",
+}
+
 function classifyCompactionItem(
-  row: CategoryRow & { readonly table: "snapshot" | "receipt" },
+  row: CategoryRow & { readonly table: "snapshot" | "receipt" | "request" },
 ): StartupInventoryItem {
-  const map = row.table === "snapshot" ? compactionSnapshot : compactionReceipt
+  const map =
+    row.table === "snapshot" ? compactionSnapshot : row.table === "receipt" ? compactionReceipt : compactionRequest
   const classification = map[row.state]
   if (classification === undefined)
     return {
@@ -370,13 +383,26 @@ function classifyCompactionItem(
     id: `${row.table}:${row.id}`,
     classification,
     state: row.state,
-    reason:
-      classification === "safe_before_dispatch"
-        ? "snapshot built but not committed; provably pre-commit (requeue-eligible rebuild)"
-        : classification === "recovery"
-          ? "compaction in-flight with no committed receipt; recovery"
-          : "compaction complete; resolved",
+    reason: compactionReason(row.table, classification),
   }
+}
+
+function compactionReason(
+  table: "snapshot" | "receipt" | "request",
+  classification: InventoryClassification,
+): string {
+  if (table === "request") {
+    if (classification === "safe_before_dispatch")
+      return "compaction request admitted but never dispatched; the drain owns execution"
+    if (classification === "recovery")
+      return "compaction request dispatched with unknown outcome; orphaned drains settle recovery_required"
+    return "compaction request terminal (settled/failed); resolved"
+  }
+  return classification === "safe_before_dispatch"
+    ? "snapshot built but not committed; provably pre-commit (requeue-eligible rebuild)"
+    : classification === "recovery"
+      ? "compaction in-flight with no committed receipt; recovery"
+      : "compaction complete; resolved"
 }
 
 const sessionActivityState: Readonly<Record<string, InventoryClassification>> = {
@@ -418,6 +444,8 @@ type RecoveryCommandInventoryRow = {
   readonly result_hash: string | null
   readonly actor_type: string | null
   readonly actor_id: string | null
+  readonly command_kind: string | null
+  readonly evidence: string | null
   readonly created_at: number
   readonly updated_at: number
   readonly descriptor_session_id: string | null
@@ -842,7 +870,7 @@ export const classifyStartup = Effect.fn("StartupInventory.classifyStartup")(fun
   // Provider attempts.
   const attempts = yield* db.all<ProviderAttemptRow>(sql`
     SELECT attempt.attempt_id AS id, attempt.state, attempt.execution_claim_token,
-           session.time_suspended AS current_session_claim_token,
+           session.execution_claim_token AS current_session_claim_token,
            resolution.decision AS resolution_decision,
            bridge.attempt_id AS bridge_attempt_id,
            bridge.receipt_id AS bridge_receipt_id,
@@ -881,13 +909,17 @@ export const classifyStartup = Effect.fn("StartupInventory.classifyStartup")(fun
   )
   tasks.forEach((row) => accept(classifyTaskRunItem(row, observedAt)))
 
-  // Compaction (snapshot attempt + compaction receipt).
+  // Compaction (snapshot attempt + compaction receipt + RI-18 compaction request).
   const snapshots = yield* db.all<CategoryRow>(sql`SELECT snapshot_id AS id, state FROM event_snapshot_attempt`)
   snapshots.forEach((row) => accept(classifyCompactionItem({ ...row, table: "snapshot" })))
   const receipts = yield* db.all<CategoryRow>(
     sql`SELECT aggregate_id AS id, state FROM event_compaction_receipt`,
   )
   receipts.forEach((row) => accept(classifyCompactionItem({ ...row, table: "receipt" })))
+  const requests = yield* db.all<CategoryRow>(
+    sql`SELECT request_id AS id, status AS state FROM session_v2_compaction_request`,
+  )
+  requests.forEach((row) => accept(classifyCompactionItem({ ...row, table: "request" })))
 
   // Session activity.
   const activities = yield* db.all<CategoryRow>(sql`
@@ -923,7 +955,8 @@ export const classifyStartup = Effect.fn("StartupInventory.classifyStartup")(fun
   const commands = yield* db.all<RecoveryCommandInventoryRow>(sql`
     SELECT command.command_id, command.descriptor_id, command.attempt, command.state,
            command.expected_owner_token, command.result_hash, command.actor_type,
-           command.actor_id, command.created_at, command.updated_at,
+           command.actor_id, command.command_kind, command.evidence,
+           command.created_at, command.updated_at,
            descriptor.session_id AS descriptor_session_id,
            descriptor.activity_id AS descriptor_activity_id,
            descriptor.turn_id AS descriptor_turn_id,
@@ -942,7 +975,7 @@ export const classifyStartup = Effect.fn("StartupInventory.classifyStartup")(fun
            attempt.provider_id AS attempt_provider_id,
            attempt.owner_token AS attempt_owner_token,
            attempt.execution_claim_token AS attempt_execution_claim_token,
-           session.time_suspended AS current_session_claim_token,
+           session.execution_claim_token AS current_session_claim_token,
            resolution.decision AS resolution_decision,
            bridge.command_id AS bridge_command_id
     FROM recovery_command command

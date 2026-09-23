@@ -1,7 +1,7 @@
 /**
  * SidePanelProfile — V3.7 Phase 4.4 PAP 性能剖析可视化面板
  *
- * 挂载到右侧工作面板 "profile" 模式。
+ * 挂载到右侧工作面板 "dev" 模式的 Profiler 标签页（WS1 三合一）。
  * 结构：RunBar → HotspotTable → MetricCards → DiffBadge
  *
  * 数据来源：

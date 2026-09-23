@@ -5,12 +5,18 @@ name: desktop-build
 #
 # macOS signing/notarization is opt-in: if the APPLE_* / CSC_* secrets are present it
 # signs, otherwise it builds an UNSIGNED package (testers right-click → Open to launch).
-# Windows/Linux packages are unsigned here.
+# Windows signing is likewise opt-in via the AZURE_TRUSTED_SIGNING_* secrets (W-c);
+# Linux packages are unsigned here.
 
 on:
   push:
     branches:
       - main
+      # W-01 §2.2.6 trigger extension: exercise the Windows packaging path on
+      # the dev mainline too (windows targets only, no release publishing — the
+      # release job stays main-only), so NSIS + Trusted Signing + the packaged
+      # smoke regress on every dev push instead of only at release time.
+      - dev
   workflow_dispatch:
     inputs:
       channel:
@@ -66,20 +72,31 @@ jobs:
         shell: bash
         env:
           PLATFORMS: ${{ github.event.inputs.platforms || 'all' }}
+          EVENT_NAME: ${{ github.event_name }}
+          GIT_REF: ${{ github.ref }}
         run: |
           # Keep one artifact per OS to stay under the repo's tight artifact quota.
           # macOS arm64 only - Apple Silicon covers current Macs. The Intel (macos-13)
           # runner is queue-starved and the x64 cross-compile is unreliable, so it is dropped.
           mac='{"host":"macos-14","target":"darwin-arm64","platform_flag":"--mac dmg zip --arm64","group":"mac"}'
           linux='{"host":"ubuntu-24.04","target":"linux-amd64","platform_flag":"--linux deb --x64","group":"linux"}'
-          win='{"host":"windows-2025","target":"win-x64","platform_flag":"--win nsis --x64","group":"win"}'
-          case "$PLATFORMS" in
-            mac)       items="$mac" ;;
-            linux)     items="$linux" ;;
-            windows)   items="$win" ;;
-            all)       items="$mac,$linux,$win" ;;
-            *)         items="$mac,$linux,$win" ;;
-          esac
+          # W-01 §2.2.6 win-arm64: both Windows arches are packaged in ONE electron-builder
+          # invocation so a single latest.yml lists both installers — electron-updater then
+          # serves x64 and arm64 machines from the same feed (a per-arch matrix split would
+          # produce two latest.yml files and silently drop one arch from the update feed).
+          win='{"host":"windows-2025","target":"win-x64-arm64","platform_flag":"--win nsis --x64 --arm64","group":"win"}'
+          # Dev mainline pushes exercise only the Windows packaging path (the newest and
+          # least-runner-covered one); everything else follows the platforms selection.
+          if [ "$EVENT_NAME" = "push" ] && [ "$GIT_REF" = "refs/heads/dev" ]; then
+            items="$win"
+          else
+            case "$PLATFORMS" in
+              mac)       items="$mac" ;;
+              linux)     items="$linux" ;;
+              windows)   items="$win" ;;
+              *)         items="$mac,$linux,$win" ;;
+            esac
+          fi
           echo "matrix={\"include\":[$items]}" >> "$GITHUB_OUTPUT"
 
   build:
@@ -98,6 +115,11 @@ jobs:
       # needs the Apple ID + app-specific password + team id. electron-builder.config.ts treats
       # mac signing as available when all three are set.
       HAS_APPLE_NOTARY: ${{ secrets.APPLE_ID != '' && secrets.APPLE_APP_SPECIFIC_PASSWORD != '' && secrets.APPLE_TEAM_ID != '' }}
+      # Windows signing uses Azure Trusted Signing (script/sign-windows.ps1, wired through
+      # electron-builder's per-file sign hook). The script authenticates with the Azure CLI,
+      # so the pipeline needs a federated service principal in addition to the endpoint /
+      # account / profile names. When any piece is missing the build proceeds unsigned.
+      HAS_TRUSTED_SIGNING: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT != '' && secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME != '' && secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE != '' && secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID != '' && secrets.AZURE_TRUSTED_SIGNING_TENANT_ID != '' && secrets.AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -115,6 +137,29 @@ jobs:
         with:
           p12-file-base64: ${{ secrets.APPLE_CERTIFICATE }}
           p12-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+
+      # Trusted Signing authenticates through the Azure CLI credential chain
+      # (sign-windows.ps1 keeps only AzureCliCredential enabled), so log in with
+      # a federated workload identity before packaging.
+      - name: Azure login for Trusted Signing
+        if: matrix.group == 'win' && env.HAS_TRUSTED_SIGNING == 'true'
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_TRUSTED_SIGNING_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TRUSTED_SIGNING_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_TRUSTED_SIGNING_SUBSCRIPTION_ID }}
+
+      # Cross-arch packaging: bun only installs the runner's own platform binaries,
+      # so the arm64 app asar would silently miss its prebuilt native modules
+      # (@lydell/node-pty-win32-arm64 for the terminal, @parcel/watcher-win32-arm64
+      # for file watching). electron-builder filters node_modules by the target
+      # os/cpu when copying, so installing both here yields each artifact its
+      # matching set. Versions must match packages/desktop/package.json
+      # optionalDependencies.
+      - name: Install arm64 Windows platform packages
+        if: matrix.group == 'win'
+        shell: pwsh
+        run: npm install --no-save --no-package-lock --no-audit --no-fund "@lydell/node-pty-win32-arm64@1.2.0-beta.12" "@parcel/watcher-win32-arm64@2.5.1"
 
       # bun run build invokes the package prebuild lifecycle before electron-vite.
       - name: Build renderer
@@ -140,7 +185,42 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Azure Trusted Signing (Windows). sign-windows.ps1 skips silently when
+          # these are unset, matching the opt-in unsigned behavior of the mac path.
+          AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
+          AZURE_TRUSTED_SIGNING_ACCOUNT_NAME: ${{ secrets.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
+          AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE: ${{ secrets.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
         run: npx electron-builder ${{ matrix.platform_flag }} --publish never --config electron-builder.config.ts
+
+      # W-01 §2.2.6 Windows smoke floor: the packaged exe launch below proves the
+      # x64 app boots, but NSIS-specific regressions (installer script, per-arch
+      # payload, signing hook) would otherwise only surface on a physical machine.
+      # Assert both per-arch installers exist, and when Trusted Signing ran,
+      # assert the installer signature actually validates on Windows.
+      - name: Assert NSIS installers and signatures
+        if: matrix.group == 'win'
+        working-directory: packages/desktop
+        shell: pwsh
+        run: |
+          $installers = Get-ChildItem -Path dist -Filter "deepagent-code-desktop-win-*.exe" -File
+          $x64 = $installers | Where-Object { $_.Name -eq "deepagent-code-desktop-win-x64.exe" }
+          $arm64 = $installers | Where-Object { $_.Name -eq "deepagent-code-desktop-win-arm64.exe" }
+          if (-not $x64 -or -not $arm64) {
+            Write-Error "NSIS installers missing: expected win-x64 and win-arm64, found: $($installers.Name -join ', ')"
+            exit 1
+          }
+          if ($env:HAS_TRUSTED_SIGNING -eq "true") {
+            foreach ($installer in @($x64, $arm64)) {
+              $signature = Get-AuthenticodeSignature -FilePath $installer.FullName
+              if ($signature.Status -ne "Valid") {
+                Write-Error "$($installer.Name) signature status '$($signature.Status)': $($signature.StatusMessage)"
+                exit 1
+              }
+              Write-Host "$($installer.Name) signed by $($signature.SignerCertificate.Subject)"
+            }
+          } else {
+            Write-Host "Trusted Signing not configured; asserting installer presence only"
+          }
 
       - name: Smoke test packaged macOS app
         if: matrix.group == 'mac'
@@ -150,18 +230,21 @@ jobs:
           test -n "$executable"
           DEEPAGENT_CODE_DESKTOP_EXECUTABLE="$executable" bun run test:subagents-cold-start
 
-      # W9.3: first real Windows run of the local-first + WSL-fallback routing.
-      # Launches the packaged app and asserts GET /global/health with Basic auth
-      # (the desktop sidecar always configures a password, so the typed API route
-      # answers 401 to a credential-less curl — the auth'd fetch proves the full
-      # sidecar bootstrap path, not just a listening port).
+      # W9.3: first real Windows run of the native-only sidecar routing (local
+      # spawn, no platform fallback). Launches the packaged app and asserts
+      # GET /global/health with Basic auth (the desktop sidecar always
+      # configures a password, so the typed API route answers 401 to a
+      # credential-less curl — the auth'd fetch proves the full sidecar
+      # bootstrap path, not just a listening port).
       - name: Smoke test packaged Windows sidecar health
         if: matrix.group == 'win'
         working-directory: packages/desktop
         shell: pwsh
         run: |
-          # Wildcard matches both prod ("DeepAgent Code.exe") and beta
-          # ("DeepAgent Code Beta.exe") artifact names so the beta build
+          # win-unpacked holds the x64 app (the arch the x64 runner can execute;
+          # arm64 lands in win-arm64-unpacked and is covered by the installer
+          # assertion above). Wildcard matches both prod ("DeepAgent Code.exe")
+          # and beta ("DeepAgent Code Beta.exe") artifact names so the beta build
           # cannot silently fail this smoke because of an exact name filter.
           $exe = Get-ChildItem -Path "dist/win-unpacked" -Filter "*DeepAgent Code*.exe" -Recurse -File | Select-Object -First 1
           if (-not $exe) {

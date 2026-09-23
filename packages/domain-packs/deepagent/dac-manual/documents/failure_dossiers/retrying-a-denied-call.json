@@ -1,0 +1,11 @@
+{
+  "ref_id": "failure:dac-manual:retrying-a-denied-call",
+  "type": "failure_dossier",
+  "description": "Retrying a permission-denied tool call unchanged, or routing around the refusal through another tool.",
+  "body": "Failure mode: a tool call returns a permission refusal (rejected, corrected, or denied) and the agent retries the identical call, rewords it cosmetically, or attempts the same effect through a different tool or shell indirection. The refusal is a user decision, not a transient error — the retry is refused again, and the routing attempt reads as an escalation around the user. Detection signals: two consecutive identical tool calls with a refusal between them; a denied bash command reappearing as an apply_patch; continued work toward a goal the user explicitly interrupted. Do not confuse a denial with a flaky failure. Safer fallback: read the refusal text, incorporate any feedback it carries, choose a genuinely different approach inside the rules, or stop and explain the block to the user.",
+  "domain": "permissions",
+  "scope_hint": "deepagent.dac-manual:failure",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:deepagent.dac-manual:human_authored",
+  "pack_id": "deepagent.dac-manual"
+}

@@ -22,11 +22,19 @@ describe("capability catalog/search diagnostics", () => {
     for (const manifest of CapabilityCatalog.capabilityCatalog) {
       expect(manifest.id).toBeString()
       expect(manifest.summary).toBeString()
-      expect(manifest.entry_tools.length).toBeGreaterThan(0)
       expect(typeof (manifest as Record<string, unknown>).body).toBe("undefined")
       // The manifest schema declares body_ref/body_hash, never body content.
       expect((manifest as Record<string, unknown>).body).toBeUndefined()
     }
+    // Tool-shaped entries advertise at least one entry tool; the V2.0.1-001 §4.2
+    // concept-shaped entries (behavioral guidance, no entry vector) are exactly these two.
+    const concept = CapabilityCatalog.capabilityCatalog.filter((manifest) => manifest.entry_tools.length === 0)
+    expect(CapabilityCatalog.capabilityCatalog.length - concept.length).toBeGreaterThan(0)
+    expect(concept.map((manifest) => String(manifest.id)).sort()).toEqual([
+      "deepagent.context-survival",
+      "deepagent.permission-denial",
+    ])
+    for (const manifest of concept) expect(manifest.required_permissions).toEqual([])
   })
 
   test("search cards carry summary + entry_tools + body_ref only (never body)", () => {

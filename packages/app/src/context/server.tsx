@@ -212,19 +212,12 @@ export namespace ServerConnection {
     email?: string
   } & Base
 
+  // The desktop's embedded local server
   export type Sidecar = {
     type: "sidecar"
+    variant: "base"
     http: HttpBase
-  } & (
-    | // Regular desktop server
-    { variant: "base" }
-    // WSL server (windows only)
-    | {
-        variant: "wsl"
-        distro: string
-      }
-  ) &
-    Base
+  } & Base
 
   // Remote server desktop can SSH into
   export type Ssh = {
@@ -246,10 +239,8 @@ export namespace ServerConnection {
         return Key.make(conn.http.url)
       case "server":
         return Key.make(`server:${conn.gatewayUrl}`)
-      case "sidecar": {
-        if (conn.variant === "wsl") return Key.make(`wsl:${conn.distro}`)
+      case "sidecar":
         return Key.make("sidecar")
-      }
       case "ssh":
         return Key.make(`ssh:${conn.host}`)
     }

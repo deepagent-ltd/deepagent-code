@@ -250,35 +250,51 @@ export const layer = Layer.effect(
   }),
 )
 
+/**
+ * Config keys the Core V2 runtime refuses because no production consumer exists (C-P2-03
+ * honesty contract). The honesty gate (test/config/config-honesty-gate.test.ts) pins the
+ * sync invariant: every schema field carries a named consumer in {@link RuntimeFieldConsumers}
+ * (type-level `satisfies`), and every refused key is NOT a schema field — nothing can be both
+ * consumed and refused.
+ */
+export const UNSUPPORTED_V1_RUNTIME_FIELDS = [
+  "snapshot",
+  "formatter",
+  "lsp",
+  "mcp",
+  "instructions",
+  "plugin",
+  "reference",
+] as const
+
+export const UNSUPPORTED_V2_RUNTIME_FIELDS = [
+  "snapshots",
+  "formatter",
+  "lsp",
+  "mcp",
+  "instructions",
+  "plugins",
+  "learning",
+  "references",
+] as const
+
+const unsupportedFieldLabel = (key: string) =>
+  key === "learning"
+    ? "learning.project_copy"
+    : key === "reference" || key === "references"
+      ? `${key} (DEEPAGENT_CODE_EXPERIMENTAL_REFERENCES is disabled)`
+      : key
+
 function unsupportedRuntimeFields(input: unknown, v1: boolean) {
   if (!input || typeof input !== "object" || Array.isArray(input)) return []
   const info = input as Record<string, unknown>
-  const fields = v1
-    ? [
-        ["snapshot", "snapshot"],
-        ["formatter", "formatter"],
-        ["lsp", "lsp"],
-        ["mcp", "mcp"],
-        ["instructions", "instructions"],
-        ["plugin", "plugin"],
-        ["reference", "reference (DEEPAGENT_CODE_EXPERIMENTAL_REFERENCES is disabled)"],
-      ]
-    : [
-        ["snapshots", "snapshots"],
-        ["formatter", "formatter"],
-        ["lsp", "lsp"],
-        ["mcp", "mcp"],
-        ["instructions", "instructions"],
-        ["plugins", "plugins"],
-        ["learning", "learning.project_copy"],
-        ["references", "references (DEEPAGENT_CODE_EXPERIMENTAL_REFERENCES is disabled)"],
-      ]
+  const fields = v1 ? UNSUPPORTED_V1_RUNTIME_FIELDS : UNSUPPORTED_V2_RUNTIME_FIELDS
   return [
     ...fields
-      .filter(([key]) => info[key] !== undefined)
-      .filter(([key]) => !isDisabledCompatibilityField(key, info[key]))
-      .filter(([key]) => (key === "reference" || key === "references" ? !Flag.DEEPAGENT_CODE_EXPERIMENTAL_REFERENCES : true))
-      .map(([, label]) => label),
+      .filter((key) => info[key] !== undefined)
+      .filter((key) => !isDisabledCompatibilityField(key, info[key]))
+      .filter((key) => (key === "reference" || key === "references" ? !Flag.DEEPAGENT_CODE_EXPERIMENTAL_REFERENCES : true))
+      .map((key) => unsupportedFieldLabel(key)),
   ]
 }
 

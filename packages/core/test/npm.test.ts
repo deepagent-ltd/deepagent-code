@@ -155,4 +155,38 @@ describe("Npm.install", () => {
       server.stop(true)
     }
   })
+
+  test("caches a registry 404 for the process and skips repeat installs of the same packages", async () => {
+    await using tmp = await tmpdir()
+    let requests = 0
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => {
+        requests++
+        return new Response("Not found", { status: 404 })
+      },
+    })
+
+    try {
+      await writePackage(tmp.path, { name: "notfound-fixture" })
+      await Bun.write(path.join(tmp.path, ".npmrc"), `registry=${server.url.origin}/\n`)
+      const run = () =>
+        Effect.gen(function* () {
+          const npm = yield* Npm.Service
+          return yield* npm
+            .install(tmp.path, { add: [{ name: "notfound-fixture-package", version: "1.0.0" }] })
+            .pipe(Effect.exit, Effect.timeout("10 seconds"))
+        }).pipe(Effect.scoped, Effect.provide(npmLayer(path.join(tmp.path, "cache"))), Effect.runPromise)
+
+      const first = await run()
+      const second = await run()
+      // The first install surfaces the 404 failure once (for diagnostics); the repeat is a silent
+      // no-op — a registry 404 is deterministic for the process lifetime.
+      expect(first._tag).toBe("Failure")
+      expect(second._tag).toBe("Success")
+      expect(requests).toBe(1)
+    } finally {
+      server.stop(true)
+    }
+  })
 })

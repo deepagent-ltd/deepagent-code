@@ -25,6 +25,10 @@ const READ_ONLY_BUILTINS = new Set([
   "context_query",
   "capability_search",
   "capability_load",
+  "domain_pack_load",
+  "pack_search",
+  "task_status",
+  "task_read",
   "question",
   "task",
   // The gate's own escape hatch: a stale plan must stay repairable, so `plan` is never gated.

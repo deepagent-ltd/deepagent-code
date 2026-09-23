@@ -69,6 +69,23 @@ interface ArboristTree {
   edgesOut: Map<string, { to?: ArboristNode }>
 }
 
+// A registry 404 is deterministic for the life of a process (an unpublished package will not appear
+// mid-session), but config loading re-requests the same install on every instance boot. Cache 404s
+// per (directory, packages) so repeat requests skip the doomed network round-trip entirely.
+const notFound = new Set<string>()
+
+function isNotFound(error: unknown): boolean {
+  let current: unknown = error
+  for (let depth = 0; depth < 6; depth++) {
+    if (!current || typeof current !== "object") return false
+    const record = current as Record<string, unknown>
+    if (record.statusCode === 404 || record.code === "E404") return true
+    if (typeof record.message === "string" && record.message.includes("404 Not Found")) return true
+    current = record.cause
+  }
+  return false
+}
+
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -152,49 +169,60 @@ export const layer = Layer.effect(
       if (!canWrite) return
 
       const add = input?.add.map((pkg) => [pkg.name, pkg.version].filter(Boolean).join("@")) ?? []
-      if (
-        yield* Effect.gen(function* () {
-          const nodeModulesExists = yield* afs.existsSafe(path.join(dir, "node_modules"))
-          if (!nodeModulesExists) {
-            yield* reify({ add, dir })
-            return true
-          }
-          return false
-        }).pipe(Effect.withSpan("Npm.checkNodeModules"))
-      )
-        return
+      const missing = `${dir}\n${add.join(" ")}`
+      if (notFound.has(missing)) return
 
       yield* Effect.gen(function* () {
-        const pkg = yield* afs.readJson(path.join(dir, "package.json")).pipe(Effect.orElseSucceed(() => ({})))
-        const lock = yield* afs.readJson(path.join(dir, "package-lock.json")).pipe(Effect.orElseSucceed(() => ({})))
+        if (
+          yield* Effect.gen(function* () {
+            const nodeModulesExists = yield* afs.existsSafe(path.join(dir, "node_modules"))
+            if (!nodeModulesExists) {
+              yield* reify({ add, dir })
+              return true
+            }
+            return false
+          }).pipe(Effect.withSpan("Npm.checkNodeModules"))
+        )
+          return
 
-        const pkgAny = pkg as any
-        const lockAny = lock as any
-        const declared = new Set([
-          ...Object.keys(pkgAny?.dependencies || {}),
-          ...Object.keys(pkgAny?.devDependencies || {}),
-          ...Object.keys(pkgAny?.peerDependencies || {}),
-          ...Object.keys(pkgAny?.optionalDependencies || {}),
-          ...(input?.add || []).map((pkg) => pkg.name),
-        ])
+        yield* Effect.gen(function* () {
+          const pkg = yield* afs.readJson(path.join(dir, "package.json")).pipe(Effect.orElseSucceed(() => ({})))
+          const lock = yield* afs.readJson(path.join(dir, "package-lock.json")).pipe(Effect.orElseSucceed(() => ({})))
 
-        const root = lockAny?.packages?.[""] || {}
-        const locked = new Set([
-          ...Object.keys(root?.dependencies || {}),
-          ...Object.keys(root?.devDependencies || {}),
-          ...Object.keys(root?.peerDependencies || {}),
-          ...Object.keys(root?.optionalDependencies || {}),
-        ])
+          const pkgAny = pkg as any
+          const lockAny = lock as any
+          const declared = new Set([
+            ...Object.keys(pkgAny?.dependencies || {}),
+            ...Object.keys(pkgAny?.devDependencies || {}),
+            ...Object.keys(pkgAny?.peerDependencies || {}),
+            ...Object.keys(pkgAny?.optionalDependencies || {}),
+            ...(input?.add || []).map((pkg) => pkg.name),
+          ])
 
-        for (const name of declared) {
-          if (!locked.has(name)) {
-            yield* reify({ dir, add })
-            return
+          const root = lockAny?.packages?.[""] || {}
+          const locked = new Set([
+            ...Object.keys(root?.dependencies || {}),
+            ...Object.keys(root?.devDependencies || {}),
+            ...Object.keys(root?.peerDependencies || {}),
+            ...Object.keys(root?.optionalDependencies || {}),
+          ])
+
+          for (const name of declared) {
+            if (!locked.has(name)) {
+              yield* reify({ dir, add })
+              return
+            }
           }
-        }
-      }).pipe(Effect.withSpan("Npm.checkDirty"))
-
-      return
+        }).pipe(Effect.withSpan("Npm.checkDirty"))
+      }).pipe(
+        Effect.tapError((error) =>
+          error instanceof InstallFailedError && isNotFound(error.cause)
+            ? Effect.sync(() => {
+                notFound.add(missing)
+              })
+            : Effect.void,
+        ),
+      )
     }, Effect.scoped)
 
     const which = Effect.fn("Npm.which")(function* (pkg: string, bin?: string) {

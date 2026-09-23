@@ -76,11 +76,14 @@ describe("V3.2 agent-strength ladder (docs/39)", () => {
       roundState: { ...createInitialRoundState("max"), round: 999, total_input_tokens: 100, total_output_tokens: 100 },
     })
 
-    expect(SessionState.getOrCreate(sessionID, "max").budget).toMatchObject({ maxRounds: null, maxTotalTokens: null })
+    // Non-ultra modes never cap ROUNDS: the legacy maxRounds is still reset. B4 (design §7.3):
+    // an explicitly configured TOKEN ceiling is now PRESERVED (the old reset made every budget
+    // warning unreachable), so with usage past it the exhausted branch is reachable.
+    expect(SessionState.getOrCreate(sessionID, "max").budget).toMatchObject({ maxRounds: null, maxTotalTokens: 1 })
     expect(SessionState.budgetStatus(sessionID)).toMatchObject({
-      status: "ok",
+      status: "exhausted",
       roundsRemaining: null,
-      tokensRemaining: null,
+      tokensRemaining: 0,
     })
     SessionState.cleanup(sessionID)
   })

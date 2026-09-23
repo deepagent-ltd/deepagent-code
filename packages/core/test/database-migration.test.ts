@@ -16,6 +16,7 @@ import eventSourcedSessionInputMigration from "@deepagent-code/core/database/mig
 import contextEpochAgentMigration from "@deepagent-code/core/database/migration/20260605042240_add_context_epoch_agent"
 import eventDropDistinctMigration from "@deepagent-code/core/database/migration/20260712040000_deepagent_event_drop_distinct"
 import timeSuspendedMigration from "@deepagent-code/core/database/migration/20260803000000_time_suspended"
+import executionClaimTokenMigration from "@deepagent-code/core/database/migration/20260922152631_execution_claim_token"
 import taskRunDeliveryMigration from "@deepagent-code/core/database/migration/20260724134000_task_run_delivery"
 import subagentControlPlaneMigration from "@deepagent-code/core/database/migration/20260803000001_subagent_control_plane_l1"
 import taskAdmissionRepairMigration from "@deepagent-code/core/database/migration/20260805000000_repair_task_admission"
@@ -701,14 +702,14 @@ describe("DatabaseMigration", () => {
           { name: "task_run_child_generation_idx" },
         ])
         expect(yield* db.get(sql`SELECT count(*) as count FROM migration`)).toEqual({ count: migrations.length })
-        expect(yield* db.get(sql`SELECT name FROM pragma_table_info('session') WHERE name = 'time_suspended'`)).toEqual(
-          { name: "time_suspended" },
+        expect(yield* db.get(sql`SELECT name FROM pragma_table_info('session') WHERE name = 'execution_claim_token'`)).toEqual(
+          { name: "execution_claim_token" },
         )
         expect(
           yield* db.get(
-            sql`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'session_time_suspended_idx'`,
+            sql`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'session_execution_claim_token_idx'`,
           ),
-        ).toEqual({ name: "session_time_suspended_idx" })
+        ).toEqual({ name: "session_execution_claim_token_idx" })
         expect(
           yield* db.get(
             sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_tool_argument_receipt'`,
@@ -3486,6 +3487,44 @@ describe("DatabaseMigration", () => {
             sql`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'session_time_suspended_idx'`,
           ),
         ).toEqual({ name: "session_time_suspended_idx" })
+      }),
+    )
+  })
+
+  test("renames the Session suspension column to the execution claim token, preserving live claims", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        yield* db.run(sql`CREATE TABLE session (id text PRIMARY KEY, time_suspended integer)`)
+        yield* db.run(
+          sql`CREATE INDEX session_time_suspended_idx ON session (time_suspended) WHERE "session"."time_suspended" is not null`,
+        )
+        yield* db.run(sql`INSERT INTO session (id, time_suspended) VALUES ('claimed', 918273), ('idle', NULL)`)
+
+        yield* DatabaseMigration.applyOnly(db, [executionClaimTokenMigration])
+
+        expect(yield* db.get(sql`SELECT execution_claim_token FROM session WHERE id = 'claimed'`)).toEqual({
+          execution_claim_token: 918273,
+        })
+        expect(yield* db.get(sql`SELECT execution_claim_token FROM session WHERE id = 'idle'`)).toEqual({
+          execution_claim_token: null,
+        })
+        expect(
+          yield* db.get(sql`SELECT name FROM pragma_table_info('session') WHERE name = 'time_suspended'`),
+        ).toBeUndefined()
+        expect(
+          yield* db.get(
+            sql`SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'session_time_suspended_idx'`,
+          ),
+        ).toBeUndefined()
+        // Partial-index semantics survive the rename: only claimed (non-null) rows are indexed.
+        expect(
+          yield* db.get(sql`
+            SELECT name FROM sqlite_master
+            WHERE type = 'index' AND name = 'session_execution_claim_token_idx'
+              AND sql LIKE '%execution_claim_token%' AND sql LIKE '%is not null%'
+          `),
+        ).toEqual({ name: "session_execution_claim_token_idx" })
       }),
     )
   })

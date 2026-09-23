@@ -1090,6 +1090,9 @@ test("interrupts background dependency installs when the instance is disposed", 
   await Effect.runPromise(
     Effect.gen(function* () {
       const dir = yield* tmpdirScoped()
+      // The @deepagent-code/plugin install is gated on the config directory actually hosting a
+      // file-based plugin (loadInstanceState), so plant one for the install fiber to start.
+      yield* FSUtil.use.writeWithDirs(path.join(dir, ".deepagent-code", "plugins", "test.ts"), "export default {}\n")
       const store = yield* InstanceStore.Service
       yield* store.provide({ directory: dir }, Config.use.get())
       yield* Deferred.await(started).pipe(Effect.timeout("1 second"))
@@ -1107,6 +1110,30 @@ test("interrupts background dependency installs when the instance is disposed", 
 // Note: deduplication and serialization of npm installs is now handled by the
 // core Npm.Service (via EffectFlock). Those behaviors are tested in the core
 // package's npm tests, not here.
+
+test("does not install plugin dependencies when no config directory hosts plugins", async () => {
+  const installed: string[] = []
+  const npm = Layer.mock(Npm.Service)({
+    install: (dir) =>
+      Effect.sync(() => {
+        installed.push(dir)
+      }),
+  })
+
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped()
+      const store = yield* InstanceStore.Service
+      yield* store.provide({ directory: dir }, Config.use.get().pipe(Effect.andThen(Config.use.waitForDependencies())))
+      expect(installed).toEqual([])
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(configLayer({ npm })),
+      Effect.provide(testInstanceStoreLayer),
+      Effect.provide(CrossSpawnSpawner.defaultLayer),
+    ),
+  )
+})
 
 it.instance("resolves scoped npm plugins in config", () =>
   Effect.gen(function* () {

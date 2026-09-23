@@ -69,7 +69,11 @@ export const layer = Layer.effectDiscard(
                 source: { type: "tool", messageID: context.assistantMessageID, callID: context.toolCallID },
               })
               .pipe(
-                Effect.mapError(() => new ToolFailure({ message: "Permission denied: question" })),
+                Effect.mapError((error) => {
+                  const refusal = PermissionV2.permissionToolFailure(error)
+                  if (refusal !== null) return refusal
+                  return new ToolFailure({ message: "Permission denied: question" })
+                }),
                 Effect.andThen(
                   question
                     .ask({

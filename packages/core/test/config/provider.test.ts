@@ -227,6 +227,8 @@ describe("ConfigProviderPlugin.Plugin", () => {
       expect(provider.name).toBe("Renamed")
       expect(provider.env).toEqual(["CUSTOM_API_KEY"])
       expect(provider.enabled).toEqual({ via: "custom", data: {} })
+      // K-04: config ingression stamps a dedicated origin provenance field.
+      expect(provider.origin).toBe("config")
       expect(provider.api).toEqual({ type: "aisdk", package: "custom-sdk", url: "https://example.test" })
       expect(provider.request.headers).toEqual({ first: "first", shared: "last", last: "last" })
       expect(model.api.id).toBe(ModelV2.ID.make("api-chat"))
@@ -234,7 +236,8 @@ describe("ConfigProviderPlugin.Plugin", () => {
       expect(model.capabilities).toEqual({ tools: true, input: ["text"], output: ["text"] })
       expect(model.enabled).toBe(false)
       expect(model.limit).toEqual({ context: 100, output: 75 })
-      expect(model.cost).toEqual([{ input: 1, output: 2, cache: { read: 0, write: 0 }, tier: undefined }])
+      // K-04: unknown cache pricing stays absent (typed unavailable), never a 0 rate.
+      expect(model.cost).toEqual([{ input: 1, output: 2 }])
       expect(model.request.headers).toEqual({ first: "first", shared: "last", last: "last" })
       expect(model.request.variant).toBe("retained")
       expect(model.variants.map((variant) => variant.id)).toEqual([
@@ -243,6 +246,54 @@ describe("ConfigProviderPlugin.Plugin", () => {
       ])
       expect(model.variants[0]?.headers).toEqual({ first: "first", shared: "last", last: "last" })
       expect(model.variants[1]?.headers).toEqual({ slow: "slow" })
+    }),
+  )
+
+  it.effect("keeps undeclared pricing/limit typed-unavailable instead of coercing 0", () =>
+    Effect.gen(function* () {
+      const catalog = yield* Catalog.Service
+      const plugin = yield* PluginV2.Service
+      const providerID = ProviderV2.ID.make("acme")
+      const config = Config.Service.of({
+        entries: () =>
+          Effect.succeed([
+            new Config.Document({
+              type: "document",
+              info: decode({
+                providers: {
+                  acme: {
+                    api: { type: "aisdk", package: "@ai-sdk/openai-compatible", url: "https://acme.test/v1" },
+                    models: {
+                      opaque: { name: "Opaque" },
+                      partial: { name: "Partial", limit: { context: 65_536 }, cost: { input: 3, output: 4 } },
+                    },
+                  },
+                },
+              }),
+            }),
+          ]),
+      })
+
+      yield* plugin.add({
+        ...ConfigProviderPlugin.Plugin,
+        effect: ConfigProviderPlugin.Plugin.effect.pipe(
+          Effect.provideService(Config.Service, config),
+          Effect.provideService(Catalog.Service, catalog),
+        ),
+      })
+
+      // 405-007 lesson: unknown never becomes a fabricated 0 that consumers would
+      // read as a real window or a real price.
+      const opaque = yield* catalog.model.get(providerID, ModelV2.ID.make("opaque"))
+      expect(opaque.limit.context).toBeUndefined()
+      expect(opaque.limit.input).toBeUndefined()
+      expect(opaque.limit.output).toBeUndefined()
+      expect(opaque.cost).toEqual([])
+
+      // Partial declarations keep exactly what was declared; the rest stays absent.
+      const partial = yield* catalog.model.get(providerID, ModelV2.ID.make("partial"))
+      expect(partial.limit).toEqual({ context: 65_536 })
+      expect(partial.cost).toEqual([{ input: 3, output: 4 }])
     }),
   )
 })

@@ -95,6 +95,8 @@ export const layer = Layer.effectDiscard(
               return yield* search.grep(input)
             }).pipe(
               Effect.mapError((error) => {
+                const refusal = PermissionV2.permissionToolFailure(error)
+                if (refusal !== null) return refusal
                 const message =
                   error instanceof Ripgrep.InvalidPatternError
                     ? `Invalid grep pattern ${JSON.stringify(input.pattern)}: ${error.message}`

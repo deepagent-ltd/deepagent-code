@@ -51,10 +51,15 @@ describe("private storage boundary", () => {
       { name: "system tmp API", pattern: /\b(?:os\.)?tmpdir\(\)/ },
       { name: "hard-coded system tmp", pattern: /[\"'`]\/tmp(?:\/|[\"'`])/ },
       { name: "legacy install root", pattern: /\.deepagent-code\/bin/ },
-      { name: "legacy WSL state", pattern: /\$HOME\/\.local\/state/ },
+      { name: "legacy state root", pattern: /\$HOME\/\.local\/state/ },
       { name: "legacy XDG package", pattern: /from [\"']xdg-basedir[\"']/ },
       { name: "legacy data root", pattern: /[\"']\.local[\"']\s*,\s*[\"']share[\"']\s*,\s*[\"']deepagent-code[\"']/ },
       { name: "legacy config root", pattern: /[\"']\.config[\"']\s*,\s*[\"']deepagent-code[\"']/ },
+      // D-W1: credential/config stores must land in the roaming config home, never the data home.
+      {
+        name: "credential store outside the roaming config home",
+        pattern: /Path\.data,\s*[\"'`](?:auth|account|mcp-auth|mcp-secrets|settings)\.json[\"'`]/,
+      },
     ]
     const violations = (
       await Promise.all(

@@ -113,9 +113,6 @@ type LegacyMessageWithParts = {
 
 export const NotFoundError = SessionNotFound.Error
 
-// W0-1 — host seam for MANUAL compaction under the V2 surface. The deepagent-code composition
-// provides the implementation (summary model resolution + the legacy continuation/soft-landing
-// semantics); core keeps only the admission contract (session exists, idle, then delegate).
 // W0-2 — host seam for the projection-layer manual shell (spawn + V1 wire mirror; see the
 // shell entry above for the classification rationale).
 export type ShellExchange = {
@@ -133,8 +130,8 @@ export type NotFoundError = SessionNotFound.Error
 /**
  * A manual (user-initiated) Session control that the wired core services cannot serve yet. Typed,
  * never a silent no-op: callers and the UI surface the `reason` directly. `operation` stays the
- * coarse command name; `reason` states the concrete gap (e.g. the manual compaction state machine is
- * not ported to the V2 runner) so a refusal is distinguishable from an unknown command.
+ * coarse command name; `reason` states the concrete gap (e.g. manual shell execution is not wired
+ * into the V2 runner) so a refusal is distinguishable from an unknown command.
  */
 export class OperationUnavailableError extends Schema.TaggedErrorClass<OperationUnavailableError>()(
   "Session.OperationUnavailableError",
@@ -171,10 +168,10 @@ export type Error =
   | AgentNotSelectableError
   | AgentV2.NotFoundError
 
-// W4-6 — the canonical V2→V1 wire converter now lives in session/legacy-wire.ts (extracted so
-// the core projector can import it without a module cycle; this re-export keeps the host
-// call sites' SessionV2.legacyAssistant spelling).
-export { legacyAssistant } from "./session/legacy-wire"
+// W4-6 — the canonical V2→V1 wire converters now live in session/legacy-wire.ts (extracted so
+// the core projector can import them without a module cycle; these re-exports keep the host
+// call sites' SessionV2.legacyAssistant / SessionV2.legacyUser spelling).
+export { legacyAssistant, legacyUser } from "./session/legacy-wire"
 
 const V2ConversationTypes = ["user", "synthetic", "system", "shell", "assistant", "compaction"] as const
 

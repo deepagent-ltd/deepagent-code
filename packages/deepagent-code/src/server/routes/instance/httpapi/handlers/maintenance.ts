@@ -14,11 +14,17 @@ import { V2ProviderTurnReceiptTable } from "@deepagent-code/core/session/runner/
 import { and, eq } from "drizzle-orm"
 import { InstanceHttpApi } from "../api"
 import { MaintenanceApi, MaintenancePaths } from "../groups/maintenance"
+import { MdExport } from "@/server/md-export"
+import { MigrationOrchestrator } from "@/server/migration-orchestrator"
+import { MigrationReport } from "@/server/migration-report"
+import { BackupGovernor } from "@/server/backup-governor"
+import { DiskReclaim } from "@/server/disk-reclaim"
 import { CompositionDigest } from "@/effect/composition-digest"
 import { makeApiError, type ApiTypedError } from "../typed-error"
 import { Service as MaintenanceRegistryService, layer } from "../maintenance-registry"
 import type { MaintenanceRegistry } from "../maintenance-registry"
 import { RecoveryExecutor } from "@/server/recovery-executor"
+import { SessionRuntimeStatus } from "@deepagent-code/core/session/runtime-status"
 
 // C6-01 maintenance handlers (design §11.1). Domain services stay free of HttpApi
 // types: expected domain outcomes are translated at the handler boundary into the
@@ -509,6 +515,257 @@ const maintenanceOperations = (
       )
     })
 
+    // W-02 M-1 — batch MD export. Same G7i F2 fence as the backup surface: the export directory
+    // must live under the instance backups root; the manifest is the resume source of truth.
+    const runMdExport = Effect.fn("MaintenanceHttpApi.mdExport")(function* (ctx: {
+      payload: { dir?: string; limit?: number; page_size?: number }
+    }) {
+      const dir = withinBackups(ctx.payload.dir ?? backupsRoot())
+      if (dir === undefined) {
+        return yield* Effect.fail(
+          makeApiError("validation_failed", {
+            resource: ctx.payload.dir ?? backupsRoot(),
+            expected: "path under the backups root",
+            actual: ctx.payload.dir ?? backupsRoot(),
+          }),
+        )
+      }
+      return yield* MdExport.run({
+        db: database.db,
+        backupDir: dir,
+        sourcePath: path.resolve(Database.path()),
+        ...(ctx.payload.limit === undefined ? {} : { limit: ctx.payload.limit }),
+        ...(ctx.payload.page_size === undefined ? {} : { pageSize: ctx.payload.page_size }),
+      }).pipe(
+        Effect.mapError((error) =>
+          makeApiError("internal_error", {
+            resource: MdExport.manifestPathFor(dir),
+            expected: "batch transcript export completed",
+            actual: `${error.code}: ${error.detail}`,
+          }),
+        ),
+      )
+    })
+
+    const mdExportStatus = Effect.fn("MaintenanceHttpApi.mdExportStatus")(function* (ctx: {
+      query: { dir?: string }
+    }) {
+      const dir = withinBackups(ctx.query.dir ?? backupsRoot())
+      if (dir === undefined) {
+        return yield* Effect.fail(
+          makeApiError("validation_failed", {
+            resource: ctx.query.dir ?? backupsRoot(),
+            expected: "path under the backups root",
+            actual: ctx.query.dir ?? backupsRoot(),
+          }),
+        )
+      }
+      const manifestPath = MdExport.manifestPathFor(dir)
+      const manifest = yield* MdExport.readManifest(manifestPath).pipe(
+        Effect.mapError((error) =>
+          makeApiError("internal_error", {
+            resource: manifestPath,
+            expected: "read the md-export manifest",
+            actual: `${error.code}: ${error.detail}`,
+          }),
+        ),
+      )
+      return {
+        exists: manifest !== undefined,
+        manifestPath,
+        exportedCount: manifest?.entries.length ?? 0,
+        entries: manifest?.entries ?? [],
+      }
+    })
+
+    // W-02 M-2 — the migration flow orchestrator runs on the LIVE maintenance runtime only: the
+    // incident shell serves a read-only store in recovery, where driving migrations is refused.
+    const runMigration = Effect.fn("MaintenanceHttpApi.migrationRun")(function* (ctx: {
+      payload: { dir?: string; stop_after?: MigrationOrchestrator.Phase }
+    }) {
+      const dir = withinBackups(ctx.payload.dir ?? backupsRoot())
+      if (dir === undefined) {
+        return yield* Effect.fail(
+          makeApiError("validation_failed", {
+            resource: ctx.payload.dir ?? backupsRoot(),
+            expected: "path under the backups root",
+            actual: ctx.payload.dir ?? backupsRoot(),
+          }),
+        )
+      }
+      const state = readState()
+      if (state !== undefined && state.mode !== "ready") {
+        return yield* Effect.fail(mapBootstrapStateToError(state, "migration")!)
+      }
+      return yield* MigrationOrchestrator.run({
+        db: database.db,
+        dbPath: path.resolve(Database.path()),
+        backupDir: dir,
+        ...(ctx.payload.stop_after === undefined ? {} : { stopAfter: ctx.payload.stop_after }),
+      }).pipe(
+        Effect.mapError((error) =>
+          makeApiError("internal_error", {
+            resource: MigrationOrchestrator.journalPathFor(dir),
+            expected: "migration orchestration ran",
+            actual: String(error),
+          }),
+        ),
+      )
+    })
+
+    const migrationStatus = Effect.fn("MaintenanceHttpApi.migrationStatus")(function* (ctx: {
+      query: { dir?: string }
+    }) {
+      const dir = withinBackups(ctx.query.dir ?? backupsRoot())
+      if (dir === undefined) {
+        return yield* Effect.fail(
+          makeApiError("validation_failed", {
+            resource: ctx.query.dir ?? backupsRoot(),
+            expected: "path under the backups root",
+            actual: ctx.query.dir ?? backupsRoot(),
+          }),
+        )
+      }
+      const journal = yield* MigrationOrchestrator.readJournal(MigrationOrchestrator.journalPathFor(dir)).pipe(
+        Effect.mapError((error) =>
+          makeApiError("internal_error", {
+            resource: MigrationOrchestrator.journalPathFor(dir),
+            expected: "read the migration-orchestration journal",
+            actual: String(error),
+          }),
+        ),
+      )
+      return { active: journal !== undefined && journal.status !== "completed", journal }
+    })
+
+    // W-02 M-3 — the compliance report runs read-only oracles only (preflight opens its own
+    // read-only connections; DataIntegrity issues PRAGMAs), so a read-only recovery store can
+    // generate it too. The only write is the report JSON under the backups root.
+    const generateMigrationReport = Effect.fn("MaintenanceHttpApi.migrationReport")(function* (ctx: {
+      payload: { dir?: string }
+    }) {
+      const dir = withinBackups(ctx.payload.dir ?? backupsRoot())
+      if (dir === undefined) {
+        return yield* Effect.fail(
+          makeApiError("validation_failed", {
+            resource: ctx.payload.dir ?? backupsRoot(),
+            expected: "path under the backups root",
+            actual: ctx.payload.dir ?? backupsRoot(),
+          }),
+        )
+      }
+      return yield* MigrationReport.generate({
+        db: database.db,
+        dbPath: path.resolve(Database.path()),
+        backupDir: dir,
+      }).pipe(
+        Effect.mapError((error) =>
+          makeApiError("internal_error", {
+            resource: MigrationReport.reportPathFor(dir),
+            expected: "compliance report generated",
+            // The error channel is widened by readJournal's plain Error; only the typed error
+            // carries a stable code.
+            actual: error instanceof MigrationReport.MigrationReportError ? `${error.code}: ${error.detail}` : String(error),
+          }),
+        ),
+      )
+    })
+
+    const migrationReportStatus = Effect.fn("MaintenanceHttpApi.migrationReportStatus")(function* (ctx: {
+      query: { dir?: string }
+    }) {
+      const dir = withinBackups(ctx.query.dir ?? backupsRoot())
+      if (dir === undefined) {
+        return yield* Effect.fail(
+          makeApiError("validation_failed", {
+            resource: ctx.query.dir ?? backupsRoot(),
+            expected: "path under the backups root",
+            actual: ctx.query.dir ?? backupsRoot(),
+          }),
+        )
+      }
+      const reportPath = MigrationReport.reportPathFor(dir)
+      const report = yield* MigrationReport.read(reportPath).pipe(
+        Effect.mapError((error) =>
+          makeApiError("internal_error", {
+            resource: reportPath,
+            expected: "read the persisted compliance report",
+            actual: `${error.code}: ${error.detail}`,
+          }),
+        ),
+      )
+      return { exists: report !== undefined, reportPath, ...(report === undefined ? {} : { report }) }
+    })
+
+    // W-02 M-4 — backups governance. LIVE runtime only: the action mutates the backups root, and
+    // an incident shell must not rearrange the restore surface it depends on.
+    const governBackups = Effect.fn("MaintenanceHttpApi.backupsGovern")(function* (ctx: {
+      payload: { dir?: string; keep?: number }
+    }) {
+      const dir = withinBackups(ctx.payload.dir ?? backupsRoot())
+      if (dir === undefined) {
+        return yield* Effect.fail(
+          makeApiError("validation_failed", {
+            resource: ctx.payload.dir ?? backupsRoot(),
+            expected: "path under the backups root",
+            actual: ctx.payload.dir ?? backupsRoot(),
+          }),
+        )
+      }
+      const state = readState()
+      if (state !== undefined && state.mode !== "ready") {
+        return yield* Effect.fail(mapBootstrapStateToError(state, "backups.govern")!)
+      }
+      return yield* BackupGovernor.govern({
+        backupDir: dir,
+        ...(ctx.payload.keep === undefined ? {} : { keep: ctx.payload.keep }),
+      }).pipe(
+        Effect.mapError((error) =>
+          makeApiError("internal_error", {
+            resource: BackupGovernor.reportPathFor(dir),
+            expected: "backups governance completed",
+            actual: `${error.code}: ${error.detail}`,
+          }),
+        ),
+      )
+    })
+
+    // W-02 M-5 — disk reclaim. LIVE runtime only (deletion + an optional main-db VACUUM). Without
+    // confirm:true the call is an inventory/candidate report and nothing is removed.
+    const reclaimDisk = Effect.fn("MaintenanceHttpApi.diskReclaim")(function* (ctx: {
+      payload: { dir?: string; confirm?: boolean; vacuum?: boolean }
+    }) {
+      const dir = withinBackups(ctx.payload.dir ?? backupsRoot())
+      if (dir === undefined) {
+        return yield* Effect.fail(
+          makeApiError("validation_failed", {
+            resource: ctx.payload.dir ?? backupsRoot(),
+            expected: "path under the backups root",
+            actual: ctx.payload.dir ?? backupsRoot(),
+          }),
+        )
+      }
+      const state = readState()
+      if (state !== undefined && state.mode !== "ready") {
+        return yield* Effect.fail(mapBootstrapStateToError(state, "disk.reclaim")!)
+      }
+      return yield* DiskReclaim.reclaim({
+        db: database.db,
+        dbPath: path.resolve(Database.path()),
+        backupDir: dir,
+        ...(ctx.payload.confirm === undefined ? {} : { confirm: ctx.payload.confirm }),
+        ...(ctx.payload.vacuum === undefined ? {} : { vacuum: ctx.payload.vacuum }),
+      }).pipe(
+        Effect.mapError((error) =>
+          makeApiError("internal_error", {
+            resource: DiskReclaim.reportPathFor(dir),
+            expected: "disk reclaim completed",
+            actual: `${error.code}: ${error.detail}`,
+          }),
+        ),
+      )
+    })
+
     return {
       getBootstrapStatus,
       listBackups,
@@ -520,12 +777,24 @@ const maintenanceOperations = (
       recoveryCommandGet,
       recoveryEvidenceExportCreate,
       recoveryEvidenceExportGet,
+      runMdExport,
+      mdExportStatus,
+      runMigration,
+      migrationStatus,
+      generateMigrationReport,
+      migrationReportStatus,
+      governBackups,
+      reclaimDisk,
     }
   })
 
 export const maintenanceHandlers = HttpApiBuilder.group(MaintenanceApi, "maintenance", (handlers) =>
-  Effect.map(maintenanceOperations({ executeRecovery: true }), (operations) =>
-    handlers
+  Effect.gen(function* () {
+    // The redrive-blocked listing projects the business runtime's durable recovery
+    // classification — its requirement resolves from the shared route-graph context.
+    const runtimeStatus = yield* SessionRuntimeStatus.Service
+    return yield* Effect.map(maintenanceOperations({ executeRecovery: true }), (operations) =>
+      handlers
       .handle("bootstrapStatus", operations.getBootstrapStatus)
       .handle("backupList", operations.listBackups)
       .handle("backupVerify", operations.verifyBackup)
@@ -534,12 +803,27 @@ export const maintenanceHandlers = HttpApiBuilder.group(MaintenanceApi, "mainten
       .handle("recoveryList", operations.recoveryList)
       .handle("recoveryCommand", operations.recoveryCommand)
       .handle("recoveryCommandGet", operations.recoveryCommandGet)
+      .handle("recoveryRedriveBlocked", () =>
+        Effect.map(runtimeStatus.blockedRedrives, (blocked) => ({
+          blocked: blocked.map((item) => ({ sessionID: item.sessionID, blockedReason: item.blockedReason })),
+          count: blocked.length,
+        })),
+      )
       .handle("recoveryEvidenceExportCreate", operations.recoveryEvidenceExportCreate)
       .handle("recoveryEvidenceExport", operations.recoveryEvidenceExportGet)
+      .handle("mdExport", operations.runMdExport)
+      .handle("mdExportStatus", operations.mdExportStatus)
+      .handle("migrationRun", operations.runMigration)
+      .handle("migrationStatus", operations.migrationStatus)
+      .handle("migrationReport", operations.generateMigrationReport)
+      .handle("migrationReportStatus", operations.migrationReportStatus)
+      .handle("backupsGovern", operations.governBackups)
+      .handle("diskReclaim", operations.reclaimDisk)
       // The digest effect's requirements resolve from the shared route-graph context at request
       // time (same open V2 runtime the instance routes run on), not from this group's own layer.
       .handle("compositionDigest", () => CompositionDigest.current),
-  ),
+    )
+  }),
 )
 
 type Operations = Effect.Success<ReturnType<typeof maintenanceOperations>>
@@ -721,6 +1005,18 @@ export function maintenanceOnlyHandlersFor(filename: string, state: BootstrapSta
             actual: "manifest-only export disabled",
           }),
         )
+      // The incident shell owns no Session/tool/event runtime: the redrive-blocked listing is a
+      // business-runtime projection, so the shell answers an honest typed 503 instead of a
+      // fabricated empty list.
+      const recoveryRedriveBlocked = () =>
+        Effect.fail(
+          makeApiError("service_unavailable", {
+            resource: MaintenancePaths.recoveryRedriveBlocked,
+            expected: "ready business runtime recovery projection",
+            actual: state.mode,
+          }),
+        )
+
       // The incident shell owns no Session/tool/event runtime, so there is no composition to
       // digest — an honest typed 503, never a fabricated fingerprint of the read-only shell.
       const compositionDigest = () =>
@@ -747,8 +1043,37 @@ export function maintenanceOnlyHandlersFor(filename: string, state: BootstrapSta
         .handle("recoveryCommandGet", (ctx) =>
           readOnlyOperation(filename, state, (operations) => operations.recoveryCommandGet(ctx)),
         )
+        .handle("recoveryRedriveBlocked", recoveryRedriveBlocked)
         .handle("recoveryEvidenceExportCreate", evidenceCreate)
         .handle("recoveryEvidenceExport", evidenceGet)
+        // W-02 M-1 — a read-only recovery store still allows the full MD export (browse/export is
+        // part of the C1A-12 read-only maintenance surface); the run never writes the database.
+        .handle("mdExport", (ctx) =>
+          readOnlyOperation(filename, state, (operations) => operations.runMdExport(ctx)),
+        )
+        .handle("mdExportStatus", (ctx) =>
+          readOnlyOperation(filename, state, (operations) => operations.mdExportStatus(ctx)),
+        )
+        // W-02 M-2 — the incident shell never drives migrations: an in-recovery store must go
+        // through the recovery descriptors, not the orchestration chain. Reading the journal is
+        // still allowed (it shows where a chain broke before the store entered recovery).
+        .handle("migrationRun", () => Effect.fail(mapBootstrapStateToError(state, "migration")!))
+        .handle("migrationStatus", (ctx) =>
+          readOnlyOperation(filename, state, (operations) => operations.migrationStatus(ctx)),
+        )
+        // W-02 M-3 — the compliance report is read-only against the store; a recovering library
+        // can still be audited (and the report lands under the backups root, not the store).
+        .handle("migrationReport", (ctx) =>
+          readOnlyOperation(filename, state, (operations) => operations.generateMigrationReport(ctx)),
+        )
+        .handle("migrationReportStatus", (ctx) =>
+          readOnlyOperation(filename, state, (operations) => operations.migrationReportStatus(ctx)),
+        )
+        // W-02 M-4/M-5 — governance and reclaim are live-runtime actions: an incident shell must
+        // not rearrange the restore surface it depends on, and never deletes residue from a store
+        // it does not own.
+        .handle("backupsGovern", () => Effect.fail(mapBootstrapStateToError(state, "backups.govern")!))
+        .handle("diskReclaim", () => Effect.fail(mapBootstrapStateToError(state, "disk.reclaim")!))
         .handle("compositionDigest", compositionDigest)
     }),
   )

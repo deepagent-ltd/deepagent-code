@@ -51,10 +51,19 @@ const message = (value: unknown) => {
 
 type ToolOutput =
   | { readonly structured: Record<string, unknown>; readonly content: LLMToolOutputType["content"] }
-  | { readonly error: { readonly type: "unknown"; readonly message: string } }
+  | { readonly error: SessionEvent.ToolCallError }
+
+// Settlement-carried failureCode → durable error classification. Anything without a recognized
+// code stays "unknown" (the pre-classification behavior).
+const failureType = (metadata: Record<string, unknown> | undefined): SessionEvent.ToolCallError["type"] => {
+  if (metadata?.failureCode === "user_rejected_permission") return "permission_rejected"
+  if (metadata?.failureCode === "user_corrected_permission") return "permission_corrected"
+  if (metadata?.failureCode === "permission_denied_rule") return "permission_denied"
+  return "unknown"
+}
 
 const settledOutput = (value: LLMToolOutputType | undefined, result: ToolResultValue): ToolOutput => {
-  if (result.type === "error") return { error: { type: "unknown", message: message(result.value) } }
+  if (result.type === "error") return { error: { type: failureType(result.metadata), message: message(result.value) } }
   const settled = value ?? LLMToolOutput.fromResultValue(result)
   if (!settled) throw new Error(`Unsupported tool result: ${message(result)}`)
   return { structured: record(settled.structured), content: settled.content }

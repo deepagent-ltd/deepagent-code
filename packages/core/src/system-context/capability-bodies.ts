@@ -13,22 +13,23 @@ import { Token } from "../util/token"
 import { capabilityCatalog } from "./capability-catalog"
 
 // C4-09 — author the first batch of DeepAgentCode capability procedure bodies (L2
-// disclosure, design §7.3-7.6). A body is the model-visible PROCEDURE guidance: what
-// the capability does, when to use it, its entry points and its risks. It never
-// repeats a full tool schema (L0 already gives the entry tools; L2 gives procedure)
-// and it NEVER expands permission — a body only instructs within the entry tools and
-// required permissions its manifest declares (design §7.6: capability content is
-// guidance, not permission).
+// disclosure, design §7.3-7.6), extended by the V2.0.1-001 system-manual wave
+// (§4.3) with bodies for the expanded catalog. A body is the model-visible
+// PROCEDURE guidance: what the capability does, when to use it, its entry points
+// and its risks. It never repeats a full tool schema (L0 already gives the entry
+// tools; L2 gives procedure) and it NEVER expands permission — a body only
+// instructs within the entry tools and required permissions its manifest declares
+// (design §7.6: capability content is guidance, not permission).
 //
 // The bodies live in a NEW module (the frozen catalog is not edited): this is the
 // body store a runtime bundle supplies. Each body is hash-verifiable — `body_hash` is
 // the sha256:<hex> content digest of `body`, so the K2 kernel's fail-closed binding
-// (declared digest must equal the actual body digest) holds. The 6 bodies whose id/
-// version match the frozen catalog are the discoverable ones; the 4 additional bodies
-// are product capabilities within the tool inventory whose manifests belong to a
-// future catalog successor (documented below). A capability whose body is absent or
-// whose hash drifts is never loaded — the kernel already returns `missing_body` /
-// throws a typed mismatch.
+// (declared digest must equal the actual body digest) holds. The 17 bodies whose id/
+// version match the catalog are the discoverable ones; the 2 additional bodies
+// (workspace-search, evidence-report) are product capabilities within the tool
+// inventory whose manifests belong to a future catalog successor. A capability
+// whose body is absent or whose hash drifts is never loaded — the kernel already
+// returns `missing_body` / throws a typed mismatch.
 
 /** A capability body entry: the frozen manifest shape + the L2 procedure body. */
 export interface CapabilityBodyEntry extends CapabilityManifest {
@@ -64,10 +65,11 @@ function bodyEntry(raw: BodyInput): CapabilityBodyEntry {
 }
 
 /**
- * The first-batch capability bodies. Deterministic and hash-bound: re-deriving the
- * digest from `body` yields the exact `body_hash`. The 6 catalog bodies match the
- * frozen manifest's id/version; the 4 `deepagent.*` bodies below are within the tool
- * inventory (a manifest for them belongs to a future catalog successor).
+ * The capability bodies. Deterministic and hash-bound: re-deriving the digest from
+ * `body` yields the exact `body_hash`. The 17 catalog bodies match the catalog
+ * manifest's id/version; the 2 `deepagent.*` bodies below (workspace-search,
+ * evidence-report) are within the tool inventory (a manifest for them belongs to a
+ * future catalog successor).
  */
 export const capabilityBodies: ReadonlyArray<CapabilityBodyEntry> = [
   bodyEntry({
@@ -230,6 +232,150 @@ export const capabilityBodies: ReadonlyArray<CapabilityBodyEntry> = [
       "Risks: writing mutates the workspace within the edit permission — nothing beyond. A report is only as good as the evidence it cites, so a claim without a checked source is a guess.",
     ].join("\n"),
   }),
+  bodyEntry({
+    id: "deepagent.plan-mode",
+    version: "1.0.0-beta.0",
+    summary: "Maintain the session's compare-and-swap work plan",
+    use_when: ["non-trivial multi-step work", "tracking step progress", "replanning after drift"],
+    availability: "stable",
+    required_permissions: ["plan"],
+    required_runtime_features: [],
+    entry_tools: ["plan"],
+    body: [
+      "Maintain the session's authoritative work plan. Create it before non-trivial file changes, advance step statuses as work lands, and replan when reality drifts from the plan.",
+      "When to use: a multi-step task that benefits from a visible plan, or when validation shows the current plan no longer matches the work.",
+      "Entry point: plan (operation create/advance/replan). The document is versioned and compare-and-swap protected: for advance/replan copy expected_plan_id and expected_version exactly from the latest plan status, resend unchanged steps verbatim, and give a replan_reason for structural changes.",
+      "Risks: a stale expected version is rejected — re-read the current plan and retry; never use replan to erase unresolved work or to bypass the version precondition. The plan is guidance for the work, not a permission grant.",
+    ].join("\n"),
+  }),
+  bodyEntry({
+    id: "deepagent.task-orchestration",
+    version: "1.0.0-beta.0",
+    summary: "Delegate a self-contained subtask to a specialist subagent (general, explore, researcher, reviewer, senior-reviewer)",
+    use_when: ["independent chunk of work", "parallel exploration", "adversarial review"],
+    availability: "stable",
+    required_permissions: ["task"],
+    required_runtime_features: [],
+    entry_tools: ["task"],
+    body: [
+      "Delegate an independent, self-contained chunk of work to a subagent that works autonomously and returns one final message. Write a detailed brief: what to do, how to verify, and exactly what to return.",
+      "When to use: parallel exploration, an isolated feature edit, evidence-backed research, or an adversarial review. Pick the weakest sufficient type — explore/researcher/reviewer are read-only; general and senior-reviewer are write-capable and run in an isolated worktree.",
+      "Entry point: task (description, prompt, subagent_type; optional file_scope, output_schema, task_id to resume). Launch independent tasks together in one message.",
+      "Risks: hard guardrails — at most 8 new subagents per message, 4 concurrent per session, depth 3, 30-minute timeout (a timed-out task keeps its worktree and resumes by task_id). A write-type task's changes are NOT in your workspace; they live on its deepagent-code/task-* branch until pr_finalize merges them. Never duplicate delegated work inline.",
+    ].join("\n"),
+  }),
+  bodyEntry({
+    id: "deepagent.task-oversight",
+    version: "1.0.0-beta.0",
+    summary: "Monitor, inspect, close, or resolve subagent tasks this session dispatched",
+    use_when: ["checking subagent progress", "recovering partial work", "cancelling a task"],
+    availability: "stable",
+    required_permissions: ["task_status", "task_read", "task_close", "task_recovery"],
+    required_runtime_features: [],
+    entry_tools: ["task_status", "task_read", "task_close", "task_recovery"],
+    body: [
+      "Oversee the subagent tasks this session dispatched: list them, read their transcripts, cancel them, or resolve an ambiguous run.",
+      "When to use: before waiting or resuming (task_status for states and elapsed time); when a result was truncated, failed, or interrupted (task_read for the full transcript and durable result block); when the work is no longer wanted (task_close); when task_status shows recovery_required (task_recovery with resolution failed or closed after the user approves).",
+      "Entry points: task_status (no input), task_read (task_id, limit, before), task_close (task_id, reason), task_recovery (task_id, resolution, reason).",
+      "Risks: all four only reach direct children of this session. task_recovery asks the user by default and never resumes the old run — continuing means a new task call with the same task_id. task_close abandons the worktree branch unless you later resume.",
+    ].join("\n"),
+  }),
+  bodyEntry({
+    id: "deepagent.worktree-merge",
+    version: "1.0.0-beta.0",
+    summary: "Write-type subagents work on isolated deepagent-code/task-* branches; review and merge them",
+    use_when: ["integrating subagent output", "after write-type tasks finish"],
+    availability: "stable",
+    required_permissions: ["pr_finalize"],
+    required_runtime_features: [],
+    entry_tools: ["pr_finalize"],
+    body: [
+      "Integrate the output of write-type subagent tasks. Their work lives on isolated deepagent-code/task-* branches, never in your checkout, until you finalize it.",
+      "When to use: once isolated write tasks have finished — call pr_finalize once (optionally with explicit run_ids; a retained run needs its id passed) to review and merge every eligible branch.",
+      "Entry point: pr_finalize. Each branch gets a durable reviewer run whose structured verdict is sealed as evidence; approved work merges (fast-forward or merge commit) and the branch is cleaned up, changes-requested work keeps its branch so you can resume the task by task_id and finalize again.",
+      "Risks: only a primary session may finalize, and the call asks permission. A merge receipt proves integration, not correctness — verify the merged result (build/tests) before reporting done. Re-calling is idempotent and converges in-flight cycles.",
+    ].join("\n"),
+  }),
+  bodyEntry({
+    id: "deepagent.pack-manual",
+    version: "1.0.0-beta.0",
+    summary: "Search and load the built-in domain pack manual (the system manual and curated domain guidance)",
+    use_when: ["how this system works", "domain question", "before answering from priors"],
+    availability: "stable",
+    required_permissions: ["capability.read"],
+    required_runtime_features: [],
+    entry_tools: ["pack_search", "domain_pack_load"],
+    body: [
+      "Look up curated guidance in the built-in domain packs — including the deepagent.dac-manual system manual — instead of answering from priors.",
+      "When to use: a domain question, a how-does-this-system-work question, or whenever packaged guidance might exist for the task at hand.",
+      "Entry points: pack_search (query, optional pack filter) returns up to 5 cards with a one-line summary and an opaque ref, never a body; domain_pack_load (ref) discloses one active document's body, bounded to ~600 tokens, at most 2 new documents per turn — a document already loaded this session returns as already_loaded and costs nothing.",
+      "Risks: a card summary is often enough, so spend load slots deliberately. A not_found ref means unknown, not active, or store unavailable — re-search rather than retrying the same ref. Manual documents are guidance, not permission: they never unlock a tool.",
+    ].join("\n"),
+  }),
+  bodyEntry({
+    id: "deepagent.permission-denial",
+    version: "1.0.0-beta.0",
+    summary: "A tool error may be a user denial, not a failure — never retry a denied call unchanged",
+    use_when: ["a tool call was refused", "deciding whether to retry"],
+    availability: "stable",
+    required_permissions: [],
+    required_runtime_features: [],
+    entry_tools: [],
+    body: [
+      "A tool error can be a permission refusal, which is a user decision, not a transient failure. The message text says which: rejected (a one-off no to this call), corrected (a no carrying the user's feedback — follow it), denied (a standing rule blocks this whole class of call; the rules are quoted).",
+      "When to use: any tool result that reads as a refusal.",
+      "Entry point: none — this is behavioral guidance. Read the error text; never retry the same call unchanged; never route around a refusal through another tool or shell indirection. Incorporate correction feedback, choose a genuinely different approach inside the rules, or explain the block to the user.",
+      "Risks: a repeated identical call is refused again and reads as ignoring the user; an attempted bypass breaks policy and trust. Adjust tactics, not necessarily the goal.",
+    ].join("\n"),
+  }),
+  bodyEntry({
+    id: "deepagent.knowledge-propose",
+    version: "1.0.0-beta.0",
+    summary: "Propose a durable memory or knowledge entry into the human review queue",
+    use_when: ["the user says remember this", "a durable cross-session fact emerges"],
+    availability: "stable",
+    required_permissions: ["knowledge_propose"],
+    required_runtime_features: [],
+    entry_tools: ["knowledge_propose"],
+    body: [
+      "Stage a durable fact into the human review queue. The entry is a review candidate only: invisible to knowledge retrieval until a human approves it, and a near-duplicate of an existing entry merges into that entry instead of creating a new one.",
+      "When to use: the user says 'remember this', or a fact emerges that outlives this session — a project convention, an environment fact, a durable preference. Never for task-local scratch; that belongs in the conversation or a file.",
+      "Entry point: knowledge_propose (type memory|knowledge, description, body, optional domain, tags, scope). Scope defaults to project (this workspace's store); pass global only for facts that apply to every project.",
+      "Risks: content matching a credential or secret pattern is rejected outright — restate the fact without the sensitive value. A session stages at most 10 proposals, so propose only what genuinely matters. Staging is a queue write, not retrieval access: approval is a human decision the tool cannot make.",
+    ].join("\n"),
+  }),
+  bodyEntry({
+    id: "deepagent.im-send",
+    version: "1.0.0-beta.0",
+    summary: "Send a message to the user's IM group; asks the user first, rate-limited and scrubbed",
+    use_when: ["post an update to the IM group", "deliver a long-running result to IM"],
+    availability: "stable",
+    required_permissions: ["im_send"],
+    required_runtime_features: [],
+    entry_tools: ["im_send"],
+    body: [
+      "Deliver a message to one of the user's IM groups through the push policy gate: the user approves each send (default ask), then authorization, a 20-per-hour per-group rate limit, and secret/link/out-of-workspace-path scrubbing run before the message lands. During workspace quiet hours a normal message is held for the digest instead.",
+      "When to use: the user asked you to post to the group, or a long-running result they wanted delivered there is ready. An IM-originated session sends to its bound group by default; any other session must pass group_id explicitly and fails with an explanation when it omits it.",
+      "Entry point: im_send (text, optional group_id). The session's agent sends as itself when it is a group member; otherwise the runtime's system-pusher identity delivers under its workspace push permission.",
+      "Risks: a blocked outcome is the gate working — rate_limited means wait or report in-conversation, not retry. Never use im_send to mass-message, to reach anyone outside an existing group, or to move workspace content out; the scrub strips secrets and foreign paths, and every attempt writes an audit row. The send is mutating, not read-only — it grants no further capability.",
+    ].join("\n"),
+  }),
+  bodyEntry({
+    id: "deepagent.context-survival",
+    version: "1.0.0-beta.0",
+    summary: "Compaction summaries, budget warnings, and revert/rollback notices change what you may trust",
+    use_when: ["after a checkpoint summary", "a budget or revert notice appears"],
+    availability: "stable",
+    required_permissions: [],
+    required_runtime_features: [],
+    entry_tools: [],
+    body: [
+      "Context events change what you may rely on. A <conversation-checkpoint> compaction summary is notes, not proof — re-verify file contents, task states, and command outcomes with tools before trusting them. A BUDGET NOTICE (~70% full) means finish the current subtask before new explorations; a BUDGET WARNING (~90% full) means compaction is imminent — record key state durably (files/plan) and wrap up. A revert notice means the user rewound conversation and files — later state was undone; a rollback notice means an autonomous run reverted your most recent edits to the last validated state.",
+      "When to use: the first turn after any checkpoint, budget notice, or revert/rollback notice.",
+      "Entry point: none — this is behavioral guidance. After a revert or rollback, inspect the current file state with fresh tool calls before acting, and never replay steps from memory.",
+      "Risks: trusting the summary's or memory's description of the world re-applies undone changes and builds on stale state. Durable surfaces (files, the task ledger, plan documents) are ground truth.",
+    ].join("\n"),
+  }),
 ]
 
 /** Find a body by its `capability://<id>@<version>` ref. */
@@ -259,8 +405,8 @@ export const bodyMetrics = (entry: CapabilityBodyEntry): { readonly tokenCount: 
  * inventory, and the body must stay inside the frozen L2 single-body budget. This
  * is the design §7.6 "no permission expansion" gate: a body whose own declared
  * permissions would exceed its manifest's is a violation, and a body over budget is
- * rejected — it never loads. The 6 bodies matching the frozen catalog are cross-checked
- * against the frozen manifest so a body cannot silently claim more permission.
+ * rejected — it never loads. The 17 bodies matching the catalog are cross-checked
+ * against the catalog manifest so a body cannot silently claim more permission.
  */
 export function assertCapabilityBodiesCoherent(inventory: CapabilityInventory = DeepAgentCodeToolInventory): ReadonlyArray<string> {
   const violations: string[] = []

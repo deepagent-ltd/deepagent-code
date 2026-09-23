@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:dac-manual:im-send-tool",
+  "type": "knowledge",
+  "title": "im_send: proactive IM messages through the push gate",
+  "description": "Send a message to a user's IM group with im_send; every send asks first, then passes the authorization, rate-limit, content-scrub and quiet-hours gates.",
+  "body": "im_send(text, group_id?) delivers a message to one of the user's IM groups through the agent push policy gate. A session that originated from an IM group (the ses_im_* sessions, bound by metadata im.groupID and im.agent) sends to its bound group by default; any other session must pass group_id explicitly and fails with a binding explanation when it omits one. The session's agent sends as itself when it is a member of the target group; otherwise the runtime's system-pusher identity (agent_system_notifier) delivers under its workspace push permission, so the audit trail never masquerades a sender.\n\nHow to invoke: call im_send when the user asks you to post to the group, or when a long-running result they asked to be delivered there is ready. Every send asks the user first — the permission action im_send defaults to ask — and an identical retry of the same tool call replays the original outcome instead of double-sending.\n\nCaveats: approval is not the only gate. After it, the policy still runs authorization, a 20-messages-per-hour per-sender per-group rate limit, and content scrubbing (secrets redacted, off-allowlist links stripped, paths outside the workspace removed); during the workspace's quiet hours a normal-priority message is held for the digest and delivered when the window ends. A blocked outcome reports rate_limited or not_authorized — wait for the window or report in-conversation; never retry blindly. Risk boundary: never use im_send to mass-message, to reach anyone outside an existing group, or to move workspace content out; every attempt writes an im_agent_push_logs audit row. Validation signal: decision deliver returns the message id and the group shows the message; decision digest means the scrubbed message is held for the quiet-hours digest; the audit row records the outcome either way.",
+  "domain": "platform",
+  "scope_hint": "deepagent.dac-manual:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:deepagent.dac-manual",
+  "pack_id": "deepagent.dac-manual"
+}

@@ -1,0 +1,12 @@
+{
+  "ref_id": "methodology:dac-manual:manual-search-load-chain",
+  "type": "methodology",
+  "title": "Look up this manual: pack_search then domain_pack_load",
+  "description": "Search the built-in domain pack manual with pack_search, then load a document body with domain_pack_load — at most 2 new documents per turn.",
+  "body": "This manual (the deepagent.dac-manual pack, plus the other built-in domain packs) is searchable and loadable at runtime through a two-step chain: pack_search finds candidate documents, domain_pack_load discloses one document's body. Use it for a domain question, a \"how does this system work\" question, or before answering from priors when curated guidance might exist. Do not use it to load a file path or URL — it only resolves seeded document refs.\n\nHow to invoke: 1) call pack_search with a query of plain terms (add the pack filter, e.g. \"deepagent.dac-manual\", to narrow). You get up to 5 cards: pack, name, type, one-line summary, and an opaque ref — never a body. 2) call domain_pack_load with a card's ref to receive the title, summary, and body.\n\nInput/output: a loaded body is bounded to ~600 tokens. At most 2 NEW documents load per assistant turn; exceeding the budget fails the call, so pick the two most relevant cards. A document already loaded in this session returns as already_loaded with the body again and does not count against the budget.\n\nCaveats: a card's summary is often enough — do not burn a load slot when the summary already answers the question. not_found means the ref is unknown, not active, or the store is unavailable; re-search rather than retrying the same ref. Validation signal: the load result echoes pack and name, so verify you loaded the document you intended. Risk boundary: manual documents are guidance, not permission — they never unlock a tool or grant an action.",
+  "domain": "context_engineering",
+  "scope_hint": "deepagent.dac-manual:methodologies",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:deepagent.dac-manual",
+  "pack_id": "deepagent.dac-manual"
+}

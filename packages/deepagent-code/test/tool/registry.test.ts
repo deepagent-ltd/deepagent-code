@@ -153,6 +153,9 @@ const itNoCodeIntel = testEffect(
 const itActivityFacade = testEffect(
   Layer.mergeAll(registryLayer({ flags: { activityFacade: true } }), node, Agent.defaultLayer),
 )
+const itActivityFacadeOff = testEffect(
+  Layer.mergeAll(registryLayer({ flags: { activityFacade: false } }), node, Agent.defaultLayer),
+)
 const itContextToolsV2 = testEffect(
   Layer.mergeAll(
     registryLayer({
@@ -251,9 +254,21 @@ describe("tool.registry", () => {
     }),
   )
 
-  // FEAT-011 T4 — flag-gated visibility. The facade flag defaults OFF (staged), so the default
-  // registry output must carry ZERO activity_* tools (byte-identical visibility to pre-facade).
-  it.instance("hides all activity facade tools while DEEPAGENT_CODE_ACTIVITY_FACADE stays staged off", () =>
+  // K-06 (2026-09-23): the facade flag now defaults ON (GA). The default registry carries the
+  // four activity_* tools; the env kill switch (activityFacade: false) restores the legacy set.
+  it.instance("activity facade tools are ON by default; the kill switch restores the legacy set", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const ids = yield* registry.ids()
+      expect(ids).toContain("activity_start")
+      expect(ids).toContain("activity_status")
+      expect(ids).toContain("activity_result")
+      expect(ids).toContain("activity_control")
+    }),
+    30_000,
+  )
+
+  itActivityFacadeOff.instance("the DEEPAGENT_CODE_ACTIVITY_FACADE kill switch hides every activity facade tool", () =>
     Effect.gen(function* () {
       const registry = yield* ToolRegistry.Service
       const agents = yield* Agent.Service
@@ -272,7 +287,6 @@ describe("tool.registry", () => {
       })).map((tool) => tool.id)
       expect(projected.filter((id) => id.startsWith("activity_"))).toHaveLength(0)
     }),
-    30_000,
   )
 
   itActivityFacade.instance("exposes activity facade tools to primary agents only when the flag is on", () =>

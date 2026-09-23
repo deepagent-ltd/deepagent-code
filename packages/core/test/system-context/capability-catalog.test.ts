@@ -17,7 +17,8 @@ import { CapabilityBudget } from "@deepagent-code/core/system-context/capability
 import { testEffect } from "../lib/effect"
 
 // C4-02 — L0 `deepagent/capability-catalog` System Context source + budget gate.
-// Target 150-300 tokens; hard cap 700 tokens / 4096 bytes (frozen contract).
+// V2.0.1-001 §4.6 (decision ④): the catalog expanded to ~12-15 rows and the hard cap
+// moved from 700 to 1000 tokens (4096 bytes unchanged).
 
 const catalogLayer = Layer.provideMerge(registerCapabilityCatalog, SystemContextRegistry.layer)
 const itRegistry = testEffect(catalogLayer)
@@ -73,10 +74,10 @@ describe("C4-02 L0 capability catalog", () => {
 })
 
 describe("C4-02 budget gate", () => {
-  test("keeps the boot catalog within the frozen budget (target 150-300 tokens)", () => {
+  test("keeps the expanded boot catalog within the raised budget (V2.0.1-001 decision ④)", () => {
     const { tokenCount, byteCount } = capabilityCatalogMetrics(renderCapabilityCatalog())
-    expect(tokenCount).toBeGreaterThanOrEqual(150)
-    expect(tokenCount).toBeLessThanOrEqual(300)
+    // The ~12-15 row expansion actually landed (the 6-row catalog measured ~260 tokens).
+    expect(tokenCount).toBeGreaterThanOrEqual(300)
     expect(byteCount).toBeLessThanOrEqual(CapabilityBudget.l0MaxBytes)
     expect(tokenCount).toBeLessThanOrEqual(CapabilityBudget.l0MaxTokens)
     expect(() => assertCapabilityCatalogWithinBudget(renderCapabilityCatalog())).not.toThrow()
@@ -115,7 +116,7 @@ describe("Core V2 context-query capability availability", () => {
     expect(capabilityL0Line(contextQuery)).toContain("Entry: context_query")
   })
 
-  test("the annotated catalog still fits the frozen L0 budget", () => {
+  test("the annotated catalog still fits the L0 budget", () => {
     const { tokenCount, byteCount } = capabilityCatalogMetrics(renderCapabilityCatalog())
     expect(tokenCount).toBeLessThanOrEqual(CapabilityBudget.l0MaxTokens)
     expect(byteCount).toBeLessThanOrEqual(CapabilityBudget.l0MaxBytes)

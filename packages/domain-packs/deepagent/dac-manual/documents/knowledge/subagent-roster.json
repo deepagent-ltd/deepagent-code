@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:dac-manual:subagent-roster",
+  "type": "knowledge",
+  "title": "Subagent roster: five delegatable agent types",
+  "description": "The task tool roster — general, explore, researcher, reviewer, senior-reviewer — with each type's read/write class and typical trigger.",
+  "body": "Five agent types are delegatable via subagent_type. general is write-capable: researching complex questions and executing multi-step tasks; it runs in an isolated worktree. explore is read-only and fast: finding files by pattern, keyword search, codebase questions — tell it the thoroughness (quick, medium, very thorough). researcher is read-only for evidence-backed research into one subsystem, with code_intel and context_query access; its final answer defaults to the ResearchResult schema. reviewer is read-only and adversarial: it assumes your plan or diff has problems and hunts correctness bugs, security issues, edge cases, convention conflicts and missing tests; its verdict defaults to the ReviewResult schema, and it cannot delegate further. senior-reviewer is the stage-level write reviewer: it reviews a merged batch, may apply ordinary file fixes (write-capable, so it runs isolated), returns a commit-bound verdict, and cannot delegate or merge.\n\nUse when choosing a type: pick the weakest type that fits — read-only types (explore, researcher, reviewer) share your workspace and cannot edit; write types (general, senior-reviewer) get their own worktree. Hidden types (goal-worker) and primary types cannot be launched.\n\nInput/output: subagent_type is a required task parameter; an unknown type fails the call. Caveats: type choice determines isolation and risk — a write type's output is not in your workspace until finalized, so record the branch from the run block. Validation signal: the returned run block's workspace_mode matches the type's class.",
+  "domain": "orchestration",
+  "scope_hint": "deepagent.dac-manual:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:deepagent.dac-manual",
+  "pack_id": "deepagent.dac-manual"
+}

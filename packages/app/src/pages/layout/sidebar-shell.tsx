@@ -23,18 +23,11 @@ export const SidebarContent = (props: {
   onOpenSettings: () => void
   historyLabel: Accessor<string>
   onOpenHistory: () => void
-  reviewLabel: Accessor<string>
-  onOpenReview: () => void
+  knowledgeLabel: Accessor<string>
+  onOpenKnowledge: () => void
   reviewPending?: Accessor<boolean>
-  wikiLabel?: Accessor<string>
-  onOpenWiki?: () => void
-  wikiAvailable?: Accessor<boolean>
-  packsLabel?: Accessor<string>
-  onOpenPacks?: () => void
   archivedLabel: Accessor<string>
   onOpenArchived: () => void
-  helpLabel: Accessor<string>
-  onOpenHelp: () => void
   renderPanel: () => JSX.Element
 }): JSX.Element => {
   const expanded = createMemo(() => !!props.mobile || props.opened())
@@ -120,31 +113,20 @@ export const SidebarContent = (props: {
               aria-label={props.archivedLabel()}
             />
           </Tooltip>
-          <Tooltip placement={placement()} value={props.reviewLabel()}>
+          <Tooltip placement={placement()} value={props.knowledgeLabel()}>
             <div class="relative">
               <IconButton
                 icon="knowledge-check"
                 variant="ghost"
                 size="large"
-                onClick={props.onOpenReview}
-                aria-label={props.reviewLabel()}
+                onClick={props.onOpenKnowledge}
+                aria-label={props.knowledgeLabel()}
               />
               <Show when={props.reviewPending?.()}>
                 <span class="absolute top-1 right-1 size-2 rounded-full bg-text-interactive-base ring-2 ring-background-base" />
               </Show>
             </div>
           </Tooltip>
-          <Show when={props.wikiAvailable?.() && !!props.onOpenWiki}>
-            <Tooltip placement={placement()} value={props.wikiLabel?.() ?? ""}>
-              <IconButton
-                icon="wiki"
-                variant="ghost"
-                size="large"
-                onClick={props.onOpenWiki}
-                aria-label={props.wikiLabel?.() ?? ""}
-              />
-            </Tooltip>
-          </Show>
           <TooltipKeybind placement={placement()} title={props.settingsLabel()} keybind={props.settingsKeybind() ?? ""}>
             <IconButton
               icon="settings-gear"
@@ -154,26 +136,6 @@ export const SidebarContent = (props: {
               aria-label={props.settingsLabel()}
             />
           </TooltipKeybind>
-          <Show when={!!props.onOpenPacks}>
-            <Tooltip placement={placement()} value={props.packsLabel?.() ?? ""}>
-              <IconButton
-                icon="package"
-                variant="ghost"
-                size="large"
-                onClick={props.onOpenPacks}
-                aria-label={props.packsLabel?.()}
-              />
-            </Tooltip>
-          </Show>
-          <Tooltip placement={placement()} value={props.helpLabel()}>
-            <IconButton
-              icon="help"
-              variant="ghost"
-              size="large"
-              onClick={props.onOpenHelp}
-              aria-label={props.helpLabel()}
-            />
-          </Tooltip>
         </div>
       </div>
 

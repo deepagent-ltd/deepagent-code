@@ -997,8 +997,18 @@ const scenarios: Scenario[] = [
     .at((ctx) => ({
       path: route("/api/session/{sessionID}/compact", { sessionID: "ses_httpapi_missing" }),
       headers: ctx.headers(),
+      body: { providerID: "test", modelID: "test-model" },
     }))
     .status(404, undefined, "status"),
+  http.protected
+    .post("/api/session/{sessionID}/compact", "v2.session.compact.invalid")
+    .seeded((ctx) => ctx.session({ title: "Invalid compact owner" }))
+    .at((ctx) => ({
+      path: route("/api/session/{sessionID}/compact", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: {},
+    }))
+    .status(400, undefined, "none"),
   http.protected
     .post("/api/session/{sessionID}/wait", "v2.session.wait")
     .at((ctx) => ({

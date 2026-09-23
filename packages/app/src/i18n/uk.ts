@@ -721,9 +721,6 @@ export const dict = {
   "settings.section.server": "Сервер",
   "settings.tab.general": "Загальні",
   "settings.tab.shortcuts": "Скорочення",
-  "settings.desktop.section.wsl": "WSL",
-  "settings.desktop.wsl.title": "Інтеграція WSL",
-  "settings.desktop.wsl.description": "Запускати сервер DeepAgent Code всередині WSL на Windows.",
 
   "settings.general.section.appearance": "Зовнішній вигляд",
   "settings.general.section.advanced": "Додатково",
@@ -1040,6 +1037,8 @@ export const dict = {
   "settings.about.attribution.description":
     "DeepAgent Code побудовано на deepagent-code, що використовується за ліцензією MIT.",
   "settings.about.license.title": "Ліцензія",
+  "settings.about.help.title": "Довідка",
+  "settings.about.help.description": "Документація, посібники та підтримка.",
   "settings.general.section.deepagent": "DeepAgent",
   "settings.general.deepagent.mode.title": "Агент",
   "settings.general.deepagent.mode.description": "Виберіть інтенсивність роботи DeepAgent.",

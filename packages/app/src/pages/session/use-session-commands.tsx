@@ -19,7 +19,7 @@ import { type Session, UserMessage } from "@deepagent-code/sdk"
 import { useSessionLayout } from "@/pages/session/session-layout"
 import { errorMessage } from "@/pages/layout/helpers"
 import { useSettings } from "@/context/settings"
-import { formatTranscript } from "@/utils/transcript"
+import { formatTranscript, transcriptFilename } from "@deepagent-code/sdk/transcript"
 import { createPromptStash } from "@/pages/session/prompt-stash"
 import { DialogPromptStash } from "@/components/dialog-prompt-stash"
 
@@ -374,8 +374,9 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       })
   }
 
-  // W3-4 — human-readable Markdown export (parity with the TUI /export command; the formatter is
-  // the ported TUI transcript renderer). Triggers a browser download of the .md file.
+  // W3-4 — human-readable Markdown export (parity with the TUI /export command; both use the
+  // canonical formatter from @deepagent-code/sdk/transcript). Triggers a browser download of
+  // the .md file; the browser itself dedupes the name on collision.
   const exportTranscript = async () => {
     const sessionID = params.id
     const sessionInfo = info()
@@ -394,7 +395,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     const url = URL.createObjectURL(blob)
     const anchor = document.createElement("a")
     anchor.href = url
-    anchor.download = `session-${sessionID.slice(0, 8)}.md`
+    anchor.download = transcriptFilename({ id: sessionInfo.id, title: sessionInfo.title, time: sessionInfo.time })
     anchor.click()
     URL.revokeObjectURL(url)
   }

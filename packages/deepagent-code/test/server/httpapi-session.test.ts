@@ -19,6 +19,7 @@ import { InstanceStore } from "../../src/project/instance-store"
 import { Project } from "../../src/project/project"
 import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
 import * as HttpSessionError from "../../src/server/routes/instance/httpapi/handlers/session-errors"
+import { MaintenancePaths } from "../../src/server/routes/instance/httpapi/groups/maintenance"
 import { SessionPaths } from "../../src/server/routes/instance/httpapi/groups/session"
 import { Session } from "@/session/session"
 import { MessageID, PartID, SessionID, type SessionID as SessionIDType } from "../../src/session/schema"
@@ -36,6 +37,7 @@ import {
 } from "@deepagent-code/core/session/sql"
 import { SessionToolRequestReceiptTable } from "@/session/tool-request-receipt.sql"
 import { SessionPromptEpochTable } from "@/session/prompt-epoch.sql"
+import { CompactionRequestTable } from "@deepagent-code/core/session/compaction-request.sql"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import { V2ProviderTurnReceiptTable } from "@deepagent-code/core/session/runner/v2-provider-turn.sql"
 import { builtinToolNames } from "@deepagent-code/core/tool/builtins"
@@ -48,6 +50,7 @@ import * as DateTime from "effect/DateTime"
 import * as Log from "@deepagent-code/core/util/log"
 import { eq } from "drizzle-orm"
 import { resetDatabase } from "../fixture/db"
+import { seedIndeterminateProviderAuthority } from "../fixture/provider-recovery"
 import { disposeAllInstances, provideInstanceEffect, TestInstance, tmpdirScoped } from "../fixture/fixture"
 import { TestLLMServer } from "../lib/llm-server"
 import { testProviderConfig } from "../lib/test-provider"
@@ -635,7 +638,7 @@ describe("session HttpApi", () => {
         const { db } = yield* Database.Service
         yield* db
           .update(SessionTable)
-          .set({ time_suspended: 1 })
+          .set({ execution_claim_token: 1 })
           .where(eq(SessionTable.id, parent.id))
           .run()
           .pipe(Effect.orDie)
@@ -644,7 +647,7 @@ describe("session HttpApi", () => {
         })
         yield* db
           .update(SessionTable)
-          .set({ time_suspended: null })
+          .set({ execution_claim_token: null })
           .where(eq(SessionTable.id, parent.id))
           .run()
           .pipe(Effect.orDie)
@@ -744,6 +747,43 @@ describe("session HttpApi", () => {
     { git: true, config: { formatter: false, lsp: false } },
     15_000,
   )
+  it.instance(
+    "status and the maintenance listing surface the typed redrive-blocked reason",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const headers = { "x-deepagent-code-directory": test.directory }
+        const { db } = yield* Database.Service
+        yield* seedIndeterminateProviderAuthority(db, {
+          sessionId: "ses_redrive_blocked",
+          attemptId: "att_redrive_blocked",
+          activityId: "act_redrive_blocked",
+          requestHash: "d".repeat(64),
+        })
+
+        // The killed Session surfaces recovery_required WITH the typed blocked reason.
+        expect(yield* requestJson<Record<string, unknown>>(SessionPaths.status, { headers })).toMatchObject({
+          ses_redrive_blocked: {
+            type: "recovery_required",
+            blockedReason: "recovery_required",
+            message: expect.any(String),
+          },
+        })
+        // The maintenance listing carries the same fenced Session with its reason code.
+        expect(
+          yield* requestJson<{ blocked: { sessionID: string; blockedReason: string }[]; count: number }>(
+            MaintenancePaths.recoveryRedriveBlocked,
+            { headers },
+          ),
+        ).toEqual({
+          blocked: [{ sessionID: "ses_redrive_blocked", blockedReason: "recovery_required" }],
+          count: 1,
+        })
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+    30_000,
+  )
+
 
   it.live("uses the persisted session directory for prompt requests", () =>
     Effect.gen(function* () {
@@ -1057,7 +1097,11 @@ describe("session HttpApi", () => {
         expect(context.status).toBe(404)
         expect(yield* responseJson(context)).toEqual(expected)
 
-        const compact = yield* request(`/api/session/${missing}/compact`, { method: "POST", headers })
+        const compact = yield* request(`/api/session/${missing}/compact`, {
+          method: "POST",
+          headers: { ...headers, "content-type": "application/json" },
+          body: JSON.stringify({ providerID: "test", modelID: "test-model" }),
+        })
         expect(compact.status).toBe(404)
         expect(yield* responseJson(compact)).toEqual(expected)
 
@@ -1143,13 +1187,26 @@ describe("session HttpApi", () => {
         const headers = { "x-deepagent-code-directory": test.directory }
         const session = yield* createSession({ title: "v2 unavailable" })
 
-        // Manual compaction must not claim success until Core owns the complete operation. The old
-        // host seam only wrote a legacy marker and returned 204 without processing a summary.
-        const compact = yield* request(`/api/session/${session.id}/compact`, { method: "POST", headers })
+        // The summary model identity is a required contract field: omitting it is a typed 400
+        // rejection at decode, never a defaulted identity.
+        const compactMissingModel = yield* request(`/api/session/${session.id}/compact`, {
+          method: "POST",
+          headers: { ...headers, "content-type": "application/json" },
+          body: JSON.stringify({}),
+        })
+        expect(compactMissingModel.status).toBe(400)
+
+        // With an explicit model the call enters the native compaction chain — an empty session
+        // history is the next typed guard, surfaced as a 503 carrying the concrete reason.
+        const compact = yield* request(`/api/session/${session.id}/compact`, {
+          method: "POST",
+          headers: { ...headers, "content-type": "application/json" },
+          body: JSON.stringify({ providerID: "test", modelID: "test-model" }),
+        })
         expect(compact.status).toBe(503)
         expect(yield* responseJson(compact)).toEqual({
           _tag: "ServiceUnavailableError",
-          message: "Session compact is not available yet",
+          message: "manual compaction requires a non-empty session history",
           service: "session.compact",
         })
 
@@ -1194,6 +1251,66 @@ describe("session HttpApi", () => {
     { git: true, config: { formatter: false, lsp: false } },
     // Boots a real server instance over a git repo; runs 3-4s under load — the default
     // 5s timeout flakes under parallel suite load.
+    30_000,
+  )
+
+  it.live("settles a manual compaction through the v2 public compact endpoint with an explicit model", () =>
+    Effect.gen(function* () {
+      const llm = yield* TestLLMServer
+      yield* llm.text("reply one", { usage: { input: 1, output: 1 } })
+      yield* llm.text("reply two", { usage: { input: 1, output: 1 } })
+      yield* llm.text("Summary of the exchanges", { usage: { input: 1, output: 1 } })
+      const directory = yield* tmpdirScoped({ git: true, config: testProviderConfig(llm.url) })
+      const headers = { "x-deepagent-code-directory": directory, "content-type": "application/json" }
+      const session = yield* createSession({
+        title: "v2 public compact",
+        model: { providerID: ProviderV2.ID.make("test"), id: ModelV2.ID.make("test-model") },
+      }).pipe(provideInstanceEffect(directory))
+
+      // Sequential rounds with an idle wait between them: back-to-back prompts coalesce into a
+      // single steered activity (one provider turn), which would leave the summary turn without a
+      // queued mock response.
+      const rounds = [
+        ["msg_v2_compact_first", "first exchange about apples"],
+        ["msg_v2_compact_second", "second exchange"],
+      ] as const
+      for (const [index, [id, text]] of rounds.entries()) {
+        const admitted = yield* request(`/api/session/${session.id}/prompt`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ id, prompt: { text } }),
+        })
+        expect(admitted.status).toBe(200)
+        yield* llm.wait(index + 1)
+        const waitedRound = yield* request(`/api/session/${session.id}/wait`, { method: "POST", headers })
+        expect(waitedRound.status).toBe(204)
+      }
+
+      const compact = yield* request(`/api/session/${session.id}/compact`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ providerID: "test", modelID: "test-model" }),
+      })
+      expect(compact.status).toBe(204)
+
+      // The summary provider turn is the third mock-LLM hit, and the durable request settled with
+      // the explicit model identity recorded at admission.
+      expect(yield* llm.calls).toBe(3)
+      const settled = yield* Database.Service.use(({ db }) =>
+        db
+          .select()
+          .from(CompactionRequestTable)
+          .where(eq(CompactionRequestTable.session_id, session.id))
+          .get()
+          .pipe(Effect.orDie),
+      )
+      expect(settled).toMatchObject({
+        status: "settled",
+        outcome: "compacted",
+        provider_id: "test",
+        model_id: "test-model",
+      })
+    }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
     30_000,
   )
 

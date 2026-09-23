@@ -47,15 +47,15 @@ type BusinessDb = Database.Interface["db"]
 //
 // A `recovery_command` row records an exit decision (the maintenance surface records it
 // with the actor who requested it); the executor APPLIES the committed decision — it
-// never invents one. Only the `abandon` exit of a `resolvable_exact` descriptor is
-// derivable from durable rows alone (actor / request hash / attempt identity) and has
-// a purely local terminal effect (never touches the provider). The other classes need
-// input the DB does not hold — C1B-05-verified baseline reconstruction (repair), the
-// safe-boundary history window (fork), external provider evidence (confirm-settled) or
-// an admin coordination action — so they are KEPT PENDING and surfaced, never
-// fabricated (§9.1: never invent a committed baseline/evidence). The design's
-// no-auto-replay rule (§2.2) is untouched: applying a recorded exit never dispatches a
-// provider request.
+// never invents one. The `resolvable_exact` descriptor class carries the two purely local
+// exits: `abandon_exact` (actor / request hash / attempt identity alone) and
+// `confirm_settled` (the row's committed typed provider evidence — the evidence was
+// admitted by the recording surface; applying it never touches the provider). The other
+// classes need input the DB does not hold — C1B-05-verified baseline reconstruction
+// (repair), the safe-boundary history window (fork) or an admin coordination action — so
+// they are KEPT PENDING and surfaced, never fabricated (§9.1: never invent a committed
+// baseline/evidence). The design's no-auto-replay rule (§2.2) is untouched: applying a
+// recorded exit never dispatches a provider request.
 
 const KeptPendingReason = {
   no_exit_resolved: "resolved_descriptor_no_exit",
@@ -65,6 +65,7 @@ const KeptPendingReason = {
   requires_admin: "requires_admin_coordination",
   requires_baseline: "requires_baseline_reconstruction",
   requires_history: "requires_safe_boundary_history",
+  confirm_settled_evidence_missing: "confirm_settled_evidence_missing",
 } as const
 
 export type PendingExitOutcome =
@@ -101,6 +102,8 @@ type CommandDbRow = {
   result_hash: string | null
   actor_type: string | null
   actor_id: string | null
+  command_kind: string | null
+  evidence: string | null
   created_at: number
   updated_at: number
 }
@@ -110,7 +113,7 @@ const storeOf = (db: BusinessDb) => SessionProviderRecoveryDurable.makeDurableRe
 const pendingCommands = Effect.fn("RecoveryExecutor.pendingCommands")(function* (db: BusinessDb) {
   const rows = yield* db.all<CommandDbRow>(sql`
     SELECT command_id, descriptor_id, attempt, state, expected_owner_token, result_hash,
-           actor_type, actor_id, created_at, updated_at
+           actor_type, actor_id, command_kind, evidence, created_at, updated_at
     FROM recovery_command WHERE state = 'pending'
   `).pipe(Effect.orDie)
   return rows.flatMap((row) => {
@@ -138,12 +141,32 @@ const applyOne = Effect.fn("RecoveryExecutor.applyOne")(function* (
   if (descriptor.payload.descriptorKind === "repairable_exact") return kept(KeptPendingReason.requires_baseline)
   if (descriptor.payload.descriptorKind === "fork_only") return kept(KeptPendingReason.requires_history)
   if (descriptor.payload.descriptorKind === "coordination_required") return kept(KeptPendingReason.requires_admin)
-  // resolvable_exact — the abandon exit. The recorded command row carries the actor
+  // resolvable_exact — the two durable exits. The recorded command row carries the actor
   // whose exit decision was committed; the executor REPLAYS that decision (crash
   // resume), never invents one: a row without an actor, or with a system actor (the
-  // permission model never grants a system actor an exit), stays pending.
+  // permission model never grants a system actor an exit), stays pending. A row whose
+  // committed exit vocabulary is `confirm_settled` routes to `applyExactSettled` — the
+  // same single-transaction authority application, carrying the row's typed evidence; a
+  // confirm_settled row without a decodable evidence body stays pending (typed reason).
   if (row.actorType === undefined || row.actorId === undefined) return kept(KeptPendingReason.no_actor)
   if (row.actorType === "system") return kept(KeptPendingReason.system_actor_refused)
+  if (row.commandKind === "confirm_settled") {
+    if (row.evidence === undefined) return kept(KeptPendingReason.confirm_settled_evidence_missing)
+    return yield* storeOf(db)
+      .applyExactSettled({ commandId: row.commandId })
+      .pipe(
+        Effect.map((outcome): PendingExitOutcome =>
+          outcome === "authority_conflict"
+            ? kept("settle_conflict:authority_conflict")
+            : outcome === "evidence_rejected"
+              ? kept(KeptPendingReason.confirm_settled_evidence_missing)
+              : { commandId: row.commandId, status: "applied", to: "settled" },
+        ),
+        Effect.catchCause((cause): Effect.Effect<PendingExitOutcome, never> =>
+          Effect.succeed({ commandId: row.commandId, status: "apply_failed", error: causeLabel(cause) }),
+        ),
+      )
+  }
   return yield* storeOf(db)
     .applyExactAbandon({
       commandId: row.commandId,

@@ -4,6 +4,8 @@ import { DateTime } from "effect"
 import { SessionMessage } from "./message"
 import { SessionSchema } from "./schema"
 import { SessionV1 } from "../v1/session"
+import { ModelV2 } from "../model"
+import { ProviderV2 } from "../provider"
 
 // W4-6 — the canonical SessionMessage → SessionV1.WithParts converter, shared by the journal→
 // wire projection egress (core projector) and re-exported from SessionV2 for the host callers.
@@ -109,6 +111,35 @@ function toolDisplayOutput(state: SessionMessage.ToolStateCompleted): string {
   return json === "{}" || json === undefined ? "" : json
 }
 
+/**
+ * The V1 wire part metadata. Before the V2 projection this field carried the tool's own result
+ * metadata (bash exit/truncated/outputPath, plugin metadata, ...); the provider channel carried
+ * only protocol riders like plan outcomes. Projecting ONLY provider.resultMetadata therefore
+ * emptied the field for every locally-executed tool — the CLI lost bash exit codes and the live
+ * battery lost every truncation/exit assertion. The durable structured output is the metadata
+ * authority now: spread it, alias the bash exit vocabulary (`exitCode` → the legacy `exit` every
+ * V1 consumer reads), surface ToolOutputStore truncation through the legacy truncated/outputPath
+ * keys, and let the provider channel override on explicit key collisions (plan protocol riders).
+ */
+function legacyCompletedMetadata(
+  state: SessionMessage.ToolStateCompleted,
+  resultMetadata: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  const structured =
+    typeof state.structured === "object" && state.structured !== null && !Array.isArray(state.structured)
+      ? state.structured
+      : {}
+  const outputPaths = state.outputPaths ?? []
+  return {
+    ...structured,
+    ...(typeof structured.exitCode === "number" && structured.exit === undefined
+      ? { exit: structured.exitCode }
+      : {}),
+    ...(outputPaths.length > 0 ? { truncated: true, outputPath: outputPaths[0] } : {}),
+    ...(resultMetadata ?? {}),
+  }
+}
+
 function legacyAssistantToolState(
   part: SessionMessage.AssistantTool,
   identity: { readonly sessionID: SessionSchema.ID; readonly messageID: SessionV1.MessageID },
@@ -138,7 +169,7 @@ function legacyAssistantToolState(
       input: part.state.input,
       output: result,
       title: part.name,
-      metadata: part.provider?.resultMetadata ?? {},
+      metadata: legacyCompletedMetadata(part.state, part.provider?.resultMetadata),
       time: { start, end: DateTime.toEpochMillis(part.time.completed ?? part.time.created) },
       attachments: part.state.attachments?.map((file, index) => ({
         id: SessionV1.PartID.ascending(`prt_${part.id}_${index}`),
@@ -164,5 +195,62 @@ function legacyAssistantToolState(
     error: part.state.error.message,
     metadata: part.provider?.resultMetadata,
     time: { start, end: DateTime.toEpochMillis(part.time.completed ?? part.time.created) },
+  }
+}
+
+/**
+ * The canonical user/synthetic converter (W4-6; moved from the projector beside
+ * {@link legacyAssistant} so the W-02 M-1 batch MD exporter shares the exact wire shape).
+ * The wire user row feeds next-turn model resolution (currentModel falls back to the last user
+ * message's model); it carries the session's model so the fallback never resolves empty.
+ */
+export function legacyUser(input: {
+  readonly sessionID: SessionSchema.ID
+  readonly message: SessionMessage.User | SessionMessage.Synthetic
+  readonly agent: string | null
+  readonly model: { id: string; providerID: string; variant?: string } | null
+  readonly synthetic?: boolean
+}): SessionV1.WithParts {
+  const created = DateTime.toEpochMillis(input.message.time.created)
+  const messageID = SessionV1.MessageID.ascending(input.message.id)
+  const parts: SessionV1.Part[] = []
+  if (input.message.text) {
+    parts.push({
+      id: SessionV1.PartID.ascending(`prt_${input.message.id.slice("msg_".length)}_0`),
+      sessionID: input.sessionID,
+      messageID,
+      type: "text",
+      text: input.message.text,
+      ...(input.synthetic === true ? { synthetic: true } : {}),
+      time: { start: created, end: created },
+    })
+  }
+  const files = input.message.type === "user" ? (input.message.files ?? []) : []
+  for (const [index, file] of files.entries()) {
+    parts.push({
+      id: SessionV1.PartID.ascending(`prt_${input.message.id.slice("msg_".length)}_f${index}`),
+      sessionID: input.sessionID,
+      messageID,
+      type: "file",
+      url: file.uri,
+      mime: file.mime,
+      ...(file.name === undefined ? {} : { filename: file.name }),
+      time: { start: created, end: created },
+    } as SessionV1.Part)
+  }
+  return {
+    info: {
+      id: messageID,
+      sessionID: input.sessionID,
+      role: "user",
+      time: { created },
+      agent: input.agent ?? "",
+      model: {
+        providerID: (input.model?.providerID ?? "") as ProviderV2.ID,
+        modelID: (input.model?.id ?? "") as ModelV2.ID,
+        ...(input.model?.variant === undefined ? {} : { variant: input.model.variant }),
+      },
+    },
+    parts,
   }
 }

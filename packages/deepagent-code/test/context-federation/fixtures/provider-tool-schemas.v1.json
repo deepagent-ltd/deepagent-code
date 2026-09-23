@@ -6,11 +6,11 @@
     "codeIntel": {
       "schemaVersion": 1,
       "hashes": {
-        "openai-responses": "3a79b289f597c894820922ce62be27d2282b50b43e3c0387361ee39d495b4b2b",
-        "openai-compatible-chat": "3a79b289f597c894820922ce62be27d2282b50b43e3c0387361ee39d495b4b2b",
-        "anthropic-messages": "3a79b289f597c894820922ce62be27d2282b50b43e3c0387361ee39d495b4b2b",
-        "gemini": "3a79b289f597c894820922ce62be27d2282b50b43e3c0387361ee39d495b4b2b",
-        "bedrock-converse": "3a79b289f597c894820922ce62be27d2282b50b43e3c0387361ee39d495b4b2b"
+        "openai-responses": "ce2f26005570c3a0c0fd162e562d9eb5db3b97cce9419e9ce7624ee3af74a469",
+        "openai-compatible-chat": "ce2f26005570c3a0c0fd162e562d9eb5db3b97cce9419e9ce7624ee3af74a469",
+        "anthropic-messages": "ce2f26005570c3a0c0fd162e562d9eb5db3b97cce9419e9ce7624ee3af74a469",
+        "gemini": "ce2f26005570c3a0c0fd162e562d9eb5db3b97cce9419e9ce7624ee3af74a469",
+        "bedrock-converse": "ce2f26005570c3a0c0fd162e562d9eb5db3b97cce9419e9ce7624ee3af74a469"
       }
     }
   },
@@ -18,21 +18,21 @@
     "codeIntel": {
       "schemaVersion": 2,
       "hashes": {
-        "openai-responses": "16e550219a61e6714e01dcb5b4e11355ad441403638eddf338089d94ee424663",
-        "openai-compatible-chat": "16e550219a61e6714e01dcb5b4e11355ad441403638eddf338089d94ee424663",
-        "anthropic-messages": "16e550219a61e6714e01dcb5b4e11355ad441403638eddf338089d94ee424663",
-        "gemini": "16e550219a61e6714e01dcb5b4e11355ad441403638eddf338089d94ee424663",
-        "bedrock-converse": "16e550219a61e6714e01dcb5b4e11355ad441403638eddf338089d94ee424663"
+        "openai-responses": "726782e54b1552ebc5c7ff45718716a9af8897fd3e232cee55bc503ea24111c6",
+        "openai-compatible-chat": "726782e54b1552ebc5c7ff45718716a9af8897fd3e232cee55bc503ea24111c6",
+        "anthropic-messages": "726782e54b1552ebc5c7ff45718716a9af8897fd3e232cee55bc503ea24111c6",
+        "gemini": "726782e54b1552ebc5c7ff45718716a9af8897fd3e232cee55bc503ea24111c6",
+        "bedrock-converse": "726782e54b1552ebc5c7ff45718716a9af8897fd3e232cee55bc503ea24111c6"
       }
     },
     "contextQuery": {
       "schemaVersion": 1,
       "hashes": {
-        "openai-responses": "617bd804004b7d3baaa15fcf274201a804c50d42c87fce231f509139d1f0ba2d",
-        "openai-compatible-chat": "617bd804004b7d3baaa15fcf274201a804c50d42c87fce231f509139d1f0ba2d",
-        "anthropic-messages": "617bd804004b7d3baaa15fcf274201a804c50d42c87fce231f509139d1f0ba2d",
-        "gemini": "617bd804004b7d3baaa15fcf274201a804c50d42c87fce231f509139d1f0ba2d",
-        "bedrock-converse": "617bd804004b7d3baaa15fcf274201a804c50d42c87fce231f509139d1f0ba2d"
+        "openai-responses": "22d56410ebbffecf9f775d3f9853ad68456df63474324835c6a4408d30a4face",
+        "openai-compatible-chat": "22d56410ebbffecf9f775d3f9853ad68456df63474324835c6a4408d30a4face",
+        "anthropic-messages": "22d56410ebbffecf9f775d3f9853ad68456df63474324835c6a4408d30a4face",
+        "gemini": "22d56410ebbffecf9f775d3f9853ad68456df63474324835c6a4408d30a4face",
+        "bedrock-converse": "22d56410ebbffecf9f775d3f9853ad68456df63474324835c6a4408d30a4face"
       }
     }
   }

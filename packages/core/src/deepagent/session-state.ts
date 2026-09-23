@@ -766,7 +766,13 @@ function normalizeState(state: SessionRunState): SessionRunState {
     ...state,
     budget: {
       ...state.budget,
-      maxTotalTokens: nextBudget.maxTotalTokens,
+      // B4 (design §7.3): preserve an explicitly configured token ceiling. The unconditional
+      // reset to the null default made maxTotalTokens permanently null, leaving Budget.check's
+      // warning/exhausted branches (and the prompt-policy "Token budget remaining" line)
+      // unreachable. Deriving a default from the model context window at session start is NOT
+      // done here: no initialization caller (getOrCreate / orchestrator.initSession /
+      // agent-gateway.ensureSessionStateForRun) carries a context-window value today.
+      maxTotalTokens: state.budget?.maxTotalTokens ?? nextBudget.maxTotalTokens,
       maxRounds: nextBudget.maxRounds,
     },
     // Backfill: sessions persisted before U1 have no planLatch/plan on disk. Sessions persisted

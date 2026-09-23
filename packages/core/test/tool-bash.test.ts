@@ -2,7 +2,7 @@ import fs from "fs/promises"
 import { realpathSync } from "node:fs"
 import path from "path"
 import { describe, expect, test } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Duration, Effect, Layer } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { Config } from "@deepagent-code/core/config"
@@ -30,6 +30,9 @@ const runs: Array<{
   readonly options?: AppProcess.RunOptions
 }> = []
 let denyAction: string | undefined
+let denyRules: PermissionV2.Ruleset = []
+let rejectFeedback: string | undefined
+let rejectPlain = false
 let result: AppProcess.RunResult = {
   command: "mock",
   exitCode: 0,
@@ -48,7 +51,15 @@ const permission = Layer.succeed(
       Effect.sync(() => assertions.push(input)).pipe(
         Effect.andThen(Effect.suspend(() => afterPermission(input))),
         Effect.andThen(
-          input.action === denyAction ? Effect.fail(new PermissionV2.DeniedError({ rules: [] })) : Effect.void,
+          rejectPlain ? Effect.fail(new PermissionV2.RejectedError()) : Effect.void,
+        ),
+        Effect.andThen(
+          rejectFeedback === undefined
+            ? Effect.void
+            : Effect.fail(new PermissionV2.CorrectedError({ feedback: rejectFeedback })),
+        ),
+        Effect.andThen(
+          input.action === denyAction ? Effect.fail(new PermissionV2.DeniedError({ rules: denyRules })) : Effect.void,
         ),
       ),
     ask: () => Effect.die("unused"),
@@ -99,6 +110,9 @@ const reset = () => {
   assertions.length = 0
   runs.length = 0
   denyAction = undefined
+  denyRules = []
+  rejectFeedback = undefined
+  rejectPlain = false
   runFailure = undefined
   policyStatements = []
   afterPermission = () => Effect.void
@@ -128,6 +142,7 @@ const withTool = <A, E, R>(
     Layer.provide(registry),
     Layer.provide(permission),
     Layer.provide(mutation),
+    Layer.provide(activeLocation),
     Layer.provide(filesystem),
     Layer.provide(processLayer),
     Layer.provide(config),
@@ -164,7 +179,7 @@ describe("BashTool", () => {
             expect(
               yield* settleTool(registry, call({ command: "pwd", description: "Print working directory" })),
             ).toEqual({
-              result: { type: "text", value: "hello\n\n\nCommand exited with code 0." },
+              result: { type: "text", value: "hello\n\n\nexit code: 0" },
               output: {
                 structured: {
                   command: "pwd",
@@ -181,7 +196,7 @@ describe("BashTool", () => {
               maxOutputBytes: BashTool.MAX_CAPTURE_BYTES,
               maxErrorBytes: BashTool.MAX_CAPTURE_BYTES,
             })
-            expect(assertions).toMatchObject([{ sessionID, action: "bash", resources: ["pwd"], save: ["pwd"] }])
+            expect(assertions).toMatchObject([{ sessionID, action: "bash", resources: ["pwd"], save: ["pwd *"] }])
           }),
         )
       },
@@ -249,7 +264,7 @@ describe("BashTool", () => {
           ).pipe(
             Effect.andThen((settled) =>
               Effect.sync(() => {
-                expect(settled.result).toEqual({ type: "text", value: "core-bash\n\nCommand exited with code 0." })
+                expect(settled.result).toEqual({ type: "text", value: "core-bash\n\nexit code: 0" })
                 expect(settled.output?.structured).toMatchObject({
                   command: "printf core-bash",
                   cwd: realpathSync(tmp.path),
@@ -317,24 +332,92 @@ describe("BashTool", () => {
     ),
   )
 
-  it.live("reports external command arguments as advisory warnings without enforcing approval", () =>
+  it.live("surfaces the user's rejection feedback as the model-visible failure", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        rejectFeedback = "run ls instead of pwd"
+        return withTool(tmp.path, (registry) => settleTool(registry, call({ command: "pwd" }))).pipe(
+          Effect.andThen((settled) =>
+            Effect.sync(() => {
+              expect(settled.result).toEqual({
+                type: "error",
+                value:
+                  "The user rejected permission to use this specific tool call with the following feedback: run ls instead of pwd",
+                metadata: { failureCode: "user_corrected_permission" },
+              })
+              expect(runs).toEqual([])
+            }),
+          ),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("surfaces a plain user rejection with its structured failure code", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        rejectPlain = true
+        return withTool(tmp.path, (registry) => settleTool(registry, call({ command: "pwd" }))).pipe(
+          Effect.andThen((settled) =>
+            Effect.sync(() => {
+              expect(settled.result).toEqual({
+                type: "error",
+                value: "The user rejected permission to use this specific tool call.",
+                metadata: { failureCode: "user_rejected_permission" },
+              })
+              expect(runs).toEqual([])
+            }),
+          ),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("surfaces a rule-based denial with its rules as the model-visible failure", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        denyAction = "bash"
+        denyRules = [{ action: "bash", resource: "pwd", effect: "deny" }]
+        return withTool(tmp.path, (registry) => settleTool(registry, call({ command: "pwd" }))).pipe(
+          Effect.andThen((settled) =>
+            Effect.sync(() => {
+              expect(settled.result).toEqual({
+                type: "error",
+                value: `The user has specified a rule which prevents you from using this specific tool call. Here are some of the relevant rules ${JSON.stringify(denyRules)}`,
+                metadata: { failureCode: "permission_denied_rule" },
+              })
+              expect(runs).toEqual([])
+            }),
+          ),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("enforces external_directory approval for command file arguments outside the Location", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
       ([active, outside]) => {
         reset()
-        denyAction = "external_directory"
         const target = path.join(outside.path, "secret.txt")
         return withTool(active.path, (registry) => settleTool(registry, call({ command: `cat ${target}` }))).pipe(
           Effect.andThen((settled) =>
             Effect.sync(() => {
-              expect(assertions.map((item) => item.action)).toEqual(["bash"])
+              const glob = path.join(realpathSync(outside.path), "*").replaceAll("\\", "/")
+              expect(assertions.map((item) => item.action)).toEqual(["external_directory", "bash"])
+              expect(assertions[0]).toMatchObject({ resources: [glob], save: [glob] })
+              expect(assertions[1]).toMatchObject({ resources: [`cat ${target}`], save: ["cat *"] })
+              expect(settled.output?.structured).not.toHaveProperty("warnings")
               expect(runs).toHaveLength(1)
-              expect(settled.output?.structured).toMatchObject({
-                warnings: [
-                  `Command argument references external directory ${path.join(realpathSync(outside.path), "*").replaceAll("\\", "/")}. Bash runs with host-user filesystem, process, and network authority; this scan is advisory only.`,
-                ],
-              })
-              expect(settled.result).toMatchObject({ type: "text", value: expect.stringContaining("Warnings:") })
             }),
           ),
         )
@@ -343,6 +426,76 @@ describe("BashTool", () => {
         Effect.promise(() =>
           Promise.all([active[Symbol.asyncDispose](), outside[Symbol.asyncDispose]()]).then(() => undefined),
         ),
+    ),
+  )
+
+  it.live("does not execute when an external command file argument is denied", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => Promise.all([tmpdir(), tmpdir()])),
+      ([active, outside]) => {
+        reset()
+        denyAction = "external_directory"
+        denyRules = [{ action: "external_directory", resource: "*", effect: "deny" }]
+        const target = path.join(outside.path, "secret.txt")
+        return withTool(active.path, (registry) => settleTool(registry, call({ command: `cat ${target}` }))).pipe(
+          Effect.andThen((settled) =>
+            Effect.sync(() => {
+              expect(settled.result).toMatchObject({
+                type: "error",
+                metadata: { failureCode: "permission_denied_rule" },
+              })
+              expect(assertions.map((item) => item.action)).toEqual(["external_directory"])
+              expect(runs).toEqual([])
+            }),
+          ),
+        )
+      },
+      ([active, outside]) =>
+        Effect.promise(() =>
+          Promise.all([active[Symbol.asyncDispose](), outside[Symbol.asyncDispose]()]).then(() => undefined),
+        ),
+    ),
+  )
+
+  it.live("approves each parsed command in a chain with BashArity prefix saves", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        return withTool(tmp.path, (registry) =>
+          settleTool(registry, call({ command: "echo foo && echo bar" })),
+        ).pipe(
+          Effect.andThen(() =>
+            Effect.sync(() => {
+              expect(assertions).toMatchObject([
+                { action: "bash", resources: ["echo foo", "echo bar"], save: ["echo *"] },
+              ])
+              expect(runs).toHaveLength(1)
+            }),
+          ),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("keeps redirect text in the permission pattern and skips bash approval for cd-only commands", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) =>
+        Effect.gen(function* () {
+          reset()
+          yield* withTool(tmp.path, (registry) =>
+            settleTool(registry, call({ command: "echo test > output.txt" })),
+          )
+          expect(assertions).toMatchObject([{ action: "bash", resources: ["echo test > output.txt"] }])
+
+          reset()
+          yield* withTool(tmp.path, (registry) => settleTool(registry, call({ command: "cd ." })))
+          expect(assertions).toEqual([])
+          expect(runs).toHaveLength(1)
+        }),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
     ),
   )
 
@@ -357,13 +510,13 @@ describe("BashTool", () => {
             Effect.sync(() => {
               expect(settled.result).toMatchObject({
                 type: "text",
-                value: expect.stringContaining("Command exited with code 7"),
+                value: expect.stringContaining("exit code: 7"),
               })
               expect(settled.output?.structured).toMatchObject({
                 command: "false",
                 cwd: realpathSync(tmp.path),
                 exitCode: 7,
-                output: "HEAD full output TAIL",
+                output: "HEAD full output TAIL\n\nexit code: 7",
                 truncated: false,
               })
             }),
@@ -465,6 +618,49 @@ describe("BashTool", () => {
     ),
   )
 
+  it.live("threads a stringified timeout through decode into the process run options", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        return withTool(tmp.path, (registry) =>
+          settleTool(registry, call({ command: "pwd", timeout: "5000" as never })),
+        ).pipe(
+          Effect.andThen((settled) =>
+            Effect.sync(() => {
+              expect(settled.result).toMatchObject({ type: "text" })
+              expect(runs[0]?.options?.timeout).toEqual(Duration.millis(5000))
+            }),
+          ),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
+  it.live("rejects a non-numeric timeout string at the input boundary", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => {
+        reset()
+        return withTool(tmp.path, (registry) =>
+          settleTool(registry, call({ command: "pwd", timeout: "abc" as never })),
+        ).pipe(
+          Effect.andThen((settled) =>
+            Effect.sync(() => {
+              expect(settled.result).toMatchObject({
+                type: "error",
+                value: expect.stringContaining("Invalid tool input"),
+              })
+              expect(runs).toEqual([])
+            }),
+          ),
+        )
+      },
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ),
+  )
+
   it.live("returns a useful timeout settlement", () =>
     Effect.acquireUseRelease(
       Effect.promise(() => tmpdir()),
@@ -495,10 +691,6 @@ describe("BashTool", () => {
 test("keeps locked deferred parity TODOs visible", async () => {
   const source = await fs.readFile(new URL("../src/tool/bash.ts", import.meta.url), "utf8")
   for (const todo of [
-    "Port tree-sitter bash / PowerShell parser-based approval reduction.",
-    "Port BashArity reusable command-prefix approvals.",
-    "Replace token-based command-argument external-directory advisories with parser-based detection.",
-    "Restore PowerShell and cmd-specific invocation/path handling on Windows.",
     "Add plugin shell.env environment augmentation once V2 plugin hooks exist.",
     "Add durable/live progress metadata streaming for long-running commands once V2 tool invocation progress context is wired.",
     "Persist background job status and define restart recovery before exposing remote observation.",

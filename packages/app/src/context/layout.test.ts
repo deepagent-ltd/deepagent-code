@@ -32,6 +32,25 @@ describe("right panel persisted-state quarantine", () => {
     })
   })
 
+  test("WS1: folds the merged dev panels into dev and closes relocated ones", () => {
+    expect(
+      migrateRightPanelSessionView(
+        {
+          debug: { scroll: {}, rightPanelMode: "debug" },
+          profile: { scroll: {}, rightPanelMode: "profile" },
+          plugins: { scroll: {}, rightPanelMode: "plugins" },
+          stats: { scroll: {}, rightPanelMode: "stats" },
+        },
+        "1.0.0",
+      ),
+    ).toEqual({
+      debug: { scroll: {}, rightPanelMode: "dev" },
+      profile: { scroll: {}, rightPanelMode: "dev" },
+      plugins: { scroll: {}, rightPanelMode: undefined },
+      stats: { scroll: {}, rightPanelMode: undefined },
+    })
+  })
+
   test("closes a panel after two failures in the same build", () => {
     const failed = (count: number, build = "1.0.0") => ({
       session: {

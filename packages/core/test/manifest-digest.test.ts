@@ -1,10 +1,15 @@
 import { describe, expect, test } from "bun:test"
+import * as fs from "node:fs"
+import * as os from "node:os"
+import * as path from "node:path"
 import { isAbsolute } from "node:path"
+import { HeadPin } from "../script/manifest-digest/head-pin"
 import {
   ManifestVersion,
   assertManifestMatches,
   assertManifestShape,
   buildManifest,
+  digestFileContent,
   generateManifest,
   serializeManifest,
   type DeterministicManifest,
@@ -106,13 +111,13 @@ describe("generateManifest (live tree)", () => {
 describe("C0-05 requirement coverage", () => {
   test("handles absent input categories deterministically (missing dirs + non-existent repo)", () => {
     const manifest = generateManifest()
-    // The C0-01/C0-06 evidence groups are absent in a clean checkout -> stable marker digests.
+    // The input set is closed over the committed-tree groups; no .artifacts evidence groups exist.
     expect(serializeManifest(manifest)).toBe(serializeManifest(generateManifest()))
-    expect(Object.keys(manifest.inputs["c0-01-inventory-report"] ?? {})).toEqual([
-      "packages/core/.artifacts/caller-inventory/report.json",
-    ])
-    expect(Object.keys(manifest.inputs["c0-06-perf-manifest"] ?? {})).toEqual([
-      "packages/core/.artifacts/perf-baseline",
+    expect(Object.keys(manifest.inputs).sort()).toEqual([
+      "contract",
+      "migration-registry",
+      "package-versions",
+      "runtime-flag-config",
     ])
 
     // A repo root with none of the input categories present must not throw and stays byte-stable.
@@ -151,36 +156,73 @@ describe("C0-05 requirement coverage", () => {
 })
 
 // C7-10 (a10 R3 close, W14) — the deterministic manifest MUST reproduce at the current HEAD. The
-// values below are the regenerated digests for the Core V2 context-tool cutover tree: any drift in
-// the manifest input groups (contract / migration registry / package versions / runtime flags) fails
-// here, and the pinned value + the record in `beta-rc-evidence-manifest.md` §1 / compliance-matrix
-// C7-10 must be refreshed TOGETHER (the R3 gap was exactly "recorded digests not reproducible at
-// HEAD").
+// pinned digests live in `script/manifest-digest/head-pin.ts` (the single source of truth shared
+// with the reproducibility gate and the docs-claims gate): any drift in the manifest input groups
+// (contract / migration registry / package versions / runtime flags) fails here.
 //
-// SCOPE (fix): the gate digests the COMMITTED tree only (`includeExternalEvidence: false`). The two
-// external-evidence groups hash artifacts under the git-ignored `packages/core/.artifacts/`
-// (caller-inventory report, perf baseline), so with them included the digest is a function of
-// whatever the machine happens to have generated — unreproducible in a clean checkout by
-// construction, and guaranteed to drift the moment any new source file changes the inventory. That
-// is not what "reproducible at HEAD" can mean; the externals are still collected and still perturb
-// the digest (asserted below), they are simply outside the reproducibility claim.
+// SCOPE (K-05/B-11 root fix): the generator input set is CLOSED over committed, git-tracked files.
+// The historical leak was the digest reading the git-ignored `packages/core/.artifacts/**`
+// (caller-inventory report, perf baseline), so a machine that had run those tools pinned a value a
+// clean checkout could never reproduce (O-TEST-3 / O-W12-3) — unreproducible at HEAD by
+// construction. External evidence now enters only when a caller explicitly binds produced bytes via
+// `extraInputs` (content-addressed under the documented repo-relative key), which is what the
+// candidate-ledger generator does for the freshly produced inventory report.
 describe("C7-10 HEAD reproducibility (a10 R3 close)", () => {
-  const TREE_PIN = "7828f565d78df982ff0ba64b653d836f9273550c252c55c59e37ae9d1ce6bd2f"
-  const OVERALL_PIN = "e8cd395d7572fb750ca4765de228812daa2aea1dccb3fa03f78b651692bffb02"
-
   test("regenerated manifest matches the HEAD-pinned digest", () => {
-    const manifest = generateManifest({ includeExternalEvidence: false })
-    expect(manifest.setTreeDigest).toBe(TREE_PIN)
-    expect(manifest.overallDigest).toBe(OVERALL_PIN)
+    const manifest = generateManifest()
+    expect(manifest.setTreeDigest).toBe(HeadPin.setTreeDigest)
+    expect(manifest.overallDigest).toBe(HeadPin.overallDigest)
   })
 
-  test("external evidence still enters the digest when present", () => {
-    // The reproducibility claim excludes the git-ignored artifacts; it must not silently IGNORE
-    // them. With evidence included the manifest digests them too, so a produced report is a real
-    // input rather than a decoration.
-    const withEvidence = generateManifest()
-    const withoutEvidence = generateManifest({ includeExternalEvidence: false })
-    expect(Object.keys(withEvidence.inputs)).toContain("c0-01-inventory-report")
-    expect(Object.keys(withoutEvidence.inputs)).not.toContain("c0-01-inventory-report")
+  test("git-ignored .artifacts residue cannot perturb the digest", () => {
+    // Build a minimal repo root with real inputs, then plant a .artifacts decoy tree (plus a stray
+    // .ts outside every input dir): the manifest bytes must not move.
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "manifest-digest-decoy-"))
+    const write = (relPath: string, content: unknown) => {
+      const abs = path.join(repoRoot, relPath)
+      fs.mkdirSync(path.dirname(abs), { recursive: true })
+      fs.writeFileSync(abs, typeof content === "string" ? content : JSON.stringify(content))
+    }
+    try {
+      for (const relPath of [
+        "packages/core/package.json",
+        "packages/deepagent-code/package.json",
+        "packages/app/package.json",
+        "packages/desktop/package.json",
+      ])
+        write(relPath, { name: relPath, version: "0.0.0" })
+      write("packages/core/src/contract/selection.ts", "export const x = 1\n")
+      write("packages/core/src/config/config.ts", "export const y = 2\n")
+      write("packages/core/src/database/migration.gen.ts", "export const migrations = []\n")
+      const base = generateManifest({ repoRoot })
+
+      write("packages/core/.artifacts/caller-inventory/report.json", { callers: ["decoy"] })
+      write("packages/core/.artifacts/perf-baseline/run-1/manifest.json", { runs: [1] })
+      write("packages/core/.artifacts/junk.ts", "export const decoy = true\n")
+      write("packages/core/src/unrelated/junk.ts", "export const outsideInputDirs = true\n")
+      const decoyed = generateManifest({ repoRoot })
+
+      expect(serializeManifest(decoyed)).toBe(serializeManifest(base))
+    } finally {
+      fs.rmSync(repoRoot, { recursive: true, force: true })
+    }
+  })
+
+  test("external evidence enters only as explicit content-addressed inputs", () => {
+    // Binding produced evidence is an explicit caller act: the exact bytes are hashed under the
+    // documented repo-relative key, so the default manifest is untouched and a bound manifest is
+    // reproducible from (tree, evidence bytes) alone.
+    const base = generateManifest()
+    const bound = generateManifest({
+      extraInputs: {
+        "c0-01-inventory-report": {
+          "packages/core/.artifacts/caller-inventory/report.json": '{"callers":[]}',
+        },
+      },
+    })
+    expect(bound.overallDigest).not.toBe(base.overallDigest)
+    expect(bound.inputs["c0-01-inventory-report"]?.["packages/core/.artifacts/caller-inventory/report.json"]).toBe(
+      digestFileContent('{"callers":[]}'),
+    )
   })
 })

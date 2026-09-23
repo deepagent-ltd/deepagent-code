@@ -185,7 +185,7 @@ describe("V3.9 §D — Grader per-criterion evaluation (§D.3)", () => {
               passed: false,
               kind: "unsupported_platform",
               exit_code: -1,
-              output: "run in WSL2",
+              output: "run in a legacy environment",
               duration_ms: 1,
             },
           ],
@@ -510,17 +510,19 @@ describe("V3.9 §D — Controller tick semantics", () => {
   test("§D.6 可回滚: critical failure → rolled_back + rollback port invoked", async () => {
     const clock = new FakeClock()
     const planDocId = putPlan([step("a", "pending")])
-    let rolledBack = false
+    let rolledBack: { goalId: string; sessionId: string; tick: number } | undefined
     const executor: StepExecutor = () => Effect.succeed({ tokensUsed: 1, critical: true })
-    const rollback: RollbackPort = () =>
+    const rollback: RollbackPort = (input) =>
       Effect.sync(() => {
-        rolledBack = true
+        rolledBack = input
       })
     const loop = makeGoalLoop(deps({ executor, rollback }, clock))
     const handle = await Effect.runPromise(loop.start(spec(planDocId)))
     const outcome = await Effect.runPromise(loop.tick(handle))
     expect(outcome).toBe("rolled_back")
-    expect(rolledBack).toBe(true)
+    // The port receives the triggering ledger tick — the "round" half of the deterministic
+    // rollback-notice id (goalId, tick) the wiring derives for its one-shot Synthetic notice.
+    expect(rolledBack).toMatchObject({ goalId: handle.goalId, sessionId: SESSION, tick: 1 })
     const status = await Effect.runPromise(loop.status(handle))
     expect(status.phase).toBe("rolled_back")
     // A diagnosis doc was written (可观测).

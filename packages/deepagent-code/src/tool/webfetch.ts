@@ -3,6 +3,7 @@ import { HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { Parser } from "htmlparser2"
 import * as Tool from "./tool"
 import TurndownService from "turndown"
+import { tolerantNumber } from "@deepagent-code/core/schema"
 import DESCRIPTION from "./webfetch.txt"
 import { isImageAttachment } from "@/util/media"
 
@@ -18,7 +19,8 @@ export const Parameters = Schema.Struct({
       default: "markdown",
     })
     .pipe(Schema.withDecodingDefault(Effect.succeed("markdown" as const))),
-  timeout: Schema.optional(Schema.Number).annotate({ description: "Optional timeout in seconds (max 120)" }),
+  // Tolerant number arm (F-1): GLM-class providers send the timeout as a stringified number.
+  timeout: Schema.optional(tolerantNumber()).annotate({ description: "Optional timeout in seconds (max 120)" }),
 })
 
 export const WebFetchTool = Tool.define(

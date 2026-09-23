@@ -12,7 +12,7 @@ import { LocationChangeJournal } from "@deepagent-code/core/location-index/chang
 import { LocationCommitLock } from "@deepagent-code/core/location-index/commit-lock"
 import { projectIdForWorkspace } from "@deepagent-code/core/deepagent/durable-knowledge-store"
 import { AbsolutePath } from "@deepagent-code/core/schema"
-import { Context, Effect, Layer, Semaphore } from "effect"
+import { Cause, Context, Effect, Layer, Semaphore } from "effect"
 import { randomUUID } from "node:crypto"
 import path from "node:path"
 import { LocationIndexCoordinator } from "./coordinator"
@@ -67,7 +67,13 @@ export const layer = Layer.effect(
           )
           const coordinator = Context.get(built, LocationIndexCoordinator.Service)
           yield* start({ coordinator, events, instance }).pipe(
-            Effect.catchCause((cause) => Effect.logWarning("Location index runtime stopped", { cause })),
+            // forkScoped ties the consumer to the instance scope: disposing the instance interrupts
+            // it, which is the satisfied end state, not a failure worth a WARN.
+            Effect.catchCause((cause) =>
+              Cause.hasInterruptsOnly(cause)
+                ? Effect.void
+                : Effect.logWarning("Location index runtime stopped", { cause: Cause.pretty(cause) }),
+            ),
             Effect.forkScoped,
           )
           return { identity, coordinator }

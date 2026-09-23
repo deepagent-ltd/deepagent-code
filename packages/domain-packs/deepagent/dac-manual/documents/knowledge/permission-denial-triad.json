@@ -1,0 +1,12 @@
+{
+  "ref_id": "knowledge:dac-manual:permission-denial-triad",
+  "type": "knowledge",
+  "title": "Permission denial triad: rejected, corrected, denied",
+  "description": "A permission tool error is a user decision, not a failure — rejected (plain no), corrected (no with feedback), denied (standing rule).",
+  "body": "When a tool call needs approval, the answer can come back as a tool error with one of three meanings. Rejected: \"The user rejected permission to use this specific tool call.\" — a one-off no to this call. Corrected: \"The user rejected permission to use this specific tool call with the following feedback: ...\" — a no that carries instructions; the feedback tells you what to do instead. Denied: \"The user has specified a rule which prevents you from using this specific tool call. Here are some of the relevant rules ...\" — a standing policy rule, so the whole class of call is off-limits.\n\nUse when a tool result looks like a refusal. Actions: read the error text first; never retry the same call unchanged — a repeated identical call will be refused again and reads as ignoring the user. For corrected, incorporate the feedback and take the suggested path. For denied, choose a different approach that stays inside the rules, or explain the block and ask. Do not attempt to route around a denial through another tool or shell indirection — that is the one response worse than the denial itself.\n\nInput/output: these arrive as ordinary tool errors, so they do not crash the turn; the distinction lives entirely in the message text.\n\nCaveats: a denial is not evidence the action was wrong in principle — only that it was not approved here; adjust tactics, not necessarily the goal. Risk boundary: escalating around a refusal breaks user trust and policy; the legitimate escalation path is a clear explanation to the user. Validation signal: your next action after a refusal differs from the refused call in a way the error text motivates.",
+  "domain": "permissions",
+  "scope_hint": "deepagent.dac-manual:knowledge",
+  "evidence_strength": "strong",
+  "provenance_tag": "domain_pack:deepagent.dac-manual",
+  "pack_id": "deepagent.dac-manual"
+}

@@ -605,14 +605,6 @@ const FIXED_ENTRIES: readonly FixedEntry[] = [
     fileFromRoot: "packages/core/script/evidence-ledger/release-gate.ts",
     identifier: "makeAuthoritativeManifest",
   },
-  {
-    id: "desktop.wsl-sidecar",
-    surface: "desktop",
-    kind: "sidecar-spawn",
-    name: "spawnWslSidecar",
-    fileFromRoot: "packages/desktop/src/main/wsl/sidecar.ts",
-    declare: "spawnWslSidecar",
-  },
 
   // IM (surface 6): durable V2 admission + reply-outbox daemon + the mention-list provider face.
   // v2f-d IM durable-only migration: the legacy executor/reply-sink/progress-stream server modules

@@ -18,6 +18,7 @@ import type { Snapshot } from "../snapshot"
 import * as Log from "@deepagent-code/core/util/log"
 import { InstanceRef, WorkspaceRef } from "@/effect/instance-ref"
 import type { InstanceStore } from "@/project/instance-store"
+import type { Database } from "@deepagent-code/core/database/database"
 import type { EventV2 } from "@deepagent-code/core/event"
 import type { Session } from "./session"
 import type { Agent } from "../agent/agent"
@@ -32,6 +33,7 @@ import {
   GoalLoopWiring,
   liveDiagnostics,
   liveRollback,
+  liveRollbackNotice,
   makeTaskSubagentRunner,
   type PanelQuestionInput,
 } from "./goal-loop-wiring"
@@ -69,6 +71,8 @@ export type GoalTickPortDeps = {
   readonly lsp: LSP.Interface
   readonly instanceStore: InstanceStore.Interface
   readonly events: EventV2.Interface
+  /** The shared DB handle backing the B5 rollback notice's deterministic-id dedupe check. */
+  readonly db: Database.Interface["db"]
   readonly eventBus: DeepAgentEventBus.Interface
   readonly approvalQueue: ApprovalQueue.Interface
   readonly flags: RuntimeFlags.Info
@@ -183,15 +187,18 @@ export const makeGoalTickPort =
       // Diagnostics + rollback, both wrapped (LSP / SessionRevert resolve through InstanceState).
       const diagnostics = () =>
         withContext(liveDiagnostics().pipe(Effect.provideService(LSPService.Service, deps.lsp)))
-      const rollback = liveRollback(deps.revert, (sid) =>
-        withContext(
-          deps.sessions
-            .messages({ sessionID: SessionID.make(sid) })
-            .pipe(
-              Effect.map((msgs) => msgs.at(-1)?.info.id ?? null),
-              Effect.catchCause(() => Effect.succeed(null)),
-            ),
-        ),
+      const rollback = liveRollback(
+        deps.revert,
+        (sid) =>
+          withContext(
+            deps.sessions
+              .messages({ sessionID: SessionID.make(sid) })
+              .pipe(
+                Effect.map((msgs) => msgs.at(-1)?.info.id ?? null),
+                Effect.catchCause(() => Effect.succeed(null)),
+              ),
+          ),
+        liveRollbackNotice(deps.events, deps.db),
       )
       const wrappedRollback: typeof rollback = (rbInput) => withContext(rollback(rbInput))
 
