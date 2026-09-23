@@ -45,12 +45,17 @@ type ListenOptions = CorsOptions & {
   hostname: string
   mdns?: boolean
   mdnsDomain?: string
+  /** Failure injection after the post-restore warm build; production never sets this. */
+  restorePrepare?: () => Promise<void>
+  /** Failure injection after the old listener closes; production never sets this. */
+  restoreRebind?: () => Promise<void>
 }
 type ListenerState = {
   scope: Scope.Scope
   server: Context.Service.Shape<typeof HttpServer.HttpServer>
   http: ListenerServer
   websockets: WebSocketTracker.Interface
+  maintenanceState?: BootstrapState
 }
 interface ListenerServer {
   readonly closeAll: Effect.Effect<void>
@@ -111,7 +116,8 @@ const listenEffect: (opts: ListenOptions) => Effect.Effect<Listener, unknown> = 
 ) {
   const cold = !serverHasListened
   const layerBuildT0 = yield* Effect.sync(() => Date.now())
-  const state = yield* startWithPortFallback(opts)
+  const control = makeRestoreControl(opts)
+  const state = yield* startWithPortFallback(opts, control.onRestored)
   yield* Effect.sync(() => {
     log.info("startup", {
       event: "server.layer_build",
@@ -124,12 +130,13 @@ const listenEffect: (opts: ListenOptions) => Effect.Effect<Listener, unknown> = 
   const listenerUrl = makeURL(opts.hostname, address.port)
 
   const unpublishMdns = yield* setupMdns(opts, address.port, state.scope)
+  control.install(state, unpublishMdns, address.port)
 
   return {
     hostname: opts.hostname,
     port: address.port,
     url: listenerUrl,
-    stop: makeStop(state, unpublishMdns),
+    stop: control.stop,
   }
 })
 
@@ -153,8 +160,8 @@ function listenerLayer(opts: ListenOptions, port: number) {
   )
 }
 
-function maintenanceListenerLayer(opts: ListenOptions, port: number, filename: string, state: BootstrapState) {
-  return HttpRouter.serve(HttpApiApp.createMaintenanceRoutes(filename, state, opts), {
+function maintenanceListenerLayer(opts: ListenOptions, port: number, filename: string, state: BootstrapState, onRestored?: () => void) {
+  return HttpRouter.serve(HttpApiApp.createMaintenanceRoutes(filename, state, opts, onRestored), {
     middleware: disposeMiddleware,
     disableLogger: true,
     disableListenLog: true,
@@ -165,18 +172,24 @@ function maintenanceListenerLayer(opts: ListenOptions, port: number, filename: s
   )
 }
 
-function startWithPortFallback(opts: ListenOptions) {
-  if (opts.port !== 0) return startListener(opts, opts.port)
+function startWithPortFallback(opts: ListenOptions, onRestored: () => void) {
+  if (opts.port !== 0) return startListener(opts, opts.port, onRestored)
   // Match the legacy listener port-resolution behavior: explicit `0` prefers
   // 4096 first, then any free port.
-  return startListener(opts, 4096).pipe(
+  return startListener(opts, 4096, onRestored).pipe(
     Effect.catchCause((cause) =>
-      errorCode(Cause.squash(cause)) === "EADDRINUSE" ? startListener(opts, 0) : Effect.failCause(cause),
+      errorCode(Cause.squash(cause)) === "EADDRINUSE" ? startListener(opts, 0, onRestored) : Effect.failCause(cause),
     ),
   )
 }
 
-function startListener(opts: ListenOptions, port: number) {
+function startListener(
+  opts: ListenOptions,
+  port: number,
+  onRestored?: () => void,
+  prepared?: Layer.MemoMap,
+  forcedMaintenance?: BootstrapState,
+) {
   return Effect.gen(function* () {
     const filename = Database.path()
     // When this process already built the AppRuntime root for the SAME database file (serve/web/acp
@@ -188,16 +201,16 @@ function startListener(opts: ListenOptions, port: number) {
     // owner and one lock. A root built for a different file (tests re-pointing
     // Flag.DEEPAGENT_CODE_DB) does not match and keeps the private-root path below.
     const root = builtAppRuntimeRoot()
-    const sharedRoot = root?.databasePath === filename ? root : undefined
+    const sharedRoot = prepared ? undefined : root?.databasePath === filename ? root : undefined
     const state =
-      sharedRoot !== undefined || filename === ":memory:"
+      forcedMaintenance ?? (prepared || sharedRoot !== undefined || filename === ":memory:"
         ? undefined
-        : yield* Effect.promise(() => Database.bootstrap(filename))
+        : yield* Effect.promise(() => Database.bootstrap(filename)))
     const scope = Scope.makeUnsafe()
     const selected = state && !state.ready
-      ? maintenanceListenerLayer(opts, port, filename, state)
+      ? maintenanceListenerLayer(opts, port, filename, state, onRestored)
       : listenerLayer(opts, port)
-    const built = yield* Layer.buildWithMemoMap(selected, sharedRoot?.memoMap ?? Layer.makeMemoMapUnsafe(), scope).pipe(
+    const built = yield* Layer.buildWithMemoMap(selected, prepared ?? sharedRoot?.memoMap ?? Layer.makeMemoMapUnsafe(), scope).pipe(
       Effect.provide(HttpApiApp.context),
       Effect.exit,
     )
@@ -207,16 +220,21 @@ function startListener(opts: ListenOptions, port: number) {
         server: Context.get(built.value, HttpServer.HttpServer),
         http: Context.get(built.value, ListenerServerService),
         websockets: Context.get(built.value, WebSocketTracker.Service),
+        maintenanceState: state && !state.ready ? state : undefined,
       } satisfies ListenerState
 
     yield* Scope.close(scope, Exit.void).pipe(Effect.ignore)
+    // A post-restore candidate must either be a fully ready business listener or fail back to
+    // the separately rebuilt incident shell. The ordinary cold-start fallback cannot turn this
+    // candidate into a maintenance listener while the handoff reports success.
+    if (prepared) return yield* Effect.failCause(built.cause)
     const failure = Cause.squash(built.cause)
     if (state && !state.ready) return yield* Effect.failCause(built.cause)
     if (!(failure instanceof DatabaseBootstrapError)) return yield* Effect.failCause(built.cause)
 
     const maintenanceScope = Scope.makeUnsafe()
     const maintenance = yield* Layer.buildWithMemoMap(
-      maintenanceListenerLayer(opts, port, filename, failure.state),
+      maintenanceListenerLayer(opts, port, filename, failure.state, onRestored),
       Layer.makeMemoMapUnsafe(),
       maintenanceScope,
     ).pipe(
@@ -228,8 +246,105 @@ function startListener(opts: ListenOptions, port: number) {
       server: Context.get(maintenance, HttpServer.HttpServer),
       http: Context.get(maintenance, ListenerServerService),
       websockets: Context.get(maintenance, WebSocketTracker.Service),
+      maintenanceState: failure.state,
     } satisfies ListenerState
   })
+}
+
+/** Keep the incident listener serving while a fresh business graph opens the restored DB.
+ * Only a fully built graph may replace it; a failed warm build leaves maintenance admission
+ * intact and retries without ever exposing a partially initialized business runtime. */
+function makeRestoreControl(opts: ListenOptions) {
+  let active: { state: ListenerState; stop: Listener["stop"] } | undefined
+  let maintenanceState: BootstrapState | undefined
+  let port = 0
+  let closed = false
+  let transition: Promise<void> | undefined
+  let retryTimer: ReturnType<typeof setTimeout> | undefined
+
+  const install = (state: ListenerState, unpublish: Effect.Effect<void>, addressPort: number) => {
+    active = { state, stop: makeStop(state, unpublish) }
+    maintenanceState = state.maintenanceState ?? maintenanceState
+    port = addressPort
+  }
+
+  const schedule = (delayMs: number) => {
+    if (closed || retryTimer) return
+    retryTimer = setTimeout(() => {
+      retryTimer = undefined
+      transition = reopen().finally(() => {
+        transition = undefined
+      })
+    }, delayMs)
+  }
+
+  const reopen = async () => {
+    if (closed || !maintenanceState) return
+    const scope = Scope.makeUnsafe()
+    const memoMap = Layer.makeMemoMapUnsafe()
+    try {
+      await Effect.runPromise(
+        Layer.buildWithMemoMap(
+          Layer.provideMerge(HttpApiApp.createRoutes(opts), HttpRouter.layer),
+          memoMap,
+          scope,
+        ).pipe(Effect.provide(HttpApiApp.context)),
+      )
+      await opts.restorePrepare?.()
+      if (closed) return
+
+      // The original restore response has completed before the delayed handoff begins. Close
+      // the old listener only after the business graph has initialized and acquired its lock.
+      await active?.stop()
+      active = undefined
+      if (closed) return
+      try {
+        await opts.restoreRebind?.()
+        const next = await Effect.runPromise(startListener(opts, port, onRestored, memoMap))
+        try {
+          const unpublish = await Effect.runPromise(setupMdns(opts, port, next.scope))
+          if (closed) {
+            await makeStop(next, unpublish)(true)
+            return
+          }
+          install(next, unpublish, port)
+        } catch (error) {
+          await makeStop(next, Effect.void)(true)
+          throw error
+        }
+        log.info("restored database reopened without process restart", { port })
+      } catch (error) {
+        // A bind/build failure after handoff must never leave a partial business listener.
+        // Reinstall the authenticated incident shell, then retry the warm build.
+        const shell = await Effect.runPromise(startListener(opts, port, onRestored, undefined, maintenanceState))
+        try {
+          install(shell, await Effect.runPromise(setupMdns(opts, port, shell.scope)), port)
+        } catch (setupError) {
+          await makeStop(shell, Effect.void)(true)
+          throw setupError
+        }
+        throw error
+      }
+    } catch (error) {
+      log.error("restored database business reopen failed", {
+        error,
+        maintenanceActive: active?.state.maintenanceState !== undefined,
+      })
+      if (!closed) schedule(2_000)
+    } finally {
+      await Effect.runPromise(Scope.close(scope, Exit.void).pipe(Effect.ignore))
+    }
+  }
+
+  const onRestored = () => schedule(100)
+  const stop: Listener["stop"] = async (close) => {
+    closed = true
+    if (retryTimer) clearTimeout(retryTimer)
+    await transition
+    await active?.stop(close)
+    active = undefined
+  }
+  return { install, onRestored, stop }
 }
 
 function errorCode(error: unknown): string | undefined {

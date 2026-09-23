@@ -71,7 +71,7 @@ export function BootstrapGate(props: ParentProps) {
     onCleanup(() => clearInterval(timer))
   })
 
-  if (state()?.kind === "maintenance") return <MaintenanceShell client={(state() as { client: MaintenanceClient }).client} />
+  if (state()?.kind === "maintenance") return <MaintenanceShell client={(state() as { client: MaintenanceClient }).client} onRestoreReady={() => void refetch()} />
   if (state()?.kind === "migration")
     return (
       <MaintenanceShell

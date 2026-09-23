@@ -32,6 +32,8 @@ export function MaintenanceShell(props: {
   mode?: ShellViewMode
   /** Notified when a rendered migration chain settles (completed or vanished) so the gate can show the app. */
   onMigrationSettled?: () => void
+  /** Called once the server has reopened the restored business runtime on the same listener. */
+  onRestoreReady?: () => void
 }) {
   const [state, setState] = createSignal<ShellState>(initialShellState)
   const [busy, setBusy] = createSignal(false)
@@ -117,6 +119,17 @@ export function MaintenanceShell(props: {
     if (state().mode !== "migration_in_progress") return
     void pollMigration()
     const timer = setInterval(() => void pollMigration(), 1500)
+    onCleanup(() => clearInterval(timer))
+  })
+
+  createEffect(() => {
+    const restore = state().restore
+    if (restore.status !== "completed" || restore.result?.status !== "restored") return
+    const poll = async () => {
+      if ((await props.client.bootstrapStatus()).kind === "ready") props.onRestoreReady?.()
+    }
+    void poll()
+    const timer = setInterval(() => void poll(), 1000)
     onCleanup(() => clearInterval(timer))
   })
 
@@ -340,7 +353,7 @@ export function MaintenanceShell(props: {
           <Show when={view().restoreStatus === "completed"}>
             <div class="mt-3 text-12-regular text-text-weak">
               {view().restoreOutcome === "restored"
-                ? "Restore succeeded: the store was replaced and the pre-restore store is retained in the quarantine."
+                ? "Restore succeeded. Reopening the business runtime; the pre-restore store remains in the incident quarantine."
                 : "Restore request recorded (dry-run status)."}
             </div>
           </Show>
