@@ -272,8 +272,15 @@ it.effect("rolls back a managed policy, attempt, and turn receipt together at th
       ownerToken: yield* (yield* V2ProviderTurn.Service).currentOwnerToken(),
     }
 
+    const mismatched = yield* SessionRunnerCanonical.commitTurn({
+      ...input,
+      policy: { ...policy, requestHash: Hash.sha256("wrong-request") },
+    }).pipe(Effect.flip)
+    expect(mismatched).toMatchObject({ reason: "model_policy_attempt_binding_mismatch" })
+    expect(yield* db.select().from(SessionProviderAttemptTable).all().pipe(Effect.orDie)).toHaveLength(0)
+
     // This trigger fires after the canonical attempt and V2 receipt have been inserted in the
-    // transaction. A crash/fault here must expose none of the three writes after reopening.
+    // transaction. A fault here must expose none of the three writes after the transaction exits.
     yield* db.run(sql`CREATE TRIGGER policy_insert_abort BEFORE INSERT ON session_model_policy_receipt
       BEGIN SELECT RAISE(ABORT, 'policy_insert_abort'); END`).pipe(Effect.orDie)
     expect((yield* SessionRunnerCanonical.commitTurn(input).pipe(Effect.exit))._tag).toBe("Failure")

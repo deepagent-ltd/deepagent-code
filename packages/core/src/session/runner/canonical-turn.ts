@@ -936,6 +936,19 @@ export const commitTurn = Effect.fn("SessionRunnerCanonical.commitTurn")(functio
             durableSelection.selected_source_fingerprint !== input.admission.selectedSourceFingerprint
           )
             return yield* new AdmissionError({ reason: "selection_revalidation_required" })
+          if (input.policy && (
+            input.policy.sessionID !== input.sessionID ||
+            input.policy.activityID !== input.admission.activityId ||
+            input.policy.userMessageID !== input.receipt.userMessageId ||
+            input.policy.promptEpoch !== input.receipt.historyPromptEpoch ||
+            input.policy.requestHash !== input.receipt.requestInputHash ||
+            input.policy.providerID !== input.receipt.providerId ||
+            input.policy.apiModelID !== input.receipt.modelId ||
+            input.policy.selectionID !== input.admission.selectionId ||
+            input.policy.projectionHash !== input.admission.projectionHash ||
+            input.policy.policy.state !== "managed" ||
+            (input.policy.policy.action !== "normal" && input.policy.policy.action !== "observed")
+          )) return yield* new AdmissionError({ reason: "model_policy_attempt_binding_mismatch" })
           const validUntil = now + ValidationMs
           yield* input.contexts.appendValidation({
             selectionId: input.admission.selectionId,
