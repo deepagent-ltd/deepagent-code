@@ -100,6 +100,7 @@ export type RunResult = {
   readonly stdout: string
   readonly stderr: string
   readonly durationMs: number
+  readonly termination: "exited" | "harness_timeout" | "harness_error"
 }
 
 export type SpawnOpts = { readonly timeoutMs?: number; readonly env?: Record<string, string> }
@@ -251,26 +252,31 @@ export function withCliFixture<A, E>(
       // External timeoutOrElse interrupts the run fiber but races the
       // scope close, which can leak the child past the test boundary.
       //
-      // Catch AppProcessError (timeout OR spawn failure) and synthesize a
-      // non-zero result so the test sees it via the usual `expectExit`
-      // path rather than as an unhandled Effect failure.
+      // Keep a harness kill distinct from a CLI failure: both exit nonzero, but only the CLI
+      // can emit the protocol error event that subprocess regression tests must verify.
       const result = yield* appProc.run(command, { timeout: Duration.millis(timeoutMs) }).pipe(
+        Effect.map((value) => ({ value, termination: "exited" as const })),
         Effect.catchTag("AppProcessError", (err) =>
           Effect.succeed({
-            command: err.command,
-            exitCode: err.exitCode ?? -1,
-            stdout: Buffer.alloc(0),
-            stderr: Buffer.from((err.stderr ?? String(err.cause ?? err.message)) + "\n"),
-            stdoutTruncated: false,
-            stderrTruncated: false,
-          } satisfies AppProcess.RunResult),
+            value: {
+              command: err.command,
+              exitCode: err.exitCode ?? -1,
+              stdout: Buffer.alloc(0),
+              stderr: Buffer.from((err.stderr ?? String(err.cause ?? err.message)) + "\n"),
+              stdoutTruncated: false,
+              stderrTruncated: false,
+            } satisfies AppProcess.RunResult,
+            termination: err.cause instanceof Error && err.cause.message === "Timed out"
+              ? "harness_timeout" as const : "harness_error" as const,
+          }),
         ),
       )
       return {
-        exitCode: result.exitCode,
-        stdout: result.stdout.toString(),
-        stderr: result.stderr.toString(),
+        exitCode: result.value.exitCode,
+        stdout: result.value.stdout.toString(),
+        stderr: result.value.stderr.toString(),
         durationMs: Date.now() - start,
+        termination: result.termination,
       }
     })
 

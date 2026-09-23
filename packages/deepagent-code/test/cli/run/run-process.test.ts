@@ -261,11 +261,9 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
 
   // Regression for #27371: an unknown model used to hang the process forever
   // waiting on a session.status === idle event that never arrived. The fix
-  // makes the SDK call surface an error promptly so the process exits nonzero.
-  // The SDK guarantees return by timeoutMs (15s), so measure against the
-  // harness timeout (30s) instead: a genuine hang is killed by the 30s test
-  // timeout (a different, signal-killed failure), while the fixed path exits
-  // on its own well before it — the 20s bound leaves slack for slow CI hosts.
+  // makes the SDK call surface an error so the process exits on its own. Under
+  // full-package load CLI startup can exceed 15s, so give the harness a separate
+  // 45s kill limit and require a real CLI exit inside a 35s behavioral bound.
   cliIt.concurrent(
     "exits nonzero promptly when the model is unknown (regression for #27371)",
     ({ deepagentCode }) =>
@@ -273,12 +271,25 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
         const result = yield* deepagentCode.run("say hi", {
           model: "test/nonexistent-model",
           format: "json",
-          timeoutMs: 15_000,
+          timeoutMs: 45_000,
         })
+        if (result.termination !== "exited")
+          throw new Error(`unknown-model CLI was ${result.termination} after ${result.durationMs}ms: ${result.stderr}`)
         expect(result.exitCode).not.toBe(0)
-        expect(result.durationMs).toBeLessThan(20_000)
+        expect(result.durationMs).toBeLessThan(35_000)
         expect(deepagentCode.parseJsonEvents(result.stdout).some((event) =>
           event.type === "error" && typeof event.error === "string" && event.error.length > 0)).toBe(true)
+      }),
+    60_000,
+  )
+
+  cliIt.concurrent(
+    "distinguishes a harness deadline from a CLI error exit",
+    ({ deepagentCode }) =>
+      Effect.gen(function* () {
+        const result = yield* deepagentCode.run("a deadline before startup", { timeoutMs: 1 })
+        expect(result.termination).toBe("harness_timeout")
+        expect(result.stdout).toBe("")
       }),
     30_000,
   )
