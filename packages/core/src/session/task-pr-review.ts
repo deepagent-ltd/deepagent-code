@@ -1,6 +1,6 @@
 export * as TaskPRReview from "./task-pr-review"
 
-import { and, eq, inArray, isNull, ne, or, sql } from "drizzle-orm"
+import { and, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm"
 import { spawnSync } from "node:child_process"
 import { Data, Effect, Exit, Option, Schema } from "effect"
 import Ajv from "ajv"
@@ -67,6 +67,7 @@ export class ReviewError extends Data.TaggedError("TaskPRReview.Error")<{
     | "branch_missing"
     | "parent_branch_missing"
     | "merge_conflict"
+    | "undo_conflict"
     | "git_failed"
     | "review_failed"
     | "verdict_binding_mismatch"
@@ -146,12 +147,13 @@ export type SubmitOutcome =
   | { readonly status: "submitted"; readonly key: string; readonly prID: string }
   | { readonly status: "adopted"; readonly key: string; readonly prID: string }
   | { readonly status: "merged"; readonly key: string; readonly prID: string }
+  | { readonly status: "undone"; readonly key: string; readonly prID: string }
   | { readonly status: "decided"; readonly key: string; readonly prID: string }
 
 /**
  * Open (or adopt) the review cycle for one reviewed tip: worktree_state 'removed'→'submitted'
  * with the deterministic PR receipt (pr_operation_key / pr_started_at / pr_id). Exact retry of the
- * same key adopts; a run already merged under this key converges to 'merged'; a run already
+ * same key adopts; a run already merged under this key converges to 'merged' (or 'undone'); a run already
  * decided under this key converges to 'decided'; any other key in flight is a typed conflict —
  * the recorded cycle is never silently re-targeted.
  */
@@ -166,8 +168,19 @@ export const submitReview = Effect.fn("TaskPRReview.submitReview")(function* (
     if (row.pr_operation_key === input.key) return { status: "adopted", ...receipt } satisfies SubmitOutcome
     return yield* reviewConflict(row, input.key)
   }
-  if (row.worktree_state === "removed" && row.pr_operation_key === input.key)
-    return { status: "merged", ...receipt } satisfies SubmitOutcome
+  if (row.worktree_state === "removed" && row.pr_operation_key === input.key) {
+    const undone = yield* db
+      .select({ id: TaskRunEventTable.event_id })
+      .from(TaskRunEventTable)
+      .where(and(
+        eq(TaskRunEventTable.run_id, row.run_id),
+        eq(TaskRunEventTable.type, "pr_merge_undone"),
+        sql`${TaskRunEventTable.time_created} >= ${row.pr_started_at ?? 0}`,
+      ))
+      .get()
+      .pipe(Effect.orDie)
+    return { status: undone ? "undone" : "merged", ...receipt } satisfies SubmitOutcome
+  }
   if (row.worktree_state === "retained" && row.pr_operation_key === input.key)
     return { status: "decided", ...receipt } satisfies SubmitOutcome
 
@@ -336,6 +349,99 @@ export const merge = Effect.fn("TaskPRReview.merge")(function* (
 })
 
 /**
+ * Undo one recorded merge only while the parent ref still equals that merge's exact after tip.
+ * The caller supplies a stable undo key; its audit receipt makes retries idempotent. A checked-out
+ * parent must have a clean tree before resetting its ref, index, and working tree together.
+ */
+export const undoMerge = Effect.fn("TaskPRReview.undoMerge")(function* (
+  db: DatabaseService,
+  input: { readonly runID: string; readonly key: string; readonly undoKey: string; readonly now?: number },
+) {
+  const row = yield* requireCycle(db, input)
+  if (row.worktree_state !== "removed")
+    return yield* new ReviewError({
+      runID: row.run_id,
+      code: "undo_conflict",
+      message: `PR cycle ${prID(input.key)} must finish merge cleanup before undo`,
+    })
+  const merged = yield* db
+    .select({ reason: TaskRunEventTable.reason })
+    .from(TaskRunEventTable)
+    .where(and(
+      eq(TaskRunEventTable.run_id, row.run_id),
+      eq(TaskRunEventTable.type, "pr_merged"),
+      sql`${TaskRunEventTable.time_created} >= ${row.pr_started_at ?? 0}`,
+    ))
+    .orderBy(desc(TaskRunEventTable.version))
+    .get()
+    .pipe(Effect.orDie)
+  const tips = merged?.reason?.split(":")
+  const before = tips?.[1]
+  const after = tips?.at(-1)
+  if (!before || !after || !/^[a-f0-9]{40,64}$/.test(before) || !/^[a-f0-9]{40,64}$/.test(after))
+    return yield* new ReviewError({
+      runID: row.run_id,
+      code: "undo_conflict",
+      message: `PR cycle ${prID(input.key)} has no usable merge tip receipt`,
+    })
+  const audit = JSON.stringify({ prID: prID(input.key), undoKey: input.undoKey, before, after })
+  const prior = yield* db
+    .select({ reason: TaskRunEventTable.reason })
+    .from(TaskRunEventTable)
+    .where(and(
+      eq(TaskRunEventTable.run_id, row.run_id),
+      eq(TaskRunEventTable.type, "pr_merge_undone"),
+      sql`${TaskRunEventTable.time_created} >= ${row.pr_started_at ?? 0}`,
+    ))
+    .get()
+    .pipe(Effect.orDie)
+  if (prior?.reason === audit) return { status: "undone", key: input.key, undoKey: input.undoKey, before } as const
+  if (prior)
+    return yield* new ReviewError({
+      runID: row.run_id,
+      code: "undo_conflict",
+      message: `PR cycle ${prID(input.key)} was already undone under another key`,
+    })
+
+  const repo = row.workspace_repository_root!
+  const parentBranch = row.workspace_parent_branch!
+  const current = yield* resolveRef(repo, `refs/heads/${parentBranch}`, row, "parent_branch_missing")
+  if (current !== after && current !== before)
+    return yield* new ReviewError({
+      runID: row.run_id,
+      code: "undo_conflict",
+      message: `Parent branch ${parentBranch} advanced beyond ${after}; merge undo refused`,
+    })
+  const checkout = yield* checkedOutPath(repo, parentBranch, row)
+  if (checkout) {
+    const status = yield* git(checkout, ["status", "--porcelain"])
+    if (status.exitCode !== 0) return yield* gitFailed(row, `git status in ${checkout}: ${text(status.stderr)}`)
+    if (text(status.stdout) !== "")
+      return yield* new ReviewError({
+        runID: row.run_id,
+        code: "undo_conflict",
+        message: `The parent checkout at ${checkout} has uncommitted work; merge undo refused`,
+      })
+  }
+  if (current === after) {
+    const moved = yield* git(repo, ["update-ref", `refs/heads/${parentBranch}`, before, after])
+    if (moved.exitCode !== 0) return yield* gitFailed(row, `git update-ref ${parentBranch}: ${text(moved.stderr)}`)
+  }
+  if (checkout) {
+    const reset = yield* git(checkout, ["reset", "--hard", before])
+    if (reset.exitCode !== 0) return yield* gitFailed(row, `git reset ${parentBranch}: ${text(reset.stderr)}`)
+  }
+  const audited = yield* appendVersionedEvent(db, row, input.key, "pr_merge_undone", audit, input.now ?? Date.now())
+  if (!audited)
+    return yield* new ReviewError({
+      runID: row.run_id,
+      code: "undo_conflict",
+      message: `PR cycle ${prID(input.key)} changed before merge undo could be audited`,
+    })
+  return { status: "undone", key: input.key, undoKey: input.undoKey, before } as const
+})
+
+/**
  * Post-merge cleanup: delete the merged branch (merged-safe `-d`, so an unmerged tip refuses) and
  * settle the cycle CAS worktree_state 'submitted'→'removed'. Idempotent and crash-safe — a retry
  * after the branch delete re-observes the missing ref and converges on the same receipt.
@@ -443,7 +549,7 @@ export type ReviewOutcome =
       readonly prID: string
     }
   | { readonly status: "changes_requested" | "rejected"; readonly prID: string; readonly rationale: string }
-  | { readonly status: "converged"; readonly prID: string; readonly prior: "merged" | "decided" }
+  | { readonly status: "converged"; readonly prID: string; readonly prior: "merged" | "undone" | "decided" }
 
 /**
  * Review one isolated run end to end on the V2 authority:
@@ -480,7 +586,7 @@ export const review = Effect.fn("TaskPRReview.review")(function* (
   const id = prID(key)
 
   const submitted = yield* submitReview(db, { runID: row.run_id, key })
-  if (submitted.status === "merged" || submitted.status === "decided")
+  if (submitted.status === "merged" || submitted.status === "undone" || submitted.status === "decided")
     return { status: "converged", prID: id, prior: submitted.status } satisfies ReviewOutcome
 
   const reviewerPrompt = yield* buildReviewPrompt(sessions, row, tip, id)
@@ -848,6 +954,19 @@ const branchCheckedOut = (repo: string, branch: string) =>
     (result) => result.exitCode === 0 && text(result.stdout) === `refs/heads/${branch}`,
   )
 
+const checkedOutPath = (repo: string, branch: string, row: RunRow) =>
+  Effect.gen(function* () {
+    const result = yield* git(repo, ["worktree", "list", "--porcelain"])
+    if (result.exitCode !== 0)
+      return yield* gitFailed(row, `git worktree list in ${repo}: ${text(result.stderr)}`)
+    return result.stdout
+      .split(/\n\s*\n/)
+      .map((block) => block.split("\n"))
+      .find((lines) => lines.includes(`branch refs/heads/${branch}`))
+      ?.find((line) => line.startsWith("worktree "))
+      ?.slice("worktree ".length)
+  })
+
 const revOrEmpty = (repo: string, ref: string) => {
   const proc = gitInSync(repo, ["rev-parse", ref])
   return proc.exitCode === 0 ? text(proc.stdout.toString()) : ""
@@ -921,8 +1040,7 @@ const appendEvent = (
     .run()
     .pipe(Effect.orDie)
 
-// The merged event rides a version-bumped CAS on the open cycle so a concurrent writer cannot
-// interleave; a lost fence still leaves the physical merge converged (audit-only debt).
+// Merge and undo audit events ride a version-bumped CAS on their respective cycle state.
 const appendVersionedEvent = (
   db: Writer,
   row: RunRow,
@@ -938,13 +1056,16 @@ const appendVersionedEvent = (
       .where(
         and(
           eq(TaskRunTable.run_id, row.run_id),
-          eq(TaskRunTable.worktree_state, "submitted"),
+          type === "pr_merge_undone"
+            ? eq(TaskRunTable.worktree_state, "removed")
+            : eq(TaskRunTable.worktree_state, "submitted"),
           eq(TaskRunTable.pr_operation_key, key),
         ),
       )
       .returning({ version: TaskRunTable.version })
       .get()
       .pipe(Effect.orDie)
-    if (!updated) return
+    if (!updated) return false
     yield* appendEvent(db, { runID: row.run_id, version: updated.version, type, reason, now })
+    return true
   }).pipe(Effect.orDie)

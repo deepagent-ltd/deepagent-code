@@ -364,6 +364,75 @@ describe("Core V2 TaskPRReview", () => {
     }),
   )
 
+  it.effect("undoMerge restores the recorded parent tip and checkout once, with a durable audit receipt", () =>
+    Effect.gen(function* () {
+      const { db, repo, run, tip, base } = yield* settledRunWithCommit("call-pr-undo-1", "undo.txt", "undo me\n")
+      const key = TaskPRReview.operationKey({ runID: run.run_id, tip })
+      yield* TaskPRReview.submitReview(db, { runID: run.run_id, key, now: 3_000 })
+      yield* TaskPRReview.merge(db, { runID: run.run_id, key, now: 4_000 })
+      yield* TaskPRReview.cleanup(db, { runID: run.run_id, key, now: 5_000 })
+
+      const undone = yield* TaskPRReview.undoMerge(db, { runID: run.run_id, key, undoKey: "user-undo-1", now: 6_000 })
+      expect(undone).toMatchObject({ status: "undone", before: base })
+      expect(rev(repo, "refs/heads/main")).toBe(base)
+      expect(yield* Effect.promise(() => Bun.file(path.join(repo, "undo.txt")).exists())).toBe(false)
+      expect(gitIn(repo, ["status", "--porcelain"]).stdout.toString().trim()).toBe("")
+      const audit = (yield* eventsOf(db, run.run_id)).filter((event) => event.type === "pr_merge_undone")
+      expect(audit).toHaveLength(1)
+      expect(audit[0]?.reason).toContain("user-undo-1")
+      expect((yield* TaskPRReview.submitReview(db, { runID: run.run_id, key })).status).toBe("undone")
+
+      expect((yield* TaskPRReview.undoMerge(db, { runID: run.run_id, key, undoKey: "user-undo-1" })).status).toBe("undone")
+      expect((yield* eventsOf(db, run.run_id)).filter((event) => event.type === "pr_merge_undone")).toHaveLength(1)
+      const conflict = yield* TaskPRReview.undoMerge(db, { runID: run.run_id, key, undoKey: "another-key" }).pipe(Effect.flip)
+      expect(conflict).toMatchObject({ code: "undo_conflict" })
+    }),
+  )
+
+  it.effect("undoMerge refuses a dirty checkout and a parent that advanced after the merge", () =>
+    Effect.gen(function* () {
+      const { db, repo, run, tip } = yield* settledRunWithCommit("call-pr-undo-2", "undo-guard.txt", "worker\n")
+      const key = TaskPRReview.operationKey({ runID: run.run_id, tip })
+      yield* TaskPRReview.submitReview(db, { runID: run.run_id, key, now: 3_000 })
+      yield* TaskPRReview.merge(db, { runID: run.run_id, key, now: 4_000 })
+      yield* TaskPRReview.cleanup(db, { runID: run.run_id, key, now: 5_000 })
+      yield* Effect.promise(() => fs.writeFile(path.join(repo, "dirty.txt"), "keep me\n"))
+      const dirty = yield* TaskPRReview.undoMerge(db, { runID: run.run_id, key, undoKey: "guard-undo" }).pipe(Effect.flip)
+      expect(dirty).toMatchObject({ code: "undo_conflict" })
+      expect(rev(repo, "refs/heads/main")).toBe(tip)
+      expect((yield* eventsOf(db, run.run_id)).filter((event) => event.type === "pr_merge_undone")).toHaveLength(0)
+
+      expectExit0(gitIn(repo, ["add", "-A"]), "add subsequent work")
+      expectExit0(gitIn(repo, ["commit", "-m", "work after merge"]), "commit subsequent work")
+      const advanced = rev(repo, "refs/heads/main")
+      const stale = yield* TaskPRReview.undoMerge(db, { runID: run.run_id, key, undoKey: "guard-undo" }).pipe(Effect.flip)
+      expect(stale).toMatchObject({ code: "undo_conflict" })
+      expect(rev(repo, "refs/heads/main")).toBe(advanced)
+    }),
+  )
+
+  it.effect("undoMerge uses the before/after receipt for an unchecked merge-commit ref", () =>
+    Effect.gen(function* () {
+      const { db, repo, run, tip } = yield* settledRunWithCommit("call-pr-undo-3", "feature-undo.txt", "feature\n")
+      yield* Effect.promise(() => fs.writeFile(path.join(repo, "parent-undo.txt"), "parent\n"))
+      expectExit0(gitIn(repo, ["add", "-A"]), "parent add")
+      expectExit0(gitIn(repo, ["commit", "-m", "parent advances"]), "parent commit")
+      const before = rev(repo, "refs/heads/main")
+      const key = TaskPRReview.operationKey({ runID: run.run_id, tip })
+      yield* TaskPRReview.submitReview(db, { runID: run.run_id, key, now: 3_000 })
+      expect((yield* TaskPRReview.merge(db, { runID: run.run_id, key, now: 4_000 })).mode).toBe("merge_commit")
+      yield* TaskPRReview.cleanup(db, { runID: run.run_id, key, now: 5_000 })
+      const after = rev(repo, "refs/heads/main")
+      expectExit0(gitIn(repo, ["checkout", "-b", "other"]), "leave parent branch unchecked")
+
+      yield* TaskPRReview.undoMerge(db, { runID: run.run_id, key, undoKey: "uncheckout-undo" })
+      expect(rev(repo, "refs/heads/main")).toBe(before)
+      expect(rev(repo, "HEAD")).toBe(after)
+      expect(gitIn(repo, ["status", "--porcelain"]).stdout.toString().trim()).toBe("")
+      expect((yield* eventsOf(db, run.run_id)).filter((event) => event.type === "pr_merge_undone")).toHaveLength(1)
+    }),
+  )
+
   it.effect("submitReview refuses non-isolated and in-flight runs (fail closed)", () =>
     Effect.gen(function* () {
       const repo = yield* Effect.promise(() => makeRepo(path.join(tmpRoot(), "repo")))
