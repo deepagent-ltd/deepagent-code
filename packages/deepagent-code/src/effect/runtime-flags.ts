@@ -266,6 +266,9 @@ export class Service extends ConfigService.Service<Service>()("@deepagent-code/R
   // DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME=false to restore the pre-V4 (V3.8-equivalent) inert posture: no
   // daemons subscribe, ticks run via the in-process BackgroundJob driver, nothing is autonomous.
   v4MultiAgentRuntime: stableOn("DEEPAGENT_CODE_V4_MULTI_AGENT_RUNTIME"),
+  // X-02: event DAG coordination is an opt-in second V2 execution lane. OFF keeps the shipped
+  // single-event admission behavior byte-for-byte, including typed admission refusals.
+  v4DagCoordination: bool("DEEPAGENT_CODE_V4_DAG_COORDINATION"),
   // Finer-grained flag: enables ONLY the goal-tick event chain without the full v4MultiAgentRuntime
   // daemon stack. When this flag is on (or v4MultiAgentRuntime is on), goal ticks are driven by the
   // GoalTickConsumer via GOAL_TICK_REQUESTED events rather than the in-process BackgroundJob for-loop.

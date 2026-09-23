@@ -104,6 +104,13 @@ export interface EventV2AdmissionBridge {
     readonly request: EventDispatcher.DispatchRequest
     readonly scope: EventAdmissionWiring.AdmissionScope
   }) => Effect.Effect<void, unknown>
+  /** Registration-owned execution mode. An absent mode keeps the single-admission lane. */
+  readonly executionFor?: (eventType: string) => "single" | "dag" | undefined
+  /** Validates ingress and records a durable C5 receipt without prompting the event parent. */
+  readonly admitReceiptOnly?: (input: {
+    readonly request: EventDispatcher.DispatchRequest
+    readonly scope: EventAdmissionWiring.AdmissionScope
+  }) => Effect.Effect<void, unknown>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/MultiAgentRuntime") {}
@@ -123,11 +130,20 @@ export class EventV2AdmissionUnavailableError extends Error {
   }
 }
 
+/** A deferred DAG node keeps the bus delivery pending for a later durable re-drive. */
+export class EventDAGUnfinishedError extends Error {
+  readonly _tag = "MultiAgentRuntime.EventDAGUnfinishedError"
+  constructor(readonly eventID: DeepAgentEvent.ID) {
+    super(`event DAG ${eventID} has unfinished subtasks`)
+    this.name = "EventDAGUnfinishedError"
+  }
+}
+
 export interface LayerOptions {
   readonly runtimeFeatures?: RuntimeFeatureRegistry
-  // the one-turn runner (§C coordination library seam). v2w-j4 durable-only: production dispatch is
-  // V2-admission-only, so production wires NO runner — the legacy event turn runner is deleted. The
-  // §C coordination library (coordinate, deterministic tests) injects a runner; absent → fail closed.
+  /** Second execution lane, default OFF. OFF retains the existing admission-only dispatch. */
+  readonly dagCoordination?: boolean
+  // The one-turn runner for the DAG lane. Production injects the V2 runner; a missing runner fails closed.
   readonly runner?: SubagentTurnRunner
   // Deterministic partition seam. Production uses TaskPartitioner.partition with stable event IDs;
   // tests can inject a valid DAG to prove same-wave scheduling without duplicating scheduler logic.
@@ -934,8 +950,7 @@ export const layerWith = (options: LayerOptions) =>
 
               // §C4 starts only after deterministic admission. Effect.all below runs every admitted turn
               // in this DAG wave concurrently; the next wave waits for all of them to settle.
-              // v2w-j4 durable-only: production wires NO turn runner (dispatch never reaches §C — the
-              // V1 fallback is deleted); an absent runner fails the turn closed, never a silent no-op.
+              // Every admitted DAG turn uses the injected V2 runner; an absent runner fails closed.
               running.push(
                 emit(
                   event,
@@ -1172,14 +1187,14 @@ export const layerWith = (options: LayerOptions) =>
           return { event, outcomes, hasUnfinished }
         })
 
-      // C5-04 — the V2 admission dispatch entry (BEFORE §C coordination per design §8.7). When the V2
-      // admission switch is ON and an `eventV2Admission` seam is provided, the event is admitted as
-      // durable bounded V2 session work instead of being partitioned into §C DAG subtasks. The runtime
-      // resolves the scope it can derive from the routed event (workspace/project/principal/session); the
-      // security namespace + the C5 mapping + the SessionV2.prompt adapter live in the injected bridge.
+      // The bridge validates every event and records C5 admission. The DAG lane writes an ingress receipt
+      // without prompting the parent; each child runner owns its own durable V2 prompt admission.
       // A resolution/admission refusal fails the dispatch so the dispatcher nacks → the retry pump
       // re-drives the event (never a silent drop), matching the V4 nack contract.
-      const dispatchV2 = (request: EventDispatcher.DispatchRequest): Effect.Effect<void, unknown> =>
+      const dispatchV2 = (
+        request: EventDispatcher.DispatchRequest,
+        receiptOnly = false,
+      ): Effect.Effect<void, unknown> =>
         Effect.gen(function* () {
           const bridge = options.eventV2Admission
           if (!bridge) return yield* Effect.void
@@ -1193,15 +1208,13 @@ export const layerWith = (options: LayerOptions) =>
             // The router authorized this trigger (it returned `dispatch` with targets) → trust `derived`.
             authorizedTrigger: true,
           }
-          return yield* bridge.admit({ request, scope })
+          if (!receiptOnly) return yield* bridge.admit({ request, scope })
+          if (!bridge.admitReceiptOnly) return yield* Effect.fail(new Error("event DAG receipt adapter is unavailable"))
+          return yield* bridge.admitReceiptOnly({ request, scope })
         })
 
-      // v2w-j4 durable-only: dispatch is V2-admission-ONLY. The hybrid fallback (switch off / seam
-      // absent → silently run the §C coordination through the V1 turn runner) is DELETED: the
-      // durable-only architecture forbids it. A disabled switch or an unwired seam is a TYPED refusal
-      // — dispatch fails, the dispatcher nacks, and the retry pump re-drives the event when the
-      // admission lane is live again. The event is never silently executed on the legacy path (and
-      // `coordinate` remains exposed for the §C coordination library's deterministic tests only).
+      // The V2 admission switch and bridge remain mandatory for either lane. Disabled or missing
+      // admission fails typed, so the dispatcher nacks instead of entering legacy orchestration.
       const dispatch: Interface["dispatch"] = (request) => {
         if (!isEventV2AdmissionEnabled(options.runtimeFeatures))
           return Effect.fail(
@@ -1217,7 +1230,14 @@ export const layerWith = (options: LayerOptions) =>
               `no eventV2Admission bridge is wired; refusing to dispatch event ${request.event.id} on the deleted legacy path`,
             ),
           )
-        return dispatchV2(request)
+        if (!options.dagCoordination || options.eventV2Admission.executionFor?.(request.event.type) !== "dag")
+          return dispatchV2(request)
+        if (!runner) return Effect.fail(new Error("event DAG turn runner is unavailable"))
+        return Effect.gen(function* () {
+          yield* dispatchV2(request, true)
+          const summary = yield* coordinate(request.event)
+          if (summary.hasUnfinished) return yield* Effect.fail(new EventDAGUnfinishedError(request.event.id))
+        })
       }
 
       return Service.of({ dispatch, coordinate })

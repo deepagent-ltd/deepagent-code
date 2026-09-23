@@ -201,7 +201,9 @@ describe("EventDispatcher dispatch failure + retry pump", () => {
       const bus = yield* DeepAgentEventBus.Service
       const dispatcher = yield* EventDispatcher.Service
       // grouped subscriber so publish records a durable pending delivery for "router".
-      yield* bus.subscribe({ group: EventDispatcher.DISPATCH_GROUP }).pipe(Stream.take(1), Stream.runCollect, Effect.forkScoped)
+      yield* bus
+        .subscribe({ group: EventDispatcher.DISPATCH_GROUP })
+        .pipe(Stream.take(1), Stream.runCollect, Effect.forkScoped)
       yield* Effect.yieldNow
       const event = yield* bus.publish(input({ idempotencyKey: "rp-1" }))
       yield* dispatcher.handle(event) // fails → nacked, attempt 1, next at 2_000
@@ -271,7 +273,9 @@ describe("EventDispatcher condition tick", () => {
       // discriminator — it must be ignored (can't be repo-scoped).
       yield* bus.publish(input({ idempotencyKey: "a1", workspaceID: "wrk_pa", payload: { repo: "A" } }))
       yield* bus.publish(input({ idempotencyKey: "a2", workspaceID: "wrk_pa", payload: { repo: "A" } }))
-      yield* bus.publish(input({ idempotencyKey: "a3", workspaceID: "wrk_pb", payload: { repo: "A" } }))
+      yield* bus.publish(
+        input({ idempotencyKey: "a3", workspaceID: "wrk_pb", payload: { repo: "A", directory: "/repos/pb" } }),
+      )
       yield* bus.publish(input({ idempotencyKey: "b1", workspaceID: "wrk_pb", payload: { repo: "B" } }))
       yield* bus.publish(input({ idempotencyKey: "n1", workspaceID: "wrk_pb", payload: {} }))
       expect(yield* dispatcher.tick(0)).toBe(1) // the schedule fired (≥1 repo repair)
@@ -282,6 +286,7 @@ describe("EventDispatcher condition tick", () => {
       expect(repos).toEqual(["A"]) // repo B (1×) and the repo-less event did NOT fire
       // the fired event is scoped to A's (latest) workspace, not the schedule's own wrk_1.
       expect(fired[0]?.workspaceID).toBe("wrk_pb")
+      expect((fired[0]?.payload as { directory?: string }).directory).toBe("/repos/pb")
     }),
   )
 
@@ -365,16 +370,30 @@ describe("EventDispatcher quiet-hours tick filter", () => {
         workspaceID: "wrk_1",
         fireAt: QUIET_AT,
         // normal priority (default) — subject to the quiet-hours defer.
-        eventTemplate: { type: "ci.failure", source: "schedule", workspaceID: "wrk_1", priority: "normal", payload: { via: "sched" } },
+        eventTemplate: {
+          type: "ci.failure",
+          source: "schedule",
+          workspaceID: "wrk_1",
+          priority: "normal",
+          payload: { via: "sched" },
+        },
       })
       // tick during quiet hours → deferred, NOT fired.
       expect(yield* dispatcher.tick(QUIET_AT)).toBe(0)
-      const duringQuiet = yield* bus.recentByType({ type: "ci.failure", windowMs: Number.MAX_SAFE_INTEGER, now: QUIET_AT })
+      const duringQuiet = yield* bus.recentByType({
+        type: "ci.failure",
+        windowMs: Number.MAX_SAFE_INTEGER,
+        now: QUIET_AT,
+      })
       expect(duringQuiet.length).toBe(0) // nothing published during quiet hours
       // it was rescheduled to the window END (06:00 = 6h) — due once we tick past the window.
       const afterWindow = yield* dispatcher.tick(6 * 3_600_000)
       expect(afterWindow).toBe(1)
-      const fired = yield* bus.recentByType({ type: "ci.failure", windowMs: Number.MAX_SAFE_INTEGER, now: 6 * 3_600_000 })
+      const fired = yield* bus.recentByType({
+        type: "ci.failure",
+        windowMs: Number.MAX_SAFE_INTEGER,
+        now: 6 * 3_600_000,
+      })
       expect(fired.map((r) => (r.payload as { via?: string }).via)).toContain("sched")
     }),
   )
@@ -391,7 +410,13 @@ describe("EventDispatcher quiet-hours tick filter", () => {
       yield* scheduler.scheduleDelay({
         workspaceID: "wrk_1",
         fireAt: QUIET_AT,
-        eventTemplate: { type: "pr.comment", source: "schedule", workspaceID: "wrk_1", priority: "high", payload: { urgent: true } },
+        eventTemplate: {
+          type: "pr.comment",
+          source: "schedule",
+          workspaceID: "wrk_1",
+          priority: "high",
+          payload: { urgent: true },
+        },
       })
       // high priority breaks through quiet hours → fires immediately.
       expect(yield* dispatcher.tick(QUIET_AT)).toBe(1)
@@ -412,7 +437,13 @@ describe("EventDispatcher quiet-hours tick filter", () => {
       yield* scheduler.scheduleDelay({
         workspaceID: "wrk_1",
         fireAt: AWAKE_AT,
-        eventTemplate: { type: "ci.failure", source: "schedule", workspaceID: "wrk_1", priority: "normal", payload: { via: "awake" } },
+        eventTemplate: {
+          type: "ci.failure",
+          source: "schedule",
+          workspaceID: "wrk_1",
+          priority: "normal",
+          payload: { via: "awake" },
+        },
       })
       expect(yield* dispatcher.tick(AWAKE_AT)).toBe(1)
     }),

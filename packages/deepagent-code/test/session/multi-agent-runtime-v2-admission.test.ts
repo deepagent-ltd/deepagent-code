@@ -75,6 +75,7 @@ const agent = (id: string, caps: string[], autonomy?: AgentDescriptor["autonomy"
 const makeRuntime = (
   eventV2Admission?: MultiAgentRuntime.EventV2AdmissionBridge,
   runtimeFeatures?: RuntimeFeatureRegistry,
+  dagCoordination = false,
 ) => {
   const database = Database.layerFromPath(":memory:")
   const core = Layer.mergeAll(
@@ -88,6 +89,7 @@ const makeRuntime = (
       return MultiAgentRuntime.layerWith({
         runner: fakeRunner,
         execution,
+        dagCoordination,
         ...(eventV2Admission ? { eventV2Admission } : {}),
         ...(runtimeFeatures ? { runtimeFeatures } : {}),
       })
@@ -101,10 +103,11 @@ function withRuntime<A>(
   eventV2Admission: MultiAgentRuntime.EventV2AdmissionBridge | undefined,
   body: (runtime: MultiAgentRuntime.Interface) => Effect.Effect<A, unknown>,
   runtimeFeatures?: RuntimeFeatureRegistry,
+  dagCoordination = false,
 ): Promise<A> {
   return Effect.runPromise(
     Effect.gen(function* () {
-      const ctx = yield* Layer.build(makeRuntime(eventV2Admission, runtimeFeatures))
+      const ctx = yield* Layer.build(makeRuntime(eventV2Admission, runtimeFeatures, dagCoordination))
       const runtime = Context.get(ctx, MultiAgentRuntime.Service)
       return yield* body(runtime)
     }).pipe(Effect.scoped),
@@ -156,7 +159,10 @@ describe("C5-04 MultiAgentRuntime V2 admission dispatch branch", () => {
     await withRuntime(fakeBridge(calls), (runtime) => runtime.dispatch(request()))
     // The bridge resolved the scope + admitted; the V4 runner NEVER ran (coordination skipped).
     expect(calls.length).toBe(1)
-    const admitted = calls[0] as { request: EventDispatcher.DispatchRequest; scope: EventAdmissionWiring.AdmissionScope }
+    const admitted = calls[0] as {
+      request: EventDispatcher.DispatchRequest
+      scope: EventAdmissionWiring.AdmissionScope
+    }
     expect(admitted.request.event.id).toBeDefined()
     expect(admitted.scope.workspaceId).toBe("wrk_1")
     expect(admitted.scope.projectScopeKey).toBe("proj_1")
@@ -165,6 +171,57 @@ describe("C5-04 MultiAgentRuntime V2 admission dispatch branch", () => {
     expect(admitted.scope.authorizedTrigger).toBe(true)
     // The §C coordination path (which would run the runner) was NOT entered.
     expect(runnerRan.length).toBe(0)
+  })
+
+  test("DAG mode stays on ordinary admission while the second lane flag is OFF", async () => {
+    setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
+    resetRunner()
+    const calls: string[] = []
+    const bridge: MultiAgentRuntime.EventV2AdmissionBridge = {
+      securityNamespaceFor: () => Effect.succeed("ns"),
+      executionFor: () => "dag",
+      admit: () =>
+        Effect.sync(() => {
+          calls.push("single")
+        }),
+      admitReceiptOnly: () =>
+        Effect.sync(() => {
+          calls.push("receipt")
+        }),
+    }
+    await withRuntime(bridge, (runtime) => runtime.dispatch(request()))
+    expect(calls).toEqual(["single"])
+    expect(runnerRan).toEqual([])
+  })
+
+  test("DAG mode admits an ingress receipt and executes V2 child turns when explicitly enabled", async () => {
+    setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
+    resetRunner()
+    const calls: string[] = []
+    const bridge: MultiAgentRuntime.EventV2AdmissionBridge = {
+      securityNamespaceFor: () => Effect.succeed("ns"),
+      executionFor: () => "dag",
+      admit: () =>
+        Effect.sync(() => {
+          calls.push("single")
+        }),
+      admitReceiptOnly: () =>
+        Effect.sync(() => {
+          calls.push("receipt")
+        }),
+    }
+    await withRuntime(
+      bridge,
+      (runtime) =>
+        runtime.dispatch({
+          ...request(),
+          event: event({ payload: { directory: "/tmp/event-repo", files: ["src/a.ts"] } }),
+        }),
+      undefined,
+      true,
+    )
+    expect(calls).toEqual(["receipt"])
+    expect(runnerRan).toEqual(["fixer", "fixer"])
   })
 
   test("flag ON + seam ABSENT: dispatch fails with the typed refusal — never a silent legacy run", async () => {

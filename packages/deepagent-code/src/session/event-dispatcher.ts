@@ -1,5 +1,6 @@
 export * as EventDispatcher from "./event-dispatcher"
 
+import path from "node:path"
 import { Context, Effect, Layer, Stream, Schedule, Duration, Cause, Deferred, Option } from "effect"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { EventRouter } from "@deepagent-code/core/deepagent/event-router"
@@ -664,7 +665,11 @@ export const layerWith = (options?: LayerOptions) =>
       const publishScheduleEvent = (
         schedule: Scheduler.Schedule,
         at: number,
-        overrides?: { readonly workspaceID?: string; readonly payload?: Record<string, unknown>; readonly keySuffix?: string },
+        overrides?: {
+          readonly workspaceID?: string
+          readonly payload?: Record<string, unknown>
+          readonly keySuffix?: string
+        },
       ) =>
         Effect.gen(function* () {
           const template = schedule.eventTemplate
@@ -763,19 +768,25 @@ export const layerWith = (options?: LayerOptions) =>
           // failure landed in (so the repair is scoped to the failing repo's project workspace).
           // recentByType returns newest-first (desc created_at); scope each repo's repair to the workspace
           // of its MOST RECENT failure (the first one encountered for that repo).
-          const byRepo = new Map<string, { count: number; workspaceID: string }>()
+          const byRepo = new Map<string, { count: number; workspaceID: string; directory?: string }>()
           for (const event of recent) {
             const repo = readRepo(event)
             if (!repo) continue // an event with no repo discriminator can't be repo-scoped → ignore.
             const prev = byRepo.get(repo)
-            byRepo.set(repo, { count: (prev?.count ?? 0) + 1, workspaceID: prev?.workspaceID ?? event.workspaceID })
+            const candidate = (event.payload as { directory?: unknown } | null)?.directory
+            const directory = typeof candidate === "string" && path.isAbsolute(candidate) ? candidate : undefined
+            byRepo.set(repo, {
+              count: (prev?.count ?? 0) + 1,
+              workspaceID: prev?.workspaceID ?? event.workspaceID,
+              directory: prev?.directory ?? (prev && prev.workspaceID !== event.workspaceID ? undefined : directory),
+            })
           }
           let firedAny = false
           for (const [repo, agg] of byRepo) {
             if (!Scheduler.conditionMet(spec, agg.count)) continue // this repo hasn't hit the threshold.
             yield* publishScheduleEvent(schedule, at, {
               workspaceID: agg.workspaceID,
-              payload: { repo },
+              payload: { repo, ...(agg.directory ? { directory: agg.directory } : {}) },
               keySuffix: repo,
             })
             firedAny = true
@@ -873,43 +884,39 @@ export const layerWith = (options?: LayerOptions) =>
       if (runLoops) {
         yield* bus.registerConsumerGroup(DISPATCH_GROUP)
         const ready = yield* Deferred.make<void>()
-        yield* bus
-          .subscribe({ group: DISPATCH_GROUP })
-          .pipe(
-            Stream.onStart(Deferred.succeed(ready, undefined)),
-            Stream.runForEach((event) =>
-              handle(event).pipe(
-                Effect.catchCause((cause) =>
-                  Effect.sync(() => log.error("event handle failed", { cause: Cause.pretty(cause) })),
-                ),
-                Effect.asVoid,
+        yield* bus.subscribe({ group: DISPATCH_GROUP }).pipe(
+          Stream.onStart(Deferred.succeed(ready, undefined)),
+          Stream.runForEach((event) =>
+            handle(event).pipe(
+              Effect.catchCause((cause) =>
+                Effect.sync(() => log.error("event handle failed", { cause: Cause.pretty(cause) })),
               ),
+              Effect.asVoid,
             ),
-            Effect.forkScoped,
-          )
+          ),
+          Effect.forkScoped,
+        )
         // wait until the group is registered before the layer is considered ready.
         // Timeout guards against DB-stall (busy WAL/retention sweep): durable registration already
         // happened via registerConsumerGroup above, so a brief live-stream miss is recoverable via
         // the retry pump. 500ms is well above normal fiber-schedule latency (<1ms).
         yield* Deferred.await(ready).pipe(Effect.timeout(Duration.millis(500)), Effect.ignore)
 
-        yield* tick()
-          .pipe(
-            Effect.catchCause((cause) =>
-              Effect.sync(() => log.error("scheduler tick failed", { cause: Cause.pretty(cause) })).pipe(Effect.as(0)),
-            ),
-            Effect.repeat(Schedule.spaced(Duration.millis(tickIntervalMs))),
-            Effect.forkScoped,
-          )
+        yield* tick().pipe(
+          Effect.catchCause((cause) =>
+            Effect.sync(() => log.error("scheduler tick failed", { cause: Cause.pretty(cause) })).pipe(Effect.as(0)),
+          ),
+          Effect.repeat(Schedule.spaced(Duration.millis(tickIntervalMs))),
+          Effect.forkScoped,
+        )
 
-        yield* pumpRetries()
-          .pipe(
-            Effect.catchCause((cause) =>
-              Effect.sync(() => log.error("retry pump failed", { cause: Cause.pretty(cause) })).pipe(Effect.as(0)),
-            ),
-            Effect.repeat(Schedule.spaced(Duration.millis(retryPumpIntervalMs))),
-            Effect.forkScoped,
-          )
+        yield* pumpRetries().pipe(
+          Effect.catchCause((cause) =>
+            Effect.sync(() => log.error("retry pump failed", { cause: Cause.pretty(cause) })).pipe(Effect.as(0)),
+          ),
+          Effect.repeat(Schedule.spaced(Duration.millis(retryPumpIntervalMs))),
+          Effect.forkScoped,
+        )
       }
 
       return Service.of({ group: DISPATCH_GROUP, handle, tick, pumpRetries })

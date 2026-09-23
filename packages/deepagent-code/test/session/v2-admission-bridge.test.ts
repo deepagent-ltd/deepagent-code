@@ -85,7 +85,12 @@ const request = (): EventDispatcher.DispatchRequest => ({
 })
 
 /** A normalized record of the SessionV2.prompt call the adapter issues. */
-type V2PromptCall = { readonly sessionID: string; readonly prompt: { readonly text: string }; readonly delivery: string; readonly resume?: boolean }
+type V2PromptCall = {
+  readonly sessionID: string
+  readonly prompt: { readonly text: string }
+  readonly delivery: string
+  readonly resume?: boolean
+}
 
 /** A fake SessionV2 whose `prompt` records each admission and returns a minimal `Admitted`. Verifies the
  * adapter really drives SessionV2.prompt without needing a live session stack. */
@@ -122,9 +127,7 @@ const runWithDb = <A>(body: (db: Database.Interface["db"]) => Effect.Effect<A, u
 
 /** End-to-end integration: build the runtime with a real provider, dispatch a routed event, and assert the
  * V2 path ran (adapter called). Returns the dispatch Effect (driven by the caller's scoped db context). */
-const providerRuntimeEffect = (
-  provider: MultiAgentRuntime.EventV2AdmissionBridge,
-): Effect.Effect<void, unknown> => {
+const providerRuntimeEffect = (provider: MultiAgentRuntime.EventV2AdmissionBridge): Effect.Effect<void, unknown> => {
   const database = Database.layerFromPath(":memory:")
   const core = Layer.mergeAll(
     DeepAgentEventBus.layerWith({ now }),
@@ -202,9 +205,11 @@ describe("C5-12 V2 admission bridge provider", () => {
     )
   })
 
-  test("schedule and repair events are registered on the default single-admission lane", async () => {
+  test("schedule and repair events carry explicit execution modes without changing ordinary admission", async () => {
     for (const type of ["schedule.scan", "ci.repair.requested"]) {
-      expect(V4_EVENT_REGISTRY.lookup(type)?.execution ?? "single").toBe("single")
+      expect(V4_EVENT_REGISTRY.lookup(type)?.execution ?? "single").toBe(
+        type === "ci.repair.requested" ? "dag" : "single",
+      )
       const req = { ...request(), event: event({ type, source: "schedule" }) }
       const v2Calls: V2PromptCall[] = []
       await runWithDb((db) =>
@@ -218,6 +223,24 @@ describe("C5-12 V2 admission bridge provider", () => {
       )
       expect(v2Calls).toHaveLength(1)
     }
+  })
+
+  test("DAG ingress resolves one durable receipt without prompting the event parent", async () => {
+    const req = { ...request(), event: event({ type: "ci.repair.requested", source: "schedule" }) }
+    const v2Calls: V2PromptCall[] = []
+    await runWithDb((db) =>
+      Effect.gen(function* () {
+        const provider = makeV2AdmissionBridge({ db, v2Session: fakeV2Session(v2Calls) })
+        expect(provider.executionFor?.(req.event.type)).toBe("dag")
+        if (!provider.admitReceiptOnly) throw new Error("missing receipt-only adapter")
+        yield* provider.admitReceiptOnly({ request: req, scope: scope(req.event) })
+        yield* provider.admitReceiptOnly({ request: req, scope: scope(req.event) })
+        const rows = yield* EventAdmission.forSession(db, parentSessionIDFor(req.event.id))
+        expect(rows).toHaveLength(1)
+        expect(rows[0]).toMatchObject({ status: "resolved" })
+      }),
+    )
+    expect(v2Calls).toEqual([])
   })
 
   test("provider.admit fails closed on an unregistered event type", async () => {
