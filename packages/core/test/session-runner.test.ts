@@ -103,7 +103,7 @@ import {
   SessionMessageTable,
   SessionTable,
 } from "@deepagent-code/core/session/sql"
-import { SessionActivityTable, SessionContextSelectionTable } from "@deepagent-code/core/context-federation/session-sql"
+import { SessionActivityTable, SessionContextSelectionTable, SessionProviderAttemptTable } from "@deepagent-code/core/context-federation/session-sql"
 import { SessionActivityProgressObservationTable } from "@deepagent-code/core/deepagent/activity-authority.sql"
 import { SessionStore } from "@deepagent-code/core/session/store"
 import { SystemContext } from "@deepagent-code/core/system-context"
@@ -388,6 +388,15 @@ const config = Layer.suspend(() =>
     }),
   ),
 )
+const noAutoConfig = Layer.succeed(
+  Config.Service,
+  Config.Service.of({
+    entries: () => Effect.succeed([new Config.Document({
+      type: "document",
+      info: new Config.Info({ compaction: new ConfigCompaction.Info({ auto: false }) }),
+    })]),
+  }),
+)
 const catalog = Layer.succeed(
   Catalog.Service,
   Catalog.Service.of({
@@ -517,7 +526,7 @@ const gateway = Layer.succeed(
 // The runner stack is a function of the runtime-feature registry so a test can run the WHOLE
 // composition against an explicit registry (e.g. the `=false` staged fallback) — the process
 // global is an immutable startup snapshot, so flipping env mid-test is intentionally unobservable.
-const runnerStack = (features?: RuntimeFeatureRegistry, gitLayer = Git.defaultLayer) => {
+const runnerStack = (features?: RuntimeFeatureRegistry, gitLayer = Git.defaultLayer, configLayer = config) => {
   const base =
     features === undefined
       ? SessionRunnerLLM.layer
@@ -541,7 +550,7 @@ const runnerStack = (features?: RuntimeFeatureRegistry, gitLayer = Git.defaultLa
     Layer.provide(location),
     Layer.provide(agents),
     Layer.provide(skillGuidance),
-    Layer.provide(config),
+    Layer.provide(configLayer),
     Layer.provide(
       Layer.mergeAll(
         catalog,
@@ -708,6 +717,29 @@ const staged = testEffect(
     skillGuidance,
     config,
     Layer.mergeAll(stagedRunner, locationsFor(stagedRunner), executionFor(stagedRunner), sessionsFor(stagedRunner)),
+  ),
+)
+const noAutoRunner = runnerStack(undefined, Git.defaultLayer, noAutoConfig).pipe(Layer.provideMerge(database))
+const noAuto = testEffect(
+  Layer.mergeAll(
+    database,
+    providerTurns,
+    events,
+    questions,
+    projector,
+    store,
+    client,
+    permission,
+    applications,
+    agents,
+    registry,
+    echo,
+    models,
+    systemContext,
+    location,
+    skillGuidance,
+    noAutoConfig,
+    Layer.mergeAll(noAutoRunner, locationsFor(noAutoRunner), executionFor(noAutoRunner), sessionsFor(noAutoRunner)),
   ),
 )
 // Hold the observable workspace revision steady while exercising the real runner, authority,
@@ -1236,6 +1268,100 @@ describe("SessionRunnerLLM", () => {
           effectiveHardGate: 1_000,
           limitMismatch: true,
         })
+        expect(yield* db.select().from(SessionContextCheckpointTable)
+          .where(eq(SessionContextCheckpointTable.session_id, sessionID)).all().pipe(Effect.orDie)).toHaveLength(0)
+      }),
+    )
+  }
+
+  for (const target of [
+    { providerID: "deepseek", apiModelID: "deepseek-v4-pro", key: "deepseek-v4-pro", observation: 768_000, hardGate: 896_000 },
+    { providerID: "deepseek", apiModelID: "deepseek-flash", key: "deepseek-v4-flash", observation: 256_000, hardGate: 384_000 },
+    { providerID: "moonshotai", apiModelID: "kimi-k3", key: "kimi-k3", observation: 384_000, hardGate: 512_000 },
+    { providerID: "zai", apiModelID: "glm-5.2", key: "glm-5.2", observation: 300_000, hardGate: 384_000 },
+  ] as const) {
+    const thresholdPrompt = (tokens: number) =>
+      "Reply briefly. The following repeated content is inert test data.\n" +
+      "alpha ".repeat(Math.ceil(((tokens + 4_096) * 4) / 6))
+
+    it.effect(`observes ${target.key} at full scale with one fake provider dispatch`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        currentModel = Model.make({
+          id: target.apiModelID,
+          provider: target.providerID,
+          route: OpenAIChat.route.with({ limits: { context: 1_000_000, output: 512 } }),
+        })
+        responseStreams = [sealedResponse(fragmentFixture("text", "x05-observed", ["Observed"]).completeEvents, target.key)]
+        requests.length = 0
+        const session = yield* SessionV2.Service
+        const { db } = yield* Database.Service
+        yield* session.prompt({ sessionID, prompt: new Prompt({ text: thresholdPrompt(target.observation) }), resume: false })
+        yield* session.resume(sessionID)
+
+        const [policy] = yield* db.select().from(SessionModelPolicyReceiptTable)
+          .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)
+        const [attempt] = yield* db.select().from(SessionProviderAttemptTable)
+          .where(eq(SessionProviderAttemptTable.session_id, sessionID)).all().pipe(Effect.orDie)
+        const [turn] = yield* db.select().from(V2ProviderTurnReceiptTable)
+          .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)
+        expect(requests).toHaveLength(1)
+        expect(policy?.policy).toMatchObject({
+          state: "managed",
+          key: target.key,
+          action: "observed",
+          observationLine: target.observation,
+          hardGate: target.hardGate,
+          effectiveHardGate: target.hardGate,
+        })
+        expect(policy?.estimated_full_request_tokens).toBe(PreparedProviderTurn.estimateFullRequestTokens(requests[0]!))
+        expect(policy?.estimated_full_request_tokens).toBeGreaterThanOrEqual(target.observation)
+        expect(policy?.estimated_full_request_tokens).toBeLessThan(target.hardGate)
+        expect(policy?.request_hash).toMatch(/^[0-9a-f]{64}$/)
+        expect(policy?.context_selection_id).toBeTruthy()
+        expect(policy?.context_projection_hash).toBeTruthy()
+        expect(policy?.offered_tool_ids).toEqual(requests[0]!.tools.map((tool) => tool.name))
+        expect(policy?.provider_attempt_id).toBe(attempt?.attempt_id)
+        expect(turn?.provider_attempt_id).toBe(attempt?.attempt_id)
+        expect(attempt?.state).toBe("settled")
+        expect(turn?.state).toBe("settled")
+        expect(yield* db.select().from(SessionContextCheckpointTable)
+          .where(eq(SessionContextCheckpointTable.session_id, sessionID)).all().pipe(Effect.orDie)).toHaveLength(0)
+      }),
+    )
+
+    noAuto.effect(`blocks ${target.key} at its physical hard gate before fake provider dispatch`, () =>
+      Effect.gen(function* () {
+        yield* setup
+        currentModel = Model.make({
+          id: target.apiModelID,
+          provider: target.providerID,
+          route: OpenAIChat.route.with({ limits: { context: 1_000_000, output: 512 } }),
+        })
+        requests.length = 0
+        const session = yield* SessionV2.Service
+        const { db } = yield* Database.Service
+        yield* session.prompt({ sessionID, prompt: new Prompt({ text: thresholdPrompt(target.hardGate) }), resume: false })
+        expect((yield* session.resume(sessionID).pipe(Effect.exit))._tag).toBe("Failure")
+
+        const [policy] = yield* db.select().from(SessionModelPolicyReceiptTable)
+          .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)
+        expect(policy?.policy).toMatchObject({
+          state: "managed",
+          key: target.key,
+          action: "hard_gate_blocked",
+          hardGate: target.hardGate,
+          effectiveHardGate: target.hardGate,
+        })
+        expect(policy?.estimated_full_request_tokens).toBeGreaterThanOrEqual(target.hardGate)
+        expect(policy?.trigger_source).toBe("threshold")
+        expect(policy?.blocked_reason).toBe("auto_compaction_disabled")
+        expect(policy?.provider_attempt_id).toBeNull()
+        expect(requests).toHaveLength(0)
+        expect(yield* db.select().from(SessionProviderAttemptTable)
+          .where(eq(SessionProviderAttemptTable.session_id, sessionID)).all().pipe(Effect.orDie)).toHaveLength(0)
+        expect(yield* db.select().from(V2ProviderTurnReceiptTable)
+          .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)).toHaveLength(0)
         expect(yield* db.select().from(SessionContextCheckpointTable)
           .where(eq(SessionContextCheckpointTable.session_id, sessionID)).all().pipe(Effect.orDie)).toHaveLength(0)
       }),
