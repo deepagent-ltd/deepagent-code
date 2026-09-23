@@ -36,25 +36,38 @@ export const proxyAuthorizationLayer = Layer.effect(
     const flags = yield* RuntimeFlags.Service
     return ProxyAuthorization.of((effect) =>
       Effect.gen(function* () {
-        if (!flags.gateway) return proxyError(404, "gateway_disabled", "Gateway is disabled")
         const request = yield* HttpServerRequest.HttpServerRequest
-        const token = /^Bearer\s+([^\s]+)$/i.exec(request.headers.authorization ?? "")?.[1]
-        if (!token) return proxyError(401, "invalid_api_key", "Invalid API key")
-        const keyHash = createHash("sha256").update(token).digest("hex")
-        const result = yield* db.select().from(ProxyTenantTable).where(eq(ProxyTenantTable.key_hash, keyHash)).get().pipe(
-          Effect.match({
-            onFailure: () => ({ unavailable: true as const }),
-            onSuccess: (value) => ({ unavailable: false as const, value }),
-          }),
-        )
-        if (result.unavailable) return proxyError(503, "gateway_unavailable", "Gateway is unavailable")
-        const tenant = result.value
-        if (!tenant?.enabled) return proxyError(401, "invalid_api_key", "Invalid API key")
-        return yield* effect.pipe(Effect.provideService(ProxyTenantContext, tenant))
+        const authorized = yield* authorizeProxyKey(db, flags.gateway, request)
+        if (!authorized.ok) return authorized.response
+        return yield* effect.pipe(Effect.provideService(ProxyTenantContext, authorized.tenant))
       }),
     )
   }),
 )
+
+export function authorizeProxyKey(
+  db: Database.Interface["db"],
+  enabled: boolean,
+  request: HttpServerRequest.HttpServerRequest,
+) {
+  return Effect.gen(function* () {
+    if (!enabled) return { ok: false as const, response: proxyError(404, "gateway_disabled", "Gateway is disabled") }
+    const token = /^Bearer\s+([^\s]+)$/i.exec(request.headers.authorization ?? "")?.[1]
+    if (!token) return { ok: false as const, response: proxyError(401, "invalid_api_key", "Invalid API key") }
+    const keyHash = createHash("sha256").update(token).digest("hex")
+    const result = yield* db.select().from(ProxyTenantTable).where(eq(ProxyTenantTable.key_hash, keyHash)).get().pipe(
+      Effect.match({
+        onFailure: () => ({ unavailable: true as const }),
+        onSuccess: (value) => ({ unavailable: false as const, value }),
+      }),
+    )
+    if (result.unavailable)
+      return { ok: false as const, response: proxyError(503, "gateway_unavailable", "Gateway is unavailable") }
+    if (!result.value?.enabled)
+      return { ok: false as const, response: proxyError(401, "invalid_api_key", "Invalid API key") }
+    return { ok: true as const, tenant: result.value }
+  })
+}
 
 export const proxyStartupGate = Layer.effectDiscard(
   Effect.gen(function* () {

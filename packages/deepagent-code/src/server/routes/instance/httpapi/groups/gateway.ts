@@ -16,5 +16,11 @@ export const GatewayHttpApi = HttpApi.make("deepagent-code-gateway").add(
         success: Schema.Struct({ object: Schema.Literal("list"), data: Schema.Array(Model) }),
       }).annotateMerge(OpenApi.annotations({ summary: "List proxy tenant models" })),
     )
+    .add(
+      HttpApiEndpoint.post("chat", "/v1/chat/completions", {
+        payload: Schema.Unknown,
+        success: Schema.Unknown,
+      }).annotateMerge(OpenApi.annotations({ summary: "Create a proxy chat completion" })),
+    )
     .middleware(ProxyAuthorization),
 )

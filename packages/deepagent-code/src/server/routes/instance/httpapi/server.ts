@@ -84,7 +84,7 @@ import { ServerAuth } from "@/server/auth"
 import { InstanceHttpApi, RootHttpApi } from "./api"
 import { GatewayHttpApi } from "./groups/gateway"
 import { gatewayHandlers } from "./handlers/gateway"
-import { proxyAuthorizationLayer, proxyError, proxyStartupGate } from "./middleware/proxy-authorization"
+import { authorizeProxyKey, proxyAuthorizationLayer, proxyError, proxyStartupGate } from "./middleware/proxy-authorization"
 import { Api } from "@deepagent-code/server/api"
 import { PublicApi } from "./public"
 import {
@@ -159,6 +159,7 @@ import { V2RunnerFrame } from "@/session/v2-runner-frame"
 import { V2OutboxRuntime } from "@/event/v2-outbox-runtime"
 import { V2OwnerSeed } from "@deepagent-code/core/session/runner/v2-owner-seed"
 import { V2OwnerDevMint } from "@deepagent-code/core/session/runner/v2-owner-dev-mint"
+import { LLMClient, RequestExecutor } from "@deepagent-code/llm/route"
 import { SessionRestart } from "@deepagent-code/core/session/execution/restart"
 
 export const context = Context.empty() as Context.Context<unknown>
@@ -261,6 +262,7 @@ const gatewayApiRoutes = HttpApiBuilder.layer(GatewayHttpApi).pipe(
   Layer.provide(gatewayHandlers),
   Layer.provide(proxyAuthorizationLayer),
 )
+const gatewayClientLayer = LLMClient.layer.pipe(Layer.provide(RequestExecutor.defaultLayer))
 const eventApiRoutes = HttpApiBuilder.layer(EventApi).pipe(
   Layer.provide(eventHandlers),
   Layer.provide([httpApiAuthLayer, workspaceRoutingLive, instanceContextLayer]),
@@ -342,11 +344,14 @@ const docRoute = HttpRouter.use((router) => router.add("GET", "/doc", () => Effe
 const gatewayFallback = HttpRouter.use((router) =>
   Effect.gen(function* () {
     const flags = yield* RuntimeFlags.Service
-    yield* router.add("*", "/v1/*", () =>
-      Effect.succeed(
-        flags.gateway
-          ? proxyError(501, "model_not_supported", "This gateway endpoint is not supported")
-          : proxyError(404, "gateway_disabled", "Gateway is disabled"),
+    const { db } = yield* Database.Service
+    yield* router.add("*", "/v1/*", (request) =>
+      authorizeProxyKey(db, flags.gateway, request).pipe(
+        Effect.map((result) =>
+          result.ok
+            ? proxyError(501, "model_not_supported", "This gateway endpoint is not supported")
+            : result.response,
+        ),
       ),
     )
   }),
@@ -415,6 +420,7 @@ export function createRoutes(corsOptions?: CorsOptions, runtimeFlagsLayer = Runt
       Format.defaultLayer,
       LSP.defaultLayer,
       LLM.defaultLayer,
+      gatewayClientLayer,
       Installation.defaultLayer,
       MCP.defaultLayer,
       Root.applicationToolsLayer,

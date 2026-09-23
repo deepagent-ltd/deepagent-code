@@ -9,6 +9,7 @@ import { Database } from "@deepagent-code/core/database/database"
 import { Flag } from "@deepagent-code/core/flag/flag"
 import { ProxyTenantTable } from "@deepagent-code/core/proxy/sql"
 import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
+import { testProviderConfig } from "../lib/test-provider"
 
 describe("gateway release gate", () => {
   test("defaults off with a typed OpenAI 404 for declared and unknown /v1 routes", async () => {
@@ -64,6 +65,14 @@ describe("gateway release gate", () => {
       const unauthorized = await handler(new Request("http://localhost/v1/models"), HttpApiApp.context)
       expect(unauthorized.status).toBe(401)
       expect((await unauthorized.json()).error.code).toBe("invalid_api_key")
+      const unknownWithoutKey = await handler(new Request("http://localhost/v1/embeddings"), HttpApiApp.context)
+      expect(unknownWithoutKey.status).toBe(401)
+      const unknownWithKey = await handler(
+        new Request("http://localhost/v1/embeddings", { headers: { authorization: `Bearer ${key}` } }),
+        HttpApiApp.context,
+      )
+      expect(unknownWithKey.status).toBe(501)
+      expect((await unknownWithKey.json()).error.code).toBe("model_not_supported")
 
       const response = await handler(
         new Request("http://localhost/v1/models", {
@@ -74,6 +83,178 @@ describe("gateway release gate", () => {
       expect(response.status).toBe(200)
       expect(await response.json()).toEqual({ object: "list", data: [] })
     } finally {
+      Flag.DEEPAGENT_CODE_DB = originalDatabase
+      await rm(directory, { recursive: true, force: true })
+    }
+  }, 30_000)
+
+  test("keeps passthrough free of sessions and reconciles provider usage with durable audit", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "deepagent-proxy-chat-test-"))
+    const originalDatabase = Flag.DEEPAGENT_CODE_DB
+    Flag.DEEPAGENT_CODE_DB = join(directory, "proxy.sqlite")
+    const hits: string[] = []
+    const upstream = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const body = await request.text()
+        hits.push(body)
+        if (body.includes("Reject"))
+          return Response.json(
+            { error: { message: "upstream key rejected: test-key", type: "authentication_error", code: "invalid_api_key" } },
+            { status: 401 },
+          )
+        return new Response(
+          [
+            'data: {"id":"upstream-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}',
+            'data: {"id":"upstream-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"exact upstream text"},"finish_reason":null}]}',
+            'data: {"id":"upstream-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":4,"total_tokens":15}}',
+            "data: [DONE]",
+            "",
+          ].join("\n\n"),
+          { headers: { "content-type": "text/event-stream" } },
+        )
+      },
+    })
+    try {
+      await Bun.write(join(directory, "deepagent-code.json"), JSON.stringify(testProviderConfig(`http://127.0.0.1:${upstream.port}/v1`)))
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          yield* (yield* Database.Service).db.insert(ProxyTenantTable).values({
+            id: "tenant-chat",
+            key_hash: createHash("sha256").update("sk-test-proxy-chat").digest("hex"),
+            key_fingerprint: "chat-fingerprint",
+            directory,
+            model_allowlist: ["test/test-model"],
+            tier: "passthrough",
+            quota_requests_per_minute: 3,
+            quota_tokens_per_day: 100_000,
+            lane_limit: 8,
+            deadline_ms: 120_000,
+            enabled: true,
+            created_at: Date.now(),
+            updated_at: Date.now(),
+          })
+        }).pipe(Effect.provide(Database.defaultLayer)),
+      )
+      const handler = HttpRouter.toWebHandler(
+        HttpApiApp.createRoutes().pipe(
+          Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DEEPAGENT_CODE_GATEWAY: true }))),
+        ),
+        { disableLogger: true },
+      ).handler
+      const response = await handler(
+        new Request("http://localhost/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            authorization: "Bearer sk-test-proxy-chat",
+            "content-type": "application/json",
+            "x-request-id": "example-1",
+          },
+          body: JSON.stringify({ model: "test-model", messages: [{ role: "user", content: "Say hello" }] }),
+        }),
+        HttpApiApp.context,
+      )
+      expect(response.status).toBe(200)
+      expect((await response.json()).choices[0].message.content).toBe("exact upstream text")
+      expect(hits).toHaveLength(1)
+      const streamed = await handler(
+        new Request("http://localhost/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            authorization: "Bearer sk-test-proxy-chat",
+            "content-type": "application/json",
+            "x-request-id": "example-2",
+          },
+          body: JSON.stringify({
+            model: "test-model",
+            messages: [{ role: "user", content: "Say hello" }],
+            stream: true,
+            stream_options: { include_usage: true },
+          }),
+        }),
+        HttpApiApp.context,
+      )
+      expect(streamed.status).toBe(200)
+      expect(streamed.headers.get("content-type")).toContain("text/event-stream")
+      const sse = await streamed.text()
+      expect(sse).toContain('"content":"exact upstream text"')
+      expect(sse).toContain('"prompt_tokens":11')
+      expect(sse).toContain("data: [DONE]")
+      expect(hits).toHaveLength(2)
+      const repeated = await handler(
+        new Request("http://localhost/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            authorization: "Bearer sk-test-proxy-chat",
+            "content-type": "application/json",
+            "x-request-id": "example-1",
+          },
+          body: JSON.stringify({ model: "test-model", messages: [{ role: "user", content: "Say hello" }] }),
+        }),
+        HttpApiApp.context,
+      )
+      expect(repeated.status).toBe(409)
+      expect((await repeated.json()).error.code).toBe("request_replay_unavailable")
+      const providerFailure = await handler(
+        new Request("http://localhost/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            authorization: "Bearer sk-test-proxy-chat",
+            "content-type": "application/json",
+            "x-request-id": "example-3",
+          },
+          body: JSON.stringify({ model: "test-model", messages: [{ role: "user", content: "Reject" }] }),
+        }),
+        HttpApiApp.context,
+      )
+      expect(providerFailure.status).toBe(401)
+      expect(await providerFailure.json()).toEqual({
+        error: { message: "upstream key rejected: <redacted>", type: "authentication_error", code: "invalid_api_key" },
+      })
+      const limited = await handler(
+        new Request("http://localhost/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            authorization: "Bearer sk-test-proxy-chat",
+            "content-type": "application/json",
+            "x-request-id": "example-4",
+          },
+          body: JSON.stringify({ model: "test-model", messages: [{ role: "user", content: "Again" }] }),
+        }),
+        HttpApiApp.context,
+      )
+      expect(limited.status).toBe(429)
+      expect((await limited.json()).error.code).toBe("rate_limit_exceeded")
+      expect(limited.headers.get("x-ratelimit-limit-requests")).toBe("3")
+      expect(limited.headers.get("x-ratelimit-remaining-requests")).toBe("0")
+      expect(hits).toHaveLength(3)
+      const sqlite = await import("bun:sqlite")
+      const reader = new sqlite.Database(Flag.DEEPAGENT_CODE_DB, { readonly: true })
+      try {
+        const ledger = reader.query("SELECT request_id, usage_input, usage_output, lane_session_id FROM proxy_request_ledger").all() as {
+          request_id: string
+          usage_input: number | null
+          usage_output: number | null
+          lane_session_id: string | null
+        }[]
+        const events = reader.query("SELECT type FROM event").all() as { type: string }[]
+        expect(ledger).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ request_id: "tenant-chat:example-1", usage_input: 11, usage_output: 4 }),
+            expect.objectContaining({ request_id: "tenant-chat:example-2", usage_input: 11, usage_output: 4 }),
+          ]),
+        )
+        expect(ledger.every((row) => row.lane_session_id === null)).toBe(true)
+        expect(events.map((event) => event.type)).toContain("proxy.request.admitted.1")
+        expect(events.map((event) => event.type)).toContain("proxy.response.completed.1")
+        expect(reader.query("SELECT count(*) AS count FROM deepagent_event_outbox WHERE event_type LIKE 'proxy.%'").get()).toMatchObject({ count: 6 })
+        expect(reader.query("SELECT count(*) AS count FROM session").get()).toMatchObject({ count: 0 })
+      } finally {
+        reader.close()
+      }
+    } finally {
+      upstream.stop(true)
       Flag.DEEPAGENT_CODE_DB = originalDatabase
       await rm(directory, { recursive: true, force: true })
     }

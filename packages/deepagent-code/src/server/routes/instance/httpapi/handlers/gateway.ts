@@ -5,11 +5,13 @@ import { InstanceStore } from "@/project/instance-store"
 import { Provider } from "@/provider/provider"
 import { GatewayHttpApi } from "../groups/gateway"
 import { ProxyTenantContext } from "../middleware/proxy-authorization"
+import { chat } from "./gateway-chat"
 
 export const gatewayHandlers = HttpApiBuilder.group(GatewayHttpApi, "gateway", (handlers) =>
   Effect.gen(function* () {
     const store = yield* InstanceStore.Service
     const provider = yield* Provider.Service
+    const chatHandler = yield* chat
 
     return handlers.handle("models", () =>
       Effect.gen(function* () {
@@ -32,6 +34,6 @@ export const gatewayHandlers = HttpApiBuilder.group(GatewayHttpApi, "gateway", (
             .sort((a, b) => a.id.localeCompare(b.id)),
         }
       }),
-    )
+    ).handleRaw("chat", chatHandler)
   }),
 )
