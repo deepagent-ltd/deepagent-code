@@ -818,6 +818,17 @@ describe("provider recovery HttpApi", () => {
           authority: "legacy_provider_receipt",
           resolution: { commandID: "facade-command-abandon", decision: "abandoned" },
         })
+        const unknown = yield* run(seeded.session.id, {
+          commandKind: "query_command",
+          commandRef: "missing-recovery-command",
+        })
+        expect(unknown.status).toBe(404)
+        const other = yield* seedRecovery("http facade cross-session query")
+        const foreign = yield* run(other.session.id, {
+          commandKind: "query_command",
+          commandRef: "facade-command-abandon",
+        })
+        expect(foreign.status).toBe(404)
 
         // A target-less abandon is a typed refusal, never an implicit default.
         const targetless = yield* run(seeded.session.id, { commandKind: "abandon_exact" })
