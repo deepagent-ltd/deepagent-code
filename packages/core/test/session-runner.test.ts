@@ -5685,6 +5685,141 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("restores the active activity's spent step ceiling before another provider turn", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const agents = yield* AgentV2.Service
+      yield* agents.update((editor) =>
+        editor.update(AgentV2.ID.make("auto"), (agent) => {
+          agent.steps = 2
+        }),
+      )
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Resume a capped activity" }), resume: false })
+      const { db } = yield* Database.Service
+      const events = yield* EventV2.Service
+      const promoted = yield* SessionInput.promoteSteers(db, events, sessionID, Number.MAX_SAFE_INTEGER)
+      yield* db
+        .insert(SessionActivityTable)
+        .values({
+          activity_id: "activity-restart-steps",
+          session_id: sessionID,
+          ordinal: 0,
+          trigger_input_id: promoted[0]!,
+          delivery: "steer",
+          state: "active",
+          created_at: Date.now(),
+        })
+        .run()
+        .pipe(Effect.orDie)
+      for (const index of [1, 2]) {
+        const assistantMessageID = SessionMessage.ID.create()
+        yield* events.publish(SessionEvent.Step.Started, {
+          sessionID,
+          timestamp: yield* DateTime.now,
+          assistantMessageID,
+          agent: "auto",
+          model: { id: ModelV2.ID.make("fake-model"), providerID: ProviderV2.ID.make("fake") },
+        })
+        yield* events.publish(SessionEvent.Tool.Called, {
+          sessionID,
+          timestamp: yield* DateTime.now,
+          assistantMessageID,
+          callID: `before-restart-step-${index}`,
+          tool: "echo",
+          input: { text: `${index}` },
+          provider: { executed: false },
+        })
+        yield* events.publish(SessionEvent.Tool.Success, {
+          sessionID,
+          timestamp: yield* DateTime.now,
+          assistantMessageID,
+          callID: `before-restart-step-${index}`,
+          structured: {},
+          content: [],
+          provider: { executed: false },
+        })
+        yield* events.publish(SessionEvent.Step.Ended, {
+          sessionID,
+          timestamp: yield* DateTime.now,
+          assistantMessageID,
+          finish: "tool-calls",
+          cost: 0,
+          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        })
+      }
+      requests.length = 0
+      const failure = yield* session.resume(sessionID).pipe(Effect.flip)
+      expect(failure).toMatchObject({ _tag: "SessionRunner.StepLimitExceededError", limit: 2 })
+      expect(requests).toHaveLength(0)
+      const budgetEvents = yield* db
+        .select({ data: EventTable.data })
+        .from(EventTable)
+        .where(eq(EventTable.type, EventV2.durableType(SessionEvent.LoopBudget.Triggered)))
+        .all()
+        .pipe(Effect.orDie)
+      expect(budgetEvents).toHaveLength(1)
+      expect(budgetEvents[0]?.data).toMatchObject({ reason: "steps", limit: 2, used: 2 })
+    }),
+  )
+
+  it.effect("resets restored steps at the latest already-promoted steer", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const agents = yield* AgentV2.Service
+      yield* agents.update((editor) =>
+        editor.update(AgentV2.ID.make("auto"), (agent) => {
+          agent.steps = 1
+        }),
+      )
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Original instruction" }), resume: false })
+      const { db } = yield* Database.Service
+      const events = yield* EventV2.Service
+      const promoted = yield* SessionInput.promoteSteers(db, events, sessionID, Number.MAX_SAFE_INTEGER)
+      yield* db
+        .insert(SessionActivityTable)
+        .values({
+          activity_id: "activity-restart-steer",
+          session_id: sessionID,
+          ordinal: 0,
+          trigger_input_id: promoted[0]!,
+          delivery: "steer",
+          state: "active",
+          created_at: Date.now(),
+        })
+        .run()
+        .pipe(Effect.orDie)
+      const assistantMessageID = SessionMessage.ID.create()
+      yield* events.publish(SessionEvent.Step.Started, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID,
+        agent: "auto",
+        model: { id: ModelV2.ID.make("fake-model"), providerID: ProviderV2.ID.make("fake") },
+      })
+      yield* events.publish(SessionEvent.Step.Ended, {
+        sessionID,
+        timestamp: yield* DateTime.now,
+        assistantMessageID,
+        finish: "stop",
+        cost: 0,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+      })
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "New steer" }), resume: false })
+      yield* SessionInput.promoteSteers(db, events, sessionID, Number.MAX_SAFE_INTEGER)
+      requests.length = 0
+      response = [
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+        LLMEvent.finish({ reason: "stop" }),
+      ]
+      yield* session.resume(sessionID)
+      expect(requests).toHaveLength(1)
+      expect(userTexts(requests[0]!)).toEqual(["Original instruction", "New steer"])
+    }),
+  )
+
   it.effect("does not restart a capped tool loop for a coalesced stale wake", () =>
     Effect.gen(function* () {
       yield* setup

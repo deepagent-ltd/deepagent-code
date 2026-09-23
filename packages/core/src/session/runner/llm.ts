@@ -11,7 +11,7 @@ import {
   type ProviderErrorEvent,
 } from "@deepagent-code/llm"
 import { AgentGateway } from "../../agent-gateway"
-import { and, desc, eq, gt, inArray } from "drizzle-orm"
+import { and, count, desc, eq, gt, inArray } from "drizzle-orm"
 import { Cause, DateTime, Duration, Effect, Exit, FiberSet, Layer, Option, Schema, Semaphore, Stream } from "effect"
 import path from "node:path"
 import { AgentV2 } from "../../agent"
@@ -2137,9 +2137,10 @@ export const layer = Layer.effect(
       )
 
     // An explicit resume can reuse an active activity after a safe startup recovery. Reconstruct
-    // the two preceding calls from committed events so restarting the process cannot grant two
-    // fresh identical attempts. Unsettled calls remain in the window as a barrier; the recovery
-    // guard decides whether their unknown effects permit another provider turn at all.
+    // the spent provider turns and preceding calls from committed events so restarting the process
+    // cannot grant a fresh step budget or two fresh identical attempts. Unsettled calls remain in
+    // the window as a barrier; the recovery guard decides whether their unknown effects permit
+    // another provider turn at all.
     const restoreLoopBudget = Effect.fn("SessionRunner.restoreLoopBudget")(function* (
       sessionID: SessionSchema.ID,
       budget: LoopBudget,
@@ -2159,6 +2160,32 @@ export const layer = Layer.effect(
         .pipe(Effect.orDie)
       if (trigger?.promotedSeq === null || trigger === undefined)
         return yield* Effect.die("active activity has no promoted trigger for loop-budget recovery")
+      const latestSteer = yield* db
+        .select({ seq: SessionInputTable.promoted_seq })
+        .from(SessionInputTable)
+        .where(
+          and(
+            eq(SessionInputTable.session_id, sessionID),
+            eq(SessionInputTable.delivery, "steer"),
+            gt(SessionInputTable.promoted_seq, trigger.promotedSeq),
+          ),
+        )
+        .orderBy(desc(SessionInputTable.promoted_seq))
+        .get()
+        .pipe(Effect.orDie)
+      const spent = yield* db
+        .select({ value: count() })
+        .from(EventTable)
+        .where(
+          and(
+            eq(EventTable.aggregate_id, sessionID),
+            eq(EventTable.type, EventV2.durableType(SessionEvent.Step.Started)),
+            gt(EventTable.seq, latestSteer?.seq ?? trigger.promotedSeq),
+          ),
+        )
+        .get()
+        .pipe(Effect.orDie)
+      budget.forActivity(active.activityID)
       const calls = yield* db
         .select({ seq: EventTable.seq, data: EventTable.data })
         .from(EventTable)
@@ -2174,7 +2201,7 @@ export const layer = Layer.effect(
         .all()
         .pipe(Effect.orDie)
       const earliest = calls.at(-1)
-      if (!earliest) return
+      if (!earliest) return { activityID: active.activityID, stepsUsed: spent?.value ?? 0 }
       const terminal = yield* db
         .select({ data: EventTable.data })
         .from(EventTable)
@@ -2190,7 +2217,6 @@ export const layer = Layer.effect(
         )
         .all()
         .pipe(Effect.orDie)
-      budget.forActivity(active.activityID)
       for (const row of calls.toReversed()) {
         const decoded = Schema.decodeUnknownOption(SessionEvent.Tool.Called.data)(row.data)
         if (Option.isNone(decoded)) return yield* Effect.die("invalid durable tool call in loop-budget recovery")
@@ -2205,6 +2231,7 @@ export const layer = Layer.effect(
           ),
         )
       }
+      return { activityID: active.activityID, stepsUsed: spent?.value ?? 0 }
     })
 
     const runDrain = Effect.fn("SessionRunner.run")(function* (input: {
@@ -2257,9 +2284,6 @@ export const layer = Layer.effect(
           promotion = openActivity ? "queue" : undefined
           continue
         }
-        let needsContinuation = true
-        let step = 1
-        let activityId: string | undefined
         // The drain ceiling honors the session agent's configured step budget; the constant is
         // only the fallback. A configured budget that the loop ignored killed long serial-agent
         // runs (one tool per turn) at the default 25 regardless of `agent.steps`. The AgentV2
@@ -2271,8 +2295,14 @@ export const layer = Layer.effect(
         const configSteps = configAgents?.[runSession?.agent ?? "auto"]?.steps
         const stepCeiling = runAgent?.info?.steps ?? configSteps ?? MAX_STEPS
         const loopBudget = new LoopBudget(stepCeiling)
-        yield* restoreLoopBudget(input.sessionID, loopBudget)
-        let attempts = 0
+        const restored = yield* restoreLoopBudget(input.sessionID, loopBudget)
+        // A pending steer will be promoted by the next runTurn and reset the step count. An
+        // already-promoted steer is the durable recovery boundary used above.
+        const pendingSteer = yield* SessionInput.hasPending(db, input.sessionID, "steer")
+        let step = pendingSteer ? 1 : (restored?.stepsUsed ?? 0) + 1
+        let attempts = pendingSteer ? 0 : (restored?.stepsUsed ?? 0)
+        let activityId: string | undefined = restored?.activityID
+        let needsContinuation = true
         while (attempts < stepCeiling) {
           const result = yield* runTurn(input.sessionID, promotion, step, loopBudget)
           needsContinuation = result.needsContinuation
