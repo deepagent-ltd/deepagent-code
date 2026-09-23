@@ -39,6 +39,7 @@ import {
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { CodeQuery } from "@deepagent-code/core/code-intelligence/query"
 import { ContextToolRuntime } from "@deepagent-code/core/context-federation/tool-runtime"
+import { ContextQueryAuthorization } from "@deepagent-code/core/context-federation/query-authorization"
 import { LSP } from "@/lsp/lsp"
 import { LocationIndexRuntime } from "@/location-index/runtime"
 import { LocationIndexCoordinator } from "@/location-index/coordinator"
@@ -376,6 +377,7 @@ describe("W3.10 V2 runner frame host hook (deepagent-code composition)", () => {
         Layer.provide(runtime),
         Layer.provide(Layer.mock(CodeIntelFacade.Service, { execute: () => Effect.succeed(codeIntelResult) })),
         Layer.provide(Layer.mock(ContextQueryFacade.Service, { execute: () => Effect.die("unused") })),
+        Layer.provide(ContextQueryAuthorization.defaultLayer),
       )
       const locations = LocationServiceMap.layerNoDeps.pipe(
         Layer.provide([
@@ -409,6 +411,79 @@ describe("W3.10 V2 runner frame host hook (deepagent-code composition)", () => {
     }
   }, 15_000)
 
+  test("keyed Location trees bind query envelopes into the ONE store the host facades resolve", async () => {
+    await using fixture = await tmpdir()
+    const root = path.join(fixture.path, "repo")
+    await Bun.write(path.join(root, "README.md"), "# shared authority store\n")
+    const previous = Flag.DEEPAGENT_CODE_DISABLE_MODELS_FETCH
+    Flag.DEEPAGENT_CODE_DISABLE_MODELS_FETCH = true
+    try {
+      // Composed exactly like runnerFrameLocationMapLayer: the REAL graph facades plus
+      // ContextQueryAuthorization.defaultLayer as the one process-local authority store.
+      // Before the store moved to the LocationRuntimeHost seam, the keyed tree self-provided a
+      // private store (Layer.fresh memo map), so every runner bind was invisible to the facades
+      // and code_intel / context_query answered authorization_unavailable.
+      const storeDeps = Layer.mergeAll(
+        CodeIntelFacade.defaultLayer,
+        ContextQueryFacade.defaultLayer,
+        ContextQueryAuthorization.defaultLayer,
+      )
+      const host = V2RunnerFrame.runnerFrameHostLayer.pipe(
+        Layer.provide(Layer.succeed(ProductionV2Sources, {})),
+        Layer.provide(RuntimeFlags.defaultLayer),
+        Layer.provide(InstanceStore.defaultLayer.pipe(Layer.provide(noopBootstrap))),
+        Layer.provide(LocationIndexRuntime.defaultLayer),
+        Layer.provide(storeDeps),
+      )
+      const locations = LocationServiceMap.layerNoDeps.pipe(
+        Layer.provide([
+          ...locationServiceMapDependencies(
+            host,
+            Database.defaultLayer,
+            EventV2.defaultLayer,
+            AgentGateway.runtimeLayer({ enabled: false, agentMode: "high" }),
+          ),
+        ]),
+      )
+      class RootStore extends Context.Service<RootStore, { readonly resolve: ContextQueryAuthorization.Interface["resolve"] }>()(
+        "v2-runner-frame-test/RootStore",
+      ) {}
+      // Root-scope capture of the store the facades were built with (the same memoized
+      // ContextQueryAuthorization.defaultLayer build as storeDeps above).
+      const rootStore = Layer.effect(
+        RootStore,
+        Effect.gen(function* () {
+          return RootStore.of({ resolve: (yield* ContextQueryAuthorization.Service).resolve })
+        }),
+      ).pipe(Layer.provide(storeDeps))
+      const program = Effect.gen(function* () {
+        const captured = yield* RootStore
+        const map = yield* LocationServiceMap
+        const runtimeHost = yield* LocationRuntimeHost
+        const ref = Location.Ref.make({ directory: AbsolutePath.make(root) })
+        // The keyed tree closes its runner's query-authority requirement through this seam
+        // (Layer.provide keeps seam outputs out of the tree output, so the runner consumes the
+        // store at tree build). Prove the tree builds, then bind through the seam layer — the
+        // exact environment the tree build feeds to the runner.
+        yield* Effect.void.pipe(Effect.provide(map.get(ref)), Effect.scoped)
+        yield* Effect.gen(function* () {
+          const controller = yield* ContextQueryAuthorization.Controller
+          yield* controller.bind({ sessionId: "ses_shared_store", envelope: sharedStoreEnvelope })
+        }).pipe(
+          Effect.provide(runtimeHost.layer(ref)),
+          Effect.provide(AgentGateway.runtimeLayer({ enabled: false, durableLearning: false })),
+          Effect.scoped,
+        )
+        // Facade-side view at the host graph: the SAME store must resolve the bound session.
+        expect(yield* captured.resolve({ sessionId: "ses_shared_store", agent: "build" })).toBeDefined()
+        expect(yield* captured.resolve({ sessionId: "ses_never_bound", agent: "build" })).toBeUndefined()
+      }).pipe(Effect.provide(Layer.mergeAll(locations, rootStore, host)), Effect.scoped)
+      await Effect.runPromise(program)
+    } finally {
+      Flag.DEEPAGENT_CODE_DISABLE_MODELS_FETCH = previous
+    }
+  }, 15_000)
+
   test("the host carries plan-gate and settle hooks into the keyed Location scope", async () => {
     await using fixture = await tmpdir()
     const root = path.join(fixture.path, "repo")
@@ -428,6 +503,7 @@ describe("W3.10 V2 runner frame host hook (deepagent-code composition)", () => {
       Layer.provide(Layer.mock(ContextQueryFacade.Service, { execute: () => Effect.die("unused") })),
       Layer.provide(Layer.succeed(SessionRunner.CurrentOnSessionSettled, () => Effect.sync(() => settled++))),
       Layer.provide(Layer.succeed(V2ProviderTurn.CurrentHistoryEpochLookup, () => Effect.succeed(37))),
+      Layer.provide(ContextQueryAuthorization.defaultLayer),
     )
     const program = Effect.gen(function* () {
       const runtimeHost = yield* LocationRuntimeHost
@@ -462,6 +538,20 @@ describe("W3.10 V2 runner frame host hook (deepagent-code composition)", () => {
     expect(settled).toBe(1)
   })
 })
+
+const sharedStoreEnvelope: ContextQueryAuthorization.Envelope = {
+  principal: {
+    securityNamespaceId: SecurityNamespaceID.make("sec_shared_store"),
+    principalId: "local-user",
+    authorizationEpoch: 1,
+    locationKeys: [LocationKey.make("loc_shared_store")],
+    projectScopeKeys: [ProjectScopeKey.make("prj_shared_store")],
+    sessionIds: ["ses_shared_store"],
+    subjectIds: ["local-user"],
+    allowBuiltin: true,
+  },
+  egress: { policyId: "provider:shared-store", epoch: 1, graphs: ["code"], sensitivities: ["public"] },
+}
 
 const codeIntelResult: CodeIntelFacade.Result = {
   schemaVersion: 2,

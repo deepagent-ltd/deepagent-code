@@ -1,4 +1,5 @@
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
+import { ContextQueryAuthorization } from "@deepagent-code/core/context-federation/query-authorization"
 import { ProductionV2Sources } from "@deepagent-code/core/context-federation/production-adapters"
 import { Database } from "@deepagent-code/core/database/database"
 import { EventV2 } from "@deepagent-code/core/event"
@@ -23,14 +24,25 @@ import { testInstanceStoreLayer } from "../../test/fixture/fixture"
 // context_query tools (the ApplicationTools bridge only carries MCP and custom plugin tools, never
 // built-ins). Mirror the production runner frame (src/session/v2-runner-frame.ts `runnerFrameHost`):
 // capture the host graph facades once and hand every keyed Location tree the real
-// `runnerFrameContextToolsFor` seam; the remaining seams keep Core's bare-host defaults.
+// `runnerFrameSeamFor` + `runnerFrameContextToolsFor` seams; the remaining seams keep Core's
+// bare-host defaults.
+// A1-07: the process-local query-authority store is captured with the facades and handed to every
+// keyed tree the same way — the runner binds session envelopes inside the tree, the facades resolve
+// them at the host graph, and both must observe ONE store or code_intel / context_query answer
+// `authorization_unavailable` even after a successful selection admission. The identity seam matters
+// for the same reason: the runner builds the envelope principal from the seam's frame, and the code
+// query authorizes hits against the index handle's identity — a v2:local envelope against a real
+// index answers `scope_denied`.
 const host = Layer.effect(
   LocationRuntimeHost,
   Effect.gen(function* () {
     const store = yield* InstanceStore.Service
     const runtime = yield* LocationIndexRuntime.Service
+    const sources = yield* ProductionV2Sources
     const codeIntel = yield* CodeIntelFacade.Service
     const contextQuery = yield* ContextQueryFacade.Service
+    const queryAuthorizationService = yield* ContextQueryAuthorization.Service
+    const queryAuthorizationController = yield* ContextQueryAuthorization.Controller
     const buildIdentity = yield* V2ProviderTurn.CurrentBuildIdentity
     const ownerAuthorizationPublicKey = yield* V2ProviderTurn.CurrentOwnerAuthorizationPublicKey
     const dependencies = Layer.mergeAll(
@@ -38,16 +50,20 @@ const host = Layer.effect(
       Layer.succeed(LocationIndexRuntime.Service, runtime),
       Layer.succeed(CodeIntelFacade.Service, codeIntel),
       Layer.succeed(ContextQueryFacade.Service, contextQuery),
+      Layer.succeed(ContextQueryAuthorization.Service, queryAuthorizationService),
+      Layer.succeed(ContextQueryAuthorization.Controller, queryAuthorizationController),
     )
     return LocationRuntimeHost.of({
       layer: (ref) =>
         Layer.mergeAll(
-          Layer.succeed(ProductionV2Sources, {}),
+          V2RunnerFrame.runnerFrameSeamFor(ref, sources),
           V2RunnerFrame.runnerFrameContextToolsFor(ref),
           Layer.succeed(SessionRunner.CurrentToolSettleGate, undefined),
           Layer.succeed(SessionRunner.CurrentOnSessionSettled, undefined),
           Layer.succeed(V2ProviderTurn.CurrentBuildIdentity, buildIdentity),
           Layer.succeed(V2ProviderTurn.CurrentOwnerAuthorizationPublicKey, ownerAuthorizationPublicKey),
+          Layer.succeed(ContextQueryAuthorization.Service, queryAuthorizationService),
+          Layer.succeed(ContextQueryAuthorization.Controller, queryAuthorizationController),
         ).pipe(Layer.provide(dependencies)),
     })
   }),
@@ -69,8 +85,16 @@ export function liveLocationServiceMap() {
         AgentGateway.runtimeLayer({ enabled: false, runsDir: Global.Path.agent.runs, durableLearning: false }),
       ),
     ]),
-    Layer.provide(Layer.mergeAll(CodeIntelFacade.defaultLayer, ContextQueryFacade.defaultLayer)),
+    Layer.provide(
+      // ContextQueryAuthorization.defaultLayer shares the facades' internal store (same layer
+      // object, one memoized build), matching runnerFrameLocationMapLayer in production.
+      Layer.mergeAll(CodeIntelFacade.defaultLayer, ContextQueryFacade.defaultLayer, ContextQueryAuthorization.defaultLayer),
+    ),
     Layer.provide(LocationIndexRuntime.defaultLayer),
     Layer.provide(testInstanceStoreLayer),
+    // The outer seam value the production host captures from the app root. The harness drives no
+    // production context adapters, so the base stays empty; `runnerFrameSeamFor` still attaches the
+    // REAL per-ref instance identity, which is what the authorization envelope is built from.
+    Layer.provide(Layer.succeed(ProductionV2Sources, {})),
   )
 }
