@@ -154,13 +154,15 @@ test("RI-51 ledger generator binds byte digests and verifies signed evidence", a
   expect(ledger.candidateId).toBe(candidateId)
   expect(ledger.evidenceBundleDigests).toEqual([runtimeIntegrityEvidenceDigest(signed.evidence)])
   expect(ledger.sourceManifestDigest).toBe(Hash.sha256(Buffer.from("source-manifest-bytes")))
-  expect(makeAuthoritativeLedger({
-    manifest,
-    sourceManifestDigest: ledger.sourceManifestDigest,
-    runtimeInventoryDigest: ledger.runtimeInventoryDigest,
-    packagedReportDigest: ledger.packagedReportDigest,
-    evidenceBundleDigests: ledger.evidenceBundleDigests,
-  }).ledgerDigest).toBe(ledger.ledgerDigest)
+  expect(
+    makeAuthoritativeLedger({
+      manifest,
+      sourceManifestDigest: ledger.sourceManifestDigest,
+      runtimeInventoryDigest: ledger.runtimeInventoryDigest,
+      packagedReportDigest: ledger.packagedReportDigest,
+      evidenceBundleDigests: ledger.evidenceBundleDigests,
+    }).ledgerDigest,
+  ).toBe(ledger.ledgerDigest)
 
   const packageDir = join(root.path, "package-dir")
   await mkdir(join(packageDir, "bin"), { recursive: true })
@@ -210,4 +212,46 @@ test("RI-51 ledger generator binds byte digests and verifies signed evidence", a
   expect(wrapperExitCode).toBe(0)
   expect(wrapperStderr).toBe("")
   expect((await Bun.file(wrapperOutputPath).json()).candidateId).toBe(candidateId)
+
+  // A prebuilt report cannot launder an unrelated runtime evidence artifact through the direct
+  // ledger entrypoint, even when candidateID and evidenceDigest were copied correctly.
+  await Bun.write(
+    packagePath,
+    JSON.stringify(
+      makePackagedRuntimeReport({
+        candidateId,
+        commit: "commit-script",
+        tree: "tree-script",
+        artifacts: packagedReport.artifacts,
+        runs: packagedReport.runs.map((run) => ({ ...run, sessionID: "ses-unrelated" })),
+      }),
+    ),
+  )
+  const unrelated = Bun.spawn(
+    [
+      process.execPath,
+      script.pathname,
+      "--manifest",
+      manifestPath,
+      "--source-manifest",
+      sourcePath,
+      "--runtime-inventory",
+      runtimePath,
+      "--packaged-report",
+      packagePath,
+      "--evidence-dir",
+      evidenceDir,
+      "--public-key",
+      publicKeyPath,
+      "--out",
+      outputPath,
+    ],
+    { cwd: join(import.meta.dir, "../.."), stdout: "pipe", stderr: "pipe" },
+  )
+  const [unrelatedStderr, unrelatedExitCode] = await Promise.all([
+    new Response(unrelated.stderr).text(),
+    unrelated.exited,
+  ])
+  expect(unrelatedExitCode).not.toBe(0)
+  expect(unrelatedStderr).toContain("sessionID does not match runtime evidence")
 })

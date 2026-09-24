@@ -25,7 +25,7 @@ import {
 import { decodeEvidenceManifest } from "../../src/contract/evidence-manifest"
 import { assertPackagedRuntimeReport } from "../../src/contract/packaged-runtime-report"
 import { Hash } from "../../src/util/hash"
-import { evidenceFiles, readEvidenceArtifact } from "./read-evidence"
+import { assertRunEvidenceMatch, evidenceFiles, readEvidenceArtifact } from "./read-evidence"
 
 const args = process.argv.slice(2)
 
@@ -69,15 +69,18 @@ if (packagedReportPath) {
   const packagedReport = assertPackagedRuntimeReport(await Bun.file(packagedReportPath).json())
   if (packagedReport.candidateId !== manifest.candidateId)
     throw new Error("packaged report candidate does not match manifest candidate")
-  if (packagedReport.commit !== manifest.commit) throw new Error("packaged report commit does not match manifest commit")
+  if (packagedReport.commit !== manifest.commit)
+    throw new Error("packaged report commit does not match manifest commit")
   if (packagedReport.tree !== manifest.tree) throw new Error("packaged report tree does not match manifest tree")
-  const evidenceHashes = new Set(artifactRows.map((artifact) => artifact.evidenceHash))
+  const artifacts = new Map(artifactRows.map((artifact) => [artifact.evidenceHash, artifact]))
   const ledgerEvidenceHashes = new Set(packagedReport.runs.map((run) => run.evidenceDigest))
   for (const run of packagedReport.runs) {
-    if (!evidenceHashes.has(run.evidenceDigest))
+    const artifact = artifacts.get(run.evidenceDigest)
+    if (!artifact)
       throw new Error(`packaged report references evidence not present in evidence dir: ${run.evidenceDigest}`)
+    assertRunEvidenceMatch(run, artifact)
   }
-  for (const evidenceHash of evidenceHashes) {
+  for (const evidenceHash of artifacts.keys()) {
     if (!ledgerEvidenceHashes.has(evidenceHash))
       throw new Error(`evidence artifact is not referenced by packaged report: ${evidenceHash}`)
   }

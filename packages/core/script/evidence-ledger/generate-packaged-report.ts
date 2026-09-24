@@ -17,8 +17,9 @@ import { readdirSync } from "node:fs"
 import path from "node:path"
 import { Schema } from "effect"
 import { PackagedRuntimeReportContract } from "../../src/contract/packaged-runtime-report"
+import { V2ProviderTurn } from "../../src/session/runner/v2-provider-turn"
 import { Hash } from "../../src/util/hash"
-import { evidenceFiles, readEvidenceArtifact } from "./read-evidence"
+import { assertRunEvidenceMatch, evidenceFiles, readEvidenceArtifact } from "./read-evidence"
 
 const args = process.argv.slice(2)
 
@@ -34,12 +35,14 @@ function required(name: string): string {
 }
 
 function files(directory: string, root = directory): string[] {
-  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-    const filename = path.join(directory, entry.name)
-    if (entry.isDirectory()) return files(filename, root)
-    if (!entry.isFile()) return []
-    return [path.relative(root, filename).replaceAll(path.sep, "/")]
-  }).sort()
+  return readdirSync(directory, { withFileTypes: true })
+    .flatMap((entry) => {
+      const filename = path.join(directory, entry.name)
+      if (entry.isDirectory()) return files(filename, root)
+      if (!entry.isFile()) return []
+      return [path.relative(root, filename).replaceAll(path.sep, "/")]
+    })
+    .sort()
 }
 
 const packageDir = required("--package-dir")
@@ -48,14 +51,17 @@ const runs = Schema.decodeUnknownSync(Schema.Array(PackagedRuntimeReportContract
   onExcessProperty: "error",
 })(await Bun.file(runsPath).json())
 const candidateId = required("--candidate")
-const evidence = await Promise.all(evidenceFiles(required("--evidence-dir")).map((filename) => readEvidenceArtifact(filename, undefined)))
+const evidence = await Promise.all(
+  evidenceFiles(required("--evidence-dir")).map((filename) => readEvidenceArtifact(filename, undefined)),
+)
 if (evidence.some((artifact) => artifact.candidateID !== candidateId))
   throw new Error("evidence artifact candidate does not match packaged report candidate")
 const evidenceHashes = new Set(evidence.map((artifact) => artifact.evidenceHash))
 if (evidenceHashes.size !== evidence.length) throw new Error("duplicate runtime evidence digest")
 for (const run of runs) {
-  if (!evidenceHashes.has(run.evidenceDigest))
-    throw new Error(`packaged run evidenceDigest does not match evidence artifact: ${run.evidenceDigest}`)
+  const artifact = evidence.find((entry) => entry.evidenceHash === run.evidenceDigest)
+  if (!artifact) throw new Error(`packaged run evidenceDigest does not match evidence artifact: ${run.evidenceDigest}`)
+  assertRunEvidenceMatch(run, artifact)
 }
 if (runs.length !== evidence.length) throw new Error("runtime evidence artifact is not referenced by packaged run")
 const artifacts = await Promise.all(
@@ -68,6 +74,33 @@ const artifacts = await Promise.all(
     }
   }),
 )
+// The shipped package records the source commit and exact binary bytes. The V2 owner identity is
+// version-derived (its subjectCommit/subjectTree are not Git IDs), so bind both domains here.
+const binary = artifacts.find(
+  (artifact) => artifact.path === "bin/deepagent-code" || artifact.path === "bin/deepagent-code.exe",
+)
+if (binary) {
+  const metadata = (await Bun.file(path.join(packageDir, "package.json")).json()) as {
+    version?: string
+    deepagentCodeBuild?: { sourceCommit?: string; binarySha256?: string }
+  }
+  if (metadata.deepagentCodeBuild?.sourceCommit !== required("--commit"))
+    throw new Error("packaged binary sourceCommit does not match candidate Git commit")
+  if (metadata.deepagentCodeBuild.binarySha256 !== binary.sha256)
+    throw new Error("packaged binary SHA-256 does not match package metadata")
+  if (!metadata.version) throw new Error("packaged binary has no version in package metadata")
+  const identity = V2ProviderTurn.buildIdentityFromVersion(metadata.version)
+  for (const artifact of evidence) {
+    if (
+      artifact.candidateID !== `candidate:${identity.buildID}` ||
+      artifact.evidence.identity.commit !== identity.subjectCommit ||
+      artifact.evidence.identity.tree !== identity.subjectTree ||
+      artifact.evidence.identity.schemaDigest !== identity.schemaDigest ||
+      artifact.evidence.identity.packageDigest !== identity.packageDigest
+    )
+      throw new Error("runtime evidence owner identity does not match packaged version")
+  }
+}
 const report = PackagedRuntimeReportContract.makePackagedRuntimeReport({
   candidateId,
   commit: required("--commit"),
