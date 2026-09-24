@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test"
+import os from "node:os"
+import { join } from "node:path"
 import { Effect } from "effect"
 import { sql } from "drizzle-orm"
 import { Database } from "@deepagent-code/core/database/database"
@@ -130,7 +132,7 @@ describe("C5-10 per-consumer side-effect receipts", () => {
 
   test("cold recovery: after a simulated restart a done receipt is NOT re-executed", async () => {
     const fs = await import("node:fs/promises")
-    const dir = await fs.mkdtemp("/tmp/dsh-c510-")
+    const dir = await fs.mkdtemp(join(os.tmpdir(), "dsh-c510-"))
     const path = `${dir}/db.sqlite`
     const ensure = (db: Db) =>
       db

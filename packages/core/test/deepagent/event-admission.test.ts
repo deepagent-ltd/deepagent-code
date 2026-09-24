@@ -253,6 +253,11 @@ const runFile = <A>(file: string, body: (db: Db) => Effect.Effect<A, unknown>): 
 
 const tmpDbFile = () => join(mkdtempSync(join(tmpdir(), "deepagent-admission-")), "test.db")
 
+const removeDbFixture = (file: string) => {
+  Bun.gc(true)
+  rmSync(join(file, ".."), { recursive: true, force: true, maxRetries: 30, retryDelay: 100 })
+}
+
 /** Adapter that records the anchor it was called with and returns a durable SessionV2 message id. */
 const anchoredRecorder = (calls: Array<string | undefined>, messageID: string): EventAdmission.SessionWorkAdapter => ({
   admit: (input) =>
@@ -291,7 +296,7 @@ describe("W5 receipt honesty — effect-first receipt with terminal states", () 
       expect(second?.messageID).toBe("msg_admitted_1")
       expect(second?.envelopeDigest).toMatch(/^[0-9a-f]{64}$/)
     } finally {
-      rmSync(join(file, ".."), { recursive: true, force: true })
+      removeDbFixture(file)
     }
   })
 
@@ -319,7 +324,7 @@ describe("W5 receipt honesty — effect-first receipt with terminal states", () 
       expect(second?.status).toBe("refused")
       expect(second?.messageID).toBe("anchor-2")
     } finally {
-      rmSync(join(file, ".."), { recursive: true, force: true })
+      removeDbFixture(file)
     }
   })
 
@@ -359,7 +364,7 @@ describe("W5 receipt honesty — effect-first receipt with terminal states", () 
       const readBack = await runFile(file, (db) => EventAdmission.admissionFor(db, envelope.eventRef))
       expect(readBack?.status).toBe("resolved")
     } finally {
-      rmSync(join(file, ".."), { recursive: true, force: true })
+      removeDbFixture(file)
     }
   })
 

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { mkdir } from "node:fs/promises"
 import { join } from "node:path"
+import { fileURLToPath } from "node:url"
 import {
   assertPackagedRuntimeReport,
   makePackagedRuntimeReport,
@@ -74,7 +75,7 @@ describe("RI-24 packaged runtime report", () => {
     const child = Bun.spawn(
       [
         process.execPath,
-        script.pathname,
+        fileURLToPath(script),
         "--candidate",
         "candidate-1",
         "--commit",

@@ -976,7 +976,7 @@ const decidePermissionInternal = Effect.fn("DeepAgentActivityAuthority.decidePer
                   const nextEpoch = request.authority_epoch + 1
                   const updated = yield* tx
                     .update(PermissionSavedEpochTable)
-                    .set({ epoch: nextEpoch, updated_at: now })
+                    .set({ epoch: nextEpoch, updated_at: Math.max(now, epoch.updated_at) })
                     .where(
                       and(
                         eq(PermissionSavedEpochTable.project_id, request.project_id),

@@ -24,7 +24,7 @@
     "test:llm-live:bash-repair": "bun run script/live-llm/bash-repair.ts",
     "fix-node-pty": "bun run script/fix-node-pty.ts",
     "test": "bun test --timeout 30000",
-    "test:ci": "mkdir -p .artifacts/unit && bun test --timeout 30000 --reporter=junit --reporter-outfile=.artifacts/unit/junit.xml",
+    "test:ci": "mkdir -p .artifacts/unit && bun test --max-concurrency 2 --timeout 30000 --reporter=junit --reporter-outfile=.artifacts/unit/junit.xml",
     "typecheck": "tsgo --noEmit"
   },
   "exports": {

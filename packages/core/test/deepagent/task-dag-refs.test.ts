@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test"
+import os from "node:os"
+import { join } from "node:path"
 import { Effect } from "effect"
 import { sql } from "drizzle-orm"
 import { Database } from "@deepagent-code/core/database/database"
@@ -180,7 +182,7 @@ describe("C5-08 unified task DAG terminal reference", () => {
 
   test("durable-only resolution survives a restart (no in-memory registry)", async () => {
     const fs = await import("node:fs/promises")
-    const dir = await fs.mkdtemp("/tmp/dsh-c508-")
+    const dir = await fs.mkdtemp(join(os.tmpdir(), "dsh-c508-"))
     const path = `${dir}/db.sqlite`
     // Ensure the receipt table physically exists WITHOUT touching the migration journal: a file DB's
     // preflight lineage check rejects a journal row whose id is not in the frozen migration.gen set

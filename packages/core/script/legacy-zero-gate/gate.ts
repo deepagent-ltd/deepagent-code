@@ -14,7 +14,7 @@
  * overhead when unused.
  */
 import { existsSync, readFileSync } from "node:fs"
-import { join } from "node:path"
+import { isAbsolute, join } from "node:path"
 import { buildInventory } from "../caller-inventory/build"
 import { rootRepoPath } from "../caller-inventory/ast"
 import { digestSourceText } from "../manifest-digest/manifest"
@@ -137,7 +137,7 @@ function digestEvidenceFiles(inventory: Inventory, bridgeSites: readonly Selecti
   const root = rootRepoPath()
   const out: Record<string, string> = {}
   for (const repoFile of [...files].sort()) {
-    const absolute = join(root, repoFile)
+    const absolute = isAbsolute(repoFile) ? repoFile : join(root, repoFile)
     out[repoFile] = existsSync(absolute)
       ? digestSourceText(readFileSync(absolute, "utf8"))
       : ABSENT_FILE_DIGEST

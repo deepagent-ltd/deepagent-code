@@ -90,6 +90,7 @@ export async function runtimeStateInventory(repository: string): Promise<readonl
     )
   )
     .flat()
+    .map((file) => file.replaceAll("\\", "/"))
     .filter(
       (file) =>
         !file.includes("/generated/") &&

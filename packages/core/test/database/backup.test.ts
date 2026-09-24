@@ -53,7 +53,7 @@ describe("Backup (C1A-06)", () => {
     const live = makeFixture(filename)
     try {
       const manifest = await run(Backup.create({ sourcePath: filename, destDir: tmp.path, buildId: "build-x" }))
-      expect((await fs.stat(manifest.backup.filePath)).mode & 0o777).toBe(0o600)
+      if (process.platform !== "win32") expect((await fs.stat(manifest.backup.filePath)).mode & 0o777).toBe(0o600)
       const manifestText = await fs.readFile(manifest.backup.filePath + ".manifest.json", "utf8")
       expect(JSON.parse(manifestText)).toEqual(manifest)
     } finally {

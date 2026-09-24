@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { generateKeyPairSync } from "node:crypto"
 import { mkdir } from "node:fs/promises"
 import { join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { contentDigest } from "../../src/contract/digest"
 import { makeAuthoritativeLedger } from "../../src/contract/evidence-ledger"
 import { makeAuthoritativeManifest, type EvidenceManifest } from "../../src/contract/evidence-manifest"
@@ -129,7 +130,7 @@ test("RI-51 ledger generator binds byte digests and verifies signed evidence", a
   const child = Bun.spawn(
     [
       process.execPath,
-      script.pathname,
+      fileURLToPath(script),
       "--manifest",
       manifestPath,
       "--source-manifest",
@@ -187,7 +188,7 @@ test("RI-51 ledger generator binds byte digests and verifies signed evidence", a
   const wrapperChild = Bun.spawn(
     [
       process.execPath,
-      wrapper.pathname,
+      fileURLToPath(wrapper),
       "--manifest",
       manifestPath,
       "--evidence-dir",

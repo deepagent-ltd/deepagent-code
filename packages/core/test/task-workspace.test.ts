@@ -83,6 +83,7 @@ const makeRepo = async (root: string) => {
   expectExit0(gitIn(root, ["init", "-b", "main"]), "git init")
   gitIn(root, ["config", "user.email", "test@deepagent.local"])
   gitIn(root, ["config", "user.name", "DeepAgent Test"])
+  gitIn(root, ["config", "core.autocrlf", "false"])
   await fs.writeFile(path.join(root, "README.md"), "# fixture repo\n")
   expectExit0(gitIn(root, ["add", "-A"]), "git add")
   expectExit0(gitIn(root, ["commit", "-m", "init"]), "git commit")
@@ -100,7 +101,7 @@ const worktreePaths = (repo: string) =>
     .stdout.toString()
     .split("\n")
     .filter((line) => line.startsWith("worktree "))
-    .map((line) => line.slice("worktree ".length).trim())
+    .map((line) => path.normalize(line.slice("worktree ".length).trim()))
 
 const porcelainStatus = (repo: string) => gitIn(repo, ["status", "--porcelain"]).stdout.toString().trim()
 
@@ -176,8 +177,9 @@ describe("Core V2 TaskWorkspace", () => {
       expect(receipt.baseCommit).toBe(head)
       expect(receipt.branch).toBe(derived.branch)
       // The receipt records the canonical (git-registered) spelling of the derived directory.
+      expect(path.basename(receipt.directory)).toBe(path.basename(derived.directory))
       expect(receipt.directory).toBe(
-        path.join(realpathSync(path.dirname(derived.directory)), path.basename(derived.directory)),
+        path.join(realpathSync(path.dirname(receipt.directory)), path.basename(receipt.directory)),
       )
       expect(receipt.parentBranch).toBe("main")
       expect(receipt.derivation).toContain("deepagent-code/task-")

@@ -681,6 +681,24 @@ describe("DeepAgentActivityAuthority", () => {
     )
   })
 
+  test("PermissionSaved advances an epoch when the database timestamp is ahead of the host clock", async () => {
+    await run(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        const future = Date.now() + 10_000
+        yield* db.run(
+          `UPDATE permission_saved_epoch SET epoch = epoch + 1, updated_at = ${future} WHERE project_id = 'project-1'`,
+        )
+        yield* Effect.gen(function* () {
+          const saved = yield* PermissionSaved.Service
+          yield* saved.add({ projectID: ProjectV2.ID.make("project-1"), action: "bash", resources: ["ls"] })
+        }).pipe(Effect.provide(PermissionSaved.layer))
+        expect(yield* db.get("SELECT epoch, updated_at FROM permission_saved_epoch WHERE project_id = 'project-1'"))
+          .toEqual({ epoch: 2, updated_at: future })
+      }),
+    )
+  })
+
   test("always fanout approves matching siblings without consuming before their effects start", async () => {
     await run(
       Effect.gen(function* () {
@@ -1709,9 +1727,9 @@ describe("DeepAgentActivityAuthority", () => {
           alwaysPatterns: [],
           metadata: {},
           ownerID: "runtime-1",
-          expiresAt: Date.now() + 10,
+          expiresAt: Date.now() + 500,
         })
-        yield* Effect.sleep("20 millis")
+        yield* Effect.sleep("600 millis")
         const { db } = yield* Database.Service
         expect(
           yield* DeepAgentActivityAuthority.requestPermission({
@@ -1788,9 +1806,9 @@ describe("DeepAgentActivityAuthority", () => {
           alwaysPatterns: [],
           metadata: {},
           ownerID: "runtime-1",
-          expiresAt: Date.now() + 200,
+          expiresAt: Date.now() + 2_000,
         })
-        const decisionExpiresAt = Date.now() + 50
+        const decisionExpiresAt = Date.now() + 500
         const decision = yield* DeepAgentActivityAuthority.decidePermission({
           requestID: request.requestID,
           idempotencyKey: "decision-expiring-once",
@@ -1821,7 +1839,7 @@ describe("DeepAgentActivityAuthority", () => {
             }).pipe(Effect.exit),
           ),
         ).toBe(true)
-        yield* Effect.sleep("60 millis")
+        yield* Effect.sleep("600 millis")
         expect(
           Exit.isFailure(
             yield* DeepAgentActivityAuthority.consumeOnce({

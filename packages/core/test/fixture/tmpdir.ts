@@ -70,11 +70,11 @@ function scratchRoot(shared: boolean): string {
     sessionRootShared = shared
     if (shared) sweepAbandonedRoots()
     if (!shared)
-      afterAll(() => {
+      afterAll(async () => {
         if (ownedRoot) return
         const dir = sessionRoot
         sessionRoot = undefined
-        if (dir) rmSync(dir, { recursive: true, force: true })
+        if (dir) await remove(dir)
       })
   }
   return sessionRoot

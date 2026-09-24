@@ -2,6 +2,7 @@ import { describe, expect, test, beforeEach, afterEach } from "bun:test"
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import { fileURLToPath } from "node:url"
 import { Effect } from "effect"
 import * as knowledgeSource from "../../src/deepagent/knowledge-source"
 import { DocumentStore } from "../../src/deepagent/document-store"
@@ -40,7 +41,7 @@ describe("session ledger (C2)", () => {
     const fixture = new URL("../fixture/ledger-id-worker.ts", import.meta.url)
     const ids = await Promise.all(
       [0, 1].map(async () => {
-        const child = Bun.spawn([process.execPath, fixture.pathname], { stdout: "pipe", stderr: "pipe" })
+        const child = Bun.spawn([process.execPath, fileURLToPath(fixture)], { stdout: "pipe", stderr: "pipe" })
         const [stdout, stderr, exit] = await Promise.all([
           new Response(child.stdout).text(),
           new Response(child.stderr).text(),

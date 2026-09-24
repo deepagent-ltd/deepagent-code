@@ -72,6 +72,7 @@ const makeRepo = async (root: string) => {
   expectExit0(gitIn(root, ["init", "-b", "main"]), "git init")
   gitIn(root, ["config", "user.email", "test@deepagent.local"])
   gitIn(root, ["config", "user.name", "DeepAgent Test"])
+  gitIn(root, ["config", "core.autocrlf", "false"])
   await fs.writeFile(path.join(root, "README.md"), "# fixture repo\n")
   expectExit0(gitIn(root, ["add", "-A"]), "git commit")
   expectExit0(gitIn(root, ["commit", "-m", "init"]), "git commit")

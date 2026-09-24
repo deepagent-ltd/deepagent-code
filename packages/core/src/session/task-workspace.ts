@@ -763,7 +763,11 @@ const registeredWorktree = (
   Effect.gen(function* () {
     const list = yield* git(repositoryRoot, ["worktree", "list", "--porcelain"])
     if (list.exitCode !== 0) return undefined
-    const found = parseWorktreeList(list.stdout).find((entry) => entry.directory === directory)
+    const found = parseWorktreeList(list.stdout).find((entry) =>
+      process.platform === "win32"
+        ? path.resolve(entry.directory!).toLowerCase() === path.resolve(directory).toLowerCase()
+        : entry.directory === directory,
+    )
     if (found?.head === undefined) return undefined
     return { ...(found.branch === undefined ? {} : { branch: found.branch }), head: found.head }
   })

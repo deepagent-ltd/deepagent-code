@@ -176,7 +176,7 @@ describe("production runtime integrity", () => {
     )
     const violations = (
       await Promise.all(
-        files.map(async (file) => registryConstructionCalls(file, await Bun.file(path.join(repository, file)).text())),
+        files.map(async (file) => registryConstructionCalls(file.replaceAll("\\", "/"), await Bun.file(path.join(repository, file)).text())),
       )
     )
       .flat()
@@ -352,7 +352,7 @@ describe("production runtime integrity", () => {
           (command) => typeof command === "string" && /\bbun\b.*(?:\.\/)?src\/(?:index|server)\.ts\b/.test(command),
         ),
       )
-      .map(({ file }) => file)
+      .map(({ file }) => file.replaceAll("\\", "/"))
       .sort()
     expect(sourceRuntimes).toEqual([
       "packages/cli/package.json",
