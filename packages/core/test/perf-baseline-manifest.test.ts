@@ -3,6 +3,7 @@ import * as fs from "node:fs"
 import * as os from "node:os"
 import * as path from "node:path"
 import { EVIDENCE_LEVEL_DECLARATION, buildAndWriteManifest } from "../script/perf-baseline/manifest"
+import { machineInfo, powerState } from "../script/perf-baseline/run-env"
 import { UNIT, writeSummariesJsonl } from "../script/perf-baseline/samples"
 import type { ScenarioOutcome } from "../script/perf-baseline/lib"
 import { tmpRoot, tmpRootShared } from "./fixture/tmpdir"
@@ -44,6 +45,17 @@ const REQUIRED_TOP_LEVEL_FIELDS = [
 const REQUIRED_GROUP_SUMMARY_FIELDS = ["n", "min", "max", "mean", "stdev", "p50", "p95", "p99"] as const
 
 describe("perf baseline run manifest integrity", () => {
+  test("non-macOS machine evidence marks unavailable macOS-only measurements", () => {
+    const machine = machineInfo("linux")
+    expect(machine.platform).toBe("linux")
+    expect(machine.logical_cores).toBeGreaterThan(0)
+    expect(machine.memory_bytes).toBeGreaterThan(0)
+    expect(machine.physical_cores).toBeNull()
+    expect(machine.macos_product_version).toBeNull()
+    expect(machine.macos_build_version).toBeNull()
+    expect(powerState("linux")).toEqual({ raw: "pmset unavailable on non-macOS", exit_code: null })
+  })
+
   test("evidence-level declaration is present and names D3-local plus the non-package caveat", () => {
     expect(EVIDENCE_LEVEL_DECLARATION).toContain("D3-local")
     expect(EVIDENCE_LEVEL_DECLARATION).toContain("不等同 D5/D6")

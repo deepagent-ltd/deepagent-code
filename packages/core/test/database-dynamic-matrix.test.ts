@@ -355,9 +355,9 @@ describe("C1A-16 dynamic matrix", () => {
       }
       await fs.chmod(file, 0o644).catch(() => undefined)
       await fs.chmod(tmp.path, 0o755).catch(() => undefined)
-      // The write is refused typed (SQLITE_READONLY) and no partial row landed.
+      // SQLite may return its extended DIRECTORY code when the parent directory is read-only.
       expect(writeErr).toBeDefined()
-      expect((writeErr as { code?: string }).code).toBe("SQLITE_READONLY")
+      expect(["SQLITE_READONLY", "SQLITE_READONLY_DIRECTORY"]).toContain(String((writeErr as { code?: string }).code))
       const after = await fs.readFile(file)
       expect(after).toEqual(before) // file byte-identical -> no partial write
       const check = new BunDatabase(file, { readonly: true })

@@ -8,7 +8,24 @@ const sh = (command: string[]) => {
 
 export const bunVersion = () => Bun.version
 
-export const machineInfo = () => {
+export const machineInfo = (platform = process.platform) => {
+  if (platform !== "darwin") {
+    const cpus = os.cpus()
+    return {
+      hw_model: null,
+      cpu_brand: cpus[0]?.model ?? null,
+      arch: process.arch,
+      // The portable OS API reports logical CPUs, not a trustworthy physical-core count.
+      physical_cores: null,
+      logical_cores: cpus.length,
+      memory_bytes: os.totalmem(),
+      os_release: os.release(),
+      os_version: os.version(),
+      macos_product_version: null,
+      macos_build_version: null,
+      platform,
+    }
+  }
   const cpu = sh(["sysctl", "-n", "machdep.cpu.brand_string"])
   return {
     hw_model: sh(["sysctl", "-n", "hw.model"]).text,
@@ -24,12 +41,13 @@ export const machineInfo = () => {
     os_version: os.version(),
     macos_product_version: sh(["sw_vers", "-productVersion"]).text,
     macos_build_version: sh(["sw_vers", "-buildVersion"]).text,
-    platform: `${process.platform}`,
+    platform,
   }
 }
 
 /** Battery / power-supply snapshot so readers can judge thermal-Throttle risk on laptops. */
-export const powerState = () => {
+export const powerState = (platform = process.platform) => {
+  if (platform !== "darwin") return { raw: "pmset unavailable on non-macOS", exit_code: null }
   const battery = sh(["pmset", "-g", "ps"])
   return { raw: battery.text, exit_code: battery.code }
 }
