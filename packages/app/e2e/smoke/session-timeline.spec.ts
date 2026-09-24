@@ -207,10 +207,10 @@ async function expectCanScrollToStart(
     collectSeen(current, seenParts, seenMessages)
     samples.push(sampleTraversal(current, seenParts.size, seenMessages.size))
     expectNoSmokeErrors(errors, current.errorToasts, current.forbiddenText)
-    expectOrderedIDs(expectedPartIDs, current.ids, "mounted part")
-    expectOrderedIDs(expectedPartIDs, current.visibleIds, "visible part")
-    expectOrderedIDs(expectedMessageIDs, unique(current.messageIds), "mounted message")
-    expectOrderedIDs(expectedMessageIDs, unique(current.visibleMessageIds), "visible message")
+    expectKnownIDs(expectedPartIDs, current.ids, "mounted part")
+    expectKnownIDs(expectedPartIDs, current.visibleIds, "visible part")
+    expectKnownIDs(expectedMessageIDs, unique(current.messageIds), "mounted message")
+    expectKnownIDs(expectedMessageIDs, unique(current.visibleMessageIds), "visible message")
 
     if (
       current.scrollTop <= 1 &&
@@ -308,16 +308,15 @@ async function scrollTimelineUp(page: Page, before: SmokeState) {
   )
 }
 
-function expectOrderedIDs(expected: string[], actual: string[], label: string) {
+function expectKnownIDs(expected: string[], actual: string[], label: string) {
   expect(actual.length, `${label} ids should not be empty`).toBeGreaterThan(0)
-  // Order-independent membership: the timeline may group part categories (e.g.
-  // tools before reasoning summaries) without changing what is mounted; the smoke
-  // contract is "every expected id is present", not a fixed visual order.
-  const actualSet = new Set(actual)
-  expect(
-    [...actualSet].filter((id) => expected.includes(id)).sort(),
-    `${label} ids`,
-  ).toEqual([...new Set(expected)].sort())
+  // Virtualized rows expose only a window and may briefly mount the same logical
+  // row twice. Assistant parts within a turn may be grouped out of ID order, but
+  // turns must remain chronological while paging.
+  const mounted = unique(actual)
+  expect(mounted.filter((id) => !expected.includes(id)), `${label} ids`).toEqual([])
+  const turns = mounted.map((id) => Number(id.match(/_smoke_(\d+)$/)?.[1]))
+  expect(turns, `${label} turn order`).toEqual(turns.slice().sort((a, b) => a - b))
 }
 
 function unique(values: string[]) {
@@ -388,10 +387,10 @@ async function expectSessionTimelineReady(
   for (const text of forbiddenText) await expect(page.getByText(text)).toHaveCount(0)
   const currentState = await timelineState(page)
   expectNoSmokeErrors(errors, currentState.errorToasts, currentState.forbiddenText)
-  expectOrderedIDs(expectedPartIDs, currentState.ids, "mounted part")
-  expectOrderedIDs(expectedPartIDs, currentState.visibleIds, "visible part")
-  expectOrderedIDs(expectedMessageIDs, unique(currentState.messageIds), "mounted message")
-  expectOrderedIDs(expectedMessageIDs, unique(currentState.visibleMessageIds), "visible message")
+  expectKnownIDs(expectedPartIDs, currentState.ids, "mounted part")
+  expectKnownIDs(expectedPartIDs, currentState.visibleIds, "visible part")
+  expectKnownIDs(expectedMessageIDs, unique(currentState.messageIds), "mounted message")
+  expectKnownIDs(expectedMessageIDs, unique(currentState.visibleMessageIds), "visible message")
 }
 
 function expectCompleteScroll(
@@ -407,6 +406,7 @@ function expectCompleteScroll(
     expectedPartIDs.filter((id) => !seenParts.has(id)),
     `missing visible timeline parts\n${sampleSummary(samples)}`,
   ).toEqual([])
+  expect([...seenParts].filter((id) => !expectedPartIDs.includes(id)), "unexpected visible timeline parts").toEqual([])
   expect(
     expectedMessageIDs.filter((id) => !seenMessages.has(id)),
     `missing visible messages\n${sampleSummary(samples)}`,
