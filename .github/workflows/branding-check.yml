@@ -16,7 +16,7 @@ jobs:
     # W11: brand-residue audit gate (legacy brand tokens from the upstream and
     # migration-era orgs/domains). Pure stateless gate, no build deps; mirrors
     # the test-fixture-gate pattern.
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     defaults:
       run:
         shell: bash

@@ -15,12 +15,13 @@ import { describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { buildInventory } from "../script/caller-inventory/build"
+import { rootRepoPath } from "../script/caller-inventory/ast"
 import { INVENTORY_SURFACE_IDS, SURFACE_IDS } from "../script/caller-inventory/types"
 import { DELEGATION_CLIENT_BINDINGS } from "../script/caller-inventory/authority"
 import { bodyLogsOnlyHit } from "../script/caller-inventory/graph"
 import { DIMENSIONS, VERDICTS } from "../script/caller-inventory/types"
 
-const ROOT = new URL("../", import.meta.url).pathname.replace(/\/$/, "")
+const ROOT = join(rootRepoPath(), "packages/core")
 const PROBE_DIR = join(ROOT, "script/caller-inventory/__probe__")
 
 const inventory = await buildInventory()
@@ -338,10 +339,7 @@ describe("C0-01 caller inventory gate", () => {
 
   test("NEW-P6 call-path / bodyLogsOnly / external-receiver soundness", () => {
     const byId = new Map(inventory.entries.map((e) => [e.entry.id, e]))
-    const ROOT = new URL("../", import.meta.url).pathname.replace(/\/$/, "")
-    // repoFile is repo-relative to the worktree root; ROOT here is packages/core, so go up to it.
-    const REPO_ROOT = new URL("../../../", import.meta.url).pathname.replace(/\/$/, "")
-    const abs = (repoFile: string) => join(REPO_ROOT, repoFile)
+    const abs = (repoFile: string) => join(rootRepoPath(), repoFile)
     // (a) every delegation/port edge must be attributed to a real CALL site (a line in the cited
     // source that contains a call expression) — never a passive import/self-export/reference line.
     for (const entry of inventory.entries) {
@@ -387,7 +385,6 @@ describe("C0-01 caller inventory gate", () => {
   test("NEW-P7-A: bodyLogsOnly scans the resolved handler, not the command-tree registration", () => {
     // bodyLogsOnlyHit must scan the entry's handler module for business callees. A probe handler that
     // performs a business call must NOT satisfy bodyLogsOnly; the real no-op handler (migrate.ts) must.
-    const REPO = new URL("../../../", import.meta.url).pathname.replace(/\/$/, "")
     const probe = join(PROBE_DIR, "probe-biz-handler.ts")
     try {
       mkdirSync(PROBE_DIR, { recursive: true })
@@ -402,7 +399,7 @@ describe("C0-01 caller inventory gate", () => {
         ].join("\n"),
       )
       expect(bodyLogsOnlyHit(probe)).toBeUndefined()
-      const migrate = join(REPO, "packages/cli/src/commands/handlers/migrate.ts")
+      const migrate = join(rootRepoPath(), "packages/cli/src/commands/handlers/migrate.ts")
       expect(existsSync(migrate)).toBe(true)
       expect(bodyLogsOnlyHit(migrate)).toBeDefined()
     } finally {

@@ -114,7 +114,7 @@ export const layer = Layer.effect(
               if (!missing.length) return
               yield* tx
                 .update(PermissionSavedEpochTable)
-                .set({ epoch: current.epoch + 1, updated_at: Date.now() })
+                .set({ epoch: current.epoch + 1, updated_at: Math.max(Date.now(), current.updated_at) })
                 .where(
                   and(
                     eq(PermissionSavedEpochTable.project_id, input.projectID),
@@ -181,7 +181,7 @@ export const layer = Layer.effect(
                 return { kind: "conflict" as const, actualEpoch: current.epoch }
               const updated = yield* tx
                 .update(PermissionSavedEpochTable)
-                .set({ epoch: current.epoch + 1, updated_at: Date.now() })
+                .set({ epoch: current.epoch + 1, updated_at: Math.max(Date.now(), current.updated_at) })
                 .where(
                   and(
                     eq(PermissionSavedEpochTable.project_id, input.projectID),
@@ -255,7 +255,7 @@ export const layer = Layer.effect(
                 return yield* Effect.die(new Error(`permission authority is missing: ${existing.project_id}`))
               yield* tx
                 .update(PermissionSavedEpochTable)
-                .set({ epoch: current.epoch + 1, updated_at: Date.now() })
+                .set({ epoch: current.epoch + 1, updated_at: Math.max(Date.now(), current.updated_at) })
                 .where(
                   and(
                     eq(PermissionSavedEpochTable.project_id, existing.project_id),

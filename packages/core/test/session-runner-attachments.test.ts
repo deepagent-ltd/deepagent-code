@@ -77,7 +77,7 @@ describe("normalizeAttachments", () => {
   it.effect("degrades an unreadable directory attachment to a note instead of failing", () =>
     Effect.gen(function* () {
       const file = new FileAttachment({
-        uri: "file:///nonexistent-attachments-dir",
+        uri: pathToFileURL(join(tmpdir(), "nonexistent-attachments-dir")).href,
         mime: "application/x-directory",
         name: "missing",
       })
@@ -203,7 +203,7 @@ describe("normalizeAttachments", () => {
   it.effect("degrades an unreadable binary file to a note instead of failing", () =>
     Effect.gen(function* () {
       const file = new FileAttachment({
-        uri: "file:///nonexistent-attachments-doc.pdf",
+        uri: pathToFileURL(join(tmpdir(), "nonexistent-attachments-doc.pdf")).href,
         mime: "application/pdf",
         name: "doc.pdf",
       })

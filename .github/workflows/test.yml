@@ -25,7 +25,7 @@ jobs:
     name: test-fixture-gate
     # QUAL-003: forbid test fixtures from bypassing the durable session state
     # machine via direct inserts into authority tables. Pure grep gate, no deps.
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     defaults:
       run:
         shell: bash
@@ -47,7 +47,7 @@ jobs:
     # tree on any machine — byte-stable across runs, pinned to head-pin.ts, every
     # digest input git-tracked, and git-ignored .artifacts/ residue unable to
     # perturb the digest. Pure stateless gate, mirrors the test-fixture-gate pattern.
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     defaults:
       run:
         shell: bash
@@ -71,11 +71,14 @@ jobs:
       matrix:
         settings:
           - name: linux
-            host: blacksmith-4vcpu-ubuntu-2404
+            host: ubuntu-24.04
+            timeout: 120
           - name: windows
-            host: blacksmith-4vcpu-windows-2025
+            host: windows-2025
+            timeout: 120
           - name: macos
             host: macos-14
+            timeout: 120
     runs-on: ${{ matrix.settings.host }}
     defaults:
       run:
@@ -109,8 +112,13 @@ jobs:
             turbo-${{ runner.os }}-
 
       - name: Run unit tests
-        timeout-minutes: 20
-        run: bun turbo test:ci --log-order=stream --log-prefix=task
+        timeout-minutes: ${{ matrix.settings.timeout }}
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            bun turbo test:ci --concurrency=1 --log-order=stream --log-prefix=task
+          else
+            bun turbo test:ci --log-order=stream --log-prefix=task
+          fi
         env:
           DEEPAGENT_CODE_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
 
@@ -178,9 +186,9 @@ jobs:
       matrix:
         settings:
           - name: linux
-            host: blacksmith-4vcpu-ubuntu-2404
+            host: ubuntu-24.04
           - name: windows
-            host: blacksmith-4vcpu-windows-2025
+            host: windows-2025
     runs-on: ${{ matrix.settings.host }}
     env:
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.playwright-browsers

@@ -1,0 +1,3 @@
+Schema checkpoint for the custom 20260922182048_v2_task_call_admission TypeScript migration.
+The matching CREATE TABLE/INDEX SQL is already executed by that migration; this checkpoint only
+advances Drizzle's schema snapshot after the later recovery_command_exit snapshot.

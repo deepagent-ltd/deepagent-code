@@ -33,7 +33,7 @@ describe("perf baseline db fixture builder", () => {
         sqlite.close()
       }
     } finally {
-      fs.rmSync(root, { recursive: true, force: true })
+      fs.rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 100 })
     }
   })
 
@@ -58,7 +58,7 @@ describe("perf baseline db fixture builder", () => {
         sqlite.close()
       }
     } finally {
-      fs.rmSync(root, { recursive: true, force: true })
+      fs.rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 100 })
     }
   })
 
@@ -71,7 +71,7 @@ describe("perf baseline db fixture builder", () => {
       expect(Number.isFinite(elapsed)).toBe(true)
       expect(elapsed).toBeGreaterThanOrEqual(0)
     } finally {
-      fs.rmSync(root, { recursive: true, force: true })
+      fs.rmSync(root, { recursive: true, force: true, maxRetries: 30, retryDelay: 100 })
     }
   })
 })

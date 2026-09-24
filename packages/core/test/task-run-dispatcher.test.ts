@@ -353,7 +353,7 @@ const stubSessions = Layer.succeed(
     interrupt: die,
   }),
 )
-const stubOutbox = TaskOutbox.layer({ maxAttempts: 2, backoffBaseMs: 1, backoffMaxMs: 1 }).pipe(
+const stubOutbox = TaskOutbox.layer({ maxAttempts: 2, backoffBaseMs: 60_000, backoffMaxMs: 60_000 }).pipe(
   Layer.provide(database),
   Layer.provide(stubSessions),
 )
@@ -817,11 +817,12 @@ describe("TaskRunDispatcher + TaskOutbox (Core V2 background runtime)", () => {
       const outbox = yield* TaskOutbox.Service
 
       // Attempt 1 fails transiently: released with backoff (pending, not yet due).
+      const beforeAttempt = Date.now()
       expect(yield* outbox.tick).toBe(1)
       const released = yield* stubOutboxRow(db)
       expect(released?.status).toBe("pending")
       expect(released?.attempts).toBe(1)
-      expect(released?.available_at).toBeGreaterThan(Date.now() - 1)
+      expect(released?.available_at).toBeGreaterThanOrEqual(beforeAttempt + 60_000)
       expect(released?.last_error).toContain("transiently failing")
 
       // Backoff elapsed: attempt 2 fails again and the bounded attempts are exhausted.

@@ -216,18 +216,21 @@ export const create = Effect.fn("Backup.create")(function* (options: BackupOptio
     catch: (cause) =>
       new BackupError({ code: "rename_failed", detail: cause instanceof Error ? cause.message : String(cause) }),
   })
-  // Persist the rename across power loss by fsyncing the containing directory.
-  yield* Effect.tryPromise({
-    try: async () => {
-      const handle = await fs.open(destDir, "r")
-      try {
-        await handle.sync()
-      } finally {
-        await handle.close()
-      }
-    },
-    catch: () => new BackupError({ code: "dir_fsync_failed", detail: `cannot fsync backup directory: ${destDir}` }),
-  })
+  // Persist the rename across power loss where directory handles support fsync. Windows rejects
+  // opening directories through node:fs, so the already-fsynced file and atomic rename are the
+  // strongest primitives available there; do not report a false backup failure after the rename.
+  if (process.platform !== "win32")
+    yield* Effect.tryPromise({
+      try: async () => {
+        const handle = await fs.open(destDir, "r")
+        try {
+          await handle.sync()
+        } finally {
+          await handle.close()
+        }
+      },
+      catch: () => new BackupError({ code: "dir_fsync_failed", detail: `cannot fsync backup directory: ${destDir}` }),
+    })
 
   const walPath = `${sourcePath}-wal`
   const walSizeBytes = yield* Effect.tryPromise({

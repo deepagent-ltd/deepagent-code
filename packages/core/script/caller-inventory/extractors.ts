@@ -11,6 +11,7 @@
 import ts from "typescript"
 import { existsSync } from "node:fs"
 import { dirname, join, resolve as resolvePath } from "node:path"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import { declarationLine, identifierLine, listSourceFiles, memberCalls, moduleAnchorLine, parseModule, declarationNodes } from "./ast"
 import { rootRepoPath } from "./ast"
 import type { Entry, EntryWithHandlers, SurfaceId } from "./types"
@@ -379,8 +380,7 @@ function lildaxCliSurface(): EntryWithHandlers[] {
       })()
       let handlerRepoFile = "packages/cli/src/index.ts"
       if (specText && specText.startsWith(".")) {
-        const url = new URL(specText, `file://${indexMod.file}`)
-        const base = url.pathname
+        const base = fileURLToPath(new URL(specText, pathToFileURL(indexMod.file))).replaceAll("\\", "/")
         const stem = base.replace(/\.ts$/, "")
         const candidates = [base, `${stem}/index.ts`, `${stem}.ts`]
         const cliRoot = /\/packages\/cli\/src\//

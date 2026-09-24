@@ -56,7 +56,9 @@ describe("deepagentCode query commands (non-interactive subprocess)", () => {
     "wiki list/search return well-formed results (wiki flag on by default)",
     ({ deepagentCode }) =>
       Effect.gen(function* () {
-        const list = yield* deepagentCode.spawn(["wiki", "list", "--format", "json"])
+        // Full-suite macOS cold starts have exceeded the harness's 30s default;
+        // the separate run-timeout suite still enforces prompt subprocess deadlines.
+        const list = yield* deepagentCode.spawn(["wiki", "list", "--format", "json"], { timeoutMs: 60_000 })
         deepagentCode.expectExit(list, 0, "wiki list --format json")
         const pages = deepagentCode.expectJsonStdout(list, "wiki list --format json") as Array<{
           docId: string
@@ -68,7 +70,9 @@ describe("deepagentCode query commands (non-interactive subprocess)", () => {
         expect(pages.length).toBeGreaterThan(0)
         expect(pages[0]!.docId).toBeString()
 
-        const search = yield* deepagentCode.spawn(["wiki", "search", "query", "--format", "json"])
+        const search = yield* deepagentCode.spawn(["wiki", "search", "query", "--format", "json"], {
+          timeoutMs: 60_000,
+        })
         deepagentCode.expectExit(search, 0, "wiki search --format json")
         const hits = deepagentCode.expectJsonStdout(search, "wiki search --format json") as Array<{
           docId: string
@@ -76,7 +80,7 @@ describe("deepagentCode query commands (non-interactive subprocess)", () => {
         }>
         expect(Array.isArray(hits)).toBe(true)
       }),
-    90_000,
+    150_000,
   )
 
   cliIt.concurrent(

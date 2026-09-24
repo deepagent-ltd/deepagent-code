@@ -18,7 +18,7 @@ const drizzleWrite = /update\(\s*SessionTable\s*\)[\s\S]{0,300}?\.set\(\s*\{[\s\
 // table name cannot bleed into session_provider_attempt.
 const sqlWrite = /\b(?:UPDATE\s+[`"]session[`"]\s+SET|INSERT\s+INTO\s+[`"]session[`"]\s*\()[^;]*execution_claim_token/i
 
-const files = Array.from(new Bun.Glob("**/*.ts").scanSync({ cwd: coreRoot })).sort()
+const files = Array.from(new Bun.Glob("**/*.ts").scanSync({ cwd: coreRoot })).map((file) => file.replaceAll("\\", "/")).sort()
 
 describe("session execution_claim_token write gate", () => {
   test("no file outside the two claim writers touches the column", () => {

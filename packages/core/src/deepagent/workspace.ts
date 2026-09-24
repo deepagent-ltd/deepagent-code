@@ -3,9 +3,10 @@ import {
   lstatSync,
   mkdirSync,
   readFileSync,
-  readlinkSync,
+  realpathSync,
   renameSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs"
@@ -231,15 +232,18 @@ export class DeepAgentCodeHome {
   }
 
   private createPublicPointer(publicPath: string): void {
-    try {
-      symlinkSync("../../public", publicPath, "dir")
-    } catch {
-      writeFileSync(
-        `${publicPath}.link.json`,
-        JSON.stringify({ target: "../../public", readonly: true }, null, 2),
-        "utf8",
-      )
+    // Windows directory links may be materialized as absolute junction targets. A link made in
+    // the staging project directory would then point at the deleted staging path after rename.
+    // The existing read-only pointer manifest survives the atomic project rename unchanged.
+    if (process.platform !== "win32") {
+      try {
+        symlinkSync("../../public", publicPath, "dir")
+        return
+      } catch {
+        // A read-only pointer manifest is the fallback when symlink creation is unavailable.
+      }
     }
+    writeFileSync(`${publicPath}.link.json`, JSON.stringify({ target: "../../public", readonly: true }, null, 2), "utf8")
   }
 
   private initializeProject(paths: ProjectPaths, projectID: string, worktree: string | null): void {
@@ -286,10 +290,10 @@ export class DeepAgentCodeHome {
     ]) {
       mkdirSync(dir, { recursive: true })
     }
-    if (existsSync(paths.publicLink)) {
-      const stat = lstatSync(paths.publicLink)
-      if (!stat.isSymbolicLink()) throw new Error(`ProjectStore.InvalidPublicLink: ${paths.publicLink}`)
-      if (readlinkSync(paths.publicLink) !== "../../public")
+    const publicLink = lstatSync(paths.publicLink, { throwIfNoEntry: false })
+    if (publicLink) {
+      if (!publicLink.isSymbolicLink()) throw new Error(`ProjectStore.InvalidPublicLink: ${paths.publicLink}`)
+      if (!pointsToPublicDirectory(paths.publicLink, paths.publicDir))
         throw new Error(`ProjectStore.InvalidPublicLink: ${paths.publicLink}`)
     } else if (!existsSync(`${paths.publicLink}.link.json`)) {
       this.createPublicPointer(paths.publicLink)
@@ -300,5 +304,19 @@ export class DeepAgentCodeHome {
       rebuildable: true,
       indexes: ["project-memory", "project-rules", "project-knowledge", "handoff", "quest"],
     })
+  }
+}
+
+function pointsToPublicDirectory(link: string, expected: string): boolean {
+  try {
+    // Resolve the actual target, not readlink's spelling: Windows can return an 8.3 alias or an
+    // absolute junction path for the same managed directory. File identity is the final fallback
+    // if native realpath still uses different aliases; zero inode values cannot prove identity.
+    if (realpathSync.native(link) === realpathSync.native(expected)) return true
+    const actual = statSync(link, { bigint: true })
+    const managed = statSync(expected, { bigint: true })
+    return actual.ino !== 0n && actual.dev === managed.dev && actual.ino === managed.ino
+  } catch {
+    return false
   }
 }

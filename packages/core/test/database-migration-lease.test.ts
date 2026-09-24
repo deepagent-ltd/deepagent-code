@@ -98,7 +98,9 @@ describe("DatabaseMigrationLease", () => {
     expect(String(attempt)).toContain("lease timed out")
   })
 
-  test("a SIGSTOP-suspended owner still fences preemption: heartbeat frozen but the process is alive", async () => {
+  // Windows has no SIGSTOP/SIGCONT; the stale-live-PID oracle above covers its process fence.
+  const suspendTest = process.platform === "win32" ? test.skip : test
+  suspendTest("a SIGSTOP-suspended owner still fences preemption: heartbeat frozen but the process is alive", async () => {
     await using tmp = await tmpdir()
     const lockDir = path.join(tmp.path, "database.runtime.lock")
     const child = Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], { stdout: "ignore", stderr: "ignore" })

@@ -81,9 +81,29 @@ describe("V3.1 DeepAgent Code workspace", () => {
 
   test("rejects public symlink that points outside the managed public area", () => {
     const paths = home.ensureProject("projA")
-    if (!existsSync(paths.publicLink)) return
-    unlinkSync(paths.publicLink)
-    symlinkSync("/tmp", paths.publicLink, "dir")
+    if (existsSync(paths.publicLink)) unlinkSync(paths.publicLink)
+    rmSync(`${paths.publicLink}.link.json`, { force: true })
+    const outside = path.join(root, "foreign")
+    mkdirSync(outside)
+    symlinkSync(outside, paths.publicLink, "dir")
     expect(() => home.ensureProject("projA")).toThrow("ProjectStore.InvalidPublicLink")
+  })
+
+  test("accepts an absolute public symlink only when it resolves to the managed public directory", () => {
+    const paths = home.ensureProject("projA")
+    if (existsSync(paths.publicLink)) unlinkSync(paths.publicLink)
+    rmSync(`${paths.publicLink}.link.json`, { force: true })
+    symlinkSync(paths.publicDir, paths.publicLink, "dir")
+    expect(home.ensureProject("projA").publicDir).toBe(paths.publicDir)
+  })
+
+  test("accepts a public link through an alternate spelling of the same directory", () => {
+    const paths = home.ensureProject("projA")
+    if (existsSync(paths.publicLink)) unlinkSync(paths.publicLink)
+    rmSync(`${paths.publicLink}.link.json`, { force: true })
+    const alias = path.join(root, "public-root-alias")
+    symlinkSync(root, alias, "dir")
+    symlinkSync(path.join(alias, "public"), paths.publicLink, "dir")
+    expect(home.ensureProject("projA").publicDir).toBe(paths.publicDir)
   })
 })

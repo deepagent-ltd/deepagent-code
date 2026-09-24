@@ -1,4 +1,4 @@
-import { test } from "@playwright/test"
+import { expect, test } from "@playwright/test"
 import { fixture, pageMessages } from "../smoke/session-timeline.fixture"
 import { mockDeepAgentCodeServer } from "../utils/mock-server"
 import { expectAppVisible } from "../utils/waits"
@@ -13,11 +13,13 @@ test("shows loaded sessions before the directory path request resolves", async (
   })
 
   let releasePath!: () => void
+  let pathRequests = 0
   const pathBlocked = new Promise<void>((resolve) => {
     releasePath = resolve
   })
   await page.route("**/path?*", async (route) => {
     if (!new URL(route.request().url()).searchParams.has("directory")) return route.fallback()
+    pathRequests += 1
     await pathBlocked
     return route.fallback()
   })
@@ -34,6 +36,8 @@ test("shows loaded sessions before the directory path request resolves", async (
 
   await page.goto("/")
   try {
+    await page.getByRole("button", { name: /SmokeProject/ }).click()
+    await expect.poll(() => pathRequests).toBeGreaterThan(0)
     await expectAppVisible(page.getByText(fixture.expected.sourceTitle).first())
   } finally {
     releasePath()

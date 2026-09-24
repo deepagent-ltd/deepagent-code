@@ -24,6 +24,8 @@
 
 import { describe, expect, test } from "bun:test"
 import { rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { Effect, Layer } from "effect"
 import { Database } from "@deepagent-code/core/database/database"
 import { DatabaseMigration } from "@deepagent-code/core/database/migration"
@@ -66,7 +68,7 @@ const sharedLayer = (file: string): Layer.Layer<Database.Service, unknown> =>
 
 /** A unique temp file per call (avoids WAL/-wal/-shm cross-run contamination). */
 const tmpDbFile = (): string => {
-  const file = `${Bun.env.TMPDIR ?? "/tmp"}/dsh-event-campaign-${crypto.randomUUID()}.sqlite`
+  const file = join(tmpdir(), `dsh-event-campaign-${crypto.randomUUID()}.sqlite`)
   return file
 }
 

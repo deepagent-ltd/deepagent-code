@@ -145,8 +145,8 @@ describe("S0 durable store root resolution (docs/34 §7.2)", () => {
   test("roots derive from injected baseDir, never real home", () => {
     expect(userGlobalKnowledgeRoot("/base")).toBe(path.join("/base", "public", "knowledge"))
     expect(projectKnowledgeRoot("/base", "project_x")).toBe(path.join("/base", "project", "project_x", "knowledge"))
-    expect(userGlobalKnowledgeRoot("/base").startsWith("/base")).toBe(true)
-    expect(projectKnowledgeRoot("/base", "project_x").startsWith("/base")).toBe(true)
+    expect(userGlobalKnowledgeRoot("/base").startsWith(path.normalize("/base"))).toBe(true)
+    expect(projectKnowledgeRoot("/base", "project_x").startsWith(path.normalize("/base"))).toBe(true)
   })
 
   test("openProjectStore isolates by workspace path; user-global shared", () => {

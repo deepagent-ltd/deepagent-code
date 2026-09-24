@@ -21,8 +21,8 @@ type WorkerInput = {
 }
 
 const runWorker = async (input: WorkerInput) => {
-  const child = Bun.spawn([process.execPath, "test/fixture/agent-execution-worker.ts", JSON.stringify(input)], {
-    cwd: import.meta.dir.replace(/\/test$/, ""),
+  const child = Bun.spawn([process.execPath, join(import.meta.dir, "fixture/agent-execution-worker.ts"), JSON.stringify(input)], {
+    cwd: join(import.meta.dir, ".."),
     stdout: "pipe",
     stderr: "pipe",
   })

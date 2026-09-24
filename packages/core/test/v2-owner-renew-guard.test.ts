@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { createHash } from "node:crypto"
 import { join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { sql } from "drizzle-orm"
 import { Effect } from "effect"
 import type { SqlClient as SqlClientService } from "effect/unstable/sql/SqlClient"
@@ -285,7 +286,7 @@ describe("V2 owner authorization renew guard (W0.7)", () => {
       const env = { ...process.env }
       delete env.DEEPAGENT_CODE_OWNER_SIGNING_KEY
       env.DEEPAGENT_CODE_OWNER_SIGNING_KEY = issuance.privateKeyPem
-      const child = Bun.spawn([process.execPath, script.pathname, ...args], {
+      const child = Bun.spawn([process.execPath, fileURLToPath(script), ...args], {
         cwd: import.meta.dir,
         env,
         stdout: "pipe",

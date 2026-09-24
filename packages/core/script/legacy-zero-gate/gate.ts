@@ -13,11 +13,11 @@
  * The gate is script+test only (never imported by production src), so it carries zero
  * overhead when unused.
  */
-import { createHash } from "node:crypto"
 import { existsSync, readFileSync } from "node:fs"
-import { join } from "node:path"
+import { isAbsolute, join } from "node:path"
 import { buildInventory } from "../caller-inventory/build"
 import { rootRepoPath } from "../caller-inventory/ast"
+import { digestSourceText } from "../manifest-digest/manifest"
 import type { Inventory } from "../caller-inventory/types"
 import {
   computeCounters,
@@ -137,9 +137,9 @@ function digestEvidenceFiles(inventory: Inventory, bridgeSites: readonly Selecti
   const root = rootRepoPath()
   const out: Record<string, string> = {}
   for (const repoFile of [...files].sort()) {
-    const absolute = join(root, repoFile)
+    const absolute = isAbsolute(repoFile) ? repoFile : join(root, repoFile)
     out[repoFile] = existsSync(absolute)
-      ? createHash("sha256").update(readFileSync(absolute, "utf8")).digest("hex")
+      ? digestSourceText(readFileSync(absolute, "utf8"))
       : ABSENT_FILE_DIGEST
   }
   return out

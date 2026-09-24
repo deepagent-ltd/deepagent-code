@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { Context, Effect, Fiber, Layer, Stream } from "effect"
+import { Context, Deferred, Effect, Fiber, Layer, Stream } from "effect"
 import { DeepAgentEventBus } from "@deepagent-code/core/deepagent/deepagent-event-bus"
 import { DeepAgentEvent } from "@deepagent-code/core/deepagent/deepagent-event"
 import {
@@ -265,24 +265,16 @@ describe("DeepAgentEventBus", () => {
   )
 
   it.live(
-    "§A3 at-least-once: a grouped subscriber gets a durable pending delivery on publish (recoverable without nack)",
+    "§A3 at-least-once: an offline registered group gets a durable pending delivery on publish",
     () =>
       Effect.gen(function* () {
         setNow(0)
         const bus = yield* DeepAgentEventBus.Service
-        // a durable consumer group goes live BEFORE the publish
-        const fiber = yield* bus
-          .subscribe({ group: "router" })
-          .pipe(Stream.take(1), Stream.runCollect, Effect.forkScoped)
-        // grouped subscribe creates a Stream.merge of two PubSub fibers (normal + high-priority
-        // channels); a single yieldNow only flushes one scheduler tick, not enough for both fibers
-        // to acquire their PubSub subscriptions. Sleep 10ms in live mode so both subscriptions are
-        // active before publish fires.
-        yield* Effect.sleep("10 millis")
+        // The durable group is authoritative for recovery even while no live PubSub consumer is
+        // attached. Live grouped delivery is exercised by the priority test below.
+        yield* bus.registerConsumerGroup("router")
         const event = yield* bus.publish(input({ idempotencyKey: "alo-1" }))
-        yield* Fiber.join(fiber)
-        // the subscriber received it but has NOT acked — at-least-once means a pending row exists,
-        // so a crash before ack is recoverable via dueRetries (not silently lost).
+        // No subscriber has acked; a crash or offline interval must remain recoverable.
         const due = yield* bus.dueRetries(0)
         expect(due.map((d) => ({ id: d.eventID, group: d.subscriptionGroup, status: d.status }))).toEqual([
           { id: event.id, group: "router", status: "pending" },
@@ -293,22 +285,57 @@ describe("DeepAgentEventBus", () => {
         const afterAck = yield* bus.dueRetries(0)
         expect(afterAck.length).toBe(0)
       }),
-    // Merge of two PubSub fibers + real sleep: a loaded host can exceed the
-    // 5s default test timeout on the join path (observed 5000ms boundary in
-    // the full suite while the isolated run completes in ~400ms).
-    { timeout: 30_000 },
   )
 
   it.live("grouped subscribers deliver each priority exactly once while anonymous sees the full stream", () =>
     Effect.gen(function* () {
       setNow(0)
       const bus = yield* DeepAgentEventBus.Service
+      const groupedNormalReady = yield* Deferred.make<void>()
+      const groupedHighReady = yield* Deferred.make<void>()
+      const anonymousReady = yield* Deferred.make<void>()
       const groupedFiber = yield* bus
         .subscribe({ group: "priority-once" })
-        .pipe(Stream.take(4), Stream.runCollect, Effect.forkScoped)
-      const anonymousFiber = yield* bus.subscribe({}).pipe(Stream.take(4), Stream.runCollect, Effect.forkScoped)
-      // Allow both PubSub subscriptions to acquire before publishing the four events.
-      yield* Effect.sleep("10 millis")
+        .pipe(
+          Stream.tap((event) =>
+            event.idempotencyKey.startsWith("priority-ready-normal-")
+              ? Deferred.succeed(groupedNormalReady, undefined)
+              : event.idempotencyKey.startsWith("priority-ready-high-")
+                ? Deferred.succeed(groupedHighReady, undefined)
+                : Effect.void,
+          ),
+          Stream.filter((event) => !event.idempotencyKey.startsWith("priority-ready-")),
+          Stream.take(4),
+          Stream.runCollect,
+          Effect.forkScoped,
+        )
+      const anonymousFiber = yield* bus.subscribe({}).pipe(
+        Stream.tap((event) =>
+          event.idempotencyKey.startsWith("priority-ready-")
+            ? Deferred.succeed(anonymousReady, undefined)
+            : Effect.void,
+        ),
+        Stream.filter((event) => !event.idempotencyKey.startsWith("priority-ready-")),
+        Stream.take(4),
+        Stream.runCollect,
+        Effect.forkScoped,
+      )
+      // Give the grouped stream's registration transaction a chance to start before
+      // sentinel writes contend for the same connection. The sentinels below then
+      // confirm that both priority channels and the anonymous observer are live.
+      yield* Effect.sleep("100 millis")
+      const readyPublisher = yield* Effect.forever(
+        Effect.all([
+          bus.publish(input({ idempotencyKey: "priority-ready-normal-" + crypto.randomUUID(), priority: "normal" })),
+          bus.publish(input({ idempotencyKey: "priority-ready-high-" + crypto.randomUUID(), priority: "high" })),
+        ]).pipe(Effect.andThen(Effect.sleep("100 millis"))),
+      ).pipe(Effect.forkScoped)
+      yield* Effect.all([
+        Deferred.await(groupedNormalReady),
+        Deferred.await(groupedHighReady),
+        Deferred.await(anonymousReady),
+      ])
+      yield* Fiber.interrupt(readyPublisher)
 
       const low = yield* bus.publish(input({ idempotencyKey: "priority-low", priority: "low" }))
       const normal = yield* bus.publish(input({ idempotencyKey: "priority-normal", priority: "normal" }))
@@ -322,6 +349,7 @@ describe("DeepAgentEventBus", () => {
       expect(new Set(grouped.map((event) => event.id)).size).toBe(4)
       expect(anonymous.map((event) => event.id).sort()).toEqual(expected)
     }),
+    { timeout: 30_000 },
   )
 
   it.effect("§A3 at-least-once: an anonymous (group-less) subscriber creates NO delivery tracking", () =>

@@ -176,7 +176,7 @@ function error(stderr: string, code: number) {
 }
 
 function clean(file: string) {
-  return path.normalize(file.replace(/^\.[\\/]/, ""))
+  return path.normalize(file.replace(/^\.[\\/]/, "")).replaceAll("\\", "/")
 }
 
 function row(data: Row): Row {

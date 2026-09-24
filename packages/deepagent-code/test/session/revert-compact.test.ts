@@ -512,7 +512,9 @@ describe("revert + compact workflow", () => {
           yield* write(path.join(dir, "b.txt"), "b0")
           yield* write(path.join(dir, "c.txt"), "c0")
 
-          const info = yield* session.create({})
+          // This session's second revert notice has a deterministic msg_00... ID, which
+          // sorts before the next real msg_0d... user turn and exercises notice exclusion.
+          const info = yield* session.create({ id: SessionID.make("ses_revert_order_155") })
           const sid = info.id
 
           const turn = Effect.fn("test.turn")(function* (file: string, next: string) {

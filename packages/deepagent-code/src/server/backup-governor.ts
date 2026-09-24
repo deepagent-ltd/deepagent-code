@@ -68,7 +68,7 @@ const writeJsonAtomic = (filePath: string, value: unknown) =>
   Effect.promise(async () => {
     await fs.mkdir(path.dirname(filePath), { recursive: true })
     const tmp = `${filePath}.tmp-${Math.random().toString(36).slice(2)}`
-    await Bun.write(tmp, `${JSON.stringify(value, null, 2)}\n`)
+    await fs.writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`)
     await fs.rename(tmp, filePath)
   }).pipe(
     Effect.catchCause(
@@ -117,7 +117,7 @@ const milestoneFileNames = Effect.fn("BackupGovernor.milestoneFileNames")(functi
   const names = yield* Effect.promise(() => fs.readdir(archiveDir).catch(() => [] as string[]))
   const milestones = new Set<string>()
   for (const name of names.filter((entry) => entry.endsWith(".json") && !entry.includes("disk-advisory"))) {
-    const record = yield* Effect.promise(() => Bun.file(path.join(archiveDir, name)).json()).pipe(
+    const record = yield* Effect.promise(() => fs.readFile(path.join(archiveDir, name), "utf8").then((t) => JSON.parse(t))).pipe(
       Effect.catchCause(() => Effect.succeed(undefined)),
     )
     const backup = (record as { backup?: { manifestPath?: string; sha256?: string } } | undefined)?.backup
@@ -129,10 +129,10 @@ const milestoneFileNames = Effect.fn("BackupGovernor.milestoneFileNames")(functi
 /** Rewrite a manifest with the mdExports pairing (idempotent; other fields untouched). */
 const stampMdExports = (manifestPath: string, mdExports: readonly string[]) =>
   Effect.promise(async () => {
-    const manifest = (await Bun.file(manifestPath).json()) as Backup.BackupManifest
+    const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as Backup.BackupManifest
     const stamped = { ...manifest, mdExports }
     const tmp = `${manifestPath}.tmp-${Math.random().toString(36).slice(2)}`
-    await Bun.write(tmp, `${JSON.stringify(stamped, null, 2)}\n`)
+    await fs.writeFile(tmp, `${JSON.stringify(stamped, null, 2)}\n`)
     await fs.rename(tmp, manifestPath)
   }).pipe(
     Effect.catchCause(

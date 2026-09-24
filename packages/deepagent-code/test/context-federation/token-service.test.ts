@@ -19,7 +19,8 @@ describe("LiveContextTokenCodec", () => {
     }, { issuedAt: 1, expiresAt: 10_000 })
 
     expect(await Effect.runPromise(second.openContextRef(token, 2))).toMatchObject({ entityId: "entity" })
-    expect((await stat(filename)).mode & 0o777).toBe(0o600)
+    // NTFS exposes synthetic POSIX mode bits; the persisted keyring is still checked below.
+    if (process.platform !== "win32") expect((await stat(filename)).mode & 0o777).toBe(0o600)
     expect(await Bun.file(filename).json()).toMatchObject({ activeKeyId: expect.any(String), keys: [expect.any(Object)] })
   })
 })

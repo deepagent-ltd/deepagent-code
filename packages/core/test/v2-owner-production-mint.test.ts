@@ -15,6 +15,7 @@ import { EffectDrizzleSqlite } from "@deepagent-code/effect-drizzle-sqlite"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
 import { existsSync } from "node:fs"
 import { join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { Effect, Option } from "effect"
 import type { SqlClient as SqlClientService } from "effect/unstable/sql/SqlClient"
 import { InstallationVersion } from "../src/installation/version"
@@ -42,7 +43,7 @@ const runMint = async (args: string[], extraEnv: Record<string, string> = {}) =>
   const env = { ...process.env }
   delete env.DEEPAGENT_CODE_OWNER_SIGNING_KEY
   Object.assign(env, extraEnv)
-  const child = Bun.spawn([process.execPath, script.pathname, ...args], {
+  const child = Bun.spawn([process.execPath, fileURLToPath(script), ...args], {
     cwd: import.meta.dir,
     env,
     stdout: "pipe",
@@ -418,8 +419,8 @@ describe("V2 owner campaign production mint (W0.3)", () => {
     // subprocess): `+` build metadata makes `v2-owner-2.0.0-beta.0+...` an illegal campaign id.
     const probe = `
       globalThis.DEEPAGENT_CODE_VERSION = "2.0.0-beta.0+exp.sha.17b0d"
-      const { V2ProviderTurn } = await import(${JSON.stringify(new URL("../src/session/runner/v2-provider-turn.ts", import.meta.url).pathname)})
-      const { Database } = await import(${JSON.stringify(new URL("../src/database/database.ts", import.meta.url).pathname)})
+      const { V2ProviderTurn } = await import(${JSON.stringify(new URL("../src/session/runner/v2-provider-turn.ts", import.meta.url).href)})
+      const { Database } = await import(${JSON.stringify(new URL("../src/database/database.ts", import.meta.url).href)})
       const { Effect } = await import("effect")
       try {
         const db = (await Effect.runPromise(

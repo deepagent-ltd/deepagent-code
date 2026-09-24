@@ -3,6 +3,7 @@ import { createHash } from "crypto"
 import fs from "fs"
 import path from "path"
 import { migrations } from "../src/database/migration.gen"
+import { digestSourceText } from "../script/manifest-digest/manifest"
 
 // §16.4 DATA-AND-RECOVERY D-1 — migration determinism gate. The generated registry must stay
 // byte-stable for the pinned release candidate: any change to the ordered migration set, any
@@ -91,10 +92,17 @@ describe("migration registry gate", () => {
   test("ordered registry digest matches the pinned release candidate", () => {
     const entries = migrations.map((migration) => {
       const content = fs.readFileSync(path.join("src/database/migration", `${migration.id}.ts`), "utf8")
-      return { id: migration.id, hash: createHash("sha256").update(content).digest("hex") }
+      return { id: migration.id, hash: digestSourceText(content) }
     })
     expect(entries.length).toBeGreaterThan(100)
     expect(digest(entries)).toBe(PINNED_DIGEST)
+    const windowsCheckout = migrations.map((migration) => ({
+      id: migration.id,
+      hash: digestSourceText(
+        fs.readFileSync(path.join("src/database/migration", `${migration.id}.ts`), "utf8").replace(/\r?\n/g, "\r\n"),
+      ),
+    }))
+    expect(digest(windowsCheckout)).toBe(PINNED_DIGEST)
   })
 
   test("applying all registry migrations to an empty database succeeds and re-applying is a no-op", async () => {

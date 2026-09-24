@@ -8,6 +8,7 @@ import { describe, expect, test } from "bun:test"
 import { eq } from "drizzle-orm"
 import { Effect } from "effect"
 import { join } from "node:path"
+import { fileURLToPath } from "node:url"
 import { Database } from "../src/database/database"
 import { InstallationVersion } from "../src/installation/version"
 import { V2OwnerAuthorization } from "../src/session/runner/v2-owner-authorization"
@@ -30,7 +31,7 @@ const runMint = async (args: string[], extraEnv: Record<string, string> = {}) =>
   const env = { ...process.env }
   delete env.DEEPAGENT_CODE_OWNER_SIGNING_KEY
   Object.assign(env, extraEnv)
-  const child = Bun.spawn([process.execPath, script.pathname, ...args], {
+  const child = Bun.spawn([process.execPath, fileURLToPath(script), ...args], {
     cwd: import.meta.dir,
     env,
     stdout: "pipe",

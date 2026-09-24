@@ -132,17 +132,20 @@ const installFile = (source: string, target: string) =>
       try: () => fs.rename(tmp, target),
       catch: () => new RestoreError({ code: "install_failed", detail: `cannot rename ${tmp} -> ${target}` }),
     })
-    yield* Effect.tryPromise({
-      try: async () => {
-        const handle = await fs.open(dir, "r")
-        try {
-          await handle.sync()
-        } finally {
-          await handle.close()
-        }
-      },
-      catch: () => new RestoreError({ code: "install_failed", detail: `cannot fsync dir ${dir}` }),
-    })
+    // Windows cannot open a directory through node:fs for fsync. The installed file was synced
+    // before the atomic rename; preserve directory fsync on platforms that support it.
+    if (process.platform !== "win32")
+      yield* Effect.tryPromise({
+        try: async () => {
+          const handle = await fs.open(dir, "r")
+          try {
+            await handle.sync()
+          } finally {
+            await handle.close()
+          }
+        },
+        catch: () => new RestoreError({ code: "install_failed", detail: `cannot fsync dir ${dir}` }),
+      })
   })
 
 /** Bitwise read-only verification of the installed backup (integrity + FK + registry-set equality). */

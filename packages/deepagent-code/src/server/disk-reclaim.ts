@@ -104,7 +104,7 @@ const writeJsonAtomic = (filePath: string, value: unknown) =>
   Effect.promise(async () => {
     await fs.mkdir(path.dirname(filePath), { recursive: true })
     const tmp = `${filePath}.tmp-${Math.random().toString(36).slice(2)}`
-    await Bun.write(tmp, `${JSON.stringify(value, null, 2)}\n`)
+    await fs.writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`)
     await fs.rename(tmp, filePath)
   }).pipe(
     Effect.catchCause(
@@ -189,7 +189,7 @@ const advisoryResiduePaths = Effect.fn("DiskReclaim.advisoryResiduePaths")(funct
   )?.outcome
   if (advisoryPath?.kind !== "disk_advisory") return new Set<string>()
   const advisory = yield* Effect.promise(() =>
-    Bun.file(advisoryPath.advisoryPath).json().catch(() => undefined),
+    fs.readFile(advisoryPath.advisoryPath, "utf8").then((t) => JSON.parse(t)).catch(() => undefined),
   )
   return new Set(
     ((advisory as { entries?: { category?: string; path?: string }[] } | undefined)?.entries ?? [])

@@ -7,6 +7,7 @@
  */
 import ts from "typescript"
 import { readdirSync, readFileSync } from "node:fs"
+import { fileURLToPath } from "node:url"
 
 /** Cached parse of one source file plus its import bindings. */
 export type ImportBinding = {
@@ -26,7 +27,7 @@ export type ParsedModule = {
 const cache = new Map<string, ParsedModule>()
 
 export function rootRepoPath(): string {
-  return new URL("../../../..", import.meta.url).pathname.replace(/\/$/, "")
+  return fileURLToPath(new URL("../../../..", import.meta.url)).replace(/[\\/]$/, "").replaceAll("\\", "/")
 }
 
 export function isExcludedModule(repoPath: string): boolean {

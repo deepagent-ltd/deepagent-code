@@ -19,21 +19,19 @@ const mode = process.argv[2] ?? "oracle"
 
 if (mode === "counts") {
   const inventory = await buildInventory()
-  const counters = currentTreeCounts(inventory)
+  const counters = await currentTreeCounts(inventory)
   const violations = violationsFor(inventory)
   console.log(JSON.stringify(counters, null, 2))
   console.log(`violations=${JSON.stringify(violationsByVerdict(violations))}`)
   console.log(`selection_bridge=${countSelectionBridgeUsages()}`)
 } else if (mode === "must-be-zero") {
   try {
-    const digest = mustBeZero()
+    const digest = await mustBeZero()
     console.log(`legacy-zero gate PASSED (snapshot ${digest})`)
-    process.exit(0)
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error))
-    process.exit(1)
+    process.exitCode = 1
   }
 } else {
-  const snapshot = redOracle()
-  void snapshot
+  await redOracle()
 }

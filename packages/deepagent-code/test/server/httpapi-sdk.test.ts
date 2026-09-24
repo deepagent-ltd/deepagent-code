@@ -955,13 +955,10 @@ describe("HttpApi SDK", () => {
   serverPathParity(
     "acknowledges async prompts after admission without waiting for model completion",
     (serverPath) =>
-      withFakeLlm(serverPath, ({ sdk, llm }) =>
-        Effect.gen(function* () {
-          let responseReleased = false
-          const responseDelay = Bun.sleep(2_000).then(() => {
-            responseReleased = true
-          })
-          yield* llm.hold("delayed response", responseDelay)
+      withFakeLlm(serverPath, ({ sdk, llm }) => {
+        const responseGate = Promise.withResolvers<void>()
+        return Effect.gen(function* () {
+          yield* llm.hold("delayed response", responseGate.promise)
           const session = yield* capture(() =>
             sdk.session.create({
               title: "async admission",
@@ -998,8 +995,7 @@ describe("HttpApi SDK", () => {
           // V2 admission vocabulary: prompts admit on the "steer" channel by default.
           expect(prompt.data).toMatchObject({ delivery: "steer" })
           expect(JSON.stringify(messages)).toContain("persist before acknowledging")
-          expect(responseReleased).toBe(false)
-          yield* Effect.promise(() => responseDelay)
+          responseGate.resolve()
           yield* pollWithTimeout(
             capture(() => sdk.session.status()).pipe(
               Effect.map((response) => (sessionID in record(response.data) ? undefined : true)),
@@ -1007,8 +1003,8 @@ describe("HttpApi SDK", () => {
             "async prompt runner did not become idle after the delayed response completed",
             "15 seconds",
           )
-        }),
-      ),
+        }).pipe(Effect.ensuring(Effect.sync(() => responseGate.resolve())))
+      }),
     60_000,
   )
 
