@@ -1065,6 +1065,35 @@ it.instance(
   { config: { model: "before/model" } },
 )
 
+it.live("watches config removal when the project directory is named plugin", () =>
+  Effect.gen(function* () {
+    const root = yield* tmpdirScoped()
+    const directory = path.join(root, "plugin")
+    yield* FSUtil.use.writeWithDirs(
+      path.join(directory, "deepagent-code.json"),
+      JSON.stringify(schemaConfig({ model: "before/model" })),
+    )
+    yield* withInstanceDir(
+      directory,
+      Effect.gen(function* () {
+        const config = yield* Config.Service
+        expect((yield* config.get()).model).toBe("before/model")
+        const changed = Deferred.makeUnsafe<string>()
+        const stop = yield* config.watch!(() =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(changed, (yield* config.get()).model ?? "")
+          }),
+        )
+        yield* Effect.addFinalizer(() => Effect.sync(stop))
+
+        yield* Effect.promise(() => fs.rm(path.join(directory, "deepagent-code.json")))
+        expect(yield* Deferred.await(changed).pipe(Effect.timeout("2 seconds"))).not.toBe("before/model")
+      }),
+    )
+  }),
+  20_000,
+)
+
 it.instance(
   "watches a newly edited plugin file once after subscription",
   () =>

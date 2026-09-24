@@ -1002,13 +1002,14 @@ export const layer = Layer.effect(
         Effect.provideService(FSUtil.Service, fs),
         Effect.orDie,
       )
+      const pluginDirectories = new Set(dirs.flatMap((dir) => [path.join(dir, "plugin"), path.join(dir, "plugins")]))
       const targets = new Set([
         Global.Path.config,
         ctx.directory,
         ...dirs,
         ...files.map(path.dirname),
         ...pluginFiles.map(path.dirname),
-        ...dirs.flatMap((dir) => [path.join(dir, "plugin"), path.join(dir, "plugins")]),
+        ...pluginDirectories,
       ])
       const semaphore = yield* Semaphore.make(1)
       let closed = false
@@ -1030,7 +1031,7 @@ export const layer = Layer.effect(
         watchers.get(dir)?.close()
         watchers.delete(dir)
         if (!existsSync(dir)) return
-        const pluginDirectory = /^(?:plugin|plugins)$/.test(path.basename(dir))
+        const pluginDirectory = pluginDirectories.has(dir)
         const fingerprint = (name: string) => {
           try {
             const stat = statSync(path.join(dir, name), { bigint: true })
