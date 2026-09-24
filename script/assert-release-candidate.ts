@@ -8,6 +8,10 @@ export async function assertReleaseCandidate(input: {
   tree: string
   tag: string
   packageDir?: string
+  releaseID?: string
+  releaseRepository?: string
+  ghCommand?: string
+  expectedDraft?: boolean
 }) {
   const git = (...args: string[]) => {
     const result = Bun.spawnSync(["git", ...args], { cwd: input.repository, stdout: "pipe", stderr: "pipe" })
@@ -18,11 +22,35 @@ export async function assertReleaseCandidate(input: {
   if (git("rev-parse", "HEAD^{tree}") !== input.tree) throw new Error("release candidate tree changed")
   if (git("status", "--porcelain", "--untracked-files=all")) throw new Error("release candidate tree is dirty")
   const tagRef = `refs/tags/${input.tag}`
-  const remote = git("ls-remote", "origin", tagRef, `${tagRef}^{}`)
-    .split("\n")
-    .filter(Boolean)
+  const remote = git("ls-remote", "origin", tagRef, `${tagRef}^{}`).split("\n").filter(Boolean)
   const tagCommit = remote.find((line) => line.endsWith(`${tagRef}^{}`)) ?? remote.find((line) => line.endsWith(tagRef))
   if (tagCommit?.split("\t")[0] !== input.commit) throw new Error("release tag does not point at candidate commit")
+
+  if (Boolean(input.releaseID) !== Boolean(input.releaseRepository))
+    throw new Error("release draft ID and repository must be paired")
+  if (input.releaseID && input.releaseRepository) {
+    const result = Bun.spawnSync(
+      [
+        input.ghCommand ?? "gh",
+        "release",
+        "view",
+        input.tag,
+        "--json",
+        "databaseId,isDraft,tagName",
+        "--repo",
+        input.releaseRepository,
+      ],
+      { cwd: input.repository, stdout: "pipe", stderr: "pipe" },
+    )
+    if (result.exitCode !== 0) throw new Error("release draft could not be read")
+    const release = JSON.parse(result.stdout.toString()) as { databaseId?: number; isDraft?: boolean; tagName?: string }
+    if (String(release.databaseId) !== input.releaseID) throw new Error("release draft ID changed")
+    if (release.tagName !== input.tag) throw new Error("release draft tag changed")
+    if (release.isDraft !== (input.expectedDraft ?? true))
+      throw new Error(
+        input.expectedDraft === false ? "release was not published" : "release candidate is no longer a draft",
+      )
+  }
 
   if (!input.packageDir) return
   const packageDir = path.resolve(input.repository, input.packageDir)
@@ -35,12 +63,32 @@ export async function assertReleaseCandidate(input: {
     throw new Error("release package sourceCommit does not match candidate commit")
   if (metadata.deepagentCodeBuild.sourceDirty !== false) throw new Error("release package was built from a dirty tree")
   const binary = ["bin/deepagent-code", "bin/deepagent-code.exe"].map((name) => path.join(packageDir, name))
-  const present = await Promise.all(binary.map(async (file) => (await Bun.file(file).exists() ? file : undefined)))
+  const present = await Promise.all(binary.map(async (file) => ((await Bun.file(file).exists()) ? file : undefined)))
   const found = present.filter((file): file is string => file !== undefined)
   if (found.length !== 1) throw new Error("release package must contain exactly one CLI binary")
   const digest = new Bun.CryptoHasher("sha256").update(await Bun.file(found[0]!).bytes()).digest("hex")
   if (metadata.deepagentCodeBuild.binarySha256 !== digest)
     throw new Error("release package binary SHA-256 does not match metadata")
+}
+
+export async function assertReleaseDraftFromEnv(packageDir?: string, expectedDraft = true) {
+  const commit = process.env.DEEPAGENT_CODE_CANDIDATE_COMMIT
+  const tree = process.env.DEEPAGENT_CODE_CANDIDATE_TREE
+  const version = process.env.DEEPAGENT_CODE_VERSION
+  const releaseID = process.env.DEEPAGENT_CODE_RELEASE
+  const releaseRepository = process.env.GH_REPO
+  if (!commit || !tree || !version || !releaseID || !releaseRepository)
+    throw new Error("release candidate and draft identity are required before publishing")
+  await assertReleaseCandidate({
+    repository: path.resolve(import.meta.dir, ".."),
+    commit,
+    tree,
+    tag: `v${version}`,
+    packageDir,
+    releaseID,
+    releaseRepository,
+    expectedDraft,
+  })
 }
 
 if (import.meta.main) {
@@ -60,5 +108,8 @@ if (import.meta.main) {
     tree,
     tag,
     packageDir: args.includes("--package-dir") ? option("--package-dir") : undefined,
+    releaseID: option("--release-id"),
+    releaseRepository: option("--release-repo"),
+    expectedDraft: !args.includes("--published"),
   })
 }

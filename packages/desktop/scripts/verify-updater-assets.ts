@@ -82,6 +82,7 @@ export async function publishUpdaterEvidence(input: {
   tree: string
   ledgerPath: string
   gh?: string
+  assertCandidate?: () => Promise<void>
 }) {
   const ledgerBytes = await Bun.file(input.ledgerPath).bytes()
   const ledger = JSON.parse(Buffer.from(ledgerBytes).toString("utf8")) as {
@@ -104,6 +105,7 @@ export async function publishUpdaterEvidence(input: {
   }
   const file = path.join(input.directory, evidenceName)
   await Bun.write(file, `${JSON.stringify(evidence, null, 2)}\n`)
+  await input.assertCandidate?.()
   const gh = input.gh ?? "gh"
   const upload = Bun.spawnSync([gh, "release", "upload", input.tag, file, "--clobber", "--repo", input.repository], {
     stdout: "pipe",

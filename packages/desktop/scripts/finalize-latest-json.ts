@@ -3,6 +3,7 @@
 import { $ } from "bun"
 import path from "node:path"
 import { parseArgs } from "node:util"
+import { assertReleaseDraft } from "./assert-release-draft"
 
 const { values } = parseArgs({
   args: Bun.argv.slice(2),
@@ -206,6 +207,7 @@ if (dryRun) {
   console.log(`dry-run: wrote latest.json for ${tag} to ${file}`)
   process.exit(0)
 }
+assertReleaseDraft()
 await $`gh release upload ${tag} ${file} --clobber --repo ${repo}`
 
 console.log(`finalized latest.json for ${tag}`)

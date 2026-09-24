@@ -3,7 +3,7 @@
 import { Script } from "@deepagent-code/script"
 import { $ } from "bun"
 import { fileURLToPath } from "url"
-import { assertReleaseCandidate } from "./assert-release-candidate"
+import { assertReleaseDraftFromEnv } from "./assert-release-candidate"
 import { prepareReleaseFiles } from "./prepare-release-files"
 import { verifySdkBuild } from "../packages/sdk/js/script/verify-build"
 import { publishUpdaterEvidence, verifyUpdaterInputs } from "../packages/desktop/scripts/verify-updater-assets"
@@ -17,28 +17,13 @@ const tag = `v${Script.version}`
 if (Script.release && Script.preview)
   throw new Error("preview release candidate freezing requires a separate repository routing design")
 if (!Script.release) await prepareReleaseFiles(Script.version, dir)
-if (Script.release) {
-  const commit = process.env.DEEPAGENT_CODE_CANDIDATE_COMMIT
-  const tree = process.env.DEEPAGENT_CODE_CANDIDATE_TREE
-  if (!commit || !tree) throw new Error("release candidate identity is required before publishing")
-  await assertReleaseCandidate({
-    repository: dir,
-    commit,
-    tree,
-    tag,
-    packageDir: "packages/deepagent-code/dist/deepagent-code-linux-x64",
-  })
+const assertCandidate = async (expectedDraft = true) => {
+  if (!Script.release) return
+  await assertReleaseDraftFromEnv("packages/deepagent-code/dist/deepagent-code-linux-x64", expectedDraft)
 }
+await assertCandidate()
 await verifySdkBuild(`${dir}/packages/sdk/js`)
-if (Script.release) {
-  await assertReleaseCandidate({
-    repository: dir,
-    commit: process.env.DEEPAGENT_CODE_CANDIDATE_COMMIT!,
-    tree: process.env.DEEPAGENT_CODE_CANDIDATE_TREE!,
-    tag,
-    packageDir: "packages/deepagent-code/dist/deepagent-code-linux-x64",
-  })
-}
+await assertCandidate()
 
 if (Script.release) {
   const latestDir = process.env.LATEST_YML_DIR
@@ -59,28 +44,28 @@ if (Script.release) {
     commit: process.env.DEEPAGENT_CODE_CANDIDATE_COMMIT!,
     tree: process.env.DEEPAGENT_CODE_CANDIDATE_TREE!,
     ledgerPath,
+    assertCandidate,
   })
 }
 
 console.log("\n=== cli ===\n")
+await assertCandidate()
 await $`bun ./packages/deepagent-code/script/publish.ts`
 
 console.log("\n=== preview cli ===\n")
+await assertCandidate()
 await $`bun ./packages/cli/script/publish.ts`
 
 console.log("\n=== sdk ===\n")
+await assertCandidate()
 await $`bun ./packages/sdk/js/script/publish.ts`
 
 console.log("\n=== plugin ===\n")
+await assertCandidate()
 await $`bun ./packages/plugin/script/publish.ts`
 
 if (Script.release) {
-  await assertReleaseCandidate({
-    repository: dir,
-    commit: process.env.DEEPAGENT_CODE_CANDIDATE_COMMIT!,
-    tree: process.env.DEEPAGENT_CODE_CANDIDATE_TREE!,
-    tag,
-    packageDir: "packages/deepagent-code/dist/deepagent-code-linux-x64",
-  })
-  await $`gh release edit ${tag} --draft=false --repo ${process.env.GH_REPO}`
+  await assertCandidate()
+  await $`gh api --method PATCH ${`repos/${process.env.GH_REPO}/releases/${process.env.DEEPAGENT_CODE_RELEASE}`} -F draft=false`
+  await assertCandidate(false)
 }

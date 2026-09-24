@@ -2,6 +2,14 @@
 
 import { $ } from "bun"
 import path from "path"
+import { parseArgs } from "node:util"
+import { assertReleaseDraft } from "./assert-release-draft"
+
+const { values } = parseArgs({
+  args: Bun.argv.slice(2),
+  options: { "dry-run": { type: "boolean", default: false } },
+})
+const dryRun = values["dry-run"]
 
 const dir = process.env.LATEST_YML_DIR!
 if (!dir) throw new Error("LATEST_YML_DIR is required")
@@ -117,6 +125,8 @@ const tmp = process.env.RUNNER_TEMP ?? "/tmp"
 for (const [filename, content] of Object.entries(output)) {
   const filepath = path.join(tmp, filename)
   await Bun.write(filepath, content)
+  if (dryRun) continue
+  assertReleaseDraft()
   await $`gh release upload ${tag} ${filepath} --clobber --repo ${repo}`
   console.log(`uploaded ${filename}`)
 }

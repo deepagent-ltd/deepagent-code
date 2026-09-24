@@ -66,6 +66,42 @@ test("release gate receives real packaged and reviewed evidence before byte-boun
   expect(workflow.slice(readback, publish)).toContain('cmp -s "$RUNNER_TEMP/release-readback/ledger.json"')
 })
 
+test("each release upload rechecks the frozen tag and draft identity", async () => {
+  const repository = path.resolve(import.meta.dir, "../../../..")
+  const workflow = await Bun.file(path.join(repository, ".github/workflows/publish.yml")).text()
+  for (const name of [
+    "Upload authoritative ledger release asset",
+    "Upload CLI release assets",
+    "Upload desktop release assets",
+    "Upload owner authorization release asset",
+  ]) {
+    const body = workflow.split(`      - name: ${name}\n`)[1]?.split(/^      - (?:name:|run:|uses:)/m)[0]
+    expect(body).toBeDefined()
+    expect(body.indexOf("bun script/assert-release-candidate.ts")).toBeGreaterThanOrEqual(0)
+    expect(body.indexOf("bun script/assert-release-candidate.ts")).toBeLessThan(body.indexOf("gh release upload"))
+    expect(body).toContain("--commit")
+    expect(body).toContain("--tag")
+    expect(body).toContain("--release-id")
+    expect(body).toContain("--release-repo")
+  }
+  const readback = workflow
+    .split("      - name: Read back final release asset bytes\n")[1]
+    ?.split(/^      - (?:name:|run:|uses:)/m)[0]
+  expect(readback?.match(/bun script\/assert-release-candidate\.ts/g)).toHaveLength(2)
+  expect(readback.indexOf("bun script/assert-release-candidate.ts")).toBeLessThan(
+    readback.indexOf("gh release download"),
+  )
+  const publish = await Bun.file(path.join(repository, "script/publish.ts")).text()
+  expect(publish).toContain("assertReleaseDraftFromEnv(")
+  expect(publish.match(/await assertCandidate\(\)/g)?.length).toBeGreaterThanOrEqual(7)
+  expect(publish).toContain("assertCandidate,")
+  for (const name of ["finalize-latest-json.ts", "finalize-latest-yml.ts"]) {
+    const finalizer = await Bun.file(path.join(repository, "packages/desktop/scripts", name)).text()
+    expect(finalizer).toContain("assertReleaseDraft()")
+    expect(finalizer.indexOf("assertReleaseDraft()")).toBeLessThan(finalizer.indexOf("gh release upload"))
+  }
+})
+
 test("release workflow builds and publishes one frozen candidate", async () => {
   const repository = path.resolve(import.meta.dir, "../../../..")
   const workflow = await Bun.file(path.join(repository, ".github/workflows/publish.yml")).text()
@@ -89,7 +125,7 @@ test("release workflow builds and publishes one frozen candidate", async () => {
   expect(version).toContain("await assertReleaseCandidate({")
   expect(workflow).toContain("DEEPAGENT_CODE_CHANNEL: ${{ needs.version.outputs.channel }}")
   expect(workflow).toContain("DEEPAGENT_CODE_CANDIDATE_COMMIT: ${{ needs.version.outputs.candidate_commit }}")
-  expect(publish).toContain("await assertReleaseCandidate({")
+  expect(publish).toContain("await assertReleaseDraftFromEnv(")
   expect(workflow.indexOf("Build SDK from frozen release candidate")).toBeLessThan(
     workflow.indexOf("RI-51 authoritative ledger release gate"),
   )
@@ -107,7 +143,10 @@ test("release workflow builds and publishes one frozen candidate", async () => {
   expect(publish.indexOf("await publishUpdaterEvidence(")).toBeLessThan(
     publish.indexOf("./packages/deepagent-code/script/publish.ts"),
   )
-  expect(publish.indexOf("await publishUpdaterEvidence(")).toBeLessThan(publish.indexOf("gh release edit"))
+  expect(publish.indexOf("await publishUpdaterEvidence(")).toBeLessThan(publish.indexOf("gh api --method PATCH"))
+  expect(publish).toContain("releases/${process.env.DEEPAGENT_CODE_RELEASE}")
+  expect(publish.indexOf("await assertCandidate(false)")).toBeGreaterThan(publish.indexOf("gh api --method PATCH"))
+  expect(publish).not.toContain("gh release edit")
   expect(publish).not.toContain("git tag -d")
   expect(publish).not.toContain("git push origin refs/tags/")
   expect(publish).not.toContain("git commit -am")

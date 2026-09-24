@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { mkdir } from "node:fs/promises"
+import { chmod, mkdir } from "node:fs/promises"
 import { join } from "node:path"
 import { assertReleaseCandidate } from "../../../../script/assert-release-candidate"
 import { ensureReleaseCandidateRef } from "../../../../script/release-candidate-ref"
@@ -45,6 +45,22 @@ test("release candidate guard binds HEAD, remote tag, clean tree, and packaged b
   await Bun.write(join(packageDir, "package.json"), JSON.stringify(metadata))
   const candidate = { repository, commit, tree, tag: "v2.0.2", packageDir }
   await expect(assertReleaseCandidate(candidate)).resolves.toBeUndefined()
+
+  const ghCommand = join(root.path, "fake-gh")
+  const releaseView = async (view: { databaseId: number; isDraft: boolean; tagName: string }) => {
+    await Bun.write(ghCommand, `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify(view)}'\n`)
+    await chmod(ghCommand, 0o755)
+  }
+  const pinned = { ...candidate, releaseID: "101", releaseRepository: "deepagent-ltd/deepagent-code", ghCommand }
+  await releaseView({ databaseId: 101, isDraft: true, tagName: "v2.0.2" })
+  await expect(assertReleaseCandidate(pinned)).resolves.toBeUndefined()
+  await releaseView({ databaseId: 102, isDraft: true, tagName: "v2.0.2" })
+  await expect(assertReleaseCandidate(pinned)).rejects.toThrow("release draft ID changed")
+  await releaseView({ databaseId: 101, isDraft: false, tagName: "v2.0.2" })
+  await expect(assertReleaseCandidate(pinned)).rejects.toThrow("release candidate is no longer a draft")
+  await expect(assertReleaseCandidate({ ...pinned, expectedDraft: false })).resolves.toBeUndefined()
+  await releaseView({ databaseId: 101, isDraft: true, tagName: "v2.0.3" })
+  await expect(assertReleaseCandidate(pinned)).rejects.toThrow("release draft tag changed")
 
   await expect(assertReleaseCandidate({ ...candidate, tree: "0".repeat(40) })).rejects.toThrow(
     "release candidate tree changed",

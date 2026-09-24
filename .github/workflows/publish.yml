@@ -137,11 +137,15 @@ jobs:
 
       - name: Verify frozen CLI release candidate
         if: needs.version.outputs.release
+        env:
+          GH_TOKEN: ${{ steps.committer.outputs.token }}
         run: |
           bun script/assert-release-candidate.ts \
             --commit "${{ needs.version.outputs.candidate_commit }}" \
             --tree "${{ needs.version.outputs.candidate_tree }}" \
             --tag "v${{ needs.version.outputs.version }}" \
+            --release-id "${{ needs.version.outputs.release }}" \
+            --release-repo "${{ needs.version.outputs.repo }}" \
             --package-dir packages/deepagent-code/dist/deepagent-code-linux-x64
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -543,6 +547,8 @@ jobs:
 
       - name: Build SDK from frozen release candidate
         if: needs.version.outputs.release
+        env:
+          GH_TOKEN: ${{ steps.committer.outputs.token }}
         run: |
           ./packages/sdk/js/script/build.ts
           bun packages/sdk/js/script/verify-build.ts
@@ -550,6 +556,8 @@ jobs:
             --commit "${{ needs.version.outputs.candidate_commit }}" \
             --tree "${{ needs.version.outputs.candidate_tree }}" \
             --tag "v${{ needs.version.outputs.version }}" \
+            --release-id "${{ needs.version.outputs.release }}" \
+            --release-repo "${{ needs.version.outputs.repo }}" \
             --package-dir packages/deepagent-code/dist/deepagent-code-linux-x64
 
       - name: Probe frozen packaged runtime
@@ -624,11 +632,14 @@ jobs:
         env:
           QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id }}
           GH_REPO: ${{ needs.version.outputs.repo }}
+          GH_TOKEN: ${{ steps.committer.outputs.token }}
         run: |
           bun script/assert-release-candidate.ts \
             --commit "${{ needs.version.outputs.candidate_commit }}" \
             --tree "${{ needs.version.outputs.candidate_tree }}" \
             --tag "v${{ needs.version.outputs.version }}" \
+            --release-id "${{ needs.version.outputs.release }}" \
+            --release-repo "${{ needs.version.outputs.repo }}" \
             --package-dir packages/deepagent-code/dist/deepagent-code-linux-x64
           mkdir -p /tmp/authoritative-ledger
           args=(--out /tmp/authoritative-ledger/ledger.json \
@@ -648,6 +659,12 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.committer.outputs.token }}
         run: |
+          bun script/assert-release-candidate.ts \
+            --commit "${{ needs.version.outputs.candidate_commit }}" \
+            --tree "${{ needs.version.outputs.candidate_tree }}" \
+            --tag "v${{ needs.version.outputs.version }}" \
+            --release-id "${{ needs.version.outputs.release }}" \
+            --release-repo "${{ needs.version.outputs.repo }}"
           bun packages/core/script/evidence-ledger/verify-ledger-products.ts \
             --ledger /tmp/authoritative-ledger/ledger.json \
             --artifact-dir /tmp/authoritative-ledger/release-evidence-products
@@ -664,6 +681,12 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.committer.outputs.token }}
         run: |
+          bun script/assert-release-candidate.ts \
+            --commit "${{ needs.version.outputs.candidate_commit }}" \
+            --tree "${{ needs.version.outputs.candidate_tree }}" \
+            --tag "v${{ needs.version.outputs.version }}" \
+            --release-id "${{ needs.version.outputs.release }}" \
+            --release-repo "${{ needs.version.outputs.repo }}"
           mapfile -t names < <(jq -r '.assets[] | select(.kind == "cli") | .name' "$RUNNER_TEMP/ri51-probe/release-assets.json")
           files=()
           for name in "${names[@]}"; do files+=("$RUNNER_TEMP/release-assets/$name"); done
@@ -674,6 +697,12 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.committer.outputs.token }}
         run: |
+          bun script/assert-release-candidate.ts \
+            --commit "${{ needs.version.outputs.candidate_commit }}" \
+            --tree "${{ needs.version.outputs.candidate_tree }}" \
+            --tag "v${{ needs.version.outputs.version }}" \
+            --release-id "${{ needs.version.outputs.release }}" \
+            --release-repo "${{ needs.version.outputs.repo }}"
           mapfile -t names < <(jq -r '.assets[] | select(.kind == "desktop") | .name' "$RUNNER_TEMP/ri51-probe/release-assets.json")
           files=()
           for name in "${names[@]}"; do files+=("$RUNNER_TEMP/release-assets/$name"); done
@@ -687,6 +716,12 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.committer.outputs.token }}
         run: |
+          bun script/assert-release-candidate.ts \
+            --commit "${{ needs.version.outputs.candidate_commit }}" \
+            --tree "${{ needs.version.outputs.candidate_tree }}" \
+            --tag "v${{ needs.version.outputs.version }}" \
+            --release-id "${{ needs.version.outputs.release }}" \
+            --release-repo "${{ needs.version.outputs.repo }}"
           gh release upload "v${{ needs.version.outputs.version }}" \
             "$RUNNER_TEMP/release-assets/owner-authorization.json" \
             --clobber --repo "${{ needs.version.outputs.repo }}"
@@ -696,6 +731,12 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.committer.outputs.token }}
         run: |
+          bun script/assert-release-candidate.ts \
+            --commit "${{ needs.version.outputs.candidate_commit }}" \
+            --tree "${{ needs.version.outputs.candidate_tree }}" \
+            --tag "v${{ needs.version.outputs.version }}" \
+            --release-id "${{ needs.version.outputs.release }}" \
+            --release-repo "${{ needs.version.outputs.repo }}"
           mkdir -p "$RUNNER_TEMP/release-readback"
           gh release download "v${{ needs.version.outputs.version }}" \
             --repo "${{ needs.version.outputs.repo }}" \
@@ -708,6 +749,12 @@ jobs:
           cmp -s "$RUNNER_TEMP/release-readback/ledger.json" /tmp/authoritative-ledger/ledger.json
           cmp -s "$RUNNER_TEMP/release-readback/release-evidence-products.tar.gz" \
             /tmp/authoritative-ledger/release-evidence-products.tar.gz
+          bun script/assert-release-candidate.ts \
+            --commit "${{ needs.version.outputs.candidate_commit }}" \
+            --tree "${{ needs.version.outputs.candidate_tree }}" \
+            --tag "v${{ needs.version.outputs.version }}" \
+            --release-id "${{ needs.version.outputs.release }}" \
+            --release-repo "${{ needs.version.outputs.repo }}"
 
       - run: ./script/publish.ts
         env:

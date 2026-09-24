@@ -31,21 +31,43 @@ test("all six updater sources bind candidate version, target URL and staged asse
     const output = path.join(root, "output")
     await mkdir(output)
     const fakeGh = path.join(root, "gh")
-    await Bun.write(fakeGh, "#!/bin/sh\nexit 0\n")
+    const uploadMarker = path.join(root, "uploaded")
+    await Bun.write(fakeGh, '#!/bin/sh\ntouch "$FAKE_GH_MARKER"\n')
     await chmod(fakeGh, 0o755)
-    const finalized = Bun.spawnSync([process.execPath, path.join(import.meta.dir, "finalize-latest-yml.ts")], {
+    const finalized = Bun.spawnSync(
+      [process.execPath, path.join(import.meta.dir, "finalize-latest-yml.ts"), "--dry-run"],
+      {
+        env: {
+          ...process.env,
+          PATH: `${root}:${process.env.PATH}`,
+          FAKE_GH_MARKER: uploadMarker,
+          LATEST_YML_DIR: sources,
+          RUNNER_TEMP: output,
+          GH_REPO: "example/repo",
+          DEEPAGENT_CODE_VERSION: "2.0.2",
+        },
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    )
+    expect(finalized.exitCode).toBe(0)
+    const refused = Bun.spawnSync([process.execPath, path.join(import.meta.dir, "finalize-latest-yml.ts")], {
       env: {
         ...process.env,
         PATH: `${root}:${process.env.PATH}`,
+        FAKE_GH_MARKER: uploadMarker,
         LATEST_YML_DIR: sources,
         RUNNER_TEMP: output,
         GH_REPO: "example/repo",
         DEEPAGENT_CODE_VERSION: "2.0.2",
+        DEEPAGENT_CODE_CANDIDATE_COMMIT: "",
       },
       stdout: "pipe",
       stderr: "pipe",
     })
-    expect(finalized.exitCode).toBe(0)
+    expect(refused.exitCode).not.toBe(0)
+    expect(refused.stderr.toString()).toContain("release candidate and draft identity are required")
+    expect(await Bun.file(uploadMarker).exists()).toBe(false)
     for (const name of ["latest.yml", "latest-mac.yml", "latest-linux.yml", "latest-linux-arm64.yml"])
       expect(await Bun.file(path.join(output, name)).exists()).toBe(true)
     await rm(path.join(sources, targets[1]![0]))
@@ -124,6 +146,15 @@ test("post-gate updater evidence binds candidate and ledger, survives same-SHA r
     await chmod(gh, 0o755)
     process.env.FAKE_GH_ASSETS = remote
     const input = { directory: local, repository: "example/repo", tag: "v2.0.2", commit, tree, ledgerPath, gh }
+    await expect(
+      publishUpdaterEvidence({
+        ...input,
+        assertCandidate: async () => {
+          throw new Error("release candidate drifted")
+        },
+      }),
+    ).rejects.toThrow("release candidate drifted")
+    expect(await Bun.file(path.join(remote, "release-updater-evidence.json")).exists()).toBe(false)
     const evidence = await publishUpdaterEvidence(input)
     expect(evidence).toMatchObject({ candidateCommit: commit, candidateTree: tree, tag: "v2.0.2", ledgerDigest })
     expect(evidence.ledgerSha256).toBe(
