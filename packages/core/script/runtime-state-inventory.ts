@@ -1653,7 +1653,7 @@ const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
     reachability: "im-websocket",
     verdict: "safe_bounded",
   },
-  "packages/core/src/util/effect-flock.ts:closure@99:104.ensuredDirs": {
+  "packages/core/src/util/effect-flock.ts:closure@93:98.ensuredDirs": {
     owner: "EffectFlock.process",
     keyScope: "lock-root-constant",
     bound: "source-constant-keyspace",
@@ -1661,6 +1661,24 @@ const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
     durability: "mkdir-memo-only",
     reachability: "storage-locking",
     verdict: "safe_bounded",
+  },
+  "packages/deepagent-code/src/config/config.ts:attach@1030:1069.observed": {
+    owner: "Config.watch-directory-subscription",
+    keyScope: "watched-config-or-plugin-filename",
+    bound: "config-names-plus-directory-plugin-file-count",
+    finalizer: "watch-close-or-directory-rebind-gc",
+    durability: "file-fingerprint-cache-only",
+    reachability: "config-hot-refresh",
+    verdict: "safe_bounded",
+  },
+  "packages/deepagent-code/src/config/config.ts:closure@993:1016.watchers": {
+    owner: "Config.watch-invocation",
+    keyScope: "watched-target-directory",
+    bound: "configured-target-directory-count",
+    finalizer: "watch-stop-closes-and-clears-all",
+    durability: "fs-watch-handles-only",
+    reachability: "config-hot-refresh",
+    verdict: "safe_scoped",
   },
   "packages/deepagent-code/src/mcp/index.ts:pendingOAuthTransports": {
     owner: "MCP.InstanceState",

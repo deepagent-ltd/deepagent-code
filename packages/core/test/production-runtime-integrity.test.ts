@@ -594,7 +594,7 @@ describe("production runtime integrity", () => {
     )
     expect(unclassified.map((candidate) => `${candidate.key} (${candidate.verdict})`)).toEqual([])
 
-    // These 12 bindings moved with 2.0.2 source edits. Their owners and exit paths are reviewed
+    // These 15 bindings moved with 2.0.2 source edits. Their owners and exit paths are reviewed
     // in runtime-state-inventory.ts; a stale source anchor must reopen review instead of falling
     // through to an unresolved or guessed classification.
     const reanchored = [
@@ -604,10 +604,13 @@ describe("production runtime integrity", () => {
       ["packages/core/src/event.ts:closure@617:620.typed", "safe_scoped"],
       ["packages/core/src/event.ts:closure@617:623.projectors", "safe_scoped"],
       ["packages/core/src/event.ts:closure@617:624.snapshotCodecs", "safe_scoped"],
+      ["packages/core/src/util/effect-flock.ts:closure@93:98.ensuredDirs", "safe_bounded"],
       ["packages/core/src/session/runner/llm.ts:closure@786:1374.withPublication", "safe_scoped"],
       ["packages/core/src/session/runner/llm.ts:closure@786:1481.planResultMetadata", "safe_scoped"],
       ["packages/deepagent-code/src/cli/cmd/run/runtime.ts:closure@914:915.sdk", "safe_scoped"],
       ["packages/deepagent-code/src/deepagent/learning-reviewer-runner.ts:closure@88:100.abort", "safe_scoped"],
+      ["packages/deepagent-code/src/config/config.ts:attach@1030:1069.observed", "safe_bounded"],
+      ["packages/deepagent-code/src/config/config.ts:closure@993:1016.watchers", "safe_scoped"],
       ["packages/deepagent-code/src/permission/index.ts:closure@136:143.withPermissionOwner", "safe_scoped"],
       ["packages/deepagent-code/src/permission/index.ts:closure@136:190.allPending", "safe_bounded"],
     ] as const
