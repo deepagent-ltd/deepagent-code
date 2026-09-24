@@ -81,7 +81,7 @@ describe("session ZIP bundle", () => {
 
   test("redacts environment values and credential URLs without altering private exports", async () => {
     const text = "PROJECT_MODE=internal postgres://alice:pwd@db.local/prod"
-    const source = { ...snapshot, messages: [{ ...snapshot.messages[0], data: { text } }] } as SessionSnapshot
+    const source = { ...snapshot, messages: [{ ...snapshot.messages[0], data: { text } }] } as unknown as SessionSnapshot
     expect(sanitizeBundleValue({ environment: { PROJECT_MODE: "internal" }, DATABASE_URL: "postgres://alice:pwd@db.local/prod", text })).toEqual({
       environment: "[REDACTED]",
       DATABASE_URL: "[REDACTED]",

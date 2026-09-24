@@ -314,7 +314,7 @@ describe("ShareNext", () => {
               {
                 file: "b.ts",
                 patch:
-                  "Index: b.ts\n===================================================================\n--- b.ts\t\n+++ b.ts\t\n@@ -1,1 +1,1 @@\n-old\n\\ No newline at end of file\n+new\n\\ No newline at end of file\n",
+                  "Index: b.ts\n===================================================================\n--- b.ts\t\n+++ b.ts\t\n@@ -1,1 +1,1 @@\n-old\n\\ No newline at end of file\n+DATABASE_URL=postgres://alice:pwd@db.local/prod PROJECT_MODE=internal\n\\ No newline at end of file\n",
                 additions: 2,
                 deletions: 0,
                 status: "modified",
@@ -350,7 +350,7 @@ describe("ShareNext", () => {
             {
               file: "b.ts",
               patch:
-                "Index: b.ts\n===================================================================\n--- b.ts\t\n+++ b.ts\t\n@@ -1,1 +1,1 @@\n-old\n\\ No newline at end of file\n+new\n\\ No newline at end of file\n",
+                "Index: b.ts\n===================================================================\n--- b.ts\t\n+++ b.ts\t\n@@ -1,1 +1,1 @@\n-old\n\\ No newline at end of file\n+DATABASE_URL=[REDACTED] PROJECT_MODE=[REDACTED]\n\\ No newline at end of file\n",
               additions: 2,
               deletions: 0,
               status: "modified",

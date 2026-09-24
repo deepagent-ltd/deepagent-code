@@ -8,6 +8,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { Provider } from "@/provider/provider"
 
 import { Session } from "@/session/session"
+import { sanitizeBundleValue } from "@/session/sanitize-share"
 import { MessageV2 } from "@/session/message-v2"
 import type { SessionID } from "@/session/schema"
 import { Database } from "@deepagent-code/core/database/database"
@@ -268,7 +269,7 @@ export const layer = Layer.effect(
       const req = yield* request()
       const res = yield* HttpClientRequest.post(`${req.baseUrl}${req.api.sync(share.id)}`).pipe(
         HttpClientRequest.setHeaders(req.headers),
-        HttpClientRequest.bodyJson({ secret: share.secret, data: Array.from(queued.values()) }),
+        HttpClientRequest.bodyJson({ secret: share.secret, data: Array.from(queued.values()).map(sanitizeBundleValue) }),
         Effect.flatMap((r) => http.execute(r)),
       )
 
