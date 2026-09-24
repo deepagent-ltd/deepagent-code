@@ -62,9 +62,20 @@ test("release asset manifest rejects remote byte drift", async () => {
   await verifyReleaseAssets(manifest, root.path, "c".repeat(40), "t".repeat(40))
   await Bun.write(join(root.path, name), "changed")
   await expect(verifyReleaseAssets(manifest, root.path)).rejects.toThrow("bytes differ")
+  await Bun.write(
+    manifest,
+    JSON.stringify({
+      schemaVersion: "release-assets.v1",
+      candidateCommit: "c".repeat(40),
+      candidateTree: "t".repeat(40),
+      version: "2.0.2",
+      assets: [{ name: "deepagent-code-desktop-win-arm64.exe", bytes: 7, sha256: "0".repeat(64), kind: "desktop" }],
+    }),
+  )
+  await expect(verifyReleaseAssets(manifest, root.path)).rejects.toThrow("unsupported ARM platform")
 })
 
-test("staging covers every CLI target, owner row and six desktop targets", async () => {
+test("staging covers supported CLI targets, owner row and four desktop targets", async () => {
   await using root = await tmpdir()
   const commit = "c".repeat(40)
   const tree = "t".repeat(40)
@@ -75,16 +86,13 @@ test("staging covers every CLI target, owner row and six desktop targets", async
   const manifestPath = join(root.path, "release-assets.json")
   await Promise.all([mkdir(cliDist), mkdir(windowsArchives), mkdir(desktopDir)])
   const targets = [
-    "linux-arm64",
     "linux-x64",
     "linux-x64-baseline",
-    "linux-arm64-musl",
     "linux-x64-musl",
     "linux-x64-baseline-musl",
     "darwin-arm64",
     "darwin-x64",
     "darwin-x64-baseline",
-    "windows-arm64",
     "windows-x64",
     "windows-x64-baseline",
   ]
@@ -121,11 +129,9 @@ test("staging covers every CLI target, owner row and six desktop targets", async
   await Promise.all(
     [
       "deepagent-code-desktop-win-x64.exe",
-      "deepagent-code-desktop-win-arm64.exe",
       "deepagent-code-desktop-mac-x64.app.tar.gz",
       "deepagent-code-desktop-mac-arm64.app.tar.gz",
       "deepagent-code-desktop-linux-x64.deb",
-      "deepagent-code-desktop-linux-arm64.deb",
     ].map((name) => Bun.write(join(desktopDir, name), name)),
   )
   await stageReleaseAssets({
@@ -139,7 +145,7 @@ test("staging covers every CLI target, owner row and six desktop targets", async
     manifestPath,
   })
   const manifest = await verifyReleaseAssets(manifestPath, assetsDir, commit, tree, true)
-  expect(manifest.assets).toHaveLength(19)
+  expect(manifest.assets).toHaveLength(14)
   await Promise.all(
     ["ledger.json", "release-evidence-products.tar.gz", "latest.yml", "release-updater-evidence.json"].map((name) =>
       Bun.write(join(assetsDir, name), name),
@@ -160,7 +166,7 @@ test("staging covers every CLI target, owner row and six desktop targets", async
     join(assetsDir, "deepagent-code-linux-x64.tar.gz"),
     await Bun.file(join(cliDist, "deepagent-code-linux-x64.tar.gz")).bytes(),
   )
-  const missing = "deepagent-code-desktop-win-arm64.exe"
+  const missing = "deepagent-code-desktop-win-x64.exe"
   await Bun.write(
     manifestPath,
     JSON.stringify({ ...manifest, assets: manifest.assets?.filter((asset) => asset.name !== missing) }),
@@ -176,16 +182,13 @@ test("RI-51 binds staged asset bytes into the archived ledger before NO-GO", asy
   const assetsDir = join(root.path, "assets")
   await mkdir(assetsDir)
   const targetNames = [
-    "linux-arm64",
     "linux-x64",
     "linux-x64-baseline",
-    "linux-arm64-musl",
     "linux-x64-musl",
     "linux-x64-baseline-musl",
     "darwin-arm64",
     "darwin-x64",
     "darwin-x64-baseline",
-    "windows-arm64",
     "windows-x64",
     "windows-x64-baseline",
   ]
@@ -193,11 +196,9 @@ test("RI-51 binds staged asset bytes into the archived ledger before NO-GO", asy
     ...targetNames.map((target) => `deepagent-code-${target}${target.startsWith("linux") ? ".tar.gz" : ".zip"}`),
     "owner-authorization.json",
     "deepagent-code-desktop-win-x64.exe",
-    "deepagent-code-desktop-win-arm64.exe",
     "deepagent-code-desktop-mac-x64.app.tar.gz",
     "deepagent-code-desktop-mac-arm64.app.tar.gz",
     "deepagent-code-desktop-linux-x64.deb",
-    "deepagent-code-desktop-linux-arm64.deb",
   ]
   const assets = await Promise.all(
     names.map(async (name) => {

@@ -31,7 +31,7 @@ const setup = async () => {
 
 await setup()
 
-const platform = "linux/amd64,linux/arm64"
+const platform = "linux/amd64"
 
 for (const name of images) {
   const image = `${reg}/build/${name}:${tag}`

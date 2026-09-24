@@ -5,27 +5,23 @@ import path from "node:path"
 
 const sha256 = async (file: string) => new Bun.CryptoHasher("sha256").update(await Bun.file(file).bytes()).digest("hex")
 const targets = [
-  "linux-arm64",
   "linux-x64",
   "linux-x64-baseline",
-  "linux-arm64-musl",
   "linux-x64-musl",
   "linux-x64-baseline-musl",
   "darwin-arm64",
   "darwin-x64",
   "darwin-x64-baseline",
-  "windows-arm64",
   "windows-x64",
   "windows-x64-baseline",
 ].map((target) => `deepagent-code-${target}`)
 const desktopTargets = [
   "deepagent-code-desktop-win-x64.exe",
-  "deepagent-code-desktop-win-arm64.exe",
   "deepagent-code-desktop-mac-x64.app.tar.gz",
   "deepagent-code-desktop-mac-arm64.app.tar.gz",
   "deepagent-code-desktop-linux-x64.deb",
-  "deepagent-code-desktop-linux-arm64.deb",
 ]
+const unsupportedArmAsset = /^deepagent-code-(?:(?:linux|windows)-arm64|desktop-(?:linux|win)-arm64)/
 
 async function files(directory: string, root = directory): Promise<string[]> {
   return (
@@ -125,6 +121,8 @@ export async function verifyReleaseAssets(
     throw new Error("release asset candidate tree mismatch")
   if (new Set(manifest.assets.map((asset) => asset.name)).size !== manifest.assets.length)
     throw new Error("release asset names are duplicated")
+  if (manifest.assets.some((asset) => unsupportedArmAsset.test(asset.name)))
+    throw new Error("release asset manifest includes an unsupported ARM platform")
   if (manifest.assets.some((asset) => !["cli", "desktop", "owner"].includes(asset.kind)))
     throw new Error("release asset kind is invalid")
   if (requireComplete) {
@@ -151,7 +149,6 @@ export async function verifyReleaseAssets(
           "latest.yml",
           "latest-mac.yml",
           "latest-linux.yml",
-          "latest-linux-arm64.yml",
           "release-updater-evidence.json",
         ]
       : []
@@ -197,6 +194,8 @@ export async function stageReleaseAssets(input: {
   const desktop = (await readdir(input.desktopDir, { withFileTypes: true }))
     .filter((entry) => entry.isFile() && /\.(exe|blockmap|dmg|zip|AppImage|deb|rpm)$|\.app\.tar\.gz$/.test(entry.name))
     .map((entry) => path.join(input.desktopDir, entry.name))
+  if (desktop.some((file) => unsupportedArmAsset.test(path.basename(file))))
+    throw new Error("release desktop assets include an unsupported ARM platform")
   if (desktopTargets.some((name) => !desktop.some((file) => path.basename(file) === name)))
     throw new Error("release desktop assets are missing a platform")
   const owner = path.join(input.cliDist, "deepagent-code-linux-x64/bin/owner-authorization.json")

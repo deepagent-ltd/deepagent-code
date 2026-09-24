@@ -5,7 +5,7 @@ import os from "node:os"
 import path from "node:path"
 import { publishUpdaterEvidence, verifyUpdaterInputs, verifyUpdaterReadback } from "./verify-updater-assets"
 
-test("all six updater sources bind candidate version, target URL and staged asset bytes", async () => {
+test("all four updater sources bind candidate version, target URL and staged asset bytes", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "deepagent-updater-inputs-"))
   try {
     const sources = path.join(root, "sources")
@@ -13,11 +13,9 @@ test("all six updater sources bind candidate version, target URL and staged asse
     await mkdir(assets)
     const targets = [
       ["latest-yml-x86_64-pc-windows-msvc/latest.yml", "deepagent-code-desktop-win-x64.exe"],
-      ["latest-yml-aarch64-pc-windows-msvc/latest.yml", "deepagent-code-desktop-win-arm64.exe"],
       ["latest-yml-x86_64-apple-darwin/latest-mac.yml", "deepagent-code-desktop-mac-x64.zip"],
       ["latest-yml-aarch64-apple-darwin/latest-mac.yml", "deepagent-code-desktop-mac-arm64.zip"],
       ["latest-yml-x86_64-unknown-linux-gnu/latest-linux.yml", "deepagent-code-desktop-linux-x64.deb"],
-      ["latest-yml-aarch64-unknown-linux-gnu/latest-linux-arm64.yml", "deepagent-code-desktop-linux-arm64.deb"],
     ]
     for (const [source, asset] of targets) {
       await mkdir(path.dirname(path.join(sources, source)), { recursive: true })
@@ -68,8 +66,11 @@ test("all six updater sources bind candidate version, target URL and staged asse
     expect(refused.exitCode).not.toBe(0)
     expect(refused.stderr.toString()).toContain("release candidate and draft identity are required")
     expect(await Bun.file(uploadMarker).exists()).toBe(false)
-    for (const name of ["latest.yml", "latest-mac.yml", "latest-linux.yml", "latest-linux-arm64.yml"])
+    for (const name of ["latest.yml", "latest-mac.yml", "latest-linux.yml"])
       expect(await Bun.file(path.join(output, name)).exists()).toBe(true)
+    const macFeed = await Bun.file(path.join(output, "latest-mac.yml")).text()
+    expect(macFeed).toContain("deepagent-code-desktop-mac-x64.zip")
+    expect(macFeed).toContain("deepagent-code-desktop-mac-arm64.zip")
     await rm(path.join(sources, targets[1]![0]))
     await expect(verifyUpdaterInputs(sources, assets, "2.0.2")).rejects.toThrow()
     await Bun.write(path.join(sources, targets[1]![0]), `version: 2.0.1\nfiles:\n  - url: ${targets[1]![1]}\n`)
@@ -90,14 +91,14 @@ test("all six updater sources bind candidate version, target URL and staged asse
   }
 })
 
-test("all five uploaded updater outputs read back byte for byte before undraft", async () => {
+test("all four uploaded updater outputs read back byte for byte before undraft", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "deepagent-updater-readback-test-"))
   const previous = process.env.FAKE_GH_ASSETS
   try {
     const local = path.join(root, "local")
     const remote = path.join(root, "remote")
     await Promise.all([mkdir(local), mkdir(remote)])
-    for (const name of ["latest.json", "latest.yml", "latest-mac.yml", "latest-linux.yml", "latest-linux-arm64.yml"]) {
+    for (const name of ["latest.json", "latest.yml", "latest-mac.yml", "latest-linux.yml"]) {
       await Bun.write(path.join(local, name), name)
       await Bun.write(path.join(remote, name), name)
     }
@@ -112,7 +113,7 @@ test("all five uploaded updater outputs read back byte for byte before undraft",
     await Bun.write(path.join(remote, "latest-mac.yml"), "tampered")
     await expect(verifyUpdaterReadback(local, "example/repo", "v2.0.2", gh)).rejects.toThrow("bytes differ")
     await Bun.write(path.join(remote, "latest-mac.yml"), "latest-mac.yml")
-    await rm(path.join(remote, "latest-linux-arm64.yml"))
+    await rm(path.join(remote, "latest-linux.yml"))
     await expect(verifyUpdaterReadback(local, "example/repo", "v2.0.2", gh)).rejects.toThrow("download failed")
   } finally {
     if (previous === undefined) delete process.env.FAKE_GH_ASSETS
@@ -129,7 +130,7 @@ test("post-gate updater evidence binds candidate and ledger, survives same-SHA r
     const local = path.join(root, "local")
     const remote = path.join(root, "remote")
     await Promise.all([mkdir(local), mkdir(remote)])
-    for (const name of ["latest.json", "latest.yml", "latest-mac.yml", "latest-linux.yml", "latest-linux-arm64.yml"]) {
+    for (const name of ["latest.json", "latest.yml", "latest-mac.yml", "latest-linux.yml"]) {
       await Bun.write(path.join(local, name), name)
       await Bun.write(path.join(remote, name), name)
     }
@@ -174,7 +175,7 @@ test("post-gate updater evidence binds candidate and ledger, survives same-SHA r
         .update(await Bun.file(ledgerPath).bytes())
         .digest("hex"),
     )
-    expect(evidence.metadata).toHaveLength(5)
+    expect(evidence.metadata).toHaveLength(4)
     expect(await Bun.file(path.join(local, "release-updater-evidence.json")).text()).toBe(
       await Bun.file(path.join(remote, "release-updater-evidence.json")).text(),
     )

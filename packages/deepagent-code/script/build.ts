@@ -83,21 +83,12 @@ const allTargets: {
 }[] = [
   {
     os: "linux",
-    arch: "arm64",
-  },
-  {
-    os: "linux",
     arch: "x64",
   },
   {
     os: "linux",
     arch: "x64",
     avx2: false,
-  },
-  {
-    os: "linux",
-    arch: "arm64",
-    abi: "musl",
   },
   {
     os: "linux",
@@ -122,10 +113,6 @@ const allTargets: {
     os: "darwin",
     arch: "x64",
     avx2: false,
-  },
-  {
-    os: "win32",
-    arch: "arm64",
   },
   {
     os: "win32",

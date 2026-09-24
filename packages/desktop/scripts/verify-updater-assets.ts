@@ -6,13 +6,11 @@ import path from "node:path"
 
 const sources = [
   ["latest-yml-x86_64-pc-windows-msvc/latest.yml", "deepagent-code-desktop-win-x64.exe"],
-  ["latest-yml-aarch64-pc-windows-msvc/latest.yml", "deepagent-code-desktop-win-arm64.exe"],
   ["latest-yml-x86_64-apple-darwin/latest-mac.yml", "deepagent-code-desktop-mac-x64.zip"],
   ["latest-yml-aarch64-apple-darwin/latest-mac.yml", "deepagent-code-desktop-mac-arm64.zip"],
   ["latest-yml-x86_64-unknown-linux-gnu/latest-linux.yml", "deepagent-code-desktop-linux-x64.deb"],
-  ["latest-yml-aarch64-unknown-linux-gnu/latest-linux-arm64.yml", "deepagent-code-desktop-linux-arm64.deb"],
 ] as const
-const outputs = ["latest.json", "latest.yml", "latest-mac.yml", "latest-linux.yml", "latest-linux-arm64.yml"]
+const outputs = ["latest.json", "latest.yml", "latest-mac.yml", "latest-linux.yml"]
 const evidenceName = "release-updater-evidence.json"
 
 export async function verifyUpdaterInputs(directory: string, assetsDir: string, version: string) {

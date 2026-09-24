@@ -218,7 +218,6 @@ jobs:
           signing-account-name: ${{ env.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
           certificate-profile-name: ${{ env.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
           files: |
-            ${{ github.workspace }}\packages\deepagent-code\dist\deepagent-code-windows-arm64\bin\deepagent-code.exe
             ${{ github.workspace }}\packages\deepagent-code\dist\deepagent-code-windows-x64\bin\deepagent-code.exe
             ${{ github.workspace }}\packages\deepagent-code\dist\deepagent-code-windows-x64-baseline\bin\deepagent-code.exe
           exclude-environment-credential: true
@@ -236,7 +235,6 @@ jobs:
         shell: pwsh
         run: |
           $files = @(
-            "${{ github.workspace }}\packages\deepagent-code\dist\deepagent-code-windows-arm64\bin\deepagent-code.exe",
             "${{ github.workspace }}\packages\deepagent-code\dist\deepagent-code-windows-x64\bin\deepagent-code.exe",
             "${{ github.workspace }}\packages\deepagent-code\dist\deepagent-code-windows-x64-baseline\bin\deepagent-code.exe"
           )
@@ -252,7 +250,6 @@ jobs:
         working-directory: packages/deepagent-code/dist
         shell: pwsh
         run: |
-          Compress-Archive -Path "deepagent-code-windows-arm64\bin\*" -DestinationPath "deepagent-code-windows-arm64.zip" -Force
           Compress-Archive -Path "deepagent-code-windows-x64\bin\*" -DestinationPath "deepagent-code-windows-x64.zip" -Force
           Compress-Archive -Path "deepagent-code-windows-x64-baseline\bin\*" -DestinationPath "deepagent-code-windows-x64-baseline.zip" -Force
 
@@ -260,7 +257,6 @@ jobs:
         with:
           name: deepagent-code-cli-signed-windows
           path: |
-            packages/deepagent-code/dist/deepagent-code-windows-arm64
             packages/deepagent-code/dist/deepagent-code-windows-x64
             packages/deepagent-code/dist/deepagent-code-windows-x64-baseline
 
@@ -295,19 +291,12 @@ jobs:
             target: aarch64-apple-darwin
             platform_flag: --mac --arm64
             bun_install_flags: --os=darwin --cpu=arm64
-          # github-hosted: blacksmith lacks ARM64 MSVC cross-compilation toolchain
-          - host: "windows-2025"
-            target: aarch64-pc-windows-msvc
-            platform_flag: --win --arm64
           - host: "blacksmith-4vcpu-windows-2025"
             target: x86_64-pc-windows-msvc
             platform_flag: --win
           - host: "blacksmith-4vcpu-ubuntu-2404"
             target: x86_64-unknown-linux-gnu
             platform_flag: --linux
-          - host: "blacksmith-4vcpu-ubuntu-2404-arm"
-            target: aarch64-unknown-linux-gnu
-            platform_flag: --linux --arm64
     runs-on: ${{ matrix.settings.host }}
     steps:
       - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
