@@ -1,0 +1,76 @@
+#!/usr/bin/env bun
+// Reopen the archived RI-51 inputs and compare their exact bytes with the authoritative ledger.
+// This runs before release upload and can be rerun on an extracted evidence asset.
+import path from "node:path"
+import { Schema } from "effect"
+import { contentDigest } from "../../src/contract/digest"
+import { assertAuthoritativeLedger } from "../../src/contract/evidence-ledger"
+import { PackagedRuntimeReportContract } from "../../src/contract/packaged-runtime-report"
+import { Hash } from "../../src/util/hash"
+import { assertManifestMatches, assertManifestShape } from "../manifest-digest/manifest"
+
+const args = process.argv.slice(2)
+const option = (name: string) => {
+  const index = args.indexOf(name)
+  return index >= 0 ? args[index + 1] : undefined
+}
+const ledgerPath = option("--ledger")
+const artifactDir = option("--artifact-dir")
+if (!ledgerPath || !artifactDir)
+  throw new Error("usage: verify-ledger-products.ts --ledger <ledger.json> --artifact-dir <dir>")
+
+const ledger = assertAuthoritativeLedger(await Bun.file(ledgerPath).json())
+const read = async (name: string, expected: string) => {
+  const file = path.join(artifactDir, name)
+  const bytes = Buffer.from(await Bun.file(file).arrayBuffer())
+  if (Hash.sha256(bytes) !== expected) throw new Error(`${name} bytes do not match ledger digest`)
+  return bytes
+}
+
+const source = assertManifestShape(
+  JSON.parse((await read("source-manifest.json", ledger.sourceManifestDigest)).toString()),
+)
+assertManifestMatches(source, source)
+const callerDigest = source.inputs["c0-01-inventory-report"]?.["packages/core/.artifacts/caller-inventory/report.json"]
+if (!callerDigest) throw new Error("source manifest is missing caller-inventory report binding")
+await read("caller-inventory/report.json", callerDigest)
+await read("runtime-inventory.tsv", ledger.runtimeInventoryDigest)
+
+if (ledger.packagedReportDigest !== contentDigest({ present: false })) {
+  const packaged = PackagedRuntimeReportContract.assertPackagedRuntimeReport(
+    JSON.parse((await read("packaged-runtime-report.json", ledger.packagedReportDigest)).toString()),
+  )
+  if (
+    packaged.candidateId !== ledger.candidateId ||
+    packaged.commit !== ledger.manifest.commit ||
+    packaged.tree !== ledger.manifest.tree
+  )
+    throw new Error("packaged report identity does not match ledger manifest")
+  const runs = Schema.decodeUnknownSync(Schema.Array(PackagedRuntimeReportContract.PackagedRuntimeRun))(
+    await Bun.file(path.join(artifactDir, "runs.json")).json(),
+  )
+  const ordered = [...runs].toSorted((a, b) =>
+    `${a.entrypoint}\u0000${a.evidenceDigest}`.localeCompare(`${b.entrypoint}\u0000${b.evidenceDigest}`),
+  )
+  if (contentDigest(ordered) !== contentDigest(packaged.runs))
+    throw new Error("runs.json does not match packaged runtime report")
+}
+
+const gatesFile = Bun.file(path.join(artifactDir, "gates.json"))
+if (await gatesFile.exists()) {
+  const gates = (await gatesFile.json()) as Record<string, unknown>
+  for (const entry of ledger.manifest.gates) {
+    const value = gates[entry.gate]
+    const status =
+      typeof value === "string"
+        ? value
+        : value && typeof value === "object" && "status" in value
+          ? value.status
+          : undefined
+    const refs = value && typeof value === "object" && "refs" in value ? value.refs : []
+    if (status !== entry.status || contentDigest(refs) !== contentDigest(entry.refs))
+      throw new Error(`gates.json ${entry.gate} does not match ledger manifest`)
+  }
+}
+
+console.log(`RI-51 archived products match ledger ${ledger.ledgerDigest}`)

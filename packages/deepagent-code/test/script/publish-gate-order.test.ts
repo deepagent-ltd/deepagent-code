@@ -9,6 +9,8 @@ test("RI-51 gate precedes every release asset upload", async () => {
   expect(workflow.slice(0, gate)).not.toContain("gh release upload")
   expect(workflow.slice(gate)).toContain("      - name: Upload CLI release assets")
   expect(workflow.slice(gate)).toContain("gh release upload")
+  expect(workflow.slice(gate)).toContain("release-evidence-products.tar.gz")
+  expect(workflow.slice(gate)).toContain("verify-ledger-products.ts")
 
   const build = workflow.slice(workflow.indexOf("  build-cli:"), workflow.indexOf("  sign-cli-windows:"))
   expect(build).toContain('DEEPAGENT_CODE_SKIP_RELEASE_UPLOAD: "1"')

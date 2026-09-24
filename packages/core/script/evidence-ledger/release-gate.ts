@@ -16,6 +16,7 @@
  * whose gate evidence does not exist.
  */
 import { readdirSync, statSync } from "node:fs"
+import { copyFile, mkdir } from "node:fs/promises"
 import path from "node:path"
 import { makeAuthoritativeManifest } from "../../src/contract/evidence-manifest"
 import { capabilityCatalogDigestValue } from "../../src/system-context/capability-catalog"
@@ -26,8 +27,7 @@ const option = (name: string) => {
   const index = args.indexOf(name)
   return index >= 0 ? args[index + 1] : undefined
 }
-const list = (name: string) =>
-  args.flatMap((value, index) => (args[index - 1] === name ? [value] : []))
+const list = (name: string) => args.flatMap((value, index) => (args[index - 1] === name ? [value] : []))
 
 const repository = path.resolve(import.meta.dir, "../../../..")
 const out = option("--out") ?? path.join(repository, "authoritative-ledger.json")
@@ -48,7 +48,9 @@ const walk = (dir: string): string[] =>
   })
 
 const migrationDir = path.join(repository, "packages/core/migration")
-const migrationNames = readdirSync(migrationDir).filter((name) => statSync(path.join(migrationDir, name)).isDirectory()).sort()
+const migrationNames = readdirSync(migrationDir)
+  .filter((name) => statSync(path.join(migrationDir, name)).isDirectory())
+  .sort()
 const migrationRegistryDigest = Hash.sha256(Buffer.from(migrationNames.join("\n")))
 const schemaDigest = await (async () => {
   const chunks: Buffer[] = []
@@ -133,6 +135,10 @@ const manifest = makeAuthoritativeManifest({
 const manifestPath = path.join(path.dirname(out), "release-evidence-manifest.json")
 await Bun.write(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
 
+const artifactDir = path.join(path.dirname(out), "release-evidence-products")
+await mkdir(artifactDir, { recursive: true })
+if (option("--gates")) await copyFile(path.resolve(option("--gates")!), path.join(artifactDir, "gates.json"))
+
 const evidenceDir = path.join(path.dirname(out), "release-evidence")
 await Bun.$`mkdir -p ${evidenceDir}`
 // Packaged-run evidence artifacts (RI-24 runtime-integrity evidence JSON) land in the evidence
@@ -149,16 +155,13 @@ const child = Bun.spawnSync(
     evidenceDir,
     "--out",
     out,
+    "--artifact-dir",
+    artifactDir,
     // The candidate ledger spawns with cwd=repository; resolve relative inputs here so the
     // packaged-dir/runs paths keep meaning regardless of where the gate was invoked from.
-    ...list("--package-dir").length > 0
-      ? [
-          "--packaged-dir",
-          path.resolve(list("--package-dir")[0]!),
-          "--runs",
-          path.resolve(option("--runs") ?? "[]"),
-        ]
-      : [],
+    ...(list("--package-dir").length > 0
+      ? ["--packaged-dir", path.resolve(list("--package-dir")[0]!), "--runs", path.resolve(option("--runs") ?? "[]")]
+      : []),
   ],
   { cwd: repository, stdout: "inherit", stderr: "inherit", env: { ...process.env } },
 )

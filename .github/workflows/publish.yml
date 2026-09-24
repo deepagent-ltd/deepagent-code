@@ -545,13 +545,20 @@ jobs:
           (cd packages/core && bun run script/evidence-ledger/release-gate.ts --out /tmp/authoritative-ledger/ledger.json)
 
       - name: Upload authoritative ledger release asset
-        if: needs.version.outputs.release && !cancelled()
+        if: needs.version.outputs.release && success()
         env:
           GH_TOKEN: ${{ steps.committer.outputs.token }}
         run: |
-          if [ -f /tmp/authoritative-ledger/ledger.json ]; then
-            gh release upload "v${{ needs.version.outputs.version }}" /tmp/authoritative-ledger/ledger.json --clobber --repo "${{ needs.version.outputs.repo }}" || echo "::warning::ledger asset upload skipped"
-          fi
+          bun packages/core/script/evidence-ledger/verify-ledger-products.ts \
+            --ledger /tmp/authoritative-ledger/ledger.json \
+            --artifact-dir /tmp/authoritative-ledger/release-evidence-products
+          tar -czf /tmp/authoritative-ledger/release-evidence-products.tar.gz \
+            -C /tmp/authoritative-ledger \
+            ledger.json release-evidence-manifest.json release-evidence-products release-evidence
+          gh release upload "v${{ needs.version.outputs.version }}" \
+            /tmp/authoritative-ledger/ledger.json \
+            /tmp/authoritative-ledger/release-evidence-products.tar.gz \
+            --clobber --repo "${{ needs.version.outputs.repo }}"
 
       - name: Upload CLI release assets
         if: needs.version.outputs.release
