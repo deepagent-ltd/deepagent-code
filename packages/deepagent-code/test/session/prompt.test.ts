@@ -3713,6 +3713,21 @@ v2Real.instance(
         }),
         "timed out waiting for the bash tool part to enter running state",
       )
+      // A running tool part can be published before the provider stream's final chunk is
+      // durably settled. This case cancels tool execution after the provider turn, so wait
+      // for the receipt instead of racing cancellation with stream finalization.
+      yield* pollWithTimeout(
+        Effect.gen(function* () {
+          const receipt = yield* db
+            .select({ state: V2ProviderTurnReceiptTable.state })
+            .from(V2ProviderTurnReceiptTable)
+            .where(eq(V2ProviderTurnReceiptTable.session_id, chat.id))
+            .get()
+            .pipe(Effect.orDie)
+          if (receipt?.state === "settled") return true
+        }),
+        "timed out waiting for the provider turn to settle before cancelling bash",
+      )
       yield* prompt.cancel(chat.id)
 
       const exit = yield* Fiber.await(run)
