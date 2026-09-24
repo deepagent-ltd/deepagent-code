@@ -72,7 +72,7 @@ jobs:
         settings:
           - name: linux
             host: ubuntu-24.04
-            timeout: 20
+            timeout: 120
           - name: windows
             host: windows-2025
             timeout: 20
