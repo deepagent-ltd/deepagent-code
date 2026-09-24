@@ -2,6 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
 import { mkdir, readdir, rename, rm } from "node:fs/promises"
 import path from "node:path"
 import { BUNDLE_MAX_BYTES, createSessionBundle, parseSessionBundle } from "../src/session/bundle"
+import { publicSharingEnabled } from "../src/share/public-share-policy"
 
 const digest = (value: string) => createHash("sha256").update(value).digest("hex")
 const equals = (left: string, right: string) => timingSafeEqual(Buffer.from(digest(left)), Buffer.from(digest(right)))
@@ -56,16 +57,19 @@ export async function cleanupExpiredShares(directory: string) {
   }))
 }
 
-export function createShareHandler(input: { directory: string; publicURL: string; uploadToken: string; ttlMs?: number }) {
+export function createShareHandler(input: { directory: string; publicURL: string; uploadToken: string; ttlMs?: number; enabled?: boolean }) {
   const base = input.publicURL.replace(/\/$/, "")
+  const enabled = input.enabled ?? publicSharingEnabled()
   const unauthorized = () => new Response("unauthorized", { status: 401, headers: noStore })
   const missing = () => new Response("not found", { status: 404, headers: noStore })
+  const unavailable = () => new Response("public sharing is disabled", { status: 503, headers: noStore })
   const tokenFrom = (request: Request) => request.headers.get("authorization")?.replace(/^Bearer /, "") ?? ""
 
   return async (request: Request): Promise<Response> => {
     const url = new URL(request.url)
     if (request.method === "GET" && url.pathname === "/healthz")
       return new Response("ok", { headers: { ...noStore, "Content-Type": "text/plain; charset=utf-8" } })
+    if (!enabled && (request.method === "POST" || request.method === "GET")) return unavailable()
     if (request.method === "POST" && url.pathname === "/api/bundles") {
       if (!equals(tokenFrom(request), input.uploadToken)) return unauthorized()
       if (Number(request.headers.get("content-length") ?? 0) > BUNDLE_MAX_BYTES) return new Response("bundle too large", { status: 413 })

@@ -727,7 +727,7 @@ export const SessionApi = HttpApi.make("session")
           params: { sessionID: SessionID },
           query: WorkspaceRoutingQuery,
           success: described(Session.Info, "Successfully shared session"),
-          error: [HttpApiError.InternalServerError, ApiNotFoundError, ConflictError],
+          error: [HttpApiError.InternalServerError, ApiNotFoundError, ConflictError, ServiceUnavailableError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.share",

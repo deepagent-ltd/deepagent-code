@@ -116,7 +116,6 @@ function goUpsellKeys(action: RetryAction) {
 }
 
 const sessionBindingCommands = [
-  "session.share",
   "session.rename",
   "session.timeline",
   "session.fork",
@@ -495,47 +494,6 @@ export function Session() {
   }
 
   const sessionCommandList = createMemo(() => [
-    {
-      title: session()?.share?.url ? "Copy share link" : "Share session",
-      value: "session.share",
-      suggested: route.type === "session",
-      category: i18n.t("tui.category.session"),
-      enabled: sync.data.config.share !== "disabled",
-      slash: {
-        name: "share",
-      },
-      run: async () => {
-        const copy = (url: string) =>
-          clipboard
-            .write?.(url)
-            .then(() => toast.show({ message: i18n.t("tui.session.shareUrlCopied"), variant: "success" }))
-            .catch(() => toast.show({ message: i18n.t("tui.session.failedCopyUrl"), variant: "error" }))
-        const url = session()?.share?.url
-        if (url) {
-          await copy(url)
-          dialog.clear()
-          return
-        }
-        if (!kv.get("share_consent", false)) {
-          const ok = await DialogConfirm.show(dialog, "Share Session", "Are you sure you want to share it?")
-          if (ok !== true) return
-          kv.set("share_consent", true)
-        }
-        await sdk.client.session
-          .share(
-            { sessionID: route.sessionID },
-            { throwOnError: true },
-          )
-          .then((res) => copy(res.data!.share!.url))
-          .catch((error) => {
-            toast.show({
-              message: error instanceof Error ? error.message : "Failed to share session",
-              variant: "error",
-            })
-          })
-        dialog.clear()
-      },
-    },
     {
       title: i18n.t("tui.session.rename"),
       value: "session.rename",

@@ -457,18 +457,8 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   }
 
   const shareCmds = () => {
-    if (sync.data.config.share === "disabled") return []
+    // Public sharing is deferred to 2.0.3; keep unshare for existing links.
     return [
-      sessionCommand({
-        id: "session.share",
-        title: info()?.share?.url ? language.t("session.share.copy.copyLink") : language.t("command.session.share"),
-        description: info()?.share?.url
-          ? language.t("toast.session.share.success.description")
-          : language.t("command.session.share.description"),
-        slash: "share",
-        disabled: !params.id,
-        onSelect: share,
-      }),
       sessionCommand({
         id: "session.unshare",
         title: language.t("command.session.unshare"),

@@ -80,6 +80,7 @@ import { SessionDiffArtifact } from "@/session/diff-artifact"
 import { exportSessionSnapshot, importSessionSnapshot, type SessionSnapshot } from "@/session/snapshot"
 import { exportSessionBundle, parseSessionBundle, BUNDLE_MAX_BYTES } from "@/session/bundle"
 import { uploadSessionBundle, downloadSessionBundle, revokeSessionBundle } from "@/session/bundle-share"
+import { publicSharingEnabled } from "@/share/public-share-policy"
 import { InstanceState } from "@/effect/instance-state"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 
@@ -521,6 +522,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     // ErrorMiddleware → NamedError.Unknown 500) instead of blanket-mapping
     // every failure to a 400 BadRequest.
     const share = Effect.fn("SessionHttpApi.share")(function* (ctx: { params: { sessionID: SessionID } }) {
+      if (!publicSharingEnabled())
+        return yield* new ServiceUnavailableError({ service: "session.share", message: "Public sharing is disabled" })
       yield* requireWritableSession(ctx.params.sessionID)
       yield* shareSvc.share(ctx.params.sessionID).pipe(Effect.mapError(() => new HttpApiError.InternalServerError({})))
       return yield* requireSession(ctx.params.sessionID)
@@ -1201,6 +1204,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
       payload: typeof ShareBundlePayload.Type
     }) {
+      if (!publicSharingEnabled())
+        return yield* new ServiceUnavailableError({ service: "session.shareBundle", message: "Public sharing is disabled" })
       yield* requireSession(ctx.params.sessionID)
       const service = process.env.DEEPAGENT_SHARE_PUBLIC_URL
       const uploadToken = process.env.DEEPAGENT_SHARE_UPLOAD_TOKEN
@@ -1215,6 +1220,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const importBundleShare = Effect.fn("SessionHttpApi.importBundleShare")(function* (ctx: {
       payload: typeof ImportBundleSharePayload.Type
     }) {
+      if (!publicSharingEnabled())
+        return yield* new ServiceUnavailableError({ service: "session.importBundleShare", message: "Public sharing is disabled" })
       const service = process.env.DEEPAGENT_SHARE_PUBLIC_URL
       if (!service)
         return yield* new ServiceUnavailableError({ service: "session.importBundleShare", message: "Bundle share host is not configured" })

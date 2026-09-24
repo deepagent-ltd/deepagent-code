@@ -1794,6 +1794,84 @@ describe("session HttpApi", () => {
   )
 
   it.instance(
+    "keeps public share routes closed by default while local ZIP export remains available",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const session = yield* createSession({ title: "local archive" })
+        const headers = { "x-deepagent-code-directory": test.directory, "content-type": "application/json" }
+        const enabled = process.env.DEEPAGENT_CODE_ENABLE_PUBLIC_SHARING
+        const service = process.env.DEEPAGENT_SHARE_PUBLIC_URL
+        const token = process.env.DEEPAGENT_SHARE_UPLOAD_TOKEN
+        const externalCalls: string[] = []
+        const host = Bun.serve({
+          hostname: "127.0.0.1",
+          port: 0,
+          fetch: (request) => {
+            externalCalls.push(request.method)
+            return new Response(null, { status: request.method === "DELETE" ? 204 : 500 })
+          },
+        })
+        delete process.env.DEEPAGENT_CODE_ENABLE_PUBLIC_SHARING
+        process.env.DEEPAGENT_SHARE_PUBLIC_URL = host.url.toString()
+        process.env.DEEPAGENT_SHARE_UPLOAD_TOKEN = "test-upload-token"
+        yield* Effect.gen(function* () {
+          for (const route of [
+            { path: pathFor(SessionPaths.share, { sessionID: session.id }), body: undefined },
+            { path: pathFor(SessionPaths.shareBundle, { sessionID: session.id }), body: { tier: "conversation" } },
+            { path: SessionPaths.importBundleShare, body: { url: `${host.url}b/old` } },
+          ]) {
+            const response = yield* request(route.path, {
+              method: "POST",
+              headers,
+              ...(route.body ? { body: JSON.stringify(route.body) } : {}),
+            })
+            expect(response.status).toBe(503)
+            expect(JSON.stringify(yield* responseJson(response))).toContain("Public sharing is disabled")
+          }
+          expect(externalCalls).toHaveLength(0)
+
+          const exported = yield* request(pathFor(SessionPaths.exportBundle, { sessionID: session.id }), {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ tier: "conversation" }),
+          })
+          expect(exported.status).toBe(200)
+          const bundle = (yield* responseJson(exported)) as { bundle: string }
+          const imported = yield* request(SessionPaths.importBundle, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ bundle: bundle.bundle }),
+          })
+          expect(imported.status).toBe(200)
+          const revoked = yield* request(SessionPaths.revokeBundleShare, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              url: `${host.url}b/${"a".repeat(32)}#${"b".repeat(43)}`,
+              revokeToken: "existing-revoke-token",
+            }),
+          })
+          expect(revoked.status).toBe(200)
+          expect(externalCalls).toEqual(["DELETE"])
+        }).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              host.stop(true)
+              if (enabled === undefined) delete process.env.DEEPAGENT_CODE_ENABLE_PUBLIC_SHARING
+              else process.env.DEEPAGENT_CODE_ENABLE_PUBLIC_SHARING = enabled
+              if (service === undefined) delete process.env.DEEPAGENT_SHARE_PUBLIC_URL
+              else process.env.DEEPAGENT_SHARE_PUBLIC_URL = service
+              if (token === undefined) delete process.env.DEEPAGENT_SHARE_UPLOAD_TOKEN
+              else process.env.DEEPAGENT_SHARE_UPLOAD_TOKEN = token
+            }),
+          ),
+        )
+      }),
+    { git: true, config: { formatter: false, lsp: false } },
+  )
+
+  it.instance(
     "keeps read-only imported sessions out of legacy share mutations",
     () =>
       Effect.gen(function* () {

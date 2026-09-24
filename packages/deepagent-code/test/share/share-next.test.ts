@@ -1,5 +1,5 @@
 import { NodeFileSystem } from "@effect/platform-node"
-import { beforeEach, describe, expect } from "bun:test"
+import { afterEach, beforeEach, describe, expect } from "bun:test"
 import { Effect, Exit, Layer, Option } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 
@@ -100,11 +100,41 @@ const seed = (url: string, org?: string) =>
     }),
   )
 
+const previousPublicSharing = process.env.DEEPAGENT_CODE_ENABLE_PUBLIC_SHARING
+
 beforeEach(async () => {
+  process.env.DEEPAGENT_CODE_ENABLE_PUBLIC_SHARING = "1"
   await resetDatabase()
 })
 
+afterEach(() => {
+  if (previousPublicSharing === undefined) delete process.env.DEEPAGENT_CODE_ENABLE_PUBLIC_SHARING
+  else process.env.DEEPAGENT_CODE_ENABLE_PUBLIC_SHARING = previousPublicSharing
+})
+
 describe("ShareNext", () => {
+  it.live("does not create a public share without the release opt-in", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const session = yield* Session.use.create({ title: "private by default" })
+          delete process.env.DEEPAGENT_CODE_ENABLE_PUBLIC_SHARING
+          const seen: HttpClientRequest.HttpClientRequest[] = []
+          const client = HttpClient.make((req) => {
+            seen.push(req)
+            return Effect.die("unexpected share request")
+          })
+          const result = yield* ShareNext.Service.use((svc) => Effect.exit(svc.create(session.id))).pipe(
+            Effect.provide(live(client)),
+          )
+          expect(Exit.isFailure(result)).toBe(true)
+          expect(seen).toHaveLength(0)
+          expect(yield* share(session.id)).toBeUndefined()
+        }),
+      { config: { enterprise: { url: "https://legacy-share.example.com" }, share: "auto" } },
+    ),
+  )
+
   it.live("request uses legacy share API without active org account", () =>
     provideTmpdirInstance(
       () =>
@@ -235,6 +265,7 @@ describe("ShareNext", () => {
 
           yield* Effect.gen(function* () {
             yield* ShareNext.use.create(session.id)
+            delete process.env.DEEPAGENT_CODE_ENABLE_PUBLIC_SHARING
             yield* ShareNext.use.remove(session.id)
           }).pipe(Effect.provide(live(client)))
 

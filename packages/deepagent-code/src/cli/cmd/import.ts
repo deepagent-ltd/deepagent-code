@@ -7,6 +7,7 @@ import { Database } from "@deepagent-code/core/database/database"
 import { SessionTable, MessageTable, PartTable } from "@deepagent-code/core/session/sql"
 import { InstanceRef } from "@/effect/instance-ref"
 import { ShareNext } from "@/share/share-next"
+import { publicSharingEnabled } from "@/share/public-share-policy"
 import { EOL } from "os"
 import path from "path"
 import { FSUtil } from "@deepagent-code/core/fs-util"
@@ -106,6 +107,9 @@ const runImport = Effect.fn("Cli.import.body")(function* (file: string, ctx: Ins
   const isUrl = file.startsWith("http://") || file.startsWith("https://")
 
   if (isUrl) {
+    if (!publicSharingEnabled()) {
+      return yield* new CliError({ message: "Public share-link imports are disabled in this release; import a local file instead" })
+    }
     const slug = parseShareUrl(file)
     if (!slug) {
       const baseUrl = yield* Effect.orDie(share.url())

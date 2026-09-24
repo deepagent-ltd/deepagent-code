@@ -630,7 +630,7 @@ export function MessageTimeline(props: {
   const titleValue = createMemo(() => info()?.title)
   const titleLabel = createMemo(() => sessionTitle(titleValue()))
   const shareUrl = createMemo(() => info()?.share?.url)
-  const shareEnabled = createMemo(() => sync.data.config.share !== "disabled")
+  const shareEnabled = createMemo(() => false)
   const parentID = createMemo(() => info()?.parentID)
   // Fork lineage carried on the session's own metadata (set by backend fork()). Drives the
   // full-width "derived from ‹parent›" banner at the top of the forked transcript.
@@ -2024,12 +2024,6 @@ export function MessageTimeline(props: {
                             </DropdownMenu.Item>
                             <DropdownMenu.Item onSelect={() => void exportSession(id, "session_logs")}>
                               <DropdownMenu.ItemLabel>{language.t("session.bundle.export.logs")}</DropdownMenu.ItemLabel>
-                            </DropdownMenu.Item>
-                            <DropdownMenu.Item onSelect={() => void shareSessionBundle(id, "conversation")}>
-                              <DropdownMenu.ItemLabel>{language.t("session.bundle.share.conversation")}</DropdownMenu.ItemLabel>
-                            </DropdownMenu.Item>
-                            <DropdownMenu.Item onSelect={() => void shareSessionBundle(id, "session_logs")}>
-                              <DropdownMenu.ItemLabel>{language.t("session.bundle.share.logs")}</DropdownMenu.ItemLabel>
                             </DropdownMenu.Item>
                             <Show when={bundleShare()[id]}>
                               <DropdownMenu.Item onSelect={() => void revokeSessionBundle(id)}>

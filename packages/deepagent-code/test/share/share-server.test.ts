@@ -7,10 +7,67 @@ import { createSessionBundle, parseSessionBundle } from "../../src/session/bundl
 import { downloadSessionBundle, revokeSessionBundle, uploadSessionBundle } from "../../src/session/bundle-share"
 import type { SessionSnapshot } from "../../src/session/snapshot"
 
+test("public share host is closed by default while existing links remain revocable", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "deepagent-share-closed-"))
+  try {
+    const input = {
+      directory,
+      publicURL: "https://share.example",
+      uploadToken: "upload-token-with-more-than-32-characters",
+    }
+    const open = createShareHandler({ ...input, enabled: true })
+    const closed = createShareHandler(input)
+    const snapshot = {
+      format: "deepagent-code.session-snapshot",
+      format_version: 1,
+      exported_at: 1,
+      source: { session_id: "ses_existing", title: "existing" },
+      session: { id: "ses_existing", title: "existing", v2_authority: true },
+      messages: [],
+      parts: [],
+      activities: [],
+      progress: [],
+    } as unknown as SessionSnapshot
+    const bytes = await createSessionBundle({ snapshot, tier: "conversation" })
+    const upload = () =>
+      new Request("https://share.example/api/bundles", {
+        method: "POST",
+        headers: { authorization: `Bearer ${input.uploadToken}` },
+        body: new Blob([new Uint8Array(bytes)]),
+      })
+    const created = await open(upload())
+    expect(created.status).toBe(201)
+    const share = (await created.json()) as { id: string; revokeToken: string }
+    expect((await closed(upload())).status).toBe(503)
+    expect((await closed(new Request(`https://share.example/b/${share.id}`))).status).toBe(503)
+    expect(
+      (
+        await closed(
+          new Request(`https://share.example/api/bundles/${share.id}`, {
+            headers: { authorization: "Bearer old-download-token" },
+          }),
+        )
+      ).status,
+    ).toBe(503)
+    expect(
+      (
+        await closed(
+          new Request(`https://share.example/api/bundles/${share.id}`, {
+            method: "DELETE",
+            headers: { authorization: `Bearer ${share.revokeToken}` },
+          }),
+        )
+      ).status,
+    ).toBe(204)
+  } finally {
+    await rm(directory, { recursive: true, force: true })
+  }
+})
+
 test("public share upload, token download, and revoke", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "deepagent-share-"))
   try {
-    const handle = createShareHandler({ directory, publicURL: "https://share.example", uploadToken: "upload-token-with-more-than-32-characters" })
+    const handle = createShareHandler({ directory, publicURL: "https://share.example", uploadToken: "upload-token-with-more-than-32-characters", enabled: true })
     const nested = JSON.stringify({ payload: JSON.stringify({ Cookie: "sid=nested-share-secret", next: "safe" }) })
     const snapshot = {
       format: "deepagent-code.session-snapshot", format_version: 1, exported_at: 1,
@@ -69,7 +126,7 @@ test("app share client accepts only configured host and round-trips through HTTP
   let handler = async (_request: Request): Promise<Response> => new Response(null, { status: 503 })
   const server = Bun.serve({ port: 0, fetch: (request) => handler(request) })
   const service = server.url.toString()
-  handler = createShareHandler({ directory, publicURL: service, uploadToken: "upload-token-with-more-than-32-characters" })
+  handler = createShareHandler({ directory, publicURL: service, uploadToken: "upload-token-with-more-than-32-characters", enabled: true })
   try {
     const snapshot = {
       format: "deepagent-code.session-snapshot", format_version: 1, exported_at: 1,
@@ -78,7 +135,7 @@ test("app share client accepts only configured host and round-trips through HTTP
       messages: [], parts: [], activities: [], progress: [],
     } as unknown as SessionSnapshot
     const bytes = await createSessionBundle({ snapshot, tier: "conversation" })
-    const share = await uploadSessionBundle({ bytes, service, uploadToken: "upload-token-with-more-than-32-characters" })
+    const share = await uploadSessionBundle({ bytes, service, uploadToken: "upload-token-with-more-than-32-characters", enabled: true })
     const downloaded = await downloadSessionBundle({ url: share.url, service })
     expect(downloaded.manifest.tier).toBe("conversation")
     const invalid = await downloadSessionBundle({ url: share.url.replace(server.url.host, "attacker.example"), service })
@@ -97,7 +154,7 @@ test("app share client accepts only configured host and round-trips through HTTP
 test("expired share is unavailable and its stored bundle is removed", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "deepagent-share-expiry-"))
   try {
-    const handler = createShareHandler({ directory, publicURL: "https://share.example", uploadToken: "upload-token-with-more-than-32-characters", ttlMs: -1 })
+    const handler = createShareHandler({ directory, publicURL: "https://share.example", uploadToken: "upload-token-with-more-than-32-characters", ttlMs: -1, enabled: true })
     const snapshot = {
       format: "deepagent-code.session-snapshot", format_version: 1, exported_at: 1,
       source: { session_id: "ses_expired", title: "expired" },

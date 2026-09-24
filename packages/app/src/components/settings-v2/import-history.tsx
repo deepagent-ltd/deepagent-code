@@ -91,7 +91,6 @@ export const ImportSection: Component = () => {
   const [copyLiveDb, setCopyLiveDb] = createSignal(true)
   const [cwdFilter, setCwdFilter] = createSignal("")
   const [snapshotFile, setSnapshotFile] = createSignal<File | undefined>(undefined)
-  const [bundleLink, setBundleLink] = createSignal("")
   const [running, setRunning] = createSignal(false)
   const [logs, setLogs] = createSignal<string[]>([])
   const [summary, setSummary] = createSignal<string>("")
@@ -132,25 +131,22 @@ export const ImportSection: Component = () => {
   const runSnapshotImport = async (h: HttpBase | undefined) => {
     try {
       const file = snapshotFile()
-      const link = bundleLink().trim()
-      if (!file && !link) {
-        push(`  [error] ${t("settings.import.snapshot.noFile", "Choose a ZIP or enter a share link first")}`)
+      if (!file) {
+        push(`  [error] ${t("settings.import.snapshot.noFile", "Choose a ZIP file first")}`)
         return
       }
-      const zip = !!file && file.name.toLowerCase().endsWith(".zip")
-      const bytes = zip ? new Uint8Array(await file!.arrayBuffer()) : undefined
-      const bundle = link
-        ? undefined
-        : bytes
-          ? Array.from({ length: Math.ceil(bytes.length / 12288) }, (_, index) =>
-              btoa(String.fromCharCode(...bytes.subarray(index * 12288, (index + 1) * 12288))),
-            ).join("")
-          : await file!.text()
-      const endpoint = link ? "import-bundle-share" : zip ? "import-bundle" : "import-snapshot"
+      const zip = file.name.toLowerCase().endsWith(".zip")
+      const bytes = zip ? new Uint8Array(await file.arrayBuffer()) : undefined
+      const bundle = bytes
+        ? Array.from({ length: Math.ceil(bytes.length / 12288) }, (_, index) =>
+            btoa(String.fromCharCode(...bytes.subarray(index * 12288, (index + 1) * 12288))),
+          ).join("")
+        : await file.text()
+      const endpoint = zip ? "import-bundle" : "import-snapshot"
       const res = await fetch(`${h?.url ?? ""}/session/${endpoint}`, {
         method: "POST",
         headers: { "content-type": "application/json", ...authHeader(h) },
-        body: JSON.stringify(link ? { url: link } : { bundle }),
+        body: JSON.stringify({ bundle }),
         signal: abort?.signal,
       })
       if (!res.ok) {
@@ -287,17 +283,6 @@ export const ImportSection: Component = () => {
                 {(file) => <span class="text-12-regular text-text-weak truncate">{file().name}</span>}
               </Show>
             </div>
-          </SettingsRowV2>
-          <SettingsRowV2 title={language.t("settings.import.bundle.link")} description={language.t("settings.import.bundle.link.hint")}>
-            <TextInputV2
-              data-action="settings-import-bundle-link"
-              type="url"
-              appearance="base"
-              value={bundleLink()}
-              onInput={(event) => setBundleLink(event.currentTarget.value)}
-              disabled={running()}
-              placeholder="https://share.example/b/...#..."
-            />
           </SettingsRowV2>
         </Show>
 

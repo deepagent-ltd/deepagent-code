@@ -17917,6 +17917,10 @@ export type SessionShareErrors = {
    * InternalServerError
    */
   500: EffectHttpApiErrorInternalServerError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
 }
 
 export type SessionShareError = SessionShareErrors[keyof SessionShareErrors]
