@@ -620,13 +620,19 @@ describe("gateway release gate", () => {
         ] }),
       }), HttpApiApp.context)
       expect(changedPolicy.status).toBe(200)
-      const deniedTool = await handler(new Request("http://localhost/v1/chat/completions", {
+      const deniedRequest = () => handler(new Request("http://localhost/v1/chat/completions", {
         method: "POST", headers: { authorization: "Bearer sk-context", "content-type": "application/json",
           "x-request-id": "context-denied-tool", "x-deepagent-session": "policy-lane" },
         body: JSON.stringify({ model: "test-model", messages: [{ role: "user", content: "Denied tool" }] }),
       }), HttpApiApp.context)
+      const deniedTool = await deniedRequest()
       expect(deniedTool.status).toBe(200)
-      expect((await deniedTool.json()).choices[0].message.content).toBe("denied side effect confirmed")
+      const deniedBody = await deniedTool.json()
+      expect(deniedBody.choices[0].message.content).toBe("denied side effect confirmed")
+      expect(deniedBody.usage).toMatchObject({ prompt_tokens: 22, completion_tokens: 8, total_tokens: 30 })
+      const deniedReplay = await deniedRequest()
+      expect(deniedReplay.status).toBe(200)
+      expect((await deniedReplay.json()).usage).toEqual(deniedBody.usage)
       expect(offeredWrite).toEqual([true])
       expect(deniedToolResults).toHaveLength(1)
       expect(deniedToolResults[0]).toContain("prevents you from using this specific tool call")
@@ -636,6 +642,19 @@ describe("gateway release gate", () => {
       try {
         const lane = toolReader.query("SELECT lane_session_id FROM proxy_request_ledger WHERE request_id = 'tenant-context:context-denied-tool'")
           .get() as { lane_session_id: string }
+        const providerTurns = toolReader.query("SELECT data FROM event WHERE type = 'session.next.step.ended.2' AND aggregate_id = ? ORDER BY seq")
+          .all(lane.lane_session_id) as { data: string }[]
+        expect(providerTurns.map((row) => JSON.parse(row.data).tokens)).toEqual([
+          expect.objectContaining({ input: 11, output: 4 }),
+          expect.objectContaining({ input: 11, output: 4 }),
+        ])
+        const ledger = toolReader.query("SELECT usage_input, usage_output FROM proxy_request_ledger WHERE request_id = 'tenant-context:context-denied-tool'")
+          .get() as { usage_input: number; usage_output: number }
+        expect(ledger).toEqual({ usage_input: 22, usage_output: 8 })
+        const audit = toolReader.query("SELECT data FROM event WHERE type = 'proxy.response.completed.1' AND aggregate_id = 'tenant-context:context-denied-tool'")
+          .all() as { data: string }[]
+        expect(audit).toHaveLength(1)
+        expect(JSON.parse(audit[0]!.data)).toMatchObject({ usageInput: 22, usageOutput: 8, usageSource: "provider" })
         const receipts = toolReader.query("SELECT prepared_turn FROM session_v2_provider_turn_receipt WHERE session_id = ? ORDER BY provider_turn_seq")
           .all(lane.lane_session_id) as { prepared_turn: string }[]
         expect((JSON.parse(receipts[0]!.prepared_turn).tool_final_offered_ids as string[])).toContain("write")

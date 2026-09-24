@@ -159,9 +159,10 @@ export const collectEnhanced = (input: {
         )).orderBy(asc(SessionMessageTable.seq)).all()
       const terminal = rows.findLast((row) => row.data && "finish" in row.data && row.data.finish !== "tool-calls")
       const latest = activity.state === "settled" ? terminal : rows.at(-1)
-      const message = latest ? yield* input.sessions.message({ sessionID: input.sessionID, messageID: latest.id }) : undefined
-      const terminalMessage = terminal && latest?.id !== terminal.id
-        ? yield* input.sessions.message({ sessionID: input.sessionID, messageID: terminal.id }) : message
+      const projected = yield* Effect.forEach(rows, (row) =>
+        input.sessions.message({ sessionID: input.sessionID, messageID: row.id }))
+      const message = latest ? projected.find((item) => item?.id === latest.id) : undefined
+      const terminalMessage = terminal ? projected.find((item) => item?.id === terminal.id) : undefined
       // The provider deadline is established by the durable terminal assistant completion. Once
       // the provider finished in time, allow bounded time for the activity/identity projection to
       // settle; otherwise a blocked poll can report 504 after a successful provider exchange.
@@ -187,13 +188,16 @@ export const collectEnhanced = (input: {
       }
       if (!terminal || message?.type !== "assistant")
         return { ok: false as const, status: 502, code: "enhancement_projection_missing", message: "Enhanced response projection is missing" }
-      const usage = message.tokens ? Usage.from({
-        inputTokens: message.tokens.input,
-        outputTokens: message.tokens.output,
-        reasoningTokens: message.tokens.reasoning,
-        cacheReadInputTokens: message.tokens.cache.read,
-        cacheWriteInputTokens: message.tokens.cache.write,
-        totalTokens: message.tokens.input + message.tokens.output,
+      // Every Step.Ended owns one assistant message's provider usage. A tool call and its
+      // continuation are separate provider turns inside this one request activity.
+      const turnUsage = projected.map((item) => item?.type === "assistant" ? item.tokens : undefined)
+      const usage = turnUsage.length > 0 && turnUsage.every((tokens) => tokens !== undefined) ? Usage.from({
+        inputTokens: turnUsage.reduce((total, tokens) => total + (tokens?.input ?? 0), 0),
+        outputTokens: turnUsage.reduce((total, tokens) => total + (tokens?.output ?? 0), 0),
+        reasoningTokens: turnUsage.reduce((total, tokens) => total + (tokens?.reasoning ?? 0), 0),
+        cacheReadInputTokens: turnUsage.reduce((total, tokens) => total + (tokens?.cache.read ?? 0), 0),
+        cacheWriteInputTokens: turnUsage.reduce((total, tokens) => total + (tokens?.cache.write ?? 0), 0),
+        totalTokens: turnUsage.reduce((total, tokens) => total + (tokens?.input ?? 0) + (tokens?.output ?? 0), 0),
       }) : undefined
       const selections = yield* input.db.select({
         selection_id: SessionContextSelectionTable.selection_id,
