@@ -454,7 +454,7 @@ const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
         ["packages/deepagent-code/src/session/snapshot.ts:closure@136:186.progressByActivity", ["snapshot-invocation", "single-call", "call-stack", "return", "ephemeral-runtime", "instance-scoped", "safe_scoped"]],
         ["packages/deepagent-code/src/snapshot/index.ts:closure@910:918.reasons", ["snapshot-invocation", "single-call", "call-stack", "return", "ephemeral-runtime", "instance-scoped", "safe_scoped"]],
         ["packages/deepagent-code/src/session/compaction.ts:closure@498:516.activeCompactions", ["SessionCompaction.layer-instance", "per-session", "active-sessions", "settle-cleanup", "coordination-only", "instance-scoped", "safe_scoped"]],
-        ["packages/deepagent-code/src/session/revert.ts:closure@52:67.files", ["revert-invocation", "single-call", "call-stack", "return", "ephemeral-runtime", "instance-scoped", "safe_scoped"]],
+        ["packages/deepagent-code/src/session/revert.ts:closure@52:75.files", ["revert-invocation", "single-call", "call-stack", "return", "ephemeral-runtime", "instance-scoped", "safe_scoped"]],
         ["packages/deepagent-code/src/session/revert.ts:mutationLocks", ["module-keyed-mutex", "per-session-key", "lock-hold-duration", "release-on-settle", "coordination-only", "instance-scoped", "safe_bounded"]],
         ["packages/deepagent-code/src/session/session.ts:closure@3165:3166.updated", ["invocation-scope", "single-call", "call-stack", "return", "ephemeral-runtime", "instance-scoped", "safe_scoped"]],
         ["packages/deepagent-code/src/session/session.ts:forkLocks", ["module-keyed-mutex", "per-session-key", "lock-hold-duration", "release-on-fork-delivery", "coordination-only", "instance-scoped", "safe_bounded"]],
