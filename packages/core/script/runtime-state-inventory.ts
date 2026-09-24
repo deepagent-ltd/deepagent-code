@@ -1664,7 +1664,7 @@ const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
     reachability: "im-websocket",
     verdict: "safe_bounded",
   },
-  "packages/core/src/util/effect-flock.ts:closure@99:104.ensuredDirs": {
+  "packages/core/src/util/effect-flock.ts:closure@93:98.ensuredDirs": {
     owner: "EffectFlock.process",
     keyScope: "lock-root-constant",
     bound: "source-constant-keyspace",
