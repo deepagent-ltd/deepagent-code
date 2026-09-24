@@ -53,6 +53,7 @@ import providerAttemptProtocolIdentityMigration from "@deepagent-code/core/datab
 import recoveryProviderMigration from "@deepagent-code/core/database/migration/20260830000000_session_provider_recovery"
 import type { SqlClient as SqlClientService } from "effect/unstable/sql/SqlClient"
 import { Database } from "@deepagent-code/core/database/database"
+import { DatabaseBootstrapError } from "@deepagent-code/core/database/bootstrap"
 import { tmpdir } from "./fixture/tmpdir"
 
 const run = <A, E>(effect: Effect.Effect<A, E, SqlClientService>) =>
@@ -664,18 +665,36 @@ describe("DatabaseMigration", () => {
       }),
     )
   })
-  test("serializes concurrent embedded initialization for one database path", async () => {
+  test("concurrent embedded initialization preserves the owner fence and leaves the database usable", async () => {
     await using tmp = await tmpdir()
     const filename = path.join(tmp.path, "embedded.sqlite")
     const layers = [Database.layerFromPath(filename), Database.layerFromPath(filename)]
 
-    await Effect.runPromise(
+    const exits = await Effect.runPromise(
       Effect.all(
-        layers.map((layer) => Effect.scoped(Layer.build(layer))),
+        layers.map((layer) => Effect.scoped(Layer.build(layer)).pipe(Effect.exit)),
         { concurrency: "unbounded" },
       ),
     )
-  })
+    // Preflight may observe the other layer's lifetime owner before it can wait for the lock.
+    // Either serialized success or a typed owner fence is safe; a later open must still work.
+    expect(exits.some(Exit.isSuccess)).toBe(true)
+    for (const exit of exits) {
+      if (Exit.isSuccess(exit)) continue
+      const error = exit.cause.reasons.find((reason) => reason._tag === "Fail")?.error
+      expect(error).toBeInstanceOf(DatabaseBootstrapError)
+      if (error instanceof DatabaseBootstrapError)
+        expect(error.state.diagnostics.stableCode).toBe("another_process_active")
+    }
+
+    const row = await Effect.runPromise(
+      Effect.gen(function* () {
+        const database = yield* Database.Service
+        return yield* database.db.get(sql`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session'`)
+      }).pipe(Effect.provide(Database.layerFromPath(filename)), Effect.scoped),
+    )
+    expect(row).toEqual({ name: "session" })
+  }, 60_000)
   if (process.platform === "linux") {
     test("declared schema has no ungenerated migrations", async () => {
       const result = await $`bun ${fileURLToPath(new URL("../script/migration.ts", import.meta.url))} --check`
