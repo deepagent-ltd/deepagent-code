@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto"
 import { and, eq, gte, sql } from "drizzle-orm"
-import { Effect, Option, Queue, Ref, Schema, Stream } from "effect"
+import { Cause, Effect, Option, Queue, Ref, Schema, Stream } from "effect"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { LLMResponse } from "@deepagent-code/llm"
 import { RequestExecutor } from "@deepagent-code/llm/route"
@@ -320,30 +320,38 @@ export const chat = Effect.gen(function* () {
           model: parsed.value.model, choices, ...(finalUsage ? { usage: finalUsage } : {}),
         })}\n\n`
         if (parsed.value.stream) {
-          // Backpressure the model stream when an HTTP consumer reads slowly.
-          const queue = yield* Queue.bounded<string>(128)
+          // The provider drain outlives its HTTP reader. A canceled or stalled reader must never
+          // backpressure EventV2 listeners and leave the tenant's durable quota row pending.
+          const queue = yield* Queue.dropping<string, Error>(128)
+          let overflowed = false
+          const offer = (value: string) => Effect.sync(() => {
+            if (overflowed) return
+            if (Queue.offerUnsafe(queue, value)) return
+            overflowed = true
+            Queue.failCauseUnsafe(queue, Cause.fail(new Error("Enhanced response consumer exceeded its 128-chunk buffer")))
+          })
           yield* collectEnhanced({
             ...enhancedInput,
-            onDelta: (text) => Queue.offer(queue, chunk([{ index: 0, delta: { content: text }, finish_reason: null }])).pipe(Effect.asVoid),
+            onDelta: (text) => offer(chunk([{ index: 0, delta: { content: text }, finish_reason: null }])),
           }).pipe(
             Effect.catchCause(() => Effect.succeed({ ok: false as const, status: 503,
               code: "enhancement_failed", message: "Enhanced execution failed" })),
             Effect.flatMap((enhanced) => Effect.gen(function* () {
               if (!enhanced.ok) {
                 yield* complete({ finishReason: enhanced.code, cost: null })
-                yield* Queue.offer(queue, `data: ${JSON.stringify({ error: { message: enhanced.message, type: "deepagent_enhancement_error", code: enhanced.code } })}\n\n`)
+                yield* offer(`data: ${JSON.stringify({ error: { message: enhanced.message, type: "deepagent_enhancement_error", code: enhanced.code } })}\n\n`)
                 return
               }
               const usage = enhanced.usage
               yield* complete({ finishReason: enhanced.finishReason, usage, cost: costFor(usage), firstTokenAt: enhanced.firstTokenAt,
                 completedAt: enhanced.completedAt, trace: enhanced.trace })
-              yield* Queue.offer(queue, chunk([{ index: 0, delta: {}, finish_reason: enhanced.finishReason }]))
+              yield* offer(chunk([{ index: 0, delta: {}, finish_reason: enhanced.finishReason }]))
               if (parsed.value.stream_options?.include_usage && usage?.inputTokens !== undefined && usage.outputTokens !== undefined)
-                yield* Queue.offer(queue, chunk([], { prompt_tokens: usage.inputTokens, completion_tokens: usage.outputTokens,
+                yield* offer(chunk([], { prompt_tokens: usage.inputTokens, completion_tokens: usage.outputTokens,
                   total_tokens: usage.totalTokens ?? usage.inputTokens + usage.outputTokens }))
             })),
-            Effect.catchCause(() => Queue.offer(queue, `data: ${JSON.stringify({ error: { message: "Enhanced execution failed", type: "deepagent_enhancement_error", code: "enhancement_failed" } })}\n\n`).pipe(Effect.asVoid)),
-            Effect.ensuring(Queue.offer(queue, "data: [DONE]\n\n")),
+            Effect.catchCause(() => offer(`data: ${JSON.stringify({ error: { message: "Enhanced execution failed", type: "deepagent_enhancement_error", code: "enhancement_failed" } })}\n\n`)),
+            Effect.ensuring(offer("data: [DONE]\n\n")),
             Effect.forkIn(scope, { startImmediately: true }),
           )
           return HttpServerResponse.stream(

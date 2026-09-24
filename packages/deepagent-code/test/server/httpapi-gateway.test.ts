@@ -789,4 +789,74 @@ describe("gateway release gate", () => {
       await rm(directory, { recursive: true, force: true })
     }
   }, 60_000)
+
+  test("a disconnected enhanced stream does not block provider settlement or the tenant lane", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "deepagent-proxy-disconnect-test-"))
+    const originalDatabase = Flag.DEEPAGENT_CODE_DB
+    Flag.DEEPAGENT_CODE_DB = join(directory, "proxy.sqlite")
+    const releaseFlood = Promise.withResolvers<void>()
+    let upstreamCalls = 0
+    const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+      await request.text()
+      const flooded = upstreamCalls++ === 0
+      return new Response(new ReadableStream({
+        start(controller) {
+          const send = (value: string) => controller.enqueue(new TextEncoder().encode(`data: ${value}\n\n`))
+          send('{"choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}')
+          void (flooded ? releaseFlood.promise : Promise.resolve()).then(() => {
+            for (const text of flooded ? Array.from({ length: 150 }, () => "x") : ["settled"])
+              send(JSON.stringify({ choices: [{ index: 0, delta: { content: text }, finish_reason: null }] }))
+            send('{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":4,"total_tokens":15}}')
+            controller.enqueue(new TextEncoder().encode("data: [DONE]\n\n"))
+            controller.close()
+          })
+        },
+      }), { headers: { "content-type": "text/event-stream" } })
+    } })
+    const openHandlers: Array<{ dispose: () => Promise<void> }> = []
+    try {
+      await Bun.write(join(directory, "deepagent-code.json"), JSON.stringify(testProviderConfig(`http://127.0.0.1:${upstream.port}/v1`)))
+      await Effect.runPromise(Effect.gen(function* () {
+        yield* (yield* Database.Service).db.insert(ProxyTenantTable).values({
+          id: "tenant-disconnect", key_hash: createHash("sha256").update("sk-disconnect").digest("hex"),
+          key_fingerprint: "disconnect-fingerprint", directory, model_allowlist: ["test/test-model"],
+          tier: "context", quota_requests_per_minute: 10, quota_tokens_per_day: 100_000,
+          lane_limit: 8, deadline_ms: 5_000, enabled: true, created_at: Date.now(), updated_at: Date.now(),
+        })
+      }).pipe(Effect.provide(Database.defaultLayer)))
+      const web = HttpRouter.toWebHandler(HttpApiApp.createRoutes().pipe(
+        Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DEEPAGENT_CODE_GATEWAY: true }))),
+      ), { disableLogger: true })
+      openHandlers.push(web)
+      const send = (requestID: string, content: string, stream: boolean) => web.handler(new Request("http://localhost/v1/chat/completions", {
+        method: "POST", headers: { authorization: "Bearer sk-disconnect", "content-type": "application/json", "x-request-id": requestID },
+        body: JSON.stringify({ model: "test-model", messages: [{ role: "user", content }], stream }),
+      }), HttpApiApp.context)
+      const flood = await send("flood", "Flood", true)
+      expect(flood.status).toBe(200)
+      await flood.body!.cancel()
+      releaseFlood.resolve()
+      const reader = new (await import("bun:sqlite")).Database(Flag.DEEPAGENT_CODE_DB, { readonly: true })
+      try {
+        const row = () => reader.query("SELECT completed_at, usage_input, usage_output, finish_reason FROM proxy_request_ledger WHERE request_id = 'tenant-disconnect:flood'")
+          .get() as { completed_at: number | null; usage_input: number | null; usage_output: number | null; finish_reason: string | null } | undefined
+        const deadline = Date.now() + 8_000
+        while (!row()?.completed_at && Date.now() < deadline) await Bun.sleep(100)
+        expect(row()).toMatchObject({ usage_input: 11, usage_output: 4, finish_reason: "stop" })
+        expect(row()?.completed_at).toBeGreaterThan(0)
+      } finally {
+        reader.close()
+      }
+      const next = await send("after-disconnect", "After disconnect", false)
+      expect(next.status).toBe(200)
+      expect((await next.json()).choices[0].message.content).toBe("settled")
+      expect(upstreamCalls).toBe(2)
+    } finally {
+      releaseFlood.resolve()
+      await Promise.all(openHandlers.map((web) => web.dispose()))
+      upstream.stop(true)
+      Flag.DEEPAGENT_CODE_DB = originalDatabase
+      await rm(directory, { recursive: true, force: true })
+    }
+  }, 30_000)
 })
