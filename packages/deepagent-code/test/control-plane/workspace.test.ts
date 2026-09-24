@@ -1903,7 +1903,8 @@ describe("workspace sync state", () => {
           const req = yield* HttpServerRequest.HttpServerRequest
           const bodyText = yield* req.text
           const url = new URL(req.url, "http://localhost")
-          if (url.pathname === "/history/global/event") return HttpServerResponse.fromWeb(eventStreamResponse())
+          // This case asserts history replay, so close the unrelated SSE response to let server teardown finish.
+          if (url.pathname === "/history/global/event") return HttpServerResponse.fromWeb(eventStreamResponse([], false))
           if (url.pathname === "/history/sync/history") {
             const body = bodyText ? JSON.parse(bodyText) : undefined
             historyBodies.push(body)
