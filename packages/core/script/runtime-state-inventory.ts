@@ -601,7 +601,8 @@ const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
         ["packages/core/src/flag/runtime-features.ts:createRuntimeFeatureRegistry@112:116.features", ["createRuntimeFeatureRegistry-invocation", "per-registry", "registry-lifetime", "registry-owner", "coordination-only", "instance-scoped", "safe_scoped"]],
         ["packages/core/src/flag/runtime-features.ts:RuntimeFeatures", ["RuntimeFeatures-registry", "per-registry", "registry-lifetime", "registry-owner", "coordination-only", "instance-scoped", "safe_scoped"]],
         // permission ask queue: pending asks resolved or interrupted within their session scope.
-        ["packages/core/src/permission.ts:closure@197:204.pending", ["PermissionV2-layer-instance", "per-layer", "layer-lifetime", "layer-finalizer", "coordination-only", "session-scoped", "safe_scoped"]],
+        ["packages/core/src/permission.ts:closure@197:205.withNoProgressOwner", ["PermissionV2-layer-instance", "per-layer", "layer-lifetime", "layer-finalizer", "coordination-only", "instance-scoped", "safe_scoped"]],
+        ["packages/core/src/permission.ts:closure@197:206.pending", ["PermissionV2-layer-instance", "per-layer", "layer-lifetime", "layer-finalizer", "coordination-only", "session-scoped", "safe_scoped"]],
         ["packages/core/src/pty.ts:closure@142:147.sessions", ["Pty-layer-instance", "per-layer", "layer-lifetime", "layer-finalizer", "coordination-only", "instance-scoped", "safe_scoped"]],
         ["packages/core/src/question.ts:closure@131:133.pending", ["QuestionV2-layer-instance", "per-layer", "layer-lifetime", "layer-finalizer", "coordination-only", "session-scoped", "safe_scoped"]],
         ["packages/core/src/session/execution/local.ts:closure@18:26.ownedClaims", ["SessionExecutionLocal-layer-instance", "per-layer", "layer-lifetime", "layer-finalizer", "coordination-only", "instance-scoped", "safe_scoped"]],
@@ -1904,8 +1905,8 @@ const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
   // (:1145). Both die with the provider turn.
   ...Object.fromEntries(
     ([
-      ["packages/core/src/session/runner/llm.ts:closure@786:1374.withPublication", ["SessionRunner.runTurnAttempt-invocation", "single-turn", "call-stack", "return", "coordination-only", "per-turn", "safe_scoped"]],
-      ["packages/core/src/session/runner/llm.ts:closure@786:1481.planResultMetadata", ["SessionRunner.runTurnAttempt-invocation", "single-turn", "turn-plan-tool-call-count", "return", "turn-validation-only", "per-turn", "safe_scoped"]],
+      ["packages/core/src/session/runner/llm.ts:closure@792:1380.withPublication", ["SessionRunner.runTurnAttempt-invocation", "single-turn", "call-stack", "return", "coordination-only", "per-turn", "safe_scoped"]],
+      ["packages/core/src/session/runner/llm.ts:closure@792:1487.planResultMetadata", ["SessionRunner.runTurnAttempt-invocation", "single-turn", "turn-plan-tool-call-count", "return", "turn-validation-only", "per-turn", "safe_scoped"]],
     ] as const).map(([key, [owner, keyScope, bound, finalizer, durability, reachability, verdict]]) => [
       key,
       { owner, keyScope, bound, finalizer, durability, reachability, verdict } satisfies RuntimeStateAudit,

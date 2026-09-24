@@ -384,6 +384,7 @@ export const layer = Layer.effect(
     const llm = yield* LLMClient.Service
     const gateway = yield* AgentGateway.Runtime
     const agents = yield* AgentV2.Service
+    const permissionService = Option.getOrUndefined(yield* Effect.serviceOption(PermissionV2.Service))
     const tools = yield* ToolRegistry.Service
     const models = yield* SessionRunnerModel.Service
     const store = yield* SessionStore.Service
@@ -602,7 +603,9 @@ export const layer = Layer.effect(
         vector_hash: observation.vectorHash,
         kind: "no_progress",
       }
-      if (!existing)
+      if (!existing) {
+        if (!permissionService?.currentNoProgressOwnerID)
+          return yield* Effect.die("V2 no-progress permission owner is unavailable")
         yield* DeepAgentActivityAuthority.requestPermission({
           activityKind: "v2",
           activityID,
@@ -613,10 +616,11 @@ export const layer = Layer.effect(
           patterns: resources,
           alwaysPatterns: resources,
           metadata,
-          ownerID: PermissionV2.noProgressOwnerID,
+          ownerID: yield* permissionService.currentNoProgressOwnerID(),
           ...(location.workspaceID ? { workspaceID: location.workspaceID } : {}),
           expiresAt: Date.now() + 86_400_000,
         })
+      }
       yield* events.publish(
         PermissionV2.Event.Asked,
         {

@@ -1,6 +1,7 @@
 import { projectLayer } from "./fixture/project-layer"
 import { describe, expect } from "bun:test"
 import { Deferred, Effect, Fiber, Layer } from "effect"
+import * as TestClock from "effect/testing/TestClock"
 import { AgentV2 } from "@deepagent-code/core/agent"
 import { Database } from "@deepagent-code/core/database/database"
 import { EventV2 } from "@deepagent-code/core/event"
@@ -16,7 +17,7 @@ import { SessionV2 } from "@deepagent-code/core/session"
 import { SessionTable } from "@deepagent-code/core/session/sql"
 import { SessionExecution } from "@deepagent-code/core/session/execution"
 import { SessionStore } from "@deepagent-code/core/session/store"
-import { eq } from "drizzle-orm"
+import { eq, sql } from "drizzle-orm"
 import { location } from "./fixture/location"
 import { testEffect } from "./lib/effect"
 
@@ -128,6 +129,7 @@ function durableNoProgressChallenge() {
     const stalled = yield* observation(first.objective.version, "v2-no-progress-stalled")
     expect(stalled.objective.state).toBe("needs_human")
     const requestID = PermissionV2.ID.create("per_v2_no_progress")
+    const service = yield* PermissionV2.Service
     yield* DeepAgentActivityAuthority.requestPermission({
       ...ref,
       requestID,
@@ -137,7 +139,7 @@ function durableNoProgressChallenge() {
       patterns: ["read"],
       alwaysPatterns: ["read"],
       metadata: { revision: stalled.observation.revision },
-      ownerID: PermissionV2.noProgressOwnerID,
+      ownerID: yield* service.currentNoProgressOwnerID!(),
     })
     return { ref, requestID }
   })
@@ -161,6 +163,30 @@ function waitForRequest() {
 }
 
 describe("PermissionV2", () => {
+  it.effect("rotates an expired no-progress owner and fences its old pending challenge", () =>
+    Effect.gen(function* () {
+      const challenge = yield* durableNoProgressChallenge()
+      const service = yield* PermissionV2.Service
+      const { db } = yield* Database.Service
+      const oldOwnerID = yield* service.currentNoProgressOwnerID!()
+      yield* TestClock.adjust("1 second")
+      yield* DeepAgentActivityAuthority.heartbeatPermissionOwner({ ownerID: "unrelated-live-owner", leaseMs: 60_000 })
+      yield* DeepAgentActivityAuthority.heartbeatPermissionOwner({ ownerID: oldOwnerID, leaseMs: 5 })
+      yield* Effect.promise(() => Bun.sleep(20))
+      expect((yield* db.get<{ lease_expires_at: number }>(
+        sql`SELECT lease_expires_at FROM session_activity_permission_owner_lease WHERE owner_id = ${oldOwnerID}`,
+      ))?.lease_expires_at).toBeLessThan(Date.now())
+      yield* TestClock.adjust("10 seconds")
+      const newOwnerID = yield* service.currentNoProgressOwnerID!()
+      expect(newOwnerID).not.toBe(oldOwnerID)
+      expect((yield* db.all<{ owner_id: string }>(
+        "SELECT owner_id FROM session_activity_permission_owner_lease",
+      )).map((row) => row.owner_id).sort()).toEqual([newOwnerID, "unrelated-live-owner"].sort())
+      expect((yield* DeepAgentActivityAuthority.permissionRequestForRequest(challenge.requestID))?.state).toBe("interrupted")
+      expect((yield* DeepAgentActivityAuthority.reconstruct(challenge.ref)).objective.state).toBe("interrupted")
+    }),
+  )
+
   for (const reply of ["once", "always", "reject"] as const) {
     it.effect(`reconstructs a V2 no-progress challenge and durably handles ${reply}`, () =>
       Effect.gen(function* () {

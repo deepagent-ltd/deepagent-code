@@ -256,6 +256,7 @@ const executions: string[] = []
 const permission = Layer.succeed(
   PermissionV2.Service,
   PermissionV2.Service.of({
+    currentNoProgressOwnerID: () => Effect.succeed("v2-no-progress:test"),
     assert: (input) =>
       Effect.sync(() => {
         permissionAssertions.push(input)
@@ -543,7 +544,7 @@ const runnerStack = (features?: RuntimeFeatureRegistry, gitLayer = Git.defaultLa
     Layer.provide(database),
     Layer.provide(store),
     Layer.provide(events),
-    Layer.provide(client),
+    Layer.provide(Layer.mergeAll(client, permission)),
     Layer.provide(registry),
     Layer.provide(models),
     Layer.provide(systemContext),

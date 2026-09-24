@@ -1,7 +1,7 @@
 export * as PermissionV2 from "./permission"
 
 import { ToolFailure } from "@deepagent-code/llm"
-import { Context, Deferred, Duration, Effect as EffectRuntime, Layer, Schedule, Schema } from "effect"
+import { Context, Deferred, Duration, Effect as EffectRuntime, Layer, Ref, Schedule, Schema, Semaphore } from "effect"
 import { and, eq, isNull } from "drizzle-orm"
 import { Database } from "./database/database"
 import { DeepAgentActivityAuthority } from "./deepagent/activity-authority"
@@ -144,8 +144,6 @@ export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Per
 }) {}
 
 export const MAX_PENDING_REQUESTS = 512
-export const noProgressOwnerID = `v2-no-progress:${Identifier.ascending()}`
-
 export class CapacityError extends Schema.TaggedErrorClass<CapacityError>()("PermissionV2.CapacityError", {
   limit: Schema.Number,
 }) {}
@@ -176,6 +174,8 @@ export function isActionWhollyDenied(action: string, ...rulesets: Ruleset[]): bo
 }
 
 export interface Interface {
+  /** Tool-only service fixtures may omit this; the V2 no-progress runner then fails closed. */
+  readonly currentNoProgressOwnerID?: () => EffectRuntime.Effect<string>
   readonly ask: (input: AssertInput) => EffectRuntime.Effect<AskResult, SessionNotFound.Error | CapacityError>
   readonly assert: (input: AssertInput) => EffectRuntime.Effect<void, Error | SessionNotFound.Error>
   readonly reply: (input: ReplyInput) => EffectRuntime.Effect<void, NotFoundError>
@@ -201,14 +201,32 @@ export const layer = Layer.effect(
     const sessions = yield* SessionStore.Service
     const saved = yield* PermissionSaved.Service
     const database = yield* Database.Service
+    const noProgressOwner = yield* Ref.make(`v2-no-progress:${Identifier.ascending()}`)
+    const withNoProgressOwner = Semaphore.makeUnsafe(1).withPermit
     const pending = new Map<ID, Pending>()
-    const recoverPermissions = EffectRuntime.gen(function* () {
-      yield* DeepAgentActivityAuthority.heartbeatPermissionOwner({ ownerID: noProgressOwnerID, leaseMs: 30_000 })
+    const recoverPermissions = withNoProgressOwner(EffectRuntime.gen(function* () {
+      const ownerID = yield* Ref.get(noProgressOwner)
+      yield* DeepAgentActivityAuthority.heartbeatPermissionOwner({ ownerID, leaseMs: 30_000 }).pipe(
+        EffectRuntime.catchTag("ActivityAuthority.ConflictError", () =>
+          EffectRuntime.gen(function* () {
+            // An expired owner cannot regain its fence. Rotate to a fresh identity, which
+            // atomically quarantines its started effects and settles its pending requests.
+            const nextOwnerID = `v2-no-progress:${Identifier.ascending()}`
+            yield* DeepAgentActivityAuthority.rotatePermissionOwner({
+              previousOwnerID: ownerID,
+              ownerID: nextOwnerID,
+              leaseMs: 30_000,
+            })
+            yield* Ref.set(noProgressOwner, nextOwnerID)
+          }),
+        ),
+      )
+      const recoveryOwnerID = yield* Ref.get(noProgressOwner)
       // An abandoned external effect must be quarantined before its permission is settled;
       // recovery otherwise crosses the activity terminal fence and can leave the ask stranded.
-      yield* DeepAgentActivityAuthority.recoverPermissionEffects(noProgressOwnerID)
-      yield* DeepAgentActivityAuthority.recoverPendingPermissions(noProgressOwnerID)
-    }).pipe(EffectRuntime.provideService(Database.Service, database))
+      yield* DeepAgentActivityAuthority.recoverPermissionEffects(recoveryOwnerID)
+      yield* DeepAgentActivityAuthority.recoverPendingPermissions(recoveryOwnerID)
+    })).pipe(EffectRuntime.provideService(Database.Service, database))
     yield* recoverPermissions.pipe(EffectRuntime.orDie)
     yield* recoverPermissions.pipe(
       EffectRuntime.catchCause((cause) => EffectRuntime.logError("V2 no-progress owner heartbeat failed", { cause })),
@@ -516,7 +534,10 @@ export const layer = Layer.effect(
       return (yield* list()).filter((request) => request.sessionID === sessionID)
     })
 
-    return Service.of({ ask, assert, reply, get, forSession, list })
+    return Service.of({
+      currentNoProgressOwnerID: () => withNoProgressOwner(Ref.get(noProgressOwner)),
+      ask, assert, reply, get, forSession, list,
+    })
   }),
 )
 
