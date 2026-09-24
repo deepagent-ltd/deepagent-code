@@ -292,6 +292,16 @@ for (const item of targets) {
   binaries[name] = Script.version
 }
 
+// A release archive must contain the same minted owner row as the unpacked install. The caller
+// provides this only for production release builds; ordinary local builds remain unchanged.
+const ownerAuthorizationFile = process.env.DEEPAGENT_CODE_RELEASE_OWNER_AUTHORIZATION_FILE
+if (ownerAuthorizationFile) {
+  const row = await Bun.file(ownerAuthorizationFile).bytes()
+  if (row.byteLength === 0) throw new Error("release owner authorization file is empty")
+  for (const name of Object.keys(binaries))
+    await Bun.write(`dist/${name}/bin/owner-authorization.json`, row)
+}
+
 if (Script.release) {
   for (const key of Object.keys(binaries)) {
     if (key.includes("linux")) {
