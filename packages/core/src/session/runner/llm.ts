@@ -54,7 +54,7 @@ import {
 } from "../../deepagent/activity-authority.sql"
 import { getActiveGoal } from "../../deepagent/session-state"
 import { DocumentStore } from "../../deepagent/document-store"
-import { planDocRef, planStoreRoot } from "../../deepagent/plan-store"
+import { hasRoot, planDocRef, planStoreRoot } from "../../deepagent/plan-store"
 import {
   type DeliveryReceipt,
   type RunError,
@@ -532,7 +532,9 @@ export const layer = Layer.effect(
         .where(eq(V2ToolEffectTable.receipt_id, receipt.receipt_id))
         .all()
         .pipe(Effect.orDie)
-      const plan = planDocRef(sessionID)
+      // A bare Core V2 runtime can observe progress without a DeepAgent plan store.
+      // Keep the configured-root requirement for plan writes and goal-steer delivery.
+      const plan = hasRoot() ? planDocRef(sessionID) : null
       yield* DeepAgentActivityAuthority.observe({
         activityKind: "v2",
         activityID,
