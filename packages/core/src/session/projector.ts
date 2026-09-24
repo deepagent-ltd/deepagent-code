@@ -2,6 +2,7 @@ export * as SessionProjector from "./projector"
 
 import { and, asc, desc, eq, gt, sql } from "drizzle-orm"
 import { isDeepStrictEqual } from "node:util"
+import path from "node:path"
 import { DateTime, Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
@@ -452,6 +453,22 @@ const firstWireParent = (db: DatabaseService, sessionID: SessionSchema.ID) => {
     )
 }
 
+function wireRoot(directory: string, subpath: string | null) {
+  if (!directory || !subpath) return directory
+  if (path.isAbsolute(subpath)) {
+    // Legacy rows may already store an absolute root; accept it only when it contains cwd.
+    const relative = path.relative(subpath, directory)
+    return relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)
+      ? directory
+      : subpath
+  }
+  const segments = subpath.split(/[\\/]/).filter((segment) => segment && segment !== ".")
+  // A traversal or malformed relative path cannot establish a wider workspace boundary.
+  if (segments.includes("..")) return directory
+  const root = path.resolve(directory, ...segments.map(() => ".."))
+  return path.resolve(root, subpath) === path.resolve(directory) ? root : directory
+}
+
 // W4-6 — the canonical user/synthetic converter moved next to legacyAssistant in legacy-wire.ts
 // (shared with the W-02 M-1 batch MD exporter); the projector re-uses it through that import.
 
@@ -483,7 +500,7 @@ function publishWireForMessage(
               sessionID,
               parentMessageID: SessionV1.MessageID.ascending(parent ? parent.id : message.id),
               directory: directory?.directory ?? "",
-              root: directory?.path ?? "",
+              root: wireRoot(directory?.directory ?? "", directory?.path ?? null),
               message,
             })
           })

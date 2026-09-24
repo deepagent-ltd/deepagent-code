@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import path from "node:path"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { writeLiveArtifact } from "../../../llm/script/live-llm/config"
@@ -31,13 +32,19 @@ const artifact = await runLegacyLiveCases({
     },
   },
   cases: [{ name: "worktree-instance-routing", prompt }],
-  files: { "fixtures/worktree.txt": `${marker}\n` },
+  // The prompt asks for the exact file content, so keep the fixture byte-equal to the oracle.
+  files: { "fixtures/worktree.txt": marker },
   inspectFiles: ["fixtures/worktree.txt"],
   toolSandbox: {},
   awaitParentTools: ["task"],
+  inspectTaskRuns: true,
   modelMaxTokens: 2048,
   maxProviderTurns: 12,
 })
+const artifactDirectory = path.resolve(import.meta.dir, "../../.artifacts/live-llm")
+const redactions = [{ value: marker, replacement: `<hidden-marker hash=${Bun.hash(marker).toString(16)}>` }]
+// Preserve redacted durable observations even when a later strict assertion fails.
+await writeLiveArtifact({ artifactDirectory }, `${artifact.suite}-observed`, artifact, { redactions })
 
 if (prompt.includes(marker)) throw new Error("Worktree routing marker leaked into the parent prompt")
 if (!artifact.sandbox?.hostReadDenied || !artifact.sandbox.systemHostReadDenied || !artifact.sandbox.networkDenied) {
@@ -68,8 +75,22 @@ if (
 }
 
 if (
-  child.model?.providerID !== artifact.fingerprint.runtimeProviderID ||
-  child.model.id !== artifact.fingerprint.modelID ||
+  (child.model &&
+    (child.model.providerID !== artifact.fingerprint.runtimeProviderID ||
+      child.model.id !== artifact.fingerprint.modelID)) ||
+  child.v2Assistants.length === 0 ||
+  child.v2Assistants.some(
+    (assistant) =>
+      assistant.model.providerID !== artifact.fingerprint.runtimeProviderID ||
+      assistant.model.id !== artifact.fingerprint.modelID,
+  ) ||
+  child.v2ProviderTurns.length === 0 ||
+  child.v2ProviderTurns.some(
+    (turn) =>
+      turn.providerID !== artifact.fingerprint.runtimeProviderID ||
+      turn.modelID !== artifact.fingerprint.modelID ||
+      turn.state !== "settled",
+  ) ||
   child.assistants.some(
     (assistant) =>
       assistant.providerID !== artifact.fingerprint.runtimeProviderID || assistant.modelID !== artifact.fingerprint.modelID,
@@ -80,16 +101,16 @@ if (
 
 const childTools = child.assistants.flatMap((assistant) => assistant.tools)
 const completedChildTools = childTools.filter((tool) => tool.status === "completed").map((tool) => tool.name)
-// Provider-generic child contract: the child completes its investigation with the allowed
-// tool set (bash + a read-family search + StructuredOutput finalize); the exact order is
-// model behavior. The investigation must end with the structured finalize tool.
-const allowedChildTools = new Set(["bash", "glob", "grep", "read", "StructuredOutput"])
+// The V2 child researches with the allowed tool set; structured finalization is sealed
+// in V2StructuredOutputEvidence, not represented as a StructuredOutput tool call.
+const allowedChildTools = new Set(["bash", "glob", "grep", "read"])
 if (
   completedChildTools.length === 0 ||
   completedChildTools.some((name) => !allowedChildTools.has(name)) ||
-  completedChildTools.at(-1) !== "StructuredOutput" ||
   completedChildTools.filter((name) => name === "bash").length < 1 ||
-  completedChildTools.filter((name) => name === "read" || name === "grep" || name === "glob").length < 1
+  completedChildTools.filter((name) => name === "read" || name === "grep" || name === "glob").length < 1 ||
+  JSON.stringify(child.v2Tools.map((tool) => ({ name: tool.name, status: tool.status }))) !==
+    JSON.stringify(childTools.map((tool) => ({ name: tool.name, status: tool.status })))
 ) {
   throw new Error(`Child tool sequence was ${completedChildTools.join(" -> ")}`)
 }
@@ -106,18 +127,47 @@ if (observation.tools.length !== 1) {
   throw new Error(`Parent tool sequence was ${observation.tools.map((tool) => `${tool.name}:${tool.status}`).join(" -> ")}`)
 }
 const taskInput = record(task.input, "task input")
-if (taskInput.isolation !== "worktree") throw new Error("Parent task did not request worktree isolation")
+if (taskInput.subagent_type !== "researcher" || taskInput.background === true) {
+  throw new Error("Parent task did not request the foreground ResearchResult researcher")
+}
 if (observation.tools.some((tool) => ["bash", "read", "grep", "glob"].includes(tool.name))) {
   throw new Error("Parent directly used a child-only filesystem or shell tool")
 }
 
-const subagent = nestedRecord(child.metadata, ["deepagent", "subagent"])
-if (subagent.state !== "completed" || subagent.finished !== true || subagent.reason !== "structured_output_valid") {
-  throw new Error(`Child durable metadata is not a completed structured result: ${JSON.stringify(subagent)}`)
+const taskRun = observation.taskRuns?.[0]
+if (
+  observation.taskRuns?.length !== 1 ||
+  taskRun?.parentSessionID !== observation.sessionID ||
+  taskRun.childSessionID !== child.id ||
+  taskRun.executionRuntime !== "v2" ||
+  taskRun.state !== "completed" ||
+  taskRun.workspaceMode !== "worktree"
+) {
+  throw new Error(`Child durable task run did not complete in a worktree: ${JSON.stringify(observation.taskRuns)}`)
 }
-const finalizer = child.assistants.find((assistant) => assistant.structured !== undefined)
-const result = record(finalizer?.structured, "ResearchResult")
+const evidence = child.structuredEvidence?.[0]
+if (
+  child.structuredEvidence?.length !== 1 ||
+  evidence?.runID !== taskRun.runID ||
+  evidence.childSessionID !== child.id ||
+  evidence.validationOutcome !== "validated" ||
+  !["ResearchResult", "default:researcher"].includes(evidence.schemaName) ||
+  !/^[0-9a-f]{64}$/.test(evidence.schemaSha256) ||
+  evidence.outputSha256 !== createHash("sha256").update(evidence.rawOutput).digest("hex") ||
+  !evidence.outputMessageID ||
+  evidence.outputMessageID !== child.v2Assistants.at(-1)?.id
+) {
+  throw new Error("Child structured output lacks one validated, message-bound V2 evidence row")
+}
+const result = record(JSON.parse(evidence.rawOutput), "ResearchResult")
 if (result.mechanism !== marker) throw new Error("Child structured result did not preserve the hidden marker")
+if (
+  result.module !== "worktree-routing" ||
+  !Array.isArray(result.keyFiles) ||
+  !result.keyFiles.includes("fixtures/worktree.txt")
+) {
+  throw new Error("Child structured result did not preserve the module and key file")
+}
 if (typeof task.output !== "string" || !task.output.includes(marker)) {
   throw new Error("Foreground task output did not carry the child marker")
 }
@@ -136,25 +186,24 @@ const resultArtifact = {
     parentDirectory,
     childDirectory,
     childAssistantPaths: child.assistants.map((assistant) => assistant.path),
+    v2ProviderTurnCount: child.v2ProviderTurns.length,
+    taskRunID: taskRun.runID,
+    structuredEvidenceMessageID: evidence.outputMessageID,
     completedChildTools,
     permissionRequestCount: observation.permissionRequests.length,
   },
 }
 await writeLiveArtifact(
-  { artifactDirectory: path.resolve(import.meta.dir, "../../.artifacts/live-llm") },
+  { artifactDirectory },
   `${resultArtifact.suite}-observed`,
   resultArtifact,
-  {
-    redactions: [{ value: marker, replacement: `<hidden-marker hash=${Bun.hash(marker).toString(16)}>` }],
-  },
+  { redactions },
 )
 await writeLiveArtifact(
-  { artifactDirectory: path.resolve(import.meta.dir, "../../.artifacts/live-llm") },
+  { artifactDirectory },
   resultArtifact.suite,
   resultArtifact,
-  {
-    redactions: [{ value: marker, replacement: `<hidden-marker hash=${Bun.hash(marker).toString(16)}>` }],
-  },
+  { redactions },
 )
 console.log(
   `${resultArtifact.suite}: passed (${resultArtifact.fingerprint.providerID}/${resultArtifact.fingerprint.modelID}, ` +
@@ -164,20 +213,6 @@ console.log(
 function record(value: unknown, name: string): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`${name} is not an object`)
   return value as Record<string, unknown>
-}
-
-function nestedRecord(value: unknown, keys: string[]) {
-  const result = keys.reduce<Record<string, unknown> | undefined>(
-    (current, key) => {
-      if (!current) return undefined
-      const next = current[key]
-      if (typeof next !== "object" || next === null || Array.isArray(next)) return undefined
-      return next as Record<string, unknown>
-    },
-    typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined,
-  )
-  if (!result) throw new Error(`Missing object path ${keys.join(".")}`)
-  return result
 }
 
 finishLiveScript()

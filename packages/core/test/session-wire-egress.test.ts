@@ -41,7 +41,7 @@ const wireID = SessionV1.MessageID.make
 
 // Each test owns a distinct session: the event table's (aggregate_id, seq) is unique, so a
 // shared sessionID would collide on seq 0 across tests.
-const seedSession = (sessionID: SessionV2.ID) =>
+const seedSession = (sessionID: SessionV2.ID, placement?: { directory: string; path: string }) =>
   Effect.gen(function* () {
     const { db } = yield* Database.Service
     yield* db
@@ -56,8 +56,8 @@ const seedSession = (sessionID: SessionV2.ID) =>
         id: sessionID,
         project_id: Project.ID.global,
         slug: "test",
-        directory: "/project",
-        path: "/project",
+        directory: placement?.directory ?? "/project",
+        path: placement?.path ?? "/project",
         title: "test",
         version: "test",
       })
@@ -133,6 +133,49 @@ const wireCursorCount = (sessionID: SessionV2.ID) =>
   })
 
 describe("SessionProjector wire egress (W4-6)", () => {
+  it.effect("projects an absolute worktree root from the session's relative subpath", () =>
+    Effect.gen(function* () {
+      const events = yield* EventV2.Service
+      const { db } = yield* Database.Service
+      for (const [sessionID, directory, subpath, root] of [
+        ["ses_wire_worktree_root", "/project/worktrees/child", "", "/project/worktrees/child"],
+        ["ses_wire_nested_root", "/project/src/nested", "src/nested", "/project"],
+        ["ses_wire_legacy_root", "/project/src", "/project", "/project"],
+        ["ses_wire_foreign_root", "/project/src", "/foreign", "/project/src"],
+        ["ses_wire_unknown_parent", "/project/sibling", "../sibling", "/project/sibling"],
+      ] as const) {
+        const id = SessionV2.ID.make(sessionID)
+        const assistantID = SessionMessage.ID.make(`msg_${sessionID}_assistant`)
+        yield* seedSession(id, { directory, path: subpath })
+        yield* seedV2Ownership(id, `owner_${sessionID}`)
+        yield* events.publish(SessionEvent.Prompted, {
+          sessionID: id,
+          messageID: SessionMessage.ID.make(`msg_${sessionID}_user`),
+          prompt: new Prompt({ text: "where am I?" }),
+          delivery: "steer",
+          timestamp: zero,
+        })
+        yield* events.publish(SessionEvent.Step.Started, {
+          sessionID: id,
+          timestamp: DateTime.makeUnsafe(1),
+          assistantMessageID: assistantID,
+          agent: "build",
+          model,
+        })
+        const wire = yield* db
+          .select({ data: MessageTable.data })
+          .from(MessageTable)
+          .where(eq(MessageTable.id, wireID(assistantID)))
+          .get()
+          .pipe(Effect.orDie)
+        expect((wire?.data as { path?: { cwd: string; root: string } } | undefined)?.path).toEqual({
+          cwd: directory,
+          root,
+        })
+      }
+    }),
+  )
+
   it.effect("derives wire rows for a prompted user message and an assistant step", () =>
     Effect.gen(function* () {
       const sessionID = SessionV2.ID.make("ses_wire_basic")

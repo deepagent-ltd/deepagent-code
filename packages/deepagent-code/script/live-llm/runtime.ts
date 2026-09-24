@@ -312,6 +312,9 @@ export async function runLegacyLiveCases(input: {
       "@deepagent-code/core/context-federation/session-sql"
     )
     const { V2ProviderTurnReceiptTable } = await import("@deepagent-code/core/session/runner/v2-provider-turn.sql")
+    const { V2StructuredOutputEvidenceTable } = await import(
+      "@deepagent-code/core/session/runner/v2-structured-output-evidence.sql"
+    )
     const { V2ToolEffectAdmissionTable, V2ToolEffectTable } = await import(
       "@deepagent-code/core/session/runner/v2-tool-effect.sql"
     )
@@ -1328,6 +1331,43 @@ export async function runLegacyLiveCases(input: {
                 directoryExists: childDirectoryExists,
                 agent: child.agent,
                 model: child.model,
+                v2Assistants: v2Messages.flatMap((message) =>
+                  message.type === "assistant"
+                    ? [{
+                        id: message.id,
+                        model: message.model,
+                        text: message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join(""),
+                      }]
+                    : [],
+                ),
+                v2ProviderTurns: yield* database.db
+                  .select({
+                    receiptID: V2ProviderTurnReceiptTable.receipt_id,
+                    providerID: V2ProviderTurnReceiptTable.provider_id,
+                    modelID: V2ProviderTurnReceiptTable.model_id,
+                    state: V2ProviderTurnReceiptTable.state,
+                  })
+                  .from(V2ProviderTurnReceiptTable)
+                  .where(eq(V2ProviderTurnReceiptTable.session_id, SessionV2.ID.make(child.id)))
+                  .all()
+                  .pipe(Effect.orDie),
+                structuredEvidence: input.inspectTaskRuns
+                  ? yield* database.db
+                      .select({
+                        runID: V2StructuredOutputEvidenceTable.run_id,
+                        childSessionID: V2StructuredOutputEvidenceTable.child_session_id,
+                        outputMessageID: V2StructuredOutputEvidenceTable.output_message_id,
+                        schemaName: V2StructuredOutputEvidenceTable.schema_name,
+                        validationOutcome: V2StructuredOutputEvidenceTable.validation_outcome,
+                        outputSha256: V2StructuredOutputEvidenceTable.output_sha256,
+                        schemaSha256: V2StructuredOutputEvidenceTable.schema_sha256,
+                        rawOutput: V2StructuredOutputEvidenceTable.raw_output,
+                      })
+                      .from(V2StructuredOutputEvidenceTable)
+                      .where(eq(V2StructuredOutputEvidenceTable.child_session_id, child.id))
+                      .all()
+                      .pipe(Effect.orDie)
+                  : undefined,
                 metadata: child.metadata,
                 messageCount: childMessages.length,
                 assembledRequestFingerprints: assembledRequestFingerprints
