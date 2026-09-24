@@ -39,6 +39,10 @@ if (
 )
   throw new Error("SLACK_IM_BINDINGS must bind each Slack channel and IM group at most once")
 
+// The in-process outbound adapter treats a missing allowlist as manually managed config. The
+// Slack bot owns its own allowlist, including the empty set after every binding is revoked.
+process.env.SLACK_IM_BINDINGS ??= "[]"
+
 const app = new App({
   token: process.env.SLACK_BOT_TOKEN,
   signingSecret: process.env.SLACK_SIGNING_SECRET,
