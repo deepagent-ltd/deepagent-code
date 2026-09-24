@@ -104,6 +104,7 @@ try {
       runsPath,
       "--evidence-dir",
       evidenceDir,
+      ...(args.includes("--require-cli-binary") ? ["--require-cli-binary"] : []),
       "--out",
       packagedPath,
     ])

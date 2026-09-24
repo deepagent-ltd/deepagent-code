@@ -76,9 +76,15 @@ const artifacts = await Promise.all(
 )
 // The shipped package records the source commit and exact binary bytes. The V2 owner identity is
 // version-derived (its subjectCommit/subjectTree are not Git IDs), so bind both domains here.
-const binary = artifacts.find(
+const binaries = artifacts.filter(
   (artifact) => artifact.path === "bin/deepagent-code" || artifact.path === "bin/deepagent-code.exe",
 )
+if (process.argv.includes("--require-cli-binary") && binaries.length !== 1)
+  throw new Error("CLI packaged run requires a release binary")
+if (binaries.length > 1) throw new Error("CLI package has multiple release binaries")
+const binary = binaries[0]
+if (binary && runs.some((run) => run.artifactPath !== binary.path))
+  throw new Error("CLI packaged run must reference the release binary")
 if (binary) {
   const metadata = (await Bun.file(path.join(packageDir, "package.json")).json()) as {
     version?: string

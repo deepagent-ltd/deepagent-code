@@ -31,6 +31,9 @@ const list = (name: string) => args.flatMap((value, index) => (args[index - 1] =
 
 const repository = path.resolve(import.meta.dir, "../../../..")
 const out = option("--out") ?? path.join(repository, "authoritative-ledger.json")
+const packageDirs = list("--package-dir")
+if (packageDirs.length > 1) throw new Error("release gate accepts exactly one CLI package directory")
+if (packageDirs.length > 0 && !option("--runs")) throw new Error("--runs is required with --package-dir")
 
 const git = (spec: string[]) => {
   const result = Bun.spawnSync(["git", "-C", repository, ...spec], { stdout: "pipe", stderr: "ignore" })
@@ -157,10 +160,11 @@ const child = Bun.spawnSync(
     out,
     "--artifact-dir",
     artifactDir,
+    "--require-cli-binary",
     // The candidate ledger spawns with cwd=repository; resolve relative inputs here so the
     // packaged-dir/runs paths keep meaning regardless of where the gate was invoked from.
-    ...(list("--package-dir").length > 0
-      ? ["--packaged-dir", path.resolve(list("--package-dir")[0]!), "--runs", path.resolve(option("--runs") ?? "[]")]
+    ...(packageDirs.length > 0
+      ? ["--packaged-dir", path.resolve(packageDirs[0]!), "--runs", path.resolve(option("--runs")!)]
       : []),
   ],
   { cwd: repository, stdout: "inherit", stderr: "inherit", env: { ...process.env } },

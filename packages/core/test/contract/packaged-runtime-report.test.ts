@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mkdir } from "node:fs/promises"
+import { mkdir, rm } from "node:fs/promises"
 import { join } from "node:path"
 import { contentDigest } from "../../src/contract/digest"
 import {
@@ -141,6 +141,7 @@ describe("RI-24 packaged runtime report", () => {
         runsPath,
         "--evidence-dir",
         evidenceDir,
+        "--require-cli-binary",
       ],
       { cwd: join(import.meta.dir, "../.."), stdout: "pipe", stderr: "pipe" },
     )
@@ -275,5 +276,126 @@ describe("RI-24 packaged runtime report", () => {
     ])
     expect(wrongBinaryExitCode).not.toBe(0)
     expect(wrongBinaryStderr).toContain("binary SHA-256 does not match package metadata")
-  })
+
+    await rm(join(packageDir, "bin", "deepagent-code"))
+    await Bun.write(runsPath, JSON.stringify([{ ...report.runs[0], artifactPath: "package.json" }]))
+    const missingBinary = Bun.spawn(
+      [
+        process.execPath,
+        script.pathname,
+        "--candidate",
+        candidateId,
+        "--commit",
+        "commit-1",
+        "--tree",
+        "tree-1",
+        "--package-dir",
+        packageDir,
+        "--runs",
+        runsPath,
+        "--evidence-dir",
+        evidenceDir,
+        "--require-cli-binary",
+      ],
+      { cwd: join(import.meta.dir, "../.."), stdout: "pipe", stderr: "pipe" },
+    )
+    const [missingBinaryStderr, missingBinaryExitCode] = await Promise.all([
+      new Response(missingBinary.stderr).text(),
+      missingBinary.exited,
+    ])
+    expect(missingBinaryExitCode).not.toBe(0)
+    expect(missingBinaryStderr).toContain("CLI packaged run requires a release binary")
+
+    const gate = new URL("../../script/evidence-ledger/release-gate.ts", import.meta.url)
+    const gateChild = Bun.spawn(
+      [
+        process.execPath,
+        gate.pathname,
+        "--package-dir",
+        packageDir,
+        "--runs",
+        runsPath,
+        "--evidence",
+        join(evidenceDir, "runtime.json"),
+        "--out",
+        join(root.path, "release-ledger.json"),
+      ],
+      { cwd: join(import.meta.dir, "../.."), stdout: "pipe", stderr: "pipe" },
+    )
+    const [gateStderr, gateExitCode] = await Promise.all([
+      new Response(gateChild.stderr).text(),
+      gateChild.exited,
+    ])
+    expect(gateExitCode).not.toBe(0)
+    expect(gateStderr).toContain("CLI packaged run requires a release binary")
+
+    const gatesPath = join(root.path, "gates.json")
+    await Bun.write(
+      gatesPath,
+      JSON.stringify(
+        Object.fromEntries(
+          Array.from({ length: 9 }, (_, index) => [`G${index}`, { status: "passed", refs: [`g${index}`] }]),
+        ),
+      ),
+    )
+    const unboundDir = join(root.path, "unbound")
+    await mkdir(unboundDir)
+    const unboundGate = Bun.spawn(
+      [process.execPath, gate.pathname, "--gates", gatesPath, "--out", join(unboundDir, "ledger.json")],
+      { cwd: join(import.meta.dir, "../.."), stdout: "pipe", stderr: "pipe" },
+    )
+    const [unboundGateStderr, unboundGateExitCode] = await Promise.all([
+      new Response(unboundGate.stderr).text(),
+      unboundGate.exited,
+    ])
+    expect(unboundGateExitCode).not.toBe(0)
+    expect(unboundGateStderr).toContain("packaged_report_missing")
+
+    const multiplePackages = Bun.spawn(
+      [process.execPath, gate.pathname, "--package-dir", packageDir, "--package-dir", packageDir],
+      { cwd: join(import.meta.dir, "../.."), stdout: "pipe", stderr: "pipe" },
+    )
+    const [multiplePackagesStderr, multiplePackagesExitCode] = await Promise.all([
+      new Response(multiplePackages.stderr).text(),
+      multiplePackages.exited,
+    ])
+    expect(multiplePackagesExitCode).not.toBe(0)
+    expect(multiplePackagesStderr).toContain("release gate accepts exactly one CLI package directory")
+
+    await Bun.write(join(packageDir, "bin", "deepagent-code"), "binary")
+    await Bun.write(join(packageDir, "probe.txt"), "not the release binary")
+    await Bun.write(
+      join(packageDir, "package.json"),
+      JSON.stringify({
+        version: "2.0.2",
+        deepagentCodeBuild: { sourceCommit: "commit-1", binarySha256: Hash.sha256(Buffer.from("binary")) },
+      }),
+    )
+    await Bun.write(runsPath, JSON.stringify([{ ...report.runs[0], artifactPath: "probe.txt" }]))
+    const wrongRunArtifact = Bun.spawn(
+      [
+        process.execPath,
+        script.pathname,
+        "--candidate",
+        candidateId,
+        "--commit",
+        "commit-1",
+        "--tree",
+        "tree-1",
+        "--package-dir",
+        packageDir,
+        "--runs",
+        runsPath,
+        "--evidence-dir",
+        evidenceDir,
+      ],
+      { cwd: join(import.meta.dir, "../.."), stdout: "pipe", stderr: "pipe" },
+    )
+    const [wrongRunArtifactStderr, wrongRunArtifactExitCode] = await Promise.all([
+      new Response(wrongRunArtifact.stderr).text(),
+      wrongRunArtifact.exited,
+    ])
+    expect(wrongRunArtifactExitCode).not.toBe(0)
+    expect(wrongRunArtifactStderr).toContain("CLI packaged run must reference the release binary")
+  }, 30_000)
 })
