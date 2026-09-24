@@ -3,7 +3,10 @@
  * RI-51 release gate — the release command's ledger consumption.
  *
  *   bun run script/evidence-ledger/release-gate.ts \
- *     [--gates <gate-results.json>] [--package-dir <dir>]... [--out <ledger.json>]
+ *     [--qualification-dir <dir> --qualification-run-id <id> --qualification-repo <owner/name>]
+ *     [--gates <gate-results.json>] [--package-dir <dir> --runs <runs.json>]
+ *     [--evidence <runtime-evidence.json>] [--asset-manifest <release-assets.json> --assets-dir <dir>]
+ *     [--out <ledger.json>]
  *
  * Builds an HONEST evidence manifest from the current tree (real content digests for schema,
  * migration registry, OpenAPI/SDK, capability catalog, event registry, provider profiles, runtime
@@ -11,9 +14,9 @@
  * an entry stay `pending`), then delegates to the single authoritative ledger generator. The exit
  * code is the ledger's: NO-GO exits non-zero and the release pipeline must stop.
  *
- * With no `--gates` every gate is pending and the release is correctly refused — fail-closed by
- * construction, so wiring this into the publish workflow can never accidentally allow a release
- * whose gate evidence does not exist.
+ * With no qualification or `--gates` every gate is pending and release is refused. A packaged
+ * passing gate also requires the staged final-asset manifest; the workflow archives exact
+ * qualification and asset-manifest bytes with the ledger before any release upload.
  */
 import { readdirSync, statSync } from "node:fs"
 import { copyFile, mkdir } from "node:fs/promises"
@@ -21,6 +24,8 @@ import path from "node:path"
 import { makeAuthoritativeManifest } from "../../src/contract/evidence-manifest"
 import { capabilityCatalogDigestValue } from "../../src/system-context/capability-catalog"
 import { Hash } from "../../src/util/hash"
+import { verifyQualificationBundle } from "./verify-qualification-bundle"
+import { verifyReleaseAssets } from "../../../../script/release-assets"
 
 const args = process.argv.slice(2)
 const option = (name: string) => {
@@ -42,6 +47,27 @@ const git = (spec: string[]) => {
 const commit = git(["rev-parse", "HEAD"]) ?? "unknown"
 const tree = git(["rev-parse", "HEAD^{tree}"]) ?? "unknown"
 const dirty = (git(["status", "--porcelain", "--untracked-files=all"]) ?? "").length > 0
+const qualificationDir = option("--qualification-dir")
+if (qualificationDir && option("--gates")) throw new Error("choose --qualification-dir or --gates")
+if (qualificationDir && !option("--qualification-run-id")) throw new Error("qualification run ID is required")
+const qualification = qualificationDir
+  ? await verifyQualificationBundle({
+      directory: path.resolve(qualificationDir),
+      commit,
+      tree,
+      runID: option("--qualification-run-id"),
+      repository: option("--qualification-repo"),
+    })
+  : undefined
+const gatesPath = qualificationDir ? path.join(qualificationDir, "gates.json") : option("--gates")
+const assetManifestPath = option("--asset-manifest")
+const assetsDir = option("--assets-dir")
+if (Boolean(assetManifestPath) !== Boolean(assetsDir))
+  throw new Error("--asset-manifest and --assets-dir must be paired")
+const assets =
+  assetManifestPath && assetsDir
+    ? await verifyReleaseAssets(path.resolve(assetManifestPath), path.resolve(assetsDir), commit, tree, true)
+    : undefined
 
 const sha256File = async (file: string) => Hash.sha256(Buffer.from(await Bun.file(file).arrayBuffer()))
 const walk = (dir: string): string[] =>
@@ -65,9 +91,8 @@ const schemaDigest = await (async () => {
 })()
 
 const gateResults = (() => {
-  const file = option("--gates")
-  if (!file) return {}
-  return JSON.parse(require("node:fs").readFileSync(file, "utf8")) as Record<string, unknown>
+  if (!gatesPath) return {}
+  return JSON.parse(require("node:fs").readFileSync(gatesPath, "utf8")) as Record<string, unknown>
 })()
 
 const gates = (["G0", "G1", "G2", "G3", "G4", "G5", "G6", "G7", "G8"] as const).map((gate) => {
@@ -90,6 +115,8 @@ const gates = (["G0", "G1", "G2", "G3", "G4", "G5", "G6", "G7", "G8"] as const).
   }
   return { gate, status: "pending" as const, refs: [] }
 })
+if (packageDirs.length && gates.some((gate) => gate.status === "passed") && !assets)
+  throw new Error("release asset manifest is required for a passing packaged gate")
 
 // Candidate identity: when packaged evidence is present, the candidate IS the packaged build —
 // the minted owner-authorization's buildID-derived candidateID (`candidate:<buildID>`) so the
@@ -105,8 +132,8 @@ const manifest = makeAuthoritativeManifest({
   candidateId: packagedCandidate ?? `release-${commit.slice(0, 12)}-${new Date().toISOString().slice(0, 10)}`,
   commit,
   tree,
-  packageDigests: Object.fromEntries(
-    await Promise.all(
+  packageDigests: Object.fromEntries([
+    ...(await Promise.all(
       list("--package-dir").map(async (dir) => {
         const files = walk(dir).sort()
         const digest = Hash.sha256(
@@ -114,8 +141,20 @@ const manifest = makeAuthoritativeManifest({
         )
         return [path.basename(dir), digest]
       }),
-    ),
-  ),
+    )),
+    ...(assets
+      ? [
+          ["release-assets-manifest", await sha256File(path.resolve(assetManifestPath!))],
+          ...assets.assets!.map((asset) => [`release-asset:${asset.name}`, asset.sha256]),
+        ]
+      : []),
+    ...(qualificationDir
+      ? [
+          ["qualification-source-run", await sha256File(path.join(qualificationDir, "source-run.json"))],
+          ["qualification-gates", await sha256File(path.join(qualificationDir, "gates.json"))],
+        ]
+      : []),
+  ]),
   schemaDigest,
   migrationRegistryDigest,
   openapiDigest: await sha256File(path.join(repository, "packages/sdk/js/src/gen/types.gen.ts")),
@@ -140,7 +179,20 @@ await Bun.write(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
 
 const artifactDir = path.join(path.dirname(out), "release-evidence-products")
 await mkdir(artifactDir, { recursive: true })
-if (option("--gates")) await copyFile(path.resolve(option("--gates")!), path.join(artifactDir, "gates.json"))
+if (gatesPath) await copyFile(path.resolve(gatesPath), path.join(artifactDir, "gates.json"))
+if (assetManifestPath) await copyFile(path.resolve(assetManifestPath), path.join(artifactDir, "release-assets.json"))
+if (qualificationDir && qualification) {
+  const archived = path.join(artifactDir, "qualification")
+  await mkdir(path.join(archived, "evidence"), { recursive: true })
+  await Promise.all(
+    ["qualification.json", "source-run.json", "gates.json", ...qualification.evidence.map((entry) => entry.path)].map(
+      async (file) => {
+        await mkdir(path.dirname(path.join(archived, file)), { recursive: true })
+        await copyFile(path.join(qualificationDir, file), path.join(archived, file))
+      },
+    ),
+  )
+}
 
 const evidenceDir = path.join(path.dirname(out), "release-evidence")
 await Bun.$`mkdir -p ${evidenceDir}`

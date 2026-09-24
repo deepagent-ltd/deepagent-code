@@ -23,10 +23,15 @@ on:
         description: "Override version (optional)"
         required: false
         type: string
+      qualification_run_id:
+        description: "Completed candidate-SHA qualification run carrying release-qualification-v2 (required for release GO)"
+        required: false
+        type: string
 
 concurrency: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.version || inputs.bump }}
 
 permissions:
+  actions: read
   id-token: write
   contents: write
   packages: write
@@ -547,6 +552,50 @@ jobs:
             --tag "v${{ needs.version.outputs.version }}" \
             --package-dir packages/deepagent-code/dist/deepagent-code-linux-x64
 
+      - name: Probe frozen packaged runtime
+        if: needs.version.outputs.release
+        run: |
+          mkdir -p "$RUNNER_TEMP/ri51-probe"
+          DEEPAGENT_CODE_OWNER_AUTHORIZATION="$PWD/packages/deepagent-code/dist/deepagent-code-linux-x64/bin/owner-authorization.json" \
+            bun packages/core/script/evidence-ledger/probe-packaged-runs.ts \
+              "$PWD/packages/deepagent-code/dist/deepagent-code-linux-x64/bin/deepagent-code" \
+              "$RUNNER_TEMP/ri51-probe/runs.json" \
+              "$RUNNER_TEMP/ri51-probe/home" \
+              "$RUNNER_TEMP/ri51-probe/evidence.json"
+
+      - name: Download reviewed G0-G8 qualification
+        if: needs.version.outputs.release && inputs.qualification_run_id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id }}
+          GH_REPO: ${{ needs.version.outputs.repo }}
+          CANDIDATE_COMMIT: ${{ needs.version.outputs.candidate_commit }}
+          CANDIDATE_TREE: ${{ needs.version.outputs.candidate_tree }}
+        run: |
+          [[ "$QUALIFICATION_RUN_ID" =~ ^[0-9]+$ ]]
+          mkdir -p "$RUNNER_TEMP/ri51-qualification"
+          gh run download "$QUALIFICATION_RUN_ID" --repo "$GH_REPO" \
+            --name release-qualification-v2 --dir "$RUNNER_TEMP/ri51-qualification"
+          gh api "repos/$GH_REPO/actions/runs/$QUALIFICATION_RUN_ID" \
+            > "$RUNNER_TEMP/ri51-qualification/source-run.json"
+          bun packages/core/script/evidence-ledger/verify-qualification-bundle.ts \
+            --dir "$RUNNER_TEMP/ri51-qualification" \
+            --commit "$CANDIDATE_COMMIT" --tree "$CANDIDATE_TREE" \
+            --run-id "$QUALIFICATION_RUN_ID" --repo "$GH_REPO"
+
+      - name: Stage and verify final release archives
+        if: needs.version.outputs.release
+        run: |
+          bun script/release-assets.ts \
+            --commit "${{ needs.version.outputs.candidate_commit }}" \
+            --tree "${{ needs.version.outputs.candidate_tree }}" \
+            --version "${{ needs.version.outputs.version }}" \
+            --cli-dist "$PWD/packages/deepagent-code/dist" \
+            --windows-archives /tmp/signed-cli-windows \
+            --desktop-dir /tmp/desktop \
+            --assets-dir "$RUNNER_TEMP/release-assets" \
+            --manifest "$RUNNER_TEMP/ri51-probe/release-assets.json"
+
       - name: Cache apt packages (AUR)
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
@@ -572,6 +621,9 @@ jobs:
       # gates are pending and the release is refused — fail-closed by construction.
       - name: RI-51 authoritative ledger release gate
         if: needs.version.outputs.release
+        env:
+          QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id }}
+          GH_REPO: ${{ needs.version.outputs.repo }}
         run: |
           bun script/assert-release-candidate.ts \
             --commit "${{ needs.version.outputs.candidate_commit }}" \
@@ -579,7 +631,17 @@ jobs:
             --tag "v${{ needs.version.outputs.version }}" \
             --package-dir packages/deepagent-code/dist/deepagent-code-linux-x64
           mkdir -p /tmp/authoritative-ledger
-          (cd packages/core && bun run script/evidence-ledger/release-gate.ts --out /tmp/authoritative-ledger/ledger.json)
+          args=(--out /tmp/authoritative-ledger/ledger.json \
+            --package-dir "$PWD/packages/deepagent-code/dist/deepagent-code-linux-x64" \
+            --runs "$RUNNER_TEMP/ri51-probe/runs.json" \
+            --evidence "$RUNNER_TEMP/ri51-probe/evidence.json" \
+            --asset-manifest "$RUNNER_TEMP/ri51-probe/release-assets.json" \
+            --assets-dir "$RUNNER_TEMP/release-assets")
+          if [[ -n "$QUALIFICATION_RUN_ID" ]]; then
+            args+=(--qualification-dir "$RUNNER_TEMP/ri51-qualification" \
+              --qualification-run-id "$QUALIFICATION_RUN_ID" --qualification-repo "$GH_REPO")
+          fi
+          (cd packages/core && bun run script/evidence-ledger/release-gate.ts "${args[@]}")
 
       - name: Upload authoritative ledger release asset
         if: needs.version.outputs.release && success()
@@ -602,15 +664,9 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.committer.outputs.token }}
         run: |
-          shopt -s nullglob
-          darwin=(packages/deepagent-code/dist/deepagent-code-darwin*.zip)
-          linux=(packages/deepagent-code/dist/deepagent-code-linux*.tar.gz)
-          windows=(/tmp/signed-cli-windows/deepagent-code-windows*.zip)
-          if (( ${#darwin[@]} == 0 || ${#linux[@]} == 0 || ${#windows[@]} == 0 )); then
-            echo "Missing CLI release assets for at least one platform"
-            exit 1
-          fi
-          files=("${darwin[@]}" "${linux[@]}" "${windows[@]}")
+          mapfile -t names < <(jq -r '.assets[] | select(.kind == "cli") | .name' "$RUNNER_TEMP/ri51-probe/release-assets.json")
+          files=()
+          for name in "${names[@]}"; do files+=("$RUNNER_TEMP/release-assets/$name"); done
           gh release upload "v${{ needs.version.outputs.version }}" "${files[@]}" --clobber --repo "${{ needs.version.outputs.repo }}"
 
       - name: Upload desktop release assets
@@ -618,12 +674,9 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.committer.outputs.token }}
         run: |
-          shopt -s nullglob
-          files=(/tmp/desktop/*.{exe,blockmap,dmg,zip,AppImage,deb,rpm} /tmp/desktop/*.app.tar.gz)
-          if (( ${#files[@]} == 0 )); then
-            echo "No desktop release assets found"
-            exit 1
-          fi
+          mapfile -t names < <(jq -r '.assets[] | select(.kind == "desktop") | .name' "$RUNNER_TEMP/ri51-probe/release-assets.json")
+          files=()
+          for name in "${names[@]}"; do files+=("$RUNNER_TEMP/release-assets/$name"); done
           gh release upload "v${{ needs.version.outputs.version }}" "${files[@]}" --clobber --repo "${{ needs.version.outputs.repo }}"
 
       # W0.5: deliver the signed owner-authorization.json with the release artifacts. The runtime
@@ -634,11 +687,27 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.committer.outputs.token }}
         run: |
-          if [ -f /tmp/owner-authorization/owner-authorization.json ]; then
-            gh release upload "v${{ needs.version.outputs.version }}" /tmp/owner-authorization/owner-authorization.json --clobber --repo "${{ needs.version.outputs.repo }}"
-          else
-            echo "::warning::owner-authorization.json was not minted for this release — operations must mint and deliver it before the default install can pass owner qualification"
-          fi
+          gh release upload "v${{ needs.version.outputs.version }}" \
+            "$RUNNER_TEMP/release-assets/owner-authorization.json" \
+            --clobber --repo "${{ needs.version.outputs.repo }}"
+
+      - name: Read back final release asset bytes
+        if: needs.version.outputs.release
+        env:
+          GH_TOKEN: ${{ steps.committer.outputs.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/release-readback"
+          gh release download "v${{ needs.version.outputs.version }}" \
+            --repo "${{ needs.version.outputs.repo }}" \
+            --dir "$RUNNER_TEMP/release-readback" --pattern '*'
+          bun script/release-assets.ts --verify --allow-ledger-assets \
+            --manifest "$RUNNER_TEMP/ri51-probe/release-assets.json" \
+            --assets-dir "$RUNNER_TEMP/release-readback" \
+            --commit "${{ needs.version.outputs.candidate_commit }}" \
+            --tree "${{ needs.version.outputs.candidate_tree }}"
+          cmp -s "$RUNNER_TEMP/release-readback/ledger.json" /tmp/authoritative-ledger/ledger.json
+          cmp -s "$RUNNER_TEMP/release-readback/release-evidence-products.tar.gz" \
+            /tmp/authoritative-ledger/release-evidence-products.tar.gz
 
       - run: ./script/publish.ts
         env:

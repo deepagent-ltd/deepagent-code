@@ -8,6 +8,7 @@ import { assertAuthoritativeLedger } from "../../src/contract/evidence-ledger"
 import { PackagedRuntimeReportContract } from "../../src/contract/packaged-runtime-report"
 import { Hash } from "../../src/util/hash"
 import { assertManifestMatches, assertManifestShape } from "../manifest-digest/manifest"
+import { verifyQualificationBundle } from "./verify-qualification-bundle"
 
 const args = process.argv.slice(2)
 const option = (name: string) => {
@@ -74,6 +75,43 @@ if (gatesPresent) {
     if (status !== entry.status || contentDigest(refs) !== contentDigest(entry.refs))
       throw new Error(`gates.json ${entry.gate} does not match ledger manifest`)
   }
+}
+const qualificationDir = path.join(artifactDir, "qualification")
+const qualificationPresent = await Bun.file(path.join(qualificationDir, "qualification.json")).exists()
+if (Boolean(ledger.manifest.packageDigests["qualification-source-run"]) !== qualificationPresent)
+  throw new Error("qualification source run presence does not match ledger")
+if (qualificationPresent) {
+  await read("qualification/source-run.json", ledger.manifest.packageDigests["qualification-source-run"]!)
+  await read("qualification/gates.json", ledger.manifest.packageDigests["qualification-gates"]!)
+  await verifyQualificationBundle({
+    directory: qualificationDir,
+    commit: ledger.manifest.commit,
+    tree: ledger.manifest.tree,
+  })
+  if (
+    Hash.sha256(Buffer.from(await Bun.file(path.join(qualificationDir, "gates.json")).arrayBuffer())) !==
+    Hash.sha256(Buffer.from(await gatesFile.arrayBuffer()))
+  )
+    throw new Error("archived qualification gates differ from ledger gates")
+}
+const assetManifest = Bun.file(path.join(artifactDir, "release-assets.json"))
+const assetManifestPresent = await assetManifest.exists()
+if (Boolean(ledger.manifest.packageDigests["release-assets-manifest"]) !== assetManifestPresent)
+  throw new Error("release asset manifest presence does not match ledger")
+if (assetManifestPresent) {
+  const bytes = Buffer.from(await assetManifest.arrayBuffer())
+  if (Hash.sha256(bytes) !== ledger.manifest.packageDigests["release-assets-manifest"])
+    throw new Error("release asset manifest bytes do not match ledger")
+  const parsed = JSON.parse(bytes.toString()) as {
+    candidateCommit: string
+    candidateTree: string
+    assets: { name: string; sha256: string }[]
+  }
+  if (parsed.candidateCommit !== ledger.manifest.commit || parsed.candidateTree !== ledger.manifest.tree)
+    throw new Error("release asset manifest candidate does not match ledger")
+  for (const asset of parsed.assets)
+    if (ledger.manifest.packageDigests[`release-asset:${asset.name}`] !== asset.sha256)
+      throw new Error(`release asset ${asset.name} digest does not match ledger`)
 }
 
 console.log(`RI-51 archived products match ledger ${ledger.ledgerDigest}`)
