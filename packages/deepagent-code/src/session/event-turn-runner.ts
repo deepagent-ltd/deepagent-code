@@ -8,6 +8,7 @@ import type { Database } from "@deepagent-code/core/database/database"
 import { Location } from "@deepagent-code/core/location"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { SessionV2 } from "@deepagent-code/core/session"
+import { SessionInput } from "@deepagent-code/core/session/input"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import { TaskWorkspace } from "@deepagent-code/core/session/task-workspace"
 import { Prompt } from "@deepagent-code/core/session/prompt"
@@ -177,8 +178,11 @@ export const makeEventTurnRunnerV2 =
         if (child.parentID !== parent.id || child.location.directory !== childLocation.directory)
           return failed("runner_failed")
         const before = yield* withChild(deps.sessions.messages({ sessionID: child.id, order: "asc" }))
-        // A crashed admit-only turn is durable but must never restart provider work implicitly.
-        if (before.some((message) => message.id === ids.messageID) && !completedTurn(before, ids.messageID, child.id))
+        const replay = completedTurn(before, ids.messageID, child.id)
+        // Admit-only input is durable before it becomes a projected user message. A crash in
+        // that window must not convert an exact prompt retry into implicit provider execution.
+        const prior = deps.db ? yield* SessionInput.find(deps.db, ids.messageID) : undefined
+        if (!replay && (prior || before.some((message) => message.id === ids.messageID)))
           return failed("runner_failed")
         yield* withChild(
           deps.sessions.prompt({
@@ -189,7 +193,6 @@ export const makeEventTurnRunnerV2 =
             resume: false,
           }),
         )
-        const replay = completedTurn(before, ids.messageID, child.id)
         if (replay) return replay
         const interruptChild = deps.sessions.interrupt(child.id).pipe(Effect.ignore)
         yield* withChild(deps.sessions.resume(child.id)).pipe(Effect.onError(() => interruptChild))

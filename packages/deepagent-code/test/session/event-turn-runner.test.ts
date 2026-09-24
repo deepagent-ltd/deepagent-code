@@ -2,11 +2,17 @@ import { describe, expect, test } from "bun:test"
 import path from "node:path"
 import fs from "node:fs/promises"
 import os from "node:os"
-import { Context, DateTime, Effect, Fiber, Layer } from "effect"
+import { Context, DateTime, Deferred, Effect, Fiber, Layer } from "effect"
 import { Database } from "@deepagent-code/core/database/database"
+import { EventV2 } from "@deepagent-code/core/event"
+import { ProjectV2 } from "@deepagent-code/core/project"
 import { SessionV2 } from "@deepagent-code/core/session"
+import { SessionExecution } from "@deepagent-code/core/session/execution"
 import { SessionMessage } from "@deepagent-code/core/session/message"
-import { EventTaskWorkspaceTable } from "@deepagent-code/core/session/sql"
+import { Prompt } from "@deepagent-code/core/session/prompt"
+import { SessionProjector } from "@deepagent-code/core/session/projector"
+import { EventTaskWorkspaceTable, SessionInputTable, SessionMessageTable } from "@deepagent-code/core/session/sql"
+import { SessionStore } from "@deepagent-code/core/session/store"
 import { TaskWorkspace } from "@deepagent-code/core/session/task-workspace"
 import type { InstanceStore } from "@/project/instance-store"
 import { makeEventTurnRunnerV2 } from "../../src/session/event-turn-runner"
@@ -99,6 +105,95 @@ const fakeServices = (options: { stall?: boolean; afterAdmission?: () => void } 
 }
 
 describe("V2 event turn runner", () => {
+  test("a real V2 admit-only inbox survives a crash without provider work on DAG replay", async () => {
+    const repo = await fs.mkdtemp(path.join(os.tmpdir(), "event-turn-real-admission-"))
+    try {
+      const git = async (args: string[]) => {
+        const proc = Bun.spawn(["git", ...args], { cwd: repo, stdout: "pipe", stderr: "pipe" })
+        if (await proc.exited !== 0) throw new Error(`git ${args.join(" ")} failed`)
+      }
+      await git(["init", "-b", "main"])
+      await git(["config", "user.email", "test@test.dev"])
+      await git(["config", "user.name", "test"])
+      await fs.writeFile(path.join(repo, "seed.txt"), "seed\n")
+      await git(["add", "-A"])
+      await git(["commit", "--no-verify", "-m", "seed"])
+      const database = Database.layerFromPath(":memory:")
+      const events = EventV2.layer.pipe(Layer.provide(database))
+      const store = SessionStore.layer.pipe(Layer.provide(database))
+      const projector = SessionProjector.layer.pipe(Layer.provide(events), Layer.provide(database))
+      const projects = Layer.succeed(ProjectV2.Service, ProjectV2.Service.of({
+        resolve: (directory) => Effect.succeed({ id: ProjectV2.ID.global, directory }),
+        directories: () => Effect.succeed([]),
+        commit: () => Effect.void,
+      }))
+      const resumes: string[] = []
+      const execution = Layer.succeed(SessionExecution.Service, SessionExecution.Service.of({
+        active: Effect.succeed(new Set()),
+        resume: (sessionID) => Effect.sync(() => { resumes.push(sessionID) }),
+        wake: () => Effect.void,
+        interrupt: () => Effect.void,
+        awaitIdle: () => Effect.void,
+      }))
+      const sessions = SessionV2.layer.pipe(
+        Layer.provide(events), Layer.provide(database), Layer.provide(store),
+        Layer.provide(projects), Layer.provide(execution),
+      )
+      await Effect.runPromise(Effect.gen(function* () {
+        const context = yield* Layer.build(Layer.mergeAll(database, events, store, projector, projects, execution, sessions))
+        const db = Context.get(context, Database.Service).db
+        const real = Context.get(context, SessionV2.Service)
+        const admitted = yield* Deferred.make<void>()
+        const crashed = SessionV2.Service.of({
+          ...real,
+          prompt: (value) => real.prompt(value).pipe(
+            Effect.tap(() => Deferred.succeed(admitted, undefined)),
+            Effect.flatMap(() => Effect.never),
+          ),
+        })
+        const attempt = input({ directory: repo, requiresWriteIsolation: true })
+        const instanceStore = fakeServices().instanceStore
+        const first = Effect.runFork(makeEventTurnRunnerV2({ sessions: crashed, instanceStore, db })(attempt))
+        const boundary = yield* Effect.race(
+          Deferred.await(admitted).pipe(Effect.as("admitted")),
+          Fiber.await(first).pipe(Effect.map((exit) => JSON.stringify(exit))),
+        )
+        expect(boundary).toBe("admitted")
+        yield* Fiber.interrupt(first)
+        expect(resumes).toEqual([])
+        expect(yield* db.select().from(SessionInputTable).all()).toHaveLength(1)
+        expect(yield* db.select().from(SessionMessageTable).all()).toHaveLength(0)
+        const receipts = yield* db.select().from(EventTaskWorkspaceTable).all()
+        expect(receipts).toHaveLength(1)
+        expect(receipts[0]?.state).toBe("retained")
+
+        const replay = yield* makeEventTurnRunnerV2({ sessions: real, instanceStore, db })(attempt)
+        expect(replay).toMatchObject({ ok: false, reason: "runner_failed" })
+        expect(resumes).toEqual([])
+        const inputs = yield* db.select().from(SessionInputTable).all()
+        expect(inputs).toHaveLength(1)
+        expect(yield* db.select().from(SessionMessageTable).all()).toHaveLength(0)
+        expect((yield* db.select().from(EventTaskWorkspaceTable).all())[0]?.state).toBe("retained")
+        expect((yield* Effect.promise(() => fs.stat(receipts[0]!.directory))).isDirectory()).toBe(true)
+        const exactRetry = yield* real.prompt({
+          id: SessionMessage.ID.make(inputs[0]!.id),
+          sessionID: SessionV2.ID.make(inputs[0]!.session_id),
+          prompt: new Prompt({ text: attempt.prompt }),
+          delivery: "queue",
+          resume: false,
+        })
+        expect(exactRetry.id).toBe(inputs[0]!.id)
+        expect(yield* db.select().from(SessionInputTable).all()).toHaveLength(1)
+        expect(resumes).toEqual([])
+        expect((yield* TaskWorkspace.reclaimStale(db, {
+          now: Date.now() + TaskWorkspace.DEFAULT_WORKTREE_RETENTION_MS + 1_000,
+        })).reclaimed).toBe(1)
+      }).pipe(Effect.scoped))
+    } finally {
+      await fs.rm(repo, { recursive: true, force: true })
+    }
+  })
+
   test("durable worktree replay after admit-only interruption never starts provider work", async () => {
     const repo = await fs.mkdtemp(path.join(os.tmpdir(), "event-turn-durable-crash-"))
     try {
