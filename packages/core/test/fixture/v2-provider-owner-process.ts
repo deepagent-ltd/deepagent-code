@@ -121,7 +121,7 @@ const program = Effect.gen(function* () {
       .onConflictDoNothing()
       .run()
     yield* db
-      .insert(SessionActivityTable)
+      .insert(SessionActivityTable) // fixture-exempt: crash takeover fixture must retain the sealed receipt's activity ID
       .values({
         activity_id: receipt.activityId,
         session_id: sessionID,

@@ -850,7 +850,7 @@ function seedForeignClaimTurn(
       .run()
       .pipe(Effect.orDie)
     yield* database.db
-      .insert(SessionActivityTable)
+      .insert(SessionActivityTable) // fixture-exempt: seeds an active foreign-claim turn for crash recovery
       .values({
         activity_id: "activity_foreign_turn",
         session_id: sessionID,
@@ -935,7 +935,7 @@ function seedForeignClaimTurn(
     const ownerService = yield* SessionProviderOwner.Service
     yield* ownerService.register({ ownerToken: "owner_foreign_turn", leaseMs: 60_000 })
     yield* database.db
-      .insert(SessionProviderAttemptTable)
+      .insert(SessionProviderAttemptTable) // fixture-exempt: seeds a prepared foreign-owner attempt for crash recovery
       .values({
         attempt_id: "attempt_foreign_turn",
         session_id: sessionID,
