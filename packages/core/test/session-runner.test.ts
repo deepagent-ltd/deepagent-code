@@ -1376,6 +1376,39 @@ describe("SessionRunnerLLM", () => {
     )
   }
 
+  it.effect("hard-gate compaction does not dispatch a summary beyond the physical input budget", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const { db } = yield* Database.Service
+      response = fragmentFixture("text", "budget-earlier", ["Earlier settled"]).completeEvents
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "x".repeat(38_000) }), resume: false })
+      yield* session.resume(sessionID)
+
+      currentModel = Model.make({
+        id: "deepseek-flash",
+        provider: "deepseek",
+        route: OpenAIChat.route.with({ limits: { context: 10_000, output: 512 } }),
+      })
+      currentModelInfo = managedNoToolInfo
+      requests.length = 0
+      responses = [fragmentFixture("text", "unsafe-hard-summary", ["summary must not dispatch"]).completeEvents]
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Continue after the long history" }), resume: false })
+      const exit = yield* session.resume(sessionID).pipe(Effect.exit)
+      expect(Exit.isFailure(exit)).toBe(true)
+
+      const policies = yield* db.select().from(SessionModelPolicyReceiptTable)
+        .where(eq(SessionModelPolicyReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie)
+      const policy = policies.findLast((row) => row.policy.state === "managed")
+      expect(policy?.policy).toMatchObject({ state: "managed", action: "hard_gate_compact" })
+      expect(policy?.blocked_reason).toBe("compaction_unavailable")
+      expect(requests).toHaveLength(0)
+      expect(yield* db.select().from(V2ProviderTurnReceiptTable)
+        .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie))
+        .toHaveLength(1)
+    }),
+  )
+
   it.effect("commits a checkpoint before hard-gate compaction and rebuilds the selected request", () =>
     Effect.gen(function* () {
       yield* setup
@@ -6988,6 +7021,44 @@ describe("SessionRunnerLLM", () => {
       const serialized = JSON.stringify(requests.at(-1)?.messages)
       expect(serialized).not.toContain("first exchange about apples")
       expect(serialized).toContain("after compaction")
+    }),
+  )
+
+  it.effect("manual compaction does not dispatch a summary beyond the physical input budget", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const execution = yield* SessionExecution.Service
+      const { db } = yield* Database.Service
+      responses = [
+        fragmentFixture("text", "budget-first", ["first settled"]).completeEvents,
+        fragmentFixture("text", "budget-second", ["second settled"]).completeEvents,
+      ]
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "x".repeat(36_000) }) })
+      yield* execution.awaitIdle(sessionID)
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "retain this exchange" }) })
+      yield* execution.awaitIdle(sessionID)
+
+      const summaryModel = Model.make({
+        id: "deepseek-flash",
+        provider: "deepseek",
+        route: OpenAIChat.route.with({ limits: { context: 10_000, output: 512 } }),
+      })
+      currentModel = summaryModel
+      requests.length = 0
+      responses = [fragmentFixture("text", "unsafe-summary", ["summary must not dispatch"]).completeEvents]
+      yield* session.compact({
+        sessionID,
+        model: { providerID: ProviderV2.ID.make(summaryModel.provider), modelID: ModelV2.ID.make(summaryModel.id) },
+      })
+
+      const request = yield* db.select().from(CompactionRequestTable)
+        .where(eq(CompactionRequestTable.session_id, sessionID)).get().pipe(Effect.orDie)
+      expect(request).toMatchObject({ status: "settled", outcome: "nothing_to_compact", summary_receipt_id: null })
+      expect(requests).toHaveLength(0)
+      expect(yield* db.select().from(V2ProviderTurnReceiptTable)
+        .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie))
+        .toHaveLength(2)
     }),
   )
 

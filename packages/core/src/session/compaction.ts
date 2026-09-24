@@ -523,7 +523,8 @@ export const make = (dependencies: Dependencies) => {
       generation: { maxTokens: summaryOutput },
     })
     const summaryEstimatedTokens = PreparedProviderTurn.estimateFullRequestTokens(summaryRequest)
-    if (summaryEstimatedTokens >= context) return false
+    const summaryBudget = PreparedProviderTurn.budget(input.model, summaryEstimatedTokens)
+    if (summaryBudget.decision !== "ok") return false
     const summaryRequestInputHash = Hash.sha256(
       CanonicalJson.stringify({
         ...LLMRequest.input(summaryRequest),
@@ -577,7 +578,7 @@ export const make = (dependencies: Dependencies) => {
               toolChoice: null,
               toolResultReferences: [],
               samplingMaxOutputTokens: summaryOutput,
-              budget: PreparedProviderTurn.budget(input.model, summaryEstimatedTokens),
+              budget: summaryBudget,
               userMessageID: input.userMessageID,
               activityID: summaryReceipt.activityId,
               providerTurnSeq: summaryReceipt.providerTurnSeq,
