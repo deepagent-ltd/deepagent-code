@@ -545,7 +545,7 @@ const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
         ["packages/deepagent-code/src/cli/cmd/run/otel.ts:ready", ["otel-bootstrap", "process-global", "process-lifetime", "process-exit", "coordination-only", "process-global", "safe_bounded"]],
         ["packages/deepagent-code/src/cli/cmd/run/otel.ts:runtime", ["otel-bootstrap", "process-global", "process-lifetime", "process-exit", "coordination-only", "process-global", "safe_bounded"]],
         ["packages/deepagent-code/src/cli/cmd/run/runtime.boot.ts:runtime", ["run-invocation", "per-run-invocation", "run-lifetime", "run-exit", "coordination-only", "run-scoped", "safe_scoped"]],
-        ["packages/deepagent-code/src/cli/cmd/run/runtime.ts:closure@914:915.sdk", ["run-invocation", "per-run-invocation", "run-lifetime", "run-exit", "coordination-only", "run-scoped", "safe_scoped"]],
+        ["packages/deepagent-code/src/cli/cmd/run/runtime.ts:closure@916:917.sdk", ["run-invocation", "per-run-invocation", "run-lifetime", "run-exit", "coordination-only", "run-scoped", "safe_scoped"]],
         ["packages/deepagent-code/src/cli/cmd/run/scrollback.surface.ts:RunScrollbackStream.pendingThemes@96", ["render-surface-instance", "per-render", "surface-lifetime", "surface-dispose", "coordination-only", "run-scoped", "safe_bounded"]],
         ["packages/deepagent-code/src/cli/cmd/run/scrollback.surface.ts:nextId", ["module-counter", "process-global", "process-lifetime", "process-exit", "coordination-only", "process-global", "safe_bounded"]],
         ["packages/deepagent-code/src/cli/cmd/run/session-data.ts:money", ["lazy-memoization", "source-module", "first-use-initialized", "not-applicable", "non-authority", "package-static", "safe_static"]],
@@ -800,7 +800,7 @@ const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
   // handle — all die with their command invocation.
   ...Object.fromEntries(
     [
-      "packages/deepagent-code/src/cli/cmd/run.ts:closure@278:1241.sdk",
+      "packages/deepagent-code/src/cli/cmd/run.ts:closure@279:1246.sdk",
       "packages/deepagent-code/src/cli/cmd/providers.ts:closure@317:330.abort",
       "packages/deepagent-code/src/cli/cmd/debug/scrap.ts:handler@9:12.runtime",
       "packages/deepagent-code/src/cli/cmd/run/footer.prompt.tsx:createPromptState@283:305.marks",
