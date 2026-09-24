@@ -35,13 +35,10 @@ export type PolicyInput = {
 }
 
 function policyRecord(input: PolicyInput, providerAttemptID?: string) {
+  // A blocked preflight has no attempt ID. Bind every source/projection facet so a
+  // same-wire successor selection cannot reuse the prior receipt's provenance.
   const receiptID = `model_policy_${Hash.sha256(CanonicalJson.stringify({
-    sessionID: input.sessionID,
-    activityID: input.activityID,
-    promptEpoch: input.promptEpoch,
-    requestHash: input.requestHash,
-    policy: input.policy,
-    estimatedFullRequestTokens: input.estimatedFullRequestTokens,
+    ...input,
     ...(providerAttemptID === undefined ? {} : { providerAttemptID }),
   }))}`
   const values = {
@@ -72,8 +69,9 @@ function policyRecord(input: PolicyInput, providerAttemptID?: string) {
 
 /** A blocked request has no provider attempt, so its diagnostic is durable on its own. */
 export const recordPolicy = Effect.fn("LongContext.recordPolicy")(function* (input: PolicyInput & { readonly db: DB }) {
-  const { receiptID, values } = policyRecord(input)
-  yield* input.db.insert(SessionModelPolicyReceiptTable).values(values).onConflictDoNothing().pipe(Effect.orDie)
+  const { db, ...policy } = input
+  const { receiptID, values } = policyRecord(policy)
+  yield* db.insert(SessionModelPolicyReceiptTable).values(values).onConflictDoNothing().pipe(Effect.orDie)
   return receiptID
 })
 

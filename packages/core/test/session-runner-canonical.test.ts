@@ -8,6 +8,7 @@ import { SessionProviderAttempt } from "../src/context-federation/provider-attem
 import { SessionProviderOwner } from "../src/context-federation/provider-owner"
 import { SessionRunnerCanonical } from "../src/session/runner/canonical-turn"
 import { ModelHardPolicy } from "../src/session/runner/model-hard-policy"
+import { LongContext } from "../src/session/long-context"
 import { SessionModelPolicyReceiptTable } from "../src/session/long-context.sql"
 import { V2ProviderTurn } from "../src/session/runner/v2-provider-turn"
 import { SessionSchema } from "../src/session/schema"
@@ -32,6 +33,48 @@ const contexts = SessionContext.layer.pipe(
 )
 const it = testEffect(Layer.mergeAll(database, owners, turns, attempts, contexts))
 const sessionID = SessionSchema.ID.make("ses_canonical")
+
+it.effect("hard-gate policy retries retain each exact selection provenance", () =>
+  Effect.gen(function* () {
+    yield* seed
+    const { db } = yield* Database.Service
+    const policy = ModelHardPolicy.decide({
+      providerID: "deepseek",
+      runtimeModelID: "deepseek-flash",
+      apiModelID: "deepseek-flash",
+      physicalInputBudget: 1_000_000,
+      estimatedFullRequestTokens: 384_000,
+      autoCompact: false,
+    })
+    const first = {
+      db,
+      sessionID,
+      activityID: "activity_hard_gate",
+      userMessageID: "msg_trigger",
+      promptEpoch: 0,
+      requestHash: Hash.sha256("same-wire-request"),
+      providerID: "deepseek",
+      runtimeModelID: "deepseek-flash",
+      apiModelID: "deepseek-flash",
+      policy,
+      estimatedFullRequestTokens: 384_000,
+      reservedOutputTokens: 512,
+      selectionID: "selection_first",
+      projectionHash: Hash.sha256("first projection"),
+      graphSnapshotRefs: ["graph:first"],
+      offeredToolIDs: ["read"],
+      degradedToolIDs: [],
+    }
+    const firstID = yield* LongContext.recordPolicy(first)
+    expect(yield* LongContext.recordPolicy(first)).toBe(firstID)
+    const next = { ...first, selectionID: "selection_next", projectionHash: Hash.sha256("next projection"), graphSnapshotRefs: ["graph:next"] }
+    const nextID = yield* LongContext.recordPolicy(next)
+    expect(nextID).not.toBe(firstID)
+    const rows = yield* db.select().from(SessionModelPolicyReceiptTable).all().pipe(Effect.orDie)
+    expect(rows).toHaveLength(2)
+    expect(rows.map((row) => row.context_selection_id).sort()).toEqual(["selection_first", "selection_next"])
+  }),
+)
 
 const seed = Effect.gen(function* () {
   const { db } = yield* Database.Service
