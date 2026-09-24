@@ -27,24 +27,19 @@ export const layer = Layer.effect(
     const reportLifecycle = (sessionID: SessionSchema.ID, effect: Effect.Effect<void>) =>
       effect.pipe(
         Effect.tapCause((cause) =>
-          Cause.hasInterruptsOnly(cause)
-            ? Effect.void
-            : Effect.logError("Failed to publish Session execution lifecycle", cause).pipe(
+          Effect.gen(function* () {
+            // A terminal event may fail after the release hook ran but before its transaction
+            // committed. Leave the durable claim fenced for explicit recovery, and discard the
+            // process-local token so a later START refusal cannot release it implicitly.
+            ownedClaims.delete(sessionID)
+            if (!Cause.hasInterruptsOnly(cause))
+              yield* Effect.logError("Failed to publish Session execution lifecycle", cause).pipe(
                 Effect.annotateLogs("sessionID", sessionID),
-              ),
+              )
+          }),
         ),
         Effect.ignore,
       )
-    const claimOnCommit = (sessionID: SessionSchema.ID) => ({
-      commit: () =>
-        store.claim(sessionID).pipe(
-          Effect.flatMap((token) =>
-            token === undefined
-              ? Effect.fail(new SessionRunner.ExecutionRecoveryRequiredError({ sessionID }))
-              : Effect.sync(() => ownedClaims.set(sessionID, token)),
-          ),
-        ),
-    })
     const releaseOnCommit = (sessionID: SessionSchema.ID) => ({
       commit: () => {
         const token = ownedClaims.get(sessionID)
@@ -52,7 +47,7 @@ export const layer = Layer.effect(
         return store.release(sessionID, token).pipe(
           Effect.flatMap((released) =>
             released
-              ? Effect.sync(() => ownedClaims.delete(sessionID))
+              ? Effect.void
               : Effect.die(`Session execution claim token changed: ${sessionID}`),
           ),
         )
@@ -68,11 +63,21 @@ export const layer = Layer.effect(
         Effect.gen(function* () {
           const session = yield* store.get(sessionID)
           if (!session) return yield* Effect.die(`Session not found: ${sessionID}`)
+          let claimedToken: number | undefined
           yield* events.publishChecked(
             SessionEvent.Execution.Started,
             { sessionID, timestamp: yield* DateTime.now },
-            { ...claimOnCommit(sessionID), location: session.location },
+            {
+              commit: () => store.claim(sessionID).pipe(Effect.flatMap((token) =>
+                token === undefined
+                  ? Effect.fail(new SessionRunner.ExecutionRecoveryRequiredError({ sessionID }))
+                  : Effect.sync(() => { claimedToken = token }),
+              )),
+              location: session.location,
+            },
           )
+          if (claimedToken === undefined) return yield* Effect.die(`Session execution claim token missing after Started: ${sessionID}`)
+          ownedClaims.set(sessionID, claimedToken)
         }).pipe(
           // A refused claim aborts the event transaction. Recover only this expected CAS result
           // from the checked hook channel; all other hook failures remain defects.
@@ -119,6 +124,9 @@ export const layer = Layer.effect(
                   )
               return
             }
+            // The Started event may have failed after its in-transaction claim hook; neither
+            // the DB claim nor the process-local token exists after that rollback.
+            if (!ownedClaims.has(sessionID)) return
             const session = yield* store.get(sessionID)
             if (!session) return yield* Effect.die(`Session not found: ${sessionID}`)
             const outcome = SessionExecution.terminal(exit, reason)
@@ -129,6 +137,7 @@ export const layer = Layer.effect(
                 { sessionID, timestamp },
                 { ...releaseOnCommit(sessionID), location: session.location },
               )
+              ownedClaims.delete(sessionID)
               return
             }
             if (outcome.type === "interrupted") {
@@ -140,6 +149,7 @@ export const layer = Layer.effect(
                   location: session.location,
                 },
               )
+              if (outcome.reason !== "shutdown") ownedClaims.delete(sessionID)
               return
             }
             yield* events.publish(
@@ -147,6 +157,7 @@ export const layer = Layer.effect(
               { sessionID, timestamp, error: outcome.error },
               { ...releaseOnCommit(sessionID), location: session.location },
             )
+            ownedClaims.delete(sessionID)
           }),
         ),
     })
