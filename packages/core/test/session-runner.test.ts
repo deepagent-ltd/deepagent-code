@@ -7047,18 +7047,43 @@ describe("SessionRunnerLLM", () => {
       currentModel = summaryModel
       requests.length = 0
       responses = [fragmentFixture("text", "unsafe-summary", ["summary must not dispatch"]).completeEvents]
-      yield* session.compact({
+      const refusal = yield* session.compact({
         sessionID,
         model: { providerID: ProviderV2.ID.make(summaryModel.provider), modelID: ModelV2.ID.make(summaryModel.id) },
+      }).pipe(Effect.flip)
+      expect(refusal).toMatchObject({ operation: "compact", reason: "summary_budget_exceeded" })
+
+      const request = yield* db.select().from(CompactionRequestTable)
+        .where(eq(CompactionRequestTable.session_id, sessionID)).get().pipe(Effect.orDie)
+      expect(request).toMatchObject({ status: "failed", outcome: "summary_budget_exceeded", summary_receipt_id: null })
+      expect(requests).toHaveLength(0)
+      expect(yield* db.select().from(V2ProviderTurnReceiptTable)
+        .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie))
+        .toHaveLength(2)
+    }),
+  )
+
+  it.effect("manual compaction keeps a genuine single-exchange no-op successful", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      const execution = yield* SessionExecution.Service
+      const { db } = yield* Database.Service
+      responses = [fragmentFixture("text", "one-reply", ["one settled reply"]).completeEvents]
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "one exchange" }) })
+      yield* execution.awaitIdle(sessionID)
+
+      currentModel = compactModel
+      requests.length = 0
+      yield* session.compact({
+        sessionID,
+        model: { providerID: ProviderV2.ID.make(compactModel.provider), modelID: ModelV2.ID.make(compactModel.id) },
       })
 
       const request = yield* db.select().from(CompactionRequestTable)
         .where(eq(CompactionRequestTable.session_id, sessionID)).get().pipe(Effect.orDie)
       expect(request).toMatchObject({ status: "settled", outcome: "nothing_to_compact", summary_receipt_id: null })
       expect(requests).toHaveLength(0)
-      expect(yield* db.select().from(V2ProviderTurnReceiptTable)
-        .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID)).all().pipe(Effect.orDie))
-        .toHaveLength(2)
     }),
   )
 

@@ -416,6 +416,9 @@ export function isRemoteCompactUnsupported(model: Model): boolean {
 export const make = (dependencies: Dependencies) => {
   const config = settings(dependencies.config)
   const compactAfterOverflow = Effect.fn("SessionCompaction.compactAfterOverflow")(function* (input: Input) {
+    // Manual requests must surface a budget refusal; automatic compaction leaves the caller's
+    // original turn to its existing hard-gate or provider-dispatch policy.
+    const budgetRefusal = input.reason === "manual" ? { refusal: "summary_budget_exceeded" as const } : false
     const context = modelInputLimit(input.model)
     if (context === undefined || context <= 0) return false
     const output = input.request.generation?.maxTokens ?? input.model.route.defaults.limits?.output ?? 0
@@ -430,7 +433,7 @@ export const make = (dependencies: Dependencies) => {
       context: [previousSummary?.type === "compaction" ? previousSummary.recent : "", selected.head].filter(Boolean),
     })
     const summaryOutput = Math.min(output || SUMMARY_OUTPUT_TOKENS, SUMMARY_OUTPUT_TOKENS)
-    if (Token.estimate(summaryPrompt) > Math.max(0, context - summaryOutput)) return false
+    if (Token.estimate(summaryPrompt) > Math.max(0, context - summaryOutput)) return budgetRefusal
     const messageID = SessionMessage.ID.create()
     yield* dependencies.events.publish(SessionEvent.Compaction.Started, {
       sessionID: input.sessionID,
@@ -524,7 +527,7 @@ export const make = (dependencies: Dependencies) => {
     })
     const summaryEstimatedTokens = PreparedProviderTurn.estimateFullRequestTokens(summaryRequest)
     const summaryBudget = PreparedProviderTurn.budget(input.model, summaryEstimatedTokens)
-    if (summaryBudget.decision !== "ok") return false
+    if (summaryBudget.decision !== "ok") return budgetRefusal
     const summaryRequestInputHash = Hash.sha256(
       CanonicalJson.stringify({
         ...LLMRequest.input(summaryRequest),
@@ -651,7 +654,8 @@ export const make = (dependencies: Dependencies) => {
     if (context === undefined || context <= 0) return false
     const tokens = input.estimatedInputTokens ?? estimateRequestTokens(input.request)
     if (tokens <= inputBudget(context, resolvedBuffer(context, config))) return false
-    return yield* compactAfterOverflow(input)
+    const compacted = yield* compactAfterOverflow(input)
+    return compacted && "refusal" in compacted ? false : compacted
   })
   return {
     autoEnabled: config.auto,
