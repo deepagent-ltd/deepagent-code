@@ -11,12 +11,12 @@
  * `bun run script/manifest-digest/generate-manifest.ts` and update both digests
  * here.
  *
- * V2.0.2 re-pin (2026-09-24): regenerate over the merged X-05 selection contract,
- * X-13e loaded-only capability audit contract, and X-08 im_send request identity migration.
+ * V2.0.2 re-pin (2026-09-25): regenerate after aligning product package versions
+ * and the four supported release targets.
  */
 export const HeadPin = {
   /** Commit whose tree the digests were pinned on. Informational; the digests are the gate. */
-  commit: "8daf3330",
-  setTreeDigest: "a3c84ffd192b533dd963dd81d805665800860a4a3f2c11d4e0bec9967475122e",
-  overallDigest: "d2075878d0b1ffb4961601d05772e3b8fbde70d798327de9998a028187730a50",
+  commit: "e18f3e91",
+  setTreeDigest: "280e5fc8fcbc01b87b461cd2ccfe94fe8eb3c35fc552e0aa55c2c0488e67c4e3",
+  overallDigest: "c4d1b7b729d1bc804e9319557b660ee295dfd04eb96ff268ca54fd4373b5096a",
 } as const
