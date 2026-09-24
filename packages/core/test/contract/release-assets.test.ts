@@ -141,13 +141,15 @@ test("staging covers every CLI target, owner row and six desktop targets", async
   const manifest = await verifyReleaseAssets(manifestPath, assetsDir, commit, tree, true)
   expect(manifest.assets).toHaveLength(19)
   await Promise.all(
-    ["ledger.json", "release-evidence-products.tar.gz", "latest.yml"].map((name) =>
+    ["ledger.json", "release-evidence-products.tar.gz", "latest.yml", "release-updater-evidence.json"].map((name) =>
       Bun.write(join(assetsDir, name), name),
     ),
   )
   await verifyReleaseAssets(manifestPath, assetsDir, commit, tree, true, true)
   await Promise.all(
-    ["ledger.json", "release-evidence-products.tar.gz", "latest.yml"].map((name) => rm(join(assetsDir, name))),
+    ["ledger.json", "release-evidence-products.tar.gz", "latest.yml", "release-updater-evidence.json"].map((name) =>
+      rm(join(assetsDir, name)),
+    ),
   )
   await Bun.write(join(assetsDir, "stale.zip"), "old release asset")
   await expect(verifyReleaseAssets(manifestPath, assetsDir, commit, tree, true)).rejects.toThrow("unexpected files")

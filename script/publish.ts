@@ -6,7 +6,7 @@ import { fileURLToPath } from "url"
 import { assertReleaseCandidate } from "./assert-release-candidate"
 import { prepareReleaseFiles } from "./prepare-release-files"
 import { verifySdkBuild } from "../packages/sdk/js/script/verify-build"
-import { verifyUpdaterInputs, verifyUpdaterReadback } from "../packages/desktop/scripts/verify-updater-assets"
+import { publishUpdaterEvidence, verifyUpdaterInputs } from "../packages/desktop/scripts/verify-updater-assets"
 
 console.log("=== publishing ===\n")
 
@@ -43,13 +43,23 @@ if (Script.release) {
 if (Script.release) {
   const latestDir = process.env.LATEST_YML_DIR
   const assetsDir = process.env.RELEASE_ASSETS_DIR
+  const ledgerPath = process.env.RELEASE_LEDGER_PATH
   const repo = process.env.GH_REPO
-  if (!latestDir || !assetsDir || !repo || !process.env.RUNNER_TEMP)
-    throw new Error("release updater verification requires latest YAML, staged assets, repository and runner temp")
+  if (!latestDir || !assetsDir || !ledgerPath || !repo || !process.env.RUNNER_TEMP)
+    throw new Error(
+      "release updater verification requires latest YAML, staged assets, RI-51 ledger, repository and runner temp",
+    )
   await verifyUpdaterInputs(latestDir, assetsDir, Script.version)
   await $`bun ./packages/desktop/scripts/finalize-latest-json.ts`
   await $`bun ./packages/desktop/scripts/finalize-latest-yml.ts`
-  await verifyUpdaterReadback(process.env.RUNNER_TEMP, repo, tag)
+  await publishUpdaterEvidence({
+    directory: process.env.RUNNER_TEMP,
+    repository: repo,
+    tag,
+    commit: process.env.DEEPAGENT_CODE_CANDIDATE_COMMIT!,
+    tree: process.env.DEEPAGENT_CODE_CANDIDATE_TREE!,
+    ledgerPath,
+  })
 }
 
 console.log("\n=== cli ===\n")

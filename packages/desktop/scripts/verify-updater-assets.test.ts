@@ -3,7 +3,7 @@ import { createHash } from "node:crypto"
 import { chmod, mkdir, mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { verifyUpdaterInputs, verifyUpdaterReadback } from "./verify-updater-assets"
+import { publishUpdaterEvidence, verifyUpdaterInputs, verifyUpdaterReadback } from "./verify-updater-assets"
 
 test("all six updater sources bind candidate version, target URL and staged asset bytes", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "deepagent-updater-inputs-"))
@@ -95,6 +95,60 @@ test("all five uploaded updater outputs read back byte for byte before undraft",
   } finally {
     if (previous === undefined) delete process.env.FAKE_GH_ASSETS
     else process.env.FAKE_GH_ASSETS = previous
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
+test("post-gate updater evidence binds candidate and ledger, survives same-SHA retry and rejects remote drift", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "deepagent-updater-evidence-test-"))
+  const previousAssets = process.env.FAKE_GH_ASSETS
+  const previousTamper = process.env.FAKE_GH_TAMPER
+  try {
+    const local = path.join(root, "local")
+    const remote = path.join(root, "remote")
+    await Promise.all([mkdir(local), mkdir(remote)])
+    for (const name of ["latest.json", "latest.yml", "latest-mac.yml", "latest-linux.yml", "latest-linux-arm64.yml"]) {
+      await Bun.write(path.join(local, name), name)
+      await Bun.write(path.join(remote, name), name)
+    }
+    const commit = "c".repeat(40)
+    const tree = "d".repeat(40)
+    const ledgerDigest = "e".repeat(64)
+    const ledgerPath = path.join(root, "ledger.json")
+    await Bun.write(ledgerPath, JSON.stringify({ ledgerDigest, manifest: { commit, tree } }))
+    const gh = path.join(root, "gh")
+    await Bun.write(
+      gh,
+      '#!/bin/sh\nif [ "$2" = upload ]; then\n  cp "$4" "$FAKE_GH_ASSETS/$(basename "$4")"\n  if [ "$FAKE_GH_TAMPER" = 1 ]; then printf tampered > "$FAKE_GH_ASSETS/$(basename "$4")"; fi\n  exit 0\nfi\nwhile [ "$#" -gt 0 ]; do\n  case "$1" in\n    --dir) shift; dir="$1";;\n    --pattern) shift; name="$1";;\n  esac\n  shift\ndone\ncp "$FAKE_GH_ASSETS/$name" "$dir/$name"\n',
+    )
+    await chmod(gh, 0o755)
+    process.env.FAKE_GH_ASSETS = remote
+    const input = { directory: local, repository: "example/repo", tag: "v2.0.2", commit, tree, ledgerPath, gh }
+    const evidence = await publishUpdaterEvidence(input)
+    expect(evidence).toMatchObject({ candidateCommit: commit, candidateTree: tree, tag: "v2.0.2", ledgerDigest })
+    expect(evidence.ledgerSha256).toBe(
+      createHash("sha256")
+        .update(await Bun.file(ledgerPath).bytes())
+        .digest("hex"),
+    )
+    expect(evidence.metadata).toHaveLength(5)
+    expect(await Bun.file(path.join(local, "release-updater-evidence.json")).text()).toBe(
+      await Bun.file(path.join(remote, "release-updater-evidence.json")).text(),
+    )
+    await publishUpdaterEvidence(input)
+    await Bun.write(path.join(local, "latest.json"), "new latest.json")
+    await Bun.write(path.join(remote, "latest.json"), "new latest.json")
+    expect((await publishUpdaterEvidence(input)).metadata[0]?.sha256).toBe(
+      createHash("sha256").update("new latest.json").digest("hex"),
+    )
+    await expect(publishUpdaterEvidence({ ...input, commit: "f".repeat(40) })).rejects.toThrow("candidate differs")
+    process.env.FAKE_GH_TAMPER = "1"
+    await expect(publishUpdaterEvidence(input)).rejects.toThrow("evidence readback bytes differ")
+  } finally {
+    if (previousAssets === undefined) delete process.env.FAKE_GH_ASSETS
+    else process.env.FAKE_GH_ASSETS = previousAssets
+    if (previousTamper === undefined) delete process.env.FAKE_GH_TAMPER
+    else process.env.FAKE_GH_TAMPER = previousTamper
     await rm(root, { recursive: true, force: true })
   }
 })

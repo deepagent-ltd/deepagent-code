@@ -27,5 +27,7 @@ release assets and compares every byte with the staged manifest before package p
 The six desktop updater source files are then checked against the staged installer bytes and
 version before any package is published. The generated `latest.json` and four `latest*.yml`
 files are uploaded to the draft release and read back byte for byte before the draft opens.
-These updater metadata bytes are a separate post-gate check; they are not included in the
-RI-51 ledger digest.
+The workflow then uploads and reads back `release-updater-evidence.json`, which binds the
+candidate commit/tree, tag, RI-51 ledger digest and exact ledger-file SHA-256 to the five updater
+metadata sizes and SHA-256 values. This is a separate post-gate audit product: the updater
+metadata bytes are not included in the original RI-51 ledger digest.

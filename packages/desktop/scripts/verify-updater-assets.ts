@@ -13,6 +13,7 @@ const sources = [
   ["latest-yml-aarch64-unknown-linux-gnu/latest-linux-arm64.yml", "deepagent-code-desktop-linux-arm64.deb"],
 ] as const
 const outputs = ["latest.json", "latest.yml", "latest-mac.yml", "latest-linux.yml", "latest-linux-arm64.yml"]
+const evidenceName = "release-updater-evidence.json"
 
 export async function verifyUpdaterInputs(directory: string, assetsDir: string, version: string) {
   for (const [source, requiredAsset] of sources) {
@@ -49,6 +50,7 @@ export async function verifyUpdaterInputs(directory: string, assetsDir: string, 
 
 export async function verifyUpdaterReadback(directory: string, repository: string, tag: string, gh = "gh") {
   const temporary = await mkdtemp(path.join(os.tmpdir(), "deepagent-updater-readback-"))
+  const verified: { name: string; bytes: number; sha256: string }[] = []
   try {
     for (const name of outputs) {
       const local = path.join(directory, name)
@@ -62,9 +64,75 @@ export async function verifyUpdaterReadback(directory: string, repository: strin
       const localBytes = await Bun.file(local).bytes()
       if (!Buffer.from(localBytes).equals(Buffer.from(await Bun.file(path.join(temporary, name)).bytes())))
         throw new Error(`updater readback bytes differ: ${name}`)
-      console.log(`updater readback ${name} sha256:${createHash("sha256").update(localBytes).digest("hex")}`)
+      const sha256 = createHash("sha256").update(localBytes).digest("hex")
+      console.log(`updater readback ${name} sha256:${sha256}`)
+      verified.push({ name, bytes: localBytes.byteLength, sha256 })
     }
   } finally {
     await rm(temporary, { recursive: true, force: true })
   }
+  return verified
+}
+
+export async function publishUpdaterEvidence(input: {
+  directory: string
+  repository: string
+  tag: string
+  commit: string
+  tree: string
+  ledgerPath: string
+  gh?: string
+}) {
+  const ledgerBytes = await Bun.file(input.ledgerPath).bytes()
+  const ledger = JSON.parse(Buffer.from(ledgerBytes).toString("utf8")) as {
+    ledgerDigest?: string
+    manifest?: { commit?: string; tree?: string }
+  }
+  if (ledger.manifest?.commit !== input.commit || ledger.manifest.tree !== input.tree)
+    throw new Error("updater evidence candidate differs from RI-51 ledger")
+  if (!ledger.ledgerDigest || !/^[a-f0-9]{64}$/.test(ledger.ledgerDigest))
+    throw new Error("updater evidence RI-51 ledger digest is invalid")
+  const metadata = await verifyUpdaterReadback(input.directory, input.repository, input.tag, input.gh)
+  const evidence = {
+    schemaVersion: "release-updater-evidence.v1",
+    candidateCommit: input.commit,
+    candidateTree: input.tree,
+    tag: input.tag,
+    ledgerDigest: ledger.ledgerDigest,
+    ledgerSha256: createHash("sha256").update(ledgerBytes).digest("hex"),
+    metadata,
+  }
+  const file = path.join(input.directory, evidenceName)
+  await Bun.write(file, `${JSON.stringify(evidence, null, 2)}\n`)
+  const gh = input.gh ?? "gh"
+  const upload = Bun.spawnSync([gh, "release", "upload", input.tag, file, "--clobber", "--repo", input.repository], {
+    stdout: "pipe",
+    stderr: "pipe",
+    env: { ...process.env },
+  })
+  if (upload.exitCode !== 0) throw new Error(`updater evidence upload failed: ${upload.stderr.toString()}`)
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "deepagent-updater-evidence-readback-"))
+  try {
+    const download = Bun.spawnSync(
+      [gh, "release", "download", input.tag, "--repo", input.repository, "--dir", temporary, "--pattern", evidenceName],
+      { stdout: "pipe", stderr: "pipe", env: { ...process.env } },
+    )
+    if (download.exitCode !== 0) throw new Error(`updater evidence download failed: ${download.stderr.toString()}`)
+    if (!(await lstat(path.join(temporary, evidenceName))).isFile())
+      throw new Error("updater evidence readback is missing")
+    if (
+      !Buffer.from(await Bun.file(file).bytes()).equals(
+        Buffer.from(await Bun.file(path.join(temporary, evidenceName)).bytes()),
+      )
+    )
+      throw new Error("updater evidence readback bytes differ")
+  } finally {
+    await rm(temporary, { recursive: true, force: true })
+  }
+  console.log(
+    `updater evidence ${evidenceName} sha256:${createHash("sha256")
+      .update(await Bun.file(file).bytes())
+      .digest("hex")}`,
+  )
+  return evidence
 }

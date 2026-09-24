@@ -146,7 +146,14 @@ export async function verifyReleaseAssets(
       ? [...manifest.assets.map((asset) => asset.name), "ledger.json", "release-evidence-products.tar.gz"]
       : manifest.assets.map((asset) => asset.name)
     const optional = allowLedgerAssets
-      ? ["latest.json", "latest.yml", "latest-mac.yml", "latest-linux.yml", "latest-linux-arm64.yml"]
+      ? [
+          "latest.json",
+          "latest.yml",
+          "latest-mac.yml",
+          "latest-linux.yml",
+          "latest-linux-arm64.yml",
+          "release-updater-evidence.json",
+        ]
       : []
     const present = await readdir(assetsDir)
     if (
