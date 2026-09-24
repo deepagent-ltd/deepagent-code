@@ -399,6 +399,16 @@ export const chat = Effect.gen(function* () {
         maxOutputTokens: parsed.value.max_completion_tokens ?? parsed.value.max_tokens,
       })
       if (parsed.value.stream) {
+        // A disconnected HTTP reader must not cancel the provider exchange after durable
+        // admission. Drain it in the server scope so usage and the quota ledger still settle.
+        const queue = yield* Queue.dropping<string, Error>(128)
+        let overflowed = false
+        const offer = (value: string) => Effect.sync(() => {
+          if (overflowed) return
+          if (Queue.offerUnsafe(queue, value)) return
+          overflowed = true
+          Queue.failCauseUnsafe(queue, Cause.fail(new Error("Passthrough response consumer exceeded its 128-chunk buffer")))
+        })
         const state = yield* Ref.make({
           usage: undefined as ReturnType<typeof LLMResponse.usage>,
           finishReason: "stop",
@@ -443,8 +453,7 @@ export const chat = Effect.gen(function* () {
                         completion_tokens: final.usage.outputTokens,
                         total_tokens: final.usage.totalTokens ?? final.usage.inputTokens + final.usage.outputTokens,
                       })
-                    : "") +
-                  "data: [DONE]\n\n"
+                    : "")
                 )
               }),
             ),
@@ -455,9 +464,14 @@ export const chat = Effect.gen(function* () {
             ),
           ),
         )
+        yield* providerStream.pipe(
+          Stream.runForEach(offer),
+          Effect.ensuring(offer("data: [DONE]\n\n")),
+          Effect.forkIn(scope, { startImmediately: true }),
+        )
         return HttpServerResponse.stream(
           Stream.make(chunk([{ index: 0, delta: { role: "assistant" }, finish_reason: null }])).pipe(
-            Stream.concat(providerStream),
+            Stream.concat(Stream.fromQueue(queue).pipe(Stream.takeUntil((value) => value === "data: [DONE]\n\n"))),
             Stream.encodeText,
           ),
           {

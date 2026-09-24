@@ -790,15 +790,17 @@ describe("gateway release gate", () => {
     }
   }, 60_000)
 
-  test("a disconnected enhanced stream does not block provider settlement or the tenant lane", async () => {
+  test("disconnected enhanced and passthrough streams settle without blocking tenant quota", async () => {
     const directory = await mkdtemp(join(tmpdir(), "deepagent-proxy-disconnect-test-"))
     const originalDatabase = Flag.DEEPAGENT_CODE_DB
     Flag.DEEPAGENT_CODE_DB = join(directory, "proxy.sqlite")
     const releaseFlood = Promise.withResolvers<void>()
     let upstreamCalls = 0
     const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
-      await request.text()
+      const body = await request.text()
       const flooded = upstreamCalls++ === 0
+      if (body.includes("Provider error"))
+        return Response.json({ error: { message: "provider failed", type: "api_error" } }, { status: 502 })
       return new Response(new ReadableStream({
         start(controller) {
           const send = (value: string) => controller.enqueue(new TextEncoder().encode(`data: ${value}\n\n`))
@@ -806,7 +808,9 @@ describe("gateway release gate", () => {
           void (flooded ? releaseFlood.promise : Promise.resolve()).then(() => {
             for (const text of flooded ? Array.from({ length: 150 }, () => "x") : ["settled"])
               send(JSON.stringify({ choices: [{ index: 0, delta: { content: text }, finish_reason: null }] }))
-            send('{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":4,"total_tokens":15}}')
+            send(body.includes("Missing usage")
+              ? '{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}'
+              : '{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":4,"total_tokens":15}}')
             controller.enqueue(new TextEncoder().encode("data: [DONE]\n\n"))
             controller.close()
           })
@@ -851,6 +855,62 @@ describe("gateway release gate", () => {
       expect(next.status).toBe(200)
       expect((await next.json()).choices[0].message.content).toBe("settled")
       expect(upstreamCalls).toBe(2)
+      const provision = await web.handler(new Request("http://localhost/proxy/admin/tenants", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: "tenant-passthrough-disconnect", key: "sk-passthrough-disconnect", directory,
+          model_allowlist: ["test/test-model"], tier: "passthrough", quota_requests_per_minute: 10,
+          quota_tokens_per_day: 100_000, lane_limit: 8, deadline_ms: 1_000 }),
+      }), HttpApiApp.context)
+      expect(provision.status).toBe(201)
+      const passthrough = (requestID: string, stream: boolean, content = requestID) => web.handler(new Request("http://localhost/v1/chat/completions", {
+        method: "POST", headers: { authorization: "Bearer sk-passthrough-disconnect", "content-type": "application/json", "x-request-id": requestID },
+        body: JSON.stringify({ model: "test-model", messages: [{ role: "user", content }], stream }),
+      }), HttpApiApp.context)
+      const canceled = await passthrough("passthrough-canceled", true)
+      expect(canceled.status).toBe(200)
+      await canceled.body!.cancel()
+      const settled = new (await import("bun:sqlite")).Database(Flag.DEEPAGENT_CODE_DB, { readonly: true })
+      try {
+        const row = () => settled.query("SELECT completed_at, usage_input, usage_output, finish_reason FROM proxy_request_ledger WHERE request_id = 'tenant-passthrough-disconnect:passthrough-canceled'")
+          .get() as { completed_at: number | null; usage_input: number | null; usage_output: number | null; finish_reason: string | null } | undefined
+        const deadline = Date.now() + 3_000
+        while (!row()?.completed_at && Date.now() < deadline) await Bun.sleep(50)
+        expect(row()).toMatchObject({ usage_input: 11, usage_output: 4, finish_reason: "stop" })
+        expect(row()?.completed_at).toBeGreaterThan(0)
+      } finally {
+        settled.close()
+      }
+      const nextPassthrough = await passthrough("passthrough-next", false)
+      expect(nextPassthrough.status).toBe(200)
+      expect((await nextPassthrough.json()).choices[0].message.content).toBe("settled")
+      expect(upstreamCalls).toBe(4)
+      const missingUsage = await passthrough("passthrough-missing-usage", true, "Missing usage")
+      expect(missingUsage.status).toBe(200)
+      expect(await missingUsage.text()).toContain("data: [DONE]")
+      const afterUnknown = await passthrough("passthrough-after-unknown", false)
+      expect(afterUnknown.status).toBe(503)
+      expect((await afterUnknown.json()).error.code).toBe("quota_usage_unknown")
+      expect(upstreamCalls).toBe(5)
+      const errorTenant = await web.handler(new Request("http://localhost/proxy/admin/tenants", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: "tenant-passthrough-error", key: "sk-passthrough-error", directory,
+          model_allowlist: ["test/test-model"], tier: "passthrough", quota_requests_per_minute: 10,
+          quota_tokens_per_day: 100_000, lane_limit: 8, deadline_ms: 1_000 }),
+      }), HttpApiApp.context)
+      expect(errorTenant.status).toBe(201)
+      const failed = await web.handler(new Request("http://localhost/v1/chat/completions", {
+        method: "POST", headers: { authorization: "Bearer sk-passthrough-error", "content-type": "application/json", "x-request-id": "stream-error" },
+        body: JSON.stringify({ model: "test-model", messages: [{ role: "user", content: "Provider error" }], stream: true }),
+      }), HttpApiApp.context)
+      expect(failed.status).toBe(200)
+      expect(await failed.text()).toContain('"code":"provider_error"')
+      const afterError = await web.handler(new Request("http://localhost/v1/chat/completions", {
+        method: "POST", headers: { authorization: "Bearer sk-passthrough-error", "content-type": "application/json", "x-request-id": "after-error" },
+        body: JSON.stringify({ model: "test-model", messages: [{ role: "user", content: "After error" }] }),
+      }), HttpApiApp.context)
+      expect(afterError.status).toBe(503)
+      expect((await afterError.json()).error.code).toBe("quota_usage_unknown")
+      expect(upstreamCalls).toBe(6)
     } finally {
       releaseFlood.resolve()
       await Promise.all(openHandlers.map((web) => web.dispose()))
