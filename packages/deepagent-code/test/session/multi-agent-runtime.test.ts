@@ -325,6 +325,44 @@ describe("MultiAgentRuntime.coordinate", () => {
     }),
   )
 
+  it.effect("does not hand a fix to PR collaboration when its dependent test is permanently blocked", () =>
+    Effect.gen(function* () {
+      resetRunner()
+      setNow(1_000)
+      setRegistry([agent("fixer", ["code_edit"], "level_2")])
+      const completed: Parameters<NonNullable<MultiAgentRuntime.LayerOptions["onEventCompleted"]>>[0][] = []
+      const summary = yield* Effect.gen(function* () {
+        const runtime = yield* MultiAgentRuntime.Service
+        return yield* runtime.coordinate(event({ payload: { files: ["src/x.ts"] } }))
+      }).pipe(Effect.provide(makeLayer({
+        onEventCompleted: (input) => Effect.sync(() => completed.push(input)),
+      })))
+      expect(summary.outcomes.map((outcome) => outcome.status)).toEqual(["completed", "blocked"])
+      expect(summary.outcomes[1]?.reason).toBe("no_capable_agent")
+      expect(summary.hasUnfinished).toBe(false)
+      expect(completed).toHaveLength(0)
+    }),
+  )
+
+  it.effect("does not expose a successful edit to PR collaboration when terminal review is blocked", () =>
+    Effect.gen(function* () {
+      resetRunner()
+      setNow(1_000)
+      setRegistry([agent("analyst", ["analyze"], "level_1"), agent("fixer", ["code_edit"], "level_2")])
+      const completed: Parameters<NonNullable<MultiAgentRuntime.LayerOptions["onEventCompleted"]>>[0][] = []
+      const summary = yield* Effect.gen(function* () {
+        const runtime = yield* MultiAgentRuntime.Service
+        return yield* runtime.coordinate(event({ type: "pr.comment", source: "im", payload: { files: ["src/x.ts"] } }))
+      }).pipe(Effect.provide(makeLayer({
+        onEventCompleted: (input) => Effect.sync(() => completed.push(input)),
+      })))
+      expect(summary.outcomes.map((outcome) => outcome.status)).toEqual(["completed", "completed", "blocked"])
+      expect(summary.outcomes[2]?.reason).toBe("no_capable_agent")
+      expect(summary.hasUnfinished).toBe(false)
+      expect(completed).toHaveLength(0)
+    }),
+  )
+
   it.effect("§C2 runs independent DAG nodes concurrently and waits for the wave before dependents", () =>
     Effect.gen(function* () {
       setNow(1_000)

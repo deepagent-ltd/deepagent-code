@@ -202,7 +202,7 @@ export interface LayerOptions {
   // the durable execution table. Tests inject stable values to prove cross-runtime exclusion.
   readonly ownerID?: string
   readonly leaseMs?: number
-  // Production collaboration boundary. Called only after every DAG node is durably terminal and receives
+  // Production collaboration boundary. Called only after every DAG node completes successfully and receives
   // terminal leaf refs, so a serial fix -> test lineage becomes one PR while independent leaves stay separate.
   readonly onEventCompleted?: (input: {
     readonly event: DeepAgentEvent.Event
@@ -1254,7 +1254,9 @@ export const layerWith = (options: LayerOptions) =>
             }
           }
 
-          if (!hasUnfinished && options.onEventCompleted) {
+          // A permanent block settles the event but does not validate its successful ancestors.
+          // Never send a partial DAG's write ref to PR collaboration as a review-ready change.
+          if (!hasUnfinished && p.subtasks.every((subtask) => completed.has(subtask.id)) && options.onEventCompleted) {
             const dependedOn = new Set(p.subtasks.flatMap((subtask) => subtask.dependsOn))
             const ancestors = new Map<string, Set<string>>()
             for (const subtask of p.subtasks)
