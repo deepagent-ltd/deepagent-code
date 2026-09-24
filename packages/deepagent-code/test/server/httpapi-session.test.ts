@@ -1875,6 +1875,16 @@ describe("session HttpApi", () => {
     "keeps read-only imported sessions out of legacy share mutations",
     () =>
       Effect.gen(function* () {
+        // Public creation is disabled in 2.0.2; opt in here to keep the V1-only
+        // adoption refusal covered independently of the rollout switch.
+        const enabled = process.env.DEEPAGENT_CODE_ENABLE_PUBLIC_SHARING
+        process.env.DEEPAGENT_CODE_ENABLE_PUBLIC_SHARING = "1"
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            if (enabled === undefined) delete process.env.DEEPAGENT_CODE_ENABLE_PUBLIC_SHARING
+            else process.env.DEEPAGENT_CODE_ENABLE_PUBLIC_SHARING = enabled
+          }),
+        )
         const test = yield* TestInstance
         const db = (yield* Database.Service).db
         const session = yield* createSession({ title: "read-only shared import" })
