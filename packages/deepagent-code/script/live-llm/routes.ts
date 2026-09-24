@@ -1237,6 +1237,7 @@ export const routeManifest = [
     paths: [
       "packages/deepagent-code/src/session/bundle-share.ts",
       "packages/deepagent-code/src/session/bundle.ts",
+      "packages/deepagent-code/src/session/sanitize-share.ts",
     ],
     checks: ["session-v2"],
   },
