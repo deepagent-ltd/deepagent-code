@@ -604,7 +604,7 @@ describe("production runtime integrity", () => {
       ["packages/core/src/event.ts:closure@617:620.typed", "safe_scoped"],
       ["packages/core/src/event.ts:closure@617:623.projectors", "safe_scoped"],
       ["packages/core/src/event.ts:closure@617:624.snapshotCodecs", "safe_scoped"],
-      ["packages/core/src/util/effect-flock.ts:closure@93:98.ensuredDirs", "safe_bounded"],
+      ["packages/core/src/util/effect-flock.ts:closure@99:104.ensuredDirs", "safe_bounded"],
       ["packages/core/src/permission.ts:closure@197:205.withNoProgressOwner", "safe_scoped"],
       ["packages/core/src/permission.ts:closure@197:206.pending", "safe_scoped"],
       ["packages/core/src/session/runner/llm.ts:closure@792:1380.withPublication", "safe_scoped"],

@@ -81,7 +81,13 @@ export namespace EffectFlock {
   // ---------------------------------------------------------------------------
 
   function wall() {
-    return performance.timeOrigin + performance.now()
+    // Filesystem mtime is wall time. On macOS, performance.now() can stop across sleep,
+    // leaving timeOrigin + now behind the mtime of a lock that is already stale.
+    return Date.now()
+  }
+
+  function mono() {
+    return performance.now()
   }
 
   const mtimeMs = (info: FileSystem.File.Info) => Option.getOrElse(info.mtime, () => new Date(0)).getTime()
@@ -214,7 +220,7 @@ export namespace EffectFlock {
       const acquireHandle = (lockfile: string, key: string): Effect.Effect<Handle, LockError> => {
         const token = randomUUID()
         return Effect.gen(function* () {
-          const started = wall()
+          const started = mono()
           let retries = 0
           while (true) {
             // A claim attempt is atomic. Keep its retry sleep outside the mask so
@@ -224,7 +230,7 @@ export namespace EffectFlock {
               Effect.catchTag("NotAcquired", () => Effect.succeed(Option.none())),
             )
             if (Option.isSome(attempt)) return attempt.value
-            if (wall() - started >= TIMEOUT_MS) return yield* new LockTimeoutError({ key })
+            if (mono() - started >= TIMEOUT_MS) return yield* new LockTimeoutError({ key })
             yield* Effect.sleep(Math.random() * Math.min(MAX_DELAY_MS, BASE_DELAY_MS * 1.7 ** retries++))
           }
         }).pipe(
