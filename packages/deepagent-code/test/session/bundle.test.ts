@@ -79,6 +79,31 @@ describe("session ZIP bundle", () => {
     })
   })
 
+  test("redacts session cookies in shared conversation and log shapes", async () => {
+    const cookie = "sid=shared-session-secret"
+    const source = {
+      ...snapshot,
+      messages: [{ ...snapshot.messages[0], data: {
+        text: `before\nAuthorization: Basic dXNlcjpwYXNz\nCookie: ${cookie}\nSet-Cookie: ${cookie}; HttpOnly\nafter`,
+      } }],
+    } as unknown as SessionSnapshot
+    const shared = await parseSessionBundle(await createSessionBundle({
+      snapshot: source,
+      tier: "session_logs",
+      share: true,
+      logs: { events: [{ headers: {
+        cookie, "set-cookie": `${cookie}; HttpOnly`, "proxy-authorization": "Basic dXNlcjpwYXNz", client_secret: "client-secret",
+      } }], inputs: [], providerTurns: [] },
+    }))
+    expect(JSON.stringify(shared)).not.toContain(cookie)
+    expect(JSON.stringify(shared)).not.toContain("dXNlcjpwYXNz")
+    expect(JSON.stringify(shared)).not.toContain("client-secret")
+    expect((shared.snapshot.messages[0]?.data as unknown as { text: string }).text).toBe("before\n[REDACTED]\n[REDACTED]\n[REDACTED]\nafter")
+    expect(shared.logs?.events).toEqual([{ headers: {
+      cookie: "[REDACTED]", "set-cookie": "[REDACTED]", "proxy-authorization": "[REDACTED]", client_secret: "[REDACTED]",
+    } }])
+  })
+
   test("redacts environment values and credential URLs without altering private exports", async () => {
     const text = "PROJECT_MODE=internal postgres://alice:pwd@db.local/prod"
     const source = { ...snapshot, messages: [{ ...snapshot.messages[0], data: { text } }] } as unknown as SessionSnapshot

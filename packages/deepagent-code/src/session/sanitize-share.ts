@@ -1,8 +1,9 @@
-const sensitiveKey = /(?:^|[_-])(?:api[_-]?key|authorization|token|secret|password|credential|private[_-]?key|env(?:ironment)?)$|(?:ApiKey|Token|Secret|Password|Credential|PrivateKey)$/i
+const sensitiveKey = /(?:^|[_-])(?:api[_-]?key|authorization|cookie|set[_-]?cookie|token|secret|password|credential|private[_-]?key|env(?:ironment)?)$|(?:ApiKey|Cookie|Token|Secret|Password|Credential|PrivateKey)$/i
 const environmentVariableKey = /^[A-Z][A-Z0-9_]{2,}$/
 const secretValue = /\b(?:sk-[A-Za-z0-9_-]{12,}|Bearer\s+\S+|(?:api[_-]?key|token|secret|password)\s*[=:]\s*(?:"[^"]*"|'[^']*'|[^\s,"'}]+))/gi
 const environmentAssignment = /\b([A-Z][A-Z0-9_]{2,})\s*=\s*(?:"[^"\n]*"|'[^'\n]*'|[^\s,;]+)/g
 const credentialURL = /\b[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s@/]+@[^\s"'`<>]+/gi
+const credentialHeader = /\b(?:authorization|proxy-authorization|cookie|set-cookie)\s*:\s*[^\r\n]+/gi
 const absolutePath = /(?:\/Users\/|\/home\/|\/root\/|\/tmp\/|\/var\/|[A-Za-z]:\\Users\\)[^\s"'`<>]+/g
 
 export function sanitizeBundleValue(value: unknown): unknown {
@@ -10,6 +11,7 @@ export function sanitizeBundleValue(value: unknown): unknown {
     .replace(secretValue, "[REDACTED]")
     .replace(environmentAssignment, "$1=[REDACTED]")
     .replace(credentialURL, "[REDACTED_URL]")
+    .replace(credentialHeader, "[REDACTED]")
     .replace(absolutePath, "[REDACTED_PATH]")
   if (Array.isArray(value)) return value.map(sanitizeBundleValue)
   if (value && typeof value === "object")
