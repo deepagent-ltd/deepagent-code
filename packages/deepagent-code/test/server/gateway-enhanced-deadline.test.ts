@@ -1,5 +1,5 @@
 import { expect } from "bun:test"
-import { eq } from "drizzle-orm"
+import { eq, max } from "drizzle-orm"
 import { DateTime, Effect, Fiber, Layer, Schema } from "effect"
 import { SessionActivityTable } from "@deepagent-code/core/context-federation/session-sql"
 import { Database } from "@deepagent-code/core/database/database"
@@ -10,10 +10,13 @@ import { ProviderV2 } from "@deepagent-code/core/provider"
 import { ProxyTenantTable } from "@deepagent-code/core/proxy/sql"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { SessionExecution } from "@deepagent-code/core/session/execution"
+import { SessionInput } from "@deepagent-code/core/session/input"
 import { SessionMessage } from "@deepagent-code/core/session/message"
 import { SessionProjector } from "@deepagent-code/core/session/projector"
+import { SessionRunnerCanonical } from "@deepagent-code/core/session/runner/canonical-turn"
 import { SessionInputTable, SessionMessageTable } from "@deepagent-code/core/session/sql"
 import { SessionStore } from "@deepagent-code/core/session/store"
+import { SessionContext } from "@deepagent-code/core/context-federation/session-context"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { collectEnhanced, proxyPromptID } from "@/server/routes/instance/httpapi/handlers/gateway-enhanced"
 import { testEffect } from "../lib/effect"
@@ -37,6 +40,7 @@ const it = testEffect(Layer.mergeAll(
   events,
   projects,
   SessionProjector.layer.pipe(Layer.provide(events), Layer.provide(database)),
+  SessionContext.layer.pipe(Layer.provide(SessionRunnerCanonical.degradedArtifactStore), Layer.provide(database)),
   sessions,
   Layer.effect(EventV2Bridge.Service, EventV2.Service).pipe(Layer.provide(events)),
 ))
@@ -93,16 +97,13 @@ it.live("returns a durable terminal completed before deadline after the poll is 
         yield* Effect.sleep("5 millis")
       }
     })
-    yield* db.update(SessionInputTable).set({ promoted_seq: 1 }).where(eq(SessionInputTable.id, admitted.id)).run()
-    yield* db.insert(SessionActivityTable).values({
-      activity_id: "activity-deadline-oracle",
-      session_id: sessionID,
-      ordinal: 0,
-      trigger_input_id: promptID,
-      delivery: "queue",
-      state: "active",
-      created_at: start,
-    }).run()
+    const promoted = yield* SessionInput.promoteNextQueued(db, yield* EventV2.Service, sessionID)
+    expect(promoted).toBe(promptID)
+    const activity = yield* (yield* SessionContext.Service).openActivity({
+      sessionId: sessionID,
+      triggerInputId: admitted.id,
+      now: start,
+    })
     const assistantID = SessionMessage.ID.make("msg_deadline_oracle_assistant")
     const completedAt = start + 100
     const encoded = Schema.encodeSync(SessionMessage.Message)(new SessionMessage.Assistant({
@@ -114,11 +115,13 @@ it.live("returns a durable terminal completed before deadline after the poll is 
       finish: "stop",
       time: { created: DateTime.makeUnsafe(start), completed: DateTime.makeUnsafe(completedAt) },
     }))
+    const previous = yield* db.select({ seq: max(SessionMessageTable.seq) }).from(SessionMessageTable)
+      .where(eq(SessionMessageTable.session_id, sessionID)).get()
     yield* db.insert(SessionMessageTable).values({
       id: assistantID,
       session_id: sessionID,
       type: "assistant",
-      seq: 2,
+      seq: (previous?.seq ?? 0) + 1,
       time_created: start,
       data: encoded,
     }).run()
@@ -130,8 +133,11 @@ it.live("returns a durable terminal completed before deadline after the poll is 
     expect(overduePolls).toBeGreaterThan(0)
     expect(collected.pollUnsafe()).toBeUndefined()
     clock = deadline + 20
-    yield* db.update(SessionActivityTable).set({ state: "settled", settled_at: deadline + 10 })
-      .where(eq(SessionActivityTable.activity_id, "activity-deadline-oracle")).run()
+    yield* (yield* SessionContext.Service).settleActivity({
+      activityId: activity.activityId,
+      state: "settled",
+      now: deadline + 10,
+    })
     const result = yield* Fiber.join(collected)
     expect(result).toMatchObject({ ok: true, text: "Done", completedAt })
   }),

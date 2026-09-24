@@ -655,6 +655,7 @@ const it = testEffect(
     echo,
     models,
     systemContext,
+    sessionContext,
     location,
     skillGuidance,
     config,
@@ -6157,19 +6158,7 @@ describe("SessionRunnerLLM", () => {
       const events = yield* EventV2.Service
       const promoted = yield* SessionInput.promoteSteers(db, events, sessionID, Number.MAX_SAFE_INTEGER)
       expect(promoted).toHaveLength(1)
-      yield* db
-        .insert(SessionActivityTable)
-        .values({
-          activity_id: "activity-restart-streak",
-          session_id: sessionID,
-          ordinal: 0,
-          trigger_input_id: promoted[0]!,
-          delivery: "steer",
-          state: "active",
-          created_at: Date.now(),
-        })
-        .run()
-        .pipe(Effect.orDie)
+      yield* (yield* SessionContext.Service).openActivity({ sessionId: sessionID, triggerInputId: promoted[0]! })
       // These are the committed tool-call/result facts left by prior provider turns. A fresh
       // runner drain must rebuild its detector from the active activity's durable event suffix.
       const assistantMessageID = SessionMessage.ID.create()
@@ -6222,19 +6211,7 @@ describe("SessionRunnerLLM", () => {
       const { db } = yield* Database.Service
       const events = yield* EventV2.Service
       const promoted = yield* SessionInput.promoteSteers(db, events, sessionID, Number.MAX_SAFE_INTEGER)
-      yield* db
-        .insert(SessionActivityTable)
-        .values({
-          activity_id: "activity-restart-steps",
-          session_id: sessionID,
-          ordinal: 0,
-          trigger_input_id: promoted[0]!,
-          delivery: "steer",
-          state: "active",
-          created_at: Date.now(),
-        })
-        .run()
-        .pipe(Effect.orDie)
+      yield* (yield* SessionContext.Service).openActivity({ sessionId: sessionID, triggerInputId: promoted[0]! })
       for (const index of [1, 2]) {
         const assistantMessageID = SessionMessage.ID.create()
         yield* events.publish(SessionEvent.Step.Started, {
@@ -6300,19 +6277,7 @@ describe("SessionRunnerLLM", () => {
       const { db } = yield* Database.Service
       const events = yield* EventV2.Service
       const promoted = yield* SessionInput.promoteSteers(db, events, sessionID, Number.MAX_SAFE_INTEGER)
-      yield* db
-        .insert(SessionActivityTable)
-        .values({
-          activity_id: "activity-restart-steer",
-          session_id: sessionID,
-          ordinal: 0,
-          trigger_input_id: promoted[0]!,
-          delivery: "steer",
-          state: "active",
-          created_at: Date.now(),
-        })
-        .run()
-        .pipe(Effect.orDie)
+      yield* (yield* SessionContext.Service).openActivity({ sessionId: sessionID, triggerInputId: promoted[0]! })
       const assistantMessageID = SessionMessage.ID.create()
       yield* events.publish(SessionEvent.Step.Started, {
         sessionID,
@@ -6357,19 +6322,7 @@ describe("SessionRunnerLLM", () => {
       const { db } = yield* Database.Service
       const events = yield* EventV2.Service
       const promoted = yield* SessionInput.promoteSteers(db, events, sessionID, Number.MAX_SAFE_INTEGER)
-      yield* db
-        .insert(SessionActivityTable)
-        .values({
-          activity_id: "activity-restart-finished",
-          session_id: sessionID,
-          ordinal: 0,
-          trigger_input_id: promoted[0]!,
-          delivery: "steer",
-          state: "active",
-          created_at: Date.now(),
-        })
-        .run()
-        .pipe(Effect.orDie)
+      yield* (yield* SessionContext.Service).openActivity({ sessionId: sessionID, triggerInputId: promoted[0]! })
       const assistantMessageID = SessionMessage.ID.create()
       yield* events.publish(SessionEvent.Step.Started, {
         sessionID,
