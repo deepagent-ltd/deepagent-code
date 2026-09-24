@@ -75,7 +75,7 @@ jobs:
             timeout: 120
           - name: windows
             host: windows-2025
-            timeout: 20
+            timeout: 120
           - name: macos
             host: macos-14
             timeout: 120
@@ -113,7 +113,12 @@ jobs:
 
       - name: Run unit tests
         timeout-minutes: ${{ matrix.settings.timeout }}
-        run: bun turbo test:ci --log-order=stream --log-prefix=task
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            bun turbo test:ci --concurrency=1 --log-order=stream --log-prefix=task
+          else
+            bun turbo test:ci --log-order=stream --log-prefix=task
+          fi
         env:
           DEEPAGENT_CODE_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
 
