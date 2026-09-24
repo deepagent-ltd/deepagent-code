@@ -477,13 +477,16 @@ const historyEpochLookupLayer = Layer.succeedContext(
 // enters compact recovery — the remote result is unknown and is NEVER disguised as a local success),
 // "refused" = the producer raises a TYPED refusal (W1.3: keeps its specific reason code).
 let remoteCompactionMode: "summary" | "fault" | "refused" | undefined
+let remoteCompactionCalls = 0
 const remoteCompactionLayer = Layer.succeedContext(
   Context.make(SessionCompaction.CurrentRemoteCompaction, (_input) =>
-    remoteCompactionMode === "summary"
-      ? Effect.succeed({ kind: "compacted", summary: "## Remote\n- remote summary" })
-      : remoteCompactionMode === "refused"
-        ? Effect.fail(new SessionCompaction.RemoteCompactRefusedError({ reason: "network_unknown" }))
-        : Effect.fail(new Error("remote compaction unavailable")),
+    Effect.sync(() => remoteCompactionCalls++).pipe(Effect.andThen(
+      remoteCompactionMode === "summary"
+        ? Effect.succeed({ kind: "compacted" as const, summary: "## Remote\n- remote summary" })
+        : remoteCompactionMode === "refused"
+          ? Effect.fail(new SessionCompaction.RemoteCompactRefusedError({ reason: "network_unknown" }))
+          : Effect.fail(new Error("remote compaction unavailable")),
+    )),
   ),
 )
 // W7 — settle-hook recorder: verifies the runner invokes the injected hook once per settled drain
@@ -833,6 +836,7 @@ const setup = Effect.gen(function* () {
   streamFailure = undefined
   responseStream = undefined
   responseStreams = undefined
+  remoteCompactionCalls = 0
   streamGate = undefined
   streamStarted = undefined
   toolExecutionGate = undefined
@@ -930,6 +934,22 @@ const setupOverflowRecovery = Effect.gen(function* () {
   })
   yield* session.resume(sessionID)
   currentModel = recoveryModel
+  requests.length = 0
+  return session
+})
+
+const setupManualHistory = Effect.gen(function* () {
+  yield* setup
+  const session = yield* SessionV2.Service
+  const execution = yield* SessionExecution.Service
+  responses = [
+    fragmentFixture("text", "manual-first", ["first settled reply"]).completeEvents,
+    fragmentFixture("text", "manual-second", ["second settled reply"]).completeEvents,
+  ]
+  yield* session.prompt({ sessionID, prompt: new Prompt({ text: "first exchange" }) })
+  yield* execution.awaitIdle(sessionID)
+  yield* session.prompt({ sessionID, prompt: new Prompt({ text: "second exchange" }) })
+  yield* execution.awaitIdle(sessionID)
   requests.length = 0
   return session
 })
@@ -7084,6 +7104,131 @@ describe("SessionRunnerLLM", () => {
         .where(eq(CompactionRequestTable.session_id, sessionID)).get().pipe(Effect.orDie)
       expect(request).toMatchObject({ status: "settled", outcome: "nothing_to_compact", summary_receipt_id: null })
       expect(requests).toHaveLength(0)
+    }),
+  )
+
+  it.effect("manual compaction reports remote uncertainty and never replays the same request", () =>
+    Effect.gen(function* () {
+      const session = yield* setupManualHistory
+      const { db } = yield* Database.Service
+      currentModel = responsesRecoveryModel
+      remoteCompactionMode = "refused"
+      yield* Effect.addFinalizer(() => Effect.sync(() => { remoteCompactionMode = undefined }))
+      const input = {
+        sessionID,
+        model: { providerID: ProviderV2.ID.make(currentModel.provider), modelID: ModelV2.ID.make(currentModel.id) },
+      }
+
+      const refusal = yield* session.compact(input).pipe(Effect.flip)
+      expect(refusal).toMatchObject({ operation: "compact", reason: "network_unknown" })
+      const request = yield* db.select().from(CompactionRequestTable)
+        .where(eq(CompactionRequestTable.session_id, sessionID)).get().pipe(Effect.orDie)
+      expect(request).toMatchObject({ status: "recovery_required", outcome: "network_unknown" })
+      expect(remoteCompactionCalls).toBe(1)
+      expect(requests).toHaveLength(0)
+      expect((yield* session.context(sessionID)).some((message) => message.type === "compaction")).toBe(false)
+
+      expect(yield* session.compact(input).pipe(Effect.flip)).toMatchObject({ reason: "network_unknown" })
+      expect(remoteCompactionCalls).toBe(1)
+      expect(requests).toHaveLength(0)
+    }),
+  )
+
+  it.effect("manual compaction reports a settled provider error as failure", () =>
+    Effect.gen(function* () {
+      const session = yield* setupManualHistory
+      const { db } = yield* Database.Service
+      currentModel = compactModel
+      responseStream = sealedResponse([LLMEvent.providerError({ message: "summary rejected" })], "manual-error")
+
+      const refusal = yield* session.compact({
+        sessionID,
+        model: { providerID: ProviderV2.ID.make(compactModel.provider), modelID: ModelV2.ID.make(compactModel.id) },
+      }).pipe(Effect.flip)
+      expect(refusal).toMatchObject({ operation: "compact", reason: "summary_provider_error" })
+      const request = yield* db.select().from(CompactionRequestTable)
+        .where(eq(CompactionRequestTable.session_id, sessionID)).get().pipe(Effect.orDie)
+      expect(request).toMatchObject({ status: "failed", outcome: "summary_provider_error" })
+      expect(request?.summary_receipt_id).toBeTruthy()
+      expect(requests).toHaveLength(1)
+    }),
+  )
+
+  it.effect("manual compaction rejects an empty settled summary", () =>
+    Effect.gen(function* () {
+      const session = yield* setupManualHistory
+      const { db } = yield* Database.Service
+      currentModel = compactModel
+      responseStream = sealedResponse([], "manual-empty")
+
+      const refusal = yield* session.compact({
+        sessionID,
+        model: { providerID: ProviderV2.ID.make(compactModel.provider), modelID: ModelV2.ID.make(compactModel.id) },
+      }).pipe(Effect.flip)
+      expect(refusal).toMatchObject({ operation: "compact", reason: "summary_empty" })
+      const request = yield* db.select().from(CompactionRequestTable)
+        .where(eq(CompactionRequestTable.session_id, sessionID)).get().pipe(Effect.orDie)
+      expect(request).toMatchObject({ status: "failed", outcome: "summary_empty" })
+      expect(request?.summary_receipt_id).toBeTruthy()
+      expect(requests).toHaveLength(1)
+    }),
+  )
+
+  it.effect("manual compaction reports a terminal summary refusal as failed", () =>
+    Effect.gen(function* () {
+      const session = yield* setupManualHistory
+      const { db } = yield* Database.Service
+      currentModel = compactModel
+      responseStream = Stream.concat(
+        sealedResponse([], "manual-overflow"),
+        Stream.fail(new LLMError({
+          module: "test",
+          method: "stream",
+          reason: new InvalidRequestReason({ message: "prompt too long", classification: "context-overflow" }),
+        })),
+      )
+
+      const refusal = yield* session.compact({
+        sessionID,
+        model: { providerID: ProviderV2.ID.make(compactModel.provider), modelID: ModelV2.ID.make(compactModel.id) },
+      }).pipe(Effect.flip)
+      expect(refusal).toMatchObject({ operation: "compact", reason: "summary_provider_failed" })
+      expect(yield* db.select().from(CompactionRequestTable)
+        .where(eq(CompactionRequestTable.session_id, sessionID)).get().pipe(Effect.orDie))
+        .toMatchObject({ status: "failed", outcome: "summary_provider_failed" })
+      expect(yield* db.select().from(V2ProviderTurnReceiptTable)
+        .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID))
+        .orderBy(desc(V2ProviderTurnReceiptTable.request_ordinal)).get().pipe(Effect.orDie))
+        .toMatchObject({ state: "failed" })
+      expect(requests).toHaveLength(1)
+    }),
+  )
+
+  it.effect("manual compaction quarantines a sealed summary stream failure without replay", () =>
+    Effect.gen(function* () {
+      const session = yield* setupManualHistory
+      const { db } = yield* Database.Service
+      currentModel = compactModel
+      responseStream = Stream.concat(sealedResponse([], "manual-unknown"), Stream.fail(providerUnavailable()))
+      const input = {
+        sessionID,
+        model: { providerID: ProviderV2.ID.make(compactModel.provider), modelID: ModelV2.ID.make(compactModel.id) },
+      }
+
+      const refusal = yield* session.compact(input).pipe(Effect.flip)
+      expect(refusal).toMatchObject({ operation: "compact", reason: "summary_provider_outcome_unknown" })
+      const request = yield* db.select().from(CompactionRequestTable)
+        .where(eq(CompactionRequestTable.session_id, sessionID)).get().pipe(Effect.orDie)
+      expect(request).toMatchObject({ status: "recovery_required", outcome: "summary_provider_outcome_unknown" })
+      const receipt = yield* db.select().from(V2ProviderTurnReceiptTable)
+        .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID))
+        .orderBy(desc(V2ProviderTurnReceiptTable.request_ordinal)).get().pipe(Effect.orDie)
+      expect(receipt).toMatchObject({ state: "indeterminate_after_crash" })
+      expect(request?.summary_receipt_id).toBe(receipt?.receipt_id)
+      expect(requests).toHaveLength(1)
+
+      expect(yield* session.compact(input).pipe(Effect.flip)).toMatchObject({ reason: "summary_provider_outcome_unknown" })
+      expect(requests).toHaveLength(1)
     }),
   )
 

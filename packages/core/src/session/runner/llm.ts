@@ -2407,18 +2407,18 @@ export const layer = Layer.effect(
         admission: selectionAdmission,
         reason: "manual",
       })
-      const refused = compacted && "refusal" in compacted
+      const failed = compacted && "kind" in compacted
       yield* CompactionRequest.settle(db, request.request_id, {
-        status: refused ? "failed" : "settled",
-        outcome: refused ? compacted.refusal : compacted === false ? "nothing_to_compact" : "compacted",
+        status: failed ? compacted.kind : "settled",
+        outcome: failed ? compacted.reason : compacted === false ? "nothing_to_compact" : "compacted",
         ...(compacted && "receiptID" in compacted && compacted.receiptID !== null
           ? { summaryReceiptID: compacted.receiptID }
           : {}),
       })
       yield* contexts
-        .settleActivity({ activityId: selectionAdmission.activityId, state: "settled" })
+        .settleActivity({ activityId: selectionAdmission.activityId, state: failed ? "failed" : "settled" })
         .pipe(Effect.ignore)
-      return compacted !== false && !refused
+      return compacted !== false && !failed
     })
 
     const run: typeof runDrain = (input) =>

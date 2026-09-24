@@ -363,7 +363,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
         sessionID,
         modelID: model.id,
         providerID: model.provider.id,
-      })
+      }, { throwOnError: true })
       .catch((err) => {
         // The V2-only profile refuses manual compaction with a typed 503 whose message carries
         // the reason — surface it instead of failing silently (fork uses the same pattern).

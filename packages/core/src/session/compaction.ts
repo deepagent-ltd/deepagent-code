@@ -416,11 +416,12 @@ export function isRemoteCompactUnsupported(model: Model): boolean {
 export const make = (dependencies: Dependencies) => {
   const config = settings(dependencies.config)
   const compactAfterOverflow = Effect.fn("SessionCompaction.compactAfterOverflow")(function* (input: Input) {
-    // Manual requests must surface a budget refusal; automatic compaction leaves the caller's
-    // original turn to its existing hard-gate or provider-dispatch policy.
-    const budgetRefusal = input.reason === "manual" ? { refusal: "summary_budget_exceeded" as const } : false
+    // Manual requests need a durable terminal classification. Automatic compaction keeps its
+    // existing skip contract so the surrounding turn can apply its own hard-gate policy.
+    const manualUnavailable = (kind: "failed" | "recovery_required", reason: string, receiptID?: string) =>
+      input.reason === "manual" ? { kind, reason, ...(receiptID ? { receiptID } : {}) } : false
     const context = modelInputLimit(input.model)
-    if (context === undefined || context <= 0) return false
+    if (context === undefined || context <= 0) return manualUnavailable("failed", "model_input_limit_unavailable")
     const output = input.request.generation?.maxTokens ?? input.model.route.defaults.limits?.output ?? 0
     const selected =
       input.reason === "manual"
@@ -433,7 +434,8 @@ export const make = (dependencies: Dependencies) => {
       context: [previousSummary?.type === "compaction" ? previousSummary.recent : "", selected.head].filter(Boolean),
     })
     const summaryOutput = Math.min(output || SUMMARY_OUTPUT_TOKENS, SUMMARY_OUTPUT_TOKENS)
-    if (Token.estimate(summaryPrompt) > Math.max(0, context - summaryOutput)) return budgetRefusal
+    if (Token.estimate(summaryPrompt) > Math.max(0, context - summaryOutput))
+      return manualUnavailable("failed", "summary_budget_exceeded")
     const messageID = SessionMessage.ID.create()
     yield* dependencies.events.publish(SessionEvent.Compaction.Started, {
       sessionID: input.sessionID,
@@ -502,7 +504,7 @@ export const make = (dependencies: Dependencies) => {
         log.warn("remote compaction returned an empty summary, entering compact recovery", {
           sessionID: input.sessionID,
         })
-        return false
+        return manualUnavailable("recovery_required", "remote_summary_empty")
       }
       // recovery_required: never publish a fake Compaction.Ended. The original history stays readable
       // and we do NOT fall through to the local summary dispatch — the compact result is unknown.
@@ -510,7 +512,7 @@ export const make = (dependencies: Dependencies) => {
         sessionID: input.sessionID,
         reason: remoteResult.reason,
       })
-      return false
+      return manualUnavailable("recovery_required", remoteResult.reason)
     }
     if (remote && isRemoteCompactUnsupported(input.model)) {
       log.warn("remote compact not applicable for a non-Responses route; using the local summary", {
@@ -527,7 +529,7 @@ export const make = (dependencies: Dependencies) => {
     })
     const summaryEstimatedTokens = PreparedProviderTurn.estimateFullRequestTokens(summaryRequest)
     const summaryBudget = PreparedProviderTurn.budget(input.model, summaryEstimatedTokens)
-    if (summaryBudget.decision !== "ok") return budgetRefusal
+    if (summaryBudget.decision !== "ok") return manualUnavailable("failed", "summary_budget_exceeded")
     const summaryRequestInputHash = Hash.sha256(
       CanonicalJson.stringify({
         ...LLMRequest.input(summaryRequest),
@@ -537,6 +539,12 @@ export const make = (dependencies: Dependencies) => {
         },
       }),
     )
+    const summaryIdentity = {
+      sessionId: input.sessionID,
+      userMessageId: input.userMessageID,
+      historyPromptEpoch: input.historyPromptEpoch,
+      requestInputHash: summaryRequestInputHash,
+    }
     const summaryEvents: LLMEvent[] = []
     const chunks: string[] = []
     let failed = false
@@ -615,28 +623,45 @@ export const make = (dependencies: Dependencies) => {
       // remain fail-closed skips.
       Effect.catchTag("V2ProviderTurn.UnsafeRetryError", (error) =>
         Effect.gen(function* () {
-          if (error.state !== "settled") return false
-          const existing = yield* V2ProviderTurn.receiptByIdentity(dependencies.db, {
-            sessionId: input.sessionID,
-            userMessageId: input.userMessageID,
-            historyPromptEpoch: input.historyPromptEpoch,
-            requestInputHash: summaryRequestInputHash,
-          }).pipe(Effect.orDie)
-          if (!existing) return false
+          if (error.state !== "settled")
+            return manualUnavailable(
+              error.state === "failed" ? "failed" : "recovery_required",
+              `summary_receipt_${error.state}`,
+            )
+          const existing = yield* V2ProviderTurn.receiptByIdentity(dependencies.db, summaryIdentity).pipe(Effect.orDie)
+          if (!existing) return manualUnavailable("recovery_required", "summary_receipt_evidence_unavailable")
           const replayed = reconstructSettledSummary(existing)
-          if (!replayed) return false
+          if (!replayed) return manualUnavailable("recovery_required", "summary_receipt_evidence_unavailable")
           failed = replayed.failed
           chunks.push(...replayed.chunks)
           return true
         }),
       ),
-      // Typed refusals from the receipt seam or canonical admission (owner unhealthy, exact-retry
-      // conflict, blocked attempt seq, expired validation) all mean the summary request never ran;
-      // skip compaction instead of failing the surrounding turn. Unexpected failures stay defects.
-      Effect.catch(() => Effect.succeed(false)),
+      // A receipt refusal before admission is a known failure. After admission, inspect the
+      // durable receipt: only a terminal failed row proves failure; otherwise keep recovery open.
+      // Automatic compaction still skips and lets its surrounding turn apply its own policy.
+      Effect.catch(() =>
+        Effect.gen(function* () {
+          const receipt = summaryReceiptID
+            ? yield* V2ProviderTurn.receiptByIdentity(dependencies.db, summaryIdentity).pipe(Effect.orDie)
+            : undefined
+          const knownFailed = receipt !== undefined && receipt.receipt_id === summaryReceiptID && receipt.state === "failed"
+          return manualUnavailable(
+            !summaryReceiptID || knownFailed ? "failed" : "recovery_required",
+            !summaryReceiptID
+              ? "summary_receipt_refused"
+              : knownFailed
+                ? "summary_provider_failed"
+                : "summary_provider_outcome_unknown",
+            summaryReceiptID,
+          )
+        }),
+      ),
     )
+    if (summarized !== true) return summarized
     const summary = chunks.join("")
-    if (!summarized || failed || !summary.trim()) return false
+    if (failed) return manualUnavailable("failed", "summary_provider_error", summaryReceiptID)
+    if (!summary.trim()) return manualUnavailable("failed", "summary_empty", summaryReceiptID)
     yield* dependencies.events.publish(SessionEvent.Compaction.Ended, {
       sessionID: input.sessionID,
       messageID,
@@ -655,7 +680,7 @@ export const make = (dependencies: Dependencies) => {
     const tokens = input.estimatedInputTokens ?? estimateRequestTokens(input.request)
     if (tokens <= inputBudget(context, resolvedBuffer(context, config))) return false
     const compacted = yield* compactAfterOverflow(input)
-    return compacted && "refusal" in compacted ? false : compacted
+    return compacted && "kind" in compacted ? false : compacted
   })
   return {
     autoEnabled: config.auto,

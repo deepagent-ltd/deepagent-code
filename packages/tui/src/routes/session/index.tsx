@@ -818,7 +818,7 @@ export function Session() {
             sessionID: route.sessionID,
             modelID: selectedModel.modelID,
             providerID: selectedModel.providerID,
-          })
+          }, { throwOnError: true })
           .then(() => toast.show({ message: i18n.t("tui.session.compacted"), variant: "success" }))
           .catch((error) => {
             // V2-only profile refuses manual compaction with a typed 503 whose message carries
