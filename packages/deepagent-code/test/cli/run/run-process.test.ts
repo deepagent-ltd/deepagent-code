@@ -37,6 +37,8 @@ const completeCurrentPlan = (hit: { body: Record<string, unknown> }) => {
 }
 
 describe("deepagentCode run (non-interactive subprocess)", () => {
+  // Each case starts a full CLI process. Running them concurrently can starve startup
+  // on loaded CI runners and hit the subprocess timeout before the case begins.
   cliIt.live(
     "preserves committed custom tool history after uninstall and process restart",
     ({ llm, home, deepagentCode }) =>
@@ -132,7 +134,7 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
 
   // Happy path: prompt completes, output reaches stdout, process exits 0.
   // If this fails, all the others likely will too — debug here first.
-  cliIt.concurrent(
+  cliIt.live(
     "exits 0 and writes the response to stdout on a successful prompt",
     ({ llm, deepagentCode }) =>
       Effect.gen(function* () {
@@ -144,7 +146,7 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
     60_000,
   )
 
-  cliIt.concurrent(
+  cliIt.live(
     "logs the embedded composition digest and compares attach with the remote root",
     ({ llm, deepagentCode }) =>
       Effect.gen(function* () {
@@ -183,7 +185,7 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
     120_000,
   )
 
-  cliIt.concurrent(
+  cliIt.live(
     "auto-approves an asked permission without human input when explicitly requested",
     ({ llm, home, deepagentCode }) =>
       Effect.gen(function* () {
@@ -226,7 +228,7 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
   // directory mode — mutating permissions are auto-rejected. In this harness
   // the session root differs from the tmp home, so file tools surface the
   // external_directory permission, which is part of the shared mutating set.
-  cliIt.concurrent(
+  cliIt.live(
     "read-only permission mode rejects mutating permissions",
     ({ llm, home, deepagentCode }) =>
       Effect.gen(function* () {
@@ -264,7 +266,7 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
   // makes the SDK call surface an error so the process exits on its own. Under
   // full-package load CLI startup can exceed 15s, so give the harness a separate
   // 45s kill limit and require a real CLI exit inside a 35s behavioral bound.
-  cliIt.concurrent(
+  cliIt.live(
     "exits nonzero promptly when the model is unknown (regression for #27371)",
     ({ deepagentCode }) =>
       Effect.gen(function* () {
@@ -283,7 +285,7 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
     60_000,
   )
 
-  cliIt.concurrent(
+  cliIt.live(
     "distinguishes a harness deadline from a CLI error exit",
     ({ deepagentCode }) =>
       Effect.gen(function* () {
@@ -294,7 +296,7 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
     30_000,
   )
 
-  cliIt.concurrent(
+  cliIt.live(
     "exits nonzero when the LLM stream fails mid-response",
     ({ llm, deepagentCode }) =>
       Effect.gen(function* () {
@@ -308,7 +310,7 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
   // --format json puts one JSON object per line on stdout for each emitted
   // event. Consumers (CI scripts, tooling) parse this stream. Asserts the
   // shape so a future event-emit change has to update this expectation.
-  cliIt.concurrent(
+  cliIt.live(
     "--format json emits parseable line-delimited JSON to stdout",
     ({ llm, deepagentCode }) =>
       Effect.gen(function* () {
@@ -329,7 +331,7 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
     60_000,
   )
 
-  cliIt.concurrent(
+  cliIt.live(
     "resolves attachments from the real cwd when inherited PWD is stale",
     ({ llm, home, deepagentCode }) =>
       Effect.gen(function* () {
@@ -346,7 +348,7 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
     60_000,
   )
 
-  cliIt.concurrent(
+  cliIt.live(
     "inlines a directory attachment as a listing instead of sending x-directory media on the wire",
     ({ llm, home, deepagentCode }) =>
       Effect.gen(function* () {
@@ -370,7 +372,7 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
     60_000,
   )
 
-  cliIt.concurrent(
+  cliIt.live(
     "requires the loop agent for the scriptable goal entry",
     ({ deepagentCode }) =>
       Effect.gen(function* () {
@@ -384,7 +386,7 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
     30_000,
   )
 
-  cliIt.concurrent(
+  cliIt.live(
     "requires a fresh session for the scriptable goal entry",
     ({ deepagentCode }) =>
       Effect.gen(function* () {
@@ -398,7 +400,7 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
     30_000,
   )
 
-  cliIt.concurrent(
+  cliIt.live(
     "runs a scriptable goal through the production Goal lifecycle and orders JSON events",
     ({ llm, deepagentCode }) =>
       Effect.gen(function* () {
@@ -446,7 +448,7 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
     60_000,
   )
 
-  cliIt.concurrent(
+  cliIt.live(
     "reads goal+plan.md when the scriptable goal has no message",
     ({ llm, home, deepagentCode }) =>
       Effect.gen(function* () {
@@ -475,7 +477,7 @@ describe("deepagentCode run (non-interactive subprocess)", () => {
     60_000,
   )
 
-  cliIt.concurrent(
+  cliIt.live(
     "returns nonzero when a goal-worker provider turn fails",
     ({ llm, deepagentCode }) =>
       Effect.gen(function* () {
