@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { generateKeyPairSync } from "node:crypto"
-import { mkdir } from "node:fs/promises"
+import { mkdir, rm } from "node:fs/promises"
 import { join } from "node:path"
 import { contentDigest } from "../../src/contract/digest"
 import { makeAuthoritativeLedger } from "../../src/contract/evidence-ledger"
@@ -186,6 +186,11 @@ test("RI-51 ledger generator binds byte digests and verifies signed evidence", a
   )
   const wrapperOutputPath = join(root.path, "wrapper-ledger.json")
   const productDir = join(root.path, "products")
+  const gateInput = JSON.stringify(
+    Object.fromEntries(gates.map((gate) => [gate.gate, { status: gate.status, refs: gate.refs }])),
+  )
+  await mkdir(productDir)
+  await Bun.write(join(productDir, "gates.json"), gateInput)
   const wrapper = new URL("../../script/evidence-ledger/generate-candidate-ledger.ts", import.meta.url)
   const wrapperChild = Bun.spawn(
     [
@@ -248,14 +253,10 @@ test("RI-51 ledger generator binds byte digests and verifies signed evidence", a
     expect((await verify()).exitCode).not.toBe(0)
     await Bun.write(file, original)
   }
-  const gateInput = JSON.stringify(
-    Object.fromEntries(
-      wrapperLedger.manifest.gates.map((gate: EvidenceManifest["gates"][number]) => [
-        gate.gate,
-        { status: gate.status, refs: gate.refs },
-      ]),
-    ),
-  )
+  await rm(join(productDir, "gates.json"))
+  const missingGates = await verify()
+  expect(missingGates.exitCode).not.toBe(0)
+  expect(missingGates.stderr).toContain("gates.json is required when a ledger gate has passed")
   await Bun.write(join(productDir, "gates.json"), gateInput)
   expect((await verify()).exitCode).toBe(0)
   await Bun.write(join(productDir, "gates.json"), JSON.stringify({ G0: { status: "passed", refs: ["tampered"] } }))
@@ -307,4 +308,37 @@ test("RI-51 ledger generator binds byte digests and verifies signed evidence", a
   ])
   expect(unrelatedExitCode).not.toBe(0)
   expect(unrelatedStderr).toContain("sessionID does not match runtime evidence")
+})
+
+test("RI-51 source-only NO-GO readback accepts all-pending gates without gates.json", async () => {
+  await using root = await tmpdir()
+  const ledgerPath = join(root.path, "ledger.json")
+  const artifactDir = join(root.path, "release-evidence-products")
+  const gate = new URL("../../script/evidence-ledger/release-gate.ts", import.meta.url)
+  const child = Bun.spawn([process.execPath, gate.pathname, "--out", ledgerPath], {
+    cwd: join(import.meta.dir, "../.."),
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ])
+  expect(exitCode).not.toBe(0)
+  expect(stderr).toContain("RI-51 RELEASE-NO-GO: evidence_bundle_missing,packaged_report_missing")
+  expect(stdout).toContain("RI-51 archived products match ledger")
+  expect(
+    (await Bun.file(ledgerPath).json()).manifest.gates.every((entry: { status: string }) => entry.status === "pending"),
+  ).toBe(true)
+  expect(await Bun.file(join(artifactDir, "gates.json")).exists()).toBe(false)
+
+  const verifier = new URL("../../script/evidence-ledger/verify-ledger-products.ts", import.meta.url)
+  const readback = Bun.spawn(
+    [process.execPath, verifier.pathname, "--ledger", ledgerPath, "--artifact-dir", artifactDir],
+    { cwd: join(import.meta.dir, "../.."), stdout: "pipe", stderr: "pipe" },
+  )
+  const [readbackStderr, readbackExitCode] = await Promise.all([new Response(readback.stderr).text(), readback.exited])
+  expect(readbackExitCode).toBe(0)
+  expect(readbackStderr).toBe("")
 })

@@ -57,7 +57,10 @@ if (ledger.packagedReportDigest !== contentDigest({ present: false })) {
 }
 
 const gatesFile = Bun.file(path.join(artifactDir, "gates.json"))
-if (await gatesFile.exists()) {
+const gatesPresent = await gatesFile.exists()
+if (!gatesPresent && ledger.manifest.gates.some((entry) => entry.status === "passed"))
+  throw new Error("gates.json is required when a ledger gate has passed")
+if (gatesPresent) {
   const gates = (await gatesFile.json()) as Record<string, unknown>
   for (const entry of ledger.manifest.gates) {
     const value = gates[entry.gate]
