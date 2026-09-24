@@ -3,9 +3,10 @@ import {
   lstatSync,
   mkdirSync,
   readFileSync,
-  readlinkSync,
+  realpathSync,
   renameSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs"
@@ -292,7 +293,7 @@ export class DeepAgentCodeHome {
     const publicLink = lstatSync(paths.publicLink, { throwIfNoEntry: false })
     if (publicLink) {
       if (!publicLink.isSymbolicLink()) throw new Error(`ProjectStore.InvalidPublicLink: ${paths.publicLink}`)
-      if (path.resolve(path.dirname(paths.publicLink), readlinkSync(paths.publicLink)) !== path.resolve(paths.publicDir))
+      if (!pointsToPublicDirectory(paths.publicLink, paths.publicDir))
         throw new Error(`ProjectStore.InvalidPublicLink: ${paths.publicLink}`)
     } else if (!existsSync(`${paths.publicLink}.link.json`)) {
       this.createPublicPointer(paths.publicLink)
@@ -303,5 +304,19 @@ export class DeepAgentCodeHome {
       rebuildable: true,
       indexes: ["project-memory", "project-rules", "project-knowledge", "handoff", "quest"],
     })
+  }
+}
+
+function pointsToPublicDirectory(link: string, expected: string): boolean {
+  try {
+    // Resolve the actual target, not readlink's spelling: Windows can return an 8.3 alias or an
+    // absolute junction path for the same managed directory. File identity is the final fallback
+    // if native realpath still uses different aliases; zero inode values cannot prove identity.
+    if (realpathSync.native(link) === realpathSync.native(expected)) return true
+    const actual = statSync(link, { bigint: true })
+    const managed = statSync(expected, { bigint: true })
+    return actual.ino !== 0n && actual.dev === managed.dev && actual.ino === managed.ino
+  } catch {
+    return false
   }
 }

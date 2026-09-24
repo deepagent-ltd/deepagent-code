@@ -96,4 +96,14 @@ describe("V3.1 DeepAgent Code workspace", () => {
     symlinkSync(paths.publicDir, paths.publicLink, "dir")
     expect(home.ensureProject("projA").publicDir).toBe(paths.publicDir)
   })
+
+  test("accepts a public link through an alternate spelling of the same directory", () => {
+    const paths = home.ensureProject("projA")
+    if (existsSync(paths.publicLink)) unlinkSync(paths.publicLink)
+    rmSync(`${paths.publicLink}.link.json`, { force: true })
+    const alias = path.join(root, "public-root-alias")
+    symlinkSync(root, alias, "dir")
+    symlinkSync(path.join(alias, "public"), paths.publicLink, "dir")
+    expect(home.ensureProject("projA").publicDir).toBe(paths.publicDir)
+  })
 })

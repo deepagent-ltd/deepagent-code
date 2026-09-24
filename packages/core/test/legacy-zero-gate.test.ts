@@ -353,3 +353,38 @@ describe("C0-08 legacy-zero gate snapshot (byte-stable)", () => {
     }
   })
 })
+
+describe("C0-08 legacy-zero CLI", () => {
+  test("must-be-zero waits for the real gate before reporting a digest", () => {
+    const result = Bun.spawnSync([process.execPath, path.join(rootRepoPath(), "packages/core/script/legacy-zero-gate/run-gate.ts"), "must-be-zero"], {
+      cwd: path.join(rootRepoPath(), "packages/core"),
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    expect(result.exitCode, result.stderr.toString()).toBe(0)
+    expect(result.stdout.toString()).toMatch(/legacy-zero gate PASSED \(snapshot [0-9a-f]{64}\)/)
+    expect(result.stdout.toString()).not.toContain("[object Promise]")
+  })
+
+  test("must-be-zero exits nonzero when its asynchronous gate rejects", async () => {
+    await using tmp = await tmpdir()
+    const preload = path.join(tmp.path, "reject-gate.ts")
+    await Bun.write(preload, `import { mock } from "bun:test"
+mock.module(${JSON.stringify(path.join(rootRepoPath(), "packages/core/script/legacy-zero-gate/gate.ts"))}, () => ({
+  mustBeZero: async () => { await Bun.sleep(10); throw new Error("gate-rejection-sentinel") },
+  currentTreeCounts: async () => ({}),
+  redOracle: async () => ({}),
+}))
+`)
+    const result = Bun.spawnSync([
+      process.execPath,
+      "--preload",
+      preload,
+      path.join(rootRepoPath(), "packages/core/script/legacy-zero-gate/run-gate.ts"),
+      "must-be-zero",
+    ], { cwd: path.join(rootRepoPath(), "packages/core"), stdout: "pipe", stderr: "pipe" })
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr.toString()).toContain("gate-rejection-sentinel")
+    expect(result.stdout.toString()).not.toContain("gate PASSED")
+  })
+})
