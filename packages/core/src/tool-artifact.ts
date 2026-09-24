@@ -1,7 +1,7 @@
 export * as ToolArtifact from "./tool-artifact"
 
 import { createHash, randomUUID } from "node:crypto"
-import { link, realpath, unlink } from "node:fs/promises"
+import { link, mkdir, readFile, realpath, stat, unlink, writeFile } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
 import path from "node:path"
 import { Effect, Schema } from "effect"
@@ -68,9 +68,8 @@ const readManaged = (uri: string, managedRoot: string) =>
       const root = await realpath(managedRoot)
       const file = await realpath(fileURLToPath(parsed))
       if (!file.startsWith(root + path.sep)) throw fail("invalid_source")
-      const source = Bun.file(file)
-      if (source.size > MAX_BYTES) throw fail("too_large")
-      return new Uint8Array(await source.arrayBuffer())
+      if ((await stat(file)).size > MAX_BYTES) throw fail("too_large")
+      return new Uint8Array(await readFile(file))
     },
     catch: (cause) => (cause instanceof Error ? cause : fail("unavailable")),
   })
@@ -117,13 +116,14 @@ export const materialize = (input: { file: ToolFileContent; root: string; scopeI
         const temporary = path.join(input.root, `${digest}.${randomUUID()}.tmp`)
         const target = artifactPath(input.root, digest)
         try {
-          await Bun.write(temporary, bytes, { createPath: true })
+          await mkdir(input.root, { recursive: true })
+          await writeFile(temporary, bytes, { flag: "wx" })
           // A hard link publishes the complete file without replacing an existing digest.
-          await link(temporary, target).catch(async (cause) => {
-            if (!(await Bun.file(target).exists())) throw cause
+          await link(temporary, target).catch((cause) => {
+            if ((cause as NodeJS.ErrnoException).code !== "EEXIST") throw cause
           })
-          const retained = Bun.file(target)
-          if (retained.size !== bytes.byteLength || hashOf(new Uint8Array(await retained.arrayBuffer())) !== digest)
+          const retained = await readFile(target)
+          if (retained.byteLength !== bytes.byteLength || hashOf(retained) !== digest)
             throw fail("integrity_mismatch")
         } finally {
           await unlink(temporary).catch((cause: NodeJS.ErrnoException) => {
@@ -160,9 +160,9 @@ export const rehydrate = (input: {
     if (!TEXT.has(mime) && !MEDIA.has(mime)) return yield* fail("unsupported_content_type")
     const bytes = yield* Effect.tryPromise({
       try: async () => {
-        const file = Bun.file(artifactPath(path.join(input.root, match[1], input.sessionID), digest))
-        if (file.size > MAX_BYTES) throw fail("too_large")
-        return new Uint8Array(await file.arrayBuffer())
+        const file = artifactPath(path.join(input.root, match[1], input.sessionID), digest)
+        if ((await stat(file)).size > MAX_BYTES) throw fail("too_large")
+        return new Uint8Array(await readFile(file))
       },
       catch: (cause) => (cause instanceof Error ? cause : fail("unavailable")),
     })
