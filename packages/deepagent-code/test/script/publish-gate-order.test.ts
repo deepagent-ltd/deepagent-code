@@ -99,6 +99,14 @@ test("release workflow builds and publishes one frozen candidate", async () => {
     publish.indexOf("./packages/deepagent-code/script/publish.ts"),
   )
   expect(publish).toContain("await verifySdkBuild(")
+  expect(workflow).toContain("RELEASE_ASSETS_DIR: ${{ runner.temp }}/release-assets")
+  expect(publish.indexOf("await verifyUpdaterInputs(")).toBeLessThan(
+    publish.indexOf("./packages/desktop/scripts/finalize-latest-json.ts"),
+  )
+  expect(publish.indexOf("await verifyUpdaterReadback(")).toBeLessThan(
+    publish.indexOf("./packages/deepagent-code/script/publish.ts"),
+  )
+  expect(publish.indexOf("await verifyUpdaterReadback(")).toBeLessThan(publish.indexOf("gh release edit"))
   expect(publish).not.toContain("git tag -d")
   expect(publish).not.toContain("git push origin refs/tags/")
   expect(publish).not.toContain("git commit -am")

@@ -24,3 +24,8 @@ with the authoritative ledger. Any missing, stale, pending, or mismatched input 
 The workflow also probes the frozen Linux x64 package, stages every CLI archive plus desktop
 assets, and binds their SHA-256 values into the ledger. After upload it downloads the draft
 release assets and compares every byte with the staged manifest before package publication.
+The six desktop updater source files are then checked against the staged installer bytes and
+version before any package is published. The generated `latest.json` and four `latest*.yml`
+files are uploaded to the draft release and read back byte for byte before the draft opens.
+These updater metadata bytes are a separate post-gate check; they are not included in the
+RI-51 ledger digest.

@@ -142,11 +142,17 @@ export async function verifyReleaseAssets(
     const desktop = manifest.assets.filter((asset) => asset.kind === "desktop").map((asset) => asset.name)
     if (desktopTargets.some((name) => !desktop.includes(name)))
       throw new Error("release asset manifest is missing a desktop platform")
-    const expectedNames = manifest.assets.map((asset) => asset.name)
-    const allowed = allowLedgerAssets
-      ? [...expectedNames, "ledger.json", "release-evidence-products.tar.gz"]
-      : expectedNames
-    if ((await readdir(assetsDir)).toSorted().join("\n") !== allowed.toSorted().join("\n"))
+    const required = allowLedgerAssets
+      ? [...manifest.assets.map((asset) => asset.name), "ledger.json", "release-evidence-products.tar.gz"]
+      : manifest.assets.map((asset) => asset.name)
+    const optional = allowLedgerAssets
+      ? ["latest.json", "latest.yml", "latest-mac.yml", "latest-linux.yml", "latest-linux-arm64.yml"]
+      : []
+    const present = await readdir(assetsDir)
+    if (
+      required.some((name) => !present.includes(name)) ||
+      present.some((name) => !required.includes(name) && !optional.includes(name))
+    )
       throw new Error("release asset directory has missing or unexpected files")
   }
   for (const asset of manifest.assets) {

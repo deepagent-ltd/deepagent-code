@@ -6,6 +6,7 @@ import { fileURLToPath } from "url"
 import { assertReleaseCandidate } from "./assert-release-candidate"
 import { prepareReleaseFiles } from "./prepare-release-files"
 import { verifySdkBuild } from "../packages/sdk/js/script/verify-build"
+import { verifyUpdaterInputs, verifyUpdaterReadback } from "../packages/desktop/scripts/verify-updater-assets"
 
 console.log("=== publishing ===\n")
 
@@ -39,6 +40,18 @@ if (Script.release) {
   })
 }
 
+if (Script.release) {
+  const latestDir = process.env.LATEST_YML_DIR
+  const assetsDir = process.env.RELEASE_ASSETS_DIR
+  const repo = process.env.GH_REPO
+  if (!latestDir || !assetsDir || !repo || !process.env.RUNNER_TEMP)
+    throw new Error("release updater verification requires latest YAML, staged assets, repository and runner temp")
+  await verifyUpdaterInputs(latestDir, assetsDir, Script.version)
+  await $`bun ./packages/desktop/scripts/finalize-latest-json.ts`
+  await $`bun ./packages/desktop/scripts/finalize-latest-yml.ts`
+  await verifyUpdaterReadback(process.env.RUNNER_TEMP, repo, tag)
+}
+
 console.log("\n=== cli ===\n")
 await $`bun ./packages/deepagent-code/script/publish.ts`
 
@@ -50,11 +63,6 @@ await $`bun ./packages/sdk/js/script/publish.ts`
 
 console.log("\n=== plugin ===\n")
 await $`bun ./packages/plugin/script/publish.ts`
-
-if (Script.release) {
-  await $`bun ./packages/desktop/scripts/finalize-latest-json.ts`
-  await $`bun ./packages/desktop/scripts/finalize-latest-yml.ts`
-}
 
 if (Script.release) {
   await assertReleaseCandidate({
