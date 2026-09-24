@@ -8,7 +8,11 @@ import { containsDataPath, resolveDataPath } from "../src/global-path"
 describe("private storage boundary", () => {
   test("production ignores an arbitrary DEEPAGENT_CODE_HOME", () => {
     const root = resolveDataPath({ DEEPAGENT_CODE_HOME: "/outside" })
-    expect(root).toBe(path.join(os.homedir(), ".deepagent", "code"))
+    expect(root).toBe(
+      process.platform === "win32"
+        ? path.win32.join(os.homedir(), "AppData", "Local", "deepagent-code")
+        : path.join(os.homedir(), ".deepagent", "code"),
+    )
   })
 
   test("containsDataPath rejects traversal and sibling prefixes", () => {
@@ -40,7 +44,7 @@ describe("private storage boundary", () => {
       "install",
       "github/action.yml",
       "patches/install-korean-ime-fix.sh",
-    ].filter(
+    ].map((file) => file.replaceAll("\\", "/")).filter(
       (file) =>
         !file.includes("/__tests__/") &&
         !file.endsWith(".test.ts") &&
