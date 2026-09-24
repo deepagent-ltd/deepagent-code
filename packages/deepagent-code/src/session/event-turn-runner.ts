@@ -1,6 +1,7 @@
 export * as EventTurnRunner from "./event-turn-runner"
 
 import path from "node:path"
+import { and, eq, lt, sql } from "drizzle-orm"
 import { Duration, Effect, Exit, Option } from "effect"
 import { AgentV2 } from "@deepagent-code/core/agent"
 import { contentDigest } from "@deepagent-code/core/contract/digest"
@@ -10,6 +11,7 @@ import { AbsolutePath } from "@deepagent-code/core/schema"
 import { SessionV2 } from "@deepagent-code/core/session"
 import { SessionInput } from "@deepagent-code/core/session/input"
 import { SessionMessage } from "@deepagent-code/core/session/message"
+import { SessionInputTable, SessionTable } from "@deepagent-code/core/session/sql"
 import { TaskWorkspace } from "@deepagent-code/core/session/task-workspace"
 import { Prompt } from "@deepagent-code/core/session/prompt"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
@@ -90,6 +92,18 @@ export const makeEventTurnRunnerV2 =
     Effect.gen(function* () {
       const ids = idsFor(input)
       if (!ids || !input.parentSessionID) return failed("runner_failed")
+      // AgentExecution increments generation after an expired/released claim. Its new child ID
+      // must not sidestep an older generation's durable admission with an unknown provider fate.
+      const previousAdmission = deps.db && input.generation! > 1
+        ? yield* deps.db.select({ id: SessionInputTable.id }).from(SessionInputTable)
+            .innerJoin(SessionTable, eq(SessionInputTable.session_id, SessionTable.id))
+            .where(and(
+              eq(sql<string>`json_extract(${SessionTable.metadata}, '$.eventID')`, input.eventID!),
+              eq(sql<string>`json_extract(${SessionTable.metadata}, '$.taskID')`, input.taskID!),
+              lt(sql<number>`json_extract(${SessionTable.metadata}, '$.generation')`, input.generation!),
+            )).limit(1).get()
+        : undefined
+      if (previousAdmission) return failed("admission_recovery_required")
       const directory =
         input.directory ?? (input.workspaceID && !input.workspaceID.startsWith("wrk") ? input.workspaceID : undefined)
       if (!directory || !path.isAbsolute(directory)) return failed("isolation_unavailable")
@@ -183,7 +197,7 @@ export const makeEventTurnRunnerV2 =
         // that window must not convert an exact prompt retry into implicit provider execution.
         const prior = deps.db ? yield* SessionInput.find(deps.db, ids.messageID) : undefined
         if (!replay && (prior || before.some((message) => message.id === ids.messageID)))
-          return failed("runner_failed")
+          return failed("admission_recovery_required")
         yield* withChild(
           deps.sessions.prompt({
             id: ids.messageID,
@@ -195,17 +209,25 @@ export const makeEventTurnRunnerV2 =
         )
         if (replay) return replay
         const interruptChild = deps.sessions.interrupt(child.id).pipe(Effect.ignore)
-        yield* withChild(deps.sessions.resume(child.id)).pipe(Effect.onError(() => interruptChild))
-        return (
-          completedTurn(
+        return yield* Effect.gen(function* () {
+          yield* withChild(deps.sessions.resume(child.id)).pipe(Effect.onError(() => interruptChild))
+          return completedTurn(
             yield* withChild(deps.sessions.messages({ sessionID: child.id, order: "asc" })),
             ids.messageID,
             child.id,
-          ) ?? failed("runner_failed")
+          ) ?? failed("admission_recovery_required")
+        }).pipe(
+          Effect.catchCause(() => Effect.succeed(failed("admission_recovery_required"))),
         )
       })
       const timed = turn.pipe(Effect.timeoutOption(Duration.millis(input.maxTurnDurationMs ?? 30 * 60_000)))
-      if (!durable && !worktree) return Option.getOrElse(yield* timed, () => failed("turn_timeout"))
+      if (!durable && !worktree) {
+        const result = Option.getOrElse(yield* timed, () => failed("turn_timeout"))
+        if (!result.ok && result.reason === "turn_timeout" && deps.db &&
+          (yield* SessionInput.find(deps.db, ids.messageID)))
+          return failed("admission_recovery_required")
+        return result
+      }
       return yield* Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           const exit = yield* restore(timed).pipe(Effect.exit)
@@ -220,6 +242,9 @@ export const makeEventTurnRunnerV2 =
           if (!cleanup) return failed("isolation_preservation_failed")
           if (Exit.isFailure(exit)) return yield* Effect.failCause(exit.cause)
           const result = Option.getOrElse(exit.value, () => failed("turn_timeout"))
+          if (!result.ok && result.reason === "turn_timeout" && deps.db &&
+            (yield* SessionInput.find(deps.db, ids.messageID)))
+            return failed("admission_recovery_required")
           return result.ok
             ? { ...result, continuationRef: cleanup.continuationRef, artifacts: cleanup.artifacts }
             : result

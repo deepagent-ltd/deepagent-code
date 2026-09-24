@@ -168,7 +168,7 @@ describe("V2 event turn runner", () => {
         expect(receipts[0]?.state).toBe("retained")
 
         const replay = yield* makeEventTurnRunnerV2({ sessions: real, instanceStore, db })(attempt)
-        expect(replay).toMatchObject({ ok: false, reason: "runner_failed" })
+        expect(replay).toMatchObject({ ok: false, reason: "admission_recovery_required" })
         expect(resumes).toEqual([])
         const inputs = yield* db.select().from(SessionInputTable).all()
         expect(inputs).toHaveLength(1)
@@ -185,6 +185,15 @@ describe("V2 event turn runner", () => {
         expect(exactRetry.id).toBe(inputs[0]!.id)
         expect(yield* db.select().from(SessionInputTable).all()).toHaveLength(1)
         expect(resumes).toEqual([])
+        // AgentExecution.claim increments generation after a failed/expired lease. That new
+        // identity must not bypass the previous generation's admitted, unpromoted inbox row.
+        const nextGeneration = yield* makeEventTurnRunnerV2({ sessions: real, instanceStore, db })({
+          ...attempt,
+          generation: attempt.generation! + 1,
+        })
+        expect(resumes).toEqual([])
+        expect(nextGeneration).toMatchObject({ ok: false, reason: "admission_recovery_required" })
+        expect(yield* db.select().from(SessionInputTable).all()).toHaveLength(1)
         expect((yield* TaskWorkspace.reclaimStale(db, {
           now: Date.now() + TaskWorkspace.DEFAULT_WORKTREE_RETENTION_MS + 1_000,
         })).reclaimed).toBe(1)
@@ -222,7 +231,7 @@ describe("V2 event turn runner", () => {
         expect(receipts).toHaveLength(1)
         expect(receipts[0]?.state).toBe("retained")
         const replay = yield* run(attempt)
-        expect(replay).toMatchObject({ ok: false, reason: "runner_failed" })
+        expect(replay).toMatchObject({ ok: false, reason: "admission_recovery_required" })
         expect(fake.prompts).toHaveLength(1)
         expect(fake.drains).toEqual([])
         expect((yield* TaskWorkspace.reclaimStale(db, {

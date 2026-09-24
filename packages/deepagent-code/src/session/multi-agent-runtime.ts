@@ -1159,7 +1159,8 @@ export const layerWith = (options: LayerOptions) =>
               }
 
               const reason = result.reason ?? "runner_failed"
-              const permanent = reason === "isolation_unavailable" || reason === "isolation_preservation_failed"
+              const permanent = reason === "isolation_unavailable" || reason === "isolation_preservation_failed" ||
+                reason === "admission_recovery_required"
               if (execution && lease) {
                 const alternate = permanent ? undefined : capable.find((candidate) => candidate.id !== agent.id)
                 if (alternate) {

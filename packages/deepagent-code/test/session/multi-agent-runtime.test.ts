@@ -1146,6 +1146,35 @@ describe("MultiAgentRuntime runner failure", () => {
     }),
   )
 
+  it.effect("a durable admitted turn requiring recovery never claims a new generation", () =>
+    Effect.gen(function* () {
+      setNow(1_000)
+      setRegistry([agent("fixer", ["code_edit", "test_run"], "level_2")])
+      const calls: number[] = []
+      const recoveryRequired: SubagentTurnRunner = (input) => Effect.sync(() => {
+        calls.push(input.generation ?? -1)
+        return { ok: false, reason: "admission_recovery_required", structured: undefined, text: "", tokensUsed: 0, cost: 0 }
+      })
+      const result = yield* Effect.gen(function* () {
+        const runtime = yield* MultiAgentRuntime.Service
+        const trigger = event()
+        const first = yield* runtime.coordinate(trigger)
+        const execution = yield* AgentExecution.Service
+        const record = yield* execution.get({ workspaceID: trigger.workspaceID, eventID: trigger.id,
+          taskID: first.outcomes[0]!.taskID })
+        const second = yield* runtime.coordinate(trigger)
+        const queue = yield* ApprovalQueue.Service
+        return { first, record, second, pending: yield* queue.listPending(trigger.workspaceID) }
+      }).pipe(Effect.provide(makeLayer({ runner: recoveryRequired })))
+      expect(result.first.outcomes[0]).toMatchObject({ status: "blocked", reason: "admission_recovery_required" })
+      expect(result.first.hasUnfinished).toBe(false)
+      expect(result.record?.status).toBe("failed")
+      expect(result.second.hasUnfinished).toBe(false)
+      expect(calls).toEqual([1])
+      expect(result.pending.some((item) => item.eventType === "agent.task.needs_human")).toBe(true)
+    }),
+  )
+
   it.effect("write-isolation failure settles the DAG and escalates to a human instead of retrying forever", () =>
     Effect.gen(function* () {
       setNow(1_000)
