@@ -28,6 +28,7 @@ export async function verifyQualificationBundle(input: {
     head_sha?: string
     conclusion?: string
     event?: string
+    path?: string
     repository?: { full_name?: string }
   }
   for (const file of ["qualification.json", "gates.json", "source-run.json"])
@@ -48,9 +49,10 @@ export async function verifyQualificationBundle(input: {
   if (
     sourceRun.head_sha !== input.commit ||
     sourceRun.conclusion !== "success" ||
-    sourceRun.event !== "workflow_dispatch"
+    sourceRun.event !== "workflow_dispatch" ||
+    sourceRun.path?.split("@")[0] !== ".github/workflows/release-qualification-v2.yml"
   )
-    throw new Error("qualification source run did not succeed on candidate SHA")
+    throw new Error("qualification producer run did not succeed on candidate SHA")
   if (!Array.isArray(metadata.evidence) || metadata.evidence.length === 0)
     throw new Error("qualification evidence inventory is empty")
 

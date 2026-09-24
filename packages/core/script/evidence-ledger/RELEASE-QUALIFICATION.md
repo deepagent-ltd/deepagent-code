@@ -78,7 +78,7 @@ digest for audit.
 Re-dispatch the publish workflow for the same version with `qualification_run_id` set to that
 completed successful run. The publish job downloads the artifact and fetches its GitHub run
 record as `source-run.json`. It requires the run to be a successful `workflow_dispatch` on the
-candidate SHA in the same repository, verifies every referenced byte, and archives the inputs
+candidate SHA from this exact producer workflow in the same repository, verifies every referenced byte, and archives the inputs
 with the authoritative ledger. Any missing, stale, pending, or mismatched input remains NO-GO.
 
 The workflow also probes the frozen Linux x64 package, stages every CLI archive plus desktop

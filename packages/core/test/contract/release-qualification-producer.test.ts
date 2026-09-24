@@ -22,7 +22,7 @@ test("qualification producer records real check bytes while keeping every gate p
   await produceQualificationBundle({ out, commit, tree, runID: "123", repository, checks })
   await Bun.write(
     join(out, "source-run.json"),
-    JSON.stringify({ id: 123, head_sha: commit, conclusion: "success", event: "workflow_dispatch", repository: { full_name: repository } }),
+    JSON.stringify({ id: 123, head_sha: commit, conclusion: "success", event: "workflow_dispatch", path: ".github/workflows/release-qualification-v2.yml@release-candidates/v2.0.2", repository: { full_name: repository } }),
   )
   const result = await verifyQualificationBundle({ directory: out, commit, tree, runID: "123", repository })
   expect(Object.values(result.gates).map((entry) => (entry as { status: string }).status)).toEqual(Array(9).fill("pending"))
@@ -79,7 +79,7 @@ test("reviewed decisions require exact candidate, complete evidence and protecte
   })
   await Bun.write(
     join(out, "source-run.json"),
-    JSON.stringify({ id: 123, head_sha: commit, conclusion: "success", event: "workflow_dispatch", repository: { full_name: repository } }),
+    JSON.stringify({ id: 123, head_sha: commit, conclusion: "success", event: "workflow_dispatch", path: ".github/workflows/release-qualification-v2.yml@release-candidates/v2.0.2", repository: { full_name: repository } }),
   )
   const result = await verifyQualificationBundle({ directory: out, commit, tree, runID: "123", repository })
   expect(Object.values(result.gates).every((entry) => (entry as { status: string }).status === "passed")).toBe(true)

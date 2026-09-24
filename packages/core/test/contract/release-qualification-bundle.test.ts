@@ -36,6 +36,7 @@ test("external G0-G8 decisions bind candidate, source run and exact evidence byt
       head_sha: commit,
       conclusion: "success",
       event: "workflow_dispatch",
+      path: ".github/workflows/release-qualification-v2.yml@release-candidates/v2.0.2",
       repository: { full_name: "deepagent-ltd/deepagent-code" },
     }),
   )
@@ -54,6 +55,29 @@ test("external G0-G8 decisions bind candidate, source run and exact evidence byt
   await Bun.write(join(root.path, "gates.json"), JSON.stringify(gates))
   const input = { directory: root.path, commit, tree, runID: "123", repository: "deepagent-ltd/deepagent-code" }
   expect((await verifyQualificationBundle(input)).sourceRunID).toBe("123")
+  await Bun.write(
+    join(root.path, "source-run.json"),
+    JSON.stringify({
+      id: 123,
+      head_sha: commit,
+      conclusion: "success",
+      event: "workflow_dispatch",
+      path: ".github/workflows/other.yml@release-candidates/v2.0.2",
+      repository: { full_name: "deepagent-ltd/deepagent-code" },
+    }),
+  )
+  await expect(verifyQualificationBundle(input)).rejects.toThrow("producer run")
+  await Bun.write(
+    join(root.path, "source-run.json"),
+    JSON.stringify({
+      id: 123,
+      head_sha: commit,
+      conclusion: "success",
+      event: "workflow_dispatch",
+      path: ".github/workflows/release-qualification-v2.yml@release-candidates/v2.0.2",
+      repository: { full_name: "deepagent-ltd/deepagent-code" },
+    }),
+  )
   await expect(verifyQualificationBundle({ ...input, tree: "other" })).rejects.toThrow("candidate")
   await expect(verifyQualificationBundle({ ...input, runID: "124" })).rejects.toThrow("input run ID")
   await Bun.write(join(root.path, evidence[3]!.path), "tampered")
