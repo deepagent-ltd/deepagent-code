@@ -83,6 +83,7 @@ export async function publishUpdaterEvidence(input: {
   ledgerPath: string
   gh?: string
   assertCandidate?: () => Promise<void>
+  upload?: (file: string) => Promise<void>
 }) {
   const ledgerBytes = await Bun.file(input.ledgerPath).bytes()
   const ledger = JSON.parse(Buffer.from(ledgerBytes).toString("utf8")) as {
@@ -107,12 +108,14 @@ export async function publishUpdaterEvidence(input: {
   await Bun.write(file, `${JSON.stringify(evidence, null, 2)}\n`)
   await input.assertCandidate?.()
   const gh = input.gh ?? "gh"
-  const upload = Bun.spawnSync([gh, "release", "upload", input.tag, file, "--clobber", "--repo", input.repository], {
-    stdout: "pipe",
-    stderr: "pipe",
-    env: { ...process.env },
-  })
-  if (upload.exitCode !== 0) throw new Error(`updater evidence upload failed: ${upload.stderr.toString()}`)
+  if (input.upload) await input.upload(file)
+  else {
+    const upload = Bun.spawnSync(
+      [process.execPath, path.resolve(import.meta.dir, "../../../script/upload-release-asset.ts"), file],
+      { stdout: "pipe", stderr: "pipe", env: { ...process.env } },
+    )
+    if (upload.exitCode !== 0) throw new Error(`updater evidence upload failed: ${upload.stderr.toString()}`)
+  }
   const temporary = await mkdtemp(path.join(os.tmpdir(), "deepagent-updater-evidence-readback-"))
   try {
     const download = Bun.spawnSync(

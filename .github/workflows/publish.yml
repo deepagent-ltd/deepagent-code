@@ -129,7 +129,6 @@ jobs:
           DEEPAGENT_CODE_VERSION: ${{ needs.version.outputs.version }}
           DEEPAGENT_CODE_CHANNEL: ${{ needs.version.outputs.channel }}
           DEEPAGENT_CODE_RELEASE: ${{ needs.version.outputs.release }}
-          DEEPAGENT_CODE_SKIP_RELEASE_UPLOAD: "1"
           DEEPAGENT_CODE_RELEASE_OWNER_AUTHORIZATION_FILE: ${{ runner.temp }}/owner-authorization.json
           DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY: ${{ runner.temp }}/release-owner-public-key.pem
           GH_REPO: ${{ needs.version.outputs.repo }}
@@ -468,6 +467,12 @@ jobs:
       - build-electron
     if: always() && !failure() && !cancelled() && needs.version.outputs.channel != 'beta'
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    env:
+      GH_REPO: ${{ needs.version.outputs.repo }}
+      DEEPAGENT_CODE_VERSION: ${{ needs.version.outputs.version }}
+      DEEPAGENT_CODE_RELEASE: ${{ needs.version.outputs.release }}
+      DEEPAGENT_CODE_CANDIDATE_COMMIT: ${{ needs.version.outputs.candidate_commit }}
+      DEEPAGENT_CODE_CANDIDATE_TREE: ${{ needs.version.outputs.candidate_tree }}
     steps:
       - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
         with:
@@ -671,10 +676,9 @@ jobs:
           tar -czf /tmp/authoritative-ledger/release-evidence-products.tar.gz \
             -C /tmp/authoritative-ledger \
             ledger.json release-evidence-manifest.json release-evidence-products release-evidence
-          gh release upload "v${{ needs.version.outputs.version }}" \
+          bun script/upload-release-asset.ts \
             /tmp/authoritative-ledger/ledger.json \
-            /tmp/authoritative-ledger/release-evidence-products.tar.gz \
-            --clobber --repo "${{ needs.version.outputs.repo }}"
+            /tmp/authoritative-ledger/release-evidence-products.tar.gz
 
       - name: Upload CLI release assets
         if: needs.version.outputs.release
@@ -690,7 +694,7 @@ jobs:
           mapfile -t names < <(jq -r '.assets[] | select(.kind == "cli") | .name' "$RUNNER_TEMP/ri51-probe/release-assets.json")
           files=()
           for name in "${names[@]}"; do files+=("$RUNNER_TEMP/release-assets/$name"); done
-          gh release upload "v${{ needs.version.outputs.version }}" "${files[@]}" --clobber --repo "${{ needs.version.outputs.repo }}"
+          bun script/upload-release-asset.ts "${files[@]}"
 
       - name: Upload desktop release assets
         if: needs.version.outputs.release
@@ -706,7 +710,7 @@ jobs:
           mapfile -t names < <(jq -r '.assets[] | select(.kind == "desktop") | .name' "$RUNNER_TEMP/ri51-probe/release-assets.json")
           files=()
           for name in "${names[@]}"; do files+=("$RUNNER_TEMP/release-assets/$name"); done
-          gh release upload "v${{ needs.version.outputs.version }}" "${files[@]}" --clobber --repo "${{ needs.version.outputs.repo }}"
+          bun script/upload-release-asset.ts "${files[@]}"
 
       # W0.5: deliver the signed owner-authorization.json with the release artifacts. The runtime
       # seed (v2-owner-seed.ts) reads it from the install root; if it is missing the release still
@@ -722,9 +726,7 @@ jobs:
             --tag "v${{ needs.version.outputs.version }}" \
             --release-id "${{ needs.version.outputs.release }}" \
             --release-repo "${{ needs.version.outputs.repo }}"
-          gh release upload "v${{ needs.version.outputs.version }}" \
-            "$RUNNER_TEMP/release-assets/owner-authorization.json" \
-            --clobber --repo "${{ needs.version.outputs.repo }}"
+          bun script/upload-release-asset.ts "$RUNNER_TEMP/release-assets/owner-authorization.json"
 
       - name: Read back final release asset bytes
         if: needs.version.outputs.release

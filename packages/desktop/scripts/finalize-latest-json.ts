@@ -208,6 +208,6 @@ if (dryRun) {
   process.exit(0)
 }
 assertReleaseDraft()
-await $`gh release upload ${tag} ${file} --clobber --repo ${repo}`
+await $`bun ${path.resolve(import.meta.dir, "../../../script/upload-release-asset.ts")} ${file}`
 
 console.log(`finalized latest.json for ${tag}`)

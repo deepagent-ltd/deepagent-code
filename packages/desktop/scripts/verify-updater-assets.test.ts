@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { createHash } from "node:crypto"
-import { chmod, mkdir, mkdtemp, rm } from "node:fs/promises"
+import { chmod, copyFile, mkdir, mkdtemp, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { publishUpdaterEvidence, verifyUpdaterInputs, verifyUpdaterReadback } from "./verify-updater-assets"
@@ -141,11 +141,23 @@ test("post-gate updater evidence binds candidate and ledger, survives same-SHA r
     const gh = path.join(root, "gh")
     await Bun.write(
       gh,
-      '#!/bin/sh\nif [ "$2" = upload ]; then\n  cp "$4" "$FAKE_GH_ASSETS/$(basename "$4")"\n  if [ "$FAKE_GH_TAMPER" = 1 ]; then printf tampered > "$FAKE_GH_ASSETS/$(basename "$4")"; fi\n  exit 0\nfi\nwhile [ "$#" -gt 0 ]; do\n  case "$1" in\n    --dir) shift; dir="$1";;\n    --pattern) shift; name="$1";;\n  esac\n  shift\ndone\ncp "$FAKE_GH_ASSETS/$name" "$dir/$name"\n',
+      '#!/bin/sh\nwhile [ "$#" -gt 0 ]; do\n  case "$1" in\n    --dir) shift; dir="$1";;\n    --pattern) shift; name="$1";;\n  esac\n  shift\ndone\ncp "$FAKE_GH_ASSETS/$name" "$dir/$name"\n',
     )
     await chmod(gh, 0o755)
     process.env.FAKE_GH_ASSETS = remote
-    const input = { directory: local, repository: "example/repo", tag: "v2.0.2", commit, tree, ledgerPath, gh }
+    const input = {
+      directory: local,
+      repository: "example/repo",
+      tag: "v2.0.2",
+      commit,
+      tree,
+      ledgerPath,
+      gh,
+      upload: async (file: string) => {
+        await copyFile(file, path.join(remote, path.basename(file)))
+        if (process.env.FAKE_GH_TAMPER === "1") await Bun.write(path.join(remote, path.basename(file)), "tampered")
+      },
+    }
     await expect(
       publishUpdaterEvidence({
         ...input,

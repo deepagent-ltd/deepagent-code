@@ -299,8 +299,7 @@ const ownerAuthorizationFile = process.env.DEEPAGENT_CODE_RELEASE_OWNER_AUTHORIZ
 if (ownerAuthorizationFile) {
   const row = await Bun.file(ownerAuthorizationFile).bytes()
   if (row.byteLength === 0) throw new Error("release owner authorization file is empty")
-  for (const name of Object.keys(binaries))
-    await Bun.write(`dist/${name}/bin/owner-authorization.json`, row)
+  for (const name of Object.keys(binaries)) await Bun.write(`dist/${name}/bin/owner-authorization.json`, row)
 }
 
 if (Script.release) {
@@ -311,9 +310,7 @@ if (Script.release) {
       await $`zip -r ../../${key}.zip *`.cwd(`dist/${key}/bin`)
     }
   }
-  // CI stages these archives as workflow artifacts and uploads them only after the RI-51 gate.
-  if (process.env.DEEPAGENT_CODE_SKIP_RELEASE_UPLOAD !== "1")
-    await $`gh release upload v${Script.version} ./dist/*.zip ./dist/*.tar.gz --clobber --repo ${process.env.GH_REPO}`
+  // Release archives are uploaded by the workflow only after the RI-51 gate.
 }
 
 export { binaries }

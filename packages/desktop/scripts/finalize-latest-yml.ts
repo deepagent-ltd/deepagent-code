@@ -127,7 +127,7 @@ for (const [filename, content] of Object.entries(output)) {
   await Bun.write(filepath, content)
   if (dryRun) continue
   assertReleaseDraft()
-  await $`gh release upload ${tag} ${filepath} --clobber --repo ${repo}`
+  await $`bun ${path.resolve(import.meta.dir, "../../../script/upload-release-asset.ts")} ${filepath}`
   console.log(`uploaded ${filename}`)
 }
 

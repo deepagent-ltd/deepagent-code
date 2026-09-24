@@ -6,14 +6,13 @@ test("RI-51 gate precedes every release asset upload", async () => {
   const workflow = await Bun.file(path.join(repository, ".github/workflows/publish.yml")).text()
   const gate = workflow.indexOf("      - name: RI-51 authoritative ledger release gate")
   expect(gate).toBeGreaterThan(0)
-  expect(workflow.slice(0, gate)).not.toContain("gh release upload")
+  expect(workflow.slice(0, gate)).not.toContain("bun script/upload-release-asset.ts")
   expect(workflow.slice(gate)).toContain("      - name: Upload CLI release assets")
-  expect(workflow.slice(gate)).toContain("gh release upload")
+  expect(workflow.slice(gate)).toContain("bun script/upload-release-asset.ts")
   expect(workflow.slice(gate)).toContain("release-evidence-products.tar.gz")
   expect(workflow.slice(gate)).toContain("verify-ledger-products.ts")
 
   const build = workflow.slice(workflow.indexOf("  build-cli:"), workflow.indexOf("  sign-cli-windows:"))
-  expect(build).toContain('DEEPAGENT_CODE_SKIP_RELEASE_UPLOAD: "1"')
   expect(build).toContain(
     "DEEPAGENT_CODE_RELEASE_OWNER_AUTHORIZATION_FILE: ${{ runner.temp }}/owner-authorization.json",
   )
@@ -27,7 +26,7 @@ test("RI-51 gate precedes every release asset upload", async () => {
   expect(workflow.slice(gate)).toContain('select(.kind == "desktop")')
 
   const script = await Bun.file(path.join(repository, "packages/deepagent-code/script/build.ts")).text()
-  expect(script).toContain('if (process.env.DEEPAGENT_CODE_SKIP_RELEASE_UPLOAD !== "1")')
+  expect(script).not.toContain("gh release upload")
   expect(script.indexOf("const ownerAuthorizationFile")).toBeLessThan(script.indexOf("if (Script.release)"))
 })
 
@@ -78,7 +77,9 @@ test("each release upload rechecks the frozen tag and draft identity", async () 
     const body = workflow.split(`      - name: ${name}\n`)[1]?.split(/^      - (?:name:|run:|uses:)/m)[0]
     expect(body).toBeDefined()
     expect(body.indexOf("bun script/assert-release-candidate.ts")).toBeGreaterThanOrEqual(0)
-    expect(body.indexOf("bun script/assert-release-candidate.ts")).toBeLessThan(body.indexOf("gh release upload"))
+    expect(body.indexOf("bun script/assert-release-candidate.ts")).toBeLessThan(
+      body.indexOf("bun script/upload-release-asset.ts"),
+    )
     expect(body).toContain("--commit")
     expect(body).toContain("--tag")
     expect(body).toContain("--release-id")
@@ -98,7 +99,21 @@ test("each release upload rechecks the frozen tag and draft identity", async () 
   for (const name of ["finalize-latest-json.ts", "finalize-latest-yml.ts"]) {
     const finalizer = await Bun.file(path.join(repository, "packages/desktop/scripts", name)).text()
     expect(finalizer).toContain("assertReleaseDraft()")
-    expect(finalizer.indexOf("assertReleaseDraft()")).toBeLessThan(finalizer.indexOf("gh release upload"))
+    expect(finalizer.indexOf("assertReleaseDraft()")).toBeLessThan(finalizer.indexOf("upload-release-asset.ts"))
+  }
+})
+
+test("post-gate assets use the frozen release ID instead of resolving the tag during upload", async () => {
+  const repository = path.resolve(import.meta.dir, "../../../..")
+  const workflow = await Bun.file(path.join(repository, ".github/workflows/publish.yml")).text()
+  const gate = workflow.indexOf("      - name: RI-51 authoritative ledger release gate")
+  const publish = workflow.indexOf("      - run: ./script/publish.ts")
+  expect(workflow.slice(gate, publish)).not.toContain("gh release upload")
+  expect(workflow.slice(gate, publish)).toContain("bun script/upload-release-asset.ts")
+  for (const name of ["finalize-latest-json.ts", "finalize-latest-yml.ts", "verify-updater-assets.ts"]) {
+    const source = await Bun.file(path.join(repository, "packages/desktop/scripts", name)).text()
+    expect(source).not.toContain("gh release upload")
+    expect(source).toContain("upload-release-asset.ts")
   }
 })
 
