@@ -17661,9 +17661,13 @@ export type SessionDeleteMessageErrors = {
    */
   404: NotFoundError
   /**
-   * SessionBusyError
+   * ConflictError | SessionBusyError
    */
-  409: SessionBusyError
+  409: ConflictError | SessionBusyError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
 }
 
 export type SessionDeleteMessageError = SessionDeleteMessageErrors[keyof SessionDeleteMessageErrors]
@@ -18426,6 +18430,14 @@ export type PartDeleteErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * ConflictError | SessionBusyError
+   */
+  409: ConflictError | SessionBusyError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
 }
 
 export type PartDeleteError = PartDeleteErrors[keyof PartDeleteErrors]
@@ -18462,6 +18474,14 @@ export type PartUpdateErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * ConflictError | SessionBusyError
+   */
+  409: ConflictError | SessionBusyError
+  /**
+   * ServiceUnavailableError
+   */
+  503: ServiceUnavailableError
 }
 
 export type PartUpdateError = PartUpdateErrors[keyof PartUpdateErrors]

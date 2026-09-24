@@ -8962,7 +8962,9 @@ export class Session2 extends HeyApiClient {
   /**
    * Delete message
    *
-   * Permanently delete a specific message and all of its parts from a session without reverting file changes.
+   * Unavailable until V2 canonical history mutation is supported; historical sessions are read-only.
+   *
+   * @deprecated
    */
   public deleteMessage<ThrowOnError extends boolean = false>(
     parameters: {
@@ -10304,7 +10306,9 @@ export class Session2 extends HeyApiClient {
 
 export class Part extends HeyApiClient {
   /**
-   * Delete a part from a message.
+   * Unavailable until V2 canonical history mutation is supported; historical sessions are read-only.
+   *
+   * @deprecated
    */
   public delete<ThrowOnError extends boolean = false>(
     parameters: {
@@ -10338,7 +10342,9 @@ export class Part extends HeyApiClient {
   }
 
   /**
-   * Update a part in a message.
+   * Unavailable until V2 canonical history mutation is supported; historical sessions are read-only.
+   *
+   * @deprecated
    */
   public update<ThrowOnError extends boolean = false>(
     parameters: {

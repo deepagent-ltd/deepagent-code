@@ -209,6 +209,18 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           ),
         )
 
+    const refuseLegacyMessageMutation = Effect.fn("SessionHttpApi.refuseLegacyMessageMutation")(function* (
+      sessionID: SessionID,
+      operation: string,
+    ) {
+      yield* requireWritableSession(sessionID)
+      yield* SessionError.mapBusy(assertSessionLaneAvailable(sessionID))
+      return yield* new ServiceUnavailableError({
+        service: operation,
+        message: "Message mutation requires a V2 canonical history API; the legacy projection is read-only",
+      })
+    })
+
     const get = Effect.fn("SessionHttpApi.get")(function* (ctx: { params: { sessionID: SessionID } }) {
       return yield* requireSession(ctx.params.sessionID)
     })
@@ -870,29 +882,19 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const deleteMessage = Effect.fn("SessionHttpApi.deleteMessage")(function* (ctx: {
       params: { sessionID: SessionID; messageID: MessageID }
     }) {
-      yield* requireSession(ctx.params.sessionID)
-      yield* SessionError.mapBusy(assertSessionLaneAvailable(ctx.params.sessionID))
-      const messages = yield* SessionError.mapStorageNotFound(session.messages({ sessionID: ctx.params.sessionID }))
-      if (!messages.some((message) => message.info.id === ctx.params.messageID))
-        return yield* notFound(`Message not found: ${ctx.params.messageID}`)
-      yield* session.removeMessage(ctx.params)
-      return true
+      return yield* refuseLegacyMessageMutation(ctx.params.sessionID, "session.deleteMessage")
     })
 
     const deletePart = Effect.fn("SessionHttpApi.deletePart")(function* (ctx: {
       params: { sessionID: SessionID; messageID: MessageID; partID: PartID }
     }) {
-      yield* requireSession(ctx.params.sessionID)
-      if (!(yield* session.getPart(ctx.params))) return yield* notFound(`Part not found: ${ctx.params.partID}`)
-      yield* session.removePart(ctx.params)
-      return true
+      return yield* refuseLegacyMessageMutation(ctx.params.sessionID, "session.deletePart")
     })
 
     const updatePart = Effect.fn("SessionHttpApi.updatePart")(function* (ctx: {
       params: { sessionID: SessionID; messageID: MessageID; partID: PartID }
       payload: typeof SessionV1.Part.Type
     }) {
-      yield* requireSession(ctx.params.sessionID)
       const payload = ctx.payload as SessionV1.Part
       if (
         payload.id !== ctx.params.partID ||
@@ -901,8 +903,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       ) {
         return yield* new HttpApiError.BadRequest({})
       }
-      if (!(yield* session.getPart(ctx.params))) return yield* notFound(`Part not found: ${ctx.params.partID}`)
-      return yield* session.updatePart(payload)
+      return yield* refuseLegacyMessageMutation(ctx.params.sessionID, "session.updatePart")
     })
 
     const contextDiagnostics = Effect.fn("SessionHttpApi.contextDiagnostics")(function* (ctx: {

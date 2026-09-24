@@ -35,6 +35,8 @@ import {
   SessionIntentTable,
   SessionMessageTable,
   SessionTable,
+  MessageTable,
+  PartTable,
 } from "@deepagent-code/core/session/sql"
 import { SessionToolRequestReceiptTable } from "@/session/tool-request-receipt.sql"
 import { SessionPromptEpochTable } from "@/session/prompt-epoch.sql"
@@ -1792,46 +1794,61 @@ describe("session HttpApi", () => {
   )
 
   it.instance(
-    "serves message mutation routes",
+    "keeps message mutation routes from writing legacy projections outside V2 authority",
     () =>
       Effect.gen(function* () {
         const test = yield* TestInstance
+        const db = (yield* Database.Service).db
         const headers = { "x-deepagent-code-directory": test.directory, "content-type": "application/json" }
-        const session = yield* createSession({ title: "messages" })
-        const first = yield* createTextMessage(session.id, "first")
-        const second = yield* createTextMessage(session.id, "second")
-
-        const updated = yield* requestJson<SessionV1.Part>(
-          pathFor(SessionPaths.updatePart, {
-            sessionID: session.id,
-            messageID: first.info.id,
-            partID: first.part.id,
-          }),
-          {
-            method: "PATCH",
-            headers,
-            body: JSON.stringify({ ...first.part, text: "updated" }),
-          },
-        )
-        expect(updated).toMatchObject({ id: first.part.id, type: "text", text: "updated" })
-
-        expect(
-          yield* requestJson<boolean>(
-            pathFor(SessionPaths.deletePart, {
-              sessionID: session.id,
-              messageID: first.info.id,
-              partID: first.part.id,
+        for (const authority of [false, true]) {
+          const session = yield* createSession({ title: authority ? "V2 message" : "historical message" })
+          const message = yield* createTextMessage(session.id, "original")
+          if (!authority) yield* db.update(SessionTable).set({ v2_authority: false }).where(eq(SessionTable.id, session.id)).run()
+          const snapshot = () =>
+            Effect.gen(function* () {
+              return {
+                session: yield* db.select().from(SessionTable).where(eq(SessionTable.id, session.id)).get(),
+                messages: yield* db.select().from(MessageTable).where(eq(MessageTable.session_id, session.id)).all(),
+                parts: yield* db.select().from(PartTable).where(eq(PartTable.session_id, session.id)).all(),
+                v2Messages: yield* db.select().from(SessionMessageTable).where(eq(SessionMessageTable.session_id, session.id)).all(),
+                inputs: yield* db.select().from(SessionInputTable).where(eq(SessionInputTable.session_id, session.id)).all(),
+                events: yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, session.id)).all(),
+              }
+            })
+          const before = yield* snapshot()
+          const mutations = [
+            {
+              path: pathFor(SessionPaths.updatePart, { sessionID: session.id, messageID: message.info.id, partID: message.part.id }),
+              method: "PATCH", service: "session.updatePart", body: JSON.stringify({ ...message.part, text: "changed" }),
+            },
+            {
+              path: pathFor(SessionPaths.deletePart, { sessionID: session.id, messageID: message.info.id, partID: message.part.id }),
+              method: "DELETE", service: "session.deletePart",
+            },
+            {
+              path: pathFor(SessionPaths.deleteMessage, { sessionID: session.id, messageID: message.info.id }),
+              method: "DELETE", service: "session.deleteMessage",
+            },
+          ] as const
+          yield* Effect.forEach(
+            mutations,
+            (mutation) => Effect.gen(function* () {
+              const response = yield* request(mutation.path, {
+                method: mutation.method,
+                headers,
+                ...("body" in mutation ? { body: mutation.body } : {}),
+              })
+              expect(response.status).toBe(authority ? 503 : 409)
+              expect(yield* responseJson(response)).toMatchObject(
+                authority
+                  ? { _tag: "ServiceUnavailableError", service: mutation.service }
+                  : { _tag: "ConflictError", resource: "legacy_session_requires_adoption" },
+              )
+              expect(yield* snapshot()).toEqual(before)
             }),
-            { method: "DELETE", headers },
-          ),
-        ).toBe(true)
-
-        expect(
-          yield* requestJson<boolean>(
-            pathFor(SessionPaths.deleteMessage, { sessionID: session.id, messageID: second.info.id }),
-            { method: "DELETE", headers },
-          ),
-        ).toBe(true)
+            { concurrency: 1 },
+          )
+        }
       }),
     { git: true, config: { formatter: false, lsp: false } },
   )
