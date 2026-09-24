@@ -5,6 +5,7 @@ const environmentAssignment = /\b([A-Z][A-Z0-9_]{2,})\s*=\s*(?:"[^"\n]*"|'[^'\n]
 const credentialURL = /\b[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s@/]+@[^\s"'`<>]+/gi
 const credentialHeader = /\b(?:authorization|proxy-authorization|cookie|set-cookie)\s*:\s*[^\r\n]+/gi
 const serializedCredentialHeader = /("(?:authorization|proxy-authorization|cookie|set-cookie)"\s*:\s*)"(?:\\.|[^"\\])*"/gi
+const escapedSerializedCredentialHeader = /(\\"(?:authorization|proxy-authorization|cookie|set-cookie)\\"\s*:\s*\\")(?:(?!\\").)*(\\")/gi
 const encodedCredentialHeader = /\b(?:authorization|proxy-authorization|cookie|set-cookie)%3a(?:(?!%0a|%0d|[&\s]).)+/gi
 const absolutePath = /(?:\/Users\/|\/home\/|\/root\/|\/tmp\/|\/var\/|[A-Za-z]:\\Users\\)[^\s"'`<>]+/g
 
@@ -15,6 +16,7 @@ export function sanitizeBundleValue(value: unknown): unknown {
     .replace(credentialURL, "[REDACTED_URL]")
     .replace(credentialHeader, "[REDACTED]")
     .replace(serializedCredentialHeader, '$1"[REDACTED]"')
+    .replace(escapedSerializedCredentialHeader, "$1[REDACTED]$2")
     .replace(encodedCredentialHeader, "[REDACTED]")
     .replace(absolutePath, "[REDACTED_PATH]")
   if (Array.isArray(value)) return value.map(sanitizeBundleValue)

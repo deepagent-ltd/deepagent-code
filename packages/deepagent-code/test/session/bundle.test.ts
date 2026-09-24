@@ -106,18 +106,22 @@ describe("session ZIP bundle", () => {
 
   test("redacts serialized and percent-encoded credential headers without removing nearby text", async () => {
     const cookie = "sid=encoded-session-secret"
+    const nestedCookie = "sid=nested-session-secret"
     const authorization = "Basic ZW5jb2RlZDpzZWNyZXQ="
     const serialized = JSON.stringify({ headers: { Cookie: cookie, Authorization: authorization } })
+    const nested = JSON.stringify({ payload: JSON.stringify({ Cookie: nestedCookie, next: "safe" }) })
     const encoded = `Cookie%3A%20${encodeURIComponent(cookie)}%0Anext=safe`
     const source = { ...snapshot, messages: [{ ...snapshot.messages[0], data: {
-      text: `before\n${serialized}\n${encoded}\nafter`,
+      text: `before\n${serialized}\n${nested}\n${encoded}\nafter`,
     } }] } as unknown as SessionSnapshot
     expect(JSON.parse(sanitizeBundleValue(serialized) as string)).toEqual({
       headers: { Cookie: "[REDACTED]", Authorization: "[REDACTED]" },
     })
+    expect(JSON.parse(JSON.parse(sanitizeBundleValue(nested) as string).payload)).toEqual({ Cookie: "[REDACTED]", next: "safe" })
     const shared = await parseSessionBundle(await createSessionBundle({ snapshot: source, tier: "conversation", share: true }))
     const text = (shared.snapshot.messages[0]?.data as unknown as { text: string }).text
     expect(text).not.toContain(cookie)
+    expect(text).not.toContain(nestedCookie)
     expect(text).not.toContain(authorization)
     expect(text).not.toContain(encodeURIComponent(cookie))
     expect(text).toContain("before")
