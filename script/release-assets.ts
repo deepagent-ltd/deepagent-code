@@ -117,6 +117,8 @@ export async function verifyReleaseAssets(
     throw new Error("release asset candidate tree mismatch")
   if (new Set(manifest.assets.map((asset) => asset.name)).size !== manifest.assets.length)
     throw new Error("release asset names are duplicated")
+  if (manifest.assets.some((asset) => !["cli", "desktop", "owner"].includes(asset.kind)))
+    throw new Error("release asset kind is invalid")
   if (requireComplete) {
     const cli = manifest.assets
       .filter((asset) => asset.kind === "cli")
