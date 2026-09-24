@@ -64,6 +64,10 @@ test("outbound projection follows the current bot channel binding", async () => 
     process.env.SLACK_IM_BINDINGS = "[]"
     expect(await send("C_NEW")).toBe("binding_not_configured")
     expect(calls).toHaveLength(1)
+
+    process.env.SLACK_IM_BINDINGS = JSON.stringify([{ groupID: "img_team", channelID: "C_NEW" }])
+    expect(await send("C_NEW")).toBe("binding_not_configured")
+    expect(calls).toHaveLength(1)
   } finally {
     if (bindings === undefined) delete process.env.SLACK_IM_BINDINGS
     else process.env.SLACK_IM_BINDINGS = bindings

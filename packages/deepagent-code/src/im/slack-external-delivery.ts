@@ -8,8 +8,10 @@ const decodeResponse = Schema.decodeUnknownOption(SlackResponse)
 const decodeBindings = Schema.decodeUnknownOption(
   Schema.Array(
     Schema.Struct({
-      groupID: Schema.String,
-      channelID: Schema.String,
+      workspaceID: Schema.String.check(Schema.isMinLength(1)),
+      groupID: Schema.String.check(Schema.isMinLength(1)),
+      channelID: Schema.String.check(Schema.isMinLength(1)),
+      agent: Schema.String.check(Schema.isMinLength(1)),
     }),
   ),
 )
