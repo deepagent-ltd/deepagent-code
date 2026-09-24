@@ -367,6 +367,25 @@ describe("im_send (WS7)", () => {
     }),
   )
 
+  it.effect("rejects conflicting text or group reuse of one durable tool-call identity", () =>
+    Effect.gen(function* () {
+      const { db, registry } = yield* services
+      const sessionID = SessionV2.ID.make("ses_im_send_identity_conflict")
+      yield* seedBase(db, sessionID, { im: { groupID: GROUP, agent: "build" } })
+      yield* seedMember(db, "build")
+      yield* seedBinding(db)
+
+      const first = structured(yield* settleTool(registry, call({ text: "original" }, sessionID)))
+      const textConflict = yield* settleTool(registry, call({ text: "changed" }, sessionID))
+      const groupConflict = yield* settleTool(registry, call({ text: "original", group_id: "imgrp_other" }, sessionID))
+      expect(textConflict.result).toMatchObject({ type: "error", metadata: { code: "im_send_identity_conflict" } })
+      expect(groupConflict.result).toMatchObject({ type: "error", metadata: { code: "im_send_identity_conflict" } })
+      expect(yield* messageCount(db)).toBe(1)
+      expect(externalCalls).toHaveLength(1)
+      expect(first.message_id).toBe(externalCalls[0]?.messageID)
+    }),
+  )
+
   it.effect("holds the scrubbed message for the digest during workspace quiet hours", () =>
     Effect.gen(function* () {
       const { db, registry } = yield* services

@@ -16,6 +16,8 @@ import { IMExternalDelivery } from "../im/external-delivery"
 import { PermissionV2 } from "../permission"
 import { SessionTable } from "../session/sql"
 import { Identifier } from "../util/identifier"
+import { CanonicalJson } from "../util/canonical-json"
+import { Hash } from "../util/hash"
 import { Tool } from "./tool"
 import { Tools } from "./tools"
 
@@ -135,6 +137,10 @@ export const layer = Layer.effectDiscard(
                   message: `im_send: session ${context.sessionID} is not visible in the durable session store`,
                 })
               const binding = imBindingOf(session.metadata ?? null)
+              const requestFingerprint = Hash.sha256(CanonicalJson.stringify({
+                text: input.text,
+                group_id: input.group_id ?? null,
+              }))
               // Provider tool-call IDs can repeat in later assistant turns. The assistant message
               // identifies the durable call; an exact retry must replay before rechecking a changed
               // group binding or a one-time permission that was consumed by the original send.
@@ -146,12 +152,20 @@ export const layer = Layer.effectDiscard(
                   message_id: AgentPushLogTable.message_id,
                   agent_id: AgentPushLogTable.agent_id,
                   group_id: AgentPushLogTable.group_id,
+                  request_fingerprint: AgentPushLogTable.request_fingerprint,
                 })
                 .from(AgentPushLogTable)
                 .where(eq(AgentPushLogTable.idempotency_key, idempotencyKey))
                 .get()
                 .pipe(Effect.orDie)
               if (prior) {
+                if (prior.request_fingerprint !== requestFingerprint)
+                  return yield* new ToolFailure({
+                    message: prior.request_fingerprint === null
+                      ? "im_send: this prior send lacks a verifiable request identity"
+                      : "im_send: conflicting text or group_id for an existing tool-call identity",
+                    metadata: { code: "im_send_identity_conflict" },
+                  })
                 const replayed = prior.decision.startsWith("blocked:") ? "blocked" : prior.decision
                 const reason = prior.decision.startsWith("blocked:")
                   ? prior.decision.slice("blocked:".length)
@@ -335,6 +349,7 @@ export const layer = Layer.effectDiscard(
                             priority: request.priority,
                             decision: decisionCode,
                             idempotency_key: idempotencyKey,
+                            request_fingerprint: requestFingerprint,
                             message_id: (messageID as MessageID | undefined) ?? null,
                             content: decision.type === "blocked" ? null : decision.content,
                             created_at: now,

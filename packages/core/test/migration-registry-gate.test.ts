@@ -76,7 +76,9 @@ import { migrations } from "../src/database/migration.gen"
 // event task workspaces, long-context checkpoints, terminal consumer receipts, and provider
 // attempt protocol identity. No previously pinned migration source changed; the generated
 // registry appended exactly these nine ordered identities and body hashes.
-const PINNED_DIGEST = "d8b958700da16bd6054f3b44eb96d10a161556f8d03627e2c63c5085f812bc11"
+// X-08 request-identity hardening adds one nullable, immutable im_send request fingerprint
+// column; the 203-entry ordered registry is re-pinned after its fresh-apply oracle passed.
+const PINNED_DIGEST = "abf2cd4f393ede8c19eaca8db1f3108dcd2dc04b1ad0041dd9fcb1f5b9a8873e"
 
 const digest = (entries: readonly { readonly id: string; readonly hash: string }[]) =>
   createHash("sha256").update(JSON.stringify(entries)).digest("hex")

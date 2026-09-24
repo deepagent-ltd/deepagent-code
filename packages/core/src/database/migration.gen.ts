@@ -203,6 +203,7 @@ const modules = await Promise.all([
     import("./migration/20260923200145_long_context_checkpoint"),
     import("./migration/20260924050000_consumer_receipt_terminal"),
     import("./migration/20260924060000_provider_attempt_protocol_identity"),
+    import("./migration/20260924070000_im_send_request_fingerprint"),
 ])
 
 const bodyHashes = [
@@ -408,6 +409,7 @@ const bodyHashes = [
   "a23f41aa87d62be524ed24cf35799f56e847b6b9a0076077448fa3a85dbe8076",
   "44acf2ac1ebf3ebe34383ce34da86108d6181d12dbcc3327873d67e50c484b21",
   "6f54efbcabd413429fc12048668129666dfd51d24bebf188389b2f309b30d064",
+  "04c18841ee2d65e389e99d2dc43f1844833aaba38eeeeaffbf69bdf9613555af",
 ]
 
 export const migrations = modules.map((module, index) => ({

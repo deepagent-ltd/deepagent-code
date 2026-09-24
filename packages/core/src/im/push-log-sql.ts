@@ -23,6 +23,9 @@ export const AgentPushLogTable = sqliteTable(
     // (mirrors deepagent_event.idempotency_key) — a re-attempt with the same key is a no-op, not a
     // second delivery.
     idempotency_key: text().notNull(),
+    // im_send binds the raw request shape to its call identity. Other proactive push callers and
+    // historical rows leave this NULL; they may not be adopted as a verified im_send exact retry.
+    request_fingerprint: text(),
     // the delivered message id when the push resulted in an im_messages row (null for digest/blocked).
     message_id: text().$type<IMID.MessageID>(),
     // §B2 静默时段: the SCRUBBED content, retained for `digest` outcomes so the (later) digest builder
