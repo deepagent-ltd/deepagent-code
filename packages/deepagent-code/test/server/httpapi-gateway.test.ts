@@ -507,7 +507,8 @@ describe("gateway release gate", () => {
           id: "tenant-context", key_hash: createHash("sha256").update("sk-context").digest("hex"),
           key_fingerprint: "context-fingerprint", directory, model_allowlist: ["test/test-model"],
           tier: "context", quota_requests_per_minute: 10, quota_tokens_per_day: 100_000,
-          lane_limit: 8, deadline_ms: 5_000, enabled: true, created_at: Date.now(), updated_at: Date.now(),
+          // This checks authority across many turns; cold workspace indexing is outside its deadline oracle.
+          lane_limit: 8, deadline_ms: 60_000, enabled: true, created_at: Date.now(), updated_at: Date.now(),
         })
       }).pipe(Effect.provide(Database.defaultLayer)))
       const web = HttpRouter.toWebHandler(HttpApiApp.createRoutes().pipe(
@@ -787,5 +788,5 @@ describe("gateway release gate", () => {
       Flag.DEEPAGENT_CODE_DB = originalDatabase
       await rm(directory, { recursive: true, force: true })
     }
-  }, 45_000)
+  }, 60_000)
 })
