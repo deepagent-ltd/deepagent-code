@@ -1794,6 +1794,46 @@ describe("session HttpApi", () => {
   )
 
   it.instance(
+    "keeps read-only imported sessions out of legacy share mutations",
+    () =>
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const db = (yield* Database.Service).db
+        const session = yield* createSession({ title: "read-only shared import" })
+        yield* db.update(SessionTable).set({ v2_authority: false }).where(eq(SessionTable.id, session.id)).run()
+        const before = {
+          session: yield* db.select().from(SessionTable).where(eq(SessionTable.id, session.id)).get(),
+          events: yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, session.id)).all(),
+        }
+        for (const method of ["DELETE", "POST"]) {
+          const response = yield* request(pathFor(SessionPaths.share, { sessionID: session.id }), {
+            method,
+            headers: { "x-deepagent-code-directory": test.directory },
+          })
+          expect(response.status).toBe(409)
+          expect(yield* responseJson(response)).toMatchObject({
+            _tag: "ConflictError",
+            resource: "legacy_session_requires_adoption",
+          })
+          expect(yield* db.select().from(SessionTable).where(eq(SessionTable.id, session.id)).get()).toEqual(before.session)
+          expect(yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, session.id)).all()).toEqual(before.events)
+        }
+
+        const writable = yield* createSession({ title: "writable share" })
+        const beforeWritable = yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, writable.id)).all()
+        const response = yield* request(pathFor(SessionPaths.share, { sessionID: writable.id }), {
+          method: "DELETE",
+          headers: { "x-deepagent-code-directory": test.directory },
+        })
+        expect(response.status).toBe(200)
+        const afterWritable = yield* db.select().from(EventTable).where(eq(EventTable.aggregate_id, writable.id)).all()
+        expect(afterWritable).toHaveLength(beforeWritable.length + 1)
+        expect(afterWritable.at(-1)?.type).toBe("session.updated.2")
+      }),
+    { git: true, config: { formatter: false, lsp: false, share: "disabled" } },
+  )
+
+  it.instance(
     "keeps message mutation routes from writing legacy projections outside V2 authority",
     () =>
       Effect.gen(function* () {

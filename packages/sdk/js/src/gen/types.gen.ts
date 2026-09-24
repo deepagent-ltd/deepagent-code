@@ -17868,6 +17868,10 @@ export type SessionUnshareErrors = {
    */
   404: NotFoundError
   /**
+   * ConflictError
+   */
+  409: ConflictError
+  /**
    * InternalServerError
    */
   500: EffectHttpApiErrorInternalServerError
@@ -17905,6 +17909,10 @@ export type SessionShareErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
   /**
    * InternalServerError
    */

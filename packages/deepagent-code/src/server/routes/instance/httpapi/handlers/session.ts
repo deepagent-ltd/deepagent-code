@@ -521,13 +521,13 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     // ErrorMiddleware → NamedError.Unknown 500) instead of blanket-mapping
     // every failure to a 400 BadRequest.
     const share = Effect.fn("SessionHttpApi.share")(function* (ctx: { params: { sessionID: SessionID } }) {
-      yield* requireSession(ctx.params.sessionID)
+      yield* requireWritableSession(ctx.params.sessionID)
       yield* shareSvc.share(ctx.params.sessionID).pipe(Effect.mapError(() => new HttpApiError.InternalServerError({})))
       return yield* requireSession(ctx.params.sessionID)
     })
 
     const unshare = Effect.fn("SessionHttpApi.unshare")(function* (ctx: { params: { sessionID: SessionID } }) {
-      yield* requireSession(ctx.params.sessionID)
+      yield* requireWritableSession(ctx.params.sessionID)
       yield* shareSvc
         .unshare(ctx.params.sessionID)
         .pipe(Effect.mapError(() => new HttpApiError.InternalServerError({})))
