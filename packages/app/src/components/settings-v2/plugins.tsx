@@ -1,5 +1,5 @@
 import { Component, createMemo, For, type JSXElement, Show } from "solid-js"
-import { useSync } from "@/context/sync"
+import { useServerSync } from "@/context/server-sync"
 import { useLanguage } from "@/context/language"
 import { SettingsListV2 } from "./parts/list"
 import "./settings-v2.css"
@@ -19,7 +19,7 @@ const pluginEmptyMessage = (value: string, file: string): JSXElement => {
 // WS1: plugins moved from the right-panel rail into a Settings tab. The list is read-only —
 // plugins are configured via the config file only (no UI add/remove).
 export const SettingsPluginsV2: Component = () => {
-  const sync = useSync()
+  const sync = useServerSync()
   const language = useLanguage()
 
   const plugins = createMemo(() =>
