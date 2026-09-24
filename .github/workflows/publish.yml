@@ -118,6 +118,7 @@ jobs:
         env:
           DEEPAGENT_CODE_VERSION: ${{ needs.version.outputs.version }}
           DEEPAGENT_CODE_RELEASE: ${{ needs.version.outputs.release }}
+          DEEPAGENT_CODE_SKIP_RELEASE_UPLOAD: "1"
           DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY: ${{ runner.temp }}/release-owner-public-key.pem
           GH_REPO: ${{ needs.version.outputs.repo }}
           GH_TOKEN: ${{ steps.committer.outputs.token }}
@@ -134,6 +135,8 @@ jobs:
           path: |
             packages/deepagent-code/dist/deepagent-code-darwin*
             packages/deepagent-code/dist/deepagent-code-linux*
+            packages/deepagent-code/dist/deepagent-code-darwin*.zip
+            packages/deepagent-code/dist/deepagent-code-linux*.tar.gz
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -227,19 +230,6 @@ jobs:
           Compress-Archive -Path "deepagent-code-windows-x64\bin\*" -DestinationPath "deepagent-code-windows-x64.zip" -Force
           Compress-Archive -Path "deepagent-code-windows-x64-baseline\bin\*" -DestinationPath "deepagent-code-windows-x64-baseline.zip" -Force
 
-      - name: Upload signed Windows CLI release assets
-        if: needs.version.outputs.release != ''
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ steps.committer.outputs.token }}
-        run: |
-          gh release upload "v${{ needs.version.outputs.version }}" `
-            "${{ github.workspace }}\packages\deepagent-code\dist\deepagent-code-windows-arm64.zip" `
-            "${{ github.workspace }}\packages\deepagent-code\dist\deepagent-code-windows-x64.zip" `
-            "${{ github.workspace }}\packages\deepagent-code\dist\deepagent-code-windows-x64-baseline.zip" `
-            --clobber `
-            --repo "${{ needs.version.outputs.repo }}"
-
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: deepagent-code-cli-signed-windows
@@ -247,6 +237,12 @@ jobs:
             packages/deepagent-code/dist/deepagent-code-windows-arm64
             packages/deepagent-code/dist/deepagent-code-windows-x64
             packages/deepagent-code/dist/deepagent-code-windows-x64-baseline
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: needs.version.outputs.release
+        with:
+          name: deepagent-code-cli-signed-windows-archives
+          path: packages/deepagent-code/dist/deepagent-code-windows*.zip
 
   build-electron:
     needs:
@@ -482,6 +478,12 @@ jobs:
           path: packages/deepagent-code/dist
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: needs.version.outputs.release
+        with:
+          name: deepagent-code-cli-signed-windows-archives
+          path: /tmp/signed-cli-windows
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: deepagent-code-preview-cli
           path: packages/cli/dist
@@ -549,6 +551,22 @@ jobs:
           if [ -f /tmp/authoritative-ledger/ledger.json ]; then
             gh release upload "v${{ needs.version.outputs.version }}" /tmp/authoritative-ledger/ledger.json --clobber --repo "${{ needs.version.outputs.repo }}" || echo "::warning::ledger asset upload skipped"
           fi
+
+      - name: Upload CLI release assets
+        if: needs.version.outputs.release
+        env:
+          GH_TOKEN: ${{ steps.committer.outputs.token }}
+        run: |
+          shopt -s nullglob
+          darwin=(packages/deepagent-code/dist/deepagent-code-darwin*.zip)
+          linux=(packages/deepagent-code/dist/deepagent-code-linux*.tar.gz)
+          windows=(/tmp/signed-cli-windows/deepagent-code-windows*.zip)
+          if (( ${#darwin[@]} == 0 || ${#linux[@]} == 0 || ${#windows[@]} == 0 )); then
+            echo "Missing CLI release assets for at least one platform"
+            exit 1
+          fi
+          files=("${darwin[@]}" "${linux[@]}" "${windows[@]}")
+          gh release upload "v${{ needs.version.outputs.version }}" "${files[@]}" --clobber --repo "${{ needs.version.outputs.repo }}"
 
       - name: Upload desktop release assets
         if: needs.version.outputs.release

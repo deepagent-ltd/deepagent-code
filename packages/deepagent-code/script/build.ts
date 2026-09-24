@@ -24,7 +24,6 @@ const sourceDirty = sourceCommit
 
 process.chdir(dir)
 
-
 function releaseOwnerPublicKeyDefine(): Record<string, string> {
   const raw = process.env.DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY?.trim()
   if (!raw) return {}
@@ -140,7 +139,11 @@ const allTargets: {
 
 const targets = singleFlag
   ? allTargets.filter((item) => {
-      if (archFlag ? item.arch !== archFlag || item.abi !== undefined || item.avx2 === false : item.os !== process.platform || item.arch !== process.arch) {
+      if (
+        archFlag
+          ? item.arch !== archFlag || item.abi !== undefined || item.avx2 === false
+          : item.os !== process.platform || item.arch !== process.arch
+      ) {
         return false
       }
 
@@ -297,7 +300,9 @@ if (Script.release) {
       await $`zip -r ../../${key}.zip *`.cwd(`dist/${key}/bin`)
     }
   }
-  await $`gh release upload v${Script.version} ./dist/*.zip ./dist/*.tar.gz --clobber --repo ${process.env.GH_REPO}`
+  // CI stages these archives as workflow artifacts and uploads them only after the RI-51 gate.
+  if (process.env.DEEPAGENT_CODE_SKIP_RELEASE_UPLOAD !== "1")
+    await $`gh release upload v${Script.version} ./dist/*.zip ./dist/*.tar.gz --clobber --repo ${process.env.GH_REPO}`
 }
 
 export { binaries }
