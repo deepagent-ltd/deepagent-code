@@ -88,10 +88,12 @@ if (binary && runs.some((run) => run.artifactPath !== binary.path))
 if (binary) {
   const metadata = (await Bun.file(path.join(packageDir, "package.json")).json()) as {
     version?: string
-    deepagentCodeBuild?: { sourceCommit?: string; binarySha256?: string }
+    deepagentCodeBuild?: { sourceCommit?: string; sourceDirty?: boolean; binarySha256?: string }
   }
   if (metadata.deepagentCodeBuild?.sourceCommit !== required("--commit"))
     throw new Error("packaged binary sourceCommit does not match candidate Git commit")
+  if (metadata.deepagentCodeBuild.sourceDirty !== false)
+    throw new Error("packaged binary was built from a dirty source tree")
   if (metadata.deepagentCodeBuild.binarySha256 !== binary.sha256)
     throw new Error("packaged binary SHA-256 does not match package metadata")
   if (!metadata.version) throw new Error("packaged binary has no version in package metadata")

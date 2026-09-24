@@ -73,7 +73,7 @@ describe("RI-24 packaged runtime report", () => {
       join(packageDir, "package.json"),
       JSON.stringify({
         version: "2.0.2",
-        deepagentCodeBuild: { sourceCommit: "commit-1", binarySha256: Hash.sha256(Buffer.from("binary")) },
+        deepagentCodeBuild: { sourceCommit: "commit-1", sourceDirty: false, binarySha256: Hash.sha256(Buffer.from("binary")) },
       }),
     )
     const evidence = makeRuntimeIntegrityEvidence({
@@ -215,7 +215,7 @@ describe("RI-24 packaged runtime report", () => {
       join(packageDir, "package.json"),
       JSON.stringify({
         version: "2.0.2",
-        deepagentCodeBuild: { sourceCommit: "unrelated-commit", binarySha256: Hash.sha256(Buffer.from("binary")) },
+        deepagentCodeBuild: { sourceCommit: "unrelated-commit", sourceDirty: false, binarySha256: Hash.sha256(Buffer.from("binary")) },
       }),
     )
     const wrongPackage = Bun.spawn(
@@ -248,7 +248,40 @@ describe("RI-24 packaged runtime report", () => {
       join(packageDir, "package.json"),
       JSON.stringify({
         version: "2.0.2",
-        deepagentCodeBuild: { sourceCommit: "commit-1", binarySha256: digest("0") },
+        deepagentCodeBuild: { sourceCommit: "commit-1", sourceDirty: true, binarySha256: Hash.sha256(Buffer.from("binary")) },
+      }),
+    )
+    const dirtyPackage = Bun.spawn(
+      [
+        process.execPath,
+        script.pathname,
+        "--candidate",
+        candidateId,
+        "--commit",
+        "commit-1",
+        "--tree",
+        "tree-1",
+        "--package-dir",
+        packageDir,
+        "--runs",
+        runsPath,
+        "--evidence-dir",
+        evidenceDir,
+      ],
+      { cwd: join(import.meta.dir, "../.."), stdout: "pipe", stderr: "pipe" },
+    )
+    const [dirtyPackageStderr, dirtyPackageExitCode] = await Promise.all([
+      new Response(dirtyPackage.stderr).text(),
+      dirtyPackage.exited,
+    ])
+    expect(dirtyPackageExitCode).not.toBe(0)
+    expect(dirtyPackageStderr).toContain("packaged binary was built from a dirty source tree")
+
+    await Bun.write(
+      join(packageDir, "package.json"),
+      JSON.stringify({
+        version: "2.0.2",
+        deepagentCodeBuild: { sourceCommit: "commit-1", sourceDirty: false, binarySha256: digest("0") },
       }),
     )
     const wrongBinary = Bun.spawn(
@@ -368,7 +401,7 @@ describe("RI-24 packaged runtime report", () => {
       join(packageDir, "package.json"),
       JSON.stringify({
         version: "2.0.2",
-        deepagentCodeBuild: { sourceCommit: "commit-1", binarySha256: Hash.sha256(Buffer.from("binary")) },
+        deepagentCodeBuild: { sourceCommit: "commit-1", sourceDirty: false, binarySha256: Hash.sha256(Buffer.from("binary")) },
       }),
     )
     await Bun.write(runsPath, JSON.stringify([{ ...report.runs[0], artifactPath: "probe.txt" }]))

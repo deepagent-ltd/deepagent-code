@@ -21,6 +21,7 @@ const sourceCommit = process.env.DEEPAGENT_CODE_COMMIT ?? gitOutput(["rev-parse"
 const sourceDirty = sourceCommit
   ? (gitOutput(["status", "--porcelain", "--untracked-files=all"])?.length ?? 0) > 0
   : undefined
+if (Script.release && sourceDirty !== false) throw new Error("release binary requires a clean source commit")
 
 process.chdir(dir)
 

@@ -27,3 +27,27 @@ test("RI-51 gate precedes every release asset upload", async () => {
   expect(script).toContain('if (process.env.DEEPAGENT_CODE_SKIP_RELEASE_UPLOAD !== "1")')
   expect(script.indexOf("const ownerAuthorizationFile")).toBeLessThan(script.indexOf("if (Script.release)"))
 })
+
+test("release workflow builds and publishes one frozen candidate", async () => {
+  const repository = path.resolve(import.meta.dir, "../../../..")
+  const workflow = await Bun.file(path.join(repository, ".github/workflows/publish.yml")).text()
+  const version = await Bun.file(path.join(repository, "script/version.ts")).text()
+  const publish = await Bun.file(path.join(repository, "script/publish.ts")).text()
+  const jobs = ["build-cli", "sign-cli-windows", "build-electron", "publish"]
+  expect(workflow).toContain("candidate_commit: ${{ steps.version.outputs.candidate_commit }}")
+  expect(workflow).toContain("candidate_tree: ${{ steps.version.outputs.candidate_tree }}")
+  expect(workflow).toContain("channel: ${{ steps.version.outputs.channel }}")
+  for (const job of jobs) {
+    const body = workflow.split(`  ${job}:\n`)[1]?.split(/^  [a-z][\w-]*:\n/m)[0]
+    expect(body).toBeDefined()
+    expect(body).toContain("ref: ${{ needs.version.outputs.candidate_commit }}")
+  }
+  expect(version.indexOf("await prepareReleaseFiles(")).toBeLessThan(version.indexOf("gh release create"))
+  expect(version.indexOf("git push origin")).toBeLessThan(version.indexOf("gh release create"))
+  expect(workflow).toContain("DEEPAGENT_CODE_CHANNEL: ${{ needs.version.outputs.channel }}")
+  expect(workflow).toContain("DEEPAGENT_CODE_CANDIDATE_COMMIT: ${{ needs.version.outputs.candidate_commit }}")
+  expect(publish).toContain("await assertReleaseCandidate({")
+  expect(publish).not.toContain("git tag -d")
+  expect(publish).not.toContain("git push origin refs/tags/")
+  expect(publish).not.toContain("git commit -am")
+})
