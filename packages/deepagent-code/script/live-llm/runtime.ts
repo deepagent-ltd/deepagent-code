@@ -308,8 +308,13 @@ export async function runLegacyLiveCases(input: {
       "@deepagent-code/core/session/sql"
     )
     const { SessionInputTable, TaskRunTable } = await import("@deepagent-code/core/session/sql")
-    const { SessionActivityTable } = await import("@deepagent-code/core/context-federation/session-sql")
+    const { SessionActivityInputTable, SessionActivityTable, SessionProviderAttemptTable } = await import(
+      "@deepagent-code/core/context-federation/session-sql"
+    )
     const { V2ProviderTurnReceiptTable } = await import("@deepagent-code/core/session/runner/v2-provider-turn.sql")
+    const { V2ToolEffectAdmissionTable, V2ToolEffectTable } = await import(
+      "@deepagent-code/core/session/runner/v2-tool-effect.sql"
+    )
     const { SessionV2 } = await import("@deepagent-code/core/session")
     const { SessionMessage } = await import("@deepagent-code/core/session/message")
     const { SessionPromptIntent } = await import("../../src/session/prompt-intent")
@@ -1462,6 +1467,19 @@ export async function runLegacyLiveCases(input: {
                   .all()
                   .pipe(Effect.orDie)
                 const activityIDs = new Set(legacyActivities.map((activity) => activity.activity_id))
+                const v2Activities = yield* database.db
+                  .select({
+                    activity_id: SessionActivityTable.activity_id,
+                    ordinal: SessionActivityTable.ordinal,
+                    trigger_input_id: SessionActivityTable.trigger_input_id,
+                    state: SessionActivityTable.state,
+                    settled_at: SessionActivityTable.settled_at,
+                  })
+                  .from(SessionActivityTable)
+                  .where(eq(SessionActivityTable.session_id, SessionV2.ID.make(session.id)))
+                  .all()
+                  .pipe(Effect.orDie)
+                const v2ActivityIDs = new Set(v2Activities.map((activity) => activity.activity_id))
                 return {
                   activityAdmissions: yield* database.db
                     .select()
@@ -1525,6 +1543,101 @@ export async function runLegacyLiveCases(input: {
                     .from(SessionToolArgumentReceiptTable)
                     .all()
                     .pipe(Effect.orDie)).filter((receipt) => receiptIDs.has(receipt.receipt_id)),
+                  v2: {
+                    inputs: yield* database.db
+                      .select({
+                        id: SessionInputTable.id,
+                        delivery: SessionInputTable.delivery,
+                        admitted_seq: SessionInputTable.admitted_seq,
+                        promoted_seq: SessionInputTable.promoted_seq,
+                      })
+                      .from(SessionInputTable)
+                      .where(eq(SessionInputTable.session_id, SessionV2.ID.make(session.id)))
+                      .all()
+                      .pipe(Effect.orDie),
+                    activities: v2Activities,
+                    activityInputs: (yield* database.db
+                      .select({
+                        activity_id: SessionActivityInputTable.activity_id,
+                        input_id: SessionActivityInputTable.input_id,
+                        ordinal: SessionActivityInputTable.ordinal,
+                        admitted_seq: SessionActivityInputTable.admitted_seq,
+                        role: SessionActivityInputTable.role,
+                      })
+                      .from(SessionActivityInputTable)
+                      .all()
+                      .pipe(Effect.orDie)).filter((row) => v2ActivityIDs.has(row.activity_id)),
+                    providerAttempts: yield* database.db
+                      .select({
+                        attempt_id: SessionProviderAttemptTable.attempt_id,
+                        activity_id: SessionProviderAttemptTable.activity_id,
+                        provider_turn_seq: SessionProviderAttemptTable.provider_turn_seq,
+                        owner_token: SessionProviderAttemptTable.owner_token,
+                        state: SessionProviderAttemptTable.state,
+                      })
+                      .from(SessionProviderAttemptTable)
+                      .where(eq(SessionProviderAttemptTable.session_id, SessionV2.ID.make(session.id)))
+                      .all()
+                      .pipe(Effect.orDie),
+                    providerReceipts: (yield* database.db
+                      .select({
+                        receipt_id: V2ProviderTurnReceiptTable.receipt_id,
+                        activity_id: V2ProviderTurnReceiptTable.activity_id,
+                        request_ordinal: V2ProviderTurnReceiptTable.request_ordinal,
+                        provider_turn_seq: V2ProviderTurnReceiptTable.provider_turn_seq,
+                        provider_attempt_id: V2ProviderTurnReceiptTable.provider_attempt_id,
+                        owner_token: V2ProviderTurnReceiptTable.owner_token,
+                        state: V2ProviderTurnReceiptTable.state,
+                        outcome_artifact: V2ProviderTurnReceiptTable.outcome_artifact,
+                      })
+                      .from(V2ProviderTurnReceiptTable)
+                      .where(eq(V2ProviderTurnReceiptTable.session_id, SessionV2.ID.make(session.id)))
+                      .all()
+                      .pipe(Effect.orDie)).map((receipt) => ({
+                        receipt_id: receipt.receipt_id,
+                        activity_id: receipt.activity_id,
+                        request_ordinal: receipt.request_ordinal,
+                        provider_turn_seq: receipt.provider_turn_seq,
+                        provider_attempt_id: receipt.provider_attempt_id,
+                        owner_token: receipt.owner_token,
+                        state: receipt.state,
+                        toolCalls: receipt.outcome_artifact?.flatMap((event) =>
+                          typeof event === "object" &&
+                          event !== null &&
+                          "type" in event &&
+                          event.type === "tool-call" &&
+                          "id" in event &&
+                          typeof event.id === "string" &&
+                          "name" in event &&
+                          typeof event.name === "string"
+                            ? [{ id: event.id, name: event.name }]
+                            : [],
+                        ) ?? [],
+                      })),
+                    toolAdmissions: yield* database.db
+                      .select({
+                        receipt_id: V2ToolEffectAdmissionTable.receipt_id,
+                        provider_attempt_id: V2ToolEffectAdmissionTable.provider_attempt_id,
+                        tool_call_id: V2ToolEffectAdmissionTable.tool_call_id,
+                        tool_name: V2ToolEffectAdmissionTable.tool_name,
+                      })
+                      .from(V2ToolEffectAdmissionTable)
+                      .where(eq(V2ToolEffectAdmissionTable.session_id, SessionV2.ID.make(session.id)))
+                      .all()
+                      .pipe(Effect.orDie),
+                    toolEffects: yield* database.db
+                      .select({
+                        receipt_id: V2ToolEffectTable.receipt_id,
+                        provider_attempt_id: V2ToolEffectTable.provider_attempt_id,
+                        tool_call_id: V2ToolEffectTable.tool_call_id,
+                        tool_name: V2ToolEffectTable.tool_name,
+                        state: V2ToolEffectTable.state,
+                      })
+                      .from(V2ToolEffectTable)
+                      .where(eq(V2ToolEffectTable.session_id, SessionV2.ID.make(session.id)))
+                      .all()
+                      .pipe(Effect.orDie),
+                  },
                 }
               })
             : undefined
@@ -1645,6 +1758,7 @@ export async function runLegacyLiveCases(input: {
             tokenUsageOverride,
             revert: revertEvidence,
             users: currentUsers.map((message) => ({
+              id: message.info.id,
               metadata: message.info.metadata,
               text: message.parts
                 .flatMap((part) => (part.type === "text" && !part.synthetic ? [part.text] : []))

@@ -56,6 +56,7 @@ const observation = artifact.cases[0]
 if (!observation) throw new Error("Activity progress suite produced no observation")
 const evidence = assertActivityProgressObservation({
   caseName: observation.name,
+  authority: "v2",
   triggerText,
   steerText,
   marker,
@@ -88,7 +89,8 @@ const result = {
     factHashes: facts.map((fact) => Bun.hash(fact.value).toString(16)),
     activityIDHash: Bun.hash(evidence.activities.map((activity) => activity.activity_id).join(",")).toString(16),
     activityStates: evidence.activities.map((activity) => activity.state),
-    progressStates: evidence.progress.map((progress) => `${progress.revision}:${progress.state}`),
+    progressStates: evidence.progressStates,
+    progressSource: evidence.evidenceKind,
     assistantTurns: observation.assistantTurns,
     toolSequence: observation.newTools.map((tool) => `${tool.name}:${tool.status}`),
     userMessages: observation.users.length,
@@ -105,7 +107,7 @@ await writeLiveArtifact(config, result.suite, result, {
 })
 console.log(
   `${result.suite}: passed (${result.fingerprint.providerID}/${result.fingerprint.modelID}, ` +
-    `${result.evidence.assistantTurns} assistant turns, ${result.evidence.progressStates.length} progress revisions)`,
+    `${result.evidence.assistantTurns} assistant turns, ${result.evidence.progressStates.length} ${result.evidence.progressSource} rows)`,
 )
 
 finishLiveScript()
