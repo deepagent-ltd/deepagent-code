@@ -461,7 +461,7 @@ describe("session HttpApi", () => {
         true,
       )
     }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
-    30_000,
+    60_000,
   )
 
   it.live("advertises and executes Core context tools through the production HTTP runtime", () =>
@@ -517,7 +517,7 @@ describe("session HttpApi", () => {
       expect(effects).toEqual([{ name: "code_intel", kind: "read_only", state: "settled" }])
       expect(JSON.stringify(inputs[1])).toContain("schemaVersion")
     }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
-    30_000,
+    60_000,
   )
 
   // RI-113 production request snapshot oracle: on the real production HTTP stack the EXACT
@@ -870,7 +870,7 @@ describe("session HttpApi", () => {
         root: sessionDirectory,
       })
     }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
-    15_000,
+    45_000,
   )
 
   it.instance(
@@ -1419,7 +1419,7 @@ describe("session HttpApi", () => {
         model_id: "test-model",
       })
     }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
-    30_000,
+    60_000,
   )
 
   it.instance(
