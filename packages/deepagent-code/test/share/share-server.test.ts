@@ -15,7 +15,7 @@ test("public share upload, token download, and revoke", async () => {
       format: "deepagent-code.session-snapshot", format_version: 1, exported_at: 1,
       source: { session_id: "ses_a", title: "private" },
       session: { id: "ses_a", title: "private", v2_authority: true, metadata: {} },
-      messages: [{ id: "msg_a", session_id: "ses_a", data: { text: "sk-1234567890123456 DATABASE_URL=postgres://alice:pwd@db.local/prod PROJECT_MODE=internal\nCookie: sid=public-share-secret\nAuthorization: Basic cHVibGljOmNyZWQ=\nnext safe" } }],
+      messages: [{ id: "msg_a", session_id: "ses_a", data: { text: "sk-1234567890123456 DATABASE_URL=postgres://alice:pwd@db.local/prod PROJECT_MODE=internal\nCookie: sid=public-share-secret\nAuthorization: Basic cHVibGljOmNyZWQ=\n{\"Cookie\":\"sid=serialized-share-secret\"}\nCookie%3A%20sid%3Dencoded-share-secret%0Anext=safe" } }],
       parts: [], activities: [], progress: [],
     } as unknown as SessionSnapshot
     const bytes = await createSessionBundle({ snapshot, tier: "session_logs", redact: false,
@@ -25,6 +25,8 @@ test("public share upload, token download, and revoke", async () => {
     expect(JSON.stringify(localShared)).not.toContain("PROJECT_MODE=internal")
     expect(JSON.stringify(localShared)).not.toContain("sid=public-share-secret")
     expect(JSON.stringify(localShared)).not.toContain("cHVibGljOmNyZWQ=")
+    expect(JSON.stringify(localShared)).not.toContain("sid=serialized-share-secret")
+    expect(JSON.stringify(localShared)).not.toContain("sid%3Dencoded-share-secret")
     const post = (authorization: string) => handle(new Request("https://share.example/api/bundles", {
       method: "POST", headers: { authorization }, body: new Blob([new Uint8Array(bytes)]),
     }))
@@ -49,6 +51,8 @@ test("public share upload, token download, and revoke", async () => {
     expect(JSON.stringify(bundle)).not.toContain("PROJECT_MODE=internal")
     expect(JSON.stringify(bundle)).not.toContain("sid=public-share-secret")
     expect(JSON.stringify(bundle)).not.toContain("cHVibGljOmNyZWQ=")
+    expect(JSON.stringify(bundle)).not.toContain("sid=serialized-share-secret")
+    expect(JSON.stringify(bundle)).not.toContain("sid%3Dencoded-share-secret")
     expect((await handle(new Request(address, { method: "DELETE", headers: { authorization: `Bearer ${secret}` } }))).status).toBe(401)
     expect((await handle(new Request(address, { method: "DELETE", headers: { authorization: `Bearer ${result.revokeToken}` } }))).status).toBe(204)
     expect((await handle(new Request(address, { headers: { authorization: `Bearer ${secret}` } }))).status).toBe(404)
