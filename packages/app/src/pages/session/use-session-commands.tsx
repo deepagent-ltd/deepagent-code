@@ -196,10 +196,19 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       return
     }
 
-    const url = await sdk.client.session
-      .share({ sessionID })
-      .then((res) => res.data?.share?.url)
-      .catch(() => undefined)
+    const result = await sdk.client.session
+      .share({ sessionID }, { throwOnError: true })
+      .then((res) => ({ url: res.data?.share?.url }))
+      .catch((error: unknown) => ({ error }))
+    if ("error" in result) {
+      showToast({
+        title: language.t("toast.session.share.failed.title"),
+        description: errorMessage(result.error, language.t("toast.session.share.failed.description")),
+        variant: "error",
+      })
+      return
+    }
+    const url = result.url
     if (!url) {
       showToast({
         title: language.t("toast.session.share.failed.title"),
@@ -217,7 +226,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     if (!sessionID) return
 
     await sdk.client.session
-      .unshare({ sessionID })
+      .unshare({ sessionID }, { throwOnError: true })
       .then(() =>
         showToast({
           title: language.t("toast.session.unshare.success.title"),
@@ -225,10 +234,10 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
           variant: "success",
         }),
       )
-      .catch(() =>
+      .catch((error: unknown) =>
         showToast({
           title: language.t("toast.session.unshare.failed.title"),
-          description: language.t("toast.session.unshare.failed.description"),
+          description: errorMessage(error, language.t("toast.session.unshare.failed.description")),
           variant: "error",
         }),
       )

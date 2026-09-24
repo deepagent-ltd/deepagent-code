@@ -522,9 +522,10 @@ export function Session() {
           kv.set("share_consent", true)
         }
         await sdk.client.session
-          .share({
-            sessionID: route.sessionID,
-          })
+          .share(
+            { sessionID: route.sessionID },
+            { throwOnError: true },
+          )
           .then((res) => copy(res.data!.share!.url))
           .catch((error) => {
             toast.show({
@@ -842,9 +843,10 @@ export function Session() {
       },
       run: async () => {
         await sdk.client.session
-          .unshare({
-            sessionID: route.sessionID,
-          })
+          .unshare(
+            { sessionID: route.sessionID },
+            { throwOnError: true },
+          )
           .then(() => toast.show({ message: i18n.t("tui.session.unshared"), variant: "success" }))
           .catch((error) => {
             toast.show({

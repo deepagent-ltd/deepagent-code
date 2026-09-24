@@ -1007,16 +1007,26 @@ export function MessageTimeline(props: {
   }
 
   const shareMutation = useMutation(() => ({
-    mutationFn: (id: string) => serverSDK.client.session.share({ sessionID: id, directory: sdk.directory }),
+    mutationFn: (id: string) => serverSDK.client.session.share({ sessionID: id, directory: sdk.directory }, { throwOnError: true }),
     onError: (err) => {
       console.error("Failed to share session", err)
+      showToast({
+        title: language.t("toast.session.share.failed.title"),
+        description: errorMessage(err),
+        variant: "error",
+      })
     },
   }))
 
   const unshareMutation = useMutation(() => ({
-    mutationFn: (id: string) => serverSDK.client.session.unshare({ sessionID: id, directory: sdk.directory }),
+    mutationFn: (id: string) => serverSDK.client.session.unshare({ sessionID: id, directory: sdk.directory }, { throwOnError: true }),
     onError: (err) => {
       console.error("Failed to unshare session", err)
+      showToast({
+        title: language.t("toast.session.unshare.failed.title"),
+        description: errorMessage(err),
+        variant: "error",
+      })
     },
   }))
 
