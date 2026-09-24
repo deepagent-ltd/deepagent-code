@@ -386,25 +386,29 @@ describe("util.effect-flock", () => {
   )
 
   it.live(
-    "interrupted acquire against a killed holder disposes well before STALE_MS",
+    "interrupted acquire against a fresh orphaned lock disposes well before STALE_MS",
     Effect.gen(function* () {
       const flock = yield* EffectFlock.Service
       const tmp = yield* Effect.promise(() => tmpRootAsync())
       const dir = path.join(tmp, "locks")
-      const ready = path.join(tmp, "ready")
       const key = "eflock:interrupt"
-
-      const proc = spawnWorker({ key, dir, ready, holdMs: 120_000 })
+      const lockDir = lock(dir, key)
 
       const oracle = Effect.gen(function* () {
-        yield* Effect.promise(() => waitForFile(ready, 5_000))
-        // SIGKILL strands a fresh lock dir — a masked acquire would sit in its
-        // retry loop until the heartbeat goes stale (~60s)
-        proc.kill("SIGKILL")
-        yield* Effect.promise(() => new Promise((resolve) => proc.once("close", resolve)))
+        // The crashed-owner recovery test above covers SIGKILL. Seed its durable aftermath
+        // directly here so this case has a fresh, occupied lock throughout cancellation.
+        yield* Effect.promise(async () => {
+          await fs.mkdir(lockDir, { recursive: true })
+          await fs.writeFile(path.join(lockDir, "heartbeat"), "")
+          await fs.writeFile(
+            path.join(lockDir, "meta.json"),
+            JSON.stringify({ token: "orphaned-owner", pid: -1, hostname: os.hostname(), createdAt: new Date().toISOString() }),
+          )
+        })
 
         const fiber = yield* Effect.scoped(flock.acquire(key, dir)).pipe(Effect.forkChild)
-        yield* Effect.sleep(1_000)
+        yield* Effect.sleep(250)
+        expect(fiber.pollUnsafe()).toBeUndefined()
 
         const start = Date.now()
         yield* Fiber.interrupt(fiber)
@@ -413,14 +417,12 @@ describe("util.effect-flock", () => {
 
         expect(disposeMs).toBeLessThan(5_000)
         expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true)
+        expect(yield* Effect.promise(() => exists(lockDir))).toBe(true)
       })
 
       yield* Effect.ensuring(
         oracle,
-        Effect.promise(async () => {
-          await stopWorker(proc).catch(() => {})
-          await fs.rm(tmp, { recursive: true, force: true })
-        }),
+        Effect.promise(() => fs.rm(tmp, { recursive: true, force: true })),
       )
     }),
     30_000,
