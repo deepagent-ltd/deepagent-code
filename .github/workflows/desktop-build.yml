@@ -204,7 +204,7 @@ jobs:
         if: matrix.group == 'mac'
         working-directory: packages/desktop
         run: |
-          executable=$(find dist/mac-arm64 -maxdepth 4 -type f -path '*/Contents/MacOS/DeepAgent Code*' -perm +111 -print -quit)
+          executable=$(find dist -maxdepth 5 -type f -path '*/Contents/MacOS/DeepAgent Code*' -perm +111 -print -quit)
           test -n "$executable"
           DEEPAGENT_CODE_DESKTOP_EXECUTABLE="$executable" bun run test:subagents-cold-start
 
