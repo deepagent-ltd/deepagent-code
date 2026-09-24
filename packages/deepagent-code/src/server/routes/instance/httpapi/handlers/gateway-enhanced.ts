@@ -19,8 +19,12 @@ import type { ChatPayload } from "../groups/gateway-wire"
 
 type Tenant = typeof ProxyTenantTable.$inferSelect
 
-export const proxyLaneID = (tenant: Tenant, hint: string) =>
-  SessionV2.ID.make(`ses_proxy_${contentDigest(`${tenant.id}:${tenant.key_fingerprint}:${tenant.tier}:${hint}`).slice(0, 24)}`)
+export const proxyLaneID = (tenant: Tenant, hint: string) => {
+  // Full-tier policy changes open a new lane. Updating an existing Session's permissions here
+  // would also change an in-flight request, while adopting it would retain stale authority.
+  const policyIdentity = tenant.tier === "full" ? `:policy:${contentDigest(tenant.permission_policy ?? [])}` : ""
+  return SessionV2.ID.make(`ses_proxy_${contentDigest(`${tenant.id}:${tenant.key_fingerprint}:${tenant.tier}${policyIdentity}:${hint}`).slice(0, 24)}`)
+}
 
 export const proxyPromptID = (tenant: Tenant, requestID: string) =>
   SessionMessage.ID.make(`msg_${contentDigest(`proxy:${tenant.id}:${requestID}`).slice(0, 40)}`)
@@ -58,6 +62,9 @@ export const collectEnhanced = (input: {
       : Effect.void
     return yield* Effect.gen(function* () {
     const hint = input.hint
+    const permissions = input.tenant.tier === "context"
+      ? [{ action: "*", resource: "*", effect: "deny" }] as const : input.tenant.permission_policy ?? []
+    const permissionIdentity = contentDigest(permissions)
     const existing = yield* input.sessions.get(input.sessionID).pipe(Effect.option)
     if (Option.isSome(existing)) {
       const binding = existing.value.metadata?.proxy
@@ -67,7 +74,8 @@ export const collectEnhanced = (input: {
         (binding as Record<string, unknown>).hint !== hint ||
         (binding as Record<string, unknown>).tier !== input.tenant.tier ||
         existing.value.location.directory !== input.tenant.directory ||
-        existing.value.model?.id !== input.modelID || existing.value.model?.providerID !== input.providerID)
+        existing.value.model?.id !== input.modelID || existing.value.model?.providerID !== input.providerID ||
+        contentDigest(existing.value.permissions) !== permissionIdentity)
         return { ok: false as const, status: 409, code: "lane_conflict", message: "Session lane binding conflicts with this request" }
     }
     if (Option.isNone(existing) || existing.value.time.archived) {
@@ -99,7 +107,7 @@ export const collectEnhanced = (input: {
         tier: input.tenant.tier } },
       location: Location.Ref.make({ directory: AbsolutePath.make(input.tenant.directory) }),
       model: { id: ModelV2.ID.make(input.modelID), providerID: ProviderV2.ID.make(input.providerID) },
-      permissions: input.tenant.tier === "context" ? [{ action: "*", resource: "*", effect: "deny" }] : input.tenant.permission_policy ?? [],
+      permissions,
     })
     const binding = session.metadata?.proxy
     if (
@@ -109,7 +117,8 @@ export const collectEnhanced = (input: {
       (binding as Record<string, unknown>).hint !== hint ||
       (binding as Record<string, unknown>).tier !== input.tenant.tier ||
       session.location.directory !== input.tenant.directory ||
-      session.model?.id !== input.modelID || session.model?.providerID !== input.providerID
+      session.model?.id !== input.modelID || session.model?.providerID !== input.providerID ||
+      contentDigest(session.permissions) !== permissionIdentity
     )
       return { ok: false as const, status: 409, code: "lane_conflict", message: "Session lane binding conflicts with this request" }
 

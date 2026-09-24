@@ -6,6 +6,7 @@ import { join } from "node:path"
 import { ConfigProvider, Effect, Layer } from "effect"
 import { HttpRouter } from "effect/unstable/http"
 import { Database } from "@deepagent-code/core/database/database"
+import { contentDigest } from "@deepagent-code/core/contract/digest"
 import { Flag } from "@deepagent-code/core/flag/flag"
 import { ProxyTenantTable } from "@deepagent-code/core/proxy/sql"
 import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
@@ -678,6 +679,41 @@ describe("gateway release gate", () => {
       const lanes = await handler(new Request("http://localhost/proxy/admin/lanes?tenant=tenant-context"), HttpApiApp.context)
       expect(lanes.status).toBe(200)
       expect((await lanes.json()).data.map((lane: { hint: string }) => lane.hint).sort()).toEqual(["default", "default", "policy-lane"])
+      const broadenedPolicy = await handler(new Request("http://localhost/proxy/admin/tenants/tenant-context", {
+        method: "PATCH", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ permission_policy: [{ action: "*", resource: "*", effect: "allow" }] }),
+      }), HttpApiApp.context)
+      expect(broadenedPolicy.status).toBe(200)
+      const allowed = await send("context-policy-allowed", "Denied tool", false, "policy-lane")
+      expect(allowed.status).toBe(200)
+      expect(offeredWrite.at(-1)).toBe(true)
+      expect(await Bun.file(join(directory, "blocked.txt")).text()).toBe("must not exist")
+      await rm(join(directory, "blocked.txt"))
+      const tightenedPolicy = await handler(new Request("http://localhost/proxy/admin/tenants/tenant-context", {
+        method: "PATCH", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ permission_policy: [{ action: "*", resource: "*", effect: "deny" }] }),
+      }), HttpApiApp.context)
+      expect(tightenedPolicy.status).toBe(200)
+      const afterTightening = await send("context-policy-tightened", "Denied tool", false, "policy-lane")
+      expect(afterTightening.status).toBe(200)
+      expect(await Bun.file(join(directory, "blocked.txt")).exists()).toBe(false)
+      expect(offeredWrite.at(-1)).toBe(false)
+      expect(deniedToolResults.at(-1)).toContain("Unknown tool: write")
+      const staleReplay = await send("context-policy-allowed", "Denied tool", false, "policy-lane")
+      expect(staleReplay.status).toBe(409)
+      expect((await staleReplay.json()).error.code).toBe("request_replay_unavailable")
+      const revisedPolicyReader = new sqlite.Database(Flag.DEEPAGENT_CODE_DB, { readonly: true })
+      try {
+        const lanes = revisedPolicyReader.query("SELECT request_id, lane_session_id FROM proxy_request_ledger WHERE request_id IN ('tenant-context:context-policy-allowed', 'tenant-context:context-policy-tightened') ORDER BY request_id").all() as { request_id: string; lane_session_id: string }[]
+        expect(lanes).toHaveLength(2)
+        expect(lanes[0]?.lane_session_id).not.toBe(lanes[1]?.lane_session_id)
+        const legacyLaneID = `ses_proxy_${contentDigest("tenant-context:context-fingerprint:full:policy-lane").slice(0, 24)}`
+        expect(lanes.every((lane) => lane.lane_session_id !== legacyLaneID)).toBe(true)
+        const session = revisedPolicyReader.query("SELECT permission FROM session WHERE id = ?").get(lanes[1]!.lane_session_id) as { permission: string }
+        expect(JSON.parse(session.permission)).toEqual([{ action: "*", resource: "*", effect: "deny" }])
+      } finally {
+        revisedPolicyReader.close()
+      }
       const failed = await handler(new Request("http://localhost/v1/chat/completions", {
         method: "POST", headers: { authorization: "Bearer sk-context", "content-type": "application/json",
           "x-request-id": "context-5", "x-deepagent-session": "failure-lane" },
@@ -751,5 +787,5 @@ describe("gateway release gate", () => {
       Flag.DEEPAGENT_CODE_DB = originalDatabase
       await rm(directory, { recursive: true, force: true })
     }
-  }, 30_000)
+  }, 45_000)
 })
