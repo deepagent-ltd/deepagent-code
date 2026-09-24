@@ -78,4 +78,17 @@ describe("session ZIP bundle", () => {
       nested: { authorization: "[REDACTED]", authorization_fingerprint: "digest", ownerToken: "[REDACTED]", text: "read [REDACTED_PATH]", command: "[REDACTED]" },
     })
   })
+
+  test("redacts environment values and credential URLs without altering private exports", async () => {
+    const text = "PROJECT_MODE=internal postgres://alice:pwd@db.local/prod"
+    const source = { ...snapshot, messages: [{ ...snapshot.messages[0], data: { text } }] } as SessionSnapshot
+    expect(sanitizeBundleValue({ environment: { PROJECT_MODE: "internal" }, DATABASE_URL: "postgres://alice:pwd@db.local/prod", text })).toEqual({
+      environment: "[REDACTED]",
+      DATABASE_URL: "[REDACTED]",
+      text: "PROJECT_MODE=[REDACTED] [REDACTED_URL]",
+    })
+    const privateBundle = await parseSessionBundle(await createSessionBundle({ snapshot: source, tier: "conversation", redact: false }))
+    expect(privateBundle.manifest.redacted).toBe(false)
+    expect(JSON.stringify(privateBundle.snapshot)).toContain(text)
+  })
 })

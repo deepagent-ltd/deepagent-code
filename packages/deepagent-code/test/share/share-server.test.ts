@@ -15,11 +15,14 @@ test("public share upload, token download, and revoke", async () => {
       format: "deepagent-code.session-snapshot", format_version: 1, exported_at: 1,
       source: { session_id: "ses_a", title: "private" },
       session: { id: "ses_a", title: "private", v2_authority: true, metadata: {} },
-      messages: [{ id: "msg_a", session_id: "ses_a", data: { text: "sk-1234567890123456" } }],
+      messages: [{ id: "msg_a", session_id: "ses_a", data: { text: "sk-1234567890123456 DATABASE_URL=postgres://alice:pwd@db.local/prod PROJECT_MODE=internal" } }],
       parts: [], activities: [], progress: [],
     } as unknown as SessionSnapshot
     const bytes = await createSessionBundle({ snapshot, tier: "session_logs", redact: false,
-      logs: { events: [{ api_key: "top-secret" }], inputs: [], providerTurns: [] } })
+      logs: { events: [{ api_key: "top-secret", DATABASE_URL: "postgres://alice:pwd@db.local/prod" }], inputs: [], providerTurns: [] } })
+    const localShared = await parseSessionBundle(await createSessionBundle({ snapshot, tier: "conversation", share: true }))
+    expect(JSON.stringify(localShared)).not.toContain("postgres://alice:pwd@db.local/prod")
+    expect(JSON.stringify(localShared)).not.toContain("PROJECT_MODE=internal")
     const post = (authorization: string) => handle(new Request("https://share.example/api/bundles", {
       method: "POST", headers: { authorization }, body: new Blob([new Uint8Array(bytes)]),
     }))
@@ -40,6 +43,8 @@ test("public share upload, token download, and revoke", async () => {
     expect(bundle.manifest.redacted).toBe(true)
     expect(JSON.stringify(bundle)).not.toContain("top-secret")
     expect(JSON.stringify(bundle)).not.toContain("sk-1234567890123456")
+    expect(JSON.stringify(bundle)).not.toContain("postgres://alice:pwd@db.local/prod")
+    expect(JSON.stringify(bundle)).not.toContain("PROJECT_MODE=internal")
     expect((await handle(new Request(address, { method: "DELETE", headers: { authorization: `Bearer ${secret}` } }))).status).toBe(401)
     expect((await handle(new Request(address, { method: "DELETE", headers: { authorization: `Bearer ${result.revokeToken}` } }))).status).toBe(204)
     expect((await handle(new Request(address, { headers: { authorization: `Bearer ${secret}` } }))).status).toBe(404)
