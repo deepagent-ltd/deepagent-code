@@ -1036,6 +1036,107 @@ it.instance("updates config and writes to file", () =>
   }),
 )
 
+it.instance(
+  "watches later config edits without replaying files present at subscription",
+  () =>
+    Effect.gen(function* () {
+      const directory = (yield* TestInstance).directory
+      const config = yield* Config.Service
+      const changed = Deferred.makeUnsafe<string>()
+      const seen: string[] = []
+      expect((yield* config.get()).model).toBe("before/model")
+      const stop = yield* config.watch!(() =>
+        Effect.gen(function* () {
+          const model = (yield* config.get()).model ?? ""
+          seen.push(model)
+          yield* Deferred.succeed(changed, model)
+        }),
+      )
+      yield* Effect.addFinalizer(() => Effect.sync(stop))
+
+      yield* Effect.sleep("100 millis")
+      expect(seen).toEqual([])
+      yield* FSUtil.use.writeFileString(
+        path.join(directory, "deepagent-code.json"),
+        JSON.stringify(schemaConfig({ model: "after/model" })),
+      )
+      expect(yield* Deferred.await(changed).pipe(Effect.timeout("5 seconds"))).toBe("after/model")
+    }),
+  { config: { model: "before/model" } },
+)
+
+it.instance(
+  "watches a newly edited plugin file once after subscription",
+  () =>
+    Effect.gen(function* () {
+      const pluginDir = path.join((yield* TestInstance).directory, ".deepagent-code", "plugin")
+      const config = yield* Config.Service
+      yield* config.get()
+      const changed = Deferred.makeUnsafe<void>()
+      const added = Deferred.makeUnsafe<void>()
+      let calls = 0
+      const stop = yield* config.watch!(() =>
+        Effect.gen(function* () {
+          calls++
+          if (calls === 1) yield* Deferred.succeed(changed, undefined)
+          if (calls === 2) yield* Deferred.succeed(added, undefined)
+        }),
+      )
+      yield* Effect.addFinalizer(() => Effect.sync(stop))
+
+      yield* Effect.sleep("100 millis")
+      expect(calls).toBe(0)
+      yield* FSUtil.use.writeFileString(path.join(pluginDir, "demo.ts"), "export default { id: 'edited.plugin' }\n")
+      yield* Deferred.await(changed).pipe(Effect.timeout("5 seconds"))
+      yield* Effect.sleep("100 millis")
+      expect(calls).toBe(1)
+      yield* FSUtil.use.writeFileString(path.join(pluginDir, "new.ts"), "export default { id: 'new.plugin' }\n")
+      yield* Deferred.await(added).pipe(Effect.timeout("5 seconds"))
+      yield* Effect.sleep("100 millis")
+      expect(calls).toBe(2)
+    }),
+  {
+    init: (dir) =>
+      FSUtil.use.writeWithDirs(path.join(dir, ".deepagent-code", "plugin", "demo.ts"), "export default {}\n"),
+  },
+)
+
+it.instance(
+  "rearms plugin watching after its directory is deleted and rebuilt",
+  () =>
+    Effect.gen(function* () {
+      const pluginDir = path.join((yield* TestInstance).directory, ".deepagent-code", "plugin")
+      const config = yield* Config.Service
+      yield* config.get()
+      let signal = Deferred.makeUnsafe<void>()
+      let calls = 0
+      const stop = yield* config.watch!(() =>
+        Effect.gen(function* () {
+          calls++
+          yield* Deferred.succeed(signal, undefined)
+        }),
+      )
+      yield* Effect.addFinalizer(() => Effect.sync(stop))
+
+      yield* Effect.promise(() => fs.rm(pluginDir, { recursive: true }))
+      yield* Deferred.await(signal).pipe(Effect.timeout("5 seconds"))
+      signal = Deferred.makeUnsafe<void>()
+      yield* FSUtil.use.writeWithDirs(path.join(pluginDir, "rebuilt.ts"), "export default {}\n")
+      yield* Deferred.await(signal).pipe(Effect.timeout("5 seconds"))
+      yield* Effect.sleep("200 millis")
+
+      const beforeEdit = calls
+      signal = Deferred.makeUnsafe<void>()
+      yield* FSUtil.use.writeFileString(path.join(pluginDir, "rebuilt.ts"), "export default { id: 'edited' }\n")
+      yield* Deferred.await(signal).pipe(Effect.timeout("5 seconds"))
+      expect(calls).toBe(beforeEdit + 1)
+    }),
+  {
+    init: (dir) =>
+      FSUtil.use.writeWithDirs(path.join(dir, ".deepagent-code", "plugin", "demo.ts"), "export default {}\n"),
+  },
+)
+
 it.instance("gets config directories", () =>
   Effect.gen(function* () {
     const dirs = yield* Config.use.directories()

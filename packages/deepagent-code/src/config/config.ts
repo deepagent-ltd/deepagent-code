@@ -11,7 +11,7 @@ import { Auth } from "../auth"
 import { Env } from "../env"
 import { applyEdits, modify } from "jsonc-parser"
 import { InstallationLocal, InstallationVersion } from "@deepagent-code/core/installation/version"
-import { existsSync, watch } from "fs"
+import { existsSync, readdirSync, statSync, watch } from "fs"
 import { Account } from "@/account/account"
 import { isRecord } from "@/util/record"
 import type { ConsoleState } from "@deepagent-code/core/v1/config/console-state"
@@ -1012,44 +1012,106 @@ export const layer = Layer.effect(
       ])
       const semaphore = yield* Semaphore.make(1)
       let closed = false
-      const watchers = [...targets].flatMap((dir) => {
-        if (!existsSync(dir)) return []
-        try {
+      const watchers = new Map<string, ReturnType<typeof watch>>()
+      const refresh = () => {
+        void Effect.runPromise(
+          semaphore
+            .withPermit(
+              Effect.gen(function* () {
+                if (closed) return
+                yield* invalidate()
+                yield* changed()
+              }),
+            )
+            .pipe(Effect.provideService(InstanceRef, ctx)),
+        ).catch((error) => log.warn("config live refresh failed", { directory: ctx.directory, error: String(error) }))
+      }
+      const attach = (dir: string) => {
+        watchers.get(dir)?.close()
+        watchers.delete(dir)
+        if (!existsSync(dir)) return
+        const pluginDirectory = /^(?:plugin|plugins)$/.test(path.basename(dir))
+        const fingerprint = (name: string) => {
+          try {
+            const stat = statSync(path.join(dir, name), { bigint: true })
+            // A watched child owns content changes. Its parent only needs to notice when
+            // that directory is deleted or replaced and its existing watcher becomes stale.
+            if (stat.isDirectory() && targets.has(path.join(dir, name))) return `${stat.dev}:${stat.ino}`
+            return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}`
+          } catch {
+            return undefined
+          }
+        }
+        const names = () => {
+          if (pluginDirectory) {
+            try {
+              return readdirSync(dir).filter((name) => /\.[cm]?[jt]sx?$/.test(name))
+            } catch {
+              return []
+            }
+          }
           return [
-            watch(dir, (_event, filename) => {
-              const name = filename?.toString() ?? ""
-              const pluginDirectory = /^(?:plugin|plugins)$/.test(path.basename(dir))
-              if (
-                closed ||
-                (name &&
-                  !/^(?:config|deepagent-code)\.jsonc?$|^\.deepagent-code$|^plugins?$/.test(name) &&
-                  !(pluginDirectory && /\.[cm]?[jt]sx?$/.test(name)) &&
-                  !pluginFiles.some((file) => path.dirname(file) === dir && path.basename(file) === name))
-              )
-                return
-              void Effect.runPromise(
-                semaphore
-                  .withPermit(
-                    Effect.gen(function* () {
-                      if (closed) return
-                      yield* invalidate()
-                      yield* changed()
-                    }),
-                  )
-                  .pipe(Effect.provideService(InstanceRef, ctx)),
-              ).catch((error) =>
-                log.warn("config live refresh failed", { directory: ctx.directory, error: String(error) }),
-              )
-            }),
+            "config.json",
+            "config.jsonc",
+            "deepagent-code.json",
+            "deepagent-code.jsonc",
+            ".deepagent-code",
+            "plugin",
+            "plugins",
+            ...pluginFiles.filter((file) => path.dirname(file) === dir).map((file) => path.basename(file)),
           ]
+        }
+        // Files can be created before watch() is attached but their queued rename notifications
+        // can arrive afterward. They are already included in the first Config/Plugin load; treating
+        // those stale notifications as edits would invalidate scoped state during that same load.
+        try {
+          const observed = new Map(names().map((name) => [name, fingerprint(name)]))
+          const changedOnDisk = (name: string) => {
+            const candidates = name ? [name] : [...new Set([...observed.keys(), ...names()])]
+            const changes = candidates
+              .map((candidate) => [candidate, fingerprint(candidate)] as const)
+              .filter(([candidate, next]) => observed.get(candidate) !== next)
+            changes.forEach(([candidate, next]) => observed.set(candidate, next))
+            return changes.map(([candidate]) => candidate)
+          }
+          const onChange = (names: string[]) => {
+            if (names.length === 0) return
+            // fs.watch follows an inode on some platforms. Reattach descendants when a watched
+            // directory is replaced so the next edit in the rebuilt tree is still observed.
+            for (const name of names) {
+              const child = path.join(dir, name)
+              if (!targets.has(child)) continue
+              for (const target of targets) {
+                if (target === child || target.startsWith(child + path.sep)) attach(target)
+              }
+            }
+            refresh()
+          }
+          const watcher = watch(dir, (_event, filename) => {
+            const name = filename?.toString() ?? ""
+            if (
+              closed ||
+              (name &&
+                !/^(?:config|deepagent-code)\.jsonc?$|^\.deepagent-code$|^plugins?$/.test(name) &&
+                !(pluginDirectory && /\.[cm]?[jt]sx?$/.test(name)) &&
+                !pluginFiles.some((file) => path.dirname(file) === dir && path.basename(file) === name))
+            )
+              return
+            onChange(changedOnDisk(name))
+          })
+          watchers.set(dir, watcher)
+          // A write between the first snapshot and watch() may have no queued notification.
+          // Compare once after subscription to close that gap.
+          onChange(changedOnDisk(""))
         } catch (error) {
           log.warn("config watch unavailable", { directory: dir, error: String(error) })
-          return []
         }
-      })
+      }
+      targets.forEach(attach)
       return () => {
         closed = true
         watchers.forEach((watcher) => watcher.close())
+        watchers.clear()
       }
     })
 
