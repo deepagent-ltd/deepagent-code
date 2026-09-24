@@ -19,7 +19,10 @@ test("release candidate guard binds HEAD, remote tag, clean tree, and packaged b
   git(repository, "config", "user.email", "release@test.example")
   git(repository, "config", "user.name", "Release Test")
   await Bun.write(join(repository, "tracked.txt"), "candidate")
-  git(repository, "add", "tracked.txt")
+  await mkdir(join(repository, "packages/sdk/js/dist"), { recursive: true })
+  const preparedFiles = ["package.json", "bun.lock", "packages/sdk/js/dist/generated.js", "UPCOMING_CHANGELOG.md"]
+  for (const file of preparedFiles) await Bun.write(join(repository, file), "prepared candidate bytes")
+  git(repository, "add", "-A")
   git(repository, "commit", "-m", "chore(release): prepare candidate")
   const commit = git(repository, "rev-parse", "HEAD")
   const tree = git(repository, "rev-parse", "HEAD^{tree}")
@@ -42,9 +45,14 @@ test("release candidate guard binds HEAD, remote tag, clean tree, and packaged b
   const candidate = { repository, commit, tree, tag: "v2.0.2", packageDir }
   await expect(assertReleaseCandidate(candidate)).resolves.toBeUndefined()
 
-  await Bun.write(join(repository, "tracked.txt"), "changed after candidate")
-  await expect(assertReleaseCandidate(candidate)).rejects.toThrow("release candidate tree is dirty")
-  await Bun.write(join(repository, "tracked.txt"), "candidate")
+  await expect(assertReleaseCandidate({ ...candidate, tree: "0".repeat(40) })).rejects.toThrow(
+    "release candidate tree changed",
+  )
+  for (const file of preparedFiles) {
+    await Bun.write(join(repository, file), "changed after candidate")
+    await expect(assertReleaseCandidate(candidate)).rejects.toThrow("release candidate tree is dirty")
+    await Bun.write(join(repository, file), "prepared candidate bytes")
+  }
 
   await Bun.write(join(packageDir, "package.json"), JSON.stringify({ ...metadata, version: "2.0.3" }))
   await expect(assertReleaseCandidate(candidate)).rejects.toThrow("release package version does not match tag")
