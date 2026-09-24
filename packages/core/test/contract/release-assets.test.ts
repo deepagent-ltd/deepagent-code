@@ -64,7 +64,7 @@ test("release asset manifest rejects remote byte drift", async () => {
   await expect(verifyReleaseAssets(manifest, root.path)).rejects.toThrow("bytes differ")
 })
 
-test("staging covers every CLI target, owner row and three desktop platforms", async () => {
+test("staging covers every CLI target, owner row and six desktop targets", async () => {
   await using root = await tmpdir()
   const commit = "c".repeat(40)
   const tree = "t".repeat(40)
@@ -119,7 +119,14 @@ test("staging covers every CLI target, owner row and three desktop platforms", a
     if (result.exitCode !== 0) throw new Error(result.stderr.toString())
   }
   await Promise.all(
-    ["desktop.exe", "desktop.dmg", "desktop.AppImage"].map((name) => Bun.write(join(desktopDir, name), name)),
+    [
+      "deepagent-code-desktop-win-x64.exe",
+      "deepagent-code-desktop-win-arm64.exe",
+      "deepagent-code-desktop-mac-x64.app.tar.gz",
+      "deepagent-code-desktop-mac-arm64.app.tar.gz",
+      "deepagent-code-desktop-linux-x64.deb",
+      "deepagent-code-desktop-linux-arm64.deb",
+    ].map((name) => Bun.write(join(desktopDir, name), name)),
   )
   await stageReleaseAssets({
     commit,
@@ -132,12 +139,25 @@ test("staging covers every CLI target, owner row and three desktop platforms", a
     manifestPath,
   })
   const manifest = await verifyReleaseAssets(manifestPath, assetsDir, commit, tree, true)
-  expect(manifest.assets).toHaveLength(16)
+  expect(manifest.assets).toHaveLength(19)
   await Bun.write(join(assetsDir, "stale.zip"), "old release asset")
   await expect(verifyReleaseAssets(manifestPath, assetsDir, commit, tree, true)).rejects.toThrow("unexpected files")
   await rm(join(assetsDir, "stale.zip"), { force: true })
   await Bun.write(join(assetsDir, "deepagent-code-linux-x64.tar.gz"), "tampered")
   await expect(verifyReleaseAssets(manifestPath, assetsDir, commit, tree, true)).rejects.toThrow("bytes differ")
+  await Bun.write(
+    join(assetsDir, "deepagent-code-linux-x64.tar.gz"),
+    await Bun.file(join(cliDist, "deepagent-code-linux-x64.tar.gz")).bytes(),
+  )
+  const missing = "deepagent-code-desktop-win-arm64.exe"
+  await Bun.write(
+    manifestPath,
+    JSON.stringify({ ...manifest, assets: manifest.assets?.filter((asset) => asset.name !== missing) }),
+  )
+  await rm(join(assetsDir, missing))
+  await expect(verifyReleaseAssets(manifestPath, assetsDir, commit, tree, true)).rejects.toThrow(
+    "missing a desktop platform",
+  )
 }, 30_000)
 
 test("RI-51 binds staged asset bytes into the archived ledger before NO-GO", async () => {
@@ -161,9 +181,12 @@ test("RI-51 binds staged asset bytes into the archived ledger before NO-GO", asy
   const names = [
     ...targetNames.map((target) => `deepagent-code-${target}${target.startsWith("linux") ? ".tar.gz" : ".zip"}`),
     "owner-authorization.json",
-    "desktop.exe",
-    "desktop.dmg",
-    "desktop.AppImage",
+    "deepagent-code-desktop-win-x64.exe",
+    "deepagent-code-desktop-win-arm64.exe",
+    "deepagent-code-desktop-mac-x64.app.tar.gz",
+    "deepagent-code-desktop-mac-arm64.app.tar.gz",
+    "deepagent-code-desktop-linux-x64.deb",
+    "deepagent-code-desktop-linux-arm64.deb",
   ]
   const assets = await Promise.all(
     names.map(async (name) => {
@@ -172,7 +195,8 @@ test("RI-51 binds staged asset bytes into the archived ledger before NO-GO", asy
         name,
         bytes: Buffer.byteLength(name),
         sha256: new Bun.CryptoHasher("sha256").update(name).digest("hex"),
-        kind: name === "owner-authorization.json" ? "owner" : name.startsWith("desktop") ? "desktop" : "cli",
+        kind:
+          name === "owner-authorization.json" ? "owner" : name.startsWith("deepagent-code-desktop") ? "desktop" : "cli",
       }
     }),
   )

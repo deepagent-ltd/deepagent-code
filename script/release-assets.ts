@@ -18,6 +18,14 @@ const targets = [
   "windows-x64",
   "windows-x64-baseline",
 ].map((target) => `deepagent-code-${target}`)
+const desktopTargets = [
+  "deepagent-code-desktop-win-x64.exe",
+  "deepagent-code-desktop-win-arm64.exe",
+  "deepagent-code-desktop-mac-x64.app.tar.gz",
+  "deepagent-code-desktop-mac-arm64.app.tar.gz",
+  "deepagent-code-desktop-linux-x64.deb",
+  "deepagent-code-desktop-linux-arm64.deb",
+]
 
 async function files(directory: string, root = directory): Promise<string[]> {
   return (
@@ -132,11 +140,7 @@ export async function verifyReleaseAssets(
     )
       throw new Error("release asset manifest is missing owner authorization")
     const desktop = manifest.assets.filter((asset) => asset.kind === "desktop").map((asset) => asset.name)
-    if (
-      !desktop.some((name) => /\.exe$/.test(name)) ||
-      !desktop.some((name) => /\.dmg$|\.app\.tar\.gz$/.test(name)) ||
-      !desktop.some((name) => /\.AppImage$|\.deb$|\.rpm$/.test(name))
-    )
+    if (desktopTargets.some((name) => !desktop.includes(name)))
       throw new Error("release asset manifest is missing a desktop platform")
     const expectedNames = manifest.assets.map((asset) => asset.name)
     const allowed = allowLedgerAssets
@@ -180,11 +184,7 @@ export async function stageReleaseAssets(input: {
   const desktop = (await readdir(input.desktopDir, { withFileTypes: true }))
     .filter((entry) => entry.isFile() && /\.(exe|blockmap|dmg|zip|AppImage|deb|rpm)$|\.app\.tar\.gz$/.test(entry.name))
     .map((entry) => path.join(input.desktopDir, entry.name))
-  if (
-    !desktop.some((file) => /\.exe$/.test(file)) ||
-    !desktop.some((file) => /\.dmg$|\.app\.tar\.gz$/.test(file)) ||
-    !desktop.some((file) => /\.AppImage$|\.deb$|\.rpm$/.test(file))
-  )
+  if (desktopTargets.some((name) => !desktop.some((file) => path.basename(file) === name)))
     throw new Error("release desktop assets are missing a platform")
   const owner = path.join(input.cliDist, "deepagent-code-linux-x64/bin/owner-authorization.json")
   const ownerDigest = await sha256(owner)
