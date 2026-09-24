@@ -16,6 +16,7 @@ import { createOpencodeClient } from "@deepagent-code/sdk"
 import { Flag } from "@deepagent-code/core/flag/flag"
 import { Identifier } from "@deepagent-code/core/util/identifier"
 import { MessageID } from "@/session/schema"
+import { publicSharingEnabled } from "@/share/public-share-policy"
 import { createRunDemo } from "./demo"
 import { resolveModelInfo, resolveRunTuiConfig, resolveSessionInfo } from "./runtime.boot"
 import { createRuntimeLifecycle } from "./runtime.lifecycle"
@@ -635,6 +636,7 @@ async function runInteractiveRuntime(input: RunRuntimeInput, deps: RunRuntimeDep
             await state.switching?.catch(() => {})
             await ensureSession()
             if (command === "share") {
+              if (!publicSharingEnabled()) return "Public sharing is disabled in 2.0.2"
               const result = await ctx.sdk.session.share({ sessionID: state.sessionID })
               return result.data?.share?.url ?? "session sharing failed"
             }

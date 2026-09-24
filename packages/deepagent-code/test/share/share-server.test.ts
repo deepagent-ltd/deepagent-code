@@ -135,7 +135,7 @@ test("app share client accepts only configured host and round-trips through HTTP
       messages: [], parts: [], activities: [], progress: [],
     } as unknown as SessionSnapshot
     const bytes = await createSessionBundle({ snapshot, tier: "conversation" })
-    const share = await uploadSessionBundle({ bytes, service, uploadToken: "upload-token-with-more-than-32-characters", enabled: true })
+    const share = await uploadSessionBundle({ bytes, service, uploadToken: "upload-token-with-more-than-32-characters" })
     const downloaded = await downloadSessionBundle({ url: share.url, service })
     expect(downloaded.manifest.tier).toBe("conversation")
     const invalid = await downloadSessionBundle({ url: share.url.replace(server.url.host, "attacker.example"), service })

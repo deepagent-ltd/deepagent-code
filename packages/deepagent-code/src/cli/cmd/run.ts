@@ -24,6 +24,7 @@ import { Filesystem } from "@/util/filesystem"
 import { createOpencodeClient, toV2Prompt, waitForV2PromptTerminal, type OpencodeClient, type ToolPart } from "@deepagent-code/sdk"
 import { FormatError, FormatUnknownError } from "../error"
 import { LegacyExecutionUnavailable } from "@/session/legacy-execution-zero"
+import { publicSharingEnabled } from "@/share/public-share-policy"
 import { INTERACTIVE_INPUT_ERROR, resolveInteractiveStdin } from "./run/runtime.stdin"
 import { backgroundTask, createBackgroundSessions, createSessionTree, questionAnswers } from "./run/noninteractive"
 import { PERMISSION_MODES, permissionReplyFor, resolvePermissionMode, type PermissionMode } from "./run/permission-mode"
@@ -170,7 +171,7 @@ export const RunCommand = effectCmd({
       })
       .option("share", {
         type: "boolean",
-        describe: "share the session",
+        describe: "public sharing is unavailable in 2.0.2",
       })
       .option("model", {
         type: "string",
@@ -558,6 +559,10 @@ export const RunCommand = effectCmd({
       }
 
       async function share(sdk: OpencodeClient, sessionID: string) {
+        if (!publicSharingEnabled()) {
+          if (args.share) UI.println(UI.Style.TEXT_DANGER_BOLD + "!  Public sharing is disabled in 2.0.2")
+          return
+        }
         const cfg = await sdk.config.get()
         if (!cfg.data) return
         if (cfg.data.share !== "auto" && !flags.autoShare && !args.share) return
