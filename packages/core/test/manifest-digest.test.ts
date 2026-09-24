@@ -10,6 +10,7 @@ import {
   assertManifestShape,
   buildManifest,
   digestFileContent,
+  digestSourceText,
   generateManifest,
   serializeManifest,
   type DeterministicManifest,
@@ -17,6 +18,11 @@ import {
 
 const groupsA = { contract: { "contract/selection.ts": "a".repeat(64) } }
 const groupsB = { contract: { "contract/selection.ts": "b".repeat(64) } }
+
+test("source checkout CRLF and LF share one digest while external evidence preserves exact bytes", () => {
+  expect(digestSourceText("export const x = 1\n")).toBe(digestSourceText("export const x = 1\r\n"))
+  expect(digestFileContent("evidence\n")).not.toBe(digestFileContent("evidence\r\n"))
+})
 
 describe("buildManifest", () => {
   test("is byte-stable across two builds of the same inputs", () => {
@@ -102,6 +108,7 @@ describe("generateManifest (live tree)", () => {
       for (const key of Object.keys(group)) {
         expect(key.startsWith("/")).toBe(false)
         expect(key).not.toMatch(/^[A-Za-z]:[\\/]/)
+        expect(key).not.toContain("\\")
         expect(key).not.toContain("core-v2-beta-w2-digest")
       }
     }

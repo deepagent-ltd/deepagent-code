@@ -9,11 +9,11 @@
  * authority.
  */
 import { describe, expect, test } from "bun:test"
-import { createHash } from "node:crypto"
 import { readFileSync } from "node:fs"
 import path from "node:path"
 import { buildInventory } from "../script/caller-inventory/build"
 import { rootRepoPath } from "../script/caller-inventory/ast"
+import { digestSourceText } from "../script/manifest-digest/manifest"
 import { tmpdir } from "./fixture/tmpdir"
 import {
   DIMENSIONS,
@@ -324,16 +324,20 @@ describe("C0-08 legacy-zero gate snapshot (byte-stable)", () => {
 
     await Bun.write(anchor, "export const anchor = 1\n")
     const before = buildSnapshot(fixtureInventory([anchorEntry()]), [])
+    await Bun.write(anchor, "export const anchor = 1\r\n")
+    const windowsCheckout = buildSnapshot(fixtureInventory([anchorEntry()]), [])
+    expect(windowsCheckout.snapshotDigest).toBe(before.snapshotDigest)
+    expect(windowsCheckout.evidenceFileDigests[repoFile]).toBe(before.evidenceFileDigests[repoFile])
     await Bun.write(anchor, "export const anchor = 2\n")
     const after = buildSnapshot(fixtureInventory([anchorEntry()]), [])
 
-    // Identical entries/counters/anchors — only the file bytes changed.
+    // Identical entries/counters/anchors — source content changed, not checkout line endings.
     expect(after.entries).toBe(before.entries)
     expect(after.counters).toEqual(before.counters)
     expect(after.snapshotDigest).not.toBe(before.snapshotDigest)
     expect(before.evidenceFileDigests[repoFile]).not.toBe(after.evidenceFileDigests[repoFile])
     expect(after.evidenceFileDigests[repoFile]).toBe(
-      createHash("sha256").update(readFileSync(anchor, "utf8")).digest("hex"),
+      digestSourceText(readFileSync(anchor, "utf8")),
     )
   })
 
@@ -345,7 +349,7 @@ describe("C0-08 legacy-zero gate snapshot (byte-stable)", () => {
       digests.map(([file]) => file),
     ).toEqual(digests.map(([file]) => file).sort())
     for (const [file, digest] of digests) {
-      expect(digest).toBe(createHash("sha256").update(readFileSync(path.join(rootRepoPath(), file), "utf8")).digest("hex"))
+      expect(digest).toBe(digestSourceText(readFileSync(path.join(rootRepoPath(), file), "utf8")))
     }
   })
 })

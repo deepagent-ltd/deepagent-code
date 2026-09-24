@@ -187,9 +187,14 @@ export interface GenerateManifestOptions {
   readonly extraInputs?: Record<string, Record<string, string>>
 }
 
-/** SHA-256 of a file's raw bytes. */
+/** SHA-256 of exact supplied content, including line endings (external evidence uses this). */
 export function digestFileContent(content: string): string {
   return createHash("sha256").update(content).digest("hex")
+}
+
+/** Canonical LF identity for Git-tracked TypeScript source across platform checkouts. */
+export function digestSourceText(content: string): string {
+  return digestFileContent(content.replace(/\r\n/g, "\n"))
 }
 
 function resolveRepoRoot(): string {
@@ -211,8 +216,8 @@ function collectTsDir(absDir: string, repoRoot: string): Record<string, string> 
   const out: Record<string, string> = {}
   if (!fs.existsSync(absDir)) return out
   for (const file of walkTsFiles(absDir)) {
-    const relPath = path.relative(repoRoot, file)
-    out[relPath] = digestFileContent(fs.readFileSync(file, "utf8"))
+    const relPath = path.relative(repoRoot, file).replaceAll("\\", "/")
+    out[relPath] = digestSourceText(fs.readFileSync(file, "utf8"))
   }
   return out
 }
@@ -240,7 +245,7 @@ function collectMigrationRegistry(repoRoot: string): Record<string, string> {
   const registryRel = ManifestInputRoots.migrationRegistryFile
   const registryAbs = path.join(repoRoot, registryRel)
   const out: Record<string, string> = {
-    [registryRel]: fs.existsSync(registryAbs) ? digestFileContent(fs.readFileSync(registryAbs, "utf8")) : absentDigest(),
+    [registryRel]: fs.existsSync(registryAbs) ? digestSourceText(fs.readFileSync(registryAbs, "utf8")) : absentDigest(),
   }
   Object.assign(out, collectTsDir(path.join(repoRoot, ManifestInputRoots.migrationBodiesDir), repoRoot))
   return out

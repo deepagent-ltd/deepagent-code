@@ -60,7 +60,7 @@ describe("database capability", () => {
       )
       expect(exit._tag).toBe("Failure")
     } finally {
-      await fs.rm(directory, { recursive: true, force: true })
+      await fs.rm(directory, { recursive: true, force: true, maxRetries: 30, retryDelay: 100 })
     }
   })
 
@@ -85,7 +85,7 @@ describe("database capability", () => {
       )
       expect(exit._tag).toBe("Success")
     } finally {
-      await fs.rm(directory, { recursive: true, force: true })
+      await fs.rm(directory, { recursive: true, force: true, maxRetries: 30, retryDelay: 100 })
     }
   })
 })
