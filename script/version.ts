@@ -7,10 +7,12 @@ import { prepareReleaseFiles } from "./prepare-release-files"
 import { ensureReleaseCandidateRef } from "./release-candidate-ref"
 
 if (
-  Script.channel === "beta" ||
-  (process.env.GH_REPO && process.env.GITHUB_REPOSITORY && process.env.GH_REPO !== process.env.GITHUB_REPOSITORY)
+  Script.channel !== "beta" &&
+  process.env.GH_REPO &&
+  process.env.GITHUB_REPOSITORY &&
+  process.env.GH_REPO !== process.env.GITHUB_REPOSITORY
 )
-  throw new Error("beta release candidate requires a separate repository routing design")
+  throw new Error("release candidate target repository differs from checkout")
 const output = [`version=${Script.version}`]
 const baseSha = (await $`git rev-parse HEAD`.text()).trim()
 const sourceSha = process.env.GITHUB_SHA ?? baseSha

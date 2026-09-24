@@ -46,7 +46,7 @@ test("release workflow builds and publishes one frozen candidate", async () => {
   }
   expect(version.indexOf("await prepareReleaseFiles(")).toBeLessThan(version.indexOf("gh release create"))
   expect(version.indexOf("ensureReleaseCandidateRef(")).toBeLessThan(version.indexOf("gh release create"))
-  expect(version.indexOf('Script.channel === "beta"')).toBeLessThan(version.indexOf("gh release create"))
+  expect(version.indexOf('Script.channel !== "beta"')).toBeLessThan(version.indexOf("gh release create"))
   expect(workflow).toContain("DEEPAGENT_CODE_CHANNEL: ${{ (github.ref_name == 'beta' && 'beta')")
   expect(version).not.toContain('else if (Script.channel === "beta")')
   expect(version).toContain('if (!release.isDraft) throw new Error("release candidate is already published")')
@@ -66,4 +66,22 @@ test("release workflow builds and publishes one frozen candidate", async () => {
   expect(publish).not.toContain("git tag -d")
   expect(publish).not.toContain("git push origin refs/tags/")
   expect(publish).not.toContain("git commit -am")
+})
+
+test("beta preview keeps build artifacts without creating or publishing a release", async () => {
+  const repository = path.resolve(import.meta.dir, "../../../..")
+  const workflow = await Bun.file(path.join(repository, ".github/workflows/publish.yml")).text()
+  const version = await Bun.file(path.join(repository, "script/version.ts")).text()
+  const channel = await Bun.file(path.join(repository, "packages/script/src/index.ts")).text()
+  const build = workflow.split("  build-cli:\n")[1]?.split("  sign-cli-windows:\n")[0]
+  const publish = workflow.split("  publish:\n")[1]
+  expect(build).toContain("ref: ${{ needs.version.outputs.candidate_commit }}")
+  expect(channel).toContain('const IS_PREVIEW = CHANNEL !== "latest"')
+  expect(version).toContain('Script.channel !== "beta"')
+  expect(version).toContain("if (!Script.preview) {")
+  expect(version.slice(version.indexOf("if (!Script.preview) {"))).toContain("gh release create")
+  expect(version).toContain("output.push(`candidate_commit=${candidateSha}`)")
+  expect(version).toContain("output.push(`candidate_tree=${(await $`git rev-parse HEAD^{tree}`.text()).trim()}`)")
+  expect(version).toContain("output.push(`channel=${Script.channel}`)")
+  expect(publish).toContain("needs.version.outputs.channel != 'beta'")
 })
