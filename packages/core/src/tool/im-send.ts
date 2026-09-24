@@ -135,6 +135,43 @@ export const layer = Layer.effectDiscard(
                   message: `im_send: session ${context.sessionID} is not visible in the durable session store`,
                 })
               const binding = imBindingOf(session.metadata ?? null)
+              // Provider tool-call IDs can repeat in later assistant turns. The assistant message
+              // identifies the durable call; an exact retry must replay before rechecking a changed
+              // group binding or a one-time permission that was consumed by the original send.
+              const idempotencyKey = `im_send:${context.sessionID}:${context.assistantMessageID}:${context.toolCallID}`
+              const externalIdempotencyKey = `im_send_external:${context.sessionID}:${context.assistantMessageID}:${context.toolCallID}`
+              const prior = yield* db
+                .select({
+                  decision: AgentPushLogTable.decision,
+                  message_id: AgentPushLogTable.message_id,
+                  agent_id: AgentPushLogTable.agent_id,
+                  group_id: AgentPushLogTable.group_id,
+                })
+                .from(AgentPushLogTable)
+                .where(eq(AgentPushLogTable.idempotency_key, idempotencyKey))
+                .get()
+                .pipe(Effect.orDie)
+              if (prior) {
+                const replayed = prior.decision.startsWith("blocked:") ? "blocked" : prior.decision
+                const reason = prior.decision.startsWith("blocked:")
+                  ? prior.decision.slice("blocked:".length)
+                  : undefined
+                const externalFailure = yield* db
+                  .select({ decision: AgentPushLogTable.decision })
+                  .from(AgentPushLogTable)
+                  .where(eq(AgentPushLogTable.idempotency_key, externalIdempotencyKey))
+                  .get()
+                  .pipe(Effect.orDie)
+                return {
+                  decision: replayed as "deliver" | "digest" | "blocked",
+                  group_id: prior.group_id,
+                  sender_id: prior.agent_id,
+                  ...(prior.message_id != null ? { message_id: prior.message_id } : {}),
+                  ...(reason !== undefined ? { reason } : {}),
+                  ...(externalFailure ? { external_delivery: "delivery_failed" as const } : {}),
+                  output: `This exact send already ran (idempotency): ${renderOutcome(replayed, reason)}${externalFailure ? " External Slack delivery failed; the durable IM message remains available." : ""}`,
+                }
+              }
 
               const groupID = input.group_id ?? binding?.groupID
               if (!groupID)
@@ -179,41 +216,6 @@ export const layer = Layer.effectDiscard(
                 )
 
               const senderAgent = binding?.agent ?? context.agent
-              const idempotencyKey = `im_send:${context.sessionID}:${context.toolCallID}`
-              const externalIdempotencyKey = `im_send_external:${context.sessionID}:${context.toolCallID}`
-
-              // §B2 去重: a retry of the SAME tool call replays the original outcome, never a second send.
-              const prior = yield* db
-                .select({
-                  decision: AgentPushLogTable.decision,
-                  message_id: AgentPushLogTable.message_id,
-                  agent_id: AgentPushLogTable.agent_id,
-                })
-                .from(AgentPushLogTable)
-                .where(eq(AgentPushLogTable.idempotency_key, idempotencyKey))
-                .get()
-                .pipe(Effect.orDie)
-              if (prior) {
-                const replayed = prior.decision.startsWith("blocked:") ? "blocked" : prior.decision
-                const reason = prior.decision.startsWith("blocked:")
-                  ? prior.decision.slice("blocked:".length)
-                  : undefined
-                const externalFailure = yield* db
-                  .select({ decision: AgentPushLogTable.decision })
-                  .from(AgentPushLogTable)
-                  .where(eq(AgentPushLogTable.idempotency_key, externalIdempotencyKey))
-                  .get()
-                  .pipe(Effect.orDie)
-                return {
-                  decision: replayed as "deliver" | "digest" | "blocked",
-                  group_id: groupID,
-                  sender_id: prior.agent_id,
-                  ...(prior.message_id != null ? { message_id: prior.message_id } : {}),
-                  ...(reason !== undefined ? { reason } : {}),
-                  ...(externalFailure ? { external_delivery: "delivery_failed" as const } : {}),
-                  output: `This exact send already ran (idempotency): ${renderOutcome(replayed, reason)}${externalFailure ? " External Slack delivery failed; the durable IM message remains available." : ""}`,
-                }
-              }
 
               // §E4 quiet hours, resolved like AgentPush's fail-safe: no config row / no configured
               // window / undecodable blob ⇒ false (never quiet); the other gates still run.

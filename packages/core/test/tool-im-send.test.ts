@@ -12,6 +12,7 @@ import { Project } from "@deepagent-code/core/project"
 import { ProjectTable } from "@deepagent-code/core/project/sql"
 import { AbsolutePath } from "@deepagent-code/core/schema"
 import { SessionV2 } from "@deepagent-code/core/session"
+import { SessionMessage } from "@deepagent-code/core/session/message"
 import { SessionSchema } from "@deepagent-code/core/session/schema"
 import { SessionTable } from "@deepagent-code/core/session/sql"
 import { IMSendTool } from "@deepagent-code/core/tool/im-send"
@@ -207,7 +208,7 @@ describe("im_send (WS7)", () => {
       expect(message?.sender_type).toBe("agent")
       expect(message?.content).toBe("Deploy finished cleanly.")
 
-      const audit = yield* pushLog(db, `im_send:${sessionID}:call-im_send-1`)
+      const audit = yield* pushLog(db, `im_send:${sessionID}:${toolIdentity.assistantMessageID}:call-im_send-1`)
       expect(audit?.decision).toBe("deliver")
       expect(audit?.agent_id).toBe("build")
       expect(String(audit?.message_id)).toBe(out.message_id as string)
@@ -270,7 +271,7 @@ describe("im_send (WS7)", () => {
       expect(out.output).toContain("rate_limited")
 
       expect(yield* messageCount(db)).toBe(0)
-      const audit = yield* pushLog(db, `im_send:${sessionID}:call-im_send-1`)
+      const audit = yield* pushLog(db, `im_send:${sessionID}:${toolIdentity.assistantMessageID}:call-im_send-1`)
       expect(audit?.decision).toBe("blocked:rate_limited")
       expect(audit?.message_id).toBeNull()
       // Blocked attempts retain no content.
@@ -299,7 +300,7 @@ describe("im_send (WS7)", () => {
         .get()
         .pipe(Effect.orDie)
       expect(message?.sender_id).toBe(IMSendTool.SYSTEM_PUSHER_AGENT_ID)
-      const audit = yield* pushLog(db, `im_send:${sessionID}:call-im_send-1`)
+      const audit = yield* pushLog(db, `im_send:${sessionID}:${toolIdentity.assistantMessageID}:call-im_send-1`)
       expect(audit?.agent_id).toBe(IMSendTool.SYSTEM_PUSHER_AGENT_ID)
     }),
   )
@@ -325,6 +326,44 @@ describe("im_send (WS7)", () => {
       expect(audits?.total).toBe(1)
       expect(externalCalls).toHaveLength(1)
       expect(externalCalls[0]).toMatchObject({ target: { channelID: "C123" }, text: "exactly once" })
+    }),
+  )
+
+  it.effect("reuses a call id in a later assistant turn without suppressing the new send", () =>
+    Effect.gen(function* () {
+      const { db, registry } = yield* services
+      const sessionID = SessionV2.ID.make("ses_im_send_next_turn")
+      yield* seedBase(db, sessionID, { im: { groupID: GROUP, agent: "build" } })
+      yield* seedMember(db, "build")
+      yield* seedBinding(db)
+
+      const first = structured(yield* settleTool(registry, call({ text: "first turn" }, sessionID)))
+      const next = structured(yield* settleTool(registry, {
+        ...call({ text: "second turn" }, sessionID),
+        assistantMessageID: SessionMessage.ID.make("msg_tool_test_next"),
+      }))
+      expect(next.message_id).not.toBe(first.message_id)
+      expect(yield* messageCount(db)).toBe(2)
+      expect(externalCalls.map((entry) => entry.text)).toEqual(["first turn", "second turn"])
+    }),
+  )
+
+  it.effect("an exact retry replays its committed outcome after permission changes", () =>
+    Effect.gen(function* () {
+      const { db, registry } = yield* services
+      const sessionID = SessionV2.ID.make("ses_im_send_permission_retry")
+      yield* seedBase(db, sessionID, { im: { groupID: GROUP, agent: "build" } })
+      yield* seedMember(db, "build")
+      yield* seedBinding(db)
+
+      const first = structured(yield* settleTool(registry, call({ text: "approved once" }, sessionID)))
+      permissionMode = "reject"
+      const replay = structured(yield* settleTool(registry, call({ text: "approved once" }, sessionID)))
+      permissionMode = "allow"
+      expect(replay.decision).toBe("deliver")
+      expect(replay.message_id).toBe(first.message_id)
+      expect(yield* messageCount(db)).toBe(1)
+      expect(externalCalls).toHaveLength(1)
     }),
   )
 
@@ -358,7 +397,7 @@ describe("im_send (WS7)", () => {
       expect(out.output).toContain("quiet-hours digest")
 
       expect(yield* messageCount(db)).toBe(0)
-      const audit = yield* pushLog(db, `im_send:${sessionID}:call-im_send-1`)
+      const audit = yield* pushLog(db, `im_send:${sessionID}:${toolIdentity.assistantMessageID}:call-im_send-1`)
       expect(audit?.decision).toBe("digest")
       expect(audit?.content).toBe("held until morning")
       expect(audit?.digest_flushed_at).toBeNull()
@@ -383,7 +422,7 @@ describe("im_send (WS7)", () => {
       expect(second.external_delivery).toBe("delivery_failed")
       expect(yield* messageCount(db)).toBe(1)
       expect(externalCalls).toHaveLength(1)
-      const audit = yield* pushLog(db, `im_send_external:${sessionID}:call-im_send-1`)
+      const audit = yield* pushLog(db, `im_send_external:${sessionID}:${toolIdentity.assistantMessageID}:call-im_send-1`)
       expect(audit?.decision).toBe("delivery_failed")
       expect(String(audit?.message_id)).toBe(String(first.message_id))
       expect(audit?.content).toBeNull()
