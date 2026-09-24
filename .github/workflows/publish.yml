@@ -60,6 +60,7 @@ jobs:
           GH_TOKEN: ${{ steps.committer.outputs.token }}
           DEEPAGENT_CODE_BUMP: ${{ inputs.bump }}
           DEEPAGENT_CODE_VERSION: ${{ inputs.version }}
+          DEEPAGENT_CODE_CHANNEL: ${{ (github.ref_name == 'beta' && 'beta') || ((inputs.bump || inputs.version) && 'latest') || github.ref_name }}
           DEEPAGENT_CODE_API_KEY: ${{ secrets.DEEPAGENT_CODE_API_KEY }}
           GH_REPO: ${{ (github.ref_name == 'beta' && 'deepagent-ltd/deepagent-code-beta') || github.repository }}
     outputs:
@@ -534,6 +535,17 @@ jobs:
         with:
           deepagent-code-app-id: ${{ vars.DEEPAGENT_CODE_APP_ID }}
           deepagent-code-app-secret: ${{ secrets.DEEPAGENT_CODE_APP_SECRET }}
+
+      - name: Build SDK from frozen release candidate
+        if: needs.version.outputs.release
+        run: |
+          ./packages/sdk/js/script/build.ts
+          bun packages/sdk/js/script/verify-build.ts
+          bun script/assert-release-candidate.ts \
+            --commit "${{ needs.version.outputs.candidate_commit }}" \
+            --tree "${{ needs.version.outputs.candidate_tree }}" \
+            --tag "v${{ needs.version.outputs.version }}" \
+            --package-dir packages/deepagent-code/dist/deepagent-code-linux-x64
 
       - name: Cache apt packages (AUR)
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0

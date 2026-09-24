@@ -4,10 +4,17 @@ import { Script } from "@deepagent-code/script"
 import { $ } from "bun"
 import { assertReleaseCandidate } from "./assert-release-candidate"
 import { prepareReleaseFiles } from "./prepare-release-files"
+import { ensureReleaseCandidateRef } from "./release-candidate-ref"
 
+if (
+  Script.channel === "beta" ||
+  (process.env.GH_REPO && process.env.GITHUB_REPOSITORY && process.env.GH_REPO !== process.env.GITHUB_REPOSITORY)
+)
+  throw new Error("beta release candidate requires a separate repository routing design")
 const output = [`version=${Script.version}`]
-const sourceSha = process.env.GITHUB_SHA ?? (await $`git rev-parse HEAD`.text()).trim()
-let candidateSha = (await $`git rev-parse HEAD`.text()).trim()
+const baseSha = (await $`git rev-parse HEAD`.text()).trim()
+const sourceSha = process.env.GITHUB_SHA ?? baseSha
+let candidateSha = baseSha
 
 if (!Script.preview) {
   await $`bun script/changelog.ts --to ${sourceSha}`.cwd(process.cwd())
@@ -24,23 +31,26 @@ if (!Script.preview) {
     await $`git commit -m ${`chore(release): prepare v${Script.version}`}`
   if ((await $`git status --porcelain --untracked-files=all`.text()).trim())
     throw new Error("release candidate source tree is dirty after preparation")
-  candidateSha = (await $`git rev-parse HEAD`.text()).trim()
-  const candidateRef = `refs/heads/release-candidates/v${Script.version}`
-  if ((await $`git ls-remote --exit-code origin ${candidateRef}`.nothrow()).exitCode === 0)
-    throw new Error(`release candidate ref already exists: ${candidateRef}`)
-  await $`git push origin ${`HEAD:${candidateRef}`}`
-  await $`gh release create v${Script.version} -d --target ${candidateSha} --title "v${Script.version}" --notes-file ${notesFile} --repo ${process.env.GH_REPO}`
+  candidateSha = ensureReleaseCandidateRef({
+    repository: process.cwd(),
+    version: Script.version,
+    baseCommit: baseSha,
+    commit: (await $`git rev-parse HEAD`.text()).trim(),
+  })
+  const existingRelease =
+    await $`gh release view v${Script.version} --json tagName,databaseId,isDraft --repo ${process.env.GH_REPO}`.nothrow()
+  if (existingRelease.exitCode === 0) {
+    const release = JSON.parse(existingRelease.stdout.toString()) as { isDraft: boolean }
+    if (!release.isDraft) throw new Error("release candidate is already published")
+  } else {
+    await $`gh release create v${Script.version} -d --target ${candidateSha} --title "v${Script.version}" --notes-file ${notesFile} --repo ${process.env.GH_REPO}`
+  }
   await assertReleaseCandidate({
     repository: process.cwd(),
     commit: candidateSha,
     tree: (await $`git rev-parse HEAD^{tree}`.text()).trim(),
     tag: `v${Script.version}`,
   })
-  const release = await $`gh release view v${Script.version} --json tagName,databaseId`.json()
-  output.push(`release=${release.databaseId}`)
-  output.push(`tag=${release.tagName}`)
-} else if (Script.channel === "beta") {
-  await $`gh release create v${Script.version} -d --title "v${Script.version}" --repo ${process.env.GH_REPO}`
   const release =
     await $`gh release view v${Script.version} --json tagName,databaseId --repo ${process.env.GH_REPO}`.json()
   output.push(`release=${release.databaseId}`)

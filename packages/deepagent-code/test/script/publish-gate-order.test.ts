@@ -14,7 +14,9 @@ test("RI-51 gate precedes every release asset upload", async () => {
 
   const build = workflow.slice(workflow.indexOf("  build-cli:"), workflow.indexOf("  sign-cli-windows:"))
   expect(build).toContain('DEEPAGENT_CODE_SKIP_RELEASE_UPLOAD: "1"')
-  expect(build).toContain("DEEPAGENT_CODE_RELEASE_OWNER_AUTHORIZATION_FILE: ${{ runner.temp }}/owner-authorization.json")
+  expect(build).toContain(
+    "DEEPAGENT_CODE_RELEASE_OWNER_AUTHORIZATION_FILE: ${{ runner.temp }}/owner-authorization.json",
+  )
   expect(build).toContain("name: deepagent-code-cli")
   expect(build).toContain("packages/deepagent-code/dist/deepagent-code-darwin*.zip")
   expect(build).toContain("packages/deepagent-code/dist/deepagent-code-linux*.tar.gz")
@@ -43,10 +45,24 @@ test("release workflow builds and publishes one frozen candidate", async () => {
     expect(body).toContain("ref: ${{ needs.version.outputs.candidate_commit }}")
   }
   expect(version.indexOf("await prepareReleaseFiles(")).toBeLessThan(version.indexOf("gh release create"))
-  expect(version.indexOf("git push origin")).toBeLessThan(version.indexOf("gh release create"))
+  expect(version.indexOf("ensureReleaseCandidateRef(")).toBeLessThan(version.indexOf("gh release create"))
+  expect(version.indexOf('Script.channel === "beta"')).toBeLessThan(version.indexOf("gh release create"))
+  expect(workflow).toContain("DEEPAGENT_CODE_CHANNEL: ${{ (github.ref_name == 'beta' && 'beta')")
+  expect(version).not.toContain('else if (Script.channel === "beta")')
+  expect(version).toContain('if (!release.isDraft) throw new Error("release candidate is already published")')
+  expect(version).toContain("await assertReleaseCandidate({")
   expect(workflow).toContain("DEEPAGENT_CODE_CHANNEL: ${{ needs.version.outputs.channel }}")
   expect(workflow).toContain("DEEPAGENT_CODE_CANDIDATE_COMMIT: ${{ needs.version.outputs.candidate_commit }}")
   expect(publish).toContain("await assertReleaseCandidate({")
+  expect(workflow.indexOf("Build SDK from frozen release candidate")).toBeLessThan(
+    workflow.indexOf("RI-51 authoritative ledger release gate"),
+  )
+  expect(workflow).toContain("./packages/sdk/js/script/build.ts")
+  expect(workflow).toContain("bun packages/sdk/js/script/verify-build.ts")
+  expect(publish.indexOf("await verifySdkBuild(")).toBeLessThan(
+    publish.indexOf("./packages/deepagent-code/script/publish.ts"),
+  )
+  expect(publish).toContain("await verifySdkBuild(")
   expect(publish).not.toContain("git tag -d")
   expect(publish).not.toContain("git push origin refs/tags/")
   expect(publish).not.toContain("git commit -am")

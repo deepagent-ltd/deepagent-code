@@ -5,6 +5,7 @@ import { $ } from "bun"
 import { fileURLToPath } from "url"
 import { assertReleaseCandidate } from "./assert-release-candidate"
 import { prepareReleaseFiles } from "./prepare-release-files"
+import { verifySdkBuild } from "../packages/sdk/js/script/verify-build"
 
 console.log("=== publishing ===\n")
 
@@ -23,6 +24,16 @@ if (Script.release) {
     repository: dir,
     commit,
     tree,
+    tag,
+    packageDir: "packages/deepagent-code/dist/deepagent-code-linux-x64",
+  })
+}
+await verifySdkBuild(`${dir}/packages/sdk/js`)
+if (Script.release) {
+  await assertReleaseCandidate({
+    repository: dir,
+    commit: process.env.DEEPAGENT_CODE_CANDIDATE_COMMIT!,
+    tree: process.env.DEEPAGENT_CODE_CANDIDATE_TREE!,
     tag,
     packageDir: "packages/deepagent-code/dist/deepagent-code-linux-x64",
   })
