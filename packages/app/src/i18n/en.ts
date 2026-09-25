@@ -509,6 +509,8 @@ export const dict = {
   "app.server.unreachable": "Could not reach {{server}}",
   "app.server.retrying": "Retrying automatically...",
   "app.server.otherServers": "Other servers",
+  "app.offline.banner.title": "Server connection lost",
+  "app.offline.banner.description": "Reconnecting automatically…",
 
   "dialog.server.title": "Servers",
   "dialog.server.description": "Switch which DeepAgent Code server this app connects to.",
