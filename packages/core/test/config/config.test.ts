@@ -66,6 +66,44 @@ describe("Config", () => {
     }),
   )
 
+  // D3 — a mixed file (V1 `provider` key + V2 `providers` key) classifies as V1 and must load
+  // through the V1 decode without the excess-property error; the V2 key survives into the
+  // final Info for ConfigProviderPlugin. The file writes happen in the outer gen: the layer
+  // provided to the inner gen builds BEFORE the inner body runs, so a write inside it would
+  // race the Config.Service construction and see an empty global directory.
+  it.live("loads a mixed V1+providers config file without excess-property failure", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) => {
+        const global = path.join(tmp.path, "global")
+        return Effect.gen(function* () {
+          yield* Effect.promise(async () => {
+            await fs.mkdir(global, { recursive: true })
+            await fs.writeFile(
+              path.join(global, "config.json"),
+              JSON.stringify({
+                provider: { kimi: { name: "Kimi" } },
+                permission: {},
+                providers: { kimi: { name: "Kimi", models: {} } },
+              }),
+            )
+          })
+
+          return yield* Effect.gen(function* () {
+            const config = yield* Config.Service
+            const entries = yield* config.entries()
+            const docs = entries.filter((entry): entry is Config.Document => entry.type === "document")
+            expect(docs.length).toBeGreaterThan(0)
+            const providers = docs.flatMap((doc) => Object.keys(doc.info.providers ?? {}))
+            expect(providers).toContain("kimi")
+          }).pipe(Effect.provide(testLayer(tmp.path)))
+        })
+      }),
+    ),
+  )
+
   it.effect("detects v1 configuration from any v1-only top-level key", () =>
     Effect.sync(() => {
       expect(ConfigMigrateV1.isV1({ snapshot: false })).toBe(true)

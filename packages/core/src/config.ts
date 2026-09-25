@@ -186,10 +186,22 @@ export const layer = Layer.effect(
       // value (formatter/lsp/snapshot/snapshots = false) is accepted regardless of which
       // generation's shape the file uses.
       const stripped = withoutRemovedFeatureFields(withoutDisabledCompatibilityFields(input))
+      //
+      // D3 — `providers` (the Core V2 catalog schema) is stripped before the V1 decode too: a
+      // mixed file (V1 `provider` keys + V2 `providers`) classifies as V1, and decodeV1Info
+      // runs with onExcessProperty:"error" — the V2-only key would die the whole location
+      // config load. The V1 schema has no consumer for it; strip, decode V1, migrate, and the
+      // final decodeInfo re-admits it. (Files with NO V1 keys classify as V2 natively and keep
+      // the key untouched.)
+      let strippedInput = stripped
+      if (v1 && typeof stripped === "object" && stripped !== null && !Array.isArray(stripped) && "providers" in stripped) {
+        const { providers: _v2Providers, ...rest } = stripped as Record<string, unknown>
+        strippedInput = rest
+      }
       const info = yield* (
         v1
-          ? decodeV1Info(stripped).pipe(Effect.map(ConfigMigrateV1.migrate), Effect.flatMap(decodeInfo))
-          : decodeInfo(stripped)
+          ? decodeV1Info(strippedInput).pipe(Effect.map(ConfigMigrateV1.migrate), Effect.flatMap(decodeInfo))
+          : decodeInfo(strippedInput)
       ).pipe(
         Effect.mapError((error) => new Error(`Invalid config in ${filepath}: ${error.message}`)),
         Effect.orDie,
