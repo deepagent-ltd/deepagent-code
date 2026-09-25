@@ -3,7 +3,7 @@ import { ConfigV1 } from "@deepagent-code/core/v1/config/config"
 import { Deferred, Effect, Exit, Layer, Option } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
-import { Config } from "@/config/config"
+import { Config, normalizeLoadedConfig } from "@/config/config"
 import { ConfigManaged } from "@/config/managed"
 import { ConfigParse } from "../../src/config/parse"
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
@@ -2330,4 +2330,21 @@ test("parseManagedPlist handles empty config", async () => {
     "test:mobileconfig",
   )
   expect(config.$schema).toBe("https://ai.deepagent.ltd/config.schema.json")
+})
+
+// D3 — `providers` is the Core V2 catalog key. The V1 loader must strip it (not reject the whole
+// file) so both loaders can read the same config; the V2 side keeps consuming it from the file.
+test("config loader strips the Core V2 providers key instead of failing the load", () => {
+  const file = {
+    $schema: "https://ai.deepagent.ltd/config.schema.json",
+    provider: { kimi: { name: "Kimi" } },
+    permission: {},
+    providers: { kimi: { name: "Kimi", models: {} } },
+  }
+  const config = ConfigParse.schema(ConfigV1.Info, normalizeLoadedConfig(file, "test"), "test")
+
+  expect(config.provider).toBeDefined()
+  expect((config as Record<string, unknown>)["providers"]).toBeUndefined()
+  // The raw schema still rejects the key — only the loader strips it, so a typo'd key keeps failing.
+  expect(() => ConfigParse.schema(ConfigV1.Info, file, "test")).toThrow()
 })

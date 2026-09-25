@@ -54,15 +54,21 @@ function mergeConfigConcatArrays(target: Info, source: Info): Info {
   return merged
 }
 
-function normalizeLoadedConfig(data: unknown, source: string) {
+export function normalizeLoadedConfig(data: unknown, source: string) {
   if (!isRecord(data)) return data
   const copy = { ...data }
   const hadLegacy = "theme" in copy || "keybinds" in copy || "tui" in copy
-  if (!hadLegacy) return copy
-  delete copy.theme
-  delete copy.keybinds
-  delete copy.tui
-  log.warn("tui keys in deepagent-code config are deprecated; move them to tui.json", { path: source })
+  if (hadLegacy) {
+    delete copy.theme
+    delete copy.keybinds
+    delete copy.tui
+    log.warn("tui keys in deepagent-code config are deprecated; move them to tui.json", { path: source })
+  }
+  // D3 — `providers` is the Core V2 catalog schema (ConfigProviderPlugin; see core's Config.Info).
+  // Both loaders read the same files, and this V1 schema rejects it as an unknown key, which
+  // used to 500 the whole instance config load. It has no V1 consumer, so strip it here and let
+  // the core V2 loader keep consuming it from the same file.
+  if ("providers" in copy) delete copy.providers
   return copy
 }
 
@@ -218,7 +224,9 @@ async function migrateGlobalConfigFiles() {
       const value = ConfigParse.jsonc(raw, "migrate")
       if (!value || typeof value !== "object" || Array.isArray(value)) return undefined
       // Schema-validate too: an invalid-field file must keep surfacing its schema error in place.
-      ConfigParse.schema(ConfigV1.Info, value, "migrate")
+      // `providers` (Core V2 catalog key) is stripped by normalizeLoadedConfig before validation —
+      // a valid V2-only file must not count as "broken" and block legacy consolidation (D3).
+      ConfigParse.schema(ConfigV1.Info, normalizeLoadedConfig(value, "migrate"), "migrate")
       return value as Record<string, unknown>
     } catch {
       return undefined
