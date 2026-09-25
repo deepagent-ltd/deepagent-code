@@ -30,6 +30,13 @@ type PendingPrompt = {
 
 const pending = new Map<string, PendingPrompt>()
 
+// D1: idle deadline for the prepare SSE stream (see prepareDeepAgentPromptDraft). Exported
+// mutable so tests can shrink it instead of waiting the real 90s.
+export let prepareStreamIdleTimeoutMs = 90_000
+export const setPrepareStreamIdleTimeoutMs = (ms: number) => {
+  prepareStreamIdleTimeoutMs = ms
+}
+
 export type FollowupDraft = {
   sessionID: string
   sessionDirectory: string
@@ -119,6 +126,7 @@ type FollowupSendInput = {
   onPromptPrepareProgress?: (preview: string) => void
   onPromptPrepareEnd?: () => void
   onPromptPrepareDiscard?: () => void
+  suppressPrepareDegradeToast?: boolean
   promptPrepareSignal?: AbortSignal
   promptOutputLanguage?: DeepAgentPromptOutputLanguage
   confirmPromptDraft?: (draft: DeepAgentPromptPrepareResult) => Promise<DeepAgentPromptConfirmResult | false>
@@ -206,8 +214,19 @@ async function prepareDeepAgentPromptDraft(input: {
     prepared = event.result
   }
 
+  // D1 guard: the terminal SSE event must arrive for the stream to end. A server that never
+  // emits one (hung refinement, a dropped connection that keeps the body open) would leave the
+  // composer in its locked preparing state forever. Race each read against an idle deadline so
+  // the failure surfaces to the W1-3 degrade path instead.
+  const PREPARE_STREAM_IDLE_TIMEOUT_MS = prepareStreamIdleTimeoutMs
   while (true) {
-    const part = await reader.read()
+    const part = await Promise.race([
+      reader.read(),
+      new Promise<never>((_, reject) => {
+        const timer = setTimeout(() => reject(new Error("Prompt draft prepare stream timed out")), PREPARE_STREAM_IDLE_TIMEOUT_MS)
+        input.signal?.addEventListener("abort", () => clearTimeout(timer), { once: true })
+      }),
+    ])
     if (part.done) break
     buffer += decoder.decode(part.value, { stream: true })
     const blocks = buffer.split("\n\n")
@@ -348,7 +367,15 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
       // W1-3 — degrade to the direct path instead of blocking the send: refinement is an
       // enhancement, not a gate. V2-only servers already degrade server-side (W0-3a); this
       // covers older servers and transient prepare failures so the raw input still goes out.
-      void err
+      // D1: the degrade must be VISIBLE — a silent fallthrough reads as "the button did
+      // nothing" when the composer unlocks with the draft still parked in the editor.
+      if (!input.suppressPrepareDegradeToast) {
+        showToast({
+          variant: "error",
+          title: "Intelligence unavailable — sent directly",
+          description: err instanceof Error ? err.message : String(err),
+        })
+      }
       degradedToDirect = true
     }
     input.onPromptPrepareEnd?.()
@@ -484,6 +511,8 @@ type PromptSubmitInput = {
   onPromptPrepareProgress?: (preview: string) => void
   onPromptPrepareEnd?: () => void
   onPromptPrepareDiscard?: () => void
+  // D1: tests pass true to keep the visible-degrade toast out of unit assertions.
+  suppressPrepareDegradeToast?: boolean
   confirmPromptDraft?: (draft: DeepAgentPromptPrepareResult) => Promise<DeepAgentPromptConfirmResult | false>
 }
 
