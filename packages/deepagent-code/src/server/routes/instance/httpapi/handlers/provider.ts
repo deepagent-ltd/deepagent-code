@@ -139,9 +139,8 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
       if (OFFICIAL_PROVIDER_ID_SET.has(providerID)) {
         yield* modelsDev.refresh(true)
         yield* provider.reload()
-        // D2: a renamed catalog entry re-homes under the official id via the alias bridge, so
-        // the post-refresh lookup must try the official id itself (bridge ran) — which is the
-        // same key the loop below merges on. No extra resolution needed here.
+        // D2: renamed catalog entries re-home under their official id inside ModelsDev's merge,
+        // so the plain official-id lookup below sees the bridged entry.
         const refreshed = yield* provider.getProvider(providerID)
         if (refreshed) return Provider.toPublicInfo(refreshed)
         return yield* new ProviderModelRefreshError({ message: `Provider not found: ${providerID}` })

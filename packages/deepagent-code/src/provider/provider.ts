@@ -30,11 +30,7 @@ import { buildCatalogIndex, catalogSpecFor } from "./catalog-spec"
 import { isRecord } from "@/util/record"
 import { optionalOmitUndefined } from "@deepagent-code/core/schema"
 import { ProviderTransform } from "./transform"
-import {
-  ProviderV2,
-  OFFICIAL_PROVIDER_ID_SET,
-  OFFICIAL_PROVIDER_CATALOG_ALIASES,
-} from "@deepagent-code/core/provider"
+import { ProviderV2, OFFICIAL_PROVIDER_ID_SET } from "@deepagent-code/core/provider"
 import { SettingsStore } from "@/settings/store"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { ModelStatus } from "./model-status"
@@ -1317,21 +1313,11 @@ export const layer = Layer.effect(
         // provider (e.g. a gateway forwarding "deepseek-chat") inherit context/reasoning/cost/modality
         // specs from the canonical catalog entry. Built once — the per-model loop below only looks up.
         const catalogIndex = buildCatalogIndex(modelsDev)
+        // D2 — official-id catalog bridging for renamed upstream entries (kimi-for-coding →
+        // kimi-code-plan-cn) lives in ModelsDev.mergeVendored: every consumer (this database,
+        // the V2 Catalog via ModelsDevPlugin, refresh) reads the bridged map from one place.
         const catalog = mapValues(modelsDev, fromModelsDevProvider)
         const database = mapValues(catalog, toPublicInfo)
-        // D2 — official-id catalog bridge: upstream models.dev renamed entries out from under
-        // fixed official ids (e.g. kimi-for-coding → kimi-code-plan-cn). Without this, a stored
-        // key for the official id merges into nothing (mergeProvider finds no catalog match) —
-        // the connection silently does nothing. Re-home each aliased catalog entry under its
-        // official id so key-store credentials, the picker, and auth writes all keep the official
-        // identity. The catalog entry itself stays under its new id for catalog-driven flows.
-        for (const [officialID, catalogID] of Object.entries(OFFICIAL_PROVIDER_CATALOG_ALIASES)) {
-          if (database[officialID]) continue
-          const entry = database[catalogID]
-          if (!entry) continue
-          database[officialID] = { ...entry, id: ProviderV2.ID.make(officialID) }
-          catalog[officialID] = { ...entry, id: ProviderV2.ID.make(officialID) } as (typeof catalog)[string]
-        }
         // "Official" is a fixed, curated set (openai/deepseek/anthropic/zhipuai/xai/google) — NOT the
         // whole models.dev catalog. Only these read credentials from the auth key store and reject
         // config redefinition; every other catalog id is a normal third-party provider configurable
