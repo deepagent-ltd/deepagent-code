@@ -141,6 +141,29 @@ const clientFor = (directory: string) => {
             },
           })
         }
+        if (text === "prepare degrades") {
+          const degradedResult = {
+            prompt_draft_id: "",
+            context_plan_id: "",
+            state: "general_ready",
+            mode: "intelligence",
+            route: "general",
+            goal: text,
+            preview: text,
+            intent_id: payload.body?.intent_id,
+            degraded: true,
+          }
+          return {
+            data: new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(
+                  new TextEncoder().encode(`data: ${JSON.stringify({ type: "result", result: degradedResult })}\n\n`),
+                )
+                controller.close()
+              },
+            }),
+          }
+        }
         if (text === "prepare stalls") {
           return {
             data: new ReadableStream<Uint8Array>({
@@ -751,6 +774,46 @@ describe("prompt submit worktree selection", () => {
     await flushAsyncSubmit()
 
     expect(sentPromptAsync[0]?.text).toBe("prepare fails")
+    expect(toastCalls.length).toBe(1)
+    expect(toastCalls[0]?.title).toContain("Intelligence unavailable")
+  })
+
+  // D1: the server's own fail-soft degrade arrives as a NORMAL result event (route:general +
+  // degraded:true) — the catch path never fires, so the toast must key off the flag.
+  test("shows a degrade toast when the server marks the result as degraded", async () => {
+    params = { id: "session-1" }
+    promptMode = "intelligence"
+    promptValue[0] = { type: "text", content: "prepare degrades", start: 0, end: 16 }
+
+    const submit = createPromptSubmit({
+      info: () => ({ id: "session-1" }),
+      imageAttachments: () => [],
+      commentCount: () => 0,
+      autoAccept: () => false,
+      mode: () => "normal",
+      working: () => false,
+      editor: () => undefined,
+      queueScroll: () => undefined,
+      promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
+      addToHistory: () => undefined,
+      resetHistoryNavigation: () => undefined,
+      setMode: () => undefined,
+      setPopover: () => undefined,
+      onSubmit: () => undefined,
+    })
+
+    await submit.handleSubmit({ preventDefault: () => undefined } as unknown as Event)
+    await flushAsyncSubmit()
+
+    expect(sentPromptAsync[0]?.text).toBe("prepare degrades")
+    expect(sentPromptAsync[0]?.metadata).toEqual({
+      deepagent: {
+        agent_mode_override: "general",
+        prompt_pipeline: {
+          mode: "direct_override",
+        },
+      },
+    })
     expect(toastCalls.length).toBe(1)
     expect(toastCalls[0]?.title).toContain("Intelligence unavailable")
   })

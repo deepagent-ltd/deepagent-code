@@ -716,6 +716,10 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
                 mode: "intelligence" as const,
                 goal: rawInput,
                 preview: rawInput,
+                // D1: explicit degrade marker — route:"general" alone is ambiguous (it is also
+                // the plain general-chat classification), so the client needs this flag to know
+                // the refinement failed and the raw input went out on the direct path.
+                degraded: true,
               }),
             ),
           ),

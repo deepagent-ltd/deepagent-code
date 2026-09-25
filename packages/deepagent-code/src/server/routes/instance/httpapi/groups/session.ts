@@ -157,6 +157,11 @@ export const PromptPrepareResult = Schema.Struct({
   goal: Schema.String,
   preview: Schema.String,
   intent_id: Schema.optional(Schema.String),
+  // D1: true when refinement failed server-side (weak model output, provider error) and the
+  // server fail-soft degraded to the direct path. A route:"general" result can ALSO be a plain
+  // general-chat classification (no failure involved), so without this flag the client cannot
+  // tell an intentional general route from a degraded one — the degrade stayed invisible.
+  degraded: Schema.optional(Schema.Boolean),
 })
 // A3 macro-round: the latest persisted next-round suggestion for human approval. `null` body when
 // no suggestion exists yet.

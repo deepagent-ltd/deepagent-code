@@ -66,6 +66,9 @@ export type DeepAgentPromptPrepareResult = {
   goal: string
   preview: string
   intent_id?: string
+  // D1: server-side fail-soft degrade marker (refinement failed; raw input goes out directly).
+  // Absent on a plain general-chat classification, which is the same route:"general" shape.
+  degraded?: boolean
 }
 
 export type DeepAgentPromptConfirmResult = { editedGoal: string }
@@ -217,25 +220,39 @@ async function prepareDeepAgentPromptDraft(input: {
   // D1 guard: the terminal SSE event must arrive for the stream to end. A server that never
   // emits one (hung refinement, a dropped connection that keeps the body open) would leave the
   // composer in its locked preparing state forever. Race each read against an idle deadline so
-  // the failure surfaces to the W1-3 degrade path instead.
-  const PREPARE_STREAM_IDLE_TIMEOUT_MS = prepareStreamIdleTimeoutMs
-  while (true) {
-    const part = await Promise.race([
-      reader.read(),
-      new Promise<never>((_, reject) => {
-        const timer = setTimeout(() => reject(new Error("Prompt draft prepare stream timed out")), PREPARE_STREAM_IDLE_TIMEOUT_MS)
-        input.signal?.addEventListener("abort", () => clearTimeout(timer), { once: true })
-      }),
-    ])
-    if (part.done) break
-    buffer += decoder.decode(part.value, { stream: true })
-    const blocks = buffer.split("\n\n")
-    buffer = blocks.pop() ?? ""
-    blocks.forEach(readEvent)
+  // the failure surfaces to the W1-3 degrade path instead. The timer is cleared per iteration
+  // (no leak across chunks) and the reader is cancelled on ANY early exit so the underlying
+  // connection does not stay pinned.
+  const readChunk = async () => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("Prompt draft prepare stream timed out")), prepareStreamIdleTimeoutMs)
+    })
+    try {
+      return await Promise.race([reader.read(), deadline])
+    } finally {
+      clearTimeout(timer)
+    }
   }
-  buffer += decoder.decode()
-  if (buffer.trim()) readEvent(buffer)
-  if (!prepared) throw new Error("Prompt draft prepare returned no result")
+  try {
+    while (true) {
+      const part = await readChunk()
+      if (part.done) break
+      buffer += decoder.decode(part.value, { stream: true })
+      const blocks = buffer.split("\n\n")
+      buffer = blocks.pop() ?? ""
+      blocks.forEach(readEvent)
+    }
+    buffer += decoder.decode()
+    if (buffer.trim()) readEvent(buffer)
+  } catch (err) {
+    await reader.cancel().catch(() => undefined)
+    throw err
+  }
+  if (!prepared) {
+    await reader.cancel().catch(() => undefined)
+    throw new Error("Prompt draft prepare returned no result")
+  }
   return prepared
 }
 
@@ -380,6 +397,17 @@ export async function sendFollowupDraft(input: FollowupSendInput) {
     }
     input.onPromptPrepareEnd?.()
     if (degradedToDirect || !prepared || prepared.route === "general") {
+      // D1: the most common real-world failure is the server's own fail-soft degrade — a NORMAL
+      // result event (route:"general") that the catch branch above never sees. The server marks
+      // those with degraded:true; distinguish them from a plain general-chat classification
+      // (same wire shape, no flag) and surface the same toast as the client-side degrade.
+      if (!degradedToDirect && prepared?.degraded && !input.suppressPrepareDegradeToast) {
+        showToast({
+          variant: "error",
+          title: "Intelligence unavailable — sent directly",
+          description: "Prompt preparation failed on the server; your message was sent as a direct prompt.",
+        })
+      }
       input.onPromptPrepareDiscard?.()
       metadata = {
         deepagent: {

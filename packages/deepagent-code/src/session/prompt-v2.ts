@@ -623,6 +623,9 @@ export const layer = Layer.effect(
                 mode: "intelligence" as const,
                 goal: input.rawInput,
                 preview: input.rawInput,
+                // D1: mark the fail-soft degrade so the client can surface it — a general-chat
+                // classification (the non-degraded branch above) must stay unmarked.
+                degraded: true,
               })
             : Effect.fail(
                 new AgentGateway.DeepAgentPromptPipeline.PromptRefinerModelError(
