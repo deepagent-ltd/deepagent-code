@@ -164,7 +164,7 @@ if (result.mechanism !== marker) throw new Error("Child structured result did no
 if (
   result.module !== "worktree-routing" ||
   !Array.isArray(result.keyFiles) ||
-  !result.keyFiles.includes("fixtures/worktree.txt")
+  !result.keyFiles.some((entry) => record(entry, "ResearchKeyFile").path === "fixtures/worktree.txt")
 ) {
   throw new Error("Child structured result did not preserve the module and key file")
 }
