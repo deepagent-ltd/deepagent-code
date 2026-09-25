@@ -307,15 +307,20 @@ const echo = Layer.effectDiscard(
 ).pipe(Layer.provide(registry))
 let modelResolveHook = Effect.void
 let pricingLookupHook = Effect.void
+let requireSessionModel = false
 let currentModel = model
 let currentModelInfo: ModelV2.Info | undefined
 let currentPricingInfo: ModelV2.Info | undefined
 const models = SessionRunnerModel.layerWith((session) =>
   modelResolveHook.pipe(
-    Effect.as({
-      model: session.model?.id === "replacement" ? replacementModel : currentModel,
-      ...(currentModelInfo ? { info: currentModelInfo } : {}),
-    }),
+    Effect.flatMap(() =>
+      requireSessionModel && !session.model
+        ? Effect.fail(new SessionRunnerModel.ModelNotSelectedError({ sessionID: session.id }))
+        : Effect.succeed({
+            model: session.model?.id === "replacement" ? replacementModel : currentModel,
+            ...(currentModelInfo ? { info: currentModelInfo } : {}),
+          }),
+    ),
   ),
 )
 const systemContextKey = SystemContext.Key.make("test/context")
@@ -826,6 +831,7 @@ const setup = Effect.gen(function* () {
   systemLoadHook = Effect.void
   modelResolveHook = Effect.void
   pricingLookupHook = Effect.void
+  requireSessionModel = false
   currentSelectionIdentity = undefined
   currentModel = model
   currentModelInfo = undefined
@@ -2200,6 +2206,62 @@ describe("SessionRunnerLLM", () => {
         context_readiness: "fallback",
         context_selected_refs: [],
       })
+    }),
+  )
+
+  it.effect("keeps task schema finalizers tool-free at the provider boundary", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      yield* session.prompt({
+        sessionID,
+        prompt: new Prompt({
+          text: "Convert the persisted result to JSON without reading again",
+          metadata: { deepagent_code_task_finalizer: true },
+        }),
+        resume: false,
+      })
+      requests.length = 0
+      responseStream = sealedResponse(
+        fragmentFixture("text", "task-finalizer", ['{"result":"done"}']).completeEvents,
+        "task-finalizer-no-tools",
+      )
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(1)
+      expect(requests[0]?.tools).toEqual([])
+      expect(requests[0]?.toolChoice).toMatchObject({ type: "none" })
+      const receipt = yield* (yield* Database.Service).db
+        .select()
+        .from(V2ProviderTurnReceiptTable)
+        .where(eq(V2ProviderTurnReceiptTable.session_id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
+      expect(receipt?.prepared_turn).toMatchObject({ tool_choice: "none", tool_final_offered_ids: [] })
+    }),
+  )
+
+  it.effect("forwards a durable child mode override into the gateway request", () =>
+    Effect.gen(function* () {
+      yield* setup
+      const session = yield* SessionV2.Service
+      yield* session.prompt({
+        sessionID,
+        prompt: new Prompt({
+          text: "Finish the delegated task",
+          metadata: { deepagent: { agent_mode_override: "xhigh" } },
+        }),
+        resume: false,
+      })
+      requests.length = 0
+      responseStream = sealedResponse(
+        fragmentFixture("text", "child-mode-override", ["Done"]).completeEvents,
+        "child-mode-override",
+      )
+      yield* session.resume(sessionID)
+
+      expect(requests).toHaveLength(1)
+      expect(requests[0]?.metadata?.deepagent).toEqual({ agent_mode_override: "xhigh" })
     }),
   )
 
@@ -5182,9 +5244,31 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
+  it.effect("uses a fresh session's first steer model before resolving the provider turn", () =>
+    Effect.gen(function* () {
+      yield* setup
+      requireSessionModel = true
+      const session = yield* SessionV2.Service
+      yield* session.prompt({
+        sessionID,
+        prompt: new Prompt({ text: "First desktop message", model: { providerID: "fake", id: "fake-model" } }),
+        resume: false,
+      })
+      expect((yield* session.get(sessionID)).model).toBeUndefined()
+
+      requests.length = 0
+      yield* session.resume(sessionID)
+
+      expect(requests.map((request) => request.model)).toEqual([model])
+      expect(requests.map(userTexts)).toEqual([["First desktop message"]])
+      expect((yield* session.get(sessionID)).model?.id).toBe(ModelV2.ID.make("fake-model"))
+    }),
+  )
+
   it.effect("uses each queued prompt's model when future queue inputs were already admitted", () =>
     Effect.gen(function* () {
       yield* setup
+      requireSessionModel = true
       const session = yield* SessionV2.Service
       yield* session.prompt({
         sessionID,
@@ -5487,7 +5571,7 @@ describe("SessionRunnerLLM", () => {
     }),
   )
 
-  it.effect("interrupts runner continuation when a question is dismissed", () =>
+  it.effect("continues after a pending question is cancelled by the user", () =>
     Effect.gen(function* () {
       yield* setup
       const session = yield* SessionV2.Service
@@ -5521,7 +5605,7 @@ describe("SessionRunnerLLM", () => {
         yield* Effect.yieldNow
         pending = yield* questions.list()
       }
-      yield* questions.reject(pending[0]!.id)
+      yield* session.interrupt(sessionID)
       const exit = yield* Fiber.join(run)
 
       expect(exit._tag).toBe("Failure")
@@ -5539,6 +5623,27 @@ describe("SessionRunnerLLM", () => {
             },
           ],
         },
+      ])
+
+      // A rejected Question is a known local cancellation, so the next admitted prompt can
+      // continue. An unknown interrupted external tool still requires explicit recovery.
+      yield* session.prompt({ sessionID, prompt: new Prompt({ text: "Continue after question" }), resume: false })
+      requests.length = 0
+      responses = [[
+        LLMEvent.stepStart({ index: 0 }),
+        LLMEvent.textStart({ id: "after-question" }),
+        LLMEvent.textDelta({ id: "after-question", text: "Continued" }),
+        LLMEvent.textEnd({ id: "after-question" }),
+        LLMEvent.stepFinish({ index: 0, reason: "stop" }),
+        LLMEvent.finish({ reason: "stop" }),
+      ]]
+      yield* session.resume(sessionID)
+      expect(requests).toHaveLength(1)
+      expect(yield* session.context(sessionID)).toMatchObject([
+        { type: "user", text: "Ask then stop" },
+        { type: "assistant" },
+        { type: "user", text: "Continue after question" },
+        { type: "assistant", content: [{ type: "text", text: "Continued" }] },
       ])
     }),
   )

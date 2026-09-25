@@ -5,6 +5,7 @@ import { Effect, Layer, Schema } from "effect"
 import fs from "fs/promises"
 import path from "path"
 import { AgentV2 } from "@deepagent-code/core/agent"
+import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import { Database } from "@deepagent-code/core/database/database"
 import { EventV2 } from "@deepagent-code/core/event"
 import { PermissionV2 } from "@deepagent-code/core/permission"
@@ -73,7 +74,7 @@ const permission = Layer.succeed(
   }),
 )
 
-const stackOver = (database: Layer.Layer<Database.Service, unknown>) => {
+const stackOver = (database: Layer.Layer<Database.Service, unknown>, downgrade = false) => {
   const events = EventV2.layer.pipe(Layer.provide(database))
   const projector = SessionProjector.layer.pipe(Layer.provide(events), Layer.provide(database))
   const sessions = SessionV2.layer.pipe(
@@ -86,7 +87,17 @@ const stackOver = (database: Layer.Layer<Database.Service, unknown>) => {
   const coreStack = Layer.mergeAll(database, events, projector, sessions)
   const registry = ToolRegistry.defaultLayer
   const agents = AgentV2.layer
-  const taskTool = TaskTool.layer.pipe(Layer.provide(registry), Layer.provide(permission), Layer.provide(agents))
+  const taskToolBase = TaskTool.layer.pipe(Layer.provide(registry), Layer.provide(permission), Layer.provide(agents))
+  const taskTool = downgrade
+    ? taskToolBase.pipe(
+        Layer.provide(AgentGateway.runtimeLayer({
+          enabled: false,
+          agentMode: "max",
+          subagentIntensity: "downgrade",
+          durableLearning: false,
+        })),
+      )
+    : taskToolBase
   // Same wiring as the production root (v2-runner-frame): one memoized slot + one SessionV2 build.
   const delegation = TaskTool.captureDelegationServiceLayer.pipe(
     Layer.provide(Delegation.delegationSlotLayer),
@@ -96,6 +107,7 @@ const stackOver = (database: Layer.Layer<Database.Service, unknown>) => {
 }
 
 const it = testEffect(stackOver(Database.layerFromPath(":memory:")))
+const intensityIt = testEffect(stackOver(Database.layerFromPath(":memory:"), true))
 
 const services = Effect.gen(function* () {
   return {
@@ -203,6 +215,29 @@ const outputOf = (settlement: { readonly output?: unknown }) =>
   (settlement.output as { structured: unknown }).structured as TaskTool.Output
 
 describe("task tool background dispatch", () => {
+  intensityIt.effect("captures downgrade policy before tool settlement and admits the child override", () =>
+    Effect.gen(function* () {
+      const { db, sessions, registry } = yield* services
+      yield* registerAgents
+      const parent = yield* sessions.create({ location: { directory: AbsolutePath.make("/tmp") } })
+      const settlement = yield* settleTool(
+        registry,
+        taskCall(
+          { description: "downgrade fixture", prompt: "inspect the fixture", subagent_type: "explore", background: true },
+          parent.id,
+        ),
+      )
+      const childID = SessionSchema.ID.make(outputOf(settlement).task_id)
+      const childInput = yield* db
+        .select()
+        .from(SessionInputTable)
+        .where(eq(SessionInputTable.session_id, childID))
+        .get()
+        .pipe(Effect.orDie)
+      expect(childInput?.prompt.metadata).toMatchObject({ deepagent: { agent_mode_override: "xhigh" } })
+    }),
+  )
+
   it.effect("admits a durable background run and returns before the child drain", () =>
     Effect.gen(function* () {
       const { db, sessions, registry } = yield* services

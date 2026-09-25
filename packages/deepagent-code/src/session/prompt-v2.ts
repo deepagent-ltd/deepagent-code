@@ -5,6 +5,7 @@ import { SessionV1 } from "@deepagent-code/core/v1/session"
 import { SessionID, MessageID } from "./schema"
 import { MessageV2 } from "./message-v2"
 import { Log } from "@deepagent-code/core/util/log"
+import { Hash } from "@deepagent-code/core/util/hash"
 import { Global } from "@deepagent-code/core/global"
 import { Session } from "./session"
 import { Agent } from "../agent/agent"
@@ -791,6 +792,53 @@ export const layer = Layer.effect(
       )
     })
 
+    // Explicit prompt intents retain their identity across retries even when the caller allocates
+    // a fresh transport message ID. The legacy intent receipt only fences the admission request;
+    // the V2 inbox remains the sole prompt and execution authority.
+    const admitV2Prompt = Effect.fn("SessionPrompt.admitV2Prompt")(function* (input: PromptInput, prompt: Prompt) {
+      const intent = input.intentID
+        ? yield* SessionPromptIntent.claim({
+            intentID: input.intentID,
+            sessionID: input.sessionID,
+            source: input.intentSource ?? "composer",
+            variant: input.intentVariant ?? "original",
+            payloadHash: Hash.sha256(JSON.stringify(prompt)),
+            messageID:
+              input.messageID ??
+              MessageID.make(`msg_intent_${Hash.sha256(`${input.sessionID}:${input.intentID}`).slice(0, 40)}`),
+          }).pipe(Effect.provideService(Database.Service, database))
+        : undefined
+      const admitted = yield* coreV2Session
+        .prompt({
+          sessionID: SessionV2.ID.make(input.sessionID),
+          ...(intent
+            ? { id: SessionMessage.ID.make(intent.receipt.messageID) }
+            : input.messageID
+              ? { id: SessionMessage.ID.make(input.messageID) }
+              : {}),
+          prompt,
+          resume: false,
+        })
+        .pipe(
+          Effect.catch((error) =>
+            Effect.fail(
+              new SessionPromptIntent.Conflict({
+                intentID: input.intentID ?? String(input.sessionID),
+                reason: String((error as { message?: unknown }).message ?? (error as { _tag?: unknown })._tag ?? error),
+              }),
+            ),
+          ),
+        )
+      if (intent?.kind === "claimed")
+        yield* SessionPromptIntent.complete({
+          intentID: intent.receipt.intentID,
+          ownerToken: intent.receipt.ownerToken,
+          messageID: MessageID.make(admitted.id),
+          delivery: "turn",
+        }).pipe(Effect.provideService(Database.Service, database))
+      return admitted
+    })
+
     const promptV2 = Effect.fn("SessionPrompt.promptV2")(function* (input: PromptInput, lifecycle?: PromptLifecycle) {
       // Call-time qualification: the campaign is minted by the r0 flow (possibly after server start),
       // so the layer-build snapshot is NOT the authority — read both the campaign tag and the
@@ -803,6 +851,28 @@ export const layer = Layer.effect(
           detail: "V2 owner qualification is not verified for the V2-only profile",
         })
       yield* ensureV2Session(input.sessionID)
+      const pipelineRequest = promptPipelineRequest(input.metadata)
+      const pipeline = pipelineRequest.mode || pipelineRequest.confirmedDraftID
+        ? yield* buildPromptPipelineSubmission(input)
+        : undefined
+      const prepared = pipeline
+        ? {
+            ...input,
+            parts: pipeline.parts,
+            metadata: {
+              ...input.metadata,
+              deepagent: {
+                ...(isRecord(input.metadata?.deepagent) ? input.metadata.deepagent : {}),
+                prompt_pipeline: {
+                  ...(isRecord(input.metadata?.deepagent) && isRecord(input.metadata.deepagent.prompt_pipeline)
+                    ? input.metadata.deepagent.prompt_pipeline
+                    : {}),
+                  ...pipeline.metadata,
+                },
+              },
+            },
+          }
+        : input
       const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
       const agentName = input.agent ?? session.agent ?? "build"
       // RI-136 + RI-26 read-model convergence: the EXECUTION authority decides. The V1 registry can
@@ -889,26 +959,10 @@ export const layer = Layer.effect(
           .pipe(Effect.orDie)
       // P1-1: resume:false is the admission-before-wake contract — the interactive path drains
       // explicitly via loop(); a wake would race the drain into a second provider dispatch.
-      const admittedInput = yield* coreV2Session
-        .prompt({
-          sessionID: v2SessionID,
-          ...(input.messageID ? { id: SessionMessage.ID.make(input.messageID) } : {}),
-          prompt: yield* requireV2PromptText(input.sessionID, interactiveV2Prompt(input), input),
-          resume: false,
-        })
-        .pipe(
-          // P2-8 (rN): V2 admission contract errors (including a legacy session without a V2
-          // projection row) map into the legacy instance service union so the HTTP surface stays
-          // typed (409 Conflict with a reason). A dedicated 404 mapping is an rN refinement.
-          Effect.catch((error) =>
-            Effect.fail(
-              new SessionPromptIntent.Conflict({
-                intentID: String(input.sessionID),
-                reason: String((error as { message?: unknown }).message ?? (error as { _tag?: unknown })._tag ?? error),
-              }),
-            ),
-          ),
-        )
+      const admittedInput = yield* admitV2Prompt(
+        input,
+        yield* requireV2PromptText(input.sessionID, interactiveV2Prompt(prepared), prepared),
+      )
       // P2-10: wire lifecycle.ready to the V2 admission receipt when a caller supplied one — the
       // legacy intent-complete signal is a no-op for the V2 path but callers that wait on it must not
       // hang.
@@ -926,7 +980,7 @@ export const layer = Layer.effect(
       // Mirror BEFORE the drain: the loop V2 branch projects the assistant against the last V1 user
       // row, which only exists once the V2 user message has been mirrored.
       yield* evidence
-      if (input.noReply === true) {
+      {
         // RI-124 adjudication (mirror-after-admission): admission is admit-only (P1-1 resume:false),
         // so the visible V2 user message is promoted only by the NEXT drain — neither the mirror
         // above nor the core journal→V1-wire egress can see it yet. Mirror the user row straight
@@ -939,7 +993,7 @@ export const layer = Layer.effect(
         // message on sessions with history.
         const created = DateTime.toEpochMillis(admittedInput.timeCreated)
         const messageID = SessionV1.MessageID.ascending(admittedInput.id)
-        const metadata = mirrorAdmissionMetadata(input.metadata)
+        const metadata = mirrorAdmissionMetadata(prepared.metadata)
         const info: SessionV1.Info = {
           id: messageID,
           sessionID: input.sessionID,
@@ -978,7 +1032,7 @@ export const layer = Layer.effect(
         }
         yield* sessions.updateMessage(info)
         yield* Effect.forEach(parts, (part) => sessions.updatePart(part))
-        return { info, parts }
+        if (input.noReply === true) return { info, parts }
       }
       return yield* loop({ sessionID: input.sessionID, drainFirst: true }).pipe(Effect.ensuring(evidence))
     })
@@ -1183,28 +1237,18 @@ export const layer = Layer.effect(
       // task_prompt); under the profile it writes no legacy rows, so the refined text replaces
       // the first user text part exactly as the legacy createUserMessage would.
       const pipelineV2 = yield* buildPromptPipelineSubmission(input)
-      const admitted = yield* coreV2Session
-        .prompt({
-          sessionID: SessionV2.ID.make(input.sessionID),
-          ...(input.messageID ? { id: SessionMessage.ID.make(input.messageID) } : {}),
-          prompt: yield* requireV2PromptText(
-            input.sessionID,
-            interactiveV2Prompt({ ...input, parts: pipelineV2.parts }),
-            input,
-          ),
-          // P1-1: admission-before-wake — prompt-async is admit-only until its own resume/wake path.
-          resume: false,
-        })
-        .pipe(
-          Effect.catch((error) =>
-            Effect.fail(
-              new SessionPromptIntent.Conflict({
-                intentID: String(input.sessionID),
-                reason: String((error as { message?: unknown }).message ?? (error as { _tag?: unknown })._tag ?? error),
-              }),
-            ),
-          ),
-        )
+      const promptContent = yield* requireV2PromptText(
+        input.sessionID,
+        interactiveV2Prompt({ ...input, parts: pipelineV2.parts }),
+        input,
+      )
+      // The async path relies on the V2 projector for its user row. Keep the stable caller
+      // metadata in that durable prompt; per-submission draft IDs would change on an exact retry.
+      const metadata = mirrorAdmissionMetadata(input.metadata)
+      const admitted = yield* admitV2Prompt(
+        input,
+        new Prompt({ ...promptContent, ...(metadata === undefined ? {} : { metadata }) }),
+      )
       // 1.4.8.rN: admission-before-execution — the interactive UI's promptAsync is admit-only
       // under the profile (resume:false) and nothing else drains it, so mirror the V2->V1 user
       // evidence FIRST (the loop V2 branch projects the assistant against the last V1 user row)
@@ -1450,12 +1494,10 @@ export const layer = Layer.effect(
                 }),
               ),
             )
-          const assistant = (yield* coreV2Session
-            .context(SessionV2.ID.make(input.sessionID))
-            .pipe(Effect.orDie)).findLast(
-            (message): message is SessionMessage.Assistant => message.type === "assistant",
-          )
-          if (!assistant)
+          const context = yield* coreV2Session.context(SessionV2.ID.make(input.sessionID)).pipe(Effect.orDie)
+          const assistantIndex = context.findLastIndex((message) => message.type === "assistant")
+          const assistant = context[assistantIndex]
+          if (!assistant || assistant.type !== "assistant")
             return yield* flags.coreV2Only
               ? refuseLegacyExecution({
                   sessionID: input.sessionID,
@@ -1466,14 +1508,10 @@ export const layer = Layer.effect(
           // 6b-2: the settle-time return derives from the folded V2 state through the same
           // canonical converter the egress uses (legacyAssistant). No wire-table write happens
           // here — the egress owns the wire rows now; this is only the loop's return value.
-          const mirrorParent = yield* sessions
-            .findMessage(input.sessionID, (message) => message.info.role === "user")
-            .pipe(Effect.orDie)
+          const mirrorParent = context.slice(0, assistantIndex).findLast((message) => message.type === "user")
           return SessionV2.legacyAssistant({
             sessionID: SessionV2.ID.make(input.sessionID),
-            parentMessageID: Option.isSome(mirrorParent)
-              ? Option.getOrThrow(mirrorParent).info.id
-              : MessageID.make(assistant.id),
+            parentMessageID: MessageID.make(mirrorParent?.id ?? assistant.id),
             directory: session.directory,
             root: current.worktree,
             message: assistant,

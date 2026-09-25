@@ -28,6 +28,7 @@ export * as TaskWorkspace from "./task-workspace"
  */
 
 import fs from "fs/promises"
+import { existsSync } from "node:fs"
 import path from "path"
 import { spawnSync } from "node:child_process"
 import { and, eq, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm"
@@ -657,8 +658,8 @@ export const requireAdmissible = (db: DatabaseService, runID: string) =>
 
 /**
  * Prune the run-owned worktree. Fenced by durable run state: an in-flight run refuses (typed)
- * and only terminal states may release. Idempotent and crash-safe — an unregistered directory
- * prunes stale registration metadata and removes the remains. The worktree BRANCH is retained:
+ * and only terminal states may release. Preserve uncommitted child edits on the branch before
+ * pruning, so a tool write remains reviewable by pr_finalize. The worktree BRANCH is retained:
  * the child's commits stay reachable for the later PR/merge flow. Best-effort by contract —
  * callers treat a release failure as cleanup debt, never as a run failure.
  */
@@ -677,6 +678,23 @@ export const release = Effect.fn("TaskWorkspace.release")(function* (
     })
   if (row.worktree_state === "removed" || !row.worktree_directory || !row.workspace_repository_root)
     return { runID: row.run_id, released: row.worktree_state === "removed", state: row.state }
+
+  const status = existsSync(row.worktree_directory)
+    ? yield* git(row.worktree_directory, ["status", "--porcelain"])
+    : undefined
+  if (status && status.exitCode !== 0)
+    return yield* new WorkspaceError({ runID: row.run_id, code: "git_failed", message: `worktree status failed: ${text(status.stderr)}` })
+  if (status?.stdout.trim()) {
+    const added = yield* git(row.worktree_directory, ["add", "-A"])
+    if (added.exitCode !== 0)
+      return yield* new WorkspaceError({ runID: row.run_id, code: "git_failed", message: `worktree add failed: ${text(added.stderr)}` })
+    const committed = yield* git(row.worktree_directory, [
+      "-c", "user.name=DeepAgent Code", "-c", "user.email=agent@deepagent.code", "commit",
+      "--no-gpg-sign", "--no-verify", "-m", "agent task work (auto-preserved)",
+    ])
+    if (committed.exitCode !== 0)
+      return yield* new WorkspaceError({ runID: row.run_id, code: "git_failed", message: `worktree commit failed: ${text(committed.stderr)}` })
+  }
 
   const pruned = yield* pruneWorktree(row.workspace_repository_root, row.worktree_directory)
   if (!pruned.ok)

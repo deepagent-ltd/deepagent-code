@@ -8,7 +8,7 @@ const prompt = [
   "Call task in foreground mode with subagent_type researcher and description verify explicit timeout recovery.",
   "The child prompt must be exactly: Call question immediately and exactly once to ask whether to continue, with one Continue option. Wait for the answer. Do not call any other tool and do not return before the answer.",
   "The test operator will deliberately leave the question unanswered.",
-  "After task returns an attempt_timeout error, call task_read exactly once with the child session id from that error.",
+  "After task returns a task_timeout error, call task_read exactly once with the child session id from that error.",
   "After task_read returns, do not call any more tools. Report that automatic retry was disabled, no replacement child was created, and the interrupted transcript was recovered.",
 ].join(" ")
 
@@ -25,6 +25,7 @@ const artifact = await runLegacyLiveCases({
   modelMaxTokens: 512,
   maxProviderTurns: 8,
   timeoutMs: 120_000,
+  inspectTaskRuns: true,
 })
 await writeLiveArtifact(
   { artifactDirectory: path.resolve(import.meta.dir, "../../.artifacts/live-llm") },
@@ -44,7 +45,7 @@ if (observation.tools.length !== 2 || task?.status !== "error" || transcript?.st
   )
 }
 if (
-  !task.error?.includes("[attempt_timeout]") ||
+  !task.error?.includes("[task_timeout]") ||
   !task.error.includes("Automatic retry is disabled") ||
   !task.error.includes("task_read")
 ) {
@@ -66,14 +67,24 @@ const child = observation.children[0]!
 if (
   child.parentID !== observation.sessionID ||
   child.agent !== "researcher" ||
-  child.model?.providerID !== artifact.fingerprint.runtimeProviderID ||
-  child.model.id !== artifact.fingerprint.modelID ||
+  child.v2Assistants.length === 0 ||
+  child.v2Assistants.some(
+    (assistant) =>
+      assistant.model.providerID !== artifact.fingerprint.runtimeProviderID ||
+      assistant.model.id !== artifact.fingerprint.modelID,
+  ) ||
+  child.v2ProviderTurns.length === 0 ||
+  child.v2ProviderTurns.some(
+    (turn) =>
+      turn.providerID !== artifact.fingerprint.runtimeProviderID ||
+      turn.modelID !== artifact.fingerprint.modelID ||
+      turn.state !== "settled",
+  ) ||
   child.assistants.length === 0 ||
   child.assistants.some(
     (assistant) =>
       assistant.providerID !== artifact.fingerprint.runtimeProviderID ||
-      assistant.modelID !== artifact.fingerprint.modelID ||
-      record(assistant.error, "expected timeout assistant error").name !== "MessageAbortedError",
+      assistant.modelID !== artifact.fingerprint.modelID,
   )
 ) {
   throw new Error(`Interrupted child ${child.id} has invalid lineage or provider/model identity`)
@@ -82,21 +93,22 @@ const questions = child.assistants.flatMap((assistant) => assistant.tools).filte
 if (
   questions.length !== 1 ||
   questions[0]?.status !== "error" ||
-  !questions[0].error?.includes("aborted") ||
+  !/abort|interrupt/i.test(questions[0].error ?? "") ||
   observation.questionRequests.filter((request) => request.sessionID === child.id).length !== 1
 ) {
   throw new Error(`Interrupted child ${child.id} did not reach exactly one held production question`)
 }
-const terminal = nestedRecord(child.metadata, ["deepagent", "subagent"])
+const terminal = observation.taskRuns?.[0]
 if (
-  terminal.state !== "interrupted" ||
-  terminal.reason !== "attempt_timeout" ||
-  terminal.finished !== true ||
-  terminal.attempts !== 0
+  observation.taskRuns?.length !== 1 ||
+  terminal?.childSessionID !== child.id ||
+  terminal.executionRuntime !== "v2" ||
+  terminal.state !== "failed" ||
+  terminal.reason !== "task_timeout"
 ) {
   throw new Error(`Timed out child has invalid durable terminal state: ${JSON.stringify(terminal)}`)
 }
-if (!transcript.output?.includes(`id="${child.id}"`) || !transcript.output.includes('state="interrupted"')) {
+if (!transcript.output?.includes(`id="${child.id}"`) || !transcript.output.includes('state="failed"')) {
   throw new Error("task_read did not recover the original interrupted child transcript")
 }
 if (observation.pendingPermissionIDs.length !== 0) {
@@ -123,26 +135,5 @@ await writeLiveArtifact(
   result,
 )
 console.log(`${result.suite}: passed (${result.fingerprint.providerID}/${result.fingerprint.modelID})`)
-
-function nestedRecord(value: unknown, keys: string[]) {
-  const result = keys.reduce<Record<string, unknown> | undefined>(
-    (current, key) => {
-      if (!current) return undefined
-      const next = current[key]
-      if (typeof next !== "object" || next === null || Array.isArray(next)) return undefined
-      return next as Record<string, unknown>
-    },
-    typeof value === "object" && value !== null && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : undefined,
-  )
-  if (!result) throw new Error(`Missing object path ${keys.join(".")}`)
-  return result
-}
-
-function record(value: unknown, name: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`${name} is not an object`)
-  return value as Record<string, unknown>
-}
 
 finishLiveScript()

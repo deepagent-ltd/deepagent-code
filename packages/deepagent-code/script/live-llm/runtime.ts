@@ -167,6 +167,7 @@ export async function runLegacyLiveCases(input: {
   modelContextTokens?: number
   maxProviderTurns?: number
   toolOutput?: ConfigV1.Info["tool_output"]
+  compaction?: ConfigV1.Info["compaction"]
   evaluateWorkspace?: (directory: string, sandbox?: ToolSandbox) => Promise<unknown>
   beforeCase?: (input: {
     caseName: string
@@ -180,6 +181,7 @@ export async function runLegacyLiveCases(input: {
     request: PermissionV1.Request
   }) => Promise<void>
   sharedSession?: boolean
+  initialAgent?: string
   compactAfterCases?: string[]
   overrideReportedInputTokensAfterCases?: ReadonlyArray<{ caseName: string; inputTokens: number }>
   timeoutMs?: number
@@ -247,6 +249,19 @@ export async function runLegacyLiveCases(input: {
 
   try {
     await prepareIsolation(testRoot, isolatedHome, isolatedData, config, input.environment)
+    // First-party settings are captured when the process-global V2 gateway layer opens. The
+    // workspace pseudo-provider is migrated later by the V1 config reader, so seed the isolated
+    // settings store before constructing the V2 runtime for intensity scenarios.
+    if (input.subagentIntensity)
+      await Bun.write(
+        path.join(isolatedData, "settings.json"),
+        JSON.stringify({
+          deepagent: {
+            subagentIntensity: input.subagentIntensity,
+            ...(input.environment?.DEEPAGENT_MODE ? { agentMode: input.environment.DEEPAGENT_MODE } : {}),
+          },
+        }),
+      )
     // The V2 owner gate is default-on (prompt-v2 refuses with v2_owner_unavailable otherwise). Arm a
     // harness-owned campaign before any layer boots (Reference defaults cache env) and seed the row
     // before the program boots, mirroring the core harness (core/script/live-llm/runtime.ts:15-23).
@@ -265,7 +280,7 @@ export async function runLegacyLiveCases(input: {
     await AgentGateway.flushKnowledgeSeed()
     const { CrossSpawnSpawner } = await import("@deepagent-code/core/cross-spawn-spawner")
     const { EffectFlock } = await import("@deepagent-code/core/util/effect-flock")
-    const { Context, Deferred, Effect, Fiber, Layer, Option, Schedule, Schema } = await import("effect")
+    const { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Option, Schedule, Schema, Scope } = await import("effect")
     const { and, desc, eq, gt, inArray } = await import("drizzle-orm")
     const { AgentExecution } = await import("@deepagent-code/core/deepagent/agent-execution")
     const { DeepAgentEventAdmissionTable } = await import("@deepagent-code/core/deepagent/event-admission-sql")
@@ -312,6 +327,9 @@ export async function runLegacyLiveCases(input: {
       "@deepagent-code/core/context-federation/session-sql"
     )
     const { V2ProviderTurnReceiptTable } = await import("@deepagent-code/core/session/runner/v2-provider-turn.sql")
+    const { SessionContextCheckpointTable, SessionModelPolicyReceiptTable } = await import(
+      "@deepagent-code/core/session/long-context.sql"
+    )
     const { V2StructuredOutputEvidenceTable } = await import(
       "@deepagent-code/core/session/runner/v2-structured-output-evidence.sql"
     )
@@ -402,6 +420,7 @@ export async function runLegacyLiveCases(input: {
         }
       | undefined
     const program = Effect.gen(function* () {
+      const scope = yield* Scope.Scope
       const prompts = yield* SessionPromptV2.Service
       const v2Session = yield* SessionV2.Service
       const database = yield* Database.Service
@@ -451,7 +470,11 @@ export async function runLegacyLiveCases(input: {
         const questionAction = input.questionAction
         if (questionAction?.type === "abort") {
           request.latch = { type: "abort" }
-          return prompts.cancel(request.sessionID as SessionID).pipe(Effect.orDie)
+          // The ask event is published by the active run. Interrupt it after this listener
+          // returns, otherwise cancellation waits for the same event publication to finish.
+          return Effect.forkIn(prompts.cancel(request.sessionID as SessionID).pipe(Effect.orDie), scope).pipe(
+            Effect.asVoid,
+          )
         }
         if (questionAction?.type === "background") {
           return Effect.gen(function* () {
@@ -501,6 +524,9 @@ export async function runLegacyLiveCases(input: {
             patterns: [...asked.resources],
             metadata: asked.metadata ?? {},
             always: [...(asked.save ?? [])],
+            ...(asked.source?.type === "tool"
+              ? { tool: { messageID: asked.source.messageID, callID: asked.source.callID } }
+              : {}),
           } as PermissionV1.Request
           permissionRequests.push(request)
           permissionLocations.set(request.id, {
@@ -525,6 +551,13 @@ export async function runLegacyLiveCases(input: {
             )
             if (Option.isNone(service))
               return yield* Effect.die(new Error("PermissionV2 service is missing from the asking Location"))
+            if (permissionBarrier && input.permissionBarrierCount) {
+              if (permissionRequests.length === input.permissionBarrierCount) {
+                permissionBarrierSnapshots.push(permissionRequests.map((item) => String(item.id)))
+                yield* Deferred.succeed(permissionBarrier, undefined)
+              }
+              yield* Deferred.await(permissionBarrier)
+            }
             yield* service.value.reply({
               requestID: asked.id,
               reply: input.permissionReply?.reply ?? "reject",
@@ -835,6 +868,7 @@ export async function runLegacyLiveCases(input: {
       const sharedSession = input.sharedSession
         ? yield* sessions.create({
             title: `Live ${input.suite}: shared Session`,
+            ...(input.initialAgent ? { agent: input.initialAgent } : {}),
             permission: Permission.fromConfig(input.primaryPermission ?? input.permission ?? {}),
           })
         : undefined
@@ -894,7 +928,7 @@ export async function runLegacyLiveCases(input: {
               })
             : undefined
           const messagesBefore = yield* sessions.messages({ sessionID: session.id })
-          const lastProviderTurnBefore = input.inspectProviderTurns
+          const lastProviderTurnBefore = input.inspectProviderTurns || testCase.admission
             ? yield* database.db
                 .select({ requestOrdinal: V2ProviderTurnReceiptTable.request_ordinal })
                 .from(V2ProviderTurnReceiptTable)
@@ -991,19 +1025,28 @@ export async function runLegacyLiveCases(input: {
           const turn = testCase.admission
             ? Effect.gen(function* () {
                 yield* prompts.promptAsync(promptInput)
-                if (!promptInput.messageID) {
+                const admittedMessageID = promptInput.messageID
+                if (!admittedMessageID) {
                   return yield* Effect.die(new Error("Durable admission did not reserve a message ID"))
                 }
                 admittedCases.set(testCase.name, {
                   ...promptInput,
                   intentID: testCase.admission!.intentID,
-                  messageID: promptInput.messageID,
+                  messageID: admittedMessageID,
                 })
                 const hasRetry = testCase.admission!.exactRetry || testCase.admission!.conflictingRetry
                 const activeBeforeRetry = hasRetry
-                  ? yield* runState
-                      .isBusy(session.id)
+                  ? yield* database.db
+                      .select({ receiptID: V2ProviderTurnReceiptTable.receipt_id })
+                      .from(V2ProviderTurnReceiptTable)
+                      .where(and(
+                        eq(V2ProviderTurnReceiptTable.session_id, SessionV2.ID.make(session.id)),
+                        inArray(V2ProviderTurnReceiptTable.state, ["preparing", "dispatching", "streaming"]),
+                      ))
+                      .get()
                       .pipe(
+                        Effect.orDie,
+                        Effect.map((receipt) => receipt !== undefined),
                         Effect.repeat({ while: (busy) => !busy, schedule: Schedule.spaced("10 millis") }),
                         Effect.timeout(config.timeoutMs),
                       )
@@ -1047,6 +1090,17 @@ export async function runLegacyLiveCases(input: {
                 admissionRetryEvidence.push({ activeBeforeRetry, exact, conflict })
                 return yield* Effect.gen(function* () {
                   const busy = yield* runState.isBusy(session.id)
+                  const settled = yield* database.db
+                    .select({ receiptID: V2ProviderTurnReceiptTable.receipt_id })
+                    .from(V2ProviderTurnReceiptTable)
+                    .where(and(
+                      eq(V2ProviderTurnReceiptTable.session_id, SessionV2.ID.make(session.id)),
+                      gt(V2ProviderTurnReceiptTable.request_ordinal, lastProviderTurnBefore?.requestOrdinal ?? 0),
+                      eq(V2ProviderTurnReceiptTable.user_message_id, admittedMessageID),
+                      eq(V2ProviderTurnReceiptTable.state, "settled"),
+                    ))
+                    .get()
+                    .pipe(Effect.orDie)
                   const messages = yield* sessions.messages({ sessionID: session.id })
                   const assistant = messages
                     .filter(
@@ -1055,9 +1109,10 @@ export async function runLegacyLiveCases(input: {
                     )
                     .slice(assistantCountBefore)
                     .findLast(
-                      (message) => message.info.time.completed !== undefined || message.info.error !== undefined,
+                      (message) => message.info.parentID === admittedMessageID &&
+                        (message.info.time.completed !== undefined || message.info.error !== undefined),
                     )
-                  return !busy && assistant ? assistant : undefined
+                  return !busy && settled && assistant ? assistant : undefined
                 }).pipe(
                   Effect.repeat({ while: (result) => result === undefined, schedule: Schedule.spaced("50 millis") }),
                   Effect.timeout(config.timeoutMs),
@@ -1071,7 +1126,27 @@ export async function runLegacyLiveCases(input: {
             : prompts.prompt(promptInput)
           const result =
             concurrentSteers.length === 0
-              ? yield* turn
+              ? input.questionAction?.type === "abort"
+                ? yield* Effect.gen(function* () {
+                    // Cancelling a pending V2 Question interrupts the prompt's drain fiber. Await
+                    // its Exit as data so the harness can inspect the durable interrupted assistant
+                    // and continue the same Session instead of interrupting its own root program.
+                    const fiber = yield* turn.pipe(Effect.forkChild)
+                    const exit = yield* Fiber.await(fiber)
+                    if (Exit.isSuccess(exit)) return exit.value
+                    if (!Cause.hasInterrupts(exit.cause)) return yield* Effect.failCause(exit.cause)
+                    const messages = yield* sessions.messages({ sessionID: session.id })
+                    const assistant = messages
+                      .filter(
+                        (message): message is SessionV1.WithParts & { info: SessionV1.Assistant } =>
+                          message.info.role === "assistant",
+                      )
+                      .slice(assistantCountBefore)
+                      .at(-1)
+                    if (!assistant) return yield* Effect.die(new Error("Cancelled V2 Question produced no assistant evidence"))
+                    return assistant
+                  })
+                : yield* turn
               : yield* Effect.gen(function* () {
                   const fiber = yield* turn.pipe(Effect.forkChild)
                   // V2-owner busy oracle: a live provider-turn receipt (preparing/dispatching/
@@ -1304,6 +1379,14 @@ export async function runLegacyLiveCases(input: {
                 }),
               )
               const childDirectoryExists = yield* Effect.promise(() => directoryExists(child.directory))
+              const taskWorkspace = input.verifyChildWorktrees
+                ? yield* database.db
+                    .select({ branch: TaskRunTable.worktree_branch })
+                    .from(TaskRunTable)
+                    .where(eq(TaskRunTable.child_session_id, SessionV2.ID.make(child.id)))
+                    .get()
+                    .pipe(Effect.orDie)
+                : undefined
               const childAssistants = childMessages.filter(
                 (message): message is SessionV1.WithParts & { info: SessionV1.Assistant } =>
                   message.info.role === "assistant",
@@ -1331,6 +1414,15 @@ export async function runLegacyLiveCases(input: {
                 directoryExists: childDirectoryExists,
                 agent: child.agent,
                 model: child.model,
+                v2Users: v2Messages.flatMap((message) =>
+                  message.type === "user"
+                    ? [{
+                        id: message.id,
+                        metadata: message.metadata,
+                        text: message.text,
+                      }]
+                    : [],
+                ),
                 v2Assistants: v2Messages.flatMap((message) =>
                   message.type === "assistant"
                     ? [{
@@ -1391,6 +1483,20 @@ export async function runLegacyLiveCases(input: {
                   ? yield* Effect.promise(() => git(child.directory, "status", "--short", "--untracked-files=all"))
                   : "<removed>",
                 verifier,
+                branch: taskWorkspace?.branch,
+                branchFiles: taskWorkspace?.branch
+                  ? Object.fromEntries(
+                      yield* Effect.forEach(input.inspectChildFiles ?? [], (file) =>
+                        Effect.sync(() => {
+                          const result = Bun.spawnSync(
+                            ["git", "show", `refs/heads/${taskWorkspace.branch}:${file}`],
+                            { cwd: instance.directory, stdout: "pipe", stderr: "pipe" },
+                          )
+                          return [file, result.exitCode === 0 ? result.stdout.toString() : undefined] as const
+                        }),
+                      ),
+                    )
+                  : undefined,
                 users: childMessages
                   .filter(
                     (message): message is SessionV1.WithParts & { info: SessionV1.User } =>
@@ -1584,6 +1690,33 @@ export async function runLegacyLiveCases(input: {
                     .all()
                     .pipe(Effect.orDie)).filter((receipt) => receiptIDs.has(receipt.receipt_id)),
                   v2: {
+                    contextCheckpoints: yield* database.db
+                      .select()
+                      .from(SessionContextCheckpointTable)
+                      .where(eq(SessionContextCheckpointTable.session_id, SessionV2.ID.make(session.id)))
+                      .all()
+                      .pipe(Effect.orDie),
+                    modelPolicies: yield* database.db
+                      .select()
+                      .from(SessionModelPolicyReceiptTable)
+                      .where(eq(SessionModelPolicyReceiptTable.session_id, SessionV2.ID.make(session.id)))
+                      .all()
+                      .pipe(Effect.orDie),
+                    compactions: (yield* database.db
+                      .select({ id: SessionMessageTable.id, type: SessionMessageTable.type, data: SessionMessageTable.data })
+                      .from(SessionMessageTable)
+                      .where(and(
+                        eq(SessionMessageTable.session_id, SessionV2.ID.make(session.id)),
+                        eq(SessionMessageTable.type, "compaction"),
+                      ))
+                      .all()
+                      .pipe(Effect.orDie)).map((row) =>
+                        Schema.decodeUnknownSync(SessionMessage.Message)({
+                          ...row.data,
+                          id: row.id,
+                          type: row.type,
+                        }),
+                      ),
                     inputs: yield* database.db
                       .select({
                         id: SessionInputTable.id,
@@ -1958,6 +2091,7 @@ export async function runLegacyLiveCases(input: {
             modelContextTokens: input.modelContextTokens,
             maxProviderTurns: input.maxProviderTurns,
             toolOutput: input.toolOutput,
+            compaction: input.compaction,
             agentPermissions: input.agentPermissions,
             subagentIntensity: input.subagentIntensity,
           }),
@@ -2236,6 +2370,7 @@ export function liveWorkspaceConfig(
     modelContextTokens?: number
     maxProviderTurns?: number
     toolOutput?: ConfigV1.Info["tool_output"]
+    compaction?: ConfigV1.Info["compaction"]
     agentPermissions?: Readonly<Record<string, ConfigV1.Info["permission"]>>
     subagentIntensity?: "inherit" | "downgrade"
   },
@@ -2248,6 +2383,7 @@ export function liveWorkspaceConfig(
     permission,
     mcp,
     tool_output: options?.toolOutput,
+    compaction: options?.compaction,
     agent: {
       "live-test": {
         mode: "primary",

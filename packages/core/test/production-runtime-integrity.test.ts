@@ -598,8 +598,8 @@ describe("production runtime integrity", () => {
     // in runtime-state-inventory.ts; a stale source anchor must reopen review instead of falling
     // through to an unresolved or guessed classification.
     const reanchored = [
-      ["packages/core/src/agent-gateway.ts:closure@1119:1127.durable", "safe_scoped"],
-      ["packages/core/src/agent-gateway.ts:closure@3574:3576.storage", "safe_scoped"],
+      ["packages/core/src/agent-gateway.ts:closure@1124:1132.durable", "safe_scoped"],
+      ["packages/core/src/agent-gateway.ts:closure@3580:3582.storage", "safe_scoped"],
       ["packages/core/src/event.ts:closure@617:619.synchronized", "safe_scoped"],
       ["packages/core/src/event.ts:closure@617:620.typed", "safe_scoped"],
       ["packages/core/src/event.ts:closure@617:623.projectors", "safe_scoped"],
@@ -607,8 +607,8 @@ describe("production runtime integrity", () => {
       ["packages/core/src/util/effect-flock.ts:closure@99:104.ensuredDirs", "safe_bounded"],
       ["packages/core/src/permission.ts:closure@197:205.withNoProgressOwner", "safe_scoped"],
       ["packages/core/src/permission.ts:closure@197:206.pending", "safe_scoped"],
-      ["packages/core/src/session/runner/llm.ts:closure@792:1380.withPublication", "safe_scoped"],
-      ["packages/core/src/session/runner/llm.ts:closure@792:1487.planResultMetadata", "safe_scoped"],
+      ["packages/core/src/session/runner/llm.ts:closure@792:1394.withPublication", "safe_scoped"],
+      ["packages/core/src/session/runner/llm.ts:closure@792:1501.planResultMetadata", "safe_scoped"],
       ["packages/deepagent-code/src/cli/cmd/run/runtime.ts:closure@916:917.sdk", "safe_scoped"],
       ["packages/deepagent-code/src/cli/cmd/run.ts:closure@279:1246.sdk", "safe_scoped"],
       ["packages/deepagent-code/src/deepagent/learning-reviewer-runner.ts:closure@88:100.abort", "safe_scoped"],

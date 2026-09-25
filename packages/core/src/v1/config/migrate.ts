@@ -54,6 +54,7 @@ export function migrate(info: typeof ConfigV1.Info.Type) {
     skills: info.skills && [...(info.skills.paths ?? []), ...(info.skills.urls ?? [])],
     instructions: info.instructions,
     commands: info.command,
+    mcp: info.mcp,
     references: info.reference,
     experimental: info.experimental?.policies && { policies: info.experimental.policies },
     providers: providers(info.provider),

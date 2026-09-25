@@ -85,7 +85,9 @@ try {
       `- tests pass: \`${validationCommand}\``,
       "",
       "## Plan",
-      "- [>] After the GRADER FEEDBACK block appears, make result.txt exactly OK and replace PENDING in feedback.txt with the exact tests_pass gap text from the previous tick, including its short ./grader command. The GRADER FEEDBACK block renders gaps as list items: copy only the text after the leading '- ' marker. feedback.txt must begin exactly with 'tests_pass:' and must not contain a leading hyphen, bullet, quote, or backtick. If reading is necessary, invoke read only on result.txt and feedback.txt directly; never call read on ., the workspace path, or any directory. Treat the GRADER FEEDBACK block as authoritative: never inspect or execute grader, verifier, dotfile, or harness paths. If no GRADER FEEDBACK block is visible yet, do not mutate either file and do not invent feedback: keep this same step active for the next tick. Do not add, remove, rename, or rewrite plan steps. Mark step_1 done only after both files are correct. — acceptance: result.txt is exactly OK and feedback.txt is the exact previous tests_pass gap without its list marker",
+      // The hidden tests_pass criterion is the runtime validator. A second step-level acceptance
+      // would require a separate validation receipt and keep plan_complete unverified after it passes.
+      "- [>] After the GRADER FEEDBACK block appears, make result.txt exactly OK and replace PENDING in feedback.txt with the exact tests_pass gap text from the previous tick, including its short ./grader command. The GRADER FEEDBACK block renders gaps as list items: copy only the text after the leading '- ' marker. feedback.txt must begin exactly with 'tests_pass:' and must not contain a leading hyphen, bullet, quote, or backtick. If reading is necessary, invoke read only on result.txt and feedback.txt directly; never call read on ., the workspace path, or any directory. Treat the GRADER FEEDBACK block as authoritative: never inspect or execute grader, verifier, dotfile, or harness paths. If no GRADER FEEDBACK block is visible yet, do not mutate either file and do not invent feedback: keep this same step active for the next tick. Do not add, remove, rename, or rewrite plan steps. Mark step_1 done only after both files are correct.",
       "",
     ].join("\n"),
   )
@@ -106,6 +108,9 @@ try {
     }),
     shell: sandbox.shell,
   }
+  // Core V2 resolves custom providers from Location config files; the env config overlay reaches
+  // the V1 app reader only. Keep both sides of this CLI fixture on the same provider catalog.
+  await Bun.write(path.join(workspace, "deepagent-code.json"), JSON.stringify(workspaceConfig))
   const environment = liveSubprocessEnvironment({
     HOME: home,
     XDG_CONFIG_HOME: path.join(testRoot, "config"),
@@ -121,6 +126,7 @@ try {
     DEEPAGENT_CODE_DISABLE_AUTOCOMPACT: "1",
     DEEPAGENT_CODE_DISABLE_MODELS_FETCH: "1",
     DEEPAGENT_CODE_DISABLE_DEFAULT_PLUGINS: "1",
+    DEEPAGENT_CODE_V2_OWNER_DEV_MINT: "1",
     DEEPAGENT_CODE_DISABLE_LSP_DOWNLOAD: "1",
     DEEPAGENT_CODE_AUTH_CONTENT: "{}",
     DEEPAGENT_CODE_LIVE_LLM_API_KEY_FILE: config.apiKeyFile,
@@ -248,6 +254,17 @@ try {
     ) {
       return [{ index, name: part.tool, input, completed: false as const }]
     }
+    if (
+      state.status === "error" &&
+      part.tool === "write" &&
+      (input.path === "result.txt" || input.path === "feedback.txt") &&
+      typeof state.error === "string" &&
+      state.error.includes("already exists and has not been read in this session")
+    ) {
+      // The write tool's overwrite fence is a recoverable refusal. The oracle below still
+      // requires successful post-feedback writes, final exact file bytes, and the hidden grader.
+      return [{ index, name: part.tool, input, completed: false as const }]
+    }
     throw new Error(`D2/E1 observed an unexpected child tool failure: ${JSON.stringify({ tool: part.tool, state })}`)
   })
   const goalTools = goalToolEvents.filter(
@@ -320,7 +337,7 @@ try {
       firstTickFeedbackObserved: true,
       eventOrder: { goalStartIndex, runningIndex, feedbackIndex, doneIndex, terminalIndex },
       goalToolSequence: goalTools.map((tool) => tool.name),
-      deniedWorkspaceReadCount: goalToolEvents.filter((tool) => !tool.completed).length,
+      recoverableToolRefusalCount: goalToolEvents.filter((tool) => !tool.completed).length,
       feedbackMutationIndices: feedbackMutations.map((tool) => tool.index),
       terminalPhase: "done",
       initialVerifierExitCode: initialExitCode,

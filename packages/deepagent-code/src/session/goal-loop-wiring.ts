@@ -1,4 +1,4 @@
-import { DateTime, Effect, Option, Schema } from "effect"
+import { Cause, DateTime, Effect, Option, Schema } from "effect"
 import { AgentGateway } from "@deepagent-code/core/agent-gateway"
 import type { DocumentStore } from "@deepagent-code/core/deepagent/document-store"
 import type {
@@ -828,7 +828,13 @@ export const makeTaskSubagentRunner =
         cost: usage.cost,
         sessionID: child.id,
       } satisfies SubagentTurnResult
-    }).pipe(Effect.catchCause(() => Effect.succeed(failedTurn("subagent turn failed"))))
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logError("goal subagent turn failed", Cause.pretty(cause)).pipe(
+          Effect.as(failedTurn("subagent turn failed")),
+        ),
+      ),
+    )
 
 /**
  * §16.3 order 3 typed adapter: one plain-text turn = one durable V2 admission plus one explicit drain

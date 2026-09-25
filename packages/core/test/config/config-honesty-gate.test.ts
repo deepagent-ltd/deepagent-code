@@ -50,6 +50,6 @@ describe("config honesty gate (C-P2-03)", () => {
     const shared = UNSUPPORTED_V1_RUNTIME_FIELDS.filter((key) =>
       (UNSUPPORTED_V2_RUNTIME_FIELDS as readonly string[]).includes(key),
     )
-    expect([...shared].sort()).toEqual(["formatter", "lsp", "mcp"])
+    expect([...shared].sort()).toEqual(["formatter", "lsp"])
   })
 })

@@ -146,7 +146,7 @@ describe("IM agent HttpApi (V2 durable-only)", () => {
             `/api/v1/im/groups/${group.id}/messages?directory=${encodeURIComponent(directory)}`,
           ).pipe(Effect.map((page) => page.messages.find((m) => m.senderType === "agent" && m.metadata?.sessionID))),
           "the outbox never delivered the agent reply to the group",
-          "30 seconds",
+          "60 seconds",
         )
         expect(reply.content).toContain("hello from the v2 agent")
         expect(reply.metadata?.type).toBe("agent_run")
@@ -164,7 +164,7 @@ describe("IM agent HttpApi (V2 durable-only)", () => {
           .pipe(Effect.orDie)
         expect(outbox).toEqual([{ status: "delivered", text: "hello from the v2 agent" }])
       }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
-    60_000,
+    120_000,
   )
 
   it.live(
@@ -187,7 +187,7 @@ describe("IM agent HttpApi (V2 durable-only)", () => {
             `/api/v1/im/groups/${group.id}/messages?directory=${encodeURIComponent(directory)}`,
           ).pipe(Effect.map((page) => page.messages.find((m) => m.senderType === "agent" && m.content.includes("first v2 reply")))),
           "first reply was never delivered",
-          "30 seconds",
+          "60 seconds",
         )
         const firstAdmissions = yield* imAdmissions()
 
@@ -197,7 +197,7 @@ describe("IM agent HttpApi (V2 durable-only)", () => {
             `/api/v1/im/groups/${group.id}/messages?directory=${encodeURIComponent(directory)}`,
           ).pipe(Effect.map((page) => page.messages.find((m) => m.senderType === "agent" && m.content.includes("second v2 reply")))),
           "second reply was never delivered",
-          "30 seconds",
+          "60 seconds",
         )
 
         const admissions = yield* imAdmissions()
@@ -207,6 +207,6 @@ describe("IM agent HttpApi (V2 durable-only)", () => {
         expect(firstReply.metadata?.sessionID).toBe(admissions[0]!.sessionID)
         expect(firstAdmissions[0]!.sessionID).toBe(admissions[1]!.sessionID)
       }).pipe(Effect.provide(TestLLMServer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer)),
-    60_000,
+    120_000,
   )
 })

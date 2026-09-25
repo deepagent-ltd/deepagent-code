@@ -14,11 +14,13 @@ import { SessionRunner } from "@deepagent-code/core/session/runner"
 import { V2ProviderTurn } from "@deepagent-code/core/session/runner/v2-provider-turn"
 import { Effect, Layer } from "effect"
 import { CodeIntelFacade } from "../../src/code-intelligence/facade"
+import { gatewayConfigFromSettings } from "../../src/deepagent/config"
 import { CompositionDigest } from "../../src/effect/composition-digest"
 import { ContextQueryFacade } from "../../src/context-federation/context-query-facade"
 import { LocationIndexRuntime } from "../../src/location-index/runtime"
 import { InstanceStore } from "../../src/project/instance-store"
 import { V2RunnerFrame } from "../../src/session/v2-runner-frame"
+import { SettingsStore } from "../../src/settings/store"
 import { testInstanceStoreLayer } from "../../test/fixture/fixture"
 
 // The harness runs the same process-local Session owner as production, but installs its own
@@ -106,14 +108,18 @@ export function liveLocationServiceMap() {
         host,
         Database.defaultLayer,
         EventV2.layer.pipe(Layer.provide(Database.defaultLayer)),
-        // Same env gate as Core's default map: the harness isolation defaults DEEPAGENT_ENABLED to
-        // "false", and suites that assert the managed DeepAgent runtime (round/continuation
-        // context, validation harvest) opt in through their environment block.
-        AgentGateway.runtimeLayer({
-          enabled: process.env.DEEPAGENT_ENABLED !== "false" && process.env.DEEPAGENT_ENABLED !== "0",
-          runsDir: Global.Path.agent.runs,
-          durableLearning: false,
-        }),
+        // Use the same first-party settings source as the production frame. Core's bare default
+        // ignores subagentIntensity, which made this live harness run a different tool policy.
+        Layer.unwrap(
+          Effect.map(Effect.promise(SettingsStore.read), (settings) =>
+            AgentGateway.runtimeLayer({
+              ...gatewayConfigFromSettings(settings.deepagent),
+              enabled: process.env.DEEPAGENT_ENABLED !== "false" && process.env.DEEPAGENT_ENABLED !== "0",
+              runsDir: Global.Path.agent.runs,
+              durableLearning: false,
+            }),
+          ),
+        ),
       ),
     ]),
     Layer.provide(

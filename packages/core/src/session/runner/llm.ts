@@ -810,15 +810,27 @@ export const layer = Layer.effect(
       // parity envs without an owner env.
       if (parityCampaign && V2ProviderTurn.ownerCampaignFromEnv())
         return yield* new V2ProviderTurn.ConflictError({ reason: "v2_owner_cannot_record_shadow_parity" })
-      const session = yield* getSession(sessionID)
-      if (session.location.directory !== location.directory || session.location.workspaceID !== location.workspaceID)
+      const existingSession = yield* getSession(sessionID)
+      if (existingSession.location.directory !== location.directory || existingSession.location.workspaceID !== location.workspaceID)
         return yield* Effect.interrupt
-      const pendingToolEffects = yield* toolEffects.listPendingForSession(session.id)
+      const pendingToolEffects = yield* toolEffects.listPendingForSession(existingSession.id)
       if (pendingToolEffects.length > 0)
         return yield* new V2ToolEffect.RecoveryRequiredError({
-          sessionId: session.id,
+          sessionId: existingSession.id,
           pending: pendingToolEffects.length,
         })
+      const promoted = yield* Effect.gen(function* () {
+        // A prompt's model and agent become active at promotion, so promote before resolving
+        // either one. Future queued inputs still wait for their own activity boundary.
+        if (promotion !== "steer" && promotion !== "queue") return [] as readonly string[]
+        const cutoff = yield* SessionInput.latestSeq(db, existingSession.id)
+        if (promotion === "steer") return yield* SessionInput.promoteSteers(db, events, existingSession.id, cutoff)
+        const queued = yield* SessionInput.promoteNextQueued(db, events, existingSession.id)
+        const steers = yield* SessionInput.promoteSteers(db, events, existingSession.id, cutoff)
+        return queued === undefined ? steers : [queued, ...steers]
+      })
+      const currentStep = promoted.length > 0 ? 1 : step
+      const session = promoted.length > 0 ? yield* getSession(sessionID) : existingSession
       const agent = yield* agents.select(session.agent)
       if (session.agent !== undefined && agent.info === undefined)
         return yield* new AgentV2.NotFoundError({ id: session.agent })
@@ -831,21 +843,9 @@ export const layer = Layer.effect(
         session.id,
         session.location,
         agent.id,
-      ).pipe(retryAgentMismatch(promotion))
+      ).pipe(retryAgentMismatch(undefined, currentStep))
       const toolFibers = yield* FiberSet.make<void, ToolOutputStore.Error>()
       let needsContinuation = false
-      const promoted = yield* Effect.gen(function* () {
-        // W1.1 — only `steer`/`queue` are transcript promotions. A `goal_steer` promotion is the
-        // goal channel's drain-only turn: it must NOT promote chat steers/queued input (the goal
-        // driver reads a DISJOINT buffer), and it dispatches no provider turn of its own.
-        if (promotion !== "steer" && promotion !== "queue") return [] as readonly string[]
-        const cutoff = yield* SessionInput.latestSeq(db, session.id)
-        if (promotion === "steer") return yield* SessionInput.promoteSteers(db, events, session.id, cutoff)
-        const queued = yield* SessionInput.promoteNextQueued(db, events, session.id)
-        const steers = yield* SessionInput.promoteSteers(db, events, session.id, cutoff)
-        return queued === undefined ? steers : [queued, ...steers]
-      })
-      const currentStep = promoted.length > 0 ? 1 : step
       // W1.1 — goal_steer drain (after the promoted-inputs read; the goal channel is DISJOINT from
       // the steer/queue promotions above). Pending goal-directed steers are delivered to the ACTIVE
       // goal's durable runtime state (the next goal tick threads them into its step prompt); without
@@ -920,7 +920,20 @@ export const layer = Layer.effect(
       const toolMaterialization = yield* tools.materialize({
         rulesets: [agent.info?.permissions ?? [], session.permissions],
       })
-      const toolDefinitions = [
+      // The task tool's bounded schema-conversion turn has a durable prompt marker. Remove
+      // tools from the provider request itself; an instruction alone cannot prevent an LLM
+      // from re-reading files after the research turn's exact-once contract has settled.
+      const taskFinalizerNoTools = context.findLast((message) => message.type === "user")?.metadata
+        ?.deepagent_code_task_finalizer === true
+      const modeOverride = context
+        .filter((message): message is SessionMessage.User => message.type === "user")
+        .map((message) => message.metadata?.deepagent)
+        .filter((value): value is Record<string, unknown> =>
+          typeof value === "object" && value !== null && !Array.isArray(value),
+        )
+        .map((value) => value.agent_mode_override)
+        .findLast((value): value is string => typeof value === "string")
+      const toolDefinitions = taskFinalizerNoTools ? [] : [
         ...(modelInfo?.capabilities.tools === false ? [] : toolMaterialization.definitions),
         // RI-126: the synthesized StructuredOutput tool is advertised but never registered —
         // its call is intercepted before registry settlement and captured as the final answer.
@@ -1077,13 +1090,14 @@ export const layer = Layer.effect(
         system: stableSystemParts.map(SystemPart.make),
         messages: requestMessages,
         tools: toolDefinitions,
-        toolChoice: stepLimitReached ? "none" : syntheticStructuredOutput ? "required" : undefined,
+        toolChoice: taskFinalizerNoTools || stepLimitReached ? "none" : syntheticStructuredOutput ? "required" : undefined,
         // RI-126 wire mode: the Responses protocol lowers this onto `text.format` json_schema;
         // `strict` stays unset (session schemas are not authored against OpenAI strict mode).
         ...(wireStructuredOutput && jsonSchemaFormat.schema !== undefined
           ? { responseFormat: { type: "json" as const, schema: jsonSchemaFormat.schema } }
           : {}),
         metadata: {
+          ...(modeOverride === undefined ? {} : { deepagent: { agent_mode_override: modeOverride } }),
           "deepagent-code": {
             callKind: "session_turn",
             feature: "v2_session_chat",
@@ -1595,6 +1609,7 @@ export const layer = Layer.effect(
           if (toolSettleGate) {
             const gate = yield* toolSettleGate({
               sessionID: input.sessionID,
+              parentID: session.parentID,
               toolName: input.call.name,
               args: input.call.input,
             })
@@ -1646,6 +1661,20 @@ export const layer = Layer.effect(
           // record the failure evidence like the typed-error path.
           return yield* baseSettleTool(input).pipe(
             Effect.tap((settlement) => recordToolEffect(input, "settled", settlement.result, undefined)),
+            // A Question is an abortable wait owned by this process, and explicit Session
+            // interruption closes its pending request. Its outcome is known after cancel; keep a
+            // durable failed effect so the next user turn is not misclassified as a crash with an
+            // unknown external side effect. Other interrupted tools remain recovery-required.
+            Effect.onInterrupt(() =>
+              input.call.name === "question"
+                ? recordToolEffect(
+                    input,
+                    "failed",
+                    { type: "error", value: "question_cancelled" },
+                    "question_cancelled",
+                  )
+                : Effect.void,
+            ),
             Effect.tapError(() =>
               recordToolEffect(
                 input,
@@ -1791,7 +1820,7 @@ export const layer = Layer.effect(
               toolRegistryIDs: toolMaterialization.registeredIDs,
               toolPermissionFilteredIDs: toolMaterialization.permissionFilteredIDs,
               toolFinalOfferedIDs: toolDefinitions.map((tool) => tool.name),
-              toolChoice: stepLimitReached ? "none" : syntheticStructuredOutput ? "required" : null,
+              toolChoice: taskFinalizerNoTools || stepLimitReached ? "none" : syntheticStructuredOutput ? "required" : null,
               toolResultReferences: context.flatMap((message) =>
                 message.type === "assistant"
                   ? message.content.flatMap((part) =>

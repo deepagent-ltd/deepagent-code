@@ -216,6 +216,45 @@ describe("SessionProjector wire egress (W4-6)", () => {
     }),
   )
 
+  it.effect("pairs each assistant wire row with its own preceding user turn", () =>
+    Effect.gen(function* () {
+      const sessionID = SessionV2.ID.make("ses_wire_two_turn_parents")
+      yield* seedSession(sessionID)
+      yield* seedV2Ownership(sessionID, "owner_wire_two_turn_parents")
+      const events = yield* EventV2.Service
+      for (const turn of [1, 2]) {
+        const userID = SessionMessage.ID.make(`msg_wire_parent_user_${turn}`)
+        const assistantID = SessionMessage.ID.make(`msg_wire_parent_assistant_${turn}`)
+        yield* events.publish(SessionEvent.Prompted, {
+          sessionID,
+          messageID: userID,
+          prompt: new Prompt({ text: `turn ${turn}` }),
+          delivery: "steer",
+          timestamp: DateTime.makeUnsafe(turn * 10),
+        })
+        yield* events.publish(SessionEvent.Step.Started, {
+          sessionID,
+          timestamp: DateTime.makeUnsafe(turn * 10 + 1),
+          assistantMessageID: assistantID,
+          agent: "build",
+          model,
+        })
+        yield* events.publish(SessionEvent.Step.Ended, {
+          sessionID,
+          timestamp: DateTime.makeUnsafe(turn * 10 + 2),
+          assistantMessageID: assistantID,
+          finish: "stop",
+          cost: 0,
+          tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
+        })
+      }
+      const { db } = yield* Database.Service
+      const second = yield* db.select({ data: MessageTable.data }).from(MessageTable)
+        .where(eq(MessageTable.id, wireID("msg_wire_parent_assistant_2"))).get().pipe(Effect.orDie)
+      expect((second?.data as { parentID?: string } | undefined)?.parentID).toBe("msg_wire_parent_user_2")
+    }),
+  )
+
   it.effect("fingerprint cursor suppresses byte-identical re-derivation", () =>
     Effect.gen(function* () {
       const sessionID = SessionV2.ID.make("ses_wire_dedupe")

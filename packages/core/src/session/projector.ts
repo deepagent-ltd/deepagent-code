@@ -1,6 +1,6 @@
 export * as SessionProjector from "./projector"
 
-import { and, asc, desc, eq, gt, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gt, gte, lt, ne, sql } from "drizzle-orm"
 import { isDeepStrictEqual } from "node:util"
 import path from "node:path"
 import { DateTime, Effect, Layer, Schema } from "effect"
@@ -32,11 +32,49 @@ import { V2ProviderTurnReceiptTable } from "./runner/v2-provider-turn.sql"
 import { legacyAssistant as legacyAssistantExport, legacyUser } from "./legacy-wire"
 import type { DeepMutable } from "../schema"
 import { SessionSchema } from "./schema"
+import { Hash } from "../util/hash"
 
 type DatabaseService = Database.Interface["db"]
 
 const decodeMessage = Schema.decodeUnknownSync(SessionMessage.Message)
 const encodeMessage = Schema.encodeSync(SessionMessage.Message)
+
+const discardRevertedV2Tail = Effect.fnUntraced(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  messageID: SessionV1.MessageID,
+  includeTarget: boolean,
+) {
+  const target = yield* db
+    .select()
+    .from(SessionMessageTable)
+    .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.id, SessionMessage.ID.make(messageID))))
+    .get()
+    .pipe(Effect.orDie)
+  if (!target) return
+  const session = yield* db
+    .select({ mutationEpoch: SessionTable.mutation_epoch })
+    .from(SessionTable)
+    .where(eq(SessionTable.id, sessionID))
+    .get()
+    .pipe(Effect.orDie)
+  if (!session) return yield* Effect.die(`SessionProjector: reverted Session ${sessionID} disappeared`)
+  // RevertChanged precedes cleanup, so the current epoch names the one synthetic notice that
+  // must survive removal of the old branch. The same event sequence replays this deletion.
+  const noticeID = SessionMessage.ID.make(
+    `msg_${Hash.sha256(`revert-notice:${sessionID}:${session.mutationEpoch}`).slice(0, 40)}`,
+  )
+  yield* db
+    .delete(SessionMessageTable)
+    .where(and(
+      eq(SessionMessageTable.session_id, sessionID),
+      includeTarget ? gte(SessionMessageTable.seq, target.seq) : gt(SessionMessageTable.seq, target.seq),
+      ne(SessionMessageTable.id, noticeID),
+    ))
+    .run()
+    .pipe(Effect.orDie)
+  return target
+})
 
 class PromptAlreadyProjected extends Error {}
 export class SessionAlreadyProjected extends Error {}
@@ -322,13 +360,15 @@ function insertMessage(db: DatabaseService, event: SessionEvent.Event, message: 
 // session_wire_projection fingerprint cursor (durable, unlike the F-17 drain-local map it
 // replaces) skips byte-identical re-derivations across replay/overlap windows.
 
-// Per-session memo for the egress' per-event constants: the first wire parent, the session
-// directory row and V2 ownership are identity lookups that do not change while a session streams,
-// yet each was a synchronous SELECT on every delta (measured: 75k each in one run, the top
-// remaining reader load). Values only change by a new session id; bounded map.
+// Per-session memo for wire egress. Directory and ownership are fixed; an assistant's parent
+// stays fixed across its streaming deltas but changes when the next user turn starts.
 const wireSessionMemo = new Map<
   string,
-  { parent: { id: string } | null; directory: { directory: string; path: string } | null; v2Owned?: boolean }
+  {
+    parent: { assistantID: string; user: { id: string } | null } | null
+    directory: { directory: string; path: string } | null
+    v2Owned?: boolean
+  }
 >()
 const WIRE_SESSION_MEMO_MAX = 2_000
 const wireSessionEntry = (sessionID: SessionSchema.ID) => {
@@ -432,22 +472,22 @@ function publishWireOnce(
   })
 }
 
-// The V1 wire parent linkage needs the first user message of the session; the F-17 mirror used
-// the same resolution (sessions.findMessage(role === "user")).
-const firstWireParent = (db: DatabaseService, sessionID: SessionSchema.ID) => {
+// Each assistant belongs to the most recent preceding user. Keep that answer for its streaming
+// deltas; a session-wide first-user cache misgroups every later reply in the Desktop timeline.
+const wireParent = (db: DatabaseService, sessionID: SessionSchema.ID, assistantID: string, seq: number) => {
   const entry = wireSessionEntry(sessionID)
-  if (entry.parent !== null) return Effect.succeed(entry.parent)
+  if (entry.parent?.assistantID === assistantID) return Effect.succeed(entry.parent.user)
   return db
     .select({ id: SessionMessageTable.id })
     .from(SessionMessageTable)
-    .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.type, "user")))
-    .orderBy(asc(SessionMessageTable.seq))
+    .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.type, "user"), lt(SessionMessageTable.seq, seq)))
+    .orderBy(desc(SessionMessageTable.seq))
     .get()
     .pipe(
       Effect.orDie,
       Effect.tap((row) =>
         Effect.sync(() => {
-          wireSessionEntry(sessionID).parent = (row as { id: string } | undefined) ?? null
+          wireSessionEntry(sessionID).parent = { assistantID, user: row ?? null }
         }),
       ),
     )
@@ -489,7 +529,7 @@ function publishWireForMessage(
     const projected =
       message.type === "assistant"
         ? yield* Effect.gen(function* () {
-            const parent = yield* firstWireParent(db, sessionID)
+            const parent = yield* wireParent(db, sessionID, message.id, row.seq)
             const directory = yield* db
               .select({ directory: SessionTable.directory, path: SessionTable.path })
               .from(SessionTable)
@@ -1355,6 +1395,9 @@ export const layer = Layer.effectDiscard(
           .where(and(eq(MessageTable.id, event.data.messageID), eq(MessageTable.session_id, event.data.sessionID)))
           .run()
           .pipe(Effect.orDie)
+        // SessionRevert cleanup publishes these durable removals for the V1 mirror. Truncate the
+        // V2 provider branch from the same message, including unmapped compaction/system rows.
+        yield* discardRevertedV2Tail(db, event.data.sessionID, event.data.messageID, true)
       }),
     )
     yield* events.project(SessionV1.Event.PartRemoved, (event) =>
@@ -1380,6 +1423,31 @@ export const layer = Layer.effectDiscard(
               eq(PartTable.session_id, event.data.sessionID),
             ),
           )
+          .run()
+          .pipe(Effect.orDie)
+        const target = yield* discardRevertedV2Tail(db, event.data.sessionID, event.data.messageID, false)
+        if (!target) return
+        if (target.type === "user") {
+          yield* db
+            .delete(SessionMessageTable)
+            .where(and(eq(SessionMessageTable.id, target.id), eq(SessionMessageTable.session_id, event.data.sessionID)))
+            .run()
+            .pipe(Effect.orDie)
+          return
+        }
+        if (target.type !== "assistant") return
+        const prefix = `prt_${target.id.slice("msg_".length)}_`
+        if (!event.data.partID.startsWith(prefix)) return
+        const index = Number(event.data.partID.slice(prefix.length))
+        if (!Number.isInteger(index) || index < 0) return
+        const message = decodeMessage({ ...target.data, id: target.id, type: target.type })
+        if (message.type !== "assistant" || index >= message.content.length) return
+        const encoded = encodeMessage(new SessionMessage.Assistant({ ...message, content: message.content.slice(0, index) }))
+        const { id, type, ...data } = encoded
+        yield* db
+          .update(SessionMessageTable)
+          .set({ data })
+          .where(and(eq(SessionMessageTable.id, target.id), eq(SessionMessageTable.session_id, event.data.sessionID)))
           .run()
           .pipe(Effect.orDie)
       }),

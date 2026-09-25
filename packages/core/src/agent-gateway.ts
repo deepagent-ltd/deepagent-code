@@ -57,6 +57,7 @@ export const isEvidenceKind = (value: unknown): value is EvidenceKind =>
 export type Config = {
   readonly enabled?: boolean
   readonly agentMode?: AgentMode
+  readonly subagentIntensity?: "inherit" | "downgrade"
   readonly failClosed?: boolean
   readonly runsDir?: string
   // P0-0: explicit storage home for durable memory/state (injected by the caller that holds
@@ -124,6 +125,7 @@ export type RuntimeSnapshot = {
 
 export interface RuntimeInterface {
   readonly snapshot: RuntimeSnapshot
+  readonly subagentIntensity?: "inherit" | "downgrade"
   readonly active: boolean
   readonly baseDir: string
   readonly runsDir: string
@@ -249,6 +251,7 @@ const env = () => {
 type CurrentConfig = {
   readonly enabled: boolean
   readonly agentMode: AgentMode
+  readonly subagentIntensity: "inherit" | "downgrade"
   readonly failClosed: boolean
   readonly providerExecutedToolPolicy: ProviderExecutedToolPolicy
   readonly allowProviderExecutedTools: boolean
@@ -265,6 +268,7 @@ type CurrentConfig = {
 const defaultConfig = (): CurrentConfig => ({
   enabled: true,
   agentMode: parseAgentMode(env().agentMode),
+  subagentIntensity: "inherit",
   failClosed: env().failClosed !== "false",
   providerExecutedToolPolicy: "deny_by_default",
   allowProviderExecutedTools: env().allowProviderExecutedTools === "true" || env().allowProviderExecutedTools === "1",
@@ -468,6 +472,7 @@ export const configure = (config: Config = {}) => {
     enabled: config.enabled ?? current.enabled,
     baseDir,
     agentMode: config.agentMode ?? current.agentMode,
+    subagentIntensity: config.subagentIntensity ?? current.subagentIntensity,
     failClosed: config.failClosed ?? current.failClosed,
     providerExecutedToolPolicy: config.providerExecutedToolPolicy ?? current.providerExecutedToolPolicy,
     allowProviderExecutedTools: config.allowProviderExecutedTools ?? current.allowProviderExecutedTools,
@@ -3028,6 +3033,7 @@ const resolvedRuntimeConfig = (config: Config): CurrentConfig => {
   return cloneConfig({
     enabled: config.enabled ?? defaults.enabled,
     agentMode: config.agentMode ?? defaults.agentMode,
+    subagentIntensity: config.subagentIntensity ?? defaults.subagentIntensity,
     failClosed: config.failClosed ?? defaults.failClosed,
     providerExecutedToolPolicy: config.providerExecutedToolPolicy ?? defaults.providerExecutedToolPolicy,
     allowProviderExecutedTools: config.allowProviderExecutedTools ?? defaults.allowProviderExecutedTools,
@@ -3583,6 +3589,7 @@ export const runtimeLayer = (config: Config = {}, options: RuntimeOptions = {}) 
             Runtime,
             Runtime.of({
               snapshot: snapshotWith(captured),
+              subagentIntensity: captured.subagentIntensity,
               active: isManagedDeepAgentRuntimeWith(captured),
               baseDir: storage.baseDir,
               runsDir: storage.runsDir,

@@ -448,7 +448,7 @@ function makePrompt(input?: PromptLayerOptions) {
     Layer.provideMerge(SessionPromptV2.layer),
     Layer.provide(input?.sessionV2 ?? SessionV2.defaultLayer),
     Layer.provide(testInstanceStoreLayer),
-    Layer.provide(SessionRevert.defaultLayer),
+    Layer.provideMerge(SessionRevert.defaultLayer),
     Layer.provide(CrossSpawnSpawner.defaultLayer),
     Layer.provide(Reference.defaultLayer),
     Layer.provide(summary),
@@ -1092,10 +1092,16 @@ const r0V2Stub = SessionV2.Service.of({
       // chat path passes — core SessionV2.prompt defaults it to "steer") is pinned at the call shape.
       r0V2PromptDeliveries.push(input.delivery)
     }).pipe(
-      Effect.as({
-        id: SessionMessage.ID.make("msg_r0_admitted"),
-        delivery: "steer",
-      } as unknown as SessionInput.Admitted),
+      Effect.as(
+        new SessionInput.Admitted({
+          admittedSeq: 1,
+          id: SessionMessage.ID.make("msg_r0_admitted"),
+          sessionID: input.sessionID,
+          prompt: input.prompt,
+          delivery: input.delivery ?? "steer",
+          timeCreated: DateTime.makeUnsafe(1_000_000),
+        }),
+      ),
     ),
   shell: () => Effect.die("r0 stub: shell unused"),
   skill: () => Effect.die("r0 stub: skill unused"),
@@ -2235,7 +2241,7 @@ v2Real.instance("static loop consumes queued replies across turns", () =>
     expect(first.info.role).toBe("assistant")
     expect(first.parts.some((part) => part.type === "text" && part.text === "world one")).toBe(true)
 
-    yield* provideR0OwnerRefs(
+    const secondUser = yield* provideR0OwnerRefs(
       prompt.prompt({
         sessionID: session.id,
         agent: "build",
@@ -2248,6 +2254,7 @@ v2Real.instance("static loop consumes queued replies across turns", () =>
 
     const second = yield* provideR0OwnerRefs(prompt.loop({ sessionID: session.id }))
     expect(second.info.role).toBe("assistant")
+    if (second.info.role === "assistant") expect(second.info.parentID).toBe(secondUser.info.id)
     expect(second.parts.some((part) => part.type === "text" && part.text === "world two")).toBe(true)
 
     expect(yield* llm.hits).toHaveLength(2)
@@ -3313,6 +3320,68 @@ v2Real.instance(
       )
     }),
   15_000,
+)
+
+v2Real.instance("promptAsync uses the V2 Session's configured agent system prompt", () =>
+  Effect.gen(function* () {
+    const marker = `agent-system-${crypto.randomUUID()}`
+    const { llm } = yield* useServerConfig((url) => ({
+      ...providerCfg(url),
+      agent: { "live-test": { mode: "primary", prompt: `Follow the user's request. ${marker}` } },
+    }))
+    const prompt = yield* SessionPromptV2.Service
+    const sessions = yield* Session.Service
+    const { db } = yield* Database.Service
+    yield* mintR0Authorization(db)
+    const chat = yield* sessions.create({ title: "Configured V2 agent", agent: "live-test" })
+    yield* llm.text("ack")
+    yield* provideR0OwnerRefs(prompt.promptAsync({
+      sessionID: chat.id,
+      agent: "live-test",
+      model: ref,
+      parts: [{ type: "text", text: "hello" }],
+    }))
+    yield* llm.wait(1)
+    expect(JSON.stringify((yield* llm.inputs)[0])).toContain(marker)
+  }),
+  30_000,
+)
+
+v2Real.instance("reverted V2 turns are absent from the next provider request", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPromptV2.Service
+    const sessions = yield* Session.Service
+    const revert = yield* SessionRevert.Service
+    const { db } = yield* Database.Service
+    yield* mintR0Authorization(db)
+    const chat = yield* sessions.create({ title: "V2 revert context" })
+    const oldMessageID = MessageID.ascending()
+
+    yield* llm.text("OLD_BRANCH")
+    yield* provideR0OwnerRefs(prompt.prompt({
+      sessionID: chat.id,
+      messageID: oldMessageID,
+      agent: "build",
+      model: ref,
+      parts: [{ type: "text", text: "old request" }],
+    }))
+    yield* revert.revert({ sessionID: chat.id, messageID: oldMessageID })
+    yield* revert.cleanup(yield* sessions.get(chat.id), yield* sessions.mutationEpoch(chat.id))
+
+    yield* llm.text("NEW_BRANCH")
+    yield* provideR0OwnerRefs(prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      model: ref,
+      parts: [{ type: "text", text: "new request" }],
+    }))
+    const requests = yield* llm.inputs
+    expect(requests).toHaveLength(2)
+    expect(JSON.stringify(requests[1]?.messages)).not.toContain("OLD_BRANCH")
+    expect(JSON.stringify(requests[1]?.messages)).not.toContain("old request")
+  }),
+  30_000,
 )
 
 noLLMServer.instance("assertNotBusy succeeds when idle", () =>
@@ -4729,9 +4798,7 @@ v2Real.instance(
       const draftID = prepareDraft(dir, session.id, "intelligence", "Design the prompt confirmation flow")
       expect(draftID).toMatch(/^prompt_draft:/)
 
-      // V2-only: the production submit path is promptAsync (app composer -> HTTP promptAsync); only
-      // its V2 branch consumes the confirmed draft (W0-3b) — prompt.prompt under the profile admits
-      // the raw parts unchanged. The drain is forked by promptAsync, so queue the turn reply first.
+      // The drain is forked by promptAsync, so queue the turn reply first.
       yield* llm.text("draft submitted")
       const receipt = yield* provideR0OwnerRefs(
         prompt.promptAsync({
@@ -5089,6 +5156,39 @@ v2Qualified.instance(
       expect(intents).toBe(0)
       expect(steers).toBe(0)
       expect(leases).toBe(0)
+    }),
+  30_000,
+)
+
+v2Real.instance(
+  "confirmed prompt draft also replaces text and preserves metadata through prompt()",
+  () =>
+    Effect.gen(function* () {
+      const { directory: dir } = yield* TestInstance
+      const prompt = yield* SessionPromptV2.Service
+      const sessions = yield* Session.Service
+      const { db } = yield* Database.Service
+      yield* mintR0Authorization(db)
+      const session = yield* sessions.create({})
+      const draftID = prepareDraft(dir, session.id, "intelligence", "Original confirmed goal")
+
+      const submitted = yield* provideR0OwnerRefs(
+        prompt.prompt({
+          sessionID: session.id,
+          agent: "build",
+          noReply: true,
+          metadata: {
+            deepagent: { prompt_pipeline: { mode: "intelligence", confirmedDraftID: draftID, editedGoal: "Edited confirmed goal" } },
+          },
+          parts: [{ type: "text", text: "ignored raw prompt" }],
+        }),
+      )
+      expect(submitted.info.role).toBe("user")
+      expect(submitted.parts.find((part) => part.type === "text")?.text).toBe("Edited confirmed goal")
+      if (submitted.info.role === "user") {
+        expect(submitted.info.metadata?.deepagent?.prompt_pipeline?.confirmed).toBe(true)
+        expect(submitted.info.metadata?.deepagent?.prompt_pipeline?.prompt_draft_id).toBe(draftID)
+      }
     }),
   30_000,
 )

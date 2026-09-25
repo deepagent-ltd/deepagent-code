@@ -102,6 +102,21 @@ describe("D2/E1 Goal CLI hard Oracle", () => {
     }
   })
 
+  test("accepts the V2 write tool's path field while retaining the same timing gate", () => {
+    expect(
+      requirePostFeedbackMutations({
+        tools: [
+          { index: 3, name: "write", input: { path: "feedback.txt" } },
+          { index: 4, name: "write", input: { path: "result.txt" } },
+          { index: 5, name: "plan", input: {} },
+        ],
+        feedbackIndex: 2,
+        workspace: "/workspace",
+        files: ["feedback.txt", "result.txt"],
+      }).map((tool) => tool.index),
+    ).toEqual([3, 4])
+  })
+
   test("rejects verifier bypass and unexpected workspace mutations", () => {
     const evidence = {
       initialExitCode: 1,

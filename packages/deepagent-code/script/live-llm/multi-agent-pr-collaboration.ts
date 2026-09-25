@@ -59,6 +59,7 @@ const artifact = await runLegacyLiveCases({
   inspectFiles: ["output/left.txt", "output/right.txt"],
   inspectChildFiles: ["output/left.txt", "output/right.txt"],
   inspectPRCollaboration: true,
+  inspectTaskRuns: true,
   toolSandbox: { verifierScript, initialVerifier: "fail" },
   evaluateWorkspace: async (directory, sandbox) => {
     if (!sandbox) throw new Error("PR collaboration verifier requires a qualified tool sandbox")
@@ -99,75 +100,83 @@ if (observation.providerErrors.length > 0) {
 }
 const workers = observation.children.filter((child) => child.agent === "worker")
 const reviewers = observation.children.filter((child) => child.agent === "reviewer")
-const seniorReviewers = observation.children.filter((child) => child.agent === "senior-reviewer")
-if (workers.length !== 2 || reviewers.length !== 1 || seniorReviewers.length !== 1) {
-  throw new Error(
-    `Expected 2 workers, 1 Reviewer, and 1 Senior Reviewer; received ${workers.length}/${reviewers.length}/${seniorReviewers.length}`,
-  )
-}
-for (const child of observation.children) {
-  if (
-    child.parentID !== observation.sessionID ||
-    child.model?.providerID !== artifact.fingerprint.runtimeProviderID ||
-    child.model.id !== artifact.fingerprint.modelID ||
-    child.assistants.some(
-      (assistant) =>
-        assistant.providerID !== artifact.fingerprint.runtimeProviderID ||
-        assistant.modelID !== artifact.fingerprint.modelID ||
-        assistant.error !== undefined,
-    )
-  ) {
-    throw new Error(`PR collaboration child ${child.id} has invalid lineage or model identity`)
-  }
-  const subagent = nestedRecord(child.metadata, ["deepagent", "subagent"])
-  if (subagent.state !== "completed" || subagent.finished !== true || subagent.reason !== "structured_output_valid") {
-    throw new Error(`PR collaboration child ${child.id} did not persist a valid terminal result`)
-  }
-}
-if (workers.some((child) => child.directoryExists || child.status !== "<removed>")) {
-  throw new Error("Merged worker worktrees were not removed")
+if (workers.length !== 2 || reviewers.length !== 2) {
+  throw new Error(`Expected two V2 workers and one reviewer per PR: ${workers.length}/${reviewers.length}`)
 }
 if (new Set(workers.map((child) => child.directory)).size !== 2) {
   throw new Error("Parallel PR workers did not receive distinct worktrees")
 }
-for (const worker of workers) {
-  const tools = worker.assistants.flatMap((assistant) => assistant.tools)
+if (workers.some((child) => child.directoryExists || child.status !== "<removed>")) {
+  throw new Error("Merged worker worktrees were not removed")
+}
+for (const child of observation.children) {
   if (
-    tools.filter((tool) => tool.name === "read" && tool.status === "completed").length !== 1 ||
-    tools.filter((tool) => tool.name === "write" && tool.status === "completed").length !== 1 ||
-    tools.filter((tool) => tool.name === "StructuredOutput" && tool.status === "completed").length !== 1 ||
-    tools.some((tool) => tool.status !== "completed")
+    child.parentID !== observation.sessionID ||
+    child.v2Assistants.length === 0 ||
+    child.v2Assistants.some(
+      (assistant) => assistant.model.providerID !== artifact.fingerprint.runtimeProviderID ||
+        assistant.model.id !== artifact.fingerprint.modelID,
+    ) ||
+    child.v2ProviderTurns.length === 0 ||
+    child.v2ProviderTurns.some(
+      (turn) => turn.providerID !== artifact.fingerprint.runtimeProviderID ||
+        turn.modelID !== artifact.fingerprint.modelID || turn.state !== "settled",
+    ) ||
+    child.structuredEvidence?.length !== 1 ||
+    child.structuredEvidence[0]?.validationOutcome !== "validated"
   ) {
-    throw new Error(`Worker ${worker.id} has an invalid tool sequence`)
+    throw new Error(`PR collaboration child ${child.id} lacks valid V2 lineage, model, or output evidence`)
   }
 }
-const reviewerTools = reviewers[0]!.assistants.flatMap((assistant) => assistant.tools)
-if (
-  reviewerTools.filter((tool) => tool.name === "StructuredOutput" && tool.status === "completed").length !== 2 ||
-  reviewerTools.some((tool) => ["bash", "edit", "write", "patch", "task"].includes(tool.name))
-) {
-  throw new Error("The batch Reviewer did not complete two read-only structured reviews")
+for (const worker of workers) {
+  const tools = worker.v2Tools
+  const read = tools.find((tool) => tool.name === "read" && tool.status === "completed")
+  const write = tools.find((tool) => tool.name === "write" && tool.status === "completed")
+  if (
+    tools.length !== 2 ||
+    !read || !write ||
+    tools.filter((tool) => tool.name === "read").length !== 1 ||
+    tools.filter((tool) => tool.name === "write").length !== 1 ||
+    typeof read.output !== "string" ||
+    typeof write.input !== "object" || write.input === null ||
+    read.output !== write.input.content ||
+    ![`${leftMarker}\n`, `${rightMarker}\n`].includes(read.output)
+  ) {
+    throw new Error(`Worker ${worker.id} did not perform exactly one matching read and write`)
+  }
 }
-const seniorTools = seniorReviewers[0]!.assistants.flatMap((assistant) => assistant.tools)
-if (
-  seniorTools.filter((tool) => tool.name === "StructuredOutput" && tool.status === "completed").length < 1 ||
-  seniorTools.some((tool) => ["bash", "task"].includes(tool.name))
-) {
-  throw new Error("The Senior Reviewer did not complete a bounded stage review")
+if (reviewers.some((reviewer) => reviewer.v2Tools.length > 0)) {
+  throw new Error("A V2 PR reviewer called a tool")
 }
-
 const taskTools = observation.tools.filter((tool) => tool.name === "task" && tool.status === "completed")
 const finalizeTools = observation.tools.filter((tool) => tool.name === "pr_finalize" && tool.status === "completed")
 if (taskTools.length !== 2 || new Set(taskTools.map((tool) => tool.messageID)).size !== 1) {
   throw new Error("Parent did not emit two completed task calls in one provider response")
 }
 if (finalizeTools.length !== 1 || finalizeTools[0]!.messageID === taskTools[0]!.messageID) {
-  throw new Error("Parent did not finalize the PR batch in one subsequent provider response")
+  throw new Error("Parent did not finalize both PRs in a subsequent provider response")
 }
-if (observation.tools.some((tool) => tool.status === "completed" && !["task", "pr_finalize"].includes(tool.name))) {
+if (observation.tools.some((tool) => !["task", "pr_finalize"].includes(tool.name))) {
   throw new Error("Parent executed a forbidden non-collaboration tool")
 }
-
+const finalized: unknown = JSON.parse(finalizeTools[0]!.output ?? "null")
+if (
+  !Array.isArray(finalized) || finalized.length !== 2 ||
+  finalized.some((entry) => typeof entry !== "object" || entry === null || entry.status !== "merged") ||
+  new Set(finalized.map((entry) => entry.prID)).size !== 2 ||
+  new Set(finalized.map((entry) => entry.mode)).size !== 2
+) {
+  throw new Error(`V2 PR finalization did not merge both branches: ${JSON.stringify(finalized)}`)
+}
+const runs = observation.taskRuns ?? []
+if (
+  runs.length !== 4 ||
+  runs.some((run) => run.executionRuntime !== "v2" || run.parentSessionID !== observation.sessionID ||
+    run.state !== "completed" || !observation.children.some((child) => child.id === run.childSessionID)) ||
+  runs.filter((run) => run.workspaceMode === "worktree").length !== 2
+) {
+  throw new Error(`V2 PR task runs did not settle: ${JSON.stringify(runs)}`)
+}
 const permissionIDs = observation.permissionRequests.map((request) => String(request.id)).sort()
 if (
   permissionIDs.length !== 2 ||
@@ -179,46 +188,9 @@ if (
 ) {
   throw new Error("Parallel PR workers did not cross the permission concurrency barrier cleanly")
 }
-
 const collaboration = artifact.collaboration
-if (!collaboration) throw new Error("Missing persisted PR collaboration evidence")
-const queue = record(collaboration.queue, "PR queue")
-const entries = array(queue.entries, "PR queue entries").map((entry) => record(entry, "PR queue entry"))
-if (entries.length !== 2 || entries.some((entry) => entry.status !== "merged")) {
-  throw new Error(`Expected two merged PR queue entries: ${JSON.stringify(entries)}`)
-}
-if (
-  new Set(entries.map((entry) => entry.parentID)).size !== 1 ||
-  entries[0]?.parentID !== observation.sessionID ||
-  new Set(entries.map((entry) => entry.reviewerID)).size !== 1 ||
-  entries[0]?.reviewerID !== reviewers[0]!.id ||
-  new Set(entries.map((entry) => record(entry.metadata, "PR metadata").batchID)).size !== 1 ||
-  entries.some((entry) => entry.sha !== entry.workerHead || !workers.some((worker) => worker.id === entry.workerID))
-) {
-  throw new Error("PR queue ownership, batch, reviewer, or exact-SHA binding is invalid")
-}
-const stageReviews = entries.map((entry) => record(record(entry.metadata, "PR metadata").stageReview, "stage review"))
-if (
-  stageReviews.some(
-    (review) =>
-      review.status !== "approved" ||
-      review.reviewerID !== seniorReviewers[0]!.id ||
-      review.implementationCommitSha !== collaboration.head,
-  )
-) {
-  throw new Error(`Senior review ownership or durable settlement is invalid: ${JSON.stringify(stageReviews)}`)
-}
-const mergeCommits = collaboration.firstParentLog.filter((line) => line.split("\t")[1]?.split(" ").length === 2)
-if (mergeCommits.length !== 2) {
-  throw new Error(
-    `Expected exactly two first-parent no-ff merge commits: ${JSON.stringify(collaboration.firstParentLog)}`,
-  )
-}
-if (!collaboration.branch.startsWith("deepagent-code/session-")) {
-  throw new Error(`PR batch ran on an unsafe target branch: ${collaboration.branch}`)
-}
-if ((collaboration.worktrees.match(/^worktree /gm) ?? []).length !== 1) {
-  throw new Error(`PR collaboration leaked worker worktrees: ${collaboration.worktrees}`)
+if (!collaboration || (collaboration.worktrees.match(/^worktree /gm) ?? []).length !== 1) {
+  throw new Error("PR collaboration leaked worker worktrees")
 }
 if (
   artifact.workspace.files["output/left.txt"] !== `${leftMarker}\n` ||
@@ -227,8 +199,8 @@ if (
 ) {
   throw new Error("Merged PR outputs or final parent cleanliness are invalid")
 }
-const evaluation = record(artifact.evaluation, "hidden verifier")
-if (evaluation.exitCode !== 0 || !String(evaluation.stdout).includes(verifierSuccess)) {
+const evaluation = artifact.evaluation as { exitCode?: number; stdout?: string } | undefined
+if (!evaluation || evaluation.exitCode !== 0 || !evaluation.stdout?.includes(verifierSuccess)) {
   throw new Error(`Hidden PR collaboration verifier failed: ${JSON.stringify(evaluation)}`)
 }
 
@@ -237,13 +209,9 @@ const result = {
   mode: "ext" as const,
   evidence: {
     workerSessionIDs: workers.map((worker) => worker.id),
-    reviewerSessionID: reviewers[0]!.id,
-    seniorReviewerSessionID: seniorReviewers[0]!.id,
-    prIDs: entries.map((entry) => entry.id),
-    sharedBatchID: record(entries[0]!.metadata, "PR metadata").batchID,
-    exactWorkerSHAs: entries.map((entry) => entry.workerHead),
-    sessionBranch: collaboration.branch,
-    mergeCommits,
+    reviewerSessionIDs: reviewers.map((reviewer) => reviewer.id),
+    prIDs: finalized.map((entry) => entry.prID),
+    mergeModes: finalized.map((entry) => entry.mode),
     concurrentPermissionIDs: permissionIDs,
     hiddenVerifierExit: evaluation.exitCode,
   },
@@ -255,31 +223,7 @@ await writeLiveArtifact(
 )
 console.log(
   `${result.suite}: passed (${result.fingerprint.providerID}/${result.fingerprint.modelID}, ` +
-    `${workers.length} workers, ${entries.length} merged PRs, ${mergeCommits.length} serial merges)`,
+    `${workers.length} workers, ${finalized.length} merged PRs)`,
 )
-
-function record(value: unknown, name: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`${name} is not an object`)
-  return value as Record<string, unknown>
-}
-
-function array(value: unknown, name: string): unknown[] {
-  if (!Array.isArray(value)) throw new Error(`${name} is not an array`)
-  return value
-}
-
-function nestedRecord(value: unknown, keys: string[]) {
-  const result = keys.reduce<Record<string, unknown> | undefined>(
-    (current, key) => {
-      if (!current) return undefined
-      const next = current[key]
-      if (typeof next !== "object" || next === null || Array.isArray(next)) return undefined
-      return next as Record<string, unknown>
-    },
-    record(value, keys[0] ?? "value"),
-  )
-  if (!result) throw new Error(`Missing object path ${keys.join(".")}`)
-  return result
-}
 
 finishLiveScript()

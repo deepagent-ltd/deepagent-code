@@ -255,6 +255,24 @@ describe("Core V2 durable TaskRun authority", () => {
     }),
   )
 
+  it.effect("a child interruption settles the durable task as interrupted", () =>
+    Effect.gen(function* () {
+      const { db, events, sessions } = yield* services
+      const parent = yield* sessions.create({ location: { directory } })
+      const submitted = yield* TaskRunAuthority.submit(db, events, sessions, specFor(parent.id))
+      const result = yield* TaskRunAuthority.execute({
+        db,
+        run: submitted.run,
+        sessions: { ...sessions, resume: () => Effect.interrupt },
+        timeoutMs: 5_000,
+      })
+      expect(result.outcome).toBe("interrupted")
+      const settled = yield* TaskRunAuthority.get(db, submitted.run.runID)
+      expect(settled?.state).toBe("interrupted")
+      expect(settled?.reason).toBe("human")
+    }),
+  )
+
   it.effect("settle converges an exact re-settle and conflicts on a divergent outcome", () =>
     Effect.gen(function* () {
       const { db, events, sessions } = yield* services

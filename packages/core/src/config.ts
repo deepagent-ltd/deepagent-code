@@ -26,6 +26,7 @@ import { ConfigVariable } from "./config/variable"
 import { Flag } from "./flag/flag"
 import { ConfigV1 } from "./v1/config/config"
 import { ConfigMigrateV1 } from "./v1/config/migrate"
+import { ConfigMCPV1 } from "./v1/config/mcp"
 
 export class Info extends Schema.Class<Info>("Config.Info")({
   $schema: Schema.optional(Schema.String).annotate({
@@ -67,6 +68,9 @@ export class Info extends Schema.Class<Info>("Config.Info")({
   commands: Schema.Record(Schema.String, ConfigCommand.Info).pipe(Schema.optional).annotate({
     description: "Named slash command definitions",
   }),
+  mcp: Schema.Record(Schema.String, Schema.Union([ConfigMCPV1.Info, Schema.Struct({ enabled: Schema.Boolean })])).pipe(Schema.optional).annotate({
+    description: "MCP servers consumed by the application V2 MCP tool bridge",
+  }),
   references: ConfigReference.Info.pipe(Schema.optional).annotate({
     description: "Named local directories or Git repositories available as external context",
   }),
@@ -93,6 +97,7 @@ export const RuntimeFieldConsumers = {
   skills: "ConfigSkillPlugin",
   instructions: "ConfigInstructions",
   commands: "ConfigCommandPlugin",
+  mcp: "V2McpBridge",
   references: "ProjectReference",
   docs_sync: "ProjectDocsSync",
   experimental: "Policy",
@@ -261,13 +266,12 @@ export const layer = Layer.effect(
  * (type-level `satisfies`), and every refused key is NOT a schema field — nothing can be both
  * consumed and refused.
  */
-export const UNSUPPORTED_V1_RUNTIME_FIELDS = ["snapshot", "formatter", "lsp", "mcp", "plugin", "reference"] as const
+export const UNSUPPORTED_V1_RUNTIME_FIELDS = ["snapshot", "formatter", "lsp", "plugin", "reference"] as const
 
 export const UNSUPPORTED_V2_RUNTIME_FIELDS = [
   "snapshots",
   "formatter",
   "lsp",
-  "mcp",
   "plugins",
   "learning",
   "references",

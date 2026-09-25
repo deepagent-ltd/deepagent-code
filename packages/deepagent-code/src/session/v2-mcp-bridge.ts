@@ -90,7 +90,21 @@ export const layer = Layer.effectDiscard(
                           messages: [],
                           abortSignal: signal,
                         })
-                          .then((value) => resume(Effect.succeed(value)))
+                          .then((value) => {
+                            if (typeof value === "object" && value !== null && "isError" in value && value.isError === true) {
+                              const content = "content" in value && Array.isArray(value.content) ? value.content : []
+                              const message = content
+                                .flatMap((item) =>
+                                  typeof item === "object" && item !== null && "text" in item && typeof item.text === "string"
+                                    ? [item.text]
+                                    : [],
+                                )
+                                .join("\n")
+                              resume(Effect.fail(new ToolFailure({ message: `MCP tool ${key} failed: ${message || "server returned isError"}` })))
+                              return
+                            }
+                            resume(Effect.succeed(value))
+                          })
                           .catch((cause) =>
                             resume(
                               Effect.fail(new ToolFailure({ message: `MCP tool ${key} failed: ${String(cause)}` })),

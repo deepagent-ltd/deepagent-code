@@ -149,6 +149,8 @@ export type ServeHandle = {
   readonly kill: (signal?: "SIGTERM" | "SIGKILL") => void
   // Resolves with the exit code once the process exits. Bun returns a number.
   readonly exited: Promise<number>
+  readonly stderrTail: () => string
+  readonly stdoutTail: () => string
 }
 
 // `deepagentCode acp` speaks newline-delimited JSON-RPC over stdin/stdout. It is
@@ -338,6 +340,7 @@ export function withCliFixture<A, E>(
       // Watch stdout line-by-line for the listening sentinel. Format
       // (see src/cli/cmd/serve.ts):
       //   "deepagentCode server listening on http://<host>:<port>"
+      const stdoutLines: string[] = []
       const readyRe = /listening on (http:\/\/([^\s:]+):(\d+))/
       const readyDeferred = yield* Deferred.make<{ url: string; hostname: string; port: number }>()
       yield* Effect.forkScoped(
@@ -345,6 +348,7 @@ export function withCliFixture<A, E>(
           Stream.decodeText(),
           Stream.splitLines,
           Stream.runForEach((line) => {
+            stdoutLines.push(line)
             const m = line.match(readyRe)
             return m ? Deferred.succeed(readyDeferred, { url: m[1], hostname: m[2], port: Number(m[3]) }) : Effect.void
           }),
@@ -381,6 +385,8 @@ export function withCliFixture<A, E>(
           proc.kill(signal)
         },
         exited: proc.exited as Promise<number>,
+        stderrTail: () => stderrChunks.join("").slice(-20_000),
+        stdoutTail: () => stdoutLines.join("\n").slice(-8_000),
       } satisfies ServeHandle
     })
 

@@ -17,6 +17,9 @@ const agentMode = (value: unknown): AgentMode | undefined =>
     ? value
     : undefined
 
+const subagentIntensity = (value: unknown): "inherit" | "downgrade" | undefined =>
+  value === "inherit" || value === "downgrade" ? value : undefined
+
 type SelfLearningPolicy = NonNullable<NonNullable<AgentGatewayConfig>["selfLearning"]>
 
 const selfLearning = (value: unknown): SelfLearningPolicy | undefined =>
@@ -43,6 +46,7 @@ export function gatewayConfig(config?: ConfigInfo): AgentGatewayConfig {
   return {
     enabled: true,
     agentMode: agentMode(options.agentMode) ?? envAgentMode() ?? "high",
+    subagentIntensity: subagentIntensity(options.subagentIntensity) ?? "inherit",
     selfLearning: selfLearning(options.selfLearning) ?? envSelfLearning() ?? "manual",
     // W7: durable learning ships ON by default (the shared core flip-flag table: absent/other value
     // = ON; `""`/`false`/`0` = OFF). `=false` falls back to the legacy-only learning path.

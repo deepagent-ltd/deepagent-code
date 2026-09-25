@@ -188,6 +188,28 @@ describe("V2McpBridge abort parity", () => {
     }
   })
 
+  test("an MCP isError result settles as a typed tool failure", async () => {
+    const rt = runtime({
+      "demo:failure": {
+        description: "returns a protocol error",
+        inputSchema: jsonSchema({ type: "object", properties: {} }),
+        execute: async () => ({ isError: true, content: [{ type: "text", text: "MCP_FIXTURE_FAILURE" }] }),
+      },
+    })
+    try {
+      await rt.runPromise(InstanceRegistry.initializeInstance(instance))
+      const exit = await rt.runPromiseExit(settle("mcp__demo__failure", {}))
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (!Exit.isFailure(exit)) return
+      expect(Cause.hasDies(exit.cause)).toBe(false)
+      const error = Option.getOrThrow(Cause.findErrorOption(exit.cause))
+      expect(error instanceof ToolFailure).toBe(true)
+      expect((error as ToolFailure).message).toContain("MCP_FIXTURE_FAILURE")
+    } finally {
+      await rt.dispose()
+    }
+  })
+
   test("refreshes the next tool snapshot across disconnect and reconnect", async () => {
     const listeners = new Set<EventV2.Listener>()
     let connected = true

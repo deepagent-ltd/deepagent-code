@@ -298,6 +298,7 @@ describe("Core V2 TaskWorkspace", () => {
   it.effect("release refuses in-flight runs, prunes after terminal settle, and stays idempotent", () =>
     Effect.gen(function* () {
       const repo = yield* Effect.promise(() => makeRepo(path.join(tmpRoot(), "repo")))
+      const headBefore = repoHead(repo)
       const { db, events, sessions } = yield* services
       const parent = yield* sessions.create({ location: { directory: AbsolutePath.make(repo) } })
       const submitted = yield* TaskRunAuthority.submit(db, events, sessions, specFor(parent.id, "call-ws-rel-1", repo, "worktree"))
@@ -323,6 +324,7 @@ describe("Core V2 TaskWorkspace", () => {
         now: 2_000,
       })
 
+      yield* Effect.promise(() => fs.writeFile(path.join(directory, "result.txt"), "preserved child work\n"))
       const released = yield* TaskWorkspace.release(db, { runID: submitted.run.runID })
       expect(released.released).toBeTrue()
       expect(worktreePaths(repo)).not.toContain(directory)
@@ -334,10 +336,13 @@ describe("Core V2 TaskWorkspace", () => {
           () => undefined,
         ),
       )
-      // The branch is retained for the later PR/merge flow, still at the recorded base commit.
+      // A tool write without an explicit child commit remains reviewable after worktree pruning.
       const retained = yield* runRow(db, submitted.run.runID)
       const branchTip = gitIn(repo, ["rev-parse", `refs/heads/${retained.worktree_branch}`]).stdout.toString().trim()
-      expect(branchTip).toBe(retained.workspace_base_commit!)
+      expect(branchTip).not.toBe(retained.workspace_base_commit!)
+      expect(gitIn(repo, ["show", `${branchTip}:result.txt`]).stdout.toString()).toBe("preserved child work\n")
+      expect(repoHead(repo)).toBe(headBefore)
+      expect(porcelainStatus(repo)).toBe("")
 
       const again = yield* TaskWorkspace.release(db, { runID: submitted.run.runID })
       expect(again.released).toBeTrue()

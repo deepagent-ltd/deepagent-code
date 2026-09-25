@@ -582,7 +582,7 @@ const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
     (
       [
         // The knowledge seed is constructed once per storage-runtime invocation.
-        ["packages/core/src/agent-gateway.ts:createStorageRuntime@523:535.seed", ["createStorageRuntime-invocation", "single-call", "call-stack", "return", "ephemeral-runtime", "instance-scoped", "safe_scoped"]],
+        ["packages/core/src/agent-gateway.ts:createStorageRuntime@528:540.seed", ["createStorageRuntime-invocation", "single-call", "call-stack", "return", "ephemeral-runtime", "instance-scoped", "safe_scoped"]],
         // cross-spawn-spawner: in-flight child process registries drained by wait semantics.
         ["packages/core/src/cross-spawn-spawner.ts:closure@168:180.ins", ["spawner-layer-instance", "per-layer", "layer-lifetime", "layer-finalizer", "coordination-only", "instance-scoped", "safe_scoped"]],
         ["packages/core/src/cross-spawn-spawner.ts:closure@168:181.outs", ["spawner-layer-instance", "per-layer", "layer-lifetime", "layer-finalizer", "coordination-only", "instance-scoped", "safe_scoped"]],
@@ -1905,8 +1905,8 @@ const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
   // (:1145). Both die with the provider turn.
   ...Object.fromEntries(
     ([
-      ["packages/core/src/session/runner/llm.ts:closure@792:1380.withPublication", ["SessionRunner.runTurnAttempt-invocation", "single-turn", "call-stack", "return", "coordination-only", "per-turn", "safe_scoped"]],
-      ["packages/core/src/session/runner/llm.ts:closure@792:1487.planResultMetadata", ["SessionRunner.runTurnAttempt-invocation", "single-turn", "turn-plan-tool-call-count", "return", "turn-validation-only", "per-turn", "safe_scoped"]],
+      ["packages/core/src/session/runner/llm.ts:closure@792:1394.withPublication", ["SessionRunner.runTurnAttempt-invocation", "single-turn", "call-stack", "return", "coordination-only", "per-turn", "safe_scoped"]],
+      ["packages/core/src/session/runner/llm.ts:closure@792:1501.planResultMetadata", ["SessionRunner.runTurnAttempt-invocation", "single-turn", "turn-plan-tool-call-count", "return", "turn-validation-only", "per-turn", "safe_scoped"]],
     ] as const).map(([key, [owner, keyScope, bound, finalizer, durability, reachability, verdict]]) => [
       key,
       { owner, keyScope, bound, finalizer, durability, reachability, verdict } satisfies RuntimeStateAudit,
@@ -1917,8 +1917,8 @@ const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
   // layer and drains its learning queue on scope close.
   ...Object.fromEntries(
     ([
-      ["packages/core/src/agent-gateway.ts:closure@1119:1127.durable", ["DeepAgent-learning-job-build", "per-queued-job", "job-run-lifetime", "queue-drain-job-settle-gc", "durable-store-backed", "instance-scoped", "safe_scoped"]],
-      ["packages/core/src/agent-gateway.ts:closure@3574:3576.storage", ["DeepAgent-runtime-instance", "per-runtime-layer", "layer-lifetime", "layer-scope-close-and-queue-drain", "durable-store-backed", "instance-scoped", "safe_scoped"]],
+      ["packages/core/src/agent-gateway.ts:closure@1124:1132.durable", ["DeepAgent-learning-job-build", "per-queued-job", "job-run-lifetime", "queue-drain-job-settle-gc", "durable-store-backed", "instance-scoped", "safe_scoped"]],
+      ["packages/core/src/agent-gateway.ts:closure@3580:3582.storage", ["DeepAgent-runtime-instance", "per-runtime-layer", "layer-lifetime", "layer-scope-close-and-queue-drain", "durable-store-backed", "instance-scoped", "safe_scoped"]],
     ] as const).map(([key, [owner, keyScope, bound, finalizer, durability, reachability, verdict]]) => [
       key,
       { owner, keyScope, bound, finalizer, durability, reachability, verdict } satisfies RuntimeStateAudit,
@@ -2107,8 +2107,8 @@ const reviewed: Readonly<Record<string, RuntimeStateAudit>> = {
   ...Object.fromEntries(
     ([
       ["packages/deepagent-code/src/server/md-export.ts:closure@304:308.doneBySession", "MdExport.run-invocation", "per-export-session", "manifest-entry-count", "call-return", "manifest-is-authority", "single-call", "safe_scoped"],
-      ["packages/deepagent-code/src/session/prompt-v2.ts:closure@265:267.seen", "resolveReferenceParts-invocation", "per-reference-alias", "template-reference-count", "call-return", "dedup-only", "single-call", "safe_scoped"],
-      ["packages/deepagent-code/src/session/prompt-v2.ts:closure@302:309.seen", "resolvePromptParts-invocation", "per-file-reference", "template-reference-count", "call-return", "dedup-only", "single-call", "safe_scoped"],
+      ["packages/deepagent-code/src/session/prompt-v2.ts:closure@266:268.seen", "resolveReferenceParts-invocation", "per-reference-alias", "template-reference-count", "call-return", "dedup-only", "single-call", "safe_scoped"],
+      ["packages/deepagent-code/src/session/prompt-v2.ts:closure@303:310.seen", "resolvePromptParts-invocation", "per-file-reference", "template-reference-count", "call-return", "dedup-only", "single-call", "safe_scoped"],
       ["packages/deepagent-code/src/tool/custom-tool-adapter.ts:closure@28:32.controller", "CustomTool.execute-invocation", "single-tool-call", "tool-call-duration", "callback-stop-and-listener-detach", "abort-signal-only", "single-call", "safe_scoped"],
       ["packages/deepagent-code/src/tool/custom-tool-rejections.ts:rejected", "ApplicationTools-instance", "weak-instance-and-plugin-key", "live-plugin-instances", "instance-disposer-forget", "diagnostic-only", "instance-scoped", "safe_scoped"],
     ] as const).map(([key, owner, keyScope, bound, finalizer, durability, reachability, verdict]) => [

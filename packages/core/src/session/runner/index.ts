@@ -69,6 +69,7 @@ export const CurrentOnSessionSettled = Context.Reference<
 // evaluatePlanGate decision; absent (core-only compositions) tools settle ungated exactly as before.
 export type ToolSettleGateInput = {
   readonly sessionID: string
+  readonly parentID?: string
   readonly toolName: string
   readonly args: unknown
 }

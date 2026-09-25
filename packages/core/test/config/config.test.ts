@@ -589,6 +589,24 @@ describe("Config", () => {
     ),
   )
 
+  it.live("preserves configured MCP servers for the application V2 tool bridge", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) =>
+        Effect.gen(function* () {
+          const mcp = { fixture: { type: "local" as const, command: ["bun", "server.ts"], enabled: true } }
+          yield* Effect.promise(() =>
+            fs.writeFile(path.join(tmp.path, "deepagent-code.json"), JSON.stringify({ mcp })),
+          )
+          const entries = yield* Config.Service.use((config) => config.entries()).pipe(Effect.provide(testLayer(tmp.path)))
+          expect(Config.latest(entries, "mcp")).toEqual(mcp)
+        }),
+      ),
+    ),
+  )
+
   it.live("rejects parsed-only fields that have no active Core V2 consumer", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
@@ -608,7 +626,6 @@ describe("Config", () => {
                 snapshots: true,
                 formatter: false,
                 lsp: false,
-                mcp: { servers: {} },
                 references: { docs: { path: "../docs" } },
                 plugins: ["example-plugin"],
                 learning: { project_copy: false },
@@ -634,7 +651,7 @@ describe("Config", () => {
           if (Exit.isFailure(exit)) {
             const error = Cause.pretty(exit.cause)
             expect(error).toContain("Unsupported Core V2 config")
-            for (const field of ["snapshots", "mcp", "references", "plugins", "learning.project_copy"]) {
+            for (const field of ["snapshots", "references", "plugins", "learning.project_copy"]) {
               expect(error).toContain(field)
             }
           }
