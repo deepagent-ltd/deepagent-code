@@ -65,8 +65,14 @@ function init() {
   createEffect(() => {
     if (stack().length === 0) return
 
+    let pendingCloseID: string | undefined
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return
+      // D4: a stale close lock (e.g. a dispose raced an unmount) would swallow every later
+      // Escape press forever. Reset it when no close is actually pending so the next dialog
+      // always closes.
+      if (lock.value && pendingCloseID === undefined) lock.value = false
+      pendingCloseID = stack().at(-1)?.id
       close()
       event.preventDefault()
       event.stopPropagation()
