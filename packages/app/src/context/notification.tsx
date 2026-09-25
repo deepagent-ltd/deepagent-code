@@ -266,6 +266,7 @@ export const { use: useNotification, provider: NotificationProvider } = createSi
     // cursor primitive and its boundaries mapped through toNotificationEvent (idle/error).
     const journal = createNotificationJournalSubscription({
       client: serverSDK.client,
+      clientFor: (directory) => serverSDK.createClient({ directory }),
       currentDirectory,
       sessionsOf: (directory: string) => {
         const [childStore] = serverSync.child(directory, { bootstrap: false })

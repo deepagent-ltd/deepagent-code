@@ -71,6 +71,10 @@ export type ExecutionJournalClient = {
 }
 
 export type ExecutionJournalHandlers = {
+  /** Read the current snapshot after the journal anchor, closing the first-subscribe race. */
+  readonly onAnchor?: (sessionID: string) => void
+  /** Deliver each durable row, including message boundaries outside the execution vocabulary. */
+  readonly onJournalEvent?: (sessionID: string, row: ExecutionJournalRow) => void
   /** Fired after every mapped event so callers can trigger reactivity. */
   readonly onEvent?: () => void
   /** Aggregate durable-cursor connectivity: fired on any transition (false = at least one
@@ -270,6 +274,7 @@ export const createExecutionJournalSubscription = (
           anchor = await readAnchor(sessionID, "watermark")
           if (cancelled.has(sessionID) || myGeneration !== generation) return
           advance(anchor)
+          input.handlers?.onAnchor?.(sessionID)
         } else {
           anchor = lastSeq
           advance(anchor)
@@ -288,6 +293,7 @@ export const createExecutionJournalSubscription = (
             if (row.seq <= seen) continue // duplicate absorption (seq-dedupe)
             seen = row.seq
             advance(row.seq)
+            input.handlers?.onJournalEvent?.(sessionID, row)
             const mapped = toLifecycleEvent({ type: row.type, data: row.data })
             if (!mapped) continue
             input.lifecycle.onEvent(mapped)
