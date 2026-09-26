@@ -299,6 +299,90 @@ export const RULE_PACKS: readonly RulePack[] = [
     ),
   },
 
+  // X-06's OpenAI-compatible chat/Responses HTTP routes translate wire requests into
+  // either the V2 durable lane (collectEnhanced -> SessionV2.prompt) or the direct provider
+  // client. They do not themselves own either executor; keep the adapter verdict tied to
+  // the concrete registered handler and both reachable implementations.
+  {
+    match: (id) => id === "http.instance.gateway.chat",
+    rules: all7(adapter([
+      { kind: "importOf", fileSuffix: "handlers/gateway.ts", specifierSuffix: "./gateway-chat" },
+      { kind: "reach", pathSuffix: "packages/deepagent-code/src/server/routes/instance/httpapi/handlers/gateway-chat.ts" },
+      { kind: "reach", pathSuffix: "packages/deepagent-code/src/server/routes/instance/httpapi/handlers/gateway-enhanced.ts" },
+      call("input.sessions.prompt", "handlers/gateway-enhanced.ts"),
+      call("client.generate", "handlers/gateway-chat.ts"),
+      notBody("promptSvc.promptOrSteer"),
+    ])),
+  },
+  {
+    match: (id) => id === "http.instance.gateway.responses",
+    rules: all7(adapter([
+      body("parseResponsesPayload"),
+      body("chatHandler"),
+      { kind: "reach", pathSuffix: "packages/deepagent-code/src/server/routes/instance/httpapi/handlers/gateway-chat.ts" },
+      { kind: "reach", pathSuffix: "packages/deepagent-code/src/server/routes/instance/httpapi/handlers/gateway-enhanced.ts" },
+      call("input.sessions.prompt", "handlers/gateway-enhanced.ts"),
+      call("client.generate", "handlers/gateway-chat.ts"),
+      notBody("promptSvc.promptOrSteer"),
+    ])),
+  },
+  {
+    match: (id) => id === "http.instance.gateway.models",
+    rules: all7(readOnly([
+      { kind: "reach", pathSuffix: "packages/deepagent-code/src/provider/provider.ts" },
+      body("provider.list"),
+      notBody("SessionV2.prompt"),
+      notBody("promptSvc.promptOrSteer"),
+    ])),
+  },
+  // Proxy-admin writes tenant configuration and reads proxy ledger/lane projections;
+  // those tables are separate from Session admission, execution, and provider registry.
+  {
+    match: (id) => id === "http.instance.proxyAdmin.tenantCreate",
+    rules: all7(adapter([
+      { kind: "reach", pathSuffix: "packages/core/src/proxy/sql.ts" },
+      body("db.insert"),
+      notBody("SessionV2.prompt"),
+      notBody("promptSvc.promptOrSteer"),
+    ])),
+  },
+  {
+    match: (id) => id === "http.instance.proxyAdmin.tenantUpdate" || id === "http.instance.proxyAdmin.tenantDelete",
+    rules: all7(adapter([
+      { kind: "reach", pathSuffix: "packages/core/src/proxy/sql.ts" },
+      body("db.update"),
+      notBody("SessionV2.prompt"),
+      notBody("promptSvc.promptOrSteer"),
+    ])),
+  },
+  {
+    match: (id) => id === "http.instance.proxyAdmin.tenantList" || id === "http.instance.proxyAdmin.ledgerList",
+    rules: all7(readOnly([
+      { kind: "reach", pathSuffix: "packages/core/src/proxy/sql.ts" },
+      body("db.select"),
+      notBody("SessionV2.prompt"),
+      notBody("promptSvc.promptOrSteer"),
+    ])),
+  },
+  {
+    match: (id) => id === "http.instance.proxyAdmin.auditList",
+    rules: all7(readOnly([
+      { kind: "reach", pathSuffix: "packages/core/src/event/sql.ts" },
+      body("db.select"),
+      notBody("SessionV2.prompt"),
+      notBody("promptSvc.promptOrSteer"),
+    ])),
+  },
+  {
+    match: (id) => id === "http.instance.proxyAdmin.laneList",
+    rules: all7(readOnly([
+      { kind: "reach", pathSuffix: "packages/core/src/session/sql.ts" },
+      body("db.select"),
+      notBody("SessionV2.prompt"),
+      notBody("promptSvc.promptOrSteer"),
+    ])),
+  },
+
   // ---- C6 API surfaces (capability/context/maintenance/system-context groups): instance-plane
   // read/control HTTP handlers — read_only with the genuine instance/workspace reader fact (the
   // same pattern every other http.instance.* GET reader uses). Their authority owners live in
@@ -492,6 +576,38 @@ export const RULE_PACKS: readonly RulePack[] = [
       notBody("SessionV2.prompt"),
     ])),
   },
+  // X-07 bundles are archival egress/ingress. The imported five-table snapshot is always
+  // marked v2_authority=false; none of these routes admits a prompt or replays execution.
+  // Sharing adds an external archive transport, still outside the seven Session authorities.
+  {
+    match: (id) =>
+      id === "http.instance.session.exportBundle" || id === "http.instance.session.exportBundleStream" ||
+      id === "http.instance.session.shareBundle",
+    rules: all7(readOnly([
+      { kind: "reach", pathSuffix: "packages/deepagent-code/src/session/bundle.ts" },
+      body("exportSessionBundle"),
+      notBody("SessionV2.prompt"),
+      notBody("promptSvc.promptOrSteer"),
+    ])),
+  },
+  {
+    match: (id) => id === "http.instance.session.importBundle" || id === "http.instance.session.importBundleShare",
+    rules: all7(readOnly([
+      { kind: "reach", pathSuffix: "packages/deepagent-code/src/session/snapshot.ts" },
+      body("importSessionSnapshot"),
+      notBody("SessionV2.prompt"),
+      notBody("promptSvc.promptOrSteer"),
+    ])),
+  },
+  {
+    match: (id) => id === "http.instance.session.revokeBundleShare",
+    rules: all7(readOnly([
+      { kind: "reach", pathSuffix: "packages/deepagent-code/src/session/bundle-share.ts" },
+      body("revokeSessionBundle"),
+      notBody("SessionV2.prompt"),
+      notBody("promptSvc.promptOrSteer"),
+    ])),
+  },
   {
     match: (id) =>
       id.startsWith("http.instance.session.") &&
@@ -558,6 +674,17 @@ export const RULE_PACKS: readonly RulePack[] = [
   },
 
   // ---- deepagent goal/panel/knowledge/pack pipeline (legacy) ----
+  // X-03 project navigation only claims settled learning generations. The claim is
+  // persistent learning coordination, not Session prompt/execution ownership.
+  {
+    match: (id) => id === "http.instance.deepagent.projectSwitch",
+    rules: all7(readOnly([
+      { kind: "reach", pathSuffix: "packages/core/src/deepagent/learning-generation.ts" },
+      body("DeepAgentLearningGeneration.claim"),
+      notBody("SessionV2.prompt"),
+      notBody("promptSvc.promptOrSteer"),
+    ])),
+  },
   // RI-71 W3: the goal-lifecycle endpoints control GoalManager, which since RI-39 captures
   // SessionV2 explicitly and drives goal turns through the V2 owner under the production profile.
   // adapter: goal-lifecycle control translated to the V2-driving goal manager; the goal loop's
@@ -1234,7 +1361,7 @@ export const RULE_PACKS: readonly RulePack[] = [
     match: (id) => id === "event.v2-bridge",
     rules: withReadOnlyRest(
       {},
-      [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt"), notBody("events.publish")],
+      [notBody("promptSvc.promptOrSteer"), notBody("SessionV2.prompt")],
       "packages/core/src/event.ts",
     ),
   },

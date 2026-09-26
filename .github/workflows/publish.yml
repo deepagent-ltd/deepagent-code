@@ -23,10 +23,15 @@ on:
         description: "Override version (optional)"
         required: false
         type: string
+      qualification_run_id:
+        description: "Completed candidate-SHA qualification run carrying release-qualification-v2 (required for release GO)"
+        required: false
+        type: string
 
 concurrency: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.version || inputs.bump }}
 
 permissions:
+  actions: read
   id-token: write
   contents: write
   packages: write
@@ -60,6 +65,7 @@ jobs:
           GH_TOKEN: ${{ steps.committer.outputs.token }}
           DEEPAGENT_CODE_BUMP: ${{ inputs.bump }}
           DEEPAGENT_CODE_VERSION: ${{ inputs.version }}
+          DEEPAGENT_CODE_CHANNEL: ${{ (github.ref_name == 'beta' && 'beta') || ((inputs.bump || inputs.version) && 'latest') || github.ref_name }}
           DEEPAGENT_CODE_API_KEY: ${{ secrets.DEEPAGENT_CODE_API_KEY }}
           GH_REPO: ${{ (github.ref_name == 'beta' && 'deepagent-ltd/deepagent-code-beta') || github.repository }}
     outputs:
@@ -67,6 +73,9 @@ jobs:
       release: ${{ steps.version.outputs.release }}
       tag: ${{ steps.version.outputs.tag }}
       repo: ${{ steps.version.outputs.repo }}
+      candidate_commit: ${{ steps.version.outputs.candidate_commit }}
+      candidate_tree: ${{ steps.version.outputs.candidate_tree }}
+      channel: ${{ steps.version.outputs.channel }}
 
   build-cli:
     needs: version
@@ -75,6 +84,7 @@ jobs:
     steps:
       - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
         with:
+          ref: ${{ needs.version.outputs.candidate_commit }}
           fetch-tags: true
 
       - uses: ./.github/actions/setup-bun
@@ -85,23 +95,6 @@ jobs:
         with:
           deepagent-code-app-id: ${{ vars.DEEPAGENT_CODE_APP_ID }}
           deepagent-code-app-secret: ${{ secrets.DEEPAGENT_CODE_APP_SECRET }}
-
-      - name: Build (release identity pinned)
-        id: build
-        run: |
-          ./packages/deepagent-code/script/build.ts ${{ (github.ref_name == 'beta' && '--sourcemaps') || '' }}
-          ./packages/cli/script/build.ts ${{ (github.ref_name == 'beta' && '--sourcemaps') || '' }}
-          # Ship the authorization row at every binary's appRoot (dirname of the executable —
-          # V2OwnerSeed.defaultOwnerAuthorizationAppRoot) so default installs self-qualify.
-          for dir in packages/deepagent-code/dist/deepagent-code-*/bin packages/cli/dist/*/bin; do
-            [ -d "$dir" ] && cp "$RUNNER_TEMP/owner-authorization.json" "$dir/owner-authorization.json"
-          done
-        env:
-          DEEPAGENT_CODE_VERSION: ${{ needs.version.outputs.version }}
-          DEEPAGENT_CODE_RELEASE: ${{ needs.version.outputs.release }}
-          DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY: ${{ runner.temp }}/release-owner-public-key.pem
-          GH_REPO: ${{ needs.version.outputs.repo }}
-          GH_TOKEN: ${{ steps.committer.outputs.token }}
 
       # Owner authorization (2026-09-11 ruling): mint with a ONE-TIME Ed25519 pair BEFORE the
       # binaries build — the public half is pinned into this exact build via the
@@ -122,6 +115,38 @@ jobs:
           jq -r '.public_key_pem' "$RUNNER_TEMP/mint-result.json" > "$RUNNER_TEMP/release-owner-public-key.pem"
           test -s "$RUNNER_TEMP/release-owner-public-key.pem"
 
+      - name: Build (release identity pinned)
+        id: build
+        run: |
+          ./packages/deepagent-code/script/build.ts ${{ (needs.version.outputs.channel == 'beta' && '--sourcemaps') || '' }}
+          ./packages/cli/script/build.ts ${{ (needs.version.outputs.channel == 'beta' && '--sourcemaps') || '' }}
+          # Ship the authorization row at every binary's appRoot (dirname of the executable —
+          # V2OwnerSeed.defaultOwnerAuthorizationAppRoot) so default installs self-qualify.
+          for dir in packages/deepagent-code/dist/deepagent-code-*/bin packages/cli/dist/*/bin; do
+            [ -d "$dir" ] && cp "$RUNNER_TEMP/owner-authorization.json" "$dir/owner-authorization.json"
+          done
+        env:
+          DEEPAGENT_CODE_VERSION: ${{ needs.version.outputs.version }}
+          DEEPAGENT_CODE_CHANNEL: ${{ needs.version.outputs.channel }}
+          DEEPAGENT_CODE_RELEASE: ${{ needs.version.outputs.release }}
+          DEEPAGENT_CODE_RELEASE_OWNER_AUTHORIZATION_FILE: ${{ runner.temp }}/owner-authorization.json
+          DEEPAGENT_CODE_RELEASE_OWNER_PUBLIC_KEY: ${{ runner.temp }}/release-owner-public-key.pem
+          GH_REPO: ${{ needs.version.outputs.repo }}
+          GH_TOKEN: ${{ steps.committer.outputs.token }}
+
+      - name: Verify frozen CLI release candidate
+        if: needs.version.outputs.release
+        env:
+          GH_TOKEN: ${{ steps.committer.outputs.token }}
+        run: |
+          bun script/assert-release-candidate.ts \
+            --commit "${{ needs.version.outputs.candidate_commit }}" \
+            --tree "${{ needs.version.outputs.candidate_tree }}" \
+            --tag "v${{ needs.version.outputs.version }}" \
+            --release-id "${{ needs.version.outputs.release }}" \
+            --release-repo "${{ needs.version.outputs.repo }}" \
+            --package-dir packages/deepagent-code/dist/deepagent-code-linux-x64
+
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: owner-authorization
@@ -134,6 +159,8 @@ jobs:
           path: |
             packages/deepagent-code/dist/deepagent-code-darwin*
             packages/deepagent-code/dist/deepagent-code-linux*
+            packages/deepagent-code/dist/deepagent-code-darwin*.zip
+            packages/deepagent-code/dist/deepagent-code-linux*.tar.gz
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -163,6 +190,8 @@ jobs:
       AZURE_TRUSTED_SIGNING_ENDPOINT: ${{ secrets.AZURE_TRUSTED_SIGNING_ENDPOINT }}
     steps:
       - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
+        with:
+          ref: ${{ needs.version.outputs.candidate_commit }}
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -189,7 +218,6 @@ jobs:
           signing-account-name: ${{ env.AZURE_TRUSTED_SIGNING_ACCOUNT_NAME }}
           certificate-profile-name: ${{ env.AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE }}
           files: |
-            ${{ github.workspace }}\packages\deepagent-code\dist\deepagent-code-windows-arm64\bin\deepagent-code.exe
             ${{ github.workspace }}\packages\deepagent-code\dist\deepagent-code-windows-x64\bin\deepagent-code.exe
             ${{ github.workspace }}\packages\deepagent-code\dist\deepagent-code-windows-x64-baseline\bin\deepagent-code.exe
           exclude-environment-credential: true
@@ -207,7 +235,6 @@ jobs:
         shell: pwsh
         run: |
           $files = @(
-            "${{ github.workspace }}\packages\deepagent-code\dist\deepagent-code-windows-arm64\bin\deepagent-code.exe",
             "${{ github.workspace }}\packages\deepagent-code\dist\deepagent-code-windows-x64\bin\deepagent-code.exe",
             "${{ github.workspace }}\packages\deepagent-code\dist\deepagent-code-windows-x64-baseline\bin\deepagent-code.exe"
           )
@@ -223,30 +250,21 @@ jobs:
         working-directory: packages/deepagent-code/dist
         shell: pwsh
         run: |
-          Compress-Archive -Path "deepagent-code-windows-arm64\bin\*" -DestinationPath "deepagent-code-windows-arm64.zip" -Force
           Compress-Archive -Path "deepagent-code-windows-x64\bin\*" -DestinationPath "deepagent-code-windows-x64.zip" -Force
           Compress-Archive -Path "deepagent-code-windows-x64-baseline\bin\*" -DestinationPath "deepagent-code-windows-x64-baseline.zip" -Force
-
-      - name: Upload signed Windows CLI release assets
-        if: needs.version.outputs.release != ''
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ steps.committer.outputs.token }}
-        run: |
-          gh release upload "v${{ needs.version.outputs.version }}" `
-            "${{ github.workspace }}\packages\deepagent-code\dist\deepagent-code-windows-arm64.zip" `
-            "${{ github.workspace }}\packages\deepagent-code\dist\deepagent-code-windows-x64.zip" `
-            "${{ github.workspace }}\packages\deepagent-code\dist\deepagent-code-windows-x64-baseline.zip" `
-            --clobber `
-            --repo "${{ needs.version.outputs.repo }}"
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: deepagent-code-cli-signed-windows
           path: |
-            packages/deepagent-code/dist/deepagent-code-windows-arm64
             packages/deepagent-code/dist/deepagent-code-windows-x64
             packages/deepagent-code/dist/deepagent-code-windows-x64-baseline
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: needs.version.outputs.release
+        with:
+          name: deepagent-code-cli-signed-windows-archives
+          path: packages/deepagent-code/dist/deepagent-code-windows*.zip
 
   build-electron:
     needs:
@@ -273,22 +291,17 @@ jobs:
             target: aarch64-apple-darwin
             platform_flag: --mac --arm64
             bun_install_flags: --os=darwin --cpu=arm64
-          # github-hosted: blacksmith lacks ARM64 MSVC cross-compilation toolchain
-          - host: "windows-2025"
-            target: aarch64-pc-windows-msvc
-            platform_flag: --win --arm64
           - host: "blacksmith-4vcpu-windows-2025"
             target: x86_64-pc-windows-msvc
             platform_flag: --win
           - host: "blacksmith-4vcpu-ubuntu-2404"
             target: x86_64-unknown-linux-gnu
             platform_flag: --linux
-          - host: "blacksmith-4vcpu-ubuntu-2404-arm"
-            target: aarch64-unknown-linux-gnu
-            platform_flag: --linux --arm64
     runs-on: ${{ matrix.settings.host }}
     steps:
       - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
+        with:
+          ref: ${{ needs.version.outputs.candidate_commit }}
 
       - uses: apple-actions/import-codesign-certs@8f3fb608891dd2244cdab3d69cd68c0d37a7fe93 # v2.0.0
         if: runner.os == 'macOS'
@@ -346,7 +359,7 @@ jobs:
         working-directory: packages/desktop
         env:
           DEEPAGENT_CODE_VERSION: ${{ needs.version.outputs.version }}
-          DEEPAGENT_CODE_CHANNEL: ${{ (github.ref_name == 'beta' && 'beta') || 'prod' }}
+          DEEPAGENT_CODE_CHANNEL: ${{ (needs.version.outputs.channel == 'beta' && 'beta') || 'prod' }}
           DEEPAGENT_CODE_CLI_ARTIFACT: ${{ (runner.os == 'Windows' && 'deepagent-code-cli-windows') || 'deepagent-code-cli' }}
           RUST_TARGET: ${{ matrix.settings.target }}
           GH_TOKEN: ${{ github.token }}
@@ -356,7 +369,7 @@ jobs:
         run: bun run build
         working-directory: packages/desktop
         env:
-          DEEPAGENT_CODE_CHANNEL: ${{ (github.ref_name == 'beta' && 'beta') || 'prod' }}
+          DEEPAGENT_CODE_CHANNEL: ${{ (needs.version.outputs.channel == 'beta' && 'beta') || 'prod' }}
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
           SENTRY_ORG: ${{ vars.SENTRY_ORG }}
           SENTRY_PROJECT: ${{ vars.WEB_SENTRY_PROJECT }}
@@ -371,7 +384,7 @@ jobs:
         working-directory: packages/desktop
         timeout-minutes: 60
         env:
-          DEEPAGENT_CODE_CHANNEL: ${{ (github.ref_name == 'beta' && 'beta') || 'prod' }}
+          DEEPAGENT_CODE_CHANNEL: ${{ (needs.version.outputs.channel == 'beta' && 'beta') || 'prod' }}
           GH_TOKEN: ${{ steps.committer.outputs.token }}
           CSC_LINK: ${{ secrets.APPLE_CERTIFICATE }}
           CSC_KEY_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -385,7 +398,7 @@ jobs:
         working-directory: packages/desktop
         timeout-minutes: 60
         env:
-          DEEPAGENT_CODE_CHANNEL: ${{ (github.ref_name == 'beta' && 'beta') || 'prod' }}
+          DEEPAGENT_CODE_CHANNEL: ${{ (needs.version.outputs.channel == 'beta' && 'beta') || 'prod' }}
 
       - name: Create macOS .app.tar.gz
         if: runner.os == 'macOS' && needs.version.outputs.release
@@ -441,10 +454,18 @@ jobs:
       - build-cli
       - sign-cli-windows
       - build-electron
-    if: always() && !failure() && !cancelled()
+    if: always() && !failure() && !cancelled() && needs.version.outputs.channel != 'beta'
     runs-on: blacksmith-4vcpu-ubuntu-2404
+    env:
+      GH_REPO: ${{ needs.version.outputs.repo }}
+      DEEPAGENT_CODE_VERSION: ${{ needs.version.outputs.version }}
+      DEEPAGENT_CODE_RELEASE: ${{ needs.version.outputs.release }}
+      DEEPAGENT_CODE_CANDIDATE_COMMIT: ${{ needs.version.outputs.candidate_commit }}
+      DEEPAGENT_CODE_CANDIDATE_TREE: ${{ needs.version.outputs.candidate_tree }}
     steps:
       - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
+        with:
+          ref: ${{ needs.version.outputs.candidate_commit }}
 
       - uses: ./.github/actions/setup-bun
 
@@ -482,6 +503,12 @@ jobs:
           path: packages/deepagent-code/dist
 
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: needs.version.outputs.release
+        with:
+          name: deepagent-code-cli-signed-windows-archives
+          path: /tmp/signed-cli-windows
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: deepagent-code-preview-cli
           path: packages/cli/dist
@@ -512,6 +539,65 @@ jobs:
           deepagent-code-app-id: ${{ vars.DEEPAGENT_CODE_APP_ID }}
           deepagent-code-app-secret: ${{ secrets.DEEPAGENT_CODE_APP_SECRET }}
 
+      - name: Build SDK from frozen release candidate
+        if: needs.version.outputs.release
+        env:
+          GH_TOKEN: ${{ steps.committer.outputs.token }}
+        run: |
+          ./packages/sdk/js/script/build.ts
+          bun packages/sdk/js/script/verify-build.ts
+          bun script/assert-release-candidate.ts \
+            --commit "${{ needs.version.outputs.candidate_commit }}" \
+            --tree "${{ needs.version.outputs.candidate_tree }}" \
+            --tag "v${{ needs.version.outputs.version }}" \
+            --release-id "${{ needs.version.outputs.release }}" \
+            --release-repo "${{ needs.version.outputs.repo }}" \
+            --package-dir packages/deepagent-code/dist/deepagent-code-linux-x64
+
+      - name: Probe frozen packaged runtime
+        if: needs.version.outputs.release
+        run: |
+          mkdir -p "$RUNNER_TEMP/ri51-probe"
+          DEEPAGENT_CODE_OWNER_AUTHORIZATION="$PWD/packages/deepagent-code/dist/deepagent-code-linux-x64/bin/owner-authorization.json" \
+            bun packages/core/script/evidence-ledger/probe-packaged-runs.ts \
+              "$PWD/packages/deepagent-code/dist/deepagent-code-linux-x64/bin/deepagent-code" \
+              "$RUNNER_TEMP/ri51-probe/runs.json" \
+              "$RUNNER_TEMP/ri51-probe/home" \
+              "$RUNNER_TEMP/ri51-probe/evidence.json"
+
+      - name: Download reviewed G0-G8 qualification
+        if: needs.version.outputs.release && inputs.qualification_run_id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id }}
+          GH_REPO: ${{ needs.version.outputs.repo }}
+          CANDIDATE_COMMIT: ${{ needs.version.outputs.candidate_commit }}
+          CANDIDATE_TREE: ${{ needs.version.outputs.candidate_tree }}
+        run: |
+          [[ "$QUALIFICATION_RUN_ID" =~ ^[0-9]+$ ]]
+          mkdir -p "$RUNNER_TEMP/ri51-qualification"
+          gh run download "$QUALIFICATION_RUN_ID" --repo "$GH_REPO" \
+            --name release-qualification-v2 --dir "$RUNNER_TEMP/ri51-qualification"
+          gh api "repos/$GH_REPO/actions/runs/$QUALIFICATION_RUN_ID" \
+            > "$RUNNER_TEMP/ri51-qualification/source-run.json"
+          bun packages/core/script/evidence-ledger/verify-qualification-bundle.ts \
+            --dir "$RUNNER_TEMP/ri51-qualification" \
+            --commit "$CANDIDATE_COMMIT" --tree "$CANDIDATE_TREE" \
+            --run-id "$QUALIFICATION_RUN_ID" --repo "$GH_REPO"
+
+      - name: Stage and verify final release archives
+        if: needs.version.outputs.release
+        run: |
+          bun script/release-assets.ts \
+            --commit "${{ needs.version.outputs.candidate_commit }}" \
+            --tree "${{ needs.version.outputs.candidate_tree }}" \
+            --version "${{ needs.version.outputs.version }}" \
+            --cli-dist "$PWD/packages/deepagent-code/dist" \
+            --windows-archives /tmp/signed-cli-windows \
+            --desktop-dir /tmp/desktop \
+            --assets-dir "$RUNNER_TEMP/release-assets" \
+            --manifest "$RUNNER_TEMP/ri51-probe/release-assets.json"
+
       - name: Cache apt packages (AUR)
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
@@ -537,31 +623,83 @@ jobs:
       # gates are pending and the release is refused — fail-closed by construction.
       - name: RI-51 authoritative ledger release gate
         if: needs.version.outputs.release
+        env:
+          QUALIFICATION_RUN_ID: ${{ inputs.qualification_run_id }}
+          GH_REPO: ${{ needs.version.outputs.repo }}
+          GH_TOKEN: ${{ steps.committer.outputs.token }}
         run: |
+          bun script/assert-release-candidate.ts \
+            --commit "${{ needs.version.outputs.candidate_commit }}" \
+            --tree "${{ needs.version.outputs.candidate_tree }}" \
+            --tag "v${{ needs.version.outputs.version }}" \
+            --release-id "${{ needs.version.outputs.release }}" \
+            --release-repo "${{ needs.version.outputs.repo }}" \
+            --package-dir packages/deepagent-code/dist/deepagent-code-linux-x64
           mkdir -p /tmp/authoritative-ledger
-          (cd packages/core && bun run script/evidence-ledger/release-gate.ts --out /tmp/authoritative-ledger/ledger.json)
+          args=(--out /tmp/authoritative-ledger/ledger.json \
+            --package-dir "$PWD/packages/deepagent-code/dist/deepagent-code-linux-x64" \
+            --runs "$RUNNER_TEMP/ri51-probe/runs.json" \
+            --evidence "$RUNNER_TEMP/ri51-probe/evidence.json" \
+            --asset-manifest "$RUNNER_TEMP/ri51-probe/release-assets.json" \
+            --assets-dir "$RUNNER_TEMP/release-assets")
+          if [[ -n "$QUALIFICATION_RUN_ID" ]]; then
+            args+=(--qualification-dir "$RUNNER_TEMP/ri51-qualification" \
+              --qualification-run-id "$QUALIFICATION_RUN_ID" --qualification-repo "$GH_REPO")
+          fi
+          (cd packages/core && bun run script/evidence-ledger/release-gate.ts "${args[@]}")
 
       - name: Upload authoritative ledger release asset
-        if: needs.version.outputs.release && !cancelled()
+        if: needs.version.outputs.release && success()
         env:
           GH_TOKEN: ${{ steps.committer.outputs.token }}
         run: |
-          if [ -f /tmp/authoritative-ledger/ledger.json ]; then
-            gh release upload "v${{ needs.version.outputs.version }}" /tmp/authoritative-ledger/ledger.json --clobber --repo "${{ needs.version.outputs.repo }}" || echo "::warning::ledger asset upload skipped"
-          fi
+          bun script/assert-release-candidate.ts \
+            --commit "${{ needs.version.outputs.candidate_commit }}" \
+            --tree "${{ needs.version.outputs.candidate_tree }}" \
+            --tag "v${{ needs.version.outputs.version }}" \
+            --release-id "${{ needs.version.outputs.release }}" \
+            --release-repo "${{ needs.version.outputs.repo }}"
+          bun packages/core/script/evidence-ledger/verify-ledger-products.ts \
+            --ledger /tmp/authoritative-ledger/ledger.json \
+            --artifact-dir /tmp/authoritative-ledger/release-evidence-products
+          tar -czf /tmp/authoritative-ledger/release-evidence-products.tar.gz \
+            -C /tmp/authoritative-ledger \
+            ledger.json release-evidence-manifest.json release-evidence-products release-evidence
+          bun script/upload-release-asset.ts \
+            /tmp/authoritative-ledger/ledger.json \
+            /tmp/authoritative-ledger/release-evidence-products.tar.gz
+
+      - name: Upload CLI release assets
+        if: needs.version.outputs.release
+        env:
+          GH_TOKEN: ${{ steps.committer.outputs.token }}
+        run: |
+          bun script/assert-release-candidate.ts \
+            --commit "${{ needs.version.outputs.candidate_commit }}" \
+            --tree "${{ needs.version.outputs.candidate_tree }}" \
+            --tag "v${{ needs.version.outputs.version }}" \
+            --release-id "${{ needs.version.outputs.release }}" \
+            --release-repo "${{ needs.version.outputs.repo }}"
+          mapfile -t names < <(jq -r '.assets[] | select(.kind == "cli") | .name' "$RUNNER_TEMP/ri51-probe/release-assets.json")
+          files=()
+          for name in "${names[@]}"; do files+=("$RUNNER_TEMP/release-assets/$name"); done
+          bun script/upload-release-asset.ts "${files[@]}"
 
       - name: Upload desktop release assets
         if: needs.version.outputs.release
         env:
           GH_TOKEN: ${{ steps.committer.outputs.token }}
         run: |
-          shopt -s nullglob
-          files=(/tmp/desktop/*.{exe,blockmap,dmg,zip,AppImage,deb,rpm} /tmp/desktop/*.app.tar.gz)
-          if (( ${#files[@]} == 0 )); then
-            echo "No desktop release assets found"
-            exit 1
-          fi
-          gh release upload "v${{ needs.version.outputs.version }}" "${files[@]}" --clobber --repo "${{ needs.version.outputs.repo }}"
+          bun script/assert-release-candidate.ts \
+            --commit "${{ needs.version.outputs.candidate_commit }}" \
+            --tree "${{ needs.version.outputs.candidate_tree }}" \
+            --tag "v${{ needs.version.outputs.version }}" \
+            --release-id "${{ needs.version.outputs.release }}" \
+            --release-repo "${{ needs.version.outputs.repo }}"
+          mapfile -t names < <(jq -r '.assets[] | select(.kind == "desktop") | .name' "$RUNNER_TEMP/ri51-probe/release-assets.json")
+          files=()
+          for name in "${names[@]}"; do files+=("$RUNNER_TEMP/release-assets/$name"); done
+          bun script/upload-release-asset.ts "${files[@]}"
 
       # W0.5: deliver the signed owner-authorization.json with the release artifacts. The runtime
       # seed (v2-owner-seed.ts) reads it from the install root; if it is missing the release still
@@ -571,20 +709,57 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.committer.outputs.token }}
         run: |
-          if [ -f /tmp/owner-authorization/owner-authorization.json ]; then
-            gh release upload "v${{ needs.version.outputs.version }}" /tmp/owner-authorization/owner-authorization.json --clobber --repo "${{ needs.version.outputs.repo }}"
-          else
-            echo "::warning::owner-authorization.json was not minted for this release — operations must mint and deliver it before the default install can pass owner qualification"
-          fi
+          bun script/assert-release-candidate.ts \
+            --commit "${{ needs.version.outputs.candidate_commit }}" \
+            --tree "${{ needs.version.outputs.candidate_tree }}" \
+            --tag "v${{ needs.version.outputs.version }}" \
+            --release-id "${{ needs.version.outputs.release }}" \
+            --release-repo "${{ needs.version.outputs.repo }}"
+          bun script/upload-release-asset.ts "$RUNNER_TEMP/release-assets/owner-authorization.json"
+
+      - name: Read back final release asset bytes
+        if: needs.version.outputs.release
+        env:
+          GH_TOKEN: ${{ steps.committer.outputs.token }}
+        run: |
+          bun script/assert-release-candidate.ts \
+            --commit "${{ needs.version.outputs.candidate_commit }}" \
+            --tree "${{ needs.version.outputs.candidate_tree }}" \
+            --tag "v${{ needs.version.outputs.version }}" \
+            --release-id "${{ needs.version.outputs.release }}" \
+            --release-repo "${{ needs.version.outputs.repo }}"
+          mkdir -p "$RUNNER_TEMP/release-readback"
+          gh release download "v${{ needs.version.outputs.version }}" \
+            --repo "${{ needs.version.outputs.repo }}" \
+            --dir "$RUNNER_TEMP/release-readback" --pattern '*'
+          bun script/release-assets.ts --verify --allow-ledger-assets \
+            --manifest "$RUNNER_TEMP/ri51-probe/release-assets.json" \
+            --assets-dir "$RUNNER_TEMP/release-readback" \
+            --commit "${{ needs.version.outputs.candidate_commit }}" \
+            --tree "${{ needs.version.outputs.candidate_tree }}"
+          cmp -s "$RUNNER_TEMP/release-readback/ledger.json" /tmp/authoritative-ledger/ledger.json
+          cmp -s "$RUNNER_TEMP/release-readback/release-evidence-products.tar.gz" \
+            /tmp/authoritative-ledger/release-evidence-products.tar.gz
+          bun script/assert-release-candidate.ts \
+            --commit "${{ needs.version.outputs.candidate_commit }}" \
+            --tree "${{ needs.version.outputs.candidate_tree }}" \
+            --tag "v${{ needs.version.outputs.version }}" \
+            --release-id "${{ needs.version.outputs.release }}" \
+            --release-repo "${{ needs.version.outputs.repo }}"
 
       - run: ./script/publish.ts
         env:
           DEEPAGENT_CODE_VERSION: ${{ needs.version.outputs.version }}
+          DEEPAGENT_CODE_CHANNEL: ${{ needs.version.outputs.channel }}
           DEEPAGENT_CODE_RELEASE: ${{ needs.version.outputs.release }}
+          DEEPAGENT_CODE_CANDIDATE_COMMIT: ${{ needs.version.outputs.candidate_commit }}
+          DEEPAGENT_CODE_CANDIDATE_TREE: ${{ needs.version.outputs.candidate_tree }}
           AUR_KEY: ${{ secrets.AUR_KEY }}
           GITHUB_TOKEN: ${{ steps.committer.outputs.token }}
           GH_REPO: ${{ needs.version.outputs.repo }}
           NPM_CONFIG_PROVENANCE: false
           LATEST_YML_DIR: /tmp/latest-yml
+          RELEASE_ASSETS_DIR: ${{ runner.temp }}/release-assets
+          RELEASE_LEDGER_PATH: /tmp/authoritative-ledger/ledger.json
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}

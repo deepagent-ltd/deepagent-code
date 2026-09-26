@@ -52,6 +52,7 @@ export interface Interface {
   ) => Effect.Effect<Output>
   readonly list: () => Effect.Effect<Hooks[]>
   readonly init: () => Effect.Effect<void>
+  readonly reload?: () => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/Plugin") {}
@@ -213,6 +214,12 @@ export const layer = Layer.effect(
                   return
                 }
 
+                if (stage === "signature") {
+                  log.warn("plugin signature rejected", { path: spec, error: message })
+                  publishPluginError(`Plugin ${spec} signature rejected: ${message}`)
+                  return
+                }
+
                 if (stage === "entry") {
                   log.error("failed to resolve plugin server entry", { path: spec, error: message })
                   publishPluginError(`Failed to load plugin ${spec}: ${message}`)
@@ -312,7 +319,11 @@ export const layer = Layer.effect(
       yield* InstanceState.get(state)
     })
 
-    return Service.of({ trigger, list, init })
+    const reload = Effect.fn("Plugin.reload")(function* () {
+      yield* InstanceState.invalidate(state)
+    })
+
+    return Service.of({ trigger, list, init, reload })
   }),
 )
 

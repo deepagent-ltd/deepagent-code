@@ -7,6 +7,7 @@ import type {
   DocumentStore,
   LinkRel,
 } from "@deepagent-code/core/deepagent/document-store"
+import { documentRevision } from "@deepagent-code/core/deepagent/document-store"
 import { readonlySet } from "@deepagent-code/core/util/readonly-collections"
 import * as WikiEvents from "./wiki-events"
 
@@ -405,10 +406,16 @@ export class WikiService {
       const store = this.graph.ownerOf(input.docId)
       if (!store) return Effect.fail(new WikiNotFoundError({ docId: input.docId, reason: "no owning store" }))
       // Append-only human-provenance edit (§B.2/B.3). evidence_refs pin the human editor for audit.
-      const updated = store.updateWithProvenance(doc.id, input.body, {
-        source: "human",
-        evidence_refs: [`human:${input.editor.id}${input.editor.name ? `:${input.editor.name}` : ""}`],
-      })
+      const updated = store.commitGovernedEdit(
+        doc.id,
+        documentRevision(doc),
+        input.body,
+        { type: "human", id: input.editor.id },
+        {
+          source: "human",
+          evidence_refs: [`human:${input.editor.id}${input.editor.name ? `:${input.editor.name}` : ""}`],
+        },
+      )
       // FEAT-006 — AFTER the write commits, publish wiki.page.changed (best-effort, never fails the
       // edit). Idempotency key = docId+version (wiki-events), so a redelivered edit never
       // double-publishes. Self-loop note: the event-driven archiver consumes ONLY archive triggers

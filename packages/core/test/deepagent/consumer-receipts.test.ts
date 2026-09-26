@@ -1,10 +1,14 @@
 import { describe, expect, test } from "bun:test"
 import { Effect } from "effect"
 import { sql } from "drizzle-orm"
+import { SqliteClient } from "@effect/sql-sqlite-bun"
+import { EffectDrizzleSqlite } from "@deepagent-code/effect-drizzle-sqlite"
 import { Database } from "@deepagent-code/core/database/database"
 import { DatabaseMigration } from "@deepagent-code/core/database/migration"
 import { ConsumerReceipts } from "@deepagent-code/core/deepagent/consumer-receipts"
 import { consumerReceiptMigration } from "@deepagent-code/core/deepagent/consumer-receipt-sql"
+import { eventSpoolMigration } from "@deepagent-code/core/deepagent/event-spool-sql"
+import consumerReceiptTerminal from "@deepagent-code/core/database/migration/20260924050000_consumer_receipt_terminal"
 
 // C5-10 — per-consumer side-effect receipts: durable idempotency (run once per (consumer, sourceEvent)),
 // redelivery → typed existing, sink failure → pending stays (E3 retry), cold recovery → no re-exec.
@@ -30,6 +34,42 @@ const refusalOf = <A>(effect: Effect.Effect<A, ConsumerReceipts.ConsumerReceiptE
   )
 
 describe("C5-10 per-consumer side-effect receipts", () => {
+  test("terminal migration preserves receipts and promotes legacy dead-spool failures", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const db = yield* EffectDrizzleSqlite.makeWithDefaults()
+        yield* DatabaseMigration.applyOnly(db, [consumerReceiptMigration, eventSpoolMigration])
+        yield* ConsumerReceipts.runOnce(db, {
+          consumerKind: "event_consumer_failure",
+          sourceEventId: "event://legacy-dead",
+          sideEffect: Effect.fail(new Error("old failure")),
+          now: 10,
+        }).pipe(Effect.exit)
+        yield* db.run(sql`
+          INSERT INTO deepagent_event_spool
+            (event_ref, session_id, envelope_digest, envelope_json, priority, status, attempts, last_error, created_at, updated_at)
+          VALUES
+            ('event://legacy-dead', 'ses_test', ${"0".repeat(64)}, '{}', 'high', 'dead', 5, 'terminal failure', 10, 20)
+        `)
+
+        yield* DatabaseMigration.applyOnly(db, [consumerReceiptTerminal])
+        expect(yield* ConsumerReceipts.receiptFor(db, "event_consumer_failure", "event://legacy-dead")).toMatchObject({
+          status: "dead",
+          attempts: 5,
+          lastError: "terminal failure",
+          resolvedAt: 20,
+        })
+        const repeat = yield* ConsumerReceipts.runOnce(db, {
+          consumerKind: "event_consumer_failure",
+          sourceEventId: "event://legacy-dead",
+          sideEffect: Effect.die("must not run"),
+          now: 30,
+        }).pipe(Effect.exit)
+        expect(String(repeat)).toContain("terminal dead receipt cannot run")
+      }).pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:", disableWAL: true })), Effect.scoped),
+    )
+  })
+
   test("first delivery executes the side effect and records a `done` receipt", async () => {
     await run((db) =>
       Effect.gen(function* () {

@@ -7,6 +7,8 @@ import { EventTable } from "@deepagent-code/core/event/sql"
 import { ModelV2 } from "@deepagent-code/core/model"
 import { ProviderV2 } from "@deepagent-code/core/provider"
 import { SessionProjector } from "@deepagent-code/core/session/projector"
+import { SessionMessageTable, SessionTable } from "@deepagent-code/core/session/sql"
+import { SessionMessage } from "@deepagent-code/core/session/message"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { Deferred, Effect, Exit, Layer } from "effect"
 import { Session as SessionNs } from "@/session/session"
@@ -126,7 +128,7 @@ describe("session.created event", () => {
     }),
   )
 
-  itLegacy.instance("emits legacy global sync payload", () =>
+  itLegacy.instance("emits native V2 creation in the global sync payload", () =>
     Effect.gen(function* () {
       const session = yield* SessionNs.Service
       const received = yield* Deferred.make<{ syncEvent: EventV2.SerializedEvent }>()
@@ -141,7 +143,7 @@ describe("session.created event", () => {
       const event = yield* awaitDeferred(received, "timed out waiting for legacy global sync event")
 
       expect(event.syncEvent).toMatchObject({
-        type: EventV2.versionedType(SessionNs.Event.Created.type, 1),
+        type: EventV2.versionedType(SessionNs.Event.Created.type, 2),
         seq: 0,
         aggregateID: info.id,
         data: { sessionID: info.id },
@@ -347,6 +349,11 @@ describe("Session", () => {
       expect((fork.metadata as { forkedFrom?: { parentSessionID?: string } }).forkedFrom?.parentSessionID).toBe(
         created.id,
       )
+      const { db } = yield* Database.Service
+      const durableTypes = (yield* db.select({ type: EventTable.type }).from(EventTable)
+        .where(eq(EventTable.aggregate_id, fork.id)).all()).map((event) => event.type)
+      expect(durableTypes).toContain(EventV2.versionedType("session.updated", 2))
+      expect(durableTypes).not.toContain(EventV2.versionedType("session.updated", 1))
     }),
   )
 
@@ -458,9 +465,7 @@ describe("Session", () => {
       const directoryError = yield* sessions
         .setDirectory({ sessionID: workspaceSession.id, directory: path.join(workspaceSession.directory, "other") })
         .pipe(Effect.flip)
-      const workspaceError = yield* sessions
-        .setWorkspace({ sessionID: localSession.id, workspaceID })
-        .pipe(Effect.flip)
+      const workspaceError = yield* sessions.setWorkspace({ sessionID: localSession.id, workspaceID }).pipe(Effect.flip)
 
       expect(directoryError).toBeInstanceOf(SessionNs.PlacementChangeUnsupportedError)
       expect(directoryError.operation).toBe("directory")
@@ -835,6 +840,36 @@ describe("Session fork memory completeness (附-D)", () => {
         tools: {},
         mode: "",
       } as unknown as SessionV1.Info)
+      const { db } = yield* Database.Service
+      yield* db
+        .insert(SessionMessageTable)
+        .values([
+          {
+            id: SessionMessage.ID.make(m1),
+            session_id: created.id,
+            type: "user",
+            seq: 1,
+            time_created: 1,
+            time_updated: 1,
+            data: {
+              text: "before cutoff",
+              time: { created: 1 },
+            } as unknown as typeof SessionMessageTable.$inferInsert.data,
+          },
+          {
+            id: SessionMessage.ID.make(m2),
+            session_id: created.id,
+            type: "user",
+            seq: 2,
+            time_created: 2,
+            time_updated: 2,
+            data: {
+              text: "after cutoff",
+              time: { created: 2 },
+            } as unknown as typeof SessionMessageTable.$inferInsert.data,
+          },
+        ])
+        .run()
 
       const fork = yield* Effect.acquireRelease(
         session.fork({ sessionID: created.id, intentID: "session-cutoff-fork", messageID: m2 }),
@@ -846,6 +881,19 @@ describe("Session fork memory completeness (附-D)", () => {
       expect(origin?.parentSessionID).toBe(created.id)
       expect(origin?.cutoffMessageID).toBe(m2)
       expect(typeof origin?.forkedAt).toBe("number")
+      const childMessages = yield* db
+        .select()
+        .from(SessionMessageTable)
+        .where(eq(SessionMessageTable.session_id, fork.id))
+        .all()
+      expect(childMessages.map((row) => (row.data as { text?: string }).text)).toEqual(["before cutoff"])
+      expect(
+        (yield* db
+          .select({ v2Authority: SessionTable.v2_authority })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, fork.id))
+          .get())?.v2Authority,
+      ).toBe(true)
     }),
   )
 

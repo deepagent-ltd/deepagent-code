@@ -966,7 +966,6 @@ export const SettingsGeneralV2: Component = () => {
 
         <SoundsSection />
 
-        <SharingSection />
 
         <UpdatesSection />
 

@@ -6,10 +6,13 @@
 //   bun probe-packaged-runs.ts <packaged-binary> <runs-out.json> [probe-home] [evidence-out.json]
 import { $ } from "bun"
 import { Database } from "bun:sqlite"
+import { Schema } from "effect"
+import { RuntimeIntegrityEvidenceContract } from "../../src/contract/runtime-integrity-evidence"
 
 const binary = process.argv[2]
 const runsOut = process.argv[3]
-if (!binary || !runsOut) throw new Error("usage: bun probe-packaged-runs.ts <packaged-binary> <runs-out.json> [probe-home]")
+if (!binary || !runsOut)
+  throw new Error("usage: bun probe-packaged-runs.ts <packaged-binary> <runs-out.json> [probe-home]")
 
 const home = process.argv[4] ?? "/tmp/ri51-probe/home"
 const workspace = `${home}/workspace`
@@ -48,10 +51,7 @@ const llm = Bun.serve({
         model: "test-model",
         choices: [{ index: 0, delta, finish_reason: finish }],
       })}\n\n`
-    const sse =
-      chunk({ role: "assistant", content: text }, null) +
-      chunk({}, "stop") +
-      "data: [DONE]\n\n"
+    const sse = chunk({ role: "assistant", content: text }, null) + chunk({}, "stop") + "data: [DONE]\n\n"
     return new Response(sse, { headers: { "content-type": "text/event-stream" } })
   },
 })
@@ -151,7 +151,8 @@ const createResponse = await fetch(`${base}/session`, {
   headers,
   body: JSON.stringify({ directory: workspace }),
 })
-if (!createResponse.ok) throw new Error(`session create failed: ${createResponse.status} ${await createResponse.text()}`)
+if (!createResponse.ok)
+  throw new Error(`session create failed: ${createResponse.status} ${await createResponse.text()}`)
 const session = (await createResponse.json()) as { id: string }
 console.log("session:", session.id)
 
@@ -193,9 +194,14 @@ console.log("composition digest:", digestBody.digest)
 // contract), exported alongside the runs so the authoritative ledger can cross-check it against
 // the evidence dir.
 const evidenceOut = process.argv[5]
-if (evidenceOut && receipt.integrity_evidence) {
-  await Bun.write(evidenceOut, `${JSON.stringify(JSON.parse(String(receipt.integrity_evidence)), null, 2)}\n`)
-}
+if (!receipt.integrity_evidence || !receipt.integrity_evidence_hash)
+  throw new Error("settled V2 provider receipt has no runtime-integrity evidence")
+const evidence = Schema.decodeUnknownSync(RuntimeIntegrityEvidenceContract.RuntimeIntegrityEvidence)(
+  JSON.parse(String(receipt.integrity_evidence)),
+)
+if (RuntimeIntegrityEvidenceContract.runtimeIntegrityEvidenceDigest(evidence) !== receipt.integrity_evidence_hash)
+  throw new Error("durable runtime-integrity evidence digest mismatch")
+if (evidenceOut) await Bun.write(evidenceOut, `${JSON.stringify(evidence, null, 2)}\n`)
 const prepared = JSON.parse(String(receipt.prepared_turn)) as { tool_registry_ids?: string[] }
 serve.kill()
 await serve.exited
@@ -207,9 +213,9 @@ const runs = [
     // run exercised (relative to --package-dir), never absolute local paths.
     entrypoint: "deepagent-code serve",
     artifactPath: "bin/deepagent-code",
-    evidenceDigest: String(receipt.integrity_evidence_hash ?? receipt.receipt_id),
+    evidenceDigest: String(receipt.integrity_evidence_hash),
     sessionID: session.id,
-    attemptID: String(receipt.provider_attempt_id ?? receipt.receipt_id),
+    attemptID: evidence.attemptID,
     rootCompositionDigest: digestBody.digest,
     toolIDs: prepared.tool_registry_ids ?? [],
     physicalCallCount: physicalCalls,

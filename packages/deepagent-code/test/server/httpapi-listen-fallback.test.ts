@@ -64,7 +64,7 @@ describe("port-fallback source gate (both entries)", () => {
   test("src/server/server.ts startWithPortFallback gates on EADDRINUSE and re-fails otherwise", async () => {
     const source = await Bun.file(path.resolve(import.meta.dir, "../../src/server/server.ts")).text()
     expect(source).toMatch(
-      /errorCode\(Cause\.squash\(cause\)\) === "EADDRINUSE"\s*\?\s*startListener\(opts, 0\)\s*:\s*Effect\.failCause\(cause\)/,
+      /errorCode\(Cause\.squash\(cause\)\) === "EADDRINUSE"\s*\?\s*startListener\(opts, 0, onRestored\)\s*:\s*Effect\.failCause\(cause\)/,
     )
   })
 

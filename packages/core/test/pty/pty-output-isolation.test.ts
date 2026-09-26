@@ -1,3 +1,4 @@
+import { eventLayer } from "../fixture/event-layer"
 import { describe, expect } from "bun:test"
 import { Duration, Effect, Layer, Queue } from "effect"
 import { EventV2 } from "@deepagent-code/core/event"
@@ -13,7 +14,7 @@ const locationLayer = Layer.succeed(
   Location.Service,
   Location.Service.of(location({ directory: AbsolutePath.make("/tmp") })),
 )
-const it = testEffect(Pty.layer.pipe(Layer.provideMerge(EventV2.defaultLayer), Layer.provideMerge(locationLayer)))
+const it = testEffect(Pty.layer.pipe(Layer.provideMerge(eventLayer()), Layer.provideMerge(locationLayer)))
 const ptyTest = process.platform === "win32" ? it.live.skip : it.live
 
 const createPty = Effect.fn("PtyOutputIsolationTest.createPty")(function* (command: string) {

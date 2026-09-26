@@ -5,9 +5,9 @@ import { runLegacyLiveCases } from "./runtime"
 
 const marker = `mcp-${crypto.randomUUID()}`
 const challenge = `challenge-${crypto.randomUUID()}`
-const toolName = "live_fixture_evidence"
-const failureToolName = "live_fixture_failure"
-const untrustedToolName = "live_fixture_untrusted"
+const toolName = "mcp__live_fixture__evidence"
+const failureToolName = "mcp__live_fixture__failure"
+const untrustedToolName = "mcp__live_fixture__untrusted"
 const prompt = [
   "The private evidence required to answer is not present in this conversation.",
   `You MUST call the available ${toolName} tool exactly once with challenge set to ${challenge}.`,
@@ -20,6 +20,7 @@ const artifact = await runLegacyLiveCases({
   permission: { "*": "deny" },
   primaryPermission: {
     "*": "deny",
+    mcp: "allow",
     [toolName]: "allow",
     [failureToolName]: "allow",
     [untrustedToolName]: "allow",

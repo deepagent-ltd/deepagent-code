@@ -26,10 +26,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { RuntimeIntegrityIdentity } from "@/effect/runtime-integrity-identity"
 import { LSP } from "@/lsp/lsp"
 import { MCP } from "@/mcp"
-import { V2McpBridge } from "@/session/v2-mcp-bridge"
-import { V2PluginToolsBridge } from "@/session/v2-plugin-tools-bridge"
-import { ApplicationTools } from "@deepagent-code/core/tool/application-tools"
-import { InstanceRegistry } from "@/effect/instance-registry"
+import { Root } from "@/effect/root"
 import { Permission } from "@/permission"
 import { Installation } from "@/installation"
 import { InstanceLayer } from "@/project/instance-layer"
@@ -49,7 +46,6 @@ import { SessionCompaction } from "@/session/compaction"
 import { LLM } from "@/session/llm"
 import { SessionPromptV2 } from "@/session/prompt-v2"
 import { SessionCommandV2 } from "@/session/command-v2"
-import { PromptEpoch } from "@/session/prompt-epoch"
 import { DurableLearningRuntime } from "@/deepagent/learning-runtime"
 import { LearningReviewerRunner } from "@/deepagent/learning-reviewer-runner"
 import { DevCampaignMint, devCampaignMint } from "@/effect/dev-campaign-mint"
@@ -86,6 +82,12 @@ import { CorsConfig, isAllowedCorsOrigin, type CorsOptions } from "@/server/cors
 import { serveUIEffect } from "@/server/shared/ui"
 import { ServerAuth } from "@/server/auth"
 import { InstanceHttpApi, RootHttpApi } from "./api"
+import { GatewayHttpApi } from "./groups/gateway"
+import { gatewayHandlers } from "./handlers/gateway"
+import { gatewayServiceTags } from "@/effect/gateway-service-tags"
+import { gatewayAdminHandlers } from "./handlers/gateway-admin"
+import { GatewayAdminApi } from "./groups/gateway-admin"
+import { authorizeProxyKey, proxyAuthorizationLayer, proxyError, proxyStartupGate } from "./middleware/proxy-authorization"
 import { Api } from "@deepagent-code/server/api"
 import { PublicApi } from "./public"
 import {
@@ -153,14 +155,10 @@ import { maintenanceHandlers, maintenanceOnlyHandlersFor } from "./handlers/main
 import { MaintenanceApi } from "./groups/maintenance"
 import type { BootstrapState } from "@deepagent-code/core/database/bootstrap"
 import { layer as maintenanceRegistryLayer } from "./maintenance-registry"
-import { RecoveryExecutor } from "@/server/recovery-executor"
-import { TaskWorktreeReclamation } from "@/effect/task-worktree-reclamation"
 import { capabilityHandlers } from "./handlers/capability"
 import { systemContextHandlers } from "./handlers/system-context"
 import { contextHandlers } from "./handlers/context"
-import { productionSourcesLayer } from "@/context-federation/production-sources"
 import { V2RunnerFrame } from "@/session/v2-runner-frame"
-import { TaskRunDispatcher } from "@deepagent-code/core/session/task-run-dispatcher"
 import { V2OutboxRuntime } from "@/event/v2-outbox-runtime"
 import { V2OwnerSeed } from "@deepagent-code/core/session/runner/v2-owner-seed"
 import { V2OwnerDevMint } from "@deepagent-code/core/session/runner/v2-owner-dev-mint"
@@ -262,6 +260,20 @@ const rootApiRoutes = HttpApiBuilder.layer(RootHttpApi).pipe(
   Layer.provide(schemaErrorLayer),
   Layer.provide(httpApiAuthLayer),
 )
+const gatewayApiRoutes = HttpApiBuilder.layer(GatewayHttpApi).pipe(
+  Layer.provide(gatewayHandlers),
+  Layer.provide(proxyAuthorizationLayer),
+)
+const gatewayAdminRoutes = HttpApiBuilder.layer(GatewayAdminApi).pipe(
+  Layer.provide(gatewayAdminHandlers),
+  Layer.provide(httpApiAuthLayer),
+)
+const gatewayServiceSubsetGate = Layer.effectDiscard(Effect.gen(function* () {
+  if (!(yield* RuntimeFlags.Service).gateway) return
+  // Resolve the handler's actual service inventory from this server root before any gateway
+  // request can be admitted. The scoped composition test checks the same root's live digest.
+  yield* Effect.all(gatewayServiceTags, { discard: true })
+}))
 const eventApiRoutes = HttpApiBuilder.layer(EventApi).pipe(
   Layer.provide(eventHandlers),
   Layer.provide([httpApiAuthLayer, workspaceRoutingLive, instanceContextLayer]),
@@ -340,6 +352,22 @@ const docRoute = HttpRouter.use((router) => router.add("GET", "/doc", () => Effe
   Layer.provide(authOnlyRouterLayer),
 )
 
+const gatewayFallback = HttpRouter.use((router) =>
+  Effect.gen(function* () {
+    const flags = yield* RuntimeFlags.Service
+    const { db } = yield* Database.Service
+    yield* router.add("*", "/v1/*", (request) =>
+      authorizeProxyKey(db, flags.gateway, request).pipe(
+        Effect.map((result) =>
+          result.ok
+            ? proxyError(501, "model_not_supported", "This gateway endpoint is not supported")
+            : result.response,
+        ),
+      ),
+    )
+  }),
+)
+
 const uiRoute = HttpRouter.use((router) =>
   Effect.gen(function* () {
     const fs = yield* FSUtil.Service
@@ -361,6 +389,10 @@ type RouteRequirements =
 export function createRoutes(corsOptions?: CorsOptions, runtimeFlagsLayer = RuntimeFlags.defaultLayer) {
   const baseRoutes = Layer.mergeAll(
     rootApiRoutes,
+    gatewayApiRoutes,
+    gatewayAdminRoutes,
+    proxyStartupGate,
+    gatewayServiceSubsetGate,
     eventApiRoutes,
     ptyConnectApiRoutes,
     imWebSocketApiRoutes,
@@ -368,6 +400,7 @@ export function createRoutes(corsOptions?: CorsOptions, runtimeFlagsLayer = Runt
     instanceRoutes,
     serverRoutes,
     docRoute,
+    gatewayFallback,
     uiRoute,
     // §A4/§C — start the V4 event-runtime daemons with the server (inert unless V4 flags are on). Draws
     // the session stack + RuntimeFlags from the provide stack below.
@@ -376,7 +409,7 @@ export function createRoutes(corsOptions?: CorsOptions, runtimeFlagsLayer = Runt
     // (durable background task runs claimed + drained through the authority executor) plus the
     // notification outbox delivery loop. Database comes from the provide stack below; SessionV2
     // from the V2RunnerFrame.sessionRuntimeLayer provided into this graph.
-    TaskRunDispatcher.runtimeLayer(),
+    Root.taskDispatcherLayer,
     // RI-24: snapshot the root context for the per-root runtime-integrity identity slot; the
     // identity derives detached on first drain use (RuntimeIntegrityIdentity.slotResolver).
     RuntimeIntegrityIdentity.captureRootContextLayer,
@@ -400,20 +433,14 @@ export function createRoutes(corsOptions?: CorsOptions, runtimeFlagsLayer = Runt
       Format.defaultLayer,
       LSP.defaultLayer,
       LLM.defaultLayer,
+      Root.gatewayClientLayer,
       Installation.defaultLayer,
       MCP.defaultLayer,
+      Root.applicationToolsLayer,
       // RI-26 W3: the same MCP→ApplicationTools bridge as the app root, so the embedded server's
       // Location trees (built through this graph's memoized ApplicationTools) expose MCP tools.
-      V2McpBridge.layer.pipe(
-        Layer.provide(ApplicationTools.layer),
-        Layer.provide(InstanceRegistry.layer),
-        Layer.provideMerge(MCP.defaultLayer),
-      ),
-      V2PluginToolsBridge.layer.pipe(
-        Layer.provide(ApplicationTools.layer),
-        Layer.provide(InstanceRegistry.layer),
-        Layer.provideMerge(ToolRegistry.productionLayer),
-      ),
+      Root.mcpBridgeLayer,
+      Root.pluginBridgeLayer,
       ModelsDev.defaultLayer,
       Permission.defaultLayer,
       Plugin.defaultLayer,
@@ -483,12 +510,12 @@ export function createRoutes(corsOptions?: CorsOptions, runtimeFlagsLayer = Runt
     .pipe(
       // The public Core handlers, legacy adapters, status surface, and every location drain share one
       // open V2 runtime. Its augmented map captures the production sources supplied immediately below.
-      Layer.provide(V2RunnerFrame.sessionRuntimeLayer),
+      Layer.provide(Root.layer),
       // W3.7 — the ProductionV2Sources VALUE seam (same context-flow mechanism as the PromptEpoch
       // seam below): the route graph's location-layer runner subtree forwards it into the four-graph
       // adapters (real code/documents/knowledge/memory sources), and the C6 context-readiness handler
       // requires it so readiness probes the SAME adapter set the runner serves (W3.7 L5).
-      Layer.provide(productionSourcesLayer({ workspaceDirectory: process.cwd() })),
+      Layer.provide(Root.routesProvideStack.productionSources),
       // F-14: the C6 readiness handler resolves LocationIndexRuntime for the probe-time identity —
       // the runner subtree builds its own per-location runtime, but the bare HTTP composition never
       // provided the service, so /context/readiness 500'd with "Service not found" in every embedded
@@ -498,24 +525,20 @@ export function createRoutes(corsOptions?: CorsOptions, runtimeFlagsLayer = Runt
       Layer.provide(LocationIndexRuntime.defaultLayer),
       Layer.provide(DurableLearningRuntime.reviewerRegistryLayer),
       Layer.provide(DurableLearningRuntime.lifecycleObserverLayer.pipe(Layer.provide(Database.defaultLayer))),
-      Layer.provide(PromptEpoch.v2RunnerSeamLayer.pipe(Layer.provide(Database.defaultLayer))),
+      Layer.provide(Root.routesProvideStack.promptEpoch),
       // W7 — settle-triggered durable learning (same INTO-the-base seam direction as above).
-      Layer.provide(DurableLearningRuntime.onSessionSettledSeamLayer.pipe(Layer.provide(Database.defaultLayer))),
+      Layer.provide(Root.routesProvideStack.onSessionSettled),
       // W2.2 — C1B recovery executor production wiring: the executor layer build runs the
       // startup drain (process boot = post-crash resume: applies committed pending recovery
       // commands, never fails the boot). It self-provides the module-level
       // Database.defaultLayer constant — memoized by object identity under the shared
       // memoMap, the SAME connection the route graph builds (single-instance local
       // process, one database; no clustering; no split-brain).
-      Layer.provide(RecoveryExecutor.layer.pipe(Layer.provide(Database.defaultLayer))),
+      Layer.provide(Root.routesProvideStack.recoveryExecutor),
       // C-P2-08 — startup reclamation of stale retained run-owned worktrees (same
       // layer-build-means-boot drain and shared Database.defaultLayer connection as the
       // recovery executor above; never fails the boot).
-      Layer.provide(TaskWorktreeReclamation.layer.pipe(Layer.provide(Database.defaultLayer))),
-      // C-P2-08 — startup reclamation of stale retained run-owned worktrees (same
-      // layer-build-means-boot drain and shared Database.defaultLayer connection as the
-      // recovery executor above; never fails the boot).
-      Layer.provide(TaskWorktreeReclamation.layer.pipe(Layer.provide(Database.defaultLayer))),
+      Layer.provide(Root.routesProvideStack.worktreeReclamation),
       Layer.provideMerge(devCampaignMint),
       // W0.5 (blocker-2): the release pipeline ships owner-authorization.json with the install
       // product; this layer seeds ONE signed row into the local DB when the routes graph is built —
@@ -524,7 +547,7 @@ export function createRoutes(corsOptions?: CorsOptions, runtimeFlagsLayer = Runt
       // (fail-closed, nothing written) and only logged — a seed failure never blocks startup.
       Layer.provideMerge(
         Layer.mergeAll(
-          V2OwnerSeed.layer({ env: process.env, appRoot: V2OwnerSeed.defaultOwnerAuthorizationAppRoot() }),
+          Root.ownerSeedLayer,
           // run 模式适配（2026-09-03）：dev 构建自举 owner 授权 — V2-only profile 拒绝 legacy 后，
           // dev 构建（无发布授权文件）必须能自举，否则每个 dev run 都 fail-closed 在
           // v2_owner_campaign_not_verified。生产版本不走此路径（fail-closed 合同不变）。
@@ -537,7 +560,7 @@ export function createRoutes(corsOptions?: CorsOptions, runtimeFlagsLayer = Runt
       // subtree captures (env override, else the persisted state-dir dev keypair, else the pinned
       // production key). The layer carries its own mint-first ordering, so a fresh-state first
       // boot qualifies instead of capturing the production key before the mint writes the keypair.
-      Layer.provideMerge(V2RunnerFrame.ownerQualificationReferencesLayer),
+      Layer.provideMerge(Root.routesProvideStack.ownerReferences),
     )
     .pipe(Layer.orDie)
 }
@@ -546,9 +569,9 @@ export function createRoutes(corsOptions?: CorsOptions, runtimeFlagsLayer = Runt
  * Pre-business incident shell. It opens the store physically read-only and serves only the
  * authenticated maintenance contract; no Session/provider/tool/event runtime is constructed.
  */
-export function createMaintenanceRoutes(filename: string, state: BootstrapState, corsOptions?: CorsOptions) {
+export function createMaintenanceRoutes(filename: string, state: BootstrapState, corsOptions?: CorsOptions, onRestored?: () => void) {
   return HttpApiBuilder.layer(MaintenanceApi).pipe(
-    Layer.provide(maintenanceOnlyHandlersFor(filename, state)),
+    Layer.provide(maintenanceOnlyHandlersFor(filename, state, onRestored)),
     Layer.provide([httpApiAuthLayer, schemaErrorLayer]),
     Layer.provide([errorLayer, compressionLayer, corsVaryFix, cors(corsOptions)]),
     Layer.orDie,

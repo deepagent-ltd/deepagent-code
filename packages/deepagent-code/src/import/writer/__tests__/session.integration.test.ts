@@ -3,11 +3,13 @@ import { Effect, Layer } from "effect"
 import { eq } from "drizzle-orm"
 import { Database } from "@deepagent-code/core/database/database"
 import { EventV2 } from "@deepagent-code/core/event"
+import { EventV2Bridge } from "@/event-v2-bridge"
 import { SessionProjector } from "@deepagent-code/core/session/projector"
 import { ProjectV2 } from "@deepagent-code/core/project"
 import { Git } from "@deepagent-code/core/git"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { SessionMessageTable, SessionTable } from "@deepagent-code/core/session/sql"
+import { DeepAgentEventOutboxTable } from "@deepagent-code/core/deepagent/event-outbox-sql"
 import { SessionSchema } from "@deepagent-code/core/session/schema"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -46,13 +48,14 @@ function sample(): SourceSession {
 function withRuntime(dbPath: string, program: Effect.Effect<any, any, any>): Promise<any> {
   const database = Database.layerFromPath(dbPath)
   const events = EventV2.layer.pipe(Layer.provide(database))
+  const bridge = EventV2Bridge.layer.pipe(Layer.provide(events), Layer.provide(database))
   const projector = SessionProjector.layer.pipe(Layer.provide(events), Layer.provide(database))
   const projects = ProjectV2.layer.pipe(
     Layer.provide(database),
     Layer.provide(FSUtil.defaultLayer),
     Layer.provide(Git.defaultLayer),
   )
-  const runtime = Layer.mergeAll(database, events, projector, projects)
+  const runtime = Layer.mergeAll(database, events, bridge, projector, projects)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return Effect.runPromise(program.pipe(Effect.provide(runtime as any)) as any)
 }
@@ -70,6 +73,11 @@ describe("import writer/session (integration)", () => {
         const sessionRow = yield* db.select().from(SessionTable).where(eq(SessionTable.id, target)).get().pipe(Effect.orDie)
         expect(sessionRow).toBeTruthy()
         expect(sessionRow!.title).toBe("集成测试会话")
+
+        // Import replay uses the same bridge as live publishes: the session.created
+        // fact lands in the C5 outbox in the event transaction.
+        const outbox = yield* db.select().from(DeepAgentEventOutboxTable).all().pipe(Effect.orDie)
+        expect(outbox.map((row) => row.event_type)).toContain("session.created")
 
         const msgs = yield* db
           .select({ id: SessionMessageTable.id, type: SessionMessageTable.type })
@@ -98,6 +106,8 @@ describe("import writer/session (integration)", () => {
         const { db } = yield* Database.Service
         const sessions = yield* db.select({ id: SessionTable.id }).from(SessionTable).where(eq(SessionTable.id, target)).all().pipe(Effect.orDie)
         expect(sessions.length).toBe(1)
+        const outbox = yield* db.select().from(DeepAgentEventOutboxTable).all().pipe(Effect.orDie)
+        expect(outbox.filter((row) => row.event_type === "session.created")).toHaveLength(1)
         const msgs = yield* db
           .select({ id: SessionMessageTable.id, type: SessionMessageTable.type })
           .from(SessionMessageTable)

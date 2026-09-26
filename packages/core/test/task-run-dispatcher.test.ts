@@ -1,3 +1,4 @@
+import { projectLayer } from "./fixture/project-layer"
 import { describe, expect, test } from "bun:test"
 import path from "node:path"
 import { LLMClient, LLMEvent, Model, type LLMClientShape, type LLMRequest } from "@deepagent-code/llm"
@@ -155,7 +156,7 @@ const systemContext = Layer.effectDiscard(
     ),
   ),
 ).pipe(Layer.provideMerge(SystemContextRegistry.layer))
-const location = Location.layer({ directory }).pipe(Layer.provide(Project.defaultLayer))
+const location = Location.layer({ directory }).pipe(Layer.provide(projectLayer(database)))
 const skillGuidance = Layer.mock(SkillGuidance.Service, {
   load: () => Effect.succeed(SystemContext.empty),
 })
@@ -294,7 +295,7 @@ const sessions = SessionV2.layer.pipe(
   Layer.provide(events),
   Layer.provide(database),
   Layer.provide(store),
-  Layer.provide(Project.defaultLayer),
+  Layer.provide(projectLayer(database)),
   Layer.provide(execution),
 )
 const it = testEffect(
@@ -336,6 +337,8 @@ const stubSessions = Layer.succeed(
     list: die,
     create: die,
     get: die,
+    requireWritable: die,
+    update: die,
     messages: die,
     message: die,
     context: die,
@@ -343,6 +346,7 @@ const stubSessions = Layer.succeed(
     switchAgent: die,
     switchModel: die,
     setPermissions: die,
+    setArchived: die,
     // A transient admission defect (not the fatal conflict/not-found classes): retries back off.
     prompt: () => Effect.die(new Error("parent admission transiently failing")),
     shell: die,
@@ -353,7 +357,7 @@ const stubSessions = Layer.succeed(
     interrupt: die,
   }),
 )
-const stubOutbox = TaskOutbox.layer({ maxAttempts: 2, backoffBaseMs: 1, backoffMaxMs: 1 }).pipe(
+const stubOutbox = TaskOutbox.layer({ maxAttempts: 2, backoffBaseMs: 60_000, backoffMaxMs: 60_000 }).pipe(
   Layer.provide(database),
   Layer.provide(stubSessions),
 )
@@ -483,12 +487,7 @@ const outboxRowFor = (db: DatabaseService, runID: string) =>
     .pipe(Effect.orDie)
 
 const parentInputs = (db: DatabaseService, sessionID: SessionSchema.ID) =>
-  db
-    .select()
-    .from(SessionInputTable)
-    .where(eq(SessionInputTable.session_id, sessionID))
-    .all()
-    .pipe(Effect.orDie)
+  db.select().from(SessionInputTable).where(eq(SessionInputTable.session_id, sessionID)).all().pipe(Effect.orDie)
 
 const receiptCount = (db: DatabaseService) =>
   db.select({ total: count() }).from(V2TaskRunReceiptTable).get().pipe(Effect.orDie)
@@ -817,11 +816,12 @@ describe("TaskRunDispatcher + TaskOutbox (Core V2 background runtime)", () => {
       const outbox = yield* TaskOutbox.Service
 
       // Attempt 1 fails transiently: released with backoff (pending, not yet due).
+      const beforeAttempt = Date.now()
       expect(yield* outbox.tick).toBe(1)
       const released = yield* stubOutboxRow(db)
       expect(released?.status).toBe("pending")
       expect(released?.attempts).toBe(1)
-      expect(released?.available_at).toBeGreaterThan(Date.now() - 1)
+      expect(released?.available_at).toBeGreaterThanOrEqual(beforeAttempt + 60_000)
       expect(released?.last_error).toContain("transiently failing")
 
       // Backoff elapsed: attempt 2 fails again and the bounded attempts are exhausted.

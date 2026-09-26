@@ -611,6 +611,18 @@ db.close()
 console.error(
   `[mint-owner-campaign] minted ${campaignId} (${signable.authorizationID}) for build identity ${buildIdentity} in ${dbPath}; valid ${isEphemeral ? "permanently (no-expiry release authorization)" : `${DEFAULT_VALIDITY_DAYS} days`}`,
 )
+if (isDev) {
+  const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
+  console.error(
+    [
+      "[mint-owner-campaign] Local source-run environment (paste into the same shell as the CLI):",
+      `export DEEPAGENT_CODE_V2_OWNER_CAMPAIGN=${shellQuote(campaignId)}`,
+      `export DEEPAGENT_CODE_V2_BUILD_IDENTITY=${shellQuote(JSON.stringify(identity))}`,
+      `export DEEPAGENT_CODE_V2_OWNER_AUTHORIZATION_PUBLIC_KEY=${shellQuote(publicKeyPem)}`,
+      `export DEEPAGENT_CODE_DB=${shellQuote(dbPath)}`,
+    ].join("\n"),
+  )
+}
 console.log(
   JSON.stringify({
     action: "minted",

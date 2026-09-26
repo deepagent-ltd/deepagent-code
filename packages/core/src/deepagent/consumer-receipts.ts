@@ -1,10 +1,11 @@
 export * as ConsumerReceipts from "./consumer-receipts"
 
-import { and, eq } from "drizzle-orm"
+import { and, eq, isNull, ne, or } from "drizzle-orm"
 import { Cause, Effect } from "effect"
 import { createHash } from "node:crypto"
 import type { Database } from "../database/database"
 import { ConsumerReceiptTable, type ConsumerReceiptStatus } from "./consumer-receipt-sql"
+import { DeepAgentEventSpoolTable } from "./event-spool-sql"
 
 // C5-10 — PER-CONSUMER SIDE-EFFECT RECEIPTS. Design authority: docs/core-v2.0-beta/design.md §8.6
 // (consumer delivery ledger + E3 有界 retry semantics) + §8.4 (durable receipt per node/work unit).
@@ -146,6 +147,9 @@ export function runOnce(db: DatabaseClient, input: RunOnceInput): Effect.Effect<
     if (existing?.status === "done") {
       return { kind: "existing", receipt: existing }
     }
+    if (existing?.status === "dead") {
+      return yield* fail("invalid_input", input.consumerKind, input.sourceEventId, "terminal dead receipt cannot run a side effect")
+    }
 
     // First delivery → start a fresh pending receipt; retry → keep the existing pending row.
     if (!existing) {
@@ -205,4 +209,76 @@ export function runOnce(db: DatabaseClient, input: RunOnceInput): Effect.Effect<
     const receipt = yield* receiptFor(db, input.consumerKind, input.sourceEventId)
     return { kind: "executed", receipt: receipt! }
   })
+}
+
+/** Bounded repair scan for crash windows after a spool row dead-letters but before its receipt lands. */
+export function deadSpoolWithoutReceipt(db: DatabaseClient, consumerKind: ConsumerKind, limit: number) {
+  return db
+    .select({ eventRef: DeepAgentEventSpoolTable.event_ref })
+    .from(DeepAgentEventSpoolTable)
+    .leftJoin(
+      ConsumerReceiptTable,
+      and(
+        eq(ConsumerReceiptTable.consumer_kind, consumerKind),
+        eq(ConsumerReceiptTable.source_event_id, DeepAgentEventSpoolTable.event_ref),
+      ),
+    )
+    .where(
+      and(
+        eq(DeepAgentEventSpoolTable.status, "dead"),
+        or(isNull(ConsumerReceiptTable.status), ne(ConsumerReceiptTable.status, "dead")),
+      ),
+    )
+    .orderBy(DeepAgentEventSpoolTable.updated_at)
+    .limit(Math.max(1, limit))
+    .all()
+    .pipe(Effect.orDie)
+}
+
+/** Mirror a durable dead spool state as a terminal receipt, preserving its real attempt count. */
+export function recordDeadSpool(db: DatabaseClient, consumerKind: ConsumerKind, sourceEventId: string) {
+  return db.transaction(
+    () => Effect.gen(function* () {
+      const spool = yield* db
+        .select()
+        .from(DeepAgentEventSpoolTable)
+        .where(eq(DeepAgentEventSpoolTable.event_ref, sourceEventId))
+        .get()
+        .pipe(Effect.orDie)
+      if (spool?.status !== "dead")
+        return yield* fail("invalid_input", consumerKind, sourceEventId, "spool row is not dead")
+      yield* db
+        .insert(ConsumerReceiptTable)
+        .values({
+          consumer_kind: consumerKind,
+          source_event_id: sourceEventId,
+          status: "dead",
+          attempts: spool.attempts,
+          last_error: spool.last_error,
+          receipt_ref: null,
+          created_at: spool.updated_at,
+          updated_at: spool.updated_at,
+          resolved_at: spool.updated_at,
+        })
+        .onConflictDoUpdate({
+          target: [ConsumerReceiptTable.consumer_kind, ConsumerReceiptTable.source_event_id],
+          set: {
+            status: "dead",
+            attempts: spool.attempts,
+            last_error: spool.last_error,
+            receipt_ref: null,
+            updated_at: spool.updated_at,
+            resolved_at: spool.updated_at,
+          },
+          setWhere: ne(ConsumerReceiptTable.status, "done"),
+        })
+        .run()
+        .pipe(Effect.orDie)
+      const receipt = yield* receiptFor(db, consumerKind, sourceEventId)
+      if (receipt?.status !== "dead")
+        return yield* fail("invalid_input", consumerKind, sourceEventId, "receipt conflicts with terminal spool row")
+      return receipt
+    }),
+    { behavior: "immediate" },
+  )
 }

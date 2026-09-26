@@ -16,6 +16,8 @@ import { InstanceStore } from "@/project/instance-store"
 import type { InstanceContext } from "@/project/instance-context"
 import { WorkspaceV2 } from "@deepagent-code/core/workspace"
 import { ProjectV2 } from "@deepagent-code/core/project"
+import { AgentV2 } from "@deepagent-code/core/agent"
+import { LocationServiceMap } from "@deepagent-code/core/location-layer"
 
 // Minimal Agent.Info records (only fields the provider reads). Cast through
 // unknown so tests don't have to build a full permission ruleset etc.
@@ -86,6 +88,23 @@ const run = (
   )
 
 describe("ServerAgentListProvider — metadata mapping & defaults", () => {
+  it("uses the Core Location roster when it is present, even when V1 lists a different agent", async () => {
+    const location = Layer.mock(LocationServiceMap, {
+      get: () =>
+        Layer.mock(AgentV2.Service, {
+          all: () => Effect.succeed([AgentV2.Info.empty(AgentV2.ID.make("core_only"))]),
+        }) as never,
+    } as never)
+    const listed = await run(
+      Layer.merge(
+        makeLayer([agentInfo({ name: "legacy_only" })]),
+        location,
+      ) as unknown as Layer.Layer<AgentListProviderService>,
+      (provider) => provider.listAgents(scope),
+    )
+    expect(listed.filter((item) => item.visible).map((item) => item.name)).toEqual(["core_only"])
+  })
+
   it("maps declared metadata onto the descriptor", async () => {
     const layer = makeLayer([
       agentInfo({
@@ -210,7 +229,14 @@ describe("ServerAgentListProvider — built-in autonomous descriptors (productio
   })
 
   it("every autonomous trigger resolves to >=1 capable agent via the production provider", async () => {
-    for (const evt of ["ci.failure", "ci.repair.requested", "pr.comment", "monitor.alert", "git.push", "schedule.scan"]) {
+    for (const evt of [
+      "ci.failure",
+      "ci.repair.requested",
+      "pr.comment",
+      "monitor.alert",
+      "git.push",
+      "schedule.scan",
+    ]) {
       const r = await run(layer, (p) => p.findByTrigger({ ...scope, event: evt }))
       expect(r.length).toBeGreaterThan(0)
     }
@@ -274,25 +300,30 @@ describe("ServerAgentListProvider — workspace scope gating", () => {
     return Effect.runPromise(eff)
   }
 
-  const configAgents = [
-    agentInfo({ name: "reviewer", mode: "all" }),
-    agentInfo({ name: "auto", mode: "primary" }),
-  ]
+  const configAgents = [agentInfo({ name: "reviewer", mode: "all" }), agentInfo({ name: "auto", mode: "primary" })]
   const configNames = (list: AgentDescriptor[]) => list.filter((d) => !d.id.startsWith("builtin:")).map((d) => d.name)
   const builtinCount = (list: AgentDescriptor[]) => list.filter((d) => d.id.startsWith("builtin:")).length
 
   it("returns this instance's config agents when the requested workspaceID matches the routed workspace", async () => {
-    const listed = await runScoped(configAgents, { workspaceID: "wrk_alpha", userID: "u1" }, {
-      routedWorkspaceID: "wrk_alpha",
-    })
+    const listed = await runScoped(
+      configAgents,
+      { workspaceID: "wrk_alpha", userID: "u1" },
+      {
+        routedWorkspaceID: "wrk_alpha",
+      },
+    )
     expect(configNames(listed)).toEqual(["reviewer", "auto"])
     expect(builtinCount(listed)).toBeGreaterThan(0)
   })
 
   it("withholds config agents (globals only) when the requested workspaceID is NOT the routed workspace", async () => {
-    const listed = await runScoped(configAgents, { workspaceID: "wrk_other", userID: "u1" }, {
-      routedWorkspaceID: "wrk_alpha",
-    })
+    const listed = await runScoped(
+      configAgents,
+      { workspaceID: "wrk_other", userID: "u1" },
+      {
+        routedWorkspaceID: "wrk_alpha",
+      },
+    )
     // out-of-scope query sees NO config agents, but the workspace-independent built-ins remain.
     expect(configNames(listed)).toEqual([])
     expect(builtinCount(listed)).toBeGreaterThan(0)

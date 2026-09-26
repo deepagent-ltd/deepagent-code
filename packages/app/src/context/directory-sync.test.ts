@@ -45,6 +45,44 @@ const assistantMessage = (
   }) as Extract<Message, { role: "assistant" }>
 
 describe("directory optimistic targeting", () => {
+  test("refreshes after an empty first page with a positive message limit", async () => {
+    const limits: number[] = []
+    const current = state()
+    const sessionID = "ses_empty_then_prompt"
+    current[1]("session", 0, { id: sessionID })
+    const sync = createDirSyncContext("/repo/main", {
+      child() {
+        return current
+      },
+      plan: {
+        async sync() {},
+      },
+    } as unknown as Parameters<typeof createDirSyncContext>[1], {
+      scope: ServerScope.local,
+      createClient() {
+        return {
+          session: {
+            async get() {
+              return { data: { id: sessionID } }
+            },
+            async messages(input: { limit: number }) {
+              limits.push(input.limit)
+              if (input.limit < 1) throw new Error("message limit must be positive")
+              return { data: [], response: { headers: new Headers() } }
+            },
+          },
+          v2: { session: { async messages() { return { data: { data: [] } } } } },
+        }
+      },
+    } as unknown as Parameters<typeof createDirSyncContext>[2])
+
+    await sync.session.sync(sessionID)
+    await sync.session.sync(sessionID, { force: true })
+
+    expect(limits).toHaveLength(2)
+    expect(limits.every((limit) => limit > 0)).toBe(true)
+  })
+
   test("writes and removes an explicit worktree optimistic message in that child store", () =>
     createRoot((dispose) => {
       const current = state()

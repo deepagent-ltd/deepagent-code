@@ -38,6 +38,7 @@ import { DialogStash } from "../dialog-stash"
 import { type AutocompleteRef, Autocomplete } from "./autocomplete"
 import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import type { FilePart, UserMessage } from "@deepagent-code/sdk"
+import { toV2Prompt } from "@deepagent-code/sdk"
 import { Locale } from "../../util/locale"
 import { contextUsage } from "../../util/session"
 import { errorMessage } from "../../util/error"
@@ -285,8 +286,8 @@ export function Prompt(props: PromptProps) {
     const text = queue?.[0]
     if (!text) return
     setFollowups(sessionID, queue.slice(1))
-    void sdk.client.session
-      .prompt({ sessionID, parts: [{ type: "text", text }] })
+    void sdk.client.v2.session
+      .prompt({ sessionID, prompt: { text } }, { throwOnError: true })
       .catch((error) => {
         toast.show({
           message: error instanceof Error ? error.message : "Failed to send followup",
@@ -1436,28 +1437,28 @@ export function Prompt(props: PromptProps) {
         }
         metadata = prepared
       }
-      sdk.client.session
+      sdk.client.v2.session
         .prompt({
           sessionID,
-          ...selectedModel,
-          agent: agent.name,
-          model: selectedModel,
-          variant,
-          metadata,
-          parts: [
-            ...editorParts,
-            {
-              type: "text",
-              text: inputText,
-            },
-            ...nonTextParts,
-          ],
-        })
+          prompt: toV2Prompt({
+            agent: agent.name,
+            model: selectedModel,
+            variant,
+            metadata,
+            parts: [
+              ...editorParts,
+              {
+                type: "text",
+                text: inputText,
+              },
+              ...nonTextParts,
+            ],
+          }),
+        }, { throwOnError: true })
         .then((result) => {
           // V4.1 §S1.2 steer ack: a message sent mid-turn is absorbed as a steer and delivered
           // at the next step boundary — keep that visible instead of appearing dropped.
-          const ack = result as unknown as { steered?: boolean }
-          if (ack.steered)
+          if (status().type !== "idle" && result.data.data.delivery === "steer")
             toast.show({
               message: i18n.t("tui.prompt.steered"),
               variant: "info",

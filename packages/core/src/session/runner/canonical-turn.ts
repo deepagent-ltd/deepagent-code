@@ -28,7 +28,7 @@ import {
 } from "../../context-federation/production-adapters"
 import type { RuntimeFeatureRegistry } from "../../flag/runtime-features"
 import { DeepAgentReleasedSnapshot } from "../../deepagent/released-snapshot"
-import { SelectionEnvelope, type SelectionQueryIntent } from "../../contract/selection"
+import { SelectionEnvelope, type GraphKind, type GraphStatus, type SelectionQueryIntent, type SelectionRef } from "../../contract/selection"
 import {
   SessionActivityInputTable,
   SessionActivityTable,
@@ -42,6 +42,7 @@ import {
   SecurityNamespaceTable,
 } from "../../context-federation/sql"
 import { SessionSchema } from "../schema"
+import { LongContext } from "../long-context"
 import { Hash } from "../../util/hash"
 import { V2ProviderTurn } from "./v2-provider-turn"
 import { V2ProviderTurnReceiptTable } from "./v2-provider-turn.sql"
@@ -148,11 +149,13 @@ export type AdmitSelectionInput = {
   readonly fallbackUserInputId?: string
   readonly system: SystemSnapshot
   readonly historyEndMessageId?: string
+  /** Force one post-checkpoint successor; reuse it on exact retry instead of churning revisions. */
+  readonly refreshAfterSelectionID?: string
   readonly model?: {
     readonly id: string
     readonly providerID: string
     readonly protocol: SelectionEnvelope["modelCapability"]["protocol"]
-    readonly contextWindow: number
+    readonly contextWindow?: number
     readonly structuredOutput: boolean
   }
   /** Location-scoped production sources captured by the runner at layer construction. Direct
@@ -328,7 +331,8 @@ function selectContext(
     // Reuse an existing V2 selection for this activity (exact-retry/continuation): ONLY a real V2
     // selection is dispatchable. A legacy_incomplete row (C3-08 read-side marking) stays readable
     // for history but is NOT reusable for a new dispatch — build a V2 successor instead.
-    if (latest && !isLegacyIncompleteRow(latest)) return yield* admissionFromRow(latest, activity, input, now)
+    if (latest && !isLegacyIncompleteRow(latest) && latest.selection_id !== input.refreshAfterSelectionID)
+      return yield* admissionFromRow(latest, activity, input, now)
     const revision = latest ? latest.revision + 1 : 0
     return yield* buildV2Selection(input, activity, now, frame, revision)
   })
@@ -508,52 +512,48 @@ export const selectionGraphEvidence = Effect.fn("SessionRunnerCanonical.selectio
     .get()
     .pipe(Effect.orDie)
   if (row === undefined) return yield* Effect.succeed(undefined)
-  return renderGraphEvidence(row)
-})
-
-function renderGraphEvidence(row: typeof SessionContextSelectionTable.$inferSelect): string | undefined {
-  let statuses: Readonly<Record<string, { readonly status: string; readonly revision: string; readonly candidateCount: number; readonly reasonCode: string }>>
+  let statuses: Readonly<Record<GraphKind, GraphStatus & { readonly rejectedCount?: number }>>
   try {
-    statuses = JSON.parse(row.graph_statuses) as Readonly<Record<string, { readonly status: string; readonly revision: string; readonly candidateCount: number; readonly reasonCode: string }>>
+    statuses = JSON.parse(row.graph_statuses) as Readonly<Record<GraphKind, GraphStatus & { readonly rejectedCount?: number }>>
   } catch {
     return undefined
   }
-  let refs: readonly { readonly token: string }[]
-  try {
-    refs = JSON.parse(row.selected_refs) as readonly { readonly token: string }[]
-  } catch {
-    refs = []
-  }
+  const decodedRefs = Schema.decodeUnknownOption(Schema.fromJsonString(SelectionEnvelope.fields.selectedRefs))(row.selected_refs)
+  const refs: readonly SelectionRef[] = Option.isSome(decodedRefs) ? decodedRefs.value : []
+  return renderGraphEvidence({ graphStatuses: statuses, selectedRefs: refs })
+})
+
+/** Pure renderer shared by the durable read and the four-source request-evidence oracle. */
+export function renderGraphEvidence(input: {
+  readonly graphStatuses: Readonly<Record<GraphKind, GraphStatus & { readonly rejectedCount?: number }>>
+  readonly selectedRefs: readonly SelectionRef[]
+}): string {
   const graphLines = GraphOrder.map((graph) => {
-    const status = statuses[graph]
+    const status = input.graphStatuses[graph]
     if (status === undefined) return `- ${graph}: n/a`
     const revision = status.revision.length === 0 ? "" : ` [rev ${status.revision.slice(0, 48)}]`
-    const rejected = "rejectedCount" in status && typeof (status as { readonly rejectedCount?: unknown }).rejectedCount === "number" && (status as { readonly rejectedCount: number }).rejectedCount > 0
-      ? ` (${(status as { readonly rejectedCount: number }).rejectedCount} rejected)`
+    const adapterVersion = typeof status.adapterVersion === "string" ? status.adapterVersion.slice(0, 48) : "unknown"
+    const rejected = status.rejectedCount !== undefined && status.rejectedCount > 0
+      ? ` (${status.rejectedCount} rejected)`
       : ""
-    return `- ${graph}: ${status.status}${revision}${rejected} (${status.candidateCount} refs)`
+    return `- ${graph}: ${status.status}${revision} [adapter version ${adapterVersion}]${rejected} (${status.candidateCount} refs)`
   })
-  // L2 — total evidence byte budget (4 KB): ref tokens are added greedily under the budget so a
-  // high-token selection cannot make the system tail arbitrarily large. Each token is also
-  // single-token-bounded (120 chars, mirrored from the writer's truncation).
+  // L2 — total evidence byte budget (4 KB). Keep each ref and provenance exact when rendered;
+  // omit whole entries that do not fit rather than truncate an identity into a false reference.
   const lines: string[] = ["Context selection (this turn):", ...graphLines]
   let budgetUsed = bytesOf(lines.join("\n"))
-  // Reserve the two one-time tail parts (prefix + the "(and N more refs)" marker with a generous
-  // N bound) so the final join never exceeds the budget after a token was accepted.
-  const tailReserve = bytesOf("Selected refs: ") + bytesOf(" (and 999999 more refs)")
-  const tokens: string[] = []
+  const refs = input.selectedRefs
+  const tailReserve = bytesOf(`\nSelected refs:\n(and ${refs.length} more refs)`)
+  const rendered: string[] = []
   for (const ref of refs) {
-    const token = ref.token.slice(0, 120).trim()
-    if (token.length === 0) continue
-    if (tokens.length >= 8) break
-    if (budgetUsed + bytesOf(token) + 1 + tailReserve > EvidenceByteBudget) break
-    tokens.push(token)
-    budgetUsed += bytesOf(token) + 1
+    if (rendered.length >= 8) break
+    const line = `- ${ref.graph} ${JSON.stringify(ref.token.slice(0, 120))} version=${JSON.stringify(ref.version ?? "degraded_unavailable")} ref=${JSON.stringify(ref.ref)} provenance_refs=${ref.provenanceRefs?.length ? JSON.stringify(ref.provenanceRefs) : "degraded_unavailable"}`
+    if (budgetUsed + bytesOf(line) + 1 + tailReserve > EvidenceByteBudget) break
+    rendered.push(line)
+    budgetUsed += bytesOf(line) + 1
   }
-  if (tokens.length > 0) lines.push(`Selected refs: ${tokens.join(" ")}`)
-  const remaining = refs
-    .map((ref) => ref.token.slice(0, 120).trim())
-    .filter((token) => token.length > 0).length - tokens.length
+  if (rendered.length > 0) lines.push("Selected refs:", ...rendered)
+  const remaining = refs.length - rendered.length
   if (remaining > 0) lines.push(`(and ${remaining} more refs)`)
   return lines.join("\n")
 }
@@ -621,14 +621,13 @@ function buildV2Envelope(
           modelId: input.model.id,
           providerId: input.model.providerID,
           protocol: input.model.protocol,
-          contextWindow: input.model.contextWindow,
+          ...(input.model.contextWindow === undefined ? {} : { contextWindow: input.model.contextWindow }),
           structuredOutput: input.model.structuredOutput,
         }
       : {
           modelId: "",
           providerId: "",
           protocol: "openai.responses",
-          contextWindow: 0,
           structuredOutput: false,
         },
     releasedKnowledge: released
@@ -783,14 +782,15 @@ export type CommitTurnInput = {
   readonly sessionID: SessionSchema.ID
   readonly admission: SelectionAdmission
   readonly receipt: Omit<V2ProviderTurn.AdmitInput, "ownerToken" | "activityId" | "providerTurnSeq">
+  readonly protocolAttemptIdentityHash?: string
   readonly ownerToken: string
+  /** Dispatchable model policy is committed in the same transaction as the attempt. */
+  readonly policy?: LongContext.PolicyInput
   readonly now?: number
 }
 
-// Creates the canonical provider attempt and the V2 receipt for one physical request inside a single
-// transaction and binds them explicitly. Exact retries converge: a prepared attempt with the same
-// binding is reused, a preparing receipt with the same identity is re-admitted, and an existing
-// binding to the same attempt is idempotent.
+// Creates the canonical provider attempt, V2 receipt, and optional model policy for one physical
+// request inside a single transaction. Exact retries converge on the same prepared attempt.
 export const commitTurn = Effect.fn("SessionRunnerCanonical.commitTurn")(function* (input: CommitTurnInput) {
   const now = input.now ?? Date.now()
   const result = yield* input.db
@@ -932,6 +932,20 @@ export const commitTurn = Effect.fn("SessionRunnerCanonical.commitTurn")(functio
             durableSelection.selected_source_fingerprint !== input.admission.selectedSourceFingerprint
           )
             return yield* new AdmissionError({ reason: "selection_revalidation_required" })
+          if (input.policy && (
+            input.policy.sessionID !== input.sessionID ||
+            input.policy.activityID !== input.admission.activityId ||
+            input.policy.userMessageID !== input.receipt.userMessageId ||
+            input.policy.promptEpoch !== input.receipt.historyPromptEpoch ||
+            input.policy.requestHash !== input.receipt.requestInputHash ||
+            input.policy.providerID !== input.receipt.providerId ||
+            input.policy.apiModelID !== input.receipt.modelId ||
+            input.policy.selectionID !== input.admission.selectionId ||
+            input.policy.projectionHash !== input.admission.projectionHash ||
+            (input.policy.policy.state !== "unmanaged" &&
+              (input.policy.policy.state !== "managed" ||
+                (input.policy.policy.action !== "normal" && input.policy.policy.action !== "observed")))
+          )) return yield* new AdmissionError({ reason: "model_policy_attempt_binding_mismatch" })
           const validUntil = now + ValidationMs
           yield* input.contexts.appendValidation({
             selectionId: input.admission.selectionId,
@@ -952,6 +966,7 @@ export const commitTurn = Effect.fn("SessionRunnerCanonical.commitTurn")(functio
             selectionId: input.admission.selectionId,
             projectionHash: input.admission.projectionHash,
             requestHash: input.receipt.requestInputHash,
+            protocolAttemptIdentityHash: input.protocolAttemptIdentityHash,
             providerId: input.receipt.providerId,
             ownerToken: input.ownerToken,
             authorizationEpoch: input.admission.authorizationEpoch,
@@ -971,6 +986,8 @@ export const commitTurn = Effect.fn("SessionRunnerCanonical.commitTurn")(functio
             receipt.providerAttemptId === attempt.attemptId
               ? receipt
               : yield* V2ProviderTurn.bindAttemptInTransaction(tx, receipt, attempt.attemptId)
+          if (input.policy)
+            yield* LongContext.recordPolicyInTransaction(tx, input.policy, attempt.attemptId)
           return { receipt: bound, attempt, providerTurnSeq }
         }),
       { behavior: "immediate" },

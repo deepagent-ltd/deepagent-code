@@ -1,3 +1,4 @@
+import { eventLayer } from "../fixture/event-layer"
 import { describe, expect } from "bun:test"
 import { Effect, Layer } from "effect"
 import { AISDK } from "@deepagent-code/core/aisdk"
@@ -9,7 +10,7 @@ import { testEffect } from "../lib/effect"
 import { it, model } from "./provider-helper"
 
 const itWithAISDK = testEffect(
-  AISDK.layer.pipe(Layer.provideMerge(PluginV2.locationLayer.pipe(Layer.provide(EventV2.defaultLayer)))),
+  AISDK.layer.pipe(Layer.provideMerge(PluginV2.locationLayer.pipe(Layer.provide(eventLayer())))),
 )
 
 describe("GooglePlugin", () => {

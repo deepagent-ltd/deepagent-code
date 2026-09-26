@@ -71,7 +71,14 @@ import { migrations } from "../src/database/migration.gen"
 // (20260922182457_recovery_command_exit) joined the registry (command_kind/evidence columns
 // for the confirm-settled durable exit) alongside the merged v2_task_call_admission entry;
 // explicit re-pin over the merged tree.
-const PINNED_DIGEST = "d060e26dd41e2ea9018e7803d73eb4bc280b6506045463e6fb269b2e2e3aeeb2"
+// Successor pin (2026-09-24, 2.0.2 merged tree): nine reviewed migrations joined for proxy
+// gateway + permission policy, input revert epoch, learning generation, V2 session authority,
+// event task workspaces, long-context checkpoints, terminal consumer receipts, and provider
+// attempt protocol identity. No previously pinned migration source changed; the generated
+// registry appended exactly these nine ordered identities and body hashes.
+// X-08 request-identity hardening adds one nullable, immutable im_send request fingerprint
+// column; the 203-entry ordered registry is re-pinned after its fresh-apply oracle passed.
+const PINNED_DIGEST = "abf2cd4f393ede8c19eaca8db1f3108dcd2dc04b1ad0041dd9fcb1f5b9a8873e"
 
 const digest = (entries: readonly { readonly id: string; readonly hash: string }[]) =>
   createHash("sha256").update(JSON.stringify(entries)).digest("hex")

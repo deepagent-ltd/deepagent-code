@@ -46,12 +46,6 @@ export namespace EffectFlock {
   const MAX_DELAY_MS = 2_000
   const HEARTBEAT_MS = Math.max(100, Math.floor(STALE_MS / 3))
 
-  const retrySchedule = Schedule.exponential(BASE_DELAY_MS, 1.7).pipe(
-    Schedule.either(Schedule.spaced(MAX_DELAY_MS)),
-    Schedule.jittered,
-    Schedule.while((meta) => meta.elapsed < TIMEOUT_MS),
-  )
-
   // ---------------------------------------------------------------------------
   // Lock metadata schema
   // ---------------------------------------------------------------------------
@@ -87,7 +81,13 @@ export namespace EffectFlock {
   // ---------------------------------------------------------------------------
 
   function wall() {
-    return performance.timeOrigin + performance.now()
+    // Filesystem mtime is wall time. On macOS, performance.now() can stop across sleep,
+    // leaving timeOrigin + now behind the mtime of a lock that is already stale.
+    return Date.now()
+  }
+
+  function mono() {
+    return performance.now()
   }
 
   const mtimeMs = (info: FileSystem.File.Info) => Option.getOrElse(info.mtime, () => new Date(0)).getTime()
@@ -219,15 +219,21 @@ export namespace EffectFlock {
 
       const acquireHandle = (lockfile: string, key: string): Effect.Effect<Handle, LockError> => {
         const token = randomUUID()
-        // A single claim attempt stays uninterruptible so it either fully
-        // claims (dir + heartbeat + meta) or fully doesn't; only the retry
-        // waits in between honor interruption.
-        return Effect.uninterruptible(tryAcquireLockDir(lockfile, key, token)).pipe(
-          Effect.retry({
-            while: (err) => err._tag === "NotAcquired",
-            schedule: retrySchedule,
-          }),
-          Effect.catchTag("NotAcquired", () => Effect.fail(new LockTimeoutError({ key }))),
+        return Effect.gen(function* () {
+          const started = mono()
+          let retries = 0
+          while (true) {
+            // A claim attempt is atomic. Keep its retry sleep outside the mask so
+            // cancellation cannot surface the internal NotAcquired sentinel.
+            const attempt = yield* Effect.uninterruptible(tryAcquireLockDir(lockfile, key, token)).pipe(
+              Effect.map(Option.some),
+              Effect.catchTag("NotAcquired", () => Effect.succeed(Option.none())),
+            )
+            if (Option.isSome(attempt)) return attempt.value
+            if (mono() - started >= TIMEOUT_MS) return yield* new LockTimeoutError({ key })
+            yield* Effect.sleep(Math.random() * Math.min(MAX_DELAY_MS, BASE_DELAY_MS * 1.7 ** retries++))
+          }
+        }).pipe(
           // An interrupt can land right after a successful attempt, before the
           // scope finalizer is registered — drop our own claim so the dir
           // isn't orphaned until it goes stale.

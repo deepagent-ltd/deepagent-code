@@ -35,6 +35,22 @@ const gate = () => {
 const mutating = { sessionID, toolName: "write", args: { file_path: "/app/a.go", content: "x" } }
 
 describe("V2 plan gate on unseeded sessions", () => {
+  test("delegated child mutations use the parent-owned plan without a child-local gate", async () => {
+    const decision = await Effect.runPromise(
+      Effect.gen(function* () {
+        const decide = yield* SessionRunner.CurrentToolSettleGate
+        if (!decide) return yield* Effect.die("tool settle gate is not wired")
+        return yield* decide({
+          sessionID: "ses_v2_goal_child",
+          parentID: "ses_v2_goal_parent",
+          toolName: "write",
+          args: { path: "result.txt", content: "OK" },
+        })
+      }).pipe(Effect.provide(gate()), Effect.scoped),
+    )
+    expect(decision).toEqual({ kind: "pass" })
+  })
+
   test("blocks once, then releases by registering an implicit plan (no repeating block tax)", async () => {
     const { decisions, plan } = await Effect.runPromise(
       Effect.gen(function* () {

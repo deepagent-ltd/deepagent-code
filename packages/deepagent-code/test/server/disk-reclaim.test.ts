@@ -21,6 +21,35 @@ const exists = async (file: string) =>
     .catch(() => false)
 
 describe("DiskReclaim (W-02 M-5)", () => {
+  test("a failed deletion persists the completed partial reclaim report", async () => {
+    await using tmp = await tmpdir()
+    const filename = path.join(tmp.path, "store", "deepagent-code.db")
+    const backupDir = path.join(tmp.path, "store", "backups")
+    await fs.mkdir(backupDir, { recursive: true })
+    await Bun.write(path.join(tmp.path, "store", "a.bak"), "deleted first")
+    await fs.mkdir(path.join(tmp.path, "store", "z.bak"))
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        const failure = yield* Effect.flip(DiskReclaim.reclaim({
+          db,
+          dbPath: filename,
+          backupDir,
+          dataRoot: tmp.path,
+          confirm: true,
+        }))
+        expect(failure).toMatchObject({ _tag: "DiskReclaim.DiskReclaimError", code: "reclaim_failed" })
+      }).pipe(Effect.provide(Database.layerFromPath(filename)), Effect.scoped),
+    )
+    const report = await Bun.file(DiskReclaim.reportPathFor(backupDir)).json() as DiskReclaim.ReclaimReport
+    expect(report.failure?.code).toBe("reclaim_failed")
+    expect(report.candidates.find((candidate) => path.basename(candidate.path) === "a.bak")?.deleted).toBeTrue()
+    expect(report.candidates.find((candidate) => path.basename(candidate.path) === "z.bak")?.deleted).toBeFalse()
+    expect(await exists(path.join(tmp.path, "store", "a.bak"))).toBeFalse()
+    expect(await exists(path.join(tmp.path, "store", "z.bak"))).toBeTrue()
+  })
+
   test("inventory + confirm gate: without confirm nothing is deleted; with confirm residue goes", async () => {
     await using tmp = await tmpdir()
     const filename = path.join(tmp.path, "store", "deepagent-code.db")
@@ -34,7 +63,8 @@ describe("DiskReclaim (W-02 M-5)", () => {
     // Operational residue in the store directory + the red-line incident set.
     await Bun.write(path.join(tmp.path, "store", "repro.db"), "repro residue")
     await Bun.write(path.join(tmp.path, "store", "old.bak"), "bak residue")
-    await Bun.write(path.join(tmp.path, "store", "deepagent-code-other.db"), "stale channel db")
+    await Bun.write(path.join(tmp.path, "store", "deepagent-code-other.db"), "other live channel db")
+    await Bun.write(path.join(tmp.path, "store", "deepagent-code-repro.db"), "repro live channel db")
     await fs.mkdir(path.join(tmp.path, "store", "restore-incidents"), { recursive: true })
     await Bun.write(path.join(tmp.path, "store", "restore-incidents", "incident-1.db"), "incident copy")
     await fs.mkdir(path.join(tmp.path, "cache"), { recursive: true })
@@ -49,7 +79,7 @@ describe("DiskReclaim (W-02 M-5)", () => {
         expect(dry.executed).toBe(false)
         expect(dry.reclaimedBytes).toBe(0)
         const dryCandidates = new Map(dry.candidates.map((candidate) => [path.basename(candidate.path), candidate]))
-        expect([...dryCandidates.keys()].sort()).toEqual(["deepagent-code-other.db", "old.bak", "repro.db"])
+        expect([...dryCandidates.keys()].sort()).toEqual(["old.bak", "repro.db"])
         expect([...dryCandidates.values()].every((candidate) => candidate.safe && !candidate.deleted)).toBe(true)
         // The full measurement classified the data root.
         const categories = new Map(dry.inventory.map((entry) => [entry.category, entry]))
@@ -68,9 +98,8 @@ describe("DiskReclaim (W-02 M-5)", () => {
           confirm: true,
         })
         expect(executed.executed).toBe(true)
-        expect(executed.reclaimedBytes).toBe("repro residue".length + "bak residue".length + "stale channel db".length)
+        expect(executed.reclaimedBytes).toBe("repro residue".length + "bak residue".length)
         expect(executed.candidates.filter((candidate) => candidate.deleted).map((candidate) => path.basename(candidate.path)).sort()).toEqual([
-          "deepagent-code-other.db",
           "old.bak",
           "repro.db",
         ])
@@ -84,6 +113,8 @@ describe("DiskReclaim (W-02 M-5)", () => {
         expect(yield* Effect.promise(() => exists(path.join(tmp.path, "store", "restore-incidents", "incident-1.db")))).toBe(true)
         // The live db, its sidecars, operational data and the backups root survive.
         expect(yield* Effect.promise(() => exists(filename))).toBe(true)
+        expect(yield* Effect.promise(() => exists(path.join(tmp.path, "store", "deepagent-code-other.db")))).toBe(true)
+        expect(yield* Effect.promise(() => exists(path.join(tmp.path, "store", "deepagent-code-repro.db")))).toBe(true)
         expect(yield* Effect.promise(() => exists(path.join(tmp.path, "cache", "operational.bin")))).toBe(true)
         // The report persisted under the backups root.
         const stored = yield* Effect.promise(() => Bun.file(DiskReclaim.reportPathFor(backupDir)).json())
@@ -93,7 +124,7 @@ describe("DiskReclaim (W-02 M-5)", () => {
     )
   })
 
-  test("safety oracle: a file referenced by a backup manifest is blocked even when it looks like residue", async () => {
+  test("safety oracle: a nested backup manifest protects its source from reclaim", async () => {
     await using tmp = await tmpdir()
     const filename = path.join(tmp.path, "store", "deepagent-code.db")
     await fs.mkdir(path.dirname(filename), { recursive: true })
@@ -102,11 +133,12 @@ describe("DiskReclaim (W-02 M-5)", () => {
     }).pipe(Effect.provide(Database.layerFromPath(filename)), Effect.ignore))
     const backupDir = path.join(tmp.path, "store", "backups")
     await fs.mkdir(backupDir, { recursive: true })
+    await fs.mkdir(path.join(backupDir, "old", "nested"), { recursive: true })
     // A .bak-looking file that a backup manifest legitimately references as its source.
     const referenced = path.join(tmp.path, "store", "manual.bak")
     await Bun.write(referenced, "referenced by a manifest")
     await Bun.write(
-      path.join(backupDir, "b.db.manifest.json"),
+      path.join(backupDir, "old", "nested", "b.db.manifest.json"),
       JSON.stringify({
         version: 1,
         backup: { fileName: "b.db", filePath: path.join(backupDir, "b.db"), sizeBytes: 1, sha256: "s", createdAt: 0 },
@@ -128,6 +160,29 @@ describe("DiskReclaim (W-02 M-5)", () => {
         expect(report.reclaimedBytes).toBe(0)
       }).pipe(Effect.provide(Database.layerFromPath(filename)), Effect.scoped),
     )
+  })
+
+  test("an unreadable nested manifest closes reclaim until the keep-set can be checked", async () => {
+    await using tmp = await tmpdir()
+    const filename = path.join(tmp.path, "store", "deepagent-code.db")
+    const backupDir = path.join(tmp.path, "store", "backups")
+    await fs.mkdir(path.join(backupDir, "old"), { recursive: true })
+    await Bun.write(path.join(backupDir, "old", "broken.manifest.json"), "not-json")
+    const residue = path.join(tmp.path, "store", "manual.bak")
+    await Bun.write(residue, "kept")
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const { db } = yield* Database.Service
+        const report = yield* DiskReclaim.reclaim({ db, dbPath: filename, backupDir, dataRoot: tmp.path, confirm: true })
+        expect(report.candidates.find((candidate) => candidate.path === residue)).toMatchObject({
+          safe: false,
+          deleted: false,
+          blockedReason: "backup manifest unreadable; reclaim blocked until it is repaired",
+        })
+      }).pipe(Effect.provide(Database.layerFromPath(filename)), Effect.scoped),
+    )
+    expect(await exists(residue)).toBeTrue()
   })
 
   test("advisory input: M-2 disk advisory residue candidates feed the reclaim list", async () => {

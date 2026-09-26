@@ -11,13 +11,14 @@ import { Auth } from "../auth"
 import { Env } from "../env"
 import { applyEdits, modify } from "jsonc-parser"
 import { InstallationLocal, InstallationVersion } from "@deepagent-code/core/installation/version"
-import { existsSync } from "fs"
+import { existsSync, readdirSync, statSync, watch } from "fs"
 import { Account } from "@/account/account"
 import { isRecord } from "@/util/record"
 import type { ConsoleState } from "@deepagent-code/core/v1/config/console-state"
 import { FSUtil } from "@deepagent-code/core/fs-util"
 import { InstanceState } from "@/effect/instance-state"
-import { Cause, Context, Duration, Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
+import { InstanceRef } from "@/effect/instance-ref"
+import { Cause, Context, Duration, Effect, Exit, Fiber, Layer, Option, Schema, Semaphore } from "effect"
 import { JsonError, InvalidError } from "@deepagent-code/core/v1/config/error"
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
@@ -53,15 +54,21 @@ function mergeConfigConcatArrays(target: Info, source: Info): Info {
   return merged
 }
 
-function normalizeLoadedConfig(data: unknown, source: string) {
+export function normalizeLoadedConfig(data: unknown, source: string) {
   if (!isRecord(data)) return data
   const copy = { ...data }
   const hadLegacy = "theme" in copy || "keybinds" in copy || "tui" in copy
-  if (!hadLegacy) return copy
-  delete copy.theme
-  delete copy.keybinds
-  delete copy.tui
-  log.warn("tui keys in deepagent-code config are deprecated; move them to tui.json", { path: source })
+  if (hadLegacy) {
+    delete copy.theme
+    delete copy.keybinds
+    delete copy.tui
+    log.warn("tui keys in deepagent-code config are deprecated; move them to tui.json", { path: source })
+  }
+  // D3 — `providers` is the Core V2 catalog schema (ConfigProviderPlugin; see core's Config.Info).
+  // Both loaders read the same files, and this V1 schema rejects it as an unknown key, which
+  // used to 500 the whole instance config load. It has no V1 consumer, so strip it here and let
+  // the core V2 loader keep consuming it from the same file.
+  if ("providers" in copy) delete copy.providers
   return copy
 }
 
@@ -146,6 +153,7 @@ type Info = ConfigV1.Info & {
   // plugin_origins is derived state, not a persisted config field. It keeps each winning plugin spec together
   // with the file and scope it came from so later runtime code can make location-sensitive decisions.
   plugin_origins?: ConfigPlugin.Origin[]
+  mcp_origins?: Record<string, string>
 }
 
 // A non-fatal config-load problem surfaced to the user (e.g. in Settings → Providers) so they can tell
@@ -175,6 +183,7 @@ export interface Interface {
   readonly invalidate: () => Effect.Effect<void>
   readonly directories: () => Effect.Effect<string[]>
   readonly waitForDependencies: () => Effect.Effect<void>
+  readonly watch?: (changed: () => Effect.Effect<void>) => Effect.Effect<() => void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@deepagent-code/Config") {}
@@ -215,7 +224,9 @@ async function migrateGlobalConfigFiles() {
       const value = ConfigParse.jsonc(raw, "migrate")
       if (!value || typeof value !== "object" || Array.isArray(value)) return undefined
       // Schema-validate too: an invalid-field file must keep surfacing its schema error in place.
-      ConfigParse.schema(ConfigV1.Info, value, "migrate")
+      // `providers` (Core V2 catalog key) is stripped by normalizeLoadedConfig before validation —
+      // a valid V2-only file must not count as "broken" and block legacy consolidation (D3).
+      ConfigParse.schema(ConfigV1.Info, normalizeLoadedConfig(value, "migrate"), "migrate")
       return value as Record<string, unknown>
     } catch {
       return undefined
@@ -285,7 +296,7 @@ function patchJsonc(input: string, patch: unknown, path: string[] = []): string 
 }
 
 function writable(info: Info) {
-  const { plugin_origins: _plugin_origins, ...next } = info
+  const { plugin_origins: _plugin_origins, mcp_origins: _mcp_origins, ...next } = info
   return next
 }
 
@@ -668,6 +679,12 @@ export const layer = Layer.effect(
 
         const merge = (source: string, next: Info, kind?: ConfigPlugin.Scope) => {
           result = mergeConfigConcatArrays(result, next)
+          if (next.mcp) {
+            result.mcp_origins = {
+              ...result.mcp_origins,
+              ...Object.fromEntries(Object.keys(next.mcp).map((name) => [name, source])),
+            }
+          }
           return mergePluginOrigins(source, next.plugin, kind)
         }
 
@@ -977,6 +994,134 @@ export const layer = Layer.effect(
 
     const invalidate = Effect.fn("Config.invalidate")(function* () {
       yield* invalidateGlobal
+      const instance = yield* InstanceRef
+      if (instance) yield* InstanceState.invalidate(state)
+    })
+
+    const watchChanges = Effect.fn("Config.watch")(function* (changed: () => Effect.Effect<void>) {
+      const ctx = yield* InstanceState.context
+      const dirs = yield* directories()
+      const pluginFiles =
+        (yield* get()).plugin_origins?.flatMap((origin) => {
+          const spec = ConfigPlugin.pluginSpecifier(origin.spec)
+          return spec.startsWith("file://") ? [fileURLToPath(spec)] : []
+        }) ?? []
+      const files = yield* ConfigPaths.files("deepagent-code", ctx.directory, ctx.worktree).pipe(
+        Effect.provideService(FSUtil.Service, fs),
+        Effect.orDie,
+      )
+      const pluginDirectories = new Set(dirs.flatMap((dir) => [path.join(dir, "plugin"), path.join(dir, "plugins")]))
+      const targets = new Set([
+        Global.Path.config,
+        ctx.directory,
+        ...dirs,
+        ...files.map(path.dirname),
+        ...pluginFiles.map(path.dirname),
+        ...pluginDirectories,
+      ])
+      const semaphore = yield* Semaphore.make(1)
+      let closed = false
+      const watchers = new Map<string, ReturnType<typeof watch>>()
+      const refresh = () => {
+        void Effect.runPromise(
+          semaphore
+            .withPermit(
+              Effect.gen(function* () {
+                if (closed) return
+                yield* invalidate()
+                yield* changed()
+              }),
+            )
+            .pipe(Effect.provideService(InstanceRef, ctx)),
+        ).catch((error) => log.warn("config live refresh failed", { directory: ctx.directory, error: String(error) }))
+      }
+      const attach = (dir: string) => {
+        watchers.get(dir)?.close()
+        watchers.delete(dir)
+        if (!existsSync(dir)) return
+        const pluginDirectory = pluginDirectories.has(dir)
+        const fingerprint = (name: string) => {
+          try {
+            const stat = statSync(path.join(dir, name), { bigint: true })
+            // A watched child owns content changes. Its parent only needs to notice when
+            // that directory is deleted or replaced and its existing watcher becomes stale.
+            if (stat.isDirectory() && targets.has(path.join(dir, name))) return `${stat.dev}:${stat.ino}`
+            return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}`
+          } catch {
+            return undefined
+          }
+        }
+        const names = () => {
+          if (pluginDirectory) {
+            try {
+              return readdirSync(dir).filter((name) => /\.[cm]?[jt]sx?$/.test(name))
+            } catch {
+              return []
+            }
+          }
+          return [
+            "config.json",
+            "config.jsonc",
+            "deepagent-code.json",
+            "deepagent-code.jsonc",
+            ".deepagent-code",
+            "plugin",
+            "plugins",
+            ...pluginFiles.filter((file) => path.dirname(file) === dir).map((file) => path.basename(file)),
+          ]
+        }
+        // Files can be created before watch() is attached but their queued rename notifications
+        // can arrive afterward. They are already included in the first Config/Plugin load; treating
+        // those stale notifications as edits would invalidate scoped state during that same load.
+        try {
+          const observed = new Map(names().map((name) => [name, fingerprint(name)]))
+          const changedOnDisk = (name: string) => {
+            const candidates = name ? [name] : [...new Set([...observed.keys(), ...names()])]
+            const changes = candidates
+              .map((candidate) => [candidate, fingerprint(candidate)] as const)
+              .filter(([candidate, next]) => observed.get(candidate) !== next)
+            changes.forEach(([candidate, next]) => observed.set(candidate, next))
+            return changes.map(([candidate]) => candidate)
+          }
+          const onChange = (names: string[]) => {
+            if (names.length === 0) return
+            // fs.watch follows an inode on some platforms. Reattach descendants when a watched
+            // directory is replaced so the next edit in the rebuilt tree is still observed.
+            for (const name of names) {
+              const child = path.join(dir, name)
+              if (!targets.has(child)) continue
+              for (const target of targets) {
+                if (target === child || target.startsWith(child + path.sep)) attach(target)
+              }
+            }
+            refresh()
+          }
+          const watcher = watch(dir, (_event, filename) => {
+            const name = filename?.toString() ?? ""
+            if (
+              closed ||
+              (name &&
+                !/^(?:config|deepagent-code)\.jsonc?$|^\.deepagent-code$|^plugins?$/.test(name) &&
+                !(pluginDirectory && /\.[cm]?[jt]sx?$/.test(name)) &&
+                !pluginFiles.some((file) => path.dirname(file) === dir && path.basename(file) === name))
+            )
+              return
+            onChange(changedOnDisk(name))
+          })
+          watchers.set(dir, watcher)
+          // A write between the first snapshot and watch() may have no queued notification.
+          // Compare once after subscription to close that gap.
+          onChange(changedOnDisk(""))
+        } catch (error) {
+          log.warn("config watch unavailable", { directory: dir, error: String(error) })
+        }
+      }
+      targets.forEach(attach)
+      return () => {
+        closed = true
+        watchers.forEach((watcher) => watcher.close())
+        watchers.clear()
+      }
     })
 
     const updateGlobal = Effect.fn("Config.updateGlobal")(function* (config: Info) {
@@ -1026,6 +1171,7 @@ export const layer = Layer.effect(
       invalidate,
       directories,
       waitForDependencies,
+      watch: watchChanges,
     })
   }),
 )

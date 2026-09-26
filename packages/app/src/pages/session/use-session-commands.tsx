@@ -196,10 +196,19 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       return
     }
 
-    const url = await sdk.client.session
-      .share({ sessionID })
-      .then((res) => res.data?.share?.url)
-      .catch(() => undefined)
+    const result = await sdk.client.session
+      .share({ sessionID }, { throwOnError: true })
+      .then((res) => ({ url: res.data?.share?.url }))
+      .catch((error: unknown) => ({ error }))
+    if ("error" in result) {
+      showToast({
+        title: language.t("toast.session.share.failed.title"),
+        description: errorMessage(result.error, language.t("toast.session.share.failed.description")),
+        variant: "error",
+      })
+      return
+    }
+    const url = result.url
     if (!url) {
       showToast({
         title: language.t("toast.session.share.failed.title"),
@@ -217,7 +226,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
     if (!sessionID) return
 
     await sdk.client.session
-      .unshare({ sessionID })
+      .unshare({ sessionID }, { throwOnError: true })
       .then(() =>
         showToast({
           title: language.t("toast.session.unshare.success.title"),
@@ -225,10 +234,10 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
           variant: "success",
         }),
       )
-      .catch(() =>
+      .catch((error: unknown) =>
         showToast({
           title: language.t("toast.session.unshare.failed.title"),
-          description: language.t("toast.session.unshare.failed.description"),
+          description: errorMessage(error, language.t("toast.session.unshare.failed.description")),
           variant: "error",
         }),
       )
@@ -363,7 +372,7 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
         sessionID,
         modelID: model.id,
         providerID: model.provider.id,
-      })
+      }, { throwOnError: true })
       .catch((err) => {
         // The V2-only profile refuses manual compaction with a typed 503 whose message carries
         // the reason — surface it instead of failing silently (fork uses the same pattern).
@@ -448,18 +457,8 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
   }
 
   const shareCmds = () => {
-    if (sync.data.config.share === "disabled") return []
+    // Public sharing is deferred to 2.0.3; keep unshare for existing links.
     return [
-      sessionCommand({
-        id: "session.share",
-        title: info()?.share?.url ? language.t("session.share.copy.copyLink") : language.t("command.session.share"),
-        description: info()?.share?.url
-          ? language.t("toast.session.share.success.description")
-          : language.t("command.session.share.description"),
-        slash: "share",
-        disabled: !params.id,
-        onSelect: share,
-      }),
       sessionCommand({
         id: "session.unshare",
         title: language.t("command.session.unshare"),

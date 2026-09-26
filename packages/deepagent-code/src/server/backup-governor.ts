@@ -2,11 +2,15 @@ export * as BackupGovernor from "./backup-governor"
 
 import fs from "node:fs/promises"
 import { createReadStream, createWriteStream } from "node:fs"
+import { createHash } from "node:crypto"
 import path from "node:path"
-import { createGzip } from "node:zlib"
+import { createGunzip, createGzip } from "node:zlib"
+import { Writable } from "node:stream"
+import { pipeline } from "node:stream/promises"
 import { Data, Effect } from "effect"
 import { Backup } from "@deepagent-code/core/database/backup"
 import { MdExport } from "./md-export"
+import { withMaintenanceLock } from "./maintenance-lock"
 
 // W-02 M-4 (design §3.3) — backups governance. The backups root currently only ever grows; this
 // module implements the retention policy and the explicit govern action:
@@ -68,7 +72,7 @@ const writeJsonAtomic = (filePath: string, value: unknown) =>
   Effect.promise(async () => {
     await fs.mkdir(path.dirname(filePath), { recursive: true })
     const tmp = `${filePath}.tmp-${Math.random().toString(36).slice(2)}`
-    await Bun.write(tmp, `${JSON.stringify(value, null, 2)}\n`)
+    await fs.writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`)
     await fs.rename(tmp, filePath)
   }).pipe(
     Effect.catchCause(
@@ -105,6 +109,33 @@ const gzipInto = (source: string, destination: string) =>
     ),
   )
 
+/** Read the archive back through gunzip before moving its manifest or deleting the source. */
+const verifyGzip = (source: string, archive: string, expected: { readonly sha256: string; readonly sizeBytes: number }) =>
+  Effect.tryPromise({
+    try: async () => {
+      const hash = createHash("sha256")
+      let sizeBytes = 0
+      await pipeline(
+        createReadStream(archive),
+        createGunzip(),
+        new Writable({
+          write(chunk: Buffer, _encoding, callback) {
+            hash.update(chunk)
+            sizeBytes += chunk.byteLength
+            callback()
+          },
+        }),
+      )
+      if (sizeBytes !== expected.sizeBytes || hash.digest("hex") !== expected.sha256)
+        throw new Error("gunzip bytes do not match the backup manifest")
+    },
+    catch: (error) =>
+      new BackupGovernorError({
+        code: "archive_failed",
+        detail: `cannot verify ${archive} against ${source}: ${String(error)}`,
+      }),
+  })
+
 /** The md-export manifest path(s) that currently pair with backups under this root, if any. */
 const mdExportsFor = Effect.fn("BackupGovernor.mdExportsFor")(function* (backupDir: string) {
   const manifest = yield* MdExport.readManifest(MdExport.manifestPathFor(backupDir))
@@ -117,7 +148,7 @@ const milestoneFileNames = Effect.fn("BackupGovernor.milestoneFileNames")(functi
   const names = yield* Effect.promise(() => fs.readdir(archiveDir).catch(() => [] as string[]))
   const milestones = new Set<string>()
   for (const name of names.filter((entry) => entry.endsWith(".json") && !entry.includes("disk-advisory"))) {
-    const record = yield* Effect.promise(() => Bun.file(path.join(archiveDir, name)).json()).pipe(
+    const record = yield* Effect.promise(() => fs.readFile(path.join(archiveDir, name), "utf8").then((t) => JSON.parse(t))).pipe(
       Effect.catchCause(() => Effect.succeed(undefined)),
     )
     const backup = (record as { backup?: { manifestPath?: string; sha256?: string } } | undefined)?.backup
@@ -129,10 +160,10 @@ const milestoneFileNames = Effect.fn("BackupGovernor.milestoneFileNames")(functi
 /** Rewrite a manifest with the mdExports pairing (idempotent; other fields untouched). */
 const stampMdExports = (manifestPath: string, mdExports: readonly string[]) =>
   Effect.promise(async () => {
-    const manifest = (await Bun.file(manifestPath).json()) as Backup.BackupManifest
+    const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as Backup.BackupManifest
     const stamped = { ...manifest, mdExports }
     const tmp = `${manifestPath}.tmp-${Math.random().toString(36).slice(2)}`
-    await Bun.write(tmp, `${JSON.stringify(stamped, null, 2)}\n`)
+    await fs.writeFile(tmp, `${JSON.stringify(stamped, null, 2)}\n`)
     await fs.rename(tmp, manifestPath)
   }).pipe(
     Effect.catchCause(
@@ -144,7 +175,11 @@ const stampMdExports = (manifestPath: string, mdExports: readonly string[]) =>
     ),
   )
 
-export const govern = Effect.fn("BackupGovernor.govern")(function* (input: GovernInput) {
+export const govern = Effect.fn("BackupGovernor.govern")((input: GovernInput) =>
+  withMaintenanceLock(input.backupDir, governUnlocked(input)),
+)
+
+const governUnlocked = Effect.fn("BackupGovernor.governUnlocked")(function* (input: GovernInput) {
   const keep = input.keep ?? DefaultKeep
   if (!Number.isInteger(keep) || keep < 1)
     return yield* new BackupGovernorError({ code: "invalid_policy", detail: `keep must be an integer >= 1, got ${keep}` })
@@ -201,6 +236,7 @@ export const govern = Effect.fn("BackupGovernor.govern")(function* (input: Gover
     yield* Effect.promise(() => fs.mkdir(archiveDir, { recursive: true }))
     const target = path.join(archiveDir, `${item.manifest.backup.fileName}.gz`)
     yield* gzipInto(item.manifest.backup.filePath, target)
+    yield* verifyGzip(item.manifest.backup.filePath, target, item.manifest.backup)
     yield* stampMdExports(item.manifestPath, mdExports)
     yield* Effect.promise(() => fs.rename(item.manifestPath, path.join(archiveDir, path.basename(item.manifestPath))))
     yield* Effect.promise(() => fs.rm(item.manifest.backup.filePath))

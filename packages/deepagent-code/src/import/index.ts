@@ -1,6 +1,7 @@
 import { Effect, Exit, Layer } from "effect"
 import { Database } from "@deepagent-code/core/database/database"
 import { EventV2 } from "@deepagent-code/core/event"
+import { EventV2Bridge } from "@/event-v2-bridge"
 import { SessionProjector } from "@deepagent-code/core/session/projector"
 import { ProjectV2 } from "@deepagent-code/core/project"
 import { Git } from "@deepagent-code/core/git"
@@ -135,7 +136,7 @@ function resolveDbPath(options: ImportOptions): string {
 
 /**
  * Run session imports against a database at `dbPath`, assembling the
- * Database + EventV2 + SessionProjector layers exactly as session-create.test
+ * Database + EventV2Bridge + SessionProjector layers exactly as session-create.test
  * does. Each import is isolated via `Effect.either` so a failure is captured,
  * not thrown.
  */
@@ -147,13 +148,14 @@ export function runSessionImports(
   return Effect.gen(function* () {
     const database = Database.layerFromPath(dbPath)
     const events = EventV2.layer.pipe(Layer.provide(database))
+    const bridge = EventV2Bridge.layer.pipe(Layer.provide(events), Layer.provide(database))
     const projector = SessionProjector.layer.pipe(Layer.provide(events), Layer.provide(database))
     const projects = ProjectV2.layer.pipe(
       Layer.provide(database),
       Layer.provide(FSUtil.defaultLayer),
       Layer.provide(Git.defaultLayer),
     )
-    const runtime = Layer.mergeAll(database, events, projector, projects)
+    const runtime = Layer.mergeAll(database, events, bridge, projector, projects)
 
     for (const session of sessions) {
       const exit = yield* Effect.exit(importSession(session).pipe(Effect.provide(runtime)))

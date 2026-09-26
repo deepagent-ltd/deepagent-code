@@ -100,7 +100,7 @@ const causeMessage = (value: unknown) => (value instanceof Error ? value.message
 
 /** Read + structurally validate the manifest, treating a missing file as "nothing exported yet". */
 export const readManifest = Effect.fn("MdExport.readManifest")(function* (manifestPath: string) {
-  const text = yield* Effect.promise(() => Bun.file(manifestPath).text()).pipe(
+  const text = yield* Effect.promise(() => fs.readFile(manifestPath, "utf8")).pipe(
     Effect.catchCause(() => Effect.succeed(undefined)),
   )
   if (text === undefined) return undefined
@@ -119,7 +119,7 @@ const writeManifestAtomic = (manifestPath: string, manifest: Manifest) =>
   Effect.promise(async () => {
     await fs.mkdir(path.dirname(manifestPath), { recursive: true })
     const tmp = `${manifestPath}.tmp-${Math.random().toString(36).slice(2)}`
-    await Bun.write(tmp, `${JSON.stringify(manifest, null, 2)}\n`)
+    await fs.writeFile(tmp, `${JSON.stringify(manifest, null, 2)}\n`)
     await fs.rename(tmp, manifestPath)
   }).pipe(
     Effect.catchCause((cause) =>
@@ -295,7 +295,7 @@ const writeSessionFile = (filePath: string, markdown: string) =>
       await fs.mkdir(path.dirname(filePath), { recursive: true })
       // Write + rename so a crash mid-write can never leave a half file under the final name.
       const tmp = `${filePath}.tmp-${Math.random().toString(36).slice(2)}`
-      await Bun.write(tmp, markdown)
+      await fs.writeFile(tmp, markdown)
       await fs.rename(tmp, filePath)
     },
     catch: (cause) => `cannot write export file ${filePath}: ${causeMessage(cause)}`,

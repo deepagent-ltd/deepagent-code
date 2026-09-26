@@ -63,9 +63,9 @@ const child = observation.children[0]
 if (!child || child.parentID !== observation.sessionID || child.agent !== "researcher") {
   throw new Error("Finalizer isolation child lineage or agent identity is incorrect")
 }
+// Durable V2 contract: the session-level child.model stamp was removed with the V2-owner cutover
+// (subagent-foreground alignment); the assistant rows remain the provider/model identity surface.
 if (
-  child.model?.providerID !== artifact.fingerprint.runtimeProviderID ||
-  child.model.id !== artifact.fingerprint.modelID ||
   child.assistants.some(
     (assistant) => assistant.providerID !== artifact.fingerprint.runtimeProviderID || assistant.modelID !== artifact.fingerprint.modelID,
   )
@@ -80,50 +80,35 @@ if (
 ) {
   throw new Error("Child research phase did not read the fixture through a completed read tool")
 }
-const structuredCalls = childTools.filter((tool) => tool.name === "StructuredOutput" && tool.status === "completed")
-if (structuredCalls.length > 1) {
-  throw new Error(
-    `Expected at most one completed child StructuredOutput call, received ${structuredCalls.length}: ` +
-      childTools.map((tool) => `${tool.name}:${tool.status}`).join(", "),
-  )
-}
-const strictFinalizer = child.assistants.find((assistant) => assistant.structured !== undefined)
-const textFallbackUsers = child.users.filter(
-  (user) => nestedRecordOptional(user.metadata, ["deepagent", "structured_finalizer"])?.allow_text === true,
+// Durable V2 finalizer contract (subagent-foreground alignment): the schema rides the finalizer
+// prompt TEXT (no provider format, no synthesized StructuredOutput tool, no deepagent.subagent
+// metadata projection). The finalizer turn is identified by its fixed instruction prompt, and the
+// parent task call is the surface that extracts + validates the result against the schema.
+const finalizerUserIndex = child.users.findLastIndex((user) =>
+  user.text.includes("Convert the persisted research result"),
 )
-const textFinalizers = child.assistants.filter((assistant) => extractJson(assistant.text) !== undefined)
-const finalizer = strictFinalizer ?? textFinalizers.at(-1)
-if (
-  !finalizer ||
-  (strictFinalizer && structuredCalls.length !== 1) ||
-  (!strictFinalizer && textFallbackUsers.length === 0)
-) {
+if (finalizerUserIndex < 0) {
+  throw new Error("Child transcript is missing the durable structured finalizer prompt")
+}
+// The finalizer turn is terminal (a degraded retry replaces it in place), so the LAST child
+// assistant is the finalizer and its answer must be the validated JSON itself.
+const finalizer = child.assistants.at(-1)
+if (!finalizer || extractJson(finalizer.text) === undefined) {
   throw new Error(
-    `Expected one structured or validated text finalizer turn, received strict=${strictFinalizer ? 1 : 0}, ` +
-      `text=${textFinalizers.length}, text_fallback_users=${textFallbackUsers.length}`,
+    `Expected a validated text finalizer turn, received none: ${child.assistants
+      .map((assistant, index) => `${index}:${assistant.text.trim().slice(0, 40)}`)
+      .join(" | ")}`,
   )
 }
 // The finalizer's OWN tools array is the isolation oracle: a leaked research tool would land as a
 // completed part on this same assistant message, not on an earlier research turn.
-const foreignFinalizerTools = finalizer.tools.filter(
-  (tool) => tool.status === "completed" && tool.name !== "StructuredOutput",
-)
+const foreignFinalizerTools = finalizer.tools.filter((tool) => tool.status === "completed")
 if (foreignFinalizerTools.length > 0) {
   throw new Error(
     `Finalizer turn executed research-phase tools: ${foreignFinalizerTools.map((tool) => tool.name).join(", ")}`,
   )
 }
-if (
-  strictFinalizer &&
-  !finalizer.tools.some((tool) => tool.name === "StructuredOutput" && tool.status === "completed")
-) {
-  throw new Error("Finalizer turn carries a structured result without its own completed StructuredOutput call")
-}
-const subagent = nestedRecord(child.metadata, ["deepagent", "subagent"])
-if (subagent.state !== "completed" || subagent.finished !== true || subagent.reason !== "structured_output_valid") {
-  throw new Error(`Child durable metadata is not a valid completed structured result: ${JSON.stringify(subagent)}`)
-}
-const result = record(finalizer.structured ?? extractJson(finalizer.text), "ResearchResult")
+const result = record(extractJson(finalizer.text), "ResearchResult")
 if (result.module !== markers.module || result.mechanism !== markers.mechanism) {
   throw new Error("Child ResearchResult scalar fields are not byte-exact copies of the fixture")
 }
@@ -149,7 +134,7 @@ if (parentTools.length !== 1 || parentTools[0]?.name !== "task") {
 }
 // Only one marker is asserted on the parent-facing task result: renderOutput can bound the excerpt via
 // DEEPAGENT_CODE_SUBAGENT_OUTPUT_MAX_CHARS, which the harness does not isolate. The byte-exact
-// field-by-field oracle runs above, on child.structured, where no bound applies.
+// field-by-field oracle runs above, on the finalizer turn's validated JSON text, where no bound applies.
 if (!parentTools[0]?.output?.includes(markers.mechanism)) {
   throw new Error("Parent task result did not carry the child's structured result")
 }
@@ -179,15 +164,13 @@ const resultArtifact = {
   evidence: {
     childSessionID: child.id,
     childAssistantTurns: child.assistants.length,
-    structuredOutputCallCount: structuredCalls.length,
-    finalizerTransport: strictFinalizer ? "structured_tool" : "validated_text",
+    finalizerTransport: "validated_text",
     finalizerTurnForeignToolCount: foreignFinalizerTools.length,
     researchToolNames: childTools.map((tool) => tool.name),
     parentReadOfFixture: parentRead !== undefined,
     markerHashes: Object.fromEntries(
       Object.entries(markers).map(([field, value]) => [field, Bun.hash(value).toString(16)]),
     ),
-    durableReason: subagent.reason,
   },
 }
 await writeLiveArtifact(
@@ -223,36 +206,6 @@ function extractJson(text: string): unknown {
     }
   }
   return undefined
-}
-
-function nestedRecordOptional(value: unknown, keys: string[]) {
-  return keys.reduce<Record<string, unknown> | undefined>(
-    (current, key) => {
-      if (!current) return undefined
-      const next = current[key]
-      if (typeof next !== "object" || next === null || Array.isArray(next)) return undefined
-      return next as Record<string, unknown>
-    },
-    typeof value === "object" && value !== null && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : undefined,
-  )
-}
-
-function nestedRecord(value: unknown, keys: string[]) {
-  const result = keys.reduce<Record<string, unknown> | undefined>(
-    (current, key) => {
-      if (!current) return undefined
-      const next = current[key]
-      if (typeof next !== "object" || next === null || Array.isArray(next)) return undefined
-      return next as Record<string, unknown>
-    },
-    typeof value === "object" && value !== null && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : undefined,
-  )
-  if (!result) throw new Error(`Missing object path ${keys.join(".")}`)
-  return result
 }
 
 finishLiveScript()

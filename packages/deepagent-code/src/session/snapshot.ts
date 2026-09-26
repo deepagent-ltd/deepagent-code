@@ -13,14 +13,15 @@ import { SessionToolRequestReceiptTable } from "./tool-request-receipt.sql"
 import { Identifier } from "@/id/id"
 
 // ---------------------------------------------------------------------------
-// 会话快照导出/导入(跨设备携带:完整现场 + 保证续跑)。
+// Legacy 五表会话快照导出/导入。V2 authority、inbox、event、provider receipts 不在此格式内；
+// 导入始终只读，不能凭五表快照续跑。
 //
 // 依据(已逐行核实):
-//  - 续跑读历史走 Session.Service.messages() → MessageTable/PartTable,不走 EventV2。
-//  - 续跑唯一硬阻塞:存在 state='active' 的 session_legacy_activity(prompt-intent.ts:803)。
+//  - 历史 legacy 执行曾从 MessageTable/PartTable 读取；V2 则另有 durable authority。
+//  - Legacy active activity 被终态化仅用于安全存档，不构成 V2 续跑证明。
 //  - 时间线活动标记由 message-v2.ts:385-443 联 session_activity_progress ⋈
 //    session_legacy_activity ⋈ message 计算,并强制 activity.session_id == message.session_id。
-// 故"完整现场 + 续跑"= 5 张表:session、message、part、session_legacy_activity、
+// 该格式保存五张表:session、message、part、session_legacy_activity、
 // session_activity_progress。
 //
 // 状态机触发器与导入的满足方式(全部核实到触发器定义):
@@ -129,8 +130,8 @@ export const exportSessionSnapshot = Effect.fn("Session.exportSnapshot")(functio
 
 /**
  * 导入:在单个事务内以全新 ID 重建 5 张表并重挂目标 project/directory;逐活动"插 active →
- * 合成 receipt → 插 progress → 终态化",既复刻活动标记(完整现场),又保证导入后无 active
- * activity(可续跑)。
+ * 合成 receipt → 插 progress → 终态化",复刻活动标记并保证导入后无 active
+ * legacy activity；合成 receipt 不构成 V2 replay/continue authority。
  */
 export const importSessionSnapshot = Effect.fn("Session.importSnapshot")(function* (input: {
   snapshot: SessionSnapshot
@@ -167,6 +168,9 @@ export const importSessionSnapshot = Effect.fn("Session.importSnapshot")(functio
     workspace_id: null,
     parent_id: null,
     share_url: null,
+    // A five-table snapshot does not carry the V2 inbox, event stream, receipts, or ownership
+    // evidence. Importing the source marker would incorrectly grant V2 write authority.
+    v2_authority: false,
   }
   const newMessages = snap.messages.map((message) => ({
     ...message,
@@ -279,7 +283,7 @@ export const importSessionSnapshot = Effect.fn("Session.importSnapshot")(functio
 
               // Terminalize (legal_update allows only active → terminal with settled_at + reason).
               // A source that was still active is terminalized to interrupted so the imported
-              // session has no active activity and is immediately continuable.
+              // archived session has no active legacy activity; this does not grant V2 authority.
               const wasActive = activity.state === "active"
               yield* tx
                 .update(SessionLegacyActivityTable)

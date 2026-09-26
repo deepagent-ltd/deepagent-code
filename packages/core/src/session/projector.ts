@@ -1,7 +1,8 @@
 export * as SessionProjector from "./projector"
 
-import { and, asc, desc, eq, gt, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gt, gte, lt, ne, sql } from "drizzle-orm"
 import { isDeepStrictEqual } from "node:util"
+import path from "node:path"
 import { DateTime, Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
 import { makeGlobalNode } from "../effect/app-node"
@@ -17,6 +18,7 @@ import { SessionMessageUpdater } from "./message-updater"
 import { SessionInput } from "./input"
 import { WorkspaceV2 } from "../workspace"
 import { SessionContextEpoch } from "./context-epoch"
+import { LongContext } from "./long-context"
 import {
   MessageTable,
   PartTable,
@@ -30,11 +32,49 @@ import { V2ProviderTurnReceiptTable } from "./runner/v2-provider-turn.sql"
 import { legacyAssistant as legacyAssistantExport, legacyUser } from "./legacy-wire"
 import type { DeepMutable } from "../schema"
 import { SessionSchema } from "./schema"
+import { Hash } from "../util/hash"
 
 type DatabaseService = Database.Interface["db"]
 
 const decodeMessage = Schema.decodeUnknownSync(SessionMessage.Message)
 const encodeMessage = Schema.encodeSync(SessionMessage.Message)
+
+const discardRevertedV2Tail = Effect.fnUntraced(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  messageID: SessionV1.MessageID,
+  includeTarget: boolean,
+) {
+  const target = yield* db
+    .select()
+    .from(SessionMessageTable)
+    .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.id, SessionMessage.ID.make(messageID))))
+    .get()
+    .pipe(Effect.orDie)
+  if (!target) return
+  const session = yield* db
+    .select({ mutationEpoch: SessionTable.mutation_epoch })
+    .from(SessionTable)
+    .where(eq(SessionTable.id, sessionID))
+    .get()
+    .pipe(Effect.orDie)
+  if (!session) return yield* Effect.die(`SessionProjector: reverted Session ${sessionID} disappeared`)
+  // RevertChanged precedes cleanup, so the current epoch names the one synthetic notice that
+  // must survive removal of the old branch. The same event sequence replays this deletion.
+  const noticeID = SessionMessage.ID.make(
+    `msg_${Hash.sha256(`revert-notice:${sessionID}:${session.mutationEpoch}`).slice(0, 40)}`,
+  )
+  yield* db
+    .delete(SessionMessageTable)
+    .where(and(
+      eq(SessionMessageTable.session_id, sessionID),
+      includeTarget ? gte(SessionMessageTable.seq, target.seq) : gt(SessionMessageTable.seq, target.seq),
+      ne(SessionMessageTable.id, noticeID),
+    ))
+    .run()
+    .pipe(Effect.orDie)
+  return target
+})
 
 class PromptAlreadyProjected extends Error {}
 export class SessionAlreadyProjected extends Error {}
@@ -90,6 +130,7 @@ function sessionRow(info: SessionV1.SessionInfo): typeof SessionTable.$inferInse
 function createdSessionRow(event: SessionEvent.Created): typeof SessionTable.$inferInsert {
   return {
     id: event.data.info.id,
+    v2_authority: true,
     project_id: event.data.info.projectID,
     workspace_id: event.data.info.location.workspaceID ?? null,
     parent_id: event.data.info.parentID,
@@ -121,9 +162,7 @@ function createdSessionRow(event: SessionEvent.Created): typeof SessionTable.$in
     preview: event.data.info.preview,
     time_created: DateTime.toEpochMillis(event.data.info.time.created),
     time_updated: DateTime.toEpochMillis(event.data.info.time.updated),
-    time_archived: event.data.info.time.archived
-      ? DateTime.toEpochMillis(event.data.info.time.archived)
-      : undefined,
+    time_archived: event.data.info.time.archived ? DateTime.toEpochMillis(event.data.info.time.archived) : undefined,
   }
 }
 
@@ -321,13 +360,15 @@ function insertMessage(db: DatabaseService, event: SessionEvent.Event, message: 
 // session_wire_projection fingerprint cursor (durable, unlike the F-17 drain-local map it
 // replaces) skips byte-identical re-derivations across replay/overlap windows.
 
-// Per-session memo for the egress' per-event constants: the first wire parent, the session
-// directory row and V2 ownership are identity lookups that do not change while a session streams,
-// yet each was a synchronous SELECT on every delta (measured: 75k each in one run, the top
-// remaining reader load). Values only change by a new session id; bounded map.
+// Per-session memo for wire egress. Directory and ownership are fixed; an assistant's parent
+// stays fixed across its streaming deltas but changes when the next user turn starts.
 const wireSessionMemo = new Map<
   string,
-  { parent: { id: string } | null; directory: { directory: string; path: string } | null; v2Owned?: boolean }
+  {
+    parent: { assistantID: string; user: { id: string } | null } | null
+    directory: { directory: string; path: string } | null
+    v2Owned?: boolean
+  }
 >()
 const WIRE_SESSION_MEMO_MAX = 2_000
 const wireSessionEntry = (sessionID: SessionSchema.ID) => {
@@ -383,7 +424,11 @@ const recordWireFingerprint = (
     .insert(SessionWireProjectionTable)
     .values({ session_id: sessionID, entity, entity_id: entityID, fingerprint, time_updated: Date.now() })
     .onConflictDoUpdate({
-      target: [SessionWireProjectionTable.session_id, SessionWireProjectionTable.entity, SessionWireProjectionTable.entity_id],
+      target: [
+        SessionWireProjectionTable.session_id,
+        SessionWireProjectionTable.entity,
+        SessionWireProjectionTable.entity_id,
+      ],
       set: { fingerprint, time_updated: Date.now() },
     })
     .run()
@@ -427,25 +472,41 @@ function publishWireOnce(
   })
 }
 
-// The V1 wire parent linkage needs the first user message of the session; the F-17 mirror used
-// the same resolution (sessions.findMessage(role === "user")).
-const firstWireParent = (db: DatabaseService, sessionID: SessionSchema.ID) => {
+// Each assistant belongs to the most recent preceding user. Keep that answer for its streaming
+// deltas; a session-wide first-user cache misgroups every later reply in the Desktop timeline.
+const wireParent = (db: DatabaseService, sessionID: SessionSchema.ID, assistantID: string, seq: number) => {
   const entry = wireSessionEntry(sessionID)
-  if (entry.parent !== null) return Effect.succeed(entry.parent)
+  if (entry.parent?.assistantID === assistantID) return Effect.succeed(entry.parent.user)
   return db
     .select({ id: SessionMessageTable.id })
     .from(SessionMessageTable)
-    .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.type, "user")))
-    .orderBy(asc(SessionMessageTable.seq))
+    .where(and(eq(SessionMessageTable.session_id, sessionID), eq(SessionMessageTable.type, "user"), lt(SessionMessageTable.seq, seq)))
+    .orderBy(desc(SessionMessageTable.seq))
     .get()
     .pipe(
       Effect.orDie,
       Effect.tap((row) =>
         Effect.sync(() => {
-          wireSessionEntry(sessionID).parent = (row as { id: string } | undefined) ?? null
+          wireSessionEntry(sessionID).parent = { assistantID, user: row ?? null }
         }),
       ),
     )
+}
+
+function wireRoot(directory: string, subpath: string | null) {
+  if (!directory || !subpath) return directory
+  if (path.isAbsolute(subpath)) {
+    // Legacy rows may already store an absolute root; accept it only when it contains cwd.
+    const relative = path.relative(subpath, directory)
+    return relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)
+      ? directory
+      : subpath
+  }
+  const segments = subpath.split(/[\\/]/).filter((segment) => segment && segment !== ".")
+  // A traversal or malformed relative path cannot establish a wider workspace boundary.
+  if (segments.includes("..")) return directory
+  const root = path.resolve(directory, ...segments.map(() => ".."))
+  return path.resolve(root, subpath) === path.resolve(directory) ? root : directory
 }
 
 // W4-6 — the canonical user/synthetic converter moved next to legacyAssistant in legacy-wire.ts
@@ -468,7 +529,7 @@ function publishWireForMessage(
     const projected =
       message.type === "assistant"
         ? yield* Effect.gen(function* () {
-            const parent = yield* firstWireParent(db, sessionID)
+            const parent = yield* wireParent(db, sessionID, message.id, row.seq)
             const directory = yield* db
               .select({ directory: SessionTable.directory, path: SessionTable.path })
               .from(SessionTable)
@@ -479,7 +540,7 @@ function publishWireForMessage(
               sessionID,
               parentMessageID: SessionV1.MessageID.ascending(parent ? parent.id : message.id),
               directory: directory?.directory ?? "",
-              root: directory?.path ?? "",
+              root: wireRoot(directory?.directory ?? "", directory?.path ?? null),
               message,
             })
           })
@@ -574,130 +635,145 @@ export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const events = yield* EventV2.Service
     const { db } = yield* Database.Service
-    if (events.registerSnapshotCodec) yield* events.registerSnapshotCodec({
-      codec: "session-projection",
-      schemaVersion: 1,
-      rebuildEventTypes: new Set([
-        SessionEvent.Created,
-        SessionEvent.Updated,
-        SessionEvent.DiffUpdated,
-        SessionEvent.RevertChanged,
-        SessionV1.Event.Created,
-        SessionV1.Event.Updated,
-        SessionV1.Event.MessageUpdated,
-        SessionV1.Event.MessageRemoved,
-        SessionV1.Event.PartUpdated,
-        SessionV1.Event.PartRemoved,
-        SessionEvent.AgentSwitched,
-        SessionEvent.ModelSwitched,
-        SessionEvent.PermissionsChanged,
-        SessionEvent.ContextUpdated,
-        SessionEvent.Synthetic,
-        SessionEvent.StructuredCaptured,
-        SessionEvent.Shell.Started,
-        SessionEvent.Shell.Ended,
-        SessionEvent.Step.Started,
-        SessionEvent.Step.Ended,
-        SessionEvent.Step.Failed,
-        SessionEvent.Text.Started,
-        SessionEvent.Text.Ended,
-        SessionEvent.Tool.Input.Started,
-        SessionEvent.Tool.Input.Ended,
-        SessionEvent.Tool.Called,
-        SessionEvent.Tool.Progress,
-        SessionEvent.Tool.Success,
-        SessionEvent.Tool.Failed,
-        SessionEvent.Reasoning.Started,
-        SessionEvent.Reasoning.Ended,
-        SessionEvent.Compaction.Ended,
-      ].map((definition) => EventV2.versionedType(definition.type, definition.sync!.version))),
-      revision: (aggregateID) =>
-        Effect.gen(function* () {
-          const session = yield* db.select({ mutationEpoch: SessionTable.mutation_epoch })
-            .from(SessionTable).where(eq(SessionTable.id, SessionSchema.ID.make(aggregateID))).get().pipe(Effect.orDie)
-          const context = yield* db.select({ revision: SessionContextEpochTable.revision })
-            .from(SessionContextEpochTable).where(eq(SessionContextEpochTable.session_id, SessionSchema.ID.make(aggregateID))).get().pipe(Effect.orDie)
-          const fileArtifacts = yield* db.select({
-            eventID: FilePartArtifactBindingTable.event_id,
-            canonicalDataHash: FilePartArtifactBindingTable.canonical_data_hash,
-          }).from(FilePartArtifactBindingTable)
-            .where(eq(FilePartArtifactBindingTable.aggregate_id, aggregateID))
-            .orderBy(asc(FilePartArtifactBindingTable.seq)).all().pipe(Effect.orDie)
-          return `${session?.mutationEpoch ?? -1}:${context?.revision ?? -1}:${fileArtifacts
-            .map((artifact) => `${artifact.eventID}:${artifact.canonicalDataHash}`)
-            .join(",")}`
-        }),
-      next: (aggregateID, cursor) =>
-        Effect.gen(function* () {
-          const position = parseSnapshotCursor(cursor)
-          for (const [index, tableName] of snapshotTableNames.entries()) {
-            if (index < position.index) continue
-            const after = index === position.index ? position.key : ""
-            if (tableName === "session") {
-              if (after) continue
-              const row = yield* db
-                .select()
-                .from(SessionTable)
-                .where(eq(SessionTable.id, SessionSchema.ID.make(aggregateID)))
-                .get()
-                .pipe(Effect.orDie)
-              if (!row) return
-              return {
-                cursor: snapshotCursor(index, row.id),
-                tableName,
-                rowKey: row.id,
-                value: {
-                  id: row.id,
-                  project_id: row.project_id,
-                  workspace_id: row.workspace_id,
-                  parent_id: row.parent_id,
-                  slug: row.slug,
-                  directory: row.directory,
-                  path: row.path,
-                  title: row.title,
-                  version: row.version,
-                  share_url: row.share_url,
-                  summary_additions: row.summary_additions,
-                  summary_deletions: row.summary_deletions,
-                  summary_files: row.summary_files,
-                  summary_diffs: row.summary_diffs?.map(({ patch: _, ...diff }) => diff),
-                  summary_diff_manifest: row.summary_diff_manifest,
-                  metadata: row.metadata,
-                  cost: row.cost,
-                  tokens_input: row.tokens_input,
-                  tokens_output: row.tokens_output,
-                  tokens_reasoning: row.tokens_reasoning,
-                  tokens_cache_read: row.tokens_cache_read,
-                  tokens_cache_write: row.tokens_cache_write,
-                  revert: row.revert,
-                  permission: row.permission,
-                  agent: row.agent,
-                  model: row.model,
-                  time_created: row.time_created,
-                  time_updated: row.time_updated,
-                  time_compacting: row.time_compacting,
-                  time_archived: row.time_archived,
-                  preview: row.preview,
-                },
+    if (events.registerSnapshotCodec)
+      yield* events.registerSnapshotCodec({
+        codec: "session-projection",
+        schemaVersion: 1,
+        rebuildEventTypes: new Set(
+          [
+            SessionEvent.Created,
+            SessionEvent.Updated,
+            SessionEvent.DiffUpdated,
+            SessionEvent.RevertChanged,
+            SessionV1.Event.Created,
+            SessionV1.Event.Updated,
+            SessionV1.Event.MessageUpdated,
+            SessionV1.Event.MessageRemoved,
+            SessionV1.Event.PartUpdated,
+            SessionV1.Event.PartRemoved,
+            SessionEvent.AgentSwitched,
+            SessionEvent.ModelSwitched,
+            SessionEvent.PermissionsChanged,
+            SessionEvent.ContextUpdated,
+            SessionEvent.Synthetic,
+            SessionEvent.StructuredCaptured,
+            SessionEvent.Shell.Started,
+            SessionEvent.Shell.Ended,
+            SessionEvent.Step.Started,
+            SessionEvent.Step.Ended,
+            SessionEvent.Step.Failed,
+            SessionEvent.Text.Started,
+            SessionEvent.Text.Ended,
+            SessionEvent.Tool.Input.Started,
+            SessionEvent.Tool.Input.Ended,
+            SessionEvent.Tool.Called,
+            SessionEvent.Tool.Progress,
+            SessionEvent.Tool.Success,
+            SessionEvent.Tool.Failed,
+            SessionEvent.Reasoning.Started,
+            SessionEvent.Reasoning.Ended,
+            SessionEvent.Compaction.Ended,
+          ].map((definition) => EventV2.versionedType(definition.type, definition.sync!.version)),
+        ),
+        revision: (aggregateID) =>
+          Effect.gen(function* () {
+            const session = yield* db
+              .select({ mutationEpoch: SessionTable.mutation_epoch })
+              .from(SessionTable)
+              .where(eq(SessionTable.id, SessionSchema.ID.make(aggregateID)))
+              .get()
+              .pipe(Effect.orDie)
+            const context = yield* db
+              .select({ revision: SessionContextEpochTable.revision })
+              .from(SessionContextEpochTable)
+              .where(eq(SessionContextEpochTable.session_id, SessionSchema.ID.make(aggregateID)))
+              .get()
+              .pipe(Effect.orDie)
+            const fileArtifacts = yield* db
+              .select({
+                eventID: FilePartArtifactBindingTable.event_id,
+                canonicalDataHash: FilePartArtifactBindingTable.canonical_data_hash,
+              })
+              .from(FilePartArtifactBindingTable)
+              .where(eq(FilePartArtifactBindingTable.aggregate_id, aggregateID))
+              .orderBy(asc(FilePartArtifactBindingTable.seq))
+              .all()
+              .pipe(Effect.orDie)
+            return `${session?.mutationEpoch ?? -1}:${context?.revision ?? -1}:${fileArtifacts
+              .map((artifact) => `${artifact.eventID}:${artifact.canonicalDataHash}`)
+              .join(",")}`
+          }),
+        next: (aggregateID, cursor) =>
+          Effect.gen(function* () {
+            const position = parseSnapshotCursor(cursor)
+            for (const [index, tableName] of snapshotTableNames.entries()) {
+              if (index < position.index) continue
+              const after = index === position.index ? position.key : ""
+              if (tableName === "session") {
+                if (after) continue
+                const row = yield* db
+                  .select()
+                  .from(SessionTable)
+                  .where(eq(SessionTable.id, SessionSchema.ID.make(aggregateID)))
+                  .get()
+                  .pipe(Effect.orDie)
+                if (!row) return
+                return {
+                  cursor: snapshotCursor(index, row.id),
+                  tableName,
+                  rowKey: row.id,
+                  value: {
+                    id: row.id,
+                    project_id: row.project_id,
+                    workspace_id: row.workspace_id,
+                    parent_id: row.parent_id,
+                    slug: row.slug,
+                    directory: row.directory,
+                    path: row.path,
+                    title: row.title,
+                    version: row.version,
+                    share_url: row.share_url,
+                    summary_additions: row.summary_additions,
+                    summary_deletions: row.summary_deletions,
+                    summary_files: row.summary_files,
+                    summary_diffs: row.summary_diffs?.map(({ patch: _, ...diff }) => diff),
+                    summary_diff_manifest: row.summary_diff_manifest,
+                    metadata: row.metadata,
+                    cost: row.cost,
+                    tokens_input: row.tokens_input,
+                    tokens_output: row.tokens_output,
+                    tokens_reasoning: row.tokens_reasoning,
+                    tokens_cache_read: row.tokens_cache_read,
+                    tokens_cache_write: row.tokens_cache_write,
+                    revert: row.revert,
+                    permission: row.permission,
+                    agent: row.agent,
+                    model: row.model,
+                    time_created: row.time_created,
+                    time_updated: row.time_updated,
+                    time_compacting: row.time_compacting,
+                    time_archived: row.time_archived,
+                    preview: row.preview,
+                  },
+                }
               }
-            }
-            if (tableName === "message") {
-              const row = yield* db
-                .select({
-                  id: MessageTable.id,
-                  session_id: MessageTable.session_id,
-                  time_created: MessageTable.time_created,
-                  time_updated: MessageTable.time_updated,
-                  data: MessageTable.data,
-                  canonicalData: EventArtifactTable.canonical_data,
-                })
-                .from(MessageTable)
-                .leftJoin(
-                  EventArtifactTable,
-                  and(
-                    eq(EventArtifactTable.aggregate_id, aggregateID),
-                    sql`json_extract(${EventArtifactTable.canonical_data}, '$.info.id') = ${MessageTable.id}`,
-                    sql`(
+              if (tableName === "message") {
+                const row = yield* db
+                  .select({
+                    id: MessageTable.id,
+                    session_id: MessageTable.session_id,
+                    time_created: MessageTable.time_created,
+                    time_updated: MessageTable.time_updated,
+                    data: MessageTable.data,
+                    canonicalData: EventArtifactTable.canonical_data,
+                  })
+                  .from(MessageTable)
+                  .leftJoin(
+                    EventArtifactTable,
+                    and(
+                      eq(EventArtifactTable.aggregate_id, aggregateID),
+                      sql`json_extract(${EventArtifactTable.canonical_data}, '$.info.id') = ${MessageTable.id}`,
+                      sql`(
                       EXISTS (
                         SELECT 1 FROM session_diff_migration_receipt receipt
                         WHERE receipt.message_id = ${MessageTable.id}
@@ -717,96 +793,157 @@ export const layer = Layer.effectDiscard(
                         )
                       )
                     )`,
-                  ),
-                )
-                .where(
-                  and(
-                    eq(MessageTable.session_id, SessionSchema.ID.make(aggregateID)),
-                    gt(sql<string>`${MessageTable.id}`, after),
-                  ),
-                )
-                .orderBy(asc(MessageTable.id))
-                .limit(1)
+                    ),
+                  )
+                  .where(
+                    and(
+                      eq(MessageTable.session_id, SessionSchema.ID.make(aggregateID)),
+                      gt(sql<string>`${MessageTable.id}`, after),
+                    ),
+                  )
+                  .orderBy(asc(MessageTable.id))
+                  .limit(1)
+                  .get()
+                  .pipe(Effect.orDie)
+                if (row)
+                  return {
+                    cursor: snapshotCursor(index, row.id),
+                    tableName,
+                    rowKey: row.id,
+                    value: {
+                      id: row.id,
+                      session_id: row.session_id,
+                      time_created: row.time_created,
+                      time_updated: row.time_updated,
+                      data: stripDiffPatches(
+                        row.canonicalData && typeof row.canonicalData.info === "object" && row.canonicalData.info
+                          ? messageData(
+                              row.canonicalData.info as (typeof SessionV1.Event.MessageUpdated.Type)["data"]["info"],
+                            )
+                          : row.data,
+                      ),
+                    },
+                  }
+                continue
+              }
+              if (tableName === "part") {
+                const row = yield* db
+                  .select()
+                  .from(PartTable)
+                  .where(
+                    and(
+                      eq(PartTable.session_id, SessionSchema.ID.make(aggregateID)),
+                      gt(sql<string>`${PartTable.id}`, after),
+                    ),
+                  )
+                  .orderBy(asc(PartTable.id))
+                  .limit(1)
+                  .get()
+                  .pipe(Effect.orDie)
+                if (!row) continue
+                const { provenance: _, ...canonical } = row
+                return { cursor: snapshotCursor(index, row.id), tableName, rowKey: row.id, value: canonical }
+              }
+              if (tableName === "file_part_artifact_binding") {
+                let artifactAfter = after
+                while (true) {
+                  const part = yield* db
+                    .select({ id: PartTable.id, messageID: PartTable.message_id, data: PartTable.data })
+                    .from(PartTable)
+                    .where(
+                      and(
+                        eq(PartTable.session_id, SessionSchema.ID.make(aggregateID)),
+                        gt(sql<string>`${PartTable.id}`, artifactAfter),
+                      ),
+                    )
+                    .orderBy(asc(PartTable.id))
+                    .limit(1)
+                    .get()
+                    .pipe(Effect.orDie)
+                  if (!part) break
+                  const descriptor = FilePartArtifact.descriptor({
+                    sessionID: aggregateID,
+                    part: { id: part.id, messageID: part.messageID, sessionID: aggregateID, ...part.data },
+                  })
+                  if (descriptor) {
+                    const metadata = yield* FilePartArtifact.snapshotRef(db, {
+                      aggregateID,
+                      partID: part.id,
+                      descriptor,
+                    })
+                    return {
+                      cursor: snapshotCursor(index, part.id),
+                      tableName,
+                      rowKey: part.id,
+                      value: { partID: part.id, metadata },
+                    }
+                  }
+                  artifactAfter = part.id
+                }
+                continue
+              }
+              if (tableName === "session_message") {
+                const row = yield* db
+                  .select()
+                  .from(SessionMessageTable)
+                  .where(
+                    and(
+                      eq(SessionMessageTable.session_id, SessionSchema.ID.make(aggregateID)),
+                      gt(sql<string>`${SessionMessageTable.id}`, after),
+                    ),
+                  )
+                  .orderBy(asc(SessionMessageTable.id))
+                  .limit(1)
+                  .get()
+                  .pipe(Effect.orDie)
+                if (!row) continue
+                return { cursor: snapshotCursor(index, row.id), tableName, rowKey: row.id, value: row }
+              }
+              if (tableName === "session_input") {
+                const row = yield* db
+                  .select()
+                  .from(SessionInputTable)
+                  .where(
+                    and(
+                      eq(SessionInputTable.session_id, SessionSchema.ID.make(aggregateID)),
+                      sql`${SessionInputTable.promoted_seq} is not null`,
+                      gt(sql<string>`${SessionInputTable.id}`, after),
+                    ),
+                  )
+                  .orderBy(asc(SessionInputTable.id))
+                  .limit(1)
+                  .get()
+                  .pipe(Effect.orDie)
+                if (!row) continue
+                return { cursor: snapshotCursor(index, row.id), tableName, rowKey: row.id, value: row }
+              }
+              if (after) continue
+              const row = yield* db
+                .select()
+                .from(SessionContextEpochTable)
+                .where(eq(SessionContextEpochTable.session_id, SessionSchema.ID.make(aggregateID)))
                 .get()
                 .pipe(Effect.orDie)
-              if (row)
-                return {
-                  cursor: snapshotCursor(index, row.id),
-                  tableName,
-                  rowKey: row.id,
-                  value: {
-                    id: row.id,
-                    session_id: row.session_id,
-                    time_created: row.time_created,
-                    time_updated: row.time_updated,
-                    data: stripDiffPatches(
-                      row.canonicalData && typeof row.canonicalData.info === "object" && row.canonicalData.info
-                        ? messageData(row.canonicalData.info as (typeof SessionV1.Event.MessageUpdated.Type)["data"]["info"])
-                        : row.data,
-                    ),
-                  },
-                }
-              continue
-            }
-            if (tableName === "part") {
-              const row = yield* db.select().from(PartTable)
-                .where(and(eq(PartTable.session_id, SessionSchema.ID.make(aggregateID)), gt(sql<string>`${PartTable.id}`, after)))
-                .orderBy(asc(PartTable.id)).limit(1).get().pipe(Effect.orDie)
               if (!row) continue
-              const { provenance: _, ...canonical } = row
-              return { cursor: snapshotCursor(index, row.id), tableName, rowKey: row.id, value: canonical }
+              return { cursor: snapshotCursor(index, row.session_id), tableName, rowKey: row.session_id, value: row }
             }
-            if (tableName === "file_part_artifact_binding") {
-              let artifactAfter = after
-              while (true) {
-                const part = yield* db.select({ id: PartTable.id, messageID: PartTable.message_id, data: PartTable.data }).from(PartTable)
-                  .where(and(eq(PartTable.session_id, SessionSchema.ID.make(aggregateID)), gt(sql<string>`${PartTable.id}`, artifactAfter)))
-                  .orderBy(asc(PartTable.id)).limit(1).get().pipe(Effect.orDie)
-                if (!part) break
-                const descriptor = FilePartArtifact.descriptor({
-                  sessionID: aggregateID,
-                  part: { id: part.id, messageID: part.messageID, sessionID: aggregateID, ...part.data },
-                })
-                if (descriptor) {
-                  const metadata = yield* FilePartArtifact.snapshotRef(db, { aggregateID, partID: part.id, descriptor })
-                  return { cursor: snapshotCursor(index, part.id), tableName, rowKey: part.id, value: { partID: part.id, metadata } }
-                }
-                artifactAfter = part.id
-              }
-              continue
-            }
-            if (tableName === "session_message") {
-              const row = yield* db.select().from(SessionMessageTable)
-                .where(and(eq(SessionMessageTable.session_id, SessionSchema.ID.make(aggregateID)), gt(sql<string>`${SessionMessageTable.id}`, after)))
-                .orderBy(asc(SessionMessageTable.id)).limit(1).get().pipe(Effect.orDie)
-              if (!row) continue
-              return { cursor: snapshotCursor(index, row.id), tableName, rowKey: row.id, value: row }
-            }
-            if (tableName === "session_input") {
-              const row = yield* db.select().from(SessionInputTable)
-                .where(and(
-                  eq(SessionInputTable.session_id, SessionSchema.ID.make(aggregateID)),
-                  sql`${SessionInputTable.promoted_seq} is not null`,
-                  gt(sql<string>`${SessionInputTable.id}`, after),
-                ))
-                .orderBy(asc(SessionInputTable.id)).limit(1).get().pipe(Effect.orDie)
-              if (!row) continue
-              return { cursor: snapshotCursor(index, row.id), tableName, rowKey: row.id, value: row }
-            }
-            if (after) continue
-            const row = yield* db.select().from(SessionContextEpochTable)
-              .where(eq(SessionContextEpochTable.session_id, SessionSchema.ID.make(aggregateID)))
-              .get().pipe(Effect.orDie)
-            if (!row) continue
-            return { cursor: snapshotCursor(index, row.session_id), tableName, rowKey: row.session_id, value: row }
-          }
-        }),
-      clear: (aggregateID, snapshotID) =>
-        Effect.gen(function* () {
-          const sessionID = SessionSchema.ID.make(aggregateID)
-          yield* db.delete(SessionContextEpochTable).where(eq(SessionContextEpochTable.session_id, sessionID)).run().pipe(Effect.orDie)
-          yield* db.delete(SessionMessageTable).where(eq(SessionMessageTable.session_id, sessionID)).run().pipe(Effect.orDie)
-          yield* db.run(sql`
+          }),
+        clear: (aggregateID, snapshotID) =>
+          Effect.gen(function* () {
+            const sessionID = SessionSchema.ID.make(aggregateID)
+            yield* db
+              .delete(SessionContextEpochTable)
+              .where(eq(SessionContextEpochTable.session_id, sessionID))
+              .run()
+              .pipe(Effect.orDie)
+            yield* db
+              .delete(SessionMessageTable)
+              .where(eq(SessionMessageTable.session_id, sessionID))
+              .run()
+              .pipe(Effect.orDie)
+            yield* db
+              .run(
+                sql`
             DELETE FROM part
             WHERE session_id = ${sessionID}
               AND NOT EXISTS (
@@ -815,8 +952,12 @@ export const layer = Layer.effectDiscard(
                   AND row.table_name = 'part'
                   AND row.row_key = part.id
               )
-          `).pipe(Effect.orDie)
-          yield* db.run(sql`
+          `,
+              )
+              .pipe(Effect.orDie)
+            yield* db
+              .run(
+                sql`
             DELETE FROM message
             WHERE session_id = ${sessionID}
               AND NOT EXISTS (
@@ -825,76 +966,112 @@ export const layer = Layer.effectDiscard(
                   AND row.table_name = 'message'
                   AND row.row_key = message.id
               )
-          `).pipe(Effect.orDie)
-        }),
-      import: (aggregateID, row, ownerID) => {
-        if (row.tableName === "session") {
-          const value = row.value as typeof SessionTable.$inferInsert
-          if (
-            value.id !== aggregateID ||
-            (ownerID !== undefined && value.workspace_id !== ownerID)
-          )
+          `,
+              )
+              .pipe(Effect.orDie)
+          }),
+        import: (aggregateID, row, ownerID) => {
+          if (row.tableName === "session") {
+            const value = row.value as typeof SessionTable.$inferInsert
+            if (value.id !== aggregateID || (ownerID !== undefined && value.workspace_id !== ownerID))
+              return Effect.die(
+                new EventV2.InvalidSyncEventError({
+                  type: "snapshot",
+                  message: `Session snapshot root does not match aggregate or owner ${aggregateID}`,
+                }),
+              )
+            return Effect.gen(function* () {
+              const { id: _, ...update } = value
+              const updated = yield* db
+                .update(SessionTable)
+                .set(update)
+                .where(eq(SessionTable.id, SessionSchema.ID.make(aggregateID)))
+                .returning({ id: SessionTable.id })
+                .get()
+                .pipe(Effect.orDie)
+              if (!updated) yield* db.insert(SessionTable).values(value).run().pipe(Effect.orDie)
+            })
+          }
+          if (row.tableName === "file_part_artifact_binding") {
+            const value = row.value as { readonly partID?: unknown; readonly metadata?: unknown }
+            if (
+              value.partID !== row.rowKey ||
+              !Schema.is(FilePartArtifact.Metadata)(value.metadata) ||
+              value.metadata.aggregateID !== aggregateID
+            )
+              return Effect.die(
+                new EventV2.InvalidSyncEventError({
+                  type: "snapshot",
+                  message: `Invalid file artifact snapshot row ${row.rowKey}`,
+                }),
+              )
+            return FilePartArtifact.bindSnapshotRef({ metadata: value.metadata, partID: value.partID }).pipe(
+              Effect.provideService(Database.Service, { db }),
+            )
+          }
+          if (row.value.session_id !== aggregateID)
             return Effect.die(
               new EventV2.InvalidSyncEventError({
                 type: "snapshot",
-                message: `Session snapshot root does not match aggregate or owner ${aggregateID}`,
+                message: `Session snapshot row ${row.tableName}:${row.rowKey} crosses aggregate authority`,
               }),
             )
-          return Effect.gen(function* () {
-            const { id: _, ...update } = value
-            const updated = yield* db.update(SessionTable).set(update).where(eq(SessionTable.id, SessionSchema.ID.make(aggregateID)))
-              .returning({ id: SessionTable.id }).get().pipe(Effect.orDie)
-            if (!updated) yield* db.insert(SessionTable).values(value).run().pipe(Effect.orDie)
-          })
-        }
-        if (row.tableName === "file_part_artifact_binding") {
-          const value = row.value as { readonly partID?: unknown; readonly metadata?: unknown }
-          if (value.partID !== row.rowKey || !Schema.is(FilePartArtifact.Metadata)(value.metadata) || value.metadata.aggregateID !== aggregateID)
-            return Effect.die(new EventV2.InvalidSyncEventError({ type: "snapshot", message: `Invalid file artifact snapshot row ${row.rowKey}` }))
-          return FilePartArtifact.bindSnapshotRef({ metadata: value.metadata, partID: value.partID }).pipe(
-            Effect.provideService(Database.Service, { db }),
-          )
-        }
-        if (row.value.session_id !== aggregateID)
+          if (row.tableName === "message") {
+            const value = row.value as typeof MessageTable.$inferInsert
+            return db
+              .insert(MessageTable)
+              .values(value)
+              .onConflictDoUpdate({ target: MessageTable.id, set: value })
+              .run()
+              .pipe(Effect.orDie)
+          }
+          if (row.tableName === "part") {
+            const value = row.value as typeof PartTable.$inferInsert
+            return db
+              .insert(PartTable)
+              .values(value)
+              .onConflictDoUpdate({ target: PartTable.id, set: value })
+              .run()
+              .pipe(Effect.orDie)
+          }
+          if (row.tableName === "session_message")
+            return db
+              .insert(SessionMessageTable)
+              .values(row.value as typeof SessionMessageTable.$inferInsert)
+              .run()
+              .pipe(Effect.orDie)
+          if (row.tableName === "session_input")
+            return Effect.gen(function* () {
+              const value = row.value as typeof SessionInputTable.$inferInsert
+              const existing = yield* db
+                .select()
+                .from(SessionInputTable)
+                .where(eq(SessionInputTable.id, value.id))
+                .get()
+                .pipe(Effect.orDie)
+              if (!existing) return yield* db.insert(SessionInputTable).values(value).run().pipe(Effect.orDie)
+              if (!isDeepStrictEqual(existing, { ...value, promoted_seq: value.promoted_seq ?? null }))
+                return yield* Effect.die(
+                  new EventV2.InvalidSyncEventError({
+                    type: "snapshot",
+                    message: `Session input ${value.id} conflicts with local admission authority`,
+                  }),
+                )
+            })
+          if (row.tableName === "session_context_epoch")
+            return db
+              .insert(SessionContextEpochTable)
+              .values(row.value as typeof SessionContextEpochTable.$inferInsert)
+              .run()
+              .pipe(Effect.orDie)
           return Effect.die(
             new EventV2.InvalidSyncEventError({
               type: "snapshot",
-              message: `Session snapshot row ${row.tableName}:${row.rowKey} crosses aggregate authority`,
+              message: `Unknown Session snapshot table ${row.tableName}`,
             }),
           )
-        if (row.tableName === "message") {
-          const value = row.value as typeof MessageTable.$inferInsert
-          return db.insert(MessageTable).values(value).onConflictDoUpdate({ target: MessageTable.id, set: value }).run().pipe(Effect.orDie)
-        }
-        if (row.tableName === "part") {
-          const value = row.value as typeof PartTable.$inferInsert
-          return db.insert(PartTable).values(value).onConflictDoUpdate({ target: PartTable.id, set: value }).run().pipe(Effect.orDie)
-        }
-        if (row.tableName === "session_message")
-          return db
-            .insert(SessionMessageTable)
-            .values(row.value as typeof SessionMessageTable.$inferInsert)
-            .run()
-            .pipe(Effect.orDie)
-        if (row.tableName === "session_input")
-          return Effect.gen(function* () {
-            const value = row.value as typeof SessionInputTable.$inferInsert
-            const existing = yield* db.select().from(SessionInputTable).where(eq(SessionInputTable.id, value.id)).get().pipe(Effect.orDie)
-            if (!existing) return yield* db.insert(SessionInputTable).values(value).run().pipe(Effect.orDie)
-            if (!isDeepStrictEqual(existing, { ...value, promoted_seq: value.promoted_seq ?? null }))
-              return yield* Effect.die(new EventV2.InvalidSyncEventError({ type: "snapshot", message: `Session input ${value.id} conflicts with local admission authority` }))
-          })
-        if (row.tableName === "session_context_epoch")
-          return db
-            .insert(SessionContextEpochTable)
-            .values(row.value as typeof SessionContextEpochTable.$inferInsert)
-            .run()
-            .pipe(Effect.orDie)
-        return Effect.die(
-          new EventV2.InvalidSyncEventError({ type: "snapshot", message: `Unknown Session snapshot table ${row.tableName}` }),
-        )
-      },
-    })
+        },
+      })
     const guardReplayedUpdatePlacement = Effect.fnUntraced(function* (
       sessionID: SessionSchema.ID,
       placement: { projectID: string; directory: string; workspaceID?: string },
@@ -1095,9 +1272,7 @@ export const layer = Layer.effectDiscard(
           share_url: event.data.info.share?.url ?? null,
           preview: event.data.info.preview ?? null,
           time_updated: DateTime.toEpochMillis(event.data.info.time.updated),
-          time_archived: event.data.info.time.archived
-            ? DateTime.toEpochMillis(event.data.info.time.archived)
-            : null,
+          time_archived: event.data.info.time.archived ? DateTime.toEpochMillis(event.data.info.time.archived) : null,
         })
         .where(eq(SessionTable.id, event.data.sessionID))
         .run()
@@ -1128,8 +1303,7 @@ export const layer = Layer.effectDiscard(
     // Revert is an independent authority. Local publish uses the commit hook to perform the
     // mutation_epoch CAS and supersede pending intent/steer rows; replay applies the event state here.
     yield* events.project(SessionEvent.RevertChanged, (event) => {
-      if (!event.replay)
-        return Effect.void
+      if (!event.replay) return Effect.void
       return db
         .update(SessionTable)
         .set({
@@ -1138,9 +1312,7 @@ export const layer = Layer.effectDiscard(
             ? {
                 ...event.data.revert,
                 messageID: SessionV1.MessageID.make(event.data.revert.messageID),
-                partID: event.data.revert.partID
-                  ? SessionV1.PartID.make(event.data.revert.partID)
-                  : undefined,
+                partID: event.data.revert.partID ? SessionV1.PartID.make(event.data.revert.partID) : undefined,
               }
             : null,
           ...(event.data.summary
@@ -1223,6 +1395,9 @@ export const layer = Layer.effectDiscard(
           .where(and(eq(MessageTable.id, event.data.messageID), eq(MessageTable.session_id, event.data.sessionID)))
           .run()
           .pipe(Effect.orDie)
+        // SessionRevert cleanup publishes these durable removals for the V1 mirror. Truncate the
+        // V2 provider branch from the same message, including unmapped compaction/system rows.
+        yield* discardRevertedV2Tail(db, event.data.sessionID, event.data.messageID, true)
       }),
     )
     yield* events.project(SessionV1.Event.PartRemoved, (event) =>
@@ -1248,6 +1423,31 @@ export const layer = Layer.effectDiscard(
               eq(PartTable.session_id, event.data.sessionID),
             ),
           )
+          .run()
+          .pipe(Effect.orDie)
+        const target = yield* discardRevertedV2Tail(db, event.data.sessionID, event.data.messageID, false)
+        if (!target) return
+        if (target.type === "user") {
+          yield* db
+            .delete(SessionMessageTable)
+            .where(and(eq(SessionMessageTable.id, target.id), eq(SessionMessageTable.session_id, event.data.sessionID)))
+            .run()
+            .pipe(Effect.orDie)
+          return
+        }
+        if (target.type !== "assistant") return
+        const prefix = `prt_${target.id.slice("msg_".length)}_`
+        if (!event.data.partID.startsWith(prefix)) return
+        const index = Number(event.data.partID.slice(prefix.length))
+        if (!Number.isInteger(index) || index < 0) return
+        const message = decodeMessage({ ...target.data, id: target.id, type: target.type })
+        if (message.type !== "assistant" || index >= message.content.length) return
+        const encoded = encodeMessage(new SessionMessage.Assistant({ ...message, content: message.content.slice(0, index) }))
+        const { id, type, ...data } = encoded
+        yield* db
+          .update(SessionMessageTable)
+          .set({ data })
+          .where(and(eq(SessionMessageTable.id, target.id), eq(SessionMessageTable.session_id, event.data.sessionID)))
           .run()
           .pipe(Effect.orDie)
       }),
@@ -1353,6 +1553,7 @@ export const layer = Layer.effectDiscard(
           sessionID: event.data.sessionID,
           prompt: event.data.prompt,
           delivery: event.data.delivery,
+          revertEpoch: event.data.revertEpoch,
           timeCreated: event.data.timestamp,
         })
       }),
@@ -1372,6 +1573,21 @@ export const layer = Layer.effectDiscard(
             promotedSeq: event.seq,
           }),
         )
+        // Prompt selection becomes active at the safe promotion boundary. Queue inputs retain
+        // their own model/agent even when later queued requests were already admitted.
+        if (event.data.prompt.agent !== undefined || event.data.prompt.model !== undefined) {
+          yield* db
+            .update(SessionTable)
+            .set({
+              ...(event.data.prompt.agent === undefined ? {} : { agent: event.data.prompt.agent }),
+              ...(event.data.prompt.model === undefined ? {} : { model: event.data.prompt.model }),
+              time_updated: DateTime.toEpochMillis(event.data.timestamp),
+            })
+            .where(eq(SessionTable.id, event.data.sessionID))
+            .run()
+            .pipe(Effect.orDie)
+          yield* SessionContextEpoch.requestReplacement(db, event.data.sessionID, event.seq)
+        }
       }),
     )
     yield* events.project(SessionEvent.InterruptRequested, (event) => {
@@ -1393,6 +1609,7 @@ export const layer = Layer.effectDiscard(
     yield* events.project(SessionEvent.Execution.Succeeded, () => Effect.void)
     yield* events.project(SessionEvent.Execution.Failed, () => Effect.void)
     yield* events.project(SessionEvent.Execution.Interrupted, () => Effect.void)
+    yield* events.project(SessionEvent.LoopBudget.Triggered, () => Effect.void)
     yield* events.project(SessionEvent.ContextUpdated, (event) => {
       if (!event.replay || event.seq === undefined) return run(db, event)
       return run(db, event).pipe(
@@ -1430,6 +1647,11 @@ export const layer = Layer.effectDiscard(
       const seq = event.seq
       if (seq === undefined) return Effect.die("Synchronized Session event is missing aggregate sequence")
       return Effect.gen(function* () {
+        if (event.data.reason === "hard_gate") {
+          if (!event.data.checkpointID || !event.data.checkpointHash)
+            return yield* Effect.die("Hard-gate compaction has no checkpoint binding")
+          yield* LongContext.assertCheckpoint(db, event.data.sessionID, event.data.checkpointID, event.data.checkpointHash).pipe(Effect.orDie)
+        }
         yield* run(db, event)
         yield* SessionContextEpoch.requestReplacement(db, event.data.sessionID, seq)
       })
@@ -1454,7 +1676,12 @@ export const layer = Layer.effectDiscard(
         return Effect.forEach(
           messageIDs,
           (messageID) =>
-            publishWireForMessage(db, events, SessionSchema.ID.make(data.sessionID!), SessionMessage.ID.make(messageID)),
+            publishWireForMessage(
+              db,
+              events,
+              SessionSchema.ID.make(data.sessionID!),
+              SessionMessage.ID.make(messageID),
+            ),
           { concurrency: 2 },
         ).pipe(Effect.ignore)
       }),

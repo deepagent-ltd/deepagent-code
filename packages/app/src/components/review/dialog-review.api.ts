@@ -19,6 +19,9 @@ export type KnowledgeItem = {
   // Storage scope, for grouping by project vs global: "durable" (global) or
   // "durable:project:<project_id>". Absent from older servers → treated as global.
   scope?: string
+  inboxID?: string
+  reviewReason?: string
+  reasonGroup?: string
 }
 
 type RawSdkClient = {
@@ -81,6 +84,22 @@ export const reviewAuthorityKey = (item: KnowledgeItem) =>
     item.fingerprint,
     item.governanceRevision,
   ])
+
+export const groupPendingByReason = (items: readonly KnowledgeItem[]) => {
+  const groups = new Map<string, { scope: "project" | "global"; reason: string; items: KnowledgeItem[] }>()
+  items.filter((item) => item.approval_status === "pending").forEach((item) => {
+    const scope = item.scope?.startsWith("durable:project:") ? "project" : "global"
+    const reason = item.reasonGroup ?? "other"
+    const key = JSON.stringify([scope, reason])
+    const group = groups.get(key)
+    if (group) group.items.push(item)
+    else groups.set(key, { scope, reason, items: [item] })
+  })
+  return [...groups.values()].sort((a, b) =>
+    (a.scope === "project" ? 0 : 1) - (b.scope === "project" ? 0 : 1) ||
+    a.reason.localeCompare(b.reason),
+  )
+}
 
 // V3.8.1 §G environment-fact use-gate. Provisional user-global environment facts surface here so the
 // user decides, per project, whether to adopt them (§G.5). Credentials never appear — only secret_ref

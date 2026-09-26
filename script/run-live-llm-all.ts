@@ -87,6 +87,12 @@ export const suites: Suite[] = [
     realLLM: true,
   },
   {
+    id: "live:proxy-smoke",
+    package: "deepagent-code",
+    command: ["bun", "run", "test:llm-live:proxy-smoke"],
+    realLLM: true,
+  },
+  {
     id: "live:adapter-structured",
     package: "llm",
     command: ["bun", "run", "test:llm-live:structured-adapter"],

@@ -28,11 +28,9 @@ import { DatabaseMigrationLease } from "./migration-lease"
 // This operation is production-capable but never implicit: only the authenticated incident
 // maintenance control plane may call it for the configured database path. Tests use temp fixtures.
 //
-// Restart contract (K-02 §5.2 S-3, documented decision): a restore REPLACES the file under a
-// running process, but open connections and in-process caches still reference the pre-restore
-// database. The caller must restart the process (or otherwise close every connection) after a
-// successful restore before business traffic resumes; in-place reopening of the business
-// database without a restart is deferred (V2.0.2 X-13).
+// Restore replaces the file only while the incident shell owns no business connection. The
+// caller must build a fresh business runtime before admitting traffic; open connections and
+// in-process caches from a previous business runtime must never be reused against this file.
 
 export type RestoreErrorCode =
   | "backup_unverified"

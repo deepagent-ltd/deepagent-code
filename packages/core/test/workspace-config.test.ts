@@ -26,6 +26,7 @@ describe("WorkspaceConfig", () => {
       expect(r.quietHours).toBeUndefined()
       expect(r.trustedSources).toEqual(WorkspaceConfig.DEFAULT_TRUSTED_SOURCES)
       expect(r.rateLimits).toEqual({})
+      expect(r.externalChannels).toEqual([])
     }),
   )
 
@@ -52,6 +53,7 @@ describe("WorkspaceConfig", () => {
         quietHours: { startHour: 22, endHour: 6, tzOffsetMinutes: 480 },
         rateLimits: { eventPublishPerMinute: 500, agentExecConcurrent: 3 },
         trustedSources: ["im", "system"],
+        externalChannels: [{ provider: "slack", groupID: "img_1", channelID: "C123" }],
       })
       const r = yield* cfg.get("wrk_1")
       expect(r.retentionDays).toBe(7)
@@ -59,6 +61,7 @@ describe("WorkspaceConfig", () => {
       expect(r.rateLimits.eventPublishPerMinute).toBe(500)
       expect(r.rateLimits.agentExecConcurrent).toBe(3)
       expect(r.trustedSources).toEqual(["im", "system"])
+      expect(r.externalChannels).toEqual([{ provider: "slack", groupID: "img_1", channelID: "C123" }])
     }),
   )
 

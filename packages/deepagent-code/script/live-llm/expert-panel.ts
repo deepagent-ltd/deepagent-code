@@ -108,11 +108,15 @@ if (
     (child) =>
       child.parentID !== observation.sessionID ||
       child.agent !== "reviewer" ||
-      child.model?.providerID !== artifact.fingerprint.runtimeProviderID ||
-      child.model.id !== artifact.fingerprint.modelID ||
-      child.assistants.some(
-        (assistant) =>
-          assistant.providerID !== artifact.fingerprint.runtimeProviderID || assistant.modelID !== artifact.fingerprint.modelID,
+      child.v2Assistants.length === 0 ||
+      child.v2Assistants.some((assistant) =>
+        assistant.model.providerID !== artifact.fingerprint.runtimeProviderID ||
+        assistant.model.id !== artifact.fingerprint.modelID,
+      ) ||
+      child.v2ProviderTurns.length === 0 ||
+      child.v2ProviderTurns.some((turn) =>
+        turn.providerID !== artifact.fingerprint.runtimeProviderID ||
+        turn.modelID !== artifact.fingerprint.modelID || turn.state !== "settled",
       ),
   )
 ) {
@@ -193,45 +197,35 @@ for (const opinion of opinions) {
     candidate.users.some((user) => user.text.toUpperCase().includes(`LENS IS ${opinion.lens.toUpperCase()}`)),
   )
   if (!child) throw new Error(`D3 could not map ${opinion.lens} to a differentiated child prompt`)
-  const tools = child.assistants.flatMap((assistant) => assistant.tools)
+  const tools = child.v2Tools
   const completedReads = tools.filter((tool) => tool.name === "read" && tool.status === "completed")
-  const finalizerCalls = tools.filter((tool) => tool.name === "StructuredOutput" && tool.status === "completed")
-  const invalidTool = tools.find((tool) => {
-    if (tool.name === "read" && tool.status === "completed") return false
-    if (tool.name === "StructuredOutput" && tool.status === "completed") return false
-    if (tool.name !== "read" || tool.status !== "error") return true
-    const input = record(tool.input, `${opinion.lens} rejected read input`)
-    return typeof input.filePath !== "string" || input.filePath.endsWith(contract.file)
-  })
-  if (completedReads.length < 1 || finalizerCalls.length < 1 || finalizerCalls.length > 2 || invalidTool !== undefined) {
+  if (tools.length !== 1 || completedReads.length !== 1) {
     throw new Error(`D3 ${opinion.lens} tool sequence was ${tools.map((tool) => `${tool.name}:${tool.status}`).join(" -> ")}`)
   }
-  const finalizerResult = record(finalizerCalls.at(-1)?.input, `${opinion.lens} finalizer result`)
+  const read = completedReads[0]!
   if (
+    typeof read.input !== "object" || read.input === null ||
+    read.input.path !== contract.file || typeof read.output !== "string" ||
+    !read.output.includes(contract.marker)
+  ) {
+    throw new Error(`D3 ${opinion.lens} did not read its assigned fixture evidence`)
+  }
+  const researchText = child.v2Assistants.map((assistant) => assistant.text).join("\n")
+  if (Object.values(evidence).some((marker) => marker !== contract.marker &&
+    `${read.output}\n${researchText}`.includes(marker))) {
+    throw new Error(`D3 ${opinion.lens} saw another lens's private evidence`)
+  }
+  const finalText = child.v2Assistants.at(-1)?.text
+  if (!finalText) throw new Error(`D3 ${opinion.lens} has no structured final answer`)
+  const finalizerResult: unknown = JSON.parse(finalText)
+  if (
+    typeof finalizerResult !== "object" || finalizerResult === null || Array.isArray(finalizerResult) ||
+    !("verdict" in finalizerResult) || !("findings" in finalizerResult) ||
     finalizerResult.verdict !== opinion.verdict ||
-    JSON.stringify(finalizerResult.findings) !== JSON.stringify(opinion.findings)
+    JSON.stringify(finalizerResult.findings) !== JSON.stringify(opinion.findings) ||
+    "lens" in finalizerResult
   ) {
-    throw new Error(`D3 ${opinion.lens} finalizer did not settle on the arbitrated opinion`)
-  }
-  const reads = completedReads.map((tool) => ({
-    input: record(tool.input, `${opinion.lens} read input`),
-    output: typeof tool.output === "string" ? tool.output : "",
-  }))
-  if (reads.some((read) => typeof read.input.filePath !== "string" || !read.input.filePath.endsWith(contract.file))) {
-    throw new Error(`D3 ${opinion.lens} read the wrong evidence file`)
-  }
-  const readOutput = reads.map((read) => read.output).join("\n")
-  const researchText = child.assistants.map((assistant) => assistant.text).join("\n")
-  const evidenceText = `${readOutput}\n${researchText}`
-  if (
-    !readOutput.includes(contract.marker) ||
-    Object.values(evidence).some((marker) => marker !== contract.marker && evidenceText.includes(marker))
-  ) {
-    throw new Error(`D3 ${opinion.lens} did not receive only its unique evidence through the real read tool`)
-  }
-  const structured = child.assistants.find((assistant) => assistant.structured !== undefined)?.structured
-  if (record(structured, `${opinion.lens} ReviewResult`).lens !== undefined) {
-    throw new Error(`D3 ${opinion.lens} model output leaked a lens field into ReviewResult`)
+    throw new Error(`D3 ${opinion.lens} V2 finalizer did not settle on the arbitrated opinion`)
   }
 }
 

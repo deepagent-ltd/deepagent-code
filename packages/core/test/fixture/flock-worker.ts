@@ -9,6 +9,7 @@ type Msg = {
   baseDelayMs?: number
   maxDelayMs?: number
   holdMs?: number
+  clockSkewMs?: number
   ready?: string
   active?: string
   done?: string
@@ -55,6 +56,8 @@ async function job(input: Msg) {
 
 async function main() {
   const msg = input()
+  if (msg.clockSkewMs)
+    Object.defineProperty(performance, "timeOrigin", { value: performance.timeOrigin - msg.clockSkewMs })
 
   await Flock.withLock(msg.key, () => job(msg), {
     dir: msg.dir,

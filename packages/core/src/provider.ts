@@ -20,7 +20,9 @@ export { ID }
 export {
   OFFICIAL_PROVIDER_IDS,
   OFFICIAL_PROVIDER_ID_SET,
+  OFFICIAL_PROVIDER_CATALOG_ALIASES,
   isOfficialProvider,
+  officialProviderCatalogID,
   type OfficialProviderID,
 } from "./provider-official"
 

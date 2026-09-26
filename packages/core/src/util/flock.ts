@@ -111,7 +111,8 @@ export namespace Flock {
   }
 
   function wall() {
-    return performance.timeOrigin + mono()
+    // Filesystem mtime uses wall time; the monotonic clock can lag after system sleep.
+    return Date.now()
   }
 
   async function stats(file: string) {

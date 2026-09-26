@@ -7,6 +7,7 @@ import { Global } from "../global"
 import { Location } from "../location"
 import { SystemContext } from "./index"
 import { InstructionContext } from "../instruction-context"
+import { ConfigInstructions } from "./config-instructions"
 import { SystemContextRegistry } from "./registry"
 
 const builtIns = Layer.effectDiscard(
@@ -46,10 +47,17 @@ const builtIns = Layer.effectDiscard(
 export const node = makeLocationNode({
   name: "system-context-builtins",
   layer: builtIns,
-  deps: [Location.node, SystemContextRegistry.node, InstructionContext.node, FSUtil.node, Global.node],
+  deps: [
+    Location.node,
+    SystemContextRegistry.node,
+    InstructionContext.node,
+    ConfigInstructions.node,
+    FSUtil.node,
+    Global.node,
+  ],
 })
 
-export const layer = Layer.mergeAll(builtIns, InstructionContext.layer).pipe(
+export const layer = Layer.mergeAll(builtIns, InstructionContext.layer, ConfigInstructions.layer).pipe(
   Layer.provideMerge(SystemContextRegistry.layer),
 )
 

@@ -75,7 +75,7 @@ describe("Session V2-native update authority (RI-16)", () => {
       yield* session.setTitle({ sessionID: info.id, title: "v2 native title" })
 
       expect((yield* session.get(info.id)).title).toBe("v2 native title")
-      expect(yield* eventTypes(info.id)).toEqual(["session.created.1", "session.updated.2"])
+      expect(yield* eventTypes(info.id)).toEqual(["session.created.2", "session.updated.2"])
 
       const converted = yield* pollWithTimeout(
         Ref.get(seen).pipe(Effect.map((all) => (all.length > 0 ? all : undefined))),
@@ -110,7 +110,7 @@ describe("Session V2-native update authority (RI-16)", () => {
 
       yield* session.setArchived({ sessionID: info.id, time: null })
       expect((yield* session.get(info.id)).time.archived).toBeUndefined()
-      expect(yield* eventTypes(info.id)).toEqual(["session.created.1", "session.updated.2", "session.updated.2"])
+      expect(yield* eventTypes(info.id)).toEqual(["session.created.2", "session.updated.2", "session.updated.2"])
 
       const converted = yield* pollWithTimeout(
         Ref.get(seen).pipe(Effect.map((all) => (all.length >= 2 ? all : undefined))),
@@ -132,7 +132,7 @@ describe("Session V2-native update authority (RI-16)", () => {
       const after = yield* session.get(info.id)
       expect(after.metadata).toEqual({ origin: "keep" })
       expect(after.time.updated).toBeGreaterThanOrEqual(before)
-      expect(yield* eventTypes(info.id)).toEqual(["session.created.1", "session.updated.2", "session.updated.2"])
+      expect(yield* eventTypes(info.id)).toEqual(["session.created.2", "session.updated.2", "session.updated.2"])
     }),
   )
 
@@ -151,7 +151,7 @@ describe("Session V2-native update authority (RI-16)", () => {
       expect(current.share).toEqual({ url: "https://share.example/session" })
       expect(current.preview).toBe("first preview")
       expect(yield* eventTypes(info.id)).toEqual([
-        "session.created.1",
+        "session.created.2",
         "session.updated.2",
         "session.updated.2",
         "session.updated.2",
@@ -200,7 +200,7 @@ describe("Session V2-native update authority (RI-16)", () => {
       expect(yield* eventTypes(info.id)).toEqual([
         "message.part.updated.1",
         "message.updated.1",
-        "session.created.1",
+        "session.created.2",
         "session.diff.2",
         "session.next.synthetic.1",
         "session.revert.1",

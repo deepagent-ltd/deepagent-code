@@ -148,6 +148,17 @@ it.effect("A: real identity frame — code graph resolves ready with real-scope 
     expect(statuses.code?.reasonCode).toBe("none")
     expect(statuses.code?.candidateCount).toBe(1)
     expect(statuses.code?.rejectedCount).toBe(0)
+    const refs = JSON.parse(row?.selected_refs ?? "[]") as { graph: string; ref: string; version: string; provenanceRefs: string[] }[]
+    expect(refs.find((ref) => ref.graph === "code")).toMatchObject({
+      ref: expect.stringContaining("seed-symbol"),
+      version: "code:1",
+      provenanceRefs: [],
+    })
+    const evidence = yield* SessionRunnerCanonical.selectionGraphEvidence(db, admission.selectionId)
+    expect(evidence).toContain("[adapter version code-intelligence.v1]")
+    expect(evidence).toContain('version="code:1" ref=')
+    expect(evidence).toContain("provenance_refs=degraded_unavailable")
+    expect(new TextEncoder().encode(evidence ?? "").length).toBeLessThanOrEqual(SessionRunnerCanonical.EvidenceByteBudget)
     // v2:local never leaks into a real frame.
     expect(row?.graph_revisions).not.toContain("v2:local")
   }).pipe(

@@ -1,0 +1,1 @@
+ALTER TABLE `session_input` ADD `revert_epoch` integer;

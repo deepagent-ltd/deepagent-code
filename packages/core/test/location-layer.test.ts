@@ -57,6 +57,7 @@ describe("LocationServiceMap", () => {
   const ORIGINAL_DISABLE_FETCH = Flag.DEEPAGENT_CODE_DISABLE_MODELS_FETCH
   const ORIGINAL_DATABASE = Flag.DEEPAGENT_CODE_DB
   const ORIGINAL_TEST_HOME = process.env.DEEPAGENT_CODE_TEST_HOME
+  const ORIGINAL_DISABLE_DEFAULT_PLUGINS = process.env.DEEPAGENT_CODE_DISABLE_DEFAULT_PLUGINS
   const testHome = mkdtempSync(tmpRootShared())
   beforeAll(() => {
     Flag.DEEPAGENT_CODE_DISABLE_MODELS_FETCH = true
@@ -64,12 +65,16 @@ describe("LocationServiceMap", () => {
     // Isolate the Global roots: the default layer otherwise resolves the real ~/.deepagent/code
     // and dies on any real user config field the V2 fail-closed contract rejects (config.ts).
     process.env.DEEPAGENT_CODE_TEST_HOME = testHome
+    process.env.DEEPAGENT_CODE_DISABLE_DEFAULT_PLUGINS = "1"
   })
   afterAll(() => {
     Flag.DEEPAGENT_CODE_DISABLE_MODELS_FETCH = ORIGINAL_DISABLE_FETCH
     Flag.DEEPAGENT_CODE_DB = ORIGINAL_DATABASE
     if (ORIGINAL_TEST_HOME === undefined) delete process.env.DEEPAGENT_CODE_TEST_HOME
     if (ORIGINAL_TEST_HOME !== undefined) process.env.DEEPAGENT_CODE_TEST_HOME = ORIGINAL_TEST_HOME
+    if (ORIGINAL_DISABLE_DEFAULT_PLUGINS === undefined) delete process.env.DEEPAGENT_CODE_DISABLE_DEFAULT_PLUGINS
+    if (ORIGINAL_DISABLE_DEFAULT_PLUGINS !== undefined)
+      process.env.DEEPAGENT_CODE_DISABLE_DEFAULT_PLUGINS = ORIGINAL_DISABLE_DEFAULT_PLUGINS
     rmSync(testHome, { recursive: true, force: true })
   })
 
@@ -131,6 +136,8 @@ describe("LocationServiceMap", () => {
             expect(blockedState.tools.map((tool) => tool.name).sort()).toEqual(expectedTools)
             expect(blockedState.researcherTools).toEqual(["glob", "grep", "read", "webfetch", "websearch"])
             const allowedState = yield* update(allowed.path)
+            // The V1 default-plugin kill switch must not remove the Core models-dev catalog producer.
+            expect(allowedState.providers.some((provider) => provider.id === ProviderV2.ID.make("deepagent"))).toBe(true)
             expect(allowedState.providers.some((provider) => provider.id === ProviderV2.ID.make("test"))).toBe(true)
             expect(allowedState.tools.map((tool) => tool.name).sort()).toEqual(expectedTools)
             expect(allowedState.researcherTools).toEqual(["glob", "grep", "read", "webfetch", "websearch"])

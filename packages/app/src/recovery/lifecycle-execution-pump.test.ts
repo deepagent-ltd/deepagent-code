@@ -140,6 +140,7 @@ describe("createExecutionJournalSubscription (durable drain)", () => {
   test("first drain anchors at the watermark; following drains resume from the last seen seq", async () => {
     const lifecycle = createRecoveryLifecycle()
     const afterCalls: string[] = []
+    const delivered: string[] = []
     let eventCalls = 0
     let page = 0
     const client: ExecutionJournalClient = {
@@ -151,7 +152,11 @@ describe("createExecutionJournalSubscription (durable drain)", () => {
           if (page === 1) {
             return {
               data: {
-                events: [row(11, "session.execution.started.1", { sessionID: "ses-a" }), row(12, "session.execution.succeeded.1", { sessionID: "ses-a" })],
+                events: [
+                  row(11, "session.next.text.ended.1", { sessionID: "ses-a" }),
+                  row(12, "session.execution.started.1", { sessionID: "ses-a" }),
+                  row(13, "session.execution.succeeded.1", { sessionID: "ses-a" }),
+                ],
               },
             }
           }
@@ -160,13 +165,28 @@ describe("createExecutionJournalSubscription (durable drain)", () => {
       },
     }
     const journals = createExecutionJournalSubscription(
-      { client, sessionIDs: () => ["ses-a"], lifecycle, handlers: { onEvent: () => (eventCalls += 1) } },
+      {
+        client,
+        sessionIDs: () => ["ses-a"],
+        lifecycle,
+        handlers: {
+          onAnchor: () => delivered.push("anchor"),
+          onJournalEvent: (_sessionID, event) => delivered.push(event.type),
+          onEvent: () => (eventCalls += 1),
+        },
+      },
       10,
     )
     try {
       await waitFor(() => afterCalls.length >= 2, "journal never drained")
       expect(afterCalls[0]).toBe("10") // watermark anchor (never a history replay at mount)
-      expect(afterCalls[1]).toBe("12") // seq-resume from the last seen row
+      expect(afterCalls[1]).toBe("13") // seq-resume from the last seen row
+      expect(delivered).toEqual([
+        "anchor",
+        "session.next.text.ended.1",
+        "session.execution.started.1",
+        "session.execution.succeeded.1",
+      ])
       expect(eventCalls).toBe(2) // reactivity hook fires once per mapped event
       const state = lifecycle.snapshot().sessions.get("ses-a")!
       expect(state.lastExecution?.state).toBe("succeeded")

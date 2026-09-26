@@ -53,6 +53,7 @@ export type MemoryInboxItem = {
   readonly project_id: string
   readonly candidate: LearningCandidate
   readonly reason: string
+  readonly reason_group?: string
   readonly created_at: string
   readonly status: "pending" | "merged" | "archived"
 }
@@ -189,9 +190,10 @@ export class LearningWorker {
       if (autoAdmit || candidate.status === "staged") {
         // Only an auto-admit decision may reinforce an already-active near duplicate. Review-required
         // candidates must remain proposals and cannot mutate retrievable knowledge before approval.
-        const doc = this.store.stageCandidate(candidateToInput(candidate, this.projectID, input.trigger), {
-          allowActiveReinforcement: autoAdmit,
-        })
+        const document = candidateToInput(candidate, this.projectID, input.trigger)
+        const doc = autoAdmit
+          ? this.store.stageCandidate(document, { allowActiveReinforcement: true })
+          : this.store.stageReviewCandidate(document)
         if (autoAdmit) {
           this.store.approve(doc.id) // gate 8: admit (status -> active, retrievable)
           autoMerged.push(candidate.candidate_id)
@@ -275,6 +277,7 @@ export class LearningWorker {
           project_id: input.projectID,
           candidate,
           reason,
+          reason_group: reasonGroup(reason),
           status: "pending" as const,
         },
       }
@@ -344,6 +347,7 @@ export class LearningWorker {
       project_id: projectID,
       candidate,
       reason,
+      reason_group: reasonGroup(reason),
       created_at: new Date().toISOString(),
       status: "pending",
     }
@@ -363,6 +367,9 @@ const readProjectID = (paths: ProjectPaths): string => {
 }
 
 const inboxDir = (paths: ProjectPaths): string => path.join(paths.docsDir, "memory-inbox")
+
+const reasonGroup = (reason: string) =>
+  reason.startsWith("reviewer unavailable") ? "reviewer unavailable" : reason
 
 // Map a learning candidate to a durable knowledge doc input (docs/34 §8). anti_pattern becomes a
 // failure_dossier (negative knowledge — never a positive injection, DAP-12). All learned knowledge

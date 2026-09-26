@@ -136,6 +136,7 @@ export const webhookHandlers = HttpApiBuilder.group(InstanceHttpApi, "webhook", 
 
     const webhookCi = Effect.fn("WebhookHttpApi.ci")(function* (ctx) {
       const workspaceID = yield* workspaceKey
+      const directory = (yield* WorkspaceRouteContext).directory
       const p = ctx.payload
       // §A1 ci.failure → CodeFixAgent. `normal` priority: external + retriable, kept under the §E2 ceiling
       // so a flapping pipeline can't flood the bus past the limit. `consecutiveFailures` still drives the
@@ -153,6 +154,7 @@ export const webhookHandlers = HttpApiBuilder.group(InstanceHttpApi, "webhook", 
         ]),
         priority: "normal",
         payload: {
+          directory,
           repo: p.repo,
           ref: p.ref,
           branch: p.branch,
@@ -176,12 +178,7 @@ export const webhookHandlers = HttpApiBuilder.group(InstanceHttpApi, "webhook", 
         source: "pr",
         workspaceID,
         ...(p.actor ? { actorID: p.actor } : {}),
-        idempotencyKey: deriveIdempotencyKey("pr", [
-          "pr.comment",
-          p.repo,
-          p.prNumber,
-          p.deliveryId ?? p.comment,
-        ]),
+        idempotencyKey: deriveIdempotencyKey("pr", ["pr.comment", p.repo, p.prNumber, p.deliveryId ?? p.comment]),
         priority: "normal",
         payload: {
           repo: p.repo,
@@ -207,12 +204,7 @@ export const webhookHandlers = HttpApiBuilder.group(InstanceHttpApi, "webhook", 
         type: MONITOR_ALERT,
         source: "monitor",
         workspaceID,
-        idempotencyKey: deriveIdempotencyKey("monitor", [
-          "monitor.alert",
-          p.repo,
-          p.alertId,
-          p.deliveryId ?? p.title,
-        ]),
+        idempotencyKey: deriveIdempotencyKey("monitor", ["monitor.alert", p.repo, p.alertId, p.deliveryId ?? p.title]),
         priority,
         payload: {
           repo: p.repo,

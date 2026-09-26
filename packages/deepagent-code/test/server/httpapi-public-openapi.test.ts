@@ -203,6 +203,7 @@ describe("PublicApi OpenAPI v2 errors", () => {
     const spec = OpenApi.fromApi(PublicApi) as OpenApiSpec
 
     for (const route of [
+      ["get", "/api/session/{sessionID}"],
       ["post", "/api/session/{sessionID}/prompt"],
       ["post", "/api/session/{sessionID}/compact"],
       ["post", "/api/session/{sessionID}/wait"],
@@ -248,9 +249,7 @@ describe("PublicApi OpenAPI v2 errors", () => {
       ["post", "/session/{sessionID}/unrevert"],
       ["delete", "/session/{sessionID}/message/{messageID}"],
     ] as const) {
-      expect(componentName(responseRef(spec.paths[route[1]]?.[route[0]]?.responses?.["409"]) ?? "")).toBe(
-        "SessionBusyError",
-      )
+      expect(componentNames(spec.paths[route[1]]?.[route[0]]?.responses?.["409"])).toContain("SessionBusyError")
     }
   })
 

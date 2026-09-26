@@ -194,19 +194,7 @@ describe("ACP service sessions", () => {
             data: input.directory ? sessions.filter((session) => session.directory === input.directory) : sessions,
           }),
         messages: () => Promise.resolve({ data: messages }),
-        prompt: (input: unknown) => {
-          prompts.push(input)
-          return Promise.resolve({
-            data: {
-              info: assistantInfo({
-                input: 100,
-                output: 40,
-                reasoning: 7,
-                cache: { read: 11, write: 13 },
-              }),
-            },
-          })
-        },
+        prompt: () => Promise.reject(new Error("legacy prompt path")),
         command: (input: unknown) => {
           commands.push(input)
           return Promise.resolve({
@@ -236,6 +224,18 @@ describe("ACP service sessions", () => {
           return Promise.resolve({ data: { id: `fork_${input.sessionID}` } })
         },
       },
+      v2: { session: {
+        prompt: (input: unknown) => {
+          prompts.push(input)
+          return Promise.resolve({ data: { data: { id: "msg_test", delivery: "steer" } } })
+        },
+        wait: () => Promise.resolve({ data: {} }),
+        messages: () => Promise.resolve({ data: { data: [
+          { id: "msg_test", type: "user" },
+          { id: "msg_assistant", type: "assistant", time: { created: 1, completed: 2 }, finish: "stop", cost: 0,
+            tokens: { input: 100, output: 40, reasoning: 7, cache: { read: 11, write: 13 } } },
+        ], cursor: {} } }),
+      } },
       mcp: {
         add: (input: { name?: string }) => {
           if (input.name) mcpAdds.push(input.name)
@@ -976,11 +976,11 @@ describe("ACP service sessions", () => {
     expect(prompts).toEqual([
       {
         sessionID: session.sessionId,
-        model: { providerID, modelID },
-        variant: "high",
-        parts: [{ type: "text", text: "hello" }],
-        agent: "plan",
-        directory: "/workspace",
+        prompt: {
+          text: "hello",
+          model: { providerID, id: modelID, variant: "high" },
+          agent: "plan",
+        },
       },
     ])
     expect(result).toEqual({
@@ -1015,14 +1015,11 @@ describe("ACP service sessions", () => {
 
     expect(prompts).toContainEqual({
       sessionID: session.sessionId,
-      model: { providerID, modelID },
-      variant: "default",
-      parts: [
-        { type: "text", text: "assistant context", synthetic: true },
-        { type: "text", text: "user context", ignored: true },
-      ],
-      agent: "build",
-      directory: "/workspace",
+      prompt: {
+        text: "assistant context\nuser context",
+        model: { providerID, id: modelID, variant: "default" },
+        agent: "build",
+      },
     })
   })
 
@@ -1047,17 +1044,15 @@ describe("ACP service sessions", () => {
       }),
     )
 
-    expect((prompts[0] as { parts?: unknown }).parts).toEqual([
+    expect((prompts[0] as { prompt?: { files?: unknown } }).prompt?.files).toEqual([
       {
-        type: "file",
-        url: "data:image/png;base64,AAAA",
-        filename: "screenshot.png",
+        uri: "data:image/png;base64,AAAA",
+        name: "screenshot.png",
         mime: "image/png",
       },
       {
-        type: "file",
-        url: "data:application/pdf;base64,JVBERg==",
-        filename: "report.pdf",
+        uri: "data:application/pdf;base64,JVBERg==",
+        name: "report.pdf",
         mime: "application/pdf",
       },
     ])
@@ -1125,8 +1120,10 @@ describe("ACP service sessions", () => {
         session: {
           create: () => Promise.resolve({ data: { id: session.sessionId } }),
           list: () => Promise.resolve({ data: [] }),
-          prompt: () => Promise.reject({ name: "ProviderAuthError", data: { providerID: "test" } }),
         },
+        v2: { session: {
+          prompt: () => Promise.reject({ name: "ProviderAuthError", data: { providerID: "test" } }),
+        } },
         mcp: {
           add: () => Promise.resolve({ data: {} }),
         },

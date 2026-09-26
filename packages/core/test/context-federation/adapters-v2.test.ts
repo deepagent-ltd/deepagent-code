@@ -121,7 +121,10 @@ describe("ContextAdaptersV2 adapter wiring", () => {
       confidence: { evidence_strength: "strong", support_count: 1 },
       extensions: { sensitivity: "public" },
     })
-    store.setStatus(knowledge.id, "active", documentRevision(knowledge))
+    store.commitGovernance(knowledge.id, documentRevision(knowledge), {
+      kind: "approve",
+      actor: { type: "human", id: "fixture-reviewer" },
+    })
     const released = selection([store.get(knowledge.id)!])
 
     const bound = ContextAdaptersV2.knowledge({
@@ -161,7 +164,10 @@ describe("ContextAdaptersV2 adapter wiring", () => {
       confidence: { evidence_strength: "strong", support_count: 1 },
       extensions: { sensitivity: "public" },
     })
-    store.setStatus(memory.id, "active", documentRevision(memory))
+    store.commitGovernance(memory.id, documentRevision(memory), {
+      kind: "approve",
+      actor: { type: "human", id: "fixture-reviewer" },
+    })
     const released = selection([store.get(memory.id)!])
     const adapter = ContextAdaptersV2.memory({
       stores: [store, store],
@@ -190,7 +196,10 @@ describe("ContextAdaptersV2 adapter wiring", () => {
       confidence: { evidence_strength: "strong", support_count: 1 },
       extensions: { sensitivity: "public" },
     })
-    store.setStatus(memory.id, "active", documentRevision(memory))
+    store.commitGovernance(memory.id, documentRevision(memory), {
+      kind: "approve",
+      actor: { type: "human", id: "fixture-reviewer" },
+    })
     const adapter = ContextAdaptersV2.memory({
       stores: [store],
       scope,

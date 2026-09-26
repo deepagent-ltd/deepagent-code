@@ -114,7 +114,7 @@ export const ImportSection: Component = () => {
   const modeOptions = createMemo(() => [
     { value: "codex" as const, label: t("settings.import.preset.codex", "Codex") },
     { value: "claude" as const, label: t("settings.import.preset.claude", "Claude Code") },
-    { value: "deepagent" as const, label: t("settings.import.preset.deepagent", "DeepAgent Code (snapshot)") },
+    { value: "deepagent" as const, label: t("settings.import.preset.deepagent", "DeepAgent Code bundle") },
     { value: "custom" as const, label: t("settings.import.preset.custom", "Custom") },
   ])
   const formatOptions = createMemo(() => [
@@ -127,17 +127,23 @@ export const ImportSection: Component = () => {
     { id: "skill", icon: "bookmark" },
   ]
 
-  // DeepAgent Code snapshot import: read the chosen bundle file and POST it to
-  // /session/import-snapshot (server rebuilds a fresh, continuable session).
+  // Portable ZIPs and legacy JSON snapshots import as fresh read-only archives.
   const runSnapshotImport = async (h: HttpBase | undefined) => {
     try {
       const file = snapshotFile()
       if (!file) {
-        push(`  [error] ${t("settings.import.snapshot.noFile", "Choose a snapshot bundle file first")}`)
+        push(`  [error] ${t("settings.import.snapshot.noFile", "Choose a ZIP file first")}`)
         return
       }
-      const bundle = await file.text()
-      const res = await fetch(`${h?.url ?? ""}/session/import-snapshot`, {
+      const zip = file.name.toLowerCase().endsWith(".zip")
+      const bytes = zip ? new Uint8Array(await file.arrayBuffer()) : undefined
+      const bundle = bytes
+        ? Array.from({ length: Math.ceil(bytes.length / 12288) }, (_, index) =>
+            btoa(String.fromCharCode(...bytes.subarray(index * 12288, (index + 1) * 12288))),
+          ).join("")
+        : await file.text()
+      const endpoint = zip ? "import-bundle" : "import-snapshot"
+      const res = await fetch(`${h?.url ?? ""}/session/${endpoint}`, {
         method: "POST",
         headers: { "content-type": "application/json", ...authHeader(h) },
         body: JSON.stringify({ bundle }),
@@ -154,7 +160,7 @@ export const ImportSection: Component = () => {
       push(
         `  [session] imported ${result?.sessionID?.slice(0, 16) ?? ""}… · ${result?.messages ?? 0} messages · ${result?.parts ?? 0} parts`,
       )
-      setSummary(t("settings.import.snapshot.done", "Snapshot imported as a new continuable session"))
+      setSummary(language.t("settings.import.bundle.done"))
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       push(`  [error] ${message}`)
@@ -262,17 +268,14 @@ export const ImportSection: Component = () => {
 
         <Show when={mode() === "deepagent"}>
           <SettingsRowV2
-            title={t("settings.import.snapshot.file", "Snapshot bundle")}
-            description={t(
-              "settings.import.snapshot.file.hint",
-              "Choose an exported session snapshot bundle (.json). It imports as a new continuable session.",
-            )}
+            title={language.t("settings.import.bundle.file")}
+            description={language.t("settings.import.bundle.file.hint")}
           >
             <div class="flex flex-col gap-2 w-full sm:w-[260px]">
               <input
                 data-action="settings-import-snapshot-file"
                 type="file"
-                accept=".json,application/json"
+                accept=".zip,application/zip,.json,application/json"
                 disabled={running()}
                 onChange={(e) => setSnapshotFile(e.currentTarget.files?.[0])}
               />

@@ -7,6 +7,7 @@ import * as SessionState from "../src/deepagent/session-state"
 import * as PlanStore from "../src/deepagent/plan-store"
 import { DocumentStore } from "../src/deepagent/document-store"
 import { PlanWriteTool } from "../src/tool/plan"
+import { PermissionV2 } from "../src/permission"
 import { ToolOutputStore } from "../src/tool-output-store"
 import { ToolRegistry } from "../src/tool/registry"
 import { ApplicationTools } from "../src/tool/application-tools"
@@ -34,8 +35,22 @@ afterEach(() => {
 const outputStore = Layer.mock(ToolOutputStore.Service, {
   bound: (input: ToolOutputStore.BoundInput) => Effect.succeed({ output: input.output, outputPaths: [] }),
 })
-const registry = ToolRegistry.layer.pipe(Layer.provide(ApplicationTools.layer), Layer.provide(outputStore))
-const it = testEffect(Layer.provideMerge(PlanWriteTool.layer, registry))
+// The plan tool asserts its declared permission at execute time (bash.ts pattern); the unit
+// scope records the assertion and allows it — deny/ask interactions belong to the permission
+// service's own tests.
+const planPermissionAssertions: PermissionV2.AssertInput[] = []
+const permission = Layer.mock(PermissionV2.Service, {
+  assert: (input: PermissionV2.AssertInput) =>
+    Effect.sync(() => {
+      planPermissionAssertions.push(input)
+    }),
+})
+const registry = ToolRegistry.layer.pipe(
+  Layer.provide(ApplicationTools.layer),
+  Layer.provide(outputStore),
+  Layer.provide(permission),
+)
+const it = testEffect(Layer.provideMerge(PlanWriteTool.layer.pipe(Layer.provide(permission)), registry))
 const identity = {
   agent: "build" as never,
   assistantMessageID: "msg_plan_tool" as never,

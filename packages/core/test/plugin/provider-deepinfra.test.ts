@@ -1,3 +1,4 @@
+import { eventLayer } from "../fixture/event-layer"
 import { describe, expect, mock } from "bun:test"
 import { Effect, Layer } from "effect"
 import { AISDK } from "@deepagent-code/core/aisdk"
@@ -8,7 +9,7 @@ import { testEffect } from "../lib/effect"
 import { it, model } from "./provider-helper"
 
 const itAISDK = testEffect(
-  Layer.provideMerge(AISDK.layer, PluginV2.locationLayer.pipe(Layer.provide(EventV2.defaultLayer))),
+  Layer.provideMerge(AISDK.layer, PluginV2.locationLayer.pipe(Layer.provide(eventLayer()))),
 )
 const deepinfraOptions: Record<string, any>[] = []
 const deepinfraLanguageModels: string[] = []

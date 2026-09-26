@@ -70,6 +70,8 @@ export type Provenance = {
   source: "builtin" | "custom" | "mcp"
   mcpServer?: string
   mcpToolName?: string
+  /** Config file or runtime registration that supplied the MCP server. */
+  configSource?: string
   // M7 (S1-v3.4): risk tier the live permission gate uses (session/tools.ts): read_only→auto-allow,
   // write_guarded/external_fetch→ask. SECURITY: mcp/index.ts sets this from a catalog MATCH of the
   // live config (`McpCatalog.deriveTier`), NOT from the persisted (attacker-writable) `riskTier`.

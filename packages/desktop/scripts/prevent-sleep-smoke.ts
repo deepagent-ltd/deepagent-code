@@ -65,7 +65,9 @@ const switchSelector = '[data-action="settings-prevent-sleep"] [data-component="
 const switchInputSelector = `${switchSelector} input[data-slot="switch-input"]`
 
 async function setPreventSleepViaSettings(page: Page, enabled: boolean) {
-  await page.keyboard.press("Meta+,")
+  // The sidecar can be ready before the renderer mounts the app layout. Wait for
+  // its visible Settings button, then open the dialog through the actual UI.
+  await page.locator('[data-component="icon-button"][data-icon="settings-gear"]:visible').first().click({ timeout: 30_000 })
   const control = page.locator(`${switchSelector} [data-slot="switch-control"]`)
   await control.waitFor({ state: "visible", timeout: 15_000 })
   // Wait until the switch reflects the opposite state before clicking, so the

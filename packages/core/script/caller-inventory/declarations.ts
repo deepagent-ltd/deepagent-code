@@ -31,7 +31,7 @@ const RULES: ReadonlyArray<{ readonly match: (id: string) => boolean; readonly r
         requirements: [
           { kind: "importOf", fileSuffix: "src/event-v2-bridge.ts", specifierSuffix: "@deepagent-code/core/event" },
           { kind: "importOf", fileSuffix: "src/event-v2-bridge.ts", specifierSuffix: "@/bus/global" },
-          { kind: "callChain", chain: "events.publish", fileSuffix: "src/event-v2-bridge.ts" },
+          { kind: "callChain", chain: "events.publishChecked", fileSuffix: "src/event-v2-bridge.ts" },
           { kind: "callChain", chain: "isEventV2AdmissionEnabled", fileSuffix: "src/event-v2-bridge.ts" },
         ],
       },

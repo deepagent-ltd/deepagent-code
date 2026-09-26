@@ -12,6 +12,9 @@ describe("FileLock production capacity", () => {
     expect(service.acquire("/repo/overflow", "agent")).toBeNull()
 
     service.release(entries[0]!.lockId)
-    expect(service.acquire("/repo/overflow", "agent")).not.toBeNull()
+    const replacement = service.acquire("/repo/overflow", "agent")
+    expect(replacement).not.toBeNull()
+    for (const entry of entries) if (entry) service.release(entry.lockId)
+    if (replacement) service.release(replacement.lockId)
   })
 })

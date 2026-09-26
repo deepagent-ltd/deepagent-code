@@ -31,4 +31,30 @@ describe("SDK error interceptor", () => {
     const result = await client.global.health({ throwOnError: false })
     expect(result.error).toEqual({ name: "PtyNotFoundError", data: { message: "PTY session not found" } })
   })
+
+  test("share mutations can surface the historical-session 409 as a readable error", async () => {
+    const body = {
+      _tag: "ConflictError",
+      message: "Historical session ses_archived requires explicit audited adoption",
+      resource: "legacy_session_requires_adoption",
+    }
+    const client = createDeepAgentCodeClient({
+      baseUrl: "http://localhost:4096",
+      fetch: async () =>
+        new Response(JSON.stringify(body), {
+          status: 409,
+          headers: { "content-type": "application/json" },
+        }),
+    })
+
+    for (const mutation of ["share", "unshare"] as const) {
+      const result = await client.session[mutation]({ sessionID: "ses_archived" })
+      expect(result.error).toEqual(body)
+
+      const error = await client.session[mutation]({ sessionID: "ses_archived" }, { throwOnError: true }).catch((value: unknown) => value)
+      if (!(error instanceof Error)) throw new Error("Expected an Error")
+      expect(error.message).toBe(body.message)
+      expect(error.cause).toMatchObject({ status: 409, body })
+    }
+  })
 })

@@ -64,7 +64,6 @@ export function getLevel(): Level {
 }
 const writeStderr = (msg: any) => {
   process.stderr.write(msg)
-  return msg.length
 }
 let write = writeStderr
 let closeWrite: (() => Promise<void>) | undefined
@@ -81,9 +80,11 @@ export function init(options: Options) {
 
 async function initialize(options: Options) {
   if (options.level) level = options.level
+  // Route concurrent logs away from the previous stream before ending it. Test/runtime re-init can
+  // overlap background fibers that log while the old file handle is closing.
+  write = writeStderr
   await closeWrite?.()
   closeWrite = undefined
-  write = writeStderr
   logpath = ""
   void cleanup(Global.Path.log)
   if (options.print) return
@@ -96,15 +97,35 @@ async function initialize(options: Options) {
   if (shouldTruncate) await fs.truncate(logpath).catch(() => {})
   if (options.dev && runID) process.env[initializedRunID] = runID
   const stream = createWriteStream(logpath, { flags: "a" })
-  closeWrite = () => new Promise((resolve) => stream.end(resolve))
-  write = async (msg: any) => {
-    return new Promise((resolve, reject) => {
-      stream.write(msg, (err) => {
-        if (err) reject(err)
-        else resolve(msg.length)
-      })
+  const writeFile = (msg: string) => {
+    if (stream.destroyed || stream.writableEnded) {
+      if (write === writeFile) write = writeStderr
+      writeStderr(msg)
+      return
+    }
+    stream.write(msg, (error) => {
+      if (!error) return
+      fail(error)
+      writeStderr(msg)
     })
   }
+  let failed = false
+  function fail(error: Error) {
+    if (failed) return
+    failed = true
+    if (write === writeFile) write = writeStderr
+    writeStderr(`ERROR log file unavailable: ${error.message}\n`)
+  }
+  // Opening the stream is asynchronous. A test or caller can remove its log directory before open,
+  // and an error event destroys the stream even when no write has happened yet.
+  stream.on("error", fail)
+  closeWrite = () =>
+    new Promise<void>((resolve) => {
+      if (stream.destroyed || stream.closed) return resolve()
+      stream.once("close", resolve)
+      stream.end(() => resolve())
+    })
+  write = writeFile
 }
 
 async function cleanup(dir: string) {

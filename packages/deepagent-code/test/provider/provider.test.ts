@@ -21,7 +21,7 @@ import { EffectFlock } from "@deepagent-code/core/util/effect-flock"
 import { Filesystem } from "@/util/filesystem"
 import { InstanceLayer } from "@/project/instance-layer"
 import { testEffect } from "../lib/effect"
-import { ProviderV2 } from "@deepagent-code/core/provider"
+import { ProviderV2, officialProviderCatalogID } from "@deepagent-code/core/provider"
 import { ModelV2 } from "@deepagent-code/core/model"
 
 const originalEnv = new Map<string, string | undefined>()
@@ -2509,3 +2509,12 @@ it.effect("provider groups: multiple groups coexist under one provider with sepa
     expect(Object.keys(mygateway.models)).toHaveLength(2)
   }).pipe(provideMultiInstance),
 )
+
+// D2 — official-id catalog bridge: a models.dev rename (kimi-for-coding → kimi-code-plan-cn)
+// must re-home the catalog entry under the official id so a stored key-store credential
+// connects instead of silently no-op'ing.
+test("officialProviderCatalogID resolves the drifted kimi id to its catalog successor", () => {
+  expect(officialProviderCatalogID("kimi-for-coding")).toBe("kimi-code-plan-cn")
+  // Non-drifted official ids resolve to themselves.
+  expect(officialProviderCatalogID("deepseek")).toBe("deepseek")
+})
