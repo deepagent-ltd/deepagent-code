@@ -437,6 +437,44 @@ export const pendingQueueInputs = Effect.fn("SessionInput.pendingQueueInputs")(f
   return rows.map(fromRow)
 })
 
+// Non-consuming peek of the agent/model selection the NEXT promotion batch would activate on
+// the session row. The projector applies each promoted prompt's agent/model (last-wins), so the
+// runner can resolve the model/agent for a first prompt BEFORE the safe promotion boundary —
+// promotion itself must wait, because a turn that fails before dispatch has to leave every
+// input pending.
+export const peekActiveSelection = Effect.fn("SessionInput.peekActiveSelection")(function* (
+  db: DatabaseService,
+  sessionID: SessionSchema.ID,
+  promotion: Delivery | undefined,
+) {
+  if (promotion !== "steer" && promotion !== "queue") return undefined
+  const cutoff = yield* latestSeq(db, sessionID)
+  const pending = (delivery: "steer" | "queue") =>
+    db
+      .select()
+      .from(SessionInputTable)
+      .where(
+        and(
+          eq(SessionInputTable.session_id, sessionID),
+          isNull(SessionInputTable.promoted_seq),
+          eq(SessionInputTable.delivery, delivery),
+          ...(delivery === "steer" ? [lte(SessionInputTable.admitted_seq, cutoff)] : []),
+        ),
+      )
+      .orderBy(asc(SessionInputTable.admitted_seq))
+      .all()
+      .pipe(Effect.orDie)
+  const steers = (yield* pending("steer")).map(fromRow)
+  const queuedRow = promotion === "queue" ? (yield* pending("queue"))[0] : undefined
+  const batch = queuedRow === undefined ? steers : [fromRow(queuedRow), ...steers]
+  const last = batch.findLast((input) => input.prompt.agent !== undefined || input.prompt.model !== undefined)
+  if (last === undefined) return undefined
+  return {
+    ...(last.prompt.agent === undefined ? {} : { agent: last.prompt.agent }),
+    ...(last.prompt.model === undefined ? {} : { model: last.prompt.model }),
+  }
+})
+
 export const promoteNextQueued = Effect.fn("SessionInput.promoteNextQueued")(function* (
   db: DatabaseService,
   events: EventV2.Interface,

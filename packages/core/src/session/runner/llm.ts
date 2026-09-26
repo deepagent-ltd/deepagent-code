@@ -819,18 +819,29 @@ export const layer = Layer.effect(
           sessionId: existingSession.id,
           pending: pendingToolEffects.length,
         })
-      const promoted = yield* Effect.gen(function* () {
-        // A prompt's model and agent become active at promotion, so promote before resolving
-        // either one. Future queued inputs still wait for their own activity boundary.
-        if (promotion !== "steer" && promotion !== "queue") return [] as readonly string[]
-        const cutoff = yield* SessionInput.latestSeq(db, existingSession.id)
-        if (promotion === "steer") return yield* SessionInput.promoteSteers(db, events, existingSession.id, cutoff)
-        const queued = yield* SessionInput.promoteNextQueued(db, events, existingSession.id)
-        const steers = yield* SessionInput.promoteSteers(db, events, existingSession.id, cutoff)
-        return queued === undefined ? steers : [queued, ...steers]
-      })
-      const currentStep = promoted.length > 0 ? 1 : step
-      const session = promoted.length > 0 ? yield* getSession(sessionID) : existingSession
+      // A prompt's model and agent become active at promotion. Resolve against a NON-consuming
+      // peek of the next promotion batch so a first prompt's selection is honored, while the
+      // promotion itself waits for the safe boundary below: a turn that fails before dispatch
+      // (system context unavailable, concurrent Session move) must leave every input pending.
+      const activeSelection = yield* SessionInput.peekActiveSelection(db, existingSession.id, promotion)
+      const session =
+        activeSelection === undefined
+          ? existingSession
+          : {
+              ...existingSession,
+              ...(activeSelection.agent === undefined ? {} : { agent: AgentV2.ID.make(activeSelection.agent) }),
+              // mirror the session-row decode (session/info.ts), which normalizes an absent
+              // variant to "default" — otherwise the post-promotion row compare false-mismatches
+              ...(activeSelection.model === undefined
+                ? {}
+                : {
+                    model: Schema.decodeUnknownSync(ModelV2.Ref)({
+                      id: activeSelection.model.id,
+                      providerID: activeSelection.model.providerID,
+                      variant: activeSelection.model.variant ?? "default",
+                    }),
+                  }),
+            }
       const agent = yield* agents.select(session.agent)
       if (session.agent !== undefined && agent.info === undefined)
         return yield* new AgentV2.NotFoundError({ id: session.agent })
@@ -843,11 +854,25 @@ export const layer = Layer.effect(
         session.id,
         session.location,
         agent.id,
-      ).pipe(retryAgentMismatch(undefined, currentStep))
+      ).pipe(retryAgentMismatch(promotion, step))
+      // The safe boundary is reached: promote now (after the system context load survived, so a
+      // pre-dispatch failure leaves every input pending; before the epoch prepare so the new
+      // baseline sequence includes the promoted messages). The projector activates the peeked
+      // selection on the session row; the re-read below re-validates the row against what this
+      // attempt prepared with.
+      const promoted = yield* Effect.gen(function* () {
+        if (promotion !== "steer" && promotion !== "queue") return [] as readonly string[]
+        const cutoff = yield* SessionInput.latestSeq(db, existingSession.id)
+        if (promotion === "steer") return yield* SessionInput.promoteSteers(db, events, existingSession.id, cutoff)
+        const queued = yield* SessionInput.promoteNextQueued(db, events, existingSession.id)
+        const steers = yield* SessionInput.promoteSteers(db, events, existingSession.id, cutoff)
+        return queued === undefined ? steers : [queued, ...steers]
+      })
+      const currentStep = promoted.length > 0 ? 1 : step
       const toolFibers = yield* FiberSet.make<void, ToolOutputStore.Error>()
       let needsContinuation = false
-      // W1.1 — goal_steer drain (after the promoted-inputs read; the goal channel is DISJOINT from
-      // the steer/queue promotions above). Pending goal-directed steers are delivered to the ACTIVE
+      // W1.1 — goal_steer drain (the goal channel is DISJOINT from the steer/queue promotions
+      // below). Pending goal-directed steers are delivered to the ACTIVE
       // goal's durable runtime state (the next goal tick threads them into its step prompt); without
       // an active goal they stay pending (no loss) and one deterministic notice reaches the user.
       // A `goal_steer` drain-only turn returns here WITHOUT a provider dispatch — the goal's own
@@ -866,10 +891,10 @@ export const layer = Layer.effect(
           session.id,
           session.location,
           agent.id,
-        ).pipe(retryAgentMismatch(undefined, currentStep)))
+        ).pipe(retryAgentMismatch(promotion, currentStep)))
       const current = yield* getSession(sessionID)
       if ((yield* agents.select(current.agent)).id !== agent.id || !sameModel(current.model, session.model))
-        return yield* Effect.die(rebuildPreparedTurn(undefined, currentStep))
+        return yield* Effect.die(rebuildPreparedTurn(promotion, currentStep))
       // C2-04/B2 residual — bind the protocol attempt identity (route/protocol/origin/capability/
       // lowering) onto the prepared attempt from the already-resolved catalog config, so an exact
       // retry never changes the model protocol/context/capability body mid-attempt (design §2.3,
